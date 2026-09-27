@@ -29,6 +29,16 @@ plain administrator language), grant or revoke a coach's right to approve an imp
 a reason and a confirmation naming the coach and the team. Deliberately out of it:
 Disconnect, retention UI, the import switch, any real import.
 
+**What the GPEXE connection is today (owner, 2026-09-27).** The stored GPEXE Team ID (980)
+is only a team binding: it says which GPEXE team a team's imports read, nothing more. The
+production Render service has no `GPEXE_API_TOKEN` configured, and production GPEXE has never
+been read. The status shown as *Connected* therefore proves no live connection and is to be
+renamed **Team linked**. No GPEXE username or password is stored anywhere, and none will be.
+**F3c — source authentication and connection** is scheduled after 5a3b and before 5a3c:
+discovery of the right API host (`server3` against `e03`), a safe way to obtain the token and
+its encrypted storage, and Connect / Reconnect / Test connection in Settings → Data sources.
+F3c has not started.
+
 **The active phase is the source-neutral Imports track** (owner's mission, 2026-09-22;
 blueprint v3.1 accepted as the direction on 2026-09-23). GPEXE is the first data source,
 not the name of the feature; future sources (Garmin, Catapult, Polar, Kinexon, …) are
@@ -88,17 +98,27 @@ canonical activity id, so the merged-session message is the generic one plus *Op
 current session* (the contract rows naming the athlete's state in the resulting session would
 need a second read).
 
-Review record: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with one
-narrow re-review after the fixes (see the PR). Browser QA by the main session on a static
-harness that runs the branch's real modules against an in-page fake of the 5a2 API, at 1280 px
-and 360/375/390 px (single decision, absence reason, bulk over the active filter, bulk conflict,
-lost answer with Check result, `roster_busy` with Try again, Two states, Use measured values,
-Remove, the sheet and the sticky bar) — not against a running backend or database, so it is
-neither a production nor an integration QA.
+5a3b is PR #125 (code at `a20cada`), open and waiting for the owner's merge decision.
+Review record: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
+re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
+runs the branch's real modules against an in-page fake of the 5a2 API, at 1280 px and
+360/375/390 px. **Integration QA passed on 2026-09-27** (main session, before the merge
+decision): the branch's real backend and frontend ran against a disposable database
+(`optimove_tests_gpexe_iqa5a3b_*`, migrated through v26, dropped afterwards) with the real 5a2
+routes and a seeded coach, team, eight athletes and two sessions — single decision with author,
+absence with a real reason and note surviving a full reload, Change and Remove matching the
+database and the GET, a bulk of seven athletes all hidden by the filter changing only the named
+seven, a stale `expectedDecisionId` refused as `decision_changed` with nothing written, a bulk
+conflict writing nothing and *Apply to the other N* writing only the rest, a lost answer replayed
+with the same `requestKey` (one request row, one decision), a double click and a second action
+during a write producing one request, and a session change with a write in flight or a result
+not confirmed asking first and never attributing the result to the other session. Not
+production, no GPEXE call, no persistent database.
 
 The remaining UI is split into 5a3c (Complete and Needs review) and 5a3d (mobile polish and
-cross-navigation). Manual values and estimates remain 5b; later-measurement confirmation
-remains 5c.
+cross-navigation), with **F3c (source authentication and connection) placed between 5a3b and
+5a3c** (owner, 2026-09-27; see the GPEXE connection note above). Manual values and estimates
+remain 5b; later-measurement confirmation remains 5c.
 
 Every later phase (5a2, 5a3, 5b, 5c, then 6) waits for the owner's go after each merge.
 
@@ -830,8 +850,10 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's review and merge decision on the **Phase 5a3b** PR (individual and bulk roster
-decisions), then **Phase 5a3c** (Complete and Needs review).
+The owner's merge decision on **PR #125** (Phase 5a3b, individual and bulk roster decisions;
+integration QA passed), then **F3c — source authentication and connection** (rename
+*Connected* to *Team linked*, host discovery, token handling, Connect / Reconnect / Test
+connection), then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 
