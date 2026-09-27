@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-26. Last `origin/main` commit checked: `8aa0de8` (merge of PR #123,
-`feature/activity-roster-decisions-5a2` → `main`).
+Last reviewed: 2026-09-27. Last `origin/main` commit checked: `a643ffd` (merge of PR #124,
+`feature/activity-roster-shell-5a3a` → `main`).
 
 ## Active phase
 
@@ -47,24 +47,58 @@ owner on 2026-09-25 (O1 (a) "Participated · no device data"; O2 team coach + cl
 platform admin, recorded as the path of the ACTIVE workspace; the downgrade triggers moved to
 5a2).
 
-**The step in progress is Phase 5a3a, the read-only Activity roster shell** (branch
-`feature/activity-roster-shell-5a3a`; frontend and docs only). Its final UX contract is
-`docs/ai/phase5a3-roster-ux-draft.md`: a Roster tab on a team activity, source-neutral metric
-columns, Needs a state / Needs review / Done filters, read-only athlete rows and the separate
-folded "Recorded, but not on this session's roster" group. No roster write, bulk decision,
-Complete/Reopen control, manual value or estimate belongs to 5a3a.
+**Phase 5a3a, the read-only Activity roster shell, is merged and deployed** (PR #124,
+`a643ffd`; see Last completed). The UX contract for the whole 5a3 roster UI is
+`docs/ai/phase5a3-roster-ux-draft.md`.
 
-5a3a is implemented in PR #124 (ready for review, not merged). Reviewed statically by
-`code-reviewer`, `ux-design-reviewer` and `mobile-qa`; their findings were fixed and the last
-narrow checks found no BLOCKER, HIGH or MEDIUM. **Browser QA passed on 2026-09-26** (owner),
-on desktop and in the mobile view: no horizontal overflow, clipped text or wrong layout. It
-was done on a static harness that renders this branch's real render functions with prepared
-roster data — not against a running backend, so it is neither a production nor a complete
-integration QA.
+**The step in progress is Phase 5a3b, individual and bulk roster decisions** (branch
+`feature/activity-roster-decisions-ui-5a3b`; frontend and docs only, on the 5a2 commands as
+merged in PR #123 — no backend, migration or rights change). It adds to the Roster tab:
+- a state per row: *Participated · no device data* saved at once; *Did not participate*
+  through the reason list of the roster answer with an optional note (an athlete with a
+  source record is asked first); *Change* unfolds the other state, a new reason and *Remove
+  this state* (with the consequence named); *Use measured values* (the only action once
+  measured values arrived after a decision; an inline confirmation says the coach decision is
+  removed — no "Keep this decision", contract Q1);
+- *Two states* after a merge: both states with the coach who set each, no checkbox, one
+  confirmed choice replaces both;
+- a group decision: a checkbox only on rows without a saved state, *Select the N that need a
+  state*, a selection kept across the chip filter with the hidden count named, a confirmation
+  naming every athlete (hidden ones marked), athletes with a source record left out of a bulk
+  absence and named, at most 60; a `bulk_conflict` names each refused athlete with the current
+  state, unticks it and offers *Apply to the other N*;
+- the three outcomes of every write (contract section 7): *Saved* (the roster is read again;
+  a row with a fresh outcome stays visible under any filter until the filter changes), *Nothing
+  was saved* only on a coded refusal (400/403/404/409, `roster_busy`, `internal_error`; the
+  roster is read again and rows that changed under the coach are marked), and *Result not
+  confirmed · Check result* for `outcome_unknown`, an uncoded 5xx, a lost answer or the 45 s
+  client timeout — *Check result* repeats the same command with the same `requestKey`, so it
+  can never write twice; a refused key is never reused. 403/404/`activity_superseded` lock
+  every write control and offer *Back to activities* / *Open the current session*. A write in
+  flight or an unconfirmed result is protected on session change, on leaving Training Load and
+  on `beforeunload` (the Imports pattern). One command at a time: while a write is in flight or a
+  result is not confirmed, every write control is off (Check result stays live), so a second
+  command can never settle after the first and replace or clear its outcome;
+- phones: one sticky action by priority (unconfirmed → selection → athletes need a state);
+  *Set state…* opens one bottom sheet (both states and the reason list in the same sheet,
+  never two), the page behind it does not scroll; 44 px targets, 16 px textarea.
 
-The remaining UI is split into 5a3b (individual and bulk decisions), 5a3c (Complete and
-Needs review) and 5a3d (mobile polish and cross-navigation). Manual values and estimates
-remain 5b; later-measurement confirmation remains 5c.
+Known API limit accepted for 5a3b: on `activity_superseded` the 409 body carries only the
+canonical activity id, so the merged-session message is the generic one plus *Open the
+current session* (the contract rows naming the athlete's state in the resulting session would
+need a second read).
+
+Review record: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with one
+narrow re-review after the fixes (see the PR). Browser QA by the main session on a static
+harness that runs the branch's real modules against an in-page fake of the 5a2 API, at 1280 px
+and 360/375/390 px (single decision, absence reason, bulk over the active filter, bulk conflict,
+lost answer with Check result, `roster_busy` with Try again, Two states, Use measured values,
+Remove, the sheet and the sticky bar) — not against a running backend or database, so it is
+neither a production nor an integration QA.
+
+The remaining UI is split into 5a3c (Complete and Needs review) and 5a3d (mobile polish and
+cross-navigation). Manual values and estimates remain 5b; later-measurement confirmation
+remains 5c.
 
 Every later phase (5a2, 5a3, 5b, 5c, then 6) waits for the owner's go after each merge.
 
@@ -84,6 +118,16 @@ nothing imported is visible in the app.
 
 ## Last completed, merged phases
 
+- **Phase 5a3a: read-only Activity roster shell** — PR #124 (`a643ffd`, code at `e27d993`,
+  merged and deployed 2026-09-27; `/api/health` reported `a643ffd` with `ok: true` three times
+  and the roster route answered 401 without a login), frontend + docs only: the Roster tab of
+  a team session (after Overview, only once the read confirms it; opens by itself when someone
+  needs a state and never over a tab the coach picked), the header, the Needs a state / Needs
+  review / Done / All filters, grouped read-only rows with source-neutral metric columns from
+  the answer's measured values, the folded "Recorded, but not on this session's roster" group,
+  the loading / retry / empty / 404 / merged states, and the phone cards at 760 px. Reviewed by
+  `code-reviewer`, `ux-design-reviewer` and `mobile-qa`; browser QA by the owner on a static
+  harness (2026-09-26). The 60-athlete scalability check stays under Separate tasks.
 - **Phase 5a2: roster decisions and completion** — PR #123 (`8aa0de8`, reviewed head
   `048b78e`), backend + migration v26 + docs: five idempotent roster write routes,
   optimistic concurrency and the contract lock order; automatic `complete → needs_review`
@@ -786,8 +830,8 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's decision on merging **PR #124** (Phase 5a3a, read-only roster tab), then
-**Phase 5a3b** (individual and bulk decisions).
+The owner's review and merge decision on the **Phase 5a3b** PR (individual and bulk roster
+decisions), then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 

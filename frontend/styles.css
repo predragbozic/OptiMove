@@ -12980,7 +12980,8 @@ button.tests-assignment-card {
   font-size: 13px;
 }
 
-/* Phase 5a3a — source-neutral, read-only activity roster. */
+/* Phase 5a3a/5a3b — source-neutral activity roster: read states, a state per
+   row, the selection and the group decision, the three write outcomes. */
 .tl-roster {
   display: grid;
   gap: 14px;
@@ -13061,7 +13062,7 @@ button.tests-assignment-card {
 .tl-roster-outside-head,
 .tl-roster-row-summary {
   display: grid;
-  grid-template-columns: minmax(150px, 1.35fr) minmax(155px, 1.25fr) repeat(var(--tl-roster-metrics), minmax(92px, 0.8fr));
+  grid-template-columns: 28px minmax(150px, 1.35fr) minmax(155px, 1.25fr) repeat(var(--tl-roster-metrics), minmax(92px, 0.8fr));
   gap: 10px;
   align-items: center;
 }
@@ -13069,7 +13070,29 @@ button.tests-assignment-card {
 .tl-roster-table.has-no-metrics .tl-roster-table-head,
 .tl-roster-outside-head.has-no-metrics,
 .tl-roster-row.has-no-metrics .tl-roster-row-summary {
-  grid-template-columns: minmax(150px, 1.35fr) minmax(155px, 1.25fr);
+  grid-template-columns: 28px minmax(150px, 1.35fr) minmax(155px, 1.25fr);
+}
+
+/* The checkbox cell: an empty span keeps the columns aligned on rows that
+   cannot be selected (measured, with a state, Two states, outside). */
+.tl-roster-pick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+}
+
+.tl-roster-pick input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.tl-roster-pick input:disabled {
+  cursor: not-allowed;
 }
 
 .tl-roster-table-head {
@@ -13111,32 +13134,279 @@ button.tests-assignment-card {
 }
 
 .tl-roster-row-summary {
-  position: relative;
   min-height: 48px;
-  padding: 8px 34px 8px 12px;
-  cursor: pointer;
+  padding: 8px 12px;
+}
+
+.tl-roster-row.is-selected {
+  background: var(--accent-soft);
+}
+
+.tl-roster-row.is-locked .tl-roster-row-summary {
+  opacity: .75;
+}
+
+.tl-roster-row.is-changed {
+  box-shadow: inset 3px 0 0 var(--tlc-warning, #a86a00);
+}
+
+.tl-roster-changed {
+  color: var(--tlc-warning, #a86a00);
+}
+
+.tl-roster-row-notes {
+  display: grid;
+  gap: 4px;
+  padding: 0 12px 8px 50px;
+  font-size: 13px;
+}
+
+/* Every write control on the row: 44 px targets, wrapping. */
+.tl-roster-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.tl-roster-actions.is-stacked {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.tl-roster-row-actions {
+  padding: 0 12px 10px 50px;
+}
+
+.tl-roster-button {
+  min-height: 44px;
+  font: inherit;
+  font-size: 14px;
+}
+
+.tl-roster-change {
+  text-decoration: underline;
+}
+
+.tl-roster-busy {
+  font-size: 13px;
+}
+
+.tl-roster-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tl-roster-tag.is-saved {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.tl-roster-tag.is-unconfirmed {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* The three outcomes: saved, nothing saved, result not confirmed. */
+.tl-roster-notice {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft, #f7f8fa);
+}
+
+.tl-roster-notice p {
+  margin: 0;
+}
+
+.tl-roster-notice.is-saved {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.tl-roster-notice.is-refused {
+  border-color: var(--tlc-warning-border, var(--line-strong));
+  background: var(--tlc-warning-soft, var(--surface-soft));
+}
+
+.tl-roster-notice.is-unconfirmed {
+  border-color: var(--danger);
+}
+
+.tl-roster-row-notice {
+  margin: 0 12px 10px 50px;
+}
+
+.tl-roster-notice .tl-roster-technical {
+  border-top: 0;
+  justify-self: stretch;
+}
+
+.tl-roster-notice .tl-roster-technical > summary {
+  padding-left: 0;
+  font-size: 12px;
+}
+
+/* An inline confirmation under the row (never a modal). */
+.tl-roster-confirm,
+.tl-roster-picker {
+  display: grid;
+  gap: 10px;
+  margin: 0 12px 10px 50px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.tl-roster-confirm p,
+.tl-roster-picker p {
+  margin: 0;
+}
+
+.tl-roster-picker.is-bulk {
+  margin: 0;
+}
+
+.tl-roster-picker-title {
+  font-weight: 700;
+}
+
+.tl-roster-picker-names,
+.tl-roster-picker-excluded {
+  font-size: 13px;
+}
+
+.tl-roster-picker-excluded {
+  color: var(--tlc-warning, #a86a00);
+}
+
+.tl-roster-picker-error {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.tl-roster-picker-hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.tl-roster-note {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.tl-roster-note span {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+}
+
+.tl-roster-note textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) - 2px);
+  font: inherit;
+  font-size: 16px;
+  resize: vertical;
+}
+
+/* The reason list: tapping a reason saves (single) or chooses (bulk). */
+.tl-roster-reasons {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
   list-style: none;
 }
 
-.tl-roster-row-summary::-webkit-details-marker,
-.tl-roster-outside > summary::-webkit-details-marker,
-.tl-roster-technical > summary::-webkit-details-marker {
+.tl-roster-reason {
+  width: 100%;
+  min-height: 48px;
+  justify-content: flex-start;
+  text-align: left;
+  font: inherit;
+  font-size: 15px;
+}
+
+.tl-roster-reason.is-chosen {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+/* The selection bar (section 6). */
+.tl-roster-select-bar {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft, #f7f8fa);
+}
+
+.tl-roster-select-bar > p,
+.tl-roster-select-note {
+  margin: 0;
+}
+
+.tl-roster-select-note {
+  font-size: 13px;
+}
+
+/* The phone sticky action and the sheet exist only below 760 px. */
+.tl-roster-sticky,
+.tl-roster-sheet-backdrop,
+.tl-roster-sheet {
   display: none;
 }
 
-.tl-roster-row-summary::after,
+.tl-roster-outside > summary::-webkit-details-marker,
+.tl-roster-technical > summary::-webkit-details-marker,
+.tl-roster-row-more > summary::-webkit-details-marker {
+  display: none;
+}
+
 .tl-roster-outside > summary::after,
-.tl-roster-technical > summary::after {
+.tl-roster-technical > summary::after,
+.tl-roster-row-more > summary::after {
   content: "▸";
   position: absolute;
   right: 12px;
   transition: transform 120ms ease;
 }
 
-.tl-roster-row[open] > .tl-roster-row-summary::after,
 .tl-roster-outside[open] > summary::after,
-.tl-roster-technical[open] > summary::after {
+.tl-roster-technical[open] > summary::after,
+.tl-roster-row-more[open] > summary::after {
   transform: rotate(90deg);
+}
+
+.tl-roster-row-more > summary {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 6px 36px 6px 50px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .tl-roster-athlete-name {
@@ -13297,13 +13567,108 @@ button.tests-assignment-card {
     overflow: hidden;
   }
   .tl-roster-row-summary {
-    grid-template-columns: 1fr;
-    gap: 5px;
+    grid-template-columns: 28px 1fr;
+    gap: 5px 8px;
     min-height: 44px;
-    padding: 10px 36px 10px 12px;
+    padding: 10px 12px;
   }
   .tl-roster-row.has-no-metrics .tl-roster-row-summary {
-    grid-template-columns: 1fr;
+    grid-template-columns: 28px 1fr;
+  }
+  .tl-roster-row-summary > .tl-roster-pick {
+    grid-row: 1;
+    align-self: start;
+    min-height: 44px;
+    min-width: 44px;
+    margin-left: -8px;
+  }
+  .tl-roster-row-summary > .tl-roster-pick input {
+    width: 22px;
+    height: 22px;
+  }
+  .tl-roster-row-summary > :not(.tl-roster-pick) {
+    grid-column: 2;
+  }
+  .tl-roster-row-notes,
+  .tl-roster-row-actions {
+    padding-left: 12px;
+  }
+  .tl-roster-row-notice,
+  .tl-roster-confirm,
+  .tl-roster-picker {
+    margin-left: 12px;
+    margin-right: 12px;
+  }
+  .tl-roster-row-more > summary {
+    padding-left: 12px;
+  }
+  .tl-roster-row-actions > .tl-roster-button,
+  .tl-roster-confirm .tl-roster-button,
+  .tl-roster-select-bar .tl-roster-button {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+  .tl-roster-select-bar .tl-roster-actions {
+    display: grid;
+  }
+  /* One sticky bar, one message, one action (section 1). */
+  .tl-roster-sticky {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--line-strong, var(--line));
+    background: var(--surface);
+    box-shadow: 0 -6px 18px rgba(14, 28, 37, .08);
+  }
+  .tl-roster-sticky > span {
+    flex: 1 1 140px;
+    min-width: 0;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+  .tl-roster-sticky .tl-roster-button {
+    flex: 0 1 auto;
+  }
+  /* The one bottom sheet on a phone; the page behind it does not scroll. */
+  body:has(.tl-roster.has-sheet) {
+    overflow: hidden;
+  }
+  .tl-roster-sheet-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    background: rgba(13, 27, 36, .46);
+  }
+  .tl-roster-sheet {
+    display: grid;
+    gap: 10px;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1201;
+    max-height: 85dvh;
+    overflow-y: auto;
+    padding: 14px 16px calc(14px + env(safe-area-inset-bottom, 0px));
+    border-radius: 16px 16px 0 0;
+    background: var(--surface);
+    box-shadow: 0 -12px 40px rgba(14, 28, 37, .28);
+  }
+  .tl-roster-sheet p {
+    margin: 0;
+  }
+  .tl-roster-sheet .tl-roster-actions {
+    display: grid;
+  }
+  .tl-roster-sheet .tl-roster-button {
+    width: 100%;
   }
   .tl-roster-outside-head {
     display: none;

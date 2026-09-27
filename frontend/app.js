@@ -64,7 +64,7 @@ import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { calendarToggled as importsCalendarToggled } from "./gpexe-import-data.js";
-import { activityRosterDisclosureToggled } from "./activity-roster-actions.js";
+import { activityRosterDisclosureToggled, closeActivityRosterOverlay } from "./activity-roster-actions.js";
 import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
@@ -481,6 +481,11 @@ function bindEvents() {
     // Dashboards UX H1: picker/menus, the dashboard dialog and the metric
     // panel close on Escape (topmost first - see closeTrainingLoadAnalysisOverlay).
     if (state.activeTab === "training-load" && state.trainingLoad.section === "analysis" && closeTrainingLoadAnalysisOverlay()) {
+      renderTrainingLoad();
+    }
+    // Phase 5a3b: the roster's reason list / sheet and its inline
+    // confirmation close on Escape (never while a save is in flight).
+    if (state.activeTab === "training-load" && closeActivityRosterOverlay()) {
       renderTrainingLoad();
     }
   });
