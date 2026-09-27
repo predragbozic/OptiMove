@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-27. Last `origin/main` commit checked: `a643ffd` (merge of PR #124,
-`feature/activity-roster-shell-5a3a` → `main`).
+Last reviewed: 2026-09-27. Last `origin/main` commit checked: `7e4d92d` (merge of PR #125,
+`feature/activity-roster-decisions-ui-5a3b` → `main`).
 
 ## Active phase
 
@@ -98,8 +98,21 @@ canonical activity id, so the merged-session message is the generic one plus *Op
 current session* (the contract rows naming the athlete's state in the resulting session would
 need a second read).
 
-5a3b is PR #125 (code at `a20cada`), open and waiting for the owner's merge decision.
-Review record: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
+**Phase 5a3b is merged and deployed**: PR #125, merge commit `7e4d92d` (2026-09-27 12:12 UTC,
+pinned to head `85cd489`); `/api/health` reported `7e4d92d` with `ok: true` three times, and
+without a login `GET …/roster`, `PUT …/roster/:athleteId/decision` and `POST …/roster/decisions`
+answered 401 (zero UUIDs, nothing written). No GPEXE action, Render environment and the import
+switch untouched.
+
+**The active step is the F3c discovery**, accepted by the owner on 2026-09-27 as the basis for
+F3c (source authentication and connection): `docs/ai/gpexe-f3c-auth-discovery.md` — confirmed
+facts and unknowns (U1–U8 open), the `e03` vs `server3` endpoint map, the
+`source_credential_connections` / `source_team_bindings` / audit model with the lock scope for
+club-owned connections, the security contract, the five-state status model, the split
+F3c1–F3c4, the owner decisions and the owner's guidelines (section 7a). The owner-run read-only
+checks of section 8 are a precondition for F3c1. **F3c1 has not started.**
+
+Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
 runs the branch's real modules against an in-page fake of the 5a2 API, at 1280 px and
 360/375/390 px. **Integration QA passed on 2026-09-27** (main session, before the merge
@@ -850,10 +863,9 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's merge decision on **PR #125** (Phase 5a3b, individual and bulk roster decisions;
-integration QA passed), then **F3c — source authentication and connection** (rename
-*Connected* to *Team linked*, host discovery, token handling, Connect / Reconnect / Test
-connection), then **Phase 5a3c** (Complete and Needs review).
+The owner's read-only checks of `docs/ai/gpexe-f3c-auth-discovery.md` section 8 (U1–U8), then
+the owner's go for **F3c1** (schema, encryption, audit — add beside), then F3c2–F3c4, then
+**Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 
