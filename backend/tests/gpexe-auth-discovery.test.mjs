@@ -248,8 +248,22 @@ test("the runbook never reads a credential unmasked, and never claims that step 
   // An empty POST shows only the request fields; the token field of a
   // successful answer comes from documentation, never from step A.
   const text = lines.join(" ");
-  assert.doesNotMatch(text, /token[- ]field[^.]{0,80}(from|reported by|decided by|determined by|comes from) step A/i, "the doc must not derive --token-field from step A");
-  assert.doesNotMatch(text, /step A[^.]{0,80}(decide|determine|report)s? (the )?token[- ]field/i, "the doc must not say step A decides the token field");
+  // Any unit (a sentence of prose, or one line of a code block or table) that
+  // names both step A and the token field must be a denial (cannot / never /
+  // not / only), never a derivation.
+  const denial = /\b(cannot|never|not|only)\b/i;
+  const units = lines.flatMap((l) => l.split(/(?<=[.!?])\s+/));
+  for (const unit of units) {
+    if (/step A/i.test(unit) && /token[- ]field/i.test(unit)) {
+      assert.match(unit, denial, `the doc must not derive the token field from step A: ${unit.slice(0, 120)}`);
+    }
+  }
+  for (const refused of [
+    "The exchange answer's field names step A reported for the exchange endpoint decide `--token-field` in step C.",
+    "token field passed to C: ______ (--token-field, from step A's exchange field names)",
+  ]) {
+    assert.ok(/step A/i.test(refused) && /token[- ]field/i.test(refused) && !denial.test(refused), "the lint would catch the wording the review refused");
+  }
   assert.match(text, /exchange request field names/i, "the form names step A's result as REQUEST field names");
   assert.match(text, /successful response field names/i, "the form names step C's successful-answer field names");
 });
