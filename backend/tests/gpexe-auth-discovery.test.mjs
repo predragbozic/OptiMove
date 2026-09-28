@@ -23,21 +23,23 @@ function fakeResponse(status, body, headers = {}) {
 
 // A fake GPEXE: records every request, demands the Token scheme, exposes a
 // team list, an exchange endpoint, and answers OPTIONS with Allow.
-function fakeGpexe({ teams = [{ id: 980, name: "FK Test" }, { id: 12, name: "Other" }] } = {}) {
+// `scheme` / `tokenField` let the fake stand for a server that speaks Bearer
+// and answers the exchange under another field name.
+function fakeGpexe({ teams = [{ id: 980, name: "FK Test" }, { id: 12, name: "Other" }], scheme = "Token", tokenField = "token" } = {}) {
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url, method: init.method, headers: { ...init.headers }, body: init.body, redirect: init.redirect });
     const u = new URL(url);
     const auth = init.headers.Authorization;
-    const authed = auth === `Token ${FAKE_TOKEN}` || auth === `Token ${ISSUED}`;
+    const authed = auth === `${scheme} ${FAKE_TOKEN}` || auth === `${scheme} ${ISSUED}`;
     if (u.pathname === "/api-token-auth/" && init.method === "POST") {
       const body = JSON.parse(init.body || "{}");
       if (!body.username || !body.password) return fakeResponse(400, { username: ["This field is required."], password: ["This field is required."] }, { "content-type": "application/json" });
-      if (body.username === FAKE_USER && body.password === FAKE_PASSWORD) return fakeResponse(200, { token: ISSUED }, { "content-type": "application/json" });
+      if (body.username === FAKE_USER && body.password === FAKE_PASSWORD) return fakeResponse(200, { [tokenField]: ISSUED, token_type: scheme }, { "content-type": "application/json" });
       return fakeResponse(400, { non_field_errors: ["Unable to log in with provided credentials."] }, { "content-type": "application/json" });
     }
     if (u.pathname === "/api/api-token-auth/" || u.pathname === "/api/token/") return fakeResponse(404, { detail: "Not found." }, { "content-type": "application/json" });
-    if (!authed) return fakeResponse(401, { detail: "Authentication credentials were not provided." }, { "content-type": "application/json", "www-authenticate": "Token" });
+    if (!authed) return fakeResponse(401, { detail: "Authentication credentials were not provided." }, { "content-type": "application/json", "www-authenticate": scheme });
     if (init.method === "OPTIONS") return fakeResponse(200, { name: "Team List", renders: [] }, { "content-type": "application/json", allow: u.pathname === "/api/team/" ? "GET, HEAD, OPTIONS" : "GET, POST, HEAD, OPTIONS" });
     if (u.pathname === "/api/team/") return fakeResponse(200, teams, { "content-type": "application/json", "x-total-count": String(teams.length), "x-gpexe-version": "9.11.7" });
     if (u.pathname === "/api/team/980/") return fakeResponse(200, { id: 980, name: "FK Test", secret_note: "should never print" }, { "content-type": "application/json" });
@@ -49,13 +51,63 @@ function fakeGpexe({ teams = [{ id: 980, name: "FK Test" }, { id: 12, name: "Oth
 }
 
 test("arguments: host is a key never a URL, team is canonical, mode is one of three, exchange path is relative", () => {
-  assert.deepEqual(parseArgs([]), { mode: "anon", host: "e03", team: "980", exchangePath: null });
+  assert.deepEqual(parseArgs([]), { mode: "anon", host: "e03", team: "980", exchangePath: null, authScheme: "Token", tokenField: "token" });
   assert.throws(() => parseArgs(["--host", "https://e03.gpexe.com/"]), DiscoveryUsageError);
   assert.throws(() => parseArgs(["--team", "0980"]), DiscoveryUsageError);
   assert.throws(() => parseArgs(["--mode", "write"]), DiscoveryUsageError);
   assert.throws(() => parseArgs(["--exchange-path", "https://evil.example/x/"]), DiscoveryUsageError);
   assert.throws(() => parseArgs(["--exchange-path", "../api-token-auth/"]), DiscoveryUsageError);
   assert.equal(parseArgs(["--exchange-path", "api-token-auth/"]).exchangePath, "api-token-auth/");
+  // The scheme and the token field are one word each, exactly as step A reported them.
+  assert.equal(parseArgs([]).authScheme, "Token");
+  assert.equal(parseArgs([]).tokenField, "token");
+  assert.equal(parseArgs(["--auth-scheme", "Bearer", "--token-field", "access_token"]).authScheme, "Bearer");
+  for (const bad of ["Token x", "Bearer:", "\"Token\"", "", "Token\nX-Injected: 1", "a".repeat(33)]) assert.throws(() => parseArgs(["--auth-scheme", bad]), DiscoveryUsageError, JSON.stringify(bad));
+  for (const bad of ["a.b", "token[0]", "", "9x", "a b"]) assert.throws(() => parseArgs(["--token-field", bad]), DiscoveryUsageError, JSON.stringify(bad));
+});
+
+test("a Bearer server with the token under access_token: the given scheme is sent as is, only the named field is read, nothing else is tried", async () => {
+  const { calls, fetchImpl } = fakeGpexe({ scheme: "Bearer", tokenField: "access_token" });
+  const env = { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: FAKE_PASSWORD, GPEXE_API_TOKEN: FAKE_TOKEN };
+  // Step A's scheme word carried into step C.
+  const a = await runDiscovery(parseArgs([]), {}, fetchImpl);
+  assert.equal(a.findings.apiDemandsScheme, "Bearer");
+  calls.length = 0;
+  const report = await runDiscovery(parseArgs(["--mode", "exchange", "--auth-scheme", "Bearer", "--token-field", "access_token"]), env, fetchImpl);
+  const text = assertNoSecretInReport(report, env);
+  assert.ok(!text.includes(ISSUED));
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].headers.Authorization, `Bearer ${ISSUED}`);
+  assert.equal(report.authScheme, "Bearer");
+  assert.equal(report.tokenField, "access_token");
+  assert.equal(report.findings.exchangeReturnsTokenField, true);
+  assert.equal(report.findings.exchangedTokenWorksAsScheme, true);
+  assert.deepEqual(report.requests[0].fieldNames, ["access_token", "token_type"]);
+  // Step B against the same server with the right scheme.
+  calls.length = 0;
+  const b = await runDiscovery(parseArgs(["--mode", "token", "--auth-scheme", "Bearer"]), { GPEXE_API_TOKEN: FAKE_TOKEN }, fetchImpl);
+  assert.equal(b.findings.tokenAccepted, true);
+  assert.ok(calls.every((c) => c.headers.Authorization === `Bearer ${FAKE_TOKEN}`));
+});
+
+test("a wrong scheme or a wrong token field is a finding, never a retry with another value", async () => {
+  const { calls, fetchImpl } = fakeGpexe({ scheme: "Bearer", tokenField: "access_token" });
+  // Default Token against a Bearer server: every request 401, exactly one request per path, no second scheme.
+  const b = await runDiscovery(parseArgs(["--mode", "token"]), { GPEXE_API_TOKEN: FAKE_TOKEN }, fetchImpl);
+  assert.equal(b.findings.tokenAccepted, false);
+  assert.ok(calls.every((c) => c.headers.Authorization === `Token ${FAKE_TOKEN}`));
+  assert.equal(new Set(calls.map((c) => `${c.method} ${c.url}`)).size, calls.length, "no path was tried twice");
+  // Right scheme, default field name: the exchange succeeds but the token is under another name -> reported as no token field, no GET follows.
+  calls.length = 0;
+  const env = { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: FAKE_PASSWORD };
+  const c = await runDiscovery(parseArgs(["--mode", "exchange", "--auth-scheme", "Bearer"]), env, fetchImpl);
+  assertNoSecretInReport(c, env);
+  assert.equal(c.findings.exchangeStatus, 200);
+  assert.equal(c.findings.exchangeReturnsTokenField, false);
+  assert.equal(c.findings.exchangedTokenWorksAsScheme, null);
+  assert.equal(calls.length, 1, "the token under another field name is never picked up");
+  assert.deepEqual(c.requests[0].fieldNames, ["access_token", "token_type"], "the owner sees the real field name and passes it explicitly");
+  assert.ok(!JSON.stringify(c).includes(ISSUED));
 });
 
 test("host: only an approved key of the code catalog resolves; server3, a URL and an unknown key are refused before any request", async () => {
@@ -131,9 +183,9 @@ test("exchange mode: username and password go only in the body of one POST to th
   assert.equal(calls[1].method, "GET");
   assert.equal(calls[1].headers.Authorization, `Token ${ISSUED}`);
   assert.deepEqual(report.findings, {
-    exchangeStatus: 200, exchangeReturnsTokenField: true, exchangedTokenWorksAsTokenScheme: true, exchangedTokenEqualsEnvToken: false, seesTeam: true,
+    exchangeStatus: 200, exchangeReturnsTokenField: true, exchangedTokenWorksAsScheme: true, exchangedTokenEqualsEnvToken: false, seesTeam: true,
   });
-  assert.deepEqual(report.requests[0].fieldNames, ["token"], "only the NAME of the token field");
+  assert.deepEqual(report.requests[0].fieldNames, ["token", "token_type"], "only the NAMES of the fields");
 });
 
 test("exchange mode with a refused login reports the status and field names only and sends no second request", async () => {

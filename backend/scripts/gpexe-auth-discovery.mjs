@@ -28,6 +28,11 @@
 //                    token pasted by the owner): the team list, the team, its
 //                    thresholds, one session-list page, and the methods each
 //                    resource allows (OPTIONS).
+//   --auth-scheme    the header scheme word step A reported (default Token);
+//                    modes token and exchange send exactly this one scheme,
+//                    never try another, never fall back.
+//   --token-field    the name of the field the exchange answer carries the
+//                    token in (default token); only that field is read.
 //   --mode exchange  GPEXE_USERNAME + GPEXE_PASSWORD in the environment: one
 //                    POST to the exchange endpoint; the returned token is used
 //                    for one GET of the team list and then dropped. If
@@ -56,18 +61,24 @@ export class DiscoveryUsageError extends Error {
 }
 
 export function parseArgs(argv) {
-  const opts = { mode: "anon", host: "e03", team: "980", exchangePath: null };
+  const opts = { mode: "anon", host: "e03", team: "980", exchangePath: null, authScheme: "Token", tokenField: "token" };
+  const names = { "--mode": "mode", "--host": "host", "--team": "team", "--exchange-path": "exchangePath", "--auth-scheme": "authScheme", "--token-field": "tokenField" };
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i];
     const value = argv[i + 1];
-    if (!["--mode", "--host", "--team", "--exchange-path"].includes(key) || value === undefined) throw new DiscoveryUsageError(`unknown or incomplete argument ${key}`);
-    if (key === "--exchange-path") opts.exchangePath = value;
-    else opts[key.slice(2)] = value;
+    if (!names[key] || value === undefined) throw new DiscoveryUsageError(`unknown or incomplete argument ${key}`);
+    opts[names[key]] = value;
   }
   if (!["anon", "token", "exchange"].includes(opts.mode)) throw new DiscoveryUsageError("--mode must be anon, token or exchange");
   if (!/^(0|[1-9][0-9]{0,11})$/.test(opts.team)) throw new DiscoveryUsageError("--team must be a canonical GPEXE team id");
   if (!/^[a-z0-9]{1,16}$/.test(opts.host)) throw new DiscoveryUsageError("--host is a catalog KEY (for example e03), never a URL");
   if (opts.exchangePath !== null && !/^[a-z0-9_\-/]{1,64}\/$/.test(opts.exchangePath)) throw new DiscoveryUsageError("--exchange-path must be a relative path ending in / (letters, digits, - _ /)");
+  // One RFC 7235 scheme token, exactly as step A reported it: a word, no
+  // space, no colon, no quotes, at most 32 characters. Only this scheme is
+  // sent; a wrong word gives a 401 finding, never a second attempt.
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(opts.authScheme)) throw new DiscoveryUsageError("--auth-scheme must be one scheme word (for example Token or Bearer)");
+  // One top-level JSON field name of the exchange answer.
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(opts.tokenField)) throw new DiscoveryUsageError("--token-field must be one field name (for example token or access_token)");
   return opts;
 }
 
@@ -149,11 +160,11 @@ async function readBody(res) {
   }
 }
 
-export async function probe({ fetchImpl, baseUrl, method, path, token = null, jsonBody = undefined, teamId }) {
+export async function probe({ fetchImpl, baseUrl, method, path, token = null, authScheme = "Token", jsonBody = undefined, teamId }) {
   const url = new URL(path, baseUrl);
   if (!url.href.startsWith(baseUrl)) throw new DiscoveryUsageError("a path may not leave the approved host");
   const headers = { Accept: "application/json" };
-  if (token) headers.Authorization = `Token ${token}`;
+  if (token) headers.Authorization = `${authScheme} ${token}`;
   if (jsonBody !== undefined) headers["Content-Type"] = "application/json";
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -176,12 +187,12 @@ const strip = (entry) => {
   return rest;
 };
 
-export async function runDiscovery({ mode, host, team, exchangePath }, env, fetchImpl = globalThis.fetch) {
+export async function runDiscovery({ mode, host, team, exchangePath, authScheme = "Token", tokenField = "token" }, env, fetchImpl = globalThis.fetch) {
   const baseUrl = discoveryBaseUrl(host);
   const today = new Date().toISOString().slice(0, 10);
-  const report = { source: DISCOVERY_SOURCE, hostKey: host, mode, teamId: team, ranAt: new Date().toISOString(), requests: [], findings: {} };
+  const report = { source: DISCOVERY_SOURCE, hostKey: host, mode, teamId: team, authScheme, tokenField, ranAt: new Date().toISOString(), requests: [], findings: {} };
   const push = async (args) => {
-    const entry = await probe({ fetchImpl, baseUrl, teamId: team, ...args });
+    const entry = await probe({ fetchImpl, baseUrl, teamId: team, authScheme, ...args });
     report.requests.push(strip(entry));
     return entry;
   };
@@ -228,16 +239,19 @@ export async function runDiscovery({ mode, host, team, exchangePath }, env, fetc
     if (!username || !password) throw new DiscoveryUsageError("GPEXE_USERNAME and GPEXE_PASSWORD are not both set in this terminal (mode exchange)");
     const path = exchangePath ?? "api-token-auth/";
     const ex = await push({ method: "POST", path, jsonBody: { username, password } });
-    const issued = ex._body && typeof ex._body === "object" && typeof ex._body.token === "string" ? ex._body.token : null;
+    // Only the named field is read; a token under another name is reported as
+    // "no token field" (its NAME still appears in fieldNames), never guessed.
+    const body = ex._body && typeof ex._body === "object" && !Array.isArray(ex._body) ? ex._body : null;
+    const issued = body && Object.prototype.hasOwnProperty.call(body, tokenField) && typeof body[tokenField] === "string" && body[tokenField] ? body[tokenField] : null;
     const findings = {
       exchangeStatus: ex.status ?? null,
       exchangeReturnsTokenField: Boolean(issued),
-      exchangedTokenWorksAsTokenScheme: null,
+      exchangedTokenWorksAsScheme: null,
       exchangedTokenEqualsEnvToken: null,
     };
     if (issued) {
       const teams = await push({ method: "GET", path: "api/team/", token: issued });
-      findings.exchangedTokenWorksAsTokenScheme = teams.status === 200;
+      findings.exchangedTokenWorksAsScheme = teams.status === 200;
       findings.seesTeam = teams.containsTeam ?? null;
       if (env.GPEXE_API_TOKEN) findings.exchangedTokenEqualsEnvToken = issued === env.GPEXE_API_TOKEN;
     }

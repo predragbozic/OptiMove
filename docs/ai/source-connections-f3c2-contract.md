@@ -53,13 +53,20 @@ the exchange path): run it once, by hand, never in a loop or a scheduler.
 node backend/scripts/gpexe-auth-discovery.mjs --mode anon --host e03 --team 980
 ```
 
+**Carry step A into steps B and C.** The scheme word step A reported (`findings.apiDemandsScheme`)
+is passed as `--auth-scheme`; the script sends exactly that one scheme and never tries another
+(a wrong word is a 401 finding, not a retry). The exchange answer's field names step A reported
+for the exchange endpoint decide `--token-field` in step C; only that one field is read. Defaults
+are `Token` and `token` (what the pilot saw on `e03`); pass the reported values explicitly even
+when they equal the defaults, so the form and the run agree.
+
 Step B — the **dedicated API account's official token**, if GPEXE issues one (the preferred
 `credential_kind = api_token`). The value is set only in this terminal and removed afterwards:
 
 ```powershell
 $s = Read-Host "GPEXE API token" -AsSecureString   # masked; this terminal only, never in chat
 $env:GPEXE_API_TOKEN = [System.Net.NetworkCredential]::new("", $s).Password; Remove-Variable s
-node backend/scripts/gpexe-auth-discovery.mjs --mode token --host e03 --team 980
+node backend/scripts/gpexe-auth-discovery.mjs --mode token --host e03 --team 980 --auth-scheme Token
 Remove-Item Env:GPEXE_API_TOKEN
 ```
 
@@ -73,15 +80,24 @@ $u = Read-Host "GPEXE API account username" -AsSecureString   # masked; this ter
 $env:GPEXE_USERNAME = [System.Net.NetworkCredential]::new("", $u).Password; Remove-Variable u
 $p = Read-Host "GPEXE API account password" -AsSecureString
 $env:GPEXE_PASSWORD = [System.Net.NetworkCredential]::new("", $p).Password; Remove-Variable p
-node backend/scripts/gpexe-auth-discovery.mjs --mode exchange --host e03 --team 980 --exchange-path api-token-auth/
+node backend/scripts/gpexe-auth-discovery.mjs --mode exchange --host e03 --team 980 --exchange-path api-token-auth/ --auth-scheme Token --token-field token
 Remove-Item Env:GPEXE_USERNAME, Env:GPEXE_PASSWORD
 ```
 
-Step D — lifetime and rotation (no script can prove these in one run): run step B again after
-at least 24 h and again after a new login to the GPEXE UI with the same account; if step B still
-answers 200 the token survived (rotation on login: no). Also read, in the GPEXE UI or its
-documentation, whether an API token page exists (generate / revoke / expiry) and note only
-yes/no and the expiry rule in words.
+Step D — lifetime and rotation. **Documentation first, never a login experiment on a credential
+in use.** A new UI login with the same account may rotate or revoke the token GPEXE issued, so a
+login is not a read-only step.
+1. Read the GPEXE documentation, the API-token page of the UI (if one exists: generate / revoke /
+   expiry / "one token per user") or ask GPEXE support: does the token expire, and does a new
+   login invalidate it? Note yes/no and the rule in words. If this answers the question, step D
+   is done.
+2. Run step B again after at least 24 h (read-only; proves the token survives a day).
+3. A **controlled login test** only when all of these hold: GPEXE documentation or support has
+   confirmed that a UI login does not affect an API token (or the owner explicitly accepts that
+   it may); the account is the dedicated API account and is **not yet used by production** (no
+   verified connection in OptiMove points at it); and the owner notes before the login that the
+   token may become invalid and a new one may have to be issued. Then: log in to the UI once, run
+   step B again, record alive yes/no. Never with the account of a live connection.
 
 ### 1.3 What to return (form; only these fields)
 
@@ -90,18 +106,23 @@ host key:                       e03
 step A  scheme word:            ______        (findings.apiDemandsScheme, expected "Token")
         unauthenticated status: ___           (findings.unauthenticatedStatusOnTeamList, expected 401)
         exchange endpoint:      path ______ status ___ field names [______]   (per candidate path)
+        scheme passed to B/C:   ______        (--auth-scheme, equals step A)
+        token field passed to C:______        (--token-field, from step A's exchange field names)
 step B  token accepted:         yes / no      (findings.tokenAccepted)
         team-list endpoint:     exists / absent / status ___
         team count:             ___
         sees Team ID 980:       yes / no
         allowed methods:        team [______]  team_session [______]  athlete_session [______]
+                                (what the endpoint supports, not what this account may do)
         team field names:       [______]      (requests[path = api/team/<team>/].fieldNames)
 step C  exchange status:        ___           (only if run)
         returns a token field:  yes / no
-        works as Token scheme:  yes / no
+        works with that scheme: yes / no      (findings.exchangedTokenWorksAsScheme)
         equals step-B token:    yes / no / not compared
-step D  token alive after 24 h: yes / no;  after a new UI login: yes / no
-        UI has an API-token page: yes / no;  expiry rule in words: ______
+step D  documented rule (expiry / rotation on login), source: ______
+        token alive after 24 h: yes / no
+        controlled login test:  not run / run (conditions of step D.3 met) -> alive yes / no
+        UI has an API-token page: yes / no
 ```
 
 Never returned, never asked for: any token, username, password, cookie, `Authorization` value,
@@ -114,10 +135,10 @@ does not by construction; sending the whole printed JSON is fine).
 |---|---|---|
 | 1. Which approved host issues the credential | steps A–C succeed on `e03` | `e03` stays the only approved key. `server3` is not probed by this procedure at all; it stays unapproved (U1/U2 are answered by GPEXE support or documentation, not by a request from OptiMove). |
 | 2. Official token or exchanged token | B accepted → `api_token`; only C works → `exchanged_token` | `credential_kind` per connection; the Connect route accepts the kind the discovery proved, the other stays disabled for `gpexe` (both kinds remain storable, F3c1). |
-| 3. Endpoint, header scheme, lifetime, rotation | A (scheme, path), C (exchange), D (lifetime) | The adapter's `scheme` and `exchangePath` constants; the decay period of `verified` (D7); whether Reconnect must be offered proactively. If D shows rotation on login, the runbook forbids UI logins with the API account. |
+| 3. Endpoint, header scheme, lifetime, rotation | A (scheme, path, exchange field names), C (exchange with the reported scheme and field), D (documented rule first; login test only under D.3) | The adapter's `scheme` and `exchangePath` constants; the decay period of `verified` (D7); whether Reconnect must be offered proactively. If D shows rotation on login, the runbook forbids UI logins with the API account. |
 | 4. Dedicated account sees Team ID 980 | B or C `seesTeam` | A binding for team 980 is only created after a Test on this connection succeeds (section 3.8). |
 | 5. Read-only team-list endpoint | B `teamListEndpoint` | If it exists, Test connection reads `team/` (one request, no team needed) and Connect offers the list to choose a source team from; if absent, Test reads the bound team's thresholds. |
-| 6. Minimal scope | B `allowedMethods`; GPEXE account roles (owner, in the UI, words only) | The runbook states the smallest GPEXE role that answers GET on `team`, `team_session`, `athlete_session`, `track`; if `Allow` lists write methods, the account must be a read-only role or GPEXE support is asked for one. |
+| 6. Minimal scope | B's real GET results (200 on `team`, the team, thresholds, sessions) and the account's GPEXE role (owner, in the UI, words only). `OPTIONS Allow` describes what the **endpoint** supports; it is not by itself proof of what **this account** may do, and it says nothing about write rights the account may or may not hold. | The runbook states the smallest GPEXE role that answers GET on `team`, `team_session`, `athlete_session`, `track`; if the endpoints allow write methods, the account must be a read-only role or GPEXE support is asked for one. |
 
 **GO for the adapter** = steps A and B (or A and C) returned, scheme word known, `seesTeam` yes,
 and question 6 answered in words. Anything else = NO-GO, the adapter is not written, the owner
