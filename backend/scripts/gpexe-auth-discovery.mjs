@@ -209,7 +209,10 @@ export async function runDiscovery({ mode, host, team, exchangePath, authScheme 
     report.findings = {
       apiDemandsScheme: teams.authScheme ?? root.authScheme ?? null,
       unauthenticatedStatusOnTeamList: teams.status ?? null,
-      exchangeEndpoints: report.requests.filter((r) => r.method === "POST").map((r) => ({ path: r.path, status: r.status ?? null, fieldNames: r.fieldNames ?? [] })),
+      // An EMPTY POST can only show the REQUEST fields the endpoint requires
+      // (username, password); it says nothing about the field a successful
+      // answer carries the token in.
+      exchangeEndpoints: report.requests.filter((r) => r.method === "POST").map((r) => ({ path: r.path, status: r.status ?? null, requestFieldNames: r.fieldNames ?? [] })),
     };
   }
 
@@ -245,7 +248,14 @@ export async function runDiscovery({ mode, host, team, exchangePath, authScheme 
     const issued = body && Object.prototype.hasOwnProperty.call(body, tokenField) && typeof body[tokenField] === "string" && body[tokenField] ? body[tokenField] : null;
     const findings = {
       exchangeStatus: ex.status ?? null,
+      // The NAMES of a successful answer's fields, so the owner can confirm
+      // the token field from documentation and repeat step C once with it.
+      successResponseFieldNames: ex.status >= 200 && ex.status < 300 ? (ex.fieldNames ?? []) : null,
+      tokenFieldUsed: tokenField,
       exchangeReturnsTokenField: Boolean(issued),
+      // A 2xx answer without the named field: the answer is dropped here,
+      // unread beyond its field names; nothing is guessed, no GET follows.
+      successWithoutNamedField: ex.status >= 200 && ex.status < 300 && !issued,
       exchangedTokenWorksAsScheme: null,
       exchangedTokenEqualsEnvToken: null,
     };

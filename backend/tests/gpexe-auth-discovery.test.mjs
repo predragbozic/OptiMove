@@ -104,6 +104,9 @@ test("a wrong scheme or a wrong token field is a finding, never a retry with ano
   assertNoSecretInReport(c, env);
   assert.equal(c.findings.exchangeStatus, 200);
   assert.equal(c.findings.exchangeReturnsTokenField, false);
+  assert.equal(c.findings.successWithoutNamedField, true, "a 2xx answer without the named field is reported as such and dropped");
+  assert.deepEqual(c.findings.successResponseFieldNames, ["access_token", "token_type"], "only the NAMES of the successful answer");
+  assert.equal(c.findings.tokenFieldUsed, "token");
   assert.equal(c.findings.exchangedTokenWorksAsScheme, null);
   assert.equal(calls.length, 1, "the token under another field name is never picked up");
   assert.deepEqual(c.requests[0].fieldNames, ["access_token", "token_type"], "the owner sees the real field name and passes it explicitly");
@@ -130,7 +133,8 @@ test("anon mode: no Authorization header is ever sent, the scheme word and the e
   assert.equal(report.findings.apiDemandsScheme, "Token");
   assert.equal(report.findings.unauthenticatedStatusOnTeamList, 401);
   const ex = report.findings.exchangeEndpoints.find((e) => e.path === "api-token-auth/");
-  assert.deepEqual(ex, { path: "api-token-auth/", status: 400, fieldNames: ["password", "username"] });
+  assert.deepEqual(ex, { path: "api-token-auth/", status: 400, requestFieldNames: ["password", "username"] }, "step A reports REQUEST field names only; it cannot know the token field");
+  assert.ok(!("tokenField" in ex) && !("fieldNames" in ex));
   assert.equal(report.findings.exchangeEndpoints.find((e) => e.path === "api/token/").status, 404);
   // The empty POST carried no credential.
   const post = calls.find((c) => c.method === "POST" && c.url.endsWith("/api-token-auth/"));
@@ -183,7 +187,8 @@ test("exchange mode: username and password go only in the body of one POST to th
   assert.equal(calls[1].method, "GET");
   assert.equal(calls[1].headers.Authorization, `Token ${ISSUED}`);
   assert.deepEqual(report.findings, {
-    exchangeStatus: 200, exchangeReturnsTokenField: true, exchangedTokenWorksAsScheme: true, exchangedTokenEqualsEnvToken: false, seesTeam: true,
+    exchangeStatus: 200, successResponseFieldNames: ["token", "token_type"], tokenFieldUsed: "token", exchangeReturnsTokenField: true, successWithoutNamedField: false,
+    exchangedTokenWorksAsScheme: true, exchangedTokenEqualsEnvToken: false, seesTeam: true,
   });
   assert.deepEqual(report.requests[0].fieldNames, ["token", "token_type"], "only the NAMES of the fields");
 });
@@ -196,6 +201,8 @@ test("exchange mode with a refused login reports the status and field names only
   assert.equal(calls.length, 1);
   assert.equal(report.findings.exchangeStatus, 400);
   assert.equal(report.findings.exchangeReturnsTokenField, false);
+  assert.equal(report.findings.successWithoutNamedField, false);
+  assert.equal(report.findings.successResponseFieldNames, null, "a refused exchange has no successful answer to describe");
   assert.deepEqual(report.requests[0].fieldNames, ["non_field_errors"]);
   assert.ok(!JSON.stringify(report).includes("Unable to log in"), "the server's text is not printed");
 });
@@ -231,12 +238,20 @@ test("a first team page without the team does not hide a 200 on the team itself;
   assert.ok(r2.requests.every((r) => r.error === "ENOTFOUND"));
 });
 
-test("the runbook never reads a credential unmasked", async () => {
+test("the runbook never reads a credential unmasked, and never claims that step A determines the token field", async () => {
   const { readFile } = await import("node:fs/promises");
   const doc = await readFile(new URL("../../docs/ai/source-connections-f3c2-contract.md", import.meta.url), "utf8");
-  const reads = doc.split(/\r?\n/).filter((l) => /Read-Host/.test(l));
+  const lines = doc.split(/\r?\n/);
+  const reads = lines.filter((l) => /Read-Host/.test(l));
   assert.ok(reads.length >= 3);
   for (const l of reads) assert.match(l, /-AsSecureString/, l);
+  // An empty POST shows only the request fields; the token field of a
+  // successful answer comes from documentation, never from step A.
+  const text = lines.join(" ");
+  assert.doesNotMatch(text, /token[- ]field[^.]{0,80}(from|reported by|decided by|determined by|comes from) step A/i, "the doc must not derive --token-field from step A");
+  assert.doesNotMatch(text, /step A[^.]{0,80}(decide|determine|report)s? (the )?token[- ]field/i, "the doc must not say step A decides the token field");
+  assert.match(text, /exchange request field names/i, "the form names step A's result as REQUEST field names");
+  assert.match(text, /successful response field names/i, "the form names step C's successful-answer field names");
 });
 
 test("the output guard refuses a report that would carry an environment value, whatever produced it", () => {

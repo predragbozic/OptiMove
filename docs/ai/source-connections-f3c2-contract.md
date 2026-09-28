@@ -55,10 +55,12 @@ node backend/scripts/gpexe-auth-discovery.mjs --mode anon --host e03 --team 980
 
 **Carry step A into steps B and C.** The scheme word step A reported (`findings.apiDemandsScheme`)
 is passed as `--auth-scheme`; the script sends exactly that one scheme and never tries another
-(a wrong word is a 401 finding, not a retry). The exchange answer's field names step A reported
-for the exchange endpoint decide `--token-field` in step C; only that one field is read. Defaults
-are `Token` and `token` (what the pilot saw on `e03`); pass the reported values explicitly even
-when they equal the defaults, so the form and the run agree.
+(a wrong word is a 401 finding, not a retry). Step A's empty POST reveals only the **request**
+fields the exchange endpoint requires (`username`, `password`); it cannot reveal the field a
+successful answer carries the token in. **`--token-field` therefore comes from the official GPEXE
+documentation or GPEXE support**; when neither says, the first step C run uses the documented
+legacy candidate `token` (the pilot's observation on `e03`). Only that one field is read. Pass the
+scheme word explicitly even when it equals the default, so the form and the run agree.
 
 Step B — the **dedicated API account's official token**, if GPEXE issues one (the preferred
 `credential_kind = api_token`). The value is set only in this terminal and removed afterwards:
@@ -73,7 +75,15 @@ Remove-Item Env:GPEXE_API_TOKEN
 Step C — only if GPEXE issues no official token, the **one-time exchange** with the dedicated
 account (`credential_kind = exchanged_token`, the fallback). Use the exchange path step A found
 (`api-token-auth/` unless step A says otherwise). If step B's token is also set, the report says
-whether the exchanged token EQUALS it (true/false) — nothing more:
+whether the exchanged token EQUALS it (true/false) — nothing more.
+
+If the exchange answers 2xx but `exchangeReturnsTokenField` is `false`
+(`successWithoutNamedField: true`), the script has already dropped that answer unread beyond its
+field names: it prints `successResponseFieldNames` (names only), sends no GET and guesses nothing.
+The owner then confirms the right field from those names against the documentation and may
+repeat step C **at most once** with the confirmed `--token-field`. Be aware that this means
+**two exchange POSTs** were sent with the account's password (each one may have issued a token on
+the GPEXE side); record both runs in the form. Never a third run, never a loop.
 
 ```powershell
 $u = Read-Host "GPEXE API account username" -AsSecureString   # masked; this terminal only
@@ -105,9 +115,8 @@ login is not a read-only step.
 host key:                       e03
 step A  scheme word:            ______        (findings.apiDemandsScheme, expected "Token")
         unauthenticated status: ___           (findings.unauthenticatedStatusOnTeamList, expected 401)
-        exchange endpoint:      path ______ status ___ field names [______]   (per candidate path)
+        exchange endpoint:      path ______ status ___ exchange request field names [______]   (per candidate path)
         scheme passed to B/C:   ______        (--auth-scheme, equals step A)
-        token field passed to C:______        (--token-field, from step A's exchange field names)
 step B  token accepted:         yes / no      (findings.tokenAccepted)
         team-list endpoint:     exists / absent / status ___
         team count:             ___
@@ -115,8 +124,12 @@ step B  token accepted:         yes / no      (findings.tokenAccepted)
         allowed methods:        team [______]  team_session [______]  athlete_session [______]
                                 (what the endpoint supports, not what this account may do)
         team field names:       [______]      (requests[path = api/team/<team>/].fieldNames)
-step C  exchange status:        ___           (only if run)
-        returns a token field:  yes / no
+step C  token field chosen:     ______        (--token-field; source: documentation / support / legacy candidate "token")
+        exchange status:        ___           (only if run)
+        successful response field names: [______]   (findings.successResponseFieldNames, names only)
+        returns the chosen field: yes / no    (findings.exchangeReturnsTokenField)
+        2xx without the chosen field: yes / no (findings.successWithoutNamedField; answer dropped)
+        repeated once with confirmed field: no / yes -> field ______, two exchange POSTs sent
         works with that scheme: yes / no      (findings.exchangedTokenWorksAsScheme)
         equals step-B token:    yes / no / not compared
 step D  documented rule (expiry / rotation on login), source: ______
@@ -135,7 +148,7 @@ does not by construction; sending the whole printed JSON is fine).
 |---|---|---|
 | 1. Which approved host issues the credential | steps A–C succeed on `e03` | `e03` stays the only approved key. `server3` is not probed by this procedure at all; it stays unapproved (U1/U2 are answered by GPEXE support or documentation, not by a request from OptiMove). |
 | 2. Official token or exchanged token | B accepted → `api_token`; only C works → `exchanged_token` | `credential_kind` per connection; the Connect route accepts the kind the discovery proved, the other stays disabled for `gpexe` (both kinds remain storable, F3c1). |
-| 3. Endpoint, header scheme, lifetime, rotation | A (scheme, path, exchange field names), C (exchange with the reported scheme and field), D (documented rule first; login test only under D.3) | The adapter's `scheme` and `exchangePath` constants; the decay period of `verified` (D7); whether Reconnect must be offered proactively. If D shows rotation on login, the runbook forbids UI logins with the API account. |
+| 3. Endpoint, header scheme, lifetime, rotation | A (scheme, path, exchange request field names), C (exchange with the reported scheme and the documented token field; the successful answer's field names), D (documented rule first; login test only under D.3) | The adapter's `scheme` and `exchangePath` constants; the decay period of `verified` (D7); whether Reconnect must be offered proactively. If D shows rotation on login, the runbook forbids UI logins with the API account. |
 | 4. Dedicated account sees Team ID 980 | B or C `seesTeam` | A binding for team 980 is only created after a Test on this connection succeeds (section 3.8). |
 | 5. Read-only team-list endpoint | B `teamListEndpoint` | If it exists, Test connection reads `team/` (one request, no team needed) and Connect offers the list to choose a source team from; if absent, Test reads the bound team's thresholds. |
 | 6. Minimal scope | B's real GET results (200 on `team`, the team, thresholds, sessions) and the account's GPEXE role (owner, in the UI, words only). `OPTIONS Allow` describes what the **endpoint** supports; it is not by itself proof of what **this account** may do, and it says nothing about write rights the account may or may not hold. | The runbook states the smallest GPEXE role that answers GET on `team`, `team_session`, `athlete_session`, `track`; if the endpoints allow write methods, the account must be a read-only role or GPEXE support is asked for one. |
