@@ -287,7 +287,7 @@ Taken as decisions for F3c; the table above keeps the alternatives for the recor
 
 | ID | Decision |
 |---|---|
-| D1 | A fixed host allowlist in code; no user-typed URL, ever. |
+| D1 | A fixed host catalog, keys only, no user-typed URL, ever. Amended by the external review of F3c1 (2026-09-27): GPEXE may run a different server per organisation, so the catalog is a seeded table (`source_host_catalog`) plus the backend's exact-host map; a new confirmed shard is one row and one code entry, never a structure change; `server3` stays unapproved until a dedicated API account and Team ID 980 are confirmed there; nothing assumes one account, token or team id is valid on two servers; F3c2 tests the connection on the chosen host before any binding. |
 | D2, D3 | Only a platform admin manages a connection and tests it. Coaches see the state only. |
 | D4 | A credential connection belongs to the club/organisation; teams are bound to it separately (`source_team_bindings`). |
 | D5 | Disconnect stays outside F3c until its consequences (orphan data, running checks, bound teams) are defined. |
@@ -373,7 +373,27 @@ Before the Connect route is designed in detail (F3c2), and without any browser c
   be created.
 Until answered, F3c2 assumes a token that may stop at any time, one host (`e03`), one team.
 
+**Mandatory F3c2 gate — host before any network call** (external review of F3c1, 2026-09-28).
+The database catalog (`source_host_catalog`) and the code allowlist (`sourceHosts.js`) are two
+separate layers. Before every request to a source (Connect, Test connection, token exchange,
+every import read), F3c2 reads the connection's catalog row in the same request and calls
+`resolveApprovedSourceHost(source, hostKey, row)`: it must be approved in the database AND resolve
+in the code, else `host_not_allowed` with nothing sent; `sourceHost()` alone is never enough (it
+does not know about retirement), and there is no fallback to another host. F3c1 already refuses a
+new connection or a new team binding on a retired key; an existing connection on a retired key is
+kept as history and only this gate stops its requests. F3c2 must test: a retired key, a key
+approved in the database but absent from the code, and a key in the code but absent or retired in
+the database, each refused before any request.
+
 ## 8c. GO / NO-GO for F3c1 (schema, encryption, audit)
+
+*As built (owner order 2026-09-27, PR "F3c1"):* the F3c1 row of section 6 was narrowed. Delivered:
+the three tables, the integrity rules of section 3, the ascending bound-team order function, the
+per-team lock taken by the binding triggers, the crypto module, the rollback and the tests. Moved
+to F3c2: the sweep over all bound teams of a connection (Connect / Reconnect / Disconnect), the
+two overlapping-Reconnect concurrency tests, the fake-source marker-token test and the start-up
+key check (the key is read only on use). F3c2 must lock the connection row before reading
+`source_connection_bound_team_ids()`.
 
 **GO, with the boundaries below.** F3c1 is source-neutral and does not depend on the open auth
 questions: it adds the tables beside `gpexe_team_settings` (D6), the encryption helper with key
