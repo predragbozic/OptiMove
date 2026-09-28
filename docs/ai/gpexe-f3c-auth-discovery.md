@@ -362,6 +362,11 @@ body was kept, and the original capture material is not part of this repository.
 
 ## 8b. What stays for F3c2 discovery (auth questions)
 
+*Procedure (2026-09-28):* the owner-run read-only script and the return form that answer U1/U2
+(for `e03` only; `server3` is not probed), U3, U4, U5 and U8 are in
+`docs/ai/source-connections-f3c2-contract.md`, section 1; the GO / NO-GO rule for the adapter is
+its section 1.4.
+
 Before the Connect route is designed in detail (F3c2), and without any browser credential:
 - U1/U2/U6 — which host issues the server-to-server token for the account OptiMove will use,
   and whether `e03` exposes `api-token-auth` for that account (the pilot's one observation is

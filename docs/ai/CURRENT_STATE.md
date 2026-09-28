@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-27. Last `origin/main` commit checked: `4949b79` (merge of PR #127,
-`docs/gpexe-f3c-capture-results` → `main`; PR #126 `bd98b5b` before it).
+Last reviewed: 2026-09-28. Last `origin/main` commit checked: `848aa94` (merge of PR #128,
+`feature/source-connections-f3c1` → `main`; PR #127 `4949b79` before it).
 
 ## Active phase
 
@@ -123,10 +123,16 @@ goal. U7 resolved, U8 partly, U1–U6 open for F3c2 discovery (section 8b). PR #
 (`bd98b5b`, the discovery document) and PR #127 (`4949b79`, the sanitized capture results and
 the GO) are merged and deployed (`/api/health` served `4949b79`).
 
-**The active step is F3c1 — source-neutral schema, encryption foundation and audit** (branch
-`feature/source-connections-f3c1`, in review; external review required: migration and
-credential storage). It adds migration v27
-(`migrations_v2/202609271000_training_load_v27_source_credential_connections.sql`): three
+**F3c1 — source-neutral schema, encryption foundation and audit — is merged and deployed**
+(PR #128, merge commit `848aa94` on 2026-09-28 12:04 UTC, pinned to head `6daf537` after two
+external review rounds by the owner; `/api/health` served `848aa94` with `ok: true` four times).
+**v27 on the deployed database is inferred** from that successful start (`npm start` runs
+`node src/migrate.js &&` the server); the deployed database was not queried, so there is no
+direct SQL proof. If it ran as inferred, it created only the four tables and the one catalog seed
+row (`gpexe` / `e03`); no connection, binding or audit row can exist yet, because no merged code
+writes to those tables, and no code touches `gpexe_team_settings`; no credential, no Render
+change, no GPEXE request. It adds migration v27
+(`migrations_v2/202609271000_training_load_v27_source_credential_connections.sql`): four
 tables in `training_load` **beside** `gpexe_team_settings` — `source_host_catalog` (the approved
 server keys per source, `gpexe`/`e03` seeded; GPEXE may run a different server per organisation,
 so a new confirmed shard is one catalog row plus one exact-host entry in `sourceHosts.js`, never a
@@ -159,8 +165,28 @@ and the two credential kinds (owner decision 2026-09-27: `api_token` entered by 
 administrator is preferred, `exchanged_token` from a one-time exchange is the fallback with the
 password never stored or logged; F3c1 supports both and chooses neither). Runbook:
 `docs/runbooks/source-connections-v27.md`; rollback rehearsed on a disposable database. **No
-route, no UI, no GPEXE call, no cut-over, no row for team 980, no Render change; the migration
-was not applied to any persistent database.**
+route, no UI, no GPEXE call, no cut-over, no row for team 980, no Render change; the local
+OPTIMOVE database was not migrated (still v21).**
+
+**The active step is F3c2 — source authentication, discovery first** (branch
+`feature/source-connections-f3c2-discovery`, owner order 2026-09-28, from `848aa94`). Before any
+Connect / Reconnect / Test route or network adapter is written, the GPEXE server-to-server
+contract must be proven with the dedicated API account by the owner alone:
+`docs/ai/source-connections-f3c2-contract.md` section 1 is the owner-run read-only procedure
+(`backend/scripts/gpexe-auth-discovery.mjs`, unit-tested against a fake server, never sends a
+request in tests, refuses every host but the approved `e03` key, never prints an environment
+value; the owner returns only host key, masked paths, statuses, the scheme word, Team ID and
+field names). It answers: which approved host issues the credential, official API token or
+one-time username/password exchange, the exact endpoint / header scheme / lifetime / rotation,
+whether the account sees Team ID 980, whether a read-only team-list endpoint exists, the minimal
+scope. Section 2 is the source-neutral F3c2 contract with the eight mandatory conditions
+(`resolveApprovedSourceHost()` before every call; connection row locked before the bound-team
+order; all bound teams locked ascending; 5 attempts / 15 minutes counted from the append-only
+audit; every attempt audited without secrets; stable codes without source text; Connect / Test on
+the chosen host only, no fallback; no binding before a successful Test / Connect) and section 3
+the test plan. **The adapter and the routes are not written until the owner's GO on the
+discovery result.** `server3` is not probed and stays unapproved; the browser JWT / cookie is
+never used.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -917,9 +943,9 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's external review and merge decision on the **F3c1** PR, the F3c2 auth discovery of
-`docs/ai/gpexe-f3c-auth-discovery.md` section 8b in parallel, then F3c2–F3c4, then
-**Phase 5a3c** (Complete and Needs review).
+The owner runs the F3c2 discovery procedure (`docs/ai/source-connections-f3c2-contract.md`
+section 1) and returns the sanitized form; on GO the F3c2 adapter and routes are built against
+the contract of its section 2, then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 
