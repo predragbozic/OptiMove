@@ -131,8 +131,10 @@ tables in `training_load` **beside** `gpexe_team_settings` — `source_host_cata
 server keys per source, `gpexe`/`e03` seeded; GPEXE may run a different server per organisation,
 so a new confirmed shard is one catalog row plus one exact-host entry in `sourceHosts.js`, never a
 structure change and never a typed URL; `server3` is not approved until a dedicated API account
-and Team ID 980 are confirmed there; the backend answers `host_not_allowed` before any request
-for an unknown or retired key and never falls back), `source_credential_connections` (club- or
+and Team ID 980 are confirmed there; a retired key takes no new connection and no new team
+binding in the database; the backend's `resolveApprovedSourceHost()` answers `host_not_allowed`
+unless the catalog row is approved AND the code resolves the key, with no fallback — calling it
+before every request is a mandatory F3c2 gate, F3c1 has no network caller), `source_credential_connections` (club- or
 team-owned, `host_key` an approved catalog key, a display label, a mandatory open `credential_kind`, the four credential parts null-together or complete,
 the five states bound to their facts, identity immutable once bound),
 `source_team_bindings` (one active binding per team and source, one active OptiMove team per
@@ -143,7 +145,8 @@ provenance pointer to the legacy GPEXE settings row that is never changed) and
 `source_connection_audit` (append-only; who, when, action, outcome, reason, error code and a
 flat sanitized object whose keys may never name a secret in any spelling — camelCase, hyphens
 and case are normalised first); the rollback refuses once any connection, binding or audit row
-exists (forward-only after first use); `source_connection_bound_team_ids()`
+exists, once the host catalog differs from the v27 seed, or once a later migration is recorded
+(forward-only after that); `source_connection_bound_team_ids()`
 gives the ascending lock order F3c2 will use, and creating or ending a binding takes that team's
 import lock inside the trigger (try-lock style, v24 `hold_gpexe_team_lock`). **Narrowed by the
 owner's order of 2026-09-27 against the discovery document's F3c1 row:** the sweep over all bound

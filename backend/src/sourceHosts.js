@@ -2,9 +2,16 @@
 // docs/ai/gpexe-f3c-auth-discovery.md D1, section 4 rule 4). A source may
 // run on several servers (one per organisation); a connection row stores
 // only a host key and the exact HTTPS base URL comes from here, never from
-// a row, a request or an administrator. This module is the final security
-// boundary: an unknown or retired key is refused (host_not_allowed) before
-// any network call, and a connection never falls back to another host.
+// a row, a request or an administrator. Two layers, both required before
+// any network call, with no fallback to another host:
+//   * the database catalog (training_load.source_host_catalog) says whether
+//     a key is APPROVED now; a retired key takes no new connection and no
+//     new binding there;
+//   * this module maps the key to an exact HTTPS host; sourceHost() alone
+//     does NOT know whether the key was retired.
+// resolveApprovedSourceHost() checks both and is the only resolver a
+// network caller may use (mandatory F3c2 gate: read the catalog row in the
+// same request, pass it here, refuse with host_not_allowed otherwise).
 //
 // Adding a confirmed server = one entry here (exact https host, no path
 // games) + one approved row in training_load.source_host_catalog (a
@@ -55,6 +62,24 @@ export function sourceHost(sourceSystem, hostKey) {
 // admin may choose from, intersected by F3c2 with the database catalog).
 export function resolvableHostKeys(sourceSystem) {
   return Object.prototype.hasOwnProperty.call(SOURCE_HOSTS, sourceSystem) ? Object.keys(SOURCE_HOSTS[sourceSystem]) : [];
+}
+
+// The gate before any network call (F3c2): the connection's catalog row,
+// read from the database in the same request, must be the same source and
+// key and approved, AND the key must resolve here. Anything else -
+// no row, a retired row, a row for another key, a key the code does not
+// know - is host_not_allowed. There is no fallback.
+export function resolveApprovedSourceHost(sourceSystem, hostKey, catalogRow) {
+  const approved = catalogRow
+    && catalogRow.source_system === sourceSystem
+    && catalogRow.host_key === hostKey
+    && catalogRow.state === "approved";
+  if (!approved) {
+    const error = new Error("source host is not approved");
+    error.code = "host_not_allowed";
+    throw error;
+  }
+  return sourceHost(sourceSystem, hostKey);
 }
 
 export function isAllowedHostKey(sourceSystem, hostKey) {

@@ -373,6 +373,18 @@ Before the Connect route is designed in detail (F3c2), and without any browser c
   be created.
 Until answered, F3c2 assumes a token that may stop at any time, one host (`e03`), one team.
 
+**Mandatory F3c2 gate — host before any network call** (external review of F3c1, 2026-09-28).
+The database catalog (`source_host_catalog`) and the code allowlist (`sourceHosts.js`) are two
+separate layers. Before every request to a source (Connect, Test connection, token exchange,
+every import read), F3c2 reads the connection's catalog row in the same request and calls
+`resolveApprovedSourceHost(source, hostKey, row)`: it must be approved in the database AND resolve
+in the code, else `host_not_allowed` with nothing sent; `sourceHost()` alone is never enough (it
+does not know about retirement), and there is no fallback to another host. F3c1 already refuses a
+new connection or a new team binding on a retired key; an existing connection on a retired key is
+kept as history and only this gate stops its requests. F3c2 must test: a retired key, a key
+approved in the database but absent from the code, and a key in the code but absent or retired in
+the database, each refused before any request.
+
 ## 8c. GO / NO-GO for F3c1 (schema, encryption, audit)
 
 *As built (owner order 2026-09-27, PR "F3c1"):* the F3c1 row of section 6 was narrowed. Delivered:

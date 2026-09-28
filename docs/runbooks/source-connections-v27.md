@@ -44,13 +44,20 @@ rotation scripts re-encrypt; they never restore bytes.
 ### Several GPEXE servers: the host catalog
 
 GPEXE may run a different server for different organisations. A connection names its server by
-a **stable key only**; no URL is ever stored, typed or accepted. Two layers hold that:
-- the database: `host_key` must be an `approved` row of `training_load.source_host_catalog` for
-  the same source (foreign key plus the `check_host` trigger for retired keys);
-- the backend, the final boundary: `backend/src/sourceHosts.js` maps a key to its **exact HTTPS
-  host** (`https://<host>/`, checked at import) and answers `host_not_allowed` for anything else
-  before any network call. There is no default and no fallback to another host; a request for a
-  connection whose key is unknown or retired fails, it never goes elsewhere.
+a **stable key only**; no URL is ever stored, typed or accepted. Two separate layers, and both
+must agree before anything reaches a server:
+- **the database catalog decides whether a key is approved now.** A new connection must name an
+  `approved` row of `training_load.source_host_catalog` for the same source (foreign key plus the
+  `check_host` trigger), and a **new team binding is refused when its connection's key is
+  retired** (the binding trigger reads the catalog row `FOR SHARE`). Enforced by v27, tested.
+- **the code allowlist decides where a key points.** `backend/src/sourceHosts.js` maps a key to
+  its **exact HTTPS host** (`https://<host>/`, checked at import). `sourceHost()` alone does not
+  know whether a key was retired.
+- **the gate before any network call is `resolveApprovedSourceHost()`**: the connection's catalog
+  row, read from the database in the same request, must be the same source and key and
+  `approved`, and the key must resolve in the code; otherwise `host_not_allowed`. No default, no
+  fallback to another host. F3c1 provides and tests this function; **F3c1 has no network caller,
+  so using it before every request is a mandatory F3c2 gate** (discovery document, section 8b).
 
 **Adding a confirmed shard (no structure change, no admin-typed URL):**
 1. Confirm, outside OptiMove, that the dedicated API account and the team's source id work on
@@ -63,8 +70,10 @@ a **stable key only**; no URL is ever stored, typed or accepted. Two layers hold
 5. F3c2's Connect and Test connection run against **exactly the chosen host** and succeed there
    before any team binding is allowed on that connection.
 
-Retiring a key: `update … set state = 'retired'`; no new connection may name it, existing ones
-stay readable as history and answer `host_not_allowed` until reconnected on an approved key.
+Retiring a key: `update … set state = 'retired'`; no new connection may name it and no new team
+binding may use a connection on it (both enforced by v27). Existing connections and bindings stay
+as history; that F3c2 then answers `host_not_allowed` for them instead of calling the server is
+the F3c2 gate above, not something F3c1 enforces.
 A connection's host is frozen while a credential is stored (the AAD rule) and once it is bound.
 
 ### A team cannot leave the club it is bound through
@@ -147,14 +156,21 @@ Before it is applied anywhere real:
 
 ## Rolling it back
 
-`docs/runbooks/source-connections-v27-rollback.sql`, one transaction, **refuses to run once any
-connection, binding or audit row exists** (the audit is append-only; history must not vanish —
-after first use only a forward migration is allowed) and otherwise drops only what v27 created
-and removes its `schema_migrations` row. It never copies, exports or decrypts a credential and
-makes no "backup before drop" table. Every older table keeps every row. Rehearsed by test 1 on
-disposable databases: apply → rollback on empty tables (identical v26 catalog, older rows kept) →
-apply again (identical v27 catalog) → first use → rollback refused, nothing dropped; on a fresh
-database a v27 broken at its last statement leaves nothing.
+`docs/runbooks/source-connections-v27-rollback.sql`, one transaction, drops only what v27 created
+and removes its `schema_migrations` row, and **refuses, dropping nothing, when any of these holds**
+(after that only a forward migration is allowed):
+- any connection, binding or audit row exists (the audit is append-only; history must not vanish);
+- the host catalog is not exactly the v27 seed (`gpexe` / `e03`, its label, `approved`, its note):
+  a later data-only migration approved another server, or a row was changed;
+- any `migrations_v2` migration newer than v27 is recorded in `schema_migrations` (dropping v27
+  under it would leave that migration recorded as applied on objects that no longer exist).
+
+It never copies, exports or decrypts a credential and makes no "backup before drop" table. Every
+older table keeps every row. Rehearsed by test 1 on disposable databases: apply → rollback on the
+untouched seed (identical v26 catalog, older rows kept) → apply again (identical v27 catalog) →
+a changed catalog row, a later migration recorded, and a real data-only migration approving a
+test server are each refused with the catalog and both `schema_migrations` rows kept → first use
+refused as well; on a fresh database a v27 broken at its last statement leaves nothing.
 
 Prefer a forward migration to fix a problem found after v27 is applied anywhere real; the same
 three rules bind it: never a decrypted credential in any copy, never a deleted or truncated audit

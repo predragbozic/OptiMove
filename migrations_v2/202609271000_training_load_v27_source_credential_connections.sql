@@ -54,10 +54,13 @@
 -- backend/tests/source-connections-f3c1.test.mjs on a disposable database).
 
 -- ---------------------------------------------------------------------------
--- 0. The host catalog: approved server keys per source. No URL is stored;
---    the backend maps a key to its exact HTTPS host and is the final
---    boundary (unknown or retired key -> host_not_allowed, before any
---    request). A platform admin only chooses an approved key.
+-- 0. The host catalog: approved server keys per source. No URL is stored.
+--    Two layers, both required: this table says which keys are APPROVED
+--    (a retired key takes no new connection and no new team binding), and
+--    backend/src/sourceHosts.js maps a key to its exact HTTPS host. Before
+--    any network call F3c2 must prove both (resolveApprovedSourceHost: the
+--    catalog row read now is approved AND the code resolves the key), with
+--    no fallback. A platform admin only chooses an approved key.
 -- ---------------------------------------------------------------------------
 create table training_load.source_host_catalog (
   source_system   text not null
@@ -194,7 +197,9 @@ comment on column training_load.source_credential_connections.host_key is
 
 -- A new connection (or a host change while still unbound and without a
 -- credential) may only name an APPROVED key. A key retired later leaves
--- existing connections in place; the backend then answers host_not_allowed.
+-- existing connections in place as history; they take no new binding (see
+-- source_team_binding_check_owner) and F3c2 must refuse any network call
+-- for them (host_not_allowed) - an F3c2 gate, not enforced by this table.
 create function training_load.source_credential_connection_check_host() returns trigger as $$
 declare
   host_state text;
@@ -313,12 +318,22 @@ create function training_load.source_team_binding_check_owner() returns trigger 
 declare
   conn record;
   team_club uuid;
+  host_state text;
 begin
   perform training_load.hold_gpexe_team_lock(new.team_id, 'binding');
-  select source_system, owner_scope, owner_club_id, owner_team_id
+  select source_system, owner_scope, owner_club_id, owner_team_id, host_key
     into conn from training_load.source_credential_connections where id = new.connection_id for share;
   if not found then
     raise exception 'source_team_bindings: connection % does not exist', new.connection_id using errcode = 'foreign_key_violation';
+  end if;
+  -- A connection whose host key has been retired takes no new binding. The
+  -- catalog row is read FOR SHARE, so a retirement committing meanwhile
+  -- waits for this binding (and the next binding then sees it retired).
+  select state into host_state from training_load.source_host_catalog
+   where source_system = conn.source_system and host_key = conn.host_key for share;
+  if host_state is distinct from 'approved' then
+    raise exception 'source_team_bindings: connection % uses host key % of %, which is retired; no new binding', new.connection_id, conn.host_key, conn.source_system
+      using errcode = 'check_violation';
   end if;
   if new.source_system is distinct from conn.source_system then
     raise exception 'source_team_bindings: the binding must carry its connection''s source (% <> %)', new.source_system, conn.source_system

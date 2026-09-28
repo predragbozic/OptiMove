@@ -26,6 +26,12 @@ const V27 = "202609271000_training_load_v27_source_credential_connections.sql";
 const UP_TO_V26 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V26) + 1);
 const ROLLBACK_SQL = path.resolve(__dirname, "../../docs/runbooks/source-connections-v27-rollback.sql");
 const MARKER = "MARKER-credential-f3c1-not-real";
+// The only host keys the tests themselves add to a disposable catalog.
+const TEST_ONLY_HOST_KEYS = ["e98", "e99"];
+const SEEDED_CATALOG = [{
+  source_system: "gpexe", host_key: "e03", label: "GPEXE e03", state: "approved",
+  note: "The server of the owner's organisation (UI at e03-ui.gpexe.com). Approved for F3c1.",
+}];
 
 let db;
 let c;
@@ -131,7 +137,7 @@ after(async () => {
 // ---------------------------------------------------------------------------
 // 1. The migration itself
 // ---------------------------------------------------------------------------
-test("1. v27 applies on v26, the rollback returns exactly the v26 catalog and keeps every older row, v27 applies again, and a v27 that fails at its end leaves nothing", async () => {
+test("1. v27 applies on v26, the rollback returns exactly the v26 catalog and keeps every older row, v27 applies again, the rollback refuses a changed catalog, a later migration and first use, and a v27 that fails at its end leaves nothing", async () => {
   const m = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v27mig", migrations: UP_TO_V26 });
   const k = new pg.Client({ connectionString: m.url });
   await k.connect();
@@ -169,13 +175,57 @@ test("1. v27 applies on v26, the rollback returns exactly the v26 catalog and ke
 
     await applyGpexeTestMigrations(m.url, [...UP_TO_V26, V27]);
     assert.deepEqual(await catalogDigest(k), v27, "v27 applies again, identically");
+    const rollbackSql = await fsp.readFile(ROLLBACK_SQL, "utf8");
+    const catalogRows = async () => (await k.query(`select source_system, host_key, label, state, note, approved_at from training_load.source_host_catalog order by 1, 2`)).rows;
+    const migrationNames = async () => (await k.query(`select migration_name from public.schema_migrations where migration_name > $1 or migration_name like $2 order by 1`, [`migrations_v2/${V27}`, `%${V27}`])).rows.map((r) => r.migration_name);
+    assert.deepEqual((await catalogRows()).map(({ approved_at, ...r }) => r), SEEDED_CATALOG, "the catalog is exactly the seed");
+
+    // A changed catalog row alone (no later migration) is refused; nothing is dropped.
+    await k.query(`update training_load.source_host_catalog set label = 'GPEXE e03 (renamed)' where host_key = 'e03'`);
+    await assert.rejects(k.query(rollbackSql), /v27 rollback refused: the host catalog is not the v27 seed/);
+    await k.query("rollback").catch(() => {});
+    assert.deepEqual(await catalogDigest(k), v27, "a refused rollback drops nothing");
+    await k.query(`update training_load.source_host_catalog set label = 'GPEXE e03' where host_key = 'e03'`);
+
+    // A later migration recorded alone (catalog still the seed) is refused as well.
+    await k.query("begin");
+    await k.query(`insert into public.schema_migrations (migration_name, checksum, execution_time_ms, runner_version) values ('migrations_v2/209901010000_test_only_later.sql', repeat('0', 64), 0, 'test')`);
+    await assert.rejects(k.query(rollbackSql), /v27 rollback refused: later migrations are applied: migrations_v2\/209901010000_test_only_later\.sql/);
+    await k.query("rollback");
+
+    // The reviewed scenario: a later DATA-ONLY migration approves another server (no connection
+    // yet). The rollback refuses, and the catalog and both migration records stay exactly as they were.
+    const SHARD = "209901010100_test_only_gpexe_shard.sql";
+    const shardRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "optimove-v27-shard-"));
+    const shardDir = path.join(shardRoot, "migrations_v2");
+    await fsp.mkdir(shardDir);
+    try {
+      for (const f of [...UP_TO_V26, V27]) await fsp.copyFile(path.resolve(__dirname, "../../migrations_v2", f), path.join(shardDir, f));
+      await fsp.writeFile(path.join(shardDir, SHARD), "insert into training_load.source_host_catalog (source_system, host_key, label, note)\nvalues ('gpexe', 'e98', 'GPEXE e98 (test only)', 'test-only data migration');\n", "utf8");
+      await runner.runMigrations({ databaseUrl: m.url, migrationsRoot: shardDir });
+    } finally {
+      await fsp.rm(shardRoot, { recursive: true, force: true });
+    }
+    const catalogBefore = await catalogRows();
+    const migrationsBefore = await migrationNames();
+    assert.deepEqual(catalogBefore.map((r) => r.host_key), ["e03", "e98"]);
+    assert.deepEqual(migrationsBefore, [`migrations_v2/${SHARD}`, `migrations_v2/${V27}`].sort());
+    assert.equal((await k.query(`select count(*)::int as n from training_load.source_credential_connections`)).rows[0].n, 0, "no connection exists yet");
+    const shardError = await k.query(rollbackSql).then(() => null, (e) => e);
+    await k.query("rollback").catch(() => {});
+    assert.ok(shardError, "the rollback refuses once a later migration approved another server");
+    assert.match(shardError.message, /the host catalog is not the v27 seed/);
+    assert.match(shardError.message, new RegExp(`later migrations are applied: migrations_v2/${SHARD.replace(/\./g, "\\.")}`));
+    assert.deepEqual(await catalogRows(), catalogBefore, "the catalog is kept exactly");
+    assert.deepEqual(await migrationNames(), migrationsBefore, "both schema_migrations records are kept");
+    assert.deepEqual(await catalogDigest(k), v27, "nothing was dropped");
 
     // After first use the rollback refuses and drops nothing: forward only.
     const conn = (await k.query(
       `insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id)
        values ('gpexe','club',$1,'e03','Rollback test','api_token',$2) returning id`, [club, user])).rows[0].id;
     await k.query(`insert into training_load.source_connection_audit (connection_id, action, outcome, performed_by_user_id, basis) values ($1,'create','ok',$2,'platform_admin')`, [conn, user]);
-    await assert.rejects(k.query(await fsp.readFile(ROLLBACK_SQL, "utf8")), /v27 rollback refused: source_credential_connections=1 source_team_bindings=0 source_connection_audit=1/);
+    await assert.rejects(k.query(rollbackSql), /v27 rollback refused: .*source_credential_connections=1 source_team_bindings=0 source_connection_audit=1 rows exist/);
     await k.query("rollback").catch(() => {});
     assert.deepEqual(await catalogDigest(k), v27, "a refused rollback drops nothing");
     assert.equal((await k.query(`select count(*)::int as n from training_load.source_connection_audit`)).rows[0].n, 1, "the audit row is still there");
@@ -224,6 +274,8 @@ test("2. the migration file carries no key, no URL and no transaction control; t
   const rollback = (await fsp.readFile(ROLLBACK_SQL, "utf8")).split(/\r?\n/).filter((l) => !l.trim().startsWith("--")).join("\n");
   assert.doesNotMatch(rollback, /create table|insert into|decrypt|copy /i, "the rollback holds only the emptiness guard, drops and the schema_migrations delete");
   assert.match(rollback, /rollback refused/, "the rollback refuses once any v27 table has a row");
+  assert.match(rollback, /from training_load\.source_host_catalog/, "the rollback compares the catalog with the v27 seed");
+  assert.match(rollback, /migration_name > 'migrations_v2\/202609271000_training_load_v27_source_credential_connections\.sql'/, "the rollback refuses under a later migration");
 });
 
 // ---------------------------------------------------------------------------
@@ -254,7 +306,12 @@ test("4. host_key must be an APPROVED catalog key: unknown keys, URLs and case v
   await c.query(`update training_load.source_host_catalog set state = 'retired' where source_system = 'gpexe' and host_key = 'e99'`);
   await refused(`insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id) values ('gpexe','club',$1,'e99','x','api_token',$2)`, [fx.club, fx.admin], /is retired/);
   assert.equal((await q(`select host_key from training_load.source_credential_connections where id = $1`, [b.id]))[0].host_key, "e99");
+  // A connection on a retired key takes no new team binding either.
+  await refused(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id) values ($1,$2,'gpexe','555001',$3)`, [fx.team2, b.id, fx.admin], /which is retired; no new binding/);
   await c.query(`update training_load.source_host_catalog set state = 'approved' where source_system = 'gpexe' and host_key = 'e99'`);
+  // Approved again: the same binding is accepted (then ended, so later tests start clean).
+  const onE99 = await bind(b, fx.team2, { source_team_id: "555001" });
+  await c.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'test' where id = $1`, [onE99.id, fx.admin]);
   // The catalog itself keeps every key.
   await refused(`delete from training_load.source_host_catalog where host_key = 'e99'`, [], /DELETE refused/);
   await refused(`update training_load.source_host_catalog set host_key = 'e98' where host_key = 'e99'`, [], /host key is immutable/);
@@ -566,11 +623,30 @@ test("17. creating or ending a binding takes the team's import lock try-lock sty
   }
 });
 
-test("18. every approved key the migration seeds resolves in the backend catalog to an exact https host, and the backend resolves nothing else", async () => {
-  const seeded = (await q(`select source_system, host_key from training_load.source_host_catalog where state = 'approved' and note not like 'test-only%' order by 1, 2`));
-  const { sourceHost, resolvableHostKeys, SOURCE_HOSTS } = await import("../src/sourceHosts.js");
-  assert.deepEqual(seeded, [{ source_system: "gpexe", host_key: "e03" }]);
+test("18. every approved key the migration seeds resolves in the backend catalog to an exact https host, the backend resolves nothing else, and a network caller's host needs BOTH an approved catalog row and the code entry", async () => {
+  // Every row that is not one of the tests' own keys must be exactly the seed; a NULL note is
+  // compared like any other value, never skipped.
+  const rows = await q(`select source_system, host_key, label, state, note from training_load.source_host_catalog order by 1, 2`);
+  assert.deepEqual(rows.filter((r) => !TEST_ONLY_HOST_KEYS.includes(r.host_key)), SEEDED_CATALOG);
+  for (const r of rows.filter((x) => TEST_ONLY_HOST_KEYS.includes(x.host_key))) assert.match(r.note ?? "", /^test-only/, "only the tests add rows, and they say so");
+  const seeded = rows.filter((r) => !TEST_ONLY_HOST_KEYS.includes(r.host_key) && r.state === "approved");
+  const { sourceHost, resolvableHostKeys, resolveApprovedSourceHost, SOURCE_HOSTS } = await import("../src/sourceHosts.js");
   for (const row of seeded) assert.match(sourceHost(row.source_system, row.host_key).baseUrl, /^https:\/\/[a-z0-9.-]+\/$/);
+
+  // The gate before any network call: the DB row must be approved AND the code must resolve the key.
+  await c.query(`insert into training_load.source_host_catalog (source_system, host_key, label, note) values ('gpexe','e99','GPEXE e99 (test only)','test-only row of the disposable database') on conflict do nothing`);
+  const row = async (key) => (await q(`select source_system, host_key, state from training_load.source_host_catalog where source_system = 'gpexe' and host_key = $1`, [key]))[0];
+  const e03 = await row("e03");
+  assert.equal(resolveApprovedSourceHost("gpexe", "e03", e03).baseUrl, "https://e03.gpexe.com/");
+  const notAllowed = (fn) => assert.throws(fn, (e) => e.code === "host_not_allowed");
+  notAllowed(() => resolveApprovedSourceHost("gpexe", "e03", { ...e03, state: "retired" }));
+  notAllowed(() => resolveApprovedSourceHost("gpexe", "e03", null));
+  notAllowed(() => resolveApprovedSourceHost("gpexe", "e03", { ...e03, host_key: "e99" }));
+  notAllowed(() => resolveApprovedSourceHost("catapult", "e03", e03));
+  const e99 = await row("e99");
+  assert.equal(e99.state, "approved");
+  notAllowed(() => resolveApprovedSourceHost("gpexe", "e99", e99)); // approved in the database, absent from the code
+  notAllowed(() => resolveApprovedSourceHost("gpexe", "server3", { source_system: "gpexe", host_key: "server3", state: "approved" })); // in no layer
   assert.deepEqual(resolvableHostKeys("gpexe"), ["e03"], "server3 is not resolvable until confirmed");
   assert.deepEqual(Object.keys(SOURCE_HOSTS), ["gpexe"]);
 });

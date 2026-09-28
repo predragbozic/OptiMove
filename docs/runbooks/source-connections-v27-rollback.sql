@@ -10,10 +10,17 @@
 --     rule);
 --   * a fresh, restore-verified backup exists;
 --   * the owner approved this database specifically.
--- It drops only what v27 created, and ONLY while every v27 table is still
--- empty (the seeded host catalog aside): once a connection, a binding or an
--- audit row exists the audit is append-only and history must not vanish,
--- so this script refuses and the only way forward is a new migration. It
+-- It drops only what v27 created, and ONLY while v27 is still exactly as it
+-- was applied. It refuses, dropping nothing, when
+--   * any connection, binding or audit row exists (the audit is append-only
+--     and history must not vanish);
+--   * the host catalog is not exactly the v27 seed (one row: gpexe / e03,
+--     its label, state approved and its note) - a later data-only migration
+--     that approved another server, or any label, state or note change;
+--   * any migrations_v2 migration newer than v27 is recorded in
+--     schema_migrations (dropping v27 under it would leave that migration
+--     recorded as applied on objects that no longer exist).
+-- After any of these the only way forward is a new migration. It
 -- NEVER copies, exports or decrypts a credential: the tables are dropped
 -- with their (absent) ciphertext; no "backup before drop" table is made
 -- here (a backup is the database backup above). Nothing of v26 or earlier
@@ -25,12 +32,38 @@ begin;
 do $$
 declare
   n_conn bigint; n_bind bigint; n_audit bigint;
+  catalog_is_seed boolean;
+  newer text;
+  reasons text[] := '{}';
 begin
   select count(*) into n_conn from training_load.source_credential_connections;
   select count(*) into n_bind from training_load.source_team_bindings;
   select count(*) into n_audit from training_load.source_connection_audit;
   if n_conn > 0 or n_bind > 0 or n_audit > 0 then
-    raise exception 'v27 rollback refused: source_credential_connections=% source_team_bindings=% source_connection_audit=% rows exist; after first use only a forward migration is allowed', n_conn, n_bind, n_audit;
+    reasons := reasons || format('source_credential_connections=%s source_team_bindings=%s source_connection_audit=%s rows exist', n_conn, n_bind, n_audit);
+  end if;
+
+  -- The catalog must be exactly the v27 seed (approved_at aside).
+  select not exists (
+           select source_system, host_key, label, state, note from training_load.source_host_catalog
+           except
+           select 'gpexe', 'e03', 'GPEXE e03', 'approved', 'The server of the owner''s organisation (UI at e03-ui.gpexe.com). Approved for F3c1.')
+     and (select count(*) from training_load.source_host_catalog) = 1
+    into catalog_is_seed;
+  if not catalog_is_seed then
+    reasons := reasons || 'the host catalog is not the v27 seed (a server was added or a row was changed)'::text;
+  end if;
+
+  select string_agg(migration_name, ', ' order by migration_name) into newer
+    from public.schema_migrations
+   where migration_name like 'migrations_v2/%'
+     and migration_name > 'migrations_v2/202609271000_training_load_v27_source_credential_connections.sql';
+  if newer is not null then
+    reasons := reasons || format('later migrations are applied: %s', newer);
+  end if;
+
+  if cardinality(reasons) > 0 then
+    raise exception 'v27 rollback refused: %; only a forward migration is allowed', array_to_string(reasons, '; ');
   end if;
 end $$;
 
