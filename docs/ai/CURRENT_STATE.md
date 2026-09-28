@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-28. Last `origin/main` commit checked: `848aa94` (merge of PR #128,
-`feature/source-connections-f3c1` → `main`; PR #127 `4949b79` before it).
+Last reviewed: 2026-09-28. Last `origin/main` commit checked: `f26120f` (merge of PR #129,
+`feature/source-connections-f3c2-discovery` → `main`; PR #128 `848aa94` before it).
 
 ## Active phase
 
@@ -168,8 +168,10 @@ password never stored or logged; F3c1 supports both and chooses neither). Runboo
 route, no UI, no GPEXE call, no cut-over, no row for team 980, no Render change; the local
 OPTIMOVE database was not migrated (still v21).**
 
-**The active step is F3c2 — source authentication, discovery first** (branch
-`feature/source-connections-f3c2-discovery`, owner order 2026-09-28, from `848aa94`). Before any
+**The active step is F3c2 — source authentication, discovery first.** The discovery PR #129
+(merge commit `f26120f`, 2026-09-28 13:18 UTC, pinned to head `e0a58ca` after the owner's external
+review; `/api/health` served `f26120f` with `ok: true` three times; nothing observable changed in
+production — no route, adapter, migration or GPEXE request) delivered the procedure. Before any
 Connect / Reconnect / Test route or network adapter is written, the GPEXE server-to-server
 contract must be proven with the dedicated API account by the owner alone:
 `docs/ai/source-connections-f3c2-contract.md` section 1 is the owner-run read-only procedure
@@ -187,6 +189,18 @@ the chosen host only, no fallback; no binding before a successful Test / Connect
 the test plan. **The adapter and the routes are not written until the owner's GO on the
 discovery result.** `server3` is not probed and stays unapproved; the browser JWT / cookie is
 never used.
+
+**Step A is done (owner-run, 2026-09-28; contract document section 1.5):** on `e03.gpexe.com` the
+API demands the `Token` scheme (401 without a credential on the team list), the only exchange
+endpoint is `POST /api-token-auth/` (400 with an empty body, request fields `username` and
+`password`; `/api/api-token-auth/` and `/api/token/` answer 404), GPEXE version 9.11.7. Not yet
+confirmed: whether GPEXE issues a persistent read-only API token, the token field of a
+successful exchange answer, lifetime and rotation, access to Team ID 980, the minimal role. The
+owner's personal GPEXE account is not used for steps B or C without a new explicit decision; a
+support request for a dedicated read-only credential limited to team 980 has been sent. **Next is
+step B (persistent token) or step C (dedicated username/password through `/api-token-auth/`),
+decided by GPEXE's answer; no adapter, route or PR until the credential kind is confirmed and the
+1.3 form returned.**
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -943,9 +957,10 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner runs the F3c2 discovery procedure (`docs/ai/source-connections-f3c2-contract.md`
-section 1) and returns the sanitized form; on GO the F3c2 adapter and routes are built against
-the contract of its section 2, then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
+GPEXE support answers which credential exists; the owner runs step B or step C of
+`docs/ai/source-connections-f3c2-contract.md` section 1 with the dedicated credential and returns
+the section 1.3 form; on GO the F3c2 adapter and routes are built against the contract of its
+section 2, then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 

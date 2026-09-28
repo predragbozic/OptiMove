@@ -72,6 +72,8 @@ node backend/scripts/gpexe-auth-discovery.mjs --mode token --host e03 --team 980
 Remove-Item Env:GPEXE_API_TOKEN
 ```
 
+(After step A: `--auth-scheme Token` is confirmed for `e03`; the lines above are exact.)
+
 Step C — only if GPEXE issues no official token, the **one-time exchange** with the dedicated
 account (`credential_kind = exchanged_token`, the fallback). Use the exchange path step A found
 (`api-token-auth/` unless step A says otherwise). If step B's token is also set, the report says
@@ -93,6 +95,10 @@ $env:GPEXE_PASSWORD = [System.Net.NetworkCredential]::new("", $p).Password; Remo
 node backend/scripts/gpexe-auth-discovery.mjs --mode exchange --host e03 --team 980 --exchange-path api-token-auth/ --auth-scheme Token --token-field token
 Remove-Item Env:GPEXE_USERNAME, Env:GPEXE_PASSWORD
 ```
+
+(After step A: `--exchange-path api-token-auth/` and `--auth-scheme Token` are confirmed for
+`e03`; `--token-field token` is the legacy candidate until GPEXE confirms the field name — replace
+it with the confirmed name when GPEXE answers.)
 
 Step D — lifetime and rotation. **Documentation first, never a login experiment on a credential
 in use.** A new UI login with the same account may rotate or revoke the token GPEXE issued, so a
@@ -156,6 +162,64 @@ does not by construction; sending the whole printed JSON is fine).
 **GO for the adapter** = steps A and B (or A and C) returned, scheme word known, `seesTeam` yes,
 and question 6 answered in words. Anything else = NO-GO, the adapter is not written, the owner
 decides.
+
+### 1.5 Step A result (owner-run, 2026-09-28, sanitized)
+
+Run once by the owner in their own terminal, no credential involved; the owner returned only the
+fields below.
+
+| Field | Result |
+|---|---|
+| host key / API host | `e03` / `e03.gpexe.com` |
+| auth scheme word (`WWW-Authenticate`) | `Token` |
+| unauthenticated team-list status | `401` |
+| exchange endpoint | `/api-token-auth/` (root, not under `/api/`) |
+| exchange endpoint status with an empty body | `400` |
+| exchange **request** field names | `username`, `password` |
+| `/api/api-token-auth/`, `/api/token/` | `404`, `404` |
+| GPEXE version header | `9.11.7 [release/stable]` |
+| Team ID | `980` — access by any credential **not yet confirmed** |
+| token field of a successful exchange answer | **not confirmed** (step A cannot see it) |
+
+What this settles: the adapter's header scheme for `e03` is `Token <credential>`, and the only
+exchange endpoint is `POST /api-token-auth/` with `username` and `password`. What it does not
+settle: whether GPEXE issues a persistent read-only API token at all (step B), the token field
+name of the exchange answer, token lifetime and rotation, whether the dedicated account sees
+team 980, and the minimal role. U1/U2 (`server3`) stay unanswered by design.
+
+**Owner decision 2026-09-28:** the owner's personal GPEXE account is **not** used for steps B or
+C; a new explicit decision would be needed. The next step is one of two, decided by GPEXE's answer
+to the support request below:
+
+- **Case 1 — GPEXE issues a persistent read-only API token** for a dedicated account limited to
+  team 980 → step B with `--auth-scheme Token` (section 1.2). `credential_kind = api_token`.
+- **Case 2 — no such token; GPEXE gives a dedicated API username/password** → step C on the
+  confirmed `/api-token-auth/` with `--auth-scheme Token`, `--exchange-path api-token-auth/` and
+  `--token-field` from GPEXE's answer (or the legacy candidate `token` when it did not say; a 2xx
+  without that field is dropped, one confirmed repeat at most — section 1.2).
+  `credential_kind = exchanged_token`.
+
+Support request sent by the owner (no secret in it):
+
+> We need a dedicated read-only API credential for `e03.gpexe.com`, limited to Team ID `980`. Do
+> you provide a persistent API token, or should a dedicated API username/password be exchanged
+> through `/api-token-auth/`? Please also confirm the token lifetime/rotation policy and the
+> successful response field containing the token. We do not need write permissions.
+
+Until GPEXE answers and step B or C has been run and its form returned: no adapter, no route,
+no PR for them.
+
+#### Secret hygiene for steps B and C (own terminal only)
+
+- The credential is typed through `Read-Host -AsSecureString` (masked), lives in a process
+  environment variable for the one `node` call and is removed right after (`Remove-Item Env:…`);
+  it is never a command-line argument, so it is never in the shell's command history.
+- Before the run, keep the session's history out of the file:
+  `Set-PSReadLineOption -HistorySaveStyle SaveNothing` (this PowerShell window only).
+- Do not run inside `Start-Transcript`; do not redirect the script's output to a file inside the
+  repository; the report contains no secret by construction, but the form in 1.3 is all that is
+  returned to chat.
+- Close the window afterwards; a new window has none of the variables.
 
 ---
 
