@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-29. Last `origin/main` commit checked: `f26120f` (merge of PR #129,
-`feature/source-connections-f3c2-discovery` → `main`; PR #128 `848aa94` before it).
+Last reviewed: 2026-09-29. Last `origin/main` commit checked: `6f083a7` (merge of PR #130,
+`feature/source-hosts-server3-profile` → `main`; PR #129 `f26120f` before it).
 
 ## Active phase
 
@@ -61,7 +61,7 @@ platform admin, recorded as the path of the ACTIVE workspace; the downgrade trig
 `a643ffd`; see Last completed). The UX contract for the whole 5a3 roster UI is
 `docs/ai/phase5a3-roster-ux-draft.md`.
 
-**The step in progress is Phase 5a3b, individual and bulk roster decisions** (branch
+**Phase 5a3b, individual and bulk roster decisions, as it was built** (since merged, see below; branch
 `feature/activity-roster-decisions-ui-5a3b`; frontend and docs only, on the 5a2 commands as
 merged in PR #123 — no backend, migration or rights change). It adds to the Roster tab:
 - a state per row: *Participated · no device data* saved at once; *Did not participate*
@@ -104,7 +104,7 @@ without a login `GET …/roster`, `PUT …/roster/:athleteId/decision` and `POST
 answered 401 (zero UUIDs, nothing written). No GPEXE action, Render environment and the import
 switch untouched.
 
-**The active step is the F3c discovery**, accepted by the owner on 2026-09-27 as the basis for
+**The F3c discovery** (done) was accepted by the owner on 2026-09-27 as the basis for
 F3c (source authentication and connection): `docs/ai/gpexe-f3c-auth-discovery.md` — confirmed
 facts and unknowns (U1–U8 open), the `e03` vs `server3` endpoint map, the
 `source_credential_connections` / `source_team_bindings` / audit model with the lock scope for
@@ -169,7 +169,7 @@ password never stored or logged; F3c1 supports both and chooses neither). Runboo
 route, no UI, no GPEXE call, no cut-over, no row for team 980, no Render change; the local
 OPTIMOVE database was not migrated (still v21).**
 
-**The active step is F3c2 — source authentication, discovery first.** The discovery PR #129
+**F3c2 — source authentication — started with discovery.** The discovery PR #129
 (merge commit `f26120f`, 2026-09-28 13:18 UTC, pinned to head `e0a58ca` after the owner's external
 review; `/api/health` served `f26120f` with `ok: true` three times; nothing observable changed in
 production — no route, adapter, migration or GPEXE request) delivered the procedure. Before any
@@ -272,9 +272,13 @@ AES-256-GCM encrypted token stored; Reconnect asks again; the password never ret
 as stored). **GO for the small PR that adds `server3` to the code allowlist (with `apiFamily` and
 `exchangePath` per entry) and, by a data-only v28, to the host catalog.**
 
-**The active step is the `server3` host profile PR** (branch
-`feature/source-hosts-server3-profile`, owner order 2026-09-29, in review; external review
-required: migration, host allowlist, network boundary). `backend/src/sourceHosts.js` now holds a
+**The `server3` host profile is merged and deployed** (PR #130, merge commit `6f083a7`,
+2026-09-29 21:05 UTC, pinned to head `f88b97b` after the owner's external review;
+`/api/health` served `6f083a7` with `ok: true` three times; without a login the GPEXE `status`,
+`candidates` and `source-athletes` routes, the roster read and `POST …/imports` answered 401,
+zero UUIDs). **v28 on the deployed database is inferred** from the server starting after the
+migration step (`npm start` runs `node src/migrate.js &&` the server); the deployed database was
+not queried. `backend/src/sourceHosts.js` now holds a
 complete profile per host — exact base URL, API family with its one path prefix (`api` → `api/`
 on `e03`, `rest_v1` → `rest/v1/` on `server3`), auth scheme `Token`, and the exchange
 (`api-token-auth/`, form-encoded, token field `token` on `server3`; none on `e03`, where no
@@ -288,8 +292,35 @@ the row was changed, or once a later migration is recorded. **The account sees 8
 binding and every request must be limited to Team ID 980** (the adapter reads from the bound
 source team id only and checks the `team` of every answer). The legacy credential file was moved
 out of the repository folder and is in `.gitignore`; it was never tracked. **No credential, no
-connection, no binding for team 980, no Connect / Test route, no adapter for real data, no GPEXE
-request; v28 was applied to disposable databases only.**
+connection, no binding for team 980, no Connect / Test route, no GPEXE request by the main
+session.**
+
+**The active step is F3c2a — the read-only adapter profile for `server3` / `rest_v1`** (branch
+`feature/gpexe-rest-v1-adapter-f3c2a`, owner order 2026-09-29, in review). It adds
+`backend/src/sourceAdapters.js` (an adapter is selected by `(source_system, apiFamily)`; a family
+without one answers `adapter_not_available`; `gpexe` / `api` has none there, the `e03` importer
+keeps its own client, unchanged) and `backend/src/gpexeRestV1Adapter.js`: every URL comes from
+`sourceApiUrl()` with the approved catalog row; GET only, one closure talks to the network and no
+generic request helper exists; the bound source team id is fixed when the adapter is created, no
+operation accepts a team and an option that names one is refused; a returned team, session or
+next-page link of another team is refused (`source_team_mismatch`), a team in an unknown shape
+too; stable codes, never the source's text. Fake-fetch contract tests only. The compatibility
+table is `docs/ai/gpexe-rest-v1-compatibility.md`.
+**None of the importer's nine request kinds is proven on `rest_v1` yet.** Proven by the
+owner-run verification of 2026-09-29 and implemented are three reads: the team list (count and a
+boolean only), the read of the bound team, and the session list by team and page size with header
+paging (the whole list or a refusal, drills left out) — the importer's own list always carries a
+date window, which is not proven. **Remaining capability gaps — each answers
+`source_capability_unavailable` until an owner-run read-only probe has seen its answer:**
+sessions in a date window (`session_list_by_date`, legacy-attested parameter names), one session
+(`session_read`, legacy-attested path), whole-session details (`session_details`,
+legacy-attested path), drill details (`session_drill_details`), athlete rows
+(`athlete_session_list`, `athlete_session_read`, `athlete_session_more`), tracks (`track_read`),
+thresholds (`team_thresholds`), units (`units`) and session tags (`session_tags`,
+legacy-attested path). So the importer cannot run on `server3` yet: a session bundle needs the
+unproven reads. Also unverified: that `rest_v1` values mean what the mapper assumes for `e03`
+(UTC timestamps, SI numbers, the drill model). **No route, no database write, no credential
+storage, no binding, no import, no GPEXE request.**
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1051,9 +1082,10 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's external review and merge decision on the `server3` host profile PR
-(`docs/ai/source-connections-f3c2-contract.md` section 1.8), then, on the owner's order, the
-`rest/v1` adapter profile and the F3c2 routes; on GO the F3c2 adapter and routes are built against the contract of its
+The owner's review and merge decision on the F3c2a adapter PR; then the owner-run read-only
+probe of the remaining `rest_v1` capabilities (`docs/ai/gpexe-rest-v1-compatibility.md`
+section 4), the reads it proves, and, on the owner's order, the F3c2 routes, built against the
+contract in `docs/ai/source-connections-f3c2-contract.md`, its
 section 2, then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
