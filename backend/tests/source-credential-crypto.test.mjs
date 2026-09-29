@@ -160,13 +160,14 @@ test("secret key names are detected after normalisation (camelCase, hyphens, dot
 
 test("host catalog: only approved keys resolve, to exact https hosts; URLs, other servers, prototype names and other sources are host_not_allowed; no fallback", () => {
   assert.equal(hosts.sourceHost("gpexe", "e03").baseUrl, "https://e03.gpexe.com/");
-  assert.deepEqual(hosts.resolvableHostKeys("gpexe"), ["e03"]);
+  assert.deepEqual(hosts.resolvableHostKeys("gpexe"), ["e03", "server3"]);
   assert.deepEqual(hosts.resolvableHostKeys("catapult"), []);
-  for (const bad of ["server3", "https://e03.gpexe.com/", "e03/", "E03", "", null, undefined, "__proto__", "constructor", "toString", 7]) {
+  for (const bad of ["server4", "https://server3.gpexe.com/", "https://e03.gpexe.com/", "e03/", "E03", "", null, undefined, "__proto__", "constructor", "toString", 7]) {
     assert.throws(() => hosts.sourceHost("gpexe", bad), (e) => e.code === "host_not_allowed", `${String(bad)} must not resolve`);
   }
   assert.throws(() => hosts.sourceHost("__proto__", "e03"), (e) => e.code === "host_not_allowed");
-  assert.throws(() => hosts.sourceHost("gpexe", "server3"), (e) => e.code === "host_not_allowed");
+  assert.equal(hosts.sourceHost("gpexe", "server3").baseUrl, "https://server3.gpexe.com/");
+  assert.throws(() => hosts.sourceHost("gpexe", "server4"), (e) => e.code === "host_not_allowed");
   assert.throws(() => hosts.sourceHost("gpexe", "https://e03.gpexe.com/"), (e) => e.code === "host_not_allowed");
   assert.throws(() => hosts.sourceHost("catapult", "e03"), (e) => e.code === "host_not_allowed");
   assert.equal(hosts.isAllowedHostKey("gpexe", "e03"), true);

@@ -152,7 +152,7 @@ does not by construction; sending the whole printed JSON is fine).
 
 | Question (owner, 2026-09-28) | Answered by | Consequence |
 |---|---|---|
-| 1. Which approved host issues the credential | steps A–C succeed on `e03` | `e03` stays the only approved key. `server3` is not probed by this procedure at all; it stays unapproved (U1/U2 are answered by GPEXE support or documentation, not by a request from OptiMove). |
+| 1. Which approved host issues the credential | the host on which the exchange and the reads succeed | As written on 2026-09-28: `e03` the only approved key, `server3` not probed. Superseded on 2026-09-29 (section 1.8): the account's API host is `server3`, verified by the owner and approved by v28. |
 | 2. Official token or exchanged token | B accepted → `api_token`; only C works → `exchanged_token` | `credential_kind` per connection; the Connect route accepts the kind the discovery proved, the other stays disabled for `gpexe` (both kinds remain storable, F3c1). |
 | 3. Endpoint, header scheme, lifetime, rotation | A (scheme, path, exchange request field names), C (exchange with the reported scheme and the documented token field; the successful answer's field names), D (documented rule first; login test only under D.3) | The adapter's `scheme` and `exchangePath` constants; the decay period of `verified` (D7); whether Reconnect must be offered proactively. If D shows rotation on login, the runbook forbids UI logins with the API account. |
 | 4. Dedicated account sees Team ID 980 | B or C `seesTeam` | A binding for team 980 is only created after a Test on this connection succeeds (section 3.8). |
@@ -353,11 +353,14 @@ Consequences:
 
 #### The one sanitized read-only verification on `server3`
 
-`backend/scripts/gpexe-auth-discovery.mjs` now carries a **discovery-only profile** for
-`server3`: the exact URL is fixed in the script, no option can change it, the application's
-allowlist still does not know the key (a test asserts both), and `--api-family` is refused when
-it does not match the host's profile. One run sends exactly four requests, all to
-`https://server3.gpexe.com/`:
+For this verification `backend/scripts/gpexe-auth-discovery.mjs` carried its own profile for
+`server3`, with the exact URL fixed in the script, while the application's allowlist did not know
+the key yet (superseded on 2026-09-29: the script now takes both hosts from the application's
+catalog and holds no URL of its own). `--api-family` is refused when it does not match the
+host's profile. One run sends exactly four requests, all to `https://server3.gpexe.com/`. The
+command block below is the historical first run; today the script takes the exchange path, the
+`form` encoding, the token field and the scheme from the host's confirmed profile and refuses a
+flag that says otherwise:
 
 1. `POST /api-token-auth/` — the one exchange (username and password in the body, once);
 2. `GET /rest/v1/team/` — the team list (a 404 here is a finding, not a failure);
@@ -428,8 +431,6 @@ only counts, keywords and booleans — never a line of the file or any part of a
 |---|---|---|
 | exchange body field names | `username`, `password` | `username`, `password` |
 | body encoding | a plain `payload` object, no `contentType` → `application/x-www-form-urlencoded` | `application/json` |
-| identifier literal | one distinct value, contains `@`, lower case, ASCII | typed by the owner (not visible) |
-| password literal | one distinct value, ASCII, no character special to JSON or form | typed by the owner (not visible) |
 | token read from | field `token` | field `token` |
 
 What this leaves, in the order of likelihood:
@@ -509,21 +510,65 @@ Field names seen (names only). Team: `club`, `controller_ip`, `default_teamsessi
 - Reconnect asks for username and password again;
 - the password is never returned to the client and never shown as stored.
 
-**GO** for the small allowlist PR below. The adapter and the routes still wait for the owner's
-order.
+**GO** for the small allowlist PR below (ordered by the owner on 2026-09-29). The adapter and
+the routes still wait for the owner's order.
 
-#### After a successful verification: the small follow-up PR (proposal, not started)
+#### The `server3` profile PR (owner order 2026-09-29; as built)
 
-One PR, no credential, no connection, no binding for team 980, no route, no adapter:
-- `backend/src/sourceHosts.js`: a `server3` entry with its exact base URL **and** the profile
-  fields `apiFamily` and `exchangePath` for every entry (`e03`: `api`, `server3`: `rest_v1`), so
-  a caller can never combine a host with another family's paths;
-- a data-only migration v28: one `approved` row `gpexe` / `server3` in
-  `training_load.source_host_catalog` (no structure change; the v27 rollback then refuses, as
-  designed);
-- the discovery script's `server3` profile switched to `appApproved: true` (its consistency
-  check fails otherwise), tests and the runbook updated;
-- external review required (migration, auth contract); not merge-ready by the main session.
+Branch `feature/source-hosts-server3-profile`. No credential, no connection, no binding for
+team 980, no route, no adapter for real data, no GPEXE request. External review required
+(migration, host allowlist, network boundary); never declared merge-ready by the main session.
+
+- **`backend/src/sourceHosts.js`: every host is a complete profile.**
+
+  | Part | `e03` | `server3` |
+  |---|---|---|
+  | exact base URL | `https://e03.gpexe.com/` | `https://server3.gpexe.com/` |
+  | API family → prefix | `api` → `api/` | `rest_v1` → `rest/v1/` |
+  | auth scheme | `Token` | `Token` |
+  | exchange | none (never confirmed there) | `api-token-auth/`, encoding `form`, token field `token` |
+
+  `sourceApiUrl(source, hostKey, catalogRow, resourcePath)` is the one way to build a data URL:
+  the host's base URL, the host's own family prefix, then a relative resource path that cannot
+  leave that prefix (no leading slash, no dot, no colon, no empty segment, a plain query only).
+  `sourceExchange(source, hostKey, catalogRow)` answers for that host only and is
+  `exchange_not_supported` on `e03`. Both go through the gate themselves: without the key's own
+  approved catalog row there is no URL. Every host must lie under its source's domain
+  (`.gpexe.com`), checked when the module loads.
+  Known duplication, recorded: the importer's client (`backend/src/gpexeClient.js`) still has its
+  own constant for the `e03` root and does not go through the catalog; a test ties the two values
+  together, and the adapter work replaces the constant. No function takes a URL, iterates over hosts, or tries a second host, family or
+  encoding; an unknown key, family or encoding is refused (profiles are validated when the
+  module loads, and everything is frozen).
+- **Migration v28** (`migrations_v2/202609291000_training_load_v28_source_host_server3.sql`):
+  one `insert` of the approved row `gpexe` / `server3`. Data only — the structure of v27 is
+  unchanged (the test compares the whole catalog of functions, triggers, indexes, columns and
+  constraints before and after).
+- **Rollback** (`docs/runbooks/source-hosts-v28-rollback.sql`): removes that one row and the v28
+  record, and refuses, changing nothing, once any connection uses `server3`, once the row is not
+  what v28 inserted, or once a later migration is recorded. The v27 rollback refuses while v28
+  is recorded.
+- **The discovery script** takes both hosts' URL and family from the application's catalog; it
+  holds no URL of its own any more.
+- **The legacy credential file** was moved out of the repository folder by the owner's order and
+  is listed in `.gitignore`; it was never tracked, committed or stashed.
+
+#### One account, eight teams: the binding rule for the adapter (not yet enforced in code)
+
+The verified account sees 8 GPEXE teams. OptiMove needs one. A binding and every request must be
+limited to Team ID 980. **Nothing in the code enforces that today**, because no adapter exists:
+`sourceApiUrl()` scopes the host and the API family only and would build a URL for any team id.
+The rule below binds the adapter work (F3c2), where it gets a team-scoped builder and its own
+tests (team 981 refused, a duplicate `team` key refused):
+- a binding names exactly one source team id (`980` for the pilot team), and v27 already allows
+  one active OptiMove team per source team across every connection;
+- the adapter builds every data request from the **bound** source team id only; a source team
+  id from a request body, a query string or a source answer is never used to read;
+- the team list (`team/`) is read to verify that the bound team is visible, never to import or
+  to offer the other seven to a coach;
+- a session whose `team` field is not the bound id is refused as inconsistent source data
+  (the `team` filter may be ignored by the server; the answer is checked, not trusted);
+- OptiMove sends `GET` only (plus the one exchange `POST`), whatever the endpoints advertise.
 
 ---
 
@@ -595,7 +640,8 @@ Disconnect stays outside F3c2 (D5). The env `GPEXE_API_TOKEN` fallback stays unt
 
 **Fact gap in v27 to close with the routes:** v27 has no fact CHECK for `linked_untested` (the other
 four states have one), so nothing in the database forces `last_error_code` / `last_error_at` onto a
-`linked_untested` row. F3c2 either adds a data-only migration v28
+`linked_untested` row. F3c2 either adds a small migration (the next free number; v28 is the
+`server3` catalog row)
 (`check (state <> 'linked_untested' or last_error_code is not null)`) or, at least, a route test
 that every write of `linked_untested` carries both facts; the choice is recorded in the F3c2 PR.
 

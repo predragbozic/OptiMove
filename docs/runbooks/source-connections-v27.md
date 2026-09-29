@@ -14,7 +14,7 @@ The only seeded data is one host catalog row.
 
 | Table | Holds | Never holds |
 |---|---|---|
-| `source_host_catalog` | the approved server keys per source (`gpexe` / `e03` seeded, state `approved`), a label and a note; rows are never deleted or renamed, only retired | a URL, a credential; `server3` (not approved until a dedicated API account and Team ID 980 are confirmed there) |
+| `source_host_catalog` | the approved server keys per source (`gpexe` / `e03` seeded, state `approved`), a label and a note; rows are never deleted or renamed, only retired | a URL, a credential (`server3` was not in the v27 seed; it was approved later by v28, see below) |
 | `source_credential_connections` | a club- or team-owned account for one source (`source_system`, `host_key` = an **approved** catalog key, a display `account_label`, the mandatory `credential_kind`), the encrypted credential (ciphertext, nonce, auth tag, key version — all four or none), the stored state and its facts | a plaintext credential, a username, a URL, a key |
 | `source_team_bindings` | which source team an OptiMove team reads through which connection; one active binding per team and source; one active OptiMove team per source team across every connection of every club (v22's global rule carried over); rows end, never disappear; an optional provenance pointer to the legacy `gpexe_team_settings` row | a change to `gpexe_team_settings` or its history |
 | `source_connection_audit` | who, when, which action, outcome, reason, error code and a flat JSON object of sanitized facts | any value under a secret-like key in any spelling — camelCase, hyphens, dots and case are normalised first (`training_load.normalize_key_name`, `key_name_is_secret`), so `signingKey`, `private-key`, `deviceKey` and `auth` are refused while `monkey`, `host_key` and `credential_kind` pass; an update, delete or truncate |
@@ -69,6 +69,13 @@ must agree before anything reaches a server:
    is the intersection of the approved catalog rows and the keys the backend can resolve.
 5. F3c2's Connect and Test connection run against **exactly the chosen host** and succeed there
    before any team binding is allowed on that connection.
+
+**Approved shards today:** `e03` (v27 seed, API family `api`) and `server3` (v28, API family
+`rest/v1`, the only host with a confirmed credential exchange). v28 is data only and has its own
+rollback, `docs/runbooks/source-hosts-v28-rollback.sql`, which refuses once any connection uses
+`server3`, once the row was changed, or once a later migration is recorded. A host key never
+implies paths: the family prefix, the auth scheme and the exchange are part of the host's profile
+in `sourceHosts.js`, and `sourceApiUrl()` is the only way to build a data URL.
 
 Retiring a key: `update … set state = 'retired'`; no new connection may name it and no new team
 binding may use a connection on it (both enforced by v27). Existing connections and bindings stay

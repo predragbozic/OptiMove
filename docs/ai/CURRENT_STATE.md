@@ -1,6 +1,6 @@
 # Current state
 
-Last reviewed: 2026-09-28. Last `origin/main` commit checked: `f26120f` (merge of PR #129,
+Last reviewed: 2026-09-29. Last `origin/main` commit checked: `f26120f` (merge of PR #129,
 `feature/source-connections-f3c2-discovery` → `main`; PR #128 `848aa94` before it).
 
 ## Active phase
@@ -136,8 +136,9 @@ change, no GPEXE request. It adds migration v27
 tables in `training_load` **beside** `gpexe_team_settings` — `source_host_catalog` (the approved
 server keys per source, `gpexe`/`e03` seeded; GPEXE may run a different server per organisation,
 so a new confirmed shard is one catalog row plus one exact-host entry in `sourceHosts.js`, never a
-structure change and never a typed URL; `server3` is not approved until a dedicated API account
-and Team ID 980 are confirmed there; a retired key takes no new connection and no new team
+structure change and never a typed URL; at the time of v27 `server3` was left out until an
+account and Team ID 980 were confirmed there (confirmed on 2026-09-29, approved by v28, see
+below); a retired key takes no new connection and no new team
 binding in the database; the backend's `resolveApprovedSourceHost()` answers `host_not_allowed`
 unless the catalog row is approved AND the code resolves the key, with no fallback — calling it
 before every request is a mandatory F3c2 gate, F3c1 has no network caller), `source_credential_connections` (club- or
@@ -176,7 +177,7 @@ Connect / Reconnect / Test route or network adapter is written, the GPEXE server
 contract must be proven with the dedicated API account by the owner alone:
 `docs/ai/source-connections-f3c2-contract.md` section 1 is the owner-run read-only procedure
 (`backend/scripts/gpexe-auth-discovery.mjs`, unit-tested against a fake server, never sends a
-request in tests, refuses every host but the approved `e03` key, never prints an environment
+request in tests, refuses every host without a profile (at that time every host but `e03`), never prints an environment
 value; the owner returns only host key, masked paths, statuses, the scheme word, Team ID and
 field names). It answers: which approved host issues the credential, official API token or
 one-time username/password exchange, the exact endpoint / header scheme / lifetime / rotation,
@@ -187,8 +188,8 @@ order; all bound teams locked ascending; 5 attempts / 15 minutes counted from th
 audit; every attempt audited without secrets; stable codes without source text; Connect / Test on
 the chosen host only, no fallback; no binding before a successful Test / Connect) and section 3
 the test plan. **The adapter and the routes are not written until the owner's GO on the
-discovery result.** `server3` is not probed and stays unapproved; the browser JWT / cookie is
-never used.
+discovery result.** As of PR #129 `server3` was not probed and not approved (superseded on
+2026-09-29, see below); the browser JWT / cookie is never used.
 
 **Step A is done (owner-run, 2026-09-28; contract document section 1.5):** on `e03.gpexe.com` the
 API demands the `Token` scheme (401 without a credential on the team list), the only exchange
@@ -230,16 +231,17 @@ Script integration still works with the same account through `server3.gpexe.com`
 `POST /api-token-auth/`, answer field `token`, header `Authorization: Token`, data under
 `/rest/v1/`. For this account: UI host `e03-ui`, API host `server3`, API family `rest/v1`,
 credential kind `exchanged_token`. **Every further authentication attempt on `e03` is stopped.**
-This is not yet permission to add `server3` to production: it is in neither
-`backend/src/sourceHosts.js` nor the database catalog. A host key never implies paths — host key,
+That statement alone was not yet permission to add `server3` to production: until the
+verification below succeeded it was in neither `backend/src/sourceHosts.js` nor the database
+catalog (superseded on 2026-09-29 by the host profile PR). A host key never implies paths — host key,
 exact base URL, API family (`api` against `rest_v1`) and auth scheme / exchange path are four
 separate parts of a host profile, and `server3` + `rest/v1` is its own adapter profile; the
-importer's client and mapper were verified against `e03`'s `api` family only. The discovery
-script (branch `feature/gpexe-discovery-server3-profile`, not merged, no PR) has a
-discovery-only `server3` profile with the exact URL fixed in the script. **Next: the owner runs
-the one sanitized verification on `server3`** (exchange → team list / team 980 → one session
-page, four requests, no import, link or write) **and returns the printed JSON; after a success a
-small PR is proposed** that adds `server3` to the code allowlist and, by a data-only v28, to the
+importer's client and mapper were verified against `e03`'s `api` family only. For the
+verification the discovery script first carried its own `server3` profile (superseded on
+2026-09-29: it now takes both hosts from the application's catalog). The plan then was: the owner
+runs the one sanitized verification on `server3` (exchange → team list / team 980 → one session
+page, four requests, no import, link or write) and returns the printed JSON; after a success a
+small PR that adds `server3` to the code allowlist and, by a data-only v28, to the
 host catalog — no credential, no binding for team 980, no route, no adapter.
 
 **The `server3` verification was run once and refused (owner-run, 2026-09-29 19:27 UTC):**
@@ -247,13 +249,12 @@ host catalog — no credential, no binding for team 980, no route, no adapter.
 were not sent, the environment variables were removed. Two refused exchanges have now been sent
 with this account (one per host). **Access to Team ID 980 is not confirmed; NO-GO for the
 adapter and for the `server3` allowlist PR.** A structural comparison with the working Apps
-Script (counts and booleans only, no value read out) shows the same field names and token field,
-an identifier and a password stored as plain literals, and one wire difference: the script sends
-the body form-encoded, the discovery run sent JSON. Most likely the typed pair is not the pair
+Script (counts and booleans only, no value read out) shows the same field names and token field
+and one wire difference: the script sends the body form-encoded, the discovery run sent JSON. Most likely the typed pair is not the pair
 the script holds; the owner checks that privately (yes / no). The discovery script has
 `--body-encoding form` for an exact reproduction. No further exchange without a new explicit
-owner decision. **Owner action:** `gpexe-code-check.js` holds plain credentials in the repository
-folder, untracked and not ignored.
+owner decision. (The legacy file `gpexe-code-check.js`, which held plain credentials in the
+repository folder, has since been moved out and ignored.)
 
 **The second `server3` verification succeeded (owner-run, 2026-09-29 19:39 UTC; contract document
 section 1.8):** with the pair the working integration holds (the club's existing account) and a
@@ -269,8 +270,26 @@ in force (existing account for the pilot only; later switch to a dedicated accou
 schema change; Connect form with username and password exchanged at once and dropped; only the
 AES-256-GCM encrypted token stored; Reconnect asks again; the password never returned or shown
 as stored). **GO for the small PR that adds `server3` to the code allowlist (with `apiFamily` and
-`exchangePath` per entry) and, by a data-only v28, to the host catalog — proposed, not started.
-The adapter and the routes wait for the owner's order.**
+`exchangePath` per entry) and, by a data-only v28, to the host catalog.**
+
+**The active step is the `server3` host profile PR** (branch
+`feature/source-hosts-server3-profile`, owner order 2026-09-29, in review; external review
+required: migration, host allowlist, network boundary). `backend/src/sourceHosts.js` now holds a
+complete profile per host — exact base URL, API family with its one path prefix (`api` → `api/`
+on `e03`, `rest_v1` → `rest/v1/` on `server3`), auth scheme `Token`, and the exchange
+(`api-token-auth/`, form-encoded, token field `token` on `server3`; none on `e03`, where no
+exchange was ever confirmed). `sourceApiUrl()` is the only way to build a data URL and cannot
+leave the host's own prefix; nothing takes a URL, falls back to another host, family or
+encoding. Migration v28
+(`migrations_v2/202609291000_training_load_v28_source_host_server3.sql`) is data only: one
+approved catalog row `gpexe` / `server3`, no structure change; its rollback
+(`docs/runbooks/source-hosts-v28-rollback.sql`) refuses once any connection uses the host, once
+the row was changed, or once a later migration is recorded. **The account sees 8 GPEXE teams; a
+binding and every request must be limited to Team ID 980** (the adapter reads from the bound
+source team id only and checks the `team` of every answer). The legacy credential file was moved
+out of the repository folder and is in `.gitignore`; it was never tracked. **No credential, no
+connection, no binding for team 980, no Connect / Test route, no adapter for real data, no GPEXE
+request; v28 was applied to disposable databases only.**
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -829,6 +848,11 @@ pre-existing; pass/fail counts don't belong in this file
 - `frontend/tests/training-load.actions.test.mjs` — the process never exits after the
   suite runs. It was reproduced on clean `main` on 2026-09-18, but the baseline commit
   was not recorded. Not fixed.
+- `backend/tests/activity-roster-5a2.test.mjs` — test "56. migration v26: applied by the runner
+  on v25, the rollback returns the schema to v25 exactly…" fails on the digest of
+  `training.lock_activity_decider`; reproduced identically on a clean detached `origin/main`
+  worktree (`f26120f`) on 2026-09-29. The cause is not established (the checked-out SQL files
+  carry CRLF line endings on this workstation, which is a candidate, unverified). Not fixed.
 - `backend/tests/training-load-metrics-builder-edit-draft.test.mjs` — refuses to start
   unless `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL` is set (deliberate guard, no database
   operation attempted), so a plain full backend run reports it as failed; same on
@@ -1027,9 +1051,9 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-On the owner's order, the small PR adding `server3` to the allowlist and the catalog
-(`docs/ai/source-connections-f3c2-contract.md` section 1.8), then the `rest/v1` adapter profile
-and the F3c2 routes; on GO the F3c2 adapter and routes are built against the contract of its
+The owner's external review and merge decision on the `server3` host profile PR
+(`docs/ai/source-connections-f3c2-contract.md` section 1.8), then, on the owner's order, the
+`rest/v1` adapter profile and the F3c2 routes; on GO the F3c2 adapter and routes are built against the contract of its
 section 2, then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.

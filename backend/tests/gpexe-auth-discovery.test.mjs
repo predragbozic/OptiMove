@@ -13,6 +13,12 @@ const FAKE_USER = "fake.user@example.invalid";
 const FAKE_PASSWORD = "Fake-Password-not-real-42";
 const ISSUED = "FAKE-ISSUED-TOKEN-fedcba9876543210-not-real";
 
+// The exchange body as a fake server reads it: form or JSON, by content type.
+function sentBody(init) {
+  if (!init.body) return {};
+  return init.headers["Content-Type"] === "application/x-www-form-urlencoded" ? Object.fromEntries(new URLSearchParams(init.body)) : JSON.parse(init.body);
+}
+
 function fakeResponse(status, body, headers = {}) {
   const h = new Headers(headers);
   return {
@@ -34,7 +40,7 @@ function fakeGpexe({ teams = [{ id: 980, name: "FK Test" }, { id: 12, name: "Oth
     const auth = init.headers.Authorization;
     const authed = auth === `${scheme} ${FAKE_TOKEN}` || auth === `${scheme} ${ISSUED}`;
     if (u.pathname === "/api-token-auth/" && init.method === "POST") {
-      const body = JSON.parse(init.body || "{}");
+      const body = sentBody(init);
       if (!body.username || !body.password) return fakeResponse(400, { username: ["This field is required."], password: ["This field is required."] }, { "content-type": "application/json" });
       if (body.username === FAKE_USER && body.password === FAKE_PASSWORD) return fakeResponse(200, { [tokenField]: ISSUED, token_type: scheme }, { "content-type": "application/json" });
       return fakeResponse(400, { non_field_errors: ["Unable to log in with provided credentials."] }, { "content-type": "application/json" });
@@ -54,7 +60,7 @@ function fakeGpexe({ teams = [{ id: 980, name: "FK Test" }, { id: 12, name: "Oth
 }
 
 test("arguments: host is a key never a URL, team is canonical, mode is one of three, exchange path is relative", () => {
-  assert.deepEqual(parseArgs([]), { mode: "anon", host: "e03", team: "980", exchangePath: null, authScheme: "Token", tokenField: "token", apiFamily: null, bodyEncoding: "json" });
+  assert.deepEqual(parseArgs([]), { mode: "anon", host: "e03", team: "980", exchangePath: null, authScheme: null, tokenField: null, apiFamily: null, bodyEncoding: null }, "null = taken from the host's profile");
   assert.equal(parseArgs(["--body-encoding", "form"]).bodyEncoding, "form");
   for (const bad of ["xml", "", "multipart", "JSON"]) assert.throws(() => parseArgs(["--body-encoding", bad]), DiscoveryUsageError, JSON.stringify(bad));
   assert.equal(parseArgs(["--api-family", "rest_v1"]).apiFamily, "rest_v1");
@@ -66,57 +72,60 @@ test("arguments: host is a key never a URL, team is canonical, mode is one of th
   assert.throws(() => parseArgs(["--exchange-path", "../api-token-auth/"]), DiscoveryUsageError);
   assert.equal(parseArgs(["--exchange-path", "api-token-auth/"]).exchangePath, "api-token-auth/");
   // The scheme and the token field are one word each, exactly as step A reported them.
-  assert.equal(parseArgs([]).authScheme, "Token");
-  assert.equal(parseArgs([]).tokenField, "token");
   assert.equal(parseArgs(["--auth-scheme", "Bearer", "--token-field", "access_token"]).authScheme, "Bearer");
   for (const bad of ["Token x", "Bearer:", "\"Token\"", "", "Token\nX-Injected: 1", "a".repeat(33)]) assert.throws(() => parseArgs(["--auth-scheme", bad]), DiscoveryUsageError, JSON.stringify(bad));
   for (const bad of ["a.b", "token[0]", "", "9x", "a b"]) assert.throws(() => parseArgs(["--token-field", bad]), DiscoveryUsageError, JSON.stringify(bad));
 });
 
-test("a Bearer server with the token under access_token: the given scheme is sent as is, only the named field is read, nothing else is tried", async () => {
+test("discovery on a host WITHOUT a confirmed exchange: the scheme word given is sent as is in token mode, and nothing else is tried", async () => {
   const { calls, fetchImpl } = fakeGpexe({ scheme: "Bearer", tokenField: "access_token" });
-  const env = { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: FAKE_PASSWORD, GPEXE_API_TOKEN: FAKE_TOKEN };
-  // Step A's scheme word carried into step C.
   const a = await runDiscovery(parseArgs([]), {}, fetchImpl);
   assert.equal(a.findings.apiDemandsScheme, "Bearer");
   calls.length = 0;
-  const report = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3", "--auth-scheme", "Bearer", "--token-field", "access_token"]), env, fetchImpl);
-  const text = assertNoSecretInReport(report, env);
-  assert.ok(!text.includes(ISSUED));
-  assert.equal(calls.length, 4);
-  assert.ok(calls.slice(1).every((c) => c.headers.Authorization === `Bearer ${ISSUED}`));
-  assert.equal(report.authScheme, "Bearer");
-  assert.equal(report.tokenField, "access_token");
-  assert.equal(report.findings.exchangeReturnsTokenField, true);
-  assert.equal(report.findings.exchangedTokenWorksAsScheme, true);
-  assert.deepEqual(report.requests[0].fieldNames, ["access_token", "token_type"]);
-  // Step B against the same server with the right scheme.
-  calls.length = 0;
   const b = await runDiscovery(parseArgs(["--mode", "token", "--auth-scheme", "Bearer"]), { GPEXE_API_TOKEN: FAKE_TOKEN }, fetchImpl);
   assert.equal(b.findings.tokenAccepted, true);
+  assert.equal(b.authScheme, "Bearer");
   assert.ok(calls.every((c) => c.headers.Authorization === `Bearer ${FAKE_TOKEN}`));
+  // The profile's own scheme against that server: every request 401, each path once, no second scheme.
+  calls.length = 0;
+  const c = await runDiscovery(parseArgs(["--mode", "token"]), { GPEXE_API_TOKEN: FAKE_TOKEN }, fetchImpl);
+  assert.equal(c.findings.tokenAccepted, false);
+  assert.ok(calls.every((x) => x.headers.Authorization === `Token ${FAKE_TOKEN}`));
+  assert.equal(new Set(calls.map((x) => `${x.method} ${x.url}`)).size, calls.length, "no path was tried twice");
 });
 
-test("a wrong scheme or a wrong token field is a finding, never a retry with another value", async () => {
-  const { calls, fetchImpl } = fakeGpexe({ scheme: "Bearer", tokenField: "access_token" });
-  // Default Token against a Bearer server: every request 401, exactly one request per path, no second scheme.
-  const b = await runDiscovery(parseArgs(["--mode", "token"]), { GPEXE_API_TOKEN: FAKE_TOKEN }, fetchImpl);
-  assert.equal(b.findings.tokenAccepted, false);
-  assert.ok(calls.every((c) => c.headers.Authorization === `Token ${FAKE_TOKEN}`));
-  assert.equal(new Set(calls.map((c) => `${c.method} ${c.url}`)).size, calls.length, "no path was tried twice");
-  // Right scheme, default field name: the exchange succeeds but the token is under another name -> reported as no token field, no GET follows.
-  calls.length = 0;
+test("on a host WITH a confirmed exchange a credential is sent only in the confirmed way: another scheme, token field, encoding or path is refused before any request", async () => {
+  const { calls, fetchImpl } = fakeServer3();
   const env = { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: FAKE_PASSWORD };
-  const c = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3", "--auth-scheme", "Bearer"]), env, fetchImpl);
+  for (const flags of [["--auth-scheme", "Bearer"], ["--token-field", "access_token"], ["--body-encoding", "json"], ["--exchange-path", "rest/v1/api-token-auth/"]]) {
+    await assert.rejects(runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3", ...flags]), env, fetchImpl), /has a confirmed exchange/, flags.join(" "));
+  }
+  assert.equal(calls.length, 0, "no credential left the process");
+  // Without any flag, and with flags that repeat the profile, the confirmed way is used.
+  for (const flags of [[], ["--auth-scheme", "Token", "--token-field", "token", "--body-encoding", "form", "--exchange-path", "api-token-auth/", "--api-family", "rest_v1"]]) {
+    calls.length = 0;
+    const r = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3", ...flags]), env, fetchImpl);
+    assert.equal(r.findings.exchangeStatus, 200);
+    assert.equal(calls[0].headers["Content-Type"], "application/x-www-form-urlencoded");
+    assert.ok(calls[0].url.endsWith("/api-token-auth/"));
+    assert.equal(r.requests[0].bodyEncoding, "form");
+    assert.equal(r.authScheme, "Token");
+    assert.equal(r.tokenField, "token");
+  }
+});
+
+test("a successful exchange whose answer lacks the confirmed token field is dropped: no field is guessed, no GET follows", async () => {
+  const { calls, fetchImpl } = fakeGpexe({ scheme: "Token", tokenField: "access_token" });
+  const env = { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: FAKE_PASSWORD };
+  const c = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3"]), env, fetchImpl);
   assertNoSecretInReport(c, env);
   assert.equal(c.findings.exchangeStatus, 200);
   assert.equal(c.findings.exchangeReturnsTokenField, false);
-  assert.equal(c.findings.successWithoutNamedField, true, "a 2xx answer without the named field is reported as such and dropped");
+  assert.equal(c.findings.successWithoutNamedField, true);
   assert.deepEqual(c.findings.successResponseFieldNames, ["access_token", "token_type"], "only the NAMES of the successful answer");
   assert.equal(c.findings.tokenFieldUsed, "token");
   assert.equal(c.findings.exchangedTokenWorksAsScheme, null);
   assert.equal(calls.length, 1, "the token under another field name is never picked up");
-  assert.deepEqual(c.requests[0].fieldNames, ["access_token", "token_type"], "the owner sees the real field name and passes it explicitly");
   assert.ok(!JSON.stringify(c).includes(ISSUED));
 });
 
@@ -130,12 +139,17 @@ test("host: only a key with a discovery profile resolves, to its exact URL; a UR
   assert.equal(calls.length, 0, "no request was sent");
 });
 
-test("server3 is a DISCOVERY-ONLY profile: the application's allowlist still knows e03 only, and the profile says so", () => {
-  assert.deepEqual(resolvableHostKeys("gpexe"), ["e03"], "the application resolves no server3");
-  assert.equal(isAllowedHostKey("gpexe", "server3"), false);
-  assert.deepEqual(Object.keys(SOURCE_HOSTS.gpexe), ["e03"]);
-  assert.equal(DISCOVERY_PROFILES.server3.appApproved, false);
-  assert.equal(DISCOVERY_PROFILES.e03.appApproved, true);
+test("both discovery profiles are the application's own hosts: same keys, URLs and API families, nothing of its own", () => {
+  assert.deepEqual(resolvableHostKeys("gpexe"), ["e03", "server3"]);
+  assert.equal(isAllowedHostKey("gpexe", "server3"), true);
+  assert.deepEqual(Object.keys(SOURCE_HOSTS.gpexe), Object.keys(DISCOVERY_PROFILES));
+  for (const key of Object.keys(DISCOVERY_PROFILES)) {
+    assert.deepEqual(Object.keys(DISCOVERY_PROFILES[key]).sort(), ["exchangeCandidates", "exchangeStopped", "thresholds"], "no host, family, scheme or exchange is repeated in the script");
+    assert.equal(discoveryProfile(key).baseUrl, SOURCE_HOSTS.gpexe[key].baseUrl);
+    assert.equal(discoveryProfile(key).apiFamily, SOURCE_HOSTS.gpexe[key].apiFamily);
+    assert.equal(discoveryProfile(key).authScheme, SOURCE_HOSTS.gpexe[key].authScheme);
+    assert.equal(discoveryProfile(key).exchange, SOURCE_HOSTS.gpexe[key].exchange);
+  }
   assert.equal(discoveryProfile("server3").apiFamily, "rest_v1");
   assert.equal(discoveryProfile("server3").apiPrefix, "rest/v1/");
   assert.equal(discoveryProfile("e03").apiFamily, "api");
@@ -159,7 +173,7 @@ function fakeServer3() {
     const json = { "content-type": "application/json" };
     if (u.origin !== "https://server3.gpexe.com") return fakeResponse(599, { wrong: "host" }, json);
     if (u.pathname === "/api-token-auth/" && init.method === "POST") {
-      const body = JSON.parse(init.body || "{}");
+      const body = sentBody(init);
       if (!body.username || !body.password) return fakeResponse(400, { username: ["required"], password: ["required"] }, json);
       if (body.username === FAKE_USER && body.password === FAKE_PASSWORD) return fakeResponse(200, { token: ISSUED }, json);
       return fakeResponse(400, { non_field_errors: ["Unable to log in with provided credentials."] }, json);
@@ -194,7 +208,6 @@ test("server3 verification: one exchange POST, then the team list, the team and 
   assert.equal(new URL(calls[3].url).searchParams.get("limit"), "1", "one small session page");
   assert.equal(report.hostKey, "server3");
   assert.equal(report.apiFamily, "rest_v1");
-  assert.equal(report.discoveryOnlyHost, true);
   assert.deepEqual(report.findings, {
     exchangeStatus: 200, successResponseFieldNames: ["token"], tokenFieldUsed: "token", exchangeReturnsTokenField: true, successWithoutNamedField: false,
     exchangedTokenWorksAsScheme: true, exchangedTokenEqualsEnvToken: null,
@@ -282,12 +295,12 @@ test("form encoding: the exchange body goes as application/x-www-form-urlencoded
   assert.equal(ok.requests[0].bodyEncoding, "form");
   assert.equal(calls.filter((c) => c.method === "POST").length, 1);
   assert.equal(new URLSearchParams(calls[0].body).get("password"), "p&ss w=rd+%not-real", "special characters survive the encoding");
-  // The default (json) against the same server is refused and NOT retried as form.
+  // Without the flag the confirmed encoding of the host is used: form.
   calls.length = 0;
-  const no = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3"]), env, form);
-  assert.equal(no.findings.exchangeStatus, 400);
-  assert.equal(no.requests[0].bodyEncoding, "json");
-  assert.equal(calls.length, 1, "one attempt, one encoding");
+  const def = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3"]), env, form);
+  assert.equal(def.findings.exchangeStatus, 200);
+  assert.equal(calls[0].headers["Content-Type"], "application/x-www-form-urlencoded");
+  assert.equal(calls.filter((c) => c.method === "POST").length, 1, "one attempt, one encoding");
 });
 
 test("the issued token can never be returned in a report", async () => {
