@@ -12,3 +12,5 @@ __pycache__/
 *.tsv
 *.dump
 *.docx
+# Legacy local script that holds plain credentials; it lives outside the repository.
+gpexe-code-check.js

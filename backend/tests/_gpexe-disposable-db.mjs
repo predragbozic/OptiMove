@@ -50,6 +50,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202609251000_training_load_v25_activity_roster_foundation.sql",
   "202609252000_training_load_v26_activity_roster_decisions.sql",
   "202609271000_training_load_v27_source_credential_connections.sql",
+  "202609291000_training_load_v28_source_host_server3.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to

@@ -1,0 +1,23 @@
+-- Training Load v28 — one approved host key: gpexe / server3.
+--
+-- Data only. No table, column, constraint, index, function or trigger is
+-- created or changed; the structure of v27 stays exactly as it is.
+--
+-- Why: the owner-run read-only verification of 2026-09-29
+-- (docs/ai/source-connections-f3c2-contract.md, section 1.8) confirmed that
+-- the club's GPEXE account is served by server3: the credential exchange
+-- answered there and Team ID 980 was read. The key's exact HTTPS host, its
+-- API family (rest/v1), its auth scheme and its exchange live in
+-- backend/src/sourceHosts.js; this table only says that the key is approved.
+-- A key resolves for a network call only when BOTH layers know it
+-- (resolveApprovedSourceHost).
+--
+-- What it does not do: it creates no connection, no credential, no binding
+-- (none for team 980) and no audit row, and it touches neither the e03 row
+-- nor gpexe_team_settings.
+--
+-- Rollback: docs/runbooks/source-hosts-v28-rollback.sql (refuses once the
+-- key is used by any connection, once the row was changed, or once a later
+-- migration is recorded).
+insert into training_load.source_host_catalog (source_system, host_key, label, note)
+values ('gpexe', 'server3', 'GPEXE server3', 'API family rest/v1. Confirmed by the owner-run read-only verification of 2026-09-29. Approved for F3c2.');

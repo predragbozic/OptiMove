@@ -72,6 +72,8 @@ node backend/scripts/gpexe-auth-discovery.mjs --mode token --host e03 --team 980
 Remove-Item Env:GPEXE_API_TOKEN
 ```
 
+(After step A: `--auth-scheme Token` is confirmed for `e03`; the lines above are exact.)
+
 Step C — only if GPEXE issues no official token, the **one-time exchange** with the dedicated
 account (`credential_kind = exchanged_token`, the fallback). Use the exchange path step A found
 (`api-token-auth/` unless step A says otherwise). If step B's token is also set, the report says
@@ -93,6 +95,10 @@ $env:GPEXE_PASSWORD = [System.Net.NetworkCredential]::new("", $p).Password; Remo
 node backend/scripts/gpexe-auth-discovery.mjs --mode exchange --host e03 --team 980 --exchange-path api-token-auth/ --auth-scheme Token --token-field token
 Remove-Item Env:GPEXE_USERNAME, Env:GPEXE_PASSWORD
 ```
+
+(After step A: `--exchange-path api-token-auth/` and `--auth-scheme Token` are confirmed for
+`e03`; `--token-field token` is the legacy candidate until GPEXE confirms the field name — replace
+it with the confirmed name when GPEXE answers.)
 
 Step D — lifetime and rotation. **Documentation first, never a login experiment on a credential
 in use.** A new UI login with the same account may rotate or revoke the token GPEXE issued, so a
@@ -146,7 +152,7 @@ does not by construction; sending the whole printed JSON is fine).
 
 | Question (owner, 2026-09-28) | Answered by | Consequence |
 |---|---|---|
-| 1. Which approved host issues the credential | steps A–C succeed on `e03` | `e03` stays the only approved key. `server3` is not probed by this procedure at all; it stays unapproved (U1/U2 are answered by GPEXE support or documentation, not by a request from OptiMove). |
+| 1. Which approved host issues the credential | the host on which the exchange and the reads succeed | As written on 2026-09-28: `e03` the only approved key, `server3` not probed. Superseded on 2026-09-29 (section 1.8): the account's API host is `server3`, verified by the owner and approved by v28. |
 | 2. Official token or exchanged token | B accepted → `api_token`; only C works → `exchanged_token` | `credential_kind` per connection; the Connect route accepts the kind the discovery proved, the other stays disabled for `gpexe` (both kinds remain storable, F3c1). |
 | 3. Endpoint, header scheme, lifetime, rotation | A (scheme, path, exchange request field names), C (exchange with the reported scheme and the documented token field; the successful answer's field names), D (documented rule first; login test only under D.3) | The adapter's `scheme` and `exchangePath` constants; the decay period of `verified` (D7); whether Reconnect must be offered proactively. If D shows rotation on login, the runbook forbids UI logins with the API account. |
 | 4. Dedicated account sees Team ID 980 | B or C `seesTeam` | A binding for team 980 is only created after a Test on this connection succeeds (section 3.8). |
@@ -156,6 +162,413 @@ does not by construction; sending the whole printed JSON is fine).
 **GO for the adapter** = steps A and B (or A and C) returned, scheme word known, `seesTeam` yes,
 and question 6 answered in words. Anything else = NO-GO, the adapter is not written, the owner
 decides.
+
+### 1.5 Step A result (owner-run, 2026-09-28, sanitized)
+
+Run once by the owner in their own terminal, no credential involved; the owner returned only the
+fields below.
+
+| Field | Result |
+|---|---|
+| host key / API host | `e03` / `e03.gpexe.com` |
+| auth scheme word (`WWW-Authenticate`) | `Token` |
+| unauthenticated team-list status | `401` |
+| exchange endpoint | `/api-token-auth/` (root, not under `/api/`) |
+| exchange endpoint status with an empty body | `400` |
+| exchange **request** field names | `username`, `password` |
+| `/api/api-token-auth/`, `/api/token/` | `404`, `404` |
+| GPEXE version header | `9.11.7 [release/stable]` |
+| Team ID | `980` — access by any credential **not yet confirmed** |
+| token field of a successful exchange answer | **not confirmed** (step A cannot see it) |
+
+What this settles: the adapter's header scheme for `e03` is `Token <credential>`, and the only
+exchange endpoint is `POST /api-token-auth/` with `username` and `password`. What it does not
+settle: whether GPEXE issues a persistent read-only API token at all (step B), the token field
+name of the exchange answer, token lifetime and rotation, whether the dedicated account sees
+team 980, and the minimal role. U1/U2 (`server3`) stay unanswered by design.
+
+**Owner decision 2026-09-28:** the owner's personal GPEXE account is **not** used for steps B or
+C; a new explicit decision would be needed. The next step is one of two, decided by GPEXE's answer
+to the support request below:
+
+- **Case 1 — GPEXE issues a persistent read-only API token** for a dedicated account limited to
+  team 980 → step B with `--auth-scheme Token` (section 1.2). `credential_kind = api_token`.
+- **Case 2 — no such token; GPEXE gives a dedicated API username/password** → step C on the
+  confirmed `/api-token-auth/` with `--auth-scheme Token`, `--exchange-path api-token-auth/` and
+  `--token-field` from GPEXE's answer (or the legacy candidate `token` when it did not say; a 2xx
+  without that field is dropped, one confirmed repeat at most — section 1.2).
+  `credential_kind = exchanged_token`.
+
+Support request sent by the owner (no secret in it):
+
+> We need a dedicated read-only API credential for `e03.gpexe.com`, limited to Team ID `980`. Do
+> you provide a persistent API token, or should a dedicated API username/password be exchanged
+> through `/api-token-auth/`? Please also confirm the token lifetime/rotation policy and the
+> successful response field containing the token. We do not need write permissions.
+
+Until GPEXE answers and step B or C has been run and its form returned: no adapter, no route,
+no PR for them.
+
+#### Secret hygiene for steps B and C (own terminal only)
+
+- The credential is typed through `Read-Host -AsSecureString` (masked), lives in a process
+  environment variable for the one `node` call and is removed right after (`Remove-Item Env:…`);
+  it is never a command-line argument, so it is never in the shell's command history.
+- Before the run, keep the session's history out of the file:
+  `Set-PSReadLineOption -HistorySaveStyle SaveNothing` (this PowerShell window only).
+- Do not run inside `Start-Transcript`; do not redirect the script's output to a file inside the
+  repository; the report contains no secret by construction, but the form in 1.3 is all that is
+  returned to chat.
+- Close the window afterwards; a new window has none of the variables.
+
+### 1.6 Step C result (owner-run, 2026-09-29, sanitized): exchange refused
+
+**Owner decision 2026-09-29:** without waiting for GPEXE support, one controlled step C with the
+owner's existing GPEXE account was allowed for the initial pilot on `e03`, under these rules:
+username and password never stored, never in the repository, chat, PR, log, screenshot, URL or
+PowerShell history; typed masked; used for one `POST /api-token-auth/` only; the issued token
+used for the read-only team check and dropped; only the sanitized form returned; no session
+search, link or import.
+
+| Field | Result |
+|---|---|
+| runs | exactly one; nothing repeated |
+| host key / exchange path / scheme / token field candidate | `e03` / `api-token-auth/` / `Token` / `token` |
+| exchange status | `400` |
+| response field names | `non_field_errors` (the only field) |
+| token issued | no |
+| second request (team list) | not sent |
+| access to Team ID 980 | **not confirmed** |
+| GPEXE version header | `9.11.8 [release/stable]` (was 9.11.7 at step A) |
+| secrets | none shown; environment variables removed |
+
+What it means. The endpoint accepted the request shape (both required fields were present, so no
+per-field error) and refused the **pair** as a whole. That is one of: the identifier typed is not
+what this endpoint calls `username` (the UI may sign in with an e-mail or through its own
+`/ui/v2/` authentication, a different system from the REST token endpoint); REST token
+authentication is not enabled for this account; the account is inactive for the API; or a typing
+error behind the masked prompt. The status alone cannot tell these apart, and the script
+deliberately does not print the server's sentence.
+
+**No further exchange attempt is made until the cause is narrowed without a credential.** A
+repeated refused login is the one step here that can harm: it may count toward a lockout of the
+owner's own account. The pilot decisions that were conditional on step C confirming team 980
+(personal account for the pilot only, exchange-and-discard Connect form, later switch to a
+dedicated account, Reconnect asking for the credentials again) are **not in force**; they stay
+proposals until a step B or C confirms access.
+
+Next safe diagnostic steps, none of which sends a credential or asks for one:
+
+1. **The account still works in the UI** — the owner signs in to `e03-ui` as usual, in their own
+   browser, and reports yes / no (rules out a lockout caused by the refused attempt).
+2. **Which identifier the UI asks for** — the label of the first field of the UI login form
+   (`Username`, `E-mail`, …) and, from the profile page, whether the account has a separate
+   username different from its e-mail: reported as words only (`same` / `different` / `no
+   username shown`), never the value.
+3. **Which endpoint and request field NAMES the UI login uses** — only if the owner chooses to:
+   DevTools → Network on the login request, reporting the path and the names of the body fields
+   (for example `email`, `password`), never the values, no screenshot, no HAR. If the names or the
+   path differ from `/api-token-auth/` + `username`, the UI and the REST token endpoint are
+   separate authentication systems and only GPEXE can enable REST access.
+4. **GPEXE support** — add to the open request: "`POST /api-token-auth/` on `e03` answers 400
+   `non_field_errors` for an account that signs in to `e03-ui`. Is REST token authentication
+   enabled per account, and which identifier does it expect?"
+
+Only after 1–3 (or GPEXE's answer) name a concrete, different input — a confirmed identifier
+kind, or a dedicated account — is one more step C allowed, by a new explicit owner decision.
+
+### 1.7 Credential-free checks 1 and 2 (owner, 2026-09-29): field names only
+
+Checked by the owner without any new login request. No screenshot is used or kept (it would show
+an e-mail address); only field NAMES are recorded, never a value.
+
+| Check | Result |
+|---|---|
+| the account's existing signed-in `e03-ui` session | works (no lockout observed) |
+| first field of the `e03-ui` login form | labelled `email` |
+| second field | labelled `password` |
+| a separate `username` field on the login form | none |
+| REST exchange endpoint's request fields (step A) | `username`, `password` |
+
+**The UI identifies the account by `email`; the REST token endpoint asks for `username`.** The
+two names differ, and that is all that is proven. It is **not** determined whether REST token
+authentication is simply not enabled for this account, or whether the UI and the REST API keep
+separate account records; both fit the one refused exchange (section 1.6), and nothing available
+without a credential or GPEXE's answer can separate them.
+
+Consequences, binding until a token is actually issued:
+- **Step C is not repeated.** Its result stands: `POST /api-token-auth/` refused the pair with
+  `400` `non_field_errors`.
+- **No adapter and no Connect route may claim or assume that this account will work.** Nothing is
+  built on an `e-mail + password → token` exchange: it has never succeeded. The adapter is written
+  only after a step B or a step C has really returned a token and read Team ID 980.
+- The Connect form's field for the exchange kind is not named here; whether it is a username or
+  an e-mail is part of what a successful exchange (or GPEXE) has to establish.
+- The open question goes to GPEXE support (section 1.6, item 4), extended by one sentence: "The
+  UI signs in with an e-mail; does `/api-token-auth/` expect a separate username, and is REST
+  access enabled per account?"
+
+**State of the discovery: NO-GO for the adapter.** Known: host `e03`, scheme `Token`, exchange
+endpoint `POST /api-token-auth/` with `username` and `password`. Unknown: the credential kind
+that exists for OptiMove, the token field of a successful answer, lifetime and rotation, access
+to Team ID 980, the minimal role.
+
+### 1.8 Owner confirmation (2026-09-29): this account's API host is `server3`, family `rest/v1`
+
+The owner confirmed that their existing Google Apps Script integration still works today with
+the same account, and how (no credential involved in the statement):
+
+| Item | Value for this account |
+|---|---|
+| UI host | `e03-ui.gpexe.com` |
+| API host | `server3.gpexe.com` |
+| API family | `rest/v1` (data read from `https://server3.gpexe.com/rest/v1/...`) |
+| exchange | `POST https://server3.gpexe.com/api-token-auth/` |
+| token field of the successful answer | `token` |
+| header | `Authorization: Token <token>` |
+| credential kind | `exchanged_token` |
+
+Consequences:
+- **Every further authentication attempt on `e03` is stopped**; the script's exchange mode
+  refuses that host. Section 1.6's refusal is plausibly explained by the account's REST access
+  living on another server; that is an inference, not a proof — why `e03` answered
+  `non_field_errors` stays undetermined.
+- **This is not yet permission to add `server3` to production.** `server3` stays out of
+  `backend/src/sourceHosts.js` and out of `training_load.source_host_catalog` until the one
+  sanitized verification below has succeeded and the owner has accepted the follow-up PR.
+- **A host key never implies paths.** The architecture distinguishes four things per server,
+  and `server3` + `rest/v1` is its own adapter profile, not "e03 with another host name":
+
+  | Part | `e03` | `server3` |
+  |---|---|---|
+  | `host_key` | `e03` | `server3` |
+  | exact base URL | `https://e03.gpexe.com/` | `https://server3.gpexe.com/` |
+  | API family (path prefix) | `api` (`api/`) | `rest_v1` (`rest/v1/`) |
+  | auth scheme / exchange path | `Token` / `api-token-auth/` | `Token` / `api-token-auth/` |
+
+  The importer's current client (`backend/src/gpexeClient.js`) and mapper were written and
+  verified against the `api` family of `e03`. Nothing proves that `rest/v1` returns the same
+  resources, field names, paging or units; that comparison is part of the adapter work, after
+  the verification, never assumed.
+
+#### The one sanitized read-only verification on `server3`
+
+For this verification `backend/scripts/gpexe-auth-discovery.mjs` carried its own profile for
+`server3`, with the exact URL fixed in the script, while the application's allowlist did not know
+the key yet (superseded on 2026-09-29: the script now takes both hosts from the application's
+catalog and holds no URL of its own). `--api-family` is refused when it does not match the
+host's profile. One run sends exactly four requests, all to `https://server3.gpexe.com/`. The
+command block below is the historical first run; today the script takes the exchange path, the
+`form` encoding, the token field and the scheme from the host's confirmed profile and refuses a
+flag that says otherwise:
+
+1. `POST /api-token-auth/` — the one exchange (username and password in the body, once);
+2. `GET /rest/v1/team/` — the team list (a 404 here is a finding, not a failure);
+3. `GET /rest/v1/team/980/` — the team itself;
+4. `GET /rest/v1/team_session/?team=980&limit=1` — one small session page.
+
+No session search over dates, no athlete read, no link, no import, no write; the token is
+dropped when the process ends. Own PowerShell window, one command after the other:
+
+```powershell
+cd C:\Users\user\Downloads\ProgramAPp; Set-PSReadLineOption -HistorySaveStyle SaveNothing; Test-Path Env:GPEXE_API_TOKEN
+```
+
+```powershell
+$u = Read-Host "GPEXE username" -AsSecureString; $env:GPEXE_USERNAME = [System.Net.NetworkCredential]::new("", $u).Password; Remove-Variable u
+```
+
+```powershell
+$p = Read-Host "GPEXE password" -AsSecureString; $env:GPEXE_PASSWORD = [System.Net.NetworkCredential]::new("", $p).Password; Remove-Variable p
+```
+
+```powershell
+try { node backend/scripts/gpexe-auth-discovery.mjs --mode exchange --host server3 --api-family rest_v1 --team 980 --exchange-path api-token-auth/ --auth-scheme Token --token-field token } finally { Remove-Item Env:GPEXE_USERNAME, Env:GPEXE_PASSWORD -ErrorAction SilentlyContinue }
+```
+
+```powershell
+Test-Path Env:GPEXE_USERNAME; Test-Path Env:GPEXE_PASSWORD; Test-Path Env:GPEXE_API_TOKEN
+```
+
+Returned to chat: only the JSON the script printed (or these fields from it): `hostKey`,
+`apiFamily`, `discoveryOnlyHost`, `findings.exchangeStatus`, `successResponseFieldNames`,
+`exchangeReturnsTokenField`, `exchangedTokenWorksAsScheme`, `teamListEndpoint`, `teamCount`,
+`teamStatus`, `sessionPageStatus`, `sessionPageHasRows`, `seesTeam`, and per request the masked path, status, field
+names and counts. Run once; a refusal or an error is the finding, never a reason to repeat.
+
+**Success** = `exchangeStatus` 200, `exchangeReturnsTokenField` true, `seesTeam` true (which
+needs the team list to name team 980 or `teamStatus` 200 — the team's own read) and
+`sessionPageStatus` 200. The session page is supporting evidence only: a 200 page may be empty,
+or the server may ignore the team filter, so it never sets `seesTeam` by itself
+(`sessionPageHasRows` is reported separately). If `rest/v1` has neither a team list nor a team
+read, `seesTeam` is `null` (unknown): that is a NO-GO to be discussed, not a success.
+
+#### Result of the verification run (owner-run, 2026-09-29 19:27 UTC, sanitized): refused
+
+| Field | Result |
+|---|---|
+| runs | one |
+| host key / family / scheme / token field | `server3` / `rest_v1` / `Token` / `token` |
+| request | `POST api-token-auth/`, body encoding `json` |
+| exchange status | `400` |
+| response field names | `non_field_errors` |
+| `Allow` of the endpoint | `POST, OPTIONS` |
+| token issued | no; the three GETs were not sent |
+| access to Team ID 980 | **not confirmed** |
+| GPEXE version header | `9.11.8 [release/stable]` |
+| environment variables afterwards | removed (three `False`) |
+
+`server3` refused the pair exactly as `e03` did. Two refused exchanges have now been sent with
+this account (one per host). **No further exchange is sent without a new explicit owner
+decision**, and not before the difference to the working integration is narrowed.
+
+#### Structural comparison with the working Apps Script (no value read out)
+
+The main session ran a check over the untracked legacy file `gpexe-code-check.js` that prints
+only counts, keywords and booleans — never a line of the file or any part of a value:
+
+| Property | Legacy script | Discovery run |
+|---|---|---|
+| exchange body field names | `username`, `password` | `username`, `password` |
+| body encoding | a plain `payload` object, no `contentType` → `application/x-www-form-urlencoded` | `application/json` |
+| token read from | field `token` | field `token` |
+
+What this leaves, in the order of likelihood:
+1. **The typed pair is not the pair the script holds.** The script works today, so its stored
+   pair is valid for REST. If the UI password was ever changed, or the REST record is separate
+   from the UI record (section 1.7), the UI password the owner types is not the REST password.
+   Only the owner can check this, privately: is the e-mail in the script the one typed, and is
+   the script's password the one typed? Answer yes / no per item, never the values.
+2. **The body encoding.** The server did read the JSON fields (an empty JSON body names both
+   fields as required, a filled one answers `non_field_errors`), so JSON is parsed; a form-only
+   credential check is unlikely but not excluded. The script now has `--body-encoding form` to
+   reproduce the working integration's wire format exactly; one encoding per run, never both.
+3. A typing error behind the masked prompt.
+
+**Security note (owner action).** `gpexe-code-check.js` holds the account's identifier and
+password as plain literals, in the repository folder, untracked and **not ignored**. One careless
+`git add` would publish them. Move the file out of the repository folder (or at least add it to
+`.gitignore`), and consider changing that password once OptiMove's connection exists.
+
+#### Second verification run (owner-run, 2026-09-29 19:39 UTC, sanitized): SUCCESS
+
+By an explicit owner decision one more exchange was sent, this time with exactly the pair the
+working integration holds (the club's existing GPEXE account, not the owner's personal UI
+login) and with the body form-encoded. Both inputs changed at once, so the run does not tell
+which of the two made the difference; the adapter therefore sends the exchange form-encoded, the
+one format proven to work.
+
+| Field | Result |
+|---|---|
+| host key / API family / prefix | `server3` / `rest_v1` / `rest/v1/` |
+| exchange | `POST api-token-auth/`, body `form`, status `200` |
+| successful response field names | `token` (the only field) |
+| header scheme | `Token` — accepted on all three reads |
+| `GET rest/v1/team/` | `200`, array, `X-Total-Count` 8, **contains team 980** |
+| `GET rest/v1/team/980/` | `200` |
+| `GET rest/v1/team_session/?team=980&limit=1` | `200`, array of 1, `X-Total-Count` 308, a `Link` header (header paging, as on `e03`) |
+| `seesTeam` | **true** (from the list and from the team's own read) |
+| GPEXE version | `9.11.8 [release/stable]` |
+| secrets | none in the output; environment variables removed |
+
+Field names seen (names only). Team: `club`, `controller_ip`, `default_teamsession_category`,
+`end_date`, `id`, `licence`, `locked`, `name`, `preferred_ground`, `rpe_format`, `season`,
+`sport`, `start_date`. Team session: `category`, `category_name`, `created_on`, `drillTags`,
+`drill_enabled`, `drills`, `drills_count`, `end_timestamp`, `id`, `is_stats_valid`, `maxStop`,
+`minStart`, `n_tracks`, `name`, `notes`, `start_timestamp`, `submitted_by`, `tags`, `team`,
+`total_time`, `union_duration`, `updated_on`.
+
+**What is now confirmed for this account**
+
+| Question of section 1.4 | Answer |
+|---|---|
+| 1. Host that issues the credential | `server3.gpexe.com` (not `e03`) |
+| 2. Credential kind | `exchanged_token`: username + password → token, through `POST /api-token-auth/`, form-encoded |
+| 3. Endpoint / scheme / token field | `/api-token-auth/` / `Token` / `token`. Lifetime and rotation: **still unknown** |
+| 4. Sees Team ID 980 | yes |
+| 5. Read-only team-list endpoint | exists: `GET rest/v1/team/` |
+| 6. Minimal scope | **not minimal.** The account sees 8 teams, and the endpoints advertise write methods (`POST` on the lists, `PUT` / `PATCH` on the team). `Allow` describes the endpoint, not the account's rights, so whether this account may write is unknown; OptiMove sends `GET` only (and the one exchange `POST`). |
+
+**Risks recorded with the success**
+- The account is broader than the pilot needs (8 teams). A binding must name team 980
+  explicitly, and the adapter must refuse every source team id that is not the bound one.
+- The account is the club's shared account and is also used by the existing Apps Script; if the
+  token is one-per-user and a new exchange rotates it, OptiMove's Connect could break that
+  integration or the reverse. Unknown until lifetime / rotation is answered (section 1.2 step D,
+  documentation first). To be answered before the first Connect in production.
+- `rest/v1` on `server3` is not the `api` family on `e03` the importer was verified against.
+  The session field names look alike, but resources, drill and athlete-session details, units and
+  paging must be compared request by request in the adapter work; nothing is assumed.
+
+**Temporary owner decisions, now in force for the initial pilot** (owner, 2026-09-29):
+- the existing account is allowed for the initial pilot only;
+- the production design keeps supporting a later switch to a dedicated API account without a
+  schema change (a new credential on the same connection, or a new connection);
+- the application may have a Connect form with username and password, but the backend exchanges
+  them for a token at once and drops them;
+- only the token is stored, AES-256-GCM encrypted as v27 defines;
+- Reconnect asks for username and password again;
+- the password is never returned to the client and never shown as stored.
+
+**GO** for the small allowlist PR below (ordered by the owner on 2026-09-29). The adapter and
+the routes still wait for the owner's order.
+
+#### The `server3` profile PR (owner order 2026-09-29; as built)
+
+Branch `feature/source-hosts-server3-profile`. No credential, no connection, no binding for
+team 980, no route, no adapter for real data, no GPEXE request. External review required
+(migration, host allowlist, network boundary); never declared merge-ready by the main session.
+
+- **`backend/src/sourceHosts.js`: every host is a complete profile.**
+
+  | Part | `e03` | `server3` |
+  |---|---|---|
+  | exact base URL | `https://e03.gpexe.com/` | `https://server3.gpexe.com/` |
+  | API family → prefix | `api` → `api/` | `rest_v1` → `rest/v1/` |
+  | auth scheme | `Token` | `Token` |
+  | exchange | none (never confirmed there) | `api-token-auth/`, encoding `form`, token field `token` |
+
+  `sourceApiUrl(source, hostKey, catalogRow, resourcePath)` is the one way to build a data URL:
+  the host's base URL, the host's own family prefix, then a relative resource path that cannot
+  leave that prefix (no leading slash, no dot, no colon, no empty segment, a plain query only).
+  `sourceExchange(source, hostKey, catalogRow)` answers for that host only and is
+  `exchange_not_supported` on `e03`. Both go through the gate themselves: without the key's own
+  approved catalog row there is no URL. Every host must lie under its source's domain
+  (`.gpexe.com`), checked when the module loads.
+  Known duplication, recorded: the importer's client (`backend/src/gpexeClient.js`) still has its
+  own constant for the `e03` root and does not go through the catalog; a test ties the two values
+  together, and the adapter work replaces the constant. No function takes a URL, iterates over hosts, or tries a second host, family or
+  encoding; an unknown key, family or encoding is refused (profiles are validated when the
+  module loads, and everything is frozen).
+- **Migration v28** (`migrations_v2/202609291000_training_load_v28_source_host_server3.sql`):
+  one `insert` of the approved row `gpexe` / `server3`. Data only — the structure of v27 is
+  unchanged (the test compares the whole catalog of functions, triggers, indexes, columns and
+  constraints before and after).
+- **Rollback** (`docs/runbooks/source-hosts-v28-rollback.sql`): removes that one row and the v28
+  record, and refuses, changing nothing, once any connection uses `server3`, once the row is not
+  what v28 inserted, or once a later migration is recorded. The v27 rollback refuses while v28
+  is recorded.
+- **The discovery script** takes both hosts' URL and family from the application's catalog; it
+  holds no URL of its own any more.
+- **The legacy credential file** was moved out of the repository folder by the owner's order and
+  is listed in `.gitignore`; it was never tracked, committed or stashed.
+
+#### One account, eight teams: the binding rule for the adapter (not yet enforced in code)
+
+The verified account sees 8 GPEXE teams. OptiMove needs one. A binding and every request must be
+limited to Team ID 980. **Nothing in the code enforces that today**, because no adapter exists:
+`sourceApiUrl()` scopes the host and the API family only and would build a URL for any team id.
+The rule below binds the adapter work (F3c2), where it gets a team-scoped builder and its own
+tests (team 981 refused, a duplicate `team` key refused):
+- a binding names exactly one source team id (`980` for the pilot team), and v27 already allows
+  one active OptiMove team per source team across every connection;
+- the adapter builds every data request from the **bound** source team id only; a source team
+  id from a request body, a query string or a source answer is never used to read;
+- the team list (`team/`) is read to verify that the bound team is visible, never to import or
+  to offer the other seven to a coach;
+- a session whose `team` field is not the bound id is refused as inconsistent source data
+  (the `team` filter may be ignored by the server; the answer is checked, not trusted);
+- OptiMove sends `GET` only (plus the one exchange `POST`), whatever the endpoints advertise.
 
 ---
 
@@ -167,7 +580,9 @@ name of anything.
 ### 2.1 Adapter interface (per `source_system`)
 
 ```
-sourceAdapter(sourceSystem) → {
+sourceAdapter(sourceSystem, hostProfile) → {              // hostProfile = { hostKey, baseUrl, apiFamily, exchangePath, authScheme }
+  // one adapter PROFILE per (source, apiFamily): gpexe/api and gpexe/rest_v1 are two profiles;
+  // a host key selects its profile, it never rewrites another profile's paths
   kinds: ['api_token'] | ['exchanged_token'] | both       // what the discovery proved for this source
   testConnection({ baseUrl, credential, sourceTeamId? })  // ONE read; → { ok, code, sourceTeamIds? }
   exchange?({ baseUrl, username, password })              // only for kinds incl. exchanged_token; → { credential } and nothing else kept
@@ -225,7 +640,8 @@ Disconnect stays outside F3c2 (D5). The env `GPEXE_API_TOKEN` fallback stays unt
 
 **Fact gap in v27 to close with the routes:** v27 has no fact CHECK for `linked_untested` (the other
 four states have one), so nothing in the database forces `last_error_code` / `last_error_at` onto a
-`linked_untested` row. F3c2 either adds a data-only migration v28
+`linked_untested` row. F3c2 either adds a small migration (the next free number; v28 is the
+`server3` catalog row)
 (`check (state <> 'linked_untested' or last_error_code is not null)`) or, at least, a route test
 that every write of `linked_untested` carries both facts; the choice is recorded in the F3c2 PR.
 

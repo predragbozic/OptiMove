@@ -28,6 +28,11 @@ const ROLLBACK_SQL = path.resolve(__dirname, "../../docs/runbooks/source-connect
 const MARKER = "MARKER-credential-f3c1-not-real";
 // The only host keys the tests themselves add to a disposable catalog.
 const TEST_ONLY_HOST_KEYS = ["e98", "e99"];
+// What v28 adds to the catalog (test 1 runs on v27 alone and sees the v27 seed only).
+const V28_CATALOG_ROW = {
+  source_system: "gpexe", host_key: "server3", label: "GPEXE server3", state: "approved",
+  note: "API family rest/v1. Confirmed by the owner-run read-only verification of 2026-09-29. Approved for F3c2.",
+};
 const SEEDED_CATALOG = [{
   source_system: "gpexe", host_key: "e03", label: "GPEXE e03", state: "approved",
   note: "The server of the owner's organisation (UI at e03-ui.gpexe.com). Approved for F3c1.",
@@ -292,7 +297,7 @@ test("3. connection ownership: exactly one owner, club or team; never user or sy
 });
 
 test("4. host_key must be an APPROVED catalog key: unknown keys, URLs and case variants are refused, two approved keys serve different connections, a retired key is refused, and a host never changes under a stored credential", async () => {
-  for (const bad of ["server3", "https://e03.gpexe.com/", "E03", "e03 ", "", "e03/../x"]) {
+  for (const bad of ["server4", "https://server3.gpexe.com/", "https://e03.gpexe.com/", "E03", "SERVER3", "e03 ", "", "e03/../x"]) {
     await refused(`insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id) values ('gpexe','club',$1,$2,'x','api_token',$3)`, [fx.club, bad, fx.admin], /host_key_format|not in the catalog|host_in_catalog/);
   }
   // A second confirmed server is one catalog ROW (data), not a structure change.
@@ -627,7 +632,7 @@ test("18. every approved key the migration seeds resolves in the backend catalog
   // Every row that is not one of the tests' own keys must be exactly the seed; a NULL note is
   // compared like any other value, never skipped.
   const rows = await q(`select source_system, host_key, label, state, note from training_load.source_host_catalog order by 1, 2`);
-  assert.deepEqual(rows.filter((r) => !TEST_ONLY_HOST_KEYS.includes(r.host_key)), SEEDED_CATALOG);
+  assert.deepEqual(rows.filter((r) => !TEST_ONLY_HOST_KEYS.includes(r.host_key)), [...SEEDED_CATALOG, V28_CATALOG_ROW]);
   for (const r of rows.filter((x) => TEST_ONLY_HOST_KEYS.includes(x.host_key))) assert.match(r.note ?? "", /^test-only/, "only the tests add rows, and they say so");
   const seeded = rows.filter((r) => !TEST_ONLY_HOST_KEYS.includes(r.host_key) && r.state === "approved");
   const { sourceHost, resolvableHostKeys, resolveApprovedSourceHost, SOURCE_HOSTS } = await import("../src/sourceHosts.js");
@@ -646,8 +651,8 @@ test("18. every approved key the migration seeds resolves in the backend catalog
   const e99 = await row("e99");
   assert.equal(e99.state, "approved");
   notAllowed(() => resolveApprovedSourceHost("gpexe", "e99", e99)); // approved in the database, absent from the code
-  notAllowed(() => resolveApprovedSourceHost("gpexe", "server3", { source_system: "gpexe", host_key: "server3", state: "approved" })); // in no layer
-  assert.deepEqual(resolvableHostKeys("gpexe"), ["e03"], "server3 is not resolvable until confirmed");
+  notAllowed(() => resolveApprovedSourceHost("gpexe", "server4", { source_system: "gpexe", host_key: "server4", state: "approved" })); // in no layer
+  assert.deepEqual(resolvableHostKeys("gpexe"), ["e03", "server3"], "the two confirmed servers, nothing else");
   assert.deepEqual(Object.keys(SOURCE_HOSTS), ["gpexe"]);
 });
 

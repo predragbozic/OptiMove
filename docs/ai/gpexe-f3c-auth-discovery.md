@@ -287,7 +287,7 @@ Taken as decisions for F3c; the table above keeps the alternatives for the recor
 
 | ID | Decision |
 |---|---|
-| D1 | A fixed host catalog, keys only, no user-typed URL, ever. Amended by the external review of F3c1 (2026-09-27): GPEXE may run a different server per organisation, so the catalog is a seeded table (`source_host_catalog`) plus the backend's exact-host map; a new confirmed shard is one row and one code entry, never a structure change; `server3` stays unapproved until a dedicated API account and Team ID 980 are confirmed there; nothing assumes one account, token or team id is valid on two servers; F3c2 tests the connection on the chosen host before any binding. |
+| D1 | A fixed host catalog, keys only, no user-typed URL, ever. Amended by the external review of F3c1 (2026-09-27): GPEXE may run a different server per organisation, so the catalog is a seeded table (`source_host_catalog`) plus the backend's exact-host map; a new confirmed shard is one row and one code entry, never a structure change; `server3` stayed unapproved until an account and Team ID 980 were confirmed there (confirmed by the owner-run verification of 2026-09-29 and approved by migration v28); nothing assumes one account, token or team id is valid on two servers; F3c2 tests the connection on the chosen host before any binding. |
 | D2, D3 | Only a platform admin manages a connection and tests it. Coaches see the state only. |
 | D4 | A credential connection belongs to the club/organisation; teams are bound to it separately (`source_team_bindings`). |
 | D5 | Disconnect stays outside F3c until its consequences (orphan data, running checks, bound teams) are defined. |

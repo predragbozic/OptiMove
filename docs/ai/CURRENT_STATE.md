@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-28. Last `origin/main` commit checked: `848aa94` (merge of PR #128,
-`feature/source-connections-f3c1` → `main`; PR #127 `4949b79` before it).
+Last reviewed: 2026-09-29. Last `origin/main` commit checked: `f26120f` (merge of PR #129,
+`feature/source-connections-f3c2-discovery` → `main`; PR #128 `848aa94` before it).
 
 ## Active phase
 
@@ -136,8 +136,9 @@ change, no GPEXE request. It adds migration v27
 tables in `training_load` **beside** `gpexe_team_settings` — `source_host_catalog` (the approved
 server keys per source, `gpexe`/`e03` seeded; GPEXE may run a different server per organisation,
 so a new confirmed shard is one catalog row plus one exact-host entry in `sourceHosts.js`, never a
-structure change and never a typed URL; `server3` is not approved until a dedicated API account
-and Team ID 980 are confirmed there; a retired key takes no new connection and no new team
+structure change and never a typed URL; at the time of v27 `server3` was left out until an
+account and Team ID 980 were confirmed there (confirmed on 2026-09-29, approved by v28, see
+below); a retired key takes no new connection and no new team
 binding in the database; the backend's `resolveApprovedSourceHost()` answers `host_not_allowed`
 unless the catalog row is approved AND the code resolves the key, with no fallback — calling it
 before every request is a mandatory F3c2 gate, F3c1 has no network caller), `source_credential_connections` (club- or
@@ -168,13 +169,15 @@ password never stored or logged; F3c1 supports both and chooses neither). Runboo
 route, no UI, no GPEXE call, no cut-over, no row for team 980, no Render change; the local
 OPTIMOVE database was not migrated (still v21).**
 
-**The active step is F3c2 — source authentication, discovery first** (branch
-`feature/source-connections-f3c2-discovery`, owner order 2026-09-28, from `848aa94`). Before any
+**The active step is F3c2 — source authentication, discovery first.** The discovery PR #129
+(merge commit `f26120f`, 2026-09-28 13:18 UTC, pinned to head `e0a58ca` after the owner's external
+review; `/api/health` served `f26120f` with `ok: true` three times; nothing observable changed in
+production — no route, adapter, migration or GPEXE request) delivered the procedure. Before any
 Connect / Reconnect / Test route or network adapter is written, the GPEXE server-to-server
 contract must be proven with the dedicated API account by the owner alone:
 `docs/ai/source-connections-f3c2-contract.md` section 1 is the owner-run read-only procedure
 (`backend/scripts/gpexe-auth-discovery.mjs`, unit-tested against a fake server, never sends a
-request in tests, refuses every host but the approved `e03` key, never prints an environment
+request in tests, refuses every host without a profile (at that time every host but `e03`), never prints an environment
 value; the owner returns only host key, masked paths, statuses, the scheme word, Team ID and
 field names). It answers: which approved host issues the credential, official API token or
 one-time username/password exchange, the exact endpoint / header scheme / lifetime / rotation,
@@ -185,8 +188,108 @@ order; all bound teams locked ascending; 5 attempts / 15 minutes counted from th
 audit; every attempt audited without secrets; stable codes without source text; Connect / Test on
 the chosen host only, no fallback; no binding before a successful Test / Connect) and section 3
 the test plan. **The adapter and the routes are not written until the owner's GO on the
-discovery result.** `server3` is not probed and stays unapproved; the browser JWT / cookie is
-never used.
+discovery result.** As of PR #129 `server3` was not probed and not approved (superseded on
+2026-09-29, see below); the browser JWT / cookie is never used.
+
+**Step A is done (owner-run, 2026-09-28; contract document section 1.5):** on `e03.gpexe.com` the
+API demands the `Token` scheme (401 without a credential on the team list), the only exchange
+endpoint is `POST /api-token-auth/` (400 with an empty body, request fields `username` and
+`password`; `/api/api-token-auth/` and `/api/token/` answer 404), GPEXE version 9.11.7. Not yet
+confirmed: whether GPEXE issues a persistent read-only API token, the token field of a
+successful exchange answer, lifetime and rotation, access to Team ID 980, the minimal role. The
+owner's personal GPEXE account is not used for steps B or C without a new explicit decision; a
+support request for a dedicated read-only credential limited to team 980 has been sent. **Next is
+step B (persistent token) or step C (dedicated username/password through `/api-token-auth/`),
+decided by GPEXE's answer; no adapter, route or PR until the credential kind is confirmed and the
+1.3 form returned.**
+
+**Step C was run once and refused (owner-run, 2026-09-29; contract document section 1.6).** By an
+explicit owner decision one controlled exchange with the owner's existing GPEXE account was
+allowed for the pilot. `POST /api-token-auth/` on `e03` answered `400` with the single field
+`non_field_errors`; no token was issued, the team-list request was not sent, nothing was
+repeated, no secret was shown and the environment variables were removed; the GPEXE version
+header now reads 9.11.8. **Access to Team ID 980 is still not confirmed, and the credential kind
+is still unknown.** The refusal concerns the username/password pair as a whole; its cause (the
+identifier the endpoint expects, REST token authentication not enabled for the account, an
+inactive API account, or a typing error) cannot be told from the status. No further exchange
+attempt is made until the cause is narrowed without a credential (section 1.6: the account still
+signs in to the UI; which identifier the UI asks for; the UI login's path and field names;
+GPEXE support). The pilot decisions that depended on a confirmed team 980 are not in force. No
+adapter, route or PR.
+
+**Credential-free checks done (owner, 2026-09-29; contract document section 1.7), field names
+only:** the existing signed-in `e03-ui` session works; the UI login form's fields are labelled
+`email` and `password`, with no separate `username` field, while the REST exchange endpoint asks
+for `username` and `password`. Whether REST token authentication is not enabled for the account
+or the UI and the REST API keep separate account records is **not determined**. Step C is not
+repeated. **The discovery stands at NO-GO for the adapter: no adapter and no Connect route may
+claim that this account will work until a token has really been issued and Team ID 980 read.**
+The question is with GPEXE support.
+
+**Owner confirmation (2026-09-29; contract document section 1.8):** the owner's existing Apps
+Script integration still works with the same account through `server3.gpexe.com`: exchange
+`POST /api-token-auth/`, answer field `token`, header `Authorization: Token`, data under
+`/rest/v1/`. For this account: UI host `e03-ui`, API host `server3`, API family `rest/v1`,
+credential kind `exchanged_token`. **Every further authentication attempt on `e03` is stopped.**
+That statement alone was not yet permission to add `server3` to production: until the
+verification below succeeded it was in neither `backend/src/sourceHosts.js` nor the database
+catalog (superseded on 2026-09-29 by the host profile PR). A host key never implies paths — host key,
+exact base URL, API family (`api` against `rest_v1`) and auth scheme / exchange path are four
+separate parts of a host profile, and `server3` + `rest/v1` is its own adapter profile; the
+importer's client and mapper were verified against `e03`'s `api` family only. For the
+verification the discovery script first carried its own `server3` profile (superseded on
+2026-09-29: it now takes both hosts from the application's catalog). The plan then was: the owner
+runs the one sanitized verification on `server3` (exchange → team list / team 980 → one session
+page, four requests, no import, link or write) and returns the printed JSON; after a success a
+small PR that adds `server3` to the code allowlist and, by a data-only v28, to the
+host catalog — no credential, no binding for team 980, no route, no adapter.
+
+**The `server3` verification was run once and refused (owner-run, 2026-09-29 19:27 UTC):**
+`POST /api-token-auth/` on `server3` answered `400` `non_field_errors`, no token, the three reads
+were not sent, the environment variables were removed. Two refused exchanges have now been sent
+with this account (one per host). **Access to Team ID 980 is not confirmed; NO-GO for the
+adapter and for the `server3` allowlist PR.** A structural comparison with the working Apps
+Script (counts and booleans only, no value read out) shows the same field names and token field
+and one wire difference: the script sends the body form-encoded, the discovery run sent JSON. Most likely the typed pair is not the pair
+the script holds; the owner checks that privately (yes / no). The discovery script has
+`--body-encoding form` for an exact reproduction. No further exchange without a new explicit
+owner decision. (The legacy file `gpexe-code-check.js`, which held plain credentials in the
+repository folder, has since been moved out and ignored.)
+
+**The second `server3` verification succeeded (owner-run, 2026-09-29 19:39 UTC; contract document
+section 1.8):** with the pair the working integration holds (the club's existing account) and a
+form-encoded body, `POST /api-token-auth/` answered 200 with the single field `token`; with
+`Authorization: Token` the team list (8 teams, contains 980), team 980 itself and one session
+page (`X-Total-Count` 308, header paging) all answered 200. **Confirmed for this account: API
+host `server3`, API family `rest/v1`, credential kind `exchanged_token`, scheme `Token`, token
+field `token`, a read-only team list exists, Team ID 980 is readable.** Still unknown: token
+lifetime and rotation, and whether a new exchange invalidates the token the existing Apps Script
+uses. Not minimal: the account sees 8 teams and the endpoints advertise write methods; OptiMove
+sends GET only and a binding must name team 980. The temporary owner decisions for the pilot are
+in force (existing account for the pilot only; later switch to a dedicated account without a
+schema change; Connect form with username and password exchanged at once and dropped; only the
+AES-256-GCM encrypted token stored; Reconnect asks again; the password never returned or shown
+as stored). **GO for the small PR that adds `server3` to the code allowlist (with `apiFamily` and
+`exchangePath` per entry) and, by a data-only v28, to the host catalog.**
+
+**The active step is the `server3` host profile PR** (branch
+`feature/source-hosts-server3-profile`, owner order 2026-09-29, in review; external review
+required: migration, host allowlist, network boundary). `backend/src/sourceHosts.js` now holds a
+complete profile per host — exact base URL, API family with its one path prefix (`api` → `api/`
+on `e03`, `rest_v1` → `rest/v1/` on `server3`), auth scheme `Token`, and the exchange
+(`api-token-auth/`, form-encoded, token field `token` on `server3`; none on `e03`, where no
+exchange was ever confirmed). `sourceApiUrl()` is the only way to build a data URL and cannot
+leave the host's own prefix; nothing takes a URL, falls back to another host, family or
+encoding. Migration v28
+(`migrations_v2/202609291000_training_load_v28_source_host_server3.sql`) is data only: one
+approved catalog row `gpexe` / `server3`, no structure change; its rollback
+(`docs/runbooks/source-hosts-v28-rollback.sql`) refuses once any connection uses the host, once
+the row was changed, or once a later migration is recorded. **The account sees 8 GPEXE teams; a
+binding and every request must be limited to Team ID 980** (the adapter reads from the bound
+source team id only and checks the `team` of every answer). The legacy credential file was moved
+out of the repository folder and is in `.gitignore`; it was never tracked. **No credential, no
+connection, no binding for team 980, no Connect / Test route, no adapter for real data, no GPEXE
+request; v28 was applied to disposable databases only.**
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -745,6 +848,11 @@ pre-existing; pass/fail counts don't belong in this file
 - `frontend/tests/training-load.actions.test.mjs` — the process never exits after the
   suite runs. It was reproduced on clean `main` on 2026-09-18, but the baseline commit
   was not recorded. Not fixed.
+- `backend/tests/activity-roster-5a2.test.mjs` — test "56. migration v26: applied by the runner
+  on v25, the rollback returns the schema to v25 exactly…" fails on the digest of
+  `training.lock_activity_decider`; reproduced identically on a clean detached `origin/main`
+  worktree (`f26120f`) on 2026-09-29. The cause is not established (the checked-out SQL files
+  carry CRLF line endings on this workstation, which is a candidate, unverified). Not fixed.
 - `backend/tests/training-load-metrics-builder-edit-draft.test.mjs` — refuses to start
   unless `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL` is set (deliberate guard, no database
   operation attempted), so a plain full backend run reports it as failed; same on
@@ -943,9 +1051,10 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner runs the F3c2 discovery procedure (`docs/ai/source-connections-f3c2-contract.md`
-section 1) and returns the sanitized form; on GO the F3c2 adapter and routes are built against
-the contract of its section 2, then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
+The owner's external review and merge decision on the `server3` host profile PR
+(`docs/ai/source-connections-f3c2-contract.md` section 1.8), then, on the owner's order, the
+`rest/v1` adapter profile and the F3c2 routes; on GO the F3c2 adapter and routes are built against the contract of its
+section 2, then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 
