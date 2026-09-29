@@ -449,6 +449,69 @@ password as plain literals, in the repository folder, untracked and **not ignore
 `git add` would publish them. Move the file out of the repository folder (or at least add it to
 `.gitignore`), and consider changing that password once OptiMove's connection exists.
 
+#### Second verification run (owner-run, 2026-09-29 19:39 UTC, sanitized): SUCCESS
+
+By an explicit owner decision one more exchange was sent, this time with exactly the pair the
+working integration holds (the club's existing GPEXE account, not the owner's personal UI
+login) and with the body form-encoded. Both inputs changed at once, so the run does not tell
+which of the two made the difference; the adapter therefore sends the exchange form-encoded, the
+one format proven to work.
+
+| Field | Result |
+|---|---|
+| host key / API family / prefix | `server3` / `rest_v1` / `rest/v1/` |
+| exchange | `POST api-token-auth/`, body `form`, status `200` |
+| successful response field names | `token` (the only field) |
+| header scheme | `Token` — accepted on all three reads |
+| `GET rest/v1/team/` | `200`, array, `X-Total-Count` 8, **contains team 980** |
+| `GET rest/v1/team/980/` | `200` |
+| `GET rest/v1/team_session/?team=980&limit=1` | `200`, array of 1, `X-Total-Count` 308, a `Link` header (header paging, as on `e03`) |
+| `seesTeam` | **true** (from the list and from the team's own read) |
+| GPEXE version | `9.11.8 [release/stable]` |
+| secrets | none in the output; environment variables removed |
+
+Field names seen (names only). Team: `club`, `controller_ip`, `default_teamsession_category`,
+`end_date`, `id`, `licence`, `locked`, `name`, `preferred_ground`, `rpe_format`, `season`,
+`sport`, `start_date`. Team session: `category`, `category_name`, `created_on`, `drillTags`,
+`drill_enabled`, `drills`, `drills_count`, `end_timestamp`, `id`, `is_stats_valid`, `maxStop`,
+`minStart`, `n_tracks`, `name`, `notes`, `start_timestamp`, `submitted_by`, `tags`, `team`,
+`total_time`, `union_duration`, `updated_on`.
+
+**What is now confirmed for this account**
+
+| Question of section 1.4 | Answer |
+|---|---|
+| 1. Host that issues the credential | `server3.gpexe.com` (not `e03`) |
+| 2. Credential kind | `exchanged_token`: username + password → token, through `POST /api-token-auth/`, form-encoded |
+| 3. Endpoint / scheme / token field | `/api-token-auth/` / `Token` / `token`. Lifetime and rotation: **still unknown** |
+| 4. Sees Team ID 980 | yes |
+| 5. Read-only team-list endpoint | exists: `GET rest/v1/team/` |
+| 6. Minimal scope | **not minimal.** The account sees 8 teams, and the endpoints advertise write methods (`POST` on the lists, `PUT` / `PATCH` on the team). `Allow` describes the endpoint, not the account's rights, so whether this account may write is unknown; OptiMove sends `GET` only (and the one exchange `POST`). |
+
+**Risks recorded with the success**
+- The account is broader than the pilot needs (8 teams). A binding must name team 980
+  explicitly, and the adapter must refuse every source team id that is not the bound one.
+- The account is the club's shared account and is also used by the existing Apps Script; if the
+  token is one-per-user and a new exchange rotates it, OptiMove's Connect could break that
+  integration or the reverse. Unknown until lifetime / rotation is answered (section 1.2 step D,
+  documentation first). To be answered before the first Connect in production.
+- `rest/v1` on `server3` is not the `api` family on `e03` the importer was verified against.
+  The session field names look alike, but resources, drill and athlete-session details, units and
+  paging must be compared request by request in the adapter work; nothing is assumed.
+
+**Temporary owner decisions, now in force for the initial pilot** (owner, 2026-09-29):
+- the existing account is allowed for the initial pilot only;
+- the production design keeps supporting a later switch to a dedicated API account without a
+  schema change (a new credential on the same connection, or a new connection);
+- the application may have a Connect form with username and password, but the backend exchanges
+  them for a token at once and drops them;
+- only the token is stored, AES-256-GCM encrypted as v27 defines;
+- Reconnect asks for username and password again;
+- the password is never returned to the client and never shown as stored.
+
+**GO** for the small allowlist PR below. The adapter and the routes still wait for the owner's
+order.
+
 #### After a successful verification: the small follow-up PR (proposal, not started)
 
 One PR, no credential, no connection, no binding for team 980, no route, no adapter:

@@ -255,6 +255,23 @@ the script holds; the owner checks that privately (yes / no). The discovery scri
 owner decision. **Owner action:** `gpexe-code-check.js` holds plain credentials in the repository
 folder, untracked and not ignored.
 
+**The second `server3` verification succeeded (owner-run, 2026-09-29 19:39 UTC; contract document
+section 1.8):** with the pair the working integration holds (the club's existing account) and a
+form-encoded body, `POST /api-token-auth/` answered 200 with the single field `token`; with
+`Authorization: Token` the team list (8 teams, contains 980), team 980 itself and one session
+page (`X-Total-Count` 308, header paging) all answered 200. **Confirmed for this account: API
+host `server3`, API family `rest/v1`, credential kind `exchanged_token`, scheme `Token`, token
+field `token`, a read-only team list exists, Team ID 980 is readable.** Still unknown: token
+lifetime and rotation, and whether a new exchange invalidates the token the existing Apps Script
+uses. Not minimal: the account sees 8 teams and the endpoints advertise write methods; OptiMove
+sends GET only and a binding must name team 980. The temporary owner decisions for the pilot are
+in force (existing account for the pilot only; later switch to a dedicated account without a
+schema change; Connect form with username and password exchanged at once and dropped; only the
+AES-256-GCM encrypted token stored; Reconnect asks again; the password never returned or shown
+as stored). **GO for the small PR that adds `server3` to the code allowlist (with `apiFamily` and
+`exchangePath` per entry) and, by a data-only v28, to the host catalog — proposed, not started.
+The adapter and the routes wait for the owner's order.**
+
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
 runs the branch's real modules against an in-page fake of the 5a2 API, at 1280 px and
@@ -1010,9 +1027,9 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner runs the one sanitized verification on `server3`
-(`docs/ai/source-connections-f3c2-contract.md` section 1.8) and returns the printed JSON; after a
-success, the small PR adding `server3` to the allowlist and the catalog; on GO the F3c2 adapter and routes are built against the contract of its
+On the owner's order, the small PR adding `server3` to the allowlist and the catalog
+(`docs/ai/source-connections-f3c2-contract.md` section 1.8), then the `rest/v1` adapter profile
+and the F3c2 routes; on GO the F3c2 adapter and routes are built against the contract of its
 section 2, then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
