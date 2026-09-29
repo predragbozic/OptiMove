@@ -216,6 +216,15 @@ signs in to the UI; which identifier the UI asks for; the UI login's path and fi
 GPEXE support). The pilot decisions that depended on a confirmed team 980 are not in force. No
 adapter, route or PR.
 
+**Credential-free checks done (owner, 2026-09-29; contract document section 1.7), field names
+only:** the existing signed-in `e03-ui` session works; the UI login form's fields are labelled
+`email` and `password`, with no separate `username` field, while the REST exchange endpoint asks
+for `username` and `password`. Whether REST token authentication is not enabled for the account
+or the UI and the REST API keep separate account records is **not determined**. Step C is not
+repeated. **The discovery stands at NO-GO for the adapter: no adapter and no Connect route may
+claim that this account will work until a token has really been issued and Team ID 980 read.**
+The question is with GPEXE support.
+
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
 runs the branch's real modules against an in-page fake of the 5a2 API, at 1280 px and
@@ -971,10 +980,10 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner reports the three credential-free checks of
-`docs/ai/source-connections-f3c2-contract.md` section 1.6 (or GPEXE support answers); then, by a
-new explicit decision, step B or one more step C with a confirmed input, and the section 1.3
-form; on GO the F3c2 adapter and routes are built against the contract of its
+GPEXE support answers which credential exists for REST access and which identifier
+`/api-token-auth/` expects (`docs/ai/source-connections-f3c2-contract.md` sections 1.6–1.7);
+then, by a new explicit decision, step B or one more step C with a confirmed input, and the
+section 1.3 form; on GO the F3c2 adapter and routes are built against the contract of its
 section 2, then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.

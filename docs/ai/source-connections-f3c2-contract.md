@@ -277,6 +277,42 @@ Next safe diagnostic steps, none of which sends a credential or asks for one:
 Only after 1–3 (or GPEXE's answer) name a concrete, different input — a confirmed identifier
 kind, or a dedicated account — is one more step C allowed, by a new explicit owner decision.
 
+### 1.7 Credential-free checks 1 and 2 (owner, 2026-09-29): field names only
+
+Checked by the owner without any new login request. No screenshot is used or kept (it would show
+an e-mail address); only field NAMES are recorded, never a value.
+
+| Check | Result |
+|---|---|
+| the account's existing signed-in `e03-ui` session | works (no lockout observed) |
+| first field of the `e03-ui` login form | labelled `email` |
+| second field | labelled `password` |
+| a separate `username` field on the login form | none |
+| REST exchange endpoint's request fields (step A) | `username`, `password` |
+
+**The UI identifies the account by `email`; the REST token endpoint asks for `username`.** The
+two names differ, and that is all that is proven. It is **not** determined whether REST token
+authentication is simply not enabled for this account, or whether the UI and the REST API keep
+separate account records; both fit the one refused exchange (section 1.6), and nothing available
+without a credential or GPEXE's answer can separate them.
+
+Consequences, binding until a token is actually issued:
+- **Step C is not repeated.** Its result stands: `POST /api-token-auth/` refused the pair with
+  `400` `non_field_errors`.
+- **No adapter and no Connect route may claim or assume that this account will work.** Nothing is
+  built on an `e-mail + password → token` exchange: it has never succeeded. The adapter is written
+  only after a step B or a step C has really returned a token and read Team ID 980.
+- The Connect form's field for the exchange kind is not named here; whether it is a username or
+  an e-mail is part of what a successful exchange (or GPEXE) has to establish.
+- The open question goes to GPEXE support (section 1.6, item 4), extended by one sentence: "The
+  UI signs in with an e-mail; does `/api-token-auth/` expect a separate username, and is REST
+  access enabled per account?"
+
+**State of the discovery: NO-GO for the adapter.** Known: host `e03`, scheme `Token`, exchange
+endpoint `POST /api-token-auth/` with `username` and `password`. Unknown: the credential kind
+that exists for OptiMove, the token field of a successful answer, lifetime and rotation, access
+to Team ID 980, the minimal role.
+
 ---
 
 ## 2. Source-neutral shape of F3c2 (what is built after GO)
