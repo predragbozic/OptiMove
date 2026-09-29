@@ -202,6 +202,20 @@ step B (persistent token) or step C (dedicated username/password through `/api-t
 decided by GPEXE's answer; no adapter, route or PR until the credential kind is confirmed and the
 1.3 form returned.**
 
+**Step C was run once and refused (owner-run, 2026-09-29; contract document section 1.6).** By an
+explicit owner decision one controlled exchange with the owner's existing GPEXE account was
+allowed for the pilot. `POST /api-token-auth/` on `e03` answered `400` with the single field
+`non_field_errors`; no token was issued, the team-list request was not sent, nothing was
+repeated, no secret was shown and the environment variables were removed; the GPEXE version
+header now reads 9.11.8. **Access to Team ID 980 is still not confirmed, and the credential kind
+is still unknown.** The refusal concerns the username/password pair as a whole; its cause (the
+identifier the endpoint expects, REST token authentication not enabled for the account, an
+inactive API account, or a typing error) cannot be told from the status. No further exchange
+attempt is made until the cause is narrowed without a credential (section 1.6: the account still
+signs in to the UI; which identifier the UI asks for; the UI login's path and field names;
+GPEXE support). The pilot decisions that depended on a confirmed team 980 are not in force. No
+adapter, route or PR.
+
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
 runs the branch's real modules against an in-page fake of the 5a2 API, at 1280 px and
@@ -957,9 +971,10 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-GPEXE support answers which credential exists; the owner runs step B or step C of
-`docs/ai/source-connections-f3c2-contract.md` section 1 with the dedicated credential and returns
-the section 1.3 form; on GO the F3c2 adapter and routes are built against the contract of its
+The owner reports the three credential-free checks of
+`docs/ai/source-connections-f3c2-contract.md` section 1.6 (or GPEXE support answers); then, by a
+new explicit decision, step B or one more step C with a confirmed input, and the section 1.3
+form; on GO the F3c2 adapter and routes are built against the contract of its
 section 2, then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.

@@ -221,6 +221,62 @@ no PR for them.
   returned to chat.
 - Close the window afterwards; a new window has none of the variables.
 
+### 1.6 Step C result (owner-run, 2026-09-29, sanitized): exchange refused
+
+**Owner decision 2026-09-29:** without waiting for GPEXE support, one controlled step C with the
+owner's existing GPEXE account was allowed for the initial pilot on `e03`, under these rules:
+username and password never stored, never in the repository, chat, PR, log, screenshot, URL or
+PowerShell history; typed masked; used for one `POST /api-token-auth/` only; the issued token
+used for the read-only team check and dropped; only the sanitized form returned; no session
+search, link or import.
+
+| Field | Result |
+|---|---|
+| runs | exactly one; nothing repeated |
+| host key / exchange path / scheme / token field candidate | `e03` / `api-token-auth/` / `Token` / `token` |
+| exchange status | `400` |
+| response field names | `non_field_errors` (the only field) |
+| token issued | no |
+| second request (team list) | not sent |
+| access to Team ID 980 | **not confirmed** |
+| GPEXE version header | `9.11.8 [release/stable]` (was 9.11.7 at step A) |
+| secrets | none shown; environment variables removed |
+
+What it means. The endpoint accepted the request shape (both required fields were present, so no
+per-field error) and refused the **pair** as a whole. That is one of: the identifier typed is not
+what this endpoint calls `username` (the UI may sign in with an e-mail or through its own
+`/ui/v2/` authentication, a different system from the REST token endpoint); REST token
+authentication is not enabled for this account; the account is inactive for the API; or a typing
+error behind the masked prompt. The status alone cannot tell these apart, and the script
+deliberately does not print the server's sentence.
+
+**No further exchange attempt is made until the cause is narrowed without a credential.** A
+repeated refused login is the one step here that can harm: it may count toward a lockout of the
+owner's own account. The pilot decisions that were conditional on step C confirming team 980
+(personal account for the pilot only, exchange-and-discard Connect form, later switch to a
+dedicated account, Reconnect asking for the credentials again) are **not in force**; they stay
+proposals until a step B or C confirms access.
+
+Next safe diagnostic steps, none of which sends a credential or asks for one:
+
+1. **The account still works in the UI** — the owner signs in to `e03-ui` as usual, in their own
+   browser, and reports yes / no (rules out a lockout caused by the refused attempt).
+2. **Which identifier the UI asks for** — the label of the first field of the UI login form
+   (`Username`, `E-mail`, …) and, from the profile page, whether the account has a separate
+   username different from its e-mail: reported as words only (`same` / `different` / `no
+   username shown`), never the value.
+3. **Which endpoint and request field NAMES the UI login uses** — only if the owner chooses to:
+   DevTools → Network on the login request, reporting the path and the names of the body fields
+   (for example `email`, `password`), never the values, no screenshot, no HAR. If the names or the
+   path differ from `/api-token-auth/` + `username`, the UI and the REST token endpoint are
+   separate authentication systems and only GPEXE can enable REST access.
+4. **GPEXE support** — add to the open request: "`POST /api-token-auth/` on `e03` answers 400
+   `non_field_errors` for an account that signs in to `e03-ui`. Is REST token authentication
+   enabled per account, and which identifier does it expect?"
+
+Only after 1–3 (or GPEXE's answer) name a concrete, different input — a confirmed identifier
+kind, or a dedicated account — is one more step C allowed, by a new explicit owner decision.
+
 ---
 
 ## 2. Source-neutral shape of F3c2 (what is built after GO)
