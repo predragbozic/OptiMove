@@ -54,7 +54,9 @@ function fakeGpexe({ teams = [{ id: 980, name: "FK Test" }, { id: 12, name: "Oth
 }
 
 test("arguments: host is a key never a URL, team is canonical, mode is one of three, exchange path is relative", () => {
-  assert.deepEqual(parseArgs([]), { mode: "anon", host: "e03", team: "980", exchangePath: null, authScheme: "Token", tokenField: "token", apiFamily: null });
+  assert.deepEqual(parseArgs([]), { mode: "anon", host: "e03", team: "980", exchangePath: null, authScheme: "Token", tokenField: "token", apiFamily: null, bodyEncoding: "json" });
+  assert.equal(parseArgs(["--body-encoding", "form"]).bodyEncoding, "form");
+  for (const bad of ["xml", "", "multipart", "JSON"]) assert.throws(() => parseArgs(["--body-encoding", bad]), DiscoveryUsageError, JSON.stringify(bad));
   assert.equal(parseArgs(["--api-family", "rest_v1"]).apiFamily, "rest_v1");
   for (const bad of ["rest/v1", "v1", "", "https://x/"]) assert.throws(() => parseArgs(["--api-family", bad]), DiscoveryUsageError, JSON.stringify(bad));
   assert.throws(() => parseArgs(["--host", "https://e03.gpexe.com/"]), DiscoveryUsageError);
@@ -255,6 +257,37 @@ test("credential exchange on e03 is stopped: mode exchange refuses the host, and
     await assert.rejects(runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3", "--exchange-path", bad]), env, fetchImpl), DiscoveryUsageError, bad);
   }
   assert.equal(calls.length, 0, "no credential left the process");
+});
+
+test("form encoding: the exchange body goes as application/x-www-form-urlencoded exactly once, json is not tried, and nothing of it is printed", async () => {
+  const calls = [];
+  const form = async (url, init) => {
+    calls.push({ url, method: init.method, headers: { ...init.headers }, body: init.body });
+    const u = new URL(url);
+    if (u.pathname === "/api-token-auth/") {
+      // This fake accepts ONLY a form body, as a server with form parsers would.
+      if (init.headers["Content-Type"] !== "application/x-www-form-urlencoded") return fakeResponse(400, { non_field_errors: ["no"] }, { "content-type": "application/json" });
+      const b = new URLSearchParams(init.body);
+      return b.get("username") === FAKE_USER && b.get("password") === "p&ss w=rd+%not-real"
+        ? fakeResponse(200, { token: ISSUED }, { "content-type": "application/json" })
+        : fakeResponse(400, { non_field_errors: ["no"] }, { "content-type": "application/json" });
+    }
+    return fakeServer3().fetchImpl(url, init);
+  };
+  const env = { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: "p&ss w=rd+%not-real" };
+  const ok = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3", "--body-encoding", "form"]), env, form);
+  const text = assertNoSecretInReport(ok, env);
+  assert.ok(!text.includes("not-real") && !text.includes(encodeURIComponent(FAKE_USER)));
+  assert.equal(ok.findings.exchangeStatus, 200);
+  assert.equal(ok.requests[0].bodyEncoding, "form");
+  assert.equal(calls.filter((c) => c.method === "POST").length, 1);
+  assert.equal(new URLSearchParams(calls[0].body).get("password"), "p&ss w=rd+%not-real", "special characters survive the encoding");
+  // The default (json) against the same server is refused and NOT retried as form.
+  calls.length = 0;
+  const no = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3"]), env, form);
+  assert.equal(no.findings.exchangeStatus, 400);
+  assert.equal(no.requests[0].bodyEncoding, "json");
+  assert.equal(calls.length, 1, "one attempt, one encoding");
 });
 
 test("the issued token can never be returned in a report", async () => {

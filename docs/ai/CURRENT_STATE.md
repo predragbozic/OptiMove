@@ -242,6 +242,19 @@ page, four requests, no import, link or write) **and returns the printed JSON; a
 small PR is proposed** that adds `server3` to the code allowlist and, by a data-only v28, to the
 host catalog — no credential, no binding for team 980, no route, no adapter.
 
+**The `server3` verification was run once and refused (owner-run, 2026-09-29 19:27 UTC):**
+`POST /api-token-auth/` on `server3` answered `400` `non_field_errors`, no token, the three reads
+were not sent, the environment variables were removed. Two refused exchanges have now been sent
+with this account (one per host). **Access to Team ID 980 is not confirmed; NO-GO for the
+adapter and for the `server3` allowlist PR.** A structural comparison with the working Apps
+Script (counts and booleans only, no value read out) shows the same field names and token field,
+an identifier and a password stored as plain literals, and one wire difference: the script sends
+the body form-encoded, the discovery run sent JSON. Most likely the typed pair is not the pair
+the script holds; the owner checks that privately (yes / no). The discovery script has
+`--body-encoding form` for an exact reproduction. No further exchange without a new explicit
+owner decision. **Owner action:** `gpexe-code-check.js` holds plain credentials in the repository
+folder, untracked and not ignored.
+
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
 runs the branch's real modules against an in-page fake of the 5a2 API, at 1280 px and

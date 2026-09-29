@@ -400,6 +400,55 @@ or the server may ignore the team filter, so it never sets `seesTeam` by itself
 (`sessionPageHasRows` is reported separately). If `rest/v1` has neither a team list nor a team
 read, `seesTeam` is `null` (unknown): that is a NO-GO to be discussed, not a success.
 
+#### Result of the verification run (owner-run, 2026-09-29 19:27 UTC, sanitized): refused
+
+| Field | Result |
+|---|---|
+| runs | one |
+| host key / family / scheme / token field | `server3` / `rest_v1` / `Token` / `token` |
+| request | `POST api-token-auth/`, body encoding `json` |
+| exchange status | `400` |
+| response field names | `non_field_errors` |
+| `Allow` of the endpoint | `POST, OPTIONS` |
+| token issued | no; the three GETs were not sent |
+| access to Team ID 980 | **not confirmed** |
+| GPEXE version header | `9.11.8 [release/stable]` |
+| environment variables afterwards | removed (three `False`) |
+
+`server3` refused the pair exactly as `e03` did. Two refused exchanges have now been sent with
+this account (one per host). **No further exchange is sent without a new explicit owner
+decision**, and not before the difference to the working integration is narrowed.
+
+#### Structural comparison with the working Apps Script (no value read out)
+
+The main session ran a check over the untracked legacy file `gpexe-code-check.js` that prints
+only counts, keywords and booleans — never a line of the file or any part of a value:
+
+| Property | Legacy script | Discovery run |
+|---|---|---|
+| exchange body field names | `username`, `password` | `username`, `password` |
+| body encoding | a plain `payload` object, no `contentType` → `application/x-www-form-urlencoded` | `application/json` |
+| identifier literal | one distinct value, contains `@`, lower case, ASCII | typed by the owner (not visible) |
+| password literal | one distinct value, ASCII, no character special to JSON or form | typed by the owner (not visible) |
+| token read from | field `token` | field `token` |
+
+What this leaves, in the order of likelihood:
+1. **The typed pair is not the pair the script holds.** The script works today, so its stored
+   pair is valid for REST. If the UI password was ever changed, or the REST record is separate
+   from the UI record (section 1.7), the UI password the owner types is not the REST password.
+   Only the owner can check this, privately: is the e-mail in the script the one typed, and is
+   the script's password the one typed? Answer yes / no per item, never the values.
+2. **The body encoding.** The server did read the JSON fields (an empty JSON body names both
+   fields as required, a filled one answers `non_field_errors`), so JSON is parsed; a form-only
+   credential check is unlikely but not excluded. The script now has `--body-encoding form` to
+   reproduce the working integration's wire format exactly; one encoding per run, never both.
+3. A typing error behind the masked prompt.
+
+**Security note (owner action).** `gpexe-code-check.js` holds the account's identifier and
+password as plain literals, in the repository folder, untracked and **not ignored**. One careless
+`git add` would publish them. Move the file out of the repository folder (or at least add it to
+`.gitignore`), and consider changing that password once OptiMove's connection exists.
+
 #### After a successful verification: the small follow-up PR (proposal, not started)
 
 One PR, no credential, no connection, no binding for team 980, no route, no adapter:

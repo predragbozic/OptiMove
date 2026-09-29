@@ -83,8 +83,8 @@ export class DiscoveryUsageError extends Error {
 }
 
 export function parseArgs(argv) {
-  const opts = { mode: "anon", host: "e03", team: "980", exchangePath: null, authScheme: "Token", tokenField: "token", apiFamily: null };
-  const names = { "--mode": "mode", "--host": "host", "--team": "team", "--exchange-path": "exchangePath", "--auth-scheme": "authScheme", "--token-field": "tokenField", "--api-family": "apiFamily" };
+  const opts = { mode: "anon", host: "e03", team: "980", exchangePath: null, authScheme: "Token", tokenField: "token", apiFamily: null, bodyEncoding: "json" };
+  const names = { "--mode": "mode", "--host": "host", "--team": "team", "--exchange-path": "exchangePath", "--auth-scheme": "authScheme", "--token-field": "tokenField", "--api-family": "apiFamily", "--body-encoding": "bodyEncoding" };
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i];
     const value = argv[i + 1];
@@ -102,6 +102,10 @@ export function parseArgs(argv) {
   // One top-level JSON field name of the exchange answer.
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(opts.tokenField)) throw new DiscoveryUsageError("--token-field must be one field name (for example token or access_token)");
   if (opts.apiFamily !== null && !["api", "rest_v1"].includes(opts.apiFamily)) throw new DiscoveryUsageError("--api-family must be api or rest_v1");
+  // How the exchange body is written on the wire: json, or form
+  // (application/x-www-form-urlencoded, what the owner's working integration
+  // sends). Exactly one per run; the other is never tried.
+  if (!["json", "form"].includes(opts.bodyEncoding)) throw new DiscoveryUsageError("--body-encoding must be json or form");
   return opts;
 }
 
@@ -199,17 +203,20 @@ async function readBody(res) {
   }
 }
 
-export async function probe({ fetchImpl, baseUrl, method, path, token = null, authScheme = "Token", jsonBody = undefined, teamId }) {
+export async function probe({ fetchImpl, baseUrl, method, path, token = null, authScheme = "Token", jsonBody = undefined, bodyEncoding = "json", teamId }) {
   const url = new URL(path, baseUrl);
   if (!url.href.startsWith(baseUrl)) throw new DiscoveryUsageError("a path may not leave the approved host");
   const headers = { Accept: "application/json" };
   if (token) headers.Authorization = `${authScheme} ${token}`;
-  if (jsonBody !== undefined) headers["Content-Type"] = "application/json";
+  const form = bodyEncoding === "form";
+  if (jsonBody !== undefined) headers["Content-Type"] = form ? "application/x-www-form-urlencoded" : "application/json";
+  const wireBody = jsonBody === undefined ? undefined : form ? new URLSearchParams(jsonBody).toString() : JSON.stringify(jsonBody);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   const entry = { method, path: maskPath(path, teamId), authenticated: Boolean(token) };
+  if (jsonBody !== undefined) entry.bodyEncoding = form ? "form" : "json";
   try {
-    const res = await fetchImpl(url.href, { method, headers, body: jsonBody === undefined ? undefined : JSON.stringify(jsonBody), redirect: "manual", signal: controller.signal });
+    const res = await fetchImpl(url.href, { method, headers, body: wireBody, redirect: "manual", signal: controller.signal });
     if (res.status >= 300 && res.status < 400) return { ...entry, status: res.status, redirected: true, note: "redirect not followed" };
     const body = await readBody(res);
     return { ...entry, ...describeResponse(res, body, { teamId }), _body: body };
@@ -226,7 +233,7 @@ const strip = (entry) => {
   return rest;
 };
 
-export async function runDiscovery({ mode, host, team, exchangePath, authScheme = "Token", tokenField = "token", apiFamily = null }, env, fetchImpl = globalThis.fetch) {
+export async function runDiscovery({ mode, host, team, exchangePath, authScheme = "Token", tokenField = "token", apiFamily = null, bodyEncoding = "json" }, env, fetchImpl = globalThis.fetch) {
   const profile = discoveryProfile(host, apiFamily);
   // An exchange path is one of the profile's known candidates, never a
   // resource path: a credential is never POSTed anywhere else on the host.
@@ -244,7 +251,7 @@ export async function runDiscovery({ mode, host, team, exchangePath, authScheme 
     mode, teamId: team, authScheme, tokenField, ranAt: new Date().toISOString(), requests: [], findings: {},
   };
   const push = async (args) => {
-    const entry = await probe({ fetchImpl, baseUrl, teamId: team, authScheme, ...args });
+    const entry = await probe({ fetchImpl, baseUrl, teamId: team, authScheme, bodyEncoding, ...args });
     report.requests.push(strip(entry));
     return entry;
   };
