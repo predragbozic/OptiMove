@@ -73,14 +73,36 @@ session. Field names look alike; meanings were verified on `e03` only.
 One more run of the discovery script in a new read-only mode (to be added on the owner's order),
 with the same rules as before: masked or own-terminal input, one exchange, GET only, only
 statuses, body shapes, field names and counts returned, nothing of any body. Each line below is
-one request; ids are taken from the previous answers, never typed.
+one request; ids are taken from the previous answers of the same run, never typed and never
+guessed.
 
-| Capability | Request to try (for team 980, one recent session) | What the answer must show |
+**How the probe chooses what to read (deterministic, no guessing):**
+- *The unfiltered list of this run.* The run first reads `team_session/?team=980&limit=<n>` and
+  keeps its `X-Total-Count` as **the unfiltered count of this run**. No number from an earlier
+  run is used (the 308 of 2026-09-29 is history, not a reference value).
+  `<n>` is 100, one page; the run does not follow further pages, and "the list read" below
+  means that one page.
+- *The session.* The list holds drills as rows of their own, so "the first row" could be a drill.
+  `<id>` is the first row, in the order the source returned it, that is a parent for certain: a
+  row whose own `drills` list is not empty. If no row of the list read has a drill, `<id>` is
+  the first row that no other listed row names in its `drills` (the rule the adapter's
+  `listSessions` applies), and the report says that the choice could not be confirmed as a
+  parent. If the rows carry no `drills` list at all, that is reported and `<id>` is the first
+  row.
+- *The day.* `<day>` is the date part of that row's `start_timestamp`.
+- *The drill.* `<drill id>` is the first id in the chosen session's own `drills` list. If no row
+  of the list read has a drill, the drill capability is reported **`not_observed`**: no request
+  is sent for it and no index or id is invented.
+- *A day the filter can be judged on.* The window is judged on a `<day>` for which the same
+  run's unfiltered list holds at least one row **outside** that day. If every row of the list
+  read is of one day, the date window is reported `not_observed`.
+
+| Capability | Request to try (for team 980) | What the answer must show |
 |---|---|---|
-| `session_list_by_date` | `team_session/?team=980&start_timestamp_gte=<day> 00:00:00&start_timestamp_lte=<day> 23:59:59&limit=5` | 200; `X-Total-Count` smaller than the unfiltered 308; every row's `team` is 980 and its `start_timestamp` inside the window |
+| `session_list_by_date` | `team_session/?team=980&start_timestamp_gte=<day> 00:00:00&start_timestamp_lte=<day> 23:59:59&limit=<n>` | 200. **Proven only when all of these hold:** every returned row's `team` is 980; every returned row's `start_timestamp` lies inside the asked window; and the filtered `X-Total-Count` is **smaller** than the unfiltered count of this same run (so at least one row was really left out). Rows that satisfy the window prove nothing alone: an ignored filter returns the same first rows. Equal counts, or a row outside the window, mean the filter is not applied: reported as not proven, never as **same** |
 | `session_read` | `team_session/<id>/` | 200; object; `team`, `drills_count`, `start_timestamp` present; `team` is 980 |
 | `session_details` | `team_session/<id>/details/` | status; body shape; field names |
-| `session_drill_details` | `team_session/<id>/details/?drill=0` | status (a 404 or an ignored parameter is a finding: **missing** or **mapped**) |
+| `session_drill_details` | two requests with the real drill id taken from the session's `drills` list: the drill's own row `team_session/<drill id>/`, then its values `team_session/<drill id>/details/` | for each: status; body shape; field names; for the row, `team` is 980. This tells whether `rest_v1` gives a drill's values under the drill's own id. It does **not** try the form the `e03` importer uses (a parameter on the parent, `drill=<n>`), because its value would have to be invented; so a non-200 here is **`not_observed`**, never **missing**. Whether one more request with the drill's position in the confirmed `drills` list is allowed is an owner decision. `not_observed` also when no listed session has a drill |
 | `athlete_session_list` | `athlete_session/?teamsession=<id>&limit=5` | status; `X-Total-Count`; field names; whether every row's `teamsession` is `<id>` |
 | `athlete_session_read` | `athlete_session/<athlete session id>/` | status; field names |
 | `athlete_session_more` | `athlete_session/<athlete session id>/more/` | status; field names |
@@ -93,8 +115,8 @@ Note for the date window: its values carry a space and colons (`<day> 00:00:00`)
 proven it gets its own tested encoding of exactly that value shape; the general rules are not
 loosened.
 
-After that probe each row becomes **same**, **mapped** or **missing**, the adapter implements
-the proven ones, and only then can the importer's mapper be compared value by value on one
+After that probe each row becomes **same**, **mapped**, **missing** or stays `not_observed`
+(still **unknown**); the adapter implements the proven ones, and only then can the importer's mapper be compared value by value on one
 session (on a disposable database, as the pilot did for `e03`).
 
 ## 5. Rules the adapter keeps, whatever is added later
@@ -115,8 +137,13 @@ session (on a disposable database, as the pilot did for `e03`).
   `Authorization` header. `401` is `source_auth_rejected`, `403` is `source_access_refused` (on
   the bound team's own read both `403` and `404` are `source_team_not_visible`; what `rest_v1`
   really answers for a team the account cannot see is part of the next probe).
-- Attempts (1–5), timeout and retry delay are bounded; `429` is never repeated; an answer larger
-  than 5 MB is refused. The caller's own deadline must still cover attempts × timeout per read.
+- Attempts (1–5), timeout and retry delay are bounded; `429` is never repeated. An answer is at
+  most 5 MiB (5 242 880 bytes) **as received**: the body is read from its stream chunk by chunk,
+  the bytes are counted (after decompression, so a small compressed answer that unpacks large is
+  stopped too), and the stream is cancelled when the count passes the limit; `Content-Length` is
+  only an early guard; part of an answer is never returned or parsed. What can be in memory at
+  most is the limit plus the one chunk that passed it. The caller's own deadline must still cover
+  attempts × timeout per read.
 - The team count is account metadata: a future route shows it to platform administrators only.
 
 ## 6. The adapter's codes, and how the F3c2 routes will use them

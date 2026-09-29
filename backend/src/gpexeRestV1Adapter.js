@@ -31,7 +31,8 @@ export const ADAPTER_SOURCE = "gpexe";
 export const ADAPTER_API_FAMILY = "rest_v1";
 export const SESSION_PAGE_LIMIT_MAX = 100;
 export const MAX_PAGES = 20;
-// One answer is at most this large; a larger one is refused unread.
+// One answer is at most this many BYTES (5 MiB). A larger one is refused:
+// unread when it is announced, cancelled when it is counted.
 export const MAX_ANSWER_BYTES = 5 * 1024 * 1024;
 
 const TEAM_ID = /^(0|[1-9][0-9]{0,11})$/;
@@ -136,6 +137,74 @@ function namesBoundTeam(value, boundTeamId) {
   return null;
 }
 
+const tooLarge = () => new SourceAdapterError("source_answer_unexpected", "The source server answered with more than can be read.");
+
+// The body of an answer, as text, or a refusal — never part of it.
+// MAX_ANSWER_BYTES is a limit in BYTES on what is really received: the body
+// is read from its stream chunk by chunk, the bytes are counted as they
+// arrive, and the stream is cancelled the moment the count passes the limit.
+// Content-Length is only an early guard: an answer that announces too much
+// is refused unread, but an answer that announces little, or nothing, is
+// still counted. The whole body is never asked for in one piece.
+export async function readBounded(res, contentLength = null, limit = MAX_ANSWER_BYTES) {
+  const announced = contentLength === null || contentLength === undefined || contentLength === "" ? NaN : Number(contentLength);
+  const stream = res?.body;
+  // Letting go of the stream is asked for, never waited for: the refusal
+  // stands whether or not, and whenever, the source lets go.
+  const cancel = (target) => {
+    try {
+      Promise.resolve(target?.cancel?.()).catch(() => {});
+    } catch {
+      // A cancel that throws changes nothing.
+    }
+  };
+  if (Number.isFinite(announced) && announced > limit) {
+    cancel(stream);
+    throw tooLarge();
+  }
+  if (stream === null || stream === undefined) return "";
+  if (typeof stream.getReader !== "function") {
+    throw new SourceAdapterError("source_answer_unexpected", "The source server's answer cannot be read as a stream.");
+  }
+  const reader = stream.getReader();
+  const chunks = [];
+  let received = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!(value instanceof Uint8Array)) {
+        cancel(reader);
+        throw new SourceAdapterError("source_answer_unexpected", "The source server's answer did not arrive as bytes.");
+      }
+      received += value.byteLength;
+      if (received > limit) {
+        cancel(reader);
+        throw tooLarge();
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof SourceAdapterError) throw error;
+    cancel(reader);
+    throw new SourceAdapterError("source_unavailable", "The source server's answer stopped before its end.");
+  }
+  try {
+    reader.releaseLock();
+  } catch {
+    // The stream is closed; nothing depends on the lock.
+  }
+  // Decoded once, over all the bytes: a character split between two chunks
+  // stays one character.
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
 export function createGpexeRestV1Adapter({
   hostKey,
   catalogRow,
@@ -201,14 +270,9 @@ export function createGpexeRestV1Adapter({
       }
       if (status !== 200) throw new SourceAdapterError("source_answer_unexpected", "The source server answered in a way that is not expected.", { status });
       const header = (name) => (typeof res.headers?.get === "function" ? res.headers.get(name) : null);
-      const announced = Number(header("content-length"));
-      if (Number.isFinite(announced) && announced > MAX_ANSWER_BYTES) {
-        throw new SourceAdapterError("source_answer_unexpected", "The source server answered with more than can be read.");
-      }
+      const text = await readBounded(res, header("content-length"));
       let body;
       try {
-        const text = await res.text();
-        if (text.length > MAX_ANSWER_BYTES) throw new Error("too large");
         body = redactGpexe(JSON.parse(text));
       } catch {
         throw new SourceAdapterError("source_answer_unexpected", "The source server answered with something that cannot be read as JSON.");

@@ -7,7 +7,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  ADAPTER_API_FAMILY, createGpexeRestV1Adapter, REST_V1_CAPABILITIES, teamScopedPath,
+  ADAPTER_API_FAMILY, createGpexeRestV1Adapter, MAX_ANSWER_BYTES, readBounded, REST_V1_CAPABILITIES, teamScopedPath,
 } from "../src/gpexeRestV1Adapter.js";
 import { adapterFamilies, createSourceAdapter, SOURCE_ADAPTERS, SourceAdapterError } from "../src/sourceAdapters.js";
 
@@ -18,9 +18,44 @@ const row = (hostKey, state = "approved") => ({ source_system: "gpexe", host_key
 const code = (c) => (e) => e instanceof SourceAdapterError ? e.code === c : e.code === c;
 const json = { "content-type": "application/json" };
 
-function answer(status, body, headers = {}) {
-  return { status, headers: new Headers({ ...json, ...headers }), text: async () => (typeof body === "string" ? body : JSON.stringify(body)) };
+// A body as a stream of byte chunks; `seen` counts what was really pulled and
+// whether the reader cancelled. An answer has NO text() and no json(): the
+// adapter may only read the stream.
+function streamOf(chunks, seen = {}) {
+  seen.pulled = 0;
+  seen.bytes = 0;
+  seen.cancelled = false;
+  let i = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (i >= chunks.length) return controller.close();
+      const chunk = chunks[i];
+      i += 1;
+      seen.pulled += 1;
+      seen.bytes += chunk.byteLength ?? 0;
+      return controller.enqueue(chunk);
+    },
+    cancel() { seen.cancelled = true; },
+  }, { highWaterMark: 0 });
 }
+const bytesOf = (text) => new TextEncoder().encode(text);
+function answer(status, body, headers = {}) {
+  const text = typeof body === "string" ? body : JSON.stringify(body);
+  return {
+    status,
+    headers: new Headers({ ...json, ...headers }),
+    // A fresh stream for every request that gets this answer.
+    get body() { return streamOf([bytesOf(text)]); },
+    text: async () => { throw new Error("the adapter must not ask for the whole body"); },
+    json: async () => { throw new Error("the adapter must not ask for the whole body"); },
+  };
+}
+const streamed = (chunks, headers = {}, seen = {}) => ({
+  status: 200,
+  headers: new Headers({ ...json, ...headers }),
+  body: streamOf(chunks, seen),
+  text: async () => { throw new Error("the adapter must not ask for the whole body"); },
+});
 const without = (object, key) => { const copy = { ...object }; delete copy[key]; return copy; };
 const session = (id, team = 980, extra = {}) => ({
   id, team, category_name: "Training", start_timestamp: "2026-09-14T10:00:00", updated_on: "2026-09-14T12:00:00",
@@ -333,19 +368,128 @@ test("11. stable codes, never the source's text: refused credential, missing, un
   assert.equal(limited.calls.length, 1);
 });
 
-test("11b. attempts, timeout and delay are bounded, an oversized answer is refused unread, and a team list without a total is refused", async () => {
+test("11b. attempts, timeout and delay are bounded, and a team list without a total is refused", async () => {
   const { calls, fetchImpl } = fakeServer({ routes: { "/rest/v1/team/": answer(200, [{ id: 980 }]) } });
   for (const over of [{ attempts: 0 }, { attempts: 6 }, { attempts: Infinity }, { attempts: 1.5 }, { attempts: "3" }, { timeoutMs: 0 }, { timeoutMs: -1 }, { timeoutMs: NaN }, { timeoutMs: 120_001 }, { retryDelayMs: -1 }, { retryDelayMs: 10_001 }, { sleep: null }, { fetchImpl: null }]) {
     assert.throws(() => make(fetchImpl, over), code("invalid_options"), JSON.stringify(Object.keys(over)));
   }
   await assert.rejects(make(fetchImpl).countVisibleTeams(), code("source_answer_unexpected"), "no X-Total-Count: the count is not invented from the page");
   assert.equal(calls.length, 1);
-  let readBody = false;
-  const big = async () => ({ status: 200, headers: new Headers({ ...json, "content-length": String(6 * 1024 * 1024) }), text: async () => { readBody = true; return "[]"; } });
-  await assert.rejects(make(big).countVisibleTeams(), code("source_answer_unexpected"));
-  assert.equal(readBody, false, "an answer announced as too large is not read");
-  const long = async () => ({ status: 200, headers: new Headers(json), text: async () => `["${"x".repeat(5 * 1024 * 1024)}"]` });
-  await assert.rejects(make(long).countVisibleTeams(), code("source_answer_unexpected"));
+});
+
+test("11c. the answer size limit is a real limit in bytes: the stream is read chunk by chunk, counted, and cancelled the moment it passes 5 MiB; a header is only an early guard", async () => {
+  assert.equal(MAX_ANSWER_BYTES, 5 * 1024 * 1024);
+  const MiB = 1024 * 1024;
+  const chunk = new Uint8Array(MiB).fill(0x20); // one MiB of spaces: valid JSON whitespace
+  const teams = (seen, chunks, headers) => make(async () => streamed(chunks, { "x-total-count": "1", ...headers }, seen)).countVisibleTeams();
+
+  // (a) announced as too large: refused before one byte is pulled.
+  const a = {};
+  await assert.rejects(teams(a, [bytesOf("[]")], { "content-length": String(5 * MiB + 1) }), code("source_answer_unexpected"));
+  assert.equal(a.pulled, 0, "nothing was read");
+  assert.equal(a.cancelled, true, "the stream was let go");
+
+  // (b) a chunked body with no Content-Length at all, 8 MiB long: stopped early.
+  const b = {};
+  await assert.rejects(teams(b, Array.from({ length: 8 }, () => chunk)), code("source_answer_unexpected"));
+  assert.equal(b.pulled, 6, "the sixth MiB passed the limit; the seventh and eighth were never pulled");
+  assert.equal(b.bytes, 6 * MiB);
+  assert.equal(b.cancelled, true);
+
+  // (c) a header that lies small: the real bytes are counted all the same.
+  const c = {};
+  await assert.rejects(teams(c, Array.from({ length: 8 }, () => chunk), { "content-length": "2" }), code("source_answer_unexpected"));
+  assert.equal(c.pulled, 6);
+  assert.equal(c.cancelled, true);
+  for (const lie of ["0", "-5", "abc", "", "1e3", "Infinity"]) {
+    const s = {};
+    await assert.rejects(teams(s, Array.from({ length: 7 }, () => chunk), { "content-length": lie }), code("source_answer_unexpected"), JSON.stringify(lie));
+    assert.equal(s.cancelled, true, JSON.stringify(lie));
+  }
+
+  // (d) bytes, not characters: 2 MiB characters of three bytes each are 6 MiB and are refused,
+  // although their character count is far below the limit.
+  const euro = bytesOf("€".repeat(MiB)); // 3 MiB of bytes, 1 MiB of characters
+  assert.equal(euro.byteLength, 3 * MiB);
+  const d = {};
+  await assert.rejects(teams(d, [bytesOf('["'), euro, euro, bytesOf('"]')]), code("source_answer_unexpected"));
+  assert.equal(d.cancelled, true);
+  assert.equal(d.pulled, 3, "stopped at the chunk that passed the limit");
+  // The same characters within the limit are read, also when a character is split between chunks.
+  const original = '[{"id":980,"name":"\u00dcn\u00efc\u00f6d\u00e9 \u20ac"}]';
+  const small = bytesOf(original);
+  const inU = small.indexOf(0xc3) + 1; // inside the two bytes of the first letter with an umlaut
+  const inEuro = small.indexOf(0xe2) + 1; // inside the three bytes of the euro sign
+  assert.ok((small[inU] & 0xc0) === 0x80 && (small[inEuro] & 0xc0) === 0x80, "both cuts are inside a multi-byte character");
+  const split = () => [small.slice(0, inU), small.slice(inU, inEuro), small.slice(inEuro)];
+  const e = {};
+  assert.deepEqual(await teams(e, split()), { teamCount: 1, boundTeamOnFirstPage: true, firstPageOnly: false });
+  assert.equal(e.cancelled, false);
+  assert.equal(await readBounded({ body: streamOf(split(), {}) }), original, "the text is whole, no replacement character");
+  assert.equal(await readBounded({ body: streamOf([new Uint8Array([0xe2]), new Uint8Array([0x82, 0xac])], {}) }), "\u20ac");
+
+  // (e) exactly the limit is allowed (whitespace around a list), one byte more is not.
+  const exact = [bytesOf("["), new Uint8Array(5 * MiB - 2).fill(0x20), bytesOf("]")];
+  assert.deepEqual(await teams({}, exact.concat()), { teamCount: 1, boundTeamOnFirstPage: false, firstPageOnly: true });
+  await assert.rejects(teams({}, [bytesOf("["), new Uint8Array(5 * MiB - 1).fill(0x20), bytesOf("]")]), code("source_answer_unexpected"));
+});
+
+test("11d. never part of an answer: a stream that breaks, a chunk that is not bytes, a body without a stream and an oversized session list all refuse, and nothing of them is returned", async () => {
+  const MiB = 1024 * 1024;
+  // A valid JSON prefix followed by too much: the parsed prefix is never returned.
+  const seen = {};
+  const rows = bytesOf(JSON.stringify([session(1)]).slice(0, -1));
+  const list = make(async () => streamed([rows, ...Array.from({ length: 6 }, () => new Uint8Array(MiB).fill(0x20)), bytesOf("]")], { "x-total-count": "1" }, seen)).listSessions({ limit: 1 });
+  const error = await list.then((value) => ({ value }), (e) => e);
+  assert.equal(error.code, "source_answer_unexpected");
+  assert.equal(error.value, undefined);
+  assert.ok(!JSON.stringify({ ...error, message: error.message }).includes("Training"), "nothing of the body is in the refusal");
+  assert.equal(seen.cancelled, true);
+  // The stream errors half way.
+  const broken = new ReadableStream({ pull(controller) { controller.error(new Error("connection reset CREDENTIAL-LIKE-TEXT")); } });
+  const half = await make(async () => ({ status: 200, headers: new Headers(json), body: broken })).countVisibleTeams().then(() => null, (e) => e);
+  assert.equal(half.code, "source_unavailable");
+  assert.ok(!JSON.stringify({ ...half, message: half.message }).includes("CREDENTIAL-LIKE-TEXT"));
+  // A chunk that is not bytes.
+  await assert.rejects(make(async () => ({ status: 200, headers: new Headers(json), body: streamOf(["[]"]) })).countVisibleTeams(), code("source_answer_unexpected"));
+  // A body that is not a stream is never read through text().
+  let asked = false;
+  await assert.rejects(make(async () => ({ status: 200, headers: new Headers(json), body: "[]", text: async () => { asked = true; return "[]"; } })).countVisibleTeams(), code("source_answer_unexpected"));
+  await assert.rejects(make(async () => ({ status: 200, headers: new Headers(json), text: async () => { asked = true; return "[]"; } })).countVisibleTeams(), code("source_answer_unexpected"));
+  assert.equal(asked, false, "text() is never called");
+  // The helper itself, with a small limit: counted, cancelled, nothing returned.
+  const s = {};
+  await assert.rejects(readBounded({ body: streamOf([bytesOf("abcd"), bytesOf("efgh"), bytesOf("ijkl")], s) }, null, 6), code("source_answer_unexpected"));
+  assert.deepEqual({ pulled: s.pulled, cancelled: s.cancelled }, { pulled: 2, cancelled: true });
+  assert.equal(await readBounded({ body: streamOf([bytesOf("abc"), bytesOf("def")], {}) }, "5", 6), "abcdef");
+  assert.equal(await readBounded({ body: null }, null, 6), "");
+  // The platform's own Response class, no network: counted and cancelled the same way; an empty one is refused.
+  const real = {};
+  const mib = new Uint8Array(MiB).fill(0x20);
+  await assert.rejects(make(async () => new Response(streamOf(Array.from({ length: 8 }, () => mib), real), { status: 200, headers: { ...json, "x-total-count": "1" } })).countVisibleTeams(), code("source_answer_unexpected"));
+  assert.equal(real.cancelled, true);
+  assert.ok(real.pulled <= 7, "the rest was never pulled");
+  await assert.rejects(make(async () => new Response(null, { status: 200, headers: { ...json, "x-total-count": "0" } })).countVisibleTeams(), code("source_answer_unexpected"));
+  await assert.rejects(make(async () => new Response("", { status: 200, headers: { ...json, "x-total-count": "0" } })).countVisibleTeams(), code("source_answer_unexpected"));
+  assert.deepEqual(await make(async () => new Response("[]", { status: 200, headers: { ...json, "x-total-count": "0" } })).countVisibleTeams(), { teamCount: 0, boundTeamOnFirstPage: false, firstPageOnly: false });
+  // A stream whose cancel never settles does not hold the refusal back.
+  const stuck = { getReader: () => ({ read: async () => ({ done: false, value: new Uint8Array(7) }), cancel: () => new Promise(() => {}), releaseLock() {} }) };
+  await assert.rejects(readBounded({ body: stuck }, null, 6), code("source_answer_unexpected"));
+  // After a whole read the stream is not left locked.
+  const whole = { body: streamOf([bytesOf("[]")], {}) };
+  assert.equal(await readBounded(whole), "[]");
+  assert.equal(whole.body.locked, false);
+  // Section 4 of the compatibility document names only capabilities the adapter knows.
+  const doc = await fsp.readFile(path.resolve(ROOT, "docs/ai/gpexe-rest-v1-compatibility.md"), "utf8");
+  const section4 = doc.slice(doc.indexOf("## 4."), doc.indexOf("## 5."));
+  const named = [...section4.matchAll(/^\| `([a-z_]+)`/gm)].map((m) => m[1]);
+  assert.ok(named.length >= 9);
+  for (const name of named) assert.ok(Object.prototype.hasOwnProperty.call(REST_V1_CAPABILITIES, name), `${name} is a capability of the adapter`);
+  assert.doesNotMatch(section4, /drill=0/);
+  assert.doesNotMatch(doc.replace(/history, not a reference value/g, ""), /unfiltered 308|than the unfiltered 308/);
+  // The source of the adapter asks for no whole body anywhere.
+  const source = (await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeRestV1Adapter.js"), "utf8")).split(/\r?\n/).filter((l) => !l.trim().startsWith("//")).join("\n");
+  assert.doesNotMatch(source, /\.text\(\)|\.json\(\)|\.arrayBuffer\(\)|\.blob\(\)/);
 });
 
 test("12. what is not proven is source_capability_unavailable: no request is sent, no path is guessed, and the refusal names the capability and how much is known", async () => {
