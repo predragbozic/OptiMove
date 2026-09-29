@@ -40,15 +40,37 @@
 //                    the exchanged token EQUALS it (true/false), which answers
 //                    "one stable token per account vs a new token per login".
 //
-// Safety: the host comes only from the approved catalog in
-// backend/src/sourceHosts.js (key, never a URL); every path is relative to
-// that host; redirects are never followed; each request has a timeout; no
+// Safety: the host comes only from a discovery profile in this file (a key,
+// never a URL): e03 from the application's approved catalog in
+// backend/src/sourceHosts.js, server3 as a discovery-only profile with its
+// exact URL and its own API family (rest/v1); every path is relative to
+// that host and carries that family's prefix; redirects are never followed; each request has a timeout; no
 // database is opened; nothing is written anywhere; the process exits 0 even
 // when GPEXE refuses, because a refusal IS a finding.
 import { pathToFileURL } from "node:url";
 import { resolvableHostKeys, sourceHost } from "../src/sourceHosts.js";
 
 export const DISCOVERY_SOURCE = "gpexe";
+
+// One PROFILE per host key. A host key alone never implies paths: each
+// profile names its exact base URL, its API family (the path prefix every
+// data request uses), its exchange path and its auth scheme. Changing the
+// host never silently changes the family, and a family is never tried on a
+// host whose profile does not name it.
+//   e03      the host the application's catalog approves; base URL taken
+//            from backend/src/sourceHosts.js; family "api".
+//   server3  DISCOVERY ONLY: not in the application's allowlist and not in
+//            the database catalog. The owner confirmed (2026-09-29) that
+//            their existing integration reads this account through
+//            server3 /rest/v1/ after POST /api-token-auth/. The exact URL
+//            is fixed here; no option can change it.
+export const DISCOVERY_PROFILES = Object.freeze({
+  // exchangeStopped: the owner stopped every credential exchange on e03
+  // (2026-09-29) after one refused attempt; mode exchange refuses this host.
+  e03: Object.freeze({ appApproved: true, exchangeStopped: true, baseUrl: null, apiFamily: "api", apiPrefix: "api/", exchangePath: "api-token-auth/", exchangeCandidates: Object.freeze(["api-token-auth/", "api/api-token-auth/", "api/token/"]), thresholds: true }),
+  server3: Object.freeze({ appApproved: false, exchangeStopped: false, baseUrl: "https://server3.gpexe.com/", apiFamily: "rest_v1", apiPrefix: "rest/v1/", exchangePath: "api-token-auth/", exchangeCandidates: Object.freeze(["api-token-auth/", "rest/v1/api-token-auth/"]), thresholds: false }),
+});
+const EXACT_HTTPS_HOST = /^https:\/\/[a-z0-9.-]+\/$/;
 export const REQUEST_TIMEOUT_MS = 30_000;
 // Header VALUES that may be printed. Everything else is reduced to its name.
 const PRINTABLE_HEADERS = new Set(["content-type", "allow", "x-total-count", "x-gpexe-version"]);
@@ -61,8 +83,8 @@ export class DiscoveryUsageError extends Error {
 }
 
 export function parseArgs(argv) {
-  const opts = { mode: "anon", host: "e03", team: "980", exchangePath: null, authScheme: "Token", tokenField: "token" };
-  const names = { "--mode": "mode", "--host": "host", "--team": "team", "--exchange-path": "exchangePath", "--auth-scheme": "authScheme", "--token-field": "tokenField" };
+  const opts = { mode: "anon", host: "e03", team: "980", exchangePath: null, authScheme: "Token", tokenField: "token", apiFamily: null };
+  const names = { "--mode": "mode", "--host": "host", "--team": "team", "--exchange-path": "exchangePath", "--auth-scheme": "authScheme", "--token-field": "tokenField", "--api-family": "apiFamily" };
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i];
     const value = argv[i + 1];
@@ -79,17 +101,34 @@ export function parseArgs(argv) {
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(opts.authScheme)) throw new DiscoveryUsageError("--auth-scheme must be one scheme word (for example Token or Bearer)");
   // One top-level JSON field name of the exchange answer.
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(opts.tokenField)) throw new DiscoveryUsageError("--token-field must be one field name (for example token or access_token)");
+  if (opts.apiFamily !== null && !["api", "rest_v1"].includes(opts.apiFamily)) throw new DiscoveryUsageError("--api-family must be api or rest_v1");
   return opts;
 }
 
-// The only host resolver: an approved key of the code catalog, nothing else.
-// The database catalog cannot be read here (no database is opened), so this
-// script is stricter than the application, not looser: server3 is refused.
-export function discoveryBaseUrl(hostKey) {
-  if (!resolvableHostKeys(DISCOVERY_SOURCE).includes(hostKey)) {
-    throw new DiscoveryUsageError(`host key ${JSON.stringify(hostKey)} is not approved; approved keys: ${resolvableHostKeys(DISCOVERY_SOURCE).join(", ")}`);
+// The only host resolver: a key with a profile above, nothing else — never
+// a URL, never an unknown key. For a host the application approves the base
+// URL comes from the application's own catalog; for a discovery-only host
+// it is the exact URL of its profile, and the application still does not
+// know the key (checked, so the two lists cannot drift silently).
+export function discoveryProfile(hostKey, apiFamily = null) {
+  const profile = typeof hostKey === "string" && Object.prototype.hasOwnProperty.call(DISCOVERY_PROFILES, hostKey) ? DISCOVERY_PROFILES[hostKey] : null;
+  if (!profile) {
+    throw new DiscoveryUsageError(`host key ${JSON.stringify(hostKey)} has no discovery profile; keys: ${Object.keys(DISCOVERY_PROFILES).join(", ")}`);
   }
-  return sourceHost(DISCOVERY_SOURCE, hostKey).baseUrl;
+  const inApp = resolvableHostKeys(DISCOVERY_SOURCE).includes(hostKey);
+  if (profile.appApproved !== inApp) {
+    throw new DiscoveryUsageError(`host key ${hostKey}: the discovery profile and the application's allowlist disagree; fix the profile before any request`);
+  }
+  const baseUrl = profile.appApproved ? sourceHost(DISCOVERY_SOURCE, hostKey).baseUrl : profile.baseUrl;
+  if (!EXACT_HTTPS_HOST.test(baseUrl)) throw new DiscoveryUsageError(`host key ${hostKey}: the base URL must be an exact https host`);
+  if (apiFamily !== null && apiFamily !== profile.apiFamily) {
+    throw new DiscoveryUsageError(`host key ${hostKey} speaks the ${profile.apiFamily} family; ${apiFamily} is not tried on it (a host never implies another family's paths)`);
+  }
+  return { ...profile, hostKey, baseUrl };
+}
+
+export function discoveryBaseUrl(hostKey) {
+  return discoveryProfile(hostKey).baseUrl;
 }
 
 // A path with every id replaced, so the report never carries a session or
@@ -187,10 +226,23 @@ const strip = (entry) => {
   return rest;
 };
 
-export async function runDiscovery({ mode, host, team, exchangePath, authScheme = "Token", tokenField = "token" }, env, fetchImpl = globalThis.fetch) {
-  const baseUrl = discoveryBaseUrl(host);
+export async function runDiscovery({ mode, host, team, exchangePath, authScheme = "Token", tokenField = "token", apiFamily = null }, env, fetchImpl = globalThis.fetch) {
+  const profile = discoveryProfile(host, apiFamily);
+  // An exchange path is one of the profile's known candidates, never a
+  // resource path: a credential is never POSTed anywhere else on the host.
+  if (exchangePath !== null && exchangePath !== undefined && !profile.exchangeCandidates.includes(exchangePath)) {
+    throw new DiscoveryUsageError(`--exchange-path ${JSON.stringify(exchangePath)} is not an exchange path of host ${host}; known: ${profile.exchangeCandidates.join(", ")}`);
+  }
+  if (mode === "exchange" && profile.exchangeStopped) {
+    throw new DiscoveryUsageError(`credential exchange on host ${host} is stopped by the owner's decision; nothing was sent`);
+  }
+  const baseUrl = profile.baseUrl;
+  const api = profile.apiPrefix;
   const today = new Date().toISOString().slice(0, 10);
-  const report = { source: DISCOVERY_SOURCE, hostKey: host, mode, teamId: team, authScheme, tokenField, ranAt: new Date().toISOString(), requests: [], findings: {} };
+  const report = {
+    source: DISCOVERY_SOURCE, hostKey: host, apiFamily: profile.apiFamily, apiPrefix: api, discoveryOnlyHost: !profile.appApproved,
+    mode, teamId: team, authScheme, tokenField, ranAt: new Date().toISOString(), requests: [], findings: {},
+  };
   const push = async (args) => {
     const entry = await probe({ fetchImpl, baseUrl, teamId: team, authScheme, ...args });
     report.requests.push(strip(entry));
@@ -198,13 +250,13 @@ export async function runDiscovery({ mode, host, team, exchangePath, authScheme 
   };
 
   if (mode === "anon") {
-    const root = await push({ method: "GET", path: "api/" });
-    const teams = await push({ method: "GET", path: "api/team/" });
-    await push({ method: "GET", path: `api/team_session/?team=${team}&limit=1` });
-    await push({ method: "OPTIONS", path: "api/team/" });
+    const root = await push({ method: "GET", path: api });
+    const teams = await push({ method: "GET", path: `${api}team/` });
+    await push({ method: "GET", path: `${api}team_session/?team=${team}&limit=1` });
+    await push({ method: "OPTIONS", path: `${api}team/` });
     // Where is the exchange endpoint, if any? An EMPTY body only reveals the
     // field names the endpoint expects; no credential is involved.
-    const candidates = exchangePath ? [exchangePath] : ["api-token-auth/", "api/api-token-auth/", "api/token/"];
+    const candidates = exchangePath ? [exchangePath] : profile.exchangeCandidates;
     for (const p of candidates) await push({ method: "POST", path: p, jsonBody: {} });
     report.findings = {
       apiDemandsScheme: teams.authScheme ?? root.authScheme ?? null,
@@ -219,13 +271,14 @@ export async function runDiscovery({ mode, host, team, exchangePath, authScheme 
   if (mode === "token") {
     const token = env.GPEXE_API_TOKEN;
     if (!token) throw new DiscoveryUsageError("GPEXE_API_TOKEN is not set in this terminal (mode token)");
-    const teams = await push({ method: "GET", path: "api/team/", token });
-    const one = await push({ method: "GET", path: `api/team/${team}/`, token });
-    await push({ method: "GET", path: `api/team/${team}/thresholds/?valid_on=${today}`, token });
-    await push({ method: "GET", path: `api/team_session/?team=${team}&limit=1`, token });
-    const optTeam = await push({ method: "OPTIONS", path: "api/team/", token });
-    const optSession = await push({ method: "OPTIONS", path: "api/team_session/", token });
-    const optAthlete = await push({ method: "OPTIONS", path: "api/athlete_session/", token });
+    const teams = await push({ method: "GET", path: `${api}team/`, token });
+    const one = await push({ method: "GET", path: `${api}team/${team}/`, token });
+    // Thresholds are only known to exist in the api family.
+    if (profile.thresholds) await push({ method: "GET", path: `${api}team/${team}/thresholds/?valid_on=${today}`, token });
+    await push({ method: "GET", path: `${api}team_session/?team=${team}&limit=1`, token });
+    const optTeam = await push({ method: "OPTIONS", path: `${api}team/`, token });
+    const optSession = await push({ method: "OPTIONS", path: `${api}team_session/`, token });
+    const optAthlete = await push({ method: "OPTIONS", path: `${api}athlete_session/`, token });
     report.findings = {
       tokenAccepted: [teams.status, one.status].some((s) => s === 200),
       teamListEndpoint: teams.status === 200 ? "exists" : teams.status === 404 ? "absent" : `status ${teams.status ?? "error"}`,
@@ -240,7 +293,7 @@ export async function runDiscovery({ mode, host, team, exchangePath, authScheme 
     const username = env.GPEXE_USERNAME;
     const password = env.GPEXE_PASSWORD;
     if (!username || !password) throw new DiscoveryUsageError("GPEXE_USERNAME and GPEXE_PASSWORD are not both set in this terminal (mode exchange)");
-    const path = exchangePath ?? "api-token-auth/";
+    const path = exchangePath ?? profile.exchangePath;
     const ex = await push({ method: "POST", path, jsonBody: { username, password } });
     // Only the named field is read; a token under another name is reported as
     // "no token field" (its NAME still appears in fieldNames), never guessed.
@@ -260,12 +313,35 @@ export async function runDiscovery({ mode, host, team, exchangePath, authScheme 
       exchangedTokenEqualsEnvToken: null,
     };
     if (issued) {
-      const teams = await push({ method: "GET", path: "api/team/", token: issued });
-      findings.exchangedTokenWorksAsScheme = teams.status === 200;
-      findings.seesTeam = teams.containsTeam ?? null;
+      // Three read-only GETs with the issued token, then it is dropped: the
+      // team list, the team itself, one page of one session row.
+      const teams = await push({ method: "GET", path: `${api}team/`, token: issued });
+      const one = await push({ method: "GET", path: `${api}team/${team}/`, token: issued });
+      const page = await push({ method: "GET", path: `${api}team_session/?team=${team}&limit=1`, token: issued });
+      findings.exchangedTokenWorksAsScheme = [teams.status, one.status, page.status].some((st) => st === 200);
+      const pageRows = page.arrayLength ?? page.resultsLength ?? null;
+      findings.teamListEndpoint = teams.status === 200 ? "exists" : teams.status === 404 ? "absent" : `status ${teams.status ?? "error"}`;
+      findings.teamCount = teams.status === 200 ? (teams.arrayLength ?? teams.count ?? teams.resultsLength ?? null) : null;
+      findings.teamStatus = one.status ?? null;
+      findings.sessionPageStatus = page.status ?? null;
+      // Supporting evidence only: a 200 page may be empty, or the server may
+      // ignore the team filter; neither proves access to the team.
+      findings.sessionPageHasRows = page.status === 200 && pageRows !== null ? pageRows > 0 : null;
+      // Access to the team is proven only by the team list naming it or by
+      // the team's own read. A first list page without it proves nothing, so
+      // "false" needs the team's own read refused; anything else is unknown.
+      findings.seesTeam = teams.containsTeam === true || one.status === 200
+        ? true
+        : [403, 404].includes(one.status) && teams.containsTeam !== true && teams.status === 200 ? false : null;
       if (env.GPEXE_API_TOKEN) findings.exchangedTokenEqualsEnvToken = issued === env.GPEXE_API_TOKEN;
     }
     report.findings = findings;
+    // The issued token is the one secret the environment guard cannot know.
+    if (issued && JSON.stringify(report).includes(issued)) {
+      const error = new Error("refusing to return: the report would contain the issued token");
+      error.code = "secret_in_report";
+      throw error;
+    }
   }
   return report;
 }

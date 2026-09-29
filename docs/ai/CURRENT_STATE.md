@@ -225,6 +225,23 @@ repeated. **The discovery stands at NO-GO for the adapter: no adapter and no Con
 claim that this account will work until a token has really been issued and Team ID 980 read.**
 The question is with GPEXE support.
 
+**Owner confirmation (2026-09-29; contract document section 1.8):** the owner's existing Apps
+Script integration still works with the same account through `server3.gpexe.com`: exchange
+`POST /api-token-auth/`, answer field `token`, header `Authorization: Token`, data under
+`/rest/v1/`. For this account: UI host `e03-ui`, API host `server3`, API family `rest/v1`,
+credential kind `exchanged_token`. **Every further authentication attempt on `e03` is stopped.**
+This is not yet permission to add `server3` to production: it is in neither
+`backend/src/sourceHosts.js` nor the database catalog. A host key never implies paths — host key,
+exact base URL, API family (`api` against `rest_v1`) and auth scheme / exchange path are four
+separate parts of a host profile, and `server3` + `rest/v1` is its own adapter profile; the
+importer's client and mapper were verified against `e03`'s `api` family only. The discovery
+script (branch `feature/gpexe-discovery-server3-profile`, not merged, no PR) has a
+discovery-only `server3` profile with the exact URL fixed in the script. **Next: the owner runs
+the one sanitized verification on `server3`** (exchange → team list / team 980 → one session
+page, four requests, no import, link or write) **and returns the printed JSON; after a success a
+small PR is proposed** that adds `server3` to the code allowlist and, by a data-only v28, to the
+host catalog — no credential, no binding for team 980, no route, no adapter.
+
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
 runs the branch's real modules against an in-page fake of the 5a2 API, at 1280 px and
@@ -980,10 +997,9 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-GPEXE support answers which credential exists for REST access and which identifier
-`/api-token-auth/` expects (`docs/ai/source-connections-f3c2-contract.md` sections 1.6–1.7);
-then, by a new explicit decision, step B or one more step C with a confirmed input, and the
-section 1.3 form; on GO the F3c2 adapter and routes are built against the contract of its
+The owner runs the one sanitized verification on `server3`
+(`docs/ai/source-connections-f3c2-contract.md` section 1.8) and returns the printed JSON; after a
+success, the small PR adding `server3` to the allowlist and the catalog; on GO the F3c2 adapter and routes are built against the contract of its
 section 2, then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.

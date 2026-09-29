@@ -313,6 +313,106 @@ endpoint `POST /api-token-auth/` with `username` and `password`. Unknown: the cr
 that exists for OptiMove, the token field of a successful answer, lifetime and rotation, access
 to Team ID 980, the minimal role.
 
+### 1.8 Owner confirmation (2026-09-29): this account's API host is `server3`, family `rest/v1`
+
+The owner confirmed that their existing Google Apps Script integration still works today with
+the same account, and how (no credential involved in the statement):
+
+| Item | Value for this account |
+|---|---|
+| UI host | `e03-ui.gpexe.com` |
+| API host | `server3.gpexe.com` |
+| API family | `rest/v1` (data read from `https://server3.gpexe.com/rest/v1/...`) |
+| exchange | `POST https://server3.gpexe.com/api-token-auth/` |
+| token field of the successful answer | `token` |
+| header | `Authorization: Token <token>` |
+| credential kind | `exchanged_token` |
+
+Consequences:
+- **Every further authentication attempt on `e03` is stopped**; the script's exchange mode
+  refuses that host. Section 1.6's refusal is plausibly explained by the account's REST access
+  living on another server; that is an inference, not a proof — why `e03` answered
+  `non_field_errors` stays undetermined.
+- **This is not yet permission to add `server3` to production.** `server3` stays out of
+  `backend/src/sourceHosts.js` and out of `training_load.source_host_catalog` until the one
+  sanitized verification below has succeeded and the owner has accepted the follow-up PR.
+- **A host key never implies paths.** The architecture distinguishes four things per server,
+  and `server3` + `rest/v1` is its own adapter profile, not "e03 with another host name":
+
+  | Part | `e03` | `server3` |
+  |---|---|---|
+  | `host_key` | `e03` | `server3` |
+  | exact base URL | `https://e03.gpexe.com/` | `https://server3.gpexe.com/` |
+  | API family (path prefix) | `api` (`api/`) | `rest_v1` (`rest/v1/`) |
+  | auth scheme / exchange path | `Token` / `api-token-auth/` | `Token` / `api-token-auth/` |
+
+  The importer's current client (`backend/src/gpexeClient.js`) and mapper were written and
+  verified against the `api` family of `e03`. Nothing proves that `rest/v1` returns the same
+  resources, field names, paging or units; that comparison is part of the adapter work, after
+  the verification, never assumed.
+
+#### The one sanitized read-only verification on `server3`
+
+`backend/scripts/gpexe-auth-discovery.mjs` now carries a **discovery-only profile** for
+`server3`: the exact URL is fixed in the script, no option can change it, the application's
+allowlist still does not know the key (a test asserts both), and `--api-family` is refused when
+it does not match the host's profile. One run sends exactly four requests, all to
+`https://server3.gpexe.com/`:
+
+1. `POST /api-token-auth/` — the one exchange (username and password in the body, once);
+2. `GET /rest/v1/team/` — the team list (a 404 here is a finding, not a failure);
+3. `GET /rest/v1/team/980/` — the team itself;
+4. `GET /rest/v1/team_session/?team=980&limit=1` — one small session page.
+
+No session search over dates, no athlete read, no link, no import, no write; the token is
+dropped when the process ends. Own PowerShell window, one command after the other:
+
+```powershell
+cd C:\Users\user\Downloads\ProgramAPp; Set-PSReadLineOption -HistorySaveStyle SaveNothing; Test-Path Env:GPEXE_API_TOKEN
+```
+
+```powershell
+$u = Read-Host "GPEXE username" -AsSecureString; $env:GPEXE_USERNAME = [System.Net.NetworkCredential]::new("", $u).Password; Remove-Variable u
+```
+
+```powershell
+$p = Read-Host "GPEXE password" -AsSecureString; $env:GPEXE_PASSWORD = [System.Net.NetworkCredential]::new("", $p).Password; Remove-Variable p
+```
+
+```powershell
+try { node backend/scripts/gpexe-auth-discovery.mjs --mode exchange --host server3 --api-family rest_v1 --team 980 --exchange-path api-token-auth/ --auth-scheme Token --token-field token } finally { Remove-Item Env:GPEXE_USERNAME, Env:GPEXE_PASSWORD -ErrorAction SilentlyContinue }
+```
+
+```powershell
+Test-Path Env:GPEXE_USERNAME; Test-Path Env:GPEXE_PASSWORD; Test-Path Env:GPEXE_API_TOKEN
+```
+
+Returned to chat: only the JSON the script printed (or these fields from it): `hostKey`,
+`apiFamily`, `discoveryOnlyHost`, `findings.exchangeStatus`, `successResponseFieldNames`,
+`exchangeReturnsTokenField`, `exchangedTokenWorksAsScheme`, `teamListEndpoint`, `teamCount`,
+`teamStatus`, `sessionPageStatus`, `sessionPageHasRows`, `seesTeam`, and per request the masked path, status, field
+names and counts. Run once; a refusal or an error is the finding, never a reason to repeat.
+
+**Success** = `exchangeStatus` 200, `exchangeReturnsTokenField` true, `seesTeam` true (which
+needs the team list to name team 980 or `teamStatus` 200 — the team's own read) and
+`sessionPageStatus` 200. The session page is supporting evidence only: a 200 page may be empty,
+or the server may ignore the team filter, so it never sets `seesTeam` by itself
+(`sessionPageHasRows` is reported separately). If `rest/v1` has neither a team list nor a team
+read, `seesTeam` is `null` (unknown): that is a NO-GO to be discussed, not a success.
+
+#### After a successful verification: the small follow-up PR (proposal, not started)
+
+One PR, no credential, no connection, no binding for team 980, no route, no adapter:
+- `backend/src/sourceHosts.js`: a `server3` entry with its exact base URL **and** the profile
+  fields `apiFamily` and `exchangePath` for every entry (`e03`: `api`, `server3`: `rest_v1`), so
+  a caller can never combine a host with another family's paths;
+- a data-only migration v28: one `approved` row `gpexe` / `server3` in
+  `training_load.source_host_catalog` (no structure change; the v27 rollback then refuses, as
+  designed);
+- the discovery script's `server3` profile switched to `appApproved: true` (its consistency
+  check fails otherwise), tests and the runbook updated;
+- external review required (migration, auth contract); not merge-ready by the main session.
+
 ---
 
 ## 2. Source-neutral shape of F3c2 (what is built after GO)
@@ -323,7 +423,9 @@ name of anything.
 ### 2.1 Adapter interface (per `source_system`)
 
 ```
-sourceAdapter(sourceSystem) → {
+sourceAdapter(sourceSystem, hostProfile) → {              // hostProfile = { hostKey, baseUrl, apiFamily, exchangePath, authScheme }
+  // one adapter PROFILE per (source, apiFamily): gpexe/api and gpexe/rest_v1 are two profiles;
+  // a host key selects its profile, it never rewrites another profile's paths
   kinds: ['api_token'] | ['exchanged_token'] | both       // what the discovery proved for this source
   testConnection({ baseUrl, credential, sourceTeamId? })  // ONE read; → { ok, code, sourceTeamIds? }
   exchange?({ baseUrl, username, password })              // only for kinds incl. exchanged_token; → { credential } and nothing else kept

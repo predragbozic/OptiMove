@@ -4,8 +4,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  assertNoSecretInReport, describeResponse, discoveryBaseUrl, DiscoveryUsageError, maskPath, parseArgs, runDiscovery,
+  assertNoSecretInReport, describeResponse, discoveryBaseUrl, discoveryProfile, DISCOVERY_PROFILES, DiscoveryUsageError, maskPath, parseArgs, runDiscovery,
 } from "../scripts/gpexe-auth-discovery.mjs";
+import { isAllowedHostKey, resolvableHostKeys, SOURCE_HOSTS } from "../src/sourceHosts.js";
 
 const FAKE_TOKEN = "FAKE-TOKEN-0123456789abcdef-not-real";
 const FAKE_USER = "fake.user@example.invalid";
@@ -40,18 +41,22 @@ function fakeGpexe({ teams = [{ id: 980, name: "FK Test" }, { id: 12, name: "Oth
     }
     if (u.pathname === "/api/api-token-auth/" || u.pathname === "/api/token/") return fakeResponse(404, { detail: "Not found." }, { "content-type": "application/json" });
     if (!authed) return fakeResponse(401, { detail: "Authentication credentials were not provided." }, { "content-type": "application/json", "www-authenticate": scheme });
-    if (init.method === "OPTIONS") return fakeResponse(200, { name: "Team List", renders: [] }, { "content-type": "application/json", allow: u.pathname === "/api/team/" ? "GET, HEAD, OPTIONS" : "GET, POST, HEAD, OPTIONS" });
-    if (u.pathname === "/api/team/") return fakeResponse(200, teams, { "content-type": "application/json", "x-total-count": String(teams.length), "x-gpexe-version": "9.11.7" });
-    if (u.pathname === "/api/team/980/") return fakeResponse(200, { id: 980, name: "FK Test", secret_note: "should never print" }, { "content-type": "application/json" });
-    if (u.pathname === "/api/team/980/thresholds/") return fakeResponse(200, [{ id: 5, valid_from: "2026-01-01" }], { "content-type": "application/json" });
-    if (u.pathname === "/api/team_session/") return fakeResponse(200, [{ id: 186942, start_timestamp: "2026-09-14T10:00:00" }], { "content-type": "application/json", "x-total-count": "57", link: `<${u.origin}/api/team_session/?team=980&limit=1&offset=1>; rel="next"` });
+    // Same resources under either family prefix (api/ on e03, rest/v1/ on server3).
+    const rel = u.pathname.replace(/^\/(api|rest\/v1)\//, "/");
+    if (init.method === "OPTIONS") return fakeResponse(200, { name: "Team List", renders: [] }, { "content-type": "application/json", allow: rel === "/team/" ? "GET, HEAD, OPTIONS" : "GET, POST, HEAD, OPTIONS" });
+    if (rel === "/team/") return fakeResponse(200, teams, { "content-type": "application/json", "x-total-count": String(teams.length), "x-gpexe-version": "9.11.7" });
+    if (rel === "/team/980/") return fakeResponse(200, { id: 980, name: "FK Test", secret_note: "should never print" }, { "content-type": "application/json" });
+    if (rel === "/team/980/thresholds/") return fakeResponse(200, [{ id: 5, valid_from: "2026-01-01" }], { "content-type": "application/json" });
+    if (rel === "/team_session/") return fakeResponse(200, [{ id: 186942, start_timestamp: "2026-09-14T10:00:00" }], { "content-type": "application/json", "x-total-count": "57", link: `<${u.origin}/api/team_session/?team=980&limit=1&offset=1>; rel="next"` });
     return fakeResponse(404, { detail: "Not found." }, { "content-type": "application/json" });
   };
   return { calls, fetchImpl };
 }
 
 test("arguments: host is a key never a URL, team is canonical, mode is one of three, exchange path is relative", () => {
-  assert.deepEqual(parseArgs([]), { mode: "anon", host: "e03", team: "980", exchangePath: null, authScheme: "Token", tokenField: "token" });
+  assert.deepEqual(parseArgs([]), { mode: "anon", host: "e03", team: "980", exchangePath: null, authScheme: "Token", tokenField: "token", apiFamily: null });
+  assert.equal(parseArgs(["--api-family", "rest_v1"]).apiFamily, "rest_v1");
+  for (const bad of ["rest/v1", "v1", "", "https://x/"]) assert.throws(() => parseArgs(["--api-family", bad]), DiscoveryUsageError, JSON.stringify(bad));
   assert.throws(() => parseArgs(["--host", "https://e03.gpexe.com/"]), DiscoveryUsageError);
   assert.throws(() => parseArgs(["--team", "0980"]), DiscoveryUsageError);
   assert.throws(() => parseArgs(["--mode", "write"]), DiscoveryUsageError);
@@ -73,11 +78,11 @@ test("a Bearer server with the token under access_token: the given scheme is sen
   const a = await runDiscovery(parseArgs([]), {}, fetchImpl);
   assert.equal(a.findings.apiDemandsScheme, "Bearer");
   calls.length = 0;
-  const report = await runDiscovery(parseArgs(["--mode", "exchange", "--auth-scheme", "Bearer", "--token-field", "access_token"]), env, fetchImpl);
+  const report = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3", "--auth-scheme", "Bearer", "--token-field", "access_token"]), env, fetchImpl);
   const text = assertNoSecretInReport(report, env);
   assert.ok(!text.includes(ISSUED));
-  assert.equal(calls.length, 2);
-  assert.equal(calls[1].headers.Authorization, `Bearer ${ISSUED}`);
+  assert.equal(calls.length, 4);
+  assert.ok(calls.slice(1).every((c) => c.headers.Authorization === `Bearer ${ISSUED}`));
   assert.equal(report.authScheme, "Bearer");
   assert.equal(report.tokenField, "access_token");
   assert.equal(report.findings.exchangeReturnsTokenField, true);
@@ -100,7 +105,7 @@ test("a wrong scheme or a wrong token field is a finding, never a retry with ano
   // Right scheme, default field name: the exchange succeeds but the token is under another name -> reported as no token field, no GET follows.
   calls.length = 0;
   const env = { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: FAKE_PASSWORD };
-  const c = await runDiscovery(parseArgs(["--mode", "exchange", "--auth-scheme", "Bearer"]), env, fetchImpl);
+  const c = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3", "--auth-scheme", "Bearer"]), env, fetchImpl);
   assertNoSecretInReport(c, env);
   assert.equal(c.findings.exchangeStatus, 200);
   assert.equal(c.findings.exchangeReturnsTokenField, false);
@@ -113,12 +118,154 @@ test("a wrong scheme or a wrong token field is a finding, never a retry with ano
   assert.ok(!JSON.stringify(c).includes(ISSUED));
 });
 
-test("host: only an approved key of the code catalog resolves; server3, a URL and an unknown key are refused before any request", async () => {
+test("host: only a key with a discovery profile resolves, to its exact URL; a URL, an unknown key and another shard are refused before any request", async () => {
   assert.equal(discoveryBaseUrl("e03"), "https://e03.gpexe.com/");
-  for (const bad of ["server3", "https://e03.gpexe.com/", "E03", ""]) assert.throws(() => discoveryBaseUrl(bad), DiscoveryUsageError);
+  assert.equal(discoveryBaseUrl("server3"), "https://server3.gpexe.com/");
+  assert.deepEqual(Object.keys(DISCOVERY_PROFILES), ["e03", "server3"]);
+  for (const bad of ["server4", "server3.gpexe.com", "https://server3.gpexe.com/", "https://e03.gpexe.com/", "E03", "SERVER3", "", "__proto__", "constructor"]) assert.throws(() => discoveryBaseUrl(bad), DiscoveryUsageError, JSON.stringify(bad));
   const { calls, fetchImpl } = fakeGpexe();
-  await assert.rejects(runDiscovery({ mode: "anon", host: "server3", team: "980", exchangePath: null }, {}, fetchImpl), DiscoveryUsageError);
+  await assert.rejects(runDiscovery({ mode: "anon", host: "server4", team: "980", exchangePath: null }, {}, fetchImpl), DiscoveryUsageError);
   assert.equal(calls.length, 0, "no request was sent");
+});
+
+test("server3 is a DISCOVERY-ONLY profile: the application's allowlist still knows e03 only, and the profile says so", () => {
+  assert.deepEqual(resolvableHostKeys("gpexe"), ["e03"], "the application resolves no server3");
+  assert.equal(isAllowedHostKey("gpexe", "server3"), false);
+  assert.deepEqual(Object.keys(SOURCE_HOSTS.gpexe), ["e03"]);
+  assert.equal(DISCOVERY_PROFILES.server3.appApproved, false);
+  assert.equal(DISCOVERY_PROFILES.e03.appApproved, true);
+  assert.equal(discoveryProfile("server3").apiFamily, "rest_v1");
+  assert.equal(discoveryProfile("server3").apiPrefix, "rest/v1/");
+  assert.equal(discoveryProfile("e03").apiFamily, "api");
+});
+
+test("a host never implies another family's paths: rest_v1 is refused on e03 and api on server3, before any request", async () => {
+  const { calls, fetchImpl } = fakeGpexe();
+  assert.throws(() => discoveryProfile("e03", "rest_v1"), DiscoveryUsageError);
+  assert.throws(() => discoveryProfile("server3", "api"), DiscoveryUsageError);
+  await assert.rejects(runDiscovery(parseArgs(["--host", "server3", "--api-family", "api"]), {}, fetchImpl), DiscoveryUsageError);
+  await assert.rejects(runDiscovery(parseArgs(["--host", "e03", "--api-family", "rest_v1"]), {}, fetchImpl), DiscoveryUsageError);
+  assert.equal(calls.length, 0);
+});
+
+// A fake server3: the rest/v1 family only; every /api/ path is a 404.
+function fakeServer3() {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, method: init.method, headers: { ...init.headers }, body: init.body, redirect: init.redirect });
+    const u = new URL(url);
+    const json = { "content-type": "application/json" };
+    if (u.origin !== "https://server3.gpexe.com") return fakeResponse(599, { wrong: "host" }, json);
+    if (u.pathname === "/api-token-auth/" && init.method === "POST") {
+      const body = JSON.parse(init.body || "{}");
+      if (!body.username || !body.password) return fakeResponse(400, { username: ["required"], password: ["required"] }, json);
+      if (body.username === FAKE_USER && body.password === FAKE_PASSWORD) return fakeResponse(200, { token: ISSUED }, json);
+      return fakeResponse(400, { non_field_errors: ["Unable to log in with provided credentials."] }, json);
+    }
+    if (!u.pathname.startsWith("/rest/v1/")) return fakeResponse(404, { detail: "Not found." }, json);
+    if (init.headers.Authorization !== `Token ${ISSUED}`) return fakeResponse(401, { detail: "no" }, { ...json, "www-authenticate": "Token" });
+    if (u.pathname === "/rest/v1/team/") return fakeResponse(200, [{ id: 980, name: "FK Test" }], { ...json, "x-total-count": "1" });
+    if (u.pathname === "/rest/v1/team/980/") return fakeResponse(200, { id: 980, name: "FK Test" }, json);
+    if (u.pathname === "/rest/v1/team_session/") return fakeResponse(200, { count: 57, next: "x", results: [{ id: 186942, notes: "private note" }] }, json);
+    return fakeResponse(404, { detail: "Not found." }, json);
+  };
+  return { calls, fetchImpl };
+}
+
+test("server3 verification: one exchange POST, then the team list, the team and one session page — all on server3 under rest/v1/, nothing printed but names, statuses and counts", async () => {
+  const { calls, fetchImpl } = fakeServer3();
+  const env = { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: FAKE_PASSWORD };
+  const report = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3", "--api-family", "rest_v1", "--auth-scheme", "Token", "--token-field", "token"]), env, fetchImpl);
+  const text = assertNoSecretInReport(report, env);
+  for (const secret of [FAKE_USER, FAKE_PASSWORD, ISSUED, "FK Test", "private note", "186942"]) assert.ok(!text.includes(secret), secret.slice(0, 6));
+  assert.deepEqual(calls.map((c) => `${c.method} ${new URL(c.url).pathname}`), [
+    "POST /api-token-auth/", "GET /rest/v1/team/", "GET /rest/v1/team/980/", "GET /rest/v1/team_session/",
+  ]);
+  for (const c of calls) {
+    assert.ok(c.url.startsWith("https://server3.gpexe.com/"), c.url);
+    assert.ok(!new URL(c.url).pathname.startsWith("/api/"), "the api family is never tried on server3");
+    assert.equal(c.redirect, "manual");
+    assert.ok(["GET", "POST"].includes(c.method));
+  }
+  assert.equal(calls.filter((c) => c.method === "POST").length, 1, "one exchange, nothing else is ever written");
+  assert.equal(calls[0].headers.Authorization, undefined);
+  assert.equal(new URL(calls[3].url).searchParams.get("limit"), "1", "one small session page");
+  assert.equal(report.hostKey, "server3");
+  assert.equal(report.apiFamily, "rest_v1");
+  assert.equal(report.discoveryOnlyHost, true);
+  assert.deepEqual(report.findings, {
+    exchangeStatus: 200, successResponseFieldNames: ["token"], tokenFieldUsed: "token", exchangeReturnsTokenField: true, successWithoutNamedField: false,
+    exchangedTokenWorksAsScheme: true, exchangedTokenEqualsEnvToken: null,
+    teamListEndpoint: "exists", teamCount: 1, teamStatus: 200, sessionPageStatus: 200, sessionPageHasRows: true, seesTeam: true,
+  });
+  const page = report.requests[3];
+  assert.equal(page.path, "rest/v1/team_session/?team=<team>&limit=1");
+  assert.deepEqual(page.resultFieldNames, ["id", "notes"]);
+  assert.equal(page.count, 57);
+});
+
+test("server3 with a refused exchange sends nothing further; without a team list the team's own read still decides", async () => {
+  const { calls, fetchImpl } = fakeServer3();
+  const refused = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3"]), { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: "wrong-not-real" }, fetchImpl);
+  assert.equal(calls.length, 1);
+  assert.equal(refused.findings.exchangeStatus, 400);
+  assert.equal(refused.findings.seesTeam, undefined);
+  // A server whose rest/v1 has no team list: 404 there, 200 on the team -> seesTeam true, endpoint absent.
+  const noList = async (url, init) => {
+    const u = new URL(url);
+    if (u.pathname === "/rest/v1/team/") return fakeResponse(404, { detail: "Not found." }, { "content-type": "application/json" });
+    return fakeServer3().fetchImpl(url, init);
+  };
+  const r = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3"]), { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: FAKE_PASSWORD }, noList);
+  assert.equal(r.findings.teamListEndpoint, "absent");
+  assert.equal(r.findings.seesTeam, true, "the team's own read answered 200");
+});
+
+test("a 200 session page never proves access to the team: empty, or with rows while the team itself is unreadable, seesTeam stays unknown or false", async () => {
+  const env = { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: FAKE_PASSWORD };
+  const json = { "content-type": "application/json" };
+  const variant = (teamList, teamOne, page) => async (url, init) => {
+    const u = new URL(url);
+    if (u.pathname === "/rest/v1/team/") return teamList;
+    if (u.pathname === "/rest/v1/team/980/") return teamOne;
+    if (u.pathname === "/rest/v1/team_session/") return page;
+    return fakeServer3().fetchImpl(url, init);
+  };
+  const args = parseArgs(["--mode", "exchange", "--host", "server3"]);
+  // The team's own read is absent (404) and the list is absent: a 200 page with rows (the filter may be ignored) proves nothing.
+  const a = await runDiscovery(args, env, variant(fakeResponse(404, {}, json), fakeResponse(404, {}, json), fakeResponse(200, [{ id: 1 }], json)));
+  assert.equal(a.findings.sessionPageStatus, 200);
+  assert.equal(a.findings.sessionPageHasRows, true);
+  assert.equal(a.findings.seesTeam, null, "unknown, never true");
+  // The list exists without the team, the team's own read is refused, the page is 200 and empty: not visible.
+  const b = await runDiscovery(args, env, variant(fakeResponse(200, [{ id: 12 }], json), fakeResponse(404, {}, json), fakeResponse(200, [], json)));
+  assert.equal(b.findings.sessionPageHasRows, false);
+  assert.equal(b.findings.seesTeam, false);
+  // Only the team's own read proves it.
+  const c = await runDiscovery(args, env, variant(fakeResponse(200, [{ id: 12 }], json), fakeResponse(200, { id: 980 }, json), fakeResponse(200, [], json)));
+  assert.equal(c.findings.seesTeam, true);
+});
+
+test("credential exchange on e03 is stopped: mode exchange refuses the host, and an exchange path outside the profile's candidates is refused, both before any request", async () => {
+  const { calls, fetchImpl } = fakeGpexe();
+  const env = { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: FAKE_PASSWORD };
+  await assert.rejects(runDiscovery(parseArgs(["--mode", "exchange", "--host", "e03"]), env, fetchImpl), /stopped by the owner/);
+  await assert.rejects(runDiscovery({ ...parseArgs([]), mode: "exchange" }, env, fetchImpl), /stopped by the owner/, "the default host is refused as well");
+  for (const bad of ["rest/v1/team/", "rest/v1/team_session/", "api/team/", "//evil/"]) {
+    await assert.rejects(runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3", "--exchange-path", bad]), env, fetchImpl), DiscoveryUsageError, bad);
+  }
+  assert.equal(calls.length, 0, "no credential left the process");
+});
+
+test("the issued token can never be returned in a report", async () => {
+  const env = { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: FAKE_PASSWORD };
+  // A hostile server echoes the issued token as a FIELD NAME of the team answer.
+  const echo = async (url, init) => {
+    const u = new URL(url);
+    if (u.pathname === "/rest/v1/team/980/") return fakeResponse(200, { [ISSUED]: 1 }, { "content-type": "application/json" });
+    return fakeServer3().fetchImpl(url, init);
+  };
+  await assert.rejects(runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3"]), env, echo), (e) => e.code === "secret_in_report");
 });
 
 test("anon mode: no Authorization header is ever sent, the scheme word and the exchange field names are reported, every request stays on the approved host with redirects manual", async () => {
@@ -177,18 +324,22 @@ test("token mode without the variable refuses before any request", async () => {
 test("exchange mode: username and password go only in the body of one POST to the approved host; the issued token is used once for the team list and never printed; equality with the env token is a boolean only", async () => {
   const { calls, fetchImpl } = fakeGpexe();
   const env = { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: FAKE_PASSWORD, GPEXE_API_TOKEN: FAKE_TOKEN };
-  const report = await runDiscovery(parseArgs(["--mode", "exchange"]), env, fetchImpl);
+  const report = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3"]), env, fetchImpl);
   const text = assertNoSecretInReport(report, env);
   for (const secret of [FAKE_USER, FAKE_PASSWORD, FAKE_TOKEN, ISSUED]) assert.ok(!text.includes(secret), `report must not contain ${secret.slice(0, 6)}…`);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 4, "one exchange and three read-only GETs");
   assert.equal(calls[0].method, "POST");
   assert.ok(calls[0].url.endsWith("/api-token-auth/"));
   assert.equal(calls[0].headers.Authorization, undefined);
-  assert.equal(calls[1].method, "GET");
-  assert.equal(calls[1].headers.Authorization, `Token ${ISSUED}`);
+  for (const c of calls.slice(1)) {
+    assert.equal(c.method, "GET");
+    assert.equal(c.headers.Authorization, `Token ${ISSUED}`);
+    assert.ok(new URL(c.url).pathname.startsWith("/rest/v1/"), "server3 keeps the rest/v1 family");
+  }
   assert.deepEqual(report.findings, {
     exchangeStatus: 200, successResponseFieldNames: ["token", "token_type"], tokenFieldUsed: "token", exchangeReturnsTokenField: true, successWithoutNamedField: false,
-    exchangedTokenWorksAsScheme: true, exchangedTokenEqualsEnvToken: false, seesTeam: true,
+    exchangedTokenWorksAsScheme: true, exchangedTokenEqualsEnvToken: false,
+    teamListEndpoint: "exists", teamCount: 2, teamStatus: 200, sessionPageStatus: 200, sessionPageHasRows: true, seesTeam: true,
   });
   assert.deepEqual(report.requests[0].fieldNames, ["token", "token_type"], "only the NAMES of the fields");
 });
@@ -196,7 +347,7 @@ test("exchange mode: username and password go only in the body of one POST to th
 test("exchange mode with a refused login reports the status and field names only and sends no second request", async () => {
   const { calls, fetchImpl } = fakeGpexe();
   const env = { GPEXE_USERNAME: FAKE_USER, GPEXE_PASSWORD: "wrong-not-real" };
-  const report = await runDiscovery(parseArgs(["--mode", "exchange"]), env, fetchImpl);
+  const report = await runDiscovery(parseArgs(["--mode", "exchange", "--host", "server3"]), env, fetchImpl);
   assertNoSecretInReport(report, env);
   assert.equal(calls.length, 1);
   assert.equal(report.findings.exchangeStatus, 400);
