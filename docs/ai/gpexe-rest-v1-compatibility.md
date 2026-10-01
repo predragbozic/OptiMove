@@ -1,6 +1,7 @@
 # GPEXE `server3` / `rest_v1` against the importer's `e03` / `api`: compatibility
 
-Status: F3c2a (owner order 2026-09-29). Read-only adapter profile only
+Status: F3c2a merged (PR #131); F3c2b, the owner-run probe, in review (owner order 2026-10-01).
+Read-only adapter profile only
 (`backend/src/gpexeRestV1Adapter.js`, selected by `backend/src/sourceAdapters.js`). No route, no
 database write, no credential storage, no binding, no import, no request to GPEXE by the main
 session. The existing `e03` importer (`backend/src/gpexeClient.js`,
@@ -24,7 +25,9 @@ session. The existing `e03` importer (`backend/src/gpexeClient.js`,
 Words used: **same** — same resource name and parameters, only the family prefix differs, and the
 answer was seen; **mapped** — a different path or parameter gives the same information, and the
 answer was seen; **missing** — a probe showed the family does not have it; **unknown** — not
-verified. *Legacy-attested* means the owner's working integration uses that path or parameter,
+verified. The probe's report adds two words of its own: **proven** for the list it starts from
+(the one read verified before), and **observed** for a read that answered 200 but has no
+importer counterpart to be "same" as (the tags). *Legacy-attested* means the owner's working integration uses that path or parameter,
 but OptiMove has never seen its answer: it is still **unknown** for the adapter.
 
 ## 2. The table
@@ -70,11 +73,30 @@ session. Field names look alike; meanings were verified on `e03` only.
 
 ## 4. What needs an owner-run read-only probe
 
-One more run of the discovery script in a new read-only mode (to be added on the owner's order),
-with the same rules as before: masked or own-terminal input, one exchange, GET only, only
-statuses, body shapes, field names and counts returned, nothing of any body. Each line below is
+**The probe is built (F3c2b): `backend/scripts/gpexe-rest-v1-capability-probe.mjs`**, owner-run
+only, with the same rules as before: own-terminal input, one exchange in the host's confirmed
+form, then GET requests only for Team ID 980, at most 14 requests in all, a timeout per request,
+answers bounded at 5 MiB, redirects never followed, no retry, no database. Only statuses, body
+shapes, field names, counts and booleans are returned, nothing of any body. Each line below is
 one request; ids are taken from the previous answers of the same run, never typed and never
-guessed.
+guessed, and a chain stops as soon as the previous answer gives no safe next id (the two reads
+that need no derived id — thresholds and tags — still run, both asked for team 980). A row of
+another team, or an athlete row of another session, stops the whole run
+(`stoppedBy: team_isolation_failed`); a row whose `team` is in a shape the probe cannot read (an
+object, a URL, a list) stops it too (`team_unknown_shape`), because an unreadable team is not a
+confirmed team. Nothing after the session's own read runs unless that read confirmed team 980.
+The host and the team cannot be changed by an option. Masked paths show no id of any length and
+no date; the importer's drop list of personal fields applies before anything is described, so a
+dropped field (such as an athlete's name) is not even named. **The PowerShell commands for the run are handed over only after the
+external review of the probe tool** (owner, 2026-10-01). Its contract tests
+(`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`) run against a fake server only.
+
+The report, per capability: a verdict (`proven` for the list this run starts from; `same`,
+`mapped`, `observed`, `not_observed`), the status, counts and booleans such as `parentConfirmed`,
+`parameterApplied`, `equivalent`, `allRowsInsideWindow`, `filteredCountSmallerThanUnfiltered`,
+`athleteIdDerived`, `hasTimezoneField`; per request the masked path, status, shape, field names
+and counts. `stoppedBy` names why a run ended early (`exchange_failed`,
+`session_list_unavailable`, `no_safe_session_id`, `team_isolation_failed`, `request_limit`).
 
 **How the probe chooses what to read (deterministic, no guessing):**
 - *The unfiltered list of this run.* The run first reads `team_session/?team=980&limit=<n>` and
@@ -100,21 +122,22 @@ guessed.
 | Capability | Request to try (for team 980) | What the answer must show |
 |---|---|---|
 | `session_list_by_date` | `team_session/?team=980&start_timestamp_gte=<day> 00:00:00&start_timestamp_lte=<day> 23:59:59&limit=<n>` | 200. **Proven only when all of these hold:** every returned row's `team` is 980; every returned row's `start_timestamp` lies inside the asked window; and the filtered `X-Total-Count` is **smaller** than the unfiltered count of this same run (so at least one row was really left out). Rows that satisfy the window prove nothing alone: an ignored filter returns the same first rows. Equal counts, or a row outside the window, mean the filter is not applied: reported as not proven, never as **same** |
-| `session_read` | `team_session/<id>/` | 200; object; `team`, `drills_count`, `start_timestamp` present; `team` is 980 |
+| `session_read` | `team_session/<id>/` | **same** only when 200, object, `team` is 980, and `drills_count` and a `start_timestamp` are present (what the importer reads from it); nothing after this read runs unless `team` is 980 |
 | `session_details` | `team_session/<id>/details/` | status; body shape; field names |
-| `session_drill_details` | **Precondition, checked first:** the chosen session `<id>` is a confirmed parent — its own read (`session_read`, above) answered 200 with `team` 980, `drills_count > 0` and a non-empty `drills` list. Only then, three read-only requests on that session: **(1) the importer's exact form, by position:** `team_session/<id>/details/?drill=0` — the `0` is the position of the first drill in the confirmed `drills` list, not an invented value; **(2) the same drill by its real id:** `team_session/<drill id>/details/`, where `<drill id>` is the first id of that `drills` list; **(3) the parent's whole-session values** `team_session/<id>/details/` (the `session_details` request of this run; not sent twice). Approved by the owner on 2026-09-30 | **Classification, one rule set (owner, 2026-10-01).** Two booleans are computed in the run and never printed with a value: `parameterApplied` = the drill answer (1) differs from the whole-session answer (3) in at least one value (an identical answer means the `drill` parameter was ignored); `equivalent` = answers (1) and (2) have the same top-level field names, the same row count and, field by field, the same values. **same** = (1) is 200, `parameterApplied` is true, and, if (2) is also 200, `equivalent` is true. **mapped** = (1) is not 200, (2) is 200, and the id answer (2) differs from the whole-session answer (3) in at least one value. **`not_observed`** = everything else: (1) 200 with the parameter ignored; (1) and (2) both 200 but not equivalent; (2) 200 but identical to (3); neither 200; or no listed session is a confirmed parent. Never **missing** |
+| `session_drill_details` | **Precondition, checked first:** the chosen session `<id>` is a confirmed parent — its own read (`session_read`, above) answered 200 with `team` 980, `drills_count > 0` and a non-empty `drills` list. Only then, three read-only requests on that session: **(1) the importer's exact form, by position:** `team_session/<id>/details/?drill=0` — the `0` is the position of the first drill in the confirmed `drills` list, not an invented value; **(2) the same drill by its real id:** `team_session/<drill id>/details/`, where `<drill id>` is the first id of that `drills` list; **(3) the parent's whole-session values** `team_session/<id>/details/` (the `session_details` request of this run; not sent twice). Approved by the owner on 2026-09-30 | **Classification, one rule set (owner, 2026-10-01).** Two booleans are computed in the run and printed as booleans only, never with the values they were computed from: `parameterApplied` = the drill answer (1) differs from the whole-session answer (3) in at least one value (an identical answer means the `drill` parameter was ignored); `equivalent` = answers (1) and (2) have the same top-level field names, the same row count and, field by field, the same values. **same** = (1) is 200, `parameterApplied` is true, and, if (2) is also 200, `equivalent` is true. **mapped** = (1) is not 200, (2) is 200, and the id answer (2) differs from the whole-session answer (3) in at least one value. **`not_observed`** = everything else: (1) 200 with the parameter ignored; (1) and (2) both 200 but not equivalent; (2) 200 but identical to (3); neither 200; or no listed session is a confirmed parent. Never **missing** |
 
-| `athlete_session_list` | `athlete_session/?teamsession=<id>&limit=5` | status; `X-Total-Count`; field names; whether every row's `teamsession` is `<id>` |
+| `athlete_session_list` | `athlete_session/?teamsession=<id>&limit=<n>` | status; `X-Total-Count`; field names; whether every row's `teamsession` is `<id>` (a row naming another session stops the run; rows naming no session in a readable way are not used and the chain stops there) |
 | `athlete_session_read` | `athlete_session/<athlete session id>/` | status; field names |
 | `athlete_session_more` | `athlete_session/<athlete session id>/more/` | status; field names |
 | `track_read` | `track/<track id>/` | status; field names (a `timezone` field) |
 | `team_thresholds` | `team/980/thresholds/?valid_on=<day>` | status; body shape; field names |
-| `session_tags` | `team_session_tag/?limit=5` | status; field names; whether a tag names a team |
+| `session_tags` | `team_session_tag/?team=980&limit=5` | status; field names; whether a tag names a team (whether the endpoint honours `team` is part of what is observed; a tag of another team stops the run) |
 
 Note for the date window: its values carry a space and colons (`<day> 00:00:00`), which
-`sourceApiUrl()` and the adapter's query builder refuse today on purpose. When the capability is
-proven it gets its own tested encoding of exactly that value shape; the general rules are not
-loosened.
+`sourceApiUrl()` and the adapter's query builder refuse today on purpose. The probe sends the
+value percent-encoded in full, `<day>%2000%3A00%3A00` (the `e03` client encodes only the space,
+`<day>%2000:00:00`; both decode to the same value). The form the probe proves is the one the
+adapter later reproduces, with its own test; the general rules are not loosened.
 
 After that probe each row becomes **same**, **mapped**, **missing** or stays `not_observed`
 (still **unknown**); the adapter implements the proven ones, and only then can the importer's mapper be compared value by value on one

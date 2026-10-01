@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-29. Last `origin/main` commit checked: `6f083a7` (merge of PR #130,
-`feature/source-hosts-server3-profile` → `main`; PR #129 `f26120f` before it).
+Last reviewed: 2026-10-01. Last `origin/main` commit checked: `47bf301` (merge of PR #131,
+`feature/gpexe-rest-v1-adapter-f3c2a` → `main`; PR #130 `6f083a7` before it).
 
 ## Active phase
 
@@ -295,8 +295,12 @@ out of the repository folder and is in `.gitignore`; it was never tracked. **No 
 connection, no binding for team 980, no Connect / Test route, no GPEXE request by the main
 session.**
 
-**The active step is F3c2a — the read-only adapter profile for `server3` / `rest_v1`** (branch
-`feature/gpexe-rest-v1-adapter-f3c2a`, owner order 2026-09-29, in review). It adds
+**F3c2a — the read-only adapter profile for `server3` / `rest_v1` — is merged and deployed**
+(PR #131, merge commit `47bf301`, 2026-10-01 12:03 UTC, pinned to head `7765b3a` after the
+owner's external review and two docs-only corrections; `/api/health` served `47bf301` with
+`ok: true` three times; without a login the GPEXE `status`, `candidates` and `source-athletes`
+routes, the roster read and `POST …/imports` answered 401; nothing observable changed in
+production — no route uses the adapter, no migration). It adds
 `backend/src/sourceAdapters.js` (an adapter is selected by `(source_system, apiFamily)`; a family
 without one answers `adapter_not_available`; `gpexe` / `api` has none there, the `e03` importer
 keeps its own client, unchanged) and `backend/src/gpexeRestV1Adapter.js`: every URL comes from
@@ -320,7 +324,27 @@ thresholds (`team_thresholds`), units (`units`) and session tags (`session_tags`
 legacy-attested path). So the importer cannot run on `server3` yet: a session bundle needs the
 unproven reads. Also unverified: that `rest_v1` values mean what the mapper assumes for `e03`
 (UTC timestamps, SI numbers, the drill model). **No route, no database write, no credential
-storage, no binding, no import, no GPEXE request.**
+storage, no binding, no import, no GPEXE request.** The compatibility document's section 4 holds
+the probe rules the owner settled (2026-09-30 / 2026-10-01): the drill is read by position
+(`details/?drill=0`) only after the parent is confirmed and then by its real id, with the
+classification matrix (same / mapped / `not_observed`, never missing); the date window is proven
+only when every row is of team 980 and inside the window and the filtered count is smaller than
+the unfiltered count of the same run.
+
+**The active step is F3c2b — the owner-run read-only capability probe** (branch
+`feature/gpexe-rest-v1-capability-probe-f3c2b`, owner order 2026-10-01, in review):
+`backend/scripts/gpexe-rest-v1-capability-probe.mjs` runs one exchange in the host's confirmed
+form and then GET requests only for Team ID 980 (at most 14 requests, a timeout per request,
+answers bounded at 5 MiB, redirects never followed, no retry, no database), derives every id —
+session, drill, athlete row, track — from an answer it has already received and checked, stops a
+chain as soon as no safe next id exists, stops the whole run on a row of another team or of a
+team in an unreadable shape, reads nothing of a session whose own read did not confirm team 980,
+asks for the tag list for team 980 as well, applies
+the drill matrix and the date-window rule of the compatibility document, and prints statuses,
+shapes, field names, counts and booleans only. Fake-fetch contract tests
+(`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`). **The adapter, the routes, the
+database, the UI, bindings and imports are untouched; the PowerShell commands for the run are
+handed over only after the external review of the tool.**
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1082,11 +1106,11 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's review and merge decision on the F3c2a adapter PR; then the owner-run read-only
-probe of the remaining `rest_v1` capabilities (`docs/ai/gpexe-rest-v1-compatibility.md`
-section 4), the reads it proves, and, on the owner's order, the F3c2 routes, built against the
-contract in `docs/ai/source-connections-f3c2-contract.md`, its
-section 2, then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
+The owner's external review and merge decision on the F3c2b probe PR; then the owner runs the
+probe and returns its sanitized report; then the adapter implements the reads the probe proved
+(`docs/ai/gpexe-rest-v1-compatibility.md` section 4), and, on the owner's order, the F3c2
+routes, built against the contract in `docs/ai/source-connections-f3c2-contract.md` section 2,
+then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 
