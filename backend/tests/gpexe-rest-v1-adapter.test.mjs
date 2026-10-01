@@ -485,7 +485,21 @@ test("11d. never part of an answer: a stream that breaks, a chunk that is not by
   const named = [...section4.matchAll(/^\| `([a-z_]+)`/gm)].map((m) => m[1]);
   assert.ok(named.length >= 9);
   for (const name of named) assert.ok(Object.prototype.hasOwnProperty.call(REST_V1_CAPABILITIES, name), `${name} is a capability of the adapter`);
-  assert.doesNotMatch(section4, /drill=0/);
+  // drill=0 may appear only as the importer's exact form, in the one row that first confirms the
+  // parent (drills_count > 0, a non-empty drills list) and classifies a non-200 as not_observed.
+  const drillRows = section4.split(/\r?\n/).filter((l) => /drill=0/.test(l));
+  assert.equal(drillRows.length, 1, "drill=0 appears in exactly one table row");
+  for (const l of drillRows) {
+    assert.ok(l.startsWith("| `session_drill_details` |"));
+    assert.match(l, /drills_count > 0/);
+    assert.match(l, /non-empty `drills` list/);
+    assert.match(l, /position of the first drill/);
+    assert.match(l, /never \*\*missing\*\*/);
+    assert.match(l, /\*\*same\*\*/);
+    assert.match(l, /\*\*mapped\*\*/);
+    assert.match(l, /parameterApplied/);
+  }
+  assert.doesNotMatch(section4, /drill=[1-9]/, "no other invented drill position");
   assert.doesNotMatch(doc.replace(/history, not a reference value/g, ""), /unfiltered 308|than the unfiltered 308/);
   // The source of the adapter asks for no whole body anywhere.
   const source = (await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeRestV1Adapter.js"), "utf8")).split(/\r?\n/).filter((l) => !l.trim().startsWith("//")).join("\n");
