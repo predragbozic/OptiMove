@@ -5,8 +5,8 @@
 //
 // What it does: ONE credential exchange (the host's confirmed form, taken
 // from the application's catalog), then GET requests only, at most
-// MAX_REQUESTS in all. Every id it needs - the session, the drill, the
-// athlete row, the track - is taken from an answer it has already received
+// MAX_REQUESTS in all. Every id it needs - the session, the athlete row,
+// the track; in the drill-only run the parent - is taken from an answer it has already received
 // and checked; nothing is typed in, nothing is guessed, and a chain stops the
 // moment the previous answer gives no safe next id. Every row with a team
 // must name 980; a row of another team stops the whole run.
@@ -19,8 +19,9 @@
 // the credential, the issued token or any value from the environment.
 //
 // Boundaries, each one tested (backend/tests/gpexe-rest-v1-capability-probe.test.mjs):
-// GET only after the one exchange; one host, one family, URLs from the
-// application's catalog; redirects never followed; a timeout per request;
+// GET only after the one exchange; one host; the family and the URLs from the
+// application's catalog, except the drill-only run's two fixed legacy reads
+// under `api/` on the same host (LEGACY_API_PATH, owner order 2026-10-01); redirects never followed; a timeout per request;
 // an answer larger than 5 MiB refused unread (the adapter's bounded reader);
 // no retry; no database; nothing written anywhere.
 import { pathToFileURL } from "node:url";
@@ -36,6 +37,11 @@ export const REQUEST_TIMEOUT_MS = 30_000;
 export const LIST_LIMIT = 100;
 // The exchange answer is one small object; more than this is not a token answer.
 export const MAX_EXCHANGE_BYTES = 64 * 1024;
+// The drill-only run only (owner order 2026-10-01, from the structure of the owner's legacy
+// integration on server3): the legacy `api/` family of the same host, for exactly two read shapes
+// on a parent the REST chain confirmed first. Not a host profile, not an adapter family.
+export const LEGACY_API_PREFIX = "api/";
+export const LEGACY_API_PATH = /^team_session\/(0|[1-9][0-9]{0,11})\/(details\/\?drill=0)?$/;
 const ID = /^(0|[1-9][0-9]{0,11})$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -62,7 +68,12 @@ export function dayOf(value) {
 // The probe's own masking on top of the discovery script's: a date window
 // value and every id that stands as a path segment, whatever its length.
 export function maskProbePath(path, team) {
-  return maskPath(path, team)
+  // Ids that stand as path segments first, so an id that happens to contain the team's digits is
+  // never split by the team masking below and left half printed.
+  const segments = path
+    .replace(/\/(\d+)(?=\/)/g, (m, d) => (d === team ? m : "/<id>"))
+    .replace(/(teamsession=)(\d+)/g, (m, k, d) => (d === team ? m : `${k}<id>`));
+  return maskPath(segments, team)
     .replace(/start_timestamp_(gte|lte)=[^&]*/g, "start_timestamp_$1=<date>")
     .replace(/\/\d+\//g, "/<id>/")
     .replace(/(teamsession=)\d+/g, "$1<id>")
@@ -90,31 +101,72 @@ export function canonical(value) {
   if (value && typeof value === "object") return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
   return JSON.stringify(value) ?? "null";
 }
-export const sameAnswer = (a, b) => canonical(a) === canonical(b);
 const fieldNamesOf = (v) => (Array.isArray(v) ? (v[0] && typeof v[0] === "object" ? Object.keys(v[0]).sort() : []) : v && typeof v === "object" ? Object.keys(v).sort() : []);
 const rowCount = (v) => (Array.isArray(v) ? v.length : v && typeof v === "object" && Array.isArray(v.results) ? v.results.length : null);
-// Equivalent = same top-level field names, same row count, same values.
-export const equivalentAnswers = (a, b) => canonical(fieldNamesOf(a)) === canonical(fieldNamesOf(b)) && rowCount(a) === rowCount(b) && sameAnswer(a, b);
 
-// The drill matrix of the compatibility document (owner, 2026-10-01).
-//   ordinal: status of details/?drill=0 on the parent, by position
-//   byId:    status of team_session/<drill id>/details/
-//   whole:   the parent's whole-session details
-export function classifyDrill({ ordinalStatus, ordinalBody, byIdStatus, byIdBody, wholeBody }) {
-  const ordinalOk = ordinalStatus === 200;
-  const byIdOk = byIdStatus === 200;
-  const parameterApplied = ordinalOk ? !sameAnswer(ordinalBody, wholeBody) : null;
-  const equivalent = ordinalOk && byIdOk ? equivalentAnswers(ordinalBody, byIdBody) : null;
-  const idDiffersFromWhole = byIdOk ? !sameAnswer(byIdBody, wholeBody) : null;
-  let verdict = "not_observed";
-  if (ordinalOk && parameterApplied === true && (byIdOk ? equivalent === true : true)) verdict = "same";
-  else if (!ordinalOk && byIdOk && idDiffersFromWhole === true) verdict = "mapped";
-  return { verdict, ordinalStatus: ordinalStatus ?? null, byIdStatus: byIdStatus ?? null, parameterApplied, equivalent, idDiffersFromWhole };
+// Field names are printed only when each is an identifier (a letter or an underscore first, no
+// space, at most 64 characters) and there are at most 200: keys that start with a digit (ids),
+// dates and keys with spaces are never printed. A single-word key is printed.
+export const printableFieldNames = (names) => names.length <= 200 && names.every((k) => /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(k));
+// Every list of key names the shared describer prints goes through that rule.
+export function sanitizeDescribed(described) {
+  for (const key of ["fieldNames", "resultFieldNames"]) {
+    if (Array.isArray(described[key]) && !printableFieldNames(described[key])) described[key] = "<unprintable>";
+  }
+  return described;
+}
+
+// An answer that was seen: a parsed object or array. A 200 with an empty or
+// unreadable body, or a JSON primitive, is no answer and can never make a verdict.
+export const parsedAnswer = (b) => b !== null && b !== undefined && typeof b === "object";
+// An answer with content: parsed and carrying at least one row or one field name. An empty
+// array or object was seen but shows nothing, so it can never make a verdict either.
+export const answerWithContent = (b) => parsedAnswer(b) && ((rowCount(b) ?? 0) > 0 || fieldNamesOf(b).length > 0);
+
+// What the list page already says about its `drills` entries, as types and booleans only.
+// No entry is ever used as an id for a request.
+export function describeDrillEntries(rows, parentRow) {
+  const entries = rows.flatMap((r) => (Array.isArray(r.drills) ? r.drills : []));
+  const kinds = new Set(entries.map((d) => (d === null ? "null" : Array.isArray(d) ? "array" : typeof d)));
+  const drillsEntryKind = kinds.size === 0 ? null : kinds.size === 1 ? [...kinds][0] : "mixed";
+  const firstDrill = parentRow && Array.isArray(parentRow.drills) ? safeId(parentRow.drills[0]) : null;
+  // Another row of the same page (never the parent itself) with the id the first entry names.
+  const listRowMatchesFirstDrill = firstDrill === null ? null : rows.some((r) => r !== parentRow && safeId(r.id) === firstDrill);
+  // The singular `drill` field of the list rows (distinct from `drills`, the list).
+  const rowsHaveSingularDrillField = rows.some((r) => "drill" in r);
+  const rowsWithNonNullSingularDrill = rowsHaveSingularDrillField ? rows.some((r) => r.drill !== null && r.drill !== undefined) : null;
+  return { drillsEntryKind, listRowMatchesFirstDrill, rowsHaveSingularDrillField, rowsWithNonNullSingularDrill };
+}
+
+// What the legacy drill answer shows (owner, 2026-10-01): its shape and whether it carries
+// player rows and metric fields, as booleans only. Nothing of a row, and no key of the players
+// map (those keys are athlete ids), leaves this function. The importer's known `api` details shape
+// is `players` as a map keyed by the GPEXE athlete id (gpexeImportMapper.js); a list of rows, at
+// the top level or under `players`, is recognised too.
+export function describeDrillAnswer(body) {
+  const object = parsedAnswer(body) && !Array.isArray(body);
+  const container = object ? body.players : undefined;
+  const playersContainerKind = Array.isArray(container) ? "array" : parsedAnswer(container) ? "map" : container === undefined ? null : "other";
+  const players = Array.isArray(body) ? body : playersContainerKind === "array" ? container : playersContainerKind === "map" ? Object.values(container) : null;
+  const rows = players ? players.filter((r) => r && typeof r === "object" && !Array.isArray(r)) : [];
+  const metricKey = (o) => Object.keys(o).some((k) => /metric/i.test(k));
+  return {
+    bodyKind: body === undefined ? null : body === null ? "null" : Array.isArray(body) ? "array" : typeof body,
+    hasContent: answerWithContent(body),
+    rowsAtTopLevel: Array.isArray(body),
+    playersField: object ? "players" in body : false,
+    playersContainerKind,
+    playerRowsPresent: rows.length > 0,
+    playerRowsAreObjects: players && players.length > 0 ? rows.length === players.length : null,
+    playerRowsHaveNumbers: rows.length > 0 ? rows.some((r) => Object.values(r).some((v) => typeof v === "number" && Number.isFinite(v))) : null,
+    playerRowsHaveNestedValues: rows.length > 0 ? rows.some((r) => Object.values(r).some((v) => v !== null && typeof v === "object")) : null,
+    metricFieldPresent: (object && metricKey(body)) || rows.some(metricKey),
+  };
 }
 
 export const PROBE_MODES = Object.freeze(["full", "drill"]);
-// The drill-only run: one exchange and these six reads, nothing else.
-export const DRILL_MODE_MAX_REQUESTS = 7;
+// The drill-only run: one exchange and these four reads, nothing else.
+export const DRILL_MODE_MAX_REQUESTS = 5;
 
 export function parseArgs(argv) {
   const opts = { host: PROBE_HOST, team: PROBE_TEAM, mode: "full" };
@@ -136,7 +188,7 @@ export function parseArgs(argv) {
 // maxRequests and timeoutMs exist for the tests; the defaults are the limits.
 export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM, mode = "full", maxRequests = MAX_REQUESTS, timeoutMs = REQUEST_TIMEOUT_MS } = {}, env, fetchImpl = globalThis.fetch) {
   if (!PROBE_MODES.includes(mode)) throw new DiscoveryUsageError("mode must be full or drill");
-  // The drill-only run never sends more than its own six reads.
+  // The drill-only run never sends more than its own four reads.
   if (mode === "drill") maxRequests = Math.min(maxRequests, DRILL_MODE_MAX_REQUESTS);
   if (!Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > MAX_REQUESTS) throw new DiscoveryUsageError(`maxRequests is a whole number from 1 to ${MAX_REQUESTS}`);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > REQUEST_TIMEOUT_MS) throw new DiscoveryUsageError(`timeoutMs is a whole number up to ${REQUEST_TIMEOUT_MS}`);
@@ -156,6 +208,11 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     if (requests > maxRequests) throw new ProbeStop("request_limit", `more than ${maxRequests} requests would be needed`);
   };
   const verdict = (name, value) => { report.capabilities[name] = value; };
+  // The one exit: the drill-only run always names its drill verdict, whatever stopped it.
+  const done = () => {
+    if (mode === "drill" && report.stoppedBy && !report.capabilities.session_drill_details) verdict("session_drill_details", { verdict: "not_observed", reason: report.stoppedBy });
+    return finish(report, env, issued ?? null);
+  };
 
   // 1. The one exchange, in the host's confirmed form, with the same timeout
   //    and a bounded answer like every read. The issued token lives in this
@@ -187,7 +244,7 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
         report.requests.push({ ...entry, status: res.status, error: "answer_too_large_or_unreadable" });
         return null;
       }
-      report.requests.push({ ...entry, ...describeResponse(res, body, { teamId: team }) });
+      report.requests.push({ ...entry, ...sanitizeDescribed(describeResponse(res, body, { teamId: team })) });
       const field = profile.exchange.tokenField;
       return res.status === 200 && body && typeof body === "object" && !Array.isArray(body) && Object.prototype.hasOwnProperty.call(body, field) && typeof body[field] === "string" && body[field] ? body[field] : null;
     } catch (e) {
@@ -199,16 +256,22 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
   })();
   if (!issued) {
     report.stoppedBy = "exchange_failed";
-    return finish(report, env, null);
+    return done();
   }
 
-  // The ONLY read: GET, one relative resource path under the family prefix,
-  // bounded body, no retry, redirects refused.
-  async function get(resourcePath) {
+  // The ONLY read: GET, one relative resource path under a prefix of the same
+  // host, bounded body, no retry, redirects refused.
+  const get = (resourcePath) => read(api, resourcePath);
+  // The drill-only run's two legacy reads, and nothing else under `api/`.
+  const getLegacy = (resourcePath) => {
+    if (mode !== "drill" || !LEGACY_API_PATH.test(resourcePath)) throw new ProbeStop("path_refused", "not one of the two legacy reads of the drill-only run");
+    return read(LEGACY_API_PREFIX, resourcePath);
+  };
+  async function read(prefix, resourcePath) {
     countRequest();
-    const url = new URL(`${api}${resourcePath}`, profile.baseUrl);
-    if (!url.href.startsWith(`${profile.baseUrl}${api}`)) throw new ProbeStop("path_refused", "a path left the family prefix");
-    const entry = { method: "GET", path: maskProbePath(`${api}${resourcePath}`, team), authenticated: true };
+    const url = new URL(`${prefix}${resourcePath}`, profile.baseUrl);
+    if (!url.href.startsWith(`${profile.baseUrl}${prefix}`)) throw new ProbeStop("path_refused", "a path left its prefix");
+    const entry = { method: "GET", path: maskProbePath(`${prefix}${resourcePath}`, team), authenticated: true };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -234,7 +297,9 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
         report.requests.push({ ...entry, status: res.status, error });
         return { status: res.status, body: undefined, error };
       }
-      const described = describeResponse(res, body, { teamId: team });
+      // Key names are printed only when every one is an identifier: a body keyed by ids or dates,
+      // at the top level or under `results`, prints none of its keys.
+      const described = sanitizeDescribed(describeResponse(res, body, { teamId: team }));
       // A count is printed only when it is a count.
       if (described.totalCount !== null && !/^\d{1,9}$/.test(described.totalCount)) described.totalCount = "<unprintable>";
       report.requests.push({ ...entry, ...described });
@@ -265,7 +330,7 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     if (list.status !== 200 || !Array.isArray(list.body)) {
       report.stoppedBy = "session_list_unavailable";
       verdict("session_list", { verdict: "not_observed", status: list.status });
-      return finish(report, env, issued);
+      return done();
     }
     assertTeam(rows, "session list");
     const unfilteredTotal = parseTotal(list.totalCount);
@@ -273,42 +338,46 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     const named = new Set(rows.flatMap((r) => (Array.isArray(r.drills) ? r.drills.map((d) => safeId(d)).filter(Boolean) : [])));
     const firstParent = rows.find((r) => Array.isArray(r.drills) && r.drills.length > 0 && safeId(r.drills[0]) !== null && safeId(r.id) !== null);
     const firstUnnamed = rows.find((r) => safeId(r.id) !== null && !named.has(safeId(r.id)));
+    // The drill-only run's parent: a row of team 980 with a readable id that says it has drills
+    // (a non-empty `drills` list or `drills_count > 0`); its `drills` entries are never ids.
+    const drillParent = rows.find((r) => safeId(r.id) !== null && namesTeam(r.team, team) === true
+      && ((Array.isArray(r.drills) && r.drills.length > 0) || (Number.isInteger(r.drills_count) && r.drills_count > 0)));
     const chosen = firstParent ?? firstUnnamed ?? null;
     const sessionId = chosen ? safeId(chosen.id) : null;
     const days = new Set(rows.map((r) => dayOf(r.start_timestamp)).filter(Boolean));
     verdict("session_list", {
       verdict: "proven", status: 200, rowCount: rows.length, totalIsNumber: unfilteredTotal !== null,
       rowsHaveDrillsField: haveDrillsField, parentChosen: Boolean(firstParent), parentUnconfirmed: !firstParent && Boolean(firstUnnamed), sessionIdDerived: sessionId !== null, distinctDays: days.size,
+      // The drill-only run's helper facts from the page already received (owner order
+      // 2026-10-01): types and booleans only; the full run's report keeps its shape.
+      ...(mode === "drill" ? describeDrillEntries(rows, drillParent ?? null) : {}),
     });
     if (sessionId === null) {
       report.stoppedBy = "no_safe_session_id";
-      return finish(report, env, issued);
+      return done();
     }
 
-    // The drill-only run (owner, 2026-10-01, after the full run found the
-    // parent's own read without a `drills` list). Every identity is confirmed
-    // before the next read, and the chain stops without a further request
-    // at the first identity or team that is not confirmed.
+    // The drill-only run (owner order 2026-10-01). A `drills` entry is not a
+    // team_session id on server3 (first drill-only run), and the owner's legacy
+    // integration reads a drill as `api/team_session/<parent>/details/?drill=<index>`
+    // with a zero-based index. So: the parent is confirmed by the REST chain,
+    // then again by the legacy family, and only then is the one drill read
+    // sent. Every identity is confirmed before the next read, and the chain
+    // stops without a further request at the first identity or team that is
+    // not confirmed. No `drills` entry is ever used as an id.
     if (mode === "drill") {
-      if (!firstParent) {
+      if (!drillParent) {
         report.stoppedBy = "no_parent_with_drills_in_list";
-        return finish(report, env, issued);
+        return done();
       }
-      const drillId = safeId(firstParent.drills[0]);
-      // Every early stop still names the drill verdict, as the full run does.
-      const stopDrill = (code) => {
-        report.stoppedBy = code;
-        verdict("session_drill_details", { verdict: "not_observed", reason: code });
-        return finish(report, env, issued);
-      };
-      // A row that names itself as its own drill is not a parent for certain.
-      if (drillId === sessionId) return stopDrill("drill_is_parent");
-      // 2. The parent's own read: the same id, team 980, drills_count > 0.
-      const parent = await get(`team_session/${sessionId}/`);
+      const parentId = safeId(drillParent.id);
+      const stopDrill = (code) => { report.stoppedBy = code; return done(); };
+      // 2. The parent's own REST read: the same id, team 980, drills_count > 0.
+      const parent = await get(`team_session/${parentId}/`);
       const pb = parent.body;
       const parentOk = Boolean(parent.status === 200 && pb && typeof pb === "object" && !Array.isArray(pb));
       if (parentOk) assertTeam([pb], "parent session");
-      const parentIdOk = parentOk && safeId(pb.id) === sessionId;
+      const parentIdOk = parentOk && safeId(pb.id) === parentId;
       const parentTeamOk = parentOk && namesTeam(pb.team, team) === true;
       const parentCount = parentOk && Number.isInteger(pb.drills_count) ? pb.drills_count : null;
       const parentStart = parentOk && dayOf(pb.start_timestamp) !== null;
@@ -320,34 +389,31 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
         drillsCountPresent: parentCount !== null, drillsCountPositive: parentCount !== null && parentCount > 0, startTimestampPresent: parentStart, drillsListPresent: parentOk && Array.isArray(pb.drills), parentConfirmed,
       });
       if (!parentConfirmed) return stopDrill(parentOk && safeId(pb.id) !== null && !parentIdOk ? "parent_id_mismatch" : "parent_not_confirmed");
-      // 3. The drill session's own read: the same drill id, team 980.
-      const drill = await get(`team_session/${drillId}/`);
-      const db = drill.body;
-      const drillOk = Boolean(drill.status === 200 && db && typeof db === "object" && !Array.isArray(db));
-      if (drillOk) assertTeam([db], "drill session");
-      const drillIdOk = drillOk && safeId(db.id) === drillId;
-      const drillTeamOk = drillOk && namesTeam(db.team, team) === true;
-      // A drill whose own read names another parent contradicts the list: stop.
-      const drillParent = drillOk && "teamsession" in db ? safeId(db.teamsession) : null;
-      const namesParent = drillParent === null ? null : drillParent === sessionId;
-      const drillConfirmed = drillIdOk && drillTeamOk && namesParent !== false;
-      verdict("drill_session_read", {
-        // Not an importer read: the importer never reads a drill session by its id, so the word
-        // is `observed`, never `same`.
-        verdict: drillConfirmed ? "observed" : "not_observed", status: drill.status ?? null, idMatchesParentList: drillIdOk, teamIs980: drillTeamOk, namesParent, drillConfirmed,
+      // 3. The same parent through the legacy family: the same id and team 980 again.
+      const legacy = await getLegacy(`team_session/${parentId}/`);
+      const lb = legacy.body;
+      const legacyOk = Boolean(legacy.status === 200 && lb && typeof lb === "object" && !Array.isArray(lb));
+      if (legacyOk) assertTeam([lb], "legacy parent session");
+      const legacyIdOk = legacyOk && safeId(lb.id) === parentId;
+      const legacyTeamOk = legacyOk && namesTeam(lb.team, team) === true;
+      const legacyConfirmed = legacyIdOk && legacyTeamOk;
+      verdict("legacy_api_session_read", {
+        // Not an adapter read: the legacy family is not part of the server3 profile.
+        verdict: legacyConfirmed ? "observed" : "not_observed", family: "api", status: legacy.status ?? null, idMatchesParent: legacyIdOk, teamIs980: legacyTeamOk,
+        drillsCountPositive: legacyOk && Number.isInteger(lb.drills_count) ? lb.drills_count > 0 : null, parentConfirmed: legacyConfirmed,
       });
-      if (!drillConfirmed) {
-        return stopDrill(namesParent === false ? "drill_parent_mismatch" : drillOk && safeId(db.id) !== null && !drillIdOk ? "drill_id_mismatch" : "drill_not_confirmed");
-      }
-      // 4. The parent's whole-session details, the reference.
-      const whole = await get(`team_session/${sessionId}/details/`);
-      verdict("session_details", { verdict: whole.status === 200 ? "same" : "not_observed", status: whole.status ?? null });
-      if (whole.status !== 200) return stopDrill("whole_session_details_unavailable");
-      // 5. and 6. The drill by position on the parent, then by its own id; 7. the matrix.
-      const ordinal = await get(`team_session/${sessionId}/details/?drill=0`);
-      const byId = await get(`team_session/${drillId}/details/`);
-      verdict("session_drill_details", classifyDrill({ ordinalStatus: ordinal.status, ordinalBody: ordinal.body, byIdStatus: byId.status, byIdBody: byId.body, wholeBody: whole.body }));
-      return finish(report, env, issued);
+      if (!legacyConfirmed) return stopDrill(legacyOk && safeId(lb.id) !== null && !legacyIdOk ? "legacy_parent_id_mismatch" : "legacy_parent_not_confirmed");
+      // 4. The one drill read: the first drill by its zero-based position on the confirmed parent.
+      const drill = await getLegacy(`team_session/${parentId}/details/?drill=0`);
+      const shape = describeDrillAnswer(drill.body);
+      const seen = drill.status === 200 && answerWithContent(drill.body);
+      const reason = drill.status !== 200 ? "drill_not_200" : !parsedAnswer(drill.body) ? "drill_answer_unreadable" : !seen ? "drill_answer_empty" : null;
+      verdict("session_drill_details", {
+        // observed, never same or mapped: no reference is read, so the parameter's effect is
+        // not judged by this run; never missing.
+        verdict: seen ? "observed" : "not_observed", family: "api", status: drill.status ?? null, parameterEffectJudged: false, ...shape, ...(reason ? { reason } : {}),
+      });
+      return done();
     }
 
     // The list's day is a hint only; the day that is used comes from the
@@ -373,8 +439,7 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       drillsCountPresent: drillsCount !== null, startTimestampPresent: startPresent || false, drillsListPresent: Array.isArray(drillIds), parentConfirmed,
     });
 
-    // 4. Whole-session details (the reference for the drill matrix), only
-    //    for a session whose own read confirmed team 980.
+    // 4. Whole-session details, only for a session whose own read confirmed team 980.
     let whole = { status: null, body: undefined };
     if (sessionTeamOk) {
       whole = await get(`team_session/${sessionId}/details/`);
@@ -383,14 +448,10 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       verdict("session_details", { verdict: "not_observed", reason: "session_not_confirmed" });
     }
 
-    // 5. The drill, by the importer's form (position 0) and by its real id.
-    if (parentConfirmed && whole.status === 200) {
-      const ordinal = await get(`team_session/${sessionId}/details/?drill=0`);
-      const byId = await get(`team_session/${drillIds[0]}/details/`);
-      verdict("session_drill_details", classifyDrill({ ordinalStatus: ordinal.status, ordinalBody: ordinal.body, byIdStatus: byId.status, byIdBody: byId.body, wholeBody: whole.body }));
-    } else {
-      verdict("session_drill_details", { verdict: "not_observed", reason: parentConfirmed ? "whole_session_details_unavailable" : "no_confirmed_parent" });
-    }
+    // 5. No drill read in the full run (owner, 2026-10-01): a `drills` entry is not a
+    //    team_session id on server3, and the REST `?drill=` form is withdrawn; the drill
+    //    is read only by the drill-only run, through the legacy form on a parent confirmed twice.
+    verdict("session_drill_details", { verdict: "not_observed", reason: "drill_read_only_in_drill_mode" });
 
     // 6. The date window, judged only on a day the unfiltered list can judge.
     if (!sessionTeamOk) {
@@ -498,7 +559,7 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       report.stoppedBy = "unexpected_error";
     }
   }
-  return finish(report, env, issued);
+  return done();
 }
 
 function finish(report, env, issued) {

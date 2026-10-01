@@ -325,11 +325,11 @@ legacy-attested path). So the importer cannot run on `server3` yet: a session bu
 unproven reads. Also unverified: that `rest_v1` values mean what the mapper assumes for `e03`
 (UTC timestamps, SI numbers, the drill model). **No route, no database write, no credential
 storage, no binding, no import, no GPEXE request.** The compatibility document's section 4 holds
-the probe rules the owner settled (2026-09-30 / 2026-10-01): the drill is read by position
-(`details/?drill=0`) only after the parent is confirmed and then by its real id, with the
-classification matrix (same / mapped / `not_observed`, never missing); the date window is proven
-only when every row is of team 980 and inside the window and the filtered count is smaller than
-the unfiltered count of the same run.
+the probe rules the owner settled (2026-09-30 / 2026-10-01): the date window is proven only when
+every row is of team 980 and inside the window and the filtered count is smaller than the
+unfiltered count of the same run. (The drill rules settled then — the REST `details/` read by
+position, then by the drill's own id, with a same / mapped matrix — were withdrawn on 2026-10-01;
+see the F3c2b paragraphs below.)
 
 **The active step is F3c2b — the owner-run read-only capability probe** (branch
 `feature/gpexe-rest-v1-capability-probe-f3c2b`, owner order 2026-10-01; the full mode was
@@ -338,11 +338,13 @@ drill-only mode is now in review):
 `backend/scripts/gpexe-rest-v1-capability-probe.mjs` runs one exchange in the host's confirmed
 form and then GET requests only for Team ID 980 (at most 14 requests, a timeout per request,
 answers bounded at 5 MiB, redirects never followed, no retry, no database), derives every id —
-session, drill, athlete row, track — from an answer it has already received and checked, stops a
+session, athlete row, track; in the drill-only run the parent — from an answer it has already
+received and checked, stops a
 chain as soon as no safe next id exists, stops the whole run on a row of another team or of a
 team in an unreadable shape, reads nothing of a session whose own read did not confirm team 980,
 asks for the tag list for team 980 as well, applies
-the drill matrix and the date-window rule of the compatibility document, and prints statuses,
+the date-window rule of the compatibility document (the full run reads no drill any more), and
+prints statuses,
 shapes, field names, counts and booleans only. Fake-fetch contract tests
 (`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`). **The adapter, the routes, the
 database, the UI, bindings and imports are untouched; the PowerShell commands for the run are
@@ -359,17 +361,42 @@ carry a `drills` list, but the parent session's own read carries `drills_count >
 `drills` list, so the probe's precondition for the two drill reads was not met and neither was
 sent. **The adapter is unchanged: every one of the eight proven reads still answers
 `source_capability_unavailable` until it is implemented with its own tests, on the owner's
-order.** For the drill, the probe gained a narrow **drill-only mode** (`--mode drill`, owner order
-2026-10-01, built, **not run**): one exchange and at most six reads, the parent confirmed from the
-list row's `drills` plus its own read's `id`, `team` 980 and `drills_count > 0` (no `drills` list
-required), the drill session confirmed by its own read (`id`, `team` 980), then the whole-session
-details, the drill by position and the drill by id, classified by the existing matrix; any
-identity or team not confirmed stops the chain without the next request (`parent_id_mismatch`,
-`drill_id_mismatch`, `drill_parent_mismatch`, `team_isolation_failed`, `team_unknown_shape`, …);
-the drill session's own read is reported as observed, never as an importer read; nothing of the
-full run is repeated. Its PowerShell commands are handed over only after the owner's external review. No
-GPEXE request by the main session, no route, no database write, no credential storage, no
-binding, no import.
+order.** For the drill, the probe gained a narrow **drill-only mode** (`--mode drill`). **Its first
+form was run once by the owner (2026-10-01, after the external review of head `1bcb969`) and
+stopped as built:** `stoppedBy: drill_id_mismatch`, 4 requests — the parent confirmed (own read
+200, same id, team 980, `drills_count > 0`, no `drills` list), but `team_session/<first drills entry>/`
+answered 200 with **an id other than the entry** (the report could not tell whether it was the
+parent's own id or a third session's) and no `teamsession` field; nothing further was read. **So
+an entry of a session's `drills` list is not a `team_session` id on `rest_v1`, or at least that
+path answers a different session; the `e03` drill model is not confirmed there; owner decision: a
+`drills` entry is never read as a `team_session` id again without new evidence.** The mode was corrected on the same PR twice (owner orders
+2026-10-01). **The REST `?drill=` plan is withdrawn:** the owner's review of the legacy
+integration's code (structural evidence, not an API answer; the file holds credentials and was
+not opened by the main session) shows that on `server3` it reads a drill's results as
+`api/team_session/<parent id>/details/?drill=<zero-based index>`, the whole session and
+`drills_count` as `rest/v1/team_session/<parent id>/details/`, and never uses `drills` as
+`team_session` ids. The drill-only run now (built, **not run** in this form): one exchange and at
+most four reads — the REST list gives a parent (team 980, a non-empty `drills` list or
+`drills_count > 0`), the parent's own REST read confirms the same id, team 980 and
+`drills_count > 0`, the same parent through the legacy family `api/team_session/<parent id>/`
+confirms the same id and team 980 again, and only then one read of the first drill by its
+zero-based position in the legacy form; it records the status, the body kind and booleans
+(content, a `players` field, player rows, numbers, nested values, a metric-named field) and calls
+the answer observed or not_observed, never same, mapped or missing (no reference is read); any
+identity or team not confirmed stops the chain before the drill read (`parent_id_mismatch`,
+`parent_not_confirmed`, `legacy_parent_id_mismatch`, `legacy_parent_not_confirmed`,
+`team_isolation_failed`, `team_unknown_shape`), and every exit names the drill verdict; no
+`drills` entry is ever used as an id; the legacy family is used by the probe only, for those two
+read shapes on the same host, and is not added to the `server3` host profile or the adapter; the
+full run no longer reads any drill. **Owner product decision (2026-10-01):** the legacy way of
+reading drill results by parent id and `?drill=<index>` is the candidate to confirm; its way of
+naming drills — linking tags through all tagged sessions of that day sorted by time — is not
+reliable enough for OptiMove and is not copied; OptiMove keeps a drill as parent session +
+zero-based drill index, links a name or tag only when the API gives an explicit, tested link,
+uses the neutral name *Drill N* until then, and never guesses a tag
+(`docs/ai/gpexe-rest-v1-compatibility.md` section 3). Its PowerShell commands are handed over only
+after the owner's external review of this form. No GPEXE request by the main session, no route, no
+database write, no credential storage, no binding, no import.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1131,11 +1158,12 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's external review of the drill-only probe mode on the F3c2b PR; then, on the owner's
-order, the owner-run drill-only read (the last unproven importer read); then the merge
+The owner's external review of the second form of the drill-only probe mode on the F3c2b PR;
+then, on the owner's order, the owner-run drill-only read (the legacy drill form on a parent
+confirmed twice); then the merge
 decision on the F3c2b PR; then the adapter implements the reads the probe proved
-(`docs/ai/gpexe-rest-v1-compatibility.md` section 2, rows 1b–7 and 9, and row 8 if the drill-only
-run proves it), and, on the owner's order, the F3c2
+(`docs/ai/gpexe-rest-v1-compatibility.md` section 2, rows 1b–7 and 9, and row 8 only after an owner decision on the `api`
+family, which the `server3` profile does not carry), and, on the owner's order, the F3c2
 routes, built against the contract in `docs/ai/source-connections-f3c2-contract.md` section 2,
 then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and

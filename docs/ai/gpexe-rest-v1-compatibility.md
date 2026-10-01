@@ -25,13 +25,25 @@ session. The existing `e03` importer (`backend/src/gpexeClient.js`,
    one exchange and ten reads, `stoppedBy: null`, 11 requests in all; only the sanitized report
    (statuses, shapes, field names, counts, booleans) came back and only its verdicts are
    recorded here — no id, no date, no value, no field list is copied into this document.
+5. **The owner-run drill-only probe of 2026-10-01** (`--mode drill` as first built, section 4):
+   stopped after three reads on `drill_id_mismatch`; the same sanitization and the same rule
+   for what is recorded.
+6. **Structural evidence from the owner's legacy integration on `server3`** (the owner's review
+   of its code, 2026-10-01, reported as paths and field use only; the file itself holds
+   credentials and was not opened for this work): the session list is read as
+   `api/team_session/`; the whole session and `drills_count` as
+   `rest/v1/team_session/<parent id>/details/`; a drill's results as
+   `api/team_session/<parent id>/details/?drill=<zero-based index>`; `drills` is not used as a
+   list of `team_session` ids. This is legacy-attested: OptiMove has not seen these answers.
 
 Words used: **same** — same resource name and parameters, only the family prefix differs, and the
 answer was seen; **mapped** — a different path or parameter gives the same information, and the
 answer was seen; **missing** — a probe showed the family does not have it; **unknown** — not
 verified. The probe's report adds two words of its own: **proven** for the list it starts from
-(the one read verified before), and **observed** for a read that answered 200 but has no
-importer counterpart to be "same" as (the tags). *Legacy-attested* means the owner's working integration uses that path or parameter,
+(the one read verified before), and **observed** for a read that answered 200 but cannot be
+called "same": it has no importer counterpart (the tags, the drill-only run's legacy parent read),
+or its form is outside the `rest_v1` family and no reference shows what it selects (the drill-only
+run's legacy drill read). *Legacy-attested* means the owner's working integration uses that path or parameter,
 but OptiMove has never seen its answer: it is still **unknown** for the adapter.
 
 ## 2. The table
@@ -48,7 +60,7 @@ but OptiMove has never seen its answer: it is still **unknown** for the adapter.
 | 5 | Burst and brake events of an athlete row | `athlete_session/<id>/more/` | **same** | probe 2026-10-01: 200 | unavailable (`athlete_session_more`) until implemented |
 | 6 | Track (time zone, device restarts) | `track/<id>/` | **same** | probe 2026-10-01: 200, id from the confirmed athlete detail | unavailable (`track_read`) until implemented |
 | 7 | Whole-session values per athlete | `team_session/<id>/details/` | **same** | probe 2026-10-01: 200 | unavailable (`session_details`) until implemented |
-| 8 | Values per drill | `team_session/<id>/details/?drill=<n>` | **`not_observed`** (still **unknown**) | probe 2026-10-01: no request was sent — the parent's own read carries `drills_count > 0` but no `drills` list, so the parent could not be confirmed under the precondition of section 4; the drill-only run (section 4) confirms the parent from the list row's `drills` and the parent's `drills_count` instead | unavailable (`session_drill_details`) |
+| 8 | Values per drill | `team_session/<id>/details/?drill=<n>` | **`not_observed`** (still **unknown** on `rest_v1`; a legacy-attested candidate in the `api` family) | full probe 2026-10-01: no request sent (the parent's own read carries `drills_count > 0` but no `drills` list). First drill-only run 2026-10-01: a `drills` entry read as `team_session/<entry>/` answered an id other than the entry (the report could not tell whether the parent's own or a third session's), so a `drills` entry is not a `team_session` id on `rest_v1`, or at least that path answers a different session, and it is never read as one again. Structural evidence (section 1, item 6): the legacy integration reads a drill's results as `api/team_session/<parent id>/details/?drill=<zero-based index>`. The REST `?drill=` form is withdrawn from the plan; the next drill-only run reads the legacy form once (section 4) | unavailable (`session_drill_details`); the `api` family is not part of the `server3` profile |
 | 9 | Threshold set valid on the session day | `team/<team>/thresholds/?valid_on=` | **same** | probe 2026-10-01: 200 on the confirmed session's day | unavailable (`team_thresholds`) until implemented |
 | — | Units | no endpoint (numbers are SI on `e03`, verified in the pilot) | **unknown** | none; that `rest_v1` numbers are SI is not verified (the probe records no value) | unavailable (`units`) |
 | — | Session tags | not used by the importer | **observed** (legacy-attested path `team_session_tag/?team=&limit=`) | probe 2026-10-01: 200, asked for team 980; no returned tag named another team (one would have stopped the run); whether `team` is honoured is not shown | unavailable (`session_tags`) |
@@ -79,7 +91,24 @@ and the drill read (row 8) is not proven at all. `fetchSessionBundle()` therefor
 Also not proven, and not a matter of paths: that the **values** of `rest_v1` mean what the
 importer's mapper assumes for `e03` — naive timestamps in UTC, numbers in SI units, drills as
 separate sessions named in their parent's `drills`, `athlete_session.drill` null for the whole
-session. Field names look alike; meanings were verified on `e03` only.
+session. Field names look alike; meanings were verified on `e03` only. **The drill model is
+not the `e03` one:** on `rest_v1` reading an entry of a session's `drills` list as a
+`team_session` id answered a session with an id other than the entry (first drill-only run,
+2026-10-01; whether that was the parent itself or a third session the report could not tell), and
+a session's own read carries `drill`, `drill_enabled` and `drills_count` without a `drills` list;
+what a drill is on `rest_v1` is open.
+
+**What OptiMove keeps of a drill (owner product decision, 2026-10-01).** The legacy
+integration's way of **reading** drill results — the parent session id plus `?drill=<zero-based
+index>` in the `api` family (section 1, item 6) — is the **candidate** to confirm, by the
+drill-only run of section 4; it is not proven until an owner-run answer has been seen. Its way of
+**naming** drills is not copied: the Sheet links a drill to a tag by taking all tagged sessions
+of that day sorted by time, which is not reliable enough for OptiMove — another tagged session
+that day, a changed order or a missing tag silently shifts every name. OptiMove keeps a drill as
+**parent session + zero-based drill index**; a drill's name or tag is linked only when the API
+gives an explicit link that has been tested; until then the drill carries the neutral name
+**Drill N**, and a tag is never guessed. This is a decision for the later import work; neither
+the adapter nor the importer does any of it today.
 
 ## 4. What needs an owner-run read-only probe
 
@@ -112,40 +141,75 @@ Verdicts: `session_list` proven; `session_list_by_date`, `session_read`, `sessio
 `not_observed` (no endpoint, no value is read); `session_drill_details` **`not_observed`** with the
 reason `no_confirmed_parent`: the list rows carry a `drills` list, but the parent's own read
 (`team_session/<id>/`) carries `drills_count > 0` **without** a `drills` list, so the precondition
-of the table row below (a non-empty `drills` list on the parent's own read) could not be met and
-no drill request was sent. No id, date, value or field list of the report is copied here.
+the drill row had at that time (a non-empty `drills` list on the parent's own read; since
+withdrawn) could not be met and no drill request was sent. No id, date, value or field list of the report is copied here.
 
-**The drill-only run (`--mode drill`, owner order 2026-10-01, built, not yet run):** the full
-run is not repeated. One exchange, then at most six reads, each one only after the previous
-answer confirmed the identity it depends on, and the chain stops **without the next request** at
-the first identity or team that is not confirmed: (1) the unfiltered list of team 980 gives a
-parent row for certain — a row of team 980 with a non-empty `drills` list — and the first
-canonical id of that list is the drill id (no such row: `no_parent_with_drills_in_list`, nothing
-else is read); (2) the parent's own read must answer 200 with the **same** `id`, `team` 980 and
-`drills_count > 0` — a `drills` list is not required there, that is what the full run found
-missing (another id: `parent_id_mismatch`; no readable id, no `drills_count > 0`, a non-200 or a
-list-shaped body: `parent_not_confirmed`; another team: `team_isolation_failed`; a team in an
-unreadable shape: `team_unknown_shape`; a list row that names itself as its drill is refused
-before any read: `drill_is_parent`); (3) the drill session's own read must answer 200 with the
-**same** drill `id` and `team` 980, and if it names its parent (`teamsession`) it must name the
-chosen one (`drill_id_mismatch`, `drill_parent_mismatch`, `drill_not_confirmed`, the two team
-stops); (4) the parent's whole-session details (not 200:
-`whole_session_details_unavailable`); (5) the drill by its
-position on the parent, the importer's exact form of the table row below; (6) the drill by its
-real id; (7) the matrix of the table row below, unchanged. The report carries `mode: "drill"`,
-`session_read` (the verdict word with the full run's meaning — team, `drills_count` and
-`start_timestamp` present — beside the gate booleans `idMatchesList`, `teamIs980`,
-`drillsCountPositive`, `drillsListPresent`, `parentConfirmed`), `drill_session_read` (**observed**
-or `not_observed`, never **same**: the importer never reads a drill session by its id; with
-`idMatchesParentList`, `teamIs980`, `namesParent`, `drillConfirmed`), `session_details` and
-`session_drill_details` (on every early stop `not_observed` with the stop code as its reason);
-nothing of the athlete chain, the date window, the thresholds or the tags is read again. The request cap of this
-mode is 7 whatever is asked (`DRILL_MODE_MAX_REQUESTS`). Its PowerShell commands are handed over
-only after the owner's external review of the mode.
+**Result of the first drill-only run (2026-10-01, `--mode drill` as first built, sanitized by
+the owner):** `stoppedBy: drill_id_mismatch`, 4 requests (one exchange, three reads). The list
+page: 100 rows, a parent for certain chosen (team 980, non-empty `drills`). The parent's own read:
+**same**, the same id, team 980, `drills_count > 0`, `start_timestamp` present, no `drills` list.
+The read of `team_session/<first drills entry>/`: 200, team 980, but **an id other than the
+entry** (the report could not tell whether it was the parent's own id or a third session's), and
+no `teamsession` field (the body has the session shape with `drill`,
+`drill_enabled` and `drills_count`). The chain stopped there, as built: no details were read. So
+an entry of `drills` is **not a `team_session` id on `rest_v1`** — or at least that path answers
+a different session —, and the `e03` drill model (a drill is a separate `team_session` named in
+its parent's `drills`) is not confirmed for `rest_v1`. Owner decision (2026-10-01): a `drills`
+entry is never read as a `team_session` id again without new evidence. No id, date, value or field
+list of the report is copied here.
+
+**The drill-only run, second form (`--mode drill`, owner order 2026-10-01, built, not yet
+run):** it reads the legacy integration's drill form on a parent confirmed twice. One exchange,
+then at most four reads, each one only after the previous answer confirmed the identity it
+depends on, and the chain stops **without the next request** at the first identity or team that
+is not confirmed: (1) the unfiltered REST list of team 980 gives a parent — a row of team 980
+with a readable id and a non-empty `drills` list or `drills_count > 0` (no such row:
+`no_parent_with_drills_in_list`, nothing else is read); (2) the parent's own REST read must
+answer 200 with the **same** `id`, `team` 980 and `drills_count > 0` (another id:
+`parent_id_mismatch`; no readable id, no `drills_count > 0`, a non-200 or a list-shaped body:
+`parent_not_confirmed`; another team: `team_isolation_failed`; a team in an unreadable shape:
+`team_unknown_shape`); (3) the same parent through the legacy family,
+`api/team_session/<parent id>/`, must answer 200 with the **same** `id` and `team` 980 again
+(another id: `legacy_parent_id_mismatch`; a non-200, an empty, unreadable or list-shaped body, or
+no readable id or team: `legacy_parent_not_confirmed`; the two team stops); (4) only then the one
+drill read: the first drill by its zero-based position on that parent, in the legacy form of the
+table row below. **No `drills` entry is ever used as an id, no read by a drill id, no REST
+`?drill=` read, no whole-session details read.** The legacy family is used by this run only, for
+exactly those two read shapes on the same host (`LEGACY_API_PATH`); it is not added to the
+`server3` host profile or to the adapter, and `sourceApiUrl()` and the host allowlist do not
+cover it; the token the one exchange issued is sent to it on the same host, as the legacy
+integration does. What is recorded of the drill read: per request the masked path, status, body
+kind and the top-level field names (and those of the first row under `results`) — printed only
+when every one is an identifier, so a body keyed by ids, by dates or by keys with spaces prints
+none of its keys; a single-word key is printed —; per capability booleans only — whether the
+answer has content, whether rows stand at the top level, whether a `players` field is present and
+whether it is a list or a map (the importer's known `api` shape is a map keyed by the GPEXE
+athlete id; its keys are never printed), whether player rows are present, are objects, carry
+numbers (the metric values) or nested values, and whether a field named like a metric is present
+(`describeDrillAnswer`); no id, date, name or value. Its verdict: 200 with a readable, non-empty
+answer → **observed**; not 200 → `not_observed` (`drill_not_200`); 200 with an unreadable body or
+a JSON primitive → `not_observed` (`drill_answer_unreadable`); 200 with an empty array or object →
+`not_observed` (`drill_answer_empty`). No reference is read, so the parameter's effect is not
+judged (`parameterEffectJudged: false`) and this run never calls the drill read same, mapped or
+missing; proving that the index selects one drill is a separate step after this answer has been
+seen. The report carries `mode: "drill"`, `session_read` (the verdict word with the full run's
+meaning beside the gate booleans `idMatchesList`, `teamIs980`, `drillsCountPositive`,
+`drillsListPresent`, `parentConfirmed`), `legacy_api_session_read` (**observed** or
+`not_observed`, with `idMatchesParent`, `teamIs980`, `drillsCountPositive`, `parentConfirmed`) and
+`session_drill_details`, which is set on every exit of this mode — before the list, at the list,
+at either parent read, a team stop, the request cap — as `not_observed` with the stop code as its
+reason. The list verdict carries the helper facts of the page already received, as types and
+booleans only: `drillsEntryKind` (the JavaScript type of the `drills` entries),
+`listRowMatchesFirstDrill` (whether another row of the page has the id the parent's first entry
+names; the parent itself never counts) and `rowsHaveSingularDrillField` /
+`rowsWithNonNullSingularDrill` (the singular `drill` field, distinct from the `drills` list).
+**The full run no longer reads any drill** (`drill_read_only_in_drill_mode`). The request cap of
+this mode is 5 whatever is asked (`DRILL_MODE_MAX_REQUESTS`). Its PowerShell commands are handed
+over only after the owner's external review of this form.
 
 The report, per capability: a verdict (`proven` for the list this run starts from; `same`,
 `mapped`, `observed`, `not_observed`), the status, counts and booleans such as `parentConfirmed`,
-`parameterApplied`, `equivalent`, `allRowsInsideWindow`, `filteredCountSmallerThanUnfiltered`,
+`allRowsInsideWindow`, `filteredCountSmallerThanUnfiltered`,
 `athleteIdDerived`, `hasTimezoneField`; per request the masked path, status, shape, field names
 and counts. `stoppedBy` names why a run ended early (`exchange_failed`,
 `session_list_unavailable`, `no_safe_session_id`, `team_isolation_failed`, `request_limit`).
@@ -168,9 +232,10 @@ and counts. `stoppedBy` names why a run ended early (`exchange_failed`,
   about the day, the source changed under the run: the date window is `not_observed`
   (`source_changed_between_list_and_detail`) and no window request is sent. Thresholds use that
   confirmed day only.
-- *The drill.* `<drill id>` is the first id in the chosen session's own `drills` list. If no row
-  of the list read has a drill, the drill capability is reported **`not_observed`**: no request
-  is sent for it and no index or id is invented.
+- *The drill.* The full run reads no drill any more (owner, 2026-10-01); the drill-only run
+  above chooses its own parent and reads the first drill by its zero-based position, never with a
+  `drills` entry used as an id. If no row of the list read is a parent, the drill capability is
+  reported **`not_observed`**: no request is sent for it and no index or id is invented.
 - *A day the filter can be judged on.* The window is judged on a `<day>` for which the same
   run's unfiltered list holds at least one row **outside** that day. If every row of the list
   read is of one day, the date window is reported `not_observed`.
@@ -180,7 +245,7 @@ and counts. `stoppedBy` names why a run ended early (`exchange_failed`,
 | `session_list_by_date` | `team_session/?team=980&start_timestamp_gte=<day> 00:00:00&start_timestamp_lte=<day> 23:59:59&limit=<n>` | 200. **Proven only when all of these hold:** every returned row's `team` is 980; every returned row's `start_timestamp` lies inside the asked window; and the filtered `X-Total-Count` is **smaller** than the unfiltered count of this same run (so at least one row was really left out). Rows that satisfy the window prove nothing alone: an ignored filter returns the same first rows. Equal counts, or a row outside the window, mean the filter is not applied: reported as not proven, never as **same** |
 | `session_read` | `team_session/<id>/` | **same** only when 200, object, `team` is 980, and `drills_count` and a `start_timestamp` are present (what the importer reads from it); nothing after this read runs unless `team` is 980 |
 | `session_details` | `team_session/<id>/details/` | status; body shape; field names |
-| `session_drill_details` | **Precondition (full mode), checked first:** the chosen session `<id>` is a confirmed parent — its own read (`session_read`, above) answered 200 with `team` 980, `drills_count > 0` and a non-empty `drills` list (the drill-only run confirms the parent from the list row's `drills` plus the own read's `id`, `team` 980 and `drills_count > 0`, see above). Only then, three read-only requests on that session: **(1) the importer's exact form, by position:** `team_session/<id>/details/?drill=0` — the `0` is the position of the first drill in the confirmed `drills` list, not an invented value; **(2) the same drill by its real id:** `team_session/<drill id>/details/`, where `<drill id>` is the first id of that `drills` list; **(3) the parent's whole-session values** `team_session/<id>/details/` (the `session_details` request of this run; not sent twice). Approved by the owner on 2026-09-30 | **Classification, one rule set (owner, 2026-10-01).** Two booleans are computed in the run and printed as booleans only, never with the values they were computed from: `parameterApplied` = the drill answer (1) differs from the whole-session answer (3) in at least one value (an identical answer means the `drill` parameter was ignored); `equivalent` = answers (1) and (2) have the same top-level field names, the same row count and, field by field, the same values. **same** = (1) is 200, `parameterApplied` is true, and, if (2) is also 200, `equivalent` is true. **mapped** = (1) is not 200, (2) is 200, and the id answer (2) differs from the whole-session answer (3) in at least one value. **`not_observed`** = everything else: (1) 200 with the parameter ignored; (1) and (2) both 200 but not equivalent; (2) 200 but identical to (3); neither 200; or no listed session is a confirmed parent. Never **missing** |
+| `session_drill_details` | **Drill-only run only. Precondition, checked first:** the parent is confirmed twice — its own REST read answered 200 with the same `id` as the list row, team 980 and `drills_count > 0`, and its legacy read `api/team_session/<parent id>/` answered 200 with the same `id` and team 980. Only then one read-only request: `api/team_session/<parent id>/details/?drill=0` — the first drill by its zero-based position on that parent, the form of the owner's legacy integration on `server3` (legacy-attested, not yet seen by OptiMove). No `drills` entry is used as an id. Approved by the owner on 2026-10-01 | status; body kind; whether the answer has content, a `players` field, player rows (objects, with numbers or nested values) and a metric-named field — booleans only. observed = 200 with a readable, non-empty answer; `not_observed` = not 200, an unreadable body, or an empty array or object. The parameter's effect is not judged (no reference read), so this run never classifies it as same or mapped. Never **missing** |
 
 | `athlete_session_list` | `athlete_session/?teamsession=<id>&limit=<n>` | status; `X-Total-Count`; field names; whether every row's `teamsession` is `<id>` (a row naming another session stops the run; rows naming no session in a readable way are not used and the chain stops there) |
 | `athlete_session_read` | `athlete_session/<athlete session id>/` | status; field names; whether the detail names the same canonical session (`rowOfSession`). A detail naming **another** session stops the run; a missing or unreadable session, or a non-200, ends this chain: no `/more/` and no track are read |

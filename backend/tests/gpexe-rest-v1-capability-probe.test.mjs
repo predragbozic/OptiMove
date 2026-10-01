@@ -7,7 +7,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  canonical, classifyDrill, dayOf, DRILL_MODE_MAX_REQUESTS, equivalentAnswers, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId,
+  answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, DRILL_MODE_MAX_REQUESTS, LEGACY_API_PATH, LEGACY_API_PREFIX, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId,
 } from "../scripts/gpexe-rest-v1-capability-probe.mjs";
 import { DiscoveryUsageError } from "../scripts/gpexe-auth-discovery.mjs";
 
@@ -53,7 +53,7 @@ const sess = (id, team, day, drills, extra = {}) => ({ id, team, name: MARKERS.s
 const WHOLE = { athlete_sessions: [{ athlete_name: MARKERS.athleteName, total_distance: 5000.5 }], session: 100 };
 const DRILL = { athlete_sessions: [{ athlete_name: MARKERS.athleteName, total_distance: 1200.25 }], session: 100, drill: 0 };
 
-// The happy server3: every capability present, drill answered by position AND by id, equivalent.
+// The happy server3 for the full run: every capability present; the full run reads no drill.
 function happyRoutes(over = {}) {
   return {
     "POST /api-token-auth/": (init) => {
@@ -64,8 +64,6 @@ function happyRoutes(over = {}) {
     "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [sess(100, 980, DAY, [101, 102]), sess(101, 980, DAY, []), sess(102, 980, DAY, []), sess(200, 980, OTHER_DAY, [])], { "x-total-count": "4" }),
     "GET /rest/v1/team_session/100/": answer(200, sess(100, 980, DAY, [101, 102])),
     "GET /rest/v1/team_session/100/details/": answer(200, WHOLE),
-    "GET /rest/v1/team_session/100/details/?drill=0": answer(200, DRILL),
-    "GET /rest/v1/team_session/101/details/": answer(200, DRILL),
     [`GET /rest/v1/team_session/?team=980&start_timestamp_gte=${encodeURIComponent(`${DAY} 00:00:00`)}&start_timestamp_lte=${encodeURIComponent(`${DAY} 23:59:59`)}&limit=100`]:
       answer(200, [sess(100, 980, DAY, [101, 102]), sess(101, 980, DAY, []), sess(102, 980, DAY, [])], { "x-total-count": "3" }),
     "GET /rest/v1/athlete_session/?teamsession=100&limit=100": answer(200, [{ id: 500, teamsession: 100, track: 900, athlete_name: MARKERS.athleteName, max_v: MARKERS.value }], { "x-total-count": "1" }),
@@ -92,19 +90,24 @@ function fakeServer(routes = happyRoutes()) {
 const run = (fetchImpl, over = {}) => runCapabilityProbe({ ...over }, ENV, fetchImpl);
 const verdicts = (report) => Object.fromEntries(Object.entries(report.capabilities).map(([k, v]) => [k, v.verdict]));
 
-test("1. the happy run: one exchange, then GET only, 13 requests in a fixed order, every capability classified, every id derived from the previous answer", async () => {
-  const { calls, fetchImpl } = fakeServer();
+test("1. the happy run: one exchange, then GET only, 11 requests in a fixed order, every capability classified, every id derived from the previous answer, no drill read", async () => {
+  const { calls, fetchImpl } = fakeServer({
+    ...happyRoutes(),
+    // Even when a drill route exists, the full run never asks for it.
+    "GET /rest/v1/team_session/100/details/?drill=0": answer(200, DRILL),
+    "GET /rest/v1/team_session/101/details/": answer(200, DRILL),
+    "GET /rest/v1/team_session/101/": answer(200, sess(101, 980, DAY, [])),
+  });
   const report = await run(fetchImpl);
   assert.equal(report.stoppedBy, null);
-  assert.equal(report.requestCount, 13);
+  assert.equal(report.requestCount, 11);
+  assert.ok(!calls.some((c) => c.url.includes("drill=") || c.url.includes("/101/") || c.url.includes("/api/team_session")), "no drill read, no drills entry as an id, no legacy read");
   assert.ok(report.requestCount <= MAX_REQUESTS);
   assert.deepEqual(calls.map((c) => `${c.method} ${new URL(c.url).pathname}${new URL(c.url).search}`), [
     "POST /api-token-auth/",
     "GET /rest/v1/team_session/?team=980&limit=100",
     "GET /rest/v1/team_session/100/",
     "GET /rest/v1/team_session/100/details/",
-    "GET /rest/v1/team_session/100/details/?drill=0",
-    "GET /rest/v1/team_session/101/details/",
     `GET /rest/v1/team_session/?team=980&start_timestamp_gte=${encodeURIComponent(`${DAY} 00:00:00`)}&start_timestamp_lte=${encodeURIComponent(`${DAY} 23:59:59`)}&limit=100`,
     "GET /rest/v1/athlete_session/?teamsession=100&limit=100",
     "GET /rest/v1/athlete_session/500/",
@@ -114,17 +117,17 @@ test("1. the happy run: one exchange, then GET only, 13 requests in a fixed orde
     "GET /rest/v1/team_session_tag/?team=980&limit=5",
   ]);
   assert.deepEqual(verdicts(report), {
-    session_list: "proven", session_read: "same", session_details: "same", session_drill_details: "same", session_list_by_date: "same",
+    session_list: "proven", session_read: "same", session_details: "same", session_drill_details: "not_observed", session_list_by_date: "same",
     athlete_session_list: "same", athlete_session_read: "same", athlete_session_more: "same", track_read: "same", team_thresholds: "same",
     session_tags: "observed", units: "not_observed",
   });
-  const drill = report.capabilities.session_drill_details;
-  assert.deepEqual(drill, { verdict: "same", ordinalStatus: 200, byIdStatus: 200, parameterApplied: true, equivalent: true, idDiffersFromWhole: true });
+  assert.deepEqual(report.capabilities.session_drill_details, { verdict: "not_observed", reason: "drill_read_only_in_drill_mode" });
   assert.deepEqual(report.capabilities.session_list_by_date, { verdict: "same", status: 200, allRowsTeam980: true, allRowsInsideWindow: true, chosenSessionAmong: true, filteredCountSmallerThanUnfiltered: true, filteredTotalIsNumber: true, rowCount: 3 });
   assert.equal(report.capabilities.session_read.parentConfirmed, true);
   assert.equal(report.capabilities.session_read.drillsCountPresent, true);
   assert.equal(report.capabilities.session_read.startTimestampPresent, true);
   assert.equal(report.capabilities.session_list.totalIsNumber, true);
+  assert.ok(!("listRowMatchesFirstDrill" in report.capabilities.session_list), "the drill-only helper facts are not in the full run");
   assert.equal(report.capabilities.track_read.hasTimezoneField, true);
   assert.equal(report.capabilities.athlete_session_read.trackIdDerived, true);
   assert.equal(report.capabilities.athlete_session_read.rowOfSession, true);
@@ -248,7 +251,7 @@ test("5. the chain stops as soon as the previous answer gives no safe next id: n
   assert.equal(d.capabilities.session_list.parentChosen, false);
   assert.equal(d.capabilities.session_list.parentUnconfirmed, true);
   assert.equal(d.capabilities.session_read.parentConfirmed, false);
-  assert.deepEqual(d.capabilities.session_drill_details, { verdict: "not_observed", reason: "no_confirmed_parent" });
+  assert.deepEqual(d.capabilities.session_drill_details, { verdict: "not_observed", reason: "drill_read_only_in_drill_mode" });
   assert.ok(!noDrills.calls.some((c) => c.url.includes("drill=") || c.url.includes("/101/")));
   // A session whose own read does not confirm team 980: no details, no athlete rows.
   const unconfirmedTeam = fakeServer(happyRoutes({ "GET /rest/v1/team_session/100/": answer(200, { id: 100, drills_count: 2, drills: [101, 102] }) }));
@@ -270,7 +273,7 @@ test("5. the chain stops as soon as the previous answer gives no safe next id: n
   // The list row says it has drills but the session's own read does not confirm it: still no drill request.
   const unconfirmed = fakeServer(happyRoutes({ "GET /rest/v1/team_session/100/": answer(200, sess(100, 980, DAY, [], { drills_count: 0 })) }));
   const e = await run(unconfirmed.fetchImpl);
-  assert.equal(e.capabilities.session_drill_details.reason, "no_confirmed_parent");
+  assert.equal(e.capabilities.session_drill_details.reason, "drill_read_only_in_drill_mode");
   assert.ok(!unconfirmed.calls.some((c) => c.url.includes("drill=")));
   // No usable session id at all: the run stops after the list.
   const noIds = fakeServer(happyRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [{ team: 980, drills: [] }], { "x-total-count": "1" }) }));
@@ -357,34 +360,67 @@ test("5c. the day comes from the session's own confirmed read: the date window i
   assert.ok(!emptyDetail.calls.some((x) => x.url.includes("/more/") || x.url.includes("/track/")));
 });
 
-test("6. the drill matrix: same only with the parameter applied (and equivalence when the id read answered); mapped only when the ordinal read failed and the id read differs from the whole session; everything else not_observed", () => {
-  const W = { a: 1, rows: [1, 2] };
-  const D = { a: 2, rows: [1] };
-  const D2 = { a: 3, rows: [1] };
-  const c = (o) => classifyDrill({ wholeBody: W, ...o }).verdict;
-  assert.equal(c({ ordinalStatus: 200, ordinalBody: D, byIdStatus: 200, byIdBody: D }), "same");
-  assert.equal(c({ ordinalStatus: 200, ordinalBody: D, byIdStatus: 404, byIdBody: undefined }), "same", "the id read need not answer");
-  assert.equal(c({ ordinalStatus: 200, ordinalBody: W, byIdStatus: 200, byIdBody: D }), "not_observed", "the parameter was ignored");
-  assert.equal(c({ ordinalStatus: 200, ordinalBody: D, byIdStatus: 200, byIdBody: D2 }), "not_observed", "both 200 but not equivalent");
-  assert.equal(c({ ordinalStatus: 404, ordinalBody: undefined, byIdStatus: 200, byIdBody: D }), "mapped");
-  assert.equal(c({ ordinalStatus: 404, ordinalBody: undefined, byIdStatus: 200, byIdBody: W }), "not_observed", "the id answer is the whole session");
-  assert.equal(c({ ordinalStatus: 404, ordinalBody: undefined, byIdStatus: 404, byIdBody: undefined }), "not_observed");
-  assert.equal(c({ ordinalStatus: null, ordinalBody: undefined, byIdStatus: null, byIdBody: undefined }), "not_observed");
-  for (const o of [{ ordinalStatus: 200, ordinalBody: D, byIdStatus: 200, byIdBody: D }, { ordinalStatus: 404, byIdStatus: 404 }]) {
-    assert.ok(!JSON.stringify(classifyDrill({ wholeBody: W, ...o })).includes("rows"), "no body in the verdict");
-  }
-  assert.equal(equivalentAnswers({ b: 1, a: [1] }, { a: [1], b: 1 }), true);
-  assert.equal(equivalentAnswers({ a: [1] }, { a: [1, 2] }), false);
+test("6. the drill answer is described as a shape and booleans only; an answer needs content; the full run never reads a drill, even when the parent's own read lists drills", async () => {
+  const P = { players: [{ athlete_name: MARKERS.athleteName, total_distance: 1200.25, zones: { z1: 3 } }], metrics: ["total_distance"], drill: 0 };
+  assert.deepEqual(describeDrillAnswer(P), {
+    bodyKind: "object", hasContent: true, rowsAtTopLevel: false, playersField: true, playersContainerKind: "array", playerRowsPresent: true, playerRowsAreObjects: true,
+    playerRowsHaveNumbers: true, playerRowsHaveNestedValues: true, metricFieldPresent: true,
+  });
+  // The importer's known api shape: players keyed by the athlete id; the keys never leave.
+  const MAP = { players: { 4711: { tot_burst_events: 4, total_distance: 812.5 }, 4712: { tot_burst_events: 2 } } };
+  assert.deepEqual(describeDrillAnswer(MAP), {
+    bodyKind: "object", hasContent: true, rowsAtTopLevel: false, playersField: true, playersContainerKind: "map", playerRowsPresent: true, playerRowsAreObjects: true,
+    playerRowsHaveNumbers: true, playerRowsHaveNestedValues: false, metricFieldPresent: false,
+  });
+  assert.ok(!JSON.stringify(describeDrillAnswer(MAP)).includes("4711"));
+  assert.equal(describeDrillAnswer({ players: {} }).playerRowsPresent, false);
+  assert.equal(describeDrillAnswer({ players: { 1: 5 } }).playerRowsAreObjects, false);
+  assert.equal(describeDrillAnswer({ players: "x" }).playersContainerKind, "other");
+  assert.deepEqual(describeDrillAnswer([{ metric_id: 1, value: 2 }]), {
+    bodyKind: "array", hasContent: true, rowsAtTopLevel: true, playersField: false, playersContainerKind: null, playerRowsPresent: true, playerRowsAreObjects: true,
+    playerRowsHaveNumbers: true, playerRowsHaveNestedValues: false, metricFieldPresent: true,
+  });
+  assert.deepEqual(describeDrillAnswer({ detail: "x" }), {
+    bodyKind: "object", hasContent: true, rowsAtTopLevel: false, playersField: false, playersContainerKind: null, playerRowsPresent: false, playerRowsAreObjects: null,
+    playerRowsHaveNumbers: null, playerRowsHaveNestedValues: null, metricFieldPresent: false,
+  });
+  assert.deepEqual(describeDrillAnswer({ players: ["a", 1] }).playerRowsAreObjects, false);
+  // Field names are printed only when every one is an identifier.
+  assert.equal(printableFieldNames(["drill", "players", "KPI_completed"]), true);
+  // Real GPEXE shapes keep their names: a 41-character key, many keys.
+  assert.equal(printableFieldNames(["are_relative_speed_distance_zones_visible", "are_relative_speed_distance_zones_visible_x"]), true);
+  assert.equal(printableFieldNames(Array.from({ length: 120 }, (_, i) => `k${i}`)), true);
+  for (const bad of [["12345"], ["2026-09-14"], ["Marker Athlete Name"], ["ok", "4711"], ["a".repeat(65)], Array.from({ length: 201 }, (_, i) => `k${i}`)]) assert.equal(printableFieldNames(bad), false, JSON.stringify(bad).slice(0, 40));
+  // An id that contains the team's digits is masked whole.
+  assert.equal(maskProbePath("api/team_session/19805/details/?drill=0", "980"), "api/team_session/<id>/details/?drill=0");
+  assert.equal(maskProbePath("rest/v1/team/980/thresholds/?valid_on=2026-09-14", "980"), "rest/v1/team/<team>/thresholds/?valid_on=<date>");
+  assert.equal(maskProbePath("api/team_session/12/34/", "980"), "api/team_session/<id>/<id>/");
+  assert.equal(maskProbePath("rest/v1/athlete_session/?teamsession=198057&limit=100", "980"), "rest/v1/athlete_session/?teamsession=<id>&limit=<n>");
+  assert.ok(!maskProbePath("rest/v1/team_session/98012/", "980").match(/\d{2,}/));
+  for (const b of [undefined, null, "x", 42, true]) assert.equal(describeDrillAnswer(b).hasContent, false, String(b));
+  assert.equal(describeDrillAnswer(undefined).bodyKind, null);
+  assert.equal(describeDrillAnswer("x").bodyKind, "string");
+  for (const b of [[], {}, undefined, null, "x", 0]) assert.equal(answerWithContent(b), false, JSON.stringify(b));
+  for (const b of [[{}], { a: 1 }]) assert.equal(answerWithContent(b), true, JSON.stringify(b));
+  // Nothing of a row leaves the description.
+  const text = JSON.stringify(describeDrillAnswer(P));
+  for (const m of [MARKERS.athleteName, "1200.25", "total_distance", "z1"]) assert.ok(!text.includes(m), m);
   assert.equal(canonical({ b: 1, a: 2 }), '{"a":2,"b":1}');
-  // The matrix through the whole run: parameter ignored -> not_observed; ordinal refused but id differs -> mapped.
-  return (async () => {
-    const ignored = fakeServer(happyRoutes({ "GET /rest/v1/team_session/100/details/?drill=0": answer(200, WHOLE) }));
-    assert.equal((await run(ignored.fetchImpl)).capabilities.session_drill_details.verdict, "not_observed");
-    const mapped = fakeServer(happyRoutes({ "GET /rest/v1/team_session/100/details/?drill=0": answer(404, { detail: "Not found." }) }));
-    const m = (await run(mapped.fetchImpl)).capabilities.session_drill_details;
-    assert.equal(m.verdict, "mapped");
-    assert.equal(m.parameterApplied, null);
-  })();
+  // The full run, even when the parent's own read lists drills: no drill request, no drills entry as an id.
+  const listed = fakeServer({
+    ...happyRoutes(),
+    "GET /rest/v1/team_session/100/details/?drill=0": answer(200, DRILL),
+    "GET /rest/v1/team_session/101/details/": answer(200, DRILL),
+  });
+  const r = await run(listed.fetchImpl);
+  assert.equal(r.capabilities.session_read.drillsListPresent, true);
+  assert.deepEqual(r.capabilities.session_drill_details, { verdict: "not_observed", reason: "drill_read_only_in_drill_mode" });
+  assert.ok(!listed.calls.some((c) => c.url.includes("drill=") || c.url.includes("/101/") || c.url.includes("/api/team_session")));
+  // The legacy reads are refused to the full run by construction (no full-mode caller exists, and
+  // the closure refuses outside the drill-only run): the source has exactly two legacy call sites.
+  assert.equal(LEGACY_API_PREFIX, "api/");
+  for (const ok of ["team_session/1/", "team_session/0/details/?drill=0", "team_session/123456789012/"]) assert.ok(LEGACY_API_PATH.test(ok), ok);
+  for (const bad of ["team_session/01/", "team_session/1/details/?drill=1", "team_session/1/details/", "team_session/?team=980", "team_session/1/details/?drill=0&x=1", "athlete_session/1/", "team_session/1234567890123/", "../team_session/1/", "team_session/1"]) assert.ok(!LEGACY_API_PATH.test(bad), bad);
 });
 
 test("7. the date window: proven only when every row is team 980, inside the window, the chosen session among them and the filtered count smaller than the unfiltered count of the same run; a single-day list is not judged", async () => {
@@ -436,7 +472,7 @@ test("8. limits: the request cap stops the run, a hanging read ends as a timeout
   const b = await run(hanging.fetchImpl, { timeoutMs: 50 });
   assert.equal(b.requests.find((r) => r.path === "rest/v1/team_session/<id>/details/").error, "timeout");
   assert.equal(b.capabilities.session_details.verdict, "not_observed");
-  assert.equal(b.capabilities.session_drill_details.reason, "whole_session_details_unavailable");
+  assert.equal(b.capabilities.session_drill_details.reason, "drill_read_only_in_drill_mode");
   assert.equal(b.stoppedBy, null, "independent reads still run after a timeout");
 
   const MiB = 1024 * 1024;
@@ -496,11 +532,19 @@ test("9. the target cannot be changed: only server3 and Team ID 980 are accepted
   assert.equal(dayOf("yesterday"), null);
 });
 
-test("10. the issued token can never be printed, even when the source echoes it as a field name", async () => {
-  const echo = fakeServer(happyRoutes({ "GET /rest/v1/track/900/": answer(200, { id: 900, [ISSUED]: 1 }) }));
-  await assert.rejects(run(echo.fetchImpl), (e) => e.code === "secret_in_report");
-  const echoEnv = fakeServer(happyRoutes({ "GET /rest/v1/track/900/": answer(200, { id: 900, [USER]: 1 }) }));
-  await assert.rejects(run(echoEnv.fetchImpl), (e) => e.code === "secret_in_report");
+test("10. the issued token can never be printed, even when the source echoes it as a field name or in a printed header", async () => {
+  // Echoed as a field name: the key is not an identifier, so no field name of that answer is printed.
+  for (const secret of [ISSUED, USER]) {
+    const echo = fakeServer(happyRoutes({ "GET /rest/v1/track/900/": answer(200, { id: 900, [secret]: 1 }) }));
+    const r = await run(echo.fetchImpl);
+    assert.ok(!JSON.stringify(r).includes(secret));
+    assert.equal(r.requests.find((x) => x.path === "rest/v1/track/<id>/").fieldNames, "<unprintable>");
+  }
+  // Echoed in a header the report prints: the final guard refuses to print the report at all.
+  for (const secret of [ISSUED, USER]) {
+    const echo = fakeServer(happyRoutes({ "GET /rest/v1/track/900/": answer(200, { id: 900 }, { "x-gpexe-version": secret }) }));
+    await assert.rejects(run(echo.fetchImpl), (e) => e.code === "secret_in_report");
+  }
 });
 
 test("11. the probe changes nothing else: the adapter, the discovery script and the routes are untouched by it, and the probe's source builds requests for the documented paths only", async () => {
@@ -511,6 +555,19 @@ test("11. the probe changes nothing else: the adapter, the discovery script and 
   assert.doesNotMatch(source, /https?:\/\//, "no URL in the probe");
   assert.doesNotMatch(source, /\.text\(\)|\.json\(\)|\.arrayBuffer\(\)/, "no whole-body read");
   assert.doesNotMatch(source, /drill=[1-9]/, "no invented drill position");
+  // The legacy family is reached only through the guarded closure, at exactly two call sites, both
+  // on the confirmed parent; no `drills` entry is ever put into a path.
+  assert.equal((source.match(/getLegacy\(`/g) || []).length, 2, "two legacy reads");
+  assert.match(source, /getLegacy\(`team_session\/\$\{parentId\}\/`\)/);
+  assert.match(source, /getLegacy\(`team_session\/\$\{parentId\}\/details\/\?drill=0`\)/);
+  assert.equal((source.match(/read\(LEGACY_API_PREFIX,/g) || []).length, 1, "the legacy prefix is used in one place");
+  assert.doesNotMatch(source, /\$\{[^}]*\bdrills?\b[^}]*\}|\$\{(drillIds|drillId|firstDrill)[^}]*\}/, "no drills entry in any path");
+  assert.match(source, /if \(mode !== "drill" \|\| !LEGACY_API_PATH\.test\(resourcePath\)\) throw new ProbeStop\("path_refused"/, "the legacy closure refuses outside the drill-only run");
+  // Every template path names only confirmed ids, the team, a day or a window.
+  for (const m of source.matchAll(/(?:get|getLegacy)\(`([^`]*)`\)/g)) {
+    for (const v of m[1].matchAll(/\$\{([^}]*)\}/g)) assert.ok(["parentId", "sessionId", "athleteId", "trackId", "team", "day", "window", "LIST_LIMIT"].includes(v[1].trim()), `${m[1]}: ${v[1]}`);
+  }
+  assert.doesNotMatch(source, /get\(`[^`]*\?drill=/, "no REST drill read");
   for (const f of await fsp.readdir(path.resolve(ROOT, "backend/src/routes"))) {
     assert.doesNotMatch(await fsp.readFile(path.resolve(ROOT, "backend/src/routes", f), "utf8"), /capability-probe|runCapabilityProbe/, f);
   }
@@ -519,151 +576,197 @@ test("11. the probe changes nothing else: the adapter, the discovery script and 
 
 // ---------------------------------------------------------------------------
 // The drill-only run (owner, 2026-10-01): the full run saw a parent whose own
-// read has drills_count > 0 but no drills list, so the drill id comes from
-// the list row and every identity is confirmed before the next read.
+// read has drills_count > 0 but no drills list; the first drill-only run saw
+// that a `drills` entry is not a team_session id. The corrected run reads the
+// importer's drill form by position on the confirmed parent, nothing by id.
 // ---------------------------------------------------------------------------
-// A server3 as the full run saw it: the list carries `drills`, the parent's own read does not.
+// A server3 as the runs saw it: the list carries `drills`, the parent's own REST read does not,
+// and a `drills` entry is not a team_session id. The legacy family answers the same parent and the
+// drill by its zero-based position (the structure of the owner's legacy integration).
+// The importer's known `api` details shape: `players` keyed by the GPEXE athlete id (gpexeImportMapper.js).
+const LEGACY_DRILL = { players: { 4711: { athlete_name: MARKERS.athleteName, tot_burst_events: 4, total_distance: 1200.25 } }, drill: 0 };
 function drillRoutes(over = {}) {
   return {
     ...happyRoutes(),
     "GET /rest/v1/team_session/100/": answer(200, { id: 100, team: 980, drills_count: 2, start_timestamp: `${DAY}T10:00:00` }),
-    "GET /rest/v1/team_session/101/": answer(200, { id: 101, team: 980, teamsession: 100, drills_count: 0 }),
+    "GET /rest/v1/team_session/101/": answer(200, { id: 777, team: 980, drill: null, drills_count: 0 }),
+    "GET /rest/v1/team_session/100/details/?drill=0": answer(200, LEGACY_DRILL),
+    "GET /api/team_session/100/": answer(200, { id: 100, team: 980, drills_count: 2, name: MARKERS.sessionName }),
+    "GET /api/team_session/101/": answer(200, { id: 101, team: 980 }),
+    "GET /api/team_session/100/details/?drill=0": answer(200, LEGACY_DRILL),
     ...over,
   };
 }
 const drillRun = (fetchImpl, over = {}) => runCapabilityProbe({ mode: "drill", ...over }, ENV, fetchImpl);
 const paths = (calls) => calls.map((c) => `${c.method} ${new URL(c.url).pathname}${new URL(c.url).search}`);
 
-test("12. the drill-only run: one exchange and exactly six reads in the documented order, every identity confirmed, the matrix applied, nothing else read", async () => {
+test("12. the drill-only run: one exchange and exactly four reads in the documented order - the REST parent, the same parent through the legacy family, the one legacy drill read - shape and booleans only, no drills entry ever used as an id", async () => {
   const { calls, fetchImpl } = fakeServer(drillRoutes());
   const report = await drillRun(fetchImpl);
   assert.equal(report.mode, "drill");
   assert.equal(report.stoppedBy, null);
-  assert.equal(report.requestCount, 7);
-  assert.equal(DRILL_MODE_MAX_REQUESTS, 7);
+  assert.equal(report.requestCount, 5);
+  assert.equal(DRILL_MODE_MAX_REQUESTS, 5);
   assert.deepEqual(paths(calls), [
     "POST /api-token-auth/",
     "GET /rest/v1/team_session/?team=980&limit=100",
     "GET /rest/v1/team_session/100/",
-    "GET /rest/v1/team_session/101/",
-    "GET /rest/v1/team_session/100/details/",
-    "GET /rest/v1/team_session/100/details/?drill=0",
-    "GET /rest/v1/team_session/101/details/",
+    "GET /api/team_session/100/",
+    "GET /api/team_session/100/details/?drill=0",
   ]);
+  const base = new URL(calls[0].url).origin;
+  assert.ok(calls.every((c) => new URL(c.url).origin === base), "one host");
   assert.ok(calls.slice(1).every((c) => c.method === "GET" && c.headers.Authorization === `Token ${ISSUED}` && c.redirect === "manual"));
-  assert.ok(!calls.some((c) => /athlete_session|track|thresholds|team_session_tag|start_timestamp_gte/.test(c.url)), "nothing of the full run is repeated");
-  assert.deepEqual(verdicts(report), { session_list: "proven", session_read: "same", drill_session_read: "observed", session_details: "same", session_drill_details: "same" });
+  assert.ok(!calls.some((c) => /\/101\/|rest\/v1\/team_session\/100\/details|athlete_session|track|thresholds|team_session_tag|start_timestamp_gte/.test(c.url)), "no drills entry as an id, no REST drill or details read, nothing of the full run");
+  assert.deepEqual(verdicts(report), { session_list: "proven", session_read: "same", legacy_api_session_read: "observed", session_drill_details: "observed" });
   assert.deepEqual(report.capabilities.session_read, { verdict: "same", status: 200, idMatchesList: true, teamIs980: true, drillsCountPresent: true, drillsCountPositive: true, startTimestampPresent: true, drillsListPresent: false, parentConfirmed: true });
-  // The drill session's own read has no importer counterpart: observed, never same.
-  assert.deepEqual(report.capabilities.drill_session_read, { verdict: "observed", status: 200, idMatchesParentList: true, teamIs980: true, namesParent: true, drillConfirmed: true });
-  assert.notEqual(report.capabilities.drill_session_read.verdict, "same");
-  assert.deepEqual(report.capabilities.session_drill_details, { verdict: "same", ordinalStatus: 200, byIdStatus: 200, parameterApplied: true, equivalent: true, idDiffersFromWhole: true });
-  const text = JSON.stringify(report);
-  for (const m of [...Object.values(MARKERS).map(String), ISSUED, USER, PASSWORD, DAY, "09-14"]) assert.ok(!text.includes(m), m);
-  for (const id of ["100", "101", "102", "200"]) assert.ok(!new RegExp(`\\b${id}\\b`).test(text.replace(/"status":\d+|"ordinalStatus":\d+|"byIdStatus":\d+|"rowCount":\d+/g, "")), `no id ${id}`);
-  // The matrix through the drill run: parameter ignored -> not_observed; ordinal refused and id differs -> mapped.
-  const ignored = await drillRun(fakeServer(drillRoutes({ "GET /rest/v1/team_session/100/details/?drill=0": answer(200, WHOLE) })).fetchImpl);
-  assert.equal(ignored.capabilities.session_drill_details.verdict, "not_observed");
-  const mapped = await drillRun(fakeServer(drillRoutes({ "GET /rest/v1/team_session/100/details/?drill=0": answer(404, { detail: "Not found." }) })).fetchImpl);
-  assert.equal(mapped.capabilities.session_drill_details.verdict, "mapped");
+  assert.deepEqual(report.capabilities.legacy_api_session_read, { verdict: "observed", family: "api", status: 200, idMatchesParent: true, teamIs980: true, drillsCountPositive: true, parentConfirmed: true });
+  assert.deepEqual(report.capabilities.session_drill_details, {
+    verdict: "observed", family: "api", status: 200, parameterEffectJudged: false,
+    bodyKind: "object", hasContent: true, rowsAtTopLevel: false, playersField: true, playersContainerKind: "map", playerRowsPresent: true, playerRowsAreObjects: true,
+    playerRowsHaveNumbers: true, playerRowsHaveNestedValues: false, metricFieldPresent: false,
+  });
+  // The drill read's printed field names are the top-level identifiers only; no key of the players map.
+  assert.deepEqual(report.requests[4].fieldNames, ["drill", "players"]);
+  assert.deepEqual(report.requests.map((r) => r.path), ["api-token-auth/", "rest/v1/team_session/?team=<team>&limit=<n>", "rest/v1/team_session/<id>/", "api/team_session/<id>/", "api/team_session/<id>/details/?drill=0"]);
+  // Helper facts from the list page: types and booleans only.
+  const list = report.capabilities.session_list;
+  assert.equal(list.drillsEntryKind, "number");
+  assert.equal(list.listRowMatchesFirstDrill, true, "the fake list carries the row the first entry names; the real page is what the run reports");
+  assert.equal(list.rowsHaveSingularDrillField, false);
+  assert.equal(list.rowsWithNonNullSingularDrill, null);
+  const text = JSON.stringify({ ...report, ranAt: "" });
+  for (const m of [...Object.values(MARKERS).map(String), ISSUED, USER, PASSWORD, DAY, "09-14", "777", "1200.25", "total_distance", "4711", "tot_burst_events"]) assert.ok(!text.includes(m), m);
+  const stripped = text.replace(/"(status|rowCount|distinctDays)":\d+/g, "");
+  for (const id of ["100", "101", "980"]) assert.ok(!new RegExp(`"[^"]*\\b${id}\\b`).test(stripped.replace(/"teamId":"980"/, "")), `no id ${id}`);
+  // A page like the real one: no other row carries the id the first entry names; the run still completes.
+  const real = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [sess(100, 980, DAY, [101, 102]), sess(200, 980, OTHER_DAY, [])], { "x-total-count": "2" }) }));
+  const realReport = await drillRun(real.fetchImpl);
+  assert.equal(realReport.capabilities.session_list.listRowMatchesFirstDrill, false);
+  assert.equal(realReport.stoppedBy, null);
+  assert.equal(real.calls.length, 5);
+  // A parent chosen by drills_count alone (the rows carry no `drills` list).
+  const countOnly = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [{ id: 300, team: 980, drills_count: 0 }, { id: 100, team: 980, drills_count: 3 }], { "x-total-count": "2" }) }));
+  const co = await drillRun(countOnly.fetchImpl);
+  assert.equal(co.stoppedBy, null);
+  assert.equal(co.capabilities.session_list.drillsEntryKind, null);
+  assert.deepEqual(paths(countOnly.calls).slice(2), ["GET /rest/v1/team_session/100/", "GET /api/team_session/100/", "GET /api/team_session/100/details/?drill=0"]);
+  // The drill answer: observed only with content; never same, mapped or missing.
+  for (const [resp, verdict, reason] of [
+    [answer(404, { detail: "Not found." }), "not_observed", "drill_not_200"],
+    [answer(500, ""), "not_observed", "drill_not_200"],
+    [answer(200, ""), "not_observed", "drill_answer_unreadable"],
+    [answer(200, "<html>interstitial</html>"), "not_observed", "drill_answer_unreadable"],
+    [answer(200, "42"), "not_observed", "drill_answer_unreadable"],
+    [answer(200, "null"), "not_observed", "drill_answer_unreadable"],
+    [answer(200, []), "not_observed", "drill_answer_empty"],
+    [answer(200, {}), "not_observed", "drill_answer_empty"],
+    [answer(200, [{ metric: 1, v: 2 }]), "observed", null],
+    [answer(200, { detail: "something" }), "observed", null],
+    [answer(200, { 4711: { tot_burst_events: 4 }, [MARKERS.athleteName]: { total_distance: 1 } }), "observed", null],
+    [answer(200, { results: [{ 4711: { tot_burst_events: 4 } }] }), "observed", null],
+  ]) {
+    const f = fakeServer(drillRoutes({ "GET /api/team_session/100/details/?drill=0": resp }));
+    const r = await drillRun(f.fetchImpl);
+    const d = r.capabilities.session_drill_details;
+    assert.equal(d.verdict, verdict, JSON.stringify(reason));
+    assert.equal(d.reason, reason ?? undefined);
+    assert.equal(d.parameterEffectJudged, false);
+    assert.ok(!["same", "mapped", "missing"].includes(d.verdict));
+    assert.equal(r.stoppedBy, null);
+    assert.equal(f.calls.length, 5);
+    const printed = JSON.stringify({ ...r, ranAt: "" });
+    for (const leak of ["4711", MARKERS.athleteName]) assert.ok(!printed.includes(leak), leak);
+  }
+  // A body wrapped in `results` and keyed by ids prints none of those keys either.
+  const wrapped = await drillRun(fakeServer(drillRoutes({ "GET /api/team_session/100/details/?drill=0": answer(200, { results: [{ 4711: { tot_burst_events: 4 } }] }) })).fetchImpl);
+  assert.equal(wrapped.requests[4].resultFieldNames, "<unprintable>");
+  assert.deepEqual(wrapped.requests[4].fieldNames, ["results"]);
+  // The helper facts on their own: entry kinds, another matching row, rows with the singular drill field.
+  assert.deepEqual(describeDrillEntries([{ id: 1, drills: [2] }, { id: 2, drills: [] }], { id: 1, drills: [2] }), { drillsEntryKind: "number", listRowMatchesFirstDrill: true, rowsHaveSingularDrillField: false, rowsWithNonNullSingularDrill: null });
+  assert.deepEqual(describeDrillEntries([{ id: 1, drills: [{ id: 2 }], drill: null }, { id: 2, drills: [], drill: 1 }], { id: 1, drills: [{ id: 2 }] }), { drillsEntryKind: "object", listRowMatchesFirstDrill: null, rowsHaveSingularDrillField: true, rowsWithNonNullSingularDrill: true });
+  assert.deepEqual(describeDrillEntries([{ id: 1, drills: [2, "3"] }], { id: 1, drills: [2, "3"] }), { drillsEntryKind: "mixed", listRowMatchesFirstDrill: false, rowsHaveSingularDrillField: false, rowsWithNonNullSingularDrill: null });
+  assert.deepEqual(describeDrillEntries([{ id: 1 }], null), { drillsEntryKind: null, listRowMatchesFirstDrill: null, rowsHaveSingularDrillField: false, rowsWithNonNullSingularDrill: null });
+  const selfRow = { id: 1, drills: [1] };
+  assert.equal(describeDrillEntries([selfRow], selfRow).listRowMatchesFirstDrill, false, "the parent itself is not another row");
 });
 
-test("13. the drill-only run stops without a further request at the first identity that is not confirmed: parent id mismatch, drill id mismatch, a foreign or unreadable team, a missing drills_count, no parent in the list, no whole-session details", async () => {
-  const after = (calls, last) => { const p = paths(calls); return p[p.length - 1] === last && p.length; };
-  // Parent id mismatch: the parent's own read names another id.
-  const pid = fakeServer(drillRoutes({ "GET /rest/v1/team_session/100/": answer(200, { id: 150, team: 980, drills_count: 2 }) }));
-  const a = await drillRun(pid.fetchImpl);
-  assert.equal(a.stoppedBy, "parent_id_mismatch");
-  assert.equal(a.capabilities.session_read.idMatchesList, false);
-  assert.deepEqual(a.capabilities.session_drill_details, { verdict: "not_observed", reason: "parent_id_mismatch" });
-  assert.equal(after(pid.calls, "GET /rest/v1/team_session/100/"), 3, "nothing after the parent read");
-  assert.ok(!JSON.stringify(a).includes("150"));
-  // Drill id mismatch: the drill's own read names another id.
-  const did = fakeServer(drillRoutes({ "GET /rest/v1/team_session/101/": answer(200, { id: 151, team: 980, teamsession: 100 }) }));
-  const b = await drillRun(did.fetchImpl);
-  assert.equal(b.stoppedBy, "drill_id_mismatch");
-  assert.equal(b.capabilities.drill_session_read.idMatchesParentList, false);
-  assert.equal(after(did.calls, "GET /rest/v1/team_session/101/"), 4, "nothing after the drill read");
-  assert.deepEqual(b.capabilities.session_drill_details, { verdict: "not_observed", reason: "drill_id_mismatch" });
-  // The drill's own read names another parent: the list is contradicted, nothing further is read.
-  const dp = fakeServer(drillRoutes({ "GET /rest/v1/team_session/101/": answer(200, { id: 101, team: 980, teamsession: 150 }) }));
-  const bp = await drillRun(dp.fetchImpl);
-  assert.equal(bp.stoppedBy, "drill_parent_mismatch");
-  assert.equal(bp.capabilities.drill_session_read.namesParent, false);
-  assert.equal(dp.calls.length, 4);
-  assert.ok(!JSON.stringify(bp).includes("150"));
-  // A drill read without a `teamsession` field confirms nothing about the parent and does not stop.
-  const np = fakeServer(drillRoutes({ "GET /rest/v1/team_session/101/": answer(200, { id: 101, team: 980 }) }));
-  const bn = await drillRun(np.fetchImpl);
-  assert.equal(bn.stoppedBy, null);
-  assert.equal(bn.capabilities.drill_session_read.namesParent, null);
-  assert.equal(np.calls.length, 7);
-  // The session_read verdict keeps the full run's meaning; the gate is parentConfirmed.
-  const zero = fakeServer(drillRoutes({ "GET /rest/v1/team_session/100/": answer(200, { id: 100, team: 980, drills_count: 0, start_timestamp: `${DAY}T10:00:00` }) }));
-  const bz = await drillRun(zero.fetchImpl);
-  assert.equal(bz.capabilities.session_read.verdict, "same");
-  assert.equal(bz.capabilities.session_read.parentConfirmed, false);
-  assert.equal(bz.stoppedBy, "parent_not_confirmed");
-  assert.equal(zero.calls.length, 3);
-  // A list row that names itself as its drill: no read at all after the list.
-  const selfRow = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [sess(100, 980, DAY, [100]), sess(200, 980, OTHER_DAY, [])], { "x-total-count": "2" }) }));
-  const bs = await drillRun(selfRow.fetchImpl);
-  assert.equal(bs.stoppedBy, "drill_is_parent");
-  assert.equal(selfRow.calls.length, 2);
-  // A foreign team on the parent or on the drill stops the whole run.
-  for (const [route, body, last, n] of [
-    ["GET /rest/v1/team_session/100/", { id: 100, team: 981, drills_count: 2 }, "GET /rest/v1/team_session/100/", 3],
-    ["GET /rest/v1/team_session/101/", { id: 101, team: 981, teamsession: 100 }, "GET /rest/v1/team_session/101/", 4],
-  ]) {
-    const f = fakeServer(drillRoutes({ [route]: answer(200, body) }));
-    const r = await drillRun(f.fetchImpl);
-    assert.equal(r.stoppedBy, "team_isolation_failed", route);
-    assert.equal(after(f.calls, last), n, route);
-    assert.ok(!JSON.stringify(r).includes("981"));
-  }
-  // An unreadable team shape stops it too.
-  for (const [route, body, n] of [
-    ["GET /rest/v1/team_session/100/", { id: 100, team: { id: 980 }, drills_count: 2 }, 3],
-    ["GET /rest/v1/team_session/101/", { id: 101, team: "https://server3.gpexe.com/rest/v1/team/980/", teamsession: 100 }, 4],
-  ]) {
-    const f = fakeServer(drillRoutes({ [route]: answer(200, body) }));
-    const r = await drillRun(f.fetchImpl);
-    assert.equal(r.stoppedBy, "team_unknown_shape", route);
-    assert.equal(f.calls.length, n, route);
-  }
-  // A parent without drills_count > 0, or a 404 parent, or a 404 drill: not confirmed, no further request.
-  for (const [route, resp, stop, n] of [
+test("13. the drill-only run stops before the drill read at the first identity or team that is not confirmed - by REST or by the legacy family - and every stop names the drill verdict", async () => {
+  const noDrill = (calls) => !calls.some((c) => c.url.includes("drill="));
+  const cases = [
+    // The REST parent.
+    ["GET /rest/v1/team_session/100/", answer(200, { id: 150, team: 980, drills_count: 2 }), "parent_id_mismatch", 3],
+    ["GET /rest/v1/team_session/100/", answer(200, { id: 100, team: 981, drills_count: 2 }), "team_isolation_failed", 3],
+    ["GET /rest/v1/team_session/100/", answer(200, { id: 100, team: { id: 980 }, drills_count: 2 }), "team_unknown_shape", 3],
     ["GET /rest/v1/team_session/100/", answer(200, { id: 100, team: 980 }), "parent_not_confirmed", 3],
     ["GET /rest/v1/team_session/100/", answer(200, { id: 100, team: 980, drills_count: 0 }), "parent_not_confirmed", 3],
     ["GET /rest/v1/team_session/100/", answer(404, { detail: "Not found." }), "parent_not_confirmed", 3],
     ["GET /rest/v1/team_session/100/", answer(200, [{ id: 100, team: 980, drills_count: 2 }]), "parent_not_confirmed", 3],
-    ["GET /rest/v1/team_session/101/", answer(404, { detail: "Not found." }), "drill_not_confirmed", 4],
-    ["GET /rest/v1/team_session/101/", answer(200, { team: 980, teamsession: 100 }), "drill_not_confirmed", 4],
-    ["GET /rest/v1/team_session/100/details/", answer(500, ""), "whole_session_details_unavailable", 5],
-  ]) {
+    // The same parent through the legacy family.
+    ["GET /api/team_session/100/", answer(200, { id: 150, team: 980 }), "legacy_parent_id_mismatch", 4],
+    ["GET /api/team_session/100/", answer(200, { id: 100, team: 981 }), "team_isolation_failed", 4],
+    ["GET /api/team_session/100/", answer(200, { id: 100, team: "https://server3.gpexe.com/api/team/980/" }), "team_unknown_shape", 4],
+    ["GET /api/team_session/100/", answer(200, { id: 100 }), "legacy_parent_not_confirmed", 4],
+    ["GET /api/team_session/100/", answer(200, { team: 980 }), "legacy_parent_not_confirmed", 4],
+    ["GET /api/team_session/100/", answer(404, { detail: "Not found." }), "legacy_parent_not_confirmed", 4],
+    ["GET /api/team_session/100/", answer(200, ""), "legacy_parent_not_confirmed", 4],
+    ["GET /api/team_session/100/", answer(200, [{ id: 100, team: 980 }]), "legacy_parent_not_confirmed", 4],
+  ];
+  for (const [route, resp, stop, n] of cases) {
     const f = fakeServer(drillRoutes({ [route]: resp }));
     const r = await drillRun(f.fetchImpl);
     assert.equal(r.stoppedBy, stop, `${route} ${stop}`);
-    assert.equal(f.calls.length, n, `${route}: no request after the failed step`);
-    assert.ok(!f.calls.some((c) => c.url.includes("drill=")) || n > 5, "the drill reads never run before the whole-session details");
+    assert.equal(f.calls.length, n, `${route} ${stop}: no request after the failed step`);
+    assert.ok(noDrill(f.calls), `${route} ${stop}: no drill read`);
+    if (n === 3) assert.ok(!f.calls.some((c) => c.url.includes("/api/team_session")), "no legacy read after a REST stop");
+    assert.deepEqual(r.capabilities.session_drill_details, { verdict: "not_observed", reason: stop });
+    // ranAt is the run's own clock (its milliseconds can hold any digits); everything else must not.
+    const text = JSON.stringify({ ...r, ranAt: "" });
+    for (const leak of ["150", "981", MARKERS.sessionName]) assert.ok(!text.includes(leak), `${stop}: ${leak}`);
   }
-  // No parent with drills in the list: the run stops after the list.
+  // No parent in the list: the run stops after the list.
   const noParent = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [sess(100, 980, DAY, []), sess(200, 980, OTHER_DAY, [])], { "x-total-count": "2" }) }));
   const c = await drillRun(noParent.fetchImpl);
   assert.equal(c.stoppedBy, "no_parent_with_drills_in_list");
   assert.equal(noParent.calls.length, 2);
+  assert.deepEqual(c.capabilities.session_drill_details, { verdict: "not_observed", reason: "no_parent_with_drills_in_list" });
+  // A row without a readable team is never the parent.
+  const teamless = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [{ id: 100, drills: [101], drills_count: 1 }], { "x-total-count": "1" }) }));
+  const tl = await drillRun(teamless.fetchImpl);
+  assert.equal(tl.stoppedBy, "no_parent_with_drills_in_list");
+  assert.equal(teamless.calls.length, 2);
   // A foreign row in the list stops it before anything else, as in the full run.
   const foreign = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [sess(100, 980, DAY, [101]), sess(300, 981, DAY, [])], { "x-total-count": "2" }) }));
   const d = await drillRun(foreign.fetchImpl);
   assert.equal(d.stoppedBy, "team_isolation_failed");
   assert.equal(foreign.calls.length, 2);
-  // The cap: never more than seven requests, whatever maxRequests says.
+  assert.deepEqual(d.capabilities.session_drill_details, { verdict: "not_observed", reason: "team_isolation_failed" });
+  // Every stop before the drill branch names the drill verdict too (one exit for the whole run).
+  for (const [over, stop, n] of [
+    [{ "GET /rest/v1/team_session/?team=980&limit=100": answer(500, "") }, "session_list_unavailable", 2],
+    [{ "POST /api-token-auth/": answer(400, { non_field_errors: ["refused"] }) }, "exchange_failed", 1],
+    [{ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [{ team: 980, drills: [] }], { "x-total-count": "1" }) }, "no_safe_session_id", 2],
+  ]) {
+    const fs = fakeServer(drillRoutes(over));
+    const rr = await drillRun(fs.fetchImpl);
+    assert.equal(rr.stoppedBy, stop);
+    assert.equal(fs.calls.length, n, stop);
+    assert.deepEqual(rr.capabilities.session_drill_details, { verdict: "not_observed", reason: stop });
+  }
+  // Full mode is not touched by that exit: a stopped full run carries no drill key it did not compute.
+  const fullStop = fakeServer(happyRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(500, "") }));
+  const fr = await runCapabilityProbe({}, ENV, fullStop.fetchImpl);
+  assert.equal(fr.stoppedBy, "session_list_unavailable");
+  assert.equal(fr.capabilities.session_drill_details, undefined);
+  // The cap: never more than five requests, whatever maxRequests says.
   const capped = fakeServer(drillRoutes());
   const e = await drillRun(capped.fetchImpl, { maxRequests: 14 });
-  assert.equal(capped.calls.length, 7);
+  assert.equal(capped.calls.length, 5);
   assert.equal(e.stoppedBy, null);
   const tight = fakeServer(drillRoutes());
   const g = await drillRun(tight.fetchImpl, { maxRequests: 4 });
   assert.equal(g.stoppedBy, "request_limit");
   assert.equal(tight.calls.length, 4);
+  assert.ok(noDrill(tight.calls));
+  assert.deepEqual(g.capabilities.session_drill_details, { verdict: "not_observed", reason: "request_limit" });
 });

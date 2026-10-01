@@ -485,24 +485,22 @@ test("11d. never part of an answer: a stream that breaks, a chunk that is not by
   const named = [...section4.matchAll(/^\| `([a-z_]+)`/gm)].map((m) => m[1]);
   assert.ok(named.length >= 9);
   for (const name of named) assert.ok(Object.prototype.hasOwnProperty.call(REST_V1_CAPABILITIES, name), `${name} is a capability of the adapter`);
-  // drill=0 may appear only as the importer's exact form, in the one row that first confirms the
-  // parent (drills_count > 0, a non-empty drills list) and classifies a non-200 as not_observed.
+  // drill=0 appears only in the one row that names the legacy form on a parent confirmed twice
+  // (owner, 2026-10-01): never the REST form, never a read by a drill id.
   const drillRows = section4.split(/\r?\n/).filter((l) => /drill=0/.test(l));
   assert.equal(drillRows.length, 1, "drill=0 appears in exactly one table row");
   for (const l of drillRows) {
     assert.ok(l.startsWith("| `session_drill_details` |"));
+    assert.match(l, /`api\/team_session\/<parent id>\/details\/\?drill=0`/);
+    assert.match(l, /zero-based/);
     assert.match(l, /drills_count > 0/);
-    assert.match(l, /non-empty `drills` list/);
-    assert.match(l, /position of the first drill/);
+    assert.match(l, /same `id`/);
+    assert.match(l, /team 980/);
     assert.match(l, /Never \*\*missing\*\*/);
-    // The matrix: same needs the parameter applied (and equivalence when the id read also
-    // answered); mapped needs the ordinal refused, the id read 200 and different from the whole
-    // session; everything else is not_observed.
-    assert.match(l, /\*\*same\*\* = \(1\) is 200, `parameterApplied` is true, and, if \(2\) is also 200, `equivalent` is true/);
-    assert.match(l, /\*\*mapped\*\* = \(1\) is not 200, \(2\) is 200, and the id answer \(2\) differs from the whole-session answer \(3\)/);
-    assert.match(l, /\*\*`not_observed`\*\* = everything else: \(1\) 200 with the parameter ignored; \(1\) and \(2\) both 200 but not equivalent; \(2\) 200 but identical to \(3\); neither 200/);
-    assert.doesNotMatch(l, /ordinal 200 = \*\*same\*\*|\(1\) 200 → \*\*same\*\*/, "no unconditional same");
+    assert.doesNotMatch(l, /rest\/v1\/team_session\/[^`]*\?drill=|`team_session\/<id>\/details\/\?drill=0`/, "never the REST form");
+    assert.doesNotMatch(l, /\*\*same\*\*|\*\*mapped\*\*/, "this run never says same or mapped");
   }
+  assert.doesNotMatch(section4, /<drill id>/, "no read by a drill id anywhere in section 4");
   assert.doesNotMatch(section4, /drill=[1-9]/, "no other invented drill position");
   assert.doesNotMatch(doc.replace(/history, not a reference value/g, ""), /unfiltered 308|than the unfiltered 308/);
   // The source of the adapter asks for no whole body anywhere.
