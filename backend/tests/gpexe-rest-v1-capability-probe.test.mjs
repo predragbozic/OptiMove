@@ -7,7 +7,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  canonical, classifyDrill, dayOf, equivalentAnswers, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_TEAM, runCapabilityProbe, safeId,
+  canonical, classifyDrill, dayOf, DRILL_MODE_MAX_REQUESTS, equivalentAnswers, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId,
 } from "../scripts/gpexe-rest-v1-capability-probe.mjs";
 import { DiscoveryUsageError } from "../scripts/gpexe-auth-discovery.mjs";
 
@@ -479,8 +479,11 @@ test("8. limits: the request cap stops the run, a hanging read ends as a timeout
 });
 
 test("9. the target cannot be changed: only server3 and Team ID 980 are accepted, and the credentials come from the environment only", async () => {
-  assert.deepEqual(parseArgs([]), { host: PROBE_HOST, team: PROBE_TEAM });
-  assert.deepEqual(parseArgs(["--host", "server3", "--team", "980"]), { host: "server3", team: "980" });
+  assert.deepEqual(parseArgs([]), { host: PROBE_HOST, team: PROBE_TEAM, mode: "full" });
+  assert.deepEqual(parseArgs(["--host", "server3", "--team", "980", "--mode", "drill"]), { host: "server3", team: "980", mode: "drill" });
+  assert.deepEqual([...PROBE_MODES], ["full", "drill"]);
+  for (const bad of [["--mode", "drills"], ["--mode", ""], ["--mode", "FULL"]]) assert.throws(() => parseArgs(bad), DiscoveryUsageError, bad.join(" "));
+  await assert.rejects(runCapabilityProbe({ mode: "all" }, ENV, fakeServer().fetchImpl), DiscoveryUsageError);
   for (const bad of [["--host", "e03"], ["--team", "981"], ["--host", "https://server3.gpexe.com/"], ["--team", "980", "--extra", "x"]]) assert.throws(() => parseArgs(bad), DiscoveryUsageError, bad.join(" "));
   const { calls, fetchImpl } = fakeServer();
   await assert.rejects(runCapabilityProbe({}, {}, fetchImpl), DiscoveryUsageError);
@@ -512,4 +515,155 @@ test("11. the probe changes nothing else: the adapter, the discovery script and 
     assert.doesNotMatch(await fsp.readFile(path.resolve(ROOT, "backend/src/routes", f), "utf8"), /capability-probe|runCapabilityProbe/, f);
   }
   assert.doesNotMatch(await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeRestV1Adapter.js"), "utf8"), /capability-probe/);
+});
+
+// ---------------------------------------------------------------------------
+// The drill-only run (owner, 2026-10-01): the full run saw a parent whose own
+// read has drills_count > 0 but no drills list, so the drill id comes from
+// the list row and every identity is confirmed before the next read.
+// ---------------------------------------------------------------------------
+// A server3 as the full run saw it: the list carries `drills`, the parent's own read does not.
+function drillRoutes(over = {}) {
+  return {
+    ...happyRoutes(),
+    "GET /rest/v1/team_session/100/": answer(200, { id: 100, team: 980, drills_count: 2, start_timestamp: `${DAY}T10:00:00` }),
+    "GET /rest/v1/team_session/101/": answer(200, { id: 101, team: 980, teamsession: 100, drills_count: 0 }),
+    ...over,
+  };
+}
+const drillRun = (fetchImpl, over = {}) => runCapabilityProbe({ mode: "drill", ...over }, ENV, fetchImpl);
+const paths = (calls) => calls.map((c) => `${c.method} ${new URL(c.url).pathname}${new URL(c.url).search}`);
+
+test("12. the drill-only run: one exchange and exactly six reads in the documented order, every identity confirmed, the matrix applied, nothing else read", async () => {
+  const { calls, fetchImpl } = fakeServer(drillRoutes());
+  const report = await drillRun(fetchImpl);
+  assert.equal(report.mode, "drill");
+  assert.equal(report.stoppedBy, null);
+  assert.equal(report.requestCount, 7);
+  assert.equal(DRILL_MODE_MAX_REQUESTS, 7);
+  assert.deepEqual(paths(calls), [
+    "POST /api-token-auth/",
+    "GET /rest/v1/team_session/?team=980&limit=100",
+    "GET /rest/v1/team_session/100/",
+    "GET /rest/v1/team_session/101/",
+    "GET /rest/v1/team_session/100/details/",
+    "GET /rest/v1/team_session/100/details/?drill=0",
+    "GET /rest/v1/team_session/101/details/",
+  ]);
+  assert.ok(calls.slice(1).every((c) => c.method === "GET" && c.headers.Authorization === `Token ${ISSUED}` && c.redirect === "manual"));
+  assert.ok(!calls.some((c) => /athlete_session|track|thresholds|team_session_tag|start_timestamp_gte/.test(c.url)), "nothing of the full run is repeated");
+  assert.deepEqual(verdicts(report), { session_list: "proven", session_read: "same", drill_session_read: "observed", session_details: "same", session_drill_details: "same" });
+  assert.deepEqual(report.capabilities.session_read, { verdict: "same", status: 200, idMatchesList: true, teamIs980: true, drillsCountPresent: true, drillsCountPositive: true, startTimestampPresent: true, drillsListPresent: false, parentConfirmed: true });
+  // The drill session's own read has no importer counterpart: observed, never same.
+  assert.deepEqual(report.capabilities.drill_session_read, { verdict: "observed", status: 200, idMatchesParentList: true, teamIs980: true, namesParent: true, drillConfirmed: true });
+  assert.notEqual(report.capabilities.drill_session_read.verdict, "same");
+  assert.deepEqual(report.capabilities.session_drill_details, { verdict: "same", ordinalStatus: 200, byIdStatus: 200, parameterApplied: true, equivalent: true, idDiffersFromWhole: true });
+  const text = JSON.stringify(report);
+  for (const m of [...Object.values(MARKERS).map(String), ISSUED, USER, PASSWORD, DAY, "09-14"]) assert.ok(!text.includes(m), m);
+  for (const id of ["100", "101", "102", "200"]) assert.ok(!new RegExp(`\\b${id}\\b`).test(text.replace(/"status":\d+|"ordinalStatus":\d+|"byIdStatus":\d+|"rowCount":\d+/g, "")), `no id ${id}`);
+  // The matrix through the drill run: parameter ignored -> not_observed; ordinal refused and id differs -> mapped.
+  const ignored = await drillRun(fakeServer(drillRoutes({ "GET /rest/v1/team_session/100/details/?drill=0": answer(200, WHOLE) })).fetchImpl);
+  assert.equal(ignored.capabilities.session_drill_details.verdict, "not_observed");
+  const mapped = await drillRun(fakeServer(drillRoutes({ "GET /rest/v1/team_session/100/details/?drill=0": answer(404, { detail: "Not found." }) })).fetchImpl);
+  assert.equal(mapped.capabilities.session_drill_details.verdict, "mapped");
+});
+
+test("13. the drill-only run stops without a further request at the first identity that is not confirmed: parent id mismatch, drill id mismatch, a foreign or unreadable team, a missing drills_count, no parent in the list, no whole-session details", async () => {
+  const after = (calls, last) => { const p = paths(calls); return p[p.length - 1] === last && p.length; };
+  // Parent id mismatch: the parent's own read names another id.
+  const pid = fakeServer(drillRoutes({ "GET /rest/v1/team_session/100/": answer(200, { id: 150, team: 980, drills_count: 2 }) }));
+  const a = await drillRun(pid.fetchImpl);
+  assert.equal(a.stoppedBy, "parent_id_mismatch");
+  assert.equal(a.capabilities.session_read.idMatchesList, false);
+  assert.deepEqual(a.capabilities.session_drill_details, { verdict: "not_observed", reason: "parent_id_mismatch" });
+  assert.equal(after(pid.calls, "GET /rest/v1/team_session/100/"), 3, "nothing after the parent read");
+  assert.ok(!JSON.stringify(a).includes("150"));
+  // Drill id mismatch: the drill's own read names another id.
+  const did = fakeServer(drillRoutes({ "GET /rest/v1/team_session/101/": answer(200, { id: 151, team: 980, teamsession: 100 }) }));
+  const b = await drillRun(did.fetchImpl);
+  assert.equal(b.stoppedBy, "drill_id_mismatch");
+  assert.equal(b.capabilities.drill_session_read.idMatchesParentList, false);
+  assert.equal(after(did.calls, "GET /rest/v1/team_session/101/"), 4, "nothing after the drill read");
+  assert.deepEqual(b.capabilities.session_drill_details, { verdict: "not_observed", reason: "drill_id_mismatch" });
+  // The drill's own read names another parent: the list is contradicted, nothing further is read.
+  const dp = fakeServer(drillRoutes({ "GET /rest/v1/team_session/101/": answer(200, { id: 101, team: 980, teamsession: 150 }) }));
+  const bp = await drillRun(dp.fetchImpl);
+  assert.equal(bp.stoppedBy, "drill_parent_mismatch");
+  assert.equal(bp.capabilities.drill_session_read.namesParent, false);
+  assert.equal(dp.calls.length, 4);
+  assert.ok(!JSON.stringify(bp).includes("150"));
+  // A drill read without a `teamsession` field confirms nothing about the parent and does not stop.
+  const np = fakeServer(drillRoutes({ "GET /rest/v1/team_session/101/": answer(200, { id: 101, team: 980 }) }));
+  const bn = await drillRun(np.fetchImpl);
+  assert.equal(bn.stoppedBy, null);
+  assert.equal(bn.capabilities.drill_session_read.namesParent, null);
+  assert.equal(np.calls.length, 7);
+  // The session_read verdict keeps the full run's meaning; the gate is parentConfirmed.
+  const zero = fakeServer(drillRoutes({ "GET /rest/v1/team_session/100/": answer(200, { id: 100, team: 980, drills_count: 0, start_timestamp: `${DAY}T10:00:00` }) }));
+  const bz = await drillRun(zero.fetchImpl);
+  assert.equal(bz.capabilities.session_read.verdict, "same");
+  assert.equal(bz.capabilities.session_read.parentConfirmed, false);
+  assert.equal(bz.stoppedBy, "parent_not_confirmed");
+  assert.equal(zero.calls.length, 3);
+  // A list row that names itself as its drill: no read at all after the list.
+  const selfRow = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [sess(100, 980, DAY, [100]), sess(200, 980, OTHER_DAY, [])], { "x-total-count": "2" }) }));
+  const bs = await drillRun(selfRow.fetchImpl);
+  assert.equal(bs.stoppedBy, "drill_is_parent");
+  assert.equal(selfRow.calls.length, 2);
+  // A foreign team on the parent or on the drill stops the whole run.
+  for (const [route, body, last, n] of [
+    ["GET /rest/v1/team_session/100/", { id: 100, team: 981, drills_count: 2 }, "GET /rest/v1/team_session/100/", 3],
+    ["GET /rest/v1/team_session/101/", { id: 101, team: 981, teamsession: 100 }, "GET /rest/v1/team_session/101/", 4],
+  ]) {
+    const f = fakeServer(drillRoutes({ [route]: answer(200, body) }));
+    const r = await drillRun(f.fetchImpl);
+    assert.equal(r.stoppedBy, "team_isolation_failed", route);
+    assert.equal(after(f.calls, last), n, route);
+    assert.ok(!JSON.stringify(r).includes("981"));
+  }
+  // An unreadable team shape stops it too.
+  for (const [route, body, n] of [
+    ["GET /rest/v1/team_session/100/", { id: 100, team: { id: 980 }, drills_count: 2 }, 3],
+    ["GET /rest/v1/team_session/101/", { id: 101, team: "https://server3.gpexe.com/rest/v1/team/980/", teamsession: 100 }, 4],
+  ]) {
+    const f = fakeServer(drillRoutes({ [route]: answer(200, body) }));
+    const r = await drillRun(f.fetchImpl);
+    assert.equal(r.stoppedBy, "team_unknown_shape", route);
+    assert.equal(f.calls.length, n, route);
+  }
+  // A parent without drills_count > 0, or a 404 parent, or a 404 drill: not confirmed, no further request.
+  for (const [route, resp, stop, n] of [
+    ["GET /rest/v1/team_session/100/", answer(200, { id: 100, team: 980 }), "parent_not_confirmed", 3],
+    ["GET /rest/v1/team_session/100/", answer(200, { id: 100, team: 980, drills_count: 0 }), "parent_not_confirmed", 3],
+    ["GET /rest/v1/team_session/100/", answer(404, { detail: "Not found." }), "parent_not_confirmed", 3],
+    ["GET /rest/v1/team_session/100/", answer(200, [{ id: 100, team: 980, drills_count: 2 }]), "parent_not_confirmed", 3],
+    ["GET /rest/v1/team_session/101/", answer(404, { detail: "Not found." }), "drill_not_confirmed", 4],
+    ["GET /rest/v1/team_session/101/", answer(200, { team: 980, teamsession: 100 }), "drill_not_confirmed", 4],
+    ["GET /rest/v1/team_session/100/details/", answer(500, ""), "whole_session_details_unavailable", 5],
+  ]) {
+    const f = fakeServer(drillRoutes({ [route]: resp }));
+    const r = await drillRun(f.fetchImpl);
+    assert.equal(r.stoppedBy, stop, `${route} ${stop}`);
+    assert.equal(f.calls.length, n, `${route}: no request after the failed step`);
+    assert.ok(!f.calls.some((c) => c.url.includes("drill=")) || n > 5, "the drill reads never run before the whole-session details");
+  }
+  // No parent with drills in the list: the run stops after the list.
+  const noParent = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [sess(100, 980, DAY, []), sess(200, 980, OTHER_DAY, [])], { "x-total-count": "2" }) }));
+  const c = await drillRun(noParent.fetchImpl);
+  assert.equal(c.stoppedBy, "no_parent_with_drills_in_list");
+  assert.equal(noParent.calls.length, 2);
+  // A foreign row in the list stops it before anything else, as in the full run.
+  const foreign = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [sess(100, 980, DAY, [101]), sess(300, 981, DAY, [])], { "x-total-count": "2" }) }));
+  const d = await drillRun(foreign.fetchImpl);
+  assert.equal(d.stoppedBy, "team_isolation_failed");
+  assert.equal(foreign.calls.length, 2);
+  // The cap: never more than seven requests, whatever maxRequests says.
+  const capped = fakeServer(drillRoutes());
+  const e = await drillRun(capped.fetchImpl, { maxRequests: 14 });
+  assert.equal(capped.calls.length, 7);
+  assert.equal(e.stoppedBy, null);
+  const tight = fakeServer(drillRoutes());
+  const g = await drillRun(tight.fetchImpl, { maxRequests: 4 });
+  assert.equal(g.stoppedBy, "request_limit");
+  assert.equal(tight.calls.length, 4);
 });

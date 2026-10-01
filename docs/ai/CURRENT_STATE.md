@@ -332,7 +332,9 @@ only when every row is of team 980 and inside the window and the filtered count 
 the unfiltered count of the same run.
 
 **The active step is F3c2b — the owner-run read-only capability probe** (branch
-`feature/gpexe-rest-v1-capability-probe-f3c2b`, owner order 2026-10-01, in review):
+`feature/gpexe-rest-v1-capability-probe-f3c2b`, owner order 2026-10-01; the full mode was
+externally reviewed at `6c51be3` and run once by the owner — see the next paragraph — and the
+drill-only mode is now in review):
 `backend/scripts/gpexe-rest-v1-capability-probe.mjs` runs one exchange in the host's confirmed
 form and then GET requests only for Team ID 980 (at most 14 requests, a timeout per request,
 answers bounded at 5 MiB, redirects never followed, no retry, no database), derives every id —
@@ -345,6 +347,29 @@ shapes, field names, counts and booleans only. Fake-fetch contract tests
 (`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`). **The adapter, the routes, the
 database, the UI, bindings and imports are untouched; the PowerShell commands for the run are
 handed over only after the external review of the tool.**
+
+**The full probe was run once by the owner (2026-10-01, after the external review of head
+`6c51be3`) and succeeded:** `stoppedBy: null`, 11 requests (one exchange, ten reads), the report
+sanitized by the owner; only its verdicts are recorded (`docs/ai/gpexe-rest-v1-compatibility.md`
+sections 1–4), no id, date, value or field list. **Eight of the importer's nine reads are proven
+`same` on `server3` / `rest_v1`** — the date window, the session read, the whole-session details,
+the athlete list, the athlete row, its `/more/`, the track and the thresholds; the tag list was
+observed for team 980; units stay unverified. **The drill read is `not_observed`:** the list rows
+carry a `drills` list, but the parent session's own read carries `drills_count > 0` without a
+`drills` list, so the probe's precondition for the two drill reads was not met and neither was
+sent. **The adapter is unchanged: every one of the eight proven reads still answers
+`source_capability_unavailable` until it is implemented with its own tests, on the owner's
+order.** For the drill, the probe gained a narrow **drill-only mode** (`--mode drill`, owner order
+2026-10-01, built, **not run**): one exchange and at most six reads, the parent confirmed from the
+list row's `drills` plus its own read's `id`, `team` 980 and `drills_count > 0` (no `drills` list
+required), the drill session confirmed by its own read (`id`, `team` 980), then the whole-session
+details, the drill by position and the drill by id, classified by the existing matrix; any
+identity or team not confirmed stops the chain without the next request (`parent_id_mismatch`,
+`drill_id_mismatch`, `drill_parent_mismatch`, `team_isolation_failed`, `team_unknown_shape`, …);
+the drill session's own read is reported as observed, never as an importer read; nothing of the
+full run is repeated. Its PowerShell commands are handed over only after the owner's external review. No
+GPEXE request by the main session, no route, no database write, no credential storage, no
+binding, no import.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1106,9 +1131,11 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's external review and merge decision on the F3c2b probe PR; then the owner runs the
-probe and returns its sanitized report; then the adapter implements the reads the probe proved
-(`docs/ai/gpexe-rest-v1-compatibility.md` section 4), and, on the owner's order, the F3c2
+The owner's external review of the drill-only probe mode on the F3c2b PR; then, on the owner's
+order, the owner-run drill-only read (the last unproven importer read); then the merge
+decision on the F3c2b PR; then the adapter implements the reads the probe proved
+(`docs/ai/gpexe-rest-v1-compatibility.md` section 2, rows 1b–7 and 9, and row 8 if the drill-only
+run proves it), and, on the owner's order, the F3c2
 routes, built against the contract in `docs/ai/source-connections-f3c2-contract.md` section 2,
 then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and

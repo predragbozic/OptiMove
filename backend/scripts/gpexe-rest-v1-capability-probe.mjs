@@ -112,14 +112,19 @@ export function classifyDrill({ ordinalStatus, ordinalBody, byIdStatus, byIdBody
   return { verdict, ordinalStatus: ordinalStatus ?? null, byIdStatus: byIdStatus ?? null, parameterApplied, equivalent, idDiffersFromWhole };
 }
 
+export const PROBE_MODES = Object.freeze(["full", "drill"]);
+// The drill-only run: one exchange and these six reads, nothing else.
+export const DRILL_MODE_MAX_REQUESTS = 7;
+
 export function parseArgs(argv) {
-  const opts = { host: PROBE_HOST, team: PROBE_TEAM };
+  const opts = { host: PROBE_HOST, team: PROBE_TEAM, mode: "full" };
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i];
     const value = argv[i + 1];
-    if (!["--host", "--team"].includes(key) || value === undefined) throw new DiscoveryUsageError(`unknown or incomplete argument ${key}`);
+    if (!["--host", "--team", "--mode"].includes(key) || value === undefined) throw new DiscoveryUsageError(`unknown or incomplete argument ${key}`);
     opts[key.slice(2)] = value;
   }
+  if (!PROBE_MODES.includes(opts.mode)) throw new DiscoveryUsageError("--mode must be full or drill");
   // This probe is for the one confirmed host and the one bound team: the
   // options exist so that a wrong value is refused loudly, not so that
   // another target can be chosen.
@@ -129,7 +134,10 @@ export function parseArgs(argv) {
 }
 
 // maxRequests and timeoutMs exist for the tests; the defaults are the limits.
-export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM, maxRequests = MAX_REQUESTS, timeoutMs = REQUEST_TIMEOUT_MS } = {}, env, fetchImpl = globalThis.fetch) {
+export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM, mode = "full", maxRequests = MAX_REQUESTS, timeoutMs = REQUEST_TIMEOUT_MS } = {}, env, fetchImpl = globalThis.fetch) {
+  if (!PROBE_MODES.includes(mode)) throw new DiscoveryUsageError("mode must be full or drill");
+  // The drill-only run never sends more than its own six reads.
+  if (mode === "drill") maxRequests = Math.min(maxRequests, DRILL_MODE_MAX_REQUESTS);
   if (!Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > MAX_REQUESTS) throw new DiscoveryUsageError(`maxRequests is a whole number from 1 to ${MAX_REQUESTS}`);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > REQUEST_TIMEOUT_MS) throw new DiscoveryUsageError(`timeoutMs is a whole number up to ${REQUEST_TIMEOUT_MS}`);
   const profile = discoveryProfile(host, PROBE_FAMILY);
@@ -139,7 +147,7 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
   if (!username || !password) throw new DiscoveryUsageError("GPEXE_USERNAME and GPEXE_PASSWORD are not both set in this terminal");
   const api = profile.apiPrefix;
   const report = {
-    source: "gpexe", hostKey: host, apiFamily: profile.apiFamily, teamId: team, ranAt: new Date().toISOString(),
+    source: "gpexe", hostKey: host, apiFamily: profile.apiFamily, teamId: team, mode, ranAt: new Date().toISOString(),
     requests: [], capabilities: {}, stoppedBy: null,
   };
   let requests = 0;
@@ -276,6 +284,72 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       report.stoppedBy = "no_safe_session_id";
       return finish(report, env, issued);
     }
+
+    // The drill-only run (owner, 2026-10-01, after the full run found the
+    // parent's own read without a `drills` list). Every identity is confirmed
+    // before the next read, and the chain stops without a further request
+    // at the first identity or team that is not confirmed.
+    if (mode === "drill") {
+      if (!firstParent) {
+        report.stoppedBy = "no_parent_with_drills_in_list";
+        return finish(report, env, issued);
+      }
+      const drillId = safeId(firstParent.drills[0]);
+      // Every early stop still names the drill verdict, as the full run does.
+      const stopDrill = (code) => {
+        report.stoppedBy = code;
+        verdict("session_drill_details", { verdict: "not_observed", reason: code });
+        return finish(report, env, issued);
+      };
+      // A row that names itself as its own drill is not a parent for certain.
+      if (drillId === sessionId) return stopDrill("drill_is_parent");
+      // 2. The parent's own read: the same id, team 980, drills_count > 0.
+      const parent = await get(`team_session/${sessionId}/`);
+      const pb = parent.body;
+      const parentOk = Boolean(parent.status === 200 && pb && typeof pb === "object" && !Array.isArray(pb));
+      if (parentOk) assertTeam([pb], "parent session");
+      const parentIdOk = parentOk && safeId(pb.id) === sessionId;
+      const parentTeamOk = parentOk && namesTeam(pb.team, team) === true;
+      const parentCount = parentOk && Number.isInteger(pb.drills_count) ? pb.drills_count : null;
+      const parentStart = parentOk && dayOf(pb.start_timestamp) !== null;
+      const parentConfirmed = parentIdOk && parentTeamOk && parentCount !== null && parentCount > 0;
+      verdict("session_read", {
+        // The verdict word keeps the full run's meaning (what the importer reads is present);
+        // the gate of this run is `parentConfirmed`, printed beside it.
+        verdict: parentTeamOk && parentCount !== null && parentStart ? "same" : "not_observed", status: parent.status ?? null, idMatchesList: parentIdOk, teamIs980: parentTeamOk,
+        drillsCountPresent: parentCount !== null, drillsCountPositive: parentCount !== null && parentCount > 0, startTimestampPresent: parentStart, drillsListPresent: parentOk && Array.isArray(pb.drills), parentConfirmed,
+      });
+      if (!parentConfirmed) return stopDrill(parentOk && safeId(pb.id) !== null && !parentIdOk ? "parent_id_mismatch" : "parent_not_confirmed");
+      // 3. The drill session's own read: the same drill id, team 980.
+      const drill = await get(`team_session/${drillId}/`);
+      const db = drill.body;
+      const drillOk = Boolean(drill.status === 200 && db && typeof db === "object" && !Array.isArray(db));
+      if (drillOk) assertTeam([db], "drill session");
+      const drillIdOk = drillOk && safeId(db.id) === drillId;
+      const drillTeamOk = drillOk && namesTeam(db.team, team) === true;
+      // A drill whose own read names another parent contradicts the list: stop.
+      const drillParent = drillOk && "teamsession" in db ? safeId(db.teamsession) : null;
+      const namesParent = drillParent === null ? null : drillParent === sessionId;
+      const drillConfirmed = drillIdOk && drillTeamOk && namesParent !== false;
+      verdict("drill_session_read", {
+        // Not an importer read: the importer never reads a drill session by its id, so the word
+        // is `observed`, never `same`.
+        verdict: drillConfirmed ? "observed" : "not_observed", status: drill.status ?? null, idMatchesParentList: drillIdOk, teamIs980: drillTeamOk, namesParent, drillConfirmed,
+      });
+      if (!drillConfirmed) {
+        return stopDrill(namesParent === false ? "drill_parent_mismatch" : drillOk && safeId(db.id) !== null && !drillIdOk ? "drill_id_mismatch" : "drill_not_confirmed");
+      }
+      // 4. The parent's whole-session details, the reference.
+      const whole = await get(`team_session/${sessionId}/details/`);
+      verdict("session_details", { verdict: whole.status === 200 ? "same" : "not_observed", status: whole.status ?? null });
+      if (whole.status !== 200) return stopDrill("whole_session_details_unavailable");
+      // 5. and 6. The drill by position on the parent, then by its own id; 7. the matrix.
+      const ordinal = await get(`team_session/${sessionId}/details/?drill=0`);
+      const byId = await get(`team_session/${drillId}/details/`);
+      verdict("session_drill_details", classifyDrill({ ordinalStatus: ordinal.status, ordinalBody: ordinal.body, byIdStatus: byId.status, byIdBody: byId.body, wholeBody: whole.body }));
+      return finish(report, env, issued);
+    }
+
     // The list's day is a hint only; the day that is used comes from the
     // session's own confirmed read below.
     const listDay = dayOf(chosen.start_timestamp);

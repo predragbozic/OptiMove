@@ -21,6 +21,10 @@ session. The existing `e03` importer (`backend/src/gpexeClient.js`,
 3. **The owner-run read-only verification of 2026-09-29** on `server3`
    (`docs/ai/source-connections-f3c2-contract.md` section 1.8) is the only evidence of what
    `rest_v1` answers: three reads, their status, body shape and field names.
+4. **The owner-run read-only capability probe of 2026-10-01** (`--mode full`, section 4):
+   one exchange and ten reads, `stoppedBy: null`, 11 requests in all; only the sanitized report
+   (statuses, shapes, field names, counts, booleans) came back and only its verdicts are
+   recorded here — no id, no date, no value, no field list is copied into this document.
 
 Words used: **same** — same resource name and parameters, only the family prefix differs, and the
 answer was seen; **mapped** — a different path or parameter gives the same information, and the
@@ -37,24 +41,29 @@ but OptiMove has never seen its answer: it is still **unknown** for the adapter.
 | — | Team list (not used by the importer; used to check visibility) | not used | **same**: `team/` | probe: 200, array, `X-Total-Count` 8, contains 980 | `countVisibleTeams()` — count and a boolean only |
 | — | Team read (not used by the importer; used to check the binding) | not used | **same**: `team/<id>/` | probe: 200, object | `verifyBoundTeam()` |
 | 1a | Sessions of a team, by team and page size (**not an importer request**: the importer always sends the date window, row 1b) | not sent without a date window | the resource and its paging are proven: `team_session/?team=&limit=` | probe: 200, array of 1, `X-Total-Count` 308, `Link` header; field names include every field the importer's list reads (`id`, `team`, `category_name`, `start_timestamp`, `updated_on`, `drills`, `drills_count`, `is_stats_valid`) | `listSessions({ limit, maxPages })` — the whole list or a refusal; drills left out as the importer does |
-| 1b | Sessions of a team **in a date window** | `…&start_timestamp_gte=&start_timestamp_lte=` | **unknown** (legacy-attested parameter names) | the legacy integration uses `start_timestamp_gte` / `start_timestamp_lte`; the value format and whether the filter is applied were not seen | `source_capability_unavailable` (`session_list_by_date`) |
-| 2 | One session (its team, `drills_count`, start) | `team_session/<id>/` | **unknown** (legacy-attested path) | path used by the legacy integration; answer not seen | unavailable (`session_read`) |
-| 3 | Athlete rows of a session | `athlete_session/?teamsession=<id>&limit=` | **unknown** | none | unavailable (`athlete_session_list`) |
-| 4 | One athlete row | `athlete_session/<id>/` | **unknown** | none | unavailable (`athlete_session_read`) |
-| 5 | Burst and brake events of an athlete row | `athlete_session/<id>/more/` | **unknown** | none | unavailable (`athlete_session_more`) |
-| 6 | Track (time zone, device restarts) | `track/<id>/` | **unknown** | none | unavailable (`track_read`) |
-| 7 | Whole-session values per athlete | `team_session/<id>/details/` | **unknown** (legacy-attested path, also with `header=true`) | path used by the legacy integration; answer not seen | unavailable (`session_details`) |
-| 8 | Values per drill | `team_session/<id>/details/?drill=<n>` | **unknown** | none (the legacy integration does not use `drill=`) | unavailable (`session_drill_details`) |
-| 9 | Threshold set valid on the session day | `team/<team>/thresholds/?valid_on=` | **unknown** | none | unavailable (`team_thresholds`) |
-| — | Units | no endpoint (numbers are SI on `e03`, verified in the pilot) | **unknown** | none; that `rest_v1` numbers are SI is not verified | unavailable (`units`) |
-| — | Session tags | not used by the importer | **unknown** (legacy-attested path `team_session_tag/?limit=`) | path used by the legacy integration; answer and team scope not seen | unavailable (`session_tags`) |
+| 1b | Sessions of a team **in a date window** | `…&start_timestamp_gte=&start_timestamp_lte=` | **same** | probe 2026-10-01: the filter is applied under the section-4 rule (every row of team 980 and inside the window, the chosen session among them, the filtered count smaller than the unfiltered count of the same run) | still `source_capability_unavailable` (`session_list_by_date`) until the adapter implements it |
+| 2 | One session (its team, `drills_count`, start) | `team_session/<id>/` | **same** | probe 2026-10-01: 200, object, team 980, `drills_count` and `start_timestamp` present; **no `drills` list** on this read (the list rows carry it) | unavailable (`session_read`) until implemented |
+| 3 | Athlete rows of a session | `athlete_session/?teamsession=<id>&limit=` | **same** | probe 2026-10-01: 200, every row of the asked session | unavailable (`athlete_session_list`) until implemented |
+| 4 | One athlete row | `athlete_session/<id>/` | **same** | probe 2026-10-01: 200, names the same session | unavailable (`athlete_session_read`) until implemented |
+| 5 | Burst and brake events of an athlete row | `athlete_session/<id>/more/` | **same** | probe 2026-10-01: 200 | unavailable (`athlete_session_more`) until implemented |
+| 6 | Track (time zone, device restarts) | `track/<id>/` | **same** | probe 2026-10-01: 200, id from the confirmed athlete detail | unavailable (`track_read`) until implemented |
+| 7 | Whole-session values per athlete | `team_session/<id>/details/` | **same** | probe 2026-10-01: 200 | unavailable (`session_details`) until implemented |
+| 8 | Values per drill | `team_session/<id>/details/?drill=<n>` | **`not_observed`** (still **unknown**) | probe 2026-10-01: no request was sent — the parent's own read carries `drills_count > 0` but no `drills` list, so the parent could not be confirmed under the precondition of section 4; the drill-only run (section 4) confirms the parent from the list row's `drills` and the parent's `drills_count` instead | unavailable (`session_drill_details`) |
+| 9 | Threshold set valid on the session day | `team/<team>/thresholds/?valid_on=` | **same** | probe 2026-10-01: 200 on the confirmed session's day | unavailable (`team_thresholds`) until implemented |
+| — | Units | no endpoint (numbers are SI on `e03`, verified in the pilot) | **unknown** | none; that `rest_v1` numbers are SI is not verified (the probe records no value) | unavailable (`units`) |
+| — | Session tags | not used by the importer | **observed** (legacy-attested path `team_session_tag/?team=&limit=`) | probe 2026-10-01: 200, asked for team 980; no returned tag named another team (one would have stopped the run); whether `team` is honoured is not shown | unavailable (`session_tags`) |
 
-Nothing is **mapped** and nothing is **missing** yet: both words need an answer that was seen.
+Nothing is **mapped** and nothing is **missing**: both words need an answer that was seen and
+differs from the importer's form, and no read was refused. **The adapter column has not moved:**
+a proven read becomes available only when the adapter implements it with its own tests (the
+next step after the drill-only run, on the owner's order).
 
 ## 3. What is proven compatible today
 
-**None of the importer's nine request kinds is proven on `rest_v1`.** What is proven is three
-reads, two of which the importer does not send at all and one of which is the importer's list
+**Eight of the importer's nine request kinds are proven on `rest_v1` by the owner-run probe of
+2026-10-01 (rows 1b–7 and 9: same paths, same parameters, 200 for team 980); the drill read
+(row 8) is `not_observed`.** The adapter still implements only the three reads verified on
+2026-09-29, two of which the importer does not send at all and one of which is the importer's list
 without its date window:
 - the credential reads the bound team (`verifyBoundTeam`);
 - how many teams the account sees (`countVisibleTeams`);
@@ -62,8 +71,9 @@ without its date window:
   header paging the `e03` client already understands (`listSessions`). Like the importer, it
   leaves out a session that another session names in its `drills`.
 
-**Not proven, so the importer cannot run on `server3` yet:** everything a session bundle is made
-of (rows 2–9) and the date window (row 1b). `fetchSessionBundle()` therefore answers
+**Not implemented, so the importer cannot run on `server3` yet:** everything a session bundle is
+made of (rows 2–9) and the date window (row 1b) are proven but not written into the adapter,
+and the drill read (row 8) is not proven at all. `fetchSessionBundle()` therefore still answers
 `source_capability_unavailable`.
 
 Also not proven, and not a matter of paths: that the **values** of `rest_v1` mean what the
@@ -93,6 +103,45 @@ no date; the importer's drop list of personal fields applies before anything is 
 dropped field (such as an athlete's name) is not even named. **The PowerShell commands for the run are handed over only after the
 external review of the probe tool** (owner, 2026-10-01). Its contract tests
 (`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`) run against a fake server only.
+
+**Result of the first owner-run probe (2026-10-01, `--mode full`, sanitized by the owner):**
+`stoppedBy: null`, 11 requests (one exchange, ten reads; the two drill reads were not sent).
+Verdicts: `session_list` proven; `session_list_by_date`, `session_read`, `session_details`,
+`athlete_session_list`, `athlete_session_read`, `athlete_session_more`, `track_read` and
+`team_thresholds` **same** (8 of the importer's 9 reads); `session_tags` observed; `units`
+`not_observed` (no endpoint, no value is read); `session_drill_details` **`not_observed`** with the
+reason `no_confirmed_parent`: the list rows carry a `drills` list, but the parent's own read
+(`team_session/<id>/`) carries `drills_count > 0` **without** a `drills` list, so the precondition
+of the table row below (a non-empty `drills` list on the parent's own read) could not be met and
+no drill request was sent. No id, date, value or field list of the report is copied here.
+
+**The drill-only run (`--mode drill`, owner order 2026-10-01, built, not yet run):** the full
+run is not repeated. One exchange, then at most six reads, each one only after the previous
+answer confirmed the identity it depends on, and the chain stops **without the next request** at
+the first identity or team that is not confirmed: (1) the unfiltered list of team 980 gives a
+parent row for certain — a row of team 980 with a non-empty `drills` list — and the first
+canonical id of that list is the drill id (no such row: `no_parent_with_drills_in_list`, nothing
+else is read); (2) the parent's own read must answer 200 with the **same** `id`, `team` 980 and
+`drills_count > 0` — a `drills` list is not required there, that is what the full run found
+missing (another id: `parent_id_mismatch`; no readable id, no `drills_count > 0`, a non-200 or a
+list-shaped body: `parent_not_confirmed`; another team: `team_isolation_failed`; a team in an
+unreadable shape: `team_unknown_shape`; a list row that names itself as its drill is refused
+before any read: `drill_is_parent`); (3) the drill session's own read must answer 200 with the
+**same** drill `id` and `team` 980, and if it names its parent (`teamsession`) it must name the
+chosen one (`drill_id_mismatch`, `drill_parent_mismatch`, `drill_not_confirmed`, the two team
+stops); (4) the parent's whole-session details (not 200:
+`whole_session_details_unavailable`); (5) the drill by its
+position on the parent, the importer's exact form of the table row below; (6) the drill by its
+real id; (7) the matrix of the table row below, unchanged. The report carries `mode: "drill"`,
+`session_read` (the verdict word with the full run's meaning — team, `drills_count` and
+`start_timestamp` present — beside the gate booleans `idMatchesList`, `teamIs980`,
+`drillsCountPositive`, `drillsListPresent`, `parentConfirmed`), `drill_session_read` (**observed**
+or `not_observed`, never **same**: the importer never reads a drill session by its id; with
+`idMatchesParentList`, `teamIs980`, `namesParent`, `drillConfirmed`), `session_details` and
+`session_drill_details` (on every early stop `not_observed` with the stop code as its reason);
+nothing of the athlete chain, the date window, the thresholds or the tags is read again. The request cap of this
+mode is 7 whatever is asked (`DRILL_MODE_MAX_REQUESTS`). Its PowerShell commands are handed over
+only after the owner's external review of the mode.
 
 The report, per capability: a verdict (`proven` for the list this run starts from; `same`,
 `mapped`, `observed`, `not_observed`), the status, counts and booleans such as `parentConfirmed`,
@@ -131,7 +180,7 @@ and counts. `stoppedBy` names why a run ended early (`exchange_failed`,
 | `session_list_by_date` | `team_session/?team=980&start_timestamp_gte=<day> 00:00:00&start_timestamp_lte=<day> 23:59:59&limit=<n>` | 200. **Proven only when all of these hold:** every returned row's `team` is 980; every returned row's `start_timestamp` lies inside the asked window; and the filtered `X-Total-Count` is **smaller** than the unfiltered count of this same run (so at least one row was really left out). Rows that satisfy the window prove nothing alone: an ignored filter returns the same first rows. Equal counts, or a row outside the window, mean the filter is not applied: reported as not proven, never as **same** |
 | `session_read` | `team_session/<id>/` | **same** only when 200, object, `team` is 980, and `drills_count` and a `start_timestamp` are present (what the importer reads from it); nothing after this read runs unless `team` is 980 |
 | `session_details` | `team_session/<id>/details/` | status; body shape; field names |
-| `session_drill_details` | **Precondition, checked first:** the chosen session `<id>` is a confirmed parent — its own read (`session_read`, above) answered 200 with `team` 980, `drills_count > 0` and a non-empty `drills` list. Only then, three read-only requests on that session: **(1) the importer's exact form, by position:** `team_session/<id>/details/?drill=0` — the `0` is the position of the first drill in the confirmed `drills` list, not an invented value; **(2) the same drill by its real id:** `team_session/<drill id>/details/`, where `<drill id>` is the first id of that `drills` list; **(3) the parent's whole-session values** `team_session/<id>/details/` (the `session_details` request of this run; not sent twice). Approved by the owner on 2026-09-30 | **Classification, one rule set (owner, 2026-10-01).** Two booleans are computed in the run and printed as booleans only, never with the values they were computed from: `parameterApplied` = the drill answer (1) differs from the whole-session answer (3) in at least one value (an identical answer means the `drill` parameter was ignored); `equivalent` = answers (1) and (2) have the same top-level field names, the same row count and, field by field, the same values. **same** = (1) is 200, `parameterApplied` is true, and, if (2) is also 200, `equivalent` is true. **mapped** = (1) is not 200, (2) is 200, and the id answer (2) differs from the whole-session answer (3) in at least one value. **`not_observed`** = everything else: (1) 200 with the parameter ignored; (1) and (2) both 200 but not equivalent; (2) 200 but identical to (3); neither 200; or no listed session is a confirmed parent. Never **missing** |
+| `session_drill_details` | **Precondition (full mode), checked first:** the chosen session `<id>` is a confirmed parent — its own read (`session_read`, above) answered 200 with `team` 980, `drills_count > 0` and a non-empty `drills` list (the drill-only run confirms the parent from the list row's `drills` plus the own read's `id`, `team` 980 and `drills_count > 0`, see above). Only then, three read-only requests on that session: **(1) the importer's exact form, by position:** `team_session/<id>/details/?drill=0` — the `0` is the position of the first drill in the confirmed `drills` list, not an invented value; **(2) the same drill by its real id:** `team_session/<drill id>/details/`, where `<drill id>` is the first id of that `drills` list; **(3) the parent's whole-session values** `team_session/<id>/details/` (the `session_details` request of this run; not sent twice). Approved by the owner on 2026-09-30 | **Classification, one rule set (owner, 2026-10-01).** Two booleans are computed in the run and printed as booleans only, never with the values they were computed from: `parameterApplied` = the drill answer (1) differs from the whole-session answer (3) in at least one value (an identical answer means the `drill` parameter was ignored); `equivalent` = answers (1) and (2) have the same top-level field names, the same row count and, field by field, the same values. **same** = (1) is 200, `parameterApplied` is true, and, if (2) is also 200, `equivalent` is true. **mapped** = (1) is not 200, (2) is 200, and the id answer (2) differs from the whole-session answer (3) in at least one value. **`not_observed`** = everything else: (1) 200 with the parameter ignored; (1) and (2) both 200 but not equivalent; (2) 200 but identical to (3); neither 200; or no listed session is a confirmed parent. Never **missing** |
 
 | `athlete_session_list` | `athlete_session/?teamsession=<id>&limit=<n>` | status; `X-Total-Count`; field names; whether every row's `teamsession` is `<id>` (a row naming another session stops the run; rows naming no session in a readable way are not used and the chain stops there) |
 | `athlete_session_read` | `athlete_session/<athlete session id>/` | status; field names; whether the detail names the same canonical session (`rowOfSession`). A detail naming **another** session stops the run; a missing or unreadable session, or a non-200, ends this chain: no `/more/` and no track are read |
@@ -146,8 +195,9 @@ value percent-encoded in full, `<day>%2000%3A00%3A00` (the `e03` client encodes 
 `<day>%2000:00:00`; both decode to the same value). The form the probe proves is the one the
 adapter later reproduces, with its own test; the general rules are not loosened.
 
-After that probe each row becomes **same**, **mapped**, **missing** or stays `not_observed`
-(still **unknown**); the adapter implements the proven ones, and only then can the importer's mapper be compared value by value on one
+After each probe a row becomes **same**, **mapped**, **missing** or stays `not_observed`
+(still **unknown**) — the first run moved rows 1b–7 and 9 to **same** and left row 8
+`not_observed` (section 2); the adapter implements the proven ones, and only then can the importer's mapper be compared value by value on one
 session (on a disposable database, as the pilot did for `e03`).
 
 ## 5. Rules the adapter keeps, whatever is added later
