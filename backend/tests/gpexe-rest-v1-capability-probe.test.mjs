@@ -645,12 +645,25 @@ test("12. the drill-only run: one exchange and exactly four reads in the documen
   assert.equal(realReport.capabilities.session_list.listRowMatchesFirstDrill, false);
   assert.equal(realReport.stoppedBy, null);
   assert.equal(real.calls.length, 5);
-  // A parent chosen by drills_count alone (the rows carry no `drills` list).
-  const countOnly = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [{ id: 300, team: 980, drills_count: 0 }, { id: 100, team: 980, drills_count: 3 }], { "x-total-count": "2" }) }));
+  // A drill-like row with a positive count but no `drills` list stands before the real parent:
+  // the run chooses the real parent, never the count-only row (owner, 2026-10-01).
+  const dLike = fakeServer(drillRoutes({
+    "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [{ id: 101, team: 980, drills_count: 2, drill: 0 }, sess(100, 980, DAY, [101, 102])], { "x-total-count": "2" }),
+    "GET /rest/v1/team_session/101/": answer(200, { id: 101, team: 980, drills_count: 2 }),
+    "GET /api/team_session/101/": answer(200, { id: 101, team: 980 }),
+    "GET /api/team_session/101/details/?drill=0": answer(200, LEGACY_DRILL),
+  }));
+  const dl = await drillRun(dLike.fetchImpl);
+  assert.equal(dl.stoppedBy, null);
+  assert.deepEqual(paths(dLike.calls).slice(2), ["GET /rest/v1/team_session/100/", "GET /api/team_session/100/", "GET /api/team_session/100/details/?drill=0"]);
+  assert.ok(!dLike.calls.some((c) => c.url.includes("/101/")), "the count-only row is never read");
+  // Only count-only rows: no parent, no legacy request, nothing after the list.
+  const countOnly = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [{ id: 300, team: 980, drills_count: 0 }, { id: 100, team: 980, drills_count: 3 }, { id: 101, team: 980, drills_count: 1, drills: [] }], { "x-total-count": "3" }) }));
   const co = await drillRun(countOnly.fetchImpl);
-  assert.equal(co.stoppedBy, null);
-  assert.equal(co.capabilities.session_list.drillsEntryKind, null);
-  assert.deepEqual(paths(countOnly.calls).slice(2), ["GET /rest/v1/team_session/100/", "GET /api/team_session/100/", "GET /api/team_session/100/details/?drill=0"]);
+  assert.equal(co.stoppedBy, "no_parent_with_drills_in_list");
+  assert.equal(countOnly.calls.length, 2);
+  assert.ok(!countOnly.calls.some((c) => c.url.includes("/api/team_session")), "no legacy request");
+  assert.deepEqual(co.capabilities.session_drill_details, { verdict: "not_observed", reason: "no_parent_with_drills_in_list" });
   // The drill answer: observed only with content; never same, mapped or missing.
   for (const [resp, verdict, reason] of [
     [answer(404, { detail: "Not found." }), "not_observed", "drill_not_200"],

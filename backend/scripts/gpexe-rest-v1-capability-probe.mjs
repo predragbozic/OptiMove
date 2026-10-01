@@ -338,10 +338,12 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     const named = new Set(rows.flatMap((r) => (Array.isArray(r.drills) ? r.drills.map((d) => safeId(d)).filter(Boolean) : [])));
     const firstParent = rows.find((r) => Array.isArray(r.drills) && r.drills.length > 0 && safeId(r.drills[0]) !== null && safeId(r.id) !== null);
     const firstUnnamed = rows.find((r) => safeId(r.id) !== null && !named.has(safeId(r.id)));
-    // The drill-only run's parent: a row of team 980 with a readable id that says it has drills
-    // (a non-empty `drills` list or `drills_count > 0`); its `drills` entries are never ids.
+    // The drill-only run's parent: a row of team 980 with a readable id and an explicit,
+    // non-empty `drills` list (owner, 2026-10-01). `drills_count` alone never chooses a parent:
+    // it is not proven that a drill row cannot carry a positive count. The count is checked only
+    // on the chosen parent's own REST read. Its `drills` entries are never ids.
     const drillParent = rows.find((r) => safeId(r.id) !== null && namesTeam(r.team, team) === true
-      && ((Array.isArray(r.drills) && r.drills.length > 0) || (Number.isInteger(r.drills_count) && r.drills_count > 0)));
+      && Array.isArray(r.drills) && r.drills.length > 0);
     const chosen = firstParent ?? firstUnnamed ?? null;
     const sessionId = chosen ? safeId(chosen.id) : null;
     const days = new Set(rows.map((r) => dayOf(r.start_timestamp)).filter(Boolean));

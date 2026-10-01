@@ -376,8 +376,9 @@ not opened by the main session) shows that on `server3` it reads a drill's resul
 `api/team_session/<parent id>/details/?drill=<zero-based index>`, the whole session and
 `drills_count` as `rest/v1/team_session/<parent id>/details/`, and never uses `drills` as
 `team_session` ids. The drill-only run now (built, **not run** in this form): one exchange and at
-most four reads — the REST list gives a parent (team 980, a non-empty `drills` list or
-`drills_count > 0`), the parent's own REST read confirms the same id, team 980 and
+most four reads — the REST list gives a parent (team 980, a readable id and an explicit,
+non-empty `drills` list; `drills_count > 0` alone never chooses one, owner 2026-10-01), the
+parent's own REST read confirms the same id, team 980 and
 `drills_count > 0`, the same parent through the legacy family `api/team_session/<parent id>/`
 confirms the same id and team 980 again, and only then one read of the first drill by its
 zero-based position in the legacy form; it records the status, the body kind and booleans
@@ -966,6 +967,16 @@ pre-existing; pass/fail counts don't belong in this file
   `3ef6033`.
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
+
+- **Mandatory before the F3c2 routes or any import: fix the drills filter of the `rest_v1`
+  adapter's `listSessions()`** (owner, 2026-10-01, after the review of PR #132). As the `e03`
+  importer does, `backend/src/gpexeRestV1Adapter.js` leaves out every session whose id another
+  session names in its `drills`. On `rest_v1` a `drills` entry is not a `team_session` id, or at
+  least that path answers a different session (first drill-only run, 2026-10-01), so that filter
+  may leave out real sessions and may keep drill rows as sessions (duplicate data in an import);
+  the fix must cover both directions. A separate, small PR,
+  not part of PR #132; the rule for telling a drill row from a session on `rest_v1` must come from
+  an observed answer, not from the `e03` model.
 
 - **Roster scalability check with 60 athletes** (owner, 2026-09-26, after PR #124's browser
   QA): the 25-athlete roster used in QA was only a test scenario, not a product limit. The

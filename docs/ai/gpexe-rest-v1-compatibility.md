@@ -81,7 +81,11 @@ without its date window:
 - how many teams the account sees (`countVisibleTeams`);
 - the team's sessions can be listed by team and page size, the whole list or a refusal, with the
   header paging the `e03` client already understands (`listSessions`). Like the importer, it
-  leaves out a session that another session names in its `drills`.
+  leaves out a session that another session names in its `drills`. **That filter is a known risk
+  on `rest_v1`:** the first drill-only run showed that a `drills` entry is not a `team_session` id
+  there, or at least that that path answers a different session, so the filter may leave out real
+  sessions whose id happens to equal an entry, and may keep drill rows as sessions. A separate
+  adapter fix is mandatory before the F3c2 routes or any import (CURRENT_STATE, Separate tasks).
 
 **Not implemented, so the importer cannot run on `server3` yet:** everything a session bundle is
 made of (rows 2–9) and the date window (row 1b) are proven but not written into the adapter,
@@ -163,8 +167,10 @@ run):** it reads the legacy integration's drill form on a parent confirmed twice
 then at most four reads, each one only after the previous answer confirmed the identity it
 depends on, and the chain stops **without the next request** at the first identity or team that
 is not confirmed: (1) the unfiltered REST list of team 980 gives a parent — a row of team 980
-with a readable id and a non-empty `drills` list or `drills_count > 0` (no such row:
-`no_parent_with_drills_in_list`, nothing else is read); (2) the parent's own REST read must
+with a readable id and an explicit, non-empty `drills` list; `drills_count > 0` alone never
+chooses a parent, because it is not proven that a drill row cannot carry a positive count (owner,
+2026-10-01) (no such row: `no_parent_with_drills_in_list`, nothing else is read, no legacy
+request); (2) the parent's own REST read must
 answer 200 with the **same** `id`, `team` 980 and `drills_count > 0` (another id:
 `parent_id_mismatch`; no readable id, no `drills_count > 0`, a non-200 or a list-shaped body:
 `parent_not_confirmed`; another team: `team_isolation_failed`; a team in an unreadable shape:
