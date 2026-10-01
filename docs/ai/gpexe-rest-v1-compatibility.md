@@ -79,12 +79,15 @@ form, then GET requests only for Team ID 980, at most 14 requests in all, a time
 answers bounded at 5 MiB, redirects never followed, no retry, no database. Only statuses, body
 shapes, field names, counts and booleans are returned, nothing of any body. Each line below is
 one request; ids are taken from the previous answers of the same run, never typed and never
-guessed, and a chain stops as soon as the previous answer gives no safe next id (the two reads
-that need no derived id — thresholds and tags — still run, both asked for team 980). A row of
+guessed, and a chain stops as soon as the previous answer gives no safe next id (the tag list,
+which needs no derived id, still runs, asked for team 980; thresholds run only on the day of the
+session's own confirmed read, otherwise `not_observed` with `session_not_confirmed` or
+`no_confirmed_day`). A row of
 another team, or an athlete row of another session, stops the whole run
 (`stoppedBy: team_isolation_failed`); a row whose `team` is in a shape the probe cannot read (an
 object, a URL, a list) stops it too (`team_unknown_shape`), because an unreadable team is not a
-confirmed team. Nothing after the session's own read runs unless that read confirmed team 980.
+confirmed team. Nothing after the session's own read runs unless that read confirmed team 980,
+except the tag list.
 The host and the team cannot be changed by an option. Masked paths show no id of any length and
 no date; the importer's drop list of personal fields applies before anything is described, so a
 dropped field (such as an athlete's name) is not even named. **The PowerShell commands for the run are handed over only after the
@@ -111,7 +114,11 @@ and counts. `stoppedBy` names why a run ended early (`exchange_failed`,
   `listSessions` applies), and the report says that the choice could not be confirmed as a
   parent. If the rows carry no `drills` list at all, that is reported and `<id>` is the first
   row.
-- *The day.* `<day>` is the date part of that row's `start_timestamp`.
+- *The day.* `<day>` is the date part of the `start_timestamp` of the session's **own confirmed
+  read** (`session_read`, team 980), never of the list row. If the list and the detail disagree
+  about the day, the source changed under the run: the date window is `not_observed`
+  (`source_changed_between_list_and_detail`) and no window request is sent. Thresholds use that
+  confirmed day only.
 - *The drill.* `<drill id>` is the first id in the chosen session's own `drills` list. If no row
   of the list read has a drill, the drill capability is reported **`not_observed`**: no request
   is sent for it and no index or id is invented.
@@ -127,10 +134,10 @@ and counts. `stoppedBy` names why a run ended early (`exchange_failed`,
 | `session_drill_details` | **Precondition, checked first:** the chosen session `<id>` is a confirmed parent — its own read (`session_read`, above) answered 200 with `team` 980, `drills_count > 0` and a non-empty `drills` list. Only then, three read-only requests on that session: **(1) the importer's exact form, by position:** `team_session/<id>/details/?drill=0` — the `0` is the position of the first drill in the confirmed `drills` list, not an invented value; **(2) the same drill by its real id:** `team_session/<drill id>/details/`, where `<drill id>` is the first id of that `drills` list; **(3) the parent's whole-session values** `team_session/<id>/details/` (the `session_details` request of this run; not sent twice). Approved by the owner on 2026-09-30 | **Classification, one rule set (owner, 2026-10-01).** Two booleans are computed in the run and printed as booleans only, never with the values they were computed from: `parameterApplied` = the drill answer (1) differs from the whole-session answer (3) in at least one value (an identical answer means the `drill` parameter was ignored); `equivalent` = answers (1) and (2) have the same top-level field names, the same row count and, field by field, the same values. **same** = (1) is 200, `parameterApplied` is true, and, if (2) is also 200, `equivalent` is true. **mapped** = (1) is not 200, (2) is 200, and the id answer (2) differs from the whole-session answer (3) in at least one value. **`not_observed`** = everything else: (1) 200 with the parameter ignored; (1) and (2) both 200 but not equivalent; (2) 200 but identical to (3); neither 200; or no listed session is a confirmed parent. Never **missing** |
 
 | `athlete_session_list` | `athlete_session/?teamsession=<id>&limit=<n>` | status; `X-Total-Count`; field names; whether every row's `teamsession` is `<id>` (a row naming another session stops the run; rows naming no session in a readable way are not used and the chain stops there) |
-| `athlete_session_read` | `athlete_session/<athlete session id>/` | status; field names |
-| `athlete_session_more` | `athlete_session/<athlete session id>/more/` | status; field names |
-| `track_read` | `track/<track id>/` | status; field names (a `timezone` field) |
-| `team_thresholds` | `team/980/thresholds/?valid_on=<day>` | status; body shape; field names |
+| `athlete_session_read` | `athlete_session/<athlete session id>/` | status; field names; whether the detail names the same canonical session (`rowOfSession`). A detail naming **another** session stops the run; a missing or unreadable session, or a non-200, ends this chain: no `/more/` and no track are read |
+| `athlete_session_more` | `athlete_session/<athlete session id>/more/` — only after a 200 detail that names the same session | status; field names |
+| `track_read` | `track/<track id>/` — `<track id>` taken **only from the confirmed detail's** `track` field, never from the list row | status; field names (a `timezone` field) |
+| `team_thresholds` | `team/980/thresholds/?valid_on=<day>` — `<day>` is the confirmed detail's day only; no request without it | status; body shape; field names |
 | `session_tags` | `team_session_tag/?team=980&limit=5` | status; field names; whether a tag names a team (whether the endpoint honours `team` is part of what is observed; a tag of another team stops the run) |
 
 Note for the date window: its values carry a space and colons (`<day> 00:00:00`), which

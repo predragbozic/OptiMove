@@ -276,7 +276,9 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       report.stoppedBy = "no_safe_session_id";
       return finish(report, env, issued);
     }
-    const day = dayOf(chosen.start_timestamp);
+    // The list's day is a hint only; the day that is used comes from the
+    // session's own confirmed read below.
+    const listDay = dayOf(chosen.start_timestamp);
 
     // 3. The session itself: the parent is confirmed here or not at all.
     const session = await get(`team_session/${sessionId}/`);
@@ -287,6 +289,9 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     const drillsCount = sessionOk && Number.isInteger(sb.drills_count) ? sb.drills_count : null;
     const drillIds = sessionOk && Array.isArray(sb.drills) ? sb.drills.map(safeId) : null;
     const startPresent = sessionOk && dayOf(sb.start_timestamp) !== null;
+    // The confirmed day: from the session's own read, and only when that read confirmed team 980.
+    const day = sessionTeamOk ? dayOf(sb.start_timestamp) : null;
+    const dayChangedSinceList = day !== null && listDay !== null && day !== listDay;
     const parentConfirmed = sessionTeamOk && drillsCount !== null && drillsCount > 0 && Array.isArray(drillIds) && drillIds.length > 0 && drillIds[0] !== null;
     // "same" as the importer's session read: team 980, drills_count and a start timestamp present.
     verdict("session_read", {
@@ -316,6 +321,10 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     // 6. The date window, judged only on a day the unfiltered list can judge.
     if (!sessionTeamOk) {
       verdict("session_list_by_date", { verdict: "not_observed", reason: "session_not_confirmed" });
+    } else if (dayChangedSinceList) {
+      // The list and the detail disagree about the day: the source changed
+      // under the run, and no window is judged on a day that moved.
+      verdict("session_list_by_date", { verdict: "not_observed", reason: "source_changed_between_list_and_detail" });
     } else if (day && days.size > 1 && unfilteredTotal !== null) {
       const window = `start_timestamp_gte=${encodeURIComponent(`${day} 00:00:00`)}&start_timestamp_lte=${encodeURIComponent(`${day} 23:59:59`)}`;
       const filtered = await get(`team_session/?team=${team}&${window}&limit=${LIST_LIMIT}`);
@@ -332,7 +341,7 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
         filteredCountSmallerThanUnfiltered: smaller, filteredTotalIsNumber: total !== null, rowCount: frows ? frows.length : null,
       });
     } else {
-      verdict("session_list_by_date", { verdict: "not_observed", reason: !day ? "no_day" : days.size <= 1 ? "list_has_one_day" : "no_unfiltered_total" });
+      verdict("session_list_by_date", { verdict: "not_observed", reason: !day ? "no_confirmed_day" : days.size <= 1 ? "list_has_one_day" : "no_unfiltered_total" });
     }
 
     // 7. Athlete rows of the confirmed session, then one row, its /more/ and its track.
@@ -349,21 +358,38 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       const allOfSession = Boolean(arows && arows.length > 0 && arows.every((r) => safeId(r.teamsession) === sessionId));
       const first = allOfSession ? arows.find((r) => safeId(r.id) !== null) : null;
       athleteId = first ? safeId(first.id) : null;
-      trackId = first && "track" in first ? safeId(first.track) : null;
+      // The list row's `track` is NOT used: the track id comes only from the
+      // row's own confirmed detail below.
       verdict("athlete_session_list", {
         verdict: athletes.status === 200 && arows && (arows.length === 0 || allOfSession) ? "same" : "not_observed", status: athletes.status ?? null, rowCount: arows ? arows.length : null,
         ...(arows && arows.length > 0 && !allOfSession ? { reason: "rows_do_not_name_session" } : {}),
-        allRowsOfSession: allOfSession, athleteIdDerived: athleteId !== null, trackIdDerived: trackId !== null,
+        allRowsOfSession: allOfSession, athleteIdDerived: athleteId !== null, listRowHasTrackField: Boolean(first && "track" in first),
       });
     } else {
       verdict("athlete_session_list", { verdict: "not_observed", reason: "session_not_confirmed" });
     }
     if (athleteId !== null) {
+      // The row's own detail must answer 200 and name the same canonical
+      // session before anything that depends on it is read. Another session
+      // stops the run; a missing or unreadable session, or a failed detail,
+      // ends this chain with not_observed and no further request.
       const one = await get(`athlete_session/${athleteId}/`);
-      const oneOk = one.status === 200 && one.body && typeof one.body === "object" && safeId(one.body.teamsession) === sessionId;
-      verdict("athlete_session_read", { verdict: oneOk ? "same" : "not_observed", status: one.status ?? null, rowOfSession: oneOk || false });
-      const more = await get(`athlete_session/${athleteId}/more/`);
-      verdict("athlete_session_more", { verdict: more.status === 200 ? "same" : "not_observed", status: more.status ?? null });
+      const ob = one.body;
+      const detailOk = Boolean(one.status === 200 && ob && typeof ob === "object" && !Array.isArray(ob));
+      const detailSession = detailOk && "teamsession" in ob ? safeId(ob.teamsession) : null;
+      if (detailSession !== null && detailSession !== sessionId) throw new ProbeStop("team_isolation_failed", "an athlete row's detail names another session");
+      const oneOk = Boolean(detailOk && detailSession === sessionId);
+      trackId = oneOk && "track" in ob ? safeId(ob.track) : null;
+      verdict("athlete_session_read", {
+        verdict: oneOk ? "same" : "not_observed", status: one.status ?? null, rowOfSession: oneOk,
+        ...(detailOk && !oneOk ? { reason: "detail_does_not_name_session" } : {}), trackIdDerived: trackId !== null,
+      });
+      if (oneOk) {
+        const more = await get(`athlete_session/${athleteId}/more/`);
+        verdict("athlete_session_more", { verdict: more.status === 200 ? "same" : "not_observed", status: more.status ?? null });
+      } else {
+        verdict("athlete_session_more", { verdict: "not_observed", reason: "detail_not_confirmed" });
+      }
     } else {
       verdict("athlete_session_read", { verdict: "not_observed", reason: "no_safe_athlete_id" });
       verdict("athlete_session_more", { verdict: "not_observed", reason: "no_safe_athlete_id" });
@@ -376,12 +402,12 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       verdict("track_read", { verdict: "not_observed", reason: "no_safe_track_id" });
     }
 
-    // 8. Thresholds valid on the session's day, and the tags list.
+    // 8. Thresholds valid on the CONFIRMED day of the session's own read, and the tags list.
     if (day) {
       const thresholds = await get(`team/${team}/thresholds/?valid_on=${day}`);
       verdict("team_thresholds", { verdict: thresholds.status === 200 ? "same" : "not_observed", status: thresholds.status ?? null });
     } else {
-      verdict("team_thresholds", { verdict: "not_observed", reason: "no_day" });
+      verdict("team_thresholds", { verdict: "not_observed", reason: sessionTeamOk ? "no_confirmed_day" : "session_not_confirmed" });
     }
     // Tags, asked for team 980 like every other list (whether the endpoint
     // honours the parameter is part of what is observed); a row of another

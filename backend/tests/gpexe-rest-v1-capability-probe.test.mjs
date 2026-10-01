@@ -126,6 +126,8 @@ test("1. the happy run: one exchange, then GET only, 13 requests in a fixed orde
   assert.equal(report.capabilities.session_read.startTimestampPresent, true);
   assert.equal(report.capabilities.session_list.totalIsNumber, true);
   assert.equal(report.capabilities.track_read.hasTimezoneField, true);
+  assert.equal(report.capabilities.athlete_session_read.trackIdDerived, true);
+  assert.equal(report.capabilities.athlete_session_read.rowOfSession, true);
   assert.equal(report.capabilities.session_tags.rowsNameATeam, true);
 });
 
@@ -226,13 +228,14 @@ test("5. the chain stops as soon as the previous answer gives no safe next id: n
   assert.equal(a.capabilities.track_read.reason, "no_safe_track_id");
   assert.ok(!empty.calls.some((c) => /athlete_session\/\d+\/|\/track\//.test(c.url)));
   assert.equal(a.capabilities.team_thresholds.verdict, "same", "independent reads still run");
-  // An athlete row without a track field: no track request.
-  const noTrack = fakeServer(happyRoutes({ "GET /rest/v1/athlete_session/?teamsession=100&limit=100": answer(200, [{ id: 500, teamsession: 100 }], { "x-total-count": "1" }) }));
+  // The confirmed detail has no track field: no track request, whatever the list row said.
+  const noTrack = fakeServer(happyRoutes({ "GET /rest/v1/athlete_session/500/": answer(200, { id: 500, teamsession: 100 }) }));
   const b = await run(noTrack.fetchImpl);
+  assert.equal(b.capabilities.athlete_session_read.trackIdDerived, false);
   assert.equal(b.capabilities.track_read.reason, "no_safe_track_id");
   assert.ok(!noTrack.calls.some((c) => c.url.includes("/track/")));
-  // A track id that is not a canonical id is not used.
-  const badTrack = fakeServer(happyRoutes({ "GET /rest/v1/athlete_session/?teamsession=100&limit=100": answer(200, [{ id: 500, teamsession: 100, track: "https://evil.example/900" }], { "x-total-count": "1" }) }));
+  // A track id in the detail that is not a canonical id is not used.
+  const badTrack = fakeServer(happyRoutes({ "GET /rest/v1/athlete_session/500/": answer(200, { id: 500, teamsession: 100, track: "https://evil.example/900" }) }));
   const c = await run(badTrack.fetchImpl);
   assert.equal(c.capabilities.track_read.reason, "no_safe_track_id");
   assert.ok(!badTrack.calls.some((x) => x.url.includes("/track/") || x.url.includes("evil")));
@@ -261,8 +264,9 @@ test("5. the chain stops as soon as the previous answer gives no safe next id: n
   assert.equal(th.capabilities.session_read.verdict, "not_observed");
   assert.equal(th.capabilities.session_read.teamIs980, true);
   assert.equal(th.capabilities.session_read.drillsCountPresent, false);
-  assert.ok(!unconfirmedTeam.calls.some((c) => c.url.includes("/details/") || c.url.includes("athlete_session")));
-  assert.equal(g.capabilities.team_thresholds.verdict, "same", "the fixed-team reads still run");
+  assert.ok(!unconfirmedTeam.calls.some((c) => c.url.includes("/details/") || c.url.includes("athlete_session") || c.url.includes("thresholds")));
+  assert.deepEqual(g.capabilities.team_thresholds, { verdict: "not_observed", reason: "session_not_confirmed" }, "no confirmed day, so no thresholds");
+  assert.equal(g.capabilities.session_tags.verdict, "observed", "the tag list still runs");
   // The list row says it has drills but the session's own read does not confirm it: still no drill request.
   const unconfirmed = fakeServer(happyRoutes({ "GET /rest/v1/team_session/100/": answer(200, sess(100, 980, DAY, [], { drills_count: 0 })) }));
   const e = await run(unconfirmed.fetchImpl);
@@ -273,6 +277,84 @@ test("5. the chain stops as soon as the previous answer gives no safe next id: n
   const f = await run(noIds.fetchImpl);
   assert.equal(f.stoppedBy, "no_safe_session_id");
   assert.equal(noIds.calls.length, 2);
+});
+
+test("5b. the athlete chain depends on the row's own confirmed detail: /more/ and the track are read only after a 200 detail that names the same session, and the track id comes from that detail only", async () => {
+  // The list says track 900, the confirmed detail says track 901: the detail decides.
+  const differs = fakeServer(happyRoutes({
+    "GET /rest/v1/athlete_session/500/": answer(200, { id: 500, teamsession: 100, track: 901 }),
+    "GET /rest/v1/track/901/": answer(200, { id: 901, timezone: MARKERS.tz }),
+  }));
+  const a = await run(differs.fetchImpl);
+  assert.equal(a.stoppedBy, null);
+  assert.equal(a.capabilities.track_read.verdict, "same");
+  assert.ok(differs.calls.some((c) => c.url.endsWith("/rest/v1/track/901/")), "the detail's track was read");
+  assert.ok(!differs.calls.some((c) => c.url.endsWith("/rest/v1/track/900/")), "the list's track was never read");
+  assert.equal(a.capabilities.athlete_session_list.listRowHasTrackField, true);
+  // The detail answers 404: no /more/, no track.
+  const missing = fakeServer(happyRoutes({ "GET /rest/v1/athlete_session/500/": answer(404, { detail: "Not found." }) }));
+  const b = await run(missing.fetchImpl);
+  assert.equal(b.stoppedBy, null);
+  assert.equal(b.capabilities.athlete_session_read.verdict, "not_observed");
+  assert.deepEqual(b.capabilities.athlete_session_more, { verdict: "not_observed", reason: "detail_not_confirmed" });
+  assert.equal(b.capabilities.track_read.reason, "no_safe_track_id");
+  assert.ok(!missing.calls.some((c) => c.url.includes("/more/") || c.url.includes("/track/")));
+  assert.equal(b.capabilities.team_thresholds.verdict, "same", "the fixed-team reads still run");
+  // The detail names another session: the whole run stops, nothing dependent is read.
+  const other = fakeServer(happyRoutes({ "GET /rest/v1/athlete_session/500/": answer(200, { id: 500, teamsession: 777, track: 900 }) }));
+  const c = await run(other.fetchImpl);
+  assert.equal(c.stoppedBy, "team_isolation_failed");
+  assert.ok(!other.calls.some((x) => x.url.includes("/more/") || x.url.includes("/track/") || x.url.includes("thresholds")));
+  assert.ok(!JSON.stringify(c).includes("777"));
+  // The detail names no session in a readable way: not_observed, no /more/, no track.
+  for (const detail of [{ id: 500, track: 900 }, { id: 500, teamsession: { id: 100 }, track: 900 }, { id: 500, teamsession: "https://server3.gpexe.com/rest/v1/team_session/100/", track: 900 }]) {
+    const unreadable = fakeServer(happyRoutes({ "GET /rest/v1/athlete_session/500/": answer(200, detail) }));
+    const d = await run(unreadable.fetchImpl);
+    assert.equal(d.stoppedBy, null, JSON.stringify(detail));
+    assert.deepEqual(d.capabilities.athlete_session_read, { verdict: "not_observed", status: 200, rowOfSession: false, reason: "detail_does_not_name_session", trackIdDerived: false });
+    assert.equal(d.capabilities.athlete_session_more.reason, "detail_not_confirmed");
+    assert.equal(d.capabilities.track_read.reason, "no_safe_track_id");
+    assert.ok(!unreadable.calls.some((x) => x.url.includes("/more/") || x.url.includes("/track/")));
+  }
+  // A detail of the wrong shape (a list) is not confirmed either.
+  const listShaped = fakeServer(happyRoutes({ "GET /rest/v1/athlete_session/500/": answer(200, [{ id: 500, teamsession: 100, track: 900 }]) }));
+  const e = await run(listShaped.fetchImpl);
+  assert.equal(e.capabilities.athlete_session_read.verdict, "not_observed");
+  assert.ok(!listShaped.calls.some((x) => x.url.includes("/more/") || x.url.includes("/track/")));
+  // The track read fails: not_observed, nothing else changes.
+  const trackGone = fakeServer(happyRoutes({ "GET /rest/v1/track/900/": answer(404, { detail: "Not found." }) }));
+  const f = await run(trackGone.fetchImpl);
+  assert.equal(f.capabilities.track_read.verdict, "not_observed");
+  assert.equal(f.capabilities.track_read.status, 404);
+  assert.equal(f.stoppedBy, null);
+});
+
+test("5c. the day comes from the session's own confirmed read: the date window is not judged when the list and the detail disagree, and thresholds use the detail's day only", async () => {
+  const DETAIL_DAY = "2026-09-12";
+  const moved = fakeServer(happyRoutes({
+    "GET /rest/v1/team_session/100/": answer(200, sess(100, 980, DETAIL_DAY, [101, 102])),
+    [`GET /rest/v1/team/980/thresholds/?valid_on=${DETAIL_DAY}`]: answer(200, [{ id: 5 }]),
+  }));
+  const a = await run(moved.fetchImpl);
+  assert.equal(a.stoppedBy, null);
+  assert.deepEqual(a.capabilities.session_list_by_date, { verdict: "not_observed", reason: "source_changed_between_list_and_detail" });
+  assert.ok(!moved.calls.some((c) => c.url.includes("start_timestamp_gte")), "no window request on a day that moved");
+  assert.ok(moved.calls.some((c) => c.url.endsWith(`/rest/v1/team/980/thresholds/?valid_on=${DETAIL_DAY}`)), "thresholds use the detail's day");
+  assert.ok(!moved.calls.some((c) => c.url.includes(`valid_on=${DAY}`)), "never the list's day");
+  assert.equal(a.capabilities.team_thresholds.verdict, "same");
+  assert.ok(!JSON.stringify(a).includes(DETAIL_DAY) && !JSON.stringify(a).includes("09-12"));
+  // The detail has no readable start timestamp: no day, so no window and no thresholds request.
+  const noStart = fakeServer(happyRoutes({ "GET /rest/v1/team_session/100/": answer(200, { id: 100, team: 980, drills_count: 2, drills: [101, 102] }) }));
+  const b = await run(noStart.fetchImpl);
+  assert.equal(b.capabilities.session_read.startTimestampPresent, false);
+  assert.deepEqual(b.capabilities.team_thresholds, { verdict: "not_observed", reason: "no_confirmed_day" });
+  assert.ok(!noStart.calls.some((c) => c.url.includes("thresholds") || c.url.includes("start_timestamp_gte")));
+  assert.equal(b.capabilities.session_list_by_date.reason, "no_confirmed_day");
+  // A 200 detail with an empty body is not confirmed either, and the report's shape stays stable.
+  const emptyDetail = fakeServer(happyRoutes({ "GET /rest/v1/athlete_session/500/": answer(200, "") }));
+  const r = await run(emptyDetail.fetchImpl);
+  assert.deepEqual(r.capabilities.athlete_session_read, { verdict: "not_observed", status: 200, rowOfSession: false, trackIdDerived: false });
+  assert.ok(!emptyDetail.calls.some((x) => x.url.includes("/more/") || x.url.includes("/track/")));
 });
 
 test("6. the drill matrix: same only with the parameter applied (and equivalence when the id read answered); mapped only when the ordinal read failed and the id read differs from the whole session; everything else not_observed", () => {
