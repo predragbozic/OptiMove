@@ -485,23 +485,28 @@ test("11d. never part of an answer: a stream that breaks, a chunk that is not by
   const named = [...section4.matchAll(/^\| `([a-z_]+)`/gm)].map((m) => m[1]);
   assert.ok(named.length >= 9);
   for (const name of named) assert.ok(Object.prototype.hasOwnProperty.call(REST_V1_CAPABILITIES, name), `${name} is a capability of the adapter`);
-  // drill=0 appears only in the one row that names the legacy form on a parent confirmed twice
-  // (owner, 2026-10-01): never the REST form, never a read by a drill id.
-  const drillRows = section4.split(/\r?\n/).filter((l) => /drill=0/.test(l));
-  assert.equal(drillRows.length, 1, "drill=0 appears in exactly one table row");
-  for (const l of drillRows) {
-    assert.ok(l.startsWith("| `session_drill_details` |"));
-    assert.match(l, /`api\/team_session\/<parent id>\/details\/\?drill=0`/);
-    assert.match(l, /zero-based/);
-    assert.match(l, /drills_count > 0/);
-    assert.match(l, /same `id`/);
-    assert.match(l, /team 980/);
-    assert.match(l, /Never \*\*missing\*\*/);
-    assert.doesNotMatch(l, /rest\/v1\/team_session\/[^`]*\?drill=|`team_session\/<id>\/details\/\?drill=0`/, "never the REST form");
-    assert.doesNotMatch(l, /\*\*same\*\*|\*\*mapped\*\*/, "this run never says same or mapped");
+  // drill=0 and drill=1 appear only in the one row that names the legacy form on a parent confirmed
+  // twice (owner, 2026-10-01): never the REST form, never a read by a drill id, never another position.
+  for (const position of ["0", "1"]) {
+    const rows = section4.split(/\r?\n/).filter((l) => new RegExp(`drill=${position}\\b`).test(l));
+    assert.equal(rows.length, 1, `drill=${position} appears in exactly one table row`);
+    assert.ok(rows[0].startsWith("| `session_drill_details` |"));
   }
+  const row = section4.split(/\r?\n/).find((l) => l.startsWith("| `session_drill_details` |"));
+  assert.match(row, /`api\/team_session\/<parent id>\/details\/\?drill=0`/);
+  assert.match(row, /`api\/team_session\/<parent id>\/details\/\?drill=1`/);
+  assert.match(row, /zero-based/);
+  assert.match(row, /drills_count >= 2/);
+  assert.match(row, /same `id`/);
+  assert.match(row, /team 980/);
+  assert.match(row, /`teamsession`/);
+  assert.match(row, /`parameter_effect_not_distinguishable`/);
+  assert.match(row, /Never \*\*missing\*\*/);
+  assert.doesNotMatch(row, /rest\/v1\/team_session\/[^`]*\?drill=|`team_session\/<id>\/details\/\?drill=0`/, "never the REST form");
+  assert.doesNotMatch(row, /`api\/team_session\/<parent id>\/details\/`/, "never a legacy details read without a position");
+  assert.doesNotMatch(row, /\*\*mapped\*\*/, "this run never says mapped");
   assert.doesNotMatch(section4, /<drill id>/, "no read by a drill id anywhere in section 4");
-  assert.doesNotMatch(section4, /drill=[1-9]/, "no other invented drill position");
+  assert.doesNotMatch(section4, /drill=([2-9]|1[0-9])/, "no other drill position");
   assert.doesNotMatch(doc.replace(/history, not a reference value/g, ""), /unfiltered 308|than the unfiltered 308/);
   // The source of the adapter asks for no whole body anywhere.
   const source = (await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeRestV1Adapter.js"), "utf8")).split(/\r?\n/).filter((l) => !l.trim().startsWith("//")).join("\n");

@@ -41,7 +41,9 @@ export const MAX_EXCHANGE_BYTES = 64 * 1024;
 // integration on server3): the legacy `api/` family of the same host, for exactly two read shapes
 // on a parent the REST chain confirmed first. Not a host profile, not an adapter family.
 export const LEGACY_API_PREFIX = "api/";
-export const LEGACY_API_PATH = /^team_session\/(0|[1-9][0-9]{0,11})\/(details\/\?drill=0)?$/;
+export const LEGACY_API_PATH = /^team_session\/(0|[1-9][0-9]{0,11})\/(details\/\?drill=[01])?$/;
+// The two drill positions the legacy integration really reads (owner, 2026-10-01): zero-based.
+export const DRILL_POSITIONS = Object.freeze([0, 1]);
 const ID = /^(0|[1-9][0-9]{0,11})$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -165,8 +167,8 @@ export function describeDrillAnswer(body) {
 }
 
 export const PROBE_MODES = Object.freeze(["full", "drill"]);
-// The drill-only run: one exchange and these four reads, nothing else.
-export const DRILL_MODE_MAX_REQUESTS = 5;
+// The drill-only run: one exchange and these five reads, nothing else.
+export const DRILL_MODE_MAX_REQUESTS = 6;
 
 export function parseArgs(argv) {
   const opts = { host: PROBE_HOST, team: PROBE_TEAM, mode: "full" };
@@ -188,7 +190,7 @@ export function parseArgs(argv) {
 // maxRequests and timeoutMs exist for the tests; the defaults are the limits.
 export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM, mode = "full", maxRequests = MAX_REQUESTS, timeoutMs = REQUEST_TIMEOUT_MS } = {}, env, fetchImpl = globalThis.fetch) {
   if (!PROBE_MODES.includes(mode)) throw new DiscoveryUsageError("mode must be full or drill");
-  // The drill-only run never sends more than its own four reads.
+  // The drill-only run never sends more than its own five reads.
   if (mode === "drill") maxRequests = Math.min(maxRequests, DRILL_MODE_MAX_REQUESTS);
   if (!Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > MAX_REQUESTS) throw new DiscoveryUsageError(`maxRequests is a whole number from 1 to ${MAX_REQUESTS}`);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > REQUEST_TIMEOUT_MS) throw new DiscoveryUsageError(`timeoutMs is a whole number up to ${REQUEST_TIMEOUT_MS}`);
@@ -338,12 +340,13 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     const named = new Set(rows.flatMap((r) => (Array.isArray(r.drills) ? r.drills.map((d) => safeId(d)).filter(Boolean) : [])));
     const firstParent = rows.find((r) => Array.isArray(r.drills) && r.drills.length > 0 && safeId(r.drills[0]) !== null && safeId(r.id) !== null);
     const firstUnnamed = rows.find((r) => safeId(r.id) !== null && !named.has(safeId(r.id)));
-    // The drill-only run's parent: a row of team 980 with a readable id and an explicit,
-    // non-empty `drills` list (owner, 2026-10-01). `drills_count` alone never chooses a parent:
-    // it is not proven that a drill row cannot carry a positive count. The count is checked only
-    // on the chosen parent's own REST read. Its `drills` entries are never ids.
+    // The drill-only run's parent: a row of team 980 with a readable id and an explicit `drills`
+    // list of at least two entries (owner, 2026-10-01), so the reads at positions 0 and 1 both
+    // name a drill. `drills_count` alone never chooses a parent: it is not proven that a drill row
+    // cannot carry a positive count. The count is checked only on the chosen parent's own REST
+    // read. Its `drills` entries are never ids.
     const drillParent = rows.find((r) => safeId(r.id) !== null && namesTeam(r.team, team) === true
-      && Array.isArray(r.drills) && r.drills.length > 0);
+      && Array.isArray(r.drills) && r.drills.length >= DRILL_POSITIONS.length);
     const chosen = firstParent ?? firstUnnamed ?? null;
     const sessionId = chosen ? safeId(chosen.id) : null;
     const days = new Set(rows.map((r) => dayOf(r.start_timestamp)).filter(Boolean));
@@ -363,8 +366,8 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     // team_session id on server3 (first drill-only run), and the owner's legacy
     // integration reads a drill as `api/team_session/<parent>/details/?drill=<index>`
     // with a zero-based index. So: the parent is confirmed by the REST chain,
-    // then again by the legacy family, and only then is the one drill read
-    // sent. Every identity is confirmed before the next read, and the chain
+    // then again by the legacy family, and only then are the two drill reads
+    // at positions 0 and 1 sent. Every identity is confirmed before the next read, and the chain
     // stops without a further request at the first identity or team that is
     // not confirmed. No `drills` entry is ever used as an id.
     if (mode === "drill") {
@@ -374,7 +377,7 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       }
       const parentId = safeId(drillParent.id);
       const stopDrill = (code) => { report.stoppedBy = code; return done(); };
-      // 2. The parent's own REST read: the same id, team 980, drills_count > 0.
+      // 2. The parent's own REST read: the same id, team 980, drills_count >= 2.
       const parent = await get(`team_session/${parentId}/`);
       const pb = parent.body;
       const parentOk = Boolean(parent.status === 200 && pb && typeof pb === "object" && !Array.isArray(pb));
@@ -383,12 +386,13 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       const parentTeamOk = parentOk && namesTeam(pb.team, team) === true;
       const parentCount = parentOk && Number.isInteger(pb.drills_count) ? pb.drills_count : null;
       const parentStart = parentOk && dayOf(pb.start_timestamp) !== null;
-      const parentConfirmed = parentIdOk && parentTeamOk && parentCount !== null && parentCount > 0;
+      const parentConfirmed = parentIdOk && parentTeamOk && parentCount !== null && parentCount >= DRILL_POSITIONS.length;
       verdict("session_read", {
         // The verdict word keeps the full run's meaning (what the importer reads is present);
         // the gate of this run is `parentConfirmed`, printed beside it.
         verdict: parentTeamOk && parentCount !== null && parentStart ? "same" : "not_observed", status: parent.status ?? null, idMatchesList: parentIdOk, teamIs980: parentTeamOk,
-        drillsCountPresent: parentCount !== null, drillsCountPositive: parentCount !== null && parentCount > 0, startTimestampPresent: parentStart, drillsListPresent: parentOk && Array.isArray(pb.drills), parentConfirmed,
+        drillsCountPresent: parentCount !== null, drillsCountPositive: parentCount !== null && parentCount > 0, drillsCountAtLeastTwo: parentCount !== null && parentCount >= DRILL_POSITIONS.length,
+        startTimestampPresent: parentStart, drillsListPresent: parentOk && Array.isArray(pb.drills), parentConfirmed,
       });
       if (!parentConfirmed) return stopDrill(parentOk && safeId(pb.id) !== null && !parentIdOk ? "parent_id_mismatch" : "parent_not_confirmed");
       // 3. The same parent through the legacy family: the same id and team 980 again.
@@ -405,15 +409,39 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
         drillsCountPositive: legacyOk && Number.isInteger(lb.drills_count) ? lb.drills_count > 0 : null, parentConfirmed: legacyConfirmed,
       });
       if (!legacyConfirmed) return stopDrill(legacyOk && safeId(lb.id) !== null && !legacyIdOk ? "legacy_parent_id_mismatch" : "legacy_parent_not_confirmed");
-      // 4. The one drill read: the first drill by its zero-based position on the confirmed parent.
-      const drill = await getLegacy(`team_session/${parentId}/details/?drill=0`);
-      const shape = describeDrillAnswer(drill.body);
-      const seen = drill.status === 200 && answerWithContent(drill.body);
-      const reason = drill.status !== 200 ? "drill_not_200" : !parsedAnswer(drill.body) ? "drill_answer_unreadable" : !seen ? "drill_answer_empty" : null;
+      // 4. The two drill reads the legacy integration really sends: positions 0 and 1 on the
+      //    confirmed parent. Each answer must name team 980 and the parent at its top level
+      //    before the next read; then only the `players` contents are compared, in memory.
+      const answers = [];
+      const players = [];
+      for (const position of DRILL_POSITIONS) {
+        const read = await getLegacy(`team_session/${parentId}/details/?drill=${position}`);
+        const b = read.body;
+        const object = read.status === 200 && parsedAnswer(b) && !Array.isArray(b);
+        if (object) assertTeam([b], `drill ${position} answer`);
+        const teamIs980 = object && namesTeam(b.team, team) === true;
+        const named = object ? safeId(b.teamsession) : null;
+        const namesParent = named === null ? null : named === parentId;
+        const answerPlayers = object && answerWithContent(b.players) ? b.players : null;
+        answers.push({ status: read.status ?? null, teamIs980, namesParent, playersPresent: answerPlayers !== null, ...describeDrillAnswer(b) });
+        players.push(answerPlayers);
+        const reason = read.status !== 200 ? "drill_not_200"
+          : !parsedAnswer(b) ? "drill_answer_unreadable"
+          : !answerWithContent(b) ? "drill_answer_empty"
+          : namesParent === false ? "drill_parent_mismatch"
+          : !teamIs980 || namesParent !== true ? "drill_answer_identity_unconfirmed"
+          : answerPlayers === null ? "drill_players_missing"
+          : null;
+        if (reason) {
+          verdict("session_drill_details", { verdict: "not_observed", family: "api", reason, positionsRead: answers.length, ...Object.fromEntries(answers.map((a, i) => [`drill${i}`, a])) });
+          return stopDrill(reason);
+        }
+      }
+      // 5. Only `players` is compared, whole, in memory; nothing of it is printed.
+      const parameterApplied = canonical(players[0]) !== canonical(players[1]);
       verdict("session_drill_details", {
-        // observed, never same or mapped: no reference is read, so the parameter's effect is
-        // not judged by this run; never missing.
-        verdict: seen ? "observed" : "not_observed", family: "api", status: drill.status ?? null, parameterEffectJudged: false, ...shape, ...(reason ? { reason } : {}),
+        verdict: parameterApplied ? "same" : "not_observed", family: "api", positionsRead: answers.length, parameterApplied,
+        ...(parameterApplied ? {} : { reason: "parameter_effect_not_distinguishable" }), drill0: answers[0], drill1: answers[1],
       });
       return done();
     }

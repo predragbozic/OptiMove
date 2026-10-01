@@ -375,26 +375,36 @@ integration's code (structural evidence, not an API answer; the file holds crede
 not opened by the main session) shows that on `server3` it reads a drill's results as
 `api/team_session/<parent id>/details/?drill=<zero-based index>`, the whole session and
 `drills_count` as `rest/v1/team_session/<parent id>/details/`, and never uses `drills` as
-`team_session` ids. The drill-only run now (built, **not run** in this form): one exchange and at
-most four reads — the REST list gives a parent (team 980, a readable id and an explicit,
-non-empty `drills` list; `drills_count > 0` alone never chooses one, owner 2026-10-01), the
-parent's own REST read confirms the same id, team 980 and
-`drills_count > 0`, the same parent through the legacy family `api/team_session/<parent id>/`
-confirms the same id and team 980 again, and only then one read of the first drill by its
-zero-based position in the legacy form; it records the status, the body kind and booleans
-(content, a `players` field, player rows, numbers, nested values, a metric-named field) and calls
-the answer observed or not_observed, never same, mapped or missing (no reference is read); any
-identity or team not confirmed stops the chain before the drill read (`parent_id_mismatch`,
-`parent_not_confirmed`, `legacy_parent_id_mismatch`, `legacy_parent_not_confirmed`,
-`team_isolation_failed`, `team_unknown_shape`), and every exit names the drill verdict; no
-`drills` entry is ever used as an id; the legacy family is used by the probe only, for those two
-read shapes on the same host, and is not added to the `server3` host profile or the adapter; the
-full run no longer reads any drill. **Owner product decision (2026-10-01):** the legacy way of
-reading drill results by parent id and `?drill=<index>` is the candidate to confirm; its way of
-naming drills — linking tags through all tagged sessions of that day sorted by time — is not
-reliable enough for OptiMove and is not copied; OptiMove keeps a drill as parent session +
-zero-based drill index, links a name or tag only when the API gives an explicit, tested link,
-uses the neutral name *Drill N* until then, and never guesses a tag
+`team_session` ids. **The second form was run once by the owner (2026-10-01, after the external
+review of head `9c702ff`):** `stoppedBy: null`, 5 requests; the parent confirmed by its REST read
+and again by `api/team_session/<parent id>/` (same id, team 980); the legacy drill read at the
+first position answered 200 with an object carrying `drills_count`, `players`, `team` and
+`teamsession` at the top level, `players` a map of objects with numbers. **Row 8 is now observed
+in the `api` family, never yet same**: one read confirms the endpoint and its shape only. The run
+also reported `listRowMatchesFirstDrill: true` (another row of the real list page has the id the
+parent's first `drills` entry names) — an observation that does not settle the `rest_v1` drill
+model. **The drill-only run, third form** (owner order 2026-10-01, built, **not run**): one
+exchange and at most five reads — the REST list gives a parent (team 980, a readable id and an
+explicit `drills` list of at least two entries; `drills_count` alone never chooses one), its own
+REST read confirms the same id, team 980 and `drills_count >= 2`, the same parent through
+`api/team_session/<parent id>/` confirms the same id and team 980 again, then the two legacy
+drill reads the legacy integration sends, `?drill=0` and `?drill=1`, each of which must name team
+980 and the parent at its top level (`team`, `teamsession`) before anything else is read; only
+the two `players` contents are compared, in memory, never printed: different →
+`parameterApplied: true` and the capability may be same; identical → `not_observed` with
+`parameter_effect_not_distinguishable`. The whole-session `api/…/details/` without a parameter is
+not used as a reference (not confirmed in the legacy integration). Any identity or team not
+confirmed stops the chain without the next request (`parent_id_mismatch`, `parent_not_confirmed`,
+`legacy_parent_id_mismatch`, `legacy_parent_not_confirmed`, `drill_parent_mismatch`,
+`drill_answer_identity_unconfirmed`, `team_isolation_failed`, `team_unknown_shape`), and every exit
+names the drill verdict; no `drills` entry is ever used as an id; the legacy family is used by the
+probe only, for those read shapes on the same host, and is not added to the `server3` host profile
+or the adapter; the full run no longer reads any drill. **Owner product decision (2026-10-01):**
+the legacy way of reading drill results by parent id and `?drill=<index>` is the candidate to
+confirm; its way of naming drills — linking tags through all tagged sessions of that day sorted by
+time — is not reliable enough for OptiMove and is not copied; OptiMove keeps a drill as parent
+session + zero-based drill index, links a name or tag only when the API gives an explicit, tested
+link, uses the neutral name *Drill N* until then, and never guesses a tag
 (`docs/ai/gpexe-rest-v1-compatibility.md` section 3). Its PowerShell commands are handed over only
 after the owner's external review of this form. No GPEXE request by the main session, no route, no
 database write, no credential storage, no binding, no import.
@@ -1169,9 +1179,9 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's external review of the second form of the drill-only probe mode on the F3c2b PR;
-then, on the owner's order, the owner-run drill-only read (the legacy drill form on a parent
-confirmed twice); then the merge
+The owner's external review of the third form of the drill-only probe mode on the F3c2b PR;
+then, on the owner's order, the owner-run drill-only read (the legacy drill reads at positions 0
+and 1 on a parent confirmed twice, compared in memory); then the merge
 decision on the F3c2b PR; then the adapter implements the reads the probe proved
 (`docs/ai/gpexe-rest-v1-compatibility.md` section 2, rows 1b–7 and 9, and row 8 only after an owner decision on the `api`
 family, which the `server3` profile does not carry), and, on the owner's order, the F3c2
