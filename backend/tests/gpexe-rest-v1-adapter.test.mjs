@@ -494,10 +494,14 @@ test("11d. never part of an answer: a stream that breaks, a chunk that is not by
     assert.match(l, /drills_count > 0/);
     assert.match(l, /non-empty `drills` list/);
     assert.match(l, /position of the first drill/);
-    assert.match(l, /never \*\*missing\*\*/);
-    assert.match(l, /\*\*same\*\*/);
-    assert.match(l, /\*\*mapped\*\*/);
-    assert.match(l, /parameterApplied/);
+    assert.match(l, /Never \*\*missing\*\*/);
+    // The matrix: same needs the parameter applied (and equivalence when the id read also
+    // answered); mapped needs the ordinal refused, the id read 200 and different from the whole
+    // session; everything else is not_observed.
+    assert.match(l, /\*\*same\*\* = \(1\) is 200, `parameterApplied` is true, and, if \(2\) is also 200, `equivalent` is true/);
+    assert.match(l, /\*\*mapped\*\* = \(1\) is not 200, \(2\) is 200, and the id answer \(2\) differs from the whole-session answer \(3\)/);
+    assert.match(l, /\*\*`not_observed`\*\* = everything else: \(1\) 200 with the parameter ignored; \(1\) and \(2\) both 200 but not equivalent; \(2\) 200 but identical to \(3\); neither 200/);
+    assert.doesNotMatch(l, /ordinal 200 = \*\*same\*\*|\(1\) 200 → \*\*same\*\*/, "no unconditional same");
   }
   assert.doesNotMatch(section4, /drill=[1-9]/, "no other invented drill position");
   assert.doesNotMatch(doc.replace(/history, not a reference value/g, ""), /unfiltered 308|than the unfiltered 308/);
