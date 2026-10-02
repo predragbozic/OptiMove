@@ -7,7 +7,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, DRILL_MODE_MAX_REQUESTS, DRILL_POSITIONS, DRILL_READ_SEQUENCE, LEGACY_API_PATH, LEGACY_API_PREFIX, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId,
+  answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, describeTeamValue, DRILL_MODE_MAX_REQUESTS, DRILL_POSITIONS, DRILL_READ_SEQUENCE, LEGACY_API_PATH, LEGACY_API_PREFIX, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId, TEAM_VALUE_KINDS,
 } from "../scripts/gpexe-rest-v1-capability-probe.mjs";
 import { DiscoveryUsageError } from "../scripts/gpexe-auth-discovery.mjs";
 
@@ -641,7 +641,7 @@ test("12. the drill-only run: one exchange and exactly six reads - the REST pare
   assert.deepEqual(report.capabilities.session_read, { verdict: "same", status: 200, idMatchesList: true, teamIs980: true, drillsCountPresent: true, drillsCountPositive: true, drillsCountAtLeastTwo: true, startTimestampPresent: true, drillsListPresent: false, parentConfirmed: true });
   assert.deepEqual(report.capabilities.legacy_api_session_read, { verdict: "observed", family: "api", status: 200, idMatchesParent: true, teamIs980: true, drillsCountPositive: true, parentConfirmed: true });
   const answerShape = {
-    status: 200, teamIs980: true, namesParent: true, playersPresent: true,
+    status: 200, teamIs980: true, namesParent: true, playersPresent: true, teamValueKind: "number",
     bodyKind: "object", hasContent: true, rowsAtTopLevel: false, playersField: true, playersContainerKind: "map", playerRowsPresent: true, playerRowsAreObjects: true,
     playerRowsHaveNumbers: true, playerRowsHaveNestedValues: true, metricFieldPresent: false,
   };
@@ -786,7 +786,7 @@ test("13. the drill reads: each answer, the repeated position 0 included, must n
     assert.equal(r.stoppedBy, stop, `${route} ${stop}`);
     assert.equal(f.calls.length, n, `${route} ${stop}: no request after the failed step`);
     if (route === D0 && n === 5) assert.ok(!f.calls.some((c) => c.url.includes("drill=1")), `${stop}: no second drill read`);
-    if (n === 7) assert.equal(d.readsMade, d.reason === stop && !["team_isolation_failed", "team_unknown_shape"].includes(stop) ? 3 : undefined);
+    assert.equal(d.readsMade, n - 4, `${stop}: every drill answer read so far is described, the team stops included`);
     assert.equal(d.verdict, "not_observed", stop);
     assert.equal(d.reason, stop);
     assert.ok(!["same", "mapped", "missing"].includes(d.verdict));
@@ -797,6 +797,79 @@ test("13. the drill reads: each answer, the repeated position 0 included, must n
   const wrapped = await drillRun(fakeServer(drillRoutes({ [D0]: answer(200, { results: [{ 4711: { tot_burst_events: 4 } }] }) })).fetchImpl);
   assert.equal(wrapped.requests[4].resultFieldNames, "<unprintable>");
   assert.deepEqual(wrapped.requests[4].fieldNames, ["results"]);
+});
+
+test("13b. the shape of a drill answer's top-level `team` is described as a kind word and booleans only, the acceptance rule is unchanged, and no value, key, URL, name or id of that field is printed", async () => {
+  assert.deepEqual([...TEAM_VALUE_KINDS], ["absent", "null", "number", "string", "object", "array", "other"]);
+  const MARK_ID = 424242;
+  const MARK_URL = "https://evil.example/team/424242/";
+  const MARK_KEY = "zzzSecretKey";
+  const body = (team, extra = {}) => legacyDrill(PLAYERS_0, { team, ...extra });
+  const absent = { players: PLAYERS_0, teamsession: 100, drills_count: 2 };
+  // [label, first position-0 answer, expected stop (null = the run completes), expected team diagnostics]
+  const cases = [
+    ["absent", absent, "drill_answer_identity_unconfirmed", { teamValueKind: "absent" }],
+    ["null", body(null), "team_unknown_shape", { teamValueKind: "null" }],
+    ["number", body(980), null, { teamValueKind: "number" }],
+    ["string", body("980"), null, { teamValueKind: "string" }],
+    ["object with the bound id", body({ id: 980, [MARK_KEY]: MARK_URL }), "team_unknown_shape", { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: true, teamObjectIdMatchesBoundTeam: true }],
+    ["object without id", body({ [MARK_KEY]: MARK_URL }), "team_unknown_shape", { teamValueKind: "object", teamObjectHasId: false, teamObjectIdCanonical: false, teamObjectIdMatchesBoundTeam: null }],
+    ["object with a non-canonical id", body({ id: MARK_URL }), "team_unknown_shape", { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: false, teamObjectIdMatchesBoundTeam: null }],
+    ["object with another canonical id", body({ id: MARK_ID }), "team_unknown_shape", { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: true, teamObjectIdMatchesBoundTeam: false }],
+    ["array", body([980]), "team_unknown_shape", { teamValueKind: "array" }],
+    ["URL string", body(MARK_URL), "team_unknown_shape", { teamValueKind: "string" }],
+    ["boolean", body(true), "team_unknown_shape", { teamValueKind: "other" }],
+    ["another canonical team", body(MARK_ID), "team_isolation_failed", { teamValueKind: "number" }],
+  ];
+  for (const [label, first, stop, diag] of cases) {
+    const f = fakeServer(drillRoutes({ [D0]: answer(200, first) }));
+    const r = await drillRun(f.fetchImpl);
+    const d = r.capabilities.session_drill_details;
+    if (stop === null) {
+      assert.equal(r.stoppedBy, null, label);
+      assert.equal(f.calls.length, 7, label);
+      assert.equal(d.drill0.teamIs980, true, label);
+    } else {
+      // The rule is unchanged: the run stops on the first drill read, nothing further is read.
+      assert.equal(r.stoppedBy, stop, label);
+      assert.equal(d.reason, stop, label);
+      assert.equal(d.verdict, "not_observed", label);
+      assert.equal(d.readsMade, 1, label);
+      assert.equal(f.calls.length, 5, `${label}: no request after the first drill read`);
+      assert.ok(!f.calls.some((c) => c.url.includes("drill=1")), `${label}: no second drill read`);
+      assert.equal(f.calls.filter((c) => c.url.includes("drill=0")).length, 1, `${label}: no repeated position 0`);
+      assert.equal(d.drill0.teamIs980, false, label);
+      assert.equal(d.drill1, undefined, label);
+    }
+    // Only the allowed keys, with the allowed values.
+    const picked = Object.fromEntries(Object.entries(d.drill0).filter(([k]) => k.startsWith("teamValue") || k.startsWith("teamObject")));
+    assert.deepEqual(picked, diag, label);
+    assert.ok(TEAM_VALUE_KINDS.includes(d.drill0.teamValueKind), label);
+    // Nothing of the field is printed: no value, key, URL, name or id, whatever the shape.
+    const text = JSON.stringify({ ...r, ranAt: "" }).replace(/"teamId":"980"/, "");
+    for (const leak of [String(MARK_ID), "424242", MARK_URL, "evil.example", MARK_KEY, MARKERS.athleteName, "4711", "1200.25"]) assert.ok(!text.includes(leak), `${label}: ${leak}`);
+    if (stop !== null) assert.ok(!/"[^"]*\b980\b/.test(text), `${label}: the bound team id is not printed as a value`);
+  }
+  // The repeated position 0 and position 1 are described the same way when they stop.
+  const repeatObj = fakeServer(drillRoutes({ [D0]: zeroThen(answer(200, legacyDrill(PLAYERS_0)), answer(200, body({ id: 980 }))) }));
+  const rr = await drillRun(repeatObj.fetchImpl);
+  assert.equal(rr.stoppedBy, "team_unknown_shape");
+  assert.equal(repeatObj.calls.length, 7);
+  assert.deepEqual([rr.capabilities.session_drill_details.readsMade, rr.capabilities.session_drill_details.drill0Repeat.teamValueKind, rr.capabilities.session_drill_details.drill0Repeat.teamObjectIdMatchesBoundTeam], [3, "object", true]);
+  const oneObj = fakeServer(drillRoutes({ [D1]: answer(200, body({ id: 980 })) }));
+  const r1 = await drillRun(oneObj.fetchImpl);
+  assert.equal(r1.stoppedBy, "team_unknown_shape");
+  assert.equal(oneObj.calls.length, 6);
+  assert.equal(r1.capabilities.session_drill_details.drill1.teamValueKind, "object");
+  // The function on its own.
+  assert.deepEqual(describeTeamValue(undefined, "980"), { teamValueKind: "absent" });
+  assert.deepEqual(describeTeamValue([{ team: 980 }], "980"), { teamValueKind: "absent" });
+  assert.deepEqual(describeTeamValue({ team: { id: "980" } }, "980"), { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: true, teamObjectIdMatchesBoundTeam: true });
+  assert.deepEqual(describeTeamValue({ team: { id: null } }, "980"), { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: false, teamObjectIdMatchesBoundTeam: null });
+  assert.deepEqual(describeTeamValue({ team: { id: "0980" } }, "980"), { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: false, teamObjectIdMatchesBoundTeam: null });
+  // The full run is not touched: its session reads carry no team diagnostics.
+  const full = await runCapabilityProbe({}, ENV, fakeServer().fetchImpl);
+  assert.ok(!JSON.stringify(full).includes("teamValueKind"));
 });
 
 test("14. the drill-only run stops before any drill read at the first parent identity or team that is not confirmed - by REST or by the legacy family - and every stop names the drill verdict", async () => {

@@ -169,6 +169,27 @@ export function describeDrillAnswer(body) {
   };
 }
 
+// The shape of a drill answer's top-level `team`, as a kind word and booleans only (owner,
+// 2026-10-02): diagnostics for the report, never a rule. The acceptance rule stays `namesTeam`
+// (a canonical id as a number or a string); every other shape still stops the run as
+// `team_unknown_shape`, even an object whose `id` is the bound team. No value, key, URL or name
+// of the field leaves this function.
+export const TEAM_VALUE_KINDS = Object.freeze(["absent", "null", "number", "string", "object", "array", "other"]);
+export function describeTeamValue(body, team) {
+  if (!parsedAnswer(body) || Array.isArray(body) || !("team" in body)) return { teamValueKind: "absent" };
+  const v = body.team;
+  const teamValueKind = v === null ? "null" : Array.isArray(v) ? "array" : typeof v === "number" ? "number" : typeof v === "string" ? "string" : typeof v === "object" ? "object" : "other";
+  const out = { teamValueKind };
+  if (teamValueKind === "object") {
+    const teamObjectHasId = Object.prototype.hasOwnProperty.call(v, "id");
+    const id = teamObjectHasId ? safeId(v.id) : null;
+    out.teamObjectHasId = teamObjectHasId;
+    out.teamObjectIdCanonical = teamObjectHasId && id !== null;
+    out.teamObjectIdMatchesBoundTeam = id === null ? null : id === team;
+  }
+  return out;
+}
+
 export const PROBE_MODES = Object.freeze(["full", "drill"]);
 // The drill-only run: one exchange and these six reads, nothing else.
 export const DRILL_MODE_MAX_REQUESTS = 7;
@@ -423,13 +444,21 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
         const read = await getLegacy(`team_session/${parentId}/details/?drill=${position}`);
         const b = read.body;
         const object = read.status === 200 && parsedAnswer(b) && !Array.isArray(b);
-        if (object) assertTeam([b], `drill ${position} answer`);
-        const teamIs980 = object && namesTeam(b.team, team) === true;
+        // The team rule is unchanged: a canonical id as a number or a string, or a stop. The
+        // shape of the field is described first, as a kind word and booleans, so a stop on an
+        // unreadable shape still says what kind of shape it was.
+        const teamNamed = object && "team" in b ? namesTeam(b.team, team) : null;
+        const teamIs980 = teamNamed === true;
         const named = object ? safeId(b.teamsession) : null;
         const namesParent = named === null ? null : named === parentId;
         const answerPlayers = object && answerWithContent(b.players) ? b.players : null;
-        answers.push({ status: read.status ?? null, teamIs980, namesParent, playersPresent: answerPlayers !== null, ...describeDrillAnswer(b) });
+        answers.push({ status: read.status ?? null, teamIs980, namesParent, playersPresent: answerPlayers !== null, ...describeTeamValue(b, team), ...describeDrillAnswer(b) });
         players.push(answerPlayers);
+        if (object && "team" in b && teamNamed !== true) {
+          const code = teamNamed === false ? "team_isolation_failed" : "team_unknown_shape";
+          verdict("session_drill_details", { verdict: "not_observed", family: "api", reason: code, readsMade: answers.length, ...Object.fromEntries(answers.map((a, i) => [labels[i], a])) });
+          assertTeam([b], `drill ${position} answer`); // throws the stop; nothing further is read
+        }
         const reason = read.status !== 200 ? "drill_not_200"
           : !parsedAnswer(b) ? "drill_answer_unreadable"
           : !answerWithContent(b) ? "drill_answer_empty"

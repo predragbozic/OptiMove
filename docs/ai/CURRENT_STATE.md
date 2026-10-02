@@ -409,9 +409,21 @@ confirm; its way of naming drills — linking tags through all tagged sessions o
 time — is not reliable enough for OptiMove and is not copied; OptiMove keeps a drill as parent
 session + zero-based drill index, links a name or tag only when the API gives an explicit, tested
 link, uses the neutral name *Drill N* until then, and never guesses a tag
-(`docs/ai/gpexe-rest-v1-compatibility.md` section 3). Its PowerShell commands are handed over only
-after the owner's external review of this form. No GPEXE request by the main session, no route, no
-database write, no credential storage, no binding, no import.
+(`docs/ai/gpexe-rest-v1-compatibility.md` section 3). **The third form was run once by the owner
+(2026-10-02, after the external review of head `3f466ed`):** `stoppedBy: team_unknown_shape`, 5
+requests — the REST list, the REST parent and the legacy parent confirmed as before; the first
+`?drill=0` answered 200 with the expected top-level fields, but its `team` was not a canonical id
+as a number or a string, so the run stopped before `?drill=1` and the repeated `?drill=0`; nothing
+was compared and there is no conclusion about the parameter; **row 8 stays observed, never yet
+same.** On the same PR the probe gained **diagnostics of the `team` shape** in every drill
+answer's report entry (owner order 2026-10-02): `teamValueKind` (`absent` / `null` / `number` /
+`string` / `object` / `array` / `other`) and, for an object only, `teamObjectHasId`,
+`teamObjectIdCanonical` and `teamObjectIdMatchesBoundTeam` — no value, key list, URL, name or id.
+**The acceptance rule is unchanged:** any non-canonical shape still stops the run as
+`team_unknown_shape`, even when the object's `id` matches the bound team, and nothing further is
+read; accepting `team.id` is a separate owner decision after the next result. Its PowerShell
+commands are handed over only after the owner's external review of this change. No GPEXE request
+by the main session, no route, no database write, no credential storage, no binding, no import.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1184,8 +1196,10 @@ pre-existing; pass/fail counts don't belong in this file
 ## Most likely next step
 
 The owner's external review of the third form of the drill-only probe mode on the F3c2b PR;
-then, on the owner's order, the owner-run drill-only read (the legacy drill reads in the control
-sequence 0 → 1 → 0 on a parent confirmed twice, compared in memory); then the merge
+(now with the `team` shape diagnostics); then, on the owner's order, the owner-run drill-only
+read (the legacy drill reads in the control sequence 0 → 1 → 0 on a parent confirmed twice,
+compared in memory), whose result decides whether `team.id` may ever confirm a team; then the
+merge
 decision on the F3c2b PR; then the adapter implements the reads the probe proved
 (`docs/ai/gpexe-rest-v1-compatibility.md` section 2, rows 1b–7 and 9, and row 8 only after an owner decision on the `api`
 family, which the `server3` profile does not carry), and, on the owner's order, the F3c2
