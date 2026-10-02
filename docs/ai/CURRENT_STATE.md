@@ -1,6 +1,6 @@
 # Current state
 
-Last reviewed: 2026-10-01. Last `origin/main` commit checked: `47bf301` (merge of PR #131,
+Last reviewed: 2026-10-02. Last `origin/main` commit checked: `47bf301` (merge of PR #131,
 `feature/gpexe-rest-v1-adapter-f3c2a` → `main`; PR #130 `6f083a7` before it).
 
 ## Active phase
@@ -452,8 +452,18 @@ position 0 must map to the same index as the first (`drill_repeat_index_changed`
 same canonical `players` (`source_changed_during_probe`); a completed sequence is reported as
 **observed, not same**, with `repeatStable`, `parameterApplied` and the indexes for 0, 1 and the
 repeated 0. **The diagnostic link is not an identity rule and no permission for the adapter; the
-identity contract of a drill answer is decided by the owner after the result.** Its PowerShell
-commands are handed over only after the owner's external review of this change. No GPEXE request
+identity contract of a drill answer is decided by the owner after the result.** **The fourth form
+was attempted twice by the owner (2026-10-02, after the external review of head `7c54a7d`) and
+neither attempt reached a drill read:** the first — exchange 200, then the REST session list timed
+out after 30 s, 2 requests, `session_list_unavailable`; the second — the exchange itself answered
+400 with the single field `non_field_errors`, 1 request, `exchange_failed`. Both are operational
+events without any conclusion about the drill model, the token or the account; by the owner's
+decision there is no third attempt and no new diagnostic. **F3c2b is closed (owner, 2026-10-02):**
+the eight confirmed reads (date window, session read, whole-session details, athlete list,
+athlete row, `/more/`, track, thresholds) stay available to a future adapter; the drill endpoint
+stays **observed** only and is not confirmed enough for a production adapter; **drill data is not
+imported for now**; no new probes, no further sign-in attempts, no rule change; the owner's Google
+Sheet is neither checked nor changed. The PR #132 merge decision is the owner's. No GPEXE request
 by the main session, no route, no database write, no credential storage, no binding, no import.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
@@ -1226,15 +1236,13 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's external review of the third form of the drill-only probe mode on the F3c2b PR;
-(the final structural diagnostics); then, on the owner's order, the owner-run drill-only read (the
-legacy drill reads in the control sequence 0 → 1 → 0 on a parent confirmed twice, each next read
-only under the probe-only diagnostic link, compared in memory), whose result is the basis for the
-owner's separate decision on the identity contract of a drill answer (the `team` object stays
-opaque); then the merge
-decision on the F3c2b PR; then the adapter implements the reads the probe proved
-(`docs/ai/gpexe-rest-v1-compatibility.md` section 2, rows 1b–7 and 9, and row 8 only after an owner decision on the `api`
-family, which the `server3` profile does not carry), and, on the owner's order, the F3c2
+The owner's merge decision on the F3c2b probe PR (F3c2b is closed: eight reads confirmed, the
+drill endpoint observed only, drill data not imported for now, no further probe); then, on the
+owner's order, the mandatory `listSessions()` drills-filter fix (Separate tasks) and the adapter
+implementing the eight reads the probe proved (`docs/ai/gpexe-rest-v1-compatibility.md`
+section 2, rows 1b–7 and 9; row 8 stays out until a separate owner decision on the `api` family,
+which the `server3` profile does not carry, and on the identity contract of a drill answer), and,
+on the owner's order, the F3c2
 routes, built against the contract in `docs/ai/source-connections-f3c2-contract.md` section 2,
 then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and

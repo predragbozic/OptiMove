@@ -45,6 +45,12 @@ session. The existing `e03` importer (`backend/src/gpexeClient.js`,
 10. **The owner-run diagnostic probe of 2026-10-02, second** (head `79b2381`, section 4): the same
     stop, 5 requests, with the drill answer's link to the list described as booleans; the same
     sanitization and the same rule.
+11. **Two owner-run attempts of the final structural diagnostics on 2026-10-02** (head
+    `7c54a7d`, section 4) that did not reach a drill read: the first — exchange 200, then the
+    REST session list timed out after 30 s, 2 requests (`session_list_unavailable`); the second —
+    the exchange itself answered 400 with the single field `non_field_errors`, 1 request
+    (`exchange_failed`). Operational events only, with no conclusion about the drill model, the
+    token or the account; no further attempt (owner, 2026-10-02).
 
 Words used: **same** — same resource name and parameters, only the family prefix differs, and the
 answer was seen; **mapped** — a different path or parameter gives the same information, and the
@@ -75,7 +81,7 @@ but OptiMove has never seen its answer: it is still **unknown** for the adapter.
 | 5 | Burst and brake events of an athlete row | `athlete_session/<id>/more/` | **same** | probe 2026-10-01: 200 | unavailable (`athlete_session_more`) until implemented |
 | 6 | Track (time zone, device restarts) | `track/<id>/` | **same** | probe 2026-10-01: 200, id from the confirmed athlete detail | unavailable (`track_read`) until implemented |
 | 7 | Whole-session values per athlete | `team_session/<id>/details/` | **same** | probe 2026-10-01: 200 | unavailable (`session_details`) until implemented |
-| 8 | Values per drill | `team_session/<id>/details/?drill=<n>` | **observed** in the `api` family (never yet **same**); still **unknown** on `rest_v1` | full probe 2026-10-01: no request sent. First drill-only run: a `drills` entry read as `team_session/<entry>/` answered an id other than the entry, so a `drills` entry is not read as a `team_session` id again. Structural evidence (section 1, item 6): the legacy integration reads `api/team_session/<parent id>/details/?drill=<zero-based index>`. Second drill-only run (2026-10-01): on a parent confirmed by its REST read and again by `api/team_session/<parent id>/`, `api/team_session/<parent id>/details/?drill=<first position>` answered 200 with an object whose top-level fields are `drills_count`, `players`, `team` and `teamsession`; `players` is a map of objects carrying numbers and nested values. That confirms the endpoint and its shape only: one read cannot show that the position selects one drill. The REST `?drill=` form stays withdrawn. Third drill-only run (2026-10-02, control sequence 0 → 1 → 0): the first `?drill=0` answered 200 with the same top-level fields, but its `team` was not a canonical id as a number or a string, so the run stopped as `team_unknown_shape` before `?drill=1`; no conclusion about the parameter. Diagnostic run (2026-10-02): that `team` is an **object without an `id`** (kept opaque), and the answer's `teamsession` is a canonical id that is **not the parent's**. Second diagnostic run (2026-10-02): the answer's `teamsession` is **not the parent's first `drills` entry** either, while that entry is exactly one row of the list page and that row names team 980; so the answer names a third session, which the next run resolves against every entry of the parent's `drills` | unavailable (`session_drill_details`); the `api` family is not part of the `server3` profile |
+| 8 | Values per drill | `team_session/<id>/details/?drill=<n>` | **observed** in the `api` family (never yet **same**); still **unknown** on `rest_v1` | full probe 2026-10-01: no request sent. First drill-only run: a `drills` entry read as `team_session/<entry>/` answered an id other than the entry, so a `drills` entry is not read as a `team_session` id again. Structural evidence (section 1, item 6): the legacy integration reads `api/team_session/<parent id>/details/?drill=<zero-based index>`. Second drill-only run (2026-10-01): on a parent confirmed by its REST read and again by `api/team_session/<parent id>/`, `api/team_session/<parent id>/details/?drill=<first position>` answered 200 with an object whose top-level fields are `drills_count`, `players`, `team` and `teamsession`; `players` is a map of objects carrying numbers and nested values. That confirms the endpoint and its shape only: one read cannot show that the position selects one drill. The REST `?drill=` form stays withdrawn. Third drill-only run (2026-10-02, control sequence 0 → 1 → 0): the first `?drill=0` answered 200 with the same top-level fields, but its `team` was not a canonical id as a number or a string, so the run stopped as `team_unknown_shape` before `?drill=1`; no conclusion about the parameter. Diagnostic run (2026-10-02): that `team` is an **object without an `id`** (kept opaque), and the answer's `teamsession` is a canonical id that is **not the parent's**. Second diagnostic run (2026-10-02): the answer's `teamsession` is **not the parent's first `drills` entry** either, while that entry is exactly one row of the list page and that row names team 980; so the answer names a third session, which the final form of the probe would resolve against every entry of the parent's `drills`; that form was attempted twice on 2026-10-02 and did not reach a drill read (a list timeout, then a refused exchange; operational events, no conclusion). **F3c2b closed (owner, 2026-10-02): the drill endpoint stays observed only, not confirmed enough for a production adapter; drill data is not imported for now; no further probe, sign-in attempt or rule change** | unavailable (`session_drill_details`); the `api` family is not part of the `server3` profile |
 | 9 | Threshold set valid on the session day | `team/<team>/thresholds/?valid_on=` | **same** | probe 2026-10-01: 200 on the confirmed session's day | unavailable (`team_thresholds`) until implemented |
 | — | Units | no endpoint (numbers are SI on `e03`, verified in the pilot) | **unknown** | none; that `rest_v1` numbers are SI is not verified (the probe records no value) | unavailable (`units`) |
 | — | Session tags | not used by the importer | **observed** (legacy-attested path `team_session_tag/?team=&limit=`) | probe 2026-10-01: 200, asked for team 980; no returned tag named another team (one would have stopped the run); whether `team` is honoured is not shown | unavailable (`session_tags`) |
@@ -107,6 +113,14 @@ without its date window:
 made of (rows 2–9) and the date window (row 1b) are proven but not written into the adapter,
 and the drill read (row 8) is not proven at all. `fetchSessionBundle()` therefore still answers
 `source_capability_unavailable`.
+
+**How F3c2b closed (owner, 2026-10-02).** The eight confirmed reads (rows 1b–7 and 9) stay
+available to a future adapter. The drill endpoint (row 8) stays **observed** only in the `api`
+family: it exists and its shape is known, but it is not confirmed enough for a production adapter
+— no completed control sequence, no identity contract for a drill answer. Drill data is therefore
+**not imported for now**; a later import of whole sessions without drills is a separate decision.
+There are no new probes, no further sign-in attempts and no change to any rule; the owner's
+Google Sheet integration is neither checked nor changed by OptiMove.
 
 Also not proven, and not a matter of paths: that the **values** of `rest_v1` mean what the
 importer's mapper assumes for `e03` — naive timestamps in UTC, numbers in SI units, drills as
@@ -237,8 +251,21 @@ that first entry**: the answer names a third session. Whether it is another entr
 tell; the final structural diagnostics below resolve it in one run. Row 8 stays **observed**, never
 yet same. No id, date, value or key of the answer is copied here.
 
+**Two attempts of the fourth form (2026-10-02, head `7c54a7d`, sanitized by the owner), neither of
+which reached a drill read:** the first run — the exchange answered 200, then the REST session
+list (`team_session/?team=<team>&limit=<n>`) did not answer within the 30 s timeout; 2 requests;
+`stoppedBy: session_list_unavailable`, the drill verdict `not_observed` with that reason; nothing
+else was sent. The second run — the exchange itself answered 400 with the single field
+`non_field_errors`; no token was issued and no GET was sent; 1 request;
+`stoppedBy: exchange_failed`. Both are **operational events without any conclusion** about the
+drill model, the token or the account: a 400 on the exchange does not tell its cause apart, and
+the same pair had passed six exchanges before. By the owner's decision there is no third attempt
+and no new diagnostic. **F3c2b is closed with the drill endpoint at observed** (section 3, "How
+F3c2b closed"); the fourth form stays in the probe, unrun, as built. No id, date, value or key is
+copied here.
+
 **The drill-only run, fourth form: the final structural diagnostics (`--mode drill`, owner order
-2026-10-02, built, not yet run):**
+2026-10-02, built; attempted twice without reaching a drill read, see above; not run further):**
 the final check of the legacy drill form. The whole-session `api/team_session/<parent id>/details/`
 without a parameter is **not** used as a reference: that form is not confirmed in the legacy
 integration. One exchange, then at most six reads, each one only after the previous answer
