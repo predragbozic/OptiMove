@@ -51,6 +51,15 @@ session. The existing `e03` importer (`backend/src/gpexeClient.js`,
     the exchange itself answered 400 with the single field `non_field_errors`, 1 request
     (`exchange_failed`). Operational events only, with no conclusion about the drill model, the
     token or the account; no further attempt (owner, 2026-10-02).
+12. **The official GPEXE REST handbook** (`gpexe-v.6-api-rest-handbook.pdf`, supplied by the
+    owner; pages 31–33 and the Team Session Brief page; written for GPEXE 6, while the server
+    reports 9.11.8): the whole session is `GET /api/team_session/<parent id>/details/`; a drill is
+    `GET /api/team_session/<parent id>/details/?drill=<zero-based index>`, `drill` starting at
+    `0`, no parameter meaning the whole session; `players` carries the athletes' results;
+    `drills_count` gives the number of drills; the top-level `team` of a details answer is the
+    team's **aggregated parameters**, not an identity field; `GET /api/team_session/<parent id>/brief/`
+    answers with `drillTags`. Documentation, not an observed answer; a confirmation by GPEXE
+    support is welcome but not a blocker (owner, 2026-10-03).
 
 Words used: **same** — same resource name and parameters, only the family prefix differs, and the
 answer was seen; **mapped** — a different path or parameter gives the same information, and the
@@ -81,7 +90,7 @@ but OptiMove has never seen its answer: it is still **unknown** for the adapter.
 | 5 | Burst and brake events of an athlete row | `athlete_session/<id>/more/` | **same** | probe 2026-10-01: 200 | unavailable (`athlete_session_more`) until implemented |
 | 6 | Track (time zone, device restarts) | `track/<id>/` | **same** | probe 2026-10-01: 200, id from the confirmed athlete detail | unavailable (`track_read`) until implemented |
 | 7 | Whole-session values per athlete | `team_session/<id>/details/` | **same** | probe 2026-10-01: 200 | unavailable (`session_details`) until implemented |
-| 8 | Values per drill | `team_session/<id>/details/?drill=<n>` | **observed** in the `api` family (never yet **same**); still **unknown** on `rest_v1` | full probe 2026-10-01: no request sent. First drill-only run: a `drills` entry read as `team_session/<entry>/` answered an id other than the entry, so a `drills` entry is not read as a `team_session` id again. Structural evidence (section 1, item 6): the legacy integration reads `api/team_session/<parent id>/details/?drill=<zero-based index>`. Second drill-only run (2026-10-01): on a parent confirmed by its REST read and again by `api/team_session/<parent id>/`, `api/team_session/<parent id>/details/?drill=<first position>` answered 200 with an object whose top-level fields are `drills_count`, `players`, `team` and `teamsession`; `players` is a map of objects carrying numbers and nested values. That confirms the endpoint and its shape only: one read cannot show that the position selects one drill. The REST `?drill=` form stays withdrawn. Third drill-only run (2026-10-02, control sequence 0 → 1 → 0): the first `?drill=0` answered 200 with the same top-level fields, but its `team` was not a canonical id as a number or a string, so the run stopped as `team_unknown_shape` before `?drill=1`; no conclusion about the parameter. Diagnostic run (2026-10-02): that `team` is an **object without an `id`** (kept opaque), and the answer's `teamsession` is a canonical id that is **not the parent's**. Second diagnostic run (2026-10-02): the answer's `teamsession` is **not the parent's first `drills` entry** either, while that entry is exactly one row of the list page and that row names team 980; so the answer names a third session, which the final form of the probe would resolve against every entry of the parent's `drills`; that form was attempted twice on 2026-10-02 and did not reach a drill read (a list timeout, then a refused exchange; operational events, no conclusion). **F3c2b closed (owner, 2026-10-02): the drill endpoint stays observed only, not confirmed enough for a production adapter; drill data is not imported for now; no further probe, sign-in attempt or rule change** | unavailable (`session_drill_details`); the `api` family is not part of the `server3` profile |
+| 8 | Values per drill | `team_session/<id>/details/?drill=<n>` | **observed** in the `api` family (never yet **same**); still **unknown** on `rest_v1` | full probe 2026-10-01: no request sent. First drill-only run: a `drills` entry read as `team_session/<entry>/` answered an id other than the entry, so a `drills` entry is not read as a `team_session` id again. Structural evidence (section 1, item 6): the legacy integration reads `api/team_session/<parent id>/details/?drill=<zero-based index>`. Second drill-only run (2026-10-01): on a parent confirmed by its REST read and again by `api/team_session/<parent id>/`, `api/team_session/<parent id>/details/?drill=<first position>` answered 200 with an object whose top-level fields are `drills_count`, `players`, `team` and `teamsession`; `players` is a map of objects carrying numbers and nested values. That confirms the endpoint and its shape only: one read cannot show that the position selects one drill. The REST `?drill=` form stays withdrawn. Third drill-only run (2026-10-02, control sequence 0 → 1 → 0): the first `?drill=0` answered 200 with the same top-level fields, but its `team` was not a canonical id as a number or a string, so the run stopped as `team_unknown_shape` before `?drill=1`; no conclusion about the parameter. Diagnostic run (2026-10-02): that `team` is an **object without an `id`** (kept opaque), and the answer's `teamsession` is a canonical id that is **not the parent's**. Second diagnostic run (2026-10-02): the answer's `teamsession` is **not the parent's first `drills` entry** either, while that entry is exactly one row of the list page and that row names team 980; so the answer names a third session, which the final form of the probe would resolve against every entry of the parent's `drills`; that form was attempted twice on 2026-10-02 and did not reach a drill read (a list timeout, then a refused exchange; operational events, no conclusion). **F3c2b closed (owner, 2026-10-02): the drill endpoint is in practice **observed**, no further probe, sign-in attempt or rule change.** Final decision (owner, 2026-10-03, on the official handbook, section 1 item 12): the drill read is `api/team_session/<confirmed parent id>/details/?drill=<index>` with a zero-based index from `0` to `drills_count - 1`; drills stay in the future adapter and in the first planned import; `team` in a details answer is an aggregate, not a team id; `drills` entries and the answer's `teamsession` are used neither to build a URL nor as an identity guard; names come from an unambiguous `drillTags` mapping of the parent, fallback `Drill N` | unavailable (`session_drill_details`) until the separate adapter PR (section 3, "How F3c2b closed"); the `api` family is not part of the `server3` profile — the adapter gets one narrow builder for exactly that path, not a family |
 | 9 | Threshold set valid on the session day | `team/<team>/thresholds/?valid_on=` | **same** | probe 2026-10-01: 200 on the confirmed session's day | unavailable (`team_thresholds`) until implemented |
 | — | Units | no endpoint (numbers are SI on `e03`, verified in the pilot) | **unknown** | none; that `rest_v1` numbers are SI is not verified (the probe records no value) | unavailable (`units`) |
 | — | Session tags | not used by the importer | **observed** (legacy-attested path `team_session_tag/?team=&limit=`) | probe 2026-10-01: 200, asked for team 980; no returned tag named another team (one would have stopped the run); whether `team` is honoured is not shown | unavailable (`session_tags`) |
@@ -114,13 +123,23 @@ made of (rows 2–9) and the date window (row 1b) are proven but not written int
 and the drill read (row 8) is not proven at all. `fetchSessionBundle()` therefore still answers
 `source_capability_unavailable`.
 
-**How F3c2b closed (owner, 2026-10-02).** The eight confirmed reads (rows 1b–7 and 9) stay
-available to a future adapter. The drill endpoint (row 8) stays **observed** only in the `api`
-family: it exists and its shape is known, but it is not confirmed enough for a production adapter
-— no completed control sequence, no identity contract for a drill answer. Drill data is therefore
-**not imported for now**; a later import of whole sessions without drills is a separate decision.
-There are no new probes, no further sign-in attempts and no change to any rule; the owner's
-Google Sheet integration is neither checked nor changed by OptiMove.
+**How F3c2b closed (owner, 2026-10-02, aligned on 2026-10-03).** The eight confirmed `rest_v1`
+reads (rows 1b–7 and 9) stay confirmed and available to the future adapter. The drill endpoint
+(row 8) is in practice **observed** in the `api` family: it exists and its shape is known; the
+probe never completed a control sequence, so nothing of it is **same** in the probe's sense. How
+it is used is settled by the official handbook, not by a further probe: the confirmed parent
+session plus a zero-based index from `0` to `drills_count - 1`. **Drills are not dropped from
+the future adapter or from the first planned import.** `team` in a details answer is an
+aggregate, not a team id; `drills` entries and the answer's `teamsession` are used neither to
+build a URL nor as an identity guard; names come from an unambiguous `drillTags` mapping with
+the fallback `Drill N`, never from the tagged sessions of a day. There are **no more owner-run
+diagnostic probes** before that implementation, no further sign-in attempts and no change to any
+probe rule; the owner's Google Sheet integration is neither checked nor changed by OptiMove. The
+two last operational events (section 1, item 11; section 4) stay recorded without any
+conclusion about drills, the token or the account. The implementation is a separate small
+adapter PR after PR #132 is merged, on the owner's order: first the mandatory `listSessions()`
+drills-filter fix, then the eight confirmed reads, then one narrow builder for exactly the drill
+path on the approved `server3` host (no generic `api/` family), then names through `drillTags`.
 
 Also not proven, and not a matter of paths: that the **values** of `rest_v1` mean what the
 importer's mapper assumes for `e03` — naive timestamps in UTC, numbers in SI units, drills as
@@ -132,17 +151,23 @@ not the `e03` one:** on `rest_v1` reading an entry of a session's `drills` list 
 a session's own read carries `drill`, `drill_enabled` and `drills_count` without a `drills` list;
 what a drill is on `rest_v1` is open.
 
-**What OptiMove keeps of a drill (owner product decision, 2026-10-01).** The legacy
-integration's way of **reading** drill results — the parent session id plus `?drill=<zero-based
-index>` in the `api` family (section 1, item 6) — is the **candidate** to confirm, by the
-drill-only run of section 4; it is not proven until an owner-run answer has been seen. Its way of
-**naming** drills is not copied: the Sheet links a drill to a tag by taking all tagged sessions
-of that day sorted by time, which is not reliable enough for OptiMove — another tagged session
-that day, a changed order or a missing tag silently shifts every name. OptiMove keeps a drill as
-**parent session + zero-based drill index**; a drill's name or tag is linked only when the API
-gives an explicit link that has been tested; until then the drill carries the neutral name
-**Drill N**, and a tag is never guessed. This is a decision for the later import work; neither
-the adapter nor the importer does any of it today.
+**What OptiMove keeps of a drill (owner product decision, 2026-10-01, made final on 2026-10-03
+on the official handbook — section 1, item 12).** A drill is identified as the **confirmed parent
+session plus a zero-based index** from `0` to `drills_count - 1`, and read as
+`api/team_session/<confirmed parent id>/details/?drill=<index>` — the form the handbook
+documents and the legacy integration uses. The entries of a session's `drills` list are **not**
+ids needed to build that URL; the `teamsession` and the top-level `team` of a drill answer are
+**not** an identity guard of the parent (the handbook documents `team` as the team's aggregated
+parameters). Safety rests on the parent confirmed first, a fixed URL builder and the bounded
+index. **Drills stay in the future adapter and in the first planned production import.** A
+drill's **name** comes first from an unambiguous `drillTags` mapping of the parent session
+(`api/team_session/<confirmed parent id>/brief/`, translated through the team's tag catalogue,
+only a tag confirmed for the bound team); when the mapping is missing, unreadable, duplicated,
+not matching `drills_count` or not explicit, the fallback is **Drill 1, Drill 2, …** (`Drill
+<index + 1>`). The Sheet's naming rule — all tagged sessions of the same day, sorted by time,
+linked to drill indexes — is **never** copied: another tagged session that day, a changed order
+or a missing tag silently shifts every name. Neither the adapter nor the importer does any of
+this today; it is the content of the separate adapter PR.
 
 **An observation that does not settle the `rest_v1` drill model.** The second drill-only run
 reported `listRowMatchesFirstDrill: true`: on one list page, the chosen parent's first `drills`

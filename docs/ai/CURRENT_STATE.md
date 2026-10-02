@@ -458,13 +458,35 @@ neither attempt reached a drill read:** the first — exchange 200, then the RES
 out after 30 s, 2 requests, `session_list_unavailable`; the second — the exchange itself answered
 400 with the single field `non_field_errors`, 1 request, `exchange_failed`. Both are operational
 events without any conclusion about the drill model, the token or the account; by the owner's
-decision there is no third attempt and no new diagnostic. **F3c2b is closed (owner, 2026-10-02):**
-the eight confirmed reads (date window, session read, whole-session details, athlete list,
-athlete row, `/more/`, track, thresholds) stay available to a future adapter; the drill endpoint
-stays **observed** only and is not confirmed enough for a production adapter; **drill data is not
-imported for now**; no new probes, no further sign-in attempts, no rule change; the owner's Google
-Sheet is neither checked nor changed. The PR #132 merge decision is the owner's. No GPEXE request
-by the main session, no route, no database write, no credential storage, no binding, no import.
+decision there is no third attempt and no new diagnostic. **F3c2b is closed (owner, 2026-10-02,
+aligned on 2026-10-03 on the official GPEXE REST handbook `gpexe-v.6-api-rest-handbook.pdf`,
+pages 31–33 and the Team Session Brief page; written for GPEXE 6, the server reports 9.11.8; a
+confirmation by GPEXE support is welcome, not a blocker):** the eight confirmed `rest_v1` reads
+(date window, session read, whole-session details, athlete list, athlete row, `/more/`, track,
+thresholds) stay confirmed; the drill endpoint is in practice **observed**, and its use is
+settled by the handbook — `api/team_session/<confirmed parent id>/details/?drill=<index>` with a
+zero-based index from `0` to `drills_count - 1`, no parameter meaning the whole session;
+**drills stay in the future adapter and in the first planned production import**; the top-level
+`team` of a details answer is the team's aggregated parameters, not a team id; `drills` entries
+and the answer's `teamsession` are used neither to build a URL nor as an identity guard (safety
+rests on the confirmed parent, a fixed URL builder and the bounded index); a drill's name comes
+from an unambiguous `drillTags` mapping of the parent (`api/team_session/<confirmed parent
+id>/brief/`, translated through the team's tag catalogue, only a tag confirmed for the bound
+team), fallback `Drill N`, and never from all tagged sessions of a day; no more owner-run
+diagnostic probes before that implementation, no further sign-in attempts, no probe rule change;
+the owner's Google Sheet is neither checked nor changed. The two last operational events stay
+recorded without any conclusion about drills, the token or the account. **The implementation is a
+separate small adapter PR after PR #132 is merged, on the owner's explicit order:** B1 the
+mandatory `listSessions()` drills-filter fix (characterisation tests first, both directions, an
+ambiguous set refused with a stable code), B2 the eight confirmed reads through the `server3` /
+`rest_v1` profile with the existing boundaries, B3 one narrow builder for exactly the drill path
+on the approved `server3` host (no generic `api/` family, no fallback, GET only, index bounded by
+`drills_count`, a drill answer accepted only as a 200 JSON object whose `players` is a non-empty
+map keyed by canonical athlete ids, one failed drill never a silently complete set), B4 names
+through `drillTags` with provenance `drill_tags` or `index_fallback`, no new table or migration,
+B5 the listed tests, B6 `code-reviewer` + `security-reviewer`. The PR #132 merge decision is the
+owner's. No GPEXE request by the main session, no route, no database write, no credential
+storage, no binding, no import.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1237,12 +1259,13 @@ pre-existing; pass/fail counts don't belong in this file
 ## Most likely next step
 
 The owner's merge decision on the F3c2b probe PR (F3c2b is closed: eight reads confirmed, the
-drill endpoint observed only, drill data not imported for now, no further probe); then, on the
-owner's order, the mandatory `listSessions()` drills-filter fix (Separate tasks) and the adapter
-implementing the eight reads the probe proved (`docs/ai/gpexe-rest-v1-compatibility.md`
-section 2, rows 1b–7 and 9; row 8 stays out until a separate owner decision on the `api` family,
-which the `server3` profile does not carry, and on the identity contract of a drill answer), and,
-on the owner's order, the F3c2
+drill endpoint observed and its use settled by the official handbook, drills kept in the first
+planned import, no further probe); then, only after that merge and a new explicit owner order, a
+separate small adapter PR from the then `origin/main`: the mandatory `listSessions()`
+drills-filter fix, the eight confirmed reads (`docs/ai/gpexe-rest-v1-compatibility.md` section 2,
+rows 1b–7 and 9), one narrow builder for exactly the drill path on the approved `server3` host
+(row 8; no generic `api/` family) and drill names through `drillTags` with the fallback
+`Drill N`; and, on the owner's order, the F3c2
 routes, built against the contract in `docs/ai/source-connections-f3c2-contract.md` section 2,
 then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
