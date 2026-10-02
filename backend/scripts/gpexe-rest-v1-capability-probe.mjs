@@ -190,21 +190,32 @@ export function describeTeamValue(body, team) {
   return out;
 }
 
-// The link a drill answer may have to the list already received (owner, 2026-10-02):
-// diagnostics only, never a rule. For the position read, the parent's `drills[position]` is the
-// expected drill; the answer's `teamsession` is compared with it, and that entry is looked up
-// among the list rows already received. Four booleans, nothing else: no id, value, name or key.
-export function describeDrillLink(body, parentRow, position, rows, team) {
-  const expected = parentRow && Array.isArray(parentRow.drills) ? safeId(parentRow.drills[position]) : null;
+// The link a drill answer may have to the confirmed parent's `drills` list and to the list page
+// already received (owner, 2026-10-02): computed in memory, reported as booleans and small indexes
+// only — no id, value, name or key. The answer's `teamsession` is looked for among the parent's
+// `drills` entries (how many match, and at which index when exactly one does) and among the rows
+// of the list page (exactly one row, and whether that row names team 980 explicitly).
+export function describeDrillLink(body, parentRow, rows, team) {
   const ts = parsedAnswer(body) && !Array.isArray(body) ? safeId(body.teamsession) : null;
-  const matching = expected === null ? [] : rows.filter((r) => r && typeof r === "object" && safeId(r.id) === expected);
+  const entries = parentRow && Array.isArray(parentRow.drills) ? parentRow.drills.map((d) => safeId(d)) : [];
+  const matches = ts === null ? [] : entries.map((e, i) => (e !== null && e === ts ? i : -1)).filter((i) => i >= 0);
+  const listRows = ts === null ? [] : rows.filter((r) => r && typeof r === "object" && safeId(r.id) === ts);
   return {
     teamsessionCanonical: ts !== null,
-    teamsessionMatchesExpectedDrill: ts !== null && expected !== null && ts === expected,
-    expectedDrillHasUniqueListRow: matching.length === 1,
-    expectedDrillListRowTeamIs980: matching.length === 1 && namesTeam(matching[0].team, team) === true,
+    teamsessionIsAnyParentDrillEntry: matches.length > 0,
+    teamsessionParentDrillMatchCount: matches.length,
+    teamsessionMatchedDrillIndex: matches.length === 1 ? matches[0] : null,
+    teamsessionHasUniqueListRow: listRows.length === 1,
+    teamsessionListRowTeamIs980: listRows.length === 1 && namesTeam(listRows[0].team, team) === true,
   };
 }
+// The probe-only diagnostic link (owner, 2026-10-02): the answer's `teamsession` is canonical,
+// appears exactly once in the confirmed parent's `drills`, is exactly one row of the list page
+// already received, that row names team 980, and the answer carries a non-empty `players`. It
+// lets THIS PROBE go on to the next position. It is not an identity rule, and it is no permission
+// for the adapter, which has no drill implementation.
+export const diagnosticLinkConfirmed = (link, playersPresent) =>
+  link.teamsessionCanonical && link.teamsessionParentDrillMatchCount === 1 && link.teamsessionHasUniqueListRow && link.teamsessionListRowTeamIs980 && playersPresent;
 
 export const PROBE_MODES = Object.freeze(["full", "drill"]);
 // The drill-only run: one exchange and these six reads, nothing else.
@@ -450,55 +461,65 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       });
       if (!legacyConfirmed) return stopDrill(legacyOk && safeId(lb.id) !== null && !legacyIdOk ? "legacy_parent_id_mismatch" : "legacy_parent_not_confirmed");
       // 4. The drill reads the legacy integration really sends, in the control sequence
-      //    0 -> 1 -> 0 on the confirmed parent. Each answer, the repeated one included, must name
-      //    team 980 and the parent at its top level and carry a non-empty `players` before the
-      //    next read; then only the `players` contents are compared, in memory.
+      //    0 -> 1 -> 0 on the confirmed parent (owner, 2026-10-02: the final structural
+      //    diagnostics). A drill answer's top-level `team` is an opaque object on server3 and is
+      //    never evidence of the team: a canonical id naming another team still stops the run,
+      //    any other shape is only described. What lets the probe go on to the next position is
+      //    the diagnostic link: the answer's `teamsession` is canonical, is exactly one entry of
+      //    the parent's `drills`, is exactly one row of the list page already received, that row
+      //    names team 980, and `players` is non-empty. The repeated position 0 must map to the
+      //    same drill index as the first and carry the same canonical `players`.
       const answers = [];
       const players = [];
       const labels = ["drill0", "drill1", "drill0Repeat"];
+      const stopWithAnswers = (code) => {
+        verdict("session_drill_details", { verdict: "not_observed", family: "api", reason: code, readsMade: answers.length, ...Object.fromEntries(answers.map((a, i) => [labels[i], a])) });
+        return stopDrill(code);
+      };
       for (const position of DRILL_READ_SEQUENCE) {
         const read = await getLegacy(`team_session/${parentId}/details/?drill=${position}`);
         const b = read.body;
         const object = read.status === 200 && parsedAnswer(b) && !Array.isArray(b);
-        // The team rule is unchanged: a canonical id as a number or a string, or a stop. The
-        // shape of the field is described first, as a kind word and booleans, so a stop on an
-        // unreadable shape still says what kind of shape it was.
         const teamNamed = object && "team" in b ? namesTeam(b.team, team) : null;
         const teamIs980 = teamNamed === true;
         const named = object ? safeId(b.teamsession) : null;
         const namesParent = named === null ? null : named === parentId;
         const answerPlayers = object && answerWithContent(b.players) ? b.players : null;
+        const link = describeDrillLink(b, drillParent, rows, team);
+        const linkConfirmed = diagnosticLinkConfirmed(link, answerPlayers !== null);
         answers.push({
           status: read.status ?? null, teamIs980, namesParent, playersPresent: answerPlayers !== null,
-          ...describeTeamValue(b, team), ...describeDrillLink(b, drillParent, position, rows, team), ...describeDrillAnswer(b),
+          ...describeTeamValue(b, team), ...link, diagnosticLinkConfirmed: linkConfirmed, ...describeDrillAnswer(b),
         });
         players.push(answerPlayers);
-        if (object && "team" in b && teamNamed !== true) {
-          const code = teamNamed === false ? "team_isolation_failed" : "team_unknown_shape";
-          verdict("session_drill_details", { verdict: "not_observed", family: "api", reason: code, readsMade: answers.length, ...Object.fromEntries(answers.map((a, i) => [labels[i], a])) });
-          assertTeam([b], `drill ${position} answer`); // throws the stop; nothing further is read
+        // A canonical id naming another team is a foreign row: the whole run stops.
+        if (teamNamed === false) {
+          verdict("session_drill_details", { verdict: "not_observed", family: "api", reason: "team_isolation_failed", readsMade: answers.length, ...Object.fromEntries(answers.map((a, i) => [labels[i], a])) });
+          throw new ProbeStop("team_isolation_failed", `drill ${position} answer: a row of another team was returned`);
         }
         const reason = read.status !== 200 ? "drill_not_200"
           : !parsedAnswer(b) ? "drill_answer_unreadable"
           : !answerWithContent(b) ? "drill_answer_empty"
-          : namesParent === false ? "drill_parent_mismatch"
-          : !teamIs980 || namesParent !== true ? "drill_answer_identity_unconfirmed"
+          : !object ? "drill_answer_identity_unconfirmed"
           : answerPlayers === null ? "drill_players_missing"
+          : !linkConfirmed ? "drill_link_not_confirmed"
           : null;
-        if (reason) {
-          verdict("session_drill_details", { verdict: "not_observed", family: "api", reason, readsMade: answers.length, ...Object.fromEntries(answers.map((a, i) => [labels[i], a])) });
-          return stopDrill(reason);
-        }
+        if (reason) return stopWithAnswers(reason);
+        // The repeated position 0 must map to the same drill as the first one.
+        if (answers.length === 3 && answers[2].teamsessionMatchedDrillIndex !== answers[0].teamsessionMatchedDrillIndex) return stopWithAnswers("drill_repeat_index_changed");
       }
       // 5. Only `players` is compared, whole, in memory; nothing of it is printed. The repeated
-      //    position 0 must equal the first one, and position 1 must differ from it.
+      //    position 0 must equal the first one; position 1 is compared with it.
       const [first, second, repeat] = players.map(canonical);
       const repeatStable = first === repeat;
       const parameterApplied = repeatStable ? first !== second : null;
-      const reason = !repeatStable ? "source_changed_during_probe" : !parameterApplied ? "parameter_effect_not_distinguishable" : null;
+      // The sequence completed under the diagnostic link: observed, never same here (owner,
+      // 2026-10-02: the identity contract is decided after this result, not by it).
       verdict("session_drill_details", {
-        verdict: reason ? "not_observed" : "same", family: "api", readsMade: answers.length, repeatStable, parameterApplied,
-        ...(reason ? { reason } : {}), drill0: answers[0], drill1: answers[1], drill0Repeat: answers[2],
+        verdict: repeatStable ? "observed" : "not_observed", family: "api", readsMade: answers.length, diagnosticLinkConfirmed: true,
+        repeatStable, parameterApplied,
+        drillIndexes: { drill0: answers[0].teamsessionMatchedDrillIndex, drill1: answers[1].teamsessionMatchedDrillIndex, drill0Repeat: answers[2].teamsessionMatchedDrillIndex },
+        ...(repeatStable ? {} : { reason: "source_changed_during_probe" }), drill0: answers[0], drill1: answers[1], drill0Repeat: answers[2],
       });
       return done();
     }

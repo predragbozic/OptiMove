@@ -42,6 +42,9 @@ session. The existing `e03` importer (`backend/src/gpexeClient.js`,
 9. **The owner-run diagnostic probe of 2026-10-02** (head `1166cfa`, section 4): the same stop,
    5 requests, now with the shape of the drill answer's `team` described as a kind word and
    booleans; the same sanitization and the same rule.
+10. **The owner-run diagnostic probe of 2026-10-02, second** (head `79b2381`, section 4): the same
+    stop, 5 requests, with the drill answer's link to the list described as booleans; the same
+    sanitization and the same rule.
 
 Words used: **same** — same resource name and parameters, only the family prefix differs, and the
 answer was seen; **mapped** — a different path or parameter gives the same information, and the
@@ -72,7 +75,7 @@ but OptiMove has never seen its answer: it is still **unknown** for the adapter.
 | 5 | Burst and brake events of an athlete row | `athlete_session/<id>/more/` | **same** | probe 2026-10-01: 200 | unavailable (`athlete_session_more`) until implemented |
 | 6 | Track (time zone, device restarts) | `track/<id>/` | **same** | probe 2026-10-01: 200, id from the confirmed athlete detail | unavailable (`track_read`) until implemented |
 | 7 | Whole-session values per athlete | `team_session/<id>/details/` | **same** | probe 2026-10-01: 200 | unavailable (`session_details`) until implemented |
-| 8 | Values per drill | `team_session/<id>/details/?drill=<n>` | **observed** in the `api` family (never yet **same**); still **unknown** on `rest_v1` | full probe 2026-10-01: no request sent. First drill-only run: a `drills` entry read as `team_session/<entry>/` answered an id other than the entry, so a `drills` entry is not read as a `team_session` id again. Structural evidence (section 1, item 6): the legacy integration reads `api/team_session/<parent id>/details/?drill=<zero-based index>`. Second drill-only run (2026-10-01): on a parent confirmed by its REST read and again by `api/team_session/<parent id>/`, `api/team_session/<parent id>/details/?drill=<first position>` answered 200 with an object whose top-level fields are `drills_count`, `players`, `team` and `teamsession`; `players` is a map of objects carrying numbers and nested values. That confirms the endpoint and its shape only: one read cannot show that the position selects one drill. The REST `?drill=` form stays withdrawn. Third drill-only run (2026-10-02, control sequence 0 → 1 → 0): the first `?drill=0` answered 200 with the same top-level fields, but its `team` was not a canonical id as a number or a string, so the run stopped as `team_unknown_shape` before `?drill=1`; no conclusion about the parameter. Diagnostic run (2026-10-02): that `team` is an **object without an `id`** (kept opaque), and the answer's `teamsession` is a canonical id that is **not the parent's** | unavailable (`session_drill_details`); the `api` family is not part of the `server3` profile |
+| 8 | Values per drill | `team_session/<id>/details/?drill=<n>` | **observed** in the `api` family (never yet **same**); still **unknown** on `rest_v1` | full probe 2026-10-01: no request sent. First drill-only run: a `drills` entry read as `team_session/<entry>/` answered an id other than the entry, so a `drills` entry is not read as a `team_session` id again. Structural evidence (section 1, item 6): the legacy integration reads `api/team_session/<parent id>/details/?drill=<zero-based index>`. Second drill-only run (2026-10-01): on a parent confirmed by its REST read and again by `api/team_session/<parent id>/`, `api/team_session/<parent id>/details/?drill=<first position>` answered 200 with an object whose top-level fields are `drills_count`, `players`, `team` and `teamsession`; `players` is a map of objects carrying numbers and nested values. That confirms the endpoint and its shape only: one read cannot show that the position selects one drill. The REST `?drill=` form stays withdrawn. Third drill-only run (2026-10-02, control sequence 0 → 1 → 0): the first `?drill=0` answered 200 with the same top-level fields, but its `team` was not a canonical id as a number or a string, so the run stopped as `team_unknown_shape` before `?drill=1`; no conclusion about the parameter. Diagnostic run (2026-10-02): that `team` is an **object without an `id`** (kept opaque), and the answer's `teamsession` is a canonical id that is **not the parent's**. Second diagnostic run (2026-10-02): the answer's `teamsession` is **not the parent's first `drills` entry** either, while that entry is exactly one row of the list page and that row names team 980; so the answer names a third session, which the next run resolves against every entry of the parent's `drills` | unavailable (`session_drill_details`); the `api` family is not part of the `server3` profile |
 | 9 | Threshold set valid on the session day | `team/<team>/thresholds/?valid_on=` | **same** | probe 2026-10-01: 200 on the confirmed session's day | unavailable (`team_thresholds`) until implemented |
 | — | Units | no endpoint (numbers are SI on `e03`, verified in the pilot) | **unknown** | none; that `rest_v1` numbers are SI is not verified (the probe records no value) | unavailable (`units`) |
 | — | Session tags | not used by the importer | **observed** (legacy-attested path `team_session_tag/?team=&limit=`) | probe 2026-10-01: 200, asked for team 980; no returned tag named another team (one would have stopped the run); whether `team` is honoured is not shown | unavailable (`session_tags`) |
@@ -222,8 +225,20 @@ of the list rather than the parent — a reading the next diagnostics check dire
 changing any rule. The list's total count grew between runs (new sessions at the source); the
 count is a counter only. No id, date, value or key of the answer is copied here.
 
-**The drill-only run, third form (`--mode drill`, owner order 2026-10-01, built; run once on
-2026-10-02, see above; the `team` diagnostics below added on 2026-10-02 and not yet run):**
+**Result of the second diagnostic run (2026-10-02, head `79b2381`, sanitized by the owner):**
+the same stop, `team_unknown_shape`, 5 requests, `readsMade: 1`. The first answer at position 0:
+`teamsessionCanonical: true`, `teamsessionMatchesExpectedDrill: false`,
+`expectedDrillHasUniqueListRow: true`, `expectedDrillListRowTeamIs980: true`. So the list side of
+the supposed chain holds — the parent's first `drills` entry is exactly one row of the list page
+already received (uniqueness on that one page of 100 rows, never globally in the source), and that
+row names team 980 — but the answer's `teamsession`, though canonical, is **neither the parent nor
+that first entry**: the answer names a third session. Whether it is another entry of the parent's
+`drills` (a different order than the zero-based position), or no entry at all, that run could not
+tell; the final structural diagnostics below resolve it in one run. Row 8 stays **observed**, never
+yet same. No id, date, value or key of the answer is copied here.
+
+**The drill-only run, fourth form: the final structural diagnostics (`--mode drill`, owner order
+2026-10-02, built, not yet run):**
 the final check of the legacy drill form. The whole-session `api/team_session/<parent id>/details/`
 without a parameter is **not** used as a reference: that form is not confirmed in the legacy
 integration. One exchange, then at most six reads, each one only after the previous answer
@@ -240,45 +255,41 @@ through the legacy family, `api/team_session/<parent id>/`, must answer 200 with
 and `team` 980 again (`legacy_parent_id_mismatch`; `legacy_parent_not_confirmed`; the two team
 stops); (4) the legacy drill reads the legacy integration really sends, at the zero-based
 positions 0 and 1, in the control sequence **0 → 1 → 0** (owner, 2026-10-01: a source that
-changes between reads must not pass for a parameter that is applied): each answer, the repeated
-position 0 included, must be an object whose top-level `team` is
-980 and whose top-level `teamsession` is the parent id, and must carry a non-empty `players`,
-before anything else is read — a non-200 (`drill_not_200`), an unreadable body or a JSON primitive
-(`drill_answer_unreadable`), an empty array or object (`drill_answer_empty`), a list body, an
-absent `team`, or an absent or unreadable `teamsession` (`drill_answer_identity_unconfirmed`), another parent
-(`drill_parent_mismatch`), another team (`team_isolation_failed`), a team in an unreadable shape
-(`team_unknown_shape`) or no `players` (`drill_players_missing`) ends the run as `not_observed`
-with that reason and no further request. **Diagnostics of the `team` shape (owner, 2026-10-02),
-not a rule:** every drill answer's entry in the report (`drill0`, `drill1`, `drill0Repeat`) carries
-`teamValueKind` — one of `absent`, `null`, `number`, `string`, `object`, `array`, `other` — and,
-for an object only, `teamObjectHasId`, `teamObjectIdCanonical` and `teamObjectIdMatchesBoundTeam`
-(a boolean, or null when there is no canonical `id`); nothing else of the field — no value, no
-key list, no URL, no name, no id. **The acceptance rule is unchanged:** only a canonical id as a
-number or a string confirms the team; an object, an array, a URL, null or any other shape still
-stops the run as `team_unknown_shape`, **even when `teamObjectIdMatchesBoundTeam` is true**, and
-neither position 1 nor the repeated position 0 follows that stop. Accepting `team.id` would be a separate owner
-decision, taken only after a result shows that shape. **Diagnostics of the drill answer's link to
-the list already received (owner, 2026-10-02), not a rule:** for each read, the parent's
-`drills[position]` is the expected drill entry (position 0 → the first entry, position 1 → the
-second, the repeat → the first again); each answer's entry carries four booleans —
-`teamsessionCanonical` (the answer's `teamsession` is a canonical id), `teamsessionMatchesExpectedDrill`
-(it equals that expected entry exactly), `expectedDrillHasUniqueListRow` (exactly one row of the
-list page already received has that entry as its id) and `expectedDrillListRowTeamIs980` (that one
-row names team 980 explicitly) — and nothing else: no id, value, name, URL or key. The `team`
-object stays opaque. **The rule is unchanged:** an answer whose `teamsession` is not the parent's
-still stops as `drill_parent_mismatch`, and the drill reads that follow are not sent. Only if a
-result shows the chain parent `drills[position]` → one list row of team 980 → the answer's
-`teamsession` equal to that entry will the owner decide, separately, whether that chain becomes
-the identity rule of a drill answer; the repeated read is held to the same identity, team,
-content, answer-size, timeout and sanitization rules as the first; (5) only the three `players`
+changes between reads must not pass for a parameter that is applied). **What lets the probe go on
+to the next position is the probe-only diagnostic link (owner, 2026-10-02), computed in memory for
+every answer, the repeated one included:** the answer's `teamsession` is a canonical id
+(`teamsessionCanonical`); it appears in the confirmed parent's `drills` list
+(`teamsessionIsAnyParentDrillEntry`, `teamsessionParentDrillMatchCount`) **exactly once**, at the
+index reported as `teamsessionMatchedDrillIndex` (an integer only when there is exactly one match,
+otherwise null); it is **exactly one row of the list page already received**
+(`teamsessionHasUniqueListRow` — uniqueness on that one page of 100 rows, never in the whole
+source); that row names team 980 explicitly (`teamsessionListRowTeamIs980`); and the answer
+carries a non-empty `players`. All five true → `diagnosticLinkConfirmed: true` and the next read
+is sent; anything false → `not_observed` with `drill_link_not_confirmed` and no further request.
+**This link is not an identity rule and no permission for the adapter**, which has no drill
+implementation; the identity contract of a drill answer is decided by the owner after the result,
+not by the probe. The drill answer's top-level `team` is **opaque and never evidence of the team**:
+its shape is described (`teamValueKind` — `absent`, `null`, `number`, `string`, `object`, `array`,
+`other` — and, for an object only, `teamObjectHasId`, `teamObjectIdCanonical`,
+`teamObjectIdMatchesBoundTeam`), no key is printed and no other field is looked for; a canonical
+id naming another team still stops the whole run (`team_isolation_failed`); any other shape is
+only described. A non-200 (`drill_not_200`), an unreadable body or a JSON primitive
+(`drill_answer_unreadable`), an empty array or object (`drill_answer_empty`), a list body
+(`drill_answer_identity_unconfirmed`) or no `players` (`drill_players_missing`) ends the run as
+`not_observed` with that reason and no further request. The repeated position 0 must map to the
+**same** `teamsessionMatchedDrillIndex` as the first (otherwise `drill_repeat_index_changed`, no
+comparison) and carry the same canonical `players`; it is held to the same identity, content,
+answer-size, timeout and sanitization rules as the first; (5) only the three `players`
 contents are compared, whole and in memory, independent of key order — no key or value of any is
 printed. The comparison is made on the answers after the importer's drop list of personal fields
 (`redactGpexe`), so a difference that lies only in a dropped field reads as identical; that fails
 safe. **The two position-0 answers differ → `not_observed` with `source_changed_during_probe`
-(`repeatStable: false`), whatever position 1 answered; both position-0 answers identical and
-position 1 different → `repeatStable: true`, `parameterApplied: true`, and the capability may be
-same; all three identical → `not_observed` with the neutral reason
-`parameter_effect_not_distinguishable`; never mapped or missing.** No `drills` entry
+(`repeatStable: false`), whatever position 1 answered; both position-0 answers identical → the
+sequence completed under the diagnostic link and the capability is reported as `observed` — not
+same (owner, 2026-10-02: the final identity contract is decided after this result) — with
+`repeatStable`, `parameterApplied` (position 1 differs from position 0) and the three matched
+indexes `drillIndexes.drill0`, `drill1`, `drill0Repeat` reported separately; never mapped or
+missing.** No `drills` entry
 is ever used as an id, no read by a drill id, no REST `?drill=` read, no legacy details read
 without a position. The legacy family is used by this run only, for exactly those read shapes on
 the same host (`LEGACY_API_PATH`: the parent read and the drill reads at positions 0 and 1); it is
@@ -292,7 +303,8 @@ keys; a single-word key is printed —; per drill answer booleans only (`teamIs9
 a `players` field and whether it is a list or a map, player rows, objects, numbers, nested values,
 a metric-named field). The report carries `mode: "drill"`, `session_read` (beside the gate
 booleans, `drillsCountAtLeastTwo`), `legacy_api_session_read` and `session_drill_details` (with
-`readsMade`, `repeatStable`, `parameterApplied`, `drill0`, `drill1`, `drill0Repeat`), which is set
+`readsMade`, `diagnosticLinkConfirmed`, `repeatStable`, `parameterApplied`, `drillIndexes`, `drill0`,
+`drill1`, `drill0Repeat`), which is set
 on every exit of this mode — before the list, at the list, at either parent read, at any drill
 read, a team stop, the request cap — as `not_observed` with the stop code as its reason unless the comparison was made.
 The list verdict carries the helper facts of the page already received, as types and booleans
@@ -341,7 +353,7 @@ and counts. `stoppedBy` names why a run ended early (`exchange_failed`,
 | `session_list_by_date` | `team_session/?team=980&start_timestamp_gte=<day> 00:00:00&start_timestamp_lte=<day> 23:59:59&limit=<n>` | 200. **Proven only when all of these hold:** every returned row's `team` is 980; every returned row's `start_timestamp` lies inside the asked window; and the filtered `X-Total-Count` is **smaller** than the unfiltered count of this same run (so at least one row was really left out). Rows that satisfy the window prove nothing alone: an ignored filter returns the same first rows. Equal counts, or a row outside the window, mean the filter is not applied: reported as not proven, never as **same** |
 | `session_read` | `team_session/<id>/` | **same** only when 200, object, `team` is 980, and `drills_count` and a `start_timestamp` are present (what the importer reads from it); nothing after this read runs unless `team` is 980 |
 | `session_details` | `team_session/<id>/details/` | status; body shape; field names |
-| `session_drill_details` | **Drill-only run only. Precondition, checked first:** the parent is a list row of team 980 with an explicit `drills` list of at least two entries, confirmed twice — its own REST read answered 200 with the same `id`, team 980 and `drills_count >= 2`, and its legacy read `api/team_session/<parent id>/` answered 200 with the same `id` and team 980. Only then three read-only requests in the control sequence 0 → 1 → 0, on the forms the owner's legacy integration on `server3` sends: `api/team_session/<parent id>/details/?drill=0`, then `api/team_session/<parent id>/details/?drill=1`, then position 0 again — the drills at the zero-based positions 0 and 1 on that parent. Each read is sent only after the previous answer named team 980 and the parent and carried a non-empty `players`. No `drills` entry is used as an id; no details read without a position. Approved by the owner on 2026-10-01 | each answer, the repeat included: status, body kind, top-level `team` 980 and `teamsession` = the parent id (otherwise `not_observed` or an isolation stop, and no further request), a non-empty `players`, and the shape booleans. Then only the three `players` contents are compared, in memory, never printed: the two position-0 answers differ → `not_observed` with `source_changed_during_probe`; they are identical and position 1 differs → `parameterApplied: true`, the capability may be **same**; all three identical → `not_observed` with `parameter_effect_not_distinguishable`. Never mapped. Never **missing** |
+| `session_drill_details` | **Drill-only run only. Precondition, checked first:** the parent is a list row of team 980 with an explicit `drills` list of at least two entries, confirmed twice — its own REST read answered 200 with the same `id`, team 980 and `drills_count >= 2`, and its legacy read `api/team_session/<parent id>/` answered 200 with the same `id` and team 980. Only then three read-only requests in the control sequence 0 → 1 → 0, on the forms the owner's legacy integration on `server3` sends: `api/team_session/<parent id>/details/?drill=0`, then `api/team_session/<parent id>/details/?drill=1`, then position 0 again — the drills at the zero-based positions 0 and 1 on that parent. Each next read is sent only under the probe-only diagnostic link of the previous answer: its `teamsession` is canonical, appears exactly once in the parent's `drills`, is exactly one row of the list page already received, that row names team 980, and `players` is non-empty (`diagnosticLinkConfirmed`; otherwise `drill_link_not_confirmed`, no further request). The answer's `team` is opaque and never evidence of the team. No `drills` entry is used as an id; no details read without a position. Approved by the owner on 2026-10-02 | each answer, the repeat included: status, body kind, the `team` shape words and booleans, the six link booleans and indexes, a non-empty `players`, and the shape booleans — never an id, value, name, URL or key. The repeated position 0 must map to the same index as the first (`drill_repeat_index_changed` otherwise). Then only the three `players` contents are compared, in memory, never printed: the two position-0 answers differ → `not_observed` with `source_changed_during_probe`; identical → **observed**, with `repeatStable`, `parameterApplied` and the indexes for 0, 1 and the repeated 0 reported separately. The diagnostic link is not an identity rule and no permission for the adapter; the identity contract is decided by the owner after the result. Never mapped. Never **missing** |
 
 | `athlete_session_list` | `athlete_session/?teamsession=<id>&limit=<n>` | status; `X-Total-Count`; field names; whether every row's `teamsession` is `<id>` (a row naming another session stops the run; rows naming no session in a readable way are not used and the chain stops there) |
 | `athlete_session_read` | `athlete_session/<athlete session id>/` | status; field names; whether the detail names the same canonical session (`rowOfSession`). A detail naming **another** session stops the run; a missing or unreadable session, or a non-200, ends this chain: no `/more/` and no track are read |

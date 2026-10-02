@@ -434,9 +434,27 @@ exactly, whether that entry is exactly one row of the list page, and whether tha
 parent still stops as `drill_parent_mismatch` and nothing further is read. Only if the next result
 confirms the chain parent `drills[position]` → one list row of team 980 → the answer's
 `teamsession` equal to that entry will the owner decide, separately, whether that chain becomes
-the identity rule of a drill answer. Its PowerShell commands are handed over only after the owner's
-external review of this change. No GPEXE request by the main session, no route, no database write,
-no credential storage, no binding, no import.
+the identity rule of a drill answer. **The second diagnostic run (2026-10-02, head `79b2381`)
+stopped the same way** (`team_unknown_shape`, 5 requests): `teamsessionCanonical: true`,
+`teamsessionMatchesExpectedDrill: false`, `expectedDrillHasUniqueListRow: true`,
+`expectedDrillListRowTeamIs980: true` — the list side holds (the parent's first `drills` entry is
+exactly one row of the list page, uniqueness on that one page of 100 rows only, and that row names
+team 980), but the answer's `teamsession` is neither the parent nor that entry: a third session.
+**The fourth form, the final structural diagnostics (owner order 2026-10-02, built, not run):** for
+every drill answer, the repeat included, the probe computes in memory whether its `teamsession` is
+canonical, how many entries of the parent's `drills` it matches and at which index when exactly
+one (`teamsessionMatchedDrillIndex`), whether it is exactly one row of the list page and whether
+that row names team 980; all of that plus a non-empty `players` is the **probe-only diagnostic
+link** (`diagnosticLinkConfirmed`) that alone lets the probe send the next read — otherwise
+`drill_link_not_confirmed` and no further request. The answer's `team` is opaque and never
+evidence of the team (a canonical id naming another team still stops the run); the repeated
+position 0 must map to the same index as the first (`drill_repeat_index_changed`) and carry the
+same canonical `players` (`source_changed_during_probe`); a completed sequence is reported as
+**observed, not same**, with `repeatStable`, `parameterApplied` and the indexes for 0, 1 and the
+repeated 0. **The diagnostic link is not an identity rule and no permission for the adapter; the
+identity contract of a drill answer is decided by the owner after the result.** Its PowerShell
+commands are handed over only after the owner's external review of this change. No GPEXE request
+by the main session, no route, no database write, no credential storage, no binding, no import.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1209,11 +1227,11 @@ pre-existing; pass/fail counts don't belong in this file
 ## Most likely next step
 
 The owner's external review of the third form of the drill-only probe mode on the F3c2b PR;
-(now with the `team` shape diagnostics); then, on the owner's order, the owner-run drill-only
-read (the legacy drill reads in the control sequence 0 → 1 → 0 on a parent confirmed twice,
-compared in memory), whose result decides whether the chain parent `drills[position]` → one list
-row of team 980 → the answer's `teamsession` may become the identity rule of a drill answer (the
-`team` object stays opaque); then the merge
+(the final structural diagnostics); then, on the owner's order, the owner-run drill-only read (the
+legacy drill reads in the control sequence 0 → 1 → 0 on a parent confirmed twice, each next read
+only under the probe-only diagnostic link, compared in memory), whose result is the basis for the
+owner's separate decision on the identity contract of a drill answer (the `team` object stays
+opaque); then the merge
 decision on the F3c2b PR; then the adapter implements the reads the probe proved
 (`docs/ai/gpexe-rest-v1-compatibility.md` section 2, rows 1b–7 and 9, and row 8 only after an owner decision on the `api`
 family, which the `server3` profile does not carry), and, on the owner's order, the F3c2

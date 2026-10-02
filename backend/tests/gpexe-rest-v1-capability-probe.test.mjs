@@ -7,7 +7,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, describeDrillLink, describeTeamValue, DRILL_MODE_MAX_REQUESTS, DRILL_POSITIONS, DRILL_READ_SEQUENCE, LEGACY_API_PATH, LEGACY_API_PREFIX, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId, TEAM_VALUE_KINDS,
+  answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, describeDrillLink, describeTeamValue, diagnosticLinkConfirmed, DRILL_MODE_MAX_REQUESTS, DRILL_POSITIONS, DRILL_READ_SEQUENCE, LEGACY_API_PATH, LEGACY_API_PREFIX, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId, TEAM_VALUE_KINDS,
 } from "../scripts/gpexe-rest-v1-capability-probe.mjs";
 import { DiscoveryUsageError } from "../scripts/gpexe-auth-discovery.mjs";
 
@@ -587,14 +587,17 @@ test("11. the probe changes nothing else: the adapter, the discovery script and 
 // A server3 as the runs saw it: the list carries `drills`, the parent's own REST read does not,
 // and a `drills` entry is not a team_session id. The legacy family answers the same parent and the
 // drill by its zero-based position (the structure of the owner's legacy integration).
-// The importer's known `api` details shape: `players` keyed by the GPEXE athlete id (gpexeImportMapper.js),
-// and, as the owner-run answer showed, `team` and `teamsession` at the top level.
+// The importer's known `api` details shape: `players` keyed by the GPEXE athlete id (gpexeImportMapper.js).
+// As the owner-run answers showed on server3: top-level `drills_count`, `players`, `team` and
+// `teamsession`; `team` an opaque object without an id; `teamsession` a canonical id that is not
+// the parent's. The fake's parent 100 has drills [101, 102], both rows of the list page, team 980.
 const PLAYERS_0 = { 4711: { athlete_name: MARKERS.athleteName, tot_burst_events: 4, total_distance: 1200.25, zones: { z1: 3 } } };
 const PLAYERS_1 = { 4711: { athlete_name: MARKERS.athleteName, tot_burst_events: 2, total_distance: 640.5, zones: { z1: 1 } } };
 const PLAYERS_0_CHANGED = { 4711: { athlete_name: MARKERS.athleteName, tot_burst_events: 5, total_distance: 1333.75, zones: { z1: 3 } } };
+const OPAQUE_TEAM = { zzzOpaqueKey: "https://evil.example/team/424242/", label: MARKERS.tagName };
+const legacyDrill = (players, extra = {}) => ({ drills_count: 2, players, team: OPAQUE_TEAM, teamsession: 101, ...extra });
 // A route that answers the first read of position 0 with `first` and its repeat with `repeat`.
 const zeroThen = (first, repeat) => { let n = 0; return () => (n++ === 0 ? first : repeat); };
-const legacyDrill = (players, extra = {}) => ({ drills_count: 2, players, team: 980, teamsession: 100, ...extra });
 function drillRoutes(over = {}) {
   return {
     ...happyRoutes(),
@@ -604,8 +607,8 @@ function drillRoutes(over = {}) {
     "GET /api/team_session/100/": answer(200, { id: 100, team: 980, drills_count: 2, name: MARKERS.sessionName }),
     "GET /api/team_session/101/": answer(200, { id: 101, team: 980 }),
     "GET /api/team_session/100/details/": answer(200, legacyDrill(PLAYERS_0)),
-    "GET /api/team_session/100/details/?drill=0": answer(200, legacyDrill(PLAYERS_0)),
-    "GET /api/team_session/100/details/?drill=1": answer(200, legacyDrill(PLAYERS_1)),
+    "GET /api/team_session/100/details/?drill=0": answer(200, legacyDrill(PLAYERS_0, { teamsession: 101 })),
+    "GET /api/team_session/100/details/?drill=1": answer(200, legacyDrill(PLAYERS_1, { teamsession: 102 })),
     ...over,
   };
 }
@@ -613,19 +616,27 @@ const drillRun = (fetchImpl, over = {}) => runCapabilityProbe({ mode: "drill", .
 const paths = (calls) => calls.map((c) => `${c.method} ${new URL(c.url).pathname}${new URL(c.url).search}`);
 const D0 = "GET /api/team_session/100/details/?drill=0";
 const D1 = "GET /api/team_session/100/details/?drill=1";
+const LIST = "GET /rest/v1/team_session/?team=980&limit=100";
+const listOf = (rowsOver) => ({ [LIST]: answer(200, rowsOver, { "x-total-count": String(rowsOver.length) }) });
+const LINK_KEYS = ["teamsessionCanonical", "teamsessionIsAnyParentDrillEntry", "teamsessionParentDrillMatchCount", "teamsessionMatchedDrillIndex", "teamsessionHasUniqueListRow", "teamsessionListRowTeamIs980", "diagnosticLinkConfirmed"];
+const linkOf = (entry) => Object.fromEntries(LINK_KEYS.map((k) => [k, entry[k]]));
+const noLeak = (report, extra = []) => {
+  const text = JSON.stringify({ ...report, ranAt: "" }).replace(/"teamId":"980"/, "").replace(/"(status|rowCount|distinctDays|readsMade|teamsessionParentDrillMatchCount|teamsessionMatchedDrillIndex|drill0|drill1|drill0Repeat)":\d+/g, "");
+  for (const m of [...Object.values(MARKERS).map(String), ISSUED, USER, PASSWORD, DAY, "09-14", "777", "1200.25", "640.5", "1333.75", "total_distance", "tot_burst_events", "4711", "z1", "zzzOpaqueKey", "evil.example", "424242", ...extra]) assert.ok(!text.includes(m), m);
+  for (const id of ["100", "101", "102", "150", "980"]) assert.ok(!new RegExp(`"[^"]*\\b${id}\\b`).test(text), `no id ${id} as a value`);
+};
 
-test("12. the drill-only run: one exchange and exactly six reads - the REST parent with two drills, the same parent through the legacy family, the legacy drill reads in the control sequence 0, 1, 0 - every answer names team 980 and the parent, and only `players` is compared, in memory", async () => {
+test("12. the drill-only run: one exchange and exactly six reads in the control sequence 0, 1, 0; a drill answer's opaque team is never evidence; the probe goes on only under the diagnostic link; the sequence ends as observed with indexes and booleans only", async () => {
   const { calls, fetchImpl } = fakeServer(drillRoutes());
   const report = await drillRun(fetchImpl);
   assert.equal(report.mode, "drill");
   assert.equal(report.stoppedBy, null);
   assert.equal(report.requestCount, 7);
   assert.equal(DRILL_MODE_MAX_REQUESTS, 7);
-  assert.deepEqual([...DRILL_POSITIONS], [0, 1]);
   assert.deepEqual([...DRILL_READ_SEQUENCE], [0, 1, 0]);
   assert.deepEqual(paths(calls), [
     "POST /api-token-auth/",
-    "GET /rest/v1/team_session/?team=980&limit=100",
+    LIST,
     "GET /rest/v1/team_session/100/",
     "GET /api/team_session/100/",
     D0,
@@ -637,191 +648,140 @@ test("12. the drill-only run: one exchange and exactly six reads - the REST pare
   assert.ok(calls.slice(1).every((c) => c.method === "GET" && c.headers.Authorization === `Token ${ISSUED}` && c.redirect === "manual"));
   assert.ok(!calls.some((c) => /\/101\/|\/102\/|rest\/v1\/team_session\/100\/details|api\/team_session\/100\/details\/$|athlete_session|track|thresholds|team_session_tag|start_timestamp_gte/.test(c.url)),
     "no drills entry as an id, no REST drill read, no legacy details read without a position, nothing of the full run");
-  assert.deepEqual(verdicts(report), { session_list: "proven", session_read: "same", legacy_api_session_read: "observed", session_drill_details: "same" });
-  assert.deepEqual(report.capabilities.session_read, { verdict: "same", status: 200, idMatchesList: true, teamIs980: true, drillsCountPresent: true, drillsCountPositive: true, drillsCountAtLeastTwo: true, startTimestampPresent: true, drillsListPresent: false, parentConfirmed: true });
-  assert.deepEqual(report.capabilities.legacy_api_session_read, { verdict: "observed", family: "api", status: 200, idMatchesParent: true, teamIs980: true, drillsCountPositive: true, parentConfirmed: true });
-  // In the fake, every drill answer names the parent (the rule's happy path), while the parent's
-  // drills[0] / drills[1] are the list rows 101 / 102 of team 980.
-  const answerShape = {
-    status: 200, teamIs980: true, namesParent: true, playersPresent: true, teamValueKind: "number",
-    teamsessionCanonical: true, teamsessionMatchesExpectedDrill: false, expectedDrillHasUniqueListRow: true, expectedDrillListRowTeamIs980: true,
-    bodyKind: "object", hasContent: true, rowsAtTopLevel: false, playersField: true, playersContainerKind: "map", playerRowsPresent: true, playerRowsAreObjects: true,
-    playerRowsHaveNumbers: true, playerRowsHaveNestedValues: true, metricFieldPresent: false,
-  };
-  // Stable 0, different 1, stable repeated 0: same.
-  assert.deepEqual(report.capabilities.session_drill_details, { verdict: "same", family: "api", readsMade: 3, repeatStable: true, parameterApplied: true, drill0: answerShape, drill1: answerShape, drill0Repeat: answerShape });
+  assert.deepEqual(verdicts(report), { session_list: "proven", session_read: "same", legacy_api_session_read: "observed", session_drill_details: "observed" });
+  const d = report.capabilities.session_drill_details;
+  // Observed, never same: the identity contract is decided after this result, not by it.
+  assert.equal(d.verdict, "observed");
+  assert.equal(d.diagnosticLinkConfirmed, true);
+  assert.equal(d.repeatStable, true);
+  assert.equal(d.parameterApplied, true);
+  assert.deepEqual(d.drillIndexes, { drill0: 0, drill1: 1, drill0Repeat: 0 });
+  assert.equal(d.reason, undefined);
+  // Per answer: the opaque team described but not accepted, the link confirmed, the shape booleans.
+  for (const [label, index] of [["drill0", 0], ["drill1", 1], ["drill0Repeat", 0]]) {
+    const e = d[label];
+    assert.deepEqual([e.status, e.teamIs980, e.namesParent, e.playersPresent, e.teamValueKind, e.teamObjectHasId], [200, false, false, true, "object", false], label);
+    assert.deepEqual(linkOf(e), { teamsessionCanonical: true, teamsessionIsAnyParentDrillEntry: true, teamsessionParentDrillMatchCount: 1, teamsessionMatchedDrillIndex: index, teamsessionHasUniqueListRow: true, teamsessionListRowTeamIs980: true, diagnosticLinkConfirmed: true }, label);
+    assert.deepEqual([e.playersContainerKind, e.playerRowsPresent, e.playerRowsHaveNumbers], ["map", true, true], label);
+  }
   assert.deepEqual(report.requests.map((r) => r.path), ["api-token-auth/", "rest/v1/team_session/?team=<team>&limit=<n>", "rest/v1/team_session/<id>/", "api/team_session/<id>/", "api/team_session/<id>/details/?drill=0", "api/team_session/<id>/details/?drill=1", "api/team_session/<id>/details/?drill=0"]);
   for (const i of [4, 5, 6]) assert.deepEqual(report.requests[i].fieldNames, ["drills_count", "players", "team", "teamsession"]);
-  // Helper facts from the list page: types and booleans only.
   const list = report.capabilities.session_list;
-  assert.equal(list.drillsEntryKind, "number");
-  assert.equal(list.listRowMatchesFirstDrill, true, "the fake list carries the row the first entry names");
-  assert.equal(list.rowsHaveSingularDrillField, false);
-  assert.equal(list.rowsWithNonNullSingularDrill, null);
-  // Nothing of either answer leaves the run: no key of the players map, no value, no name, no id.
-  const text = JSON.stringify({ ...report, ranAt: "" });
-  for (const m of [...Object.values(MARKERS).map(String), ISSUED, USER, PASSWORD, DAY, "09-14", "777", "1200.25", "640.5", "total_distance", "tot_burst_events", "4711", "z1"]) assert.ok(!text.includes(m), m);
-  const stripped = text.replace(/"(status|rowCount|distinctDays|readsMade)":\d+/g, "").replace(/"teamId":"980"/, "");
-  for (const id of ["100", "101"]) assert.ok(!new RegExp(`"[^"]*\\b${id}\\b`).test(stripped), `no id ${id}`);
+  assert.deepEqual([list.drillsEntryKind, list.listRowMatchesFirstDrill, list.rowsHaveSingularDrillField, list.rowsWithNonNullSingularDrill], ["number", true, false, null]);
+  noLeak(report);
 
-  // All three `players` identical: the parameter's effect cannot be told apart.
-  for (const second of [legacyDrill(PLAYERS_0), legacyDrill({ ...PLAYERS_0 }, { drills_count: 3, extra: "differs outside players" })]) {
-    const f = fakeServer(drillRoutes({ [D1]: answer(200, second) }));
-    const r = await drillRun(f.fetchImpl);
-    assert.equal(r.stoppedBy, null);
-    assert.equal(f.calls.length, 7);
-    const d = r.capabilities.session_drill_details;
-    assert.equal(d.verdict, "not_observed");
-    assert.equal(d.reason, "parameter_effect_not_distinguishable");
-    assert.equal(d.repeatStable, true);
-    assert.equal(d.parameterApplied, false);
-  }
-  // The repeated position 0 answers other `players` than the first: the source changed during the
-  // probe, whatever position 1 answered, and nothing is concluded about the parameter.
-  for (const second of [PLAYERS_1, PLAYERS_0, PLAYERS_0_CHANGED]) {
-    const f = fakeServer(drillRoutes({ [D0]: zeroThen(answer(200, legacyDrill(PLAYERS_0)), answer(200, legacyDrill(PLAYERS_0_CHANGED))), [D1]: answer(200, legacyDrill(second)) }));
-    const r = await drillRun(f.fetchImpl);
-    assert.equal(r.stoppedBy, null);
-    assert.equal(f.calls.length, 7);
-    const d = r.capabilities.session_drill_details;
-    assert.equal(d.verdict, "not_observed");
-    assert.equal(d.reason, "source_changed_during_probe");
-    assert.equal(d.repeatStable, false);
-    assert.equal(d.parameterApplied, null);
-    const printed = JSON.stringify({ ...r, ranAt: "" });
-    for (const leak of ["1333.75", "1200.25", "640.5", "4711", MARKERS.athleteName]) assert.ok(!printed.includes(leak), leak);
-  }
-  // The key order of the map does not make two maps differ; a different key set does.
-  const reordered = { b: { x: 1, y: 2 }, a: { y: 2, x: 1 } };
+  // Reversed order: position 0 maps to drills[1], position 1 to drills[0]; still observed, indexes 1, 0, 1.
+  const reversed = await drillRun(fakeServer(drillRoutes({ [D0]: answer(200, legacyDrill(PLAYERS_0, { teamsession: 102 })), [D1]: answer(200, legacyDrill(PLAYERS_1, { teamsession: 101 })) })).fetchImpl);
+  assert.equal(reversed.stoppedBy, null);
+  assert.deepEqual([reversed.capabilities.session_drill_details.verdict, reversed.capabilities.session_drill_details.drillIndexes], ["observed", { drill0: 1, drill1: 0, drill0Repeat: 1 }]);
+  // Both positions map to the same index: the sequence completes, the indexes say so, parameterApplied is what players say.
+  const sameIdx = await drillRun(fakeServer(drillRoutes({ [D1]: answer(200, legacyDrill(PLAYERS_1, { teamsession: 101 })) })).fetchImpl);
+  assert.equal(sameIdx.stoppedBy, null);
+  assert.deepEqual([sameIdx.capabilities.session_drill_details.verdict, sameIdx.capabilities.session_drill_details.drillIndexes, sameIdx.capabilities.session_drill_details.parameterApplied], ["observed", { drill0: 0, drill1: 0, drill0Repeat: 0 }, true]);
+  // All three players identical: observed, parameterApplied false (the identity contract is not decided here).
+  const flat = await drillRun(fakeServer(drillRoutes({ [D1]: answer(200, legacyDrill(PLAYERS_0, { teamsession: 102 })) })).fetchImpl);
+  assert.deepEqual([flat.capabilities.session_drill_details.verdict, flat.capabilities.session_drill_details.repeatStable, flat.capabilities.session_drill_details.parameterApplied], ["observed", true, false]);
+  // The repeated position 0 with changed players: source changed during the probe.
+  const changed = await drillRun(fakeServer(drillRoutes({ [D0]: zeroThen(answer(200, legacyDrill(PLAYERS_0, { teamsession: 101 })), answer(200, legacyDrill(PLAYERS_0_CHANGED, { teamsession: 101 }))) })).fetchImpl);
+  assert.deepEqual([changed.stoppedBy, changed.capabilities.session_drill_details.verdict, changed.capabilities.session_drill_details.reason, changed.capabilities.session_drill_details.repeatStable, changed.capabilities.session_drill_details.parameterApplied], [null, "not_observed", "source_changed_during_probe", false, null]);
+  // The repeated position 0 that maps to another index: stopped after the third read, nothing compared.
+  const moved = fakeServer(drillRoutes({ [D0]: zeroThen(answer(200, legacyDrill(PLAYERS_0, { teamsession: 101 })), answer(200, legacyDrill(PLAYERS_0, { teamsession: 102 }))) }));
+  const mv = await drillRun(moved.fetchImpl);
+  assert.deepEqual([mv.stoppedBy, mv.capabilities.session_drill_details.reason, mv.capabilities.session_drill_details.readsMade, moved.calls.length], ["drill_repeat_index_changed", "drill_repeat_index_changed", 3, 7]);
+  assert.equal(mv.capabilities.session_drill_details.repeatStable, undefined);
+  // A reordered map is the same players.
   const ordered = { a: { x: 1, y: 2 }, b: { x: 1, y: 2 } };
-  const ro = await drillRun(fakeServer(drillRoutes({ [D0]: zeroThen(answer(200, legacyDrill(ordered)), answer(200, legacyDrill(reordered))), [D1]: answer(200, legacyDrill(reordered)) })).fetchImpl);
-  assert.equal(ro.capabilities.session_drill_details.repeatStable, true, "a reordered repeat is the same answer");
-  assert.equal(ro.capabilities.session_drill_details.reason, "parameter_effect_not_distinguishable");
-  const otherKeys = await drillRun(fakeServer(drillRoutes({ [D1]: answer(200, legacyDrill({ 4712: { tot_burst_events: 4 } })) })).fetchImpl);
-  assert.equal(otherKeys.capabilities.session_drill_details.verdict, "same");
-  for (const r of [ro, otherKeys]) assert.ok(!["mapped", "missing"].includes(r.capabilities.session_drill_details.verdict));
-
-  // The parent: only a list row with an explicit `drills` list of at least two entries.
-  const oneDrillFirst = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [sess(300, 980, DAY, [301]), sess(100, 980, DAY, [101, 102])], { "x-total-count": "2" }) }));
-  const of = await drillRun(oneDrillFirst.fetchImpl);
-  assert.equal(of.stoppedBy, null);
-  assert.ok(!oneDrillFirst.calls.some((c) => c.url.includes("/300/")), "a one-drill parent is never chosen");
-  assert.deepEqual(paths(oneDrillFirst.calls).slice(2, 4), ["GET /rest/v1/team_session/100/", "GET /api/team_session/100/"]);
-  const oneDrillOnly = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [sess(300, 980, DAY, [301]), sess(100, 980, DAY, [101]), sess(200, 980, OTHER_DAY, [])], { "x-total-count": "3" }) }));
-  const oo = await drillRun(oneDrillOnly.fetchImpl);
-  assert.equal(oo.stoppedBy, "no_parent_with_drills_in_list");
-  assert.equal(oneDrillOnly.calls.length, 2);
-  assert.ok(!oneDrillOnly.calls.some((c) => c.url.includes("/api/team_session")), "no legacy request");
-  assert.deepEqual(oo.capabilities.session_drill_details, { verdict: "not_observed", reason: "no_parent_with_drills_in_list" });
-  // A drill-like row with a positive count but no `drills` list stands before the real parent.
-  const dLike = fakeServer(drillRoutes({
-    "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [{ id: 101, team: 980, drills_count: 2, drill: 0 }, sess(100, 980, DAY, [101, 102])], { "x-total-count": "2" }),
-    "GET /rest/v1/team_session/101/": answer(200, { id: 101, team: 980, drills_count: 2 }),
-    "GET /api/team_session/101/details/?drill=0": answer(200, legacyDrill(PLAYERS_0, { teamsession: 101 })),
-    "GET /api/team_session/101/details/?drill=1": answer(200, legacyDrill(PLAYERS_1, { teamsession: 101 })),
-  }));
-  const dl = await drillRun(dLike.fetchImpl);
-  assert.equal(dl.stoppedBy, null);
-  assert.deepEqual(paths(dLike.calls).slice(2), ["GET /rest/v1/team_session/100/", "GET /api/team_session/100/", D0, D1, D0]);
-  assert.ok(!dLike.calls.some((c) => c.url.includes("/101/")), "the count-only row is never read");
-  // Only count-only rows: no parent, no legacy request, nothing after the list.
-  const countOnly = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [{ id: 300, team: 980, drills_count: 0 }, { id: 100, team: 980, drills_count: 3 }, { id: 101, team: 980, drills_count: 2, drills: [] }], { "x-total-count": "3" }) }));
-  const co = await drillRun(countOnly.fetchImpl);
-  assert.equal(co.stoppedBy, "no_parent_with_drills_in_list");
-  assert.equal(countOnly.calls.length, 2);
-  assert.ok(!countOnly.calls.some((c) => c.url.includes("/api/team_session")), "no legacy request");
-  // The helper facts on their own.
-  assert.deepEqual(describeDrillEntries([{ id: 1, drills: [2] }, { id: 2, drills: [] }], { id: 1, drills: [2] }), { drillsEntryKind: "number", listRowMatchesFirstDrill: true, rowsHaveSingularDrillField: false, rowsWithNonNullSingularDrill: null });
-  assert.deepEqual(describeDrillEntries([{ id: 1, drills: [{ id: 2 }], drill: null }, { id: 2, drills: [], drill: 1 }], { id: 1, drills: [{ id: 2 }] }), { drillsEntryKind: "object", listRowMatchesFirstDrill: null, rowsHaveSingularDrillField: true, rowsWithNonNullSingularDrill: true });
-  const selfRow = { id: 1, drills: [1] };
-  assert.equal(describeDrillEntries([selfRow], selfRow).listRowMatchesFirstDrill, false, "the parent itself is not another row");
+  const reordered = { b: { y: 2, x: 1 }, a: { y: 2, x: 1 } };
+  const ro = await drillRun(fakeServer(drillRoutes({ [D0]: zeroThen(answer(200, legacyDrill(ordered, { teamsession: 101 })), answer(200, legacyDrill(reordered, { teamsession: 101 }))) })).fetchImpl);
+  assert.equal(ro.capabilities.session_drill_details.repeatStable, true);
+  for (const r of [reversed, sameIdx, flat, changed, mv, ro]) {
+    assert.ok(!["same", "mapped", "missing"].includes(r.capabilities.session_drill_details.verdict));
+    noLeak(r);
+  }
 });
 
-test("13. the drill reads: each answer, the repeated position 0 included, must name team 980 and the parent at its top level before the next read; absence, an unreadable shape or a mismatch is not_observed or an isolation stop; never mapped or missing", async () => {
-  const P = { players: PLAYERS_0 };
-  const good0 = answer(200, legacyDrill(PLAYERS_0));
+test("13. the diagnostic link gates every next drill read: a teamsession that is not canonical, not exactly one parent drill entry, not exactly one row of the list page, a row not of team 980, or an answer without players stops the run without the next request; a canonical foreign team is an isolation stop; the opaque team is described, never accepted", async () => {
+  const link = (teamsession, extra = {}) => legacyDrill(PLAYERS_0, { teamsession, ...extra });
+  const probeOf = (over) => fakeServer(drillRoutes(over));
+  // [label, routes, stop, requests sent, expected link of the stopping answer]
   const cases = [
-    // [route, answer, stop, requests sent]
-    [D0, answer(404, { detail: "Not found." }), "drill_not_200", 5],
-    [D0, answer(500, ""), "drill_not_200", 5],
-    [D0, answer(200, ""), "drill_answer_unreadable", 5],
-    [D0, answer(200, "<html>interstitial</html>"), "drill_answer_unreadable", 5],
-    [D0, answer(200, "42"), "drill_answer_unreadable", 5],
-    [D0, answer(200, "null"), "drill_answer_unreadable", 5],
-    [D0, answer(200, []), "drill_answer_empty", 5],
-    [D0, answer(200, {}), "drill_answer_empty", 5],
-    [D0, answer(200, [legacyDrill(PLAYERS_0)]), "drill_answer_identity_unconfirmed", 5],
-    [D0, answer(200, P), "drill_answer_identity_unconfirmed", 5],
-    [D0, answer(200, { ...P, team: 980 }), "drill_answer_identity_unconfirmed", 5],
-    [D0, answer(200, { ...P, teamsession: 100 }), "drill_answer_identity_unconfirmed", 5],
-    [D0, answer(200, { ...P, team: 980, teamsession: "x" }), "drill_answer_identity_unconfirmed", 5],
-    [D0, answer(200, { ...P, team: 980, teamsession: { id: 100 } }), "drill_answer_identity_unconfirmed", 5],
-    [D0, answer(200, legacyDrill(PLAYERS_0, { teamsession: 150 })), "drill_parent_mismatch", 5],
-    [D0, answer(200, legacyDrill(PLAYERS_0, { team: 981 })), "team_isolation_failed", 5],
-    [D0, answer(200, legacyDrill(PLAYERS_0, { team: { id: 980 } })), "team_unknown_shape", 5],
-    [D0, answer(200, { team: 980, teamsession: 100 }), "drill_players_missing", 5],
-    [D0, answer(200, legacyDrill({})), "drill_players_missing", 5],
-    [D0, answer(200, { 4711: { tot_burst_events: 4 }, [MARKERS.athleteName]: { total_distance: 1 } }), "drill_answer_identity_unconfirmed", 5],
-    [D0, answer(200, { results: [{ 4711: { tot_burst_events: 4 } }] }), "drill_answer_identity_unconfirmed", 5],
-    // The second position is held to the same rules.
-    [D1, answer(404, { detail: "Not found." }), "drill_not_200", 6],
-    [D1, answer(200, legacyDrill(PLAYERS_1, { teamsession: 150 })), "drill_parent_mismatch", 6],
-    [D1, answer(200, legacyDrill(PLAYERS_1, { team: 981 })), "team_isolation_failed", 6],
-    [D1, answer(200, legacyDrill(PLAYERS_1, { team: undefined })), "drill_answer_identity_unconfirmed", 6],
-    [D1, answer(200, { team: 980, teamsession: 100 }), "drill_players_missing", 6],
-    // The repeated position 0 is held to the same rules (first read good, repeat bad).
-    [D0, zeroThen(good0, answer(200, legacyDrill(PLAYERS_0, { team: 981 }))), "team_isolation_failed", 7],
-    [D0, zeroThen(good0, answer(200, legacyDrill(PLAYERS_0, { team: { id: 980 } }))), "team_unknown_shape", 7],
-    [D0, zeroThen(good0, answer(200, legacyDrill(PLAYERS_0, { teamsession: 150 }))), "drill_parent_mismatch", 7],
-    [D0, zeroThen(good0, answer(200, legacyDrill(PLAYERS_0, { team: undefined }))), "drill_answer_identity_unconfirmed", 7],
-    [D0, zeroThen(good0, answer(200, legacyDrill(PLAYERS_0, { teamsession: undefined }))), "drill_answer_identity_unconfirmed", 7],
-    [D0, zeroThen(good0, answer(200, legacyDrill({}))), "drill_players_missing", 7],
-    [D0, zeroThen(good0, answer(200, { team: 980, teamsession: 100, players: "unreadable" })), "drill_players_missing", 7],
-    [D0, zeroThen(good0, answer(200, "")), "drill_answer_unreadable", 7],
-    [D0, zeroThen(good0, answer(200, "<html>interstitial</html>")), "drill_answer_unreadable", 7],
-    [D0, zeroThen(good0, answer(200, {})), "drill_answer_empty", 7],
-    [D0, zeroThen(good0, answer(503, "")), "drill_not_200", 7],
+    ["teamsession is the parent (not a drill entry)", { [D0]: answer(200, link(100)) }, "drill_link_not_confirmed", 5, { c: true, any: false, n: 0, i: null, u: true, t: true }],
+    ["teamsession is no parent drill entry", { [D0]: answer(200, link(200)) }, "drill_link_not_confirmed", 5, { c: true, any: false, n: 0, i: null, u: true, t: true }],
+    ["teamsession not canonical (URL)", { [D0]: answer(200, link("https://evil.example/team_session/101/")) }, "drill_link_not_confirmed", 5, { c: false, any: false, n: 0, i: null, u: false, t: false }],
+    ["teamsession absent", { [D0]: answer(200, { drills_count: 2, players: PLAYERS_0, team: OPAQUE_TEAM }) }, "drill_link_not_confirmed", 5, { c: false, any: false, n: 0, i: null, u: false, t: false }],
+    ["teamsession an object", { [D0]: answer(200, link({ id: 101 })) }, "drill_link_not_confirmed", 5, { c: false, any: false, n: 0, i: null, u: false, t: false }],
+    ["duplicate entry in the parent's drills", { ...listOf([sess(100, 980, DAY, [101, 101]), sess(101, 980, DAY, []), sess(200, 980, OTHER_DAY, [])]) }, "drill_link_not_confirmed", 5, { c: true, any: true, n: 2, i: null, u: true, t: true }],
+    ["no list row for the entry", { ...listOf([sess(100, 980, DAY, [101, 102]), sess(200, 980, OTHER_DAY, [])]) }, "drill_link_not_confirmed", 5, { c: true, any: true, n: 1, i: 0, u: false, t: false }],
+    ["two list rows for the entry", { ...listOf([sess(100, 980, DAY, [101, 102]), sess(101, 980, DAY, []), sess(101, 980, DAY, []), sess(102, 980, DAY, [])]) }, "drill_link_not_confirmed", 5, { c: true, any: true, n: 1, i: 0, u: false, t: false }],
+    ["list row without a readable team", { ...listOf([sess(100, 980, DAY, [101, 102]), { id: 101, drills: [] }, sess(102, 980, DAY, [])]) }, "drill_link_not_confirmed", 5, { c: true, any: true, n: 1, i: 0, u: true, t: false }],
+    ["no players", { [D0]: answer(200, { drills_count: 2, team: OPAQUE_TEAM, teamsession: 101 }) }, "drill_players_missing", 5, { c: true, any: true, n: 1, i: 0, u: true, t: true }],
+    ["empty players", { [D0]: answer(200, link(101, { players: {} })) }, "drill_players_missing", 5, { c: true, any: true, n: 1, i: 0, u: true, t: true }],
+    ["canonical foreign team", { [D0]: answer(200, link(101, { team: 981 })) }, "team_isolation_failed", 5, { c: true, any: true, n: 1, i: 0, u: true, t: true, ok: true }],
+    ["not 200", { [D0]: answer(404, { detail: "Not found." }) }, "drill_not_200", 5, { c: false, any: false, n: 0, i: null, u: false, t: false }],
+    ["unreadable", { [D0]: answer(200, "<html>interstitial</html>") }, "drill_answer_unreadable", 5, { c: false, any: false, n: 0, i: null, u: false, t: false }],
+    ["empty object", { [D0]: answer(200, {}) }, "drill_answer_empty", 5, { c: false, any: false, n: 0, i: null, u: false, t: false }],
+    ["list-shaped answer", { [D0]: answer(200, [link(101)]) }, "drill_answer_identity_unconfirmed", 5, { c: false, any: false, n: 0, i: null, u: false, t: false }],
+    // Position 1 and the repeated position 0 are held to the same link.
+    ["position 1 names no drill entry", { [D1]: answer(200, link(200)) }, "drill_link_not_confirmed", 6, { c: true, any: false, n: 0, i: null, u: true, t: true }],
+    ["position 1 foreign team", { [D1]: answer(200, link(102, { team: 981 })) }, "team_isolation_failed", 6, { c: true, any: true, n: 1, i: 1, u: true, t: true, ok: true }],
+    ["repeat names the parent", { [D0]: zeroThen(answer(200, link(101)), answer(200, link(100))) }, "drill_link_not_confirmed", 7, { c: true, any: false, n: 0, i: null, u: true, t: true }],
+    ["repeat without players", { [D0]: zeroThen(answer(200, link(101)), answer(200, { drills_count: 2, team: OPAQUE_TEAM, teamsession: 101 })) }, "drill_players_missing", 7, { c: true, any: true, n: 1, i: 0, u: true, t: true }],
+    ["repeat foreign team", { [D0]: zeroThen(answer(200, link(101)), answer(200, link(101, { team: 981 }))) }, "team_isolation_failed", 7, { c: true, any: true, n: 1, i: 0, u: true, t: true, ok: true }],
   ];
-  for (const [route, resp, stop, n] of cases) {
-    const f = fakeServer(drillRoutes({ [route]: resp }));
+  for (const [label, over, stop, n, L] of cases) {
+    const f = probeOf(over);
     const r = await drillRun(f.fetchImpl);
     const d = r.capabilities.session_drill_details;
-    assert.equal(r.stoppedBy, stop, `${route} ${stop}`);
-    assert.equal(f.calls.length, n, `${route} ${stop}: no request after the failed step`);
-    if (route === D0 && n === 5) assert.ok(!f.calls.some((c) => c.url.includes("drill=1")), `${stop}: no second drill read`);
-    assert.equal(d.readsMade, n - 4, `${stop}: every drill answer read so far is described, the team stops included`);
-    assert.equal(d.verdict, "not_observed", stop);
-    assert.equal(d.reason, stop);
+    assert.equal(r.stoppedBy, stop, label);
+    assert.equal(d.verdict, "not_observed", label);
+    assert.equal(d.reason, stop, label);
+    assert.equal(f.calls.length, n, `${label}: no request after the failed step`);
+    assert.equal(d.readsMade, n - 4, label);
+    if (n === 5) assert.ok(!f.calls.some((c) => c.url.includes("drill=1")), `${label}: no second drill read`);
+    if (n < 7) assert.equal(f.calls.filter((c) => c.url.includes("drill=0")).length, 1, `${label}: no repeated position 0`);
+    const entry = d[["drill0", "drill1", "drill0Repeat"][n - 5]];
+    assert.deepEqual(linkOf(entry), { teamsessionCanonical: L.c, teamsessionIsAnyParentDrillEntry: L.any, teamsessionParentDrillMatchCount: L.n, teamsessionMatchedDrillIndex: L.i, teamsessionHasUniqueListRow: L.u, teamsessionListRowTeamIs980: L.t, diagnosticLinkConfirmed: Boolean(L.ok) }, label);
+    // A confirmed link never outranks a foreign team: the isolation stop comes first.
+    if (L.ok) assert.equal(stop, "team_isolation_failed", label);
+    assert.equal(d.repeatStable, undefined, label);
     assert.ok(!["same", "mapped", "missing"].includes(d.verdict));
-    const text = JSON.stringify({ ...r, ranAt: "" });
-    for (const leak of ["150", "981", "4711", MARKERS.athleteName, "tot_burst_events", "1200.25"]) assert.ok(!text.includes(leak), `${stop}: ${leak}`);
+    noLeak(r, ["981"]);
   }
-  // A body wrapped in `results` and keyed by ids prints none of those keys.
-  const wrapped = await drillRun(fakeServer(drillRoutes({ [D0]: answer(200, { results: [{ 4711: { tot_burst_events: 4 } }] }) })).fetchImpl);
-  assert.equal(wrapped.requests[4].resultFieldNames, "<unprintable>");
-  assert.deepEqual(wrapped.requests[4].fieldNames, ["results"]);
+  // A foreign team in a list row stops the run at the list, as before.
+  const foreign = probeOf(listOf([sess(100, 980, DAY, [101, 102]), sess(300, 981, DAY, [])]));
+  const fr = await drillRun(foreign.fetchImpl);
+  assert.deepEqual([fr.stoppedBy, foreign.calls.length], ["team_isolation_failed", 2]);
+  // The function on its own.
+  const rows = [{ id: 1, team: 980, drills: [2, 3, 2] }, { id: 2, team: 980 }, { id: 3, team: 981 }];
+  assert.deepEqual(describeDrillLink({ teamsession: 2 }, rows[0], rows, "980"), { teamsessionCanonical: true, teamsessionIsAnyParentDrillEntry: true, teamsessionParentDrillMatchCount: 2, teamsessionMatchedDrillIndex: null, teamsessionHasUniqueListRow: true, teamsessionListRowTeamIs980: true });
+  assert.deepEqual(describeDrillLink({ teamsession: "3" }, rows[0], rows, "980"), { teamsessionCanonical: true, teamsessionIsAnyParentDrillEntry: true, teamsessionParentDrillMatchCount: 1, teamsessionMatchedDrillIndex: 1, teamsessionHasUniqueListRow: true, teamsessionListRowTeamIs980: false });
+  assert.deepEqual(describeDrillLink({ teamsession: 2 }, { id: 1, team: 980 }, rows, "980"), { teamsessionCanonical: true, teamsessionIsAnyParentDrillEntry: false, teamsessionParentDrillMatchCount: 0, teamsessionMatchedDrillIndex: null, teamsessionHasUniqueListRow: true, teamsessionListRowTeamIs980: true });
+  assert.deepEqual(describeDrillLink([{ teamsession: 2 }], rows[0], rows, "980"), { teamsessionCanonical: false, teamsessionIsAnyParentDrillEntry: false, teamsessionParentDrillMatchCount: 0, teamsessionMatchedDrillIndex: null, teamsessionHasUniqueListRow: false, teamsessionListRowTeamIs980: false });
+  const ok = describeDrillLink({ teamsession: 2 }, rows[0].drills ? { ...rows[0], drills: [2, 3] } : rows[0], rows, "980");
+  assert.equal(diagnosticLinkConfirmed(ok, true), true);
+  assert.equal(diagnosticLinkConfirmed(ok, false), false);
+  assert.equal(diagnosticLinkConfirmed({ ...ok, teamsessionListRowTeamIs980: false }, true), false);
+  assert.equal(diagnosticLinkConfirmed({ ...ok, teamsessionParentDrillMatchCount: 2, teamsessionMatchedDrillIndex: null }, true), false);
 });
 
-test("13b. the shape of a drill answer's top-level `team` is described as a kind word and booleans only, the acceptance rule is unchanged, and no value, key, URL, name or id of that field is printed", async () => {
+test("13b. the shape of a drill answer's top-level `team` is described as a kind word and booleans only; a canonical foreign team stops the run; every other shape is described and never accepted as the team; no value, key, URL, name or id of that field is printed", async () => {
   assert.deepEqual([...TEAM_VALUE_KINDS], ["absent", "null", "number", "string", "object", "array", "other"]);
   const MARK_ID = 424242;
   const MARK_URL = "https://evil.example/team/424242/";
-  const MARK_KEY = "zzzSecretKey";
-  const body = (team, extra = {}) => legacyDrill(PLAYERS_0, { team, ...extra });
-  const absent = { players: PLAYERS_0, teamsession: 100, drills_count: 2 };
-  // [label, first position-0 answer, expected stop (null = the run completes), expected team diagnostics]
+  const body = (team) => legacyDrill(PLAYERS_0, { team, teamsession: 101 });
+  const absent = { players: PLAYERS_0, teamsession: 101, drills_count: 2 };
   const cases = [
-    ["absent", absent, "drill_answer_identity_unconfirmed", { teamValueKind: "absent" }],
-    ["null", body(null), "team_unknown_shape", { teamValueKind: "null" }],
+    ["absent", absent, null, { teamValueKind: "absent" }],
+    ["null", body(null), null, { teamValueKind: "null" }],
     ["number", body(980), null, { teamValueKind: "number" }],
     ["string", body("980"), null, { teamValueKind: "string" }],
-    ["object with the bound id", body({ id: 980, [MARK_KEY]: MARK_URL }), "team_unknown_shape", { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: true, teamObjectIdMatchesBoundTeam: true }],
-    ["object without id", body({ [MARK_KEY]: MARK_URL }), "team_unknown_shape", { teamValueKind: "object", teamObjectHasId: false, teamObjectIdCanonical: false, teamObjectIdMatchesBoundTeam: null }],
-    ["object with a non-canonical id", body({ id: MARK_URL }), "team_unknown_shape", { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: false, teamObjectIdMatchesBoundTeam: null }],
-    ["object with another canonical id", body({ id: MARK_ID }), "team_unknown_shape", { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: true, teamObjectIdMatchesBoundTeam: false }],
-    ["array", body([980]), "team_unknown_shape", { teamValueKind: "array" }],
-    ["URL string", body(MARK_URL), "team_unknown_shape", { teamValueKind: "string" }],
-    ["boolean", body(true), "team_unknown_shape", { teamValueKind: "other" }],
+    ["object with the bound id", body({ id: 980, zzzOpaqueKey: MARK_URL }), null, { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: true, teamObjectIdMatchesBoundTeam: true }],
+    ["object without id", body({ zzzOpaqueKey: MARK_URL }), null, { teamValueKind: "object", teamObjectHasId: false, teamObjectIdCanonical: false, teamObjectIdMatchesBoundTeam: null }],
+    ["object with a non-canonical id", body({ id: MARK_URL }), null, { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: false, teamObjectIdMatchesBoundTeam: null }],
+    ["object with another canonical id", body({ id: MARK_ID }), null, { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: true, teamObjectIdMatchesBoundTeam: false }],
+    ["array", body([980]), null, { teamValueKind: "array" }],
+    ["URL string", body(MARK_URL), null, { teamValueKind: "string" }],
+    ["boolean", body(true), null, { teamValueKind: "other" }],
     ["another canonical team", body(MARK_ID), "team_isolation_failed", { teamValueKind: "number" }],
   ];
   for (const [label, first, stop, diag] of cases) {
@@ -829,137 +789,45 @@ test("13b. the shape of a drill answer's top-level `team` is described as a kind
     const r = await drillRun(f.fetchImpl);
     const d = r.capabilities.session_drill_details;
     if (stop === null) {
+      // Not evidence of the team, but no longer a stop in itself: the diagnostic link carries the run.
       assert.equal(r.stoppedBy, null, label);
       assert.equal(f.calls.length, 7, label);
-      assert.equal(d.drill0.teamIs980, true, label);
+      assert.equal(d.verdict, "observed", label);
     } else {
-      // The rule is unchanged: the run stops on the first drill read, nothing further is read.
       assert.equal(r.stoppedBy, stop, label);
-      assert.equal(d.reason, stop, label);
-      assert.equal(d.verdict, "not_observed", label);
-      assert.equal(d.readsMade, 1, label);
       assert.equal(f.calls.length, 5, `${label}: no request after the first drill read`);
-      assert.ok(!f.calls.some((c) => c.url.includes("drill=1")), `${label}: no second drill read`);
-      assert.equal(f.calls.filter((c) => c.url.includes("drill=0")).length, 1, `${label}: no repeated position 0`);
-      assert.equal(d.drill0.teamIs980, false, label);
-      assert.equal(d.drill1, undefined, label);
+      assert.equal(d.readsMade, 1, label);
     }
-    // Only the allowed keys, with the allowed values.
+    assert.equal(d.drill0.teamIs980, ["number", "string"].includes(label), label);
     const picked = Object.fromEntries(Object.entries(d.drill0).filter(([k]) => k.startsWith("teamValue") || k.startsWith("teamObject")));
     assert.deepEqual(picked, diag, label);
     assert.ok(TEAM_VALUE_KINDS.includes(d.drill0.teamValueKind), label);
-    // Nothing of the field is printed: no value, key, URL, name or id, whatever the shape.
-    const text = JSON.stringify({ ...r, ranAt: "" }).replace(/"teamId":"980"/, "");
-    for (const leak of [String(MARK_ID), "424242", MARK_URL, "evil.example", MARK_KEY, MARKERS.athleteName, "4711", "1200.25"]) assert.ok(!text.includes(leak), `${label}: ${leak}`);
-    if (stop !== null) assert.ok(!/"[^"]*\b980\b/.test(text), `${label}: the bound team id is not printed as a value`);
+    noLeak(r, [String(MARK_ID), MARK_URL]);
   }
-  // The repeated position 0 and position 1 are described the same way when they stop.
-  const repeatObj = fakeServer(drillRoutes({ [D0]: zeroThen(answer(200, legacyDrill(PLAYERS_0)), answer(200, body({ id: 980 }))) }));
-  const rr = await drillRun(repeatObj.fetchImpl);
-  assert.equal(rr.stoppedBy, "team_unknown_shape");
-  assert.equal(repeatObj.calls.length, 7);
-  assert.deepEqual([rr.capabilities.session_drill_details.readsMade, rr.capabilities.session_drill_details.drill0Repeat.teamValueKind, rr.capabilities.session_drill_details.drill0Repeat.teamObjectIdMatchesBoundTeam], [3, "object", true]);
-  const oneObj = fakeServer(drillRoutes({ [D1]: answer(200, body({ id: 980 })) }));
-  const r1 = await drillRun(oneObj.fetchImpl);
-  assert.equal(r1.stoppedBy, "team_unknown_shape");
-  assert.equal(oneObj.calls.length, 6);
-  assert.equal(r1.capabilities.session_drill_details.drill1.teamValueKind, "object");
-  // The function on its own.
   assert.deepEqual(describeTeamValue(undefined, "980"), { teamValueKind: "absent" });
   assert.deepEqual(describeTeamValue([{ team: 980 }], "980"), { teamValueKind: "absent" });
-  assert.deepEqual(describeTeamValue({ team: { id: "980" } }, "980"), { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: true, teamObjectIdMatchesBoundTeam: true });
-  assert.deepEqual(describeTeamValue({ team: { id: null } }, "980"), { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: false, teamObjectIdMatchesBoundTeam: null });
   assert.deepEqual(describeTeamValue({ team: { id: "0980" } }, "980"), { teamValueKind: "object", teamObjectHasId: true, teamObjectIdCanonical: false, teamObjectIdMatchesBoundTeam: null });
-  // The full run is not touched: its session reads carry no team diagnostics.
+  // The full run is not touched: its session reads carry no drill diagnostics.
   const full = await runCapabilityProbe({}, ENV, fakeServer().fetchImpl);
-  assert.ok(!JSON.stringify(full).includes("teamValueKind"));
+  for (const k of ["teamValueKind", "teamsessionMatchedDrillIndex", "diagnosticLinkConfirmed"]) assert.ok(!JSON.stringify(full).includes(k), k);
 });
 
-test("13c. the link between a drill answer and the list already received is described as four booleans only; the rule is unchanged (an answer naming the drill row, not the parent, still stops as drill_parent_mismatch); no id leaves the report", async () => {
-  const link = (teamsession, over = {}) => legacyDrill(PLAYERS_0, { teamsession, ...over });
-  // The real-like shape: position 0 names the parent's first drill entry (a list row of team 980), not the parent.
-  const real = fakeServer(drillRoutes({ [D0]: answer(200, link(101)) }));
-  const r = await drillRun(real.fetchImpl);
-  assert.equal(r.stoppedBy, "drill_parent_mismatch", "the rule is unchanged");
-  assert.equal(real.calls.length, 5);
-  assert.ok(!real.calls.some((c) => c.url.includes("drill=1")));
-  const d0 = r.capabilities.session_drill_details.drill0;
-  assert.equal(d0.namesParent, false);
-  assert.deepEqual(
-    [d0.teamsessionCanonical, d0.teamsessionMatchesExpectedDrill, d0.expectedDrillHasUniqueListRow, d0.expectedDrillListRowTeamIs980],
-    [true, true, true, true],
-  );
-  // Position 1 is checked against drills[1]; the repeated position 0 against drills[0] again.
-  const pos1 = fakeServer(drillRoutes({ [D1]: answer(200, link(102)) }));
-  const r1 = await drillRun(pos1.fetchImpl);
-  assert.equal(r1.stoppedBy, "drill_parent_mismatch");
-  assert.equal(pos1.calls.length, 6);
-  assert.equal(r1.capabilities.session_drill_details.drill1.teamsessionMatchesExpectedDrill, true);
-  const wrongPos = fakeServer(drillRoutes({ [D1]: answer(200, link(101)) }));
-  const rw = await drillRun(wrongPos.fetchImpl);
-  assert.equal(rw.capabilities.session_drill_details.drill1.teamsessionMatchesExpectedDrill, false, "drills[1] is 102, not 101");
-  const repeat = fakeServer(drillRoutes({ [D0]: zeroThen(answer(200, legacyDrill(PLAYERS_0)), answer(200, link(101))) }));
-  const rr = await drillRun(repeat.fetchImpl);
-  assert.equal(rr.stoppedBy, "drill_parent_mismatch");
-  assert.equal(repeat.calls.length, 7);
-  assert.equal(rr.capabilities.session_drill_details.drill0Repeat.teamsessionMatchesExpectedDrill, true);
-  // The expected drill entry is not a unique row of the page, or its row is not team 980, or the page has no such row.
-  const list = (rowsOver) => ({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, rowsOver, { "x-total-count": String(rowsOver.length) }) });
-  const dup = await drillRun(fakeServer(drillRoutes({ ...list([sess(100, 980, DAY, [101, 102]), sess(101, 980, DAY, []), sess(101, 980, DAY, []), sess(102, 980, DAY, [])]), [D0]: answer(200, link(101)) })).fetchImpl);
-  assert.deepEqual([dup.capabilities.session_drill_details.drill0.expectedDrillHasUniqueListRow, dup.capabilities.session_drill_details.drill0.expectedDrillListRowTeamIs980], [false, false]);
-  const noRow = await drillRun(fakeServer(drillRoutes({ ...list([sess(100, 980, DAY, [101, 102]), sess(200, 980, OTHER_DAY, [])]), [D0]: answer(200, link(101)) })).fetchImpl);
-  assert.deepEqual([noRow.capabilities.session_drill_details.drill0.teamsessionMatchesExpectedDrill, noRow.capabilities.session_drill_details.drill0.expectedDrillHasUniqueListRow, noRow.capabilities.session_drill_details.drill0.expectedDrillListRowTeamIs980], [true, false, false]);
-  const teamless = await drillRun(fakeServer(drillRoutes({ ...list([sess(100, 980, DAY, [101, 102]), { id: 101, drills: [] }, sess(102, 980, DAY, [])]), [D0]: answer(200, link(101)) })).fetchImpl);
-  assert.deepEqual([teamless.capabilities.session_drill_details.drill0.expectedDrillHasUniqueListRow, teamless.capabilities.session_drill_details.drill0.expectedDrillListRowTeamIs980], [true, false]);
-  // A non-canonical or absent teamsession: canonical false, match false; the rule's own stop applies.
-  for (const [ts, stop] of [["https://evil.example/team_session/101/", "drill_answer_identity_unconfirmed"], [undefined, "drill_answer_identity_unconfirmed"], [{ id: 101 }, "drill_answer_identity_unconfirmed"], [150, "drill_parent_mismatch"]]) {
-    const f = fakeServer(drillRoutes({ [D0]: answer(200, link(ts)) }));
-    const x = await drillRun(f.fetchImpl);
-    assert.equal(x.stoppedBy, stop, String(ts));
-    const dx = x.capabilities.session_drill_details.drill0;
-    assert.equal(dx.teamsessionCanonical, ts === 150, String(ts));
-    assert.equal(dx.teamsessionMatchesExpectedDrill, false, String(ts));
-    assert.deepEqual([dx.expectedDrillHasUniqueListRow, dx.expectedDrillListRowTeamIs980], [true, true], "the list side does not depend on the answer");
-  }
-  // Nothing of the ids leaves the report, whichever case.
-  for (const rep of [r, r1, rr, dup, noRow]) {
-    const text = JSON.stringify({ ...rep, ranAt: "" }).replace(/"teamId":"980"/, "").replace(/"(status|rowCount|distinctDays|readsMade)":\d+/g, "");
-    for (const leak of ["101", "102", "100", "150", "evil", MARKERS.athleteName, "4711"]) assert.ok(!new RegExp(`"[^"]*\\b${leak}\\b|${leak}`).test(text) || !text.includes(leak), `${leak}`);
-    for (const id of ["100", "101", "102", "150"]) assert.ok(!new RegExp(`"[^"]*\\b${id}\\b`).test(text), `no id ${id} as a value`);
-  }
-  // The function on its own: a parent without drills, a position beyond the list, an array body.
-  const rows = [{ id: 1, team: 980, drills: [2, 3] }, { id: 2, team: 980 }, { id: 3, team: 981 }];
-  assert.deepEqual(describeDrillLink({ teamsession: 2 }, rows[0], 0, rows, "980"), { teamsessionCanonical: true, teamsessionMatchesExpectedDrill: true, expectedDrillHasUniqueListRow: true, expectedDrillListRowTeamIs980: true });
-  assert.deepEqual(describeDrillLink({ teamsession: 3 }, rows[0], 1, rows, "980"), { teamsessionCanonical: true, teamsessionMatchesExpectedDrill: true, expectedDrillHasUniqueListRow: true, expectedDrillListRowTeamIs980: false });
-  assert.deepEqual(describeDrillLink({ teamsession: 2 }, rows[0], 2, rows, "980"), { teamsessionCanonical: true, teamsessionMatchesExpectedDrill: false, expectedDrillHasUniqueListRow: false, expectedDrillListRowTeamIs980: false });
-  assert.deepEqual(describeDrillLink({ teamsession: 2 }, { id: 1, team: 980 }, 0, rows, "980"), { teamsessionCanonical: true, teamsessionMatchesExpectedDrill: false, expectedDrillHasUniqueListRow: false, expectedDrillListRowTeamIs980: false });
-  assert.deepEqual(describeDrillLink([{ teamsession: 2 }], rows[0], 0, rows, "980"), { teamsessionCanonical: false, teamsessionMatchesExpectedDrill: false, expectedDrillHasUniqueListRow: true, expectedDrillListRowTeamIs980: true });
-  // The full run is not touched.
-  const full = await runCapabilityProbe({}, ENV, fakeServer().fetchImpl);
-  assert.ok(!JSON.stringify(full).includes("teamsessionMatchesExpectedDrill"));
-});
-
-test("14. the drill-only run stops before any drill read at the first parent identity or team that is not confirmed - by REST or by the legacy family - and every stop names the drill verdict", async () => {
+test("14. the drill-only run stops before any drill read at the first parent identity or team that is not confirmed - by REST or by the legacy family - every stop names the drill verdict, and the cap is seven", async () => {
   const noDrill = (calls) => !calls.some((c) => c.url.includes("drill="));
   const cases = [
-    // The REST parent.
     ["GET /rest/v1/team_session/100/", answer(200, { id: 150, team: 980, drills_count: 2 }), "parent_id_mismatch", 3],
     ["GET /rest/v1/team_session/100/", answer(200, { id: 100, team: 981, drills_count: 2 }), "team_isolation_failed", 3],
     ["GET /rest/v1/team_session/100/", answer(200, { id: 100, team: { id: 980 }, drills_count: 2 }), "team_unknown_shape", 3],
     ["GET /rest/v1/team_session/100/", answer(200, { id: 100, team: 980 }), "parent_not_confirmed", 3],
-    ["GET /rest/v1/team_session/100/", answer(200, { id: 100, team: 980, drills_count: 0 }), "parent_not_confirmed", 3],
     ["GET /rest/v1/team_session/100/", answer(200, { id: 100, team: 980, drills_count: 1 }), "parent_not_confirmed", 3],
     ["GET /rest/v1/team_session/100/", answer(404, { detail: "Not found." }), "parent_not_confirmed", 3],
     ["GET /rest/v1/team_session/100/", answer(200, [{ id: 100, team: 980, drills_count: 2 }]), "parent_not_confirmed", 3],
-    // The same parent through the legacy family.
     ["GET /api/team_session/100/", answer(200, { id: 150, team: 980 }), "legacy_parent_id_mismatch", 4],
     ["GET /api/team_session/100/", answer(200, { id: 100, team: 981 }), "team_isolation_failed", 4],
     ["GET /api/team_session/100/", answer(200, { id: 100, team: "https://server3.gpexe.com/api/team/980/" }), "team_unknown_shape", 4],
     ["GET /api/team_session/100/", answer(200, { id: 100 }), "legacy_parent_not_confirmed", 4],
-    ["GET /api/team_session/100/", answer(200, { team: 980 }), "legacy_parent_not_confirmed", 4],
     ["GET /api/team_session/100/", answer(404, { detail: "Not found." }), "legacy_parent_not_confirmed", 4],
     ["GET /api/team_session/100/", answer(200, ""), "legacy_parent_not_confirmed", 4],
-    ["GET /api/team_session/100/", answer(200, [{ id: 100, team: 980 }]), "legacy_parent_not_confirmed", 4],
   ];
   for (const [route, resp, stop, n] of cases) {
     const f = fakeServer(drillRoutes({ [route]: resp }));
@@ -969,67 +837,40 @@ test("14. the drill-only run stops before any drill read at the first parent ide
     assert.ok(noDrill(f.calls), `${route} ${stop}: no drill read`);
     if (n === 3) assert.ok(!f.calls.some((c) => c.url.includes("/api/team_session")), "no legacy read after a REST stop");
     assert.deepEqual(r.capabilities.session_drill_details, { verdict: "not_observed", reason: stop });
-    // ranAt is the run's own clock (its milliseconds can hold any digits); everything else must not.
-    const text = JSON.stringify({ ...r, ranAt: "" });
-    for (const leak of ["150", "981", MARKERS.sessionName]) assert.ok(!text.includes(leak), `${stop}: ${leak}`);
+    noLeak(r, ["981"]);
   }
-  // No parent in the list: the run stops after the list.
-  const noParent = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [sess(100, 980, DAY, []), sess(200, 980, OTHER_DAY, [])], { "x-total-count": "2" }) }));
+  // No parent with two drills, only count-only rows, a one-drill parent first, a drill-like row first.
+  const noParent = fakeServer(drillRoutes(listOf([sess(100, 980, DAY, [101]), sess(200, 980, OTHER_DAY, [])])));
   const c = await drillRun(noParent.fetchImpl);
-  assert.equal(c.stoppedBy, "no_parent_with_drills_in_list");
-  assert.equal(noParent.calls.length, 2);
-  assert.deepEqual(c.capabilities.session_drill_details, { verdict: "not_observed", reason: "no_parent_with_drills_in_list" });
-  // A row without a readable team is never the parent.
-  const teamless = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [{ id: 100, drills: [101, 102], drills_count: 2 }], { "x-total-count": "1" }) }));
-  const tl = await drillRun(teamless.fetchImpl);
-  assert.equal(tl.stoppedBy, "no_parent_with_drills_in_list");
-  assert.equal(teamless.calls.length, 2);
-  // A foreign row in the list stops it before anything else, as in the full run.
-  const foreign = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [sess(100, 980, DAY, [101, 102]), sess(300, 981, DAY, [])], { "x-total-count": "2" }) }));
-  const d = await drillRun(foreign.fetchImpl);
-  assert.equal(d.stoppedBy, "team_isolation_failed");
-  assert.equal(foreign.calls.length, 2);
-  assert.deepEqual(d.capabilities.session_drill_details, { verdict: "not_observed", reason: "team_isolation_failed" });
-  // Every stop before the drill branch names the drill verdict too (one exit for the whole run).
+  assert.deepEqual([c.stoppedBy, noParent.calls.length, c.capabilities.session_drill_details], ["no_parent_with_drills_in_list", 2, { verdict: "not_observed", reason: "no_parent_with_drills_in_list" }]);
+  const countOnly = fakeServer(drillRoutes(listOf([{ id: 300, team: 980, drills_count: 0 }, { id: 100, team: 980, drills_count: 3 }, { id: 101, team: 980, drills_count: 2, drills: [] }])));
+  const co = await drillRun(countOnly.fetchImpl);
+  assert.deepEqual([co.stoppedBy, countOnly.calls.length], ["no_parent_with_drills_in_list", 2]);
+  assert.ok(!countOnly.calls.some((x) => x.url.includes("/api/team_session")));
+  const dLike = fakeServer(drillRoutes({ ...listOf([{ id: 101, team: 980, drills_count: 2, drill: 0 }, sess(100, 980, DAY, [101, 102]), sess(102, 980, DAY, [])]), "GET /rest/v1/team_session/101/": answer(200, { id: 101, team: 980, drills_count: 2 }) }));
+  const dl = await drillRun(dLike.fetchImpl);
+  assert.equal(dl.stoppedBy, null);
+  assert.ok(!dLike.calls.some((x) => x.url.includes("/101/")), "the count-only row is never read");
+  // Every stop before the drill branch names the drill verdict too.
   for (const [over, stop, n] of [
-    [{ "GET /rest/v1/team_session/?team=980&limit=100": answer(500, "") }, "session_list_unavailable", 2],
+    [{ [LIST]: answer(500, "") }, "session_list_unavailable", 2],
     [{ "POST /api-token-auth/": answer(400, { non_field_errors: ["refused"] }) }, "exchange_failed", 1],
-    [{ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [{ team: 980, drills: [] }], { "x-total-count": "1" }) }, "no_safe_session_id", 2],
+    [{ [LIST]: answer(200, [{ team: 980, drills: [] }], { "x-total-count": "1" }) }, "no_safe_session_id", 2],
   ]) {
     const fs = fakeServer(drillRoutes(over));
     const rr = await drillRun(fs.fetchImpl);
-    assert.equal(rr.stoppedBy, stop);
-    assert.equal(fs.calls.length, n, stop);
-    assert.deepEqual(rr.capabilities.session_drill_details, { verdict: "not_observed", reason: stop });
+    assert.deepEqual([rr.stoppedBy, fs.calls.length, rr.capabilities.session_drill_details], [stop, n, { verdict: "not_observed", reason: stop }]);
   }
-  // Full mode is not touched by that exit: a stopped full run carries no drill key it did not compute.
-  const fullStop = fakeServer(happyRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(500, "") }));
+  const fullStop = fakeServer(happyRoutes({ [LIST]: answer(500, "") }));
   const fr = await runCapabilityProbe({}, ENV, fullStop.fetchImpl);
-  assert.equal(fr.stoppedBy, "session_list_unavailable");
-  assert.equal(fr.capabilities.session_drill_details, undefined);
-  // The cap: never more than seven requests, whatever maxRequests says.
+  assert.deepEqual([fr.stoppedBy, fr.capabilities.session_drill_details], ["session_list_unavailable", undefined]);
+  // The cap: never more than seven requests, whatever maxRequests says; a smaller cap stops before the repeat.
   const capped = fakeServer(drillRoutes());
   const e = await drillRun(capped.fetchImpl, { maxRequests: 14 });
-  assert.equal(capped.calls.length, 7);
-  assert.equal(e.stoppedBy, null);
-  // A cap that stops before the repeated position 0: nothing is compared.
-  const six = fakeServer(drillRoutes());
-  const s6 = await drillRun(six.fetchImpl, { maxRequests: 6 });
-  assert.equal(s6.stoppedBy, "request_limit");
-  assert.equal(six.calls.length, 6);
-  assert.equal(six.calls.filter((x) => x.url.includes("drill=0")).length, 1, "no repeated position 0");
-  assert.deepEqual(s6.capabilities.session_drill_details, { verdict: "not_observed", reason: "request_limit" });
-  const tight = fakeServer(drillRoutes());
-  const g = await drillRun(tight.fetchImpl, { maxRequests: 4 });
-  assert.equal(g.stoppedBy, "request_limit");
-  assert.equal(tight.calls.length, 4);
-  assert.ok(noDrill(tight.calls));
-  assert.deepEqual(g.capabilities.session_drill_details, { verdict: "not_observed", reason: "request_limit" });
-  // A cap that allows the first drill read only: the second is never sent, and nothing is compared.
-  const five = fakeServer(drillRoutes());
-  const h = await drillRun(five.fetchImpl, { maxRequests: 5 });
-  assert.equal(h.stoppedBy, "request_limit");
-  assert.equal(five.calls.length, 5);
-  assert.ok(!five.calls.some((x) => x.url.includes("drill=1")));
-  assert.deepEqual(h.capabilities.session_drill_details, { verdict: "not_observed", reason: "request_limit" });
+  assert.deepEqual([capped.calls.length, e.stoppedBy], [7, null]);
+  for (const [cap, drill0Reads] of [[6, 1], [5, 1], [4, 0]]) {
+    const t = fakeServer(drillRoutes());
+    const g = await drillRun(t.fetchImpl, { maxRequests: cap });
+    assert.deepEqual([g.stoppedBy, t.calls.length, t.calls.filter((x) => x.url.includes("drill=0")).length, g.capabilities.session_drill_details], ["request_limit", cap, drill0Reads, { verdict: "not_observed", reason: "request_limit" }], String(cap));
+  }
 });
