@@ -384,15 +384,19 @@ in the `api` family, never yet same**: one read confirms the endpoint and its sh
 also reported `listRowMatchesFirstDrill: true` (another row of the real list page has the id the
 parent's first `drills` entry names) — an observation that does not settle the `rest_v1` drill
 model. **The drill-only run, third form** (owner order 2026-10-01, built, **not run**): one
-exchange and at most five reads — the REST list gives a parent (team 980, a readable id and an
+exchange and at most six reads (cap 7) — the REST list gives a parent (team 980, a readable id and an
 explicit `drills` list of at least two entries; `drills_count` alone never chooses one), its own
 REST read confirms the same id, team 980 and `drills_count >= 2`, the same parent through
-`api/team_session/<parent id>/` confirms the same id and team 980 again, then the two legacy
-drill reads the legacy integration sends, `?drill=0` and `?drill=1`, each of which must name team
-980 and the parent at its top level (`team`, `teamsession`) before anything else is read; only
-the two `players` contents are compared, in memory, never printed: different →
-`parameterApplied: true` and the capability may be same; identical → `not_observed` with
-`parameter_effect_not_distinguishable`. The whole-session `api/…/details/` without a parameter is
+`api/team_session/<parent id>/` confirms the same id and team 980 again, then the legacy
+drill reads the legacy integration sends in the control sequence `?drill=0` → `?drill=1` →
+`?drill=0` (owner, 2026-10-01), each of which, the repeat included, must name team 980 and the
+parent at its top level (`team`, `teamsession`) and carry a non-empty `players` before anything
+else is read; only the three `players` contents are compared, in memory, never printed: the two
+position-0 answers differ → `not_observed` with `source_changed_during_probe`; they are identical
+and position 1 differs → `parameterApplied: true` and the capability may be same (only for the
+`api` family: positions 0 and 1 produce different results for a stable, confirmed parent; no drill
+name, and position 0 is not thereby proven to be the first drill); all three identical →
+`not_observed` with `parameter_effect_not_distinguishable`. The whole-session `api/…/details/` without a parameter is
 not used as a reference (not confirmed in the legacy integration). Any identity or team not
 confirmed stops the chain without the next request (`parent_id_mismatch`, `parent_not_confirmed`,
 `legacy_parent_id_mismatch`, `legacy_parent_not_confirmed`, `drill_parent_mismatch`,
@@ -1180,8 +1184,8 @@ pre-existing; pass/fail counts don't belong in this file
 ## Most likely next step
 
 The owner's external review of the third form of the drill-only probe mode on the F3c2b PR;
-then, on the owner's order, the owner-run drill-only read (the legacy drill reads at positions 0
-and 1 on a parent confirmed twice, compared in memory); then the merge
+then, on the owner's order, the owner-run drill-only read (the legacy drill reads in the control
+sequence 0 → 1 → 0 on a parent confirmed twice, compared in memory); then the merge
 decision on the F3c2b PR; then the adapter implements the reads the probe proved
 (`docs/ai/gpexe-rest-v1-compatibility.md` section 2, rows 1b–7 and 9, and row 8 only after an owner decision on the `api`
 family, which the `server3` profile does not carry), and, on the owner's order, the F3c2

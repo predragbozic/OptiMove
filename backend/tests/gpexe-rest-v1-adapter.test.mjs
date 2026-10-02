@@ -501,6 +501,8 @@ test("11d. never part of an answer: a stream that breaks, a chunk that is not by
   assert.match(row, /team 980/);
   assert.match(row, /`teamsession`/);
   assert.match(row, /`parameter_effect_not_distinguishable`/);
+  assert.match(row, /`source_changed_during_probe`/);
+  assert.match(row, /0 → 1 → 0/);
   assert.match(row, /Never \*\*missing\*\*/);
   assert.doesNotMatch(row, /rest\/v1\/team_session\/[^`]*\?drill=|`team_session\/<id>\/details\/\?drill=0`/, "never the REST form");
   assert.doesNotMatch(row, /`api\/team_session\/<parent id>\/details\/`/, "never a legacy details read without a position");

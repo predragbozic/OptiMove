@@ -7,7 +7,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, DRILL_MODE_MAX_REQUESTS, DRILL_POSITIONS, LEGACY_API_PATH, LEGACY_API_PREFIX, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId,
+  answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, DRILL_MODE_MAX_REQUESTS, DRILL_POSITIONS, DRILL_READ_SEQUENCE, LEGACY_API_PATH, LEGACY_API_PREFIX, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId,
 } from "../scripts/gpexe-rest-v1-capability-probe.mjs";
 import { DiscoveryUsageError } from "../scripts/gpexe-auth-discovery.mjs";
 
@@ -560,8 +560,9 @@ test("11. the probe changes nothing else: the adapter, the discovery script and 
   assert.equal((source.match(/getLegacy\(`/g) || []).length, 2, "two legacy call sites: the parent and the drill reads");
   assert.match(source, /getLegacy\(`team_session\/\$\{parentId\}\/`\)/);
   assert.match(source, /getLegacy\(`team_session\/\$\{parentId\}\/details\/\?drill=\$\{position\}`\)/);
-  assert.match(source, /for \(const position of DRILL_POSITIONS\)/);
+  assert.match(source, /for \(const position of DRILL_READ_SEQUENCE\)/);
   assert.match(source, /DRILL_POSITIONS = Object\.freeze\(\[0, 1\]\)/);
+  assert.match(source, /DRILL_READ_SEQUENCE = Object\.freeze\(\[0, 1, 0\]\)/);
   assert.doesNotMatch(source, /getLegacy\(`[^`]*details\/`\)/, "no legacy details read without a drill position");
   assert.equal((source.match(/read\(LEGACY_API_PREFIX,/g) || []).length, 1, "the legacy prefix is used in one place");
   assert.doesNotMatch(source, /\$\{[^}]*\bdrills?\b[^}]*\}|\$\{(drillIds|drillId|firstDrill)[^}]*\}/, "no drills entry in any path");
@@ -590,6 +591,9 @@ test("11. the probe changes nothing else: the adapter, the discovery script and 
 // and, as the owner-run answer showed, `team` and `teamsession` at the top level.
 const PLAYERS_0 = { 4711: { athlete_name: MARKERS.athleteName, tot_burst_events: 4, total_distance: 1200.25, zones: { z1: 3 } } };
 const PLAYERS_1 = { 4711: { athlete_name: MARKERS.athleteName, tot_burst_events: 2, total_distance: 640.5, zones: { z1: 1 } } };
+const PLAYERS_0_CHANGED = { 4711: { athlete_name: MARKERS.athleteName, tot_burst_events: 5, total_distance: 1333.75, zones: { z1: 3 } } };
+// A route that answers the first read of position 0 with `first` and its repeat with `repeat`.
+const zeroThen = (first, repeat) => { let n = 0; return () => (n++ === 0 ? first : repeat); };
 const legacyDrill = (players, extra = {}) => ({ drills_count: 2, players, team: 980, teamsession: 100, ...extra });
 function drillRoutes(over = {}) {
   return {
@@ -610,14 +614,15 @@ const paths = (calls) => calls.map((c) => `${c.method} ${new URL(c.url).pathname
 const D0 = "GET /api/team_session/100/details/?drill=0";
 const D1 = "GET /api/team_session/100/details/?drill=1";
 
-test("12. the drill-only run: one exchange and exactly five reads - the REST parent with two drills, the same parent through the legacy family, the legacy drill reads at positions 0 and 1 - both answers name team 980 and the parent, and only `players` is compared, in memory", async () => {
+test("12. the drill-only run: one exchange and exactly six reads - the REST parent with two drills, the same parent through the legacy family, the legacy drill reads in the control sequence 0, 1, 0 - every answer names team 980 and the parent, and only `players` is compared, in memory", async () => {
   const { calls, fetchImpl } = fakeServer(drillRoutes());
   const report = await drillRun(fetchImpl);
   assert.equal(report.mode, "drill");
   assert.equal(report.stoppedBy, null);
-  assert.equal(report.requestCount, 6);
-  assert.equal(DRILL_MODE_MAX_REQUESTS, 6);
+  assert.equal(report.requestCount, 7);
+  assert.equal(DRILL_MODE_MAX_REQUESTS, 7);
   assert.deepEqual([...DRILL_POSITIONS], [0, 1]);
+  assert.deepEqual([...DRILL_READ_SEQUENCE], [0, 1, 0]);
   assert.deepEqual(paths(calls), [
     "POST /api-token-auth/",
     "GET /rest/v1/team_session/?team=980&limit=100",
@@ -625,6 +630,7 @@ test("12. the drill-only run: one exchange and exactly five reads - the REST par
     "GET /api/team_session/100/",
     D0,
     D1,
+    D0,
   ]);
   const base = new URL(calls[0].url).origin;
   assert.ok(calls.every((c) => new URL(c.url).origin === base), "one host");
@@ -639,9 +645,10 @@ test("12. the drill-only run: one exchange and exactly five reads - the REST par
     bodyKind: "object", hasContent: true, rowsAtTopLevel: false, playersField: true, playersContainerKind: "map", playerRowsPresent: true, playerRowsAreObjects: true,
     playerRowsHaveNumbers: true, playerRowsHaveNestedValues: true, metricFieldPresent: false,
   };
-  assert.deepEqual(report.capabilities.session_drill_details, { verdict: "same", family: "api", positionsRead: 2, parameterApplied: true, drill0: answerShape, drill1: answerShape });
-  assert.deepEqual(report.requests.map((r) => r.path), ["api-token-auth/", "rest/v1/team_session/?team=<team>&limit=<n>", "rest/v1/team_session/<id>/", "api/team_session/<id>/", "api/team_session/<id>/details/?drill=0", "api/team_session/<id>/details/?drill=1"]);
-  for (const i of [4, 5]) assert.deepEqual(report.requests[i].fieldNames, ["drills_count", "players", "team", "teamsession"]);
+  // Stable 0, different 1, stable repeated 0: same.
+  assert.deepEqual(report.capabilities.session_drill_details, { verdict: "same", family: "api", readsMade: 3, repeatStable: true, parameterApplied: true, drill0: answerShape, drill1: answerShape, drill0Repeat: answerShape });
+  assert.deepEqual(report.requests.map((r) => r.path), ["api-token-auth/", "rest/v1/team_session/?team=<team>&limit=<n>", "rest/v1/team_session/<id>/", "api/team_session/<id>/", "api/team_session/<id>/details/?drill=0", "api/team_session/<id>/details/?drill=1", "api/team_session/<id>/details/?drill=0"]);
+  for (const i of [4, 5, 6]) assert.deepEqual(report.requests[i].fieldNames, ["drills_count", "players", "team", "teamsession"]);
   // Helper facts from the list page: types and booleans only.
   const list = report.capabilities.session_list;
   assert.equal(list.drillsEntryKind, "number");
@@ -651,24 +658,41 @@ test("12. the drill-only run: one exchange and exactly five reads - the REST par
   // Nothing of either answer leaves the run: no key of the players map, no value, no name, no id.
   const text = JSON.stringify({ ...report, ranAt: "" });
   for (const m of [...Object.values(MARKERS).map(String), ISSUED, USER, PASSWORD, DAY, "09-14", "777", "1200.25", "640.5", "total_distance", "tot_burst_events", "4711", "z1"]) assert.ok(!text.includes(m), m);
-  const stripped = text.replace(/"(status|rowCount|distinctDays|positionsRead)":\d+/g, "").replace(/"teamId":"980"/, "");
+  const stripped = text.replace(/"(status|rowCount|distinctDays|readsMade)":\d+/g, "").replace(/"teamId":"980"/, "");
   for (const id of ["100", "101"]) assert.ok(!new RegExp(`"[^"]*\\b${id}\\b`).test(stripped), `no id ${id}`);
 
-  // Identical `players` at both positions: the parameter's effect cannot be told apart.
+  // All three `players` identical: the parameter's effect cannot be told apart.
   for (const second of [legacyDrill(PLAYERS_0), legacyDrill({ ...PLAYERS_0 }, { drills_count: 3, extra: "differs outside players" })]) {
     const f = fakeServer(drillRoutes({ [D1]: answer(200, second) }));
     const r = await drillRun(f.fetchImpl);
     assert.equal(r.stoppedBy, null);
-    assert.equal(f.calls.length, 6);
+    assert.equal(f.calls.length, 7);
     const d = r.capabilities.session_drill_details;
     assert.equal(d.verdict, "not_observed");
     assert.equal(d.reason, "parameter_effect_not_distinguishable");
+    assert.equal(d.repeatStable, true);
     assert.equal(d.parameterApplied, false);
+  }
+  // The repeated position 0 answers other `players` than the first: the source changed during the
+  // probe, whatever position 1 answered, and nothing is concluded about the parameter.
+  for (const second of [PLAYERS_1, PLAYERS_0, PLAYERS_0_CHANGED]) {
+    const f = fakeServer(drillRoutes({ [D0]: zeroThen(answer(200, legacyDrill(PLAYERS_0)), answer(200, legacyDrill(PLAYERS_0_CHANGED))), [D1]: answer(200, legacyDrill(second)) }));
+    const r = await drillRun(f.fetchImpl);
+    assert.equal(r.stoppedBy, null);
+    assert.equal(f.calls.length, 7);
+    const d = r.capabilities.session_drill_details;
+    assert.equal(d.verdict, "not_observed");
+    assert.equal(d.reason, "source_changed_during_probe");
+    assert.equal(d.repeatStable, false);
+    assert.equal(d.parameterApplied, null);
+    const printed = JSON.stringify({ ...r, ranAt: "" });
+    for (const leak of ["1333.75", "1200.25", "640.5", "4711", MARKERS.athleteName]) assert.ok(!printed.includes(leak), leak);
   }
   // The key order of the map does not make two maps differ; a different key set does.
   const reordered = { b: { x: 1, y: 2 }, a: { y: 2, x: 1 } };
   const ordered = { a: { x: 1, y: 2 }, b: { x: 1, y: 2 } };
-  const ro = await drillRun(fakeServer(drillRoutes({ [D0]: answer(200, legacyDrill(ordered)), [D1]: answer(200, legacyDrill(reordered)) })).fetchImpl);
+  const ro = await drillRun(fakeServer(drillRoutes({ [D0]: zeroThen(answer(200, legacyDrill(ordered)), answer(200, legacyDrill(reordered))), [D1]: answer(200, legacyDrill(reordered)) })).fetchImpl);
+  assert.equal(ro.capabilities.session_drill_details.repeatStable, true, "a reordered repeat is the same answer");
   assert.equal(ro.capabilities.session_drill_details.reason, "parameter_effect_not_distinguishable");
   const otherKeys = await drillRun(fakeServer(drillRoutes({ [D1]: answer(200, legacyDrill({ 4712: { tot_burst_events: 4 } })) })).fetchImpl);
   assert.equal(otherKeys.capabilities.session_drill_details.verdict, "same");
@@ -695,7 +719,7 @@ test("12. the drill-only run: one exchange and exactly five reads - the REST par
   }));
   const dl = await drillRun(dLike.fetchImpl);
   assert.equal(dl.stoppedBy, null);
-  assert.deepEqual(paths(dLike.calls).slice(2), ["GET /rest/v1/team_session/100/", "GET /api/team_session/100/", D0, D1]);
+  assert.deepEqual(paths(dLike.calls).slice(2), ["GET /rest/v1/team_session/100/", "GET /api/team_session/100/", D0, D1, D0]);
   assert.ok(!dLike.calls.some((c) => c.url.includes("/101/")), "the count-only row is never read");
   // Only count-only rows: no parent, no legacy request, nothing after the list.
   const countOnly = fakeServer(drillRoutes({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, [{ id: 300, team: 980, drills_count: 0 }, { id: 100, team: 980, drills_count: 3 }, { id: 101, team: 980, drills_count: 2, drills: [] }], { "x-total-count": "3" }) }));
@@ -710,8 +734,9 @@ test("12. the drill-only run: one exchange and exactly five reads - the REST par
   assert.equal(describeDrillEntries([selfRow], selfRow).listRowMatchesFirstDrill, false, "the parent itself is not another row");
 });
 
-test("13. the drill reads: each answer must name team 980 and the parent at its top level before the next read; absence, an unreadable shape or a mismatch is not_observed or an isolation stop; never mapped or missing", async () => {
+test("13. the drill reads: each answer, the repeated position 0 included, must name team 980 and the parent at its top level before the next read; absence, an unreadable shape or a mismatch is not_observed or an isolation stop; never mapped or missing", async () => {
   const P = { players: PLAYERS_0 };
+  const good0 = answer(200, legacyDrill(PLAYERS_0));
   const cases = [
     // [route, answer, stop, requests sent]
     [D0, answer(404, { detail: "Not found." }), "drill_not_200", 5],
@@ -741,6 +766,18 @@ test("13. the drill reads: each answer must name team 980 and the parent at its 
     [D1, answer(200, legacyDrill(PLAYERS_1, { team: 981 })), "team_isolation_failed", 6],
     [D1, answer(200, legacyDrill(PLAYERS_1, { team: undefined })), "drill_answer_identity_unconfirmed", 6],
     [D1, answer(200, { team: 980, teamsession: 100 }), "drill_players_missing", 6],
+    // The repeated position 0 is held to the same rules (first read good, repeat bad).
+    [D0, zeroThen(good0, answer(200, legacyDrill(PLAYERS_0, { team: 981 }))), "team_isolation_failed", 7],
+    [D0, zeroThen(good0, answer(200, legacyDrill(PLAYERS_0, { team: { id: 980 } }))), "team_unknown_shape", 7],
+    [D0, zeroThen(good0, answer(200, legacyDrill(PLAYERS_0, { teamsession: 150 }))), "drill_parent_mismatch", 7],
+    [D0, zeroThen(good0, answer(200, legacyDrill(PLAYERS_0, { team: undefined }))), "drill_answer_identity_unconfirmed", 7],
+    [D0, zeroThen(good0, answer(200, legacyDrill(PLAYERS_0, { teamsession: undefined }))), "drill_answer_identity_unconfirmed", 7],
+    [D0, zeroThen(good0, answer(200, legacyDrill({}))), "drill_players_missing", 7],
+    [D0, zeroThen(good0, answer(200, { team: 980, teamsession: 100, players: "unreadable" })), "drill_players_missing", 7],
+    [D0, zeroThen(good0, answer(200, "")), "drill_answer_unreadable", 7],
+    [D0, zeroThen(good0, answer(200, "<html>interstitial</html>")), "drill_answer_unreadable", 7],
+    [D0, zeroThen(good0, answer(200, {})), "drill_answer_empty", 7],
+    [D0, zeroThen(good0, answer(503, "")), "drill_not_200", 7],
   ];
   for (const [route, resp, stop, n] of cases) {
     const f = fakeServer(drillRoutes({ [route]: resp }));
@@ -748,7 +785,8 @@ test("13. the drill reads: each answer must name team 980 and the parent at its 
     const d = r.capabilities.session_drill_details;
     assert.equal(r.stoppedBy, stop, `${route} ${stop}`);
     assert.equal(f.calls.length, n, `${route} ${stop}: no request after the failed step`);
-    if (route === D0) assert.ok(!f.calls.some((c) => c.url.includes("drill=1")), `${stop}: no second drill read`);
+    if (route === D0 && n === 5) assert.ok(!f.calls.some((c) => c.url.includes("drill=1")), `${stop}: no second drill read`);
+    if (n === 7) assert.equal(d.readsMade, d.reason === stop && !["team_isolation_failed", "team_unknown_shape"].includes(stop) ? 3 : undefined);
     assert.equal(d.verdict, "not_observed", stop);
     assert.equal(d.reason, stop);
     assert.ok(!["same", "mapped", "missing"].includes(d.verdict));
@@ -829,11 +867,18 @@ test("14. the drill-only run stops before any drill read at the first parent ide
   const fr = await runCapabilityProbe({}, ENV, fullStop.fetchImpl);
   assert.equal(fr.stoppedBy, "session_list_unavailable");
   assert.equal(fr.capabilities.session_drill_details, undefined);
-  // The cap: never more than six requests, whatever maxRequests says.
+  // The cap: never more than seven requests, whatever maxRequests says.
   const capped = fakeServer(drillRoutes());
   const e = await drillRun(capped.fetchImpl, { maxRequests: 14 });
-  assert.equal(capped.calls.length, 6);
+  assert.equal(capped.calls.length, 7);
   assert.equal(e.stoppedBy, null);
+  // A cap that stops before the repeated position 0: nothing is compared.
+  const six = fakeServer(drillRoutes());
+  const s6 = await drillRun(six.fetchImpl, { maxRequests: 6 });
+  assert.equal(s6.stoppedBy, "request_limit");
+  assert.equal(six.calls.length, 6);
+  assert.equal(six.calls.filter((x) => x.url.includes("drill=0")).length, 1, "no repeated position 0");
+  assert.deepEqual(s6.capabilities.session_drill_details, { verdict: "not_observed", reason: "request_limit" });
   const tight = fakeServer(drillRoutes());
   const g = await drillRun(tight.fetchImpl, { maxRequests: 4 });
   assert.equal(g.stoppedBy, "request_limit");

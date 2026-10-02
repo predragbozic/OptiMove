@@ -44,6 +44,9 @@ export const LEGACY_API_PREFIX = "api/";
 export const LEGACY_API_PATH = /^team_session\/(0|[1-9][0-9]{0,11})\/(details\/\?drill=[01])?$/;
 // The two drill positions the legacy integration really reads (owner, 2026-10-01): zero-based.
 export const DRILL_POSITIONS = Object.freeze([0, 1]);
+// The control sequence (owner, 2026-10-01): position 0, position 1, then position 0 again, so a
+// source that changes between reads cannot pass for a parameter that is applied.
+export const DRILL_READ_SEQUENCE = Object.freeze([0, 1, 0]);
 const ID = /^(0|[1-9][0-9]{0,11})$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -167,8 +170,8 @@ export function describeDrillAnswer(body) {
 }
 
 export const PROBE_MODES = Object.freeze(["full", "drill"]);
-// The drill-only run: one exchange and these five reads, nothing else.
-export const DRILL_MODE_MAX_REQUESTS = 6;
+// The drill-only run: one exchange and these six reads, nothing else.
+export const DRILL_MODE_MAX_REQUESTS = 7;
 
 export function parseArgs(argv) {
   const opts = { host: PROBE_HOST, team: PROBE_TEAM, mode: "full" };
@@ -190,7 +193,7 @@ export function parseArgs(argv) {
 // maxRequests and timeoutMs exist for the tests; the defaults are the limits.
 export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM, mode = "full", maxRequests = MAX_REQUESTS, timeoutMs = REQUEST_TIMEOUT_MS } = {}, env, fetchImpl = globalThis.fetch) {
   if (!PROBE_MODES.includes(mode)) throw new DiscoveryUsageError("mode must be full or drill");
-  // The drill-only run never sends more than its own five reads.
+  // The drill-only run never sends more than its own six reads.
   if (mode === "drill") maxRequests = Math.min(maxRequests, DRILL_MODE_MAX_REQUESTS);
   if (!Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > MAX_REQUESTS) throw new DiscoveryUsageError(`maxRequests is a whole number from 1 to ${MAX_REQUESTS}`);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > REQUEST_TIMEOUT_MS) throw new DiscoveryUsageError(`timeoutMs is a whole number up to ${REQUEST_TIMEOUT_MS}`);
@@ -366,8 +369,8 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     // team_session id on server3 (first drill-only run), and the owner's legacy
     // integration reads a drill as `api/team_session/<parent>/details/?drill=<index>`
     // with a zero-based index. So: the parent is confirmed by the REST chain,
-    // then again by the legacy family, and only then are the two drill reads
-    // at positions 0 and 1 sent. Every identity is confirmed before the next read, and the chain
+    // then again by the legacy family, and only then are the drill reads sent
+    // in the control sequence 0 -> 1 -> 0. Every identity is confirmed before the next read, and the chain
     // stops without a further request at the first identity or team that is
     // not confirmed. No `drills` entry is ever used as an id.
     if (mode === "drill") {
@@ -409,12 +412,14 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
         drillsCountPositive: legacyOk && Number.isInteger(lb.drills_count) ? lb.drills_count > 0 : null, parentConfirmed: legacyConfirmed,
       });
       if (!legacyConfirmed) return stopDrill(legacyOk && safeId(lb.id) !== null && !legacyIdOk ? "legacy_parent_id_mismatch" : "legacy_parent_not_confirmed");
-      // 4. The two drill reads the legacy integration really sends: positions 0 and 1 on the
-      //    confirmed parent. Each answer must name team 980 and the parent at its top level
-      //    before the next read; then only the `players` contents are compared, in memory.
+      // 4. The drill reads the legacy integration really sends, in the control sequence
+      //    0 -> 1 -> 0 on the confirmed parent. Each answer, the repeated one included, must name
+      //    team 980 and the parent at its top level and carry a non-empty `players` before the
+      //    next read; then only the `players` contents are compared, in memory.
       const answers = [];
       const players = [];
-      for (const position of DRILL_POSITIONS) {
+      const labels = ["drill0", "drill1", "drill0Repeat"];
+      for (const position of DRILL_READ_SEQUENCE) {
         const read = await getLegacy(`team_session/${parentId}/details/?drill=${position}`);
         const b = read.body;
         const object = read.status === 200 && parsedAnswer(b) && !Array.isArray(b);
@@ -433,15 +438,19 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
           : answerPlayers === null ? "drill_players_missing"
           : null;
         if (reason) {
-          verdict("session_drill_details", { verdict: "not_observed", family: "api", reason, positionsRead: answers.length, ...Object.fromEntries(answers.map((a, i) => [`drill${i}`, a])) });
+          verdict("session_drill_details", { verdict: "not_observed", family: "api", reason, readsMade: answers.length, ...Object.fromEntries(answers.map((a, i) => [labels[i], a])) });
           return stopDrill(reason);
         }
       }
-      // 5. Only `players` is compared, whole, in memory; nothing of it is printed.
-      const parameterApplied = canonical(players[0]) !== canonical(players[1]);
+      // 5. Only `players` is compared, whole, in memory; nothing of it is printed. The repeated
+      //    position 0 must equal the first one, and position 1 must differ from it.
+      const [first, second, repeat] = players.map(canonical);
+      const repeatStable = first === repeat;
+      const parameterApplied = repeatStable ? first !== second : null;
+      const reason = !repeatStable ? "source_changed_during_probe" : !parameterApplied ? "parameter_effect_not_distinguishable" : null;
       verdict("session_drill_details", {
-        verdict: parameterApplied ? "same" : "not_observed", family: "api", positionsRead: answers.length, parameterApplied,
-        ...(parameterApplied ? {} : { reason: "parameter_effect_not_distinguishable" }), drill0: answers[0], drill1: answers[1],
+        verdict: reason ? "not_observed" : "same", family: "api", readsMade: answers.length, repeatStable, parameterApplied,
+        ...(reason ? { reason } : {}), drill0: answers[0], drill1: answers[1], drill0Repeat: answers[2],
       });
       return done();
     }
