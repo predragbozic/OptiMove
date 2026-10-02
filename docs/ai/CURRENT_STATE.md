@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-29. Last `origin/main` commit checked: `6f083a7` (merge of PR #130,
-`feature/source-hosts-server3-profile` → `main`; PR #129 `f26120f` before it).
+Last reviewed: 2026-10-02. Last `origin/main` commit checked: `47bf301` (merge of PR #131,
+`feature/gpexe-rest-v1-adapter-f3c2a` → `main`; PR #130 `6f083a7` before it).
 
 ## Active phase
 
@@ -295,8 +295,12 @@ out of the repository folder and is in `.gitignore`; it was never tracked. **No 
 connection, no binding for team 980, no Connect / Test route, no GPEXE request by the main
 session.**
 
-**The active step is F3c2a — the read-only adapter profile for `server3` / `rest_v1`** (branch
-`feature/gpexe-rest-v1-adapter-f3c2a`, owner order 2026-09-29, in review). It adds
+**F3c2a — the read-only adapter profile for `server3` / `rest_v1` — is merged and deployed**
+(PR #131, merge commit `47bf301`, 2026-10-01 12:03 UTC, pinned to head `7765b3a` after the
+owner's external review and two docs-only corrections; `/api/health` served `47bf301` with
+`ok: true` three times; without a login the GPEXE `status`, `candidates` and `source-athletes`
+routes, the roster read and `POST …/imports` answered 401; nothing observable changed in
+production — no route uses the adapter, no migration). It adds
 `backend/src/sourceAdapters.js` (an adapter is selected by `(source_system, apiFamily)`; a family
 without one answers `adapter_not_available`; `gpexe` / `api` has none there, the `e03` importer
 keeps its own client, unchanged) and `backend/src/gpexeRestV1Adapter.js`: every URL comes from
@@ -320,7 +324,169 @@ thresholds (`team_thresholds`), units (`units`) and session tags (`session_tags`
 legacy-attested path). So the importer cannot run on `server3` yet: a session bundle needs the
 unproven reads. Also unverified: that `rest_v1` values mean what the mapper assumes for `e03`
 (UTC timestamps, SI numbers, the drill model). **No route, no database write, no credential
-storage, no binding, no import, no GPEXE request.**
+storage, no binding, no import, no GPEXE request.** The compatibility document's section 4 holds
+the probe rules the owner settled (2026-09-30 / 2026-10-01): the date window is proven only when
+every row is of team 980 and inside the window and the filtered count is smaller than the
+unfiltered count of the same run. (The drill rules settled then — the REST `details/` read by
+position, then by the drill's own id, with a same / mapped matrix — were withdrawn on 2026-10-01;
+see the F3c2b paragraphs below.)
+
+**The active step is F3c2b — the owner-run read-only capability probe** (branch
+`feature/gpexe-rest-v1-capability-probe-f3c2b`, owner order 2026-10-01; the full mode was
+externally reviewed at `6c51be3` and run once by the owner — see the next paragraph — and the
+drill-only mode is now in review):
+`backend/scripts/gpexe-rest-v1-capability-probe.mjs` runs one exchange in the host's confirmed
+form and then GET requests only for Team ID 980 (at most 14 requests, a timeout per request,
+answers bounded at 5 MiB, redirects never followed, no retry, no database), derives every id —
+session, athlete row, track; in the drill-only run the parent — from an answer it has already
+received and checked, stops a
+chain as soon as no safe next id exists, stops the whole run on a row of another team or of a
+team in an unreadable shape, reads nothing of a session whose own read did not confirm team 980,
+asks for the tag list for team 980 as well, applies
+the date-window rule of the compatibility document (the full run reads no drill any more), and
+prints statuses,
+shapes, field names, counts and booleans only. Fake-fetch contract tests
+(`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`). **The adapter, the routes, the
+database, the UI, bindings and imports are untouched; the PowerShell commands for the run are
+handed over only after the external review of the tool.**
+
+**The full probe was run once by the owner (2026-10-01, after the external review of head
+`6c51be3`) and succeeded:** `stoppedBy: null`, 11 requests (one exchange, ten reads), the report
+sanitized by the owner; only its verdicts are recorded (`docs/ai/gpexe-rest-v1-compatibility.md`
+sections 1–4), no id, date, value or field list. **Eight of the importer's nine reads are proven
+`same` on `server3` / `rest_v1`** — the date window, the session read, the whole-session details,
+the athlete list, the athlete row, its `/more/`, the track and the thresholds; the tag list was
+observed for team 980; units stay unverified. **The drill read is `not_observed`:** the list rows
+carry a `drills` list, but the parent session's own read carries `drills_count > 0` without a
+`drills` list, so the probe's precondition for the two drill reads was not met and neither was
+sent. **The adapter is unchanged: every one of the eight proven reads still answers
+`source_capability_unavailable` until it is implemented with its own tests, on the owner's
+order.** For the drill, the probe gained a narrow **drill-only mode** (`--mode drill`). **Its first
+form was run once by the owner (2026-10-01, after the external review of head `1bcb969`) and
+stopped as built:** `stoppedBy: drill_id_mismatch`, 4 requests — the parent confirmed (own read
+200, same id, team 980, `drills_count > 0`, no `drills` list), but `team_session/<first drills entry>/`
+answered 200 with **an id other than the entry** (the report could not tell whether it was the
+parent's own id or a third session's) and no `teamsession` field; nothing further was read. **So
+an entry of a session's `drills` list is not a `team_session` id on `rest_v1`, or at least that
+path answers a different session; the `e03` drill model is not confirmed there; owner decision: a
+`drills` entry is never read as a `team_session` id again without new evidence.** The mode was corrected on the same PR twice (owner orders
+2026-10-01). **The REST `?drill=` plan is withdrawn:** the owner's review of the legacy
+integration's code (structural evidence, not an API answer; the file holds credentials and was
+not opened by the main session) shows that on `server3` it reads a drill's results as
+`api/team_session/<parent id>/details/?drill=<zero-based index>`, the whole session and
+`drills_count` as `rest/v1/team_session/<parent id>/details/`, and never uses `drills` as
+`team_session` ids. **The second form was run once by the owner (2026-10-01, after the external
+review of head `9c702ff`):** `stoppedBy: null`, 5 requests; the parent confirmed by its REST read
+and again by `api/team_session/<parent id>/` (same id, team 980); the legacy drill read at the
+first position answered 200 with an object carrying `drills_count`, `players`, `team` and
+`teamsession` at the top level, `players` a map of objects with numbers. **Row 8 is now observed
+in the `api` family, never yet same**: one read confirms the endpoint and its shape only. The run
+also reported `listRowMatchesFirstDrill: true` (another row of the real list page has the id the
+parent's first `drills` entry names) — an observation that does not settle the `rest_v1` drill
+model. **The drill-only run, third form** (owner order 2026-10-01, built, **not run**): one
+exchange and at most six reads (cap 7) — the REST list gives a parent (team 980, a readable id and an
+explicit `drills` list of at least two entries; `drills_count` alone never chooses one), its own
+REST read confirms the same id, team 980 and `drills_count >= 2`, the same parent through
+`api/team_session/<parent id>/` confirms the same id and team 980 again, then the legacy
+drill reads the legacy integration sends in the control sequence `?drill=0` → `?drill=1` →
+`?drill=0` (owner, 2026-10-01), each of which, the repeat included, must name team 980 and the
+parent at its top level (`team`, `teamsession`) and carry a non-empty `players` before anything
+else is read; only the three `players` contents are compared, in memory, never printed: the two
+position-0 answers differ → `not_observed` with `source_changed_during_probe`; they are identical
+and position 1 differs → `parameterApplied: true` and the capability may be same (only for the
+`api` family: positions 0 and 1 produce different results for a stable, confirmed parent; no drill
+name, and position 0 is not thereby proven to be the first drill); all three identical →
+`not_observed` with `parameter_effect_not_distinguishable`. The whole-session `api/…/details/` without a parameter is
+not used as a reference (not confirmed in the legacy integration). Any identity or team not
+confirmed stops the chain without the next request (`parent_id_mismatch`, `parent_not_confirmed`,
+`legacy_parent_id_mismatch`, `legacy_parent_not_confirmed`, `drill_parent_mismatch`,
+`drill_answer_identity_unconfirmed`, `team_isolation_failed`, `team_unknown_shape`), and every exit
+names the drill verdict; no `drills` entry is ever used as an id; the legacy family is used by the
+probe only, for those read shapes on the same host, and is not added to the `server3` host profile
+or the adapter; the full run no longer reads any drill. **Owner product decision (2026-10-01):**
+the legacy way of reading drill results by parent id and `?drill=<index>` is the candidate to
+confirm; its way of naming drills — linking tags through all tagged sessions of that day sorted by
+time — is not reliable enough for OptiMove and is not copied; OptiMove keeps a drill as parent
+session + zero-based drill index, links a name or tag only when the API gives an explicit, tested
+link, uses the neutral name *Drill N* until then, and never guesses a tag
+(`docs/ai/gpexe-rest-v1-compatibility.md` section 3). **The third form was run once by the owner
+(2026-10-02, after the external review of head `3f466ed`):** `stoppedBy: team_unknown_shape`, 5
+requests — the REST list, the REST parent and the legacy parent confirmed as before; the first
+`?drill=0` answered 200 with the expected top-level fields, but its `team` was not a canonical id
+as a number or a string, so the run stopped before `?drill=1` and the repeated `?drill=0`; nothing
+was compared and there is no conclusion about the parameter; **row 8 stays observed, never yet
+same.** On the same PR the probe gained **diagnostics of the `team` shape** in every drill
+answer's report entry (owner order 2026-10-02): `teamValueKind` (`absent` / `null` / `number` /
+`string` / `object` / `array` / `other`) and, for an object only, `teamObjectHasId`,
+`teamObjectIdCanonical` and `teamObjectIdMatchesBoundTeam` — no value, key list, URL, name or id.
+**The acceptance rule is unchanged:** any non-canonical shape still stops the run as
+`team_unknown_shape`, even when the object's `id` matches the bound team, and nothing further is
+read; accepting `team.id` is a separate owner decision after the next result. **The diagnostic run
+(2026-10-02, head `1166cfa`) stopped the same way** (`team_unknown_shape`, 5 requests) and showed
+that the drill answer's `team` is an object without an `id` (kept opaque: no key printed, no other
+field looked for, never evidence of the team), and that the answer's `teamsession` is a canonical
+id that is not the parent's (`namesParent: false`) — under the current rule a readable team would
+still have stopped as `drill_parent_mismatch`. On the same PR the probe gained, as diagnostics
+only (owner order 2026-10-02), four booleans per drill answer about its link to the list already
+received: whether `teamsession` is canonical, whether it equals the parent's `drills[position]`
+exactly, whether that entry is exactly one row of the list page, and whether that row names team
+980 — no id, value, name, URL or key. **The rule is unchanged:** an answer naming anything but the
+parent still stops as `drill_parent_mismatch` and nothing further is read. Only if the next result
+confirms the chain parent `drills[position]` → one list row of team 980 → the answer's
+`teamsession` equal to that entry will the owner decide, separately, whether that chain becomes
+the identity rule of a drill answer. **The second diagnostic run (2026-10-02, head `79b2381`)
+stopped the same way** (`team_unknown_shape`, 5 requests): `teamsessionCanonical: true`,
+`teamsessionMatchesExpectedDrill: false`, `expectedDrillHasUniqueListRow: true`,
+`expectedDrillListRowTeamIs980: true` — the list side holds (the parent's first `drills` entry is
+exactly one row of the list page, uniqueness on that one page of 100 rows only, and that row names
+team 980), but the answer's `teamsession` is neither the parent nor that entry: a third session.
+**The fourth form, the final structural diagnostics (owner order 2026-10-02, built, not run):** for
+every drill answer, the repeat included, the probe computes in memory whether its `teamsession` is
+canonical, how many entries of the parent's `drills` it matches and at which index when exactly
+one (`teamsessionMatchedDrillIndex`), whether it is exactly one row of the list page and whether
+that row names team 980; all of that plus a non-empty `players` is the **probe-only diagnostic
+link** (`diagnosticLinkConfirmed`) that alone lets the probe send the next read — otherwise
+`drill_link_not_confirmed` and no further request. The answer's `team` is opaque and never
+evidence of the team (a canonical id naming another team still stops the run); the repeated
+position 0 must map to the same index as the first (`drill_repeat_index_changed`) and carry the
+same canonical `players` (`source_changed_during_probe`); a completed sequence is reported as
+**observed, not same**, with `repeatStable`, `parameterApplied` and the indexes for 0, 1 and the
+repeated 0. **The diagnostic link is not an identity rule and no permission for the adapter; the
+identity contract of a drill answer is decided by the owner after the result.** **The fourth form
+was attempted twice by the owner (2026-10-02, after the external review of head `7c54a7d`) and
+neither attempt reached a drill read:** the first — exchange 200, then the REST session list timed
+out after 30 s, 2 requests, `session_list_unavailable`; the second — the exchange itself answered
+400 with the single field `non_field_errors`, 1 request, `exchange_failed`. Both are operational
+events without any conclusion about the drill model, the token or the account; by the owner's
+decision there is no third attempt and no new diagnostic. **F3c2b is closed (owner, 2026-10-02,
+aligned on 2026-10-03 on the official GPEXE REST handbook `gpexe-v.6-api-rest-handbook.pdf`,
+pages 31–33 and the Team Session Brief page; written for GPEXE 6, the server reports 9.11.8; a
+confirmation by GPEXE support is welcome, not a blocker):** the eight confirmed `rest_v1` reads
+(date window, session read, whole-session details, athlete list, athlete row, `/more/`, track,
+thresholds) stay confirmed; the drill endpoint is in practice **observed**, and its use is
+settled by the handbook — `api/team_session/<confirmed parent id>/details/?drill=<index>` with a
+zero-based index from `0` to `drills_count - 1`, no parameter meaning the whole session;
+**drills stay in the future adapter and in the first planned production import**; the top-level
+`team` of a details answer is the team's aggregated parameters, not a team id; `drills` entries
+and the answer's `teamsession` are used neither to build a URL nor as an identity guard (safety
+rests on the confirmed parent, a fixed URL builder and the bounded index); a drill's name comes
+from an unambiguous `drillTags` mapping of the parent (`api/team_session/<confirmed parent
+id>/brief/`, translated through the team's tag catalogue, only a tag confirmed for the bound
+team), fallback `Drill N`, and never from all tagged sessions of a day; no more owner-run
+diagnostic probes before that implementation, no further sign-in attempts, no probe rule change;
+the owner's Google Sheet is neither checked nor changed. The two last operational events stay
+recorded without any conclusion about drills, the token or the account. **The implementation is a
+separate small adapter PR after PR #132 is merged, on the owner's explicit order:** B1 the
+mandatory `listSessions()` drills-filter fix (characterisation tests first, both directions, an
+ambiguous set refused with a stable code), B2 the eight confirmed reads through the `server3` /
+`rest_v1` profile with the existing boundaries, B3 one narrow builder for exactly the drill path
+on the approved `server3` host (no generic `api/` family, no fallback, GET only, index bounded by
+`drills_count`, a drill answer accepted only as a 200 JSON object whose `players` is a non-empty
+map keyed by canonical athlete ids, one failed drill never a silently complete set), B4 names
+through `drillTags` with provenance `drill_tags` or `index_fallback`, no new table or migration,
+B5 the listed tests, B6 `code-reviewer` + `security-reviewer`. The PR #132 merge decision is the
+owner's. No GPEXE request by the main session, no route, no database write, no credential
+storage, no binding, no import.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -891,6 +1057,16 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
+- **Mandatory before the F3c2 routes or any import: fix the drills filter of the `rest_v1`
+  adapter's `listSessions()`** (owner, 2026-10-01, after the review of PR #132). As the `e03`
+  importer does, `backend/src/gpexeRestV1Adapter.js` leaves out every session whose id another
+  session names in its `drills`. On `rest_v1` a `drills` entry is not a `team_session` id, or at
+  least that path answers a different session (first drill-only run, 2026-10-01), so that filter
+  may leave out real sessions and may keep drill rows as sessions (duplicate data in an import);
+  the fix must cover both directions. A separate, small PR,
+  not part of PR #132; the rule for telling a drill row from a session on `rest_v1` must come from
+  an observed answer, not from the `e03` model.
+
 - **Roster scalability check with 60 athletes** (owner, 2026-09-26, after PR #124's browser
   QA): the 25-athlete roster used in QA was only a test scenario, not a product limit. The
   roster must support every athlete of a team; check the roster with 60 athletes (layout,
@@ -1082,11 +1258,16 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's review and merge decision on the F3c2a adapter PR; then the owner-run read-only
-probe of the remaining `rest_v1` capabilities (`docs/ai/gpexe-rest-v1-compatibility.md`
-section 4), the reads it proves, and, on the owner's order, the F3c2 routes, built against the
-contract in `docs/ai/source-connections-f3c2-contract.md`, its
-section 2, then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
+The owner's merge decision on the F3c2b probe PR (F3c2b is closed: eight reads confirmed, the
+drill endpoint observed and its use settled by the official handbook, drills kept in the first
+planned import, no further probe); then, only after that merge and a new explicit owner order, a
+separate small adapter PR from the then `origin/main`: the mandatory `listSessions()`
+drills-filter fix, the eight confirmed reads (`docs/ai/gpexe-rest-v1-compatibility.md` section 2,
+rows 1b–7 and 9), one narrow builder for exactly the drill path on the approved `server3` host
+(row 8; no generic `api/` family) and drill names through `drillTags` with the fallback
+`Drill N`; and, on the owner's order, the F3c2
+routes, built against the contract in `docs/ai/source-connections-f3c2-contract.md` section 2,
+then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 
