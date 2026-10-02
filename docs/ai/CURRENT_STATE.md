@@ -421,9 +421,22 @@ answer's report entry (owner order 2026-10-02): `teamValueKind` (`absent` / `nul
 `teamObjectIdCanonical` and `teamObjectIdMatchesBoundTeam` — no value, key list, URL, name or id.
 **The acceptance rule is unchanged:** any non-canonical shape still stops the run as
 `team_unknown_shape`, even when the object's `id` matches the bound team, and nothing further is
-read; accepting `team.id` is a separate owner decision after the next result. Its PowerShell
-commands are handed over only after the owner's external review of this change. No GPEXE request
-by the main session, no route, no database write, no credential storage, no binding, no import.
+read; accepting `team.id` is a separate owner decision after the next result. **The diagnostic run
+(2026-10-02, head `1166cfa`) stopped the same way** (`team_unknown_shape`, 5 requests) and showed
+that the drill answer's `team` is an object without an `id` (kept opaque: no key printed, no other
+field looked for, never evidence of the team), and that the answer's `teamsession` is a canonical
+id that is not the parent's (`namesParent: false`) — under the current rule a readable team would
+still have stopped as `drill_parent_mismatch`. On the same PR the probe gained, as diagnostics
+only (owner order 2026-10-02), four booleans per drill answer about its link to the list already
+received: whether `teamsession` is canonical, whether it equals the parent's `drills[position]`
+exactly, whether that entry is exactly one row of the list page, and whether that row names team
+980 — no id, value, name, URL or key. **The rule is unchanged:** an answer naming anything but the
+parent still stops as `drill_parent_mismatch` and nothing further is read. Only if the next result
+confirms the chain parent `drills[position]` → one list row of team 980 → the answer's
+`teamsession` equal to that entry will the owner decide, separately, whether that chain becomes
+the identity rule of a drill answer. Its PowerShell commands are handed over only after the owner's
+external review of this change. No GPEXE request by the main session, no route, no database write,
+no credential storage, no binding, no import.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1198,8 +1211,9 @@ pre-existing; pass/fail counts don't belong in this file
 The owner's external review of the third form of the drill-only probe mode on the F3c2b PR;
 (now with the `team` shape diagnostics); then, on the owner's order, the owner-run drill-only
 read (the legacy drill reads in the control sequence 0 → 1 → 0 on a parent confirmed twice,
-compared in memory), whose result decides whether `team.id` may ever confirm a team; then the
-merge
+compared in memory), whose result decides whether the chain parent `drills[position]` → one list
+row of team 980 → the answer's `teamsession` may become the identity rule of a drill answer (the
+`team` object stays opaque); then the merge
 decision on the F3c2b PR; then the adapter implements the reads the probe proved
 (`docs/ai/gpexe-rest-v1-compatibility.md` section 2, rows 1b–7 and 9, and row 8 only after an owner decision on the `api`
 family, which the `server3` profile does not carry), and, on the owner's order, the F3c2

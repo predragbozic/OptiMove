@@ -190,6 +190,22 @@ export function describeTeamValue(body, team) {
   return out;
 }
 
+// The link a drill answer may have to the list already received (owner, 2026-10-02):
+// diagnostics only, never a rule. For the position read, the parent's `drills[position]` is the
+// expected drill; the answer's `teamsession` is compared with it, and that entry is looked up
+// among the list rows already received. Four booleans, nothing else: no id, value, name or key.
+export function describeDrillLink(body, parentRow, position, rows, team) {
+  const expected = parentRow && Array.isArray(parentRow.drills) ? safeId(parentRow.drills[position]) : null;
+  const ts = parsedAnswer(body) && !Array.isArray(body) ? safeId(body.teamsession) : null;
+  const matching = expected === null ? [] : rows.filter((r) => r && typeof r === "object" && safeId(r.id) === expected);
+  return {
+    teamsessionCanonical: ts !== null,
+    teamsessionMatchesExpectedDrill: ts !== null && expected !== null && ts === expected,
+    expectedDrillHasUniqueListRow: matching.length === 1,
+    expectedDrillListRowTeamIs980: matching.length === 1 && namesTeam(matching[0].team, team) === true,
+  };
+}
+
 export const PROBE_MODES = Object.freeze(["full", "drill"]);
 // The drill-only run: one exchange and these six reads, nothing else.
 export const DRILL_MODE_MAX_REQUESTS = 7;
@@ -452,7 +468,10 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
         const named = object ? safeId(b.teamsession) : null;
         const namesParent = named === null ? null : named === parentId;
         const answerPlayers = object && answerWithContent(b.players) ? b.players : null;
-        answers.push({ status: read.status ?? null, teamIs980, namesParent, playersPresent: answerPlayers !== null, ...describeTeamValue(b, team), ...describeDrillAnswer(b) });
+        answers.push({
+          status: read.status ?? null, teamIs980, namesParent, playersPresent: answerPlayers !== null,
+          ...describeTeamValue(b, team), ...describeDrillLink(b, drillParent, position, rows, team), ...describeDrillAnswer(b),
+        });
         players.push(answerPlayers);
         if (object && "team" in b && teamNamed !== true) {
           const code = teamNamed === false ? "team_isolation_failed" : "team_unknown_shape";

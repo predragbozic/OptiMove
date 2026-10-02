@@ -7,7 +7,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, describeTeamValue, DRILL_MODE_MAX_REQUESTS, DRILL_POSITIONS, DRILL_READ_SEQUENCE, LEGACY_API_PATH, LEGACY_API_PREFIX, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId, TEAM_VALUE_KINDS,
+  answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, describeDrillLink, describeTeamValue, DRILL_MODE_MAX_REQUESTS, DRILL_POSITIONS, DRILL_READ_SEQUENCE, LEGACY_API_PATH, LEGACY_API_PREFIX, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId, TEAM_VALUE_KINDS,
 } from "../scripts/gpexe-rest-v1-capability-probe.mjs";
 import { DiscoveryUsageError } from "../scripts/gpexe-auth-discovery.mjs";
 
@@ -640,8 +640,11 @@ test("12. the drill-only run: one exchange and exactly six reads - the REST pare
   assert.deepEqual(verdicts(report), { session_list: "proven", session_read: "same", legacy_api_session_read: "observed", session_drill_details: "same" });
   assert.deepEqual(report.capabilities.session_read, { verdict: "same", status: 200, idMatchesList: true, teamIs980: true, drillsCountPresent: true, drillsCountPositive: true, drillsCountAtLeastTwo: true, startTimestampPresent: true, drillsListPresent: false, parentConfirmed: true });
   assert.deepEqual(report.capabilities.legacy_api_session_read, { verdict: "observed", family: "api", status: 200, idMatchesParent: true, teamIs980: true, drillsCountPositive: true, parentConfirmed: true });
+  // In the fake, every drill answer names the parent (the rule's happy path), while the parent's
+  // drills[0] / drills[1] are the list rows 101 / 102 of team 980.
   const answerShape = {
     status: 200, teamIs980: true, namesParent: true, playersPresent: true, teamValueKind: "number",
+    teamsessionCanonical: true, teamsessionMatchesExpectedDrill: false, expectedDrillHasUniqueListRow: true, expectedDrillListRowTeamIs980: true,
     bodyKind: "object", hasContent: true, rowsAtTopLevel: false, playersField: true, playersContainerKind: "map", playerRowsPresent: true, playerRowsAreObjects: true,
     playerRowsHaveNumbers: true, playerRowsHaveNestedValues: true, metricFieldPresent: false,
   };
@@ -870,6 +873,70 @@ test("13b. the shape of a drill answer's top-level `team` is described as a kind
   // The full run is not touched: its session reads carry no team diagnostics.
   const full = await runCapabilityProbe({}, ENV, fakeServer().fetchImpl);
   assert.ok(!JSON.stringify(full).includes("teamValueKind"));
+});
+
+test("13c. the link between a drill answer and the list already received is described as four booleans only; the rule is unchanged (an answer naming the drill row, not the parent, still stops as drill_parent_mismatch); no id leaves the report", async () => {
+  const link = (teamsession, over = {}) => legacyDrill(PLAYERS_0, { teamsession, ...over });
+  // The real-like shape: position 0 names the parent's first drill entry (a list row of team 980), not the parent.
+  const real = fakeServer(drillRoutes({ [D0]: answer(200, link(101)) }));
+  const r = await drillRun(real.fetchImpl);
+  assert.equal(r.stoppedBy, "drill_parent_mismatch", "the rule is unchanged");
+  assert.equal(real.calls.length, 5);
+  assert.ok(!real.calls.some((c) => c.url.includes("drill=1")));
+  const d0 = r.capabilities.session_drill_details.drill0;
+  assert.equal(d0.namesParent, false);
+  assert.deepEqual(
+    [d0.teamsessionCanonical, d0.teamsessionMatchesExpectedDrill, d0.expectedDrillHasUniqueListRow, d0.expectedDrillListRowTeamIs980],
+    [true, true, true, true],
+  );
+  // Position 1 is checked against drills[1]; the repeated position 0 against drills[0] again.
+  const pos1 = fakeServer(drillRoutes({ [D1]: answer(200, link(102)) }));
+  const r1 = await drillRun(pos1.fetchImpl);
+  assert.equal(r1.stoppedBy, "drill_parent_mismatch");
+  assert.equal(pos1.calls.length, 6);
+  assert.equal(r1.capabilities.session_drill_details.drill1.teamsessionMatchesExpectedDrill, true);
+  const wrongPos = fakeServer(drillRoutes({ [D1]: answer(200, link(101)) }));
+  const rw = await drillRun(wrongPos.fetchImpl);
+  assert.equal(rw.capabilities.session_drill_details.drill1.teamsessionMatchesExpectedDrill, false, "drills[1] is 102, not 101");
+  const repeat = fakeServer(drillRoutes({ [D0]: zeroThen(answer(200, legacyDrill(PLAYERS_0)), answer(200, link(101))) }));
+  const rr = await drillRun(repeat.fetchImpl);
+  assert.equal(rr.stoppedBy, "drill_parent_mismatch");
+  assert.equal(repeat.calls.length, 7);
+  assert.equal(rr.capabilities.session_drill_details.drill0Repeat.teamsessionMatchesExpectedDrill, true);
+  // The expected drill entry is not a unique row of the page, or its row is not team 980, or the page has no such row.
+  const list = (rowsOver) => ({ "GET /rest/v1/team_session/?team=980&limit=100": answer(200, rowsOver, { "x-total-count": String(rowsOver.length) }) });
+  const dup = await drillRun(fakeServer(drillRoutes({ ...list([sess(100, 980, DAY, [101, 102]), sess(101, 980, DAY, []), sess(101, 980, DAY, []), sess(102, 980, DAY, [])]), [D0]: answer(200, link(101)) })).fetchImpl);
+  assert.deepEqual([dup.capabilities.session_drill_details.drill0.expectedDrillHasUniqueListRow, dup.capabilities.session_drill_details.drill0.expectedDrillListRowTeamIs980], [false, false]);
+  const noRow = await drillRun(fakeServer(drillRoutes({ ...list([sess(100, 980, DAY, [101, 102]), sess(200, 980, OTHER_DAY, [])]), [D0]: answer(200, link(101)) })).fetchImpl);
+  assert.deepEqual([noRow.capabilities.session_drill_details.drill0.teamsessionMatchesExpectedDrill, noRow.capabilities.session_drill_details.drill0.expectedDrillHasUniqueListRow, noRow.capabilities.session_drill_details.drill0.expectedDrillListRowTeamIs980], [true, false, false]);
+  const teamless = await drillRun(fakeServer(drillRoutes({ ...list([sess(100, 980, DAY, [101, 102]), { id: 101, drills: [] }, sess(102, 980, DAY, [])]), [D0]: answer(200, link(101)) })).fetchImpl);
+  assert.deepEqual([teamless.capabilities.session_drill_details.drill0.expectedDrillHasUniqueListRow, teamless.capabilities.session_drill_details.drill0.expectedDrillListRowTeamIs980], [true, false]);
+  // A non-canonical or absent teamsession: canonical false, match false; the rule's own stop applies.
+  for (const [ts, stop] of [["https://evil.example/team_session/101/", "drill_answer_identity_unconfirmed"], [undefined, "drill_answer_identity_unconfirmed"], [{ id: 101 }, "drill_answer_identity_unconfirmed"], [150, "drill_parent_mismatch"]]) {
+    const f = fakeServer(drillRoutes({ [D0]: answer(200, link(ts)) }));
+    const x = await drillRun(f.fetchImpl);
+    assert.equal(x.stoppedBy, stop, String(ts));
+    const dx = x.capabilities.session_drill_details.drill0;
+    assert.equal(dx.teamsessionCanonical, ts === 150, String(ts));
+    assert.equal(dx.teamsessionMatchesExpectedDrill, false, String(ts));
+    assert.deepEqual([dx.expectedDrillHasUniqueListRow, dx.expectedDrillListRowTeamIs980], [true, true], "the list side does not depend on the answer");
+  }
+  // Nothing of the ids leaves the report, whichever case.
+  for (const rep of [r, r1, rr, dup, noRow]) {
+    const text = JSON.stringify({ ...rep, ranAt: "" }).replace(/"teamId":"980"/, "").replace(/"(status|rowCount|distinctDays|readsMade)":\d+/g, "");
+    for (const leak of ["101", "102", "100", "150", "evil", MARKERS.athleteName, "4711"]) assert.ok(!new RegExp(`"[^"]*\\b${leak}\\b|${leak}`).test(text) || !text.includes(leak), `${leak}`);
+    for (const id of ["100", "101", "102", "150"]) assert.ok(!new RegExp(`"[^"]*\\b${id}\\b`).test(text), `no id ${id} as a value`);
+  }
+  // The function on its own: a parent without drills, a position beyond the list, an array body.
+  const rows = [{ id: 1, team: 980, drills: [2, 3] }, { id: 2, team: 980 }, { id: 3, team: 981 }];
+  assert.deepEqual(describeDrillLink({ teamsession: 2 }, rows[0], 0, rows, "980"), { teamsessionCanonical: true, teamsessionMatchesExpectedDrill: true, expectedDrillHasUniqueListRow: true, expectedDrillListRowTeamIs980: true });
+  assert.deepEqual(describeDrillLink({ teamsession: 3 }, rows[0], 1, rows, "980"), { teamsessionCanonical: true, teamsessionMatchesExpectedDrill: true, expectedDrillHasUniqueListRow: true, expectedDrillListRowTeamIs980: false });
+  assert.deepEqual(describeDrillLink({ teamsession: 2 }, rows[0], 2, rows, "980"), { teamsessionCanonical: true, teamsessionMatchesExpectedDrill: false, expectedDrillHasUniqueListRow: false, expectedDrillListRowTeamIs980: false });
+  assert.deepEqual(describeDrillLink({ teamsession: 2 }, { id: 1, team: 980 }, 0, rows, "980"), { teamsessionCanonical: true, teamsessionMatchesExpectedDrill: false, expectedDrillHasUniqueListRow: false, expectedDrillListRowTeamIs980: false });
+  assert.deepEqual(describeDrillLink([{ teamsession: 2 }], rows[0], 0, rows, "980"), { teamsessionCanonical: false, teamsessionMatchesExpectedDrill: false, expectedDrillHasUniqueListRow: true, expectedDrillListRowTeamIs980: true });
+  // The full run is not touched.
+  const full = await runCapabilityProbe({}, ENV, fakeServer().fetchImpl);
+  assert.ok(!JSON.stringify(full).includes("teamsessionMatchesExpectedDrill"));
 });
 
 test("14. the drill-only run stops before any drill read at the first parent identity or team that is not confirmed - by REST or by the legacy family - and every stop names the drill verdict", async () => {
