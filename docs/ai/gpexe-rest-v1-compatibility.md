@@ -82,21 +82,21 @@ but OptiMove has never seen its answer: it is still **unknown** for the adapter.
 |---|---|---|---|---|---|
 | — | Team list (not used by the importer; used to check visibility) | not used | **same**: `team/` | probe: 200, array, `X-Total-Count` 8, contains 980 | `countVisibleTeams()` — count and a boolean only |
 | — | Team read (not used by the importer; used to check the binding) | not used | **same**: `team/<id>/` | probe: 200, object | `verifyBoundTeam()` |
-| 1a | Sessions of a team, by team and page size (**not an importer request**: the importer always sends the date window, row 1b) | not sent without a date window | the resource and its paging are proven: `team_session/?team=&limit=` | probe: 200, array of 1, `X-Total-Count` 308, `Link` header; field names include every field the importer's list reads (`id`, `team`, `category_name`, `start_timestamp`, `updated_on`, `drills`, `drills_count`, `is_stats_valid`) | `listSessions({ limit, maxPages })` — the whole list or a refusal; drills left out as the importer does |
-| 1b | Sessions of a team **in a date window** | `…&start_timestamp_gte=&start_timestamp_lte=` | **same** | probe 2026-10-01: the filter is applied under the section-4 rule (every row of team 980 and inside the window, the chosen session among them, the filtered count smaller than the unfiltered count of the same run) | still `source_capability_unavailable` (`session_list_by_date`) until the adapter implements it |
-| 2 | One session (its team, `drills_count`, start) | `team_session/<id>/` | **same** | probe 2026-10-01: 200, object, team 980, `drills_count` and `start_timestamp` present; **no `drills` list** on this read (the list rows carry it) | unavailable (`session_read`) until implemented |
-| 3 | Athlete rows of a session | `athlete_session/?teamsession=<id>&limit=` | **same** | probe 2026-10-01: 200, every row of the asked session | unavailable (`athlete_session_list`) until implemented |
-| 4 | One athlete row | `athlete_session/<id>/` | **same** | probe 2026-10-01: 200, names the same session | unavailable (`athlete_session_read`) until implemented |
-| 5 | Burst and brake events of an athlete row | `athlete_session/<id>/more/` | **same** | probe 2026-10-01: 200 | unavailable (`athlete_session_more`) until implemented |
-| 6 | Track (time zone, device restarts) | `track/<id>/` | **same** | probe 2026-10-01: 200, id from the confirmed athlete detail | unavailable (`track_read`) until implemented |
-| 7 | Whole-session values per athlete | `team_session/<id>/details/` | **same** | probe 2026-10-01: 200 | unavailable (`session_details`) until implemented |
-| 8 | Values per drill | `team_session/<id>/details/?drill=<n>` | **observed** in the `api` family (never yet **same**); still **unknown** on `rest_v1` | full probe 2026-10-01: no request sent. First drill-only run: a `drills` entry read as `team_session/<entry>/` answered an id other than the entry, so a `drills` entry is not read as a `team_session` id again. Structural evidence (section 1, item 6): the legacy integration reads `api/team_session/<parent id>/details/?drill=<zero-based index>`. Second drill-only run (2026-10-01): on a parent confirmed by its REST read and again by `api/team_session/<parent id>/`, `api/team_session/<parent id>/details/?drill=<first position>` answered 200 with an object whose top-level fields are `drills_count`, `players`, `team` and `teamsession`; `players` is a map of objects carrying numbers and nested values. That confirms the endpoint and its shape only: one read cannot show that the position selects one drill. The REST `?drill=` form stays withdrawn. Third drill-only run (2026-10-02, control sequence 0 → 1 → 0): the first `?drill=0` answered 200 with the same top-level fields, but its `team` was not a canonical id as a number or a string, so the run stopped as `team_unknown_shape` before `?drill=1`; no conclusion about the parameter. Diagnostic run (2026-10-02): that `team` is an **object without an `id`** (kept opaque), and the answer's `teamsession` is a canonical id that is **not the parent's**. Second diagnostic run (2026-10-02): the answer's `teamsession` is **not the parent's first `drills` entry** either, while that entry is exactly one row of the list page and that row names team 980; so the answer names a third session, which the final form of the probe would resolve against every entry of the parent's `drills`; that form was attempted twice on 2026-10-02 and did not reach a drill read (a list timeout, then a refused exchange; operational events, no conclusion). **F3c2b closed (owner, 2026-10-02): the drill endpoint is in practice **observed**, no further probe, sign-in attempt or rule change.** Final decision (owner, 2026-10-03, on the official handbook, section 1 item 12): the drill read is `api/team_session/<confirmed parent id>/details/?drill=<index>` with a zero-based index from `0` to `drills_count - 1`; drills stay in the future adapter and in the first planned import; `team` in a details answer is an aggregate, not a team id; `drills` entries and the answer's `teamsession` are used neither to build a URL nor as an identity guard; names come from an unambiguous `drillTags` mapping of the parent, fallback `Drill N` | unavailable (`session_drill_details`) until the separate adapter PR (section 3, "How F3c2b closed"); the `api` family is not part of the `server3` profile — the adapter gets one narrow builder for exactly that path, not a family |
-| 9 | Threshold set valid on the session day | `team/<team>/thresholds/?valid_on=` | **same** | probe 2026-10-01: 200 on the confirmed session's day | unavailable (`team_thresholds`) until implemented |
+| 1a | Sessions of a team, by team and page size (**not an importer request**: the importer always sends the date window, row 1b) | not sent without a date window | the resource and its paging are proven: `team_session/?team=&limit=` | probe: 200, array of 1, `X-Total-Count` 308, `Link` header; field names include every field the importer's list reads (`id`, `team`, `category_name`, `start_timestamp`, `updated_on`, `drills`, `drills_count`, `is_stats_valid`) | `listSessions({ limit, maxPages })` — the whole list or a refusal; parents and drills told apart by the list structure, an ambiguous page refused (F3c2c) |
+| 1b | Sessions of a team **in a date window** | `…&start_timestamp_gte=&start_timestamp_lte=` | **same** | probe 2026-10-01: the filter is applied under the section-4 rule (every row of team 980 and inside the window, the chosen session among them, the filtered count smaller than the unfiltered count of the same run) | **implemented (F3c2c)**: `listSessionsByDay({ fromDay, toDay })`, at most 31 days, the proved encoding, read from exactly one day earlier so a drill's parent of the evening before is seen (the `e03` importer's look-back), every row inside that read or `source_filter_ignored`, the parents of the extra day left out after the classification |
+| 2 | One session (its team, `drills_count`, start) | `team_session/<id>/` | **same** | probe 2026-10-01: 200, object, team 980, `drills_count` and `start_timestamp` present; **no `drills` list** on this read (the list rows carry it) | **implemented (F3c2c)**: `getSession({ sessionId })` — the read that confirms a parent (same id, team 980, `drills_count` 0–30) |
+| 3 | Athlete rows of a session | `athlete_session/?teamsession=<id>&limit=` | **same** | probe 2026-10-01: 200, every row of the asked session | **implemented (F3c2c)**: `listAthleteSessions({ sessionId })` on a confirmed parent, whole or refused, every row of that session |
+| 4 | One athlete row | `athlete_session/<id>/` | **same** | probe 2026-10-01: 200, names the same session | **implemented (F3c2c)**: `getAthleteSession({ sessionId, athleteSessionId })` under a confirmed parent; the detail must name that session |
+| 5 | Burst and brake events of an athlete row | `athlete_session/<id>/more/` | **same** | probe 2026-10-01: 200 | **implemented (F3c2c)**: `getAthleteSessionMore({ athleteSessionId })` for a row read under a confirmed parent |
+| 6 | Track (time zone, device restarts) | `track/<id>/` | **same** | probe 2026-10-01: 200, id from the confirmed athlete detail | **implemented (F3c2c)**: `getTrack({ trackId })` for a track a confirmed row named |
+| 7 | Whole-session values per athlete | `team_session/<id>/details/` | **same** | probe 2026-10-01: 200 | **implemented (F3c2c)**: `getSessionDetails({ sessionId })` on a confirmed parent; only `players` (canonical athlete ids → metric values) and `drills_count` leave the adapter |
+| 8 | Values per drill | `team_session/<id>/details/?drill=<n>` | **observed** in the `api` family (never yet **same**); still **unknown** on `rest_v1` | full probe 2026-10-01: no request sent. First drill-only run: a `drills` entry read as `team_session/<entry>/` answered an id other than the entry, so a `drills` entry is not read as a `team_session` id again. Structural evidence (section 1, item 6): the legacy integration reads `api/team_session/<parent id>/details/?drill=<zero-based index>`. Second drill-only run (2026-10-01): on a parent confirmed by its REST read and again by `api/team_session/<parent id>/`, `api/team_session/<parent id>/details/?drill=<first position>` answered 200 with an object whose top-level fields are `drills_count`, `players`, `team` and `teamsession`; `players` is a map of objects carrying numbers and nested values. That confirms the endpoint and its shape only: one read cannot show that the position selects one drill. The REST `?drill=` form stays withdrawn. Third drill-only run (2026-10-02, control sequence 0 → 1 → 0): the first `?drill=0` answered 200 with the same top-level fields, but its `team` was not a canonical id as a number or a string, so the run stopped as `team_unknown_shape` before `?drill=1`; no conclusion about the parameter. Diagnostic run (2026-10-02): that `team` is an **object without an `id`** (kept opaque), and the answer's `teamsession` is a canonical id that is **not the parent's**. Second diagnostic run (2026-10-02): the answer's `teamsession` is **not the parent's first `drills` entry** either, while that entry is exactly one row of the list page and that row names team 980; so the answer names a third session, which the final form of the probe would resolve against every entry of the parent's `drills`; that form was attempted twice on 2026-10-02 and did not reach a drill read (a list timeout, then a refused exchange; operational events, no conclusion). **F3c2b closed (owner, 2026-10-02): the drill endpoint is in practice **observed**, no further probe, sign-in attempt or rule change.** Final decision (owner, 2026-10-03, on the official handbook, section 1 item 12): the drill read is `api/team_session/<confirmed parent id>/details/?drill=<index>` with a zero-based index from `0` to `drills_count - 1`; drills stay in the future adapter and in the first planned import; `team` in a details answer is an aggregate, not a team id; `drills` entries and the answer's `teamsession` are used neither to build a URL nor as an identity guard; names come from an unambiguous `drillTags` mapping of the parent, fallback `Drill N` | **implemented (F3c2c) through one narrow builder**, `legacyDrillDetailsUrl()`: `getSessionDrillDetails({ sessionId, drillIndex })` and `getSessionDrills({ sessionId })` on a confirmed parent, index 0 to `drills_count - 1`; the answer accepted only as a players map of canonical athlete ids with metric values; the `api` family is still not part of the `server3` profile and `sourceApiUrl()` does not build this URL |
+| 9 | Threshold set valid on the session day | `team/<team>/thresholds/?valid_on=` | **same** | probe 2026-10-01: 200 on the confirmed session's day | **implemented (F3c2c)**: `getTeamThresholds({ sessionId })` on the confirmed session's day; null on 404 |
 | — | Units | no endpoint (numbers are SI on `e03`, verified in the pilot) | **unknown** | none; that `rest_v1` numbers are SI is not verified (the probe records no value) | unavailable (`units`) |
-| — | Session tags | not used by the importer | **observed** (legacy-attested path `team_session_tag/?team=&limit=`) | probe 2026-10-01: 200, asked for team 980; no returned tag named another team (one would have stopped the run); whether `team` is honoured is not shown | unavailable (`session_tags`) |
+| — | Session tags | not used by the importer | **observed** (legacy-attested path `team_session_tag/?team=&limit=`) | probe 2026-10-01: 200, asked for team 980; no returned tag named another team (one would have stopped the run); whether `team` is honoured is not shown | **implemented (F3c2c)**: `listSessionTags()` — the bound team's tags as id → name, read for drill names only (`getDrillLabels`) |
 
 Nothing is **mapped** and nothing is **missing**: both words need an answer that was seen and
-differs from the importer's form, and no read was refused. **The adapter column has not moved:**
+differs from the importer's form, and no read was refused. **The adapter column moved in F3c2c** (rows 1b–9 and the tag list implemented, `units` unavailable); before it:
 a proven read becomes available only when the adapter implements it with its own tests (the
 next step after the drill-only run, on the owner's order).
 
@@ -140,6 +140,65 @@ conclusion about drills, the token or the account. The implementation is a separ
 adapter PR after PR #132 is merged, on the owner's order: first the mandatory `listSessions()`
 drills-filter fix, then the eight confirmed reads, then one narrow builder for exactly the drill
 path on the approved `server3` host (no generic `api/` family), then names through `drillTags`.
+
+**F3c2c, as built (branch `feature/gpexe-server3-adapter-f3c2c`, owner order 2026-10-03; not
+merged, not run against the real server).** `backend/src/gpexeRestV1Adapter.js` now implements:
+- **the `listSessions()` classification** (B1): a drill is a row named in exactly one other
+  row's `drills` that carries no drills of its own; a named row with drills or a positive
+  `drills_count`, an entry named by two rows, a row naming itself, or a `drills` list that
+  disagrees with `drills_count` makes the page ambiguous — `source_list_ambiguous` with a
+  reason, never a thinned list; an entry that names no listed row misclassifies nothing and is
+  only counted (`drillReferencesNotListed`); `drills` entries are page-local references, never
+  resource ids and never in a URL;
+- **the eight proven reads** (B2) through the `server3` / `rest_v1` profile: the date window
+  (`listSessionsByDay`, two days, forward, at most 31 days, read from exactly one day earlier so a
+  drill's parent of the evening before is seen and the drill row is never listed as a session — the
+  `e03` importer's look-back, never widened to two days —, the proved `%20` / `%3A` encoding —
+  the one widening of the host path rule, which now admits exactly those two percent sequences
+  in a query value and nothing else), the session read (`getSession`, which **confirms** a
+  parent: same id, team 980, `drills_count` 0–30), the whole-session details, the athlete rows,
+  one athlete row, its `/more/`, its track and the thresholds. Everything but the lists hangs off
+  a session this adapter instance has confirmed (`session_not_confirmed`,
+  `athlete_row_not_confirmed`, `track_not_confirmed` otherwise); a row of another session, a
+  detail of another row or session, events of another row or a track of another id refuse;
+- **the narrow drill read** (B3–B4): `legacyDrillDetailsUrl()` builds exactly
+  `https://server3.gpexe.com/api/team_session/<confirmed parent id>/details/?drill=<index>` for
+  the approved `server3` row and nothing else — a canonical parent id, an integer index from 0 to
+  `drills_count - 1`, no other host, family, path, query or fallback; `legacyBriefUrl()` builds
+  only `…/brief/`. A drill answer is accepted only as a 200 JSON object whose `players` is a
+  map keyed by canonical athlete ids (an empty map is valid — a drill not yet computed, as the
+  `e03` pilot fixtures carry; a missing, null, array or other shape fails), each value a plain object of metric values
+  (finite numbers, null, short unit strings, or one nested object of such); its top-level `team`
+  (aggregated parameters) and `teamsession` are neither read as identity nor returned. One drill
+  that cannot be read ends the set there: `getSessionDrills` returns `complete: false` with the
+  failed position and its stable code, the drills read so far, and never tries another index,
+  host or form; a refused credential or a foreign team ends the whole operation;
+- **drill names** (B5): `getDrillLabels` reads `…/brief/`, parses `drillTags` in one of two
+  explicit candidate shapes (a positional array of exactly `drills_count` tag ids or nulls; or
+  objects `{ drill, tag }` each drill at most once — neither shape has been observed on a
+  server yet), translates a tag id through the bound team's tag catalogue (`listSessionTags`,
+  every row naming the bound team), and otherwise answers `Drill <index + 1>`; each label
+  carries `drillIndex`, `label`, `tagId`, `tagName` and `labelEvidence` (`drill_tags` or
+  `index_fallback`). A duplicate tag, a count that disagrees, an unreadable or unknown shape, a
+  foreign or unnamed tag, a brief of another session or a brief that cannot be read all fall
+  back; the day's other sessions are never read;
+- `fetchSessionBundle({ sessionId })` composes them in the e03 bundle shape plus `drillsStatus`
+  and `drillLabels`. No route, database table, migration, credential storage, binding or import
+  uses it yet; the import policy for an incomplete drill set is decided in the later integration
+  PR.
+**Decided before any route exposes the bundle (security review of F3c2c, recorded, not applied):**
+`getSession`, `getAthleteSession`, `getAthleteSessionMore`, `getTrack` and `getTeamThresholds` return
+the source object after the importer's drop list of personal fields (`redactGpexe`), as the `e03`
+importer does for its raw snapshot — a denylist, not a projection to the fields the mapper reads.
+Whether the `rest_v1` route stores the same redacted raw snapshot or an allowlisted projection is a
+retention decision for the integration PR; until then no route returns a bundle. Also recorded: a
+drill row inside the window whose parent started the day before is told apart through the one-day
+look-back of `listSessionsByDay` (`lookBackDays: 1`); a parent more than one day before its drill
+is outside the owner's model and is not looked for. No widening of the window.
+
+**Open compatibility note:** the handbook is for GPEXE 6 while the server reports 9.11.8; a
+confirmation by GPEXE support is welcome, not a blocker. Nothing in F3c2c was run against the
+real server; every network test uses a fake fetch.
 
 Also not proven, and not a matter of paths: that the **values** of `rest_v1` mean what the
 importer's mapper assumes for `e03` — naive timestamps in UTC, numbers in SI units, drills as
@@ -429,21 +488,40 @@ session (on a disposable database, as the pilot did for `e03`).
 
 - Selected by `(source_system, apiFamily)`; a family without an adapter is
   `adapter_not_available`. No adapter is made from another by rewriting paths.
-- Every URL comes from `sourceApiUrl()` with the key's own approved catalog row.
+- Every `rest_v1` URL comes from `sourceApiUrl()` with the key's own approved catalog row. The
+  only other URLs are the two the legacy builders make — `legacyDrillDetailsUrl()` and
+  `legacyBriefUrl()`, `api/team_session/<confirmed parent id>/details/?drill=<index>` and
+  `…/brief/` on the approved `server3` host only — behind the same catalog gate; they are not a
+  generic `api/` family, take no path, URL, host or extra query, and are used by the drill reads
+  only. The host path rule admits exactly two percent sequences in a query value, `%20` and
+  `%3A`, for the proved date-window form.
 - The bound source team id is fixed when the adapter is created. No operation accepts a team; an
   option that names one in any spelling is refused; a query never carries `team` twice.
 - An answer, a row or a next-page link that names another team is refused
   (`source_team_mismatch`), and a team in an unknown shape is refused
   (`source_answer_unexpected`). Nothing of a refused answer is returned.
-- Resources without a team parameter (athlete rows, tracks) are reachable only from a session
-  that was first read and found to belong to the bound team; this rule binds the reads that are
-  still unavailable.
+- Resources without a team parameter (details, drills, athlete rows, `/more/`, tracks, the
+  brief) are reachable only from a session this adapter instance first read and found to belong
+  to the bound team (`getSession`): `session_not_confirmed` / `athlete_row_not_confirmed` /
+  `track_not_confirmed` otherwise. The top-level `team` of a details answer is an aggregate, not
+  an identity; `drills` entries and a drill answer's `teamsession` are neither a URL source nor an
+  identity guard.
+- The session list is told apart into parents and drills by the confirmed list structure only
+  (a drill is named in exactly one other row's `drills` and carries none itself); an ambiguous
+  page is refused (`source_list_ambiguous`), never thinned.
+- A `players` answer is accepted only as a map of canonical athlete ids to metric values (an empty
+  map is valid; a missing, null, array or other shape is refused); only `players` and
+  `drills_count` leave the adapter. An athlete row is read only when the confirmed session's own
+  list named it (`athlete_row_not_listed` otherwise, no request). No retry by default. One failed drill never makes an
+  incomplete set look complete (`getSessionDrills`: `complete: false`, the failed index and code).
+- Drill names come from an unambiguous `drillTags` mapping of the parent's brief and the bound
+  team's tag catalogue, otherwise `Drill N`; never from the day's other sessions.
 - GET only; one closure talks to the network; no generic request helper exists.
 - Stable codes, OptiMove's own sentences, never the source's text; the credential only in the
   `Authorization` header. `401` is `source_auth_rejected`, `403` is `source_access_refused` (on
   the bound team's own read both `403` and `404` are `source_team_not_visible`; what `rest_v1`
   really answers for a team the account cannot see is part of the next probe).
-- Attempts (1–5), timeout and retry delay are bounded; `429` is never repeated. An answer is at
+- No retry by default: one attempt per read; a caller may ask for at most three, and `429`, `401`, `403`, `404` and a redirect are never repeated. Timeout and retry delay are bounded. An answer is at
   most 5 MiB (5 242 880 bytes) **as received**: the body is read from its stream chunk by chunk,
   the bytes are counted (after decompression, so a small compressed answer that unpacks large is
   stopped too), and the stream is cancelled when the count passes the limit; `Content-Length` is
@@ -456,8 +534,11 @@ session (on a disposable database, as the pilot did for `e03`).
 
 The contract (`docs/ai/source-connections-f3c2-contract.md` section 2.3, condition 6) lists the
 codes a route answers. The read adapter is one level below; its interface is `verifyBoundTeam`,
-`countVisibleTeams` and `listSessions` (the contract's `testConnection` and `listTeams` are built
-from the first two). Its codes and what a route makes of them:
+`countVisibleTeams`, `listSessions`, `listSessionsByDay`, `getSession`, `getSessionDetails`,
+`getSessionDrillDetails`, `getSessionDrills`, `listAthleteSessions`, `getAthleteSession`,
+`getAthleteSessionMore`, `getTrack`, `getTeamThresholds`, `listSessionTags`, `getDrillLabels` and
+`fetchSessionBundle` (the contract's `testConnection` and `listTeams` are built from the first
+two). Its codes and what a route makes of them:
 
 | Adapter code | Meaning | Route code (contract 2.3) |
 |---|---|---|
@@ -471,6 +552,10 @@ from the first two). Its codes and what a route makes of them:
 | `source_not_found` | 404 elsewhere | `source_answer_unexpected` |
 | `source_unavailable` | network, timeout, 5xx, 429 | `source_unavailable` |
 | `source_answer_unexpected`, `source_list_changed`, `source_list_incomplete` | an answer of another shape, or a list that is not whole | `source_answer_unexpected` |
+| `source_list_ambiguous` | the session list cannot be told apart into parents and drills (`reason`: `named_row_has_drills`, `entry_named_twice`, `self_reference`, `drills_count_disagrees`) | `source_answer_unexpected` |
+| `source_filter_ignored` | a date-window answer carried a session outside the window | `source_answer_unexpected` |
+| `session_not_confirmed`, `athlete_row_not_listed`, `athlete_row_not_confirmed`, `track_not_confirmed` | a dependent read asked before its parent was confirmed, or its row listed, by this adapter — a caller's ordering mistake | `internal_error` |
+| `invalid_drill_index`, `drills_count_out_of_range`, `invalid_id` | an index outside 0 to `drills_count - 1`, more than 30 drills, or a non-canonical id | `internal_error`, except `drills_count_out_of_range` from the source's own `drills_count`, which is `source_answer_unexpected` |
 | `team_param_not_allowed`, `duplicate_param`, `path_not_allowed`, `invalid_options`, `invalid_bound_team`, `credential_missing` | a caller's mistake inside OptiMove, never a user's input | `internal_error` (logged with the code, never with a value) |
 
 The routes create one adapter per request, from the catalog row read in that request, so a key

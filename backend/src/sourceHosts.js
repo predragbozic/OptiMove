@@ -68,8 +68,11 @@ const HOST_LABELS = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)*$/;
 // A relative resource path: lower-case segments, digits, _ and -, each
 // followed by a slash, then an optional query of plain key=value pairs. No
 // leading slash, no dot, no colon, no backslash, no empty segment — so no
-// "..", no "//host", no scheme.
-const RESOURCE_PATH = /^(?:[a-z0-9_-]+\/)+(?:\?[A-Za-z0-9_]+=[A-Za-z0-9_.:-]*(?:&[A-Za-z0-9_]+=[A-Za-z0-9_.:-]*)*)?$/;
+// "..", no "//host", no scheme. A query value may carry exactly two
+// percent-encoded characters, the space (%20) and the colon (%3A) of a
+// timestamp — the one form the owner-run probe proved for a date window
+// (F3c2c); every other percent sequence is refused.
+const RESOURCE_PATH = /^(?:[a-z0-9_-]+\/)+(?:\?[A-Za-z0-9_]+=(?:[A-Za-z0-9_.:-]|%20|%3A)*(?:&[A-Za-z0-9_]+=(?:[A-Za-z0-9_.:-]|%20|%3A)*)*)?$/;
 
 const own = (object, key) => typeof key === "string" && Object.prototype.hasOwnProperty.call(object, key);
 

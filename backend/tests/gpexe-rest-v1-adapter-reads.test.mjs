@@ -1,0 +1,784 @@
+// Contract tests of the F3c2c reads of the GPEXE rest_v1 adapter: the
+// listSessions() parent/drill classification, the eight reads the owner-run
+// probe proved, the one narrow legacy drill read and the drill names. Fake
+// fetch only: no network, no database, no environment, no real credential.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createSourceAdapter, SourceAdapterError } from "../src/sourceAdapters.js";
+import { MAX_ANSWER_BYTES } from "../src/gpexeRestV1Adapter.js";
+
+const CREDENTIAL = "MARKER-credential-f3c2c-not-real";
+const row = (hostKey, state = "approved") => ({ source_system: "gpexe", host_key: hostKey, state });
+const code = (c) => (e) => e instanceof SourceAdapterError ? e.code === c : e.code === c;
+const json = { "content-type": "application/json" };
+
+function streamOf(chunks) {
+  let i = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (i >= chunks.length) return controller.close();
+      const chunk = chunks[i];
+      i += 1;
+      return controller.enqueue(chunk);
+    },
+  }, { highWaterMark: 0 });
+}
+const bytesOf = (text) => new TextEncoder().encode(text);
+function answer(status, body, headers = {}) {
+  const text = typeof body === "string" ? body : JSON.stringify(body);
+  return {
+    status,
+    headers: new Headers({ ...json, ...headers }),
+    get body() { return streamOf([bytesOf(text)]); },
+    text: async () => { throw new Error("the adapter must not ask for the whole body"); },
+    json: async () => { throw new Error("the adapter must not ask for the whole body"); },
+  };
+}
+const session = (id, team = 980, extra = {}) => ({
+  id, team, category_name: "Training", start_timestamp: "2026-09-14T10:00:00", end_timestamp: "2026-09-14T11:00:00", updated_on: "2026-09-14T12:00:00",
+  drills_count: 0, drills: [], is_stats_valid: true, notes: "a private note", ...extra,
+});
+const parent = (id, drills, team = 980, extra = {}) => session(id, team, { drills, drills_count: drills.length, ...extra });
+
+function fakeServer(routes = {}) {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url: String(url), method: init.method, headers: { ...init.headers }, redirect: init.redirect });
+    const u = new URL(url);
+    const key = `${u.pathname}${u.search}`;
+    const route = routes[key] ?? routes[u.pathname];
+    if (route === undefined) return answer(404, { detail: "Not found." });
+    return typeof route === "function" ? route(u, init) : route;
+  };
+  return { calls, fetchImpl };
+}
+const make = (fetchImpl, over = {}) => createSourceAdapter({
+  sourceSystem: "gpexe", hostKey: "server3", catalogRow: row("server3"), credential: CREDENTIAL, boundSourceTeamId: "980",
+  fetchImpl, attempts: 1, sleep: async () => {}, ...over,
+});
+const LIST = "/rest/v1/team_session/?team=980&limit=100";
+const listOf = (rows, over = {}) => fakeServer({ [LIST]: answer(200, rows, { "x-total-count": String(rows.length) }), ...over });
+const idsOf = (result) => result.sessions.map((s) => s.id);
+
+// ---------------------------------------------------------------------------
+// B1. The parent / drill classification of the session list.
+//
+// Characterisation of the F3c2a filter (recorded before the fix, 2026-10-03):
+// a row whose id appears in ANY row's `drills` was left out, whatever the
+// row itself said; a row that no `drills` named stayed, whatever it looked
+// like; nothing checked that a named entry exists on the page or that a
+// parent's `drills` and `drills_count` agree. The two failure directions:
+//   (a) a real parent named in another row's `drills` disappeared silently;
+//   (b) a drill-shaped row that nothing named stayed as a session of its own.
+// The fixed rule below returns the whole list of parents or refuses an
+// ambiguous page with a stable code — never a silent partial list.
+// ---------------------------------------------------------------------------
+test("B1.1 a real parent stays, its drill rows are left out and counted, and the parent keeps its page-local drill references", async () => {
+  const { calls, fetchImpl } = listOf([parent(100, [101, 102]), session(101), session(102), parent(200, [201]), session(201), session(300)]);
+  const result = await make(fetchImpl).listSessions();
+  assert.deepEqual(idsOf(result), ["100", "200", "300"]);
+  assert.equal(result.total, 6);
+  assert.equal(result.drillsLeftOut, 3);
+  assert.deepEqual(result.sessions[0].drillIds, ["101", "102"]);
+  assert.equal(result.sessions[0].drillsCount, 2);
+  assert.equal(calls.length, 1);
+});
+
+test("B1.2 direction (a): a row named in another row's drills that itself carries drills or a positive drills_count is not a drill for certain — the page is refused, never silently thinned", async () => {
+  // A real parent (300, two drills) whose id a sloppy row names in its drills.
+  for (const [named, reason] of [[parent(300, [301, 302]), "named_row_has_drills"], [session(300, 980, { drills_count: 2, drills: [301, 302] }), "named_row_has_drills"], [session(300, 980, { drills_count: 2 }), "drills_count_disagrees"]]) {
+    const { fetchImpl } = listOf([parent(100, [101, 300]), session(101), named, session(301), session(302)]);
+    const error = await make(fetchImpl).listSessions().then(() => null, (e) => e);
+    assert.equal(error?.code, "source_list_ambiguous", JSON.stringify(named));
+    assert.equal(error.reason, reason, JSON.stringify(named));
+    assert.equal(error.sessions, undefined, "nothing of the list is returned");
+  }
+});
+
+test("B1.3 direction (b): a drill-shaped row that nothing names is a session of its own — the list has no field that says otherwise — and a drill reference never removes an unrelated real session", async () => {
+  // 400 looks like a drill (no drills, count 0) but nothing names it: it stays. 500 is a real session nobody names: it stays.
+  const { fetchImpl } = listOf([parent(100, [101]), session(101), session(400), parent(500, [501]), session(501)]);
+  const result = await make(fetchImpl).listSessions();
+  assert.deepEqual(idsOf(result), ["100", "400", "500"]);
+  assert.equal(result.drillsLeftOut, 2);
+});
+
+test("B1.4 an ambiguous page is refused with a stable code and no partial list: an entry named by two parents, a row naming itself, drills and drills_count that disagree, a non-canonical entry; an entry that names no listed row misclassifies nothing and is only counted", async () => {
+  const cases = [
+    ["named by two parents", [parent(100, [101]), parent(200, [101]), session(101)], "entry_named_twice"],
+    ["a row naming itself", [parent(100, [100, 101]), session(101)], "self_reference"],
+    ["drills longer than drills_count", [session(100, 980, { drills: [101, 102], drills_count: 1 }), session(101), session(102)], "drills_count_disagrees"],
+    ["drills_count without entries", [session(100, 980, { drills: [], drills_count: 2 })], "drills_count_disagrees"],
+  ];
+  // A parent whose drill reference is on no row of the whole list (a drill outside the window,
+  // or a reference that is not a list id): the parent stays, nothing is dropped, the reference is counted.
+  const { fetchImpl: notListed } = listOf([parent(100, [101, 999]), session(101), session(300)]);
+  const kept = await make(notListed).listSessions();
+  assert.deepEqual(idsOf(kept), ["100", "300"]);
+  assert.equal(kept.drillsLeftOut, 1);
+  assert.equal(kept.drillReferencesNotListed, 1);
+  for (const [label, rows, reason] of cases) {
+    const { fetchImpl } = listOf(rows);
+    const error = await make(fetchImpl).listSessions().then(() => null, (e) => e);
+    assert.equal(error?.code, "source_list_ambiguous", label);
+    assert.equal(error.reason, reason, label);
+    assert.equal(error.sessions, undefined, "nothing of the list is returned");
+  }
+  for (const entries of [["x1"], [{ id: 101 }], [null], ["0101"], [1.5]]) {
+    const { fetchImpl } = listOf([session(100, 980, { drills: entries, drills_count: 1 }), session(101)]);
+    await assert.rejects(make(fetchImpl).listSessions(), code("source_answer_unexpected"), JSON.stringify(entries));
+  }
+});
+
+test("B1.5 the existing fail-closed rules still come first: a foreign team, an unreadable team or a duplicate row refuse the whole list before any classification", async () => {
+  for (const [rows, expected] of [
+    [[parent(100, [101]), session(101, 981)], "source_team_mismatch"],
+    [[parent(100, [101]), session(101, { id: 980 })], "source_answer_unexpected"],
+    [[parent(100, [101]), session(101), session(101)], "source_list_changed"],
+  ]) {
+    const { fetchImpl } = listOf(rows);
+    await assert.rejects(make(fetchImpl).listSessions(), code(expected));
+  }
+});
+
+test("B1.6 the classification is made over the WHOLE list, across pages: a parent on page 2 whose drills are on page 1 is kept and its drills left out", async () => {
+  const page1 = [session(101), session(102)];
+  const page2 = [parent(100, [101, 102]), session(300)];
+  const { calls, fetchImpl } = fakeServer({
+    "/rest/v1/team_session/?team=980&limit=2": answer(200, page1, { "x-total-count": "4", link: '<https://server3.gpexe.com/rest/v1/team_session/?team=980&limit=2&offset=2>; rel="next"' }),
+    "/rest/v1/team_session/?team=980&limit=2&offset=2": answer(200, page2, { "x-total-count": "4" }),
+  });
+  const result = await make(fetchImpl).listSessions({ limit: 2 });
+  assert.deepEqual(idsOf(result), ["100", "300"]);
+  assert.equal(result.drillsLeftOut, 2);
+  assert.equal(calls.length, 2);
+});
+
+// ---------------------------------------------------------------------------
+// B2–B5. The eight proven reads, the narrow legacy drill read and the drill names.
+// ---------------------------------------------------------------------------
+const PLAYERS = (burst) => ({ 4711: { tot_burst_events: { unit: "number", value: burst }, tot_brake_events: { unit: "number", value: 1 }, total_distance: 1200.5 }, 4712: { tot_burst_events: 2 } });
+const OPAQUE_TEAM = { zzzOpaqueKey: "https://evil.example/team/424242/" };
+const details = (players, extra = {}) => ({ drills_count: 2, players, team: OPAQUE_TEAM, teamsession: 7777, ...extra });
+const athleteRow = (id, athlete, extra = {}) => ({ id, athlete, track: 900 + (id % 10), teamsession: 100, drill: null, total_time: 2400, total_distance: 3000, max_v: 7.5, athlete_name: "Marker Athlete Name", ...extra });
+const PARENT = "/rest/v1/team_session/100/";
+const ATHLETES = "/rest/v1/athlete_session/?teamsession=100&limit=100";
+const WHOLE = "/rest/v1/team_session/100/details/";
+const D0 = "/api/team_session/100/details/?drill=0";
+const D1 = "/api/team_session/100/details/?drill=1";
+const BRIEF = "/api/team_session/100/brief/";
+const TAGS = "/rest/v1/team_session_tag/?team=980&limit=100";
+const THRESH = "/rest/v1/team/980/thresholds/?valid_on=2026-09-14";
+const WINDOW = "/rest/v1/team_session/?team=980&start_timestamp_gte=2026-09-13%2000%3A00%3A00&start_timestamp_lte=2026-09-15%2023%3A59%3A59&limit=100";
+function fullRoutes(over = {}) {
+  return {
+    "/rest/v1/team/980/": answer(200, { id: 980, name: "FK Marker" }),
+    [LIST]: answer(200, [parent(100, [101, 102]), session(101), session(102), session(200)], { "x-total-count": "4" }),
+    [WINDOW]: answer(200, [parent(100, [101, 102]), session(101), session(102)], { "x-total-count": "3" }),
+    [PARENT]: answer(200, { id: 100, team: 980, category_name: "Training", is_stats_valid: true, drills_count: 2, start_timestamp: "2026-09-14T10:00:00", end_timestamp: "2026-09-14T11:00:00", updated_on: "2026-09-14T12:00:00", drill: null, name: "Marker Session", notes: "private" }),
+    [ATHLETES]: answer(200, [athleteRow(500, 4711), athleteRow(501, 4712, { track: 901 })], { "x-total-count": "2" }),
+    "/rest/v1/athlete_session/500/": answer(200, athleteRow(500, 4711)),
+    "/rest/v1/athlete_session/501/": answer(200, athleteRow(501, 4712, { track: 901 })),
+    "/rest/v1/athlete_session/500/more/": answer(200, { athletesession_id: 500, events: { acceleration_events_count: "3" }, complementary_data: {} }),
+    "/rest/v1/athlete_session/501/more/": answer(200, { athletesession_id: 501, events: {}, complementary_data: {} }),
+    "/rest/v1/track/900/": answer(200, { id: 900, athlete: 4711, timezone: "Europe/Sarajevo", timestamp: "2026-09-14T09:50:00", utc_timestamp: 1789000000 }),
+    "/rest/v1/track/901/": answer(200, { id: 901, athlete: 4712, timezone: "Europe/Sarajevo", timestamp: "2026-09-14T09:50:00", utc_timestamp: 1789000000 }),
+    [WHOLE]: answer(200, details(PLAYERS(9))),
+    [D0]: answer(200, details(PLAYERS(5), { teamsession: 101 })),
+    [D1]: answer(200, details(PLAYERS(4), { teamsession: 102 })),
+    [BRIEF]: answer(200, { id: 100, drillTags: [31, 32] }),
+    [TAGS]: answer(200, [{ id: 31, name: "Rondo", team: 980 }, { id: 32, name: "Small-sided game", team: 980 }, { id: 33, name: "Unused", team: 980 }], { "x-total-count": "3" }),
+    [THRESH]: answer(200, { id: 1473, team: 980, power_thresholds: [20, 25, 60, 75], speed_thresholds: [5.5, 7] }),
+    ...over,
+  };
+}
+const full = (over) => fakeServer(fullRoutes(over));
+const pathsOf = (calls) => calls.map((c) => { const u = new URL(c.url); return `${u.pathname}${u.search}`; });
+const noNames = (value, extra = []) => {
+  const text = JSON.stringify(value);
+  for (const leak of ["Marker Athlete Name", "a private note", "private", "someone", "zzzOpaqueKey", "evil.example", "424242", CREDENTIAL, ...extra]) assert.ok(!text.includes(leak), leak);
+};
+const errorOf = (p) => p.then(() => null, (e) => e);
+async function confirmedAdapter(over, make_ = make) {
+  const server = full(over);
+  const a = make_(server.fetchImpl);
+  await a.getSession({ sessionId: "100" });
+  // The rows are listed so that a row read is allowed; a fixture whose list is
+  // meant to fail is exercised by the test itself through the operation.
+  try { await a.listAthleteSessions({ sessionId: "100" }); } catch {}
+  server.calls.length = 0;
+  return { ...server, a };
+}
+
+test("B2.1 the eight reads, each a GET on server3 under /rest/v1/ for the bound team, hang off a session confirmed first; the bundle has the importer's shape, the drill set is complete, and no athlete name leaves the adapter", async () => {
+  const { calls, fetchImpl } = full();
+  const a = make(fetchImpl);
+  const bundle = await a.fetchSessionBundle({ sessionId: "100" });
+  assert.deepEqual(pathsOf(calls), [
+    PARENT, ATHLETES, "/rest/v1/athlete_session/500/", "/rest/v1/athlete_session/500/more/", "/rest/v1/track/900/",
+    "/rest/v1/athlete_session/501/", "/rest/v1/athlete_session/501/more/", "/rest/v1/track/901/",
+    WHOLE, D0, D1, BRIEF, TAGS, THRESH,
+  ]);
+  assert.ok(calls.every((c) => c.method === "GET" && c.redirect === "manual" && c.headers.Authorization === `Token ${CREDENTIAL}` && new URL(c.url).origin === "https://server3.gpexe.com"));
+  assert.equal(bundle.teamSession.id, 100);
+  assert.equal(bundle.teamSession.notes, undefined, "the importer's drop list applies");
+  assert.deepEqual(bundle.athleteSessions.map((r) => r.id), [500, 501]);
+  assert.deepEqual(Object.keys(bundle.more), ["500", "501"]);
+  assert.deepEqual(Object.keys(bundle.tracks), ["900", "901"]);
+  assert.deepEqual(Object.keys(bundle.details.full.players), ["4711", "4712"]);
+  assert.deepEqual(Object.keys(bundle.details.drills), ["0", "1"]);
+  assert.equal(bundle.details.drills["0"].players["4711"].tot_burst_events.value, 5);
+  assert.deepEqual(bundle.drillsStatus, { complete: true, drillsCount: 2, failed: null });
+  assert.deepEqual(bundle.drillLabels, [
+    { drillIndex: 0, label: "Rondo", tagId: "31", tagName: "Rondo", labelEvidence: "drill_tags" },
+    { drillIndex: 1, label: "Small-sided game", tagId: "32", tagName: "Small-sided game", labelEvidence: "drill_tags" },
+  ]);
+  assert.equal(bundle.teamThresholds.id, 1473);
+  noNames(bundle);
+  // The window read: the proved encoding, every row inside the window, the same classification.
+  const w = await a.listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
+  assert.deepEqual(idsOf(w), ["100"]);
+  assert.deepEqual([w.drillsLeftOut, w.fromDay, w.toDay, w.total], [2, "2026-09-14", "2026-09-15", 3]);
+  assert.equal(pathsOf(calls).pop(), WINDOW);
+});
+
+test("B2.2 nothing without a confirmed parent: details, drills, athlete rows, thresholds, labels and the bundle's dependents refuse before any request; a session of another team never becomes confirmed", async () => {
+  const { calls, fetchImpl } = full();
+  const a = make(fetchImpl);
+  for (const op of ["getSessionDetails", "getSessionDrills", "listAthleteSessions", "getTeamThresholds", "getDrillLabels"]) {
+    await assert.rejects(a[op]({ sessionId: "100" }), code("session_not_confirmed"), op);
+  }
+  await assert.rejects(a.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 }), code("session_not_confirmed"));
+  await assert.rejects(a.getAthleteSession({ sessionId: "100", athleteSessionId: "500" }), code("session_not_confirmed"));
+  await assert.rejects(a.getAthleteSessionMore({ athleteSessionId: "500" }), code("athlete_row_not_confirmed"));
+  await assert.rejects(a.getTrack({ trackId: "900" }), code("track_not_confirmed"));
+  assert.equal(calls.length, 0, "nothing was sent");
+  // A session of another team, or one that answers another id, is refused and does not confirm anything.
+  const foreign = full({ [PARENT]: answer(200, { id: 100, team: 981, drills_count: 2, start_timestamp: "2026-09-14T10:00:00" }) });
+  const b = make(foreign.fetchImpl);
+  await assert.rejects(b.getSession({ sessionId: "100" }), code("source_team_mismatch"));
+  await assert.rejects(b.getSessionDetails({ sessionId: "100" }), code("session_not_confirmed"));
+  const other = full({ [PARENT]: answer(200, { id: 150, team: 980, drills_count: 2, start_timestamp: "2026-09-14T10:00:00" }) });
+  await assert.rejects(make(other.fetchImpl).getSession({ sessionId: "100" }), code("source_answer_unexpected"));
+  for (const team of [{ id: 980 }, "https://server3.gpexe.com/rest/v1/team/980/", null, undefined]) {
+    const s = full({ [PARENT]: answer(200, { id: 100, team, drills_count: 2 }) });
+    await assert.rejects(make(s.fetchImpl).getSession({ sessionId: "100" }), code("source_answer_unexpected"), JSON.stringify(team));
+  }
+  // A confirmed session of 980 is not a confirmed session for an adapter bound to 981.
+  const bound981 = make(full().fetchImpl, { boundSourceTeamId: "981" });
+  await assert.rejects(bound981.getSession({ sessionId: "100" }), code("source_team_mismatch"));
+  // Ids are canonical or refused; a team option is refused everywhere.
+  for (const bad of ["", "0100", "100 ", "x", null, {}, 1.5, "100&team=981"]) await assert.rejects(a.getSession({ sessionId: bad }), code("invalid_id"), JSON.stringify(bad));
+  for (const op of ["getSession", "getSessionDetails", "getSessionDrills", "listAthleteSessions", "getTeamThresholds", "getDrillLabels", "fetchSessionBundle", "listSessionsByDay", "listSessionTags"]) {
+    await assert.rejects(a[op]({ sessionId: "100", team: "981" }), code("team_param_not_allowed"), op);
+    await assert.rejects(a[op]({ sessionId: "100", TeamId: "981" }), code("team_param_not_allowed"), op);
+  }
+  await assert.rejects(a.getSession({ sessionId: "100", url: "https://evil.example/" }), code("invalid_options"));
+});
+
+test("B2.3 athlete rows: whole or refused, every row of the confirmed session; a row of another session, a foreign next page, an unknown athlete id, a detail of another row or session, events of another row, a track not named by a confirmed row — all refused", async () => {
+  const { a } = await confirmedAdapter();
+  const rows = await a.listAthleteSessions({ sessionId: "100" });
+  assert.deepEqual(rows.rows.map((r) => r.id), [500, 501]);
+  assert.equal(rows.rows[0].athlete_name, undefined);
+  const cases = [
+    ["a row of another session", { [ATHLETES]: answer(200, [athleteRow(500, 4711), athleteRow(502, 4713, { teamsession: 200 })], { "x-total-count": "2" }) }, "listAthleteSessions", { sessionId: "100" }, "source_answer_unexpected"],
+    ["an athlete id in an unknown shape", { [ATHLETES]: answer(200, [athleteRow(500, { id: 4711 })], { "x-total-count": "1" }) }, "listAthleteSessions", { sessionId: "100" }, "source_answer_unexpected"],
+    ["no total", { [ATHLETES]: answer(200, [athleteRow(500, 4711)]) }, "listAthleteSessions", { sessionId: "100" }, "source_answer_unexpected"],
+    ["a foreign next page", { [ATHLETES]: answer(200, [athleteRow(500, 4711)], { "x-total-count": "2", link: '<https://server3.gpexe.com/rest/v1/athlete_session/?teamsession=200&limit=100&offset=1>; rel="next"' }) }, "listAthleteSessions", { sessionId: "100" }, "source_answer_unexpected"],
+    ["a detail of another row", { "/rest/v1/athlete_session/500/": answer(200, athleteRow(501, 4712)) }, "getAthleteSession", { sessionId: "100", athleteSessionId: "500" }, "source_answer_unexpected"],
+    ["a detail of another session", { "/rest/v1/athlete_session/500/": answer(200, athleteRow(500, 4711, { teamsession: 200 })) }, "getAthleteSession", { sessionId: "100", athleteSessionId: "500" }, "source_answer_unexpected"],
+    ["a track in an unknown shape", { "/rest/v1/athlete_session/500/": answer(200, athleteRow(500, 4711, { track: "https://evil.example/track/900/" })) }, "getAthleteSession", { sessionId: "100", athleteSessionId: "500" }, "source_answer_unexpected"],
+  ];
+  for (const [label, over, op, options, expected] of cases) {
+    const { a: b } = await confirmedAdapter(over);
+    await assert.rejects(b[op](options), code(expected), label);
+  }
+  // The chain: a row read under the session makes its events and its track readable; nothing else.
+  const { a: c, calls } = await confirmedAdapter();
+  await assert.rejects(c.getAthleteSessionMore({ athleteSessionId: "500" }), code("athlete_row_not_confirmed"));
+  const row = await c.getAthleteSession({ sessionId: "100", athleteSessionId: "500" });
+  assert.equal(row.athlete_name, undefined);
+  const more = await c.getAthleteSessionMore({ athleteSessionId: "500" });
+  assert.equal(more.athletesession_id, 500);
+  await assert.rejects(c.getAthleteSessionMore({ athleteSessionId: "501" }), code("athlete_row_not_confirmed"));
+  assert.equal((await c.getTrack({ trackId: "900" })).timezone, "Europe/Sarajevo");
+  await assert.rejects(c.getTrack({ trackId: "901" }), code("track_not_confirmed"));
+  await assert.rejects(c.getTrack({ trackId: "999" }), code("track_not_confirmed"));
+  // Events that name another row, a track that answers another id.
+  const { a: d } = await confirmedAdapter({ "/rest/v1/athlete_session/500/more/": answer(200, { athletesession_id: 501 }) });
+  await d.getAthleteSession({ sessionId: "100", athleteSessionId: "500" });
+  await assert.rejects(d.getAthleteSessionMore({ athleteSessionId: "500" }), code("source_answer_unexpected"));
+  const { a: e } = await confirmedAdapter({ "/rest/v1/track/900/": answer(200, { id: 901 }) });
+  await e.getAthleteSession({ sessionId: "100", athleteSessionId: "500" });
+  await assert.rejects(e.getTrack({ trackId: "900" }), code("source_answer_unexpected"));
+  // A paged athlete list on the same session is followed; a second page of another session is not.
+  const paged = fakeServer(fullRoutes({
+    [ATHLETES]: answer(200, [athleteRow(500, 4711)], { "x-total-count": "2", link: '<https://server3.gpexe.com/rest/v1/athlete_session/?teamsession=100&limit=100&offset=1>; rel="next"' }),
+    "/rest/v1/athlete_session/?teamsession=100&limit=100&offset=1": answer(200, [athleteRow(501, 4712)], { "x-total-count": "2" }),
+  }));
+  const f = make(paged.fetchImpl);
+  await f.getSession({ sessionId: "100" });
+  assert.deepEqual((await f.listAthleteSessions({ sessionId: "100" })).rows.map((r) => r.id), [500, 501]);
+  assert.ok(!calls.some((x) => x.url.includes("teamsession=200")));
+});
+
+test("B2.4 the date window: two calendar days, forward, at most 31 days, the proved encoding; a source that returns a row outside the window is refused as a whole; the same parent/drill classification and the same team rules apply", async () => {
+  const { a, calls } = await confirmedAdapter();
+  for (const bad of [{ fromDay: "2026-09-14" }, { toDay: "2026-09-14" }, { fromDay: "2026-9-14", toDay: "2026-09-15" }, { fromDay: "2026-02-30", toDay: "2026-03-01" }, { fromDay: "2026-09-15", toDay: "2026-09-14" }, { fromDay: "2026-09-01", toDay: "2026-10-02" }, { fromDay: "2026-09-14", toDay: "2026-09-15", limit: 5 }, { fromDay: "2026-09-14 00:00:00", toDay: "2026-09-15" }, { fromDay: "2026-09-14%2000", toDay: "2026-09-15" }]) {
+    await assert.rejects(a.listSessionsByDay(bad), code("invalid_options"), JSON.stringify(bad));
+  }
+  assert.ok(!calls.some((c) => c.url.includes("start_timestamp")), "nothing was sent for a bad window");
+  const ok = await a.listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
+  assert.deepEqual(idsOf(ok), ["100"]);
+  const sent = new URL(calls[calls.length - 1].url);
+  assert.equal(sent.search, "?team=980&start_timestamp_gte=2026-09-13%2000%3A00%3A00&start_timestamp_lte=2026-09-15%2023%3A59%3A59&limit=100");
+  // Exactly 31 days is allowed, 32 is not.
+  const thirtyOne = fakeServer(fullRoutes({ "/rest/v1/team_session/?team=980&start_timestamp_gte=2026-08-31%2000%3A00%3A00&start_timestamp_lte=2026-10-01%2023%3A59%3A59&limit=100": answer(200, [], { "x-total-count": "0" }) }));
+  assert.deepEqual(idsOf(await make(thirtyOne.fetchImpl).listSessionsByDay({ fromDay: "2026-09-01", toDay: "2026-10-01" })), []);
+  // A row outside the window: the filter was ignored, the whole answer is refused.
+  const outside = full({ [WINDOW]: answer(200, [parent(100, [101, 102]), session(101), session(102), session(200, 980, { start_timestamp: "2026-09-20T10:00:00" })], { "x-total-count": "4" }) });
+  await assert.rejects(make(outside.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" }), code("source_filter_ignored"));
+  const noDay = full({ [WINDOW]: answer(200, [session(300, 980, { start_timestamp: null })], { "x-total-count": "1" }) });
+  await assert.rejects(make(noDay.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" }), code("source_filter_ignored"));
+  const foreign = full({ [WINDOW]: answer(200, [session(300, 981)], { "x-total-count": "1" }) });
+  await assert.rejects(make(foreign.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" }), code("source_team_mismatch"));
+  const ambiguousPage = full({ [WINDOW]: answer(200, [parent(100, [101]), parent(200, [101]), session(101)], { "x-total-count": "3" }) });
+  await assert.rejects(make(ambiguousPage.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" }), code("source_list_ambiguous"));
+  // A next page of the window keeps the window (the server's link, decoded by the URL parser, goes out re-encoded).
+  const paged = fakeServer(fullRoutes({
+    [WINDOW]: answer(200, [parent(100, [101, 102]), session(101)], { "x-total-count": "3", link: '<https://server3.gpexe.com/rest/v1/team_session/?team=980&start_timestamp_gte=2026-09-13%2000%3A00%3A00&start_timestamp_lte=2026-09-15%2023%3A59%3A59&limit=100&offset=2>; rel="next"' }),
+    "/rest/v1/team_session/?team=980&start_timestamp_gte=2026-09-13%2000%3A00%3A00&start_timestamp_lte=2026-09-15%2023%3A59%3A59&limit=100&offset=2": answer(200, [session(102)], { "x-total-count": "3" }),
+  }));
+  const p = make(paged.fetchImpl);
+  assert.deepEqual(idsOf(await p.listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" })), ["100"]);
+  assert.equal(paged.calls.length, 2);
+});
+
+test("B2.5 thresholds: read for the confirmed session's day only, null on 404, refused for another team or an unknown shape; and a 404 elsewhere stays a refusal", async () => {
+  const { a, calls } = await confirmedAdapter();
+  assert.equal((await a.getTeamThresholds({ sessionId: "100" })).id, 1473);
+  assert.ok(calls.some((c) => c.url.endsWith(THRESH)));
+  const none = await confirmedAdapter({ [THRESH]: answer(404, { detail: "Not found." }) });
+  assert.equal(await none.a.getTeamThresholds({ sessionId: "100" }), null);
+  const foreign = await confirmedAdapter({ [THRESH]: answer(200, { id: 1, team: 981 }) });
+  await assert.rejects(foreign.a.getTeamThresholds({ sessionId: "100" }), code("source_team_mismatch"));
+  const odd = await confirmedAdapter({ [THRESH]: answer(200, [{ id: 1 }]) });
+  await assert.rejects(odd.a.getTeamThresholds({ sessionId: "100" }), code("source_answer_unexpected"));
+  const noDay = await confirmedAdapter({ [PARENT]: answer(200, { id: 100, team: 980, drills_count: 2 }) });
+  await assert.rejects(noDay.a.getTeamThresholds({ sessionId: "100" }), code("source_answer_unexpected"));
+  const missingDetails = await confirmedAdapter({ [WHOLE]: answer(404, { detail: "Not found." }) });
+  await assert.rejects(missingDetails.a.getSessionDetails({ sessionId: "100" }), code("source_not_found"));
+});
+
+test("B3.1 the legacy drill URL builder: exactly one host, one path, one query parameter; the first and the last index pass; every other input is refused and nothing else can be built", async () => {
+  const { legacyDrillDetailsUrl, legacyBriefUrl } = await import("../src/gpexeRestV1Adapter.js");
+  const base = { hostKey: "server3", catalogRow: row("server3"), parentId: "100", drillsCount: 3 };
+  assert.equal(legacyDrillDetailsUrl({ ...base, drillIndex: 0 }), "https://server3.gpexe.com/api/team_session/100/details/?drill=0");
+  assert.equal(legacyDrillDetailsUrl({ ...base, drillIndex: 2 }), "https://server3.gpexe.com/api/team_session/100/details/?drill=2");
+  assert.equal(legacyDrillDetailsUrl({ ...base, parentId: 100, drillIndex: 1 }), "https://server3.gpexe.com/api/team_session/100/details/?drill=1");
+  assert.equal(legacyBriefUrl({ hostKey: "server3", catalogRow: row("server3"), parentId: "100" }), "https://server3.gpexe.com/api/team_session/100/brief/");
+  const refused = [
+    [{ ...base, drillsCount: 0, drillIndex: 0 }, "drills_count_out_of_range", "drills_count = 0"],
+    [{ ...base, drillsCount: 31, drillIndex: 0 }, "drills_count_out_of_range", "more than MAX_DRILLS"],
+    [{ ...base, drillsCount: "3", drillIndex: 0 }, "drills_count_out_of_range", "a count as text"],
+    [{ ...base, drillIndex: -1 }, "invalid_drill_index", "negative"],
+    [{ ...base, drillIndex: 3 }, "invalid_drill_index", "index == drills_count"],
+    [{ ...base, drillIndex: 1.5 }, "invalid_drill_index", "decimal"],
+    [{ ...base, drillIndex: "0" }, "invalid_drill_index", "a string"],
+    [{ ...base, drillIndex: null }, "invalid_drill_index", "null"],
+    [{ ...base, drillIndex: undefined }, "invalid_drill_index", "undefined"],
+    [{ ...base, drillIndex: {} }, "invalid_drill_index", "an object"],
+    [{ ...base, drillIndex: 1e9 }, "invalid_drill_index", "too large"],
+    [{ ...base, drillIndex: Number.NaN }, "invalid_drill_index", "NaN"],
+    [{ ...base, parentId: "0100", drillIndex: 0 }, "invalid_id", "a leading zero"],
+    [{ ...base, parentId: "100/../101", drillIndex: 0 }, "invalid_id", "a dotted parent"],
+    [{ ...base, parentId: "100?drill=1", drillIndex: 0 }, "invalid_id", "a query in the parent"],
+    [{ ...base, parentId: "100#x", drillIndex: 0 }, "invalid_id", "a fragment in the parent"],
+    [{ ...base, parentId: "https://evil.example/100", drillIndex: 0 }, "invalid_id", "an absolute URL as parent"],
+    [{ ...base, parentId: "//evil.example/100", drillIndex: 0 }, "invalid_id", "a protocol-relative URL as parent"],
+    [{ ...base, parentId: "100%2F..%2F101", drillIndex: 0 }, "invalid_id", "an encoded traversal"],
+    [{ ...base, parentId: ["100"], drillIndex: 0 }, "invalid_id", "a list"],
+    [{ ...base, hostKey: "e03", catalogRow: row("e03"), drillIndex: 0 }, "path_not_allowed", "another host key"],
+    [{ ...base, hostKey: "server4", catalogRow: row("server4"), drillIndex: 0 }, "host_not_allowed", "an unknown host"],
+    [{ ...base, hostKey: "https://server3.gpexe.com/", catalogRow: row("https://server3.gpexe.com/"), drillIndex: 0 }, "host_not_allowed", "a URL as host key"],
+    [{ ...base, catalogRow: row("server3", "retired"), drillIndex: 0 }, "host_not_allowed", "a retired row"],
+    [{ ...base, catalogRow: null, drillIndex: 0 }, "host_not_allowed", "no row"],
+    [{ ...base, catalogRow: row("e03"), drillIndex: 0 }, "host_not_allowed", "another key's row"],
+  ];
+  for (const [input, expected, label] of refused) {
+    assert.throws(() => legacyDrillDetailsUrl(input), code(expected), label);
+  }
+  for (const [input, expected] of [[{ hostKey: "e03", catalogRow: row("e03"), parentId: "100" }, "path_not_allowed"], [{ hostKey: "server3", catalogRow: row("server3"), parentId: "x" }, "invalid_id"], [{ hostKey: "server3", catalogRow: null, parentId: "100" }, "host_not_allowed"]]) {
+    assert.throws(() => legacyBriefUrl(input), code(expected));
+  }
+  // The builders take no path, no URL, no family and no extra query: there is no parameter for them.
+  assert.equal(legacyDrillDetailsUrl({ ...base, drillIndex: 0, path: "../../", url: "https://evil.example/", family: "api", query: "&x=1" }), "https://server3.gpexe.com/api/team_session/100/details/?drill=0");
+});
+
+test("B3.2 the adapter sends the legacy reads only through the builders: never for an index outside drills_count, never with a drills entry, never with a caller's path", async () => {
+  const { a, calls } = await confirmedAdapter();
+  await assert.rejects(a.getSessionDrillDetails({ sessionId: "100", drillIndex: 2 }), code("invalid_drill_index"));
+  await assert.rejects(a.getSessionDrillDetails({ sessionId: "100", drillIndex: "0" }), code("invalid_drill_index"));
+  await assert.rejects(a.getSessionDrillDetails({ sessionId: "100", drillIndex: 0, path: "../" }), code("invalid_options"));
+  assert.ok(!calls.some((c) => c.url.includes("/api/")), "no legacy request yet");
+  const d1 = await a.getSessionDrillDetails({ sessionId: "100", drillIndex: 1 });
+  assert.equal(pathsOf(calls).pop(), D1);
+  assert.equal(d1.players["4711"].tot_burst_events.value, 4);
+  // A confirmed parent with no drills: no drill read at all.
+  const none = await confirmedAdapter({ [PARENT]: answer(200, { id: 100, team: 980, drills_count: 0, start_timestamp: "2026-09-14T10:00:00" }) });
+  await assert.rejects(none.a.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 }), code("invalid_drill_index"));
+  assert.deepEqual(await none.a.getSessionDrills({ sessionId: "100" }), { complete: true, drillsCount: 0, drills: [], failed: null });
+  assert.deepEqual(await none.a.getDrillLabels({ sessionId: "100" }), []);
+  assert.ok(!none.calls.some((c) => c.url.includes("/api/")));
+  // One drill: index 0 is the last.
+  const one = await confirmedAdapter({ [PARENT]: answer(200, { id: 100, team: 980, drills_count: 1, start_timestamp: "2026-09-14T10:00:00" }), [D0]: answer(200, details(PLAYERS(5), { drills_count: 1 })) });
+  const set = await one.a.getSessionDrills({ sessionId: "100" });
+  assert.deepEqual([set.complete, set.drills.map((d) => d.drillIndex)], [true, [0]]);
+  assert.ok(!one.calls.some((c) => c.url.includes("drill=1")));
+  // drills_count beyond the bound is refused at the session read.
+  const many = full({ [PARENT]: answer(200, { id: 100, team: 980, drills_count: 31, start_timestamp: "2026-09-14T10:00:00" }) });
+  await assert.rejects(make(many.fetchImpl).getSession({ sessionId: "100" }), code("drills_count_out_of_range"));
+});
+
+test("B4.1 a drill answer is accepted only as a 200 JSON object whose players is a map of canonical athlete ids with metric values; its team and teamsession are not read as identity", async () => {
+  const good = details(PLAYERS(5), { team: OPAQUE_TEAM, teamsession: 424242 });
+  const { a } = await confirmedAdapter({ [D0]: answer(200, good) });
+  const d = await a.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 });
+  assert.deepEqual(Object.keys(d.players), ["4711", "4712"]);
+  noNames(d, ["Marker"]);
+  const refused = [
+    ["no players", { drills_count: 2, team: 980 }, "players_missing"],
+    ["players a list", { players: [{ id: 4711 }] }, "players_missing"],
+    ["a non-canonical athlete key", { players: { "0471": { a: 1 } } }, "athlete_id_not_canonical"],
+    ["a name as athlete key", { players: { "Marker Athlete Name": { a: 1 } } }, "athlete_id_not_canonical"],
+    ["a URL as athlete key", { players: { "https://evil.example/4711": { a: 1 } } }, "athlete_id_not_canonical"],
+    ["a too long numeric key", { players: { "4711471147114": { a: 1 } } }, "athlete_id_not_canonical"],
+    ["an athlete without values", { players: { 4711: {} } }, "player_values_missing"],
+    ["an athlete with a list", { players: { 4711: [1, 2] } }, "player_values_missing"],
+    ["a metric that is free text", { players: { 4711: { note: "Marker Athlete Name scored" } } }, "metric_shape_unknown"],
+    ["a metric nested too deep", { players: { 4711: { zones: { z1: { v: 1 } } } } }, "metric_shape_unknown"],
+    ["a metric that is a list", { players: { 4711: { zones: [1, 2] } } }, "metric_shape_unknown"],
+    ["a metric with a bad name", { players: { 4711: { "tot burst": 1 } } }, "metric_shape_unknown"],
+  ];
+  for (const [label, body, reason] of refused) {
+    const { a: b } = await confirmedAdapter({ [D0]: answer(200, body) });
+    const error = await errorOf(b.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 }));
+    assert.equal(error?.code, "source_answer_unexpected", label);
+    assert.equal(error.reason, reason, label);
+    noNames({ ...error, message: error.message });
+  }
+  // A list body, invalid JSON, an empty body, a JSON primitive.
+  for (const [label, resp] of [["a list body", answer(200, [details(PLAYERS(1))])], ["invalid JSON", answer(200, "{not json")], ["an empty body", answer(200, "")], ["a JSON primitive", answer(200, "42")]]) {
+    const { a: b } = await confirmedAdapter({ [D0]: resp });
+    await assert.rejects(b.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 }), code("source_answer_unexpected"), label);
+  }
+  // The same validation guards the whole-session details.
+  const { a: w } = await confirmedAdapter({ [WHOLE]: answer(200, { players: [] }) });
+  await assert.rejects(w.getSessionDetails({ sessionId: "100" }), code("source_answer_unexpected"));
+});
+
+test("B4.2 statuses and transport on a drill read: 401 and 403 end the whole operation; 404, 429, 5xx, a redirect, a timeout, an oversized or broken body end that drill only — the set is then not complete, nothing of a body leaks, no other index, host or form is tried", async () => {
+  const MiB = 1024 * 1024;
+  const streamedBody = (chunks, headers = {}) => ({ status: 200, headers: new Headers({ ...json, ...headers }), body: streamOf(chunks), text: async () => { throw new Error("whole body"); } });
+  const bigChunks = () => [bytesOf('{"players":{"4711":{"a":'), new Uint8Array(5 * MiB).fill(0x31), bytesOf("}}}")];
+  const perDrill = [
+    ["404", () => answer(404, { detail: "Not found. Marker Athlete Name" }), "source_not_found"],
+    ["429", () => answer(429, "slow down"), "source_unavailable"],
+    ["500", () => answer(500, "<html>Marker Athlete Name</html>"), "source_unavailable"],
+    ["503", () => answer(503, ""), "source_unavailable"],
+    ["a redirect", () => ({ status: 302, headers: new Headers({ location: "https://evil.example/" }), body: null }), "source_answer_unexpected"],
+    ["418", () => answer(418, ""), "source_answer_unexpected"],
+    ["an announced oversize", () => answer(200, "{}", { "content-length": String(MAX_ANSWER_BYTES + 1) }), "source_answer_unexpected"],
+    ["one byte over the limit, chunked", () => streamedBody(bigChunks()), "source_answer_unexpected"],
+    ["a falsely small content-length", () => streamedBody(bigChunks(), { "content-length": "10" }), "source_answer_unexpected"],
+    ["a body without a stream", () => ({ status: 200, headers: new Headers(json), body: "{}", text: async () => "{}" }), "source_answer_unexpected"],
+    ["a broken stream", () => ({ status: 200, headers: new Headers(json), body: new ReadableStream({ pull(c) { c.error(new Error("reset Marker Athlete Name")); } }) }), "source_unavailable"],
+    ["a timeout", () => (u, init) => new Promise((_, reject) => { init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))); }), "source_unavailable"],
+  ];
+  for (const [label, resp, expected] of perDrill) {
+    const { a, calls } = await confirmedAdapter({ [D0]: resp() }, (f) => make(f, { timeoutMs: 50 }));
+    const single = await errorOf(a.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 }));
+    assert.equal(single?.code, expected, label);
+    noNames({ ...single, message: single.message });
+    const { a: b, calls: calls2 } = await confirmedAdapter({ [D0]: resp() }, (f) => make(f, { timeoutMs: 50 }));
+    const set = await b.getSessionDrills({ sessionId: "100" });
+    assert.deepEqual([set.complete, set.drills.length, set.failed], [false, 0, { drillIndex: 0, code: expected }], label);
+    assert.ok(!calls.some((c) => c.url.includes("drill=1")) && !calls2.some((c) => c.url.includes("drill=1")), `${label}: the next index is not tried`);
+    assert.ok([...calls, ...calls2].every((c) => new URL(c.url).origin === "https://server3.gpexe.com" && !c.url.includes("/rest/v1/team_session/100/details/?drill")), `${label}: no other host or form`);
+    // The whole-session data are untouched by the drill failure; the labels are still read.
+    const { a: c } = await confirmedAdapter({ [D0]: resp() }, (f) => make(f, { timeoutMs: 50 }));
+    const bundle = await c.fetchSessionBundle({ sessionId: "100" });
+    assert.deepEqual(bundle.drillsStatus, { complete: false, drillsCount: 2, failed: { drillIndex: 0, code: expected } }, label);
+    assert.deepEqual(Object.keys(bundle.details.full.players), ["4711", "4712"]);
+    assert.deepEqual(bundle.details.drills, {});
+    assert.equal(bundle.drillLabels.length, 2);
+    noNames(bundle);
+  }
+  // A failure on the second drill keeps the first and is not complete.
+  const { a: second } = await confirmedAdapter({ [D1]: answer(503, "") });
+  const set2 = await second.getSessionDrills({ sessionId: "100" });
+  assert.deepEqual([set2.complete, set2.drills.map((d) => d.drillIndex), set2.failed], [false, [0], { drillIndex: 1, code: "source_unavailable" }]);
+  // A body exactly at the limit is read whole.
+  // Padding is JSON whitespace between tokens, so the body is valid at exactly the limit.
+  const head = '{"players":{"4711":{"a":1}}';
+  const tail = "}";
+  const exact = `${head}${" ".repeat(MAX_ANSWER_BYTES - head.length - tail.length)}${tail}`;
+  assert.equal(new TextEncoder().encode(exact).byteLength, MAX_ANSWER_BYTES);
+  const { a: atLimit } = await confirmedAdapter({ [D0]: streamedBody([bytesOf(exact.slice(0, MiB)), bytesOf(exact.slice(MiB))]) });
+  const okAtLimit = await atLimit.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 });
+  assert.equal(typeof okAtLimit.players["4711"].a, "number");
+  // Global refusals end the whole operation and the bundle.
+  for (const [status, expected] of [[401, "source_auth_rejected"], [403, "source_access_refused"]]) {
+    const { a } = await confirmedAdapter({ [D0]: answer(status, "") });
+    await assert.rejects(a.getSessionDrills({ sessionId: "100" }), code(expected));
+    await assert.rejects(a.fetchSessionBundle({ sessionId: "100" }), code(expected));
+  }
+});
+
+test("B5.1 drill names: drillTags of the parent's brief, mapped by zero-based position and translated through the bound team's tag catalogue; everything else is Drill N — never a tag of another team, never a guess, never the day's other sessions", async () => {
+  const label = (labels) => labels.map((l) => [l.drillIndex, l.label, l.tagId, l.labelEvidence]);
+  const fb = (n) => Array.from({ length: n }, (_, i) => [i, `Drill ${i + 1}`, null, "index_fallback"]);
+  // Shape A, positional.
+  const { a, calls } = await confirmedAdapter();
+  assert.deepEqual(label(await a.getDrillLabels({ sessionId: "100" })), [[0, "Rondo", "31", "drill_tags"], [1, "Small-sided game", "32", "drill_tags"]]);
+  assert.deepEqual(pathsOf(calls).slice(-2), [BRIEF, TAGS]);
+  // Shape B, explicit { drill, tag }, in any order.
+  const b = await confirmedAdapter({ [BRIEF]: answer(200, { drillTags: [{ drill: 1, tag: 32 }, { drill: 0, tag: "31" }] }) });
+  assert.deepEqual(label(await b.a.getDrillLabels({ sessionId: "100" })), [[0, "Rondo", "31", "drill_tags"], [1, "Small-sided game", "32", "drill_tags"]]);
+  // A position without a tag falls back on its own.
+  const partial = await confirmedAdapter({ [BRIEF]: answer(200, { drillTags: [31, null] }) });
+  assert.deepEqual(label(await partial.a.getDrillLabels({ sessionId: "100" })), [[0, "Rondo", "31", "drill_tags"], [1, "Drill 2", null, "index_fallback"]]);
+  const fallbacks = [
+    ["drillTags missing", { id: 100 }],
+    ["drillTags null", { drillTags: null }],
+    ["drillTags an object", { drillTags: { 0: 31, 1: 32 } }],
+    ["a string", { drillTags: "31,32" }],
+    ["fewer than drills_count", { drillTags: [31] }],
+    ["more than drills_count", { drillTags: [31, 32, 33] }],
+    ["a duplicate tag at two positions", { drillTags: [31, 31] }],
+    ["an unreadable entry", { drillTags: [31, { name: "Rondo" }] }],
+    ["a URL entry", { drillTags: ["https://evil.example/tag/31", 32] }],
+    ["shape B with an index out of range", { drillTags: [{ drill: 2, tag: 31 }] }],
+    ["shape B with a decimal index", { drillTags: [{ drill: 0.5, tag: 31 }] }],
+    ["shape B with the same drill twice", { drillTags: [{ drill: 0, tag: 31 }, { drill: 0, tag: 32 }] }],
+    ["shape B without a tag", { drillTags: [{ drill: 0 }] }],
+    ["shape B with a name instead of an id", { drillTags: [{ drill: 0, tag: "Rondo" }] }],
+    ["a brief of another session", { id: 150, drillTags: [31, 32] }],
+    ["an unknown tag id", { drillTags: [34, 35] }],
+  ];
+  for (const [what, brief] of fallbacks) {
+    const s = await confirmedAdapter({ [BRIEF]: answer(200, brief) });
+    assert.deepEqual(label(await s.a.getDrillLabels({ sessionId: "100" })), fb(2), what);
+  }
+  // A brief that cannot be read is a fallback, not an error; a refused credential is an error.
+  for (const [what, resp] of [["404", answer(404, {})], ["500", answer(500, "")], ["not JSON", answer(200, "<html>")], ["a list", answer(200, [31, 32])]]) {
+    const s = await confirmedAdapter({ [BRIEF]: resp });
+    assert.deepEqual(label(await s.a.getDrillLabels({ sessionId: "100" })), fb(2), what);
+  }
+  const denied = await confirmedAdapter({ [BRIEF]: answer(401, "") });
+  await assert.rejects(denied.a.getDrillLabels({ sessionId: "100" }), code("source_auth_rejected"));
+  // The tag catalogue: a tag of another team refuses the list; a tag without a usable name falls back; a tag in an unknown team shape refuses.
+  const foreignTag = await confirmedAdapter({ [TAGS]: answer(200, [{ id: 31, name: "Rondo", team: 981 }], { "x-total-count": "1" }) });
+  await assert.rejects(foreignTag.a.getDrillLabels({ sessionId: "100" }), code("source_team_mismatch"));
+  const oddTag = await confirmedAdapter({ [TAGS]: answer(200, [{ id: 31, name: "Rondo", team: { id: 980 } }], { "x-total-count": "1" }) });
+  await assert.rejects(oddTag.a.getDrillLabels({ sessionId: "100" }), code("source_answer_unexpected"));
+  const blankTag = await confirmedAdapter({ [TAGS]: answer(200, [{ id: 31, name: "   ", team: 980 }, { id: 32, name: "x".repeat(81), team: 980 }], { "x-total-count": "2" }) });
+  assert.deepEqual(label(await blankTag.a.getDrillLabels({ sessionId: "100" })), fb(2));
+  const tagList = await a.listSessionTags();
+  assert.deepEqual([...tagList.tags.entries()], [["31", "Rondo"], ["32", "Small-sided game"], ["33", "Unused"]]);
+  // Never the day's other sessions: the labels come from one brief and one tag list, and no other session is read.
+  const dayWithTaggedSessions = await confirmedAdapter({ [LIST]: answer(200, [parent(100, [101, 102]), session(101), session(102), session(300, 980, { tags: [31] }), session(301, 980, { tags: [32] })], { "x-total-count": "5" }) });
+  await dayWithTaggedSessions.a.getDrillLabels({ sessionId: "100" });
+  assert.ok(!dayWithTaggedSessions.calls.some((c) => /team_session\/(300|301)\//.test(c.url) || c.url.includes("start_timestamp")));
+  assert.deepEqual(pathsOf(dayWithTaggedSessions.calls), [BRIEF, TAGS]);
+  // The labels carry no name of an athlete and no source text.
+  noNames(await a.getDrillLabels({ sessionId: "100" }));
+});
+
+test("B5.2 parseDrillTags on its own: the two candidate shapes and nothing else", async () => {
+  const { parseDrillTags } = await import("../src/gpexeRestV1Adapter.js");
+  const m = (v, n) => { const r = parseDrillTags(v, n); return r === null ? null : [...r.entries()]; };
+  assert.deepEqual(m([31, 32], 2), [[0, "31"], [1, "32"]]);
+  assert.deepEqual(m(["31", null], 2), [[0, "31"]]);
+  assert.deepEqual(m([null, null], 2), []);
+  assert.deepEqual(m([{ drill: 1, tag: 32 }], 2), [[1, "32"]]);
+  assert.deepEqual(m([], 0), []);
+  for (const [v, n] of [[[31], 2], [[31, 32, 33], 2], [[31, 31], 2], [[{ drill: 0, tag: 31 }, { drill: 1, tag: 31 }], 2], [[{ drill: "0", tag: 31 }], 2], [[{ drill: 0, tag: 31 }, 32], 2], [[0.5], 1], [[-1], 1], ["31", 1], [{ 0: 31 }, 1], [null, 1], [[31], -1], [[31], 1.5]]) {
+    assert.equal(m(v, n), null, JSON.stringify([v, n]));
+  }
+});
+
+test("B6. regression: the capabilities say what is implemented, the e03 importer and the host allowlist are untouched, and nothing writes", async () => {
+  const { a } = await confirmedAdapter();
+  const declared = a.capabilities();
+  for (const name of ["session_list_by_date", "session_read", "session_details", "athlete_session_list", "athlete_session_read", "athlete_session_more", "track_read", "team_thresholds"]) assert.deepEqual(declared[name], { status: "proven", available: true }, name);
+  assert.deepEqual(declared.session_drill_details, { status: "observed", available: true });
+  assert.deepEqual(declared.session_tags, { status: "observed", available: true });
+  assert.deepEqual(declared.units, { status: "unknown", available: false });
+  const fsp = await import("node:fs/promises");
+  const path = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const hosts = await fsp.readFile(path.resolve(ROOT, "backend/src/sourceHosts.js"), "utf8");
+  assert.match(hosts, /server3: Object\.freeze\(\{\s*baseUrl: "https:\/\/server3\.gpexe\.com\/", label: "GPEXE server3",\s*apiFamily: "rest_v1"/);
+  assert.doesNotMatch(hosts, /brief|drill/, "the host profile knows nothing of drills");
+  const client = await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeClient.js"), "utf8");
+  assert.match(client, /export const GPEXE_API_BASE = "https:\/\/e03\.gpexe\.com\/api\/";/);
+  assert.match(client, /team_session\/\$\{id\}\/details\/\?drill=\$\{index\}/, "the e03 importer's own drill form is unchanged");
+  assert.doesNotMatch(client, /sourceAdapters|gpexeRestV1Adapter|sourceHosts|legacyDrill/);
+  const adapterSource = await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeRestV1Adapter.js"), "utf8");
+  assert.doesNotMatch(adapterSource, /\bpg\b|pool\.query|INSERT|UPDATE|DELETE FROM|process\.env|require\(/, "no database, no environment");
+});
+
+test("B6b. the one widening of the host path rule is exactly two percent sequences in a query value, %20 and %3A: every other percent sequence, in a value or a segment, is still refused", async () => {
+  const { sourceApiUrl } = await import("../src/sourceHosts.js");
+  const r = row("server3");
+  assert.equal(sourceApiUrl("gpexe", "server3", r, "team_session/?team=980&start_timestamp_gte=2026-09-13%2000%3A00%3A00&limit=100"), "https://server3.gpexe.com/rest/v1/team_session/?team=980&start_timestamp_gte=2026-09-13%2000%3A00%3A00&limit=100");
+  for (const bad of ["team/?a=%2F", "team/?a=%25", "team/?a=%00", "team/?a=%2e%2e", "team/?a=%20%2F", "team/?a=%3a", "team/?a=%2520", "team/?a=%", "team/?a=%2", "team%20/?a=1", "team/%2e%2e/?a=1", "team/?a%20b=1"]) {
+    assert.throws(() => sourceApiUrl("gpexe", "server3", r, bad), (e) => e.code === "path_not_allowed", bad);
+  }
+  const { teamScopedPath } = await import("../src/gpexeRestV1Adapter.js");
+  assert.equal(teamScopedPath("team_session/", "980", [["start_timestamp_gte", "2026-09-14%2000%3A00%3A00"]]), "team_session/?team=980&start_timestamp_gte=2026-09-14%2000%3A00%3A00");
+  for (const bad of ["2026-09-14 00:00:00", "a%2Fb", "%25", "x%3a", "a&b=1", "a#b"]) assert.throws(() => teamScopedPath("team_session/", "980", [["v", bad]]), (e) => e.code === "path_not_allowed", bad);
+});
+
+// ---------------------------------------------------------------------------
+// B7. Review fixes of 2026-10-03 (code-reviewer HIGH/MEDIUM/LOW, security-reviewer MEDIUM/LOW).
+// ---------------------------------------------------------------------------
+test("B7.1 the date window reads exactly one day back: a drill row inside the window whose parent started the evening before is not listed as a session, the parent of that extra day is left out again, two days back is never read, and a row before the extra day still refuses the whole answer", async () => {
+  const rows = [
+    parent(100, [101, 102], 980, { start_timestamp: "2026-09-13T23:30:00" }),
+    session(101, 980, { start_timestamp: "2026-09-14T00:05:00" }),
+    session(102, 980, { start_timestamp: "2026-09-14T00:20:00" }),
+    session(300, 980, { start_timestamp: "2026-09-14T10:00:00" }),
+  ];
+  const server = full({ [WINDOW]: answer(200, rows, { "x-total-count": "4" }) });
+  const r = await make(server.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
+  assert.deepEqual(idsOf(r), ["300"]);
+  assert.equal(r.drillsLeftOut, 2);
+  assert.equal(r.lookBackParentsLeftOut, 1);
+  assert.equal(r.lookBackDays, 1);
+  assert.deepEqual(pathsOf(server.calls), [WINDOW]);
+  assert.ok(!server.calls.some((c) => c.url.includes("2026-09-12")), "two days back is never read");
+  // A parent of the extra day with no drill in the window is left out too — it is not of the window.
+  const quiet = full({ [WINDOW]: answer(200, [session(99, 980, { start_timestamp: "2026-09-13T18:00:00" }), session(300)], { "x-total-count": "2" }) });
+  assert.deepEqual(idsOf(await make(quiet.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" })), ["300"]);
+  // A row before the extra day: the filter was ignored.
+  const early = full({ [WINDOW]: answer(200, [session(98, 980, { start_timestamp: "2026-09-12T23:59:59" }), session(300)], { "x-total-count": "2" }) });
+  await assert.rejects(make(early.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" }), code("source_filter_ignored"));
+  // Month and year boundaries of the look-back day.
+  const jan = fakeServer(fullRoutes({ "/rest/v1/team_session/?team=980&start_timestamp_gte=2025-12-31%2000%3A00%3A00&start_timestamp_lte=2026-01-01%2023%3A59%3A59&limit=100": answer(200, [], { "x-total-count": "0" }) }));
+  assert.deepEqual(idsOf(await make(jan.fetchImpl).listSessionsByDay({ fromDay: "2026-01-01", toDay: "2026-01-01" })), []);
+  assert.equal(pathsOf(jan.calls)[0], "/rest/v1/team_session/?team=980&start_timestamp_gte=2025-12-31%2000%3A00%3A00&start_timestamp_lte=2026-01-01%2023%3A59%3A59&limit=100");
+});
+
+const { validatePlayersAnswer } = await import("../src/gpexeRestV1Adapter.js");
+const fsp = (await import("node:fs/promises")).default;
+const path = (await import("node:path")).default;
+const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..", "..");
+
+test("B7.2 an empty players map is a valid answer (a drill not yet computed): the drill set stays complete and the whole-session details are accepted; a missing, null, array, string, number or boolean players still fails", async () => {
+  const { a } = await confirmedAdapter({ [D1]: answer(200, { drills_count: 2, players: {} }), [WHOLE]: answer(200, { drills_count: 2, players: {} }) });
+  const set = await a.getSessionDrills({ sessionId: "100" });
+  assert.equal(set.complete, true);
+  assert.equal(set.failed, null);
+  assert.deepEqual(set.drills[1].details, { players: {}, drills_count: 2 });
+  assert.deepEqual(await a.getSessionDetails({ sessionId: "100" }), { players: {}, drills_count: 2 });
+  for (const [label, players] of [["missing", undefined], ["null", null], ["an array", []], ["an array of players", [{ 4711: { a: 1 } }]], ["a string", "4711"], ["a number", 1], ["a boolean", true]]) {
+    const body = players === undefined ? { drills_count: 2 } : { drills_count: 2, players };
+    const { a: b } = await confirmedAdapter({ [D1]: answer(200, body) });
+    const s = await b.getSessionDrills({ sessionId: "100" });
+    assert.equal(s.complete, false, label);
+    assert.deepEqual(s.failed, { drillIndex: 1, code: "source_answer_unexpected" }, label);
+    assert.throws(() => validatePlayersAnswer(body, "x"), code("source_answer_unexpected"), label);
+  }
+  // The prototype-named metrics are refused; a details drill count that disagrees with the confirmed one is refused.
+  for (const metric of ["__proto__", "constructor", "prototype"]) {
+    assert.throws(() => validatePlayersAnswer({ players: { 4711: JSON.parse(`{"${metric}": 1}`) } }, "x"), code("source_answer_unexpected"), metric);
+  }
+  assert.throws(() => validatePlayersAnswer({ players: { 4711: { a: 1 } }, drills_count: 3 }, "x", 2), code("source_answer_unexpected"));
+  assert.deepEqual(validatePlayersAnswer({ players: { 4711: { a: 1 } }, drills_count: 2 }, "x", 2), { players: { 4711: { a: 1 } }, drills_count: 2 });
+});
+
+test("B7.3 no retry by default: a 5xx and a network failure each cost exactly one request with the default adapter; a caller may ask for at most three attempts; and a programming error inside a drill read propagates instead of becoming a failed drill", async () => {
+  const five = full({ [PARENT]: answer(503, { detail: "x" }) });
+  const dflt = createSourceAdapter({ sourceSystem: "gpexe", hostKey: "server3", catalogRow: row("server3"), credential: CREDENTIAL, boundSourceTeamId: "980", fetchImpl: five.fetchImpl, sleep: async () => {} });
+  await assert.rejects(dflt.getSession({ sessionId: "100" }), code("source_unavailable"));
+  assert.equal(five.calls.length, 1);
+  const down = { calls: 0, fetchImpl: async () => { down.calls += 1; throw new TypeError("fetch failed"); } };
+  const dflt2 = createSourceAdapter({ sourceSystem: "gpexe", hostKey: "server3", catalogRow: row("server3"), credential: CREDENTIAL, boundSourceTeamId: "980", fetchImpl: down.fetchImpl, sleep: async () => {} });
+  await assert.rejects(dflt2.getSession({ sessionId: "100" }), code("source_unavailable"));
+  assert.equal(down.calls, 1);
+  assert.throws(() => make(five.fetchImpl, { attempts: 4 }), code("invalid_options"));
+  const three = full({ [PARENT]: answer(503, { detail: "x" }) });
+  await assert.rejects(make(three.fetchImpl, { attempts: 3 }).getSession({ sessionId: "100" }), code("source_unavailable"));
+  assert.equal(three.calls.length, 3);
+  // A TypeError thrown while reading a drill answer is not a failed drill.
+  const broken = { ...answer(200, { players: { 4711: { a: 1 } } }), get body() { throw new TypeError("boom"); } };
+  const { a } = await confirmedAdapter({ [D1]: broken });
+  await assert.rejects(a.getSessionDrills({ sessionId: "100" }), TypeError);
+});
+
+test("B7.4 an athlete row is read only when the confirmed session's own list named it: a never-listed id sends no request and answers a stable code; a list read again replaces the named set; a session confirmed again starts over", async () => {
+  const { a, calls } = await confirmedAdapter();
+  await assert.rejects(a.getAthleteSession({ sessionId: "100", athleteSessionId: "777" }), code("athlete_row_not_listed"));
+  assert.equal(calls.length, 0, "nothing was sent for a row the list did not name");
+  const row = await a.getAthleteSession({ sessionId: "100", athleteSessionId: "500" });
+  assert.equal(row.id, 500);
+  // A list that no longer names 500 replaces the named set in the same instance.
+  const again = await confirmedAdapter({ [ATHLETES]: answer(200, [athleteRow(501, 4712, { track: 901 })], { "x-total-count": "1" }) });
+  await assert.rejects(again.a.getAthleteSession({ sessionId: "100", athleteSessionId: "500" }), code("athlete_row_not_listed"));
+  // A session read again that now fails withdraws the earlier confirmation in the same instance.
+  let parentAnswer = fullRoutes()[PARENT];
+  const flip = fakeServer({ ...fullRoutes(), [PARENT]: () => parentAnswer });
+  const b = make(flip.fetchImpl);
+  await b.getSession({ sessionId: "100" });
+  await b.listAthleteSessions({ sessionId: "100" });
+  parentAnswer = answer(200, { id: 100, team: 981, drills_count: 2, start_timestamp: "2026-09-14T10:00:00" });
+  await assert.rejects(b.getSession({ sessionId: "100" }), code("source_team_mismatch"));
+  await assert.rejects(b.listAthleteSessions({ sessionId: "100" }), code("session_not_confirmed"));
+  await assert.rejects(b.getAthleteSession({ sessionId: "100", athleteSessionId: "500" }), code("session_not_confirmed"));
+  // More than MAX_ATHLETE_ROWS rows for one session is refused.
+  const many = Array.from({ length: 201 }, (_, i) => athleteRow(1000 + i, 5000 + i));
+  const big = await confirmedAdapter({ [ATHLETES]: answer(200, many, { "x-total-count": "201" }) });
+  const tooMany = await errorOf(big.a.listAthleteSessions({ sessionId: "100" }));
+  assert.equal(tooMany.code, "source_answer_unexpected");
+  assert.equal(tooMany.reason, "athlete_rows_too_many");
+});
+
+test("B7.5 next-page links carry only limit and offset (and the window bounds) as the adapter re-sends them; any team-like key in any spelling and any other parameter is refused on both list kinds; listSessionTags refuses an unknown option without a request", async () => {
+  const link = (q) => ({ "x-total-count": "2", link: `<https://server3.gpexe.com/rest/v1/athlete_session/?teamsession=100&${q}>; rel="next"` });
+  for (const q of ["team_id=981&limit=100&offset=1", "teamId=981&limit=100&offset=1", "TEAM=981&limit=100&offset=1", "limit=100&offset=1&cursor=abc", "limit=100&offset=-1", "limit=abc&offset=1", "limit=100&offset=1&page=2"]) {
+    const s = full({ [ATHLETES]: answer(200, [athleteRow(500, 4711)], link(q)) });
+    const a = make(s.fetchImpl);
+    await a.getSession({ sessionId: "100" });
+    await assert.rejects(a.listAthleteSessions({ sessionId: "100" }), code("source_answer_unexpected"), q);
+    assert.ok(!s.calls.some((c) => c.url.includes("offset=")), `nothing followed for ${q}`);
+  }
+  const good = fakeServer(fullRoutes({
+    [ATHLETES]: answer(200, [athleteRow(500, 4711)], link("limit=100&offset=1")),
+    "/rest/v1/athlete_session/?teamsession=100&limit=100&offset=1": answer(200, [athleteRow(501, 4712, { track: 901 })], { "x-total-count": "2" }),
+  }));
+  const g = make(good.fetchImpl);
+  await g.getSession({ sessionId: "100" });
+  assert.equal((await g.listAthleteSessions({ sessionId: "100" })).rows.length, 2);
+  for (const q of ["team=980&limit=2&offset=2&page=3", "team=980&limit=2&offset=x", "team=980&limit=2&offset=2&team_id=980"]) {
+    const s = listOf([session(1)], { [LIST]: answer(200, [session(1)], { "x-total-count": "3", link: `<https://server3.gpexe.com/rest/v1/team_session/?${q}>; rel="next"` }) });
+    await assert.rejects(make(s.fetchImpl).listSessions(), (e) => e.code === "source_answer_unexpected" || e.code === "source_team_mismatch", q);
+    assert.equal(s.calls.length, 1, q);
+  }
+  const { a, calls } = await confirmedAdapter();
+  await assert.rejects(a.listSessionTags({ url: "https://evil.example/" }), code("invalid_options"));
+  assert.equal(calls.length, 0);
+});
+
+test("B7.6 doc lint: the compatibility document no longer carries the F3c2a sentences the adapter column contradicts", async () => {
+  const doc = await fsp.readFile(path.resolve(ROOT, "docs/ai/gpexe-rest-v1-compatibility.md"), "utf8");
+  assert.doesNotMatch(doc, /adapter column has not moved|drills left out as the importer does/);
+  assert.match(doc, /exactly one day earlier/);
+  assert.match(doc, /an empty map is valid/);
+  assert.doesNotMatch(doc, /is listed as a session by `listSessionsByDay`|, or widened,/);
+  const currentState = await fsp.readFile(path.resolve(ROOT, "docs/ai/CURRENT_STATE.md"), "utf8");
+  assert.match(currentState, /non-empty\s+map keyed by canonical athlete ids[^.]*relaxed by the owner/);
+});
