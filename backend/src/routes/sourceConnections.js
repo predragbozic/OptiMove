@@ -105,7 +105,7 @@ function attemptRoute(action) {
       result = await service[action]({ ctx, sourceSystem: req.params.source, id: req.params.id, body });
     } catch (error) {
       if (error instanceof service.SourceConnectionError && error.code === "outcome_unknown" && error.details?.connectionId) {
-        await service.recordUnknownOutcome({ connectionId: error.details.connectionId, action: action === "testConnection" ? "test" : action, ctx });
+        await service.recordUnknownOutcome({ connectionId: error.details.connectionId, action: action === "testConnection" ? "test" : action, ctx, attemptId: error.details.attemptId ?? null });
       }
       throw error;
     } finally {

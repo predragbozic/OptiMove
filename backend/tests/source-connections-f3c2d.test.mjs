@@ -397,7 +397,9 @@ test("4. connect: one form-encoded POST to exactly the confirmed exchange endpoi
   assert.equal(row.last_error_code, null);
   const audit = await auditOf(conn.id);
   assert.deepEqual(audit.map((a) => [a.action, a.outcome, a.error_code]), [["create", "ok", null], ["connect", "ok", null]]);
-  assert.deepEqual(audit[1].metadata, { host_key: "server3", credential_kind: "exchanged_token", status_class: "2xx", attempt_no: 1, bound_team_count: 0, source_team_count: 8, counted: true });
+  const { attempt_id: attemptId, ...facts } = audit[1].metadata;
+  assert.match(attemptId, /^[0-9a-f-]{36}$/, "every audit row names its logical attempt");
+  assert.deepEqual(facts, { host_key: "server3", credential_kind: "exchanged_token", status_class: "2xx", attempt_no: 1, bound_team_count: 0, source_team_count: 8, counted: true });
   assert.equal(audit[1].performed_by_user_id, pa.id);
   noSecret(await dbTextOf(conn.id), "the database rows");
   // A second connect on a connected row is refused and audited, not counted.
@@ -972,8 +974,8 @@ test("18. bounded waits: a second attempt of the same user waits for the first o
   try {
     const src2 = useSource();
     const r = await api(`/gpexe/connections/${a.id}/test`, { method: "POST", cookie: pa.cookie, body: {} });
-    assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.equal(r.body.result.code, "source_unavailable");
+    assert.equal(r.status, 503, JSON.stringify(r.body));
+    assert.equal(r.body.error, "network_budget_exhausted", "nothing sent = a local refusal, not a source outcome");
     assert.equal(readCalls(src2.calls).length, 0, "nothing was sent past the budget");
   } finally {
     service.setSourceConnectionTimingForTests({ exchangeTimeout: 400, testTimeout: 400 });
@@ -1096,6 +1098,141 @@ test("22. the per-user lock wait is bounded by its own lock timeout, not cut sho
     assert.ok(waited >= 1_200 && waited < 6_000, `waited the user-lock bound, not the statement timeout (${waited} ms)`);
     g.release();
     assert.equal((await first).status, 200);
+  } finally {
+    service.setSourceConnectionTimingForTests({ exchangeTimeout: 400, testTimeout: 400 });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 23–26. Owner's external review of cb862cd (2026-10-03): throttle correctness
+// and the lifetime of the plaintext pair.
+// ---------------------------------------------------------------------------
+test("23. a Test whose network budget is already spent sends nothing: 503 network_budget_exhausted, the state unchanged, audited counted:false; six of them in a row never answer 429, and the next real attempt still reaches the source", async () => {
+  const { club } = await org();
+  const pa = await platformAdmin();
+  const conn = await created(pa, club);
+  useSource();
+  assert.equal((await api(`/gpexe/connections/${conn.id}/connect`, { method: "POST", cookie: pa.cookie, body: { username: USERNAME, password: PASSWORD } })).body.result.state, "verified");
+  const before = await rowOf(conn.id);
+  service.setSourceConnectionTimingForTests({ exchangeTimeout: 400, testTimeout: 400, networkBudget: 0 });
+  try {
+    const src = useSource();
+    for (let i = 1; i <= 6; i += 1) {
+      const r = await api(`/gpexe/connections/${conn.id}/test`, { method: "POST", cookie: pa.cookie, body: {} });
+      assert.equal(r.status, 503, `attempt ${i}: ${JSON.stringify(r.body)}`);
+      assert.equal(r.body.error, "network_budget_exhausted", `attempt ${i}`);
+    }
+    assert.equal(src.calls.length, 0, "nothing was sent in six attempts");
+    const after = await rowOf(conn.id);
+    assert.equal(after.state, "verified");
+    assert.ok(after.credential_ciphertext.equals(before.credential_ciphertext));
+    assert.equal(String(after.updated_at), String(before.updated_at), "the row was not touched");
+    const rows = (await auditOf(conn.id)).filter((a) => a.error_code === "network_budget_exhausted");
+    assert.equal(rows.length, 6);
+    assert.ok(rows.every((a) => a.outcome === "refused" && a.metadata.counted === false && typeof a.metadata.attempt_id === "string"));
+  } finally {
+    service.setSourceConnectionTimingForTests({ exchangeTimeout: 400, testTimeout: 400 });
+  }
+  const src2 = useSource();
+  const ok = await api(`/gpexe/connections/${conn.id}/test`, { method: "POST", cookie: pa.cookie, body: {} });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(src2.calls.length, 1, "a real test still reaches the source: the six refusals did not count");
+  assert.equal((await auditOf(conn.id)).at(-1).metadata.attempt_no, 2, "the connect and this test are the only counted attempts");
+});
+
+test("24. an attempt whose COMMIT answer was lost leaves two audit rows (the committed one and the unknown one) with one attempt id, and the throttle counts it exactly once: four more real attempts pass and the sixth is 429", async () => {
+  const { club } = await org();
+  const pa = await platformAdmin();
+  const conn = await created(pa, club);
+  useSource();
+  service.setSourceConnectionCommitForTests({
+    fault: async (client) => { await client.query("commit"); await new Promise(() => {}); }, timeoutMs: 200,
+    checkFault: async () => { await new Promise(() => {}); }, checkTimeoutMs: 200,
+  });
+  try {
+    const r = await api(`/gpexe/connections/${conn.id}/connect`, { method: "POST", cookie: pa.cookie, body: { username: USERNAME, password: PASSWORD } });
+    assert.equal(r.body.error, "outcome_unknown", JSON.stringify(r.body));
+  } finally {
+    service.setSourceConnectionCommitForTests();
+  }
+  const rows = (await auditOf(conn.id)).filter((a) => a.action === "connect");
+  assert.deepEqual(rows.map((a) => a.outcome), ["ok", "unknown"], "two rows for one attempt");
+  assert.ok(rows[0].metadata.attempt_id && rows[0].metadata.attempt_id === rows[1].metadata.attempt_id, "one attempt id on both rows");
+  // Counted once: four refused reconnects are still allowed (2..5), the next is the sixth.
+  const src = useSource({ exchange: "401" });
+  const reconnect = () => api(`/gpexe/connections/${conn.id}/reconnect`, { method: "POST", cookie: pa.cookie, body: { username: USERNAME, password: PASSWORD, confirmation: { sourceSystem: "gpexe", ownerClubId: club, affectedTeamCount: 0 } } });
+  for (let i = 2; i <= 5; i += 1) {
+    const r = await reconnect();
+    assert.equal(r.body.error, "source_auth_rejected", `attempt ${i} is still allowed: ${JSON.stringify(r.body)}`);
+    assert.equal((await auditOf(conn.id)).at(-1).metadata.attempt_no, i);
+  }
+  const sixth = await reconnect();
+  assert.equal(sixth.status, 429, JSON.stringify(sixth.body));
+  assert.equal(exchangeCalls(src.calls).length, 4, "exactly four exchanges reached the source after the unknown one");
+});
+
+test("25. the compensating audit of an attempt that reached the source and failed is visible to the throttle before the next attempt of the same user runs: with four counted attempts, a fifth that fails after the exchange (its audit delayed) makes a concurrent sixth answer 429 with zero requests", async () => {
+  const { club } = await org();
+  const pa = await platformAdmin();
+  const a = await created(pa, club);
+  const b = await created(pa, club);
+  let src = useSource({ exchange: "401" });
+  for (let i = 0; i < 4; i += 1) assert.equal((await api(`/gpexe/connections/${a.id}/connect`, { method: "POST", cookie: pa.cookie, body: { username: USERNAME, password: PASSWORD } })).body.error, "source_auth_rejected");
+  service.setSourceConnectionTimingForTests({ exchangeTimeout: 10_000, testTimeout: 10_000 });
+  service.setSourceConnectionWriteFaultForTests(async () => { throw Object.assign(new Error("simulated write failure"), { code: "XX000" }); });
+  service.setSourceConnectionCompensationDelayForTests(1_500);
+  try {
+    const g = gate();
+    src = useSource({ exchangeGate: g });
+    const fifth = api(`/gpexe/connections/${a.id}/connect`, { method: "POST", cookie: pa.cookie, body: { username: USERNAME, password: PASSWORD } });
+    for (let i = 0; i < 50 && src.calls.length === 0; i += 1) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(src.calls.length, 1, "the fifth attempt is at the source");
+    const sixth = api(`/gpexe/connections/${b.id}/connect`, { method: "POST", cookie: pa.cookie, body: { username: USERNAME, password: PASSWORD } });
+    await new Promise((r) => setTimeout(r, 200));
+    g.release();
+    const [r5, r6] = await Promise.all([fifth, sixth]);
+    assert.equal(r5.body.error, "attempt_not_recorded", JSON.stringify(r5.body));
+    assert.equal(r6.status, 429, JSON.stringify(r6.body));
+    assert.equal(r6.body.error, "source_auth_throttled");
+    assert.equal(exchangeCalls(src.calls).length, 1, "the sixth attempt never reached the source (the fifth's exchange is the only one)");
+    assert.ok(src.calls.every((c) => c.url === EXCHANGE_URL || c.url.startsWith(BASE)), "and the fifth's own test read is the only other request");
+    const compensating = (await auditOf(a.id)).at(-1);
+    assert.deepEqual([compensating.outcome, compensating.error_code, compensating.metadata.counted], ["unknown", "attempt_not_recorded", true]);
+  } finally {
+    service.setSourceConnectionCompensationDelayForTests(0);
+    service.setSourceConnectionWriteFaultForTests(null);
+    service.setSourceConnectionTimingForTests({ exchangeTimeout: 400, testTimeout: 400 });
+  }
+});
+
+test("26. the plaintext pair leaves the request body object as soon as it is read: while the source call is held, the body the route handed over carries neither username nor password; the pair itself is dropped after the exchange in every outcome", async () => {
+  const { club } = await org();
+  const pa = await platformAdmin();
+  const conn = await created(pa, club);
+  const ctx = { userId: pa.id, basis: "platform_admin", workspace: { type: "platform", scopeId: null } };
+  service.setSourceConnectionTimingForTests({ exchangeTimeout: 10_000, testTimeout: 10_000 });
+  try {
+    const g = gate();
+    const src = useSource({ exchangeGate: g });
+    const body = { username: USERNAME, password: PASSWORD };
+    const pending = service.connect({ ctx, sourceSystem: "gpexe", id: conn.id, body });
+    for (let i = 0; i < 50 && src.calls.length === 0; i += 1) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(src.calls.length, 1, "the exchange is held");
+    assert.deepEqual(Object.keys(body), [], "the body object holds no credential field while the source call is in flight");
+    assert.equal(body.username, undefined);
+    assert.equal(body.password, undefined);
+    g.release();
+    const result = await pending;
+    assert.equal(result.state, "verified");
+    // A reconnect body keeps its confirmation copy out of the object as well; a refused exchange drops the pair too.
+    const body2 = { username: USERNAME, password: PASSWORD, confirmation: { sourceSystem: "gpexe", ownerClubId: club, affectedTeamCount: 0 } };
+    const g2 = gate();
+    const src2 = useSource({ exchange: "401", exchangeGate: g2 });
+    const pending2 = service.reconnect({ ctx, sourceSystem: "gpexe", id: conn.id, body: body2 });
+    for (let i = 0; i < 50 && src2.calls.length === 0; i += 1) await new Promise((r) => setTimeout(r, 50));
+    assert.ok(!("username" in body2) && !("password" in body2), "the reconnect body lost its credential fields");
+    g2.release();
+    await assert.rejects(pending2, (e) => e.code === "source_auth_rejected");
   } finally {
     service.setSourceConnectionTimingForTests({ exchangeTimeout: 400, testTimeout: 400 });
   }

@@ -47,11 +47,13 @@ not take is `400 invalid_body` and is not an attempt.
    with zero requests when the key was retired meanwhile;
 5. every bound team's import lock, try-lock style (`hold_gpexe_team_lock`) → `409
    try_again` (names the team) when a check, import or connection change runs;
-6. the throttle: attempts that **reached the source** in the last 15 minutes, per
-   connection and per user, counted from the append-only audit; 5 or more → `429
-   source_auth_throttled` (`Retry-After: 900`). Refusals that never reached the source
-   (throttled, `host_not_allowed`, `try_again`, `key_missing`, state and confirmation
-   refusals) are audited with `counted: false` and never extend the window;
+6. the throttle: logical attempts that **really sent a request to the source** in the last 15
+   minutes, per connection and per user, counted from the append-only audit as distinct
+   `attempt_id`s (an attempt's committed row and a later `unknown` row count once); 5 or more
+   → `429 source_auth_throttled` (`Retry-After: 900`). Refusals that never reached the source
+   (throttled, `host_not_allowed`, `try_again`, `key_missing`, `network_budget_exhausted`,
+   `attempt_not_sent`, state
+   and confirmation refusals) are audited with `counted: false` and never extend the window;
 7. the key ring (`SOURCE_CREDENTIAL_KEYS`) → `503 key_missing` with zero requests;
 8. the network: the exchange (connect / reconnect) and the test reads; then the row, the
    audit row and the COMMIT.
@@ -67,7 +69,7 @@ not take is `400 invalid_body` and is not an attempt.
 | test read 401 (or 403 on the team list count) | `source_auth_rejected` | credential stored, `needs_reconnect` | `needs_reconnect`, ciphertext kept |
 | test read 5xx / timeout | `source_unavailable` | credential stored, `linked_untested` with facts | `source_unavailable` |
 | bound team 403 / 404 (the account cannot read that team) | `source_team_not_visible` | credential stored, `linked_untested` | `source_unavailable` with that code |
-| the source reached, then the row could not be written (database failure, a right revoked meanwhile) | `attempt_not_recorded` (`500`) / `rights_changed` (`409`) | nothing stored; audited `unknown` / `failed` on a fresh connection, **counted** (that row lands after the user's lock was released, so a further attempt of that user may start before it counts); a `try_again` at that point also discards the issued token, so the pair has to be entered again | same |
+| the source reached, then the row could not be written (database failure, a right revoked meanwhile) | `attempt_not_recorded` (`500`) / `rights_changed` (`409`) | nothing stored; audited `unknown` / `failed` **in the attempt's own transaction** (back to the savepoint taken after the locks, then the bounded COMMIT), so the user's next attempt, waiting on the per-user lock, already counts it; **counted**; a `try_again` at that point also discards the issued token, so the pair has to be entered again | same |
 | other shape | `source_answer_unexpected` | credential stored, `linked_untested` | `source_unavailable` |
 
 The answer of a successful attempt is `{ result: { outcome, state, code, boundTeamsChecked,

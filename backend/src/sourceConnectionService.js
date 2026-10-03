@@ -24,6 +24,7 @@
 //   6. the key ring; only then the network.
 // Nothing waits on a team lock while holding the connection row (the lock
 // is a try-lock), so the binding trigger's reverse order cannot deadlock.
+import crypto from "node:crypto";
 import { pool } from "./db.js";
 import { isPlatformAdministrator } from "./authz.js";
 import { resolveActiveWorkspace } from "./workspace.js";
@@ -76,7 +77,7 @@ export const SUPPORTED_CREDENTIAL_KIND = "exchanged_token";
 const UNBOUND_LIST_PLACEHOLDER_TEAM = "0";
 // The only metadata keys an audit row may carry (condition 5). The v27
 // trigger refuses a secret-named key whatever the value; these are facts.
-const AUDIT_METADATA_KEYS = new Set(["host_key", "credential_kind", "status_class", "attempt_no", "bound_team_count", "source_team_count", "counted"]);
+const AUDIT_METADATA_KEYS = new Set(["host_key", "credential_kind", "status_class", "attempt_no", "bound_team_count", "source_team_count", "counted", "attempt_id"]);
 
 // ---------------------------------------------------------------------------
 // Test seams (never set by the application).
@@ -115,6 +116,11 @@ function guardClient(client) {
 // A fault injected right before the row is written (after the source was
 // reached): tests prove that such an attempt is still recorded and counted.
 export function setSourceConnectionWriteFaultForTests(fn) { writeFault = fn ?? null; }
+// A delay injected before the compensating audit row of an attempt that
+// reached the source and did not commit: tests prove that the row is still
+// visible to the throttle before the next attempt of the same user runs.
+let compensationDelayMs = 0;
+export function setSourceConnectionCompensationDelayForTests(ms) { compensationDelayMs = ms ?? 0; }
 // A fault injected into the read a route makes AFTER a confirmed COMMIT:
 // tests prove that such a read never turns a committed attempt into a 500.
 let postCommitReadFault = null;
@@ -308,18 +314,35 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
   if (action === "test") {
     plainBody(body ?? {}, []);
   } else {
+    // The pair is copied out and the original body object loses its
+    // credential fields at once; only `pair` carries them, until the
+    // exchange, and it is dropped in every outcome (finally below).
     pair = readCredentialPair(plainBody(body, action === "reconnect" ? ["username", "password", "confirmation"] : ["username", "password"]));
     if (action === "reconnect") confirmation = readConfirmation(body);
+    scrubCredentialFields(body);
   }
+  // One logical attempt: every audit row it writes carries this id, and the
+  // throttle counts distinct ids, so a committed row plus a later "unknown"
+  // row of the same attempt count once.
+  const attemptId = crypto.randomUUID();
+  // Requests really sent to the source by this attempt, counted at the fetch
+  // invocation itself (the exchange and every adapter read go through
+  // trackedFetch); "reached the source" is true only once one was invoked.
+  let sent = 0;
 
   const client = await pool.connect();
   const release = guardClient(client);
   let released = false;
   // Everything the audit of a refusal needs, once the row is known.
   let known = null;
-  // Set right before the first request to the source: an attempt that
-  // reached the source is recorded and counted whatever happens afterwards.
+  // True once a request to the source was really invoked: such an attempt
+  // is recorded and counted whatever happens afterwards.
   let reachedSource = false;
+  const trackedFetch = (...args) => {
+    sent += 1;
+    reachedSource = true;
+    return sourceFetch()(...args);
+  };
   // Set when this attempt's own audit row was inserted in the transaction.
   let recorded = false;
   try {
@@ -408,8 +431,10 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
         and performed_at > coalesce($2::timestamptz, now()) - make_interval(mins => $3)
         and (outcome in ('ok', 'failed', 'unknown') or (outcome = 'refused' and error_code = 'source_auth_rejected'))`;
     const counts = {
-      per_connection: (await client.query(`select count(*)::int as n from training_load.source_connection_audit where connection_id = $1 and ${COUNTED}`, [row.id, testClock(), THROTTLE_WINDOW_MINUTES])).rows[0].n,
-      per_user: (await client.query(`select count(*)::int as n from training_load.source_connection_audit where performed_by_user_id = $1 and ${COUNTED}`, [ctx.userId, testClock(), THROTTLE_WINDOW_MINUTES])).rows[0].n,
+      // One logical attempt counts once, however many rows it left (its
+      // committed row and a later "unknown" row share the attempt id).
+      per_connection: (await client.query(`select count(distinct coalesce(metadata->>'attempt_id', id::text))::int as n from training_load.source_connection_audit where connection_id = $1 and ${COUNTED}`, [row.id, testClock(), THROTTLE_WINDOW_MINUTES])).rows[0].n,
+      per_user: (await client.query(`select count(distinct coalesce(metadata->>'attempt_id', id::text))::int as n from training_load.source_connection_audit where performed_by_user_id = $1 and ${COUNTED}`, [ctx.userId, testClock(), THROTTLE_WINDOW_MINUTES])).rows[0].n,
     };
     const attemptNo = Math.max(counts.per_connection, counts.per_user) + 1;
     if (counts.per_connection >= THROTTLE_MAX_ATTEMPTS || counts.per_user >= THROTTLE_MAX_ATTEMPTS) {
@@ -429,7 +454,12 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
     let token = null;
     let exchangeStatusClass = "none";
     const networkDeadline = Date.now() + networkBudgetMs;
-    const baseMetadata = { host_key: row.host_key, credential_kind: row.credential_kind, attempt_no: attemptNo, bound_team_count: bindings.length };
+    // Everything up to here is locks, counts and checks; the savepoint lets a
+    // failure after the source call be recorded in THIS transaction, with
+    // every lock still held, instead of on a second connection.
+    await client.query("savepoint attempt_locked");
+
+    const baseMetadata = { host_key: row.host_key, credential_kind: row.credential_kind, attempt_no: attemptNo, bound_team_count: bindings.length, attempt_id: attemptId };
     if (action === "test") {
       try {
         token = decryptCredential({ ciphertext: row.credential_ciphertext, nonce: row.credential_nonce, authTag: row.credential_auth_tag, keyVersion: row.credential_key_version }, context, keyring);
@@ -444,8 +474,7 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
       } catch {
         throw refusal(409, "exchange_not_supported", "No credential exchange is confirmed on this host; nothing was sent to it.");
       }
-      reachedSource = true;
-      const result = await exchangeCredential({ exchangeSpec, username: pair.username, password: pair.password });
+      const result = await exchangeCredential({ exchangeSpec, username: pair.username, password: pair.password, fetchImpl: trackedFetch });
       pair = null;
       exchangeStatusClass = result.statusClass;
       if (!result.ok) {
@@ -456,7 +485,7 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
         const auditId = await insertAudit(client, { connectionId: row.id, action, outcome, errorCode: result.code, userId: ctx.userId, basis: ctx.basis, metadata: { ...baseMetadata, status_class: result.statusClass, counted: true } });
         recorded = true;
         released = true;
-        await commitAttempt(client, release, auditId, row.id);
+        await commitAttempt(client, release, auditId, row.id, attemptId);
         throw refusal(result.code === "source_auth_rejected" ? 409 : 502, result.code, EXCHANGE_MESSAGES[result.code]);
       }
       token = result.token;
@@ -464,7 +493,14 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
 
     // The test reads (one adapter per bound team; the list count when none),
     // within what is left of the attempt's network budget.
-    const read = await testReads({ row, catalog, token, bindings, deadline: networkDeadline, onFirstRequest: () => { reachedSource = true; } });
+    const read = await testReads({ row, catalog, token, bindings, deadline: networkDeadline, fetchImpl: trackedFetch });
+    // Nothing was sent at all (the network budget was already spent): not an
+    // attempt the source saw — a local refusal, the state unchanged.
+    if (!read.ok && sent === 0) {
+      // Whatever stopped the reads, no request was invoked: not an attempt the
+      // source saw, nothing counted, nothing changed.
+      throw refusal(503, read.code === "network_budget_exhausted" ? "network_budget_exhausted" : "attempt_not_sent", "The attempt could not send anything to the source; nothing was changed.");
+    }
     const metadata = { ...baseMetadata, status_class: read.ok ? "2xx" : read.statusClass, counted: true, ...(read.sourceTeamCount === null ? {} : { source_team_count: read.sourceTeamCount }) };
 
     // 9. Before anything is stored: the caller's right and the owner must
@@ -506,13 +542,62 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
     const auditId = await insertAudit(client, { connectionId: row.id, action, outcome, errorCode, userId: ctx.userId, basis: ctx.basis, metadata });
     recorded = true;
     released = true;
-    const confirmation2 = await commitAttempt(client, release, auditId, row.id);
+    const confirmation2 = await commitAttempt(client, release, auditId, row.id, attemptId);
     return {
       connectionId: row.id, action, outcome, state, code: errorCode, lastVerifiedAt: state === "verified" ? written.last_verified_at : null,
       boundTeamsChecked: read.boundTeamsChecked, sourceTeamCount: read.sourceTeamCount, exchangeStatusClass,
       ...(confirmation2 ? { commitConfirmation: confirmation2 } : {}),
     };
   } catch (error) {
+    // A lock wait that ran out on any statement of the attempt (the catalog
+    // row, a club row) is the same stable answer as a busy connection row.
+    if (error?.code === "55P03") error = refusal(409, "try_again", "Another change of this connection, its host or its club is running. Try again when it has finished.", { connectionId: id });
+    // Recorded already: the attempt's own row was inserted in the transaction
+    // (then committed, or its commit is outcome_unknown and handled there).
+    const alreadyRecorded = recorded || (error instanceof SourceConnectionError && error.code === "outcome_unknown");
+    const compensate = reachedSource && !alreadyRecorded && known;
+    if (compensate) {
+      // The source was reached, and the attempt did not commit (a database
+      // error, a refused right, a write fault): it is recorded and counted
+      // on a fresh connection as a failed attempt BEFORE this transaction is
+      // rolled back — the per-user lock is still held here, so the next
+      // attempt of this user, waiting on that lock, already sees the row
+      // when it counts. (Only when the server itself ended this session is
+      // the lock already gone; that residual is documented.) The audit row's
+      // foreign key needs KEY SHARE only, which this row lock allows.
+      if (compensationDelayMs > 0) await new Promise((r) => setTimeout(r, compensationDelayMs));
+      const code = error instanceof SourceConnectionError ? error.code : "attempt_not_recorded";
+      const outcome = error instanceof SourceConnectionError ? "failed" : "unknown";
+      const metadata = { host_key: known.hostKey, credential_kind: known.credentialKind, counted: true, attempt_id: attemptId };
+      // First choice: this very transaction. Back to the savepoint taken
+      // after the locks (an aborted statement is undone, the locks stay),
+      // insert the row, commit with the bounded COMMIT discipline. No second
+      // pool connection is needed while this one is held.
+      let compensated = false;
+      if (!released) {
+        try {
+          await withinBound(client.query("rollback to savepoint attempt_locked"), 5_000);
+          const auditId = await withinBound(insertAudit(client, { connectionId: known.connectionId, action, outcome, errorCode: code, userId: ctx.userId, basis: ctx.basis, metadata }), 5_000);
+          released = true;
+          try {
+            await commitAttempt(client, release, auditId, known.connectionId, attemptId);
+            compensated = true;
+          } catch {
+            // outcome_unknown of the compensation itself: the row may exist;
+            // the fallback below may add a second row of the same attempt,
+            // which the throttle counts once.
+          }
+        } catch {
+          // This session is unusable (ended by the server, or the savepoint
+          // itself failed): fall back below.
+        }
+      }
+      if (!compensated) {
+        // Fallback: a fresh connection, bounded. (Only when the session died
+        // is the user lock already gone; that residual is documented.)
+        await withinBound(auditRefusal({ connectionId: known.connectionId, action, errorCode: code, ctx, outcome, metadata }), 5_000).catch(() => {});
+      }
+    }
     if (!released) {
       // The rollback may itself fail on a dead session; the client is then
       // destroyed instead of returned.
@@ -521,21 +606,7 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
       released = true;
       release(dead);
     }
-    // A lock wait that ran out on any statement of the attempt (the catalog
-    // row, a club row) is the same stable answer as a busy connection row.
-    if (error?.code === "55P03") error = refusal(409, "try_again", "Another change of this connection, its host or its club is running. Try again when it has finished.", { connectionId: id });
-    // Recorded already: the attempt's own row was inserted in the transaction
-    // (then committed, or its commit is outcome_unknown and handled there).
-    const alreadyRecorded = recorded || (error instanceof SourceConnectionError && error.code === "outcome_unknown");
-    if (reachedSource && !alreadyRecorded && known) {
-      // The source was reached, and the attempt did not commit (a database
-      // error, a refused right, a write fault): it is still recorded and
-      // counted, on a fresh connection, as a failed attempt (the throttle
-      // counts `failed`), and the answer never says that nothing happened at
-      // the source. (The rollback above already released this user's lock,
-      // so one more attempt may start before this row lands — at most one.)
-      const code = error instanceof SourceConnectionError ? error.code : "attempt_not_recorded";
-      await auditRefusal({ connectionId: known.connectionId, action, errorCode: code, ctx, outcome: error instanceof SourceConnectionError ? "failed" : "unknown", metadata: { host_key: known.hostKey, credential_kind: known.credentialKind, counted: true } });
+    if (compensate) {
       if (error instanceof SourceConnectionError) throw error;
       console.error(`[source-connections] ${action} reached the source but its result could not be recorded: ${error?.code ?? ""}`.slice(0, 300));
       throw refusal(500, "attempt_not_recorded", "The source was reached, but the result could not be stored. Nothing of this connection changed; read its state before trying again.", { connectionId: known.connectionId });
@@ -544,13 +615,25 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
       // A refusal that never reached the source is audited on its own, in
       // its own short transaction, and is never counted by the throttle.
       if (known && !alreadyRecorded && error.code !== "attempt_not_recorded") {
-        await auditRefusal({ connectionId: known.connectionId, action, errorCode: error.code, ctx, metadata: { host_key: known.hostKey, credential_kind: known.credentialKind, counted: false } });
+        await auditRefusal({ connectionId: known.connectionId, action, errorCode: error.code, ctx, metadata: { host_key: known.hostKey, credential_kind: known.credentialKind, counted: false, attempt_id: attemptId } });
       }
       throw error;
     }
     throw internal(action, error);
   } finally {
+    pair = null;
     if (!released) release();
+  }
+}
+
+// The original body object loses its credential fields as soon as they were
+// copied out (JavaScript strings cannot be overwritten; what is guaranteed is
+// that no reference to them survives in the body the route handed over).
+function scrubCredentialFields(body) {
+  if (body && typeof body === "object") {
+    for (const key of ["username", "password"]) {
+      try { body[key] = undefined; delete body[key]; } catch { /* nothing kept */ }
+    }
   }
 }
 
@@ -578,13 +661,13 @@ function internal(action, error) {
 // host's confirmed encoding; redirects refused; the answer bounded; only the
 // token field read. Statuses become stable codes; the body never leaves.
 // ---------------------------------------------------------------------------
-async function exchangeCredential({ exchangeSpec, username, password }) {
+async function exchangeCredential({ exchangeSpec, username, password, fetchImpl = sourceFetch() }) {
   const body = exchangeSpec.encoding === "json"
     ? JSON.stringify({ username, password })
     : new URLSearchParams({ username, password }).toString();
   let res;
   try {
-    res = await sourceFetch()(exchangeSpec.url, {
+    res = await fetchImpl(exchangeSpec.url, {
       method: "POST",
       redirect: "manual",
       headers: { "Content-Type": exchangeSpec.encoding === "json" ? "application/json" : "application/x-www-form-urlencoded", Accept: "application/json" },
@@ -650,27 +733,26 @@ async function readBounded(res, limit) {
 // adapter per bound source team, each limited to that team); with no binding
 // yet, the team list count — nothing is chosen or bound from that list.
 // ---------------------------------------------------------------------------
-async function testReads({ row, catalog, token, bindings, deadline, onFirstRequest = () => {} }) {
+async function testReads({ row, catalog, token, bindings, deadline, fetchImpl }) {
   const active = bindings.filter((b) => b.team_active !== false);
   // Each read gets at most the test timeout, and never more than what is
   // left of the attempt's whole network budget; past the budget the rest
-  // is not read and the test fails as source_unavailable.
+  // is not read (network_budget_exhausted: the caller tells a spent budget
+  // before any request from one after some).
   const options = () => {
     const left = deadline - Date.now();
-    if (left < 1) throw new SourceAdapterErrorLike("source_unavailable", "network budget exhausted");
-    return { sourceSystem: row.source_system, hostKey: row.host_key, catalogRow: catalog, credential: token, fetchImpl: sourceFetch(), timeoutMs: Math.max(1, Math.min(testTimeoutMs, left)), attempts: 1 };
+    if (left < 1) throw new SourceAdapterErrorLike("network_budget_exhausted", "network budget exhausted");
+    return { sourceSystem: row.source_system, hostKey: row.host_key, catalogRow: catalog, credential: token, fetchImpl, timeoutMs: Math.max(1, Math.min(testTimeoutMs, left)), attempts: 1 };
   };
   try {
     if (active.length === 0) {
       const adapter = createSourceAdapter({ ...options(), boundSourceTeamId: UNBOUND_LIST_PLACEHOLDER_TEAM });
-      onFirstRequest();
       const list = await adapter.countVisibleTeams();
       return { ok: true, code: null, statusClass: "2xx", sourceTeamCount: list.teamCount, boundTeamsChecked: 0 };
     }
     let checked = 0;
     for (const b of active) {
       const adapter = createSourceAdapter({ ...options(), boundSourceTeamId: b.source_team_id });
-      onFirstRequest();
       await adapter.verifyBoundTeam();
       checked += 1;
     }
@@ -682,6 +764,7 @@ async function testReads({ row, catalog, token, bindings, deadline, onFirstReque
     if (code === "source_auth_rejected" || code === "source_access_refused") return { ok: false, code: "source_auth_rejected", statusClass, sourceTeamCount: null, boundTeamsChecked: 0 };
     if (code === "source_team_not_visible") return { ok: false, code, statusClass, sourceTeamCount: null, boundTeamsChecked: 0 };
     if (code === "source_unavailable") return { ok: false, code, statusClass, sourceTeamCount: null, boundTeamsChecked: 0 };
+    if (code === "network_budget_exhausted") return { ok: false, code, statusClass: "none", sourceTeamCount: null, boundTeamsChecked: 0 };
     if (code === "host_not_allowed" || code === "path_not_allowed" || code === "adapter_not_available") throw refusal(409, "host_not_allowed", "The host of this connection is not approved; nothing was sent to it.");
     // source_answer_unexpected, source_team_mismatch, an unknown adapter code
     return { ok: false, code: "source_answer_unexpected", statusClass, sourceTeamCount: null, boundTeamsChecked: 0 };
@@ -737,7 +820,7 @@ async function auditRefusal({ connectionId, action, errorCode, ctx, metadata, ou
 // more audit row "unknown" by the same user and basis when that can be
 // written; the client re-reads state instead of resending.
 // ---------------------------------------------------------------------------
-async function commitAttempt(client, release, auditId, connectionId) {
+async function commitAttempt(client, release, auditId, connectionId, attemptId = null) {
   let commitError = null;
   try {
     const commit = commitFault ? commitFault(client) : client.query("commit");
@@ -757,7 +840,7 @@ async function commitAttempt(client, release, auditId, connectionId) {
     console.error(`[source-connections] checking the attempt after an unconfirmed COMMIT failed: ${error?.message ?? ""}`.slice(0, 300));
   }
   if (found) return "verified_after_commit_error";
-  throw refusal(503, "outcome_unknown", "The database did not confirm this attempt, and it could not be verified yet. Read the connection's state before doing anything else; do not resend the credentials blindly.", { connectionId, auditId });
+  throw refusal(503, "outcome_unknown", "The database did not confirm this attempt, and it could not be verified yet. Read the connection's state before doing anything else; do not resend the credentials blindly.", { connectionId, auditId, attemptId });
 }
 
 async function auditRowIsCommitted(auditId, ms) {
@@ -793,12 +876,12 @@ async function auditRowIsCommitted(auditId, ms) {
 // The second audit row of an unresolved outcome, written by the handler
 // after outcome_unknown (best effort, a fresh connection, never a system
 // basis — the v27 actor CHECK).
-export async function recordUnknownOutcome({ connectionId, action, ctx }) {
+export async function recordUnknownOutcome({ connectionId, action, ctx, attemptId = null }) {
   try {
     await pool.query(
       `insert into training_load.source_connection_audit (connection_id, action, outcome, error_code, performed_by_user_id, basis, metadata)
-       values ($1, $2, 'unknown', 'outcome_unknown', $3, $4, '{}'::jsonb)`,
-      [connectionId, action, ctx.userId, ctx.basis],
+       values ($1, $2, 'unknown', 'outcome_unknown', $3, $4, $5::jsonb)`,
+      [connectionId, action, ctx.userId, ctx.basis, JSON.stringify(auditMetadata(attemptId ? { attempt_id: attemptId } : {}))],
     );
     return true;
   } catch {

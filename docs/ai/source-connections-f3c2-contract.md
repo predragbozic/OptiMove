@@ -667,7 +667,8 @@ Where this narrows or settles the table above:
 - **Credential kind:** `exchanged_token` only (`credential_kind_unsupported` otherwise): Connect
   and Reconnect take `{ username, password }` for that one HTTPS request, exchange them once on the
   host's confirmed exchange (`sourceExchange()`: `server3`, form-encoded, token field `token`) and
-  drop them; only the AES-256-GCM parts of the token are stored (F3c1 crypto, the row's own
+  drop them — the pair is copied out of the request body at validation, the body object loses the
+  two fields at once, only that copy lives until the exchange, and it is dropped in every outcome; only the AES-256-GCM parts of the token are stored (F3c1 crypto, the row's own
   context as AAD). The username, the password and the token are never returned, logged, audited
   as values or named in an error.
 - **Host:** at create and before every network call the key must be approved in the catalog
@@ -694,14 +695,22 @@ Where this narrows or settles the table above:
   the append-only audit; 5 or more → `429 source_auth_throttled`, `Retry-After: 900`. Every other
   refusal is audited with `counted: false` and never counted, so a retry after 429 cannot extend
   the lockout; a Test does not reset the count. The window and every fact timestamp come from the
-  database's own clock (`now()` in SQL; a test may substitute one). An attempt that reached the
+  database's own clock (`now()` in SQL; a test may substitute one). **What is counted is one
+  logical attempt that really invoked a request to the source:** every audit row of an attempt
+  carries its `attempt_id` and the throttle counts distinct ids, so an attempt's committed row and
+  a later `unknown` row of the same attempt count once; "reached the source" becomes true at the
+  fetch invocation itself (the exchange and every adapter read go through one tracked fetch), so a
+  Test whose network budget was already spent sends nothing and is a local refusal
+  (`network_budget_exhausted`, `counted: false`, the state unchanged); any other read failure with
+  zero requests sent is the local refusal `attempt_not_sent` (503), also uncounted. An attempt that reached the
   source and then could not be stored (a database failure, a right revoked or a club archived
-  meanwhile) is still audited on a fresh connection as `unknown` (`attempt_not_recorded`) or
-  `failed` (`rights_changed`) with `counted: true` — both outcomes the throttle counts — and the
-  answer never says the source was not reached; that row lands on a fresh pool connection after
-  the user's lock was released, so a further attempt of that user may start before it counts (the
-  lock is not held across that insert; an attempt that reaches the source holds it through the
-  source call). Every
+  meanwhile) is audited as `unknown` (`attempt_not_recorded`) or `failed` (`rights_changed`) with
+  `counted: true` **in the attempt's own transaction** — back to a savepoint taken after the locks,
+  the row inserted, the bounded COMMIT — so every lock, the per-user lock included, is held until
+  that row is committed and the next attempt of that user, waiting on that lock, already sees it;
+  a fresh, bounded connection is the fallback only when that session is unusable (then the user
+  lock is already gone — the documented residual).
+  The answer never says the source was not reached. Every
   checked-out database client carries an error listener while it is out of the pool, so a
   session ended by the server during the source call (idle timeout, pooler reset) fails the next
   statement instead of crashing the process.
