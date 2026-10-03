@@ -297,7 +297,7 @@ test("1. v29 applies on v28, enforces the two state/fact invariants, adds the pe
 // ---------------------------------------------------------------------------
 // 2. Route contract and info hiding
 // ---------------------------------------------------------------------------
-test("2. only a platform admin in the platform or the owning club's workspace sees or touches a connection; a club admin, a coach, another club's workspace, an archived club and a malformed id all get 404; a signed-out caller 401; a form body 415; an unknown field 400", async () => {
+test("2. a platform admin in the platform or the owning club's workspace, or the owning club's admin in that club's workspace, sees or touches a connection; another club's admin, a coach, another club's workspace, an archived club and a malformed id all get 404; a signed-out caller 401; a form body 415; an unknown field 400", async () => {
   const { club, team } = await org();
   const pa = await platformAdmin();
   const conn = await created(pa, club);
@@ -306,7 +306,8 @@ test("2. only a platform admin in the platform or the owning club's workspace se
   const other = await org();
   const paOtherClub = await platformAdmin(["club", other.club]);
   await q(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [paOtherClub.id, other.club]);
-  for (const [who, cookie] of [["club admin", ca.cookie], ["coach", co.cookie], ["platform admin acting in another club's workspace", paOtherClub.cookie]]) {
+  const otherCa = await clubAdmin(other.club);
+  for (const [who, cookie] of [["another club's admin", otherCa.cookie], ["coach", co.cookie], ["platform admin acting in another club's workspace", paOtherClub.cookie]]) {
     assert.equal((await api(`/gpexe/connections/${conn.id}`, { cookie })).status, 404, who);
     assert.equal((await api(`/gpexe/connections?clubId=${club}`, { cookie })).status, 404, who);
     assert.equal((await api(`/gpexe/connections/${conn.id}/test`, { method: "POST", cookie, body: {} })).status, 404, who);
@@ -321,6 +322,9 @@ test("2. only a platform admin in the platform or the owning club's workspace se
   assert.equal((await api(`/gpexe/connections/${conn.id}/connect`, { method: "POST", cookie: pa.cookie, body: { username: "a", password: "b", extra: 1 } })).body.error, "invalid_body");
   assert.equal((await api(`/gpexe/connections/${conn.id}/connect`, { method: "POST", cookie: pa.cookie, body: { username: "a" } })).body.error, "invalid_body");
   assert.equal((await api(`/gpexe/connections/${conn.id}/connect`, { method: "POST", cookie: pa.cookie, body: { username: "a", password: "b\nc" } })).body.error, "invalid_body");
+  // The owning club's admin, in that club's workspace, sees it (owner decision 2026-10-03).
+  assert.equal((await api(`/gpexe/connections/${conn.id}`, { cookie: ca.cookie })).status, 200, "the owning club's admin");
+  assert.equal((await api(`/gpexe/connections?clubId=${club}`, { cookie: ca.cookie })).status, 200);
   // A platform admin who is also this club's admin, acting in the club workspace, sees it; the platform workspace too.
   const paClub = await platformAdmin(["club", club]);
   await q(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [paClub.id, club]);
@@ -414,7 +418,7 @@ test("4. connect: one form-encoded POST to exactly the confirmed exchange endpoi
   assert.ok(!("credentialCiphertext" in read.body.connection) && !("token" in read.body.connection));
 });
 
-test("5. connect with bound teams: the account sees eight teams, but the test reads exactly the bound teams' own rows (team 980 and the other binding), never the list, never another team; no binding is created or changed by the route; an archived bound team is skipped", async () => {
+test("5. connect with bound teams: the list is read once (id and name, for the administrator's choice) and then exactly the bound teams' own rows (team 980 and the other binding), never another team; no binding is created or changed by the route; an archived bound team is skipped", async () => {
   const { club, team, team2 } = await org();
   const pa = await platformAdmin();
   const conn = await created(pa, club);
@@ -425,10 +429,10 @@ test("5. connect with bound teams: the account sees eight teams, but the test re
   const r = await api(`/gpexe/connections/${conn.id}/connect`, { method: "POST", cookie: pa.cookie, body: { username: USERNAME, password: PASSWORD } });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.result.boundTeamsChecked, 2);
-  assert.equal(r.body.result.sourceTeamCount, null);
+  assert.equal(r.body.result.sourceTeamCount, 8);
   const reads = readCalls(src.calls).map((c) => c.url.slice(BASE.length));
-  assert.deepEqual(reads.sort(), ["team/980/", "team/983/"]);
-  assert.ok(!src.calls.some((c) => c.url.includes("team/?")), "the list is never read when a binding exists");
+  assert.deepEqual(reads.sort(), ["team/", "team/980/", "team/983/"]);
+  assert.equal(reads.filter((p) => p === "team/").length, 1, "the list is read exactly once");
   assert.deepEqual(await q(`select id, team_id, source_team_id, state from training_load.source_team_bindings where connection_id = $1 order by team_id`, [conn.id]), bindingsBefore, "bindings untouched");
   assert.equal((await q(`select count(*)::int as n from training_load.source_team_bindings where connection_id = $1`, [conn.id]))[0].n, 2);
   assert.deepEqual(r.body.connection.boundTeams.map((b) => b.sourceTeamId).sort(), ["980", "983"]);
@@ -439,13 +443,13 @@ test("5. connect with bound teams: the account sees eight teams, but the test re
   assert.equal(t.body.result.outcome, "failed");
   assert.equal(t.body.result.code, "source_team_not_visible");
   assert.equal(t.body.connection.state, "source_unavailable");
-  assert.ok(readCalls(src2.calls).length <= 2);
+  assert.ok(readCalls(src2.calls).length <= 3);
   // Archive the second team: only team 980 is read.
   await q(`update public.teams set is_active = false where id = $1`, [team2]);
   const src3 = useSource();
   const t2 = await api(`/gpexe/connections/${conn.id}/test`, { method: "POST", cookie: pa.cookie, body: {} });
   assert.equal(t2.body.result.boundTeamsChecked, 1);
-  assert.deepEqual(readCalls(src3.calls).map((c) => c.url.slice(BASE.length)), ["team/980/"]);
+  assert.deepEqual(readCalls(src3.calls).map((c) => c.url.slice(BASE.length)), ["team/", "team/980/"]);
   assert.equal(t2.body.connection.state, "verified");
   // Moving a bound team to another club is refused by the database while the binding is active.
   const otherClub = (await q(`insert into public.clubs (name) values ('Other') returning id`))[0].id;
@@ -520,7 +524,7 @@ test("7. test uses the stored token on exactly the chosen host: ok → verified;
     assert.equal(r.body.result.state, state, JSON.stringify(mode));
     assert.equal(r.body.result.code, code);
     assert.equal(r.body.result.outcome, outcome);
-    assert.deepEqual(src.calls.map((c) => [c.method, c.url, c.authIsIssuedToken]), [["GET", `${BASE}team/980/`, true]], "exactly the bound team's own read with the stored token");
+    assert.deepEqual(src.calls.map((c) => [c.method, c.url, c.authIsIssuedToken]), [["GET", `${BASE}team/`, true], ["GET", `${BASE}team/980/`, true]], "the list, then exactly the bound team's own read, with the stored token");
     assert.equal(exchangeCalls(src.calls).length, 0, "a test never exchanges");
     const row = await rowOf(conn.id);
     assert.equal(row.state, state);
@@ -571,7 +575,7 @@ test("8. reconnect needs a confirmation that names the source, the owning club a
   assert.ok(!after.credential_ciphertext.equals(before.credential_ciphertext));
   // The bound teams are read in the lock order (ascending OptiMove team id), so the two reads may come either way round.
   assert.deepEqual(src.calls[0].url, EXCHANGE_URL);
-  assert.deepEqual(src.calls.slice(1).map((c) => [c.method, c.url.replace(BASE, "")]).sort(), [["GET", "team/980/"], ["GET", "team/981/"]]);
+  assert.deepEqual(src.calls.slice(1).map((c) => [c.method, c.url.replace(BASE, "")]).sort(), [["GET", "team/"], ["GET", "team/980/"], ["GET", "team/981/"]], "the list for the administrator's choice, then the bound teams");
   // A refused exchange on reconnect keeps the old credential and the state.
   useSource({ exchange: "401" });
   const bad = await api(`/gpexe/connections/${conn.id}/reconnect`, { method: "POST", cookie: pa.cookie, body: { username: USERNAME, password: PASSWORD, confirmation: { sourceSystem: "gpexe", ownerClubId: club, affectedTeamCount: 2 } } });

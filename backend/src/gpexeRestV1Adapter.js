@@ -103,6 +103,16 @@ export const LEGACY_DRILL_HOST_KEY = "server3";
 export const LEGACY_API_PREFIX = "api/";
 
 const TEAM_ID = /^(0|[1-9][0-9]{0,11})$/;
+// The team list is one page; more rows than that in one answer is not a page.
+export const TEAM_LIST_MAX_ROWS = 100;
+// A team's display name as the list may return it: one line of printable
+// text, bounded; anything else is null (the id is the identity, never the name).
+export const TEAM_NAME_MAX_LENGTH = 120;
+const teamName = (value) => {
+  if (typeof value !== "string") return null;
+  const text = value.replace(/[\u0000-\u001f\u007f]|\p{Cf}/gu, " ").replace(/\s+/g, " ").trim();
+  return text ? text.slice(0, TEAM_NAME_MAX_LENGTH) : null;
+};
 // The canonical GPEXE athlete id, the same pattern the importer enforces
 // (gpexeImportMapper.js GPEXE_ATHLETE_ID_PATTERN); the keys of a `players`
 // map must match it.
@@ -801,6 +811,33 @@ export function createGpexeRestV1Adapter({
         boundTeamOnFirstPage: res.body.some((t) => t && namesBoundTeam(t.id, team) === true),
         firstPageOnly: res.body.length < total,
       };
+    },
+
+    // The teams this credential sees, for an administrator to choose ONE
+    // from (owner decision 2026-10-03): the first page of the list, each row
+    // reduced to its canonical id and a sanitized display name — no other
+    // field of a team leaves here — and the total count. Nothing is chosen,
+    // stored or bound from this list by the adapter; a bind verifies the
+    // chosen team alone (verifyBoundTeam on an adapter bound to it). A row
+    // without a canonical id, a duplicate id or more rows than a page refuse
+    // the whole list.
+    async listVisibleTeams(options) {
+      refuseTeamOptions(options);
+      const res = await read("team/");
+      if (!Array.isArray(res.body)) throw unexpected("The source server did not answer the team list as a list.");
+      const total = Number(res.totalCount);
+      if (res.totalCount === null || res.totalCount === undefined || res.totalCount === "" || !Number.isInteger(total) || total < 0) {
+        throw unexpected("The source server did not say how many teams there are.");
+      }
+      if (res.body.length > TEAM_LIST_MAX_ROWS) throw unexpected("The source server answered the team list with more rows than one page.");
+      const teams = res.body.map((row) => {
+        if (!isPlainObject(row)) throw unexpected("The source server answered a team that is not an object.");
+        const id = canonicalId(row.id);
+        if (id === null) throw unexpected("The source server answered a team without a canonical id.");
+        return { sourceTeamId: id, name: teamName(row.name) };
+      });
+      if (new Set(teams.map((t) => t.sourceTeamId)).size !== teams.length) throw unexpected("The source server listed one team twice.");
+      return { teamCount: total, teams, firstPageOnly: teams.length < total };
     },
 
     // Every parent session of the bound team, in the order the source gives
