@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-03. Last `origin/main` commit checked: `e70fbd7` (merge of PR #132,
-`feature/gpexe-rest-v1-capability-probe-f3c2b` → `main`; PR #131 `47bf301` before it).
+Last reviewed: 2026-10-03. Last `origin/main` commit checked: `379d2fa` (merge of PR #133,
+`feature/gpexe-server3-adapter-f3c2c` → `main`; PR #132 `e70fbd7` before it).
 
 ## Active phase
 
@@ -493,10 +493,14 @@ B5 the listed tests, B6 `code-reviewer` + `security-reviewer`. The PR #132 merge
 owner's. No GPEXE request by the main session, no route, no database write, no credential
 storage, no binding, no import.
 
-**The active step is F3c2c — the `server3` read adapter: the `listSessions()` fix, the eight
-proven reads, the narrow drill read and the drill names** (branch
-`feature/gpexe-server3-adapter-f3c2c` from `e70fbd7`, owner order 2026-10-03; backend adapter,
-tests and documentation only; **not merged, not run against the real server**). As built:
+**F3c2c — the `server3` read adapter: the `listSessions()` fix, the eight proven reads, the
+narrow drill read and the drill names — is merged and deployed** (PR #133, merge commit
+`379d2fa` on 2026-10-03 10:37 UTC, pinned to head `10a71af` after the owner's external review in
+three rounds; `/api/health` served `379d2fa` with `ok: true` three times; no route uses the
+adapter, so no unauthenticated smoke of a new route; no GPEXE exchange, search, link or import,
+no migration, the Render environment and `GPEXE_IMPORT_APPLY_ENABLED` untouched; **not run against
+the real server** — fake fetch only). As built (branch `feature/gpexe-server3-adapter-f3c2c` from
+`e70fbd7`, owner order 2026-10-03; backend adapter, tests and documentation only):
 `backend/src/gpexeRestV1Adapter.js` tells the session list apart into parents and drills by the
 confirmed list structure only and refuses an ambiguous page with `source_list_ambiguous` instead
 of thinning it (a real parent named in another row's `drills` is no longer dropped; a named row
@@ -540,6 +544,55 @@ Connect / Test route, UI or import. Contract tests with a fake fetch only
 note: the handbook is GPEXE 6, the server reports 9.11.8 (a GPEXE support confirmation is welcome,
 not a blocker). The import policy for an incomplete drill set and the storage of drill labels are
 decided in the later integration PR.
+
+**The active step is F3c2d — the GPEXE Connect / Reconnect / Test backend routes** (branch
+`feature/gpexe-connect-routes-f3c2d` from `379d2fa`, owner order 2026-10-03; backend routes,
+service, migration v29, tests and docs; **not merged, not run against the real server, no
+credential used**). As built — `backend/src/routes/sourceConnections.js` at
+`/api/training-load/sources` and `backend/src/sourceConnectionService.js`, contract section 2.5
+of `docs/ai/source-connections-f3c2-contract.md`, runbook
+`docs/runbooks/source-connections-f3c2d.md`: a platform admin only (platform workspace or the
+owning club's workspace), everyone and everything else the same 404; a connection is club-owned
+and teams are bound separately (no binding route in this step, no binding derived from the
+account's visible teams); the first real profile is `server3` / `rest_v1` — the host must be
+approved in the catalog and resolvable in code and have a confirmed exchange and a read adapter,
+no typed URL, no fallback to `e03`, no generic proxy, GET only plus the one exchange POST,
+redirects refused; Connect / Reconnect take a username and password for that one HTTPS request,
+exchange them once on the confirmed endpoint (form-encoded, token field `token`), keep only the
+AES-256-GCM parts of the token (F3c1 crypto) and drop the pair; the pair and the token are never
+returned, logged, audited as values or named in an error; the UI JWT / cookie is never a
+credential; Test uses the stored token for every active bound team's own read (one adapter
+instance per bound source team) or, while nothing is bound, the team list count only; the
+concurrency and security conditions of the contract: per-user advisory lock (bounded at 20 s, then
+`try_again`; a 10 s statement timeout and a 90 s network budget per attempt), the connection row
+`FOR NO KEY UPDATE` under a 2 s `lock_timeout` (`try_again`), bound teams locked ascending
+try-lock style, the throttle of 5 attempts that reached the source in 15 minutes per connection
+and per user counted from the append-only audit (refusals audited with `counted: false` and never
+counted, so a retry after 429 never extends the lockout), secret-free audit with a fixed metadata
+allowlist, Reconnect only with a confirmation naming the source, the owning club and the number
+of bound teams, the F2 COMMIT-outcome discipline (`verified_after_commit_error` /
+`outcome_unknown` with a second `unknown` audit row by the same admin; an attempt that reached
+the source and then could not be stored is audited and counted as `attempt_not_recorded` /
+`rights_changed`; a read after a confirmed COMMIT never turns the answer into a failure), the
+global error handler no longer logs or echoes a request body the JSON parser refused, Disconnect
+not implemented. **Migration v29**
+(`migrations_v2/202610031000_training_load_v29_source_connection_state_facts.sql`) closes the
+v27 fact gap the contract named — `linked_untested` carries both facts, every state but
+`not_connected` holds a credential — and adds the partial index of the per-user throttle window;
+rollback `docs/runbooks/source-connections-v29-rollback.sql`, rehearsed on a disposable
+database; **v29 is not applied to any persistent database** (the local OPTIMOVE stays v21; the
+deployed database gets it only through a merge and deploy the owner decides). Tests
+(`backend/tests/source-connections-f3c2d.test.mjs`, disposable database and fake fetch): the
+migration and its rollback, route contract and info hiding, create, connect with and without
+bound teams (the eight-team account reads only the bound team 980 and the other binding, never
+the list), every exchange answer class, test states, reconnect, the retired host, the throttle in
+both orders and across two connections concurrently, overlapping attempts and a held team lock,
+a missing key and an unreadable credential, the COMMIT outcome, and the secret scan of every
+response, audit row, database column and console line of the suite. Recorded for the integration
+PR, not built: an incomplete drill set is never shown as complete; an empty, successfully read
+`players` drill answer is a valid empty drill distinct from a failed read; tag names are
+HTML-escaped in the future UI; the raw-snapshot decision stays open; the importer is not wired to
+a connection and `GPEXE_IMPORT_APPLY_ENABLED` stays off.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1005,6 +1058,10 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #133 (`379d2fa`, merged 2026-10-03 10:37 UTC pinned to head `10a71af`) is deployed:
+  `/api/health` served `379d2fa` with `ok: true` three times on 2026-10-03. Adapter, tests and
+  docs only: no migration, no route; v28 stays the last migration inferred on the deployed
+  database. No GPEXE request at the deploy.
 - PR #132 (`e70fbd7`, merged 2026-10-02 22:16 UTC pinned to head `f2b2e01`) is deployed:
   `/api/health` served `e70fbd7` with `ok: true` three times on 2026-10-02. Docs and probe only:
   no migration, no route change; v28 stays the last migration inferred on the deployed database.
@@ -1114,10 +1171,10 @@ pre-existing; pass/fail counts don't belong in this file
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
 - **Mandatory before the F3c2 routes or any import: fix the drills filter of the `rest_v1`
-  adapter's `listSessions()`** (owner, 2026-10-01, after the review of PR #132). **Addressed in
-  the F3c2c adapter PR (not merged): the classification refuses an ambiguous page instead of
-  thinning it, and the date window reads one day back for a drill's parent; see the active step
-  above.** As built in F3c2a, like the `e03` importer, `backend/src/gpexeRestV1Adapter.js` left out
+  adapter's `listSessions()`** (owner, 2026-10-01, after the review of PR #132). **Done in the
+  F3c2c adapter PR (#133, merged `379d2fa`): the classification refuses an ambiguous page instead
+  of thinning it, the date window reads one day back for a drill's parent, and a session is read
+  only when a list classified it as a parent; see the F3c2c paragraph above.** As built in F3c2a, like the `e03` importer, `backend/src/gpexeRestV1Adapter.js` left out
   every session whose id another session named in its `drills`. On `rest_v1` a `drills` entry is not a `team_session` id, or at
   least that path answers a different session (first drill-only run, 2026-10-01), so that filter
   may leave out real sessions and may keep drill rows as sessions (duplicate data in an import);
@@ -1316,11 +1373,10 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's external review and merge decision on the F3c2c adapter PR (the `listSessions()`
-fix, the eight confirmed reads, the narrow drill read and the drill names; none of it run against
-the real server); then, on the owner's order, the F3c2
-routes, built against the contract in `docs/ai/source-connections-f3c2-contract.md` section 2,
-then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
+The owner's external review and merge decision on the F3c2d routes PR (Connect / Reconnect /
+Test, migration v29; none of it run against the real server, no credential used; v29 on the
+deployed database only through that merge and deploy); then, on the owner's order, the binding
+route, F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 

@@ -215,7 +215,7 @@ after(async () => {
 });
 
 test("8. v28 adds exactly one catalog row and changes no structure; it creates no connection, binding or audit row and leaves the e03 row as it was", async () => {
-  assert.equal(GPEXE_TEST_MIGRATIONS.at(-1), V28, "the test migration list ends with v28");
+  assert.ok(GPEXE_TEST_MIGRATIONS.includes(V28), "the test migration list carries v28 (v29 follows it since F3c2d)");
   const before27 = await structure(k);
   const e03Before = (await catalog()).filter((r) => r.host_key === "e03");
   await applyGpexeTestMigrations(db.url, [...UP_TO_V27, V28]);

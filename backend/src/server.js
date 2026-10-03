@@ -25,6 +25,7 @@ import trainingLoadMetricsRouter from "./routes/trainingLoadMetrics.js";
 import trainingActivityRouter from "./routes/trainingActivity.js";
 import trainingLoadDashboardRouter from "./routes/trainingLoadDashboard.js";
 import gpexeImportRouter from "./routes/gpexeImport.js";
+import sourceConnectionsRouter from "./routes/sourceConnections.js";
 import { startGpexeRetentionSchedule } from "./gpexeImportService.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { pool } from "./db.js";
@@ -107,6 +108,9 @@ app.use("/api/training-activity", requireAuth, trainingActivityRouter);
 // other training_load router above.
 app.use("/api/training-load/dashboards", requireAuth, trainingLoadDashboardRouter);
 app.use("/api/training-load/gpexe", requireAuth, gpexeImportRouter);
+// Source credential connections (F3c2d): platform admin only inside the
+// router; every other caller gets the same 404 as a missing connection.
+app.use("/api/training-load/sources", requireAuth, sourceConnectionsRouter);
 app.get("/api/realtime", requireAuth, realtimeRouter);
 
 // Dev/test: this is a plain ES-modules frontend with no build step - script
@@ -166,6 +170,17 @@ app.use((req, res) => {
 });
 
 app.use((error, _req, res, _next) => {
+  // A body the JSON parser could not read: body-parser attaches the RAW
+  // request text to the error (`body`) and its message can quote the input.
+  // Such a body may carry a credential (the source-connection routes take a
+  // username and a password), so neither the error object nor its message
+  // is logged or echoed - only the parser's error type and the status.
+  if (error && (typeof error.type === "string" && error.type.startsWith("entity.") || Object.prototype.hasOwnProperty.call(error, "body"))) {
+    const status = Number(error.status || error.statusCode || 400);
+    console.error(`[http] request body refused: ${String(error.type || "entity.parse.failed").replace(/[^a-z._-]/gi, "")} (${status})`);
+    const tooLarge = error.type === "entity.too.large";
+    return res.status(status).json({ error: tooLarge ? "body_too_large" : "invalid_json", message: tooLarge ? "The request body is larger than this server accepts." : "The request body could not be read as JSON." });
+  }
   console.error(error);
   const status = Number(error.status || error.statusCode || 500);
   res.status(status).json({
