@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-03. Last `origin/main` commit checked: `379d2fa` (merge of PR #133,
-`feature/gpexe-server3-adapter-f3c2c` → `main`; PR #132 `e70fbd7` before it).
+Last reviewed: 2026-10-03. Last `origin/main` commit checked: `cb54b85` (merge of PR #134,
+`feature/gpexe-connect-routes-f3c2d` → `main`; PR #133 `379d2fa` before it).
 
 ## Active phase
 
@@ -545,10 +545,20 @@ note: the handbook is GPEXE 6, the server reports 9.11.8 (a GPEXE support confir
 not a blocker). The import policy for an incomplete drill set and the storage of drill labels are
 decided in the later integration PR.
 
-**The active step is F3c2d — the GPEXE Connect / Reconnect / Test backend routes** (branch
-`feature/gpexe-connect-routes-f3c2d` from `379d2fa`, owner order 2026-10-03; backend routes,
-service, migration v29, tests and docs; **not merged, not run against the real server, no
-credential used**). As built — `backend/src/routes/sourceConnections.js` at
+**F3c2d — the GPEXE Connect / Reconnect / Test backend routes and migration v29 — is merged and
+deployed** (PR #134, merge commit `cb54b85` on 2026-10-03, after the owner's external review in
+three rounds — round 3 at head `eb1076c`: a stable `attempt_id` per logical attempt with the
+throttle counting distinct ids, "reached the source" set by the fetch invocation itself, a spent
+network budget or any read failure with zero requests a local uncounted refusal
+(`network_budget_exhausted` / `attempt_not_sent`), the compensating audit of a failed
+source-reaching attempt written in the attempt's own transaction through a savepoint, and the
+username / password removed from the request body object right after validation; `/api/health`
+served `cb54b85` with `ok: true` (owner); **v29 on the deployed database is inferred** from the
+server starting after the migration step (`npm start` runs `node src/migrate.js &&` the server),
+the deployed database was not queried; **not run against the real server, no credential used, no
+connection row, no binding, no GPEXE request; `GPEXE_IMPORT_APPLY_ENABLED` and the Render
+environment untouched; the local OPTIMOVE database stays v21**). As built (branch
+`feature/gpexe-connect-routes-f3c2d` from `379d2fa`, owner order 2026-10-03) — `backend/src/routes/sourceConnections.js` at
 `/api/training-load/sources` and `backend/src/sourceConnectionService.js`, contract section 2.5
 of `docs/ai/source-connections-f3c2-contract.md`, runbook
 `docs/runbooks/source-connections-f3c2d.md`: a platform admin only (platform workspace or the
@@ -593,6 +603,100 @@ PR, not built: an incomplete drill set is never shown as complete; an empty, suc
 `players` drill answer is a valid empty drill distinct from a failed read; tag names are
 HTML-escaped in the future UI; the raw-snapshot decision stays open; the importer is not wired to
 a connection and `GPEXE_IMPORT_APPLY_ENABLED` stays off.
+
+**The active step is F3c2e — the verified team binding, the club-admin path and the approved-pair
+allowlist** (branch `feature/gpexe-team-binding-f3c2e` from `cb54b85`, owner order 2026-10-03, its
+amendment of the same day and the allowlist decision of 2026-10-04; backend service, router,
+adapter, migration v30, tests and docs; **not merged, not run against the real server, no
+credential used, no binding of the real team 980, no production GPEXE call; v30 applied to no
+persistent database**). Discovery result: `docs/ai/source-connections-f3c2e-discovery.md` (the v27
+binding table's columns, the guards the database already has, the derived lock order, and why the
+first "no v30" conclusion was superseded). As built:
+- **The allowlist (owner decision 2026-10-04, after the security review's HIGH F-1 — a club admin
+  could bind any team the shared account sees; option (a)):** the existing `gpexe_team_settings`
+  row of an OptiMove team is the platform-admin-approved pair `OptiMove team ↔ GPEXE Team ID`,
+  still set and changed only through the F3b Settings route (reason, history). A binding may only
+  bind that exact pair, whoever calls (`409 team_setting_missing` / `team_setting_mismatch`,
+  locally, zero requests); a club admin sees and may choose only the GPEXE teams matching an
+  approved pair of an active team of their club (server-side intersection; no name, id, count or
+  other fact of the rest leaves the server), a platform admin the bounded, annotated list;
+  `sourceTeamsTruncated` is reported to both. **Migration v30**
+  (`migrations_v2/202610041000_training_load_v30_gpexe_team_settings_bound_final.sql`) keeps the
+  approved Team ID (and the team) of a bound team's settings row final while its gpexe binding is
+  active (trigger `gpexe_team_settings_bound_team_final`, `23514`; the same canonical value
+  passes; DELETE / TRUNCATE / repoint already refused by v24; no data change); the F3b
+  `setTeamSettings()` answers `409 gpexe_team_bound` for the same case (pre-check under the team
+  lock; the trigger mapped to the same code, never SQL text), the same value stays idempotent,
+  and without an active binding the change works as before. Rollback
+  `docs/runbooks/source-connections-v30-rollback.sql` (refuses under a later migration and while
+  an active binding relies on it), rehearsed on a disposable database with the apply → invariants
+  → rollback → identical catalog → reapply → failed-last-statement atomicity sequence.
+- **Owner product decision (2026-10-03, replacing "platform admin only" and the typed Team ID):**
+  the GPEXE connection and its team bindings are managed by the **owning club's admin** in that
+  club's workspace, and by a platform admin (platform workspace or the club's workspace) for
+  support; one authorization path with two bases (`resolveConnectionAdmin()`: `platform_admin` or
+  `club_admin`), everyone and everything else the same 404 (another club's admin, an admin of two
+  clubs in the other club's workspace, a coach, an athlete, a revoked role, an archived club or
+  team, a foreign team); the right and the club are re-checked `FOR SHARE` after every source call
+  by basis (`rightsStillHold()`), and the audit basis is the context's basis. Coaches get nothing
+  here (their connection state stays the Imports status route; the sentence to contact an
+  administrator is F3c3 UI).
+- **The team list after a successful Connect / Test:** both now read the first page of `team/`
+  through the adapter's new `listVisibleTeams()` — each row reduced to its canonical id and a
+  sanitized display name (control and format characters removed; nothing else leaves the adapter;
+  a row without a canonical id, a duplicate or more rows than a page refuse the list) — and then
+  verify every active bound team's own read as before; every visible team is matched against the
+  owning club's approved pairs and the result carries `sourceTeams` (`sourceTeamId`, `name`,
+  `approvedTeamId`, `approvedTeamName`; a club admin: the intersection only), `sourceTeamCount`
+  and `sourceTeamsTruncated`. Nothing is preselected, stored or bound from it; the chosen team is
+  verified again, alone, by the bind.
+- **`POST /api/training-load/sources/:source/connections/:id/bindings` `{ teamId, sourceTeamId }`**
+  (a branch of the same `attempt()` as Connect / Reconnect / Test, so one lock, audit, COMMIT and
+  compensation path): body checked before any lock (`400`); the connection and the team read
+  unlocked (`404` unless the team exists, is active and is in the owning club); the per-user lock;
+  the connection row `FOR NO KEY UPDATE` (state must be `verified` → `409 connection_not_verified`);
+  the same binding again is the same final answer (`200`, `idempotent: true`, no row, no request,
+  no audit) — answered BEFORE the `verified` gate, so a retry after an unknown outcome gets its
+  binding even when a Test moved the state meanwhile; the caller's own team already bound for
+  the source is a `409 team_already_bound` before any request; the catalog row `FOR SHARE` and
+  the host gate; every active bound team's and the target team's try-lock, ascending, once each
+  (`try_again` while a check, import, settings change, team move or binding runs for any of them
+  — the credential-attempt rule, because a refused credential during the bind changes the
+  connection's state); the team's approved pair in `gpexe_team_settings` `FOR SHARE` — missing
+  → `409 team_setting_missing`, another canonical GPEXE Team ID → `409 team_setting_mismatch`,
+  the same → the binding carries the provenance pointer; the settings row and its history are
+  never written (D12, digest-tested); the 5 / 15 min window
+  (a bind that reached the source without succeeding counts like a credential attempt, a
+  successful one does not; `429` when full); key ring and decrypt; the one `GET
+  team/<sourceTeamId>/` through the adapter bound to exactly that id; rights and club re-checked;
+  the team row `FOR SHARE` only now and re-qualified (archived or moved meanwhile → the same 404,
+  nothing bound, but audited and counted because the source was reached; a rename or an archive
+  never waits behind a slow source); only after the chosen
+  team's read succeeded a source team bound to another team is `409 source_team_already_bound`
+  (an id the credential cannot see is `source_team_not_visible` either way — no other club's
+  binding is confirmed to exist; the v27 partial unique indexes are the backstop, mapped by their
+  exact names, tested through an insert-fault seam; `55P03` and `40P01` are both `try_again`); the binding
+  row and its audit (`bind`, `team_id`, `source_team_id` as a metadata fact — a non-secret key by
+  the v27 predicate) in the same transaction; the F2
+  bounded COMMIT (`verified_after_commit_error` / `503 outcome_unknown` naming the team, the second
+  `unknown` row with the team, the retry idempotent). Answer classes of the chosen team's read:
+  `401` → `409 source_auth_rejected` and the connection becomes `needs_reconnect`; `403` / `404` →
+  `409 source_team_not_visible`; `429` / 5xx / network / timeout → `502 source_unavailable`;
+  redirect / oversized / non-JSON / another team's id / non-object → `502 source_answer_unexpected`
+  — each audited with the team, nothing bound, the credential kept. Out-of-transaction audit rows (a refusal, the
+  second row of an unknown outcome) are written under the row `lock_timeout` so a team row held by
+  a running move or archive never holds the request. **No Unbind, Disconnect, Delete or automatic
+  replacement; no automatic binding of any of the eight visible teams; no assumption that a Team
+  ID is valid on another host.**
+- **GET** `…/connections/:id` and the list show per binding `bindingId`, `teamId`, `teamName`
+  (from OptiMove), `sourceTeamId`, `state`, `teamActive`, `boundAt`; never the source's own team
+  name, a credential part, a username or an account fact. No new read route.
+- Tests: `backend/tests/source-connections-f3c2e.test.mjs` (disposable database through v29,
+  fake source; the 24 ordered cases, the club-admin cross-club / wrong-workspace / revoked-role /
+  archived-club-mid-call cases, concurrency against Test / Reconnect, a team move, a team or club
+  archive and a held team lock, both COMMIT outcomes, the field allowlists, the secret scan);
+  `gpexe-rest-v1-adapter.test.mjs` gained the `listVisibleTeams()` contract; the F3c2d suite was
+  adapted (club admin sees the connection; the list is read before the bound teams).
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1058,6 +1162,11 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #134 (`cb54b85`, merged 2026-10-03, head `eb1076c` after three external review rounds) is
+  deployed: `/api/health` served `cb54b85` with `ok: true` (owner). **v29 on the deployed database
+  is inferred** from the server starting after the migration step; the deployed database was not
+  queried. No connection row, binding or audit row can exist there yet: no credential was ever
+  entered and no GPEXE request was made.
 - PR #133 (`379d2fa`, merged 2026-10-03 10:37 UTC pinned to head `10a71af`) is deployed:
   `/api/health` served `379d2fa` with `ok: true` three times on 2026-10-03. Adapter, tests and
   docs only: no migration, no route; v28 stays the last migration inferred on the deployed
@@ -1373,10 +1482,13 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's external review and merge decision on the F3c2d routes PR (Connect / Reconnect /
-Test, migration v29; none of it run against the real server, no credential used; v29 on the
-deployed database only through that merge and deploy); then, on the owner's order, the binding
-route, F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
+The owner's external review and merge decision on the F3c2e PR (the verified team binding, the
+club-admin path and the team list after Connect / Test; no migration; none of it run against the
+real server, no credential used, no binding of the real team 980); then, on the owner's order,
+F3c2f (the importer's credential resolver and the cut-over from `GPEXE_API_TOKEN` — F3c2 is not
+complete before it), F3c3 (Settings UI: Connect account → Test connection → Choose GPEXE team →
+Choose OptiMove team of the same club → Review → Confirm binding; the coach's "contact an
+administrator" sentence) and F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 

@@ -1,7 +1,8 @@
 // Source credential connections (F3c2d): create, connect, reconnect, test
-// and read. Mounted at /api/training-load/sources behind requireAuth. A
-// platform admin only; anything else — and any connection, club or id the
-// caller may not see — answers the same 404 as a missing one (ADR-006).
+// and read; (F3c2e) bind a team. Mounted at /api/training-load/sources behind
+// requireAuth. A platform admin, or the owning club's admin in that club's
+// workspace; anything else — and any connection, club, team or id the caller
+// may not see — answers the same 404 as a missing one (ADR-006).
 // Same-origin JSON only: the session cookie is SameSite=Lax and every write
 // here requires a JSON object body, so a cross-site form post never reaches
 // the service. No body is logged anywhere in this router.
@@ -105,7 +106,7 @@ function attemptRoute(action) {
       result = await service[action]({ ctx, sourceSystem: req.params.source, id: req.params.id, body });
     } catch (error) {
       if (error instanceof service.SourceConnectionError && error.code === "outcome_unknown" && error.details?.connectionId) {
-        await service.recordUnknownOutcome({ connectionId: error.details.connectionId, action: action === "testConnection" ? "test" : action, ctx, attemptId: error.details.attemptId ?? null });
+        await service.recordUnknownOutcome({ connectionId: error.details.connectionId, action: ACTION_NAME[action], ctx, attemptId: error.details.attemptId ?? null, teamId: error.details.teamId ?? null });
       }
       throw error;
     } finally {
@@ -121,9 +122,12 @@ function attemptRoute(action) {
     } catch {
       connectionReadError = true;
     }
-    res.json({ result, connection, ...(connectionReadError ? { connectionReadError: true } : {}) });
+    // A binding that was created now is 201; everything else (a Connect, a
+    // Test, the same binding again) is 200.
+    res.status(action === "bindTeam" && result.idempotent === false ? 201 : 200).json({ result, connection, ...(connectionReadError ? { connectionReadError: true } : {}) });
   });
 }
+const ACTION_NAME = { connect: "connect", reconnect: "reconnect", testConnection: "test", bindTeam: "bind" };
 
 function scrub(body) {
   if (body && typeof body === "object") {
@@ -136,5 +140,9 @@ function scrub(body) {
 router.post("/:source/connections/:id/connect", attemptRoute("connect"));
 router.post("/:source/connections/:id/reconnect", attemptRoute("reconnect"));
 router.post("/:source/connections/:id/test", attemptRoute("testConnection"));
+// F3c2e: bind one OptiMove team of the owning club to one chosen source team
+// ({ teamId, sourceTeamId }); the chosen team is read again, alone, before
+// the row is written.
+router.post("/:source/connections/:id/bindings", attemptRoute("bindTeam"));
 
 export default router;

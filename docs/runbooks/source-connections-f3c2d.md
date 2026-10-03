@@ -1,4 +1,4 @@
-# Source connections — Connect / Reconnect / Test (F3c2d)
+# Source connections — Connect / Reconnect / Test (F3c2d) and the team binding (F3c2e)
 
 Backend routes for a source credential connection: create it, attach a credential by a
 one-time username/password exchange, test it with the stored token, replace the
@@ -13,10 +13,14 @@ no fallback to `e03`, no typed URL and no generic proxy.
 
 ## Who
 
-An **active platform admin** only, acting in the platform workspace or in the owning
-club's workspace (when that admin is also that club's admin). Everyone else, every other
-workspace, an archived or missing club, a malformed id and an unknown source answer the
-same `404 {error: "notFound"}`. Without a session: `401`.
+The **owning club's admin**, acting in that club's workspace, or an **active platform admin**
+acting in the platform workspace or in the owning club's workspace (owner decision 2026-10-03).
+Everyone else — another club's admin, an admin of two clubs acting in the other club's
+workspace, a coach, an athlete, a revoked role —, every other workspace, an archived or
+missing club or team, a foreign team, a malformed id and an unknown source answer the same
+`404 {error: "notFound"}`. Without a session: `401`. The right and the club are checked again,
+by basis, after every source call and before any write (`409 rights_changed`); every audit row
+carries the basis (`club_admin` or `platform_admin`).
 
 ## Routes (mounted at `/api/training-load/sources`)
 
@@ -27,7 +31,8 @@ same `404 {error: "notFound"}`. Without a session: `401`.
 | `POST /:source/connections` | `{ ownerScope: "club", ownerClubId, hostKey, accountLabel, credentialKind: "exchanged_token" }` | one `not_connected` row and an audit row `create`. The host must be approved in the catalog **and** resolvable in `sourceHosts.js` **and** have a confirmed exchange **and** speak a family with a read adapter — today only `server3` |
 | `POST /:source/connections/:id/connect` | `{ username, password }` | state must be `not_connected`; one exchange POST, then the test reads with the issued token; the token is stored AES-256-GCM; the username and password are dropped |
 | `POST /:source/connections/:id/reconnect` | `{ username, password, confirmation: { sourceSystem, ownerClubId, affectedTeamCount } }` | state must hold a credential; the confirmation must name the connection's source, owning club and current number of active bound teams exactly, or `409 confirmation_mismatch` (the answer carries `expected`) before anything is sent; otherwise as connect, with a new ciphertext and nonce |
-| `POST /:source/connections/:id/test` | `{}` | the stored token on exactly the chosen host: every active bound team's own read (`team/<id>/`), or, while no team is bound, the team list count; nothing is chosen or bound from that list |
+| `POST /:source/connections/:id/test` | `{}` | the stored token on exactly the chosen host: the first page of the team list (each team as its canonical id and a sanitized name — `result.sourceTeams`, for the administrator to choose one from; nothing is preselected or bound) and then every active bound team's own read (`team/<id>/`) |
+| `POST /:source/connections/:id/bindings` | `{ teamId, sourceTeamId }` | F3c2e: bind one OptiMove team of the owning club to the chosen source team — state must be `verified`; the chosen team is read again, alone (`GET team/<sourceTeamId>/`), before the row is written; `201` with the binding, `200` with `idempotent: true` for the same binding again; see "Binding a team" below |
 
 Every write needs a JSON object body (`415` otherwise); a body with a field the route does
 not take is `400 invalid_body` and is not an attempt.
@@ -102,3 +107,98 @@ secret-named key as the backstop.
 - v29 on a persistent database is applied only by the owner's explicit decision
   (`.claude/rules/database-safety.md`); its rollback refuses once a later migration is
   recorded.
+
+## Binding a team (F3c2e)
+
+**The allowlist (owner decision 2026-10-04).** A team's existing GPEXE Team ID in Settings →
+Data sources (`gpexe_team_settings`, set by a platform admin with a reason and a history) is the
+approved pair `OptiMove team ↔ GPEXE Team ID`. A binding can only bind that exact pair, whoever
+asks; nobody adds a Team ID through the bind route. A club admin sees and may choose only the
+GPEXE teams that match an approved pair of an active team of their club (`result.sourceTeams`
+of Connect / Test is that intersection — `sourceTeamId`, `name`, `approvedTeamId`,
+`approvedTeamName` — and `sourceTeamCount` its size; nothing of the other teams the shared
+account sees leaves the server); a platform admin sees the bounded list with the approved pair
+per row, for support and for setting the allowlist. `sourceTeamsTruncated` says whether the
+source list was cut at one page. While a binding is active the approved Team ID cannot change:
+the F3b `PUT …/settings` answers `409 gpexe_team_bound`; a raw UPDATE meets the v30 trigger. The
+same value stays idempotent; without an active binding the change works as before.
+
+The flow in Settings is Connect account → Test connection → Choose GPEXE team (from
+`result.sourceTeams`) → Choose the approved OptiMove team → Review → Confirm binding. The route
+does the last step; it never chooses a team itself and never binds any of the teams the account
+sees automatically.
+
+Order of one bind (one transaction, the same shape as an attempt): the body (`400
+invalid_body` for anything but a team UUID and a canonical source team id) → the connection
+and the team read unlocked (`404` unless the team exists, is active and is in the owning
+club) → the per-user lock → the connection row (`409 try_again` when busy) → the same binding
+again answers `200 idempotent` with no row, no request and no audit row, whatever the state →
+`409 connection_not_verified` unless `verified` → this team already bound for this source → `409
+team_already_bound` → the catalog row and the host gate (`409 host_not_allowed`) → every bound
+team's and the target team's import try-lock, ascending (`409 try_again` while a Check now, an
+import, a settings change, a team move or another binding runs for any of them) → the team's
+approved pair: no setting → `409 team_setting_missing`; a different canonical Team ID → `409
+team_setting_mismatch`; the same → the binding carries the provenance pointer; the setting and
+its history are never written → the 5 / 15 min window
+(`429 source_auth_throttled` when full) → the key ring and the credential (`503 key_missing` /
+`credential_unreadable`) → one `GET team/<sourceTeamId>/` with the stored token → the right and
+the club re-checked (`409 rights_changed`) → the team row, re-checked (archived or moved
+meanwhile → `404`, nothing bound) → a source team already bound to another team → `409
+source_team_already_bound` (answered only for a team the credential really sees) → the binding
+row and its audit row `bind` → the bounded COMMIT.
+
+| The chosen team's read | Answer | Connection state | Bound |
+|---|---|---|---|
+| `200` naming the team | `201`, the binding | unchanged | yes |
+| `401` | `409 source_auth_rejected` | `needs_reconnect` | no |
+| `403`, `404` | `409 source_team_not_visible` | unchanged | no |
+| `429`, 5xx, network, timeout | `502 source_unavailable` | unchanged | no |
+| redirect, oversized, not JSON, another id, not an object | `502 source_answer_unexpected` | unchanged | no |
+
+Every outcome that reached the source is audited (`bind`, the team, `source_team_id` as a
+fact, `counted: true`); a local refusal is audited with `counted: false`; a `404` answered
+before anything was sent is not audited, while a team that stopped qualifying after the
+source answered (archived or moved meanwhile) is the same 404 but audited and counted
+(`failed`, `team_not_available`; a refused credential still turns the connection to
+`needs_reconnect` first). A bind that reached the source without succeeding counts in the
+5 / 15 min window like a credential attempt (a successful bind does not). A lost
+COMMIT answer follows the attempt discipline (`commitConfirmation: verified_after_commit_error`,
+or `503 outcome_unknown` with `teamId`, a second `unknown` audit row naming the team, and the
+retry answering the existing binding without a second row). Unbind, Disconnect and replacing
+a binding do not exist in this step. The database's own refusals surface as stable codes
+(`team_already_bound` / `source_team_already_bound`, `try_again`, `binding_refused`), never as
+SQL text; a lock wait that ran out or a deadlock chosen as victim is `try_again`.
+
+### v30 (F3c2e): the approved pair is final while bound
+
+`migrations_v2/202610041000_training_load_v30_gpexe_team_settings_bound_final.sql` adds
+`training_load.gpexe_team_id_canonical(text)` and the trigger
+`gpexe_team_settings_bound_team_final` (BEFORE UPDATE): while a team has an active gpexe
+`source_team_binding`, an UPDATE that changes the canonical GPEXE Team ID or the OptiMove team of
+its settings row is refused (`23514`, that constraint name); the same canonical value passes.
+DELETE / TRUNCATE / repoint stay refused by v24 for every row. No data change. **Not applied to
+any persistent database by this step** (the local OPTIMOVE stays v21; the deployed database gets
+it only through a merge and deploy the owner decides). Rollback:
+`docs/runbooks/source-connections-v30-rollback.sql` — refuses under a later migration and while
+an active gpexe binding of a team with a settings row relies on the protection; rehearsed on a
+disposable database (apply on v29 → invariants → rollback → identical v29 catalog → apply again →
+refusals; a file failing at its last statement applies nothing).
+
+### Recorded limits of F3c2e (non-blocking, for the owner)
+
+- No Unbind / end-binding route exists yet: a bound pair is permanent in practice, the approved
+  Team ID cannot change while it is bound (`409 gpexe_team_bound`), and the v30 rollback refuses
+  while such a binding exists. A wrongly approved pair that was bound has no supported correction
+  until the unbind step; schedule it before the first real bind.
+- The approved pair is enforced on the INSERT side by the application only (the v27 insert
+  trigger checks the pointer, not the id equality); v30 protects the settings side. Never claim
+  that the database alone guarantees the pair.
+- The v22 key on `gpexe_team_settings.gpexe_team_id` is on the raw text: `setTeamSettings()` now
+  refuses a canonical clash (`0981` against `981`) as `gpexe_team_taken`; rows from before this
+  rule are not re-checked (none exist on any known database).
+- `sourceTeamsTruncated` is reported to a club admin too (owner order 2026-10-04: the filtering
+  must not hide a truncated source list); it tells only that the account's list was cut at one
+  page, never a count.
+- The F3b Settings screen has no sentence for `gpexe_team_bound` yet (frontend follow-up).
+- `team_setting_missing` / `team_setting_mismatch` name "Settings → Data sources" for any source;
+  a second source will need its own allowlist wording.
