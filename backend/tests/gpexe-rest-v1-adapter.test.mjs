@@ -133,8 +133,9 @@ test("3. every request is a GET to server3 under /rest/v1/, with the Token schem
   const text = JSON.stringify(list);
   assert.ok(!text.includes(CREDENTIAL));
   assert.ok(!text.includes("a private note") && !text.includes("someone"));
-  assert.deepEqual(list, { total: 1, drillsLeftOut: 0, sessions: [{
-    id: "186942", categoryName: "Training", startTimestamp: "2026-09-14T10:00:00", updatedOn: "2026-09-14T12:00:00",
+  // The fixture's drill references name no listed row: nothing is dropped, the references are counted.
+  assert.deepEqual(list, { total: 1, drillsLeftOut: 0, drillReferencesNotListed: 2, sessions: [{
+    id: "186942", categoryName: "Training", startTimestamp: "2026-09-14T10:00:00", endTimestamp: null, updatedOn: "2026-09-14T12:00:00",
     drillsCount: 2, isStatsValid: true, drillIds: ["186943", "186944"],
   }] });
 });
@@ -145,9 +146,9 @@ test("4. GET only: the adapter exposes named reads and nothing generic — no re
   assert.ok(Object.isFrozen(a));
   const names = Object.keys(a).filter((k) => typeof a[k] === "function").sort();
   assert.deepEqual(names, [
-    "capabilities", "countVisibleTeams", "fetchSessionBundle", "getAthleteSession", "getAthleteSessionMore", "getSession", "getSessionDetails",
-    "getSessionDrillDetails", "getTeamThresholds", "getTrack", "getUnits", "listAthleteSessions", "listSessionTags", "listSessions",
-    "listSessionsByDay", "verifyBoundTeam",
+    "capabilities", "countVisibleTeams", "fetchSessionBundle", "getAthleteSession", "getAthleteSessionMore", "getDrillLabels", "getSession",
+    "getSessionDetails", "getSessionDrillDetails", "getSessionDrills", "getTeamThresholds", "getTrack", "getUnits", "listAthleteSessions",
+    "listSessionTags", "listSessions", "listSessionsByDay", "verifyBoundTeam",
   ]);
   for (const forbidden of ["request", "get", "read", "fetch", "post", "put", "patch", "delete", "send", "call", "getAllPages"]) assert.equal(a[forbidden], undefined, forbidden);
   // An option that tries to carry a method, a URL or a path changes nothing.
@@ -161,7 +162,10 @@ test("4. GET only: the adapter exposes named reads and nothing generic — no re
   const body = source.split(/\r?\n/).filter((l) => !l.trim().startsWith("//")).join("\n");
   assert.deepEqual([...new Set([...body.matchAll(/method:\s*"([A-Z]+)"/g)].map((m) => m[1]))], ["GET"]);
   assert.doesNotMatch(body, /https?:\/\//, "no URL in the adapter");
-  assert.doesNotMatch(body, /gpexe\.com|rest\/v1|"api\/"/, "no host and no family prefix in the adapter");
+  assert.doesNotMatch(body, /gpexe\.com|rest\/v1/, "no host and no rest_v1 prefix in the adapter");
+  // The one legacy prefix is a named constant used by the two narrow builders only.
+  assert.equal((body.match(/"api\/"/g) || []).length, 1, "the legacy prefix appears once, as LEGACY_API_PREFIX");
+  assert.equal((body.match(/LEGACY_API_PREFIX/g) || []).length, 3, "the constant is read by legacyUrl only (its definition, the URL template, the path check)");
   assert.equal((body.match(/fetchImpl\(/g) || []).length, 1, "one place talks to the network");
 });
 
@@ -295,7 +299,7 @@ test("9. a next page is followed only on the same host, family, resource and tea
 });
 
 test("9b. a session named in another session's drills is a drill, not a session of its own (as the e03 importer treats it)", async () => {
-  const rows = [session(10, 980, { drills: [11, 12], drills_count: 2 }), session(11, 980, { drills: [] }), session(12, 980, { drills: [] }), session(20, 980, { drills: [] })];
+  const rows = [session(10, 980, { drills: [11, 12], drills_count: 2 }), session(11, 980, { drills: [], drills_count: 0 }), session(12, 980, { drills: [], drills_count: 0 }), session(20, 980, { drills: [], drills_count: 0 })];
   const { fetchImpl } = fakeServer({ routes: { "/rest/v1/team_session/": answer(200, rows, { "x-total-count": "4" }) } });
   const list = await make(fetchImpl).listSessions({ limit: 10 });
   assert.deepEqual(list.sessions.map((s) => s.id), ["10", "20"]);
@@ -370,7 +374,7 @@ test("11. stable codes, never the source's text: refused credential, missing, un
 
 test("11b. attempts, timeout and delay are bounded, and a team list without a total is refused", async () => {
   const { calls, fetchImpl } = fakeServer({ routes: { "/rest/v1/team/": answer(200, [{ id: 980 }]) } });
-  for (const over of [{ attempts: 0 }, { attempts: 6 }, { attempts: Infinity }, { attempts: 1.5 }, { attempts: "3" }, { timeoutMs: 0 }, { timeoutMs: -1 }, { timeoutMs: NaN }, { timeoutMs: 120_001 }, { retryDelayMs: -1 }, { retryDelayMs: 10_001 }, { sleep: null }, { fetchImpl: null }]) {
+  for (const over of [{ attempts: 0 }, { attempts: 4 }, { attempts: 6 }, { attempts: Infinity }, { attempts: 1.5 }, { attempts: "3" }, { timeoutMs: 0 }, { timeoutMs: -1 }, { timeoutMs: NaN }, { timeoutMs: 120_001 }, { retryDelayMs: -1 }, { retryDelayMs: 10_001 }, { sleep: null }, { fetchImpl: null }]) {
     assert.throws(() => make(fetchImpl, over), code("invalid_options"), JSON.stringify(Object.keys(over)));
   }
   await assert.rejects(make(fetchImpl).countVisibleTeams(), code("source_answer_unexpected"), "no X-Total-Count: the count is not invented from the page");
@@ -519,50 +523,40 @@ test("11d. never part of an answer: a stream that breaks, a chunk that is not by
   assert.doesNotMatch(source, /\.text\(\)|\.json\(\)|\.arrayBuffer\(\)|\.blob\(\)/);
 });
 
-test("12. what is not proven is source_capability_unavailable: no request is sent, no path is guessed, and the refusal names the capability and how much is known", async () => {
-  const { calls, fetchImpl } = fakeServer({ routes: { "/rest/v1/team_session/1/": answer(200, session(1)) } });
+test("12. units stays source_capability_unavailable; every other capability is implemented and declared; a date option on the plain list points to listSessionsByDay; the adapter builds requests for the documented resources only", async () => {
+  const { calls, fetchImpl } = fakeServer();
   const a = make(fetchImpl);
-  const expected = {
-    listSessionsByDay: ["session_list_by_date", "legacy_attested"],
-    getSession: ["session_read", "legacy_attested"],
-    getSessionDetails: ["session_details", "legacy_attested"],
-    getSessionDrillDetails: ["session_drill_details", "unknown"],
-    listAthleteSessions: ["athlete_session_list", "unknown"],
-    getAthleteSession: ["athlete_session_read", "unknown"],
-    getAthleteSessionMore: ["athlete_session_more", "unknown"],
-    getTrack: ["track_read", "unknown"],
-    getTeamThresholds: ["team_thresholds", "unknown"],
-    getUnits: ["units", "unknown"],
-    listSessionTags: ["session_tags", "legacy_attested"],
-    fetchSessionBundle: ["session_read", "legacy_attested"],
-  };
-  for (const [op, [capability, status]] of Object.entries(expected)) {
-    for (const options of [undefined, {}, { sessionId: "1" }, { id: "1", fromDay: "2026-09-01", toDay: "2026-09-14" }]) {
-      const error = await a[op](options).then(() => null, (e) => e);
-      assert.ok(error, op);
-      assert.equal(error.code, "source_capability_unavailable", op);
-      assert.equal(error.capability, capability, op);
-      assert.equal(error.capabilityStatus, status, op);
-    }
+  for (const options of [undefined, {}, { sessionId: "1" }]) {
+    const error = await a.getUnits(options).then(() => null, (e) => e);
+    assert.equal(error?.code, "source_capability_unavailable");
+    assert.equal(error.capability, "units");
+    assert.equal(error.capabilityStatus, "unknown");
   }
-  // A date window on the proven list is the unproven capability, not a silent full list.
   for (const options of [{ fromDay: "2026-09-01" }, { toDay: "2026-09-14" }, { from: "2026-09-01", to: "2026-09-14" }, { startTimestampGte: "2026-09-01" }, { date: "2026-09-14" }, { since: "2026-09-01" }]) {
     const error = await a.listSessions(options).then(() => null, (e) => e);
-    assert.equal(error.code, "source_capability_unavailable", JSON.stringify(options));
-    assert.equal(error.capability, "session_list_by_date");
+    assert.equal(error?.code, "invalid_options", JSON.stringify(options));
   }
-  assert.equal(calls.length, 0, "nothing was sent for an unproven capability");
-  assert.deepEqual(a.capabilities(), Object.fromEntries(Object.entries(REST_V1_CAPABILITIES).map(([k, v]) => [k, { status: v.status, available: v.status === "proven" }])));
-  assert.deepEqual(Object.entries(REST_V1_CAPABILITIES).filter(([, v]) => v.status === "proven").map(([k]) => k), ["team_list", "team_read", "session_list"]);
+  assert.equal(calls.length, 0, "nothing was sent");
+  const declared = a.capabilities();
+  assert.deepEqual(declared, Object.fromEntries(Object.entries(REST_V1_CAPABILITIES).map(([k, v]) => [k, { status: v.status, available: v.status === "proven" || v.status === "observed" }])));
+  assert.deepEqual(Object.entries(REST_V1_CAPABILITIES).filter(([, v]) => v.status === "proven").map(([k]) => k),
+    ["team_list", "team_read", "session_list", "session_list_by_date", "session_read", "session_details", "athlete_session_list", "athlete_session_read", "athlete_session_more", "track_read", "team_thresholds"]);
+  assert.deepEqual(Object.entries(REST_V1_CAPABILITIES).filter(([, v]) => v.status === "observed").map(([k]) => k), ["session_drill_details", "session_tags"]);
+  assert.deepEqual(Object.entries(REST_V1_CAPABILITIES).filter(([, v]) => v.status === "unknown").map(([k]) => k), ["units"]);
   // The table says what the e03 client really sends: it never lists sessions without a date window.
   const client = await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeClient.js"), "utf8");
   assert.doesNotMatch(client, /team_session\/\?team=\$\{team\}&limit=/);
   assert.match(client, /team_session\/\?team=\$\{team\}&start_timestamp_gte=/);
   assert.equal(REST_V1_CAPABILITIES.session_list.e03, "not sent without a date window");
-  // The adapter's code builds a request only for the proven resources.
+  // The adapter's code builds requests for the documented resources only, and the legacy family
+  // only through the two narrow builders.
   const source = (await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeRestV1Adapter.js"), "utf8")).split(/\r?\n/).filter((l) => !l.trim().startsWith("//")).join("\n");
   const code_ = source.slice(source.indexOf("export function createGpexeRestV1Adapter"));
-  for (const unproven of ["athlete_session/", "track/", "thresholds/", "/details", "team_session_tag", "start_timestamp_gte", "/more", "valid_on", "teamsession="]) assert.ok(!code_.includes(unproven), `no request is built for ${unproven}`);
+  for (const resource of ["team/", "team_session/", "athlete_session/", "track/", "thresholds/", "team_session_tag/", "details/", "more/"]) assert.ok(code_.includes(resource), `a request is built for ${resource}`);
+  assert.doesNotMatch(code_, /api\/team_session|brief\/|\?drill=/, "the legacy forms are built by the exported builders only, never inline");
+  assert.equal((source.match(/legacyDrillDetailsUrl\(\{/g) || []).length, 2, "the drill builder: its definition and its one caller");
+  assert.equal((source.match(/legacyBriefUrl\(\{/g) || []).length, 2, "the brief builder: its definition and its one caller");
+  assert.doesNotMatch(source, /header=true|%2F|\.\.\//, "no undocumented parameter, no encoded slash, no dotted path segment");
 });
 
 test("13. the existing e03 importer is untouched: its client still names its own root and the rest_v1 adapter is not imported by it", async () => {

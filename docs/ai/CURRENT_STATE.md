@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-02. Last `origin/main` commit checked: `47bf301` (merge of PR #131,
-`feature/gpexe-rest-v1-adapter-f3c2a` → `main`; PR #130 `6f083a7` before it).
+Last reviewed: 2026-10-03. Last `origin/main` commit checked: `e70fbd7` (merge of PR #132,
+`feature/gpexe-rest-v1-capability-probe-f3c2b` → `main`; PR #131 `47bf301` before it).
 
 ## Active phase
 
@@ -331,10 +331,14 @@ unfiltered count of the same run. (The drill rules settled then — the REST `de
 position, then by the drill's own id, with a same / mapped matrix — were withdrawn on 2026-10-01;
 see the F3c2b paragraphs below.)
 
-**The active step is F3c2b — the owner-run read-only capability probe** (branch
-`feature/gpexe-rest-v1-capability-probe-f3c2b`, owner order 2026-10-01; the full mode was
-externally reviewed at `6c51be3` and run once by the owner — see the next paragraph — and the
-drill-only mode is now in review):
+**F3c2b — the owner-run read-only capability probe — is merged and deployed** (PR #132, merge
+commit `e70fbd7` on 2026-10-02 22:16 UTC, pinned to head `f2b2e01`; `/api/health` served
+`e70fbd7` with `ok: true` three times; docs and probe only, so no route changed and no
+unauthenticated smoke was needed; no GPEXE exchange, search, link or import at the deploy, the
+Render environment and `GPEXE_IMPORT_APPLY_ENABLED` untouched). As it was built (branch
+`feature/gpexe-rest-v1-capability-probe-f3c2b`, owner order 2026-10-01; the full mode externally
+reviewed at `6c51be3` and run once by the owner — see the next paragraph — and the drill-only mode
+in several forms after it):
 `backend/scripts/gpexe-rest-v1-capability-probe.mjs` runs one exchange in the host's confirmed
 form and then GET requests only for Team ID 980 (at most 14 requests, a timeout per request,
 answers bounded at 5 MiB, redirects never followed, no retry, no database), derives every id —
@@ -482,11 +486,60 @@ ambiguous set refused with a stable code), B2 the eight confirmed reads through 
 `rest_v1` profile with the existing boundaries, B3 one narrow builder for exactly the drill path
 on the approved `server3` host (no generic `api/` family, no fallback, GET only, index bounded by
 `drills_count`, a drill answer accepted only as a 200 JSON object whose `players` is a non-empty
-map keyed by canonical athlete ids, one failed drill never a silently complete set), B4 names
+map keyed by canonical athlete ids — the "non-empty" condition was relaxed by the owner on
+2026-10-03, see the as-built paragraph below —, one failed drill never a silently complete set), B4 names
 through `drillTags` with provenance `drill_tags` or `index_fallback`, no new table or migration,
 B5 the listed tests, B6 `code-reviewer` + `security-reviewer`. The PR #132 merge decision is the
 owner's. No GPEXE request by the main session, no route, no database write, no credential
 storage, no binding, no import.
+
+**The active step is F3c2c — the `server3` read adapter: the `listSessions()` fix, the eight
+proven reads, the narrow drill read and the drill names** (branch
+`feature/gpexe-server3-adapter-f3c2c` from `e70fbd7`, owner order 2026-10-03; backend adapter,
+tests and documentation only; **not merged, not run against the real server**). As built:
+`backend/src/gpexeRestV1Adapter.js` tells the session list apart into parents and drills by the
+confirmed list structure only and refuses an ambiguous page with `source_list_ambiguous` instead
+of thinning it (a real parent named in another row's `drills` is no longer dropped; a named row
+with drills of its own, an entry named twice, a self-reference or a `drills` / `drills_count`
+disagreement is refused; an entry naming no listed row is only counted); implements the eight
+proven `rest_v1` reads through the existing profile — the date window (`listSessionsByDay`, at
+most 31 days, read from exactly one day earlier so a drill's parent of the evening before is seen
+and a drill row is never listed as a session, the proved `%20` / `%3A` encoding, which is the one widening of the host path rule
+in `sourceHosts.js`: exactly those two percent sequences in a query value), the session read
+that confirms a parent, the whole-session details, the athlete rows, one row, its `/more/`, its
+track and the thresholds, each dependent read only under a session this adapter instance
+confirmed; adds one narrow builder, `legacyDrillDetailsUrl()`, for exactly
+`https://server3.gpexe.com/api/team_session/<confirmed parent id>/details/?drill=<index>` with an
+integer index from 0 to `drills_count - 1` (and `legacyBriefUrl()` for `…/brief/`) on the approved
+`server3` row only — no generic `api/` family, no fallback, GET only; accepts a drill answer only
+as a 200 JSON object whose `players` is a map of canonical athlete ids to metric values (an empty
+map is valid — a drill not yet computed, owner decision 2026-10-03 — while a missing, null, array
+or other shape fails; the top-level `team`, an aggregate, and `teamsession` are neither identity
+nor returned); sends no retry by default (one attempt per read, at most three on request); reads a
+session only when a session list of this instance classified it as a parent (so a drill row is
+never read, confirmed or bundled as a session) and an athlete row only when the confirmed session's
+own list named it; returns from every read only the fields the mapper and the candidate service read
+(explicit projections, `BUNDLE_FIELDS`); withdraws, on a refresh of a session or of its athlete list,
+every row and track confirmed under it and discards a concurrent stale answer (`session_refreshed`);
+treats a brief of another session, an unknown brief shape or a non-canonical tag id as an error
+and falls back to `Drill N` only for a missing or unreachable brief (owner's external review of
+PR #133, 2026-10-03; after its narrow re-reviews also: a projected value must be a scalar or a
+number list — `field_shape_unknown` otherwise —, an older list answer never overrides a newer
+classification, a dependent read that lands after a refresh is discarded, and a row once seen as a
+drill cannot return as a parent through a later list); ends
+a drill set at the first drill that cannot be read (`complete: false`, the failed index and code,
+never another index, host or form; a refused credential or a foreign team ends the operation);
+names drills from an unambiguous `drillTags` mapping of the parent's brief translated through the
+bound team's tag catalogue, otherwise `Drill N`, with `labelEvidence` `drill_tags` or
+`index_fallback`, never from the day's other sessions; and composes `fetchSessionBundle` in the
+e03 bundle shape plus `drillsStatus` and `drillLabels`. The `e03` importer, the host allowlist,
+the routes, the database, migrations and the frontend are untouched; no credential, binding,
+Connect / Test route, UI or import. Contract tests with a fake fetch only
+(`backend/tests/gpexe-rest-v1-adapter-reads.test.mjs`, `…-adapter.test.mjs`,
+`source-hosts-server3.test.mjs`), with mutation evidence for the key guards. Open compatibility
+note: the handbook is GPEXE 6, the server reports 9.11.8 (a GPEXE support confirmation is welcome,
+not a blocker). The import policy for an incomplete drill set and the storage of drill labels are
+decided in the later integration PR.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -952,6 +1005,9 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #132 (`e70fbd7`, merged 2026-10-02 22:16 UTC pinned to head `f2b2e01`) is deployed:
+  `/api/health` served `e70fbd7` with `ok: true` three times on 2026-10-02. Docs and probe only:
+  no migration, no route change; v28 stays the last migration inferred on the deployed database.
 - PR #122 (`cc4b0cc`) is deployed (owner, 2026-09-25). **v25 on the deployed database is
   inferred** from the successful server start of that deploy (`npm start` runs
   `node src/migrate.js &&` the server); the deployed database was not queried.
@@ -1058,9 +1114,11 @@ pre-existing; pass/fail counts don't belong in this file
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
 - **Mandatory before the F3c2 routes or any import: fix the drills filter of the `rest_v1`
-  adapter's `listSessions()`** (owner, 2026-10-01, after the review of PR #132). As the `e03`
-  importer does, `backend/src/gpexeRestV1Adapter.js` leaves out every session whose id another
-  session names in its `drills`. On `rest_v1` a `drills` entry is not a `team_session` id, or at
+  adapter's `listSessions()`** (owner, 2026-10-01, after the review of PR #132). **Addressed in
+  the F3c2c adapter PR (not merged): the classification refuses an ambiguous page instead of
+  thinning it, and the date window reads one day back for a drill's parent; see the active step
+  above.** As built in F3c2a, like the `e03` importer, `backend/src/gpexeRestV1Adapter.js` left out
+  every session whose id another session named in its `drills`. On `rest_v1` a `drills` entry is not a `team_session` id, or at
   least that path answers a different session (first drill-only run, 2026-10-01), so that filter
   may leave out real sessions and may keep drill rows as sessions (duplicate data in an import);
   the fix must cover both directions. A separate, small PR,
@@ -1258,14 +1316,9 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's merge decision on the F3c2b probe PR (F3c2b is closed: eight reads confirmed, the
-drill endpoint observed and its use settled by the official handbook, drills kept in the first
-planned import, no further probe); then, only after that merge and a new explicit owner order, a
-separate small adapter PR from the then `origin/main`: the mandatory `listSessions()`
-drills-filter fix, the eight confirmed reads (`docs/ai/gpexe-rest-v1-compatibility.md` section 2,
-rows 1b–7 and 9), one narrow builder for exactly the drill path on the approved `server3` host
-(row 8; no generic `api/` family) and drill names through `drillTags` with the fallback
-`Drill N`; and, on the owner's order, the F3c2
+The owner's external review and merge decision on the F3c2c adapter PR (the `listSessions()`
+fix, the eight confirmed reads, the narrow drill read and the drill names; none of it run against
+the real server); then, on the owner's order, the F3c2
 routes, built against the contract in `docs/ai/source-connections-f3c2-contract.md` section 2,
 then F3c3–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
