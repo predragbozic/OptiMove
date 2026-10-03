@@ -57,6 +57,8 @@ const make = (fetchImpl, over = {}) => createSourceAdapter({
   fetchImpl, attempts: 1, sleep: async () => {}, ...over,
 });
 const LIST = "/rest/v1/team_session/?team=980&limit=100";
+// A session read needs the list classification first (a drill row is never read as a session).
+const primed = async (fetchImpl, over = {}) => { const a = make(fetchImpl, over); await a.listSessions(); return a; };
 const listOf = (rows, over = {}) => fakeServer({ [LIST]: answer(200, rows, { "x-total-count": String(rows.length) }), ...over });
 const idsOf = (result) => result.sessions.map((s) => s.id);
 
@@ -202,6 +204,7 @@ const errorOf = (p) => p.then(() => null, (e) => e);
 async function confirmedAdapter(over, make_ = make) {
   const server = full(over);
   const a = make_(server.fetchImpl);
+  await a.listSessions();
   await a.getSession({ sessionId: "100" });
   // The rows are listed so that a row read is allowed; a fixture whose list is
   // meant to fail is exercised by the test itself through the operation.
@@ -212,10 +215,10 @@ async function confirmedAdapter(over, make_ = make) {
 
 test("B2.1 the eight reads, each a GET on server3 under /rest/v1/ for the bound team, hang off a session confirmed first; the bundle has the importer's shape, the drill set is complete, and no athlete name leaves the adapter", async () => {
   const { calls, fetchImpl } = full();
-  const a = make(fetchImpl);
+  const a = await primed(fetchImpl);
   const bundle = await a.fetchSessionBundle({ sessionId: "100" });
   assert.deepEqual(pathsOf(calls), [
-    PARENT, ATHLETES, "/rest/v1/athlete_session/500/", "/rest/v1/athlete_session/500/more/", "/rest/v1/track/900/",
+    LIST, PARENT, ATHLETES, "/rest/v1/athlete_session/500/", "/rest/v1/athlete_session/500/more/", "/rest/v1/track/900/",
     "/rest/v1/athlete_session/501/", "/rest/v1/athlete_session/501/more/", "/rest/v1/track/901/",
     WHOLE, D0, D1, BRIEF, TAGS, THRESH,
   ]);
@@ -244,7 +247,8 @@ test("B2.1 the eight reads, each a GET on server3 under /rest/v1/ for the bound 
 
 test("B2.2 nothing without a confirmed parent: details, drills, athlete rows, thresholds, labels and the bundle's dependents refuse before any request; a session of another team never becomes confirmed", async () => {
   const { calls, fetchImpl } = full();
-  const a = make(fetchImpl);
+  const a = await primed(fetchImpl);
+  const sent = calls.length;
   for (const op of ["getSessionDetails", "getSessionDrills", "listAthleteSessions", "getTeamThresholds", "getDrillLabels"]) {
     await assert.rejects(a[op]({ sessionId: "100" }), code("session_not_confirmed"), op);
   }
@@ -252,21 +256,24 @@ test("B2.2 nothing without a confirmed parent: details, drills, athlete rows, th
   await assert.rejects(a.getAthleteSession({ sessionId: "100", athleteSessionId: "500" }), code("session_not_confirmed"));
   await assert.rejects(a.getAthleteSessionMore({ athleteSessionId: "500" }), code("athlete_row_not_confirmed"));
   await assert.rejects(a.getTrack({ trackId: "900" }), code("track_not_confirmed"));
-  assert.equal(calls.length, 0, "nothing was sent");
+  assert.equal(calls.length, sent, "nothing was sent");
   // A session of another team, or one that answers another id, is refused and does not confirm anything.
   const foreign = full({ [PARENT]: answer(200, { id: 100, team: 981, drills_count: 2, start_timestamp: "2026-09-14T10:00:00" }) });
-  const b = make(foreign.fetchImpl);
+  const b = await primed(foreign.fetchImpl);
   await assert.rejects(b.getSession({ sessionId: "100" }), code("source_team_mismatch"));
   await assert.rejects(b.getSessionDetails({ sessionId: "100" }), code("session_not_confirmed"));
   const other = full({ [PARENT]: answer(200, { id: 150, team: 980, drills_count: 2, start_timestamp: "2026-09-14T10:00:00" }) });
-  await assert.rejects(make(other.fetchImpl).getSession({ sessionId: "100" }), code("source_answer_unexpected"));
+  await assert.rejects((await primed(other.fetchImpl)).getSession({ sessionId: "100" }), code("source_answer_unexpected"));
   for (const team of [{ id: 980 }, "https://server3.gpexe.com/rest/v1/team/980/", null, undefined]) {
     const s = full({ [PARENT]: answer(200, { id: 100, team, drills_count: 2 }) });
-    await assert.rejects(make(s.fetchImpl).getSession({ sessionId: "100" }), code("source_answer_unexpected"), JSON.stringify(team));
+    await assert.rejects((await primed(s.fetchImpl)).getSession({ sessionId: "100" }), code("source_answer_unexpected"), JSON.stringify(team));
   }
   // A confirmed session of 980 is not a confirmed session for an adapter bound to 981.
-  const bound981 = make(full().fetchImpl, { boundSourceTeamId: "981" });
-  await assert.rejects(bound981.getSession({ sessionId: "100" }), code("source_team_mismatch"));
+  const other981 = full();
+  const bound981 = make(other981.fetchImpl, { boundSourceTeamId: "981" });
+  await assert.rejects(bound981.listSessions(), (e) => e instanceof SourceAdapterError, "team 981 has no list here");
+  await assert.rejects(bound981.getSession({ sessionId: "100" }), code("session_not_listed"));
+  assert.ok(!other981.calls.some((c) => c.url.includes("/team_session/100/")), "the session of 980 is never asked for");
   // Ids are canonical or refused; a team option is refused everywhere.
   for (const bad of ["", "0100", "100 ", "x", null, {}, 1.5, "100&team=981"]) await assert.rejects(a.getSession({ sessionId: bad }), code("invalid_id"), JSON.stringify(bad));
   for (const op of ["getSession", "getSessionDetails", "getSessionDrills", "listAthleteSessions", "getTeamThresholds", "getDrillLabels", "fetchSessionBundle", "listSessionsByDay", "listSessionTags"]) {
@@ -317,7 +324,7 @@ test("B2.3 athlete rows: whole or refused, every row of the confirmed session; a
     [ATHLETES]: answer(200, [athleteRow(500, 4711)], { "x-total-count": "2", link: '<https://server3.gpexe.com/rest/v1/athlete_session/?teamsession=100&limit=100&offset=1>; rel="next"' }),
     "/rest/v1/athlete_session/?teamsession=100&limit=100&offset=1": answer(200, [athleteRow(501, 4712)], { "x-total-count": "2" }),
   }));
-  const f = make(paged.fetchImpl);
+  const f = await primed(paged.fetchImpl);
   await f.getSession({ sessionId: "100" });
   assert.deepEqual((await f.listAthleteSessions({ sessionId: "100" })).rows.map((r) => r.id), [500, 501]);
   assert.ok(!calls.some((x) => x.url.includes("teamsession=200")));
@@ -438,7 +445,7 @@ test("B3.2 the adapter sends the legacy reads only through the builders: never f
   assert.ok(!one.calls.some((c) => c.url.includes("drill=1")));
   // drills_count beyond the bound is refused at the session read.
   const many = full({ [PARENT]: answer(200, { id: 100, team: 980, drills_count: 31, start_timestamp: "2026-09-14T10:00:00" }) });
-  await assert.rejects(make(many.fetchImpl).getSession({ sessionId: "100" }), code("drills_count_out_of_range"));
+  await assert.rejects((await primed(many.fetchImpl)).getSession({ sessionId: "100" }), code("drills_count_out_of_range"));
 });
 
 test("B4.1 a drill answer is accepted only as a 200 JSON object whose players is a map of canonical athlete ids with metric values; its team and teamsession are not read as identity", async () => {
@@ -558,23 +565,35 @@ test("B5.1 drill names: drillTags of the parent's brief, mapped by zero-based po
     ["more than drills_count", { drillTags: [31, 32, 33] }],
     ["a duplicate tag at two positions", { drillTags: [31, 31] }],
     ["an unreadable entry", { drillTags: [31, { name: "Rondo" }] }],
-    ["a URL entry", { drillTags: ["https://evil.example/tag/31", 32] }],
     ["shape B with an index out of range", { drillTags: [{ drill: 2, tag: 31 }] }],
     ["shape B with a decimal index", { drillTags: [{ drill: 0.5, tag: 31 }] }],
     ["shape B with the same drill twice", { drillTags: [{ drill: 0, tag: 31 }, { drill: 0, tag: 32 }] }],
     ["shape B without a tag", { drillTags: [{ drill: 0 }] }],
-    ["shape B with a name instead of an id", { drillTags: [{ drill: 0, tag: "Rondo" }] }],
-    ["a brief of another session", { id: 150, drillTags: [31, 32] }],
     ["an unknown tag id", { drillTags: [34, 35] }],
   ];
+  // A tag id that is there but not canonical, or a brief of another session, is a refusal, never a label (external review 2026-10-03).
+  for (const [what, brief, reason] of [
+    ["a URL entry", { drillTags: ["https://evil.example/tag/31", 32] }, "tag_id_not_canonical"],
+    ["shape B with a name instead of an id", { drillTags: [{ drill: 0, tag: "Rondo" }] }, "tag_id_not_canonical"],
+    ["a brief of another session", { id: 150, drillTags: [31, 32] }, "brief_of_another_session"],
+  ]) {
+    const s = await confirmedAdapter({ [BRIEF]: answer(200, brief) });
+    const e = await errorOf(s.a.getDrillLabels({ sessionId: "100" }));
+    assert.equal(e?.code, "source_answer_unexpected", what);
+    assert.equal(e.reason, reason, what);
+  }
   for (const [what, brief] of fallbacks) {
     const s = await confirmedAdapter({ [BRIEF]: answer(200, brief) });
     assert.deepEqual(label(await s.a.getDrillLabels({ sessionId: "100" })), fb(2), what);
   }
-  // A brief that cannot be read is a fallback, not an error; a refused credential is an error.
-  for (const [what, resp] of [["404", answer(404, {})], ["500", answer(500, "")], ["not JSON", answer(200, "<html>")], ["a list", answer(200, [31, 32])]]) {
+  // A missing or unreachable brief is a fallback; an unreadable or wrong-shaped brief and a refused credential are errors (external review 2026-10-03).
+  for (const [what, resp] of [["404", answer(404, {})], ["500", answer(500, "")]]) {
     const s = await confirmedAdapter({ [BRIEF]: resp });
     assert.deepEqual(label(await s.a.getDrillLabels({ sessionId: "100" })), fb(2), what);
+  }
+  for (const [what, resp] of [["not JSON", answer(200, "<html>")], ["a list", answer(200, [31, 32])]]) {
+    const s = await confirmedAdapter({ [BRIEF]: resp });
+    await assert.rejects(s.a.getDrillLabels({ sessionId: "100" }), code("source_answer_unexpected"), what);
   }
   const denied = await confirmedAdapter({ [BRIEF]: answer(401, "") });
   await assert.rejects(denied.a.getDrillLabels({ sessionId: "100" }), code("source_auth_rejected"));
@@ -604,8 +623,12 @@ test("B5.2 parseDrillTags on its own: the two candidate shapes and nothing else"
   assert.deepEqual(m([null, null], 2), []);
   assert.deepEqual(m([{ drill: 1, tag: 32 }], 2), [[1, "32"]]);
   assert.deepEqual(m([], 0), []);
-  for (const [v, n] of [[[31], 2], [[31, 32, 33], 2], [[31, 31], 2], [[{ drill: 0, tag: 31 }, { drill: 1, tag: 31 }], 2], [[{ drill: "0", tag: 31 }], 2], [[{ drill: 0, tag: 31 }, 32], 2], [[0.5], 1], [[-1], 1], ["31", 1], [{ 0: 31 }, 1], [null, 1], [[31], -1], [[31], 1.5]]) {
+  for (const [v, n] of [[[31], 2], [[31, 32, 33], 2], [[31, 31], 2], [[{ drill: 0, tag: 31 }, { drill: 1, tag: 31 }], 2], [[{ drill: "0", tag: 31 }], 2], [[{ drill: 0, tag: 31 }, 32], 2], ["31", 1], [{ 0: 31 }, 1], [null, 1], [[31], -1], [[31], 1.5]]) {
     assert.equal(m(v, n), null, JSON.stringify([v, n]));
+  }
+  // A non-canonical tag id in either shape is a refusal, not an unknown shape.
+  for (const [v, n] of [[[0.5], 1], [[-1], 1], [["007"], 1], [[{ drill: 0, tag: "x" }], 1]]) {
+    assert.throws(() => parseDrillTags(v, n), (e) => e.code === "source_answer_unexpected" && e.reason === "tag_id_not_canonical", JSON.stringify([v, n]));
   }
 });
 
@@ -704,16 +727,20 @@ test("B7.2 an empty players map is a valid answer (a drill not yet computed): th
 test("B7.3 no retry by default: a 5xx and a network failure each cost exactly one request with the default adapter; a caller may ask for at most three attempts; and a programming error inside a drill read propagates instead of becoming a failed drill", async () => {
   const five = full({ [PARENT]: answer(503, { detail: "x" }) });
   const dflt = createSourceAdapter({ sourceSystem: "gpexe", hostKey: "server3", catalogRow: row("server3"), credential: CREDENTIAL, boundSourceTeamId: "980", fetchImpl: five.fetchImpl, sleep: async () => {} });
+  await dflt.listSessions();
+  const listed = five.calls.length;
   await assert.rejects(dflt.getSession({ sessionId: "100" }), code("source_unavailable"));
-  assert.equal(five.calls.length, 1);
+  assert.equal(five.calls.length - listed, 1);
   const down = { calls: 0, fetchImpl: async () => { down.calls += 1; throw new TypeError("fetch failed"); } };
   const dflt2 = createSourceAdapter({ sourceSystem: "gpexe", hostKey: "server3", catalogRow: row("server3"), credential: CREDENTIAL, boundSourceTeamId: "980", fetchImpl: down.fetchImpl, sleep: async () => {} });
-  await assert.rejects(dflt2.getSession({ sessionId: "100" }), code("source_unavailable"));
+  await assert.rejects(dflt2.listSessions(), code("source_unavailable"));
   assert.equal(down.calls, 1);
   assert.throws(() => make(five.fetchImpl, { attempts: 4 }), code("invalid_options"));
   const three = full({ [PARENT]: answer(503, { detail: "x" }) });
-  await assert.rejects(make(three.fetchImpl, { attempts: 3 }).getSession({ sessionId: "100" }), code("source_unavailable"));
-  assert.equal(three.calls.length, 3);
+  const t3 = await primed(three.fetchImpl, { attempts: 3 });
+  const listed3 = three.calls.length;
+  await assert.rejects(t3.getSession({ sessionId: "100" }), code("source_unavailable"));
+  assert.equal(three.calls.length - listed3, 3);
   // A TypeError thrown while reading a drill answer is not a failed drill.
   const broken = { ...answer(200, { players: { 4711: { a: 1 } } }), get body() { throw new TypeError("boom"); } };
   const { a } = await confirmedAdapter({ [D1]: broken });
@@ -733,6 +760,7 @@ test("B7.4 an athlete row is read only when the confirmed session's own list nam
   let parentAnswer = fullRoutes()[PARENT];
   const flip = fakeServer({ ...fullRoutes(), [PARENT]: () => parentAnswer });
   const b = make(flip.fetchImpl);
+  await b.listSessions();
   await b.getSession({ sessionId: "100" });
   await b.listAthleteSessions({ sessionId: "100" });
   parentAnswer = answer(200, { id: 100, team: 981, drills_count: 2, start_timestamp: "2026-09-14T10:00:00" });
@@ -751,7 +779,7 @@ test("B7.5 next-page links carry only limit and offset (and the window bounds) a
   const link = (q) => ({ "x-total-count": "2", link: `<https://server3.gpexe.com/rest/v1/athlete_session/?teamsession=100&${q}>; rel="next"` });
   for (const q of ["team_id=981&limit=100&offset=1", "teamId=981&limit=100&offset=1", "TEAM=981&limit=100&offset=1", "limit=100&offset=1&cursor=abc", "limit=100&offset=-1", "limit=abc&offset=1", "limit=100&offset=1&page=2"]) {
     const s = full({ [ATHLETES]: answer(200, [athleteRow(500, 4711)], link(q)) });
-    const a = make(s.fetchImpl);
+    const a = await primed(s.fetchImpl);
     await a.getSession({ sessionId: "100" });
     await assert.rejects(a.listAthleteSessions({ sessionId: "100" }), code("source_answer_unexpected"), q);
     assert.ok(!s.calls.some((c) => c.url.includes("offset=")), `nothing followed for ${q}`);
@@ -760,7 +788,7 @@ test("B7.5 next-page links carry only limit and offset (and the window bounds) a
     [ATHLETES]: answer(200, [athleteRow(500, 4711)], link("limit=100&offset=1")),
     "/rest/v1/athlete_session/?teamsession=100&limit=100&offset=1": answer(200, [athleteRow(501, 4712, { track: 901 })], { "x-total-count": "2" }),
   }));
-  const g = make(good.fetchImpl);
+  const g = await primed(good.fetchImpl);
   await g.getSession({ sessionId: "100" });
   assert.equal((await g.listAthleteSessions({ sessionId: "100" })).rows.length, 2);
   for (const q of ["team=980&limit=2&offset=2&page=3", "team=980&limit=2&offset=x", "team=980&limit=2&offset=2&team_id=980"]) {
@@ -781,4 +809,298 @@ test("B7.6 doc lint: the compatibility document no longer carries the F3c2a sent
   assert.doesNotMatch(doc, /is listed as a session by `listSessionsByDay`|, or widened,/);
   const currentState = await fsp.readFile(path.resolve(ROOT, "docs/ai/CURRENT_STATE.md"), "utf8");
   assert.match(currentState, /non-empty\s+map keyed by canonical athlete ids[^.]*relaxed by the owner/);
+});
+
+// ---------------------------------------------------------------------------
+// B8. External review of PR #133 (2026-10-03): the parent classification as the
+// precondition of a session read, explicit projections, revocation under
+// refresh, strict drill labels, canonical tag ids.
+// ---------------------------------------------------------------------------
+const { BUNDLE_FIELDS, projectMore } = await import("../src/gpexeRestV1Adapter.js");
+
+test("B8.1 a session is read only when a session list of this instance classified it as a parent: no list → no request; a drill row is refused as a session and as a bundle; a later list that reclassifies a parent as a drill withdraws its confirmation", async () => {
+  const server = full();
+  const a = make(server.fetchImpl);
+  await assert.rejects(a.getSession({ sessionId: "100" }), code("session_not_listed"));
+  await assert.rejects(a.fetchSessionBundle({ sessionId: "100" }), code("session_not_listed"));
+  assert.equal(server.calls.length, 0, "nothing was sent");
+  await a.listSessions();
+  // 101 and 102 are drill rows of 100 on that page: never a session, never a bundle, no request.
+  const sent = server.calls.length;
+  for (const drill of ["101", "102"]) {
+    await assert.rejects(a.getSession({ sessionId: drill }), code("session_not_listed"), drill);
+    await assert.rejects(a.fetchSessionBundle({ sessionId: drill }), code("session_not_listed"), drill);
+  }
+  assert.equal(server.calls.length, sent);
+  // A parent of the list is readable; a window list classifies too (its look-back parents as well).
+  assert.equal((await a.getSession({ sessionId: "100" })).id, 100);
+  const windowed = full({ [WINDOW]: answer(200, [parent(300, [301], 980, { start_timestamp: "2026-09-13T23:30:00" }), session(301, 980, { start_timestamp: "2026-09-14T00:05:00" })], { "x-total-count": "2" }), "/rest/v1/team_session/300/": answer(200, { id: 300, team: 980, drills_count: 1, start_timestamp: "2026-09-13T23:30:00" }) });
+  const w = make(windowed.fetchImpl);
+  await w.listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
+  assert.equal((await w.getSession({ sessionId: "300" })).id, 300);
+  await assert.rejects(w.getSession({ sessionId: "301" }), code("session_not_listed"));
+  // Reclassification: a page on which 100 is named as a drill of 900 withdraws 100 and everything under it.
+  let page = fullRoutes()[LIST];
+  const flip = fakeServer({ ...fullRoutes(), [LIST]: () => page });
+  const b = make(flip.fetchImpl);
+  await b.listSessions();
+  await b.getSession({ sessionId: "100" });
+  await b.listAthleteSessions({ sessionId: "100" });
+  await b.getAthleteSession({ sessionId: "100", athleteSessionId: "500" });
+  page = answer(200, [parent(900, [100]), session(100), session(200)], { "x-total-count": "3" });
+  await b.listSessions();
+  const before = flip.calls.length;
+  await assert.rejects(b.getSession({ sessionId: "100" }), code("session_not_listed"));
+  await assert.rejects(b.getSessionDetails({ sessionId: "100" }), code("session_not_confirmed"));
+  await assert.rejects(b.getAthleteSessionMore({ athleteSessionId: "500" }), code("athlete_row_not_confirmed"));
+  await assert.rejects(b.getTrack({ trackId: "900" }), code("track_not_confirmed"));
+  assert.equal(flip.calls.length, before, "nothing was sent after the reclassification");
+});
+
+test("B8.2 explicit projections: every read returns exactly the fields the importer reads and nothing the source adds, in any spelling or nesting; the lists of fields cover every field the mapper source reads", async () => {
+  const extra = { first_name: "Marker Athlete Name", athlete_obj: { name: "someone" }, notes: "a private note", zzzOpaqueKey: 1, submitted_by: "someone" };
+  const { a } = await confirmedAdapter({
+    [PARENT]: answer(200, { id: 100, team: 980, category_name: "Training", start_timestamp: "2026-09-14T10:00:00", end_timestamp: "2026-09-14T11:00:00", updated_on: "2026-09-14T12:00:00", drills_count: 2, is_stats_valid: true, total_time: 3600, total_distance: 5000, max_v: 8, drills: [101, 102], ...extra }),
+    [ATHLETES]: answer(200, [athleteRow(500, 4711, extra), athleteRow(501, 4712, { track: 901, ...extra })], { "x-total-count": "2" }),
+    "/rest/v1/athlete_session/500/": answer(200, athleteRow(500, 4711, { is_stats_valid: true, ...extra })),
+    "/rest/v1/athlete_session/500/more/": answer(200, { athletesession_id: 500, events: { acceleration_events_count: 3, acceleration_events_threshold_value: 2.5, acceleration_events_duration: 0.3, deceleration_events_count: 2, deceleration_events_threshold_value: -2.5, deceleration_events_duration: 0.3, first_name: "Marker Athlete Name", zzzOpaqueKey: 1 }, complementary_data: { power: [{ extremes: [25, 60], distance: 100, is_ready: true, label: "someone" }, "not a zone"], speed: [{ extremes: [7, null], distance: 50, is_ready: true }], heart: [{ extremes: [1, 2] }] }, ...extra }),
+    "/rest/v1/track/900/": answer(200, { id: 900, athlete: 4711, timezone: "Europe/Sarajevo", timestamp: "2026-09-14T09:50:00", utc_timestamp: 1789000000, lat: 1, lng: 2, ...extra }),
+    [THRESH]: answer(200, { id: 1473, team: 980, validity_start: "2026-01-01T00:00:00", validity_end: null, power_thresholds: [20, 25, 60, 75], speed_thresholds: [5.5, 7], acceleration_events_threshold: 2.5, acceleration_events_duration: 0.3, deceleration_events_threshold: -2.5, deceleration_events_duration: 0.3, ...extra }),
+  });
+  const s = await a.getSession({ sessionId: "100" });
+  assert.deepEqual(Object.keys(s).sort(), [...BUNDLE_FIELDS.teamSession].sort());
+  const { rows } = await a.listAthleteSessions({ sessionId: "100" });
+  for (const r of rows) assert.ok(Object.keys(r).every((k) => BUNDLE_FIELDS.athleteSession.includes(k)) && Object.keys(r).length === BUNDLE_FIELDS.athleteSession.length - 1, "a listed row carries only projected fields (the fixture has no is_stats_valid)");
+  const r = await a.getAthleteSession({ sessionId: "100", athleteSessionId: "500" });
+  assert.deepEqual(Object.keys(r).sort(), [...BUNDLE_FIELDS.athleteSession].sort());
+  const m = await a.getAthleteSessionMore({ athleteSessionId: "500" });
+  assert.deepEqual(m, {
+    athletesession_id: 500,
+    events: { acceleration_events_count: 3, acceleration_events_threshold_value: 2.5, acceleration_events_duration: 0.3, deceleration_events_count: 2, deceleration_events_threshold_value: -2.5, deceleration_events_duration: 0.3 },
+    complementary_data: { power: [{ extremes: [25, 60], distance: 100, is_ready: true }], speed: [{ extremes: [7, null], distance: 50, is_ready: true }] },
+  });
+  const tr = await a.getTrack({ trackId: "900" });
+  assert.deepEqual(Object.keys(tr).sort(), [...BUNDLE_FIELDS.track].sort());
+  const th = await a.getTeamThresholds({ sessionId: "100" });
+  assert.deepEqual(Object.keys(th).sort(), [...BUNDLE_FIELDS.teamThresholds].sort());
+  // A field the source leaves out is simply absent — never invented.
+  const sparse = await confirmedAdapter({ [PARENT]: answer(200, { id: 100, team: 980, drills_count: 2, start_timestamp: "2026-09-14T10:00:00" }) });
+  assert.deepEqual(await sparse.a.getSession({ sessionId: "100" }), { id: 100, team: 980, drills_count: 2, start_timestamp: "2026-09-14T10:00:00" });
+  assert.deepEqual(projectMore({ athletesession_id: 1 }), { athletesession_id: 1, events: {}, complementary_data: {} });
+  assert.deepEqual(projectMore({ events: null, complementary_data: "x" }), { events: {}, complementary_data: {} });
+  // The whole bundle, as the importer gets it, carries no unknown key anywhere.
+  const bundle = await a.fetchSessionBundle({ sessionId: "100" });
+  noNames(bundle, ["first_name", "athlete_obj", "zzzOpaqueKey", "heart", "\"lat\"", "\"lng\""]);
+  // Every field the mapper reads from a session, row, track, threshold set, events or zone is in the lists.
+  const mapper = await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeImportMapper.js"), "utf8");
+  const reads = (re) => new Set([...mapper.matchAll(re)].map((m) => m[1]));
+  const subset = (set, list, what) => { for (const k of set) assert.ok(list.includes(k), `${what}.${k} is read by the mapper but not projected`); };
+  subset(reads(/\bsession\.([a-z_]+)\b/g), BUNDLE_FIELDS.teamSession, "teamSession");
+  subset(reads(/\b(?:row|r)\.([a-z_]+)\b/g), BUNDLE_FIELDS.athleteSession, "athleteSession");
+  subset(reads(/\btrack\.([a-z_]+)\b/g), BUNDLE_FIELDS.track, "track");
+  subset(reads(/\bthresholds\.([a-z_]+)\b/g), BUNDLE_FIELDS.teamThresholds, "teamThresholds");
+  subset(reads(/\bmore\?\.([a-z_]+)\b/g), BUNDLE_FIELDS.more, "more");
+  subset(reads(/complementary_data\?\.([a-z_]+)\b/g), BUNDLE_FIELDS.complementaryData, "complementary_data");
+  subset(new Set([...reads(/\bz\??\.([a-z_]+)\b/g), ...reads(/matching\[0\]\.([a-z_]+)\b/g)]), BUNDLE_FIELDS.zone, "zone");
+  const suffixes = [...reads(/events\[`\$\{prefix\}_([a-z_]+)`\]/g)];
+  assert.ok(suffixes.length >= 3, "the event suffixes the mapper reads were found");
+  for (const prefix of ["acceleration_events", "deceleration_events"]) subset(new Set(suffixes.map((x) => `${prefix}_${x}`)), BUNDLE_FIELDS.moreEvents, "more.events");
+  // The candidate service reads two session fields and two row fields from the stored bundle.
+  for (const k of ["category_name", "drills_count"]) assert.ok(BUNDLE_FIELDS.teamSession.includes(k));
+  for (const k of ["athlete", "teamsession"]) assert.ok(BUNDLE_FIELDS.athleteSession.includes(k));
+  // And the other way round: every projected field is read by a consumer (mapper, or the service's four fields).
+  const consumed = (re, extra) => new Set([...reads(re), ...extra]);
+  const sessionReads = consumed(/\bsession\.([a-z_]+)\b/g, ["category_name", "drills_count"]);
+  for (const k of BUNDLE_FIELDS.teamSession) assert.ok(sessionReads.has(k), `teamSession.${k} is projected but nothing reads it`);
+  const rowReads = consumed(/\b(?:row|r)\.([a-z_]+)\b/g, ["athlete", "teamsession", "total_time", "total_distance", "max_v"]);
+  for (const k of BUNDLE_FIELDS.athleteSession) assert.ok(rowReads.has(k), `athleteSession.${k} is projected but nothing reads it`);
+  for (const k of BUNDLE_FIELDS.track) assert.ok(reads(/\btrack\.([a-z_]+)\b/g).has(k), `track.${k}`);
+  for (const k of BUNDLE_FIELDS.teamThresholds) assert.ok(reads(/\bthresholds\.([a-z_]+)\b/g).has(k), `teamThresholds.${k}`);
+});
+
+test("B8.3 a refresh of the session or of its athlete list withdraws every row and track confirmed under it, and an answer that started before the refresh is discarded unrecorded (concurrent stale answers)", async () => {
+  // Sequential: re-read of the session, then of the list.
+  const { a } = await confirmedAdapter();
+  await a.getAthleteSession({ sessionId: "100", athleteSessionId: "500" });
+  await a.getAthleteSession({ sessionId: "100", athleteSessionId: "501" });
+  await a.getSession({ sessionId: "100" });
+  await assert.rejects(a.getAthleteSessionMore({ athleteSessionId: "500" }), code("athlete_row_not_confirmed"));
+  await assert.rejects(a.getTrack({ trackId: "900" }), code("track_not_confirmed"));
+  await assert.rejects(a.getTrack({ trackId: "901" }), code("track_not_confirmed"));
+  await assert.rejects(a.getAthleteSession({ sessionId: "100", athleteSessionId: "500" }), code("athlete_row_not_listed"));
+  await a.listAthleteSessions({ sessionId: "100" });
+  await a.getAthleteSession({ sessionId: "100", athleteSessionId: "500" });
+  await a.listAthleteSessions({ sessionId: "100" });
+  await assert.rejects(a.getAthleteSessionMore({ athleteSessionId: "500" }), code("athlete_row_not_confirmed"));
+  await assert.rejects(a.getTrack({ trackId: "900" }), code("track_not_confirmed"));
+  // Concurrent: the list answer is held while the session is re-read; the stale list records nothing.
+  const gate = () => { let release; const p = new Promise((r) => { release = r; }); return { p, release }; };
+  const hold = gate();
+  const routes = fullRoutes();
+  const slow = fakeServer({ ...routes, [ATHLETES]: async () => { await hold.p; return routes[ATHLETES]; } });
+  const b = make(slow.fetchImpl);
+  await b.listSessions();
+  await b.getSession({ sessionId: "100" });
+  const staleList = b.listAthleteSessions({ sessionId: "100" });
+  await new Promise((r) => setTimeout(r, 5));
+  await b.getSession({ sessionId: "100" });
+  hold.release();
+  await assert.rejects(staleList, code("session_refreshed"));
+  await assert.rejects(b.getAthleteSession({ sessionId: "100", athleteSessionId: "500" }), code("athlete_row_not_listed"));
+  // Concurrent: the row answer is held while the list is re-read; the stale row confirms nothing.
+  const hold2 = gate();
+  const slow2 = fakeServer({ ...routes, "/rest/v1/athlete_session/500/": async () => { await hold2.p; return routes["/rest/v1/athlete_session/500/"]; } });
+  const c = make(slow2.fetchImpl);
+  await c.listSessions();
+  await c.getSession({ sessionId: "100" });
+  await c.listAthleteSessions({ sessionId: "100" });
+  const staleRow = c.getAthleteSession({ sessionId: "100", athleteSessionId: "500" });
+  await new Promise((r) => setTimeout(r, 5));
+  await c.listAthleteSessions({ sessionId: "100" });
+  hold2.release();
+  await assert.rejects(staleRow, code("session_refreshed"));
+  await assert.rejects(c.getAthleteSessionMore({ athleteSessionId: "500" }), code("athlete_row_not_confirmed"));
+  await assert.rejects(c.getTrack({ trackId: "900" }), code("track_not_confirmed"));
+  // Concurrent: a stale session answer does not confirm either.
+  const hold3 = gate();
+  let first = true;
+  const slow3 = fakeServer({ ...routes, [PARENT]: async () => { if (first) { first = false; await hold3.p; } return routes[PARENT]; } });
+  const d = make(slow3.fetchImpl);
+  await d.listSessions();
+  const staleSession = d.getSession({ sessionId: "100" });
+  await new Promise((r) => setTimeout(r, 5));
+  await d.getSession({ sessionId: "100" });
+  hold3.release();
+  await assert.rejects(staleSession, code("session_refreshed"));
+  assert.equal((await d.getSessionDetails({ sessionId: "100" })).drills_count, 2, "the fresh confirmation stands");
+});
+
+test("B8.4 drill labels: only a missing or unreachable brief means the neutral name; a brief of another session, a brief that is not an object, a non-canonical tag or a programming error is never turned into a label", async () => {
+  const labelsOf = (over) => confirmedAdapter(over).then(({ a }) => a.getDrillLabels({ sessionId: "100" }));
+  assert.deepEqual((await labelsOf({ [BRIEF]: answer(404, { detail: "x" }) })).map((l) => l.labelEvidence), ["index_fallback", "index_fallback"]);
+  assert.deepEqual((await labelsOf({ [BRIEF]: answer(503, { detail: "x" }) })).map((l) => l.labelEvidence), ["index_fallback", "index_fallback"]);
+  await assert.rejects(labelsOf({ [BRIEF]: answer(200, { id: 150, drillTags: [31, 32] }) }), (e) => e.code === "source_answer_unexpected" && e.reason === "brief_of_another_session");
+  await assert.rejects(labelsOf({ [BRIEF]: answer(200, [31, 32]) }), (e) => e.code === "source_answer_unexpected" && e.reason === "brief_shape_unknown");
+  await assert.rejects(labelsOf({ [BRIEF]: answer(200, { id: 100, drillTags: ["007", 32] }) }), (e) => e.code === "source_answer_unexpected" && e.reason === "tag_id_not_canonical");
+  await assert.rejects(labelsOf({ [BRIEF]: answer(200, { id: 100, drillTags: [{ drill: 0, tag: -1 }] }) }), (e) => e.code === "source_answer_unexpected" && e.reason === "tag_id_not_canonical");
+  await assert.rejects(labelsOf({ [BRIEF]: answer(200, "not json at all") }), code("source_answer_unexpected"));
+  await assert.rejects(labelsOf({ [BRIEF]: answer(401, "") }), code("source_auth_rejected"));
+  const broken = { ...answer(200, { id: 100, drillTags: [31, 32] }), get body() { throw new TypeError("boom"); } };
+  await assert.rejects(labelsOf({ [BRIEF]: broken }), TypeError);
+  // A brief without an id, or whose drillTags are an unknown shape, still falls back (documented rule).
+  assert.deepEqual((await labelsOf({ [BRIEF]: answer(200, { drillTags: [31, 32] }) })).map((l) => l.tagName), ["Rondo", "Small-sided game"]);
+  assert.deepEqual((await labelsOf({ [BRIEF]: answer(200, { id: 100, drillTags: "Rondo, SSG" }) })).map((l) => l.labelEvidence), ["index_fallback", "index_fallback"]);
+});
+
+test("B8.5 a tag row with a non-canonical id refuses the whole tag list; parseDrillTags refuses a non-canonical tag id in both shapes and still answers null for an unknown shape", async () => {
+  const { a } = await confirmedAdapter({ [TAGS]: answer(200, [{ id: 31, name: "Rondo", team: 980 }, { id: "007", name: "Bad", team: 980 }], { "x-total-count": "2" }) });
+  const e = await errorOf(a.listSessionTags());
+  assert.equal(e.code, "source_answer_unexpected");
+  assert.ok(e.reason === "tag_id_not_canonical" || e.reason === "row_id_not_canonical", e.reason);
+  const { parseDrillTags } = await import("../src/gpexeRestV1Adapter.js");
+  for (const bad of [["007", 32], [1.5, 32], [-1, 32], ["31 ", 32], [{ drill: 0, tag: "007" }, { drill: 1, tag: 32 }], [{ drill: 0, tag: 1.5 }]]) {
+    assert.throws(() => parseDrillTags(bad, 2), (x) => x.code === "source_answer_unexpected" && x.reason === "tag_id_not_canonical", JSON.stringify(bad));
+  }
+  assert.equal(parseDrillTags([31, 32, 33], 2), null);
+  assert.equal(parseDrillTags([{ drill: 0 }], 2), null);
+  assert.equal(parseDrillTags([{ drill: 0, tag: null }], 2), null);
+  assert.equal(parseDrillTags([true, 32], 2), null);
+  assert.deepEqual([...parseDrillTags([31, null], 2).entries()], [[0, "31"]]);
+  const src = await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeRestV1Adapter.js"), "utf8");
+  assert.doesNotMatch(src, /is a non-empty map keyed by canonical athlete ids/);
+});
+
+test("B8.6 round-2 hardening: an older session list answering after a newer one records nothing; a dependent read (details, drill, more, track, brief) that lands after its session was refreshed is discarded; a projected field of an unexpected shape refuses the answer", async () => {
+  const gate = () => { let release; const p = new Promise((r) => { release = r; }); return { p, release }; };
+  const routes = fullRoutes();
+  // Stale list: list 1 is held, list 2 (which names 100 as a drill of 900) answers first.
+  let held = true;
+  const hold = gate();
+  const server = fakeServer({ ...routes, [LIST]: async () => { if (held) { held = false; await hold.p; return routes[LIST]; } return answer(200, [parent(900, [100]), session(100), session(200)], { "x-total-count": "3" }); } });
+  const a = make(server.fetchImpl);
+  const stale = a.listSessions();
+  await new Promise((r) => setTimeout(r, 5));
+  await a.listSessions();
+  hold.release();
+  await assert.rejects(stale, code("session_list_refreshed"));
+  await assert.rejects(a.getSession({ sessionId: "100" }), code("session_not_listed"));
+  assert.equal((await a.getSession({ sessionId: "900" }).catch((e) => e)).code, "source_not_found", "900 is a known parent of the newer list (its own read has no fixture here)");
+  // Dependent reads after a refresh mid-flight.
+  for (const [what, route, op, args, setup] of [
+    ["details", WHOLE, "getSessionDetails", { sessionId: "100" }, null],
+    ["drill", D0, "getSessionDrills", { sessionId: "100" }, null],
+    ["more", "/rest/v1/athlete_session/500/more/", "getAthleteSessionMore", { athleteSessionId: "500" }, "row"],
+    ["track", "/rest/v1/track/900/", "getTrack", { trackId: "900" }, "row"],
+    ["brief", BRIEF, "getDrillLabels", { sessionId: "100" }, null],
+  ]) {
+    const h = gate();
+    let first = true;
+    const slow = fakeServer({ ...routes, [route]: async () => { if (first) { first = false; await h.p; } return routes[route]; } });
+    const b = make(slow.fetchImpl);
+    await b.listSessions();
+    await b.getSession({ sessionId: "100" });
+    await b.listAthleteSessions({ sessionId: "100" });
+    if (setup === "row") await b.getAthleteSession({ sessionId: "100", athleteSessionId: "500" });
+    const pending = b[op](args);
+    await new Promise((r) => setTimeout(r, 5));
+    await b.getSession({ sessionId: "100" });
+    h.release();
+    await assert.rejects(pending, code("session_refreshed"), what);
+  }
+  // Projected fields must be scalars (or the number lists): an object, a long text or a nested array refuses the answer.
+  for (const [what, over, op, args] of [
+    ["a session category as an object", { [PARENT]: answer(200, { id: 100, team: 980, drills_count: 2, start_timestamp: "2026-09-14T10:00:00", category_name: { name: "Training" } }) }, "getSession", { sessionId: "100" }],
+    ["a long session text", { [PARENT]: answer(200, { id: 100, team: 980, drills_count: 2, start_timestamp: "2026-09-14T10:00:00", category_name: "x".repeat(65) }) }, "getSession", { sessionId: "100" }],
+    ["a row with an object athlete field value", { "/rest/v1/athlete_session/500/": answer(200, athleteRow(500, 4711, { total_time: { value: 1 } })) }, "getAthleteSession", { sessionId: "100", athleteSessionId: "500" }],
+    ["thresholds with a nested list", { [THRESH]: answer(200, { id: 1473, team: 980, power_thresholds: [[20], 25] }) }, "getTeamThresholds", { sessionId: "100" }],
+    ["thresholds with a string in the list", { [THRESH]: answer(200, { id: 1473, team: 980, speed_thresholds: ["5.5", 7] }) }, "getTeamThresholds", { sessionId: "100" }],
+  ]) {
+    const c = op === "getSession" ? await primed(full(over).fetchImpl) : (await confirmedAdapter(over)).a;
+    const e = await errorOf(c[op](args));
+    assert.equal(e?.code, "source_answer_unexpected", what);
+    assert.equal(e.reason, "field_shape_unknown", what);
+  }
+  const { a: ok } = await confirmedAdapter({ [THRESH]: answer(200, { id: 1473, team: 980, validity_end: null, power_thresholds: [20, null, 60], speed_thresholds: [] }) });
+  assert.deepEqual(await ok.getTeamThresholds({ sessionId: "100" }), { id: 1473, team: 980, validity_end: null, power_thresholds: [20, null, 60], speed_thresholds: [] });
+});
+
+test("B8.7 a row this instance already classified as a drill never comes back as a parent through a later list that lacks its parent: the contradicting list is refused and the id stays unreadable", async () => {
+  const server = fakeServer(fullRoutes({
+    [LIST]: answer(200, [parent(100, [101]), session(101)], { "x-total-count": "2" }),
+    [WINDOW]: answer(200, [session(101, 980, { start_timestamp: "2026-09-14T00:05:00" })], { "x-total-count": "1" }),
+    "/rest/v1/team_session/101/": answer(200, { id: 101, team: 980, drills_count: 0, start_timestamp: "2026-09-14T00:05:00" }),
+  }));
+  const a = make(server.fetchImpl);
+  await a.listSessions();
+  const e = await errorOf(a.listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" }));
+  assert.equal(e?.code, "source_list_ambiguous");
+  assert.equal(e.reason, "classification_conflict");
+  await assert.rejects(a.getSession({ sessionId: "101" }), code("session_not_listed"));
+  assert.ok(!server.calls.some((c) => c.url.includes("/team_session/101/")), "the drill row was never read as a session");
+  // The other direction stays as before: a parent later named as a drill is withdrawn (B8.1).
+});
+
+test("B8.8 a refused answer confirms nothing: after a session, a row list or a row is refused for its shape, every dependent read is refused without a request", async () => {
+  const bad = full({ [PARENT]: answer(200, { id: 100, team: 980, drills_count: 2, start_timestamp: "2026-09-14T10:00:00", category_name: { name: "Training" } }) });
+  const a = await primed(bad.fetchImpl);
+  assert.equal((await errorOf(a.getSession({ sessionId: "100" }))).reason, "field_shape_unknown");
+  let sent = bad.calls.length;
+  for (const op of ["getSessionDetails", "getSessionDrills", "listAthleteSessions", "getTeamThresholds", "getDrillLabels"]) await assert.rejects(a[op]({ sessionId: "100" }), code("session_not_confirmed"), op);
+  assert.equal(bad.calls.length, sent);
+  const badList = full({ [ATHLETES]: answer(200, [athleteRow(500, 4711, { total_time: {} })], { "x-total-count": "1" }) });
+  const b = await primed(badList.fetchImpl);
+  await b.getSession({ sessionId: "100" });
+  assert.equal((await errorOf(b.listAthleteSessions({ sessionId: "100" }))).reason, "field_shape_unknown");
+  sent = badList.calls.length;
+  await assert.rejects(b.getAthleteSession({ sessionId: "100", athleteSessionId: "500" }), code("athlete_row_not_listed"));
+  assert.equal(badList.calls.length, sent);
+  const badRow = full({ "/rest/v1/athlete_session/500/": answer(200, athleteRow(500, 4711, { total_time: { value: 1 } })) });
+  const c = await primed(badRow.fetchImpl);
+  await c.getSession({ sessionId: "100" });
+  await c.listAthleteSessions({ sessionId: "100" });
+  assert.equal((await errorOf(c.getAthleteSession({ sessionId: "100", athleteSessionId: "500" }))).reason, "field_shape_unknown");
+  sent = badRow.calls.length;
+  await assert.rejects(c.getAthleteSessionMore({ athleteSessionId: "500" }), code("athlete_row_not_confirmed"));
+  await assert.rejects(c.getTrack({ trackId: "900" }), code("track_not_confirmed"));
+  assert.equal(badRow.calls.length, sent);
 });

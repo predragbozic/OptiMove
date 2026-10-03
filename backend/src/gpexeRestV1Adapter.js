@@ -59,6 +59,43 @@ export const MAX_ATHLETE_ROWS = 200;
 // A date window is at most this many days, inclusive (the Imports screen
 // clips to 31 days; the adapter holds the same line).
 export const MAX_WINDOW_DAYS = 31;
+
+// What leaves the adapter from a source object: exactly the fields the
+// importer's mapper (gpexeImportMapper.js) and the candidate service read.
+// Everything else — whatever the source adds, in any spelling — is dropped
+// by projection, not by a list of forbidden names.
+export const BUNDLE_FIELDS = Object.freeze({
+  teamSession: Object.freeze(["id", "team", "category_name", "start_timestamp", "end_timestamp", "updated_on", "drills_count", "is_stats_valid"]),
+  athleteSession: Object.freeze(["id", "athlete", "track", "teamsession", "drill", "is_stats_valid", "total_time", "total_distance", "max_v"]),
+  more: Object.freeze(["athletesession_id", "events", "complementary_data"]),
+  moreEvents: Object.freeze(["acceleration_events_count", "acceleration_events_threshold_value", "acceleration_events_duration", "deceleration_events_count", "deceleration_events_threshold_value", "deceleration_events_duration"]),
+  complementaryData: Object.freeze(["power", "speed"]),
+  zone: Object.freeze(["extremes", "distance", "is_ready"]),
+  track: Object.freeze(["id", "athlete", "timezone", "timestamp", "utc_timestamp"]),
+  teamThresholds: Object.freeze(["id", "team", "validity_start", "validity_end", "power_thresholds", "speed_thresholds", "acceleration_events_threshold", "acceleration_events_duration", "deceleration_events_threshold", "deceleration_events_duration"]),
+});
+const NUMBER_LIST_FIELDS = new Set(["power_thresholds", "speed_thresholds", "extremes"]);
+const scalar = (v) => v === null || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v)) || (typeof v === "string" && v.length <= 64 && !/[\r\n\t]/.test(v));
+// A projected value is a scalar (null, boolean, finite number, short one-line
+// string); the three number lists are arrays of finite numbers or nulls.
+// Anything else — an object, a long text, a nested array — refuses the answer.
+const pick = (object, keys) => Object.fromEntries(keys.filter((k) => Object.prototype.hasOwnProperty.call(object, k)).map((k) => {
+  const v = object[k];
+  const ok = NUMBER_LIST_FIELDS.has(k) ? Array.isArray(v) && v.length <= 32 && v.every((x) => x === null || (typeof x === "number" && Number.isFinite(x))) : scalar(v);
+  if (!ok) throw unexpected("A field of the source answer has a shape the importer does not read.", { reason: "field_shape_unknown", field: k });
+  return [k, v];
+}));
+export function projectMore(body) {
+  // `events` and `complementary_data` are structural and built below; only the
+  // row id is a scalar picked as such.
+  const out = pick(body, BUNDLE_FIELDS.more.filter((k) => k === "athletesession_id"));
+  out.events = isPlainObject(body.events) ? pick(body.events, BUNDLE_FIELDS.moreEvents) : {};
+  const zones = isPlainObject(body.complementary_data) ? body.complementary_data : {};
+  out.complementary_data = Object.fromEntries(BUNDLE_FIELDS.complementaryData
+    .filter((k) => Array.isArray(zones[k]))
+    .map((k) => [k, zones[k].filter(isPlainObject).map((z) => pick(z, BUNDLE_FIELDS.zone))]));
+  return out;
+}
 // The only query parameters a server-given next-page link may carry back.
 const NEXT_LINK_KEYS = new Set(["limit", "offset", "start_timestamp_gte", "start_timestamp_lte"]);
 // The legacy drill reads: the only `api/` host key and the only two shapes.
@@ -312,7 +349,8 @@ export async function readBounded(res, contentLength = null, limit = MAX_ANSWER_
 }
 
 // A `players` answer (whole session or one drill): an object whose `players`
-// is a non-empty map keyed by canonical athlete ids, each value a plain
+// is a map keyed by canonical athlete ids — empty when a drill's details are
+// not yet computed (owner decision 2026-10-03) —, each value a plain
 // object of metric values — a finite number, null, or an object whose own
 // values are finite numbers, null or short unit strings (the importer's
 // known shape, e.g. { unit, value }). Nothing else, nothing deeper: a name,
@@ -370,15 +408,22 @@ export function validatePlayersAnswer(body, what = "the details answer", expecte
 export function parseDrillTags(drillTags, drillsCount) {
   if (!Array.isArray(drillTags) || !Number.isInteger(drillsCount) || drillsCount < 0) return null;
   const byIndex = new Map();
-  if (drillTags.every((e) => e === null || canonicalId(e) !== null)) {
+  const tagIdOf = (value) => {
+    const id = canonicalId(value);
+    // A tag id that is there but not canonical is a refusal, not "no tag".
+    if (id === null) throw unexpected("The source answer names a drill tag in an unknown way.", { reason: "tag_id_not_canonical" });
+    return id;
+  };
+  if (drillTags.every((e) => e === null || typeof e === "number" || typeof e === "string")) {
     if (drillTags.length !== drillsCount) return null;
-    drillTags.forEach((e, i) => { if (e !== null) byIndex.set(i, canonicalId(e)); });
+    drillTags.forEach((e, i) => { if (e !== null) byIndex.set(i, tagIdOf(e)); });
   } else if (drillTags.every((e) => isPlainObject(e))) {
     if (drillTags.length > drillsCount) return null;
     for (const e of drillTags) {
       const index = e.drill;
-      const tag = canonicalId(e.tag);
-      if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= drillsCount || tag === null || byIndex.has(index)) return null;
+      if (e.tag === undefined || e.tag === null) return null;
+      const tag = tagIdOf(e.tag);
+      if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= drillsCount || byIndex.has(index)) return null;
       byIndex.set(index, tag);
     }
   } else {
@@ -429,6 +474,52 @@ export function createGpexeRestV1Adapter({
   const listedAthleteRows = new Map(); // session id → Set of row ids its own list named
   const confirmedAthleteRows = new Map();
   const confirmedTracks = new Set();
+  // Sessions the list classification of this instance found to be parents
+  // (never a drill row): the precondition of every session read, so a drill
+  // row can never be read, confirmed or bundled as a session.
+  const knownParents = new Set();
+  const knownDrills = new Set(); // ids a list of this instance classified as drill rows
+  // One counter per session: every refresh of the session or of its athlete
+  // list moves it, and an answer that started under an older count is
+  // thrown away unrecorded (a concurrent stale answer cannot re-confirm).
+  const sessionEpoch = new Map();
+  const trackOwner = new Map(); // track id → the session its row was read under
+  const epochOf = (id) => sessionEpoch.get(id) ?? 0;
+  const revokeDependents = (id) => {
+    sessionEpoch.set(id, epochOf(id) + 1);
+    listedAthleteRows.delete(id);
+    for (const [rowId, info] of confirmedAthleteRows) if (info.sessionId === id) confirmedAthleteRows.delete(rowId);
+    for (const [trackId, owner] of trackOwner) if (owner === id) { trackOwner.delete(trackId); confirmedTracks.delete(trackId); }
+  };
+  const revokeSession = (id) => { confirmedSessions.delete(id); revokeDependents(id); };
+  const refreshedDuring = (id, epoch) => {
+    if (epochOf(id) !== epoch) throw new SourceAdapterError("session_refreshed", "That session was refreshed while this read was in flight; the answer is discarded.");
+  };
+  let listSequence = 0;
+  let lastRecordedList = 0;
+  const nextListTicket = () => { listSequence += 1; return listSequence; };
+  const recordClassification = (rows, parents, ticket) => {
+    // An older list that answers after a newer one records nothing: the
+    // newer classification stands (last started wins, not last answered).
+    if (ticket < lastRecordedList) throw new SourceAdapterError("session_list_refreshed", "A newer session list was read while this one was in flight; this answer is discarded.");
+    lastRecordedList = ticket;
+    const parentIds = new Set(parents.map((p) => canonicalId(p.id)));
+    // A row this instance already saw as a drill cannot come back as a parent
+    // on a page that simply lacks its parent: that is a contradiction, and the
+    // whole list is refused rather than the last page having the last word.
+    for (const row of rows) {
+      const id = canonicalId(row.id);
+      if (parentIds.has(id) && knownDrills.has(id)) throw ambiguous("classification_conflict");
+    }
+    for (const row of rows) {
+      const id = canonicalId(row.id);
+      if (parentIds.has(id)) { knownParents.add(id); continue; }
+      // Now a drill row: whatever this instance held about it is withdrawn.
+      knownDrills.add(id);
+      knownParents.delete(id);
+      revokeSession(id);
+    }
+  };
 
   // The ONLY network function. GET, one URL that a builder of this file
   // made, nothing else. Every rest_v1 read goes through sourceApiUrl(); the
@@ -560,7 +651,7 @@ export function createGpexeRestV1Adapter({
       for (const row of res.body) {
         if (!isPlainObject(row)) throw unexpected(`A row of ${what} is not an object.`);
         const id = canonicalId(row.id);
-        if (id === null) throw unexpected(`A row of ${what} has no usable id.`);
+        if (id === null) throw unexpected(`A row of ${what} has no usable id.`, { reason: "row_id_not_canonical" });
         if (ids.has(id)) throw new SourceAdapterError("source_list_changed", `A row of ${what} came twice while it was read; read it again.`);
         ids.add(id);
         rows.push(row);
@@ -645,9 +736,11 @@ export function createGpexeRestV1Adapter({
   });
 
   async function sessionList(firstPath, maxPages) {
+    const ticket = nextListTicket();
     const { rows, total } = await wholeList(firstPath, (next) => nextPath(next, "team_session/"), "the session list", maxPages);
     checkSessionRows(rows);
     const { parents, drillsLeftOut, drillReferencesNotListed } = classifyParents(rows);
+    recordClassification(rows, parents, ticket);
     return { sessions: parents.map(summary), total, drillsLeftOut, drillReferencesNotListed };
   }
 
@@ -741,6 +834,7 @@ export function createGpexeRestV1Adapter({
       // The parents of that extra day are left out again after the
       // classification; a drill row is never returned as a session.
       const lookFrom = dayBefore(from);
+      const ticket = nextListTicket();
       const path = teamScopedPath("team_session/", team, [["start_timestamp_gte", `${lookFrom}%2000%3A00%3A00`], ["start_timestamp_lte", `${to}%2023%3A59%3A59`], ["limit", SESSION_PAGE_LIMIT_MAX]]);
       const { rows, total } = await wholeList(path, (next) => nextPath(next, "team_session/"), "the session list");
       checkSessionRows(rows);
@@ -749,6 +843,7 @@ export function createGpexeRestV1Adapter({
         if (day === null || day < lookFrom || day > to) throw new SourceAdapterError("source_filter_ignored", "The source server returned sessions outside the asked window; the window cannot be trusted.");
       }
       const { parents, drillsLeftOut, drillReferencesNotListed } = classifyParents(rows);
+      recordClassification(rows, parents, ticket);
       const inWindow = parents.filter((p) => dayOf(p.start_timestamp) >= from);
       return { sessions: inWindow.map(summary), total, drillsLeftOut, drillReferencesNotListed, lookBackParentsLeftOut: parents.length - inWindow.length, lookBackDays: 1, fromDay: from, toDay: to };
     },
@@ -759,11 +854,16 @@ export function createGpexeRestV1Adapter({
     async getSession(options) {
       const { sessionId } = only(options, ["sessionId"]);
       const id = requireId(sessionId, "The session id");
-      // Read again means confirmed again: an earlier confirmation does not
-      // survive a read that fails or names another team.
-      confirmedSessions.delete(id);
-      listedAthleteRows.delete(id);
+      // Only a row the list classification of this instance found to be a
+      // parent is read as a session: no request for anything else.
+      if (!knownParents.has(id)) throw new SourceAdapterError("session_not_listed", "That id was not classified as a parent session by a session list this adapter read.");
+      // Read again means confirmed again: the earlier confirmation and every
+      // row and track confirmed under it are withdrawn before the read, and
+      // an answer that started before a later refresh is thrown away.
+      revokeSession(id);
+      const epoch = epochOf(id);
       const { body } = await read(`team_session/${id}/`);
+      if (epochOf(id) !== epoch) throw new SourceAdapterError("session_refreshed", "That session was refreshed while this read was in flight; the answer is discarded.");
       if (!isPlainObject(body)) throw unexpected("The source server did not answer the session as an object.");
       if (canonicalId(body.id) !== id) throw unexpected("The source server answered another session than the one asked.");
       const named = namesBoundTeam(body.team, team);
@@ -774,15 +874,20 @@ export function createGpexeRestV1Adapter({
         throw new SourceAdapterError("drills_count_out_of_range", `The session reports a number of drills outside 0 to ${MAX_DRILLS}.`);
       }
       const day = dayOf(body.start_timestamp);
+      // Every check and the projection come before the first write of state:
+      // an answer refused for its shape confirms nothing.
+      const out = pick(body, BUNDLE_FIELDS.teamSession);
       confirmedSessions.set(id, { drillsCount, day });
-      return body;
+      return out;
     },
 
     // Whole-session values per athlete, for a confirmed parent.
     async getSessionDetails(options) {
       const { sessionId } = only(options, ["sessionId"]);
       const parent = confirmed(sessionId);
+      const epoch = epochOf(parent.id);
       const { body } = await read(`team_session/${parent.id}/details/`);
+      refreshedDuring(parent.id, epoch);
       return validatePlayersAnswer(body, "the whole-session details", parent.drillsCount);
     },
 
@@ -810,10 +915,12 @@ export function createGpexeRestV1Adapter({
       const drills = [];
       for (let index = 0; index < parent.drillsCount; index += 1) {
         try {
+          const epoch = epochOf(parent.id);
           const { body } = await readDrill(parent.id, index, parent.drillsCount);
+          refreshedDuring(parent.id, epoch);
           drills.push({ drillIndex: index, details: validatePlayersAnswer(body, "the drill details", parent.drillsCount) });
         } catch (error) {
-          if (!(error instanceof SourceAdapterError) || isGlobal(error)) throw error;
+          if (!(error instanceof SourceAdapterError) || isGlobal(error) || error.code === "session_refreshed") throw error;
           return { complete: false, drillsCount: parent.drillsCount, drills, failed: { drillIndex: index, code: error.code ?? "source_drill_unavailable" } };
         }
       }
@@ -825,7 +932,11 @@ export function createGpexeRestV1Adapter({
     async listAthleteSessions(options) {
       const { sessionId } = only(options, ["sessionId"]);
       const parent = confirmed(sessionId);
+      // A fresh list withdraws every row and track confirmed under the old one.
+      revokeDependents(parent.id);
+      const epoch = epochOf(parent.id);
       const { rows, total } = await wholeList(`athlete_session/?teamsession=${parent.id}&limit=${SESSION_PAGE_LIMIT_MAX}`, (next) => nextAthletePath(next, parent.id), "the athlete rows");
+      if (epochOf(parent.id) !== epoch) throw new SourceAdapterError("session_refreshed", "That session was refreshed while its athlete list was in flight; the answer is discarded.");
       if (rows.length > MAX_ATHLETE_ROWS) throw unexpected("The source server returned more athlete rows for one session than this adapter reads.", { reason: "athlete_rows_too_many" });
       const ids = new Set();
       for (const row of rows) {
@@ -835,8 +946,9 @@ export function createGpexeRestV1Adapter({
         if (rowId === null) throw unexpected("An athlete row of the source answer names itself in an unknown way.");
         ids.add(rowId);
       }
+      const projected = rows.map((row) => pick(row, BUNDLE_FIELDS.athleteSession));
       listedAthleteRows.set(parent.id, ids);
-      return { rows, total };
+      return { rows: projected, total };
     },
 
     // One athlete row, read under a confirmed parent: the detail must name
@@ -849,15 +961,18 @@ export function createGpexeRestV1Adapter({
       // athlete list, read by this instance. Otherwise no request is sent, so an
       // answer of another team's row is never fetched and never told apart.
       if (!listedAthleteRows.get(parent.id)?.has(id)) throw new SourceAdapterError("athlete_row_not_listed", "That athlete row was not named by the confirmed session's own athlete list read by this adapter.");
+      const epoch = epochOf(parent.id);
       const { body } = await read(`athlete_session/${id}/`);
+      if (epochOf(parent.id) !== epoch) throw new SourceAdapterError("session_refreshed", "That session was refreshed while the athlete row was in flight; the answer is discarded.");
       if (!isPlainObject(body) || canonicalId(body.id) !== id) throw unexpected("The source server answered another athlete row than the one asked.");
       if (canonicalId(body.teamsession) !== parent.id) throw unexpected("The source server's athlete row names another session.", { reason: "row_of_another_session" });
       if (canonicalId(body.athlete) === null) throw unexpected("The source server's athlete row names its athlete in an unknown way.");
       const trackId = body.track === undefined || body.track === null ? null : canonicalId(body.track);
       if (body.track !== undefined && body.track !== null && trackId === null) throw unexpected("The source server's athlete row names its track in an unknown way.");
+      const out = pick(body, BUNDLE_FIELDS.athleteSession);
       confirmedAthleteRows.set(id, { sessionId: parent.id, trackId });
-      if (trackId !== null) confirmedTracks.add(trackId);
-      return body;
+      if (trackId !== null) { confirmedTracks.add(trackId); trackOwner.set(trackId, parent.id); }
+      return out;
     },
 
     // The burst and brake events of an athlete row read above.
@@ -865,10 +980,13 @@ export function createGpexeRestV1Adapter({
       const { athleteSessionId } = only(options, ["athleteSessionId"]);
       const id = requireId(athleteSessionId, "The athlete row id");
       if (!confirmedAthleteRows.has(id)) throw new SourceAdapterError("athlete_row_not_confirmed", "That athlete row was not first read under a confirmed session by this adapter.");
+      const owner = confirmedAthleteRows.get(id).sessionId;
+      const epoch = epochOf(owner);
       const { body } = await read(`athlete_session/${id}/more/`);
+      refreshedDuring(owner, epoch);
       if (!isPlainObject(body)) throw unexpected("The source server did not answer the athlete row's events as an object.");
       if (body.athletesession_id !== undefined && canonicalId(body.athletesession_id) !== id) throw unexpected("The source server's events name another athlete row.");
-      return body;
+      return projectMore(body);
     },
 
     // A track named by an athlete row read above.
@@ -876,9 +994,12 @@ export function createGpexeRestV1Adapter({
       const { trackId } = only(options, ["trackId"]);
       const id = requireId(trackId, "The track id");
       if (!confirmedTracks.has(id)) throw new SourceAdapterError("track_not_confirmed", "That track was not named by an athlete row this adapter read under a confirmed session.");
+      const owner = trackOwner.get(id);
+      const epoch = epochOf(owner);
       const { body } = await read(`track/${id}/`);
+      refreshedDuring(owner, epoch);
       if (!isPlainObject(body) || canonicalId(body.id) !== id) throw unexpected("The source server answered another track than the one asked.");
-      return body;
+      return pick(body, BUNDLE_FIELDS.track);
     },
 
     // The threshold set of the bound team valid on a confirmed session's day;
@@ -901,7 +1022,7 @@ export function createGpexeRestV1Adapter({
         if (named === null) throw unexpected("The source server's thresholds name their team in an unknown way.");
         if (named === false) throw new SourceAdapterError("source_team_mismatch", "The source server returned thresholds of another team.");
       }
-      return body;
+      return pick(body, BUNDLE_FIELDS.teamThresholds);
     },
 
     async getUnits(options) { refuseTeamOptions(options); throw unavailable("units"); },
@@ -917,8 +1038,10 @@ export function createGpexeRestV1Adapter({
         const named = namesBoundTeam(row.team, team);
         if (named === null) throw unexpected("A tag of the source answer does not name its team in a known way.");
         if (named === false) throw new SourceAdapterError("source_team_mismatch", "The source server returned a tag of another team.");
+        const tagId = canonicalId(row.id);
+        if (tagId === null) throw unexpected("A tag of the source answer names itself in an unknown way.", { reason: "tag_id_not_canonical" });
         const name = typeof row.name === "string" ? row.name.trim() : "";
-        tags.set(canonicalId(row.id), name !== "" && name.length <= 80 && !/[\r\n\t]/.test(name) ? name : null);
+        tags.set(tagId, name !== "" && name.length <= 80 && !/[\r\n\t]/.test(name) ? name : null);
       }
       return { tags, total };
     },
@@ -934,10 +1057,19 @@ export function createGpexeRestV1Adapter({
       if (parent.drillsCount < 1) return [];
       let mapping = null;
       try {
+        const epoch = epochOf(parent.id);
         const { body } = await readBrief(parent.id);
-        if (isPlainObject(body) && (body.id === undefined || canonicalId(body.id) === parent.id)) mapping = parseDrillTags(body.drillTags, parent.drillsCount);
+        refreshedDuring(parent.id, epoch);
+        if (!isPlainObject(body)) throw unexpected("The source server did not answer the brief as an object.", { reason: "brief_shape_unknown" });
+        if (body.id !== undefined && body.id !== null && canonicalId(body.id) !== parent.id) throw unexpected("The source server answered the brief of another session.", { reason: "brief_of_another_session" });
+        mapping = parseDrillTags(body.drillTags, parent.drillsCount);
       } catch (error) {
-        if (isGlobal(error)) throw error;
+        // Only "there is no brief" and "the brief cannot be reached now" mean
+        // the neutral name. A brief of another session, an unknown shape, a
+        // non-canonical tag, a refused credential, a foreign team or a
+        // programming error is never turned into a label.
+        if (!(error instanceof SourceAdapterError) || isGlobal(error)) throw error;
+        if (error.code !== "source_not_found" && error.code !== "source_unavailable") throw error;
         mapping = null;
       }
       if (mapping === null || mapping.size === 0) return Array.from({ length: parent.drillsCount }, (_, i) => fallback(i));

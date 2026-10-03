@@ -515,8 +515,18 @@ integer index from 0 to `drills_count - 1` (and `legacyBriefUrl()` for `…/brie
 as a 200 JSON object whose `players` is a map of canonical athlete ids to metric values (an empty
 map is valid — a drill not yet computed, owner decision 2026-10-03 — while a missing, null, array
 or other shape fails; the top-level `team`, an aggregate, and `teamsession` are neither identity
-nor returned); sends no retry by default (one attempt per read, at most three on request); reads an
-athlete row only when the confirmed session's own list named it; ends
+nor returned); sends no retry by default (one attempt per read, at most three on request); reads a
+session only when a session list of this instance classified it as a parent (so a drill row is
+never read, confirmed or bundled as a session) and an athlete row only when the confirmed session's
+own list named it; returns from every read only the fields the mapper and the candidate service read
+(explicit projections, `BUNDLE_FIELDS`); withdraws, on a refresh of a session or of its athlete list,
+every row and track confirmed under it and discards a concurrent stale answer (`session_refreshed`);
+treats a brief of another session, an unknown brief shape or a non-canonical tag id as an error
+and falls back to `Drill N` only for a missing or unreachable brief (owner's external review of
+PR #133, 2026-10-03; after its narrow re-reviews also: a projected value must be a scalar or a
+number list — `field_shape_unknown` otherwise —, an older list answer never overrides a newer
+classification, a dependent read that lands after a refresh is discarded, and a row once seen as a
+drill cannot return as a parent through a later list); ends
 a drill set at the first drill that cannot be read (`complete: false`, the failed index and code,
 never another index, host or form; a refused credential or a foreign team ends the operation);
 names drills from an unambiguous `drillTags` mapping of the parent's brief translated through the

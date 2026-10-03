@@ -179,19 +179,40 @@ merged, not run against the real server).** `backend/src/gpexeRestV1Adapter.js` 
   server yet), translates a tag id through the bound team's tag catalogue (`listSessionTags`,
   every row naming the bound team), and otherwise answers `Drill <index + 1>`; each label
   carries `drillIndex`, `label`, `tagId`, `tagName` and `labelEvidence` (`drill_tags` or
-  `index_fallback`). A duplicate tag, a count that disagrees, an unreadable or unknown shape, a
-  foreign or unnamed tag, a brief of another session or a brief that cannot be read all fall
-  back; the day's other sessions are never read;
+  `index_fallback`). A duplicate tag, a count that disagrees, an unknown `drillTags` shape, a
+  foreign or unnamed tag, or a brief that is missing or unreachable fall back; a brief of another
+  session, a brief that is not an object or a non-canonical tag id is an error (see the round-2
+  note below); the day's other sessions are never read;
 - `fetchSessionBundle({ sessionId })` composes them in the e03 bundle shape plus `drillsStatus`
   and `drillLabels`. No route, database table, migration, credential storage, binding or import
   uses it yet; the import policy for an incomplete drill set is decided in the later integration
   PR.
-**Decided before any route exposes the bundle (security review of F3c2c, recorded, not applied):**
-`getSession`, `getAthleteSession`, `getAthleteSessionMore`, `getTrack` and `getTeamThresholds` return
-the source object after the importer's drop list of personal fields (`redactGpexe`), as the `e03`
-importer does for its raw snapshot — a denylist, not a projection to the fields the mapper reads.
-Whether the `rest_v1` route stores the same redacted raw snapshot or an allowlisted projection is a
-retention decision for the integration PR; until then no route returns a bundle. Also recorded: a
+**After the owner's external review of PR #133 (2026-10-03), also built:** (1) **the parent
+classification is the precondition of every session read** — `getSession` and `fetchSessionBundle`
+accept only an id that a session list of this instance (`listSessions` or `listSessionsByDay`)
+classified as a parent (`session_not_listed` otherwise, no request); a row a later list names as a
+drill loses that standing and every confirmation under it; (2) **explicit projections** — every read
+returns exactly the fields the importer's mapper and the candidate service read (`BUNDLE_FIELDS`:
+session, athlete row, `more` with its six event fields and the `power` / `speed` zones' `extremes` /
+`distance` / `is_ready`, track, threshold set) and nothing the source adds in any spelling or nesting;
+the `e03` drop list still runs first but is no longer what protects the output; (3) **revocation under
+refresh** — re-reading a session withdraws its confirmation, its listed rows and every row and track
+confirmed under it; re-reading its athlete list withdraws the rows and tracks; each session carries an
+epoch, and a list, row or session answer that started before a later refresh is discarded unrecorded
+(`session_refreshed`), so a concurrent stale answer can never re-confirm; (4) **drill labels** fall
+back to `Drill N` only when the brief is missing (404) or unreachable (`source_unavailable`); a brief
+of another session, a brief that is not an object, a non-canonical tag id, a refused credential, a
+foreign team or a programming error is an error, never a label; (5) a tag id that is there but not
+canonical refuses the drill tags and the tag list (`tag_id_not_canonical`). After the narrow
+re-reviews of that round, also (6): a projected value must be a scalar (null, boolean, finite number,
+one-line string of at most 64 characters) or, for the two threshold lists and a zone's `extremes`, a
+list of finite numbers or nulls — anything else refuses the answer (`field_shape_unknown`), so no
+nested object can leave under a projected key; the session projection carries only the eight fields
+a consumer reads; an older session list that answers after a newer one records nothing
+(`session_list_refreshed`); a dependent read (details, drill, `/more/`, track, brief) that lands
+after its session was refreshed is discarded (`session_refreshed`); and a row this instance once
+classified as a drill cannot come back as a parent through a later list that lacks its parent — that
+list is refused (`source_list_ambiguous`, `classification_conflict`). Also recorded: a
 drill row inside the window whose parent started the day before is told apart through the one-day
 look-back of `listSessionsByDay` (`lookBackDays: 1`); a parent more than one day before its drill
 is outside the owner's model and is not looked for. No widening of the window.
@@ -511,8 +532,12 @@ session (on a disposable database, as the pilot did for `e03`).
   page is refused (`source_list_ambiguous`), never thinned.
 - A `players` answer is accepted only as a map of canonical athlete ids to metric values (an empty
   map is valid; a missing, null, array or other shape is refused); only `players` and
-  `drills_count` leave the adapter. An athlete row is read only when the confirmed session's own
-  list named it (`athlete_row_not_listed` otherwise, no request). No retry by default. One failed drill never makes an
+  `drills_count` leave the adapter. A session is read only when a session list of this instance
+  classified it as a parent (`session_not_listed` otherwise, no request); an athlete row only when
+  the confirmed session's own list named it (`athlete_row_not_listed`). Every read returns only
+  the projected fields (`BUNDLE_FIELDS`). A refresh of a session or of its athlete list withdraws
+  every row and track confirmed under it, and an answer that started before the refresh is
+  discarded (`session_refreshed`). No retry by default. One failed drill never makes an
   incomplete set look complete (`getSessionDrills`: `complete: false`, the failed index and code).
 - Drill names come from an unambiguous `drillTags` mapping of the parent's brief and the bound
   team's tag catalogue, otherwise `Drill N`; never from the day's other sessions.
@@ -552,9 +577,12 @@ two). Its codes and what a route makes of them:
 | `source_not_found` | 404 elsewhere | `source_answer_unexpected` |
 | `source_unavailable` | network, timeout, 5xx, 429 | `source_unavailable` |
 | `source_answer_unexpected`, `source_list_changed`, `source_list_incomplete` | an answer of another shape, or a list that is not whole | `source_answer_unexpected` |
-| `source_list_ambiguous` | the session list cannot be told apart into parents and drills (`reason`: `named_row_has_drills`, `entry_named_twice`, `self_reference`, `drills_count_disagrees`) | `source_answer_unexpected` |
+| `source_list_ambiguous` | the session list cannot be told apart into parents and drills (`reason`: `named_row_has_drills`, `entry_named_twice`, `self_reference`, `drills_count_disagrees`, `classification_conflict`) | `source_answer_unexpected` |
+| `source_answer_unexpected` with `reason: field_shape_unknown` | a projected field carries a value of a shape no consumer reads (an object, a long text, a nested list) | `source_answer_unexpected` |
+| `session_list_refreshed` | an older session list answered after a newer one; its classification was discarded | `internal_error` (the caller repeats the list) |
 | `source_filter_ignored` | a date-window answer carried a session outside the window | `source_answer_unexpected` |
-| `session_not_confirmed`, `athlete_row_not_listed`, `athlete_row_not_confirmed`, `track_not_confirmed` | a dependent read asked before its parent was confirmed, or its row listed, by this adapter — a caller's ordering mistake | `internal_error` |
+| `session_not_listed`, `session_not_confirmed`, `athlete_row_not_listed`, `athlete_row_not_confirmed`, `track_not_confirmed` | a read asked before its session was classified as a parent, confirmed, or its row listed, by this adapter — a caller's ordering mistake | `internal_error` |
+| `session_refreshed` | the session or its athlete list was refreshed while this answer was in flight; the answer was discarded unrecorded | `internal_error` (the caller repeats the read) |
 | `invalid_drill_index`, `drills_count_out_of_range`, `invalid_id` | an index outside 0 to `drills_count - 1`, more than 30 drills, or a non-canonical id | `internal_error`, except `drills_count_out_of_range` from the source's own `drills_count`, which is `source_answer_unexpected` |
 | `team_param_not_allowed`, `duplicate_param`, `path_not_allowed`, `invalid_options`, `invalid_bound_team`, `credential_missing` | a caller's mistake inside OptiMove, never a user's input | `internal_error` (logged with the code, never with a value) |
 
