@@ -1104,3 +1104,44 @@ test("B8.8 a refused answer confirms nothing: after a session, a row list or a r
   await assert.rejects(c.getTrack({ trackId: "900" }), code("track_not_confirmed"));
   assert.equal(badRow.calls.length, sent);
 });
+
+test("B8.9 last started wins, fail-closed: with two held lists, the older one finishing FIRST is discarded (session_list_refreshed), its candidate stays session_not_listed without a request, and only the newer list, once it finishes, classifies", async () => {
+  const gate = () => { let release; const p = new Promise((r) => { release = r; }); return { p, release }; };
+  const routes = fullRoutes();
+  const older = gate();
+  const newer = gate();
+  let n = 0;
+  // Older list: 900 is a parent and 100 its drill. Newer list: 100 is a parent (the fixture page).
+  const server = fakeServer({ ...routes, [LIST]: async () => {
+    n += 1;
+    if (n === 1) { await older.p; return answer(200, [parent(900, [100]), session(100), session(200)], { "x-total-count": "3" }); }
+    await newer.p; return routes[LIST];
+  } });
+  const a = make(server.fetchImpl);
+  const first = a.listSessions();
+  await new Promise((r) => setTimeout(r, 5));
+  const second = a.listSessions();
+  await new Promise((r) => setTimeout(r, 5));
+  older.release();
+  await assert.rejects(first, code("session_list_refreshed"));
+  const sent = server.calls.length;
+  await assert.rejects(a.getSession({ sessionId: "900" }), code("session_not_listed"), "the older list's parent was never recorded");
+  await assert.rejects(a.getSession({ sessionId: "100" }), code("session_not_listed"), "nothing is classified until the newer list finishes");
+  assert.equal(server.calls.length, sent, "no request for an unclassified id");
+  newer.release();
+  assert.deepEqual(idsOf(await second), ["100", "200"]);
+  assert.equal((await a.getSession({ sessionId: "100" })).id, 100);
+  await assert.rejects(a.getSession({ sessionId: "900" }), code("session_not_listed"));
+  // The other order (newer finishes first, older later) is still discarded too.
+  const older2 = gate();
+  let m = 0;
+  const server2 = fakeServer({ ...routes, [LIST]: async () => { m += 1; if (m === 1) { await older2.p; return answer(200, [parent(900, [100]), session(100), session(200)], { "x-total-count": "3" }); } return routes[LIST]; } });
+  const b = make(server2.fetchImpl);
+  const stale = b.listSessions();
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(idsOf(await b.listSessions()), ["100", "200"]);
+  older2.release();
+  await assert.rejects(stale, code("session_list_refreshed"));
+  assert.equal((await b.getSession({ sessionId: "100" })).id, 100);
+  await assert.rejects(b.getSession({ sessionId: "900" }), code("session_not_listed"));
+});

@@ -208,8 +208,9 @@ re-reviews of that round, also (6): a projected value must be a scalar (null, bo
 one-line string of at most 64 characters) or, for the two threshold lists and a zone's `extremes`, a
 list of finite numbers or nulls — anything else refuses the answer (`field_shape_unknown`), so no
 nested object can leave under a projected key; the session projection carries only the eight fields
-a consumer reads; an older session list that answers after a newer one records nothing
-(`session_list_refreshed`); a dependent read (details, drill, `/more/`, track, brief) that lands
+a consumer reads; only the most recently started session list may record its classification —
+an older list is discarded whether it answers before or after the newer one, fail-closed, before any
+change to the classification or the confirmations (`session_list_refreshed`); a dependent read (details, drill, `/more/`, track, brief) that lands
 after its session was refreshed is discarded (`session_refreshed`); and a row this instance once
 classified as a drill cannot come back as a parent through a later list that lacks its parent — that
 list is refused (`source_list_ambiguous`, `classification_conflict`). Also recorded: a
@@ -579,7 +580,7 @@ two). Its codes and what a route makes of them:
 | `source_answer_unexpected`, `source_list_changed`, `source_list_incomplete` | an answer of another shape, or a list that is not whole | `source_answer_unexpected` |
 | `source_list_ambiguous` | the session list cannot be told apart into parents and drills (`reason`: `named_row_has_drills`, `entry_named_twice`, `self_reference`, `drills_count_disagrees`, `classification_conflict`) | `source_answer_unexpected` |
 | `source_answer_unexpected` with `reason: field_shape_unknown` | a projected field carries a value of a shape no consumer reads (an object, a long text, a nested list) | `source_answer_unexpected` |
-| `session_list_refreshed` | an older session list answered after a newer one; its classification was discarded | `internal_error` (the caller repeats the list) |
+| `session_list_refreshed` | a newer session list was started while this one was in flight; its classification was discarded unrecorded, whichever answered first | `internal_error` (the caller repeats the list) |
 | `source_filter_ignored` | a date-window answer carried a session outside the window | `source_answer_unexpected` |
 | `session_not_listed`, `session_not_confirmed`, `athlete_row_not_listed`, `athlete_row_not_confirmed`, `track_not_confirmed` | a read asked before its session was classified as a parent, confirmed, or its row listed, by this adapter — a caller's ordering mistake | `internal_error` |
 | `session_refreshed` | the session or its athlete list was refreshed while this answer was in flight; the answer was discarded unrecorded | `internal_error` (the caller repeats the read) |

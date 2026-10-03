@@ -496,13 +496,13 @@ export function createGpexeRestV1Adapter({
     if (epochOf(id) !== epoch) throw new SourceAdapterError("session_refreshed", "That session was refreshed while this read was in flight; the answer is discarded.");
   };
   let listSequence = 0;
-  let lastRecordedList = 0;
   const nextListTicket = () => { listSequence += 1; return listSequence; };
   const recordClassification = (rows, parents, ticket) => {
-    // An older list that answers after a newer one records nothing: the
-    // newer classification stands (last started wins, not last answered).
-    if (ticket < lastRecordedList) throw new SourceAdapterError("session_list_refreshed", "A newer session list was read while this one was in flight; this answer is discarded.");
-    lastRecordedList = ticket;
+    // Last started wins, fail-closed: only the most recently started list may
+    // record its classification. An answer of any other list — older, whether
+    // it lands before or after the newer one — is discarded before any change
+    // to the classification or the confirmations.
+    if (ticket !== listSequence) throw new SourceAdapterError("session_list_refreshed", "A newer session list was started while this one was in flight; this answer is discarded.");
     const parentIds = new Set(parents.map((p) => canonicalId(p.id)));
     // A row this instance already saw as a drill cannot come back as a parent
     // on a page that simply lacks its parent: that is a contradiction, and the
