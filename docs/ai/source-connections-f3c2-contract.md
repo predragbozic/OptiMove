@@ -652,6 +652,94 @@ dropped.
 
 ---
 
+### 2.5 F3c2d as built (owner order 2026-10-03; branch `feature/gpexe-connect-routes-f3c2d`; not merged)
+
+`backend/src/routes/sourceConnections.js` (mounted at `/api/training-load/sources`) and
+`backend/src/sourceConnectionService.js`; runbook `docs/runbooks/source-connections-f3c2d.md`.
+Where this narrows or settles the table above:
+
+- **Routes delivered:** `GET …/connections?clubId=`, `GET …/connections/:id`, `POST
+  …/connections` (create), `…/connect`, `…/reconnect`, `…/test`. **Not in this step:** `POST
+  …/bindings` (teams are bound separately; no route binds, and no route derives a binding from
+  the account's visible teams), Disconnect (D5), `api_token` entry, club-admin management (D2
+  stays platform admin only).
+- **Owner:** `ownerScope: "club"` only (D4); `owner_scope_unsupported` otherwise.
+- **Credential kind:** `exchanged_token` only (`credential_kind_unsupported` otherwise): Connect
+  and Reconnect take `{ username, password }` for that one HTTPS request, exchange them once on the
+  host's confirmed exchange (`sourceExchange()`: `server3`, form-encoded, token field `token`) and
+  drop them; only the AES-256-GCM parts of the token are stored (F3c1 crypto, the row's own
+  context as AAD). The username, the password and the token are never returned, logged, audited
+  as values or named in an error.
+- **Host:** at create and before every network call the key must be approved in the catalog
+  (row read `FOR SHARE` in the transaction) **and** resolve in `sourceHosts.js` **and** have a
+  confirmed exchange **and** speak a family with a read adapter — today exactly `server3` /
+  `rest_v1`; `e03` answers `exchange_not_supported`; no fallback (conditions 1 and 7).
+- **Test connection:** the F3c2c adapter, one instance per bound team limited to that team
+  (`verifyBoundTeam()`, the team's own read); while no team is bound, the team list **count** only
+  (`countVisibleTeams()` with a placeholder the adapter never sends as a team) — the eight visible
+  teams are counted, never listed back, never chosen, never bound. An archived bound team is
+  skipped (`boundTeamsChecked` says how many were read).
+- **Lock order (conditions 2–4):** per-user advisory lock (one user's attempts are serialized;
+  the wait is bounded at 20 s, then `try_again`; every statement of the attempt has a 10 s
+  `statement_timeout` except that one lock statement, which runs under `lock_timeout` 20 s and a
+  `statement_timeout` of 22 s so the lock bound decides; the transaction's idle time and the
+  source calls a 90 s budget) →
+  connection row `FOR NO KEY UPDATE` under `lock_timeout` 2 s (`try_again`; the audit
+  row of a refused attempt needs KEY SHARE only, so it never waits on a running attempt) → bound
+  team ids (`source_connection_bound_team_ids`) → reconnect confirmation → catalog row `FOR
+  SHARE` + host gate → every bound team's `hold_gpexe_team_lock` ascending (try-lock, `try_again`)
+  → throttle count → key ring → network. The locks are held through the source call.
+- **Throttle (condition 4, D10):** attempts that reached the source (`ok` / `failed` / `unknown`,
+  plus `refused` with `source_auth_rejected`) in 15 minutes, per connection **and** per user, from
+  the append-only audit; 5 or more → `429 source_auth_throttled`, `Retry-After: 900`. Every other
+  refusal is audited with `counted: false` and never counted, so a retry after 429 cannot extend
+  the lockout; a Test does not reset the count. The window and every fact timestamp come from the
+  database's own clock (`now()` in SQL; a test may substitute one). An attempt that reached the
+  source and then could not be stored (a database failure, a right revoked or a club archived
+  meanwhile) is still audited on a fresh connection as `unknown` (`attempt_not_recorded`) or
+  `failed` (`rights_changed`) with `counted: true` — both outcomes the throttle counts — and the
+  answer never says the source was not reached; that row lands on a fresh pool connection after
+  the user's lock was released, so a further attempt of that user may start before it counts (the
+  lock is not held across that insert; an attempt that reaches the source holds it through the
+  source call). Every
+  checked-out database client carries an error listener while it is out of the pool, so a
+  session ended by the server during the source call (idle timeout, pooler reset) fails the next
+  statement instead of crashing the process.
+- **Reconnect confirmation (D11):** `confirmation: { sourceSystem, ownerClubId, affectedTeamCount }`
+  must equal the row's source, owning club and current number of active bound teams, checked under
+  the row lock before any request; `409 confirmation_mismatch` carries `expected`.
+- **States (2.4):** connect / reconnect + test ok → `verified`; test read 401 (or 403 on the team
+  list count) → `needs_reconnect` (new ciphertext stored); a bound team's read answering 403 / 404
+  is `source_team_not_visible` (the account cannot read that team); any other failed test read after a stored credential
+  → `linked_untested` with `last_error_code` / `last_error_at` (v29 enforces both facts); a Test
+  on an existing credential: ok → `verified` and the error facts cleared, 401/403 →
+  `needs_reconnect`, anything else (`source_unavailable`, `source_answer_unexpected`,
+  `source_team_not_visible`) → `source_unavailable` with that code. A refused or failed exchange
+  stores nothing and leaves the state as it was (a reconnect keeps the old credential; nothing
+  then says whether it still works).
+- **Audit (condition 5):** one row per attempt in the attempt's transaction; a refusal before the
+  network in its own short transaction; metadata keys only `host_key`, `credential_kind`,
+  `status_class`, `attempt_no`, `bound_team_count`, `source_team_count`, `counted`.
+- **COMMIT outcome:** the F2 discipline — answer awaited 15 s, then the audit row looked for on a
+  fresh connection (5 s): found → `commitConfirmation: verified_after_commit_error`; not found →
+  `503 outcome_unknown` and a second audit row `unknown` by the same admin and basis.
+- **Codes added to the table of 2.3 (6):** `already_connected`, `not_connected`,
+  `confirmation_mismatch`, `owner_scope_unsupported`, `exchange_not_supported`,
+  `adapter_not_available`, `credential_unreadable`, `invalid_body`, `attempt_not_recorded`,
+  `rights_changed`; `outcome_unknown` as above. A read the route makes after a confirmed COMMIT
+  never changes the answer: it fails as `connectionReadError: true` beside the result.
+- **Fact gap closed by migration v29** (`202610031000_training_load_v29_source_connection_state_facts.sql`):
+  `linked_untested` carries both facts; every state but `not_connected` holds a credential; a
+  partial index for the per-user window. Rollback `docs/runbooks/source-connections-v29-rollback.sql`,
+  rehearsed on a disposable database in `backend/tests/source-connections-f3c2d.test.mjs`.
+- **Recorded for the integration PR, not built here:** an incomplete drill set is never shown
+  as complete; an empty but successfully read `players` drill answer is a valid empty drill and
+  stays distinct from a failed read; tag names are HTML-escaped in the future UI; the raw-snapshot
+  decision (projection or redacted body) stays open; `GPEXE_IMPORT_APPLY_ENABLED` stays off and
+  the importer is not wired to a connection (D8's env fallback unchanged).
+
+---
+
 ## 3. Test plan (written with the adapter; all on disposable `optimove_tests_gpexe_*` databases)
 
 Fake source server (in-process `http` server, as `gpexe-in-app-import.test.mjs` does): answers
