@@ -9,7 +9,10 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import http from "node:http";
 import pg from "pg";
-import { createGpexeDisposableDb, createGpexePilotOrg, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-disposable-db.mjs";
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { applyGpexeTestMigrations, createGpexeDisposableDb, createGpexePilotOrg, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 import * as cryptoMod from "../src/sourceCredentialCrypto.js";
 
@@ -30,6 +33,11 @@ const EXCHANGE_URL = "https://server3.gpexe.com/api-token-auth/";
 const REST = "https://server3.gpexe.com/rest/v1/";
 const LEGACY = "https://server3.gpexe.com/api/";
 const DAY = "2026-09-14";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, "../..");
+const V31 = "202610041200_training_load_v31_gpexe_import_checks_source_path.sql";
+const UP_TO_V30 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V31));
+const V31_ROLLBACK = path.resolve(ROOT, "docs/runbooks/gpexe-import-checks-v31-rollback.sql");
 
 let db, admin, server, apiBase, importer, connections, resolver, createSession, appPool;
 const logLines = [];
@@ -151,8 +159,10 @@ async function coachOf(teamId) {
 // pair is globally unique, and a check row makes it final — v24 / v30).
 let nextSourceTeam = 981;
 const visibleTeams = new Set();
-async function org({ leadingZero = false } = {}) {
-  const o = await createGpexePilotOrg(admin, { athleteNames: ["A101", "B102", "C103"] });
+async function org({ leadingZero = false, bare = false } = {}) {
+  // `bare`: a team without athlete memberships, so a raw team move meets no membership foreign key
+  // (public.athlete_memberships references (team_id, club_id)) and only a trigger can refuse it.
+  const o = await createGpexePilotOrg(admin, { athleteNames: bare ? [] : ["A101", "B102", "C103"] });
   const sourceTeamId = String(nextSourceTeam++);
   visibleTeams.add(Number(sourceTeamId));
   const padmin = await platformAdmin();
@@ -173,7 +183,7 @@ function bundleFor(sourceTeamId, { detailsDrills = [0, 1], emptyDrill = null } =
 }
 function fakeSource({ token = TOKEN } = {}) {
   const calls = [];
-  const state = { served: null, bundle: null, gates: { team: null, list: null, athletes: null, track: null }, faults: { listStatus: 200, drillMissing: null, refuseAllReads: false } };
+  const state = { served: null, bundle: null, gates: { team: null, list: null, athletes: null, track: null }, faults: { listStatus: 200, drillMissing: null, refuseAllReads: false, emptyList: false } };
   const json = (status, body, headers = {}) => new Response(typeof body === "string" ? body : JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
   const abortable = (init, p) => new Promise((resolve, reject) => {
     if (init.signal?.aborted) return reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
@@ -206,6 +216,7 @@ function fakeSource({ token = TOKEN } = {}) {
     if (key === `/rest/v1/team_session/?team=${t}&start_timestamp_gte=2026-09-13%2000%3A00%3A00&start_timestamp_lte=${DAY}%2023%3A59%3A59&limit=100`) {
       if (state.gates.list) await abortable(init, state.gates.list.p);
       if (state.faults.listStatus !== 200) return json(state.faults.listStatus, { detail: SOURCE_SENTENCE });
+      if (state.faults.emptyList) return json(200, [], { "x-total-count": "0" });
       const base = { team: Number(t), category_name: "DRILL", start_timestamp: b.teamSession.start_timestamp, end_timestamp: b.teamSession.end_timestamp, updated_on: b.teamSession.updated_on, is_stats_valid: true, drills: [], drills_count: 0 };
       const rows = [{ ...b.teamSession, drills: [sid * 1000 + 1, sid * 1000 + 2], drills_count: 2 }, { ...base, id: sid * 1000 + 1 }, { ...base, id: sid * 1000 + 2 }];
       return json(200, rows, { "x-total-count": String(rows.length) });
@@ -251,13 +262,13 @@ const importReads = () => src.calls.filter((c) => c.key.startsWith("/rest/v1/tea
 // The legacy client factory as a seam: either a fake e03-style client, or a
 // trap that fails the test when the legacy path is reached at all.
 const legacyTrap = () => importer.setGpexeClientFactory(() => { throw new Error("TRAP: the legacy client factory was called for a team with an active binding"); });
-const legacyFake = (sourceTeamId, { listGate = null, bundleGate = null } = {}) => {
+const legacyFake = (sourceTeamId, { listGate = null, bundleGate = null, emptyList = false } = {}) => {
   const calls = { factory: 0, list: 0, bundle: 0 };
   importer.setGpexeClientFactory(() => {
     calls.factory += 1;
     const bundle = bundleFor(sourceTeamId);
     return {
-      async listTeamSessions({ gpexeTeamId }) { calls.list += 1; assert.equal(String(gpexeTeamId), String(sourceTeamId)); if (listGate) await listGate.p; return [{ id: String(bundle.teamSession.id) }]; },
+      async listTeamSessions({ gpexeTeamId }) { calls.list += 1; assert.equal(String(gpexeTeamId), String(sourceTeamId)); if (listGate) await listGate.p; return emptyList ? [] : [{ id: String(bundle.teamSession.id) }]; },
       async fetchSessionBundle() { calls.bundle += 1; if (bundleGate) await bundleGate.p; return structuredClone(bundle); },
     };
   });
@@ -312,6 +323,7 @@ test("1. a team without a new binding keeps the legacy path, explicitly: the leg
   assert.equal(importReads().length, 0, "the new adapter was not used");
   assert.equal((await candidatesOf(o.teamId)).length, 1);
   assert.ok(logLines.slice(logBefore).some((l) => l.includes(`check ${row.id}`) && l.includes("legacy_env")), "the path is logged");
+  assert.deepEqual([row.source_path, row.source_connection_id, row.source_binding_id, row.source_team_id, row.source_host_key], ["legacy_env", null, null, null, null], "v31: the row records the legacy path and nothing else");
   // Without an environment token the legacy path answers as before: 503, no check row.
   importer.setGpexeClientFactory(null);
   delete process.env.GPEXE_API_TOKEN;
@@ -332,6 +344,8 @@ test("2. a team with an active binding reads only through it: the environment to
   const row = await runCheck(o);
   assert.equal(row.status, "succeeded", JSON.stringify(row));
   assert.equal(row.gpexe_team_id, o.sourceTeamId);
+  assert.deepEqual([row.source_path, row.source_connection_id, row.source_binding_id, row.source_team_id, row.source_host_key], ["source_connection", conn.id, binding.bindingId, o.sourceTeamId, "server3"], "v31: the row records the path, the connection, the binding, the source team and the host key — written in the locked INSERT");
+  await assert.rejects(q(`update training_load.gpexe_import_checks set source_path = 'legacy_env', source_connection_id = null, source_binding_id = null, source_team_id = null, source_host_key = null where id = $1`, [row.id]), /credential path of check .* is final/);
   const reads = importReads();
   assert.ok(reads.length >= 8, `the adapter read the list, the session, the athletes, their rows, more, tracks, details, drills, thresholds (${reads.length})`);
   assert.ok(reads.every((c) => c.method === "GET" && c.auth === "connection"), "GET only, the connection's token only");
@@ -403,7 +417,7 @@ test("4. the resolver's own contract (a fake executor): no binding → legacy_en
     team_id: teamId, team_club_id: "c1", team_active: true, binding_id: "b1", connection_id: "k1", source_team_id: "981", binding_state: "active", source_system: "gpexe",
     approved_source_team_id: "981", connection_row_id: "k1", owner_scope: "club", owner_club_id: "c1", connection_state: "verified", host_key: "server3", credential_kind: "exchanged_token",
     credential_ciphertext: Buffer.alloc(1), credential_nonce: Buffer.alloc(1), credential_auth_tag: Buffer.alloc(1), credential_key_version: 1, club_active: true, credential_fingerprint: "f".repeat(64),
-    catalog_source_system: "gpexe", catalog_host_key: "server3", catalog_state: "approved",
+    catalog_source_system: "gpexe", catalog_host_key: "server3", catalog_state: "approved", team_club_active: true, has_ended_binding: false,
   };
   const exec = (rows) => ({ query: async () => ({ rows }) });
   const code = async (rows) => { try { await resolver.resolveImportSourceFacts(exec(rows), { teamId }); return "ok"; } catch (e) { return e.code; } };
@@ -412,6 +426,8 @@ test("4. the resolver's own contract (a fake executor): no binding → legacy_en
   assert.equal(await code([base, { ...base, binding_id: "b2" }]), "binding_ambiguous");
   assert.equal(await code([]), "team_not_available");
   assert.equal(await code([{ ...base, team_active: false }]), "team_not_available");
+  assert.equal(await code([{ ...base, team_club_active: false }]), "team_not_available");
+  assert.equal(await code([{ ...none, has_ended_binding: true }]), "binding_ended", "a team that had a binding never returns to the legacy path");
   assert.equal(await code([{ ...base, approved_source_team_id: null }]), "team_setting_missing");
   assert.equal(await code([{ ...base, approved_source_team_id: "0981" }]), "ok", "the approved pair is compared canonically, the one rule v30 / the bind / the Settings route share");
   assert.equal(await code([{ ...base, approved_source_team_id: "x981" }]), "team_setting_missing");
@@ -445,7 +461,7 @@ test("4. the resolver's own contract (a fake executor): no binding → legacy_en
   assert.throws(() => resolver.openImportSource(e03), (e) => e.code === "adapter_not_available" || e.code === "credential_unreadable");
 });
 
-test("5. an ended binding is never used: after an Unbind the team is a team without a binding (the legacy path again, the ended row untouched); when binding A ended and binding B to another source team was created, the next check reads B's source team only", async () => {
+test("5. an ended binding is never used, and a team that had one never returns to the environment token: after an Unbind a check answers 409 source_connection_unavailable (reason binding_ended for an administrator), the legacy factory is not called and the environment token is not read; a new binding opens the source-connection path again; a second club's own binding is read; another club's team cannot be bound through this club's connection", async () => {
   const o = await org();
   useSource();
   const { conn, binding } = await bound(o);
@@ -453,11 +469,22 @@ test("5. an ended binding is never used: after an Unbind the team is a team with
   src.serve(o.sourceTeamId);
   assert.equal((await runCheck(o)).status, "succeeded");
   assert.equal((await unbind(o, conn, binding)).status, 200);
-  const legacy = legacyFake(o.sourceTeamId);
+  process.env.GPEXE_API_TOKEN = ENV_TOKEN;
   const readsBefore = importReads().length;
-  assert.equal((await runCheck(o)).status, "succeeded", "a team without a binding: the legacy path");
-  assert.equal(legacy.factory, 1);
+  const checksBefore = (await q(`select count(*)::int as n from training_load.gpexe_import_checks where owner_team_id = $1`, [o.teamId]))[0].n;
+  const coach = await api(`/gpexe/teams/${o.teamId}/checks`, { method: "POST", cookie: o.coach.cookie, body: { from: DAY, to: DAY } });
+  assert.deepEqual([coach.status, coach.body.error, coach.body.reason], [409, "source_connection_unavailable", undefined], JSON.stringify(coach.body));
+  const padmin = await api(`/gpexe/teams/${o.teamId}/checks`, { method: "POST", cookie: o.padmin.cookie, body: { from: DAY, to: DAY } });
+  assert.deepEqual([padmin.status, padmin.body.error, padmin.body.reason], [409, "source_connection_unavailable", "binding_ended"], JSON.stringify(padmin.body));
+  assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_checks where owner_team_id = $1`, [o.teamId]))[0].n, checksBefore, "no check row");
   assert.equal(importReads().length, readsBefore, "the ended binding's connection was not read");
+  assert.ok(src.calls.every((c) => c.auth !== "ENV"), "the environment token was never sent");
+  // A new binding of the same pair opens the source-connection path again.
+  const again = await api(`/sources/gpexe/connections/${conn.id}/bindings`, { method: "POST", cookie: o.cadmin.cookie, body: { teamId: o.teamId, sourceTeamId: o.sourceTeamId } });
+  assert.equal(again.status, 201, JSON.stringify(again.body));
+  const rowAgain = await runCheck(o);
+  assert.deepEqual([rowAgain.status, rowAgain.source_path, rowAgain.source_binding_id], ["succeeded", "source_connection", again.body.result.binding.bindingId]);
+  assert.ok(importReads().length > readsBefore, "read through the new binding");
   // Binding B: the approved pair must change first (allowed once the binding ended and only
   // while nothing of the team describes the old one — this team has checks, so v24 refuses);
   // so B is bound on a second team of the same club through the same connection.
@@ -472,7 +499,6 @@ test("5. an ended binding is never used: after an Unbind the team is a team with
   const row = await runCheck(other);
   assert.equal(row.status, "succeeded", JSON.stringify(row));
   assert.ok(importReads().filter((c) => c.key.includes(`team=${other.sourceTeamId}`)).length > 0);
-  assert.equal(importReads().filter((c) => c.key.includes(`team=${o.sourceTeamId}`)).length, readsBefore > 0 ? importReads().filter((c) => c.key.includes(`team=${o.sourceTeamId}`)).length : 0);
 });
 
 test("6. concurrency: an Unbind holding the team lock, a Test / bind in flight or any holder of the team import lock makes the check answer 409 gpexe_change_busy with no check row; an Unbind that lands after the resolve and before the first source read stops the run with binding_ended before any request (nothing recorded, the Unbind itself succeeded); a connection moved to needs_reconnect or a host retired during the run stop it with their codes", async () => {
@@ -553,7 +579,8 @@ test("6. concurrency: an Unbind holding the team lock, a Test / bind in flight o
     [() => q(`update training_load.source_host_catalog set state = 'retired' where host_key = 'server3'`), "host_not_allowed", () => q(`update training_load.source_host_catalog set state = 'approved' where host_key = 'server3'`)],
   ]) {
     const g = gate(); let holds = 0;
-    // The first re-validation (before the list) passes; the mutation lands before the second (before the bundle).
+    // The first re-validation (before the list) passes; the mutation lands before the second one (after the list,
+    // before any bundle): re-validations are list-pre (1), list-post (2), bundle-pre (3), bundle-post (4).
     resolver.setImportSourceRevalidateHoldForTests(async () => { holds += 1; if (holds === 2) await g.p; });
     const started = await startCheck(o);
     assert.equal(started.status, 202, JSON.stringify(started.body));
@@ -867,11 +894,12 @@ test("12. round-2 hardening: a Reconnect during a run stops it with connection_c
     const { conn, binding } = await bound(o);
     legacyTrap();
     src.serve(o.sourceTeamId);
+    // Re-validations in order: list-pre (1), list-post (2), bundle-pre (3), bundle-post (4).
     const g = gate(); let holds = 0;
-    resolver.setImportSourceRevalidateHoldForTests(async () => { holds += 1; if (holds === 3) await g.p; });
+    resolver.setImportSourceRevalidateHoldForTests(async () => { holds += 1; if (holds === 4) await g.p; });
     const started = await startCheck(o);
     assert.equal(started.status, 202, JSON.stringify(started.body));
-    await waitFor(() => holds === 3);
+    await waitFor(() => holds === 4);
     assert.ok(importReads().some((c) => c.key.includes("/details/")), "the bundle was read before the hold");
     const u = await unbind(o, conn, binding);
     assert.equal(u.status, 200, JSON.stringify(u.body));
@@ -940,6 +968,269 @@ test("12. round-2 hardening: a Reconnect during a run stops it with connection_c
     assert.equal(row.status, "succeeded", JSON.stringify(row));
     assert.equal(row.gpexe_team_id, `0${o.sourceTeamId}`, "the check row keeps the stored value");
     assert.ok(importReads().some((c) => c.key.includes(`team=${o.sourceTeamId}`)), "the adapter is bound to the canonical id");
+  }
+});
+
+test("13. the facts are re-validated after a list too, empty or not: a binding ended while an EMPTY list was in flight → binding_ended, not a succeeded check; a credential replaced while an empty list was in flight → connection_credential_changed; a binding created while a legacy empty list was in flight → binding_started; in every case no candidate, no further read and no fallback", async () => {
+  // (a) binding path, empty list, Unbind during the list.
+  {
+    const o = await org();
+    useSource();
+    const { conn, binding } = await bound(o);
+    process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    src.state.faults.emptyList = true;
+    src.state.gates.list = gate();
+    const started = await startCheck(o);
+    assert.equal(started.status, 202, JSON.stringify(started.body));
+    await waitFor(() => src.calls.some((c) => c.key.includes("start_timestamp_gte")));
+    assert.equal((await unbind(o, conn, binding)).status, 200);
+    const readsBefore = importReads().length;
+    src.state.gates.list.release();
+    await started.done.p;
+    const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [started.body.check.id]))[0];
+    assert.deepEqual([row.status, row.error_code], ["failed", "binding_ended"], JSON.stringify(row));
+    assert.equal(importReads().length, readsBefore, "nothing more was read");
+    assert.equal((await candidatesOf(o.teamId)).length, 0);
+    assert.ok(src.calls.every((c) => c.auth !== "ENV"));
+  }
+  // (b) binding path, empty list, Reconnect during the list.
+  {
+    const o = await org();
+    useSource();
+    const { conn } = await bound(o);
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    src.state.faults.emptyList = true;
+    src.state.gates.list = gate();
+    const started = await startCheck(o);
+    assert.equal(started.status, 202, JSON.stringify(started.body));
+    await waitFor(() => src.calls.some((c) => c.key.includes("start_timestamp_gte")));
+    const re = await api(`/sources/gpexe/connections/${conn.id}/reconnect`, { method: "POST", cookie: o.cadmin.cookie, body: { username: USERNAME, password: PASSWORD, confirmation: { sourceSystem: "gpexe", ownerClubId: o.clubId, affectedTeamCount: 1 } }, allowed: [SOURCE_TEAM_NAME_MARKER] });
+    assert.equal(re.status, 200, JSON.stringify(re.body));
+    src.state.gates.list.release();
+    await started.done.p;
+    const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [started.body.check.id]))[0];
+    assert.deepEqual([row.status, row.error_code], ["failed", "connection_credential_changed"], JSON.stringify(row));
+    assert.equal((await candidatesOf(o.teamId)).length, 0);
+    assert.equal((await connRow(conn.id)).state, "verified");
+  }
+  // (c) legacy path, empty list, a binding appears during the list.
+  {
+    const o = await org();
+    useSource();
+    const conn = await verifiedConnection(o);
+    const listGate = gate();
+    const legacy = legacyFake(o.sourceTeamId, { listGate, emptyList: true });
+    const started = await startCheck(o);
+    assert.equal(started.status, 202, JSON.stringify(started.body));
+    await waitFor(() => legacy.list === 1);
+    const b = await api(`/sources/gpexe/connections/${conn.id}/bindings`, { method: "POST", cookie: o.cadmin.cookie, body: { teamId: o.teamId, sourceTeamId: o.sourceTeamId } });
+    assert.equal(b.status, 201, JSON.stringify(b.body));
+    listGate.release();
+    await started.done.p;
+    const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [started.body.check.id]))[0];
+    assert.deepEqual([row.status, row.error_code], ["failed", "binding_started"], JSON.stringify(row));
+    assert.equal(legacy.bundle, 0);
+    assert.equal((await candidatesOf(o.teamId)).length, 0);
+  }
+});
+
+test("14. the legacy path is open only to a team that never had a source binding: no history → legacy; after an Unbind → 409 source_connection_unavailable / binding_ended with the legacy factory never called and the environment token never read; a new binding → the source-connection path again; an unusable ACTIVE binding never falls back either", async () => {
+  const o = await org();
+  useSource();
+  const legacy = legacyFake(o.sourceTeamId);
+  assert.equal((await runCheck(o)).status, "succeeded", "no history: the legacy path");
+  assert.equal(legacy.factory, 1);
+  const { conn, binding } = await bound(o);
+  assert.equal((await unbind(o, conn, binding)).status, 200);
+  process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+  legacyTrap();
+  for (let i = 0; i < 2; i += 1) {
+    const r = await api(`/gpexe/teams/${o.teamId}/checks`, { method: "POST", cookie: o.padmin.cookie, body: { from: DAY, to: DAY } });
+    assert.deepEqual([r.status, r.body.error, r.body.reason], [409, "source_connection_unavailable", "binding_ended"], JSON.stringify(r.body));
+  }
+  assert.ok(src.calls.every((c) => c.auth !== "ENV"));
+  assert.equal(importReads().length, 0);
+  const again = await api(`/sources/gpexe/connections/${conn.id}/bindings`, { method: "POST", cookie: o.cadmin.cookie, body: { teamId: o.teamId, sourceTeamId: o.sourceTeamId } });
+  assert.equal(again.status, 201, JSON.stringify(again.body));
+  src.serve(o.sourceTeamId);
+  assert.equal((await runCheck(o)).source_path, "source_connection");
+  await q(`update training_load.source_credential_connections set state = 'needs_reconnect', last_error_code = 'source_auth_rejected', last_error_at = now() where id = $1`, [conn.id]);
+  const unusable = await api(`/gpexe/teams/${o.teamId}/checks`, { method: "POST", cookie: o.padmin.cookie, body: { from: DAY, to: DAY } });
+  assert.deepEqual([unusable.status, unusable.body.reason], [409, "connection_not_usable"]);
+  assert.ok(src.calls.every((c) => c.auth !== "ENV"), "an unusable active binding never falls back to the environment token");
+});
+
+test("15. both paths pin the team's club: a legacy team moved to another club during a held list stops with team_club_changed (no candidate, no bundle read); a legacy team whose club is archived during a held bundle stops with team_not_available (nothing recorded); the database refuses to move a BOUND team (the v27 backstop, proven); a bound team whose club is archived during a run stops with team_not_available", async () => {
+  // (a) legacy team moved during the list.
+  {
+    const o = await org({ bare: true });
+    useSource();
+    const listGate = gate();
+    const legacy = legacyFake(o.sourceTeamId, { listGate });
+    const otherClub = (await q(`insert into public.clubs (name) values ('Other club') returning id`))[0].id;
+    const started = await startCheck(o);
+    assert.equal(started.status, 202, JSON.stringify(started.body));
+    await waitFor(() => legacy.list === 1);
+    await q(`update public.teams set club_id = $2 where id = $1`, [o.teamId, otherClub]);
+    listGate.release();
+    await started.done.p;
+    const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [started.body.check.id]))[0];
+    assert.deepEqual([row.status, row.error_code], ["failed", "team_club_changed"], JSON.stringify(row));
+    assert.equal(legacy.bundle, 0, "no bundle read after the move");
+    assert.equal((await candidatesOf(o.teamId)).length, 0);
+  }
+  // (b) legacy team's club archived during the bundle.
+  {
+    const o = await org();
+    useSource();
+    const bundleGate = gate();
+    const legacy = legacyFake(o.sourceTeamId, { bundleGate });
+    const started = await startCheck(o);
+    assert.equal(started.status, 202, JSON.stringify(started.body));
+    await waitFor(() => legacy.bundle === 1);
+    await q(`update public.clubs set is_active = false where id = $1`, [o.clubId]);
+    bundleGate.release();
+    await started.done.p;
+    const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [started.body.check.id]))[0];
+    assert.deepEqual([row.status, row.error_code], ["failed", "team_not_available"], JSON.stringify(row));
+    assert.equal((await candidatesOf(o.teamId)).length, 0, "the bundle read across the archive is not recorded");
+    await q(`update public.clubs set is_active = true where id = $1`, [o.clubId]);
+  }
+  // (c) a bound team cannot be moved: the v27 backstop, proven, not assumed (a bare team, so no membership FK answers first).
+  {
+    const o = await org({ bare: true });
+    useSource();
+    await bound(o);
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    const otherClub = (await q(`insert into public.clubs (name) values ('Other club B') returning id`))[0].id;
+    const moved = await q(`update public.teams set club_id = $2 where id = $1`, [o.teamId, otherClub]).then(() => null, (e) => e);
+    assert.ok(moved, "the move of a bound team is refused by the database");
+    assert.match(String(moved.message), /bound|binding/i, `the v27 move guard, not a foreign key: ${moved.message}`);
+    assert.equal(String((await q(`select club_id from public.teams where id = $1`, [o.teamId]))[0].club_id), String(o.clubId), "the team stays in its club");
+    assert.equal((await runCheck(o)).status, "succeeded");
+  }
+  // (d) a bound team's club archived during a held bundle.
+  {
+    const o = await org();
+    useSource();
+    await bound(o);
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    const g = gate(); let holds = 0;
+    resolver.setImportSourceRevalidateHoldForTests(async () => { holds += 1; if (holds === 4) await g.p; });
+    const started = await startCheck(o);
+    assert.equal(started.status, 202, JSON.stringify(started.body));
+    await waitFor(() => holds === 4);
+    await q(`update public.clubs set is_active = false where id = $1`, [o.clubId]);
+    g.release();
+    await started.done.p;
+    resolver.setImportSourceRevalidateHoldForTests(null);
+    const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [started.body.check.id]))[0];
+    assert.deepEqual([row.status, row.error_code], ["failed", "team_not_available"], JSON.stringify(row));
+    assert.equal((await candidatesOf(o.teamId)).length, 0);
+    await q(`update public.clubs set is_active = true where id = $1`, [o.clubId]);
+  }
+});
+
+test("16. migration v31 applies on v30 (five columns, one CHECK, two triggers and their functions), backfills every earlier row as legacy_env with nulls by its default, makes the database refuse a connection-path row whose binding is ended / of another team / of another connection / of another source team or whose host key is not the connection's, refuses the mixed shapes (23514), keeps the five columns final (a raw UPDATE refused), rolls back to exactly the v30 catalog, applies again, refuses to roll back under a later migration and while a source-connection row exists, and a file that fails at its last statement applies nothing", async () => {
+  const m = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v31mig", migrations: UP_TO_V30 });
+  const k = new pg.Client({ connectionString: m.url });
+  await k.connect();
+  try {
+    assert.equal((await k.query("select current_database() as db")).rows[0].db, m.name);
+    const catalog = async () => ({
+      columns: (await k.query(`select column_name, data_type, is_nullable, column_default from information_schema.columns where table_schema = 'training_load' and table_name = 'gpexe_import_checks' order by ordinal_position`)).rows,
+      constraints: (await k.query(`select conname, pg_get_constraintdef(oid) as def from pg_constraint where conrelid = 'training_load.gpexe_import_checks'::regclass order by 1`)).rows,
+      triggers: (await k.query(`select tgname, pg_get_triggerdef(oid) as def from pg_trigger where tgrelid = 'training_load.gpexe_import_checks'::regclass and not tgisinternal order by 1`)).rows,
+      functions: (await k.query(`select p.proname, md5(pg_get_functiondef(p.oid)) as digest from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'training_load' and p.proname like '%gpexe_check%' order by 1`)).rows,
+    });
+    const v30 = await catalog();
+    assert.ok(!v30.columns.some((c) => c.column_name === "source_path"));
+    // Fixture written BEFORE v31: a club, a team with its approved pair, a user, and one check row from the legacy era.
+    const club = (await k.query(`insert into public.clubs (name) values ('C') returning id`)).rows[0].id;
+    const team = (await k.query(`insert into public.teams (club_id, name) values ($1, 'T') returning id`, [club])).rows[0].id;
+    const team2 = (await k.query(`insert into public.teams (club_id, name) values ($1, 'T2') returning id`, [club])).rows[0].id;
+    const user = (await k.query(`insert into public.users (email) values ('u@test.local') returning id`)).rows[0].id;
+    await k.query(`insert into training_load.gpexe_team_settings (owner_team_id, gpexe_team_id, configured_by_user_id) values ($1, '981', $2)`, [team, user]);
+    await k.query(`insert into training_load.gpexe_team_settings (owner_team_id, gpexe_team_id, configured_by_user_id) values ($1, '982', $2)`, [team2, user]);
+    const oldRow = (await k.query(`insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, status, window_from, window_to, finished_at, gpexe_team_id) values ($1, $2, 'succeeded', '2026-09-01', '2026-09-01', now(), '981') returning id`, [team, user])).rows[0].id;
+    await applyGpexeTestMigrations(m.url, [...UP_TO_V30, V31]);
+    const v31 = await catalog();
+    assert.deepEqual(v31.columns.filter((c) => c.column_name.startsWith("source_")).map((c) => [c.column_name, c.is_nullable]), [["source_path", "NO"], ["source_connection_id", "YES"], ["source_binding_id", "YES"], ["source_team_id", "YES"], ["source_host_key", "YES"]]);
+    assert.ok(v31.constraints.some((c) => c.conname === "gpexe_import_checks_source_path_facts"));
+    assert.match(v31.constraints.find((c) => c.conname === "gpexe_import_checks_source_host_key_format").def, /\[a-z0-9\]\[a-z0-9_-\]\{0,30\}/, "the host-key format is the catalog's own (v27), not a stricter one");
+    assert.deepEqual(v31.triggers.filter((t) => /source/.test(t.tgname)).map((t) => t.tgname), ["gpexe_import_checks_freeze_source", "gpexe_import_checks_source_facts"]);
+    const backfilled = (await k.query(`select source_path, source_connection_id, source_binding_id, source_team_id, source_host_key from training_load.gpexe_import_checks where id = $1`, [oldRow])).rows[0];
+    assert.deepEqual(backfilled, { source_path: "legacy_env", source_connection_id: null, source_binding_id: null, source_team_id: null, source_host_key: null }, "every earlier row is the legacy path by default");
+    // A connection and an active binding of the approved pair (team ↔ 981), for the guards.
+    const parts = cryptoMod.encryptCredential(TOKEN, { connectionId: "00000000-0000-0000-0000-000000000001", ownerScope: "club", ownerClubId: club, ownerTeamId: null, sourceSystem: "gpexe", hostKey: "server3", credentialKind: "exchanged_token" }, cryptoMod.parseKeyring(process.env.SOURCE_CREDENTIAL_KEYS));
+    const connId = (await k.query(
+      `insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id, state, credential_ciphertext, credential_nonce, credential_auth_tag, credential_key_version, last_verified_at)
+       values ('gpexe','club',$1,'server3','L','exchanged_token',$2,'verified',$3,$4,$5,$6, now()) returning id`,
+      [club, user, parts.ciphertext, parts.nonce, parts.authTag, parts.keyVersion],
+    )).rows[0].id;
+    const connId2 = (await k.query(
+      `insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id, state, credential_ciphertext, credential_nonce, credential_auth_tag, credential_key_version, last_verified_at)
+       values ('gpexe','club',$1,'server3','L2','exchanged_token',$2,'verified',$3,$4,$5,$6, now()) returning id`,
+      [club, user, parts.ciphertext, parts.nonce, parts.authTag, parts.keyVersion],
+    )).rows[0].id;
+    const bindingId = (await k.query(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id) values ($1, $2, 'gpexe', '981', $3, $1) returning id`, [team, connId, user])).rows[0].id;
+    const binding2 = (await k.query(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id) values ($1, $2, 'gpexe', '982', $3, $1) returning id`, [team2, connId, user])).rows[0].id;
+    const insertCheck = (over = {}) => {
+      const v = { team, path: "source_connection", conn: connId, binding: bindingId, sourceTeam: "981", host: "server3", gpexe: "981", ...over };
+      return k.query(`insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, status, window_from, window_to, finished_at, gpexe_team_id, source_path, source_connection_id, source_binding_id, source_team_id, source_host_key)
+                      values ($1, $2, 'succeeded', '2026-09-02', '2026-09-02', now(), $3, $4, $5, $6, $7, $8) returning id`, [v.team, user, v.gpexe, v.path, v.conn, v.binding, v.sourceTeam, v.host]);
+    };
+    const refused = async (over, pattern) => { const e = await insertCheck(over).then(() => null, (err) => err); assert.ok(e, `refused: ${JSON.stringify(over)}`); assert.match(String(e.message), pattern); };
+    await refused({ binding: binding2 }, /another team/);
+    await refused({ conn: connId2 }, /other than its binding/);
+    await refused({ sourceTeam: "982" }, /source team other than its binding/);
+    await refused({ host: "e03" }, /host key other than its connection/);
+    await refused({ binding: "00000000-0000-0000-0000-00000000dead" }, /does not exist|violates foreign key/);
+    await refused({ path: "legacy_env" }, /source_path_facts/);
+    // (the row trigger fires before the CHECK: a connection-path row without a binding is refused by whichever answers first)
+    await refused({ conn: null, binding: null, sourceTeam: null, host: null }, /source_path_facts|does not exist/);
+    await refused({ sourceTeam: "0981" }, /source team other than its binding/);
+    // Mixed shapes and formats.
+    await refused({ path: "legacy_env", binding: null, conn: null, sourceTeam: null, host: "server3" }, /source_path_facts/);
+    await refused({ host: "Server3" }, /source_host_key_format|host key other/);
+    // Before any connection-path row exists: the rollback runs, and the atomicity of the file holds.
+    const rollbackSql = await fsp.readFile(V31_ROLLBACK, "utf8");
+    await k.query(rollbackSql);
+    assert.deepEqual(await catalog(), v30, "the rollback leaves exactly the v30 columns, constraints, triggers and functions of the checks table");
+    assert.equal((await k.query(`select count(*)::int as n from public.schema_migrations where migration_name like $1`, [`%${V31}`])).rows[0].n, 0);
+    assert.equal((await k.query(`select count(*)::int as n from training_load.gpexe_import_checks`)).rows[0].n, 1, "no row lost");
+    const sql = await fsp.readFile(path.resolve(ROOT, "migrations_v2", V31), "utf8");
+    assert.doesNotMatch(sql.replace(/[$][$][^]*?[$][$]/g, "<body>"), /https?:\/\/|SOURCE_CREDENTIAL_KEYS|^\s*(begin|commit|rollback)\b/im, "no URL, key or transaction control outside the function bodies");
+    await k.query("begin");
+    await assert.rejects(k.query(`${sql}\nselect 1/0;`), /division by zero/);
+    await k.query("rollback");
+    assert.deepEqual(await catalog(), v30, "nothing of the failed file was applied");
+    await applyGpexeTestMigrations(m.url, [...UP_TO_V30, V31]);
+    assert.deepEqual(await catalog(), v31, "v31 applies again, identically");
+    // A correct connection-path row is accepted, is final, and is evidence the rollback refuses to erase.
+    const good = (await insertCheck()).rows[0].id;
+    await assert.rejects(k.query(`update training_load.gpexe_import_checks set source_host_key = 'e03' where id = $1`, [good]), /credential path of check .* is final/);
+    await assert.rejects(k.query(`update training_load.gpexe_import_checks set source_path = 'legacy_env', source_connection_id = null, source_binding_id = null, source_team_id = null, source_host_key = null where id = $1`, [good]), /credential path of check .* is final/);
+    await k.query(`update training_load.gpexe_import_checks set sessions_seen = 3 where id = $1`, [good]);
+    // An ended binding is refused for a NEW row, while the earlier row keeps pointing at it (history).
+    await k.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'test' where id = $1`, [bindingId, user]);
+    await refused({}, /not active/);
+    await assert.rejects(k.query(rollbackSql), /v31 rollback refused: 1 check row\(s\) record a source-connection read/);
+    await k.query("rollback").catch(() => {});
+    assert.deepEqual(await catalog(), v31, "a refused rollback drops nothing");
+    await k.query("begin");
+    await k.query(`insert into public.schema_migrations (migration_name, checksum, execution_time_ms, runner_version) values ('migrations_v2/209901010000_test_only_later.sql', repeat('0', 64), 0, 'test')`);
+    await assert.rejects(k.query(rollbackSql), /v31 rollback refused: later migrations are applied/);
+    await k.query("rollback").catch(() => {});
+    assert.deepEqual(await catalog(), v31);
+  } finally {
+    await k.end();
+    await m.drop();
   }
 });
 

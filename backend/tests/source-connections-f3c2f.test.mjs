@@ -21,6 +21,8 @@ const ORIGINAL_ACTIVE = process.env.SOURCE_CREDENTIAL_ACTIVE_KEY_VERSION;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "../..");
 const V30_ROLLBACK = path.resolve(ROOT, "docs/runbooks/source-connections-v30-rollback.sql");
+// The v30 rollback rehearsal needs a database whose LAST migration is v30 (it refuses under a later one by design).
+const UP_TO_V30 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf("202610041000_training_load_v30_gpexe_team_settings_bound_final.sql") + 1);
 
 const USERNAME = "marker-username-f3c2f@example.invalid";
 const PASSWORD = "MARKER-password-f3c2f-not-real";
@@ -531,7 +533,7 @@ test("8. after an Unbind: the v30 trigger no longer blocks a change of the team'
   assert.deepEqual((await api(`/gpexe/connections/${conn.id}`, { cookie: pa.cookie })).body.connection.boundTeams.map((b) => b.sourceTeamId).sort(), ["981", "983"]);
   void configurer;
   // The v30 rollback refuses only while an ACTIVE binding relies on it: on a separate disposable database an ended binding no longer blocks it.
-  const m = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "f3c2frb", migrations: GPEXE_TEST_MIGRATIONS });
+  const m = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "f3c2frb", migrations: UP_TO_V30 });
   const k = new pg.Client({ connectionString: m.url });
   await k.connect();
   try {
@@ -553,7 +555,7 @@ test("8. after an Unbind: the v30 trigger no longer blocks a change of the team'
     await k.query(rollbackSql);
     assert.equal((await k.query(`select count(*)::int as n from pg_trigger where tgname in ('gpexe_team_settings_bound_team_final', 'source_team_bindings_check_pair')`)).rows[0].n, 0, "the rollback went through once the binding was ended");
     assert.equal((await k.query(`select state from training_load.source_team_bindings where id = $1`, [bId])).rows[0].state, "ended", "the history row stays");
-    await applyGpexeTestMigrations(m.url, GPEXE_TEST_MIGRATIONS);
+    await applyGpexeTestMigrations(m.url, UP_TO_V30);
   } finally {
     await k.end();
     await m.drop();

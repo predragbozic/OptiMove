@@ -468,6 +468,11 @@ export async function startCheck(teamId, { userId, window, wait = false }) {
     try {
       facts = await resolveImportSourceFacts(lockClient, { teamId });
     } catch (error) {
+      // A binding that ended between the pre-read and the lock is a change in
+      // flight (retry), like any other disagreement below.
+      if (error instanceof SourceImportResolveError && error.code === "binding_ended" && preFacts.path === PATH_SOURCE_CONNECTION) {
+        throw new GpexeImportServiceError(409, "gpexe_change_busy", "The team's source binding changed while the check was being started. Try again.");
+      }
       if (error instanceof SourceImportResolveError) throw unavailableSource(error);
       throw error;
     }
@@ -477,9 +482,16 @@ export async function startCheck(teamId, { userId, window, wait = false }) {
     if (facts.path === PATH_SOURCE_CONNECTION && facts.sourceTeamId !== canonicalSourceTeamId("gpexe", gpexeTeamId)) {
       throw unavailableSource(new SourceImportResolveError("team_setting_mismatch", "The team's active source binding does not name its approved source team; nothing was read."));
     }
+    // v31: the check row records the path it reads through and, on the
+    // binding path, the connection, binding, source team and host key — in
+    // this same locked INSERT, final from creation. Never a credential.
+    const onConnection = facts.path === PATH_SOURCE_CONNECTION;
     row = (await lockClient.query(
-      `insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, window_from, window_to, gpexe_team_id) values ($1,$2,$3,$4,$5) returning *`,
-      [teamId, userId, window.from, window.to, gpexeTeamId],
+      `insert into training_load.gpexe_import_checks
+         (owner_team_id, requested_by_user_id, window_from, window_to, gpexe_team_id, source_path, source_connection_id, source_binding_id, source_team_id, source_host_key)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *`,
+      [teamId, userId, window.from, window.to, gpexeTeamId, onConnection ? PATH_SOURCE_CONNECTION : PATH_LEGACY_ENV,
+        onConnection ? facts.connectionId : null, onConnection ? facts.bindingId : null, onConnection ? facts.sourceTeamId : null, onConnection ? facts.hostKey : null],
     )).rows[0];
     // The COMMIT is awaited under a bound (the F2 discipline): once it was
     // sent, the answer never says "nothing was written" — the row is looked

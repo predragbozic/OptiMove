@@ -916,7 +916,8 @@ Discovery: `docs/ai/source-connections-f3c2e-discovery.md` section 7. No migrati
 ### 2.8 F3c2g as built (owner order 2026-10-04; branch `feature/gpexe-importer-resolver-f3c2g`; not merged)
 
 The importer's credential resolver and the strict transition rule. Discovery, entry-point map and
-the open decisions: `docs/ai/source-connections-f3c2g-discovery.md`. No migration; one route change —
+the decisions: `docs/ai/source-connections-f3c2g-discovery.md` (Q1 → migration v31, Q2 kept, Q3 → no
+legacy downgrade after an Unbind). Migration v31 (see the round-4 bullet); one route change —
 the importer router's error-detail allowlist gains `reason` (a new field on `source_connection_unavailable`,
 shown to administrators only); no UI, no GPEXE request; `GPEXE_API_TOKEN` stays in the configuration and
 on Render untouched.
@@ -959,8 +960,10 @@ on Render untouched.
   row; the reason for an administrator only), or the precise code on the check row when it is
   found after the row exists (`credential_unreadable` — the decrypt happens once, after COMMIT —
   or anything that moves mid-run); a
-  team without a binding keeps the legacy path, labelled `legacy_env` (the existing
-  `GPEXE_API_TOKEN` / `e03` client, `503 gpexe_token_missing` without the variable). The path is
+  team without a binding — and that never had one for the source — keeps the legacy path, labelled
+  `legacy_env` (the existing `GPEXE_API_TOKEN` / `e03` client, `503 gpexe_token_missing` without the
+  variable); a team with ended binding history answers `source_connection_unavailable` /
+  `binding_ended` until it is bound again. The path is
   decided once per check under the team lock: an unlocked pre-read (which alone decides whether
   the legacy client is built, and proves the key ring and the key version (no decrypt) before any row
   exists) and the locked read must agree, otherwise `409 gpexe_change_busy` (retry).
@@ -1005,6 +1008,34 @@ on Render untouched.
   attempt's own outcome sets the state, and the next refused check re-applies it. During a run the
   preview dry-run of each session still takes the team import lock briefly (pre-existing F1
   design; no network inside it).
+- **Round 4 (owner's external review of `6ad4b49`, 2026-10-04 — all five items closed in this PR):**
+  (1) both paths re-validate **after** a list too, empty or not — a binding ended, a credential
+  replaced or a binding created while the list was in flight ends the run before any session
+  (`binding_ended` / `connection_credential_changed` / `binding_started`), nothing recorded, no
+  fallback; (2) **no legacy downgrade after an Unbind**: the legacy path is open only to a team
+  that never had a binding for the source — a team with ended binding history and no active one
+  answers `409 source_connection_unavailable` / `binding_ended` and never reads `GPEXE_API_TOKEN`;
+  a new binding opens the source-connection path again (decision Q3 taken); (3) both paths **pin
+  the team's club**: the run keeps the club it started in and checks, before and after every list
+  and bundle, that the team is still active, still in that club, and the club active
+  (`team_club_changed` / `team_not_available`) — a bound team cannot move at all (the v27 move
+  guard, proven by a refused raw UPDATE in the tests), a legacy team that moves stops its run;
+  (4) **migration v31** (`migrations_v2/202610041200_training_load_v31_gpexe_import_checks_source_path.sql`,
+  decision Q1 taken): `gpexe_import_checks` gains `source_path` (`legacy_env` / `source_connection`,
+  NOT NULL, DEFAULT `legacy_env` — every row from before v31 was written before the resolver
+  existed, so the default is the documented backfill, no rewrite), `source_connection_id` and
+  `source_binding_id` (FKs, RESTRICT), `source_team_id` (canonical) and `source_host_key`; a CHECK
+  binds the four to the path (all null on the legacy path, all present on the connection path); a
+  BEFORE INSERT trigger makes the database itself refuse a connection-path row whose binding is not
+  active, not the team's, not the connection's, not that source team, or whose host key is not the
+  connection's; a BEFORE UPDATE trigger keeps the five columns final from creation; the check's
+  INSERT writes them in the same locked statement; never a credential, token or URL; rollback
+  `docs/runbooks/gpexe-import-checks-v31-rollback.sql` (NOWAIT, refuses under a later migration and
+  while any row says `source_connection` — evidence v30 cannot represent), rehearsed apply → guards
+  → rollback → identical v30 catalog → failed-last-statement atomicity → reapply → refusals on a
+  disposable database; **v31 is applied to no persistent database** (the local OPTIMOVE stays v21;
+  the deployed database gets it only through a merge and deploy the owner decides); (5) decision Q2
+  kept: only a `verified` connection is read, an import never promotes a state.
 - **Serialization** with every other writer through the v24 team lock key: `startCheck` waits at
   most `SETTINGS_LOCK_TIMEOUT_MS` for the team import lock (`409 gpexe_change_busy`), while a
   Test / Reconnect / bind holds that team's try-lock for its whole attempt, an Unbind for its

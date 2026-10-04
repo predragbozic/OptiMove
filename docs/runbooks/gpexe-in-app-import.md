@@ -59,10 +59,18 @@ a Test / Reconnect holds the row at that moment — the attempt's own outcome th
 the next refused check re-applies it) and fails the check with `source_auth_rejected`; a `403`
 fails the check with `source_access_refused` and changes no state; an administrator reconnects or
 tests the connection, then the coach checks again. The binding path reports progress after every
-request of the source, so a slow source never makes a live check look abandoned. A check whose
+request of the source, so a slow source never makes a live check look abandoned. The facts are
+checked after every list (empty or not) and after every bundle too, and both paths keep the team in
+the club it started in (`team_club_changed` / `team_not_available` otherwise). **After an Unbind
+the team is not back on the legacy token:** until it is bound again a check answers
+`409 source_connection_unavailable` (`binding_ended`), and `GPEXE_API_TOKEN` is read for no team
+that ever had a binding. Since **v31** every check row records its path (`source_path`:
+`legacy_env` or `source_connection`) and, on the connection path, the connection, binding, source
+team and host key it read through — final from creation, never a credential; rows from before v31
+read `legacy_env` (the only path that existed then). A check whose
 start COMMIT was sent but not answered in time either runs (the row is found) or answers `503
 check_outcome_unknown` — never "nothing was written"; read the team's checks before starting
-another one. A team **without** a binding keeps the legacy path above (`legacy_env`), until F3c4
+another one. A team that **never had** a binding keeps the legacy path above (`legacy_env`), until F3c4
 decides the variable's fate. A check started while a Test, Reconnect, bind, Unbind or Settings
 change holds the team's lock answers `409 gpexe_change_busy`: retry. The server log names the path
 of every check (`legacy_env`, or `source_connection` with the connection and binding ids), never a

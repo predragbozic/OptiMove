@@ -98,12 +98,12 @@ every session bundle**, and the run stops with the precise code when anything mo
 
 | Change during the run | What happens |
 |---|---|
-| the binding is ended (Unbind) | `binding_ended`: the run stops before its next request; nothing already recorded is undone |
+| the binding is ended (Unbind) | `binding_ended`: the run stops before its next request (the facts are checked before AND after every list — empty or not — and every bundle, so a list or bundle read across the end is dropped before anything of it is recorded); nothing already recorded is undone |
+| the team moves to another club, or the team or its club is archived | `team_club_changed` / `team_not_available`: both paths pin the club the run started in (a bound team cannot move at all — the v27 move guard; a legacy team can, and its run stops); the team gate answers first, so an archived club of a bound team is `team_not_available` (the connection's club differing from the team's is unreachable for an active binding) |
 | the binding ended and a new one (same team, maybe another source team or connection) was created | still `binding_ended` for the running check (it is tied to its binding id); the next check resolves the new binding |
 | the connection moved to `needs_reconnect` / `source_unavailable` (an admin's Test or the auto-invalidation below) | `connection_not_usable` |
 | the host was retired in the catalog | `host_not_allowed` |
 | the approved Team ID changed | cannot happen while bound (v30); checked anyway → `team_setting_mismatch` |
-| the team moved to another club, the club or team archived | cannot move while bound (v27); archived → `connection_foreign_club` / `team_not_available` |
 | the source answers 401 to a read | `source_auth_rejected`: the connection becomes `needs_reconnect` with one `auto_invalidate` audit row (basis `system`, no user — the one actor the v27 CHECK allows for that action; conditional on the fingerprint of the credential the run held, written after the check's own outcome, bounded), the check fails, **no fallback** |
 | the source answers 403 to a read | `source_access_refused`: the check fails with that code and the connection keeps its state (one resource the credential may not read is not a refused credential — the F3c2e bind rule), **no fallback** |
 | the source is unavailable or answers unexpectedly | `source_unavailable` / `source_answer_unexpected`: the check fails, no fallback, nothing recorded for that session |
@@ -133,7 +133,8 @@ fresh credential (round-2 hardening, contract 2.8).
   precise code on the check row for what is only found after COMMIT (`credential_unreadable` and
   `adapter_not_available` from the one decrypt and adapter creation right before the first
   request, zero requests sent) or mid-run. No fallback.
-- A team **without** a new binding keeps the legacy path, explicitly labelled `legacy_env`: the
+- A team **without** a new binding — and that **never had one** for the source — keeps the legacy
+  path, explicitly labelled `legacy_env`: the
   existing `clientFactory` / `GPEXE_API_TOKEN` / `e03` client, unchanged (`503 gpexe_token_missing`
   when the variable is absent, as today). This is temporary (D8: until F3c4), and the variable is
   neither removed from the configuration nor touched on Render in this step.
@@ -171,22 +172,33 @@ Through the binding path the importer receives the adapter's bundle in the e03 b
 
 ## 5. Open decisions for the owner (none blocks this step)
 
-- **Q1 — the durable record of which path a check used.** D8 says "the audit says which". The
-  v27 audit CHECK allows the `system` basis only for `auto_invalidate` and every other action only
-  with an administrator basis, and a check is a coach's action; the check row
-  (`gpexe_import_checks`) has no column for it. In this step the path is written to the server log
-  by code only (`legacy_env` / `source_connection` with the connection and binding ids, never a
-  secret) and returned in no API field. The recommended closure is a small data-only migration
-  (v31) adding `credential_source` (`legacy_env` / `source_connection`), `source_connection_id`
-  and `source_binding_id` to `gpexe_import_checks`, final from creation like `gpexe_team_id`
-  (v24) — a separate decision, not taken here.
-- **Q2 — which states are usable for an import read.** This step accepts `verified` only. A
-  connection that a failed Test moved to `source_unavailable` needs a successful Test (an admin
-  action) before the next check; relaxing this is a product decision.
-- **Q3 — an Unbind returns the team to the legacy path** while a `GPEXE_API_TOKEN` exists in that
-  environment (D8 as written). On the deployed service the variable is absent, so a check after an
-  Unbind answers `gpexe_token_missing`. Whether an ended binding should block the legacy path
-  instead is the owner's call for F3c4.
+- **Q1 — the durable record of which path a check used — DECIDED (owner, 2026-10-04, round 4):**
+  migration v31 adds `source_path` (`legacy_env` / `source_connection`), `source_connection_id`,
+  `source_binding_id`, `source_team_id` and `source_host_key` to `gpexe_import_checks`, written in
+  the same locked INSERT that starts the check and final from creation (a BEFORE UPDATE trigger);
+  a BEFORE INSERT trigger makes the database refuse a connection-path row the data does not
+  support; rows from before v31 are `legacy_env` by the column default (the resolver did not exist,
+  the environment token was the only path) — documented backfill, no rewrite. The audit table is
+  untouched (its `system` basis stays reserved for `auto_invalidate`). Rollback:
+  `docs/runbooks/gpexe-import-checks-v31-rollback.sql`, forward-safe.
+- **Q2 — which states are usable for an import read — KEPT (owner, round 4):** `verified` only; an
+  import never promotes a state. A connection that a failed Test moved to `source_unavailable`
+  needs a successful Test (an administrator's action) before the next check.
+- **Q3 — the legacy path after an Unbind — DECIDED (owner, round 4): no downgrade.** The legacy
+  path is open only to a team that never had a binding for the source; a team whose binding ended
+  answers `source_connection_unavailable` / `binding_ended` until it is bound again and never reads
+  `GPEXE_API_TOKEN` again, whatever the environment holds.
+
+## 5a. Round-4 rules (owner's external review of the first PR head, 2026-10-04)
+
+- The facts are re-validated **after** every source operation as well as before it — a list,
+  empty or not, and a bundle — on both paths; a list or bundle read across a change is dropped
+  before anything of it is recorded.
+- Both paths pin the club the run started in: the team must still be active, in that club, and the
+  club active, before and after every operation (`team_club_changed`, `team_not_available`). A bound
+  team cannot move (the v27 move guard, proven by a refused raw UPDATE in the tests); a legacy team
+  can, and its run stops.
+- The legacy path is open only to a team that never had a binding for the source (section 5, Q3).
 
 ## 6. Out of scope here, recorded
 

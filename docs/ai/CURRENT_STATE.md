@@ -756,9 +756,11 @@ source that is never called).
 
 **The active step is F3c2g — the importer's credential resolver and the controlled transition from
 `GPEXE_API_TOKEN`** (branch `feature/gpexe-importer-resolver-f3c2g` from `d285296`, owner order
-2026-10-04; backend service, resolver module, tests and docs; **no migration, not merged, one route
+2026-10-04; backend service, resolver module, migration v31, tests and docs; **not merged, one route
 change (the importer router's error detail `reason`, administrators only), no UI, no real connection,
-binding or import, no GPEXE request, no credential; `GPEXE_API_TOKEN`
+binding or import, no GPEXE request, no credential; v31 applied to no persistent database (the local
+OPTIMOVE stays v21, the deployed database gets it only through a merge and deploy the owner decides);
+`GPEXE_API_TOKEN`
 neither removed from the configuration nor touched on Render; `GPEXE_IMPORT_APPLY_ENABLED` untouched**).
 Discovery: `docs/ai/source-connections-f3c2g-discovery.md` (the check run is the importer's only
 network entry point; approve and preview read the stored snapshot; `createGpexeClient()` is the only
@@ -783,20 +785,26 @@ decrypt; the resolver's facts are branded. **The transition rule (D8 made
 strict):** a team with an active binding reads only through it — the legacy factory is not called,
 the variable is not read, and an unusable binding answers `409` / `503 source_connection_unavailable`
 with the precise `reason` (no check row) or the precise code on the check row — never a fallback; a
-team without a binding keeps the legacy path, labelled `legacy_env`; the path is decided once per
+team without a binding — and that never had one — keeps the legacy path, labelled `legacy_env`; a
+team whose binding ended answers `source_connection_unavailable` / `binding_ended` until it is bound
+again and never reads the variable again (owner's round-4 decision, Q3); the path is decided once per
 check under the team lock (an unlocked pre-read and the locked read must agree, else `409
-gpexe_change_busy`). The binding path's reads are the F3c2c adapter's (`listSessionsByDay`,
+gpexe_change_busy`); the facts are re-validated before AND after every list (empty or not) and every
+bundle, both paths pin the club the run started in (`team_club_changed` / `team_not_available`). The binding path's reads are the F3c2c adapter's (`listSessionsByDay`,
 `fetchSessionBundle`, GET only, bound to the approved source team); an incomplete drill set stops
 the run with `drill_set_incomplete` before the session is recorded, an empty successfully read
 `players` is a valid empty drill, and `drillsStatus` / `drillLabels` are stripped so the stored
 snapshot keeps the F1 contract. The resolver is wired into `startCheck` / `runCheck` directly: on
 the deployed database no connection or binding exists, so every team still takes the legacy path
 and nothing observable changes; removing the variable stays F3c4. **Status of the legacy env
-fallback:** in force only for a team without a binding, labelled, logged by code
-(`legacy_env` / `source_connection` with ids — no API field, no audit row: the v27 audit CHECK
-gives `system` only to `auto_invalidate`; the recommended closure is a data-only v31 column on the
-check row, a separate owner decision — discovery Q1); other open decisions: Q2 (`verified` is the
-only usable state) and Q3 (an Unbind returns a team to the legacy path while the variable exists).
+fallback:** in force only for a team that never had a binding, labelled, and recorded on every check
+row by **migration v31** (`migrations_v2/202610041200_training_load_v31_gpexe_import_checks_source_path.sql`:
+`source_path` `legacy_env` / `source_connection` with `source_connection_id`, `source_binding_id`,
+`source_team_id`, `source_host_key`, written in the locked INSERT, final from creation, a BEFORE
+INSERT trigger refusing a path the data does not support; rows from before v31 are `legacy_env` by
+default — the documented backfill; rollback `docs/runbooks/gpexe-import-checks-v31-rollback.sql`,
+forward-safe: it refuses while any row says `source_connection`; rehearsed on a disposable database) —
+the owner's round-4 decisions: Q1 v31, Q2 `verified` only, Q3 no legacy downgrade after an Unbind.
 Tests: `backend/tests/gpexe-import-credential-resolver.test.mjs` (disposable database, a fake source
 serving the exchange, the team reads and the rest_v1 session reads; the legacy factory as a trap on
 the binding path; the resolver's contract with a fake executor), with mutation evidence for the key
@@ -1605,10 +1613,9 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's external review and merge decision on the F3c2g PR (the importer's credential resolver
-and the strict transition rule; no migration); then, on the owner's order, the decisions it left
-open (Q1 the durable record of a check's credential path — a data-only v31 on the check row —, Q2 the
-usable states, Q3 the legacy path after an Unbind), the first production binding only on a separate
+The owner's external review and merge decision on the F3c2g PR (the importer's credential resolver,
+the strict transition rule and migration v31 — v31 reaches the deployed database only through that
+merge and deploy); then, on the owner's order, the first production binding only on a separate
 explicit order, F3c3 (Settings UI: Connect account → Test connection → Choose GPEXE team → Choose the
 approved OptiMove team → Review → Confirm binding; Unbind; the coach's "contact an administrator"
 sentence) and F3c4, then **Phase 5a3c** (Complete and Needs review).

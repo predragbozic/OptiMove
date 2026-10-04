@@ -31,7 +31,13 @@
 //     that is no longer usable, a credential replaced by a Reconnect, a
 //     retired host, a moved team or a changed approved pair stop the run with
 //     the precise code; the legacy path is re-validated the same way (a
-//     binding that appears mid-run stops it: binding_started).
+//     binding that appears mid-run stops it: binding_started); both paths
+//     pin the team's club (a team moved or archived, or its club archived,
+//     stops the run) and re-validate AFTER every operation too — a list,
+//     empty or not, and a bundle are returned only when the facts still hold;
+//   * the legacy path is open only to a team that NEVER had a binding for the
+//     source: after an Unbind the team is binding_ended until it is bound
+//     again, never back on the environment token (owner, 2026-10-04).
 import crypto from "node:crypto";
 import { pool } from "./db.js";
 import { decryptCredential, keyringFromEnv } from "./sourceCredentialCrypto.js";
@@ -80,7 +86,8 @@ const MESSAGES = Object.freeze({
   adapter_not_available: "There is no read adapter for the host of the team's source connection; nothing was read.",
   key_missing: "The server has no key for this connection's credential; nothing was read.",
   credential_unreadable: "The stored credential could not be read; reconnect to store a new one. Nothing was read.",
-  binding_ended: "The team's source binding ended while the check was running; the check stopped.",
+  binding_ended: "The team's source binding has ended; bind the team again before the next check. The legacy token is never used for a team that had a binding.",
+  team_club_changed: "The team moved to another club while the check was running; the check stopped.",
   binding_started: "A source binding was created for the team while the check was running through the legacy token; the check stopped. Check again.",
   drill_set_incomplete: "The source did not answer every drill of a session; that session was not recorded and the check stopped.",
   source_team_mismatch: "The check asked for a source team other than the bound one; nothing was read.",
@@ -131,8 +138,11 @@ const factsSql = (withParts) => `
          case when c.credential_nonce is null then null else encode(sha256(c.credential_nonce), 'hex') end as credential_fingerprint,
          ${withParts ? "c.credential_ciphertext, c.credential_nonce, c.credential_auth_tag, c.credential_key_version," : ""}
          coalesce(cl.is_active, true) as club_active,
+         coalesce(tc.is_active, true) as team_club_active,
+         exists (select 1 from training_load.source_team_bindings e where e.team_id = t.id and e.source_system = $2 and e.state <> 'active') as has_ended_binding,
          h.source_system as catalog_source_system, h.host_key as catalog_host_key, h.state as catalog_state
     from public.teams t
+    left join public.clubs tc on tc.id = t.club_id
     left join training_load.source_team_bindings b on b.team_id = t.id and b.source_system = $2 and b.state = 'active'
     left join training_load.gpexe_team_settings s on s.owner_team_id = t.id
     left join training_load.source_credential_connections c on c.id = b.connection_id
@@ -147,12 +157,24 @@ const FACTS_LITE_SQL = factsSql(false);
 // rows of one team (one per active binding, or one with nulls). `expected` is
 // the identity a run started with; `expectLegacy` says the run is a legacy
 // one and a binding may not have appeared.
-function judge(rows, { teamId, sourceSystem, expected = null, expectLegacy = false }) {
-  if (rows.length === 0 || rows[0].team_active !== true) throw fail("team_not_available", { status: 404 });
+function judge(rows, { teamId, sourceSystem, expected = null, expectLegacy = null }) {
+  if (rows.length === 0 || rows[0].team_active !== true || rows[0].team_club_active !== true) throw fail("team_not_available", { status: 404 });
+  const teamClubId = rows[0].team_club_id === null || rows[0].team_club_id === undefined ? null : String(rows[0].team_club_id);
+  // Both paths pin the club the run started in: a team moved to another club
+  // (possible only without a binding — v27 refuses the move of a bound team)
+  // reads nothing more for either club.
+  // (`undefined` means "no run yet"; a run that started with no club is
+  // pinned to null, so a move INTO a club is a change too)
+  const pinned = expected ? expected.teamClubId : expectLegacy ? expectLegacy.teamClubId : undefined;
+  if (pinned !== undefined && pinned !== teamClubId) throw fail("team_club_changed");
   const bindings = rows.filter((r) => r.binding_id !== null);
   if (bindings.length === 0) {
     if (expected) throw fail("binding_ended", { facts: { bindingId: expected.bindingId } });
-    return issue({ path: PATH_LEGACY_ENV, teamId, sourceSystem });
+    // The legacy path is open only to a team that never had a binding for
+    // this source: after an Unbind the team needs a new binding, and the
+    // environment token is never read for it again.
+    if (rows[0].has_ended_binding === true) throw fail("binding_ended");
+    return issue({ path: PATH_LEGACY_ENV, teamId, sourceSystem, teamClubId });
   }
   if (expectLegacy) throw fail("binding_started");
   if (bindings.length > 1) throw fail("binding_ambiguous");
@@ -179,6 +201,7 @@ function judge(rows, { teamId, sourceSystem, expected = null, expectLegacy = fal
   return issue({
     path: PATH_SOURCE_CONNECTION,
     teamId,
+    teamClubId,
     sourceSystem,
     bindingId: r.binding_id,
     connectionId: r.connection_id,
@@ -283,6 +306,7 @@ export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalTh
     return issue({
       path: PATH_SOURCE_CONNECTION,
       teamId: facts.teamId,
+      teamClubId: facts.teamClubId,
       sourceSystem: facts.sourceSystem,
       connectionId: facts.connectionId,
       bindingId: facts.bindingId,
@@ -310,7 +334,7 @@ export async function assertImportSourceStillUsable(source, executor = pool) {
   if (source.path !== PATH_SOURCE_CONNECTION) return;
   if (revalidateHold) await revalidateHold();
   const rows = (await executor.query(FACTS_LITE_SQL, [source.teamId, source.sourceSystem])).rows;
-  judge(rows, { teamId: source.teamId, sourceSystem: source.sourceSystem, expected: { bindingId: source.bindingId, connectionId: source.connectionId, sourceTeamId: source.sourceTeamId, credentialFingerprint: source.credentialFingerprint } });
+  judge(rows, { teamId: source.teamId, sourceSystem: source.sourceSystem, expected: { bindingId: source.bindingId, connectionId: source.connectionId, sourceTeamId: source.sourceTeamId, credentialFingerprint: source.credentialFingerprint, teamClubId: source.teamClubId } });
 }
 
 // The legacy path's re-validation: a team that reads through the environment
@@ -321,7 +345,7 @@ export async function assertLegacyPathStillOpen(legacy, executor = pool) {
   if (legacy.path !== PATH_LEGACY_ENV) throw fail("binding_ambiguous");
   if (revalidateHold) await revalidateHold();
   const rows = (await executor.query(FACTS_LITE_SQL, [legacy.teamId, legacy.sourceSystem])).rows;
-  judge(rows, { teamId: legacy.teamId, sourceSystem: legacy.sourceSystem, expectLegacy: true });
+  judge(rows, { teamId: legacy.teamId, sourceSystem: legacy.sourceSystem, expectLegacy: { teamClubId: legacy.teamClubId } });
 }
 
 function withinBound(promise, ms) {
@@ -419,6 +443,10 @@ export function importClientFor(source) {
       await assertImportSourceStillUsable(source);
       const result = await adapter.listSessionsByDay({ fromDay, toDay });
       if (onProgress) await onProgress();
+      // A list — empty or not — is returned only when the facts still hold
+      // after the read: a binding that ended or a credential replaced while
+      // the list was in flight ends the run here, before any session.
+      await assertImportSourceStillUsable(source);
       return result.sessions.map((s) => ({ ...s }));
     },
     async fetchSessionBundle({ gpexeTeamId, sessionId, onProgress = null } = {}) {
@@ -452,7 +480,11 @@ export function legacyImportClientFor(legacy, client) {
     path: PATH_LEGACY_ENV,
     async listTeamSessions(options) {
       await assertLegacyPathStillOpen(legacy);
-      return client.listTeamSessions(options);
+      const sessions = await client.listTeamSessions(options);
+      // Empty or not, the list is returned only when the team still has no
+      // binding and is still the same active team of the same club.
+      await assertLegacyPathStillOpen(legacy);
+      return sessions;
     },
     async fetchSessionBundle(options) {
       await assertLegacyPathStillOpen(legacy);
