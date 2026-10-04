@@ -1,4 +1,5 @@
-// Source credential connections: Connect, Reconnect, Test (F3c2d).
+// Source credential connections: Connect, Reconnect, Test (F3c2d) and the
+// verified team binding (F3c2e).
 // Contract: docs/ai/source-connections-f3c2-contract.md section 2 (routes,
 // the eight mandatory conditions, the state transitions) and the owner's
 // order of 2026-10-03. GPEXE / server3 / rest_v1 is the first real profile;
@@ -24,9 +25,17 @@
 //   6. the key ring; only then the network.
 // Nothing waits on a team lock while holding the connection row (the lock
 // is a try-lock), so the binding trigger's reverse order cannot deadlock.
+// A bind (F3c2e) is a branch of the same attempt: after the connection row it
+// takes its one team's row FOR SHARE, that team's try-lock and the team's
+// takes every bound team and the target team try-lock style, ascending,
+// reads the team's approved pair (gpexe_team_settings) FOR SHARE, reads the
+// chosen team alone, takes the team row FOR SHARE only after the source
+// answered, and inserts the binding with its audit in the same transaction;
+// a bind that reached the source without succeeding counts in the 5 / 15 min
+// window like a credential attempt.
 import crypto from "node:crypto";
 import { pool } from "./db.js";
-import { isPlatformAdministrator } from "./authz.js";
+import { isPlatformAdministrator, holdsClubAdminRole } from "./authz.js";
 import { resolveActiveWorkspace } from "./workspace.js";
 import { resolveApprovedSourceHost, sourceExchange, sourceHost, isAllowedHostKey } from "./sourceHosts.js";
 import { adapterFamilies, createSourceAdapter } from "./sourceAdapters.js";
@@ -77,7 +86,15 @@ export const SUPPORTED_CREDENTIAL_KIND = "exchanged_token";
 const UNBOUND_LIST_PLACEHOLDER_TEAM = "0";
 // The only metadata keys an audit row may carry (condition 5). The v27
 // trigger refuses a secret-named key whatever the value; these are facts.
-const AUDIT_METADATA_KEYS = new Set(["host_key", "credential_kind", "status_class", "attempt_no", "bound_team_count", "source_team_count", "counted", "attempt_id"]);
+// source_team_id is the source's own team number, stored in clear in
+// source_team_bindings (v27); it is a fact, not a secret.
+const AUDIT_METADATA_KEYS = new Set(["host_key", "credential_kind", "status_class", "attempt_no", "bound_team_count", "source_team_count", "counted", "attempt_id", "source_team_id"]);
+// The canonical source team id per source (gpexe: the guard PR's numeric
+// form, the v27 CHECK); any other source: the v27 generic form.
+const SOURCE_TEAM_ID = { gpexe: /^(0|[1-9][0-9]{0,11})$/, default: /^[A-Za-z0-9._:-]{1,64}$/ };
+// A gpexe_team_settings value (v22 allows leading zeros) compared in its
+// canonical form — the same rule as training_load.gpexe_team_id_canonical (v30).
+const canonicalGpexeTeamId = (raw) => (typeof raw === "string" && /^[0-9]{1,12}$/.test(raw) ? raw.replace(/^0+(?=[0-9])/, "") : raw);
 
 // ---------------------------------------------------------------------------
 // Test seams (never set by the application).
@@ -116,6 +133,11 @@ function guardClient(client) {
 // A fault injected right before the row is written (after the source was
 // reached): tests prove that such an attempt is still recorded and counted.
 export function setSourceConnectionWriteFaultForTests(fn) { writeFault = fn ?? null; }
+let bindInsertFault = null;
+// Runs right before the binding INSERT, after every in-code check: a test
+// inserts a clashing row from another session there, so the v27 unique
+// indexes (the database's backstop) are really what refuses.
+export function setSourceBindingInsertFaultForTests(fn) { bindInsertFault = fn ?? null; }
 // A delay injected before the compensating audit row of an attempt that
 // reached the source and did not commit: tests prove that the row is still
 // visible to the throttle before the next attempt of the same user runs.
@@ -132,19 +154,54 @@ export function setSourceConnectionClockForTests(fn) { nowForTests = fn ?? null;
 const sourceFetch = () => fetchForSource ?? globalThis.fetch;
 
 // ---------------------------------------------------------------------------
-// Access: a platform admin only (D2/D3), in the platform workspace or in the
-// owning club's workspace. Everything else — another role, another
-// workspace, an archived or missing club — is the same 404 as a missing
-// connection (ADR-006). Resolved once per request.
+// Access (D2 settled by the owner on 2026-10-03): an active platform admin in
+// the platform workspace or in the owning club's workspace, or the owning
+// club's own active admin in that club's workspace. Everything else — another
+// role, another club's admin, another workspace, an archived or missing club
+// — is the same 404 as a missing connection (ADR-006). Resolved once per
+// request.
 // ---------------------------------------------------------------------------
 export async function resolveConnectionAdmin(req) {
-  if (!req?.user?.id || !req.authz || !isPlatformAdministrator(req.authz)) return null;
+  if (!req?.user?.id || !req.authz) return null;
   const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
-  if (!workspace || (workspace.type !== "platform" && workspace.type !== "club")) return null;
-  return { userId: String(req.user.id), basis: "platform_admin", workspace: { type: workspace.type, scopeId: workspace.scopeId ? String(workspace.scopeId) : null } };
+  if (!workspace) return null;
+  const scopeId = workspace.scopeId ? String(workspace.scopeId) : null;
+  // One path, two bases (owner decision 2026-10-03): an active platform
+  // admin in the platform workspace or in a club's workspace; otherwise an
+  // active club admin, only in the club workspace of their own club (the
+  // workspace list admits an active club only, and the club is checked again
+  // on every read and after every source call).
+  if (isPlatformAdministrator(req.authz)) {
+    if (workspace.type !== "platform" && workspace.type !== "club") return null;
+    return { userId: String(req.user.id), basis: "platform_admin", workspace: { type: workspace.type, scopeId } };
+  }
+  if (workspace.type === "club" && scopeId && holdsClubAdminRole(req.authz, scopeId)) {
+    return { userId: String(req.user.id), basis: "club_admin", workspace: { type: "club", scopeId } };
+  }
+  return null;
+}
+// After the time a source call took, the caller's right and the owning club
+// must still hold before anything is stored — by the context's basis, the
+// rows FOR SHARE so a revocation or an archive running meanwhile is ordered
+// against this transaction.
+async function rightsStillHold(client, ctx, clubId) {
+  const right = ctx.basis === "platform_admin"
+    ? await client.query(
+      `select 1 from public.user_global_roles g join public.users u on u.id = g.user_id
+        where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of g, u`,
+      [ctx.userId],
+    )
+    : await client.query(
+      `select 1 from public.user_club_roles r join public.users u on u.id = r.user_id
+        where r.user_id = $1 and r.club_id = $2 and r.role = 'club_admin' and r.is_active = true and u.is_active = true for share of r, u`,
+      [ctx.userId, clubId],
+    );
+  const club = await client.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true) for share`, [clubId]);
+  return right.rowCount > 0 && club.rowCount > 0;
 }
 function clubVisible(ctx, clubId) {
-  return ctx.workspace.type === "platform" || (ctx.workspace.type === "club" && ctx.workspace.scopeId === String(clubId));
+  if (ctx.workspace.type === "platform") return ctx.basis === "platform_admin";
+  return ctx.workspace.type === "club" && ctx.workspace.scopeId === String(clubId);
 }
 
 // ---------------------------------------------------------------------------
@@ -162,14 +219,21 @@ function publicConnection(row, bindings = []) {
     ownerScope: row.owner_scope, ownerClubId: row.owner_club_id, accountLabel: row.account_label, credentialKind: row.credential_kind,
     state: row.state, hasCredential: row.has_credential === true,
     lastVerifiedAt: row.last_verified_at, lastErrorCode: row.last_error_code, lastErrorAt: row.last_error_at,
-    boundTeams: bindings.map((b) => ({ teamId: b.team_id, sourceTeamId: b.source_team_id, teamName: b.team_name ?? null, teamActive: b.team_active !== false })),
+    boundTeams: bindings.map((b) => ({ ...publicBinding(b), teamActive: b.team_active !== false })),
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
 
+// A binding as it is shown: the OptiMove team (id and name from the OptiMove
+// database), the source team id, its state and when it was bound. Never the
+// source's own name of the team, never an account fact.
+function publicBinding(b) {
+  return { bindingId: b.id, teamId: b.team_id, teamName: b.team_name ?? null, sourceTeamId: b.source_team_id, state: "active", boundAt: b.bound_at };
+}
+
 async function bindingsOf(executor, connectionId) {
   return (await executor.query(
-    `select b.team_id, b.source_team_id, t.name as team_name, coalesce(t.is_active, true) as team_active
+    `select b.id, b.team_id, b.source_team_id, b.bound_at, t.name as team_name, coalesce(t.is_active, true) as team_active
        from training_load.source_team_bindings b join public.teams t on t.id = b.team_id
       where b.connection_id = $1 and b.state = 'active' order by b.team_id`,
     [connectionId],
@@ -279,6 +343,9 @@ export async function createConnection({ ctx, sourceSystem, body }) {
 export function connect(args) { return attempt({ ...args, action: "connect" }); }
 export function reconnect(args) { return attempt({ ...args, action: "reconnect" }); }
 export function testConnection(args) { return attempt({ ...args, action: "test" }); }
+// F3c2e: bind one OptiMove team of the owning club to one chosen source team,
+// after that team's own read with the stored credential succeeded.
+export function bindTeam(args) { return attempt({ ...args, action: "bind" }); }
 
 function plainBody(body, allowed) {
   if (body === null || typeof body !== "object" || Array.isArray(body)) throw refusal(400, "invalid_body", "A JSON object body is required.");
@@ -293,6 +360,16 @@ function readCredentialPair(body) {
   if (typeof username !== "string" || username.length < 1 || username.length > MAX_USERNAME_LENGTH || !ONE_LINE.test(username)) throw refusal(400, "invalid_body", "username is one line of at most 254 characters.");
   if (typeof password !== "string" || password.length < 1 || password.length > MAX_PASSWORD_LENGTH || !ONE_LINE.test(password)) throw refusal(400, "invalid_body", "password is one line of at most 512 characters.");
   return { username, password };
+}
+
+// The bind body: the OptiMove team and the chosen source team id, nothing
+// else — no URL, host, name, credential or list.
+function readBindBody(body, sourceSystem) {
+  const { teamId, sourceTeamId } = body;
+  if (typeof teamId !== "string" || !UUID.test(teamId)) throw refusal(400, "invalid_body", "teamId must be an OptiMove team id.");
+  const pattern = Object.hasOwn(SOURCE_TEAM_ID, sourceSystem) ? SOURCE_TEAM_ID[sourceSystem] : SOURCE_TEAM_ID.default;
+  if (typeof sourceTeamId !== "string" || !pattern.test(sourceTeamId)) throw refusal(400, "invalid_body", "sourceTeamId must be a canonical source team id.");
+  return { teamId: teamId.toLowerCase(), sourceTeamId };
 }
 
 function readConfirmation(body) {
@@ -311,8 +388,11 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
   // not an attempt and is not audited.
   let pair = null;
   let confirmation = null;
+  let bindBody = null;
   if (action === "test") {
     plainBody(body ?? {}, []);
+  } else if (action === "bind") {
+    bindBody = readBindBody(plainBody(body, ["teamId", "sourceTeamId"]), sourceSystem);
   } else {
     // The pair is copied out and the original body object loses its
     // credential fields at once; only `pair` carries them, until the
@@ -362,7 +442,17 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
       [id, sourceSystem],
     )).rows[0];
     if (!pre || pre.club_active === false || !clubVisible(ctx, pre.owner_club_id)) { await client.query("rollback"); released = true; release(); return null; }
-    known = { connectionId: pre.id, hostKey: pre.host_key, credentialKind: pre.credential_kind };
+    known = { connectionId: pre.id, hostKey: pre.host_key, credentialKind: pre.credential_kind, teamId: null };
+    // A bind names a team: it must exist, be active and belong to the owning
+    // club, or the answer is the same 404 as a missing connection (a team of
+    // another club is never confirmed to exist).
+    let teamPre = null;
+    if (bindBody) {
+      teamPre = (await client.query(`select id, club_id, name, coalesce(is_active, true) as active from public.teams where id = $1`, [bindBody.teamId])).rows[0];
+      if (!teamPre || teamPre.active === false || String(teamPre.club_id) !== String(pre.owner_club_id)) { await client.query("rollback"); released = true; release(); return null; }
+      known.teamId = bindBody.teamId;
+      known.sourceTeamId = bindBody.sourceTeamId;
+    }
     // 2. The per-user window (condition 4): two attempts of one user on two
     //    connections never count each other out. One user's attempts are
     //    serialized here; the wait is bounded by lock_timeout (and the
@@ -394,13 +484,36 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
       throw error;
     }
     if (!row || row.club_active === false || !clubVisible(ctx, row.owner_club_id)) { await client.query("rollback"); released = true; release(); return null; }
+    // 3. The bound teams, read only after the row lock (condition 2).
+    const bindings = await bindingsOf(client, row.id);
+    // A bind that exists already, exactly so, is the same final answer BEFORE
+    // any state gate: a retry after an unknown outcome gets its binding even
+    // when a Test moved the connection out of verified meanwhile (no row, no
+    // request, no audit).
+    if (bindBody) {
+      const same = bindings.find((b) => String(b.team_id) === bindBody.teamId);
+      if (same && same.source_team_id === bindBody.sourceTeamId) {
+        await client.query("rollback"); released = true; release();
+        return { connectionId: row.id, action, outcome: "ok", idempotent: true, binding: publicBinding(same) };
+      }
+    }
     // The state precondition.
     if (action === "connect" && row.state !== "not_connected") throw refusal(409, "already_connected", "This connection already holds a credential; use Reconnect to replace it.");
+    if (action === "bind" && row.state !== "verified") throw refusal(409, "connection_not_verified", "This connection is not verified; run Test connection (or Connect) successfully before binding a team.");
     if (action !== "connect" && row.state === "not_connected") throw refusal(409, "not_connected", "This connection holds no credential yet; use Connect first.");
     if (row.credential_kind !== SUPPORTED_CREDENTIAL_KIND) throw refusal(409, "credential_kind_unsupported", "This connection's credential kind is not supported by this step.");
-    // 3. The bound teams, read only after the row lock (condition 2), and
-    //    the reconnect confirmation (D11) against those facts.
-    const bindings = await bindingsOf(client, row.id);
+    // The caller's own team already bound for this source (to another source
+    // team, or through another connection) is a conflict before anything is
+    // sent. Whether the SOURCE team is bound elsewhere is answered only after
+    // the chosen team's own read succeeded (below), so an id the caller's
+    // credential cannot see is never confirmed to exist in another club; the
+    // two partial unique indexes of v27 are the backstop.
+    let legacyPointer = null;
+    if (bindBody) {
+      const own = await client.query(`select 1 from training_load.source_team_bindings where state = 'active' and source_system = $1 and team_id = $2`, [row.source_system, bindBody.teamId]);
+      if (own.rowCount > 0) throw refusal(409, "team_already_bound", "This team is already bound for this source; nothing was changed.", { teamId: bindBody.teamId });
+    }
+    // The reconnect confirmation (D11) against the bound teams.
     if (confirmation && (confirmation.sourceSystem !== row.source_system || confirmation.ownerClubId !== String(row.owner_club_id) || confirmation.affectedTeamCount !== bindings.length)) {
       throw refusal(409, "confirmation_mismatch", "The confirmation does not name this connection's source, owning club and number of bound teams.", {
         expected: { sourceSystem: row.source_system, ownerClubId: row.owner_club_id, affectedTeamCount: bindings.length },
@@ -414,22 +527,61 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
     } catch {
       throw refusal(409, "host_not_allowed", "The host of this connection is not approved; nothing was sent to it.");
     }
-    // 5. Every bound team, ascending, try-lock style (condition 3).
-    for (const b of bindings) {
-      try {
-        await client.query(`select training_load.hold_gpexe_team_lock($1, $2)`, [b.team_id, action]);
-      } catch (error) {
-        if (error.code === "P0001") throw refusal(409, "try_again", "A GPEXE check, import or connection change is running for a bound team. Try again when it has finished.", { teamId: b.team_id });
-        throw error;
+    if (bindBody) {
+      // 5b. A bind may change the connection's state (a refused credential →
+      //     needs_reconnect), so, as for every credential attempt (condition
+      //     3), every active bound team AND the target team are try-locked in
+      //     ascending order, once each — the same lock the insert trigger, a
+      //     check, an import, a settings change and a team move take. Any of
+      //     them busy: try_again, no state change, no binding. The team ROW is
+      //     not taken here: it is read FOR SHARE only after the source
+      //     answered (step 9b), so a rename or an archive never waits behind
+      //     a slow source.
+      const toLock = [...new Set([...bindings.map((b) => String(b.team_id)), bindBody.teamId])].sort();
+      for (const teamId of toLock) {
+        try {
+          await client.query(`select training_load.hold_gpexe_team_lock($1, 'bind')`, [teamId]);
+        } catch (error) {
+          if (error.code === "P0001") throw refusal(409, "try_again", "A GPEXE check, import, settings change or binding is running for a team of this connection. Try again when it has finished.", { teamId });
+          throw error;
+        }
+      }
+      // The approved pair (owner decision 2026-10-04): the team's existing
+      // gpexe_team_settings row IS the platform-admin allowlist. It must exist
+      // and name, in canonical form, exactly the chosen source team; nothing
+      // else may be bound, by anyone. The row is read FOR SHARE (a settings
+      // change in flight holds the team lock above, so it is never half-seen)
+      // and never written here (D12); the binding carries the provenance
+      // pointer to it. The v30 trigger keeps that pair final while the
+      // binding is active.
+      const setting = row.source_system === "gpexe"
+        ? (await client.query(`select gpexe_team_id from training_load.gpexe_team_settings where owner_team_id = $1 for share`, [bindBody.teamId])).rows[0]
+        : undefined;
+      if (!setting) throw refusal(409, "team_setting_missing", "This team has no approved source team yet; a platform administrator sets it in Settings → Data sources first. Nothing was changed.", { teamId: bindBody.teamId });
+      if (canonicalGpexeTeamId(setting.gpexe_team_id) !== bindBody.sourceTeamId) throw refusal(409, "team_setting_mismatch", "This team's approved source team is another one; a platform administrator changes it in Settings → Data sources, with a reason, before it can be bound. Nothing was changed.", { teamId: bindBody.teamId });
+      legacyPointer = bindBody.teamId;
+    } else {
+      // 5. Every bound team, ascending, try-lock style (condition 3).
+      for (const b of bindings) {
+        try {
+          await client.query(`select training_load.hold_gpexe_team_lock($1, $2)`, [b.team_id, action]);
+        } catch (error) {
+          if (error.code === "P0001") throw refusal(409, "try_again", "A GPEXE check, import or connection change is running for a bound team. Try again when it has finished.", { teamId: b.team_id });
+          throw error;
+        }
       }
     }
     // 6. The throttle (condition 4): attempts that reached the source in the
     //    window, per connection and per user; a refusal below never counts.
     //    The window is measured by the database's own clock (a test may move
     //    it); one query per key so each uses its own index.
-    const COUNTED = `action in ('connect', 'reconnect', 'test')
-        and performed_at > coalesce($2::timestamptz, now()) - make_interval(mins => $3)
-        and (outcome in ('ok', 'failed', 'unknown') or (outcome = 'refused' and error_code = 'source_auth_rejected'))`;
+    //    A bind that reached the source and did not succeed (failed, unknown,
+    //    or the credential refused) counts in the same window as a credential
+    //    attempt: the stored token is sent either way. A successful bind is
+    //    exempt (its repeat is a local no-op).
+    const COUNTED = `performed_at > coalesce($2::timestamptz, now()) - make_interval(mins => $3)
+        and ((action in ('connect', 'reconnect', 'test') and (outcome in ('ok', 'failed', 'unknown') or (outcome = 'refused' and error_code = 'source_auth_rejected')))
+          or (action = 'bind' and (outcome in ('failed', 'unknown') or (outcome = 'refused' and error_code = 'source_auth_rejected'))))`;
     const counts = {
       // One logical attempt counts once, however many rows it left (its
       // committed row and a later "unknown" row share the attempt id).
@@ -459,8 +611,8 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
     // every lock still held, instead of on a second connection.
     await client.query("savepoint attempt_locked");
 
-    const baseMetadata = { host_key: row.host_key, credential_kind: row.credential_kind, attempt_no: attemptNo, bound_team_count: bindings.length, attempt_id: attemptId };
-    if (action === "test") {
+    const baseMetadata = { host_key: row.host_key, credential_kind: row.credential_kind, attempt_no: attemptNo, bound_team_count: bindings.length, attempt_id: attemptId, ...(bindBody ? { source_team_id: bindBody.sourceTeamId } : {}) };
+    if (action === "test" || action === "bind") {
       try {
         token = decryptCredential({ ciphertext: row.credential_ciphertext, nonce: row.credential_nonce, authTag: row.credential_auth_tag, keyVersion: row.credential_key_version }, context, keyring);
       } catch (error) {
@@ -493,7 +645,7 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
 
     // The test reads (one adapter per bound team; the list count when none),
     // within what is left of the attempt's network budget.
-    const read = await testReads({ row, catalog, token, bindings, deadline: networkDeadline, fetchImpl: trackedFetch });
+    const read = await testReads({ row, catalog, token, bindings, deadline: networkDeadline, fetchImpl: trackedFetch, chosenSourceTeamId: bindBody?.sourceTeamId ?? null });
     // Nothing was sent at all (the network budget was already spent): not an
     // attempt the source saw — a local refusal, the state unchanged.
     if (!read.ok && sent === 0) {
@@ -502,18 +654,137 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
       throw refusal(503, read.code === "network_budget_exhausted" ? "network_budget_exhausted" : "attempt_not_sent", "The attempt could not send anything to the source; nothing was changed.");
     }
     const metadata = { ...baseMetadata, status_class: read.ok ? "2xx" : read.statusClass, counted: true, ...(read.sourceTeamCount === null ? {} : { source_team_count: read.sourceTeamCount }) };
+    // What the administrator may see of the teams the credential sees (owner
+    // decision 2026-10-04): every visible team is matched against the
+    // approved pairs of the owning club (the gpexe_team_settings rows of its
+    // active teams). A platform admin gets the bounded list with the match
+    // per row (support, setting the allowlist); a club admin gets ONLY the
+    // intersection — no name, id, count or other fact of a team outside it.
+    // The truncation of the source list is reported to both.
+    let presented = null;
+    if (read.ok && !bindBody && Array.isArray(read.sourceTeams)) {
+      // Two settings rows anywhere in the database that are one GPEXE team in
+      // canonical form ("981" in club A, "0981" in club B) make the allowlist
+      // ambiguous: the v30 unique index refuses that state, and should it exist
+      // anyway (the index missing), the list is withheld fail-closed — for
+      // every basis — when any such duplicate names a team the source offers or
+      // a team of the owning club's own pairs. The check is GLOBAL (every club),
+      // not scoped to the owning club, and no row ever wins over another.
+      const duplicated = new Set((await client.query(
+        `select training_load.gpexe_team_id_canonical(gpexe_team_id) as canonical
+           from training_load.gpexe_team_settings
+          group by 1 having count(*) > 1`,
+      )).rows.map((r) => r.canonical));
+      const own = (await client.query(
+        `select s.owner_team_id as team_id, s.gpexe_team_id, t.name as team_name
+           from training_load.gpexe_team_settings s join public.teams t on t.id = s.owner_team_id
+          where t.club_id = $1 and coalesce(t.is_active, true)`,
+        [row.owner_club_id],
+      )).rows;
+      const ownKeys = own.map((r) => canonicalGpexeTeamId(r.gpexe_team_id));
+      const ambiguous = (duplicated.size > 0 && (
+        read.sourceTeams.some((t) => duplicated.has(t.sourceTeamId))
+        || ownKeys.some((key) => duplicated.has(key))))
+        // The two reads above are two statements: a duplicate committed between
+        // them would be in `own` but not in `duplicated`, so the club's own rows
+        // are checked in memory as well — never one row over another.
+        || new Set(ownKeys).size !== ownKeys.length;
+      const approved = new Map(own.map((r) => [canonicalGpexeTeamId(r.gpexe_team_id), r]));
+      if (ambiguous) {
+        presented = { unavailable: "approved_pairs_ambiguous" };
+      } else {
+        const annotated = read.sourceTeams.map((t) => {
+          const pair = row.source_system === "gpexe" ? approved.get(t.sourceTeamId) : undefined;
+          return { sourceTeamId: t.sourceTeamId, name: t.name, approvedTeamId: pair?.team_id ?? null, approvedTeamName: pair?.team_name ?? null };
+        });
+        // Fail closed: only the platform basis sees the whole list; any other
+        // basis (today club_admin only) sees the intersection.
+        const whole = ctx.basis === "platform_admin";
+        const teams = whole ? annotated : annotated.filter((t) => t.approvedTeamId !== null);
+        presented = { teams, count: whole ? read.sourceTeamCount : teams.length, truncated: read.sourceTeamsTruncated === true };
+      }
+    }
 
     // 9. Before anything is stored: the caller's right and the owner must
     //    still hold now, after the time the source took (a revoked admin or
     //    an archived club stores nothing; the token is discarded).
-    const adminRows = await client.query(
-      `select g.id from public.user_global_roles g join public.users u on u.id = g.user_id
-        where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of g, u`,
-      [ctx.userId],
-    );
-    const clubRows = await client.query(`select id from public.clubs where id = $1 and coalesce(is_active, true) for share`, [row.owner_club_id]);
-    if (adminRows.rowCount === 0 || clubRows.rowCount === 0) throw refusal(409, "rights_changed", "The right to manage this connection changed while the source was being called; nothing was stored.");
+    if (!(await rightsStillHold(client, ctx, row.owner_club_id))) throw refusal(409, "rights_changed", "The right to manage this connection changed while the source was being called; nothing was stored.");
     if (writeFault) await writeFault(client);
+
+    if (bindBody) {
+      // 9b. The team row, FOR SHARE for the short rest of the transaction, and
+      //     the same qualification as at the pre-read: a team archived or moved
+      //     under the administrator while the source answered is the same 404
+      //     as a missing one, with nothing bound — but the source WAS reached
+      //     with the stored token, so the attempt is audited and counted like
+      //     every other source-reaching outcome (condition 5), and a refused
+      //     credential still becomes a fact of the connection before the 404.
+      const team = (await client.query(`select id, club_id, coalesce(is_active, true) as active from public.teams where id = $1 for share`, [bindBody.teamId])).rows[0];
+      if (!team || team.active === false || String(team.club_id) !== String(row.owner_club_id)) {
+        if (!read.ok && read.code === "source_auth_rejected") await markNeedsReconnect(client, row.id, ctx.userId);
+        const auditId = await insertAudit(client, { connectionId: row.id, teamId: bindBody.teamId, action, outcome: "failed", errorCode: "team_not_available", userId: ctx.userId, basis: ctx.basis, metadata });
+        recorded = true;
+        released = true;
+        await commitAttempt(client, release, auditId, row.id, attemptId, bindBody.teamId);
+        return null;
+      }
+      if (!read.ok) {
+        // The source answered and the team cannot be bound: a refused
+        // credential is a fact of the connection (needs_reconnect); a team
+        // not visible or a source not available changes nothing of it. Each
+        // is audited with the team and committed; no row is bound.
+        if (read.code === "source_auth_rejected") await markNeedsReconnect(client, row.id, ctx.userId);
+        const auditId = await insertAudit(client, { connectionId: row.id, teamId: bindBody.teamId, action, outcome: read.code === "source_auth_rejected" ? "refused" : "failed", errorCode: read.code, userId: ctx.userId, basis: ctx.basis, metadata });
+        recorded = true;
+        released = true;
+        await commitAttempt(client, release, auditId, row.id, attemptId, bindBody.teamId);
+        throw refusal(read.code === "source_unavailable" || read.code === "source_answer_unexpected" ? 502 : 409, read.code, BIND_MESSAGES[read.code] ?? BIND_MESSAGES.source_answer_unexpected, { teamId: bindBody.teamId });
+      }
+      // The chosen team is visible to this credential: only now is "bound to
+      // another team already" answered (the unique index is the backstop).
+      const taken = await client.query(`select 1 from training_load.source_team_bindings where state = 'active' and source_system = $1 and source_team_id = $2`, [row.source_system, bindBody.sourceTeamId]);
+      if (taken.rowCount > 0) throw refusal(409, "source_team_already_bound", "That source team is already bound to another team; nothing was changed.", { teamId: bindBody.teamId });
+      // The binding row (the v27 insert trigger re-checks the owner, the host
+      // and the pointer, and re-takes the team lock this transaction holds),
+      // then its audit, in this transaction.
+      let inserted;
+      try {
+        if (bindInsertFault) await bindInsertFault(client);
+        inserted = (await client.query(
+          `insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id)
+           values ($1, $2, $3, $4, $5, $6) returning id, team_id, source_team_id, bound_at`,
+          [bindBody.teamId, row.id, row.source_system, bindBody.sourceTeamId, ctx.userId, legacyPointer],
+        )).rows[0];
+      } catch (error) {
+        if (error.code === "23505" && error.constraint === "source_team_bindings_one_active_per_team_source") throw refusal(409, "team_already_bound", "This team is already bound for this source; nothing was changed.", { teamId: bindBody.teamId });
+        if (error.code === "23505" && error.constraint === "source_team_bindings_one_active_per_source_team") throw refusal(409, "source_team_already_bound", "That source team is already bound to another team; nothing was changed.", { teamId: bindBody.teamId });
+        if (error.code === "23505") throw refusal(409, "binding_refused", "The database refused this binding; nothing was changed.", { teamId: bindBody.teamId });
+        if (error.code === "P0001") throw refusal(409, "try_again", "A GPEXE check, import, settings change or binding is running for this team. Try again when it has finished.", { teamId: bindBody.teamId });
+        // The v30 pair trigger (the database's own guarantee of the approved
+        // pair; the service checked it under the same locks, so this is a
+        // raw-writer or race path) answers the same readable codes.
+        if (error.code === "23514" && error.constraint === "source_team_bindings_approved_pair_missing") throw refusal(409, "team_setting_missing", "This team has no approved source team yet; a platform administrator sets it in Settings → Data sources first. Nothing was changed.", { teamId: bindBody.teamId });
+        if (error.code === "23514" && error.constraint === "source_team_bindings_approved_pair") throw refusal(409, "team_setting_mismatch", "This team's approved source team is another one; a platform administrator changes it in Settings → Data sources, with a reason, before it can be bound. Nothing was changed.", { teamId: bindBody.teamId });
+        if (error.code === "23514" || error.code === "23503") throw refusal(409, "binding_refused", "The database refused this binding (the host, the club, the team or the approved source team changed meanwhile); nothing was changed.", { teamId: bindBody.teamId });
+        throw error;
+      }
+      // A successful bind is NOT counted by the 5 / 15 min window (its repeat
+      // is a local no-op), and its audit row says so. `counted` documents
+      // what the COUNTED predicate decides from action / outcome / error_code
+      // (test 27 keeps the two in step); the one deliberate divergence is an
+      // attempt whose COMMIT outcome stayed unknown — its `ok` row says false
+      // and its later `unknown` row true, and the window counts the attempt
+      // once by attempt_id.
+      const auditId = await insertAudit(client, { connectionId: row.id, teamId: bindBody.teamId, action, outcome: "ok", userId: ctx.userId, basis: ctx.basis, metadata: { ...metadata, bound_team_count: bindings.length + 1, counted: false } });
+      recorded = true;
+      released = true;
+      const confirmation3 = await commitAttempt(client, release, auditId, row.id, attemptId, bindBody.teamId);
+      return {
+        connectionId: row.id, action, outcome: "ok", idempotent: false,
+        binding: { bindingId: inserted.id, teamId: inserted.team_id, teamName: teamPre?.name ?? null, sourceTeamId: inserted.source_team_id, state: "active", boundAt: inserted.bound_at },
+        ...(confirmation3 ? { commitConfirmation: confirmation3 } : {}),
+      };
+    }
     // 10. The row: new ciphertext for connect / reconnect; the state per 2.4,
     //     every time from the database's clock.
     let state;
@@ -545,30 +816,36 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
     const confirmation2 = await commitAttempt(client, release, auditId, row.id, attemptId);
     return {
       connectionId: row.id, action, outcome, state, code: errorCode, lastVerifiedAt: state === "verified" ? written.last_verified_at : null,
-      boundTeamsChecked: read.boundTeamsChecked, sourceTeamCount: read.sourceTeamCount, exchangeStatusClass,
+      boundTeamsChecked: read.boundTeamsChecked, sourceTeamCount: presented?.count ?? null, exchangeStatusClass,
+      // The teams this administrator may choose from (id, name and the
+      // approved OptiMove team of the pair); nothing is preselected or bound.
+      // sourceTeamsTruncated is false only when the source list was complete.
+      sourceTeams: presented?.teams ?? null,
+      sourceTeamsTruncated: presented?.truncated ?? null,
+      ...(presented?.unavailable ? { sourceTeamsUnavailable: presented.unavailable } : {}),
       ...(confirmation2 ? { commitConfirmation: confirmation2 } : {}),
     };
   } catch (error) {
     // A lock wait that ran out on any statement of the attempt (the catalog
     // row, a club row) is the same stable answer as a busy connection row.
-    if (error?.code === "55P03") error = refusal(409, "try_again", "Another change of this connection, its host or its club is running. Try again when it has finished.", { connectionId: id });
+    if (error?.code === "55P03" || error?.code === "40P01") error = refusal(409, "try_again", "Another change of this connection, its host, its club or a team is running. Try again when it has finished.", { connectionId: id });
     // Recorded already: the attempt's own row was inserted in the transaction
     // (then committed, or its commit is outcome_unknown and handled there).
     const alreadyRecorded = recorded || (error instanceof SourceConnectionError && error.code === "outcome_unknown");
     const compensate = reachedSource && !alreadyRecorded && known;
     if (compensate) {
       // The source was reached, and the attempt did not commit (a database
-      // error, a refused right, a write fault): it is recorded and counted
-      // on a fresh connection as a failed attempt BEFORE this transaction is
-      // rolled back — the per-user lock is still held here, so the next
-      // attempt of this user, waiting on that lock, already sees the row
-      // when it counts. (Only when the server itself ended this session is
-      // the lock already gone; that residual is documented.) The audit row's
-      // foreign key needs KEY SHARE only, which this row lock allows.
+      // error, a refused right, a write fault): it is recorded and counted as
+      // a failed attempt in THIS transaction — back to the savepoint taken
+      // after the locks, the row inserted, the bounded COMMIT — so every
+      // lock, the per-user lock included, is held until the row is visible
+      // to the next attempt of this user. A fresh, bounded connection is only
+      // the fallback when this session is unusable (ended by the server);
+      // only then is the user lock already gone (documented residual).
       if (compensationDelayMs > 0) await new Promise((r) => setTimeout(r, compensationDelayMs));
       const code = error instanceof SourceConnectionError ? error.code : "attempt_not_recorded";
       const outcome = error instanceof SourceConnectionError ? "failed" : "unknown";
-      const metadata = { host_key: known.hostKey, credential_kind: known.credentialKind, counted: true, attempt_id: attemptId };
+      const metadata = { host_key: known.hostKey, credential_kind: known.credentialKind, counted: true, attempt_id: attemptId, ...(known.sourceTeamId ? { source_team_id: known.sourceTeamId } : {}) };
       // First choice: this very transaction. Back to the savepoint taken
       // after the locks (an aborted statement is undone, the locks stay),
       // insert the row, commit with the bounded COMMIT discipline. No second
@@ -577,10 +854,10 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
       if (!released) {
         try {
           await withinBound(client.query("rollback to savepoint attempt_locked"), 5_000);
-          const auditId = await withinBound(insertAudit(client, { connectionId: known.connectionId, action, outcome, errorCode: code, userId: ctx.userId, basis: ctx.basis, metadata }), 5_000);
+          const auditId = await withinBound(insertAudit(client, { connectionId: known.connectionId, teamId: known.teamId, action, outcome, errorCode: code, userId: ctx.userId, basis: ctx.basis, metadata }), 5_000);
           released = true;
           try {
-            await commitAttempt(client, release, auditId, known.connectionId, attemptId);
+            await commitAttempt(client, release, auditId, known.connectionId, attemptId, known.teamId);
             compensated = true;
           } catch {
             // outcome_unknown of the compensation itself: the row may exist;
@@ -595,7 +872,7 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
       if (!compensated) {
         // Fallback: a fresh connection, bounded. (Only when the session died
         // is the user lock already gone; that residual is documented.)
-        await withinBound(auditRefusal({ connectionId: known.connectionId, action, errorCode: code, ctx, outcome, metadata }), 5_000).catch(() => {});
+        await withinBound(auditRefusal({ connectionId: known.connectionId, teamId: known.teamId, action, errorCode: code, ctx, outcome, metadata }), 5_000).catch(() => {});
       }
     }
     if (!released) {
@@ -614,8 +891,8 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
     if (error instanceof SourceConnectionError) {
       // A refusal that never reached the source is audited on its own, in
       // its own short transaction, and is never counted by the throttle.
-      if (known && !alreadyRecorded && error.code !== "attempt_not_recorded") {
-        await auditRefusal({ connectionId: known.connectionId, action, errorCode: error.code, ctx, metadata: { host_key: known.hostKey, credential_kind: known.credentialKind, counted: false, attempt_id: attemptId } });
+      if (known && !alreadyRecorded && error.code !== "attempt_not_recorded" && error.status !== 404) {
+        await auditRefusal({ connectionId: known.connectionId, teamId: known.teamId, action, errorCode: error.code, ctx, metadata: { host_key: known.hostKey, credential_kind: known.credentialKind, counted: false, attempt_id: attemptId } });
       }
       throw error;
     }
@@ -624,6 +901,18 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
     pair = null;
     if (!released) release();
   }
+}
+
+// A bind's read refused the stored credential: a fact of the whole connection
+// (2.4), recorded in the attempt's own transaction.
+async function markNeedsReconnect(client, connectionId, userId) {
+  await client.query(
+    `update training_load.source_credential_connections
+        set state = 'needs_reconnect', last_error_code = 'source_auth_rejected', last_error_at = coalesce($2::timestamptz, now()),
+            updated_by_user_id = $3::uuid, updated_at = coalesce($2::timestamptz, now())
+      where id = $1::uuid`,
+    [connectionId, testClock(), userId],
+  );
 }
 
 // The original body object loses its credential fields as soon as they were
@@ -636,6 +925,13 @@ function scrubCredentialFields(body) {
     }
   }
 }
+
+const BIND_MESSAGES = {
+  source_auth_rejected: "The source refused the stored credential; reconnect before binding a team. Nothing was bound.",
+  source_team_not_visible: "The source does not show that team to this credential. Nothing was bound.",
+  source_unavailable: "The source did not answer the team's read. Nothing was bound; try again later.",
+  source_answer_unexpected: "The source answered the team's read in a way this server does not understand. Nothing was bound.",
+};
 
 const EXCHANGE_MESSAGES = {
   source_auth_rejected: "The source refused the username and password. Nothing was stored.",
@@ -733,7 +1029,7 @@ async function readBounded(res, limit) {
 // adapter per bound source team, each limited to that team); with no binding
 // yet, the team list count — nothing is chosen or bound from that list.
 // ---------------------------------------------------------------------------
-async function testReads({ row, catalog, token, bindings, deadline, fetchImpl }) {
+async function testReads({ row, catalog, token, bindings, deadline, fetchImpl, chosenSourceTeamId = null }) {
   const active = bindings.filter((b) => b.team_active !== false);
   // Each read gets at most the test timeout, and never more than what is
   // left of the attempt's whole network budget; past the budget the rest
@@ -745,29 +1041,34 @@ async function testReads({ row, catalog, token, bindings, deadline, fetchImpl })
     return { sourceSystem: row.source_system, hostKey: row.host_key, catalogRow: catalog, credential: token, fetchImpl, timeoutMs: Math.max(1, Math.min(testTimeoutMs, left)), attempts: 1 };
   };
   try {
-    if (active.length === 0) {
-      const adapter = createSourceAdapter({ ...options(), boundSourceTeamId: UNBOUND_LIST_PLACEHOLDER_TEAM });
-      const list = await adapter.countVisibleTeams();
-      return { ok: true, code: null, statusClass: "2xx", sourceTeamCount: list.teamCount, boundTeamsChecked: 0 };
+    if (chosenSourceTeamId !== null) {
+      // A bind: the chosen team's own read, alone, with the adapter bound to
+      // exactly that id; never the list.
+      await createSourceAdapter({ ...options(), boundSourceTeamId: chosenSourceTeamId }).verifyBoundTeam();
+      return { ok: true, code: null, statusClass: "2xx", sourceTeamCount: null, sourceTeams: null, boundTeamsChecked: 1 };
     }
+    // Connect / Test: the teams this credential sees (id and name only), for
+    // the administrator to choose one from — nothing is chosen, stored or
+    // bound here —, then every active bound team's own read.
+    const list = await createSourceAdapter({ ...options(), boundSourceTeamId: UNBOUND_LIST_PLACEHOLDER_TEAM }).listVisibleTeams();
     let checked = 0;
     for (const b of active) {
       const adapter = createSourceAdapter({ ...options(), boundSourceTeamId: b.source_team_id });
       await adapter.verifyBoundTeam();
       checked += 1;
     }
-    return { ok: true, code: null, statusClass: "2xx", sourceTeamCount: null, boundTeamsChecked: checked };
+    return { ok: true, code: null, statusClass: "2xx", sourceTeamCount: list.teamCount, sourceTeams: list.teams, sourceTeamsTruncated: list.firstPageOnly === true, boundTeamsChecked: checked };
   } catch (error) {
     const code = error?.code;
     const status = error?.status;
     const statusClass = Number.isInteger(status) ? `${Math.floor(status / 100)}xx` : "network";
-    if (code === "source_auth_rejected" || code === "source_access_refused") return { ok: false, code: "source_auth_rejected", statusClass, sourceTeamCount: null, boundTeamsChecked: 0 };
-    if (code === "source_team_not_visible") return { ok: false, code, statusClass, sourceTeamCount: null, boundTeamsChecked: 0 };
-    if (code === "source_unavailable") return { ok: false, code, statusClass, sourceTeamCount: null, boundTeamsChecked: 0 };
-    if (code === "network_budget_exhausted") return { ok: false, code, statusClass: "none", sourceTeamCount: null, boundTeamsChecked: 0 };
+    if (code === "source_auth_rejected" || code === "source_access_refused") return { ok: false, code: "source_auth_rejected", statusClass, sourceTeamCount: null, sourceTeams: null, boundTeamsChecked: 0 };
+    if (code === "source_team_not_visible") return { ok: false, code, statusClass, sourceTeamCount: null, sourceTeams: null, boundTeamsChecked: 0 };
+    if (code === "source_unavailable") return { ok: false, code, statusClass, sourceTeamCount: null, sourceTeams: null, boundTeamsChecked: 0 };
+    if (code === "network_budget_exhausted") return { ok: false, code, statusClass: "none", sourceTeamCount: null, sourceTeams: null, boundTeamsChecked: 0 };
     if (code === "host_not_allowed" || code === "path_not_allowed" || code === "adapter_not_available") throw refusal(409, "host_not_allowed", "The host of this connection is not approved; nothing was sent to it.");
     // source_answer_unexpected, source_team_mismatch, an unknown adapter code
-    return { ok: false, code: "source_answer_unexpected", statusClass, sourceTeamCount: null, boundTeamsChecked: 0 };
+    return { ok: false, code: "source_answer_unexpected", statusClass, sourceTeamCount: null, sourceTeams: null, boundTeamsChecked: 0 };
   }
 }
 
@@ -799,15 +1100,39 @@ async function insertAudit(executor, { connectionId, action, outcome, errorCode 
   )).rows[0].id;
 }
 
-async function auditRefusal({ connectionId, action, errorCode, ctx, metadata, outcome = "refused" }) {
+async function auditRefusal({ connectionId, action, errorCode, ctx, metadata, outcome = "refused", teamId = null }) {
   try {
-    await pool.query(
-      `insert into training_load.source_connection_audit (connection_id, action, outcome, error_code, performed_by_user_id, basis, metadata)
-       values ($1, $2, $7, $3, $4, $5, $6::jsonb)`,
-      [connectionId, action, errorCode, ctx.userId, ctx.basis, JSON.stringify(auditMetadata(metadata)), outcome],
+    await boundedAuditInsert(
+      `insert into training_load.source_connection_audit (connection_id, team_id, action, outcome, error_code, performed_by_user_id, basis, metadata)
+       values ($1, $8, $2, $7, $3, $4, $5, $6::jsonb)`,
+      [connectionId, action, errorCode, ctx.userId, ctx.basis, JSON.stringify(auditMetadata(metadata)), outcome, teamId],
     );
   } catch (error) {
     console.error(`[source-connections] the refusal ${errorCode} of ${action} could not be audited: ${error?.code ?? ""}`);
+  }
+}
+
+// An audit row written outside the attempt's own transaction (a refusal, the
+// second row of an unknown outcome): its foreign keys take KEY SHARE locks
+// on the connection and the team, and a team row held by a running move or
+// archive must not hold this request for the length of that transaction —
+// the wait is bounded like every other row wait here, then the row is
+// dropped and logged by code only.
+async function boundedAuditInsert(sql, params) {
+  const client = await pool.connect();
+  const release = guardClient(client);
+  let dead = false;
+  try {
+    await client.query("begin");
+    await client.query(`set local lock_timeout = '${ROW_LOCK_TIMEOUT_MS}ms'`);
+    await client.query(`set local statement_timeout = '${statementTimeoutMs}ms'`);
+    await client.query(sql, params);
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback").catch(() => { dead = true; });
+    throw error;
+  } finally {
+    release(dead);
   }
 }
 
@@ -820,7 +1145,7 @@ async function auditRefusal({ connectionId, action, errorCode, ctx, metadata, ou
 // more audit row "unknown" by the same user and basis when that can be
 // written; the client re-reads state instead of resending.
 // ---------------------------------------------------------------------------
-async function commitAttempt(client, release, auditId, connectionId, attemptId = null) {
+async function commitAttempt(client, release, auditId, connectionId, attemptId = null, teamId = null) {
   let commitError = null;
   try {
     const commit = commitFault ? commitFault(client) : client.query("commit");
@@ -840,7 +1165,7 @@ async function commitAttempt(client, release, auditId, connectionId, attemptId =
     console.error(`[source-connections] checking the attempt after an unconfirmed COMMIT failed: ${error?.message ?? ""}`.slice(0, 300));
   }
   if (found) return "verified_after_commit_error";
-  throw refusal(503, "outcome_unknown", "The database did not confirm this attempt, and it could not be verified yet. Read the connection's state before doing anything else; do not resend the credentials blindly.", { connectionId, auditId, attemptId });
+  throw refusal(503, "outcome_unknown", "The database did not confirm this attempt, and it could not be verified yet. Read the connection's state before doing anything else; do not resend the credentials blindly.", { connectionId, auditId, attemptId, ...(teamId ? { teamId } : {}) });
 }
 
 async function auditRowIsCommitted(auditId, ms) {
@@ -876,12 +1201,12 @@ async function auditRowIsCommitted(auditId, ms) {
 // The second audit row of an unresolved outcome, written by the handler
 // after outcome_unknown (best effort, a fresh connection, never a system
 // basis — the v27 actor CHECK).
-export async function recordUnknownOutcome({ connectionId, action, ctx, attemptId = null }) {
+export async function recordUnknownOutcome({ connectionId, action, ctx, attemptId = null, teamId = null }) {
   try {
-    await pool.query(
-      `insert into training_load.source_connection_audit (connection_id, action, outcome, error_code, performed_by_user_id, basis, metadata)
-       values ($1, $2, 'unknown', 'outcome_unknown', $3, $4, $5::jsonb)`,
-      [connectionId, action, ctx.userId, ctx.basis, JSON.stringify(auditMetadata(attemptId ? { attempt_id: attemptId } : {}))],
+    await boundedAuditInsert(
+      `insert into training_load.source_connection_audit (connection_id, team_id, action, outcome, error_code, performed_by_user_id, basis, metadata)
+       values ($1, $6, $2, 'unknown', 'outcome_unknown', $3, $4, $5::jsonb)`,
+      [connectionId, action, ctx.userId, ctx.basis, JSON.stringify(auditMetadata(attemptId ? { attempt_id: attemptId } : {})), teamId],
     );
     return true;
   } catch {

@@ -148,7 +148,7 @@ test("4. GET only: the adapter exposes named reads and nothing generic — no re
   assert.deepEqual(names, [
     "capabilities", "countVisibleTeams", "fetchSessionBundle", "getAthleteSession", "getAthleteSessionMore", "getDrillLabels", "getSession",
     "getSessionDetails", "getSessionDrillDetails", "getSessionDrills", "getTeamThresholds", "getTrack", "getUnits", "listAthleteSessions",
-    "listSessionTags", "listSessions", "listSessionsByDay", "verifyBoundTeam",
+    "listSessionTags", "listSessions", "listSessionsByDay", "listVisibleTeams", "verifyBoundTeam",
   ]);
   for (const forbidden of ["request", "get", "read", "fetch", "post", "put", "patch", "delete", "send", "call", "getAllPages"]) assert.equal(a[forbidden], undefined, forbidden);
   // An option that tries to carry a method, a URL or a path changes nothing.
@@ -585,4 +585,33 @@ test("14. no credential, account address or token value is in the files of this 
     // Documents may name a Git commit by its full id; code files may not carry any 40-hex value.
     if (f.startsWith("backend/")) assert.doesNotMatch(text, /\b[0-9a-f]{40}\b/i, `${f}: a 40-hex value`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// F3c2e: the team list for an administrator's choice — id and name only.
+// ---------------------------------------------------------------------------
+test("F3c2e-1. listVisibleTeams: one GET on team/, each row reduced to its canonical id and a sanitized name (nothing else leaves), the total from the header; a missing or non-string name is null; a row without a canonical id, a duplicate id, more rows than a page, or no total refuse the whole list", async () => {
+  const rows = [
+    { id: 980, name: "  FK  Test" + String.fromCharCode(0, 10) + " Club ", notes: "a private note", users: [{ email: "x@example.invalid" }], token: "never" },
+    { id: "981", name: 42 },
+    { id: 982 },
+    { id: 983, name: "x".repeat(500) },
+  ];
+  const { calls, fetchImpl } = fakeServer({ routes: { "/rest/v1/team/": answer(200, rows, { "x-total-count": "8" }) } });
+  const list = await make(fetchImpl).listVisibleTeams();
+  assert.deepEqual(calls.map((c) => [c.method, c.url]), [["GET", "https://server3.gpexe.com/rest/v1/team/"]]);
+  assert.deepEqual(list, { teamCount: 8, firstPageOnly: true, teams: [
+    { sourceTeamId: "980", name: "FK Test Club" }, { sourceTeamId: "981", name: null }, { sourceTeamId: "982", name: null }, { sourceTeamId: "983", name: "x".repeat(120) },
+  ] });
+  const text = JSON.stringify(list);
+  for (const marker of ["private note", "example.invalid", "never", "users", "notes"]) assert.ok(!text.includes(marker), `${marker} never leaves the adapter`);
+  await assert.rejects(make(fetchImpl).listVisibleTeams({ team: "981" }), code("team_param_not_allowed"), "no option may name a team");
+  const bad = (body, headers = { "x-total-count": "2" }) => make(fakeServer({ routes: { "/rest/v1/team/": answer(200, body, headers) } }).fetchImpl).listVisibleTeams();
+  await assert.rejects(bad([{ id: "0980", name: "a" }]), code("source_answer_unexpected"), "a non-canonical id");
+  await assert.rejects(bad([{ id: 980 }, { id: "980" }]), code("source_answer_unexpected"), "a duplicate id");
+  await assert.rejects(bad([980, 981]), code("source_answer_unexpected"), "a row that is not an object");
+  await assert.rejects(bad({ id: 980 }), code("source_answer_unexpected"), "not a list");
+  await assert.rejects(bad(Array.from({ length: 101 }, (_, i) => ({ id: 1000 + i })), { "x-total-count": "101" }), code("source_answer_unexpected"), "more rows than a page");
+  await assert.rejects(bad([{ id: 980 }], {}), code("source_answer_unexpected"), "no total");
+  assert.deepEqual(await bad([], { "x-total-count": "0" }), { teamCount: 0, firstPageOnly: false, teams: [] });
 });

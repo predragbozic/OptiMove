@@ -170,6 +170,10 @@ function changeReason(raw) {
 // current value is left alone (a reason can never be rewritten without a real
 // change). A different value is refused - with nothing written - as soon as
 // anything depends on the current one.
+const GPEXE_TEAM_BOUND_MESSAGE = "This team is bound to its GPEXE team through a source connection; the GPEXE team cannot be changed while that binding is active.";
+// The canonical GPEXE team id (no leading zeros), the comparison v30 makes.
+const canonicalGpexeId = (raw) => (typeof raw === "string" && /^[0-9]{1,12}$/.test(raw) ? raw.replace(/^0+(?=[0-9])/, "") : raw);
+
 export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
   if (typeof gpexeTeamId !== "string" || !/^[0-9]{1,12}$/.test(gpexeTeamId)) {
     throw new GpexeImportServiceError(400, "invalid_gpexe_team_id", "gpexeTeamId must be a numeric GPEXE team id.");
@@ -190,6 +194,23 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
       await client.query("commit");
       return getTeamSettings(teamId);
     }
+    // F3c2e (owner decision 2026-10-04): the settings row is the approved
+    // pair a source binding is made of. While the team has an active gpexe
+    // binding the approved GPEXE team cannot change (end the binding first —
+    // not available yet). Checked here under the same team lock the bind
+    // holds; the v30 trigger is the database's own backstop.
+    if (current && canonicalGpexeId(current.gpexe_team_id) !== canonicalGpexeId(gpexeTeamId)) {
+      const bound = await client.query(`select 1 from training_load.source_team_bindings where team_id = $1 and source_system = 'gpexe' and state = 'active'`, [teamId]);
+      if (bound.rowCount > 0) throw new GpexeImportServiceError(409, "gpexe_team_bound", GPEXE_TEAM_BOUND_MESSAGE);
+    }
+    // One GPEXE team feeds at most one OptiMove team: the v22 key is on the raw
+    // text, so the same team written with a leading zero is refused here as the
+    // same conflict the key answers (the approved pair must stay unambiguous).
+    const clash = await client.query(
+      `select 1 from training_load.gpexe_team_settings where owner_team_id <> $1 and training_load.gpexe_team_id_canonical(gpexe_team_id) = training_load.gpexe_team_id_canonical($2)`,
+      [teamId, gpexeTeamId],
+    );
+    if (clash.rowCount > 0) throw new GpexeImportServiceError(409, "gpexe_team_taken", "This GPEXE team is already connected to another OptiMove team.");
 
     // A change needs a reason; a first connection may carry one and it is
     // kept (an empty or whitespace-only one is refused either way).
@@ -220,7 +241,10 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
     await client.query("commit");
   } catch (error) {
     await client.query("rollback").catch(() => {});
-    if (error.code === "23505") throw new GpexeImportServiceError(409, "gpexe_team_taken", "This GPEXE team is already connected to another OptiMove team.");
+    if (error.code === "23505" && ["gpexe_team_settings_gpexe_team_id_key", "gpexe_team_settings_canonical_team_id_key"].includes(error.constraint)) {
+      throw new GpexeImportServiceError(409, "gpexe_team_taken", "This GPEXE team is already connected to another OptiMove team.");
+    }
+    if (error.code === "23514" && error.constraint === "gpexe_team_settings_bound_team_final") throw new GpexeImportServiceError(409, "gpexe_team_bound", GPEXE_TEAM_BOUND_MESSAGE);
     if (error.code === "55P03" || error.code === "40P01") {
       throw new GpexeImportServiceError(409, "gpexe_change_busy", "A GPEXE check, import or connection change is running for this team. Try again when it has finished.");
     }
