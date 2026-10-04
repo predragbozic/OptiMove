@@ -1,4 +1,4 @@
-# Source connections — Connect / Reconnect / Test (F3c2d) and the team binding (F3c2e)
+# Source connections — Connect / Reconnect / Test (F3c2d), the team binding (F3c2e) and Unbind (F3c2f)
 
 Backend routes for a source credential connection: create it, attach a credential by a
 one-time username/password exchange, test it with the stored token, replace the
@@ -33,6 +33,7 @@ carries the basis (`club_admin` or `platform_admin`).
 | `POST /:source/connections/:id/reconnect` | `{ username, password, confirmation: { sourceSystem, ownerClubId, affectedTeamCount } }` | state must hold a credential; the confirmation must name the connection's source, owning club and current number of active bound teams exactly, or `409 confirmation_mismatch` (the answer carries `expected`) before anything is sent; otherwise as connect, with a new ciphertext and nonce |
 | `POST /:source/connections/:id/test` | `{}` | the stored token on exactly the chosen host: the first page of the team list (each team as its canonical id and a sanitized name — `result.sourceTeams`, for the administrator to choose one from; nothing is preselected or bound) and then every active bound team's own read (`team/<id>/`) |
 | `POST /:source/connections/:id/bindings` | `{ teamId, sourceTeamId }` | F3c2e: bind one OptiMove team of the owning club to the chosen source team — state must be `verified`; the chosen team is read again, alone (`GET team/<sourceTeamId>/`), before the row is written; `201` with the binding, `200` with `idempotent: true` for the same binding again; see "Binding a team" below |
+| `POST /:source/connections/:id/bindings/:bindingId/unbind` | `{ requestKey, reason, expected: { teamId, sourceTeamId } }` | F3c2f: end an active binding — local only (no source request, no credential change, nothing deleted); `200` with the ended binding, the same `requestKey` again replays the saved answer; see "Ending a binding (Unbind)" below |
 
 Every write needs a JSON object body (`415` otherwise); a body with a field the route does
 not take is `400 invalid_body` and is not an attempt.
@@ -226,12 +227,64 @@ ACCESS EXCLUSIVE **NOWAIT**: a Settings change or a bind in flight makes it fail
 with nothing dropped and nothing left locked — never a wait that could form a cycle with a
 Settings UPDATE (whose trigger reads the bindings) — and it is simply run again when quiet.
 
+## Ending a binding (Unbind, F3c2f)
+
+An Unbind is the only supported way to end a binding. It is a **local OptiMove operation**: no
+request to the source, no exchange, no credential change (the connection need not be `verified`),
+nothing deleted — the binding row goes `active` → `ended` with when, who and why; the Settings row
+and the provenance pointer stay; GET lists active bindings only and the ended row stays readable
+history. Who may call it: the same two bases as every source route (the owning club's admin in
+that club's workspace, or a platform admin); everyone and everything else the same `404`.
+
+Body: `requestKey` (a UUID the client chooses for this one Unbind — the same key again returns the
+same saved answer), `reason` (one line of visible text, 1–500 characters, required — no control,
+format or blank-rendering characters, at least one letter, digit or punctuation mark; a reason of
+symbols only is refused; zero-width joiners are refused too, a known limit for scripts that need
+them; stored in the audit row and on the binding), `expected: { teamId, sourceTeamId }` (the pair the administrator saw — a binding never
+changes except to end, so "the same pair, still active" is the whole precondition). Nothing else.
+
+Order of one Unbind: the body (`400 invalid_body`) → the connection and the binding read unlocked
+(`404` unless the binding is that connection's and the caller may see the club) → the per-user
+lock → the connection row (`409 try_again` when busy) → the request record: the same `requestKey`
+of this user on this connection → `200` with `replayed: true`, the saved `auditId` and facts, no
+second UPDATE or audit row, answered before any team lock (a retry of a lost answer never meets a
+busy team); the same key with another body or for another binding → `409 request_key_reused`, whose
+`current` describes the binding that key already ended (its `bindingId` may differ from the path's) → the
+target team's import try-lock only (`409 try_again` while a Check now, an import, a Settings
+change, a bind or a team move runs for THAT team; an import of a sibling team does not block an
+Unbind, which changes neither the credential nor the connection's state) → the binding row
+(`try_again` when busy) → already ended → `409 binding_already_ended` with `current`; `expected`
+not the binding's pair → `409 binding_mismatch` with `current` → the right and the club re-checked
+(`409 rights_changed`) → the UPDATE (`state = 'ended'`, `ended_at`, `ended_by_user_id`, `end_reason`; the
+v27 trigger allows exactly this change) → the audit row `unbind` (the team, the reason,
+`counted: false`, `source_contacted: false`, `request_id`, `request_hash`) → the bounded COMMIT
+(`commitConfirmation: verified_after_commit_error` when the answer was lost; `503 outcome_unknown`
+naming the team when it cannot be verified — then a second `unknown` audit row, and the retry with
+the same key replays once the row is ended). `55P03` and `40P01` are `try_again`. **What
+`requestKey` means:** it binds to its body permanently only once an Unbind was saved — the same key
+and body then replay the saved success, the same key with another body or binding is
+`request_key_reused`. A refusal is not a request record: the same key may repeat a transient or
+correctable refusal and succeed later. A refusal is
+audited once per request (the same user repeating the same `requestKey` into the same refusal adds
+no row — serialized in its own bounded transaction by a transaction-scoped advisory lock on that
+identity, so two identical refusals in flight write one row; a fresh key per request still adds
+one row each — a new attempt, a known, authenticated-only growth; the
+audit row links to its binding by `binding_id`, not by equal timestamps: `ended_at` is the real
+moment, the audit's `performed_at` the transaction's start). An Unbind shares the per-user lock and the connection row with Connect / Reconnect / Test
+/ bind: while one of those runs for the same connection (up to its network budget), the Unbind
+answers `try_again` at once — retry after it. A binding of an archived club cannot be ended
+through the route (the same 404 as every read of an archived club): restore the club first.
+
+After an Unbind: the approved GPEXE Team ID of the team can change again through Settings (v30 no
+longer blocks it), the team can take a new valid binding, the freed source team can be bound to
+another approved pair (every v30 rule still applies), and the v30 rollback is no longer refused by
+that row. Repeating the same successful Unbind deliberately is safe; a different `requestKey` on
+an already ended binding never pretends to have just ended it.
+
 ### Recorded limits of F3c2e (non-blocking, for the owner)
 
-- No Unbind / end-binding route exists yet: a bound pair is permanent in practice, the approved
-  Team ID cannot change while it is bound (`409 gpexe_team_bound`), and the v30 rollback refuses
-  while such a binding exists. A wrongly approved pair that was bound has no supported correction
-  until the unbind step; schedule it before the first real bind.
+- Unbind exists since F3c2f (above); the first real production binding stays forbidden until
+  F3c2f is merged, deployed and smoke-checked (owner, 2026-10-04).
 - The approved pair is guaranteed by the database in both directions since the second form of
   v30 (the INSERT trigger and the canonical unique index); the application checks it first and
   answers the readable codes. Rows from before v30 are refused by the migration itself when they

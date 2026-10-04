@@ -1,5 +1,5 @@
 // Source credential connections (F3c2d): create, connect, reconnect, test
-// and read; (F3c2e) bind a team. Mounted at /api/training-load/sources behind
+// and read; (F3c2e) bind a team; (F3c2f) unbind. Mounted at /api/training-load/sources behind
 // requireAuth. A platform admin, or the owning club's admin in that club's
 // workspace; anything else — and any connection, club, team or id the caller
 // may not see — answers the same 404 as a missing one (ADR-006).
@@ -23,11 +23,11 @@ function handle(fn) {
       if (error instanceof service.SourceConnectionError) {
         // Only known detail fields: a detail can never replace error/message
         // and never carries a body field back.
-        const { expected, connectionId, teamId, retryAfterMinutes, auditId } = error.details || {};
+        const { expected, connectionId, teamId, retryAfterMinutes, auditId, current } = error.details || {};
         if (error.status === 429 && retryAfterMinutes) res.setHeader("Retry-After", String(retryAfterMinutes * 60));
         return res.status(error.status).json({
           error: error.code, message: error.message,
-          ...(expected ? { expected } : {}), ...(connectionId ? { connectionId } : {}), ...(teamId ? { teamId } : {}), ...(auditId ? { auditId } : {}),
+          ...(expected ? { expected } : {}), ...(connectionId ? { connectionId } : {}), ...(teamId ? { teamId } : {}), ...(auditId ? { auditId } : {}), ...(current ? { current } : {}),
           ...(error.details?.commitConfirmation ? { commitConfirmation: error.details.commitConfirmation } : {}),
         });
       }
@@ -144,5 +144,36 @@ router.post("/:source/connections/:id/test", attemptRoute("testConnection"));
 // ({ teamId, sourceTeamId }); the chosen team is read again, alone, before
 // the row is written.
 router.post("/:source/connections/:id/bindings", attemptRoute("bindTeam"));
+
+// F3c2f: end an active binding ({ requestKey, reason, expected: { teamId,
+// sourceTeamId } }). Local only: nothing is sent to the source. The same
+// requestKey answers the same saved result.
+router.post("/:source/connections/:id/bindings/:bindingId/unbind", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!jsonObjectBody(req, res)) return;
+  const body = req.body;
+  req.body = undefined;
+  let result;
+  try {
+    result = await service.unbindTeam({ ctx, sourceSystem: req.params.source, id: req.params.id, bindingId: req.params.bindingId, body });
+  } catch (error) {
+    if (error instanceof service.SourceConnectionError && error.code === "outcome_unknown" && error.details?.connectionId) {
+      await service.recordUnknownOutcome({ connectionId: error.details.connectionId, action: "unbind", ctx, attemptId: error.details.attemptId ?? null, teamId: error.details.teamId ?? null });
+    }
+    throw error;
+  } finally {
+    scrub(body);
+  }
+  if (!result) return notFound(res);
+  let connection = null;
+  let connectionReadError = false;
+  try {
+    connection = await service.getConnection({ ctx, sourceSystem: req.params.source, id: req.params.id });
+  } catch {
+    connectionReadError = true;
+  }
+  res.json({ result, connection, ...(connectionReadError ? { connectionReadError: true } : {}) });
+}));
 
 export default router;

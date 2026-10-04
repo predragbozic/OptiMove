@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-03. Last `origin/main` commit checked: `cb54b85` (merge of PR #134,
-`feature/gpexe-connect-routes-f3c2d` → `main`; PR #133 `379d2fa` before it).
+Last reviewed: 2026-10-04. Last `origin/main` commit checked: `440ad83` (merge of PR #135,
+`feature/gpexe-team-binding-f3c2e` → `main`; PR #134 `cb54b85` before it).
 
 ## Active phase
 
@@ -604,12 +604,24 @@ PR, not built: an incomplete drill set is never shown as complete; an empty, suc
 HTML-escaped in the future UI; the raw-snapshot decision stays open; the importer is not wired to
 a connection and `GPEXE_IMPORT_APPLY_ENABLED` stays off.
 
-**The active step is F3c2e — the verified team binding, the club-admin path and the approved-pair
-allowlist** (branch `feature/gpexe-team-binding-f3c2e` from `cb54b85`, owner order 2026-10-03, its
-amendment of the same day and the allowlist decision of 2026-10-04; backend service, router,
-adapter, migration v30, tests and docs; **not merged, not run against the real server, no
-credential used, no binding of the real team 980, no production GPEXE call; v30 applied to no
-persistent database**). Discovery result: `docs/ai/source-connections-f3c2e-discovery.md` (the v27
+**F3c2e — the verified team binding, the club-admin path and the approved-pair allowlist — is
+merged and deployed** (PR #135, merge commit `440ad83` on 2026-10-04, merged exactly from head `3352ad1` (the full 40-character
+SHAs are in PR #135's merge record; this file keeps the short forms) after the owner's
+external review in three rounds; Render showed the deploy Live for `440ad83` and `/api/health`
+returned `ok: true` with commit `440ad83` three times; without a login every new and existing
+source route — the list, the single GET, create, connect, reconnect, test and the new bindings
+route — and `PUT …/gpexe/teams/:teamId/settings` answered 401 (zero UUIDs, no data). **v30 on the
+deployed database is an indirect conclusion only**, from the server starting after the migration
+step (`npm start` runs `node src/migrate.js &&` the server); the deployed database was not queried
+with SQL. No Connect, no binding, no credential and no GPEXE request were made at the merge or
+the deploy; the local OPTIMOVE database stays v21. **The first real production binding stays
+forbidden until F3c2f (Unbind) is merged, deployed and smoke-checked.** As built (branch
+`feature/gpexe-team-binding-f3c2e` from `cb54b85`, owner order 2026-10-03, its amendment of the
+same day and the allowlist decision of 2026-10-04; backend service, router, adapter, migration
+v30, tests and docs; not run against the real server, no credential used, no binding of the real
+team 980).
+
+Discovery result: `docs/ai/source-connections-f3c2e-discovery.md` (the v27
 binding table's columns, the guards the database already has, the derived lock order, and why the
 first "no v30" conclusion was superseded). As built:
 - **The allowlist (owner decision 2026-10-04, after the security review's HIGH F-1 — a club admin
@@ -703,6 +715,36 @@ first "no v30" conclusion was superseded). As built:
   archive and a held team lock, both COMMIT outcomes, the field allowlists, the secret scan);
   `gpexe-rest-v1-adapter.test.mjs` gained the `listVisibleTeams()` contract; the F3c2d suite was
   adapted (club admin sees the connection; the list is read before the bound teams).
+
+**The active step is F3c2f — a safe Unbind** (branch `feature/gpexe-unbind-f3c2f` from `440ad83`,
+owner order 2026-10-04; backend route, service, tests and docs; **no migration, not merged, no
+F3c3 UI, no importer cut-over, no real connection, binding or Unbind on the deployed database, no
+GPEXE request**). Discovery: `docs/ai/source-connections-f3c2e-discovery.md` section 7 (v27
+already holds the end state with its facts and the immutability rule, the audit action `unbind`
+with a mandatory `team_id` and the `reason` column; no request table fits, so the audit row of the
+successful Unbind is the request record; no v31). As built — contract section 2.7, runbook
+"Ending a binding (Unbind)": `POST …/connections/:id/bindings/:bindingId/unbind` `{ requestKey,
+reason, expected: { teamId, sourceTeamId } }`, the same two authorization bases as F3c2e and the
+same 404 for everyone else; a local operation only (no source request, no exchange, no credential
+change, nothing deleted; the connection need not be `verified`); lock order: per-user lock →
+connection row → the request record (a replay answered before any team lock) → the target team's
+try-lock only (an Unbind changes neither credential nor state, so the credential-attempt rule
+"every bound team" does not apply; a sibling team's import never blocks the remedy) → the binding
+row → checks → rights → UPDATE `active → ended` with when / who / why (`clock_timestamp()`) →
+audit `unbind` → bounded COMMIT; `55P03` / `40P01` → `try_again`; idempotent by
+`requestKey` (the same key replays the saved answer without a second UPDATE or audit row, the same
+key with another body is `request_key_reused`, a new key on an ended binding is
+`binding_already_ended` with the current state, a stale `expected` pair is `binding_mismatch`; the
+key binds to its body only once an Unbind was saved — a refusal is not a request record, the same
+key may repeat a transient or correctable refusal, a fresh key is a new attempt); the
+F2 COMMIT discipline; audit `unbind` with the team, the reason, `counted: false`,
+`source_contacted: false`, `request_id` / `request_hash` (never in the authentication window); a
+refusal is audited once per user / key / refusal, serialized in its own bounded transaction by a
+transaction-scoped advisory lock (owner's external review of PR #136).
+After an Unbind the approved Team ID can change again, the team and the freed source team can be
+bound again under every v30 rule, the ended row stays as history, and the v30 rollback is no longer
+refused by it. Tests: `backend/tests/source-connections-f3c2f.test.mjs` (disposable database, fake
+source that is never called).
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1168,6 +1210,13 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #135 (`440ad83`, merged 2026-10-04 exactly from head `3352ad1` after three external review
+  rounds) is deployed: Render Live for `440ad83` (owner); `/api/health` served `440ad83` with
+  `ok: true` three times; without a login the list, single GET, create, connect, reconnect, test
+  and the new bindings route, and `PUT …/gpexe/teams/:teamId/settings`, answered 401 (zero UUIDs,
+  no data). **v30 on the deployed database is inferred** from the server starting after the
+  migration step — an indirect conclusion, not SQL proof. No connection row, binding or audit row
+  was created: no credential was entered and no GPEXE request was made.
 - PR #134 (`cb54b85`, merged 2026-10-03, head `eb1076c` after three external review rounds) is
   deployed: `/api/health` served `cb54b85` with `ok: true` (owner). **v29 on the deployed database
   is inferred** from the server starting after the migration step; the deployed database was not
@@ -1488,13 +1537,12 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's external review and merge decision on the F3c2e PR (the verified team binding, the
-club-admin path and the team list after Connect / Test; no migration; none of it run against the
-real server, no credential used, no binding of the real team 980); then, on the owner's order,
-F3c2f (the importer's credential resolver and the cut-over from `GPEXE_API_TOKEN` — F3c2 is not
-complete before it), F3c3 (Settings UI: Connect account → Test connection → Choose GPEXE team →
-Choose OptiMove team of the same club → Review → Confirm binding; the coach's "contact an
-administrator" sentence) and F3c4, then **Phase 5a3c** (Complete and Needs review).
+The F3c2f Unbind PR (a safe, local, idempotent way to end an active binding — required before the
+first real production binding), its external review and merge; then, on the owner's order, the
+importer's credential resolver and the cut-over from `GPEXE_API_TOKEN` (F3c2 is not complete
+before it), F3c3 (Settings UI: Connect account → Test connection → Choose GPEXE team → Choose the
+approved OptiMove team → Review → Confirm binding; Unbind; the coach's "contact an administrator"
+sentence) and F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 

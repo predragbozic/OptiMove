@@ -196,8 +196,8 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
     }
     // F3c2e (owner decision 2026-10-04): the settings row is the approved
     // pair a source binding is made of. While the team has an active gpexe
-    // binding the approved GPEXE team cannot change (end the binding first —
-    // not available yet). Checked here under the same team lock the bind
+    // binding the approved GPEXE team cannot change (end the binding first,
+    // through the F3c2f Unbind). Checked here under the same team lock the bind
     // holds; the v30 trigger is the database's own backstop.
     if (current && canonicalGpexeId(current.gpexe_team_id) !== canonicalGpexeId(gpexeTeamId)) {
       const bound = await client.query(`select 1 from training_load.source_team_bindings where team_id = $1 and source_system = 'gpexe' and state = 'active'`, [teamId]);

@@ -1,5 +1,5 @@
-// Source credential connections: Connect, Reconnect, Test (F3c2d) and the
-// verified team binding (F3c2e).
+// Source credential connections: Connect, Reconnect, Test (F3c2d), the
+// verified team binding (F3c2e) and the safe Unbind (F3c2f).
 // Contract: docs/ai/source-connections-f3c2-contract.md section 2 (routes,
 // the eight mandatory conditions, the state transitions) and the owner's
 // order of 2026-10-03. GPEXE / server3 / rest_v1 is the first real profile;
@@ -88,7 +88,12 @@ const UNBOUND_LIST_PLACEHOLDER_TEAM = "0";
 // trigger refuses a secret-named key whatever the value; these are facts.
 // source_team_id is the source's own team number, stored in clear in
 // source_team_bindings (v27); it is a fact, not a secret.
-const AUDIT_METADATA_KEYS = new Set(["host_key", "credential_kind", "status_class", "attempt_no", "bound_team_count", "source_team_count", "counted", "attempt_id", "source_team_id"]);
+// request_id / request_hash (F3c2f): the idempotency identity of an Unbind,
+// stored on its audit row (the audit is the request record: append-only, per
+// connection, team and user); source_contacted: the plain fact that an
+// Unbind never reaches the source. None of these names a secret.
+const AUDIT_METADATA_KEYS = new Set(["host_key", "credential_kind", "status_class", "attempt_no", "bound_team_count", "source_team_count", "counted", "attempt_id", "source_team_id", "request_id", "request_hash", "source_contacted", "binding_id"]);
+export const UNBIND_REASON_MAX_LENGTH = 500;
 // The canonical source team id per source (gpexe: the guard PR's numeric
 // form, the v27 CHECK); any other source: the v27 generic form.
 const SOURCE_TEAM_ID = { gpexe: /^(0|[1-9][0-9]{0,11})$/, default: /^[A-Za-z0-9._:-]{1,64}$/ };
@@ -138,6 +143,21 @@ let bindInsertFault = null;
 // inserts a clashing row from another session there, so the v27 unique
 // indexes (the database's backstop) are really what refuses.
 export function setSourceBindingInsertFaultForTests(fn) { bindInsertFault = fn ?? null; }
+let unbindHold = null;
+// Runs inside an Unbind after every lock and check, right before its UPDATE:
+// a test holds the transaction there to race it against a bind, a Settings
+// change or an import of the same team.
+export function setSourceUnbindHoldForTests(fn) { unbindHold = fn ?? null; }
+let unbindReplayHold = null;
+// Runs inside an Unbind once its own earlier request record was found, right
+// before the replay's right re-check: a test revokes the right there.
+export function setSourceUnbindReplayHoldForTests(fn) { unbindReplayHold = fn ?? null; }
+let auditDedupeHold = null;
+// Runs inside the refusal-audit transaction while its dedupe advisory lock is
+// held, after the check-and-insert and before COMMIT: a test races a second
+// identical refusal against it and proves that exactly one audit row is
+// written (the second waits on the lock and then sees the committed row).
+export function setSourceAuditDedupeHoldForTests(fn) { auditDedupeHold = fn ?? null; }
 // A delay injected before the compensating audit row of an attempt that
 // reached the source and did not commit: tests prove that the row is still
 // visible to the throttle before the next attempt of the same user runs.
@@ -346,6 +366,229 @@ export function testConnection(args) { return attempt({ ...args, action: "test" 
 // F3c2e: bind one OptiMove team of the owning club to one chosen source team,
 // after that team's own read with the stored credential succeeded.
 export function bindTeam(args) { return attempt({ ...args, action: "bind" }); }
+
+// ---------------------------------------------------------------------------
+// F3c2f: Unbind — end an active binding. A LOCAL operation only: no request to
+// the source, no exchange, no credential change, nothing deleted (the binding
+// row becomes `ended` with when / who / why; the settings row and the
+// provenance pointer stay). Idempotent by requestKey: the audit row of the
+// successful Unbind is its request record (append-only, per connection, team
+// and performing user), so the same key answers the same saved facts without
+// a second UPDATE or audit, and the same key with another body is refused.
+// Lock order: the per-user lock → the connection row FOR NO KEY UPDATE → the
+// request record (a replay is answered here, behind the two locks that
+// serialize one user's and one connection's changes, before any team lock, so
+// a retry of a lost answer never meets a busy team) → the TARGET team's
+// import try-lock (an Unbind changes neither the credential nor the
+// connection's state, so the credential-attempt rule "every bound team" does
+// not apply: a Check now or import of a sibling team must not block the
+// remedy; the v27 trigger takes the same try-lock inside the UPDATE) → the
+// binding row FOR UPDATE → the checks → the right and the club re-checked →
+// UPDATE + audit `unbind` in one transaction → the bounded COMMIT. 55P03 and
+// 40P01 are `try_again`; nothing waits without a bound. The connection does
+// not have to be `verified`: a binding can always be ended safely.
+// ---------------------------------------------------------------------------
+export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
+  if (!SOURCE_SYSTEM.test(sourceSystem ?? "") || typeof id !== "string" || !UUID.test(id) || typeof bindingId !== "string" || !UUID.test(bindingId)) return null;
+  const request = readUnbindBody(plainBody(body, ["requestKey", "reason", "expected"]), sourceSystem);
+  const requestHash = crypto.createHash("sha256").update(JSON.stringify({ sourceSystem, id: id.toLowerCase(), bindingId: bindingId.toLowerCase(), reason: request.reason, expected: request.expected })).digest("hex");
+  const attemptId = crypto.randomUUID();
+  const action = "unbind";
+  const client = await pool.connect();
+  const release = guardClient(client);
+  let released = false;
+  let known = null;
+  let recorded = false;
+  try {
+    await client.query("begin");
+    await client.query(`set local statement_timeout = '${statementTimeoutMs}ms'`);
+    await client.query(`set local idle_in_transaction_session_timeout = '${statementTimeoutMs * 3}ms'`);
+    // 1. Identity, unlocked: the connection must be visible to the caller and
+    //    the binding must be that connection's; anything else is the same 404.
+    const pre = (await client.query(
+      `select c.id, c.host_key, c.credential_kind, c.owner_club_id, cl.is_active as club_active, b.team_id
+         from training_load.source_credential_connections c
+         join public.clubs cl on cl.id = c.owner_club_id
+         join training_load.source_team_bindings b on b.connection_id = c.id
+        where c.id = $1 and c.source_system = $2 and c.owner_scope = 'club' and b.id = $3`,
+      [id, sourceSystem, bindingId],
+    )).rows[0];
+    if (!pre || pre.club_active === false || !clubVisible(ctx, pre.owner_club_id)) { await client.query("rollback"); released = true; release(); return null; }
+    known = { connectionId: pre.id, hostKey: pre.host_key, credentialKind: pre.credential_kind, teamId: pre.team_id, sourceTeamId: null };
+    // 2. The per-user lock (one change of this user at a time, bounded).
+    await client.query(`set local lock_timeout = '${userLockWaitMs}ms'`);
+    await client.query(`set local statement_timeout = '${userLockWaitMs + 2_000}ms'`);
+    try {
+      await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 21))`, [`source-auth-throttle:${ctx.userId}`]);
+    } catch (error) {
+      if (error.code === "55P03" || error.code === "57014") throw refusal(409, "try_again", "Another connect, reconnect, test, bind or unbind of yours is still running. Try again when it has finished.", { connectionId: id });
+      throw error;
+    }
+    await client.query(`set local statement_timeout = '${statementTimeoutMs}ms'`);
+    await client.query(`set local lock_timeout = '${ROW_LOCK_TIMEOUT_MS}ms'`);
+    // 3. The connection row.
+    let row;
+    try {
+      row = (await client.query(
+        `select c.id, c.source_system, c.host_key, c.credential_kind, c.owner_club_id, cl.is_active as club_active
+           from training_load.source_credential_connections c join public.clubs cl on cl.id = c.owner_club_id
+          where c.id = $1 and c.source_system = $2 and c.owner_scope = 'club' for no key update of c`,
+        [id, sourceSystem],
+      )).rows[0];
+    } catch (error) {
+      if (error.code === "55P03") throw refusal(409, "try_again", "Another change of this connection is running. Try again when it has finished.", { connectionId: id });
+      throw error;
+    }
+    if (!row || row.club_active === false || !clubVisible(ctx, row.owner_club_id)) { await client.query("rollback"); released = true; release(); return null; }
+    // 4. The request record, behind the per-user lock and the connection row
+    //    only: the same key of this user on this connection is the same saved
+    //    answer (a retry after a lost answer never meets a busy team); the
+    //    same key with another body — another binding, reason or pair — is
+    //    refused. The record is the append-only audit row of the successful
+    //    Unbind, which names the binding it ended. A refusal is NOT a request
+    //    record: the same key may repeat a transient or correctable refusal
+    //    (try_again, binding_mismatch, …) and a fresh key is always a new
+    //    attempt; the key binds to its body only once an Unbind was saved.
+    //    The refusal audit's dedupe (the catch block below) only keeps the
+    //    same user / key / refusal from adding a second audit row.
+    const earlier = (await client.query(
+      `select a.id, a.metadata, b.id as binding_id, b.team_id, b.source_team_id, b.state, b.bound_at, b.ended_at, b.ended_by_user_id, b.end_reason, t.name as team_name
+         from training_load.source_connection_audit a
+         join training_load.source_team_bindings b on b.id = (a.metadata->>'binding_id')::uuid
+         join public.teams t on t.id = b.team_id
+        where a.connection_id = $1 and a.action = 'unbind' and a.outcome = 'ok' and a.performed_by_user_id = $2 and a.metadata->>'request_id' = $3
+        order by a.performed_at, a.id limit 1`,
+      [row.id, ctx.userId, request.requestKey],
+    )).rows[0];
+    if (earlier) {
+      if (earlier.metadata.request_hash !== requestHash || String(earlier.binding_id) !== bindingId.toLowerCase()) {
+        throw refusal(409, "request_key_reused", "This requestKey was already used for a different Unbind request; use a new key.", { current: { bindingId: earlier.binding_id, teamId: earlier.team_id, sourceTeamId: earlier.source_team_id, state: earlier.state, endedAt: earlier.ended_at } });
+      }
+      // A replay is a read of the caller's own earlier result; the right is
+      // still re-checked, so the retry rule has no exception.
+      if (unbindReplayHold) await unbindReplayHold(client);
+      if (!(await rightsStillHold(client, ctx, row.owner_club_id))) throw refusal(409, "rights_changed", "The right to manage this connection changed; nothing was changed.");
+      await client.query("rollback"); released = true; release();
+      return unbindResult(row.id, { id: earlier.binding_id, team_id: earlier.team_id, team_name: earlier.team_name, source_team_id: earlier.source_team_id, state: earlier.state, bound_at: earlier.bound_at, ended_at: earlier.ended_at, ended_by_user_id: earlier.ended_by_user_id, end_reason: earlier.end_reason }, earlier.id, true, null);
+    }
+    // 5. The target team's import try-lock (a Check now, an import, a Settings
+    //    change, a bind, a team move and the binding trigger itself take the
+    //    same lock); the other bound teams are not touched by an Unbind.
+    const bindings = await bindingsOf(client, row.id);
+    try {
+      await client.query(`select training_load.hold_gpexe_team_lock($1, 'unbind')`, [pre.team_id]);
+    } catch (error) {
+      if (error.code === "P0001") throw refusal(409, "try_again", "A GPEXE check, import, settings change or binding change is running for this team. Try again when it has finished.", { teamId: pre.team_id });
+      throw error;
+    }
+    // 6. The binding row itself.
+    let binding;
+    try {
+      binding = (await client.query(
+        `select b.id, b.team_id, b.source_team_id, b.state, b.bound_at, b.ended_at, b.ended_by_user_id, b.end_reason, t.name as team_name
+           from training_load.source_team_bindings b join public.teams t on t.id = b.team_id
+          where b.id = $1 and b.connection_id = $2 for update of b`,
+        [bindingId, row.id],
+      )).rows[0];
+    } catch (error) {
+      if (error.code === "55P03") throw refusal(409, "try_again", "Another change of this binding is running. Try again when it has finished.", { connectionId: id });
+      throw error;
+    }
+    if (!binding) { await client.query("rollback"); released = true; release(); return null; }
+    known.sourceTeamId = binding.source_team_id;
+    const current = { bindingId: binding.id, teamId: binding.team_id, sourceTeamId: binding.source_team_id, state: binding.state, endedAt: binding.ended_at };
+    // 7. The checks against the row as it is under the lock.
+    if (binding.state !== "active") throw refusal(409, "binding_already_ended", "This binding was already ended; nothing was changed.", { current });
+    if (String(request.expected.teamId) !== String(binding.team_id) || request.expected.sourceTeamId !== binding.source_team_id) {
+      throw refusal(409, "binding_mismatch", "The binding is not the one named in the request; nothing was changed. Read the current binding and try again.", { current });
+    }
+    // (test seam: hold the transaction here, with every lock taken and before
+    // the final checks, to race it against other operations)
+    if (unbindHold) await unbindHold(client);
+    // 8. The right and the club, again, right before the write.
+    if (!(await rightsStillHold(client, ctx, row.owner_club_id))) throw refusal(409, "rights_changed", "The right to manage this connection changed; nothing was changed.");
+    // 9. The end of the binding (the v27 immutability trigger allows exactly
+    //    this change and re-takes the team's try-lock this transaction holds).
+    const ended = (await client.query(
+      `update training_load.source_team_bindings
+          set state = 'ended', ended_at = coalesce($2::timestamptz, clock_timestamp()), ended_by_user_id = $3::uuid, end_reason = $4::text
+        where id = $1::uuid and state = 'active'
+        returning ended_at`,
+      [binding.id, testClock(), ctx.userId, request.reason],
+    )).rows[0];
+    if (!ended) throw refusal(409, "binding_already_ended", "This binding was already ended; nothing was changed.", { current });
+    // 10. The audit row, in the same transaction: the request record and the
+    //     plain facts (the source was not contacted; nothing counts in the
+    //     authentication window).
+    const auditId = await insertAudit(client, {
+      connectionId: row.id, teamId: binding.team_id, action, outcome: "ok", userId: ctx.userId, basis: ctx.basis, reason: request.reason,
+      metadata: { host_key: row.host_key, credential_kind: row.credential_kind, source_team_id: binding.source_team_id, binding_id: binding.id, bound_team_count: Math.max(0, bindings.length - 1), counted: false, source_contacted: false, attempt_id: attemptId, request_id: request.requestKey, request_hash: requestHash },
+    });
+    recorded = true;
+    released = true;
+    const confirmation = await commitAttempt(client, release, auditId, row.id, attemptId, binding.team_id);
+    return unbindResult(row.id, { ...binding, state: "ended", ended_at: ended.ended_at, ended_by_user_id: ctx.userId, end_reason: request.reason }, auditId, false, confirmation);
+  } catch (error) {
+    if (error?.code === "55P03" || error?.code === "40P01") error = refusal(409, "try_again", "Another change of this connection, its club or a team is running. Try again when it has finished.", { connectionId: id });
+    if (!released) {
+      let dead = false;
+      await withinBound(client.query("rollback"), 5_000).catch(() => { dead = true; });
+      released = true;
+      release(dead);
+    }
+    if (error instanceof SourceConnectionError) {
+      const alreadyRecorded = recorded || error.code === "outcome_unknown";
+      if (known && !alreadyRecorded && error.status !== 404) {
+        // A refusal is audited once per request: the same user repeating the
+        // same requestKey into the same refusal adds no row (the audit is
+        // append-only and must not grow without bound from retries). The
+        // check and the insert are one bounded statement.
+        await auditRefusal({ connectionId: known.connectionId, teamId: known.teamId, action, errorCode: error.code, ctx, onceForRequestId: request.requestKey, metadata: { host_key: known.hostKey, credential_kind: known.credentialKind, counted: false, source_contacted: false, attempt_id: attemptId, request_id: request.requestKey, binding_id: bindingId.toLowerCase(), ...(known.sourceTeamId ? { source_team_id: known.sourceTeamId } : {}) } });
+      }
+      throw error;
+    }
+    throw internal(action, error);
+  } finally {
+    if (!released) release();
+  }
+}
+
+function unbindResult(connectionId, binding, auditId, replayed, commitConfirmation) {
+  return {
+    connectionId, action: "unbind", outcome: "ok", replayed,
+    binding: { bindingId: binding.id, teamId: binding.team_id, teamName: binding.team_name ?? null, sourceTeamId: binding.source_team_id, state: binding.state, boundAt: binding.bound_at, endedAt: binding.ended_at, endedByUserId: binding.ended_by_user_id, endReason: binding.end_reason },
+    auditId, sourceContacted: false,
+    ...(commitConfirmation ? { commitConfirmation } : {}),
+  };
+}
+
+// A reason is visible text: no control or format character (that includes
+// bidi controls, zero-width characters and the Unicode line separators), at
+// least one letter, digit or punctuation mark, at most 500 characters.
+// (the Hangul fillers U+115F, U+1160, U+3164, U+FFA0 are letters by category
+// but render blank, so they count as invisible here too)
+const INVISIBLE = /[\p{Cc}\p{Cf}\u2028\u2029\u115F\u1160\u3164\uFFA0]/u;
+const VISIBLE_MARK = /[\p{L}\p{N}\p{P}]/u;
+function isVisibleReason(text) {
+  return text.length >= 1 && text.length <= UNBIND_REASON_MAX_LENGTH && !INVISIBLE.test(text) && VISIBLE_MARK.test(text);
+}
+
+// The Unbind body: the idempotency key, the mandatory reason and the pair the
+// administrator saw (the concurrency check the schema can answer: a binding
+// never changes except to end, so "the same pair, still active" is the whole
+// precondition). Nothing else.
+function readUnbindBody(body, sourceSystem) {
+  const { requestKey, reason, expected } = body;
+  if (typeof requestKey !== "string" || !UUID.test(requestKey)) throw refusal(400, "invalid_body", "requestKey must be a UUID chosen by the client for this one Unbind.");
+  if (typeof reason !== "string" || !isVisibleReason(reason.trim())) throw refusal(400, "invalid_body", `reason is one line of visible text, at most ${UNBIND_REASON_MAX_LENGTH} characters, and is required.`);
+  if (expected === null || typeof expected !== "object" || Array.isArray(expected)) throw refusal(400, "invalid_body", "expected must name the binding's teamId and sourceTeamId.");
+  for (const key of Object.keys(expected)) if (!["teamId", "sourceTeamId"].includes(key)) throw refusal(400, "invalid_body", "expected carries a field it does not take.");
+  const pattern = Object.hasOwn(SOURCE_TEAM_ID, sourceSystem) ? SOURCE_TEAM_ID[sourceSystem] : SOURCE_TEAM_ID.default;
+  if (typeof expected.teamId !== "string" || !UUID.test(expected.teamId) || typeof expected.sourceTeamId !== "string" || !pattern.test(expected.sourceTeamId)) {
+    throw refusal(400, "invalid_body", "expected must name the binding's teamId and sourceTeamId.");
+  }
+  return { requestKey: requestKey.toLowerCase(), reason: reason.trim(), expected: { teamId: expected.teamId.toLowerCase(), sourceTeamId: expected.sourceTeamId } };
+}
 
 function plainBody(body, allowed) {
   if (body === null || typeof body !== "object" || Array.isArray(body)) throw refusal(400, "invalid_body", "A JSON object body is required.");
@@ -1092,20 +1335,41 @@ export function auditMetadata(metadata) {
   return out;
 }
 
-async function insertAudit(executor, { connectionId, action, outcome, errorCode = null, userId, basis, metadata = {}, teamId = null }) {
+async function insertAudit(executor, { connectionId, action, outcome, errorCode = null, userId, basis, metadata = {}, teamId = null, reason = null }) {
   return (await executor.query(
-    `insert into training_load.source_connection_audit (connection_id, team_id, action, outcome, error_code, performed_by_user_id, basis, metadata)
-     values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb) returning id`,
-    [connectionId, teamId, action, outcome, errorCode, userId, basis, JSON.stringify(auditMetadata(metadata))],
+    `insert into training_load.source_connection_audit (connection_id, team_id, action, outcome, error_code, performed_by_user_id, basis, metadata, reason)
+     values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9) returning id`,
+    [connectionId, teamId, action, outcome, errorCode, userId, basis, JSON.stringify(auditMetadata(metadata)), reason],
   )).rows[0].id;
 }
 
-async function auditRefusal({ connectionId, action, errorCode, ctx, metadata, outcome = "refused", teamId = null }) {
+async function auditRefusal({ connectionId, action, errorCode, ctx, metadata, outcome = "refused", teamId = null, onceForRequestId = null }) {
   try {
+    // With onceForRequestId the row is written only when this user has no
+    // row of the same action, outcome, code and request id on this
+    // connection and team yet. The check-and-insert alone is not atomic
+    // (no unique index on an append-only table, and the attempt's own locks
+    // are already released here), so boundedAuditInsert first takes a
+    // transaction-scoped advisory lock on exactly that identity, bounded by
+    // lock_timeout, and runs the check-and-insert as the NEXT statement, so
+    // its snapshot is taken after the wait. Two identical refusals in flight
+    // therefore write one row; the second sees it.
+    const dedupeKey = onceForRequestId === null ? null
+      : [connectionId, ctx.userId, action, outcome, errorCode ?? "", teamId ?? "null", onceForRequestId].join("|");
     await boundedAuditInsert(
-      `insert into training_load.source_connection_audit (connection_id, team_id, action, outcome, error_code, performed_by_user_id, basis, metadata)
-       values ($1, $8, $2, $7, $3, $4, $5, $6::jsonb)`,
-      [connectionId, action, errorCode, ctx.userId, ctx.basis, JSON.stringify(auditMetadata(metadata)), outcome, teamId],
+      onceForRequestId === null
+        ? `insert into training_load.source_connection_audit (connection_id, team_id, action, outcome, error_code, performed_by_user_id, basis, metadata)
+           values ($1, $8, $2, $7, $3, $4, $5, $6::jsonb)`
+        : `insert into training_load.source_connection_audit (connection_id, team_id, action, outcome, error_code, performed_by_user_id, basis, metadata)
+           select $1::uuid, $8::uuid, $2::text, $7::text, $3::text, $4::uuid, $5::text, $6::jsonb
+            where not exists (
+              select 1 from training_load.source_connection_audit
+               where connection_id = $1::uuid and team_id is not distinct from $8::uuid and action = $2::text and outcome = $7::text
+                 and error_code is not distinct from $3::text and performed_by_user_id = $4::uuid and metadata->>'request_id' = $9::text)`,
+      onceForRequestId === null
+        ? [connectionId, action, errorCode, ctx.userId, ctx.basis, JSON.stringify(auditMetadata(metadata)), outcome, teamId]
+        : [connectionId, action, errorCode, ctx.userId, ctx.basis, JSON.stringify(auditMetadata(metadata)), outcome, teamId, onceForRequestId],
+      dedupeKey,
     );
   } catch (error) {
     console.error(`[source-connections] the refusal ${errorCode} of ${action} could not be audited: ${error?.code ?? ""}`);
@@ -1118,18 +1382,51 @@ async function auditRefusal({ connectionId, action, errorCode, ctx, metadata, ou
 // archive must not hold this request for the length of that transaction —
 // the wait is bounded like every other row wait here, then the row is
 // dropped and logged by code only.
-async function boundedAuditInsert(sql, params) {
+//
+// With a dedupeKey the insert is a deduplicated one (an Unbind refusal): the
+// transaction first takes pg_advisory_xact_lock on that identity — a
+// transaction-scoped lock, never a session lock that could stay on a pooled
+// connection — under the same lock_timeout (lock_timeout bounds advisory
+// waits too: 55P03 after ROW_LOCK_TIMEOUT_MS), then runs the caller's
+// check-and-insert as a separate statement so its snapshot is taken after the
+// wait, then commits within the COMMIT bound. Identical refusals are thereby
+// serialized: the second one's NOT EXISTS sees the first one's row.
+async function boundedAuditInsert(sql, params, dedupeKey = null) {
   const client = await pool.connect();
   const release = guardClient(client);
   let dead = false;
+  let commitSent = false;
   try {
-    await client.query("begin");
+    // READ COMMITTED is pinned: the dedupe relies on the next statement
+    // taking its snapshot after the lock wait, which a stricter default
+    // isolation level would silently break.
+    await client.query("begin isolation level read committed");
     await client.query(`set local lock_timeout = '${ROW_LOCK_TIMEOUT_MS}ms'`);
     await client.query(`set local statement_timeout = '${statementTimeoutMs}ms'`);
+    await client.query(`set local idle_in_transaction_session_timeout = '${statementTimeoutMs}ms'`);
+    if (dedupeKey !== null) {
+      await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 21))`, [`source-audit-dedupe:${dedupeKey}`]);
+    }
     await client.query(sql, params);
-    await client.query("commit");
+    // The test hold sits in the window the lock protects: this transaction's
+    // row is written but not committed, so without the lock an identical
+    // refusal's NOT EXISTS could not see it and would write a second row.
+    if (dedupeKey !== null && auditDedupeHold) await auditDedupeHold(client);
+    commitSent = true;
+    const commit = client.query("commit");
+    commit.catch(() => {});
+    await withinBound(commit, commitTimeoutMs);
   } catch (error) {
-    await client.query("rollback").catch(() => { dead = true; });
+    // Once COMMIT was sent, nothing more is awaited on this client: a
+    // ROLLBACK would queue behind the unanswered COMMIT without a bound, so
+    // the client is destroyed instead (the server ends the transaction with
+    // the connection). Before that, the ROLLBACK itself is bounded.
+    dead = true;
+    if (!commitSent) {
+      const rollback = client.query("rollback");
+      rollback.catch(() => {});
+      await withinBound(rollback, 5_000).then(() => { dead = false; }, () => {});
+    }
     throw error;
   } finally {
     release(dead);
