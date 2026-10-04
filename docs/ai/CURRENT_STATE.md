@@ -734,9 +734,13 @@ row → checks → rights → UPDATE `active → ended` with when / who / why (`
 audit `unbind` → bounded COMMIT; `55P03` / `40P01` → `try_again`; idempotent by
 `requestKey` (the same key replays the saved answer without a second UPDATE or audit row, the same
 key with another body is `request_key_reused`, a new key on an ended binding is
-`binding_already_ended` with the current state, a stale `expected` pair is `binding_mismatch`); the
+`binding_already_ended` with the current state, a stale `expected` pair is `binding_mismatch`; the
+key binds to its body only once an Unbind was saved — a refusal is not a request record, the same
+key may repeat a transient or correctable refusal, a fresh key is a new attempt); the
 F2 COMMIT discipline; audit `unbind` with the team, the reason, `counted: false`,
-`source_contacted: false`, `request_id` / `request_hash` (never in the authentication window).
+`source_contacted: false`, `request_id` / `request_hash` (never in the authentication window); a
+refusal is audited once per user / key / refusal, serialized in its own bounded transaction by a
+transaction-scoped advisory lock (owner's external review of PR #136).
 After an Unbind the approved Team ID can change again, the team and the freed source team can be
 bound again under every v30 rule, the ended row stays as history, and the v30 rollback is no longer
 refused by it. Tests: `backend/tests/source-connections-f3c2f.test.mjs` (disposable database, fake

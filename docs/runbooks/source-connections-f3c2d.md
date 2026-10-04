@@ -260,9 +260,15 @@ v27 trigger allows exactly this change) → the audit row `unbind` (the team, th
 `counted: false`, `source_contacted: false`, `request_id`, `request_hash`) → the bounded COMMIT
 (`commitConfirmation: verified_after_commit_error` when the answer was lost; `503 outcome_unknown`
 naming the team when it cannot be verified — then a second `unknown` audit row, and the retry with
-the same key replays once the row is ended). `55P03` and `40P01` are `try_again`. A refusal is
+the same key replays once the row is ended). `55P03` and `40P01` are `try_again`. **What
+`requestKey` means:** it binds to its body permanently only once an Unbind was saved — the same key
+and body then replay the saved success, the same key with another body or binding is
+`request_key_reused`. A refusal is not a request record: the same key may repeat a transient or
+correctable refusal and succeed later. A refusal is
 audited once per request (the same user repeating the same `requestKey` into the same refusal adds
-no row; a fresh key per request still adds one row each — a known, authenticated-only growth; the
+no row — serialized in its own bounded transaction by a transaction-scoped advisory lock on that
+identity, so two identical refusals in flight write one row; a fresh key per request still adds
+one row each — a new attempt, a known, authenticated-only growth; the
 audit row links to its binding by `binding_id`, not by equal timestamps: `ended_at` is the real
 moment, the audit's `performed_at` the transaction's start). An Unbind shares the per-user lock and the connection row with Connect / Reconnect / Test
 / bind: while one of those runs for the same connection (up to its network budget), the Unbind

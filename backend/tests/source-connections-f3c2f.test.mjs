@@ -68,6 +68,7 @@ after(async () => {
   service?.setSourceConnectionClockForTests(null);
   service?.setSourceUnbindHoldForTests(null);
   service?.setSourceUnbindReplayHoldForTests(null);
+  service?.setSourceAuditDedupeHoldForTests(null);
   if (server) { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
   if (appPool) await appPool.end();
   if (admin) await admin.end();
@@ -132,6 +133,7 @@ async function approvePair(teamId, gpexeTeamId, userId) {
 afterEach(async () => {
   service.setSourceUnbindHoldForTests(null);
   service.setSourceUnbindReplayHoldForTests(null);
+  service.setSourceAuditDedupeHoldForTests(null);
   for (const teamId of approvedTeams.splice(0)) {
     await q(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = bound_by_user_id, end_reason = 'test cleanup' where team_id = $1 and state = 'active'`, [teamId]);
     releaseCounter += 1;
@@ -625,6 +627,139 @@ test("10. the right and the club are re-checked right before the write: a club a
     const again = await unbindApi(conn.id, binding.bindingId, ca.cookie, unbindBody(binding, { requestKey: rows.find((a) => a.outcome === "ok" && a.metadata.binding_id === binding.bindingId).metadata.request_id }));
     assert.deepEqual([again.status, again.body.result?.replayed], [200, true], "with the right back the same key replays");
   }
+});
+
+test("11. the refusal-audit dedupe is serialized: two parallel identical refused Unbinds (same user, connection, binding, requestKey, body, refusal) write exactly one refusal audit row — the first is held after taking the dedupe advisory lock, the second waits on that lock within the bound, both answer the same refusal, and no transaction, advisory lock or pooled client is left behind", async () => {
+  const { club, team } = await org();
+  const ca = await clubAdmin(club);
+  const { conn, binding } = await bound(ca, club, team);
+  assert.equal((await unbindApi(conn.id, binding.bindingId, ca.cookie, unbindBody(binding))).status, 200);
+  const body = unbindBody(binding); // a fresh key: a stable refusal (binding_already_ended) for both
+  const g = gate();
+  let held = false;
+  service.setSourceAuditDedupeHoldForTests(async () => { held = true; await g.p; });
+  const before = (await auditOf(conn.id)).length;
+  const logBefore = logLines.length;
+  let firstDone = false;
+  let secondDone = false;
+  // Only this database's advisory locks (other suites run in parallel against other disposable databases), and only the
+  // dedupe lock of exactly this identity: the same bigint key the service derives.
+  // (a 64-bit advisory key shows in pg_locks as classid = its high 32 bits, objid = its low 32 bits, objsubid = 1)
+  const h = `hashtextextended('source-audit-dedupe:' || $1::text, 21)`;
+  const identity = [conn.id, ca.id, "unbind", "refused", "binding_already_ended", team, body.requestKey].join("|");
+  const lockRows = async (granted) => (await q(`select count(*)::int as n from pg_locks where locktype = 'advisory' and database = (select oid from pg_database where datname = current_database()) and granted = $2 and objsubid = 1 and classid = ((${h} >> 32) & 4294967295)::oid and objid = (${h} & 4294967295)::oid`, [identity, granted]))[0].n;
+  const waiting = () => lockRows(false);
+  let first; let second; let sawWait = false; let firstDoneWhileHeld = null; let rowsWhileHeld = null; let secondStarted = null; let releasedAt = null; let heldLock = null; const started = Date.now();
+  try {
+    first = unbindApi(conn.id, binding.bindingId, ca.cookie, body).then((r) => { firstDone = true; return r; });
+    await waitFor(() => held);
+    service.setSourceAuditDedupeHoldForTests(null); // the second is not held — it waits on the lock itself
+    secondStarted = Date.now();
+    second = unbindApi(conn.id, binding.bindingId, ca.cookie, body).then((r) => { secondDone = true; return r; });
+    // Wait until the second either waits on the dedupe lock (the serialized case) or finished without waiting (a broken dedupe).
+    while (!secondDone && !sawWait && Date.now() - started < 3_000) {
+      sawWait = (await waiting()) === 1;
+      if (!sawWait) await new Promise((r) => setTimeout(r, 25));
+    }
+    firstDoneWhileHeld = firstDone;
+    rowsWhileHeld = (await auditOf(conn.id)).length;
+    heldLock = await lockRows(true);
+  } finally {
+    releasedAt = Date.now();
+    g.release();
+  }
+  const [r1, r2] = await Promise.all([first, second]);
+  assert.deepEqual([r1.status, r1.body.error, r2.status, r2.body.error], [409, "binding_already_ended", 409, "binding_already_ended"]);
+  const rows = (await auditOf(conn.id)).filter((a) => a.action === "unbind" && a.outcome === "refused" && a.error_code === "binding_already_ended" && a.performed_by_user_id === ca.id && a.metadata.request_id === body.requestKey);
+  assert.equal(rows.length, 1, `exactly one refusal row for this user / key / refusal (found ${rows.length})`);
+  assert.equal(rows[0].team_id, team);
+  assert.equal(logLines.slice(logBefore).filter((l) => l.includes("could not be audited")).length, 0, "neither refusal lost its audit (the second waited, it did not time out)");
+  assert.equal(heldLock, 1, "the first held the dedupe lock of exactly this identity");
+  assert.equal(sawWait, true, "the second refusal waited on the dedupe advisory lock");
+  assert.equal(firstDoneWhileHeld, false, "the first request was still held inside its dedupe transaction");
+  assert.equal(rowsWhileHeld, before, "nothing was written while the first was held");
+  assert.ok(releasedAt - secondStarted < service.ROW_LOCK_TIMEOUT_MS, "the second waited inside the lock bound, not until lock_timeout");
+  assert.equal(await lockRows(true) + await lockRows(false), 0, "no dedupe advisory lock left behind");
+  assert.equal((await q(`select count(*)::int as n from pg_stat_activity where datname = current_database() and state like 'idle in transaction%'`))[0].n, 0, "no transaction left open");
+  await waitFor(() => appPool.totalCount === appPool.idleCount && appPool.waitingCount === 0);
+  // Not a request record: the same key repeats the same refusal (no second row), and a fresh key is a new attempt (one more row).
+  assert.equal((await unbindApi(conn.id, binding.bindingId, ca.cookie, body)).body.error, "binding_already_ended");
+  assert.equal((await auditOf(conn.id)).length, before + 1);
+  assert.equal((await unbindApi(conn.id, binding.bindingId, ca.cookie, unbindBody(binding))).body.error, "binding_already_ended");
+  assert.equal((await auditOf(conn.id)).length, before + 2);
+});
+
+test("12. the dedupe wait is bounded and a failed secondary audit never changes the answer: a second identical refusal that cannot get the dedupe lock within lock_timeout still answers the same 409 and only the first writes its row; an audit transaction that fails after its insert is rolled back, leaves no row, no lock and no open transaction, and the answer is unchanged with a code-only console line", async () => {
+  const { club, team } = await org();
+  const ca = await clubAdmin(club);
+  const { conn, binding } = await bound(ca, club, team);
+  assert.equal((await unbindApi(conn.id, binding.bindingId, ca.cookie, unbindBody(binding))).status, 200);
+  const before = (await auditOf(conn.id)).length;
+  // (a) the wait is bounded: the first is held past lock_timeout, the second times out (55P03, dropped and logged by code only).
+  const body = unbindBody(binding);
+  const g = gate();
+  let held = false;
+  service.setSourceAuditDedupeHoldForTests(async () => { held = true; await g.p; });
+  let first;
+  try {
+    first = unbindApi(conn.id, binding.bindingId, ca.cookie, body);
+    await waitFor(() => held);
+    service.setSourceAuditDedupeHoldForTests(null);
+    const logA = logLines.length;
+    const t0 = Date.now();
+    const second = await unbindApi(conn.id, binding.bindingId, ca.cookie, body);
+    const took = Date.now() - t0;
+    assert.deepEqual([second.status, second.body.error], [409, "binding_already_ended"], JSON.stringify(second.body));
+    assert.ok(took >= service.ROW_LOCK_TIMEOUT_MS - 100 && took < service.ROW_LOCK_TIMEOUT_MS + 3_000, `the second waited only until lock_timeout (${took} ms)`);
+    assert.equal((await auditOf(conn.id)).length, before, "the second wrote nothing while the first is still held");
+    assert.ok(logLines.slice(logA).some((l) => l.includes("could not be audited: 55P03")), "the dropped audit is logged by code only");
+  } finally {
+    g.release();
+  }
+  assert.deepEqual([(await first).status, (await first).body.error], [409, "binding_already_ended"]);
+  assert.equal((await auditOf(conn.id)).length, before + 1, "exactly the first's row");
+  // (b) a failure inside the audit transaction after its insert: rolled back, no row, the answer unchanged.
+  const body2 = unbindBody(binding);
+  service.setSourceAuditDedupeHoldForTests(async () => { throw new Error("injected audit fault"); });
+  const r = await unbindApi(conn.id, binding.bindingId, ca.cookie, body2);
+  service.setSourceAuditDedupeHoldForTests(null);
+  assert.deepEqual([r.status, r.body.error], [409, "binding_already_ended"], JSON.stringify(r.body));
+  assert.equal((await auditOf(conn.id)).length, before + 1, "the failed audit left no row");
+  assert.ok(!logLines.some((l) => l.includes("injected audit fault")), "the failure is logged by code only, never by message");
+  assert.equal((await q(`select count(*)::int as n from pg_locks where locktype = 'advisory' and database = (select oid from pg_database where datname = current_database())`))[0].n, 0, "no advisory lock left behind");
+  assert.equal((await q(`select count(*)::int as n from pg_stat_activity where datname = current_database() and state like 'idle in transaction%'`))[0].n, 0, "no transaction left open");
+  await waitFor(() => appPool.totalCount === appPool.idleCount && appPool.waitingCount === 0);
+  // A later identical refusal with that key is audited normally (nothing of the failed attempt lingers).
+  assert.equal((await unbindApi(conn.id, binding.bindingId, ca.cookie, body2)).body.error, "binding_already_ended");
+  assert.equal((await auditOf(conn.id)).length, before + 2);
+  // (c) an audit COMMIT whose answer never comes: the Unbind answer is not held, the pooled client is destroyed (no
+  // ROLLBACK is queued behind the unanswered COMMIT), and the server ends the abandoned transaction with the socket.
+  service.setSourceConnectionCommitForTests({ timeoutMs: 150 });
+  service.setSourceAuditDedupeHoldForTests(async (client) => {
+    const original = client.query.bind(client);
+    client.query = (text, ...rest) => (typeof text === "string" && /^(commit|rollback)$/i.test(text.trim()) ? new Promise(() => {}) : original(text, ...rest));
+  });
+  const t1 = Date.now();
+  let hung;
+  let r3;
+  try {
+    r3 = await Promise.race([
+      unbindApi(conn.id, binding.bindingId, ca.cookie, unbindBody(binding)),
+      new Promise((resolve) => { hung = setTimeout(() => resolve({ status: 0, body: { error: "hung" } }), 7_000); }),
+    ]);
+  } finally {
+    clearTimeout(hung);
+    service.setSourceAuditDedupeHoldForTests(null);
+    service.setSourceConnectionCommitForTests();
+  }
+  assert.deepEqual([r3.status, r3.body.error], [409, "binding_already_ended"], `the answer is not held by the audit COMMIT (${Date.now() - t1} ms)`);
+  assert.ok(Date.now() - t1 < 5_000, "answered within the COMMIT bound, not a ROLLBACK or TCP wait");
+  await waitFor(() => appPool.totalCount === appPool.idleCount && appPool.waitingCount === 0);
+  for (let i = 0; i < 80 && (await q(`select count(*)::int as n from pg_stat_activity where datname = current_database() and state like 'idle in transaction%'`))[0].n !== 0; i += 1) await new Promise((r) => setTimeout(r, 50));
+  assert.equal((await q(`select count(*)::int as n from pg_stat_activity where datname = current_database() and state like 'idle in transaction%'`))[0].n, 0, "the abandoned audit transaction ended with its connection");
+  assert.equal((await q(`select count(*)::int as n from pg_locks where locktype = 'advisory' and database = (select oid from pg_database where datname = current_database())`))[0].n, 0, "no advisory lock left behind");
+  assert.equal((await unbindApi(conn.id, binding.bindingId, ca.cookie, unbindBody(binding))).body.error, "binding_already_ended", "the next refusal is served and audited normally");
+  assert.equal((await auditOf(conn.id)).length, before + 3);
 });
 
 test("9. this suite runs on a disposable database only, left no active binding, and no console line carries a secret, a source sentence or a source team name", async () => {

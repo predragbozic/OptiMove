@@ -890,11 +890,21 @@ Discovery: `docs/ai/source-connections-f3c2e-discovery.md` section 7. No migrati
   `commitConfirmation: verified_after_commit_error`; an unverifiable COMMIT → `503 outcome_unknown`
   naming the team, a second `unknown` audit row with the team, and the retry with the same key
   replays. Another user's identical key is another request (the record is per user).
+- **What `requestKey` means:** the key becomes permanently bound to its body once an Unbind was
+  saved: the same key with the same body then replays the saved success; the same key with
+  another body or binding after a saved success is `409 request_key_reused`. A refusal audit row
+  is NOT a request record: the same key may repeat a transient or correctable refusal
+  (`try_again`, `binding_mismatch`, `rights_changed`, …) and, once the cause is gone, succeed; the
+  refusal dedupe only prevents a duplicate audit row for the same user / key / refusal; a fresh
+  `requestKey` is a new attempt and may add a new refusal row.
 - **Audit:** one row `unbind` per attempt that reached the checks: `team_id`, basis, the `reason`
   column, metadata `host_key`, `credential_kind`, `source_team_id`, `binding_id`,
   `bound_team_count` (after), `counted: false`, `source_contacted: false`, `attempt_id`,
   `request_id`, `request_hash`; refusals `refused` with their code (uncounted; the same user
-  repeating the same `requestKey` into the same refusal adds no row); a `404` is not audited. A
+  repeating the same `requestKey` into the same refusal adds no row — the dedupe runs in its own
+  bounded transaction under a transaction-scoped advisory lock on the identity connection / user /
+  action / outcome / code / team / `requestKey`, so two identical refusals in flight write one
+  row); a `404` is not audited. A
   binding of an archived club cannot be ended through the route (the same 404 as every other
   read of an archived club): restore the club first. Nothing of an Unbind enters the
   5 / 15 min authentication window.
