@@ -437,7 +437,7 @@ test("6. a club admin's whole flow: Connect answers the teams the credential see
   assert.deepEqual([audit[0].outcome, audit[0].error_code, audit[0].team_id, audit[0].basis, audit[0].performed_by_user_id], ["ok", null, team, "club_admin", ca.id]);
   const { attempt_id: attemptId, ...facts } = audit[0].metadata;
   assert.match(attemptId, /^[0-9a-f-]{36}$/);
-  assert.deepEqual(facts, { host_key: "server3", credential_kind: "exchanged_token", status_class: "2xx", attempt_no: 2, bound_team_count: 1, counted: true, source_team_id: "981" }, "the connect was attempt 1; a bind that reaches the source is counted in the same window unless it succeeds");
+  assert.deepEqual(facts, { host_key: "server3", credential_kind: "exchanged_token", status_class: "2xx", attempt_no: 2, bound_team_count: 1, counted: false, source_team_id: "981" }, "the connect was attempt 1; a successful bind is numbered in the window but not counted, and its row says counted: false");
   noSecret(await dbTextOf(conn.id), "the database rows");
   const read = await api(`/gpexe/connections/${conn.id}`, { cookie: ca.cookie });
   assert.deepEqual(read.body.connection.boundTeams.map((b) => [b.teamId, b.sourceTeamId, b.state, b.teamActive, b.bindingId]), [[team, "981", "active", true, bindingId]]);
@@ -542,7 +542,7 @@ test("9. the approved pair: a team whose gpexe_team_settings names the chosen so
   assert.equal((await bindingsOf(conn.id)).length, 1);
   assert.deepEqual([await digestOf(SETTINGS, [[team, team2]]), await digestOf(HISTORY, [[team, team2]])], before, "the legacy rows and their history are byte-identical");
   const binds = (await auditOf(conn.id)).filter((a) => a.action === "bind");
-  assert.deepEqual(binds.map((a) => [a.outcome, a.error_code, a.team_id, a.metadata.counted]), [["refused", "team_setting_missing", team3, false], ["ok", null, team, true], ["refused", "team_setting_mismatch", team2, false]]);
+  assert.deepEqual(binds.map((a) => [a.outcome, a.error_code, a.team_id, a.metadata.counted]), [["refused", "team_setting_missing", team3, false], ["ok", null, team, false], ["refused", "team_setting_mismatch", team2, false]], "only a source-reaching bind that did not succeed is counted; a successful one and the local refusals say counted: false");
   await endBindings(conn.id, ca.id);
 });
 
@@ -875,29 +875,38 @@ test("21. a bind that reaches the source and does not succeed counts in the 5 / 
   await endBindings(conn.id, ca.id);
 });
 
-test("22. the v27 unique index is the backstop of the source-team conflict: a clashing binding of the same source team inserted from another session after every in-code check (the deterministic form of two concurrent binds through two connections) makes the route answer 409 source_team_already_bound, audited failed with the team; one binding in total; any other unique violation is binding_refused", async () => {
+test("22. the unique-index backstop of the INSERT: with v30 no valid row can clash any more (one OptiMove team per canonical GPEXE team, one binding per team through the team lock, the pair enforced by the database), so the exact-name mapping is proven through the insert seam: a 23505 on source_team_bindings_one_active_per_source_team → 409 source_team_already_bound, on ..._one_active_per_team_source → team_already_bound, any other unique violation → binding_refused; each audited failed with the team and counted, nothing bound; a clashing raw row itself is refused by the v30 pair trigger", async () => {
   const { club, team, team2 } = await org();
   const ca = await clubAdmin(club);
   const a = await verified(ca, club);
   const b = await verified(ca, club);
-  // The clashing row goes in through connection b for team2 (its own team try-lock is free; b's row is not held by a's attempt).
-  service.setSourceBindingInsertFaultForTests(async () => {
-    await q(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id) values ($1, $2, 'gpexe', '981', $3)`, [team2, b.id, ca.id]);
-  });
-  let r;
+  // A raw clash of the same source team on another team is no longer possible: team2 is approved for 982.
+  const raw = await admin.query(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id) values ($1, $2, 'gpexe', '981', $3, $1)`, [team2, b.id, ca.id]).then(() => null, (e) => e);
+  assert.deepEqual([raw?.code, raw?.constraint], ["23514", "source_team_bindings_approved_pair"], "the database refuses the clashing row before any index is reached");
+  assert.deepEqual((await q(`select indexname from pg_indexes where schemaname = 'training_load' and tablename = 'source_team_bindings' and indexname like 'source_team_bindings_one_active_%' order by 1`)).map((r) => r.indexname), ["source_team_bindings_one_active_per_source_team", "source_team_bindings_one_active_per_team_source"], "the names the mapping relies on exist in the catalog");
+  const unique = (constraint) => Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505", constraint });
+  service.setSourceConnectionClockForTests(() => new Date(Date.now() + 16 * 60 * 1000));
   try {
-    const src = useSource();
-    r = await bindApi(a.id, ca.cookie, { teamId: team, sourceTeamId: "981" });
-    assert.deepEqual(teamReads(src.calls), ["team/981/"]);
+    for (const [constraint, code] of [["source_team_bindings_one_active_per_source_team", "source_team_already_bound"], ["source_team_bindings_one_active_per_team_source", "team_already_bound"], ["some_other_unique_key", "binding_refused"]]) {
+      service.setSourceBindingInsertFaultForTests(async () => { throw unique(constraint); });
+      let r;
+      try {
+        const src = useSource();
+        r = await bindApi(a.id, ca.cookie, { teamId: team, sourceTeamId: "981" });
+        assert.deepEqual(teamReads(src.calls), ["team/981/"]);
+      } finally {
+        service.setSourceBindingInsertFaultForTests(null);
+      }
+      assert.deepEqual([r.status, r.body.error, r.body.teamId], [409, code, team], JSON.stringify(r.body));
+      assert.ok(!JSON.stringify(r.body).includes("duplicate key"), "never the database's text");
+      assert.deepEqual(await bindingsOf(a.id), []);
+      const last = (await auditOf(a.id)).at(-1);
+      assert.deepEqual([last.action, last.outcome, last.error_code, last.team_id, last.metadata.counted, last.metadata.source_team_id], ["bind", "failed", code, team, true, "981"]);
+    }
   } finally {
-    service.setSourceBindingInsertFaultForTests(null);
+    service.setSourceConnectionClockForTests(null);
   }
-  assert.deepEqual([r.status, r.body.error, r.body.teamId], [409, "source_team_already_bound", team], JSON.stringify(r.body));
-  assert.equal((await q(`select count(*)::int as n from training_load.source_team_bindings where source_team_id = '981' and state = 'active'`))[0].n, 1, "one binding in total");
-  assert.deepEqual(await bindingsOf(a.id), []);
-  const last = (await auditOf(a.id)).at(-1);
-  assert.deepEqual([last.action, last.outcome, last.error_code, last.team_id, last.metadata.counted, last.metadata.source_team_id], ["bind", "failed", "source_team_already_bound", team, true, "981"]);
-  await endBindings(b.id, ca.id);
+  assert.equal((await q(`select count(*)::int as n from training_load.source_team_bindings where source_team_id = '981' and state = 'active'`))[0].n, 0, "nothing bound");
 });
 
 test("23. the allowlist decision across clubs: two clubs on the same shared account each see only their own approved pairs after Connect and Test (no name, id or count of the other club's or of the unapproved teams); a platform admin sees the bounded list with the approved pair per row and the truncation flag, but cannot bind outside the pair either", async () => {
@@ -1013,16 +1022,17 @@ test("24. the allowlist and the binding in both orders: a Settings change to ano
   await endBindings(conn.id, ca.id);
 });
 
-test("25. migration v30 applies on v29 (the trigger and the two functions), keeps the approved GPEXE team of a bound team final for a raw UPDATE (same canonical value allowed; no binding → allowed; v24 still refuses DELETE), rolls back to exactly the v29 catalog of the settings table, applies again, refuses under a later migration and while an active binding relies on it; a file that fails at its last statement applies nothing", async () => {
+test("25. migration v30 applies on v29 (two triggers, three functions, the canonical unique index), refuses to apply over canonical duplicates or over an unpaired active binding without changing anything, keeps the approved GPEXE team of a bound team final for a raw UPDATE (same canonical value allowed; no binding → allowed; v24 still refuses DELETE), makes the database itself refuse an active binding that is not the approved pair (wrong source team, no pointer, pointer to another team, no setting; a leading-zero setting still matches canonically), refuses a second setting of the same canonical GPEXE team, orders a settings change and a raw binding INSERT in both directions, rolls back to exactly the v29 catalog, applies again, refuses under a later migration and while an active binding relies on it; a file that fails at its last statement applies nothing", async () => {
   const m = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v30mig", migrations: UP_TO_V29 });
   const k = new pg.Client({ connectionString: m.url });
   await k.connect();
   try {
     assert.equal((await k.query("select current_database() as db")).rows[0].db, m.name);
     const catalog = async () => ({
-      triggers: (await k.query(`select tgname, pg_get_triggerdef(oid) as def from pg_trigger where tgrelid = 'training_load.gpexe_team_settings'::regclass and not tgisinternal order by tgname`)).rows,
-      functions: (await k.query(`select p.proname, md5(pg_get_functiondef(p.oid)) as digest from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'training_load' and p.proname like '%gpexe_team%' order by 1`)).rows,
+      triggers: (await k.query(`select tgrelid::regclass::text as rel, tgname, pg_get_triggerdef(oid) as def from pg_trigger where tgrelid in ('training_load.gpexe_team_settings'::regclass, 'training_load.source_team_bindings'::regclass) and not tgisinternal order by 1, 2`)).rows,
+      functions: (await k.query(`select p.proname, md5(pg_get_functiondef(p.oid)) as digest from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'training_load' and (p.proname like '%gpexe_team%' or p.proname like '%gpexe_binding%') order by 1`)).rows,
       constraints: (await k.query(`select conname from pg_constraint where conrelid = 'training_load.gpexe_team_settings'::regclass order by 1`)).rows.map((r) => r.conname),
+      indexes: (await k.query(`select indexname, indexdef from pg_indexes where schemaname = 'training_load' and tablename in ('gpexe_team_settings', 'source_team_bindings') order by 1`)).rows,
     });
     const v29 = await catalog();
     assert.ok(!v29.triggers.some((t) => t.tgname === "gpexe_team_settings_bound_team_final"));
@@ -1040,15 +1050,96 @@ test("25. migration v30 applies on v29 (the trigger and the two functions), keep
     const bind = () => k.query(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id) values ($1, $2, 'gpexe', '981', $3, $1) returning id`, [team, connId, user]);
     const unbind = () => k.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'test' where team_id = $1 and state = 'active'`, [team, user]);
     const change = (value) => k.query(`update training_load.gpexe_team_settings set gpexe_team_id = $2, change_reason = 'test', configured_by_user_id = $3, configured_at = now() where owner_team_id = $1`, [team, value, user]);
-    // Before v30 the gap is real: the approved team changes under an active binding.
+    // Before v30 the gaps are real: the approved team changes under an active binding, a binding needs no pair,
+    // and "0981" can sit next to "981".
     await bind();
     await change("982");
     await change("981");
     await unbind();
+    const team2 = (await k.query(`insert into public.teams (club_id, name) values ($1, 'T2') returning id`, [club])).rows[0].id;
+    const team3 = (await k.query(`insert into public.teams (club_id, name) values ($1, 'T3') returning id`, [club])).rows[0].id;
+    const unpaired = (await k.query(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id) values ($1, $2, 'gpexe', '555', $3) returning id`, [team2, connId, user])).rows[0].id;
+    // The migration refuses to apply over an ACTIVE binding that is not its team's approved pair, and changes nothing.
+    await assert.rejects(applyGpexeTestMigrations(m.url, [...UP_TO_V29, V30]), /ABORT while applying .*v30.*SQLSTATE P0001/);
+    assert.deepEqual(await catalog(), v29, "a v30 refused over an unpaired active binding leaves the v29 catalog");
+    await k.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'test' where id = $1`, [unpaired, user]);
+    await k.query(`insert into training_load.gpexe_team_settings (owner_team_id, gpexe_team_id, configured_by_user_id) values ($1, '0981', $2)`, [team2, user]);
+    // The migration refuses canonical duplicates and changes nothing.
+    // The runner reports the SQLSTATE of the refusing statement (P0001 from the duplicate check), never its text.
+    await assert.rejects(applyGpexeTestMigrations(m.url, [...UP_TO_V29, V30]), /ABORT while applying .*v30.*SQLSTATE P0001/);
+    const refusedDirectly = await k.query(`do $$ declare dups integer; begin select count(*) into dups from (select training_load.gpexe_team_id_canonical(gpexe_team_id) c from training_load.gpexe_team_settings group by 1 having count(*) > 1) d; if dups > 0 then raise exception 'dups %', dups; end if; end $$`).then(() => "no-function-yet", (e) => e.code);
+    assert.equal(refusedDirectly, "42883", "before v30 the canonical function does not exist: the refusal came from the migration's own check");
+    assert.deepEqual(await catalog(), v29, "a refused v30 leaves the v29 catalog");
+    assert.equal((await k.query(`select count(*)::int as n from public.schema_migrations where migration_name like $1`, [`%${V30}`])).rows[0].n, 0);
+    await k.query(`update training_load.gpexe_team_settings set gpexe_team_id = '982', change_reason = 'resolved by hand' where owner_team_id = $1`, [team2]);
 
     await applyGpexeTestMigrations(m.url, [...UP_TO_V29, V30]);
     const v30 = await catalog();
     assert.ok(v30.triggers.some((t) => t.tgname === "gpexe_team_settings_bound_team_final"));
+    assert.ok(v30.triggers.some((t) => t.tgname === "source_team_bindings_check_pair"));
+    assert.ok(v30.indexes.some((i) => i.indexname === "gpexe_team_settings_canonical_team_id_key"));
+    assert.deepEqual(v30.triggers.filter((t) => t.rel.endsWith("source_team_bindings")).map((t) => t.tgname), ["source_team_bindings_check_owner", "source_team_bindings_check_pair", "source_team_bindings_immutable", "source_team_bindings_no_truncate"], "the pair check fires after the owner check (the team try-lock)");
+    // The approved pair on INSERT: the correct pair passes; everything else is refused by the database.
+    const rawBind = (teamId, sourceTeamId, pointer) => k.query(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id) values ($1, $2, 'gpexe', $3, $4, $5) returning id`, [teamId, connId, sourceTeamId, user, pointer]).then((r) => r.rows[0].id, (e) => e);
+    const pairError = async (promise, what, constraint = "source_team_bindings_approved_pair") => { const e = await promise; assert.deepEqual([e?.code, e?.constraint], ["23514", constraint], what); };
+    await pairError(rawBind(team, "982", team), "a wrong source team");
+    await pairError(rawBind(team, "981", null), "no pointer");
+    await pairError(rawBind(team3, "983", team3), "no setting for the team (its own guard, named apart)", "source_team_bindings_approved_pair_missing");
+    const foreignPointer = await rawBind(team, "981", team2);
+    assert.equal(foreignPointer?.code, "23514", "a pointer to another team's setting (v27 refuses it first)");
+    assert.notEqual(foreignPointer?.constraint, "source_team_bindings_approved_pair");
+    const paired = await rawBind(team, "981", team);
+    assert.match(String(paired), /^[0-9a-f-]{36}$/, "the exact pair passes");
+    await k.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'test' where id = $1`, [paired, user]);
+    // A leading-zero setting still matches its canonical binding.
+    await change("0981");
+    const canonicalPair = await rawBind(team, "981", team);
+    assert.match(String(canonicalPair), /^[0-9a-f-]{36}$/, "'0981' approves binding '981'");
+    await k.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'test' where id = $1`, [canonicalPair, user]);
+    await change("981");
+    // An ended row is outside the rule (history), an active one is not.
+    const endedUnpaired = await k.query(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, state, ended_at, ended_by_user_id, end_reason) values ($1, $2, 'gpexe', '777', $3, 'ended', now(), $3, 'history') returning id`, [team3, connId, user]).then(() => null, (e) => e);
+    assert.equal(endedUnpaired, null, "an already-ended row is not an active binding");
+    // Canonical uniqueness of the settings: '0981' next to '981' is one GPEXE team.
+    const dup = await k.query(`insert into training_load.gpexe_team_settings (owner_team_id, gpexe_team_id, configured_by_user_id) values ($1, '0981', $2)`, [team3, user]).then(() => null, (e) => e);
+    assert.deepEqual([dup?.code, dup?.constraint], ["23505", "gpexe_team_settings_canonical_team_id_key"]);
+    // A settings change and a raw binding INSERT in both orders, never a mismatch and never a wait without a bound.
+    const peer = new pg.Client({ connectionString: m.url });
+    await peer.connect();
+    try {
+      await peer.query("begin");
+      await peer.query(`update training_load.gpexe_team_settings set gpexe_team_id = '0981', change_reason = 'in flight', configured_by_user_id = $2, configured_at = now() where owner_team_id = $1`, [team, user]);
+      await k.query("begin");
+      await k.query(`set local lock_timeout = '300ms'`);
+      const insertDuring = await k.query(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id) values ($1, $2, 'gpexe', '981', $3, $1)`, [team, connId, user]).then(() => null, (e) => e.code);
+      assert.ok(["P0001", "55P03"].includes(insertDuring), `a binding INSERT during a settings change is refused or waits only within lock_timeout (${insertDuring})`);
+      await k.query("rollback");
+      await peer.query("rollback");
+      await peer.query("begin");
+      await peer.query(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id) values ($1, $2, 'gpexe', '981', $3, $1)`, [team, connId, user]);
+      await k.query("begin");
+      await k.query(`set local lock_timeout = '300ms'`);
+      const changeDuring = await change("982").then(() => null, (e) => e.code);
+      assert.ok(["P0001", "55P03"].includes(changeDuring), `a settings change during a binding INSERT is refused at once or waits only within lock_timeout (${changeDuring})`);
+      await k.query("rollback");
+      await peer.query("commit");
+      const changeAfter = await change("982").then(() => null, (e) => e);
+      assert.deepEqual([changeAfter?.code, changeAfter?.constraint], ["23514", "gpexe_team_settings_bound_team_final"], "once the binding committed, the approved team is final");
+      await unbind();
+      // The waiter that CONTINUES: a settings UPDATE that changes nothing still holds the row (no team lock, so the
+      // INSERT really waits on FOR SHARE); once it commits the INSERT re-reads the committed row and is decided by it.
+      await peer.query("begin");
+      await peer.query(`update training_load.gpexe_team_settings set gpexe_team_id = '981' where owner_team_id = $1`, [team]);
+      const waiting = k.query(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id) values ($1, $2, 'gpexe', '981', $3, $1) returning id`, [team, connId, user]);
+      await new Promise((r) => setTimeout(r, 300));
+      await peer.query("commit");
+      const waited = await waiting.then((r) => r.rows[0].id, (e) => e);
+      assert.match(String(waited), /^[0-9a-f-]{36}$/, "the waiter continued and the pair, unchanged, passed");
+      await unbind();
+      // A real id change always takes the team try-lock (v24), so an INSERT or a settings change never waits on it: it is refused at once (asserted above).
+    } finally {
+      await peer.end();
+    }
     assert.equal((await k.query(`select training_load.gpexe_team_id_canonical('0980') as c`)).rows[0].c, "980");
     assert.equal((await k.query(`select training_load.gpexe_team_id_canonical('0') as c`)).rows[0].c, "0");
     // The invariant: bound → the approved team is final; same canonical value passes; no binding → a change passes; v24 still refuses DELETE.
@@ -1063,9 +1154,9 @@ test("25. migration v30 applies on v29 (the trigger and the two functions), keep
     const rollbackSql = await fsp.readFile(V30_ROLLBACK, "utf8");
     await assert.rejects(k.query(rollbackSql), /v30 rollback refused: 1 active gpexe binding/);
     await k.query("rollback").catch(() => {});
-    assert.ok((await catalog()).triggers.some((t) => t.tgname === "gpexe_team_settings_bound_team_final"), "a refused rollback drops nothing");
+    assert.deepEqual(await catalog(), v30, "a refused rollback drops nothing");
     await unbind();
-    await change("982");
+    await change("984");
     await change("981");
     // Rollback: exactly the v29 catalog again; apply again; refuse under a later migration.
     await k.query(rollbackSql);
@@ -1092,6 +1183,58 @@ test("25. migration v30 applies on v29 (the trigger and the two functions), keep
     await k.end();
     await m.drop();
   }
+});
+
+test("26. '981' against '0981': the service refuses the second setting (409 gpexe_team_taken), the database refuses a raw one (23505 on the canonical index), and should such a duplicate exist anyway (the index dropped on this disposable database only), Connect / Test withhold the team list fail-closed (sourceTeamsUnavailable: approved_pairs_ambiguous) instead of letting one row win; a bind of the ambiguous pair is still decided by the exact canonical pair", async () => {
+  const { club, team, team2, configurer } = await org();
+  const ca = await clubAdmin(club);
+  const conn = await verified(ca, club);
+  const team3 = (await q(`insert into public.teams (club_id, name) values ($1, 'Third') returning id`, [club]))[0].id;
+  const viaService = await settings.setTeamSettings(team3, { gpexeTeamId: "0981", userId: configurer }).then(() => null, (e) => e);
+  assert.deepEqual([viaService?.status, viaService?.code], [409, "gpexe_team_taken"], String(viaService?.message));
+  assert.ok(!/sql|constraint|index|duplicate/i.test(viaService.message));
+  const rawDup = await admin.query(`insert into training_load.gpexe_team_settings (owner_team_id, gpexe_team_id, configured_by_user_id) values ($1, '0981', $2)`, [team3, configurer]).then(() => null, (e) => e);
+  assert.deepEqual([rawDup?.code, rawDup?.constraint], ["23505", "gpexe_team_settings_canonical_team_id_key"]);
+  await admin.query(`drop index training_load.gpexe_team_settings_canonical_team_id_key`);
+  try {
+    await approvePair(team3, "0981", configurer);
+    useSource();
+    const t = await api(`/gpexe/connections/${conn.id}/test`, { method: "POST", cookie: ca.cookie, body: {} });
+    assert.equal(t.status, 200, JSON.stringify(t.body));
+    assert.deepEqual([t.body.result.state, t.body.result.sourceTeams, t.body.result.sourceTeamCount, t.body.result.sourceTeamsTruncated, t.body.result.sourceTeamsUnavailable], ["verified", null, null, null, "approved_pairs_ambiguous"]);
+    const pa = await platformAdmin();
+    const tPa = await api(`/gpexe/connections/${conn.id}/test`, { method: "POST", cookie: pa.cookie, body: {} });
+    assert.equal(tPa.body.result.sourceTeamsUnavailable, "approved_pairs_ambiguous", "the platform admin's list is withheld too");
+    assert.ok(!JSON.stringify(t.body).includes(SOURCE_TEAM_NAME_MARKER) && !JSON.stringify(tPa.body).includes(SOURCE_TEAM_NAME_MARKER), "nothing of the list leaves");
+    // The exact pair of team still binds; team3's pair asks for "981" too (canonical of "0981") — the own-team settings decide, team by team.
+    assert.equal((await bindApi(conn.id, ca.cookie, { teamId: team, sourceTeamId: "981" })).status, 201);
+    await endBindings(conn.id, ca.id);
+    releaseCounter += 1;
+    await q(`update training_load.gpexe_team_settings set gpexe_team_id = $2, change_reason = 'test cleanup' where owner_team_id = $1`, [team3, String(920000000000 + releaseCounter)]);
+  } finally {
+    await admin.query(`create unique index gpexe_team_settings_canonical_team_id_key on training_load.gpexe_team_settings (training_load.gpexe_team_id_canonical(gpexe_team_id))`);
+  }
+  assert.equal((await q(`select count(*)::int as n from pg_indexes where schemaname = 'training_load' and indexname = 'gpexe_team_settings_canonical_team_id_key'`))[0].n, 1, "the index is back");
+  void team2;
+});
+
+test("27. the audit fact `counted` agrees with the throttle's own predicate on every row this suite wrote (action / outcome / error_code decide the window; the metadata only documents it); the one divergence is an attempt whose COMMIT outcome stayed unknown — its ok row says false, its later unknown row true, and the window counts that attempt once by attempt_id", async () => {
+  const rows = await q(`
+    select id, action, outcome, error_code, metadata,
+           (((action in ('connect', 'reconnect', 'test') and (outcome in ('ok', 'failed', 'unknown') or (outcome = 'refused' and error_code = 'source_auth_rejected')))
+             or (action = 'bind' and (outcome in ('failed', 'unknown') or (outcome = 'refused' and error_code = 'source_auth_rejected'))))) as window_counts
+      from training_load.source_connection_audit
+     where action in ('connect', 'reconnect', 'test', 'bind')`);
+  assert.ok(rows.length > 50, `enough rows to mean something (${rows.length})`);
+  const disagreeing = rows.filter((r) => (r.metadata.counted === true) !== r.window_counts);
+  for (const r of disagreeing) {
+    assert.ok(r.outcome === "unknown" && r.error_code === "outcome_unknown", `only the second row of an unknown outcome may differ: ${r.action} ${r.outcome} ${r.error_code} ${JSON.stringify(r.metadata)}`);
+    const sibling = rows.find((o) => o.id !== r.id && o.metadata.attempt_id === r.metadata.attempt_id);
+    assert.ok(sibling && sibling.outcome === "ok" && sibling.metadata.counted === false, "its sibling is the committed ok row of a successful bind, which the window does not count; the attempt counts once by attempt_id");
+  }
+  assert.ok(rows.some((r) => r.action === "bind" && r.outcome === "ok" && r.metadata.counted === false), "a successful bind row says false");
+  assert.ok(rows.some((r) => r.action === "bind" && r.outcome === "failed" && r.metadata.counted === true), "a failed source-reaching bind row says true");
+  assert.ok(rows.some((r) => r.action === "bind" && r.outcome === "refused" && r.error_code !== "source_auth_rejected" && r.metadata.counted === false), "a local refusal says false");
 });
 
 test("19. this suite runs on a disposable database only and bound nothing persistent: the database is the disposable one and every binding it made is ended", async () => {

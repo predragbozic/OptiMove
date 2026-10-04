@@ -154,10 +154,12 @@ export function setSourceConnectionClockForTests(fn) { nowForTests = fn ?? null;
 const sourceFetch = () => fetchForSource ?? globalThis.fetch;
 
 // ---------------------------------------------------------------------------
-// Access: a platform admin only (D2/D3), in the platform workspace or in the
-// owning club's workspace. Everything else — another role, another
-// workspace, an archived or missing club — is the same 404 as a missing
-// connection (ADR-006). Resolved once per request.
+// Access (D2 settled by the owner on 2026-10-03): an active platform admin in
+// the platform workspace or in the owning club's workspace, or the owning
+// club's own active admin in that club's workspace. Everything else — another
+// role, another club's admin, another workspace, an archived or missing club
+// — is the same 404 as a missing connection (ADR-006). Resolved once per
+// request.
 // ---------------------------------------------------------------------------
 export async function resolveConnectionAdmin(req) {
   if (!req?.user?.id || !req.authz) return null;
@@ -661,21 +663,35 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
     // The truncation of the source list is reported to both.
     let presented = null;
     if (read.ok && !bindBody && Array.isArray(read.sourceTeams)) {
-      const approved = new Map((await client.query(
+      // Two settings rows that are one GPEXE team in canonical form ("981" and
+      // "0981") make the pairs ambiguous: the v30 unique index refuses that
+      // state, and should it exist anyway the list is withheld (fail closed)
+      // instead of one row silently winning.
+      const approved = new Map();
+      let ambiguous = false;
+      for (const r of (await client.query(
         `select s.owner_team_id as team_id, s.gpexe_team_id, t.name as team_name
            from training_load.gpexe_team_settings s join public.teams t on t.id = s.owner_team_id
           where t.club_id = $1 and coalesce(t.is_active, true)`,
         [row.owner_club_id],
-      )).rows.map((r) => [canonicalGpexeTeamId(r.gpexe_team_id), r]));
-      const annotated = read.sourceTeams.map((t) => {
-        const pair = row.source_system === "gpexe" ? approved.get(t.sourceTeamId) : undefined;
-        return { sourceTeamId: t.sourceTeamId, name: t.name, approvedTeamId: pair?.team_id ?? null, approvedTeamName: pair?.team_name ?? null };
-      });
-      // Fail closed: only the platform basis sees the whole list; any other
-      // basis (today club_admin only) sees the intersection.
-      const whole = ctx.basis === "platform_admin";
-      const teams = whole ? annotated : annotated.filter((t) => t.approvedTeamId !== null);
-      presented = { teams, count: whole ? read.sourceTeamCount : teams.length, truncated: read.sourceTeamsTruncated === true };
+      )).rows) {
+        const key = canonicalGpexeTeamId(r.gpexe_team_id);
+        if (approved.has(key)) ambiguous = true;
+        approved.set(key, r);
+      }
+      if (ambiguous) {
+        presented = { unavailable: "approved_pairs_ambiguous" };
+      } else {
+        const annotated = read.sourceTeams.map((t) => {
+          const pair = row.source_system === "gpexe" ? approved.get(t.sourceTeamId) : undefined;
+          return { sourceTeamId: t.sourceTeamId, name: t.name, approvedTeamId: pair?.team_id ?? null, approvedTeamName: pair?.team_name ?? null };
+        });
+        // Fail closed: only the platform basis sees the whole list; any other
+        // basis (today club_admin only) sees the intersection.
+        const whole = ctx.basis === "platform_admin";
+        const teams = whole ? annotated : annotated.filter((t) => t.approvedTeamId !== null);
+        presented = { teams, count: whole ? read.sourceTeamCount : teams.length, truncated: read.sourceTeamsTruncated === true };
+      }
     }
 
     // 9. Before anything is stored: the caller's right and the owner must
@@ -720,9 +736,9 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
       // The binding row (the v27 insert trigger re-checks the owner, the host
       // and the pointer, and re-takes the team lock this transaction holds),
       // then its audit, in this transaction.
-      if (bindInsertFault) await bindInsertFault(client);
       let inserted;
       try {
+        if (bindInsertFault) await bindInsertFault(client);
         inserted = (await client.query(
           `insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id)
            values ($1, $2, $3, $4, $5, $6) returning id, team_id, source_team_id, bound_at`,
@@ -733,10 +749,22 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
         if (error.code === "23505" && error.constraint === "source_team_bindings_one_active_per_source_team") throw refusal(409, "source_team_already_bound", "That source team is already bound to another team; nothing was changed.", { teamId: bindBody.teamId });
         if (error.code === "23505") throw refusal(409, "binding_refused", "The database refused this binding; nothing was changed.", { teamId: bindBody.teamId });
         if (error.code === "P0001") throw refusal(409, "try_again", "A GPEXE check, import, settings change or binding is running for this team. Try again when it has finished.", { teamId: bindBody.teamId });
-        if (error.code === "23514" || error.code === "23503") throw refusal(409, "binding_refused", "The database refused this binding (the host, the club or the team changed meanwhile); nothing was changed.", { teamId: bindBody.teamId });
+        // The v30 pair trigger (the database's own guarantee of the approved
+        // pair; the service checked it under the same locks, so this is a
+        // raw-writer or race path) answers the same readable codes.
+        if (error.code === "23514" && error.constraint === "source_team_bindings_approved_pair_missing") throw refusal(409, "team_setting_missing", "This team has no approved source team yet; a platform administrator sets it in Settings → Data sources first. Nothing was changed.", { teamId: bindBody.teamId });
+        if (error.code === "23514" && error.constraint === "source_team_bindings_approved_pair") throw refusal(409, "team_setting_mismatch", "This team's approved source team is another one; a platform administrator changes it in Settings → Data sources, with a reason, before it can be bound. Nothing was changed.", { teamId: bindBody.teamId });
+        if (error.code === "23514" || error.code === "23503") throw refusal(409, "binding_refused", "The database refused this binding (the host, the club, the team or the approved source team changed meanwhile); nothing was changed.", { teamId: bindBody.teamId });
         throw error;
       }
-      const auditId = await insertAudit(client, { connectionId: row.id, teamId: bindBody.teamId, action, outcome: "ok", userId: ctx.userId, basis: ctx.basis, metadata: { ...metadata, bound_team_count: bindings.length + 1 } });
+      // A successful bind is NOT counted by the 5 / 15 min window (its repeat
+      // is a local no-op), and its audit row says so. `counted` documents
+      // what the COUNTED predicate decides from action / outcome / error_code
+      // (test 27 keeps the two in step); the one deliberate divergence is an
+      // attempt whose COMMIT outcome stayed unknown — its `ok` row says false
+      // and its later `unknown` row true, and the window counts the attempt
+      // once by attempt_id.
+      const auditId = await insertAudit(client, { connectionId: row.id, teamId: bindBody.teamId, action, outcome: "ok", userId: ctx.userId, basis: ctx.basis, metadata: { ...metadata, bound_team_count: bindings.length + 1, counted: false } });
       recorded = true;
       released = true;
       const confirmation3 = await commitAttempt(client, release, auditId, row.id, attemptId, bindBody.teamId);
@@ -777,12 +805,13 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
     const confirmation2 = await commitAttempt(client, release, auditId, row.id, attemptId);
     return {
       connectionId: row.id, action, outcome, state, code: errorCode, lastVerifiedAt: state === "verified" ? written.last_verified_at : null,
-      boundTeamsChecked: read.boundTeamsChecked, sourceTeamCount: presented ? presented.count : null, exchangeStatusClass,
+      boundTeamsChecked: read.boundTeamsChecked, sourceTeamCount: presented?.count ?? null, exchangeStatusClass,
       // The teams this administrator may choose from (id, name and the
       // approved OptiMove team of the pair); nothing is preselected or bound.
       // sourceTeamsTruncated is false only when the source list was complete.
-      sourceTeams: presented ? presented.teams : null,
-      sourceTeamsTruncated: presented ? presented.truncated : null,
+      sourceTeams: presented?.teams ?? null,
+      sourceTeamsTruncated: presented?.truncated ?? null,
+      ...(presented?.unavailable ? { sourceTeamsUnavailable: presented.unavailable } : {}),
       ...(confirmation2 ? { commitConfirmation: confirmation2 } : {}),
     };
   } catch (error) {
@@ -795,13 +824,13 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
     const compensate = reachedSource && !alreadyRecorded && known;
     if (compensate) {
       // The source was reached, and the attempt did not commit (a database
-      // error, a refused right, a write fault): it is recorded and counted
-      // on a fresh connection as a failed attempt BEFORE this transaction is
-      // rolled back — the per-user lock is still held here, so the next
-      // attempt of this user, waiting on that lock, already sees the row
-      // when it counts. (Only when the server itself ended this session is
-      // the lock already gone; that residual is documented.) The audit row's
-      // foreign key needs KEY SHARE only, which this row lock allows.
+      // error, a refused right, a write fault): it is recorded and counted as
+      // a failed attempt in THIS transaction — back to the savepoint taken
+      // after the locks, the row inserted, the bounded COMMIT — so every
+      // lock, the per-user lock included, is held until the row is visible
+      // to the next attempt of this user. A fresh, bounded connection is only
+      // the fallback when this session is unusable (ended by the server);
+      // only then is the user lock already gone (documented residual).
       if (compensationDelayMs > 0) await new Promise((r) => setTimeout(r, compensationDelayMs));
       const code = error instanceof SourceConnectionError ? error.code : "attempt_not_recorded";
       const outcome = error instanceof SourceConnectionError ? "failed" : "unknown";

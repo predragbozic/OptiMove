@@ -1,5 +1,7 @@
--- Training Load v30 — the approved GPEXE team of a bound OptiMove team is final
--- while its source binding is active.
+-- Training Load v30 — the approved pair (OptiMove team <-> GPEXE Team ID) of
+-- a source binding is guaranteed by the database: an active binding binds
+-- exactly its team's approved pair, that pair is final while the binding is
+-- active, and one OptiMove team holds one GPEXE team in canonical form.
 --
 -- F3c2e (verified team binding). Owner decision 2026-10-04 (security review
 -- HIGH F-1, option (a)): the existing training_load.gpexe_team_settings row
@@ -14,6 +16,28 @@
 -- approves.
 --
 -- What it adds (nothing else):
+--   0. (owner's external review of PR #135, 2026-10-04) Two further backstops
+--      so the database itself guarantees the approved pair:
+--      a. a BEFORE INSERT trigger on source_team_bindings: an ACTIVE gpexe
+--         binding must point at its own team's gpexe_team_settings row
+--         (legacy_gpexe_settings_team_id = team_id), that row must exist, and
+--         the canonical source_team_id must equal the canonical approved
+--         GPEXE Team ID — otherwise check_violation, constraint
+--         source_team_bindings_approved_pair (…_missing when the team has
+--         no settings row at all). It fires AFTER v27's
+--         source_team_bindings_check_owner (by name order), i.e. after the
+--         team's import try-lock, and reads the settings row FOR SHARE: the
+--         same order the bind route uses (team try-lock, then the settings
+--         row), so no new wait and no cycle with a settings change (which
+--         takes the team lock first) or with the trigger below.
+--         The guarantee is scoped to source_system = 'gpexe', whose allowlist
+--         is gpexe_team_settings; a future source needs its own approved-pair
+--         rule before it gets a bind route.
+--      b. a unique index on gpexe_team_id_canonical(gpexe_team_id): the v22
+--         key is on the raw text, so "981" and "0981" could name one GPEXE
+--         team for two OptiMove teams. The migration REFUSES, changing
+--         nothing, when such canonical duplicates already exist (resolve them
+--         by hand through Settings, with a reason, then apply).
 --   1. training_load.gpexe_team_id_canonical(text): the canonical form of a
 --      GPEXE team id as stored by v22 (`^[0-9]{1,12}$`, which allowed leading
 --      zeros) — leading zeros removed, "0" kept — the form the guard PR (#118)
@@ -80,3 +104,75 @@ comment on function training_load.refuse_gpexe_team_change_while_bound() is
 create trigger gpexe_team_settings_bound_team_final
   before update on training_load.gpexe_team_settings
   for each row execute function training_load.refuse_gpexe_team_change_while_bound();
+
+-- ---------------------------------------------------------------------------
+-- 0a. The approved pair, on INSERT (the database's own guarantee)
+-- ---------------------------------------------------------------------------
+create function training_load.refuse_unapproved_gpexe_binding() returns trigger as $$
+declare
+  approved text;
+begin
+  if new.source_system <> 'gpexe' or new.state <> 'active' then
+    return new;
+  end if;
+  if new.legacy_gpexe_settings_team_id is null or new.legacy_gpexe_settings_team_id is distinct from new.team_id then
+    raise exception 'source_team_bindings: an active GPEXE binding of team % must point at that team''s own approved GPEXE setting (legacy_gpexe_settings_team_id)', new.team_id
+      using errcode = 'check_violation', constraint = 'source_team_bindings_approved_pair';
+  end if;
+  select gpexe_team_id into approved from training_load.gpexe_team_settings where owner_team_id = new.team_id for share;
+  if not found then
+    raise exception 'source_team_bindings: team % has no approved GPEXE team in gpexe_team_settings; nothing can be bound', new.team_id
+      using errcode = 'check_violation', constraint = 'source_team_bindings_approved_pair_missing';
+  end if;
+  if training_load.gpexe_team_id_canonical(approved) is distinct from training_load.gpexe_team_id_canonical(new.source_team_id) then
+    raise exception 'source_team_bindings: team % is approved for GPEXE team %, not for %', new.team_id, approved, new.source_team_id
+      using errcode = 'check_violation', constraint = 'source_team_bindings_approved_pair';
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+comment on function training_load.refuse_unapproved_gpexe_binding() is
+  'v30 (F3c2e): an active gpexe source_team_binding binds exactly the approved pair of its team (gpexe_team_settings): pointer to its own setting, setting present, canonical ids equal.';
+
+-- Fires after source_team_bindings_check_owner ("check_o" < "check_p"): the
+-- team's import try-lock is already held when the settings row is read.
+create trigger source_team_bindings_check_pair
+  before insert on training_load.source_team_bindings
+  for each row execute function training_load.refuse_unapproved_gpexe_binding();
+
+-- ---------------------------------------------------------------------------
+-- 0b. One OptiMove team per canonical GPEXE team id
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  dups integer;
+  unpaired integer;
+begin
+  select count(*) into dups from (
+    select training_load.gpexe_team_id_canonical(gpexe_team_id) as canonical
+      from training_load.gpexe_team_settings
+     group by 1 having count(*) > 1
+  ) d;
+  if dups > 0 then
+    raise exception 'v30 refused: % GPEXE team id(s) in training_load.gpexe_team_settings differ only by leading zeros; resolve them by hand (Settings, with a reason) before applying v30 — no row is changed here', dups;
+  end if;
+  -- An ACTIVE gpexe binding that is not its team's approved pair would be
+  -- protected by nothing after v30 (the INSERT trigger sees new rows only):
+  -- refuse to apply over it rather than keep a contradiction. None can exist
+  -- on any database this project knows (no merged code writes a binding).
+  select count(*) into unpaired
+    from training_load.source_team_bindings b
+    left join training_load.gpexe_team_settings s on s.owner_team_id = b.team_id
+   where b.source_system = 'gpexe' and b.state = 'active'
+     and (b.legacy_gpexe_settings_team_id is distinct from b.team_id
+          or s.owner_team_id is null
+          or training_load.gpexe_team_id_canonical(s.gpexe_team_id) is distinct from training_load.gpexe_team_id_canonical(b.source_team_id));
+  if unpaired > 0 then
+    raise exception 'v30 refused: % active GPEXE binding(s) are not their team''s approved pair; end or correct them by hand before applying v30 — no row is changed here', unpaired;
+  end if;
+end $$;
+
+create unique index gpexe_team_settings_canonical_team_id_key
+  on training_load.gpexe_team_settings (training_load.gpexe_team_id_canonical(gpexe_team_id));
+comment on index training_load.gpexe_team_settings_canonical_team_id_key is
+  'v30 (F3c2e): one OptiMove team per GPEXE team in canonical form ("981" and "0981" are one team); the v22 key on the raw text stays.';

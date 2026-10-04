@@ -103,7 +103,16 @@ approval or imported data exists — a binding is none of those. **Migration v30
 the owner on 2026-10-04) adds exactly that backstop: a BEFORE UPDATE trigger on
 `gpexe_team_settings` that refuses a change of the canonical GPEXE Team ID (or of the OptiMove
 team) of a row whose team has an active gpexe `source_team_binding`; the same canonical value
-passes; `gpexe_team_id_canonical(text)` is the comparison (no stored value changes). What v30
+passes; `gpexe_team_id_canonical(text)` is the comparison (no stored value changes). **After the
+owner's external review of PR #135 (2026-10-04) v30 also makes the database guarantee the other
+half of the pair:** a BEFORE INSERT trigger on `source_team_bindings`
+(`source_team_bindings_check_pair`, firing after v27's owner check and so after the team's
+import try-lock, reading the settings row `FOR SHARE` — the bind route's own order) refuses an
+active gpexe binding that does not point at its own team's settings row, whose team has no
+settings row, or whose canonical `source_team_id` differs from the canonical approved Team ID
+(`23514`, constraint `source_team_bindings_approved_pair`); and a unique index on
+`gpexe_team_id_canonical(gpexe_team_id)` makes "981" and "0981" one GPEXE team for the whole
+database (the migration refuses, changing nothing, when such duplicates already exist). What v30
 refuses and what it leaves to v24: UPDATE changing the canonical Team ID while bound → refused
 (`23514`, constraint `gpexe_team_settings_bound_team_final`); UPDATE changing `owner_team_id` →
 already refused for every row by v24 (`refuse_gpexe_team_repoint`), repeated for the bound case;

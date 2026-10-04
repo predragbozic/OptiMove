@@ -156,7 +156,8 @@ row and its audit row `bind` → the bounded COMMIT.
 | redirect, oversized, not JSON, another id, not an object | `502 source_answer_unexpected` | unchanged | no |
 
 Every outcome that reached the source is audited (`bind`, the team, `source_team_id` as a
-fact, `counted: true`); a local refusal is audited with `counted: false`; a `404` answered
+fact; `counted: true` when it did not succeed, `counted: false` for a successful bind, which the
+window never counts); a local refusal is audited with `counted: false`; a `404` answered
 before anything was sent is not audited, while a team that stopped qualifying after the
 source answered (archived or moved meanwhile) is the same 404 but audited and counted
 (`failed`, `team_not_available`; a refused credential still turns the connection to
@@ -172,11 +173,36 @@ SQL text; a lock wait that ran out or a deadlock chosen as victim is `try_again`
 ### v30 (F3c2e): the approved pair is final while bound
 
 `migrations_v2/202610041000_training_load_v30_gpexe_team_settings_bound_final.sql` adds
-`training_load.gpexe_team_id_canonical(text)` and the trigger
-`gpexe_team_settings_bound_team_final` (BEFORE UPDATE): while a team has an active gpexe
+`training_load.gpexe_team_id_canonical(text)`, the trigger
+`gpexe_team_settings_bound_team_final` (BEFORE UPDATE: while a team has an active gpexe
 `source_team_binding`, an UPDATE that changes the canonical GPEXE Team ID or the OptiMove team of
-its settings row is refused (`23514`, that constraint name); the same canonical value passes.
-DELETE / TRUNCATE / repoint stay refused by v24 for every row. No data change. **Not applied to
+its settings row is refused — `23514`, that constraint name; the same canonical value passes),
+the trigger `source_team_bindings_check_pair` (BEFORE INSERT: an active gpexe binding must point
+at its own team's settings row, that row must exist, and the canonical ids must be equal —
+`23514`, constraint `source_team_bindings_approved_pair`, or `…_approved_pair_missing` when the
+team has no settings row; the service answers `binding_refused`
+for it, having checked the pair itself first), and the unique index
+`gpexe_team_settings_canonical_team_id_key` (one OptiMove team per canonical GPEXE team; the
+service answers `gpexe_team_taken`). The migration refuses, changing nothing, when canonical
+duplicates already exist (resolve them by hand through Settings, with a reason) or when an
+active gpexe binding is not its team's approved pair (none can exist on any known database).
+Because `npm start` runs the migrations before the server, a refusal would stop that deploy
+from starting (fail-closed, nothing changed); the owner's read-only preflight before a deploy
+that applies v30 is, on that database (the canonical function does not exist before v30):
+
+```sql
+select regexp_replace(gpexe_team_id, '^0+([0-9])', '\1') as canonical, count(*)
+  from training_load.gpexe_team_settings group by 1 having count(*) > 1;
+select count(*) from training_load.source_team_bindings b
+  left join training_load.gpexe_team_settings s on s.owner_team_id = b.team_id
+ where b.source_system = 'gpexe' and b.state = 'active'
+   and (b.legacy_gpexe_settings_team_id is distinct from b.team_id or s.owner_team_id is null
+        or regexp_replace(s.gpexe_team_id, '^0+([0-9])', '\1') <> b.source_team_id);
+```
+
+Both must return no row / 0. The guarantee is scoped to `gpexe`; a future source needs its own
+approved-pair rule before it gets a bind route. DELETE /
+TRUNCATE / repoint stay refused by v24 for every row. No data change. **Not applied to
 any persistent database by this step** (the local OPTIMOVE stays v21; the deployed database gets
 it only through a merge and deploy the owner decides). Rollback:
 `docs/runbooks/source-connections-v30-rollback.sql` — refuses under a later migration and while
@@ -190,12 +216,10 @@ refusals; a file failing at its last statement applies nothing).
   Team ID cannot change while it is bound (`409 gpexe_team_bound`), and the v30 rollback refuses
   while such a binding exists. A wrongly approved pair that was bound has no supported correction
   until the unbind step; schedule it before the first real bind.
-- The approved pair is enforced on the INSERT side by the application only (the v27 insert
-  trigger checks the pointer, not the id equality); v30 protects the settings side. Never claim
-  that the database alone guarantees the pair.
-- The v22 key on `gpexe_team_settings.gpexe_team_id` is on the raw text: `setTeamSettings()` now
-  refuses a canonical clash (`0981` against `981`) as `gpexe_team_taken`; rows from before this
-  rule are not re-checked (none exist on any known database).
+- The approved pair is guaranteed by the database in both directions since the second form of
+  v30 (the INSERT trigger and the canonical unique index); the application checks it first and
+  answers the readable codes. Rows from before v30 are refused by the migration itself when they
+  are canonical duplicates; none exist on any known database.
 - `sourceTeamsTruncated` is reported to a club admin too (owner order 2026-10-04: the filtering
   must not hide a truncated source list); it tells only that the account's list was cut at one
   page, never a count.

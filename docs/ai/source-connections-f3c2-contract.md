@@ -770,7 +770,15 @@ final while its binding is active (discovery section 4).
   binding is active the approved Team ID cannot change: `setTeamSettings()` answers `409
   gpexe_team_bound` (pre-check under the team lock; the v30 trigger `23514
   gpexe_team_settings_bound_team_final` mapped to the same code, never SQL text); the same value
-  stays idempotent; without an active binding the F3b change works as before.
+  stays idempotent; without an active binding the F3b change works as before. **The database
+  guarantees the pair in both directions (v30, after the owner's external review):** an active
+  gpexe binding that is not its team's exact approved pair (pointer, setting present, canonical
+  ids equal) is refused on INSERT (`source_team_bindings_approved_pair`), and one OptiMove team per
+  canonical GPEXE team is a unique index (`gpexe_team_settings_canonical_team_id_key`; the
+  service answers `gpexe_team_taken`; Connect / Test withhold the team list fail-closed as
+  `sourceTeamsUnavailable: approved_pairs_ambiguous` should duplicates exist anyway). A successful
+  bind's audit row says `counted: false`; a source-reaching bind that did not succeed `counted:
+  true`; a local refusal `counted: false`.
 
 - **Who (replaces the F3c2d narrowing of D2):** one authorization path with two bases. An active
   platform admin in the platform workspace or in the owning club's workspace (`platform_admin`),

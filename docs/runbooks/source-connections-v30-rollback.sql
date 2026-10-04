@@ -10,15 +10,17 @@
 --     route relies on the trigger as the backstop of the approved pair);
 --   * a fresh, restore-verified backup exists;
 --   * the owner approved this database specifically.
--- It drops only what v30 created. It refuses, changing nothing, when
+-- It drops only what v30 created (the pair trigger and its function on
+-- source_team_bindings, the canonical unique index, the settings trigger and
+-- its function, the canonical function). It refuses, changing nothing, when
 --   * any migrations_v2 migration newer than v30 is recorded;
 --   * the protection is already needed: an ACTIVE gpexe source_team_binding
 --     exists for a team that has a gpexe_team_settings row (without the
 --     trigger that pair could silently diverge) — end the bindings first,
 --     through a path that exists by then, never by a raw UPDATE here.
--- Rows are not read for their content, copied or exported; dropping a
--- trigger and two functions touches no data. Nothing of v29 or earlier is
--- touched (v24's own guards on gpexe_team_settings stay).
+-- Rows are not read for their content, copied or exported; dropping two
+-- triggers, three functions and an index touches no data. Nothing of v29 or
+-- earlier is touched (v24's own guards on gpexe_team_settings stay).
 --
 -- One transaction: everything or nothing.
 begin;
@@ -26,11 +28,12 @@ begin;
 -- change holds a row lock for seconds. Never queue every other access
 -- behind it.
 set local lock_timeout = '5s';
--- The refusal below is checked under the locks the DROP needs anyway, so a
--- bind in flight (ROW SHARE on the settings row, a binding not yet committed)
--- makes this rollback fail at once (55P03) instead of slipping past the check.
+-- The refusal below is checked under the locks the DROPs need anyway, so a
+-- bind in flight (its binding row not yet committed, the settings row held
+-- FOR SHARE) makes this rollback fail at once (55P03) instead of slipping
+-- past the check. Bindings first, then settings: the bind path's own order.
+lock table training_load.source_team_bindings in access exclusive mode;
 lock table training_load.gpexe_team_settings in access exclusive mode;
-lock table training_load.source_team_bindings in share row exclusive mode;
 
 do $$
 declare
@@ -56,6 +59,9 @@ begin
   end if;
 end $$;
 
+drop index if exists training_load.gpexe_team_settings_canonical_team_id_key;
+drop trigger if exists source_team_bindings_check_pair on training_load.source_team_bindings;
+drop function if exists training_load.refuse_unapproved_gpexe_binding();
 drop trigger if exists gpexe_team_settings_bound_team_final on training_load.gpexe_team_settings;
 drop function if exists training_load.refuse_gpexe_team_change_while_bound();
 drop function if exists training_load.gpexe_team_id_canonical(text);
@@ -65,11 +71,14 @@ delete from public.schema_migrations
 
 do $$
 begin
-  if exists (select 1 from pg_trigger where tgname = 'gpexe_team_settings_bound_team_final') then
-    raise exception 'v30 rollback refused: the v30 trigger is still there';
+  if exists (select 1 from pg_trigger where tgname in ('gpexe_team_settings_bound_team_final', 'source_team_bindings_check_pair')) then
+    raise exception 'v30 rollback refused: a v30 trigger is still there';
   end if;
-  if exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'training_load' and p.proname in ('refuse_gpexe_team_change_while_bound', 'gpexe_team_id_canonical')) then
+  if exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'training_load' and p.proname in ('refuse_gpexe_team_change_while_bound', 'refuse_unapproved_gpexe_binding', 'gpexe_team_id_canonical')) then
     raise exception 'v30 rollback refused: a v30 function is still there';
+  end if;
+  if exists (select 1 from pg_indexes where schemaname = 'training_load' and indexname = 'gpexe_team_settings_canonical_team_id_key') then
+    raise exception 'v30 rollback refused: the v30 index is still there';
   end if;
 end $$;
 

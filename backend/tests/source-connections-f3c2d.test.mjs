@@ -4,7 +4,7 @@
 // No real credential, no real host: every network call goes to an in-process
 // fake fetch that records the exact URL, method, header names and whether
 // the Authorization value equals the issued marker token.
-import { after, before, test } from "node:test";
+import { after, afterEach, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fsp from "node:fs/promises";
@@ -135,9 +135,29 @@ async function created(adminUser, club) {
   assert.equal(r.status, 201, JSON.stringify(r.body));
   return r.body.connection;
 }
+// A binding needs its team's approved pair (v30): the setting is written as the
+// F3b route would (with a reason when it changes), the binding points at it.
+// gpexe_team_settings is unique per canonical GPEXE id across the database and
+// never deleted, so after each test the approved teams' bindings are ended and
+// their settings re-pointed to spare ids, which frees 980/981/983 again.
+const approvedTeams = [];
+let releaseCounter = 0;
 async function bind(connectionId, teamId, sourceTeamId, userId) {
-  return (await q(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id) values ($1,$2,'gpexe',$3,$4) returning id`, [teamId, connectionId, sourceTeamId, userId]))[0].id;
+  await q(
+    `insert into training_load.gpexe_team_settings (owner_team_id, gpexe_team_id, configured_by_user_id) values ($1,$2,$3)
+     on conflict (owner_team_id) do update set gpexe_team_id = excluded.gpexe_team_id, configured_by_user_id = excluded.configured_by_user_id, configured_at = now(), change_reason = 'test pair'`,
+    [teamId, sourceTeamId, userId],
+  );
+  approvedTeams.push(teamId);
+  return (await q(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id) values ($1,$2,'gpexe',$3,$4,$1) returning id`, [teamId, connectionId, sourceTeamId, userId]))[0].id;
 }
+afterEach(async () => {
+  for (const teamId of approvedTeams.splice(0)) {
+    await q(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = bound_by_user_id, end_reason = 'test cleanup' where team_id = $1 and state = 'active'`, [teamId]);
+    releaseCounter += 1;
+    await q(`update training_load.gpexe_team_settings set gpexe_team_id = $2, change_reason = 'test cleanup', configured_at = now() where owner_team_id = $1`, [teamId, String(910000000000 + releaseCounter)]);
+  }
+});
 // One active binding per source team across the whole database: a test that bound team 980 ends its bindings before the next one.
 async function endBindings(connectionId, userId) {
   await q(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'test finished' where connection_id = $1 and state = 'active'`, [connectionId, userId]);

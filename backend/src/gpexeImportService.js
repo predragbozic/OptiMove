@@ -241,7 +241,9 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
     await client.query("commit");
   } catch (error) {
     await client.query("rollback").catch(() => {});
-    if (error.code === "23505") throw new GpexeImportServiceError(409, "gpexe_team_taken", "This GPEXE team is already connected to another OptiMove team.");
+    if (error.code === "23505" && ["gpexe_team_settings_gpexe_team_id_key", "gpexe_team_settings_canonical_team_id_key"].includes(error.constraint)) {
+      throw new GpexeImportServiceError(409, "gpexe_team_taken", "This GPEXE team is already connected to another OptiMove team.");
+    }
     if (error.code === "23514" && error.constraint === "gpexe_team_settings_bound_team_final") throw new GpexeImportServiceError(409, "gpexe_team_bound", GPEXE_TEAM_BOUND_MESSAGE);
     if (error.code === "55P03" || error.code === "40P01") {
       throw new GpexeImportServiceError(409, "gpexe_change_busy", "A GPEXE check, import or connection change is running for this team. Try again when it has finished.");

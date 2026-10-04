@@ -624,7 +624,13 @@ first "no v30" conclusion was superseded). As built:
   (`migrations_v2/202610041000_training_load_v30_gpexe_team_settings_bound_final.sql`) keeps the
   approved Team ID (and the team) of a bound team's settings row final while its gpexe binding is
   active (trigger `gpexe_team_settings_bound_team_final`, `23514`; the same canonical value
-  passes; DELETE / TRUNCATE / repoint already refused by v24; no data change); the F3b
+  passes; DELETE / TRUNCATE / repoint already refused by v24; no data change) and, after the
+  owner's external review of PR #135, guarantees the pair on INSERT as well (trigger
+  `source_team_bindings_check_pair`: pointer to the own setting, setting present, canonical ids
+  equal — `source_team_bindings_approved_pair`) plus one OptiMove team per canonical GPEXE team
+  (unique index `gpexe_team_settings_canonical_team_id_key`; the migration refuses existing
+  duplicates without changing them; Connect / Test withhold the list fail-closed should they
+  exist anyway); the F3b
   `setTeamSettings()` answers `409 gpexe_team_bound` for the same case (pre-check under the team
   lock; the trigger mapped to the same code, never SQL text), the same value stays idempotent,
   and without an active binding the change works as before. Rollback
