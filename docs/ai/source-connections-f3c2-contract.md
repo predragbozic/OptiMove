@@ -776,7 +776,10 @@ final while its binding is active (discovery section 4).
   ids equal) is refused on INSERT (`source_team_bindings_approved_pair`), and one OptiMove team per
   canonical GPEXE team is a unique index (`gpexe_team_settings_canonical_team_id_key`; the
   service answers `gpexe_team_taken`; Connect / Test withhold the team list fail-closed as
-  `sourceTeamsUnavailable: approved_pairs_ambiguous` should duplicates exist anyway). A successful
+  `sourceTeamsUnavailable: approved_pairs_ambiguous` should duplicates exist anyway — the check is
+  global over every club's settings, not only the owning club's, and withholds the whole answer for
+  every basis whenever such a duplicate names a team the source offers or a pair of the owning club;
+  a duplicate between other clubs that names neither is not this connection's concern). A successful
   bind's audit row says `counted: false`; a source-reaching bind that did not succeed `counted:
   true`; a local refusal `counted: false`.
 
@@ -833,7 +836,9 @@ final while its binding is active (discovery section 4).
   the window is full; a successful bind is exempt (its repeat is a local no-op). The per-user
   count of bind rows runs outside the v29 partial index (no migration for it; the window is
   small). `55P03` and `40P01` are both `try_again`. The insert's database refusals map to stable
-  codes (`23505` → the two conflicts, `P0001` → `try_again`, `23514` / `23503` → `binding_refused`).
+  codes (`23505` → the two conflicts by exact index name, `P0001` → `try_again`, the v30 pair
+  trigger's `23514` → `team_setting_missing` / `team_setting_mismatch` by constraint name, any other
+  `23514` / `23503` → `binding_refused`).
   Out-of-transaction audit rows are written under the row `lock_timeout`.
 - **Lock order proof (condition 3 kept):** the connection row is taken before the team's
   try-lock; the trigger's reverse order is a try-lock; a Connect / Reconnect / Test of the same

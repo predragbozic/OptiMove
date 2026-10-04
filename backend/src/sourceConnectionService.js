@@ -663,22 +663,33 @@ async function attempt({ ctx, sourceSystem, id, body, action }) {
     // The truncation of the source list is reported to both.
     let presented = null;
     if (read.ok && !bindBody && Array.isArray(read.sourceTeams)) {
-      // Two settings rows that are one GPEXE team in canonical form ("981" and
-      // "0981") make the pairs ambiguous: the v30 unique index refuses that
-      // state, and should it exist anyway the list is withheld (fail closed)
-      // instead of one row silently winning.
-      const approved = new Map();
-      let ambiguous = false;
-      for (const r of (await client.query(
+      // Two settings rows anywhere in the database that are one GPEXE team in
+      // canonical form ("981" in club A, "0981" in club B) make the allowlist
+      // ambiguous: the v30 unique index refuses that state, and should it exist
+      // anyway (the index missing), the list is withheld fail-closed — for
+      // every basis — when any such duplicate names a team the source offers or
+      // a team of the owning club's own pairs. The check is GLOBAL (every club),
+      // not scoped to the owning club, and no row ever wins over another.
+      const duplicated = new Set((await client.query(
+        `select training_load.gpexe_team_id_canonical(gpexe_team_id) as canonical
+           from training_load.gpexe_team_settings
+          group by 1 having count(*) > 1`,
+      )).rows.map((r) => r.canonical));
+      const own = (await client.query(
         `select s.owner_team_id as team_id, s.gpexe_team_id, t.name as team_name
            from training_load.gpexe_team_settings s join public.teams t on t.id = s.owner_team_id
           where t.club_id = $1 and coalesce(t.is_active, true)`,
         [row.owner_club_id],
-      )).rows) {
-        const key = canonicalGpexeTeamId(r.gpexe_team_id);
-        if (approved.has(key)) ambiguous = true;
-        approved.set(key, r);
-      }
+      )).rows;
+      const ownKeys = own.map((r) => canonicalGpexeTeamId(r.gpexe_team_id));
+      const ambiguous = (duplicated.size > 0 && (
+        read.sourceTeams.some((t) => duplicated.has(t.sourceTeamId))
+        || ownKeys.some((key) => duplicated.has(key))))
+        // The two reads above are two statements: a duplicate committed between
+        // them would be in `own` but not in `duplicated`, so the club's own rows
+        // are checked in memory as well — never one row over another.
+        || new Set(ownKeys).size !== ownKeys.length;
+      const approved = new Map(own.map((r) => [canonicalGpexeTeamId(r.gpexe_team_id), r]));
       if (ambiguous) {
         presented = { unavailable: "approved_pairs_ambiguous" };
       } else {

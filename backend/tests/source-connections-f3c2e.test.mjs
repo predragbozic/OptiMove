@@ -1152,6 +1152,52 @@ test("25. migration v30 applies on v29 (two triggers, three functions, the canon
     await assert.rejects(k.query(`delete from training_load.gpexe_team_settings where owner_team_id = $1`, [team]), /never deleted/);
     // The rollback refuses while the protection is needed.
     const rollbackSql = await fsp.readFile(V30_ROLLBACK, "utf8");
+    // The rollback never waits on a business transaction (NOWAIT). The cycle the owner named is reproduced for
+    // real: a Settings transaction holds its row (team2, unbound) → the rollback is started and left running →
+    // the Settings transaction makes a REAL canonical change, whose v30 trigger reads source_team_bindings and
+    // whose v24 trigger takes the team try-lock. With NOWAIT the rollback has already given up (55P03, nothing
+    // dropped, its bindings lock released by its own abort) and the UPDATE runs through and commits; with a
+    // waiting lock the rollback would hold the bindings table while waiting on settings, the UPDATE's trigger
+    // read would wait on the bindings → a cycle and a 40P01 on one side (the mutation that fails this test).
+    {
+      const busy = new pg.Client({ connectionString: m.url });
+      await busy.connect();
+      try {
+        await busy.query("begin");
+        await busy.query(`select 1 from training_load.gpexe_team_settings where owner_team_id = $1 for update`, [team2]);
+        const started = Date.now();
+        let rollbackSettled = false;
+        const rollbackTry = k.query(rollbackSql).then(() => null, (e) => e.code).finally(() => { rollbackSettled = true; });
+        // Give the rollback the chance to reach its lock before the Settings change moves on (it settles at once with NOWAIT).
+        for (let i = 0; i < 120 && !rollbackSettled; i += 1) {
+          const waiting = (await busy.query(`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query ilike '%lock table%'`)).rows[0].n;
+          if (waiting > 0) break;
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        const settingsChange = await busy.query(`update training_load.gpexe_team_settings set gpexe_team_id = '983', change_reason = 'while a rollback was tried', configured_by_user_id = $2, configured_at = now() where owner_team_id = $1`, [team2, user]).then(() => null, (e) => e.code);
+        const refused = await rollbackTry;
+        const elapsed = Date.now() - started;
+        await k.query("rollback").catch(() => {});
+        assert.deepEqual([refused, settingsChange], ["55P03", null], "the rollback gave up at once (55P03) and the Settings transaction, whose trigger read the bindings, went through — no 40P01 on either side");
+        assert.ok(elapsed < 2_000, `at once, not after a lock wait (${elapsed} ms)`);
+        assert.deepEqual(await catalog(), v30, "a refused rollback drops nothing");
+        await busy.query("commit");
+        assert.equal((await k.query(`select gpexe_team_id from training_load.gpexe_team_settings where owner_team_id = $1`, [team2])).rows[0].gpexe_team_id, "983", "the business transaction committed its change");
+        await busy.query(`update training_load.gpexe_team_settings set gpexe_team_id = '982', change_reason = 'back', configured_by_user_id = $2, configured_at = now() where owner_team_id = $1`, [team2, user]);
+        // A binding operation in flight: the same fail-fast refusal; the binding commits normally afterwards.
+        await busy.query("begin");
+        const inFlight = (await busy.query(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id) values ($1, $2, 'gpexe', '982', $3, $1) returning id`, [team2, connId, user])).rows[0].id;
+        const refused2 = await k.query(rollbackSql).then(() => null, (e) => e.code);
+        await k.query("rollback").catch(() => {});
+        assert.equal(refused2, "55P03");
+        assert.deepEqual(await catalog(), v30);
+        await busy.query("commit");
+        await k.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'test' where id = $1`, [inFlight, user]);
+        assert.equal((await k.query(`select count(*)::int as n from pg_locks l join pg_database d on d.oid = l.database where d.datname = current_database() and l.locktype = 'relation' and l.mode = 'AccessExclusiveLock' and l.granted`)).rows[0].n, 0, "nothing left locked by the refused rollbacks");
+      } finally {
+        await busy.end();
+      }
+    }
     await assert.rejects(k.query(rollbackSql), /v30 rollback refused: 1 active gpexe binding/);
     await k.query("rollback").catch(() => {});
     assert.deepEqual(await catalog(), v30, "a refused rollback drops nothing");
@@ -1235,6 +1281,44 @@ test("27. the audit fact `counted` agrees with the throttle's own predicate on e
   assert.ok(rows.some((r) => r.action === "bind" && r.outcome === "ok" && r.metadata.counted === false), "a successful bind row says false");
   assert.ok(rows.some((r) => r.action === "bind" && r.outcome === "failed" && r.metadata.counted === true), "a failed source-reaching bind row says true");
   assert.ok(rows.some((r) => r.action === "bind" && r.outcome === "refused" && r.error_code !== "source_auth_rejected" && r.metadata.counted === false), "a local refusal says false");
+});
+
+test("28. a canonical duplicate ACROSS clubs ('981' in club A, '0981' in club B) is caught by the global check: with the canonical index dropped on this disposable database only, Connect / Test of club A's connection withhold the team list fail-closed for the club admin and for the platform admin (sourceTeamsUnavailable: approved_pairs_ambiguous; no name, id, count or annotation leaves); the index is put back and the catalog is right again", async () => {
+  const a = await org();
+  const b = await org({ approve: false });
+  const ca = await clubAdmin(a.club);
+  const pa = await platformAdmin();
+  const conn = await verified(ca, a.club);
+  await admin.query(`drop index training_load.gpexe_team_settings_canonical_team_id_key`);
+  try {
+    await approvePair(b.team, "0981", b.configurer);
+    useSource();
+    for (const [who, cookie] of [["club admin", ca.cookie], ["platform admin", pa.cookie]]) {
+      const t = await api(`/gpexe/connections/${conn.id}/test`, { method: "POST", cookie, body: {} });
+      assert.equal(t.status, 200, `${who}: ${JSON.stringify(t.body)}`);
+      assert.deepEqual([t.body.result.state, t.body.result.sourceTeams, t.body.result.sourceTeamCount, t.body.result.sourceTeamsTruncated, t.body.result.sourceTeamsUnavailable], ["verified", null, null, null, "approved_pairs_ambiguous"], who);
+      const text = JSON.stringify(t.body);
+      assert.ok(!text.includes(SOURCE_TEAM_NAME_MARKER) && !text.includes('"sourceTeamId"') && !text.includes("approvedTeamId"), `${who}: nothing of the list leaves`);
+      otherTeamFacts(text, []);
+    }
+    // The connect path withholds it the same way.
+    const fresh = await created(ca, a.club);
+    useSource();
+    const c = await api(`/gpexe/connections/${fresh.id}/connect`, { method: "POST", cookie: ca.cookie, body: { username: USERNAME, password: PASSWORD } });
+    assert.deepEqual([c.status, c.body.result.state, c.body.result.sourceTeamsUnavailable, c.body.result.sourceTeams], [200, "verified", "approved_pairs_ambiguous", null]);
+    // Out of the way before the index returns.
+    releaseCounter += 1;
+    await q(`update training_load.gpexe_team_settings set gpexe_team_id = $2, change_reason = 'test cleanup' where owner_team_id = $1`, [b.team, String(930000000000 + releaseCounter)]);
+  } finally {
+    await admin.query(`create unique index gpexe_team_settings_canonical_team_id_key on training_load.gpexe_team_settings (training_load.gpexe_team_id_canonical(gpexe_team_id))`);
+  }
+  const indexDefs = (await q(`select indexdef from pg_indexes where schemaname = 'training_load' and indexname = 'gpexe_team_settings_canonical_team_id_key'`)).map((r) => r.indexdef);
+  assert.equal(indexDefs.length, 1, "the catalog is right again");
+  assert.match(indexDefs[0], /^CREATE UNIQUE INDEX gpexe_team_settings_canonical_team_id_key ON training_load\.gpexe_team_settings USING btree \((training_load\.)?gpexe_team_id_canonical\(gpexe_team_id\)\)$/);
+  // With the duplicate gone the list is back for club A.
+  useSource();
+  const again = await api(`/gpexe/connections/${conn.id}/test`, { method: "POST", cookie: ca.cookie, body: {}, allowed: [SOURCE_TEAM_NAME_MARKER] });
+  assert.deepEqual([again.body.result.sourceTeamsUnavailable, again.body.result.sourceTeams.map((t) => t.sourceTeamId)], [undefined, ["981", "982"]]);
 });
 
 test("19. this suite runs on a disposable database only and bound nothing persistent: the database is the disposable one and every binding it made is ended", async () => {

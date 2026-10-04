@@ -78,7 +78,16 @@ not take is `400 invalid_body` and is not an attempt.
 | other shape | `source_answer_unexpected` | credential stored, `linked_untested` | `source_unavailable` |
 
 The answer of a successful attempt is `{ result: { outcome, state, code, boundTeamsChecked,
-sourceTeamCount, exchangeStatusClass }, connection }`. A COMMIT whose answer was lost is
+sourceTeamCount, sourceTeams, sourceTeamsTruncated, exchangeStatusClass }, connection }` — for a
+Connect / Test `sourceTeams` is the list the administrator may choose from (`sourceTeamId`,
+`name`, `approvedTeamId`, `approvedTeamName`; a club admin: the approved pairs of the club only),
+`sourceTeamCount` its count, `sourceTeamsTruncated` whether the source list was cut at one page.
+When a canonical duplicate anywhere in `gpexe_team_settings` (any club) names a team the source
+offers or one of the owning club's own pairs, the whole list is withheld for every basis:
+`sourceTeams`, `sourceTeamCount` and `sourceTeamsTruncated` are `null` and
+`sourceTeamsUnavailable: "approved_pairs_ambiguous"` is set — a `200 verified` with that field is
+not a source problem but a Settings one: resolve the duplicate Team ID through Settings, with a
+reason (the v30 unique index makes the state impossible on a migrated database). A COMMIT whose answer was lost is
 verified on a fresh connection inside the request (`commitConfirmation:
 "verified_after_commit_error"`); when that cannot resolve it, `503 outcome_unknown` with
 a second audit row `unknown` by the same admin — read the connection's state, do not
@@ -167,7 +176,9 @@ COMMIT answer follows the attempt discipline (`commitConfirmation: verified_afte
 or `503 outcome_unknown` with `teamId`, a second `unknown` audit row naming the team, and the
 retry answering the existing binding without a second row). Unbind, Disconnect and replacing
 a binding do not exist in this step. The database's own refusals surface as stable codes
-(`team_already_bound` / `source_team_already_bound`, `try_again`, `binding_refused`), never as
+(`team_already_bound` / `source_team_already_bound`, `try_again`, `team_setting_missing` /
+`team_setting_mismatch` from the v30 pair trigger, `binding_refused` only for a guard the service
+does not map by name), never as
 SQL text; a lock wait that ran out or a deadlock chosen as victim is `try_again`.
 
 ### v30 (F3c2e): the approved pair is final while bound
@@ -180,8 +191,10 @@ its settings row is refused — `23514`, that constraint name; the same canonica
 the trigger `source_team_bindings_check_pair` (BEFORE INSERT: an active gpexe binding must point
 at its own team's settings row, that row must exist, and the canonical ids must be equal —
 `23514`, constraint `source_team_bindings_approved_pair`, or `…_approved_pair_missing` when the
-team has no settings row; the service answers `binding_refused`
-for it, having checked the pair itself first), and the unique index
+team has no settings row; the service, having checked the pair itself first under the same
+locks, maps `…_approved_pair_missing` to `409 team_setting_missing` and `…_approved_pair` to
+`409 team_setting_mismatch`; `binding_refused` stays only for a database guard the service does
+not map by name), and the unique index
 `gpexe_team_settings_canonical_team_id_key` (one OptiMove team per canonical GPEXE team; the
 service answers `gpexe_team_taken`). The migration refuses, changing nothing, when canonical
 duplicates already exist (resolve them by hand through Settings, with a reason) or when an
@@ -208,7 +221,10 @@ it only through a merge and deploy the owner decides). Rollback:
 `docs/runbooks/source-connections-v30-rollback.sql` — refuses under a later migration and while
 an active gpexe binding of a team with a settings row relies on the protection; rehearsed on a
 disposable database (apply on v29 → invariants → rollback → identical v29 catalog → apply again →
-refusals; a file failing at its last statement applies nothing).
+refusals; a file failing at its last statement applies nothing). The rollback takes both tables
+ACCESS EXCLUSIVE **NOWAIT**: a Settings change or a bind in flight makes it fail at once (`55P03`)
+with nothing dropped and nothing left locked — never a wait that could form a cycle with a
+Settings UPDATE (whose trigger reads the bindings) — and it is simply run again when quiet.
 
 ### Recorded limits of F3c2e (non-blocking, for the owner)
 

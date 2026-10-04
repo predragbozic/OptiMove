@@ -12,7 +12,8 @@
 --   * the owner approved this database specifically.
 -- It drops only what v30 created (the pair trigger and its function on
 -- source_team_bindings, the canonical unique index, the settings trigger and
--- its function, the canonical function). It refuses, changing nothing, when
+-- its function, the canonical function). It refuses, changing nothing, when a
+-- Settings change or a bind is in flight (NOWAIT, 55P03), and when
 --   * any migrations_v2 migration newer than v30 is recorded;
 --   * the protection is already needed: an ACTIVE gpexe source_team_binding
 --     exists for a team that has a gpexe_team_settings row (without the
@@ -22,18 +23,25 @@
 -- triggers, three functions and an index touches no data. Nothing of v29 or
 -- earlier is touched (v24's own guards on gpexe_team_settings stay).
 --
--- One transaction: everything or nothing.
+-- One transaction: everything or nothing. Run it as
+--   psql -v ON_ERROR_STOP=1 -f docs/runbooks/source-connections-v30-rollback.sql
+-- so a refusal (55P03 while something is in flight, or one of the checks)
+-- stops the script at once instead of erroring on through an aborted
+-- transaction; nothing is dropped either way — run it again when quiet.
 begin;
--- DDL needs ACCESS EXCLUSIVE on gpexe_team_settings; a bind or a settings
--- change holds a row lock for seconds. Never queue every other access
--- behind it.
+-- DDL needs ACCESS EXCLUSIVE on both tables. The locks are taken NOWAIT:
+-- a Settings change or a bind in flight (any lock on either table) makes
+-- this rollback fail at once with 55P03 and change nothing — it never waits,
+-- so it can never be one side of a lock cycle (a Settings UPDATE holds the
+-- settings row and its trigger then reads the bindings; a rollback waiting
+-- on the settings table while holding the bindings table would be the other
+-- side, and the deadlock detector could pick the business transaction).
+-- A refused rollback releases everything it took by its own rollback; run
+-- it again when the tables are quiet. The checks below run under these
+-- locks, so no binding can be committed between the check and the DROPs.
 set local lock_timeout = '5s';
--- The refusal below is checked under the locks the DROPs need anyway, so a
--- bind in flight (its binding row not yet committed, the settings row held
--- FOR SHARE) makes this rollback fail at once (55P03) instead of slipping
--- past the check. Bindings first, then settings: the bind path's own order.
-lock table training_load.source_team_bindings in access exclusive mode;
-lock table training_load.gpexe_team_settings in access exclusive mode;
+lock table training_load.source_team_bindings in access exclusive mode nowait;
+lock table training_load.gpexe_team_settings in access exclusive mode nowait;
 
 do $$
 declare
