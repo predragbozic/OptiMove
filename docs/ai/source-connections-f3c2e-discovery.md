@@ -149,3 +149,48 @@ is `false` only when the source list was complete. Nothing is preselected, store
 the list, and the chosen team is verified again, alone, by the bind, which must name an approved
 pair whoever calls it. A bind that reached the source without succeeding counts in the 5 / 15 min
 window like a credential attempt; a successful bind does not.
+
+## 7. F3c2f — Unbind: discovery result (2026-10-04, before implementation)
+
+Owner order: a safe, local, idempotent way to end an active binding, required before the first
+real production binding; no F3c3 UI, no importer cut-over, no GPEXE request.
+
+- **Ending is already in the schema (v27):** `source_team_bindings.state` (`active` → `ended`),
+  `ended_at`, `ended_by_user_id`, `end_reason`, bound together by `source_team_bindings_ended_facts`;
+  the immutability trigger allows exactly that one change of an active row (every other column
+  immutable, an ended row frozen, DELETE / TRUNCATE refused) and takes the team's import try-lock
+  itself (`hold_gpexe_team_lock(old.team_id, 'ending a binding')`). The two partial unique indexes
+  cover active rows only, so an ended row frees the team and the source team. The v30 pair trigger
+  checks INSERTs of active rows only; the v30 settings trigger looks at active bindings only, so a
+  team's approved GPEXE Team ID can change again once its binding is ended; the v30 rollback
+  refuses only while an active binding exists.
+- **The audit already allows it (v27):** action `unbind` is in the action CHECK, requires `team_id`
+  (`source_connection_audit_bind_names_team`), the `reason` column (1–500) exists, basis
+  `platform_admin` / `club_admin`; append-only.
+- **No request table fits:** `training.activity_roster_requests`, `training.activity_write_requests`
+  and `training_load.metric_write_requests` are keyed to activities / metrics by foreign key. The
+  audit row of a successful Unbind is the request record instead: append-only, per connection,
+  team and performing user, with the idempotency identity in its metadata (`request_id` — the
+  client's UUID `requestKey` —, `request_hash` — SHA-256 of the canonical body —; neither name is a
+  secret for `key_name_is_secret`; checked by the SQL backstop like every other key), read under
+  the connection row and binding row locks before any write.
+- **Migration v31: not needed.** v27–v30 cover the end state, its facts, the audit action, the
+  append-only history and the lock the trigger takes.
+
+**Superseded at implementation (contract section 2.7, the normative text):** the request record is
+read right after the connection row, before any team lock, and only the TARGET team's import
+try-lock is taken (an Unbind changes neither the credential nor the connection's state). The order
+below is the pre-implementation derivation, kept as history.
+
+Lock order of one Unbind as first derived (the binding contract's, without the network): per-user advisory lock
+(bounded) → connection row `FOR NO KEY UPDATE` (2 s, `try_again`) → every active bound team of the
+connection and the target team, ascending, once each, try-lock (`try_again`) → the binding row
+`FOR UPDATE` (2 s, `try_again`) → the request record (same key: the saved answer; same key with
+another body: `request_key_reused`) → the checks (`binding_already_ended`, `binding_mismatch`
+against `expected { teamId, sourceTeamId }`) → the right and the club re-checked `FOR SHARE` →
+`UPDATE … set state = 'ended' … where state = 'active'` (the trigger re-takes the held try-lock) →
+audit `unbind` in the same transaction → the bounded COMMIT (`verified_after_commit_error` /
+`503 outcome_unknown` with the team; the retry with the same key replays). `55P03` / `40P01` →
+`try_again`. The connection need not be `verified`. No cycle: the same order as a bind minus the
+source call; a Settings change, a bind, an import and the team move all take the team try-lock
+first and meet the Unbind's held lock at once, or hold it and make the Unbind answer `try_again`.

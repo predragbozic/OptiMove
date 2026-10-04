@@ -846,7 +846,62 @@ final while its binding is active (discovery section 4).
   the bind waits for only within `lock_timeout`; a Check now / import holding the team lock makes
   the bind `try_again` with zero requests.
 - **Not in this step:** Unbind, Disconnect, Delete, replacing a binding, binding any of the eight
-  visible teams automatically, F3c2f (importer credential resolver, cut-over), F3c3 UI.
+  visible teams automatically, the importer credential resolver and the cut-over (a later step), F3c3 UI.
+
+### 2.7 F3c2f as built (owner order 2026-10-04; branch `feature/gpexe-unbind-f3c2f`; not merged)
+
+Discovery: `docs/ai/source-connections-f3c2e-discovery.md` section 7. No migration.
+
+- **Route:** `POST /api/training-load/sources/:source/connections/:id/bindings/:bindingId/unbind`
+  `{ requestKey, reason, expected: { teamId, sourceTeamId } }` — nothing else (`400 invalid_body`
+  for an unknown field, a missing / empty / multi-line / over-long reason, a non-UUID
+  `requestKey`, a malformed `expected`). The same authorization path as F3c2e (an active platform
+  admin in the platform or the owning club's workspace, or the owning club's active admin in that
+  club's workspace); a coach, another club's admin, a wrong workspace, an archived club, a binding
+  of another connection or club, an unknown or malformed id: the same `404`; without a session
+  `401`. The right and the club are re-checked `FOR SHARE` right before the write.
+- **Local only:** no request to the source, no exchange, no credential change (the connection
+  need not be `verified`), nothing deleted; the binding row goes `active` → `ended` with
+  `ended_at`, `ended_by_user_id`, `end_reason`; the settings row and the provenance pointer stay;
+  GET lists active bindings only and the ended row stays readable history.
+- **Lock order:** per-user lock → connection row `FOR NO KEY UPDATE` → the request record (a
+  replay is answered here, before any team lock, so a retry of a lost answer never meets a busy
+  team) → the TARGET team's import try-lock only (an Unbind changes neither the credential nor the
+  connection's state, so condition 3's "every bound team" — the rule for credential attempts —
+  does not apply; an import of a sibling team never blocks the remedy) → the binding row
+  `FOR UPDATE` → checks → rights → UPDATE (`where state = 'active'`; the v27 immutability trigger
+  allows exactly this change and re-takes the held try-lock) → audit `unbind` → bounded COMMIT.
+  `55P03` and `40P01` are `try_again`; nothing waits without a bound. An import, a Check now, a
+  Settings change, a bind or a team move of THAT team holding its lock makes the Unbind answer
+  `try_again`; an Unbind in flight makes them answer at once (`try_again` / `gpexe_change_busy` /
+  the trigger's `P0001`). `ended_at` is the real moment (`clock_timestamp()`), not the
+  transaction's start.
+- **Outcomes:** the active binding ended → `200` `{ result: { action: "unbind", outcome: "ok",
+  replayed: false, binding: { bindingId, teamId, teamName, sourceTeamId, state: "ended", boundAt,
+  endedAt, endedByUserId, endReason }, auditId, sourceContacted: false }, connection }`; the same
+  `requestKey` again (same user, same body) → `200` with `replayed: true`, the same `auditId` and
+  facts, no second UPDATE and no second audit row; the same key with another body or for another
+  binding of the connection → `409 request_key_reused` (the record names the binding it ended,
+  `binding_id` in its metadata; the answer's `current` describes THAT binding, so its `bindingId`
+  may differ from the path's — a client compares `current.bindingId` before showing it as the
+  requested binding's state); a new key on an already ended binding → `409 binding_already_ended` with
+  `current { bindingId, teamId, sourceTeamId, state, endedAt }`; an `expected` pair that is not the
+  binding's → `409 binding_mismatch` with `current`; a COMMIT whose answer was lost →
+  `commitConfirmation: verified_after_commit_error`; an unverifiable COMMIT → `503 outcome_unknown`
+  naming the team, a second `unknown` audit row with the team, and the retry with the same key
+  replays. Another user's identical key is another request (the record is per user).
+- **Audit:** one row `unbind` per attempt that reached the checks: `team_id`, basis, the `reason`
+  column, metadata `host_key`, `credential_kind`, `source_team_id`, `binding_id`,
+  `bound_team_count` (after), `counted: false`, `source_contacted: false`, `attempt_id`,
+  `request_id`, `request_hash`; refusals `refused` with their code (uncounted; the same user
+  repeating the same `requestKey` into the same refusal adds no row); a `404` is not audited. A
+  binding of an archived club cannot be ended through the route (the same 404 as every other
+  read of an archived club): restore the club first. Nothing of an Unbind enters the
+  5 / 15 min authentication window.
+- **After an Unbind:** the v30 settings trigger no longer blocks a change of the team's approved
+  GPEXE Team ID; the team can take a new valid binding; the freed source team can be bound to
+  another approved pair under every v30 rule; the v30 rollback refuses only while an active
+  binding exists.
 
 ## 3. Test plan (written with the adapter; all on disposable `optimove_tests_gpexe_*` databases)
 
