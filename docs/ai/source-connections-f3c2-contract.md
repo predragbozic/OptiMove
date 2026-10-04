@@ -913,6 +913,109 @@ Discovery: `docs/ai/source-connections-f3c2e-discovery.md` section 7. No migrati
   another approved pair under every v30 rule; the v30 rollback refuses only while an active
   binding exists.
 
+### 2.8 F3c2g as built (owner order 2026-10-04; branch `feature/gpexe-importer-resolver-f3c2g`; not merged)
+
+The importer's credential resolver and the strict transition rule. Discovery, entry-point map and
+the open decisions: `docs/ai/source-connections-f3c2g-discovery.md`. No migration; one route change —
+the importer router's error-detail allowlist gains `reason` (a new field on `source_connection_unavailable`,
+shown to administrators only); no UI, no GPEXE request; `GPEXE_API_TOKEN` stays in the configuration and
+on Render untouched.
+
+- **The resolver** (`backend/src/sourceImportCredentialResolver.js`), for exactly one OptiMove team
+  and one source system — it takes no URL, host, source team id or credential from its caller:
+  - phase 1, inside the caller's short transaction under the team import lock
+    (`resolveImportSourceFacts`): the team (active, its club), at most one active binding
+    (`binding_ambiguous` otherwise), the approved pair of `gpexe_team_settings` equal to the
+    binding's source team (`team_setting_missing` / `team_setting_mismatch`), the connection of
+    the binding owned by the team's club and the club active (`connection_foreign_club`), the
+    connection `verified` (`connection_not_usable` for every other state — an import never
+    performs a Test), the host approved in the catalog AND resolvable in code
+    (`host_not_allowed`); it returns `{ path: "legacy_env" }` for a team without a binding or the
+    closed facts of the binding path (ids, host key, API family, the encrypted parts with their
+    AAD context) — never a URL;
+  - phase 2, after COMMIT and right before the first request (`openImportSource`): the key ring
+    (`key_missing`), the decrypt with the row's own context (`credential_unreadable`), the adapter
+    of `createSourceAdapter()` bound to the binding's source team on the approved host
+    (`adapter_not_available` for a family without one — `e03` therefore cannot be an import
+    connection); the plaintext reference and the encrypted parts are dropped in `finally`; the
+    adapter closure is the only holder of the plaintext for the run;
+  - phase 3, during the run, before every source operation and without a lock
+    (`assertImportSourceStillUsable`): the same facts against the identity the run started with
+    — an ended or replaced binding is `binding_ended`, a connection that left `verified` is
+    `connection_not_usable`, a retired host `host_not_allowed`, a changed pair or club the codes
+    above; the run stops before its next request and nothing already recorded is undone;
+  - a refused credential during a read (a 401, `source_auth_rejected`; a 403 —
+    `source_access_refused` — fails the check with its own code and keeps the state):
+    `autoInvalidateImportSource` moves the connection `verified → needs_reconnect` with exactly
+    one `auto_invalidate` audit row (basis `system`, no user, metadata `binding_id`,
+    `source_team_id`, `trigger: import_read`; idempotent and conditional on the credential the run
+    held — a connection already out of `verified`, or reconnected meanwhile, gets no row) in its
+    own transaction bounded server- and client-side, after the check's own outcome was written;
+    the check fails with the code; **no fallback**.
+- **The transition rule** (D8 made strict): a team with an active binding reads only through it —
+  the legacy client factory is not called and the environment variable is not read, whatever
+  happens later; a binding that is not usable answers `409` (or `503` for `key_missing`)
+  `source_connection_unavailable` with the precise code as `reason` at `startCheck` (no check
+  row; the reason for an administrator only), or the precise code on the check row when it is
+  found after the row exists (`credential_unreadable` — the decrypt happens once, after COMMIT —
+  or anything that moves mid-run); a
+  team without a binding keeps the legacy path, labelled `legacy_env` (the existing
+  `GPEXE_API_TOKEN` / `e03` client, `503 gpexe_token_missing` without the variable). The path is
+  decided once per check under the team lock: an unlocked pre-read (which alone decides whether
+  the legacy client is built, and proves the key ring and the key version (no decrypt) before any row
+  exists) and the locked read must agree, otherwise `409 gpexe_change_busy` (retry).
+- **The importer** (`startCheck` / `runCheck` in `backend/src/gpexeImportService.js`): the binding
+  path's reads go through `importClientFor(source)` — the adapter's `listSessionsByDay` and
+  `fetchSessionBundle`, each preceded by the re-validation, the bound team enforced
+  (`source_team_mismatch` for any other), GET only; `drillsStatus.complete !== true` stops the
+  run with `drill_set_incomplete` before the session is recorded (the mapper would otherwise
+  skip the missing drill's metrics and the candidate would look complete); an empty,
+  successfully read `players` is a valid empty drill and is recorded; `drillsStatus` and
+  `drillLabels` are stripped so the stored snapshot keeps the F1 bundle contract (drill-label
+  storage stays open). The path is written to the server log by code only (`legacy_env` /
+  `source_connection` with the connection and binding ids); no API field carries it and no audit
+  row records it (discovery Q1: a v31 column on the check row is the recommended closure, a
+  separate decision).
+- **Round-2 hardening (internal `security-reviewer` / `code-reviewer` / `db-reviewer`, 2026-10-04):**
+  the run's identity carries a **fingerprint of the stored credential** (sha256 of its random nonce,
+  never the credential): a Reconnect during a run stops it with `connection_credential_changed`,
+  and the auto-invalidation is conditional on that fingerprint, so a stale 401 can never move a
+  freshly reconnected connection; the **legacy path is re-validated the same way** before every
+  operation (`legacyImportClientFor`: a binding that appears mid-run stops the run with
+  `binding_started`); the re-validation window is **one bundle** (before and after the adapter's
+  dependent reads of one session, so a bundle read across the end of its binding is dropped before
+  it is recorded; a single bundle can be many requests, each with its own timeout); the binding
+  path reports **progress per request** (every adapter response pings the check's heartbeat, as the
+  legacy client does, so a slow source never makes a live check look abandoned); **only a 401
+  (`source_auth_rejected`) auto-invalidates** — a 403 (`source_access_refused`) fails the check and
+  keeps the state, the F3c2e bind rule for a team the credential cannot see; the invalidation runs
+  only after the check's own outcome is written, in its own transaction bounded on the client side
+  too (`AUTO_INVALIDATE_BOUND_MS`, the client destroyed on an unanswered COMMIT), and can never
+  change that outcome; the **check-start COMMIT is bounded** (15 s): once sent, its loss is never
+  "nothing was written" — the row is looked for on a fresh connection and the check runs when it
+  is found, otherwise `503 check_outcome_unknown` and the next start is free; the lock transaction
+  pins READ COMMITTED; the approved pair is compared **canonically** (the v30 / bind / Settings
+  rule, so a stored `0981` imports as `981`); the pre-read proves the key ring **without a decrypt**
+  (the plaintext is materialised once, after COMMIT); the facts and the opened source are
+  **branded** (a caller cannot hand the resolver a host, catalog row, source team or encrypted
+  parts of its own: `context_not_issued`); the precise `reason` of a refusal is returned to an
+  **administrator** (platform, or the team's club) only — a coach gets the stable code and the
+  sentence to contact an administrator. An auto-invalidation that meets the connection row held by
+  a Test / Reconnect in flight times out after 2 s and is skipped (logged by code only): the
+  attempt's own outcome sets the state, and the next refused check re-applies it. During a run the
+  preview dry-run of each session still takes the team import lock briefly (pre-existing F1
+  design; no network inside it).
+- **Serialization** with every other writer through the v24 team lock key: `startCheck` waits at
+  most `SETTINGS_LOCK_TIMEOUT_MS` for the team import lock (`409 gpexe_change_busy`), while a
+  Test / Reconnect / bind holds that team's try-lock for its whole attempt, an Unbind for its
+  write and a Settings change for its write; after COMMIT the run holds no transaction or lock
+  across a network call (the preview dry-run of each recorded session takes the team lock
+  briefly, as F1 always did, with no network inside it).
+- Tests: `backend/tests/gpexe-import-credential-resolver.test.mjs` (a disposable database through
+  v30, a fake source serving the exchange, the team reads and the rest_v1 session reads derived
+  from the shared bundle fixture; the legacy path through a fake e03-style client; the legacy
+  factory as a trap on the binding path; the resolver's own contract with a fake executor).
+
 ## 3. Test plan (written with the adapter; all on disposable `optimove_tests_gpexe_*` databases)
 
 Fake source server (in-process `http` server, as `gpexe-in-app-import.test.mjs` does): answers
@@ -947,7 +1050,9 @@ hang on demand, and records every request (method, path, header NAMES, whether a
    `system` basis on that row is refused by the v27 CHECK, tested); state as committed; the
    client's re-read shows it.
 10. Import client: a bound team's read uses the stored credential of its connection; with none
-    and the env token present, the env fallback (D8) is used and audited as `system`.
+    and the env token present, the env fallback (D8) is used. *As built in F3c2g (section 2.8):
+    the path is logged by code only — the v27 audit CHECK gives `system` only to
+    `auto_invalidate`, so "audited as system" is not met without a schema change (discovery Q1).*
 
 External review triggers 2 and 4 are active for the whole of F3c2: the PR is never declared
 merge-ready by the main session.

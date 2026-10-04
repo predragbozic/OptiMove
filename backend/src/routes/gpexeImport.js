@@ -5,6 +5,7 @@
 import { Router } from "express";
 import { query } from "../db.js";
 import { canApproveGpexeImport, resolveGpexeTeamAccess } from "../gpexeImportAccess.js";
+import { holdsClubAdminRole } from "../authz.js";
 import * as service from "../gpexeImportService.js";
 
 const router = Router();
@@ -26,9 +27,17 @@ function handle(fn) {
       if (error instanceof service.GpexeImportServiceError) {
         if (error.status === 404) return notFound(res);
         // Only the known detail fields, so a detail can never replace error/message.
-        const { reviewAgain, changesToImported, verify } = error.details || {};
+        const { reviewAgain, changesToImported, verify, reason } = error.details || {};
+        // The precise reason of a source-connection refusal names connection
+        // and server configuration facts: an administrator of the team's club
+        // or of the platform gets it; a coach gets the stable code and the
+        // sentence to contact an administrator (the F3c2e contract).
+        const access = req.gpexeTeamAccess;
+        const adminViewer = Boolean(access && (access.platformAdmin || (access.clubId && holdsClubAdminRole(req.authz, access.clubId))));
+        const message = typeof reason === "string" && !adminViewer ? "The team's source connection cannot be used right now; contact an administrator. Nothing was read." : error.message;
         return res.status(error.status).json({
-          error: error.code, message: error.message,
+          error: error.code, message,
+          ...(typeof reason === "string" && adminViewer ? { reason } : {}),
           ...(reviewAgain ? { reviewAgain } : {}),
           ...(changesToImported !== undefined ? { changesToImported } : {}),
           ...(verify ? { verify } : {}),
@@ -48,6 +57,7 @@ async function teamAccess(req, res) {
   }
   const access = await resolveGpexeTeamAccess(req, req.params.teamId, { query });
   if (!access) notFound(res);
+  else req.gpexeTeamAccess = access;
   return access;
 }
 
