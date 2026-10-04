@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-04. Last `origin/main` commit checked: `440ad83` (merge of PR #135,
-`feature/gpexe-team-binding-f3c2e` → `main`; PR #134 `cb54b85` before it).
+Last reviewed: 2026-10-04. Last `origin/main` commit checked: `d285296` (merge of PR #136,
+`feature/gpexe-unbind-f3c2f` → `main`; PR #135 `440ad83` before it).
 
 ## Active phase
 
@@ -716,10 +716,18 @@ first "no v30" conclusion was superseded). As built:
   `gpexe-rest-v1-adapter.test.mjs` gained the `listVisibleTeams()` contract; the F3c2d suite was
   adapted (club admin sees the connection; the list is read before the bound teams).
 
-**The active step is F3c2f — a safe Unbind** (branch `feature/gpexe-unbind-f3c2f` from `440ad83`,
-owner order 2026-10-04; backend route, service, tests and docs; **no migration, not merged, no
-F3c3 UI, no importer cut-over, no real connection, binding or Unbind on the deployed database, no
-GPEXE request**). Discovery: `docs/ai/source-connections-f3c2e-discovery.md` section 7 (v27
+**F3c2f — a safe Unbind — is merged and deployed** (PR #136, merge commit `d285296` on 2026-10-04
+15:17 UTC, merged exactly from head `ea1674d` after the owner's external review in two rounds —
+round 2 closed the refusal-audit dedupe (its own bounded transaction under a transaction-scoped
+advisory lock) and the `requestKey` semantics; `/api/health` served `d285296` with `ok: true` three
+times in a row and once more at the smoke; without a login `POST …/connections/<zero
+uuid>/bindings/<zero uuid>/unbind` answered 401 with and without a body and the connection GET
+401; **no migration** in it, so v30 stays the last migration inferred on the deployed database; no
+Connect, binding, Unbind, credential or GPEXE request at the merge or the deploy; the Render
+environment and `GPEXE_IMPORT_APPLY_ENABLED` untouched). **After this deploy the first production
+binding is no longer blocked by a missing Unbind path, but it is not made without a separate,
+explicit owner order.** As built (branch `feature/gpexe-unbind-f3c2f` from `440ad83`, owner order
+2026-10-04; backend route, service, tests and docs). Discovery: `docs/ai/source-connections-f3c2e-discovery.md` section 7 (v27
 already holds the end state with its facts and the immutability rule, the audit action `unbind`
 with a mandatory `team_id` and the `reason` column; no request table fits, so the audit row of the
 successful Unbind is the request record; no v31). As built — contract section 2.7, runbook
@@ -745,6 +753,73 @@ After an Unbind the approved Team ID can change again, the team and the freed so
 bound again under every v30 rule, the ended row stays as history, and the v30 rollback is no longer
 refused by it. Tests: `backend/tests/source-connections-f3c2f.test.mjs` (disposable database, fake
 source that is never called).
+
+**The active step is F3c2g — the importer's credential resolver and the controlled transition from
+`GPEXE_API_TOKEN`** (branch `feature/gpexe-importer-resolver-f3c2g` from `d285296`, owner order
+2026-10-04; backend service, resolver module, migration v31, tests and docs; **not merged, one route
+change (the importer router's error detail `reason`, administrators only), no UI, no real connection,
+binding or import, no GPEXE request, no credential; v31 applied to no persistent database (the local
+OPTIMOVE stays v21, the deployed database gets it only through a merge and deploy the owner decides);
+`GPEXE_API_TOKEN`
+neither removed from the configuration nor touched on Render; `GPEXE_IMPORT_APPLY_ENABLED` untouched**).
+Discovery: `docs/ai/source-connections-f3c2g-discovery.md` (the check run is the importer's only
+network entry point; approve and preview read the stored snapshot; `createGpexeClient()` is the only
+reader of the variable and `startCheck()` its only caller). As built — contract section 2.8, runbook
+`docs/runbooks/gpexe-in-app-import.md` ("Which credential a check uses"):
+`backend/src/sourceImportCredentialResolver.js` turns one OptiMove team into a closed read context in
+three phases — the facts under the team import lock (one active binding, the approved pair, the
+connection of the same club and `verified`, the host approved in the catalog and in code; no URL,
+host, source team or credential from the caller), the decrypt and the adapter after COMMIT right
+before the first request with the plaintext reference dropped in `finally`, and the same facts
+re-validated before and after every source operation of the run, a fingerprint of the stored
+credential included (an ended or replaced binding, a connection that left `verified`, a Reconnect, a
+retired host stop the run with `binding_ended` / `connection_not_usable` /
+`connection_credential_changed` / `host_not_allowed`; a legacy run stops with `binding_started` when
+a binding appears); a refused credential (401) moves the connection to `needs_reconnect` with one
+`auto_invalidate` audit row (basis `system`, written after the check's own outcome, conditional on
+the credential the run held, bounded) and fails the check, while a 403 fails the check and keeps the
+state; the binding path reports progress per source request; the check-start COMMIT is bounded and
+its loss is never "nothing was written" (`503 check_outcome_unknown` or the run when the row is
+found); the approved pair is compared canonically; the pre-read proves the key ring without a
+decrypt; the resolver's facts are branded. **The transition rule (D8 made
+strict):** a team with an active binding reads only through it — the legacy factory is not called,
+the variable is not read, and an unusable binding answers `409` / `503 source_connection_unavailable`
+with the precise `reason` (no check row) or the precise code on the check row — never a fallback; a
+team without a binding — and that never had one — keeps the legacy path, labelled `legacy_env`; a
+team whose binding ended answers `source_connection_unavailable` / `binding_ended` until it is bound
+again and never reads the variable again (owner's round-4 decision, Q3); the path is decided once per
+check under the team lock (an unlocked pre-read and the locked read must agree, else `409
+gpexe_change_busy`); the facts are re-validated before AND after every list (empty or not) and every
+bundle, both paths pin the club the run started in (`team_club_changed` / `team_not_available`). The binding path's reads are the F3c2c adapter's (`listSessionsByDay`,
+`fetchSessionBundle`, GET only, bound to the approved source team); an incomplete drill set stops
+the run with `drill_set_incomplete` before the session is recorded, an empty successfully read
+`players` is a valid empty drill, and `drillsStatus` / `drillLabels` are stripped so the stored
+snapshot keeps the F1 contract. The resolver is wired into `startCheck` / `runCheck` directly: on
+the deployed database no connection or binding exists, so every team still takes the legacy path
+and nothing observable changes; removing the variable stays F3c4. **Status of the legacy env
+fallback:** in force only for a team that never had a binding, labelled, and recorded on every check
+row by **migration v31** (`migrations_v2/202610041200_training_load_v31_gpexe_import_checks_source_path.sql`:
+`source_path` `legacy_env` / `source_connection` with `source_connection_id`, `source_binding_id`,
+`source_team_id`, `source_host_key`, written in the locked INSERT, final from creation, a BEFORE
+INSERT trigger refusing a path the data does not support; rows from before v31 are `legacy_env` by
+default — the documented backfill; rollback `docs/runbooks/gpexe-import-checks-v31-rollback.sql`,
+forward-safe: it refuses while any row says `source_connection`; rehearsed on a disposable database) —
+the owner's round-4 decisions: Q1 v31, Q2 `verified` only, Q3 no legacy downgrade after an Unbind.
+**Round 5 (owner's external review of `d7657c8`, 2026-10-04):** the v31 trigger also refuses a
+`legacy_env` row for a team that has or had a gpexe binding (under the team's import try-lock;
+`23514`, `gpexe_import_checks_legacy_path_never_bound`), whoever writes it — a never-bound team
+writes `legacy_env`, rows from before a team's first binding stay as history, serialized with a bind
+by the one team lock in both orders; the precise code of a failed check stays on the row, and on
+the status, the check detail and a start that fails after its COMMIT a coach sees
+`source_connection_unavailable` plus the sentence to contact an administrator for every
+connection-configuration code (a platform admin and the club's own admin see the precise one;
+general source answers and team facts are shown as they are); **decision for F3c4 recorded:** the
+migration that retires the environment path drops the `legacy_env` DEFAULT, new code writes no
+legacy check, historical legacy rows are not rewritten.
+Tests: `backend/tests/gpexe-import-credential-resolver.test.mjs` (disposable database, a fake source
+serving the exchange, the team reads and the rest_v1 session reads; the legacy factory as a trap on
+the binding path; the resolver's contract with a fake executor), with mutation evidence for the key
+guards.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1210,6 +1285,12 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #136 (`d285296`, merged 2026-10-04 15:17 UTC exactly from head `ea1674d` after two external
+  review rounds) is deployed: `/api/health` served `d285296` with `ok: true` three times in a row
+  (15:18 UTC) and once more at the smoke; without a login the Unbind route (zero UUIDs, with and
+  without a body) and the connection GET answered 401. No migration in it: v30 stays the last
+  migration inferred on the deployed database. No connection row, binding, Unbind, credential or
+  GPEXE request at the merge or the deploy.
 - PR #135 (`440ad83`, merged 2026-10-04 exactly from head `3352ad1` after three external review
   rounds) is deployed: Render Live for `440ad83` (owner); `/api/health` served `440ad83` with
   `ok: true` three times; without a login the list, single GET, create, connect, reconnect, test
@@ -1333,6 +1414,12 @@ pre-existing; pass/fail counts don't belong in this file
   `3ef6033`.
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
+
+- **Hardening, non-blocking (owner's external review of PR #136, 2026-10-04): the global PostgreSQL
+  pool in `backend/src/db.js` sets no `connectionTimeoutMillis`, so `pool.connect()` can wait
+  without a bound when the pool is exhausted** (every service path that checks out a client
+  inherits it; pre-existing, not changed in PR #136 or in F3c2g). Separate small task: a bounded
+  checkout with a stable refusal code, a test, and a note in the runbooks.
 
 - **Mandatory before the F3c2 routes or any import: fix the drills filter of the `rest_v1`
   adapter's `listSessions()`** (owner, 2026-10-01, after the review of PR #132). **Done in the
@@ -1537,10 +1624,10 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The F3c2f Unbind PR (a safe, local, idempotent way to end an active binding — required before the
-first real production binding), its external review and merge; then, on the owner's order, the
-importer's credential resolver and the cut-over from `GPEXE_API_TOKEN` (F3c2 is not complete
-before it), F3c3 (Settings UI: Connect account → Test connection → Choose GPEXE team → Choose the
+The owner's external review and merge decision on the F3c2g PR (the importer's credential resolver,
+the strict transition rule and migration v31 — v31 reaches the deployed database only through that
+merge and deploy); then, on the owner's order, the first production binding only on a separate
+explicit order, F3c3 (Settings UI: Connect account → Test connection → Choose GPEXE team → Choose the
 approved OptiMove team → Review → Confirm binding; Unbind; the coach's "contact an administrator"
 sentence) and F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and

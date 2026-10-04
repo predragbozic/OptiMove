@@ -559,12 +559,17 @@ test("12. units stays source_capability_unavailable; every other capability is i
   assert.doesNotMatch(source, /header=true|%2F|\.\.\//, "no undocumented parameter, no encoded slash, no dotted path segment");
 });
 
-test("13. the existing e03 importer is untouched: its client still names its own root and the rest_v1 adapter is not imported by it", async () => {
+test("13. the e03 client is untouched (it still names its own root and imports no adapter); the importer reaches the rest_v1 adapter only through the F3c2g credential resolver, never directly; no route uses the adapter", async () => {
   const client = await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeClient.js"), "utf8");
   assert.match(client, /export const GPEXE_API_BASE = "https:\/\/e03\.gpexe\.com\/api\/";/);
-  assert.doesNotMatch(client, /sourceAdapters|gpexeRestV1Adapter|sourceHosts/);
+  assert.doesNotMatch(client, /sourceAdapters|gpexeRestV1Adapter|sourceHosts|sourceImportCredentialResolver/);
+  // F3c2g (owner order 2026-10-04): the importer's one door to the adapter is
+  // the resolver, which takes a team id and nothing else from its caller.
   const service = await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeImportService.js"), "utf8");
-  assert.doesNotMatch(service, /sourceAdapters|gpexeRestV1Adapter/);
+  assert.doesNotMatch(service, /sourceAdapters|gpexeRestV1Adapter|sourceHosts|createSourceAdapter|decryptCredential/);
+  assert.match(service, /from "\.\/sourceImportCredentialResolver\.js"/);
+  const resolver = await fsp.readFile(path.resolve(ROOT, "backend/src/sourceImportCredentialResolver.js"), "utf8");
+  assert.doesNotMatch(resolver, /gpexeRestV1Adapter|gpexeClient/, "the resolver selects an adapter by the host's family through sourceAdapters only, and never touches the legacy client");
   // No route uses the adapter.
   for (const f of await fsp.readdir(path.resolve(ROOT, "backend/src/routes"))) {
     assert.doesNotMatch(await fsp.readFile(path.resolve(ROOT, "backend/src/routes", f), "utf8"), /sourceAdapters|gpexeRestV1Adapter/, f);

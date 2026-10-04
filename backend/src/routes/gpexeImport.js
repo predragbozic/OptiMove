@@ -5,6 +5,7 @@
 import { Router } from "express";
 import { query } from "../db.js";
 import { canApproveGpexeImport, resolveGpexeTeamAccess } from "../gpexeImportAccess.js";
+import { holdsClubAdminRole } from "../authz.js";
 import * as service from "../gpexeImportService.js";
 
 const router = Router();
@@ -18,6 +19,15 @@ function forbidden(res) {
   return res.status(403).json({ error: "forbidden", message: "Only a platform admin may do this." });
 }
 
+// F3c2e / F3c2g: an administrator of the platform or of the team's club sees
+// the precise connection facts (the refusal `reason`, a failed check's precise
+// code); a coach gets the stable code and the sentence to contact an
+// administrator. Decided from the resolved team access of this request only.
+function adminViewerOf(req) {
+  const access = req.gpexeTeamAccess;
+  return Boolean(access && (access.platformAdmin || (access.clubId && holdsClubAdminRole(req.authz, access.clubId))));
+}
+
 function handle(fn) {
   return async (req, res, next) => {
     try {
@@ -26,9 +36,16 @@ function handle(fn) {
       if (error instanceof service.GpexeImportServiceError) {
         if (error.status === 404) return notFound(res);
         // Only the known detail fields, so a detail can never replace error/message.
-        const { reviewAgain, changesToImported, verify } = error.details || {};
+        const { reviewAgain, changesToImported, verify, reason } = error.details || {};
+        // The precise reason of a source-connection refusal names connection
+        // and server configuration facts: an administrator of the team's club
+        // or of the platform gets it; a coach gets the stable code and the
+        // sentence to contact an administrator (the F3c2e contract).
+        const adminViewer = adminViewerOf(req);
+        const message = typeof reason === "string" && !adminViewer ? "The team's source connection cannot be used right now; contact an administrator. Nothing was read." : error.message;
         return res.status(error.status).json({
-          error: error.code, message: error.message,
+          error: error.code, message,
+          ...(typeof reason === "string" && adminViewer ? { reason } : {}),
           ...(reviewAgain ? { reviewAgain } : {}),
           ...(changesToImported !== undefined ? { changesToImported } : {}),
           ...(verify ? { verify } : {}),
@@ -48,6 +65,7 @@ async function teamAccess(req, res) {
   }
   const access = await resolveGpexeTeamAccess(req, req.params.teamId, { query });
   if (!access) notFound(res);
+  else req.gpexeTeamAccess = access;
   return access;
 }
 
@@ -58,7 +76,7 @@ router.get("/teams/:teamId/status", handle(async (req, res) => {
   // or team), so only a platform admin gets it back.
   const [settings, lastCheck, approval] = await Promise.all([
     service.getTeamSettings(access.teamId),
-    service.latestCheck(access.teamId),
+    service.latestCheck(access.teamId, { adminViewer: adminViewerOf(req) }),
     canApproveGpexeImport({ query }, req.user.id, access.teamId),
   ]);
   res.json({
@@ -94,7 +112,7 @@ router.post("/teams/:teamId/checks", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
   const window = service.resolveCheckWindow({ from: req.body?.from, to: req.body?.to });
-  const check = await service.startCheck(access.teamId, { userId: req.user.id, window });
+  const check = await service.startCheck(access.teamId, { userId: req.user.id, window, adminViewer: adminViewerOf(req) });
   res.status(202).json({ check, importSwitch: service.applySwitchInfo() });
 }));
 
@@ -102,7 +120,7 @@ router.get("/teams/:teamId/checks/:checkId", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
   if (!UUID.test(req.params.checkId)) return notFound(res);
-  const check = await service.getCheck(access.teamId, req.params.checkId);
+  const check = await service.getCheck(access.teamId, req.params.checkId, { adminViewer: adminViewerOf(req) });
   if (!check) return notFound(res);
   res.json({ check });
 }));

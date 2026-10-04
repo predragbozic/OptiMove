@@ -16,6 +16,11 @@
 import { pool, query } from "./db.js";
 import { canApproveGpexeImport } from "./gpexeImportAccess.js";
 import { createGpexeClient, GpexeClientError } from "./gpexeClient.js";
+import {
+  resolveImportSourceFacts, preflightImportSource, openImportSource, importClientFor, legacyImportClientFor, sameImportSource,
+  importSourceIdentity, canonicalSourceTeamId, autoInvalidateImportSource, boundImportSideEffect, AUTO_INVALIDATE_BOUND_MS,
+  SourceImportResolveError, SourceAdapterError, PATH_SOURCE_CONNECTION, PATH_LEGACY_ENV, isConnectionConfigurationCode,
+} from "./sourceImportCredentialResolver.js";
 import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCanonicalGpexeAthleteId } from "./gpexeImportMapper.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
 import { blockedByMapping, buildCandidatePreview, canonicalJson, previewLocked, sha256Hex } from "./gpexeImportPreview.js";
@@ -51,10 +56,34 @@ export function setCheckRunObserver(observer) {
   checkRunObserver = observer ?? null;
 }
 
-// Tests replace the GPEXE client; production always builds the real one.
+// Tests replace the LEGACY GPEXE client (the environment-token path for a
+// team without a new source binding); production always builds the real
+// one. It is called only on that path: a team with an active binding never
+// reaches it (F3c2g, docs/ai/source-connections-f3c2g-discovery.md section 3).
 let clientFactory = () => createGpexeClient();
 export function setGpexeClientFactory(factory) {
   clientFactory = factory ?? (() => createGpexeClient());
+}
+// F3c2g test seam: a hold between the unlocked pre-read of the source path and
+// the locked read, so a test can create or end a binding in between and prove
+// that the two reads must agree (gpexe_change_busy, no check row).
+let preReadHold = null;
+export function setImportSourcePreReadHoldForTests(fn) { preReadHold = fn ?? null; }
+// F3c2g test seam: a fault in place of the COMMIT of the check's start
+// transaction (the F2 discipline: a sent COMMIT whose answer is lost never
+// becomes "nothing was written").
+let checkStartCommitFault = null;
+export function setCheckStartCommitFaultForTests(fn) { checkStartCommitFault = fn ?? null; }
+export const CHECK_START_COMMIT_BOUND_MS = 15_000;
+export const CHECK_START_VERIFY_BOUND_MS = 5_000;
+// F3c2g: the resolver's refusal as the route's answer — a stable code, the
+// precise reason, no fallback, nothing sent.
+function unavailableSource(error) {
+  const status = error.code === "team_not_available" ? 404 : (error.status === 503 ? 503 : 409);
+  if (status === 404) return new GpexeImportServiceError(404, "not_found", "Not found.");
+  const out = new GpexeImportServiceError(status, "source_connection_unavailable", error.message);
+  out.details = { reason: error.code };
+  return out;
 }
 
 export class GpexeImportServiceError extends Error {
@@ -331,7 +360,15 @@ export async function retentionStatus() {
 // Checks
 // ---------------------------------------------------------------------------
 
-function checkView(row) {
+// F3c2g: the precise code of a failed check stays in the database; on the API
+// a code that describes the team's source connection (the resolver's set) is
+// shown to an administrator of the platform or of the team's club only. A
+// coach sees the stable code and the sentence to contact an administrator —
+// the same rule as the 409 of a check start. General source answers and team
+// facts are shown to everyone as they are.
+export const COACH_CONNECTION_MESSAGE = "The team's source connection cannot be used right now; contact an administrator.";
+function checkView(row, { adminViewer = false } = {}) {
+  const masked = Boolean(row.error_code) && !adminViewer && isConnectionConfigurationCode(row.error_code);
   return {
     id: row.id,
     status: row.status,
@@ -342,38 +379,64 @@ function checkView(row) {
     candidatesNew: row.candidates_new,
     candidatesChanged: row.candidates_changed,
     candidatesUnchanged: row.candidates_unchanged,
-    error: row.error_code ? { code: row.error_code, message: row.error_message } : null,
+    error: row.error_code
+      ? (masked ? { code: "source_connection_unavailable", message: COACH_CONNECTION_MESSAGE } : { code: row.error_code, message: row.error_message })
+      : null,
   };
 }
 
-export async function getCheck(teamId, checkId) {
+export async function getCheck(teamId, checkId, { adminViewer = false } = {}) {
   const row = (await query(`select * from training_load.gpexe_import_checks where id = $1 and owner_team_id = $2`, [checkId, teamId])).rows[0];
-  return row ? checkView(row) : null;
+  return row ? checkView(row, { adminViewer }) : null;
 }
 
-export async function latestCheck(teamId) {
+export async function latestCheck(teamId, { adminViewer = false } = {}) {
   const row = (await query(`select * from training_load.gpexe_import_checks where owner_team_id = $1 order by started_at desc limit 1`, [teamId])).rows[0];
-  return row ? checkView(row) : null;
+  return row ? checkView(row, { adminViewer }) : null;
 }
 
 // Starts a check and returns it right away; the fetch runs in the
 // background (GPEXE can take minutes). `wait` is for tests and the CLI.
-export async function startCheck(teamId, { userId, window, wait = false }) {
+export async function startCheck(teamId, { userId, window, wait = false, adminViewer = false }) {
   // A first, unlocked read only to fail early (no GPEXE team, no token); the
   // value the check really uses is read again under the lock below.
   const settings = await getTeamSettings(teamId);
   if (!settings) throw new GpexeImportServiceError(409, "gpexe_team_not_configured", "No GPEXE team is configured for this team yet.");
   let gpexeTeamId = settings.gpexeTeamId;
-  let client;
+  // F3c2g: which path this check reads through is decided once, under the
+  // team lock below; this unlocked pre-read only fails early and decides
+  // whether the legacy client is built at all. A team with an active source
+  // binding never builds it, so the environment token is never read for it.
+  let preFacts;
   try {
-    client = clientFactory();
+    preFacts = await resolveImportSourceFacts(pool, { teamId });
   } catch (error) {
-    if (error instanceof GpexeClientError && error.code === "token_missing") {
-      throw new GpexeImportServiceError(503, "gpexe_token_missing", "The server has no GPEXE token configured.");
-    }
+    if (error instanceof SourceImportResolveError) throw unavailableSource(error);
     throw error;
   }
+  let client = null;
+  if (preFacts.path === PATH_LEGACY_ENV) {
+    try {
+      client = clientFactory();
+    } catch (error) {
+      if (error instanceof GpexeClientError && error.code === "token_missing") {
+        throw new GpexeImportServiceError(503, "gpexe_token_missing", "The server has no GPEXE token configured.");
+      }
+      throw error;
+    }
+  } else {
+    // The key ring is proven BEFORE the check row exists (key_missing answers
+    // here, nothing written) — without a decrypt: the plaintext is
+    // materialised once, after COMMIT, right before the first request.
+    try {
+      preflightImportSource(preFacts);
+    } catch (error) {
+      if (error instanceof SourceImportResolveError) throw unavailableSource(error);
+      throw error;
+    }
+  }
 
+  if (preReadHold) await preReadHold();
   await query(
     `update training_load.gpexe_import_checks
         set status = 'failed', finished_at = now(), error_code = 'abandoned',
@@ -387,9 +450,19 @@ export async function startCheck(teamId, { userId, window, wait = false }) {
   // whichever takes the lock first wins, and a check that exists then blocks
   // the change. No GPEXE request is made while this transaction is open.
   let row;
+  let facts;
   const lockClient = await pool.connect();
+  let lockReleased = false;
+  let commitSent = false;
+  let commitUnanswered = false;
+  // The server may end this client while a bounded COMMIT is awaited; the
+  // listener keeps that from crashing the process (removed before release).
+  const onLockClientError = () => {};
+  lockClient.on("error", onLockClientError);
   try {
-    await lockClient.query("begin");
+    // READ COMMITTED is pinned: the locked read below must take its snapshot
+    // after the advisory wait, not at the transaction's first statement.
+    await lockClient.query("begin isolation level read committed");
     await lockClient.query(`set local lock_timeout = '${SETTINGS_LOCK_TIMEOUT_MS}ms'`);
     await lockTeamForImport(lockClient, teamId);
     const locked = (await lockClient.query(
@@ -398,28 +471,131 @@ export async function startCheck(teamId, { userId, window, wait = false }) {
     )).rows[0];
     if (!locked) throw new GpexeImportServiceError(409, "gpexe_team_not_configured", "No GPEXE team is configured for this team yet.");
     gpexeTeamId = locked.gpexe_team_id;
-    row = (await lockClient.query(
-      `insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, window_from, window_to, gpexe_team_id) values ($1,$2,$3,$4,$5) returning *`,
-      [teamId, userId, window.from, window.to, gpexeTeamId],
-    )).rows[0];
-    await lockClient.query("commit");
-  } catch (error) {
-    await lockClient.query("rollback").catch(() => {});
-    if (error.code === "23505") throw new GpexeImportServiceError(409, "check_already_running", "A check is already running for this team.");
-    if (error.code === "55P03" || error.code === "40P01") {
-      throw new GpexeImportServiceError(409, "gpexe_change_busy", "A GPEXE check, import or connection change is running for this team. Try again when it has finished.");
+    // F3c2g: the authoritative path, under the same lock a bind, an Unbind, a
+    // Test / Reconnect and a Settings change take. A binding that appeared or
+    // ended since the pre-read is a change in flight: retry, never a check
+    // that half-used either path.
+    try {
+      facts = await resolveImportSourceFacts(lockClient, { teamId });
+    } catch (error) {
+      // A binding that ended between the pre-read and the lock is a change in
+      // flight (retry), like any other disagreement below.
+      if (error instanceof SourceImportResolveError && error.code === "binding_ended" && preFacts.path === PATH_SOURCE_CONNECTION) {
+        throw new GpexeImportServiceError(409, "gpexe_change_busy", "The team's source binding changed while the check was being started. Try again.");
+      }
+      if (error instanceof SourceImportResolveError) throw unavailableSource(error);
+      throw error;
     }
-    if (error instanceof GpexeImportServiceError) throw error;
-    console.error(`[gpexe] the check of ${teamId} could not be started: ${error?.code ?? ""} ${error?.message}`);
-    throw new GpexeImportServiceError(500, "internal_error", "The check could not be started; nothing was written.");
+    if (!sameImportSource(preFacts, facts)) {
+      throw new GpexeImportServiceError(409, "gpexe_change_busy", "The team's source binding changed while the check was being started. Try again.");
+    }
+    if (facts.path === PATH_SOURCE_CONNECTION && facts.sourceTeamId !== canonicalSourceTeamId("gpexe", gpexeTeamId)) {
+      throw unavailableSource(new SourceImportResolveError("team_setting_mismatch", "The team's active source binding does not name its approved source team; nothing was read."));
+    }
+    // v31: the check row records the path it reads through and, on the
+    // binding path, the connection, binding, source team and host key — in
+    // this same locked INSERT, final from creation. Never a credential.
+    const onConnection = facts.path === PATH_SOURCE_CONNECTION;
+    row = (await lockClient.query(
+      `insert into training_load.gpexe_import_checks
+         (owner_team_id, requested_by_user_id, window_from, window_to, gpexe_team_id, source_path, source_connection_id, source_binding_id, source_team_id, source_host_key)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *`,
+      [teamId, userId, window.from, window.to, gpexeTeamId, onConnection ? PATH_SOURCE_CONNECTION : PATH_LEGACY_ENV,
+        onConnection ? facts.connectionId : null, onConnection ? facts.bindingId : null, onConnection ? facts.sourceTeamId : null, onConnection ? facts.hostKey : null],
+    )).rows[0];
+    // The COMMIT is awaited under a bound (the F2 discipline): once it was
+    // sent, the answer never says "nothing was written" — the row is looked
+    // for on a fresh connection below.
+    commitSent = true;
+    const commit = checkStartCommitFault ? checkStartCommitFault(lockClient) : lockClient.query("commit");
+    commit.catch(() => {});
+    await boundImportSideEffect(commit, CHECK_START_COMMIT_BOUND_MS);
+  } catch (error) {
+    if (commitSent) {
+      // Nothing more is awaited on this client (a ROLLBACK would queue behind
+      // the unanswered COMMIT): it is destroyed, and the server ends the
+      // transaction with the connection if the COMMIT had not landed.
+      commitUnanswered = true;
+      lockClient.removeListener("error", onLockClientError);
+      lockClient.release(true);
+      lockReleased = true;
+      console.error(`[gpexe] the COMMIT of check ${row.id} (team ${teamId}) was not confirmed (${error?.code ?? error?.name ?? ""}); looking for the row`);
+    } else {
+      await lockClient.query("rollback").catch(() => {});
+      if (error.code === "23505") throw new GpexeImportServiceError(409, "check_already_running", "A check is already running for this team.");
+      if (error.code === "55P03" || error.code === "40P01") {
+        throw new GpexeImportServiceError(409, "gpexe_change_busy", "A GPEXE check, import or connection change is running for this team. Try again when it has finished.");
+      }
+      // The database's own refusal of the legacy path for a team that has or
+      // had a binding (v31). The resolver decided the legacy path under this
+      // very lock, so the guard can only fire when the two disagree — the
+      // answer is the same as for any other disagreement: retry, nothing
+      // written (a backstop; the application cannot reach it on its own path,
+      // so no route test proves it).
+      if (error.code === "23514" && error.constraint === "gpexe_import_checks_legacy_path_never_bound") {
+        throw new GpexeImportServiceError(409, "gpexe_change_busy", "The team's source binding changed while the check was being started. Try again.");
+      }
+      if (error instanceof GpexeImportServiceError) throw error;
+      console.error(`[gpexe] the check of ${teamId} could not be started: ${error?.code ?? ""} ${error?.message}`);
+      throw new GpexeImportServiceError(500, "internal_error", "The check could not be started; nothing was written.");
+    }
   } finally {
-    lockClient.release();
+    lockClient.removeListener("error", onLockClientError);
+    if (!lockReleased) { lockClient.release(); lockReleased = true; }
+  }
+  // Only an UNANSWERED COMMIT is verified (the flag is set in that branch
+  // alone): after a confirmed COMMIT no read may turn the answer into a
+  // failure (the F2 rule), and nothing is logged.
+  if (commitUnanswered && !(await rowConfirmed(row.id))) {
+    throw new GpexeImportServiceError(503, "check_outcome_unknown", "The database did not confirm the start of this check. Read the team's checks before starting another one; nothing was sent to the source.");
   }
 
-  const job = runCheck(row.id, { teamId, userId, gpexeTeamId, window, gpexe: client });
+  // F3c2g: the binding path opens its read context only now — after COMMIT,
+  // before the first request — and the check row says where the run stopped
+  // if that fails (nothing of the environment token is tried instead). The
+  // legacy path is wrapped so that a binding appearing mid-run stops it.
+  let source = null;
+  if (facts.path === PATH_SOURCE_CONNECTION) {
+    try {
+      source = openImportSource(facts);
+      client = importClientFor(source);
+    } catch (error) {
+      const code = error instanceof SourceImportResolveError ? error.code : "internal_error";
+      if (!(error instanceof SourceImportResolveError)) console.error(`[gpexe] check ${row.id} could not open its source connection: ${error?.code ?? error?.name ?? ""}`);
+      try {
+        await query(
+          `update training_load.gpexe_import_checks set status = 'failed', finished_at = now(), error_code = $2, error_message = $3 where id = $1 and status = 'running'`,
+          [row.id, code, error instanceof SourceImportResolveError ? error.message : "The check could not open its source connection."],
+        );
+        return checkView((await query(`select * from training_load.gpexe_import_checks where id = $1`, [row.id])).rows[0], { adminViewer });
+      } catch (writeError) {
+        // The row stays running until the stale sweep closes it; the answer
+        // says so instead of claiming an outcome.
+        console.error(`[gpexe] check ${row.id} could not be marked failed (${code}): ${writeError?.code ?? ""}`);
+        return checkView(row, { adminViewer });
+      }
+    }
+  } else {
+    client = legacyImportClientFor(facts, client);
+  }
+  const identity = importSourceIdentity(facts);
+  console.info(`[gpexe] check ${row.id} of team ${teamId} reads through ${identity.path}${identity.path === PATH_SOURCE_CONNECTION ? ` (connection ${identity.connectionId}, binding ${identity.bindingId}, source team ${identity.sourceTeamId})` : " (GPEXE_API_TOKEN, a team without a source binding)"}`);
+  const job = runCheck(row.id, { teamId, userId, gpexeTeamId, window, gpexe: client, source });
   if (wait) await job;
   else job.catch((error) => console.error(`[gpexe] check ${row.id} failed outside its own handler: ${error?.name}`));
-  return checkView(wait ? (await query(`select * from training_load.gpexe_import_checks where id = $1`, [row.id])).rows[0] : row);
+  return checkView(wait ? (await query(`select * from training_load.gpexe_import_checks where id = $1`, [row.id])).rows[0] : row, { adminViewer });
+}
+
+// After an unconfirmed COMMIT of a check's start: is the row there? A fresh
+// connection, a bounded wait; an unreadable answer counts as "not confirmed".
+async function rowConfirmed(checkId) {
+  try {
+    const r = await boundImportSideEffect(query(`select 1 from training_load.gpexe_import_checks where id = $1`, [checkId]), CHECK_START_VERIFY_BOUND_MS);
+    if (r.rowCount === 1) console.warn(`[gpexe] check ${checkId}: the COMMIT of its start was not confirmed, but the row exists; the check runs.`);
+    return r.rowCount === 1;
+  } catch {
+    return false;
+  }
 }
 
 // Thrown when the check's own row is no longer 'running' (a later check
@@ -447,9 +623,14 @@ async function runCheck(checkId, options) {
   }
 }
 
-async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpexe }) {
+async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpexe, source = null }) {
   const counts = { sessions: 0, new: 0, changed: 0, unchanged: 0 };
   const alive = () => heartbeat(checkId, counts);
+  // The binding path's adapter sends many requests per operation; every
+  // response reports progress, as the legacy client does per request, so a
+  // slow source never makes a live check look abandoned. This ping never
+  // throws: the throwing alive() calls below decide whether the run goes on.
+  if (source) source.setRequestProgress(async () => { try { await heartbeat(checkId, counts); } catch { /* alive() decides */ } });
   try {
     // Every check is also a retention run, so expired snapshots go even when
     // no scheduler ran; a failure here must not stop the check.
@@ -469,7 +650,12 @@ async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpex
     await query(`update training_load.gpexe_import_checks set status = 'succeeded', finished_at = now() where id = $1 and status = 'running'`, [checkId]);
   } catch (error) {
     if (error instanceof CheckClosedElsewhere) return;
-    const known = error instanceof GpexeClientError;
+    // A known refusal carries its own stable code and our own sentence (an
+    // adapter never passes the source's text on); anything else is logged by
+    // name only. On the binding path a refused credential also moves the
+    // connection to needs_reconnect (one auto_invalidate audit row, basis
+    // system) — and nothing falls back to the environment token.
+    const known = error instanceof GpexeClientError || error instanceof SourceAdapterError || error instanceof SourceImportResolveError;
     if (!known) console.error(`[gpexe] check ${checkId} failed: ${error?.stack || error}`);
     await query(
       `update training_load.gpexe_import_checks set status = 'failed', finished_at = now(), error_code = $2, error_message = $3,
@@ -477,6 +663,18 @@ async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpex
         where id = $1 and status = 'running'`,
       [checkId, known ? error.code : "internal_error", known ? error.message : "The check failed on the server.", counts.sessions, counts.new, counts.changed, counts.unchanged],
     );
+    // Only after the check's own outcome is written, and never changing it:
+    // on the binding path a refused credential (401, source_auth_rejected)
+    // moves the connection to needs_reconnect with one auto_invalidate audit
+    // row (basis system). A 403 (source_access_refused) keeps the state: one
+    // resource the credential may not read is not a refused credential (the
+    // F3c2e bind rule for a team it cannot see). Every step inside is bounded
+    // (connect, statements, COMMIT, rollback); the outer bound here only
+    // detaches the run from a side effect that outlives all of them — the
+    // detached work still ends on its own bounds and releases its client.
+    if (source && error?.code === "source_auth_rejected") {
+      await boundImportSideEffect(autoInvalidateImportSource(source, { errorCode: "source_auth_rejected" }), 3 * AUTO_INVALIDATE_BOUND_MS + 15_000).catch(() => false);
+    }
   }
 }
 

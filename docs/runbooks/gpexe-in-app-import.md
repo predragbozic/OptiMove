@@ -34,6 +34,59 @@ Proof:
 
 The GPEXE host is fixed (`https://e03.gpexe.com/api/`). Requests are GET
 only and redirects are refused, so the token cannot be sent anywhere else.
+
+**Which credential a check uses (F3c2g, `docs/ai/source-connections-f3c2g-discovery.md`).** A
+team with an **active source binding** (Settings → Data sources, F3c2e) reads only through that
+binding's connection: the stored, encrypted token of the club's connection on the connection's
+approved host (`server3` / `rest_v1`), bound to the approved GPEXE team. `GPEXE_API_TOKEN` is
+not read for such a team, and nothing falls back to it: a connection that is not `verified`, a
+retired host or a missing key answer `409` / `503 source_connection_unavailable` — with the
+precise `reason` (`connection_not_usable`, `host_not_allowed`, `key_missing`,
+`team_setting_missing`, `team_setting_mismatch`, `connection_foreign_club`, `binding_ambiguous`)
+for an administrator of the platform or of the team's club, while a coach gets the stable code and
+the sentence to contact an administrator — and write no check row; an unreadable credential is
+found after the row exists (the decrypt happens once, right before the first request) and fails
+the check with `credential_unreadable`, zero requests sent. The same facts — the binding, the
+connection's state, its club, its host, the approved pair and a fingerprint of the stored
+credential — are re-checked before and after every read of a running check, which stops with
+`binding_ended`, `connection_not_usable`, `connection_credential_changed` (a Reconnect landed
+meanwhile) or `host_not_allowed` when they change; a check running through the legacy token stops
+with `binding_started` when a binding appears; `drill_set_incomplete` stops a check when the
+source does not answer every drill of a session (nothing of that session is recorded). A `401`
+from the source moves the connection to `needs_reconnect` with one `auto_invalidate` audit row
+(basis `system`; written after the check's own outcome, never changing it; skipped and logged when
+a Test / Reconnect holds the row at that moment — the attempt's own outcome then sets the state and
+the next refused check re-applies it) and fails the check with `source_auth_rejected`; a `403`
+fails the check with `source_access_refused` and changes no state; an administrator reconnects or
+tests the connection, then the coach checks again. The binding path reports progress after every
+request of the source, so a slow source never makes a live check look abandoned. The facts are
+checked after every list (empty or not) and after every bundle too, and both paths keep the team in
+the club it started in (`team_club_changed` / `team_not_available` otherwise). **After an Unbind
+the team is not back on the legacy token:** until it is bound again a check answers
+`409 source_connection_unavailable` (`binding_ended`), and `GPEXE_API_TOKEN` is read for no team
+that ever had a binding. Since **v31** every check row records its path (`source_path`:
+`legacy_env` or `source_connection`) and, on the connection path, the connection, binding, source
+team and host key it read through — final from creation, never a credential; rows from before v31
+read `legacy_env` (the only path that existed then), and the database itself refuses a `legacy_env`
+row for a team that has or had a gpexe binding (the v31 trigger, under the team's import lock;
+`gpexe_import_checks_legacy_path_never_bound`), whoever writes it — rows written before a team's
+first binding stay as history. A check whose
+start COMMIT was sent but not answered in time either runs (the row is found) or answers `503
+check_outcome_unknown` — never "nothing was written"; read the team's checks before starting
+another one. A team that **never had** a binding keeps the legacy path above (`legacy_env`), until F3c4
+decides the variable's fate. A check started while a Test, Reconnect, bind, Unbind or Settings
+change holds the team's lock answers `409 gpexe_change_busy`: retry. The server log names the path
+of every check (`legacy_env`, or `source_connection` with the connection and binding ids), never a
+secret; no API field carries it yet. **What a failed check shows, and to whom:** the precise code
+stays on the check row; on the status (`lastCheck`) and on a check's detail a platform admin and an
+active admin of the team's club see it with its own sentence, while a coach sees
+`source_connection_unavailable` and the sentence to contact an administrator for every code that
+describes the connection — the binding, the connection's state, club, host, key, adapter or
+credential, a refused credential (`source_auth_rejected`) and a resource it may not read
+(`source_access_refused`) included. A general source answer (`source_unavailable`,
+`source_answer_unexpected`, `drill_set_incomplete`, …) and a team fact are shown to everyone as they
+are. F3c4, when it retires the environment path, drops the `legacy_env` default; new code then
+writes no legacy check and the historical legacy rows are not rewritten (owner, 2026-10-04).
 Personal fields the importer does not need are removed before anything is
 kept: names on tracks, birth date, weight, picture, e-mail, notes, weather,
 coordinates, who submitted a session, and roles.
