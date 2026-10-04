@@ -403,9 +403,35 @@ test("3. a binding that is not usable never falls back to the environment token:
   await q(`update training_load.source_credential_connections set credential_auth_tag = decode('00000000000000000000000000000000', 'hex') where id = $1`, [conn.id]);
   // The key ring is proven before the row (no decrypt); the decrypt itself happens once, after COMMIT: an
   // unreadable credential is therefore a failed check row with zero source requests, never a fallback.
-  const unreadable = await runCheck(o);
+  const startedByCoach = await startCheck(o);
+  assert.equal(startedByCoach.status, 202, JSON.stringify(startedByCoach.body));
+  if (startedByCoach.body.check.status === "running") await startedByCoach.done.p;
+  const unreadable = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [startedByCoach.body.check.id]))[0];
   assert.deepEqual([unreadable.status, unreadable.error_code], ["failed", "credential_unreadable"], JSON.stringify(unreadable));
   assert.equal(importReads().length, 0, "nothing read");
+  // Round 5: the precise code stays in the database; on the API the coach sees the stable code and the sentence to
+  // contact an administrator — on the start answer, the check detail and the status — while the platform admin and
+  // the club's own admin see the precise code: the same failed row for all three.
+  assert.deepEqual([startedByCoach.body.check.error.code, /contact an administrator/.test(startedByCoach.body.check.error.message)], ["source_connection_unavailable", true], JSON.stringify(startedByCoach.body));
+  // A coach who is also a club admin of ANOTHER club is still a coach here (the authority is the team's own club).
+  const otherClub = (await q(`insert into public.clubs (name) values ($1) returning id`, [`other-${uid()}`]))[0].id;
+  await q(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [o.coach.id, otherClub]);
+  for (const [who, cookie, expected] of [["coach", o.coach.cookie, "source_connection_unavailable"], ["coach who administers another club", o.coach.cookie, "source_connection_unavailable"], ["platform admin", o.padmin.cookie, "credential_unreadable"], ["club admin", o.cadmin.cookie, "credential_unreadable"]]) {
+    const detail = await api(`/gpexe/teams/${o.teamId}/checks/${unreadable.id}`, { cookie });
+    const status = await api(`/gpexe/teams/${o.teamId}/status`, { cookie });
+    assert.deepEqual([detail.status, detail.body.check.error.code, status.status, status.body.lastCheck.error.code], [200, expected, 200, expected], `${who}: ${JSON.stringify([detail.body, status.body.lastCheck])}`);
+    if (expected === "source_connection_unavailable") {
+      assert.match(detail.body.check.error.message, /contact an administrator/);
+      assert.doesNotMatch(JSON.stringify([detail.body, status.body.lastCheck]), /credential|unreadable|reconnect/i, `${who} sees no connection fact`);
+    } else {
+      assert.match(detail.body.check.error.message, /could not be read/);
+    }
+  }
+  // The same failure started by the club's admin: the start answer itself carries the precise code.
+  const startedByAdmin = await startCheck(o, o.cadmin.cookie);
+  assert.equal(startedByAdmin.status, 202, JSON.stringify(startedByAdmin.body));
+  if (startedByAdmin.body.check.status === "running") await startedByAdmin.done.p;
+  assert.deepEqual([startedByAdmin.body.check.error.code, /could not be read/.test(startedByAdmin.body.check.error.message)], ["credential_unreadable", true], JSON.stringify(startedByAdmin.body));
   await q(`update training_load.source_credential_connections set credential_auth_tag = $2 where id = $1`, [conn.id, parts.credential_auth_tag]);
   const row = await runCheck(o);
   assert.equal(row.status, "succeeded", JSON.stringify(row));
@@ -428,6 +454,13 @@ test("4. the resolver's own contract (a fake executor): no binding → legacy_en
   assert.equal(await code([{ ...base, team_active: false }]), "team_not_available");
   assert.equal(await code([{ ...base, team_club_active: false }]), "team_not_available");
   assert.equal(await code([{ ...none, has_ended_binding: true }]), "binding_ended", "a team that had a binding never returns to the legacy path");
+  // Every code this module can put on a check row is classified: masked for a coach (a connection fact) or deliberately
+  // visible (a team fact, a source-data fact). A new code fails here until it is classified.
+  const coachVisible = ["team_not_available", "team_club_changed", "drill_set_incomplete"];
+  for (const c of resolver.IMPORT_RESOLVE_CODES) assert.ok(resolver.isConnectionConfigurationCode(c) !== coachVisible.includes(c), `${c} is classified exactly once`);
+  for (const c of ["source_auth_rejected", "source_access_refused"]) assert.ok(resolver.isConnectionConfigurationCode(c), `${c} (the adapter's credential answers) is masked`);
+  for (const c of ["source_unavailable", "source_answer_unexpected", "source_list_ambiguous", "internal_error", "abandoned"]) assert.ok(!resolver.isConnectionConfigurationCode(c), `${c} stays visible`);
+  assert.deepEqual([...resolver.CONNECTION_CONFIGURATION_CODE_LIST].sort(), [...new Set(resolver.CONNECTION_CONFIGURATION_CODE_LIST)].sort());
   assert.equal(await code([{ ...base, approved_source_team_id: null }]), "team_setting_missing");
   assert.equal(await code([{ ...base, approved_source_team_id: "0981" }]), "ok", "the approved pair is compared canonically, the one rule v30 / the bind / the Settings route share");
   assert.equal(await code([{ ...base, approved_source_team_id: "x981" }]), "team_setting_missing");
@@ -616,10 +649,20 @@ test("7. a refused or lost source answer never causes a fallback: a 403 fails th
   assert.deepEqual([row.status, row.error_code], ["failed", "source_unavailable"], JSON.stringify(row));
   assert.equal((await connRow(conn.id)).state, "verified");
   assert.equal((await auditOf(conn.id)).filter((a) => a.action === "auto_invalidate").length, 0);
+  // Round 5: a general source answer (a 5xx) is not a connection fact — the coach sees it as it is.
+  assert.equal((await api(`/gpexe/teams/${o.teamId}/checks/${row.id}`, { cookie: o.coach.cookie })).body.check.error.code, "source_unavailable");
+  assert.equal((await api(`/gpexe/teams/${o.teamId}/checks/${forbidden.id}`, { cookie: o.coach.cookie })).body.check.error.code, "source_connection_unavailable", "a resource the credential may not read is a connection fact: masked for the coach");
   src.state.faults.listStatus = 401;
   row = await runCheck(o);
   assert.deepEqual([row.status, row.error_code], ["failed", "source_auth_rejected"], JSON.stringify(row));
   assert.deepEqual(await connRow(conn.id), { state: "needs_reconnect", last_error_code: "source_auth_rejected" });
+  // Round 5: a refused credential is a connection fact — the coach sees the stable code on the detail and the status,
+  // the club admin and the platform admin the precise one.
+  const refusedByCoach = await api(`/gpexe/teams/${o.teamId}/checks/${row.id}`, { cookie: o.coach.cookie });
+  assert.deepEqual([refusedByCoach.body.check.error.code, /contact an administrator/.test(refusedByCoach.body.check.error.message)], ["source_connection_unavailable", true], JSON.stringify(refusedByCoach.body));
+  assert.equal((await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.coach.cookie })).body.lastCheck.error.code, "source_connection_unavailable");
+  assert.equal((await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.cadmin.cookie })).body.lastCheck.error.code, "source_auth_rejected");
+  assert.equal((await api(`/gpexe/teams/${o.teamId}/checks/${row.id}`, { cookie: o.padmin.cookie })).body.check.error.code, "source_auth_rejected");
   const rows = (await auditOf(conn.id)).filter((a) => a.action === "auto_invalidate");
   assert.equal(rows.length, 1);
   assert.deepEqual([rows[0].outcome, rows[0].error_code, rows[0].basis, rows[0].performed_by_user_id, rows[0].team_id, rows[0].metadata.binding_id, rows[0].metadata.source_team_id, rows[0].metadata.trigger], ["ok", "source_auth_rejected", "system", null, o.teamId, binding.bindingId, o.sourceTeamId, "import_read"]);
@@ -1186,24 +1229,40 @@ test("16. migration v31 applies on v30 (five columns, one CHECK, two triggers an
                       values ($1, $2, 'succeeded', '2026-09-02', '2026-09-02', now(), $3, $4, $5, $6, $7, $8) returning id`, [v.team, user, v.gpexe, v.path, v.conn, v.binding, v.sourceTeam, v.host]);
     };
     const refused = async (over, pattern) => { const e = await insertCheck(over).then(() => null, (err) => err); assert.ok(e, `refused: ${JSON.stringify(over)}`); assert.match(String(e.message), pattern); };
+    // Round 5: a legacy row only for a team that NEVER had a gpexe binding — refused for the two bound teams (SQLSTATE 23514,
+    // the named constraint), accepted for a third team that was never bound.
+    const team3 = (await k.query(`insert into public.teams (club_id, name) values ($1, 'T3') returning id`, [club])).rows[0].id;
+    await k.query(`insert into training_load.gpexe_team_settings (owner_team_id, gpexe_team_id, configured_by_user_id) values ($1, '983', $2)`, [team3, user]);
+    const legacyRow = (over = {}) => insertCheck({ path: "legacy_env", conn: null, binding: null, sourceTeam: null, host: null, gpexe: "983", team: team3, ...over });
+    const refusedLegacy = async (over) => {
+      const e = await legacyRow(over).then(() => null, (err) => err);
+      assert.ok(e, `legacy refused: ${JSON.stringify(over)}`);
+      assert.deepEqual([e.code, e.constraint], ["23514", "gpexe_import_checks_legacy_path_never_bound"], String(e.message));
+      assert.match(String(e.message), /environment token/);
+    };
+    await refusedLegacy({ team, gpexe: "981" });
+    await refusedLegacy({ team: team2, gpexe: "982" });
+    const neverBound = (await legacyRow()).rows[0].id;
+    assert.equal((await k.query(`select source_path from training_load.gpexe_import_checks where id = $1`, [neverBound])).rows[0].source_path, "legacy_env");
     await refused({ binding: binding2 }, /another team/);
     await refused({ conn: connId2 }, /other than its binding/);
     await refused({ sourceTeam: "982" }, /source team other than its binding/);
     await refused({ host: "e03" }, /host key other than its connection/);
     await refused({ binding: "00000000-0000-0000-0000-00000000dead" }, /does not exist|violates foreign key/);
-    await refused({ path: "legacy_env" }, /source_path_facts/);
+    await refused({ path: "legacy_env", team: team3, gpexe: "983" }, /source_path_facts/);
+    await refused({ path: "legacy_env" }, /source_path_facts|environment token/);
     // (the row trigger fires before the CHECK: a connection-path row without a binding is refused by whichever answers first)
     await refused({ conn: null, binding: null, sourceTeam: null, host: null }, /source_path_facts|does not exist/);
     await refused({ sourceTeam: "0981" }, /source team other than its binding/);
-    // Mixed shapes and formats.
-    await refused({ path: "legacy_env", binding: null, conn: null, sourceTeam: null, host: "server3" }, /source_path_facts/);
+    // Mixed shapes and formats (on the never-bound team, so the CHECK itself answers, not the legacy guard).
+    await refused({ path: "legacy_env", team: team3, gpexe: "983", binding: null, conn: null, sourceTeam: null, host: "server3" }, /source_path_facts/);
     await refused({ host: "Server3" }, /source_host_key_format|host key other/);
     // Before any connection-path row exists: the rollback runs, and the atomicity of the file holds.
     const rollbackSql = await fsp.readFile(V31_ROLLBACK, "utf8");
     await k.query(rollbackSql);
     assert.deepEqual(await catalog(), v30, "the rollback leaves exactly the v30 columns, constraints, triggers and functions of the checks table");
     assert.equal((await k.query(`select count(*)::int as n from public.schema_migrations where migration_name like $1`, [`%${V31}`])).rows[0].n, 0);
-    assert.equal((await k.query(`select count(*)::int as n from training_load.gpexe_import_checks`)).rows[0].n, 1, "no row lost");
+    assert.equal((await k.query(`select count(*)::int as n from training_load.gpexe_import_checks`)).rows[0].n, 2, "no row lost (the legacy-era row and the never-bound team's row)");
     const sql = await fsp.readFile(path.resolve(ROOT, "migrations_v2", V31), "utf8");
     assert.doesNotMatch(sql.replace(/[$][$][^]*?[$][$]/g, "<body>"), /https?:\/\/|SOURCE_CREDENTIAL_KEYS|^\s*(begin|commit|rollback)\b/im, "no URL, key or transaction control outside the function bodies");
     await k.query("begin");
@@ -1220,6 +1279,9 @@ test("16. migration v31 applies on v30 (five columns, one CHECK, two triggers an
     // An ended binding is refused for a NEW row, while the earlier row keeps pointing at it (history).
     await k.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'test' where id = $1`, [bindingId, user]);
     await refused({}, /not active/);
+    // Round 5: after the binding ended the team has history — a legacy row stays refused; the never-bound team still writes one.
+    await refusedLegacy({ team, gpexe: "981" });
+    await legacyRow();
     await assert.rejects(k.query(rollbackSql), /v31 rollback refused: 1 check row\(s\) record a source-connection read/);
     await k.query("rollback").catch(() => {});
     assert.deepEqual(await catalog(), v31, "a refused rollback drops nothing");
@@ -1231,6 +1293,79 @@ test("16. migration v31 applies on v30 (five columns, one CHECK, two triggers an
   } finally {
     await k.end();
     await m.drop();
+  }
+});
+
+test("17. the database refuses the legacy path to a team with any gpexe binding, whoever writes the row, serialized by the one team import lock in both orders: a legacy check INSERT held open makes a bind try-lock-refused (try_again) and after its COMMIT the bind succeeds with the earlier legacy row kept as history; a binding INSERT held open makes a raw legacy INSERT try-lock-refused, and after its COMMIT the same INSERT is refused by the v31 guard (23514 gpexe_import_checks_legacy_path_never_bound); after an Unbind through the API a raw legacy INSERT stays refused while the application answers binding_ended", async () => {
+  const o = await org();
+  useSource();
+  const conn = await verifiedConnection(o);
+  process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+  const user = o.padmin.id;
+  const a = new pg.Client({ connectionString: db.url });
+  const b = new pg.Client({ connectionString: db.url });
+  await a.connect();
+  await b.connect();
+  const legacyInsert = (c, teamId, sourceTeamId) => c.query(
+    `insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, status, window_from, window_to, finished_at, gpexe_team_id)
+     values ($1, $2, 'succeeded', $3, $3, now(), $4) returning id`, [teamId, user, DAY, sourceTeamId]);
+  const bindBody = (teamId, sourceTeamId) => ({ method: "POST", cookie: o.cadmin.cookie, body: { teamId, sourceTeamId } });
+  try {
+    // Order 1: the legacy INSERT holds the team lock → the bind is refused at once (try_again, nothing bound); after the
+    // COMMIT the bind succeeds, and the row from before the binding stays as history.
+    await a.query("begin");
+    const legacyId = (await legacyInsert(a, o.teamId, o.sourceTeamId)).rows[0].id;
+    const bindWhileHeld = await api(`/sources/gpexe/connections/${conn.id}/bindings`, bindBody(o.teamId, o.sourceTeamId));
+    assert.deepEqual([bindWhileHeld.status, bindWhileHeld.body.error], [409, "try_again"], JSON.stringify(bindWhileHeld.body));
+    assert.equal((await q(`select count(*)::int as n from training_load.source_team_bindings where team_id = $1`, [o.teamId]))[0].n, 0);
+    await a.query("commit");
+    const bind = await api(`/sources/gpexe/connections/${conn.id}/bindings`, bindBody(o.teamId, o.sourceTeamId));
+    assert.equal(bind.status, 201, JSON.stringify(bind.body));
+    assert.equal((await q(`select source_path from training_load.gpexe_import_checks where id = $1`, [legacyId]))[0].source_path, "legacy_env", "the row from before the binding stays as history");
+    // With the binding active a raw legacy INSERT is refused by the database (the application takes the connection path).
+    const whileBound = await legacyInsert(a, o.teamId, o.sourceTeamId).then(() => null, (e) => e);
+    assert.deepEqual([whileBound?.code, whileBound?.constraint], ["23514", "gpexe_import_checks_legacy_path_never_bound"], String(whileBound?.message));
+    // Order 2 (a second team of the same club): the binding INSERT holds the team lock → the raw legacy INSERT is
+    // try-lock-refused (v24, before any read of the facts); after the COMMIT the same INSERT is refused by the v31 guard.
+    const team2 = (await q(`insert into public.teams (club_id, name) values ($1, $2) returning id`, [o.clubId, `T2-${uid()}`]))[0].id;
+    const sourceTeam2 = String(nextSourceTeam++);
+    visibleTeams.add(Number(sourceTeam2));
+    assert.equal((await api(`/gpexe/teams/${team2}/settings`, { method: "PUT", cookie: o.padmin.cookie, body: { gpexeTeamId: sourceTeam2 } })).status, 200);
+    await b.query("begin");
+    await b.query(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id, legacy_gpexe_settings_team_id) values ($1, $2, 'gpexe', $3, $4, $1)`, [team2, conn.id, sourceTeam2, user]);
+    const whileHeld = await legacyInsert(a, team2, sourceTeam2).then(() => null, (e) => e);
+    assert.ok(whileHeld, "refused while the binding INSERT holds the team lock");
+    assert.match(String(whileHeld.message), /is running for team .*\(check\)/, "v24's own trigger answers first");
+    // The v31 trigger holds the team's import try-lock ITSELF: with v24's trigger disabled for one statement the same
+    // refusal comes from the v31 function ("check source"), so the guard never depends on another trigger's lock.
+    await a.query(`alter table training_load.gpexe_import_checks disable trigger gpexe_import_checks_require_team`);
+    let ownLock;
+    try {
+      ownLock = await legacyInsert(a, team2, sourceTeam2).then(() => null, (e) => e);
+    } finally {
+      await a.query(`alter table training_load.gpexe_import_checks enable trigger gpexe_import_checks_require_team`);
+    }
+    assert.ok(ownLock, "refused by the v31 trigger's own try-lock");
+    assert.match(String(ownLock.message), /is running for team .*\(check source\)/);
+    assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_checks where owner_team_id = $1`, [team2]))[0].n, 0);
+    await b.query("commit");
+    const afterCommit = await legacyInsert(a, team2, sourceTeam2).then(() => null, (e) => e);
+    assert.deepEqual([afterCommit?.code, afterCommit?.constraint], ["23514", "gpexe_import_checks_legacy_path_never_bound"], String(afterCommit?.message));
+    assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_checks where owner_team_id = $1`, [team2]))[0].n, 0, "no legacy row for a team bound meanwhile");
+    // After an Unbind through the API the team has history: the raw legacy INSERT stays refused, and the application
+    // answers binding_ended (an administrator's view) without calling the legacy factory.
+    assert.equal((await unbind(o, conn, bind.body.result.binding)).status, 200);
+    const afterUnbind = await legacyInsert(a, o.teamId, o.sourceTeamId).then(() => null, (e) => e);
+    assert.deepEqual([afterUnbind?.code, afterUnbind?.constraint], ["23514", "gpexe_import_checks_legacy_path_never_bound"], String(afterUnbind?.message));
+    legacyTrap();
+    const started = await api(`/gpexe/teams/${o.teamId}/checks`, { method: "POST", cookie: o.padmin.cookie, body: { from: DAY, to: DAY } });
+    assert.deepEqual([started.status, started.body.error, started.body.reason], [409, "source_connection_unavailable", "binding_ended"], JSON.stringify(started.body));
+    assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_checks where owner_team_id = $1`, [o.teamId]))[0].n, 1, "only the row from before the binding");
+  } finally {
+    await a.query("rollback").catch(() => {});
+    await b.query("rollback").catch(() => {});
+    await a.end();
+    await b.end();
   }
 });
 

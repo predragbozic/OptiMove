@@ -97,6 +97,26 @@ const MESSAGES = Object.freeze({
 function fail(code, extra = {}) {
   return new SourceImportResolveError(code, MESSAGES[code] ?? "The source connection cannot be used; nothing was read.", extra);
 }
+// The codes of a failed check that describe the team's source connection —
+// the binding, the connection's state, club, host, key, adapter or credential
+// (a refused credential and a resource it may not read included). On the API
+// an administrator of the platform or of the team's club sees them; a coach
+// sees the stable code `source_connection_unavailable` and the sentence to
+// contact an administrator, the same rule as the 409 of a check start. A
+// general source answer (a 5xx, an unexpected answer, an incomplete drill
+// set) and a team fact (a move, an archive) are not in this set.
+const CONNECTION_CONFIGURATION_CODES = new Set([
+  "binding_ambiguous", "binding_ended", "binding_started", "team_setting_missing", "team_setting_mismatch",
+  "connection_foreign_club", "connection_not_usable", "connection_credential_changed", "host_not_allowed",
+  "adapter_not_available", "key_missing", "credential_unreadable", "context_not_issued", "source_team_mismatch",
+  "source_auth_rejected", "source_access_refused",
+]);
+export const isConnectionConfigurationCode = (code) => CONNECTION_CONFIGURATION_CODES.has(code);
+// For the tests only (the Set itself stays private, so no importer can change
+// the masking at runtime): the masked codes, and every code this module can
+// put on a check row — a new code must be classified (test 4).
+export const CONNECTION_CONFIGURATION_CODE_LIST = Object.freeze([...CONNECTION_CONFIGURATION_CODES]);
+export const IMPORT_RESOLVE_CODES = Object.freeze(Object.keys(MESSAGES));
 
 // Only objects this module built are accepted back by it: a caller cannot
 // hand in a host, a catalog row, a source team or encrypted parts of its own.

@@ -959,7 +959,8 @@ on Render untouched.
   `source_connection_unavailable` with the precise code as `reason` at `startCheck` (no check
   row; the reason for an administrator only), or the precise code on the check row when it is
   found after the row exists (`credential_unreadable` — the decrypt happens once, after COMMIT —
-  or anything that moves mid-run); a
+  or anything that moves mid-run; on the API that code is for administrators only, a coach sees
+  `source_connection_unavailable` — round 5); a
   team without a binding — and that never had one for the source — keeps the legacy path, labelled
   `legacy_env` (the existing `GPEXE_API_TOKEN` / `e03` client, `503 gpexe_token_missing` without the
   variable); a team with ended binding history answers `source_connection_unavailable` /
@@ -1036,6 +1037,24 @@ on Render untouched.
   disposable database; **v31 is applied to no persistent database** (the local OPTIMOVE stays v21;
   the deployed database gets it only through a merge and deploy the owner decides); (5) decision Q2
   kept: only a `verified` connection is read, an import never promotes a state.
+- **Round 5 (owner's external review of `d7657c8`, 2026-10-04 — closed in this PR):** (1) **the
+  v31 trigger protects the legacy path**: after the team's import try-lock it refuses a `legacy_env`
+  row for a team that has any gpexe binding, active or ended (`23514`,
+  `gpexe_import_checks_legacy_path_never_bound`; the application maps it to `409 gpexe_change_busy`,
+  a backstop it cannot reach on its own locked path); a team that never had a binding writes
+  `legacy_env`; rows from before a team's first binding stay as history; the `source_connection`
+  checks are unchanged; proven with a bind and a legacy INSERT serialized by the one team lock in
+  both orders, after an Unbind, and with the rollback → identical v30 catalog → reapply sequence
+  still green; **decision for F3c4 recorded**: the migration that retires the environment path drops
+  the `DEFAULT 'legacy_env'`, new code writes no legacy check, historical legacy rows are not
+  rewritten; (2) **the asynchronous connection codes are masked for a coach**: the precise code stays
+  on the check row; on `GET …/status`, `GET …/checks/:checkId` and the answer of a start that fails
+  right after its COMMIT a platform admin and an active admin of the team's club see the precise
+  resolver / connection code, a coach sees `source_connection_unavailable` and the sentence to
+  contact an administrator for every code of the connection-configuration set (the binding, the
+  connection's state, club, host, key, adapter and credential codes, a refused credential and a
+  resource it may not read included); general source answers and team facts are shown as they are
+  (the three viewers of the same failed row are tested); (3) the PR title names migration v31.
 - **Serialization** with every other writer through the v24 team lock key: `startCheck` waits at
   most `SETTINGS_LOCK_TIMEOUT_MS` for the team import lock (`409 gpexe_change_busy`), while a
   Test / Reconnect / bind holds that team's try-lock for its whole attempt, an Unbind for its

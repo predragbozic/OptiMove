@@ -180,7 +180,17 @@ Through the binding path the importer receives the adapter's bundle in the e03 b
   support; rows from before v31 are `legacy_env` by the column default (the resolver did not exist,
   the environment token was the only path) — documented backfill, no rewrite. The audit table is
   untouched (its `system` basis stays reserved for `auto_invalidate`). Rollback:
-  `docs/runbooks/gpexe-import-checks-v31-rollback.sql`, forward-safe.
+  `docs/runbooks/gpexe-import-checks-v31-rollback.sql`, forward-safe. **Round 5 (owner's external
+  review of `d7657c8`):** the same BEFORE INSERT trigger refuses a `legacy_env` row for a team that
+  has or had a gpexe binding — it takes the team's import try-lock first, then looks for any
+  `source_team_bindings` row of the team, active or ended — with SQLSTATE `23514` and the constraint
+  name `gpexe_import_checks_legacy_path_never_bound` (the application maps it to `409
+  gpexe_change_busy`, "try again" — it can only meet it when its own locked decision and the
+  database disagree, and the next attempt resolves the real path; a backstop no route test can
+  reach). A team that never had a binding writes `legacy_env`; rows
+  written before a team's first binding stay as history. **Decision for F3c4 (owner, 2026-10-04):**
+  the migration that retires the environment path drops the `DEFAULT 'legacy_env'`; from then on new
+  code writes no legacy check, and the historical legacy rows are not rewritten.
 - **Q2 — which states are usable for an import read — KEPT (owner, round 4):** `verified` only; an
   import never promotes a state. A connection that a failed Test moved to `source_unavailable`
   needs a successful Test (an administrator's action) before the next check.
@@ -199,6 +209,26 @@ Through the binding path the importer receives the adapter's bundle in the e03 b
   team cannot move (the v27 move guard, proven by a refused raw UPDATE in the tests); a legacy team
   can, and its run stops.
 - The legacy path is open only to a team that never had a binding for the source (section 5, Q3).
+
+## 5b. Round-5 rules (owner's external review of `d7657c8`, 2026-10-04)
+
+- The database itself refuses the legacy path to a team with any gpexe binding, active or ended
+  (the v31 trigger, under the team's import try-lock; `23514`,
+  `gpexe_import_checks_legacy_path_never_bound`), whoever writes the row. Serialized with a bind by
+  the one team lock in both orders: a legacy INSERT held open makes a bind `try_again`, and after
+  its COMMIT the bind succeeds with the earlier legacy row kept as history; a binding INSERT held
+  open makes a raw legacy INSERT try-lock-refused, and after its COMMIT the same INSERT meets the
+  guard. The F3c4 decision above (no `DEFAULT`, no new legacy row, no rewrite of history).
+- **The precise code of a failed check stays in the database; on the API it is for administrators
+  only.** `GET …/status` (`lastCheck.error`), `GET …/checks/:checkId` and the answer of a check
+  start that fails right after its COMMIT show a code of the connection-configuration set
+  (`CONNECTION_CONFIGURATION_CODES` in the resolver: the binding, the connection's state, club, host,
+  key, adapter and credential codes, `source_auth_rejected` and `source_access_refused` included)
+  with its own sentence to a platform admin and to an active admin of the team's club; a coach sees
+  `source_connection_unavailable` and the sentence to contact an administrator. A general source
+  answer (`source_unavailable`, `source_answer_unexpected`, `source_list_ambiguous`,
+  `drill_set_incomplete`, …) and a team fact (`team_club_changed`, `team_not_available`) are shown to
+  everyone as they are. The same rule the 409 of a check start already follows.
 
 ## 6. Out of scope here, recorded
 

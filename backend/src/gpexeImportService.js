@@ -19,7 +19,7 @@ import { createGpexeClient, GpexeClientError } from "./gpexeClient.js";
 import {
   resolveImportSourceFacts, preflightImportSource, openImportSource, importClientFor, legacyImportClientFor, sameImportSource,
   importSourceIdentity, canonicalSourceTeamId, autoInvalidateImportSource, boundImportSideEffect, AUTO_INVALIDATE_BOUND_MS,
-  SourceImportResolveError, SourceAdapterError, PATH_SOURCE_CONNECTION, PATH_LEGACY_ENV,
+  SourceImportResolveError, SourceAdapterError, PATH_SOURCE_CONNECTION, PATH_LEGACY_ENV, isConnectionConfigurationCode,
 } from "./sourceImportCredentialResolver.js";
 import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCanonicalGpexeAthleteId } from "./gpexeImportMapper.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
@@ -360,7 +360,15 @@ export async function retentionStatus() {
 // Checks
 // ---------------------------------------------------------------------------
 
-function checkView(row) {
+// F3c2g: the precise code of a failed check stays in the database; on the API
+// a code that describes the team's source connection (the resolver's set) is
+// shown to an administrator of the platform or of the team's club only. A
+// coach sees the stable code and the sentence to contact an administrator —
+// the same rule as the 409 of a check start. General source answers and team
+// facts are shown to everyone as they are.
+export const COACH_CONNECTION_MESSAGE = "The team's source connection cannot be used right now; contact an administrator.";
+function checkView(row, { adminViewer = false } = {}) {
+  const masked = Boolean(row.error_code) && !adminViewer && isConnectionConfigurationCode(row.error_code);
   return {
     id: row.id,
     status: row.status,
@@ -371,23 +379,25 @@ function checkView(row) {
     candidatesNew: row.candidates_new,
     candidatesChanged: row.candidates_changed,
     candidatesUnchanged: row.candidates_unchanged,
-    error: row.error_code ? { code: row.error_code, message: row.error_message } : null,
+    error: row.error_code
+      ? (masked ? { code: "source_connection_unavailable", message: COACH_CONNECTION_MESSAGE } : { code: row.error_code, message: row.error_message })
+      : null,
   };
 }
 
-export async function getCheck(teamId, checkId) {
+export async function getCheck(teamId, checkId, { adminViewer = false } = {}) {
   const row = (await query(`select * from training_load.gpexe_import_checks where id = $1 and owner_team_id = $2`, [checkId, teamId])).rows[0];
-  return row ? checkView(row) : null;
+  return row ? checkView(row, { adminViewer }) : null;
 }
 
-export async function latestCheck(teamId) {
+export async function latestCheck(teamId, { adminViewer = false } = {}) {
   const row = (await query(`select * from training_load.gpexe_import_checks where owner_team_id = $1 order by started_at desc limit 1`, [teamId])).rows[0];
-  return row ? checkView(row) : null;
+  return row ? checkView(row, { adminViewer }) : null;
 }
 
 // Starts a check and returns it right away; the fetch runs in the
 // background (GPEXE can take minutes). `wait` is for tests and the CLI.
-export async function startCheck(teamId, { userId, window, wait = false }) {
+export async function startCheck(teamId, { userId, window, wait = false, adminViewer = false }) {
   // A first, unlocked read only to fail early (no GPEXE team, no token); the
   // value the check really uses is read again under the lock below.
   const settings = await getTeamSettings(teamId);
@@ -516,6 +526,15 @@ export async function startCheck(teamId, { userId, window, wait = false }) {
       if (error.code === "55P03" || error.code === "40P01") {
         throw new GpexeImportServiceError(409, "gpexe_change_busy", "A GPEXE check, import or connection change is running for this team. Try again when it has finished.");
       }
+      // The database's own refusal of the legacy path for a team that has or
+      // had a binding (v31). The resolver decided the legacy path under this
+      // very lock, so the guard can only fire when the two disagree — the
+      // answer is the same as for any other disagreement: retry, nothing
+      // written (a backstop; the application cannot reach it on its own path,
+      // so no route test proves it).
+      if (error.code === "23514" && error.constraint === "gpexe_import_checks_legacy_path_never_bound") {
+        throw new GpexeImportServiceError(409, "gpexe_change_busy", "The team's source binding changed while the check was being started. Try again.");
+      }
       if (error instanceof GpexeImportServiceError) throw error;
       console.error(`[gpexe] the check of ${teamId} could not be started: ${error?.code ?? ""} ${error?.message}`);
       throw new GpexeImportServiceError(500, "internal_error", "The check could not be started; nothing was written.");
@@ -548,12 +567,12 @@ export async function startCheck(teamId, { userId, window, wait = false }) {
           `update training_load.gpexe_import_checks set status = 'failed', finished_at = now(), error_code = $2, error_message = $3 where id = $1 and status = 'running'`,
           [row.id, code, error instanceof SourceImportResolveError ? error.message : "The check could not open its source connection."],
         );
-        return checkView((await query(`select * from training_load.gpexe_import_checks where id = $1`, [row.id])).rows[0]);
+        return checkView((await query(`select * from training_load.gpexe_import_checks where id = $1`, [row.id])).rows[0], { adminViewer });
       } catch (writeError) {
         // The row stays running until the stale sweep closes it; the answer
         // says so instead of claiming an outcome.
         console.error(`[gpexe] check ${row.id} could not be marked failed (${code}): ${writeError?.code ?? ""}`);
-        return checkView(row);
+        return checkView(row, { adminViewer });
       }
     }
   } else {
@@ -564,7 +583,7 @@ export async function startCheck(teamId, { userId, window, wait = false }) {
   const job = runCheck(row.id, { teamId, userId, gpexeTeamId, window, gpexe: client, source });
   if (wait) await job;
   else job.catch((error) => console.error(`[gpexe] check ${row.id} failed outside its own handler: ${error?.name}`));
-  return checkView(wait ? (await query(`select * from training_load.gpexe_import_checks where id = $1`, [row.id])).rows[0] : row);
+  return checkView(wait ? (await query(`select * from training_load.gpexe_import_checks where id = $1`, [row.id])).rows[0] : row, { adminViewer });
 }
 
 // After an unconfirmed COMMIT of a check's start: is the row there? A fresh

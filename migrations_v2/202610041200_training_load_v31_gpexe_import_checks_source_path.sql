@@ -34,6 +34,21 @@
 --      team's import try-lock itself (v24 hold_gpexe_team_lock, reentrant for
 --      the application and for v24's gpexe_import_checks_require_team, which
 --      sorts before it by name) and reads two rows by primary key under it.
+--      A row on the LEGACY path is accepted only for a team that has NO gpexe
+--      source binding at all, active or ended (SQLSTATE 23514, constraint name
+--      gpexe_import_checks_legacy_path_never_bound): the environment token is
+--      for a team that never had a binding, and the database refuses the
+--      downgrade whoever writes the row — the application decides the same
+--      under the same lock, this is the backstop. Rows written before a
+--      team's first binding stay as they are: history, never rewritten.
+--      The guard reads with the writer's snapshot: it is airtight under READ
+--      COMMITTED (the application pins it; psql's default), while a raw
+--      writer in REPEATABLE READ or SERIALIZABLE whose snapshot predates a
+--      bind's COMMIT would not see that binding — the same limit the
+--      connection-path reads below have.
+--      Owner decision for F3c4 (2026-10-04): the migration that retires the
+--      environment path drops the DEFAULT 'legacy_env'; from then on new code
+--      writes no legacy row, and the historical legacy rows are not rewritten.
 --   4. a BEFORE UPDATE trigger (gpexe_import_checks_freeze_source): the five
 --      columns are final from creation — a check's path is what the row says.
 --
@@ -74,7 +89,7 @@ alter table training_load.gpexe_import_checks
   );
 
 comment on column training_load.gpexe_import_checks.source_path is
-  'F3c2g: which credential path the check read through — legacy_env (GPEXE_API_TOKEN; a team that never had a source binding) or source_connection (the club connection through the team''s active binding). Rows from before v31 default to legacy_env: the resolver did not exist, the environment token was the only path. Final from creation.';
+  'F3c2g: which credential path the check read through — legacy_env (GPEXE_API_TOKEN; only a team that never had a gpexe source binding, the BEFORE INSERT trigger refuses it otherwise) or source_connection (the club connection through the team''s active binding). Rows from before v31 default to legacy_env: the resolver did not exist, the environment token was the only path. Final from creation.';
 comment on column training_load.gpexe_import_checks.source_connection_id is
   'F3c2g: the source connection the check read through (source_connection path only). Final from creation. Never a credential.';
 comment on column training_load.gpexe_import_checks.source_binding_id is
@@ -90,14 +105,23 @@ declare
   b record;
   c record;
 begin
-  if new.source_path = 'legacy_env' then
-    return new;
-  end if;
   -- The same team import try-lock every writer of these facts takes (v24
   -- hold_gpexe_team_lock; reentrant for the application, which already holds
-  -- it): the two reads below cannot race a bind, an Unbind or a Reconnect,
+  -- it): the reads below cannot race a bind, an Unbind or a Reconnect,
   -- whatever order a future trigger sorts in.
   perform training_load.hold_gpexe_team_lock(new.owner_team_id, 'check source');
+  if new.source_path = 'legacy_env' then
+    -- The environment token is for a team that NEVER had a gpexe source
+    -- binding: once one exists, active or ended, a legacy row is refused by
+    -- the database itself, whoever writes it. Rows from before the team's
+    -- first binding stay (history).
+    if exists (select 1 from training_load.source_team_bindings sb
+                where sb.team_id = new.owner_team_id and sb.source_system = 'gpexe') then
+      raise exception 'gpexe_import_checks: check of team % cannot read through the environment token: the team has or had a gpexe source binding', new.owner_team_id
+        using errcode = 'check_violation', constraint = 'gpexe_import_checks_legacy_path_never_bound';
+    end if;
+    return new;
+  end if;
   select team_id, connection_id, source_team_id, state, source_system
     into b
     from training_load.source_team_bindings

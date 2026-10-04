@@ -67,14 +67,26 @@ the team is not back on the legacy token:** until it is bound again a check answ
 that ever had a binding. Since **v31** every check row records its path (`source_path`:
 `legacy_env` or `source_connection`) and, on the connection path, the connection, binding, source
 team and host key it read through — final from creation, never a credential; rows from before v31
-read `legacy_env` (the only path that existed then). A check whose
+read `legacy_env` (the only path that existed then), and the database itself refuses a `legacy_env`
+row for a team that has or had a gpexe binding (the v31 trigger, under the team's import lock;
+`gpexe_import_checks_legacy_path_never_bound`), whoever writes it — rows written before a team's
+first binding stay as history. A check whose
 start COMMIT was sent but not answered in time either runs (the row is found) or answers `503
 check_outcome_unknown` — never "nothing was written"; read the team's checks before starting
 another one. A team that **never had** a binding keeps the legacy path above (`legacy_env`), until F3c4
 decides the variable's fate. A check started while a Test, Reconnect, bind, Unbind or Settings
 change holds the team's lock answers `409 gpexe_change_busy`: retry. The server log names the path
 of every check (`legacy_env`, or `source_connection` with the connection and binding ids), never a
-secret; no API field carries it yet.
+secret; no API field carries it yet. **What a failed check shows, and to whom:** the precise code
+stays on the check row; on the status (`lastCheck`) and on a check's detail a platform admin and an
+active admin of the team's club see it with its own sentence, while a coach sees
+`source_connection_unavailable` and the sentence to contact an administrator for every code that
+describes the connection — the binding, the connection's state, club, host, key, adapter or
+credential, a refused credential (`source_auth_rejected`) and a resource it may not read
+(`source_access_refused`) included. A general source answer (`source_unavailable`,
+`source_answer_unexpected`, `drill_set_incomplete`, …) and a team fact are shown to everyone as they
+are. F3c4, when it retires the environment path, drops the `legacy_env` default; new code then
+writes no legacy check and the historical legacy rows are not rewritten (owner, 2026-10-04).
 Personal fields the importer does not need are removed before anything is
 kept: names on tracks, birth date, weight, picture, e-mail, notes, weather,
 coordinates, who submitted a session, and roles.

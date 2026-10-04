@@ -805,6 +805,17 @@ INSERT trigger refusing a path the data does not support; rows from before v31 a
 default — the documented backfill; rollback `docs/runbooks/gpexe-import-checks-v31-rollback.sql`,
 forward-safe: it refuses while any row says `source_connection`; rehearsed on a disposable database) —
 the owner's round-4 decisions: Q1 v31, Q2 `verified` only, Q3 no legacy downgrade after an Unbind.
+**Round 5 (owner's external review of `d7657c8`, 2026-10-04):** the v31 trigger also refuses a
+`legacy_env` row for a team that has or had a gpexe binding (under the team's import try-lock;
+`23514`, `gpexe_import_checks_legacy_path_never_bound`), whoever writes it — a never-bound team
+writes `legacy_env`, rows from before a team's first binding stay as history, serialized with a bind
+by the one team lock in both orders; the precise code of a failed check stays on the row, and on
+the status, the check detail and a start that fails after its COMMIT a coach sees
+`source_connection_unavailable` plus the sentence to contact an administrator for every
+connection-configuration code (a platform admin and the club's own admin see the precise one;
+general source answers and team facts are shown as they are); **decision for F3c4 recorded:** the
+migration that retires the environment path drops the `legacy_env` DEFAULT, new code writes no
+legacy check, historical legacy rows are not rewritten.
 Tests: `backend/tests/gpexe-import-credential-resolver.test.mjs` (disposable database, a fake source
 serving the exchange, the team reads and the rest_v1 session reads; the legacy factory as a trap on
 the binding path; the resolver's contract with a fake executor), with mutation evidence for the key
