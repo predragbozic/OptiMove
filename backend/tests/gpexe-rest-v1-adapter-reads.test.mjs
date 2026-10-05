@@ -1213,11 +1213,10 @@ test("B7.5 a refused players answer (F3c3 pilot follow-up): the acceptance rule 
   assert.deepEqual([big.diagnostic.players, big.diagnostic.failing.arrayLengths, big.diagnostic.failing.depths], ["65+", ["65+"], ["4+"]]);
   assert.ok(big.message.length <= "The source answer to the whole-session details carries a metric value in an unknown shape.".length + DIAGNOSTIC_MARK.length + 900);
 
-  // Through the adapter: the whole-session read fails closed with the description; a drill keeps its per-drill code only.
+  // Through the adapter: since the projection (B7.6) an unconsumed metric no longer refuses the
+  // whole-session read - it is dropped; the drill read keeps the full check and its description.
   const { a } = await confirmedAdapter({ [WHOLE]: answer(200, details({ [ID]: { tot_burst_events: { unit: "number", value: 1 }, [SECRET_NAME]: [SECRET_NUMBER] } })) });
-  const whole = await errorOf(a.getSessionDetails({ sessionId: "100" }));
-  assert.deepEqual([whole?.code, whole?.reason, whole?.diagnostic?.operation], ["source_answer_unexpected", "metric_shape_unknown", "session_details"]);
-  assert.ok(!whole.message.includes(ID) && !whole.message.includes(SECRET_NAME) && !whole.message.includes("13579"));
+  assert.deepEqual(await a.getSessionDetails({ sessionId: "100" }), { players: { [ID]: { tot_burst_events: { unit: "number", value: 1 } } }, drills_count: 2 });
   const { a: b } = await confirmedAdapter({ [D0]: answer(200, details({ [ID]: { [SECRET_NAME]: [1] } })) });
   const set = await b.getSessionDrills({ sessionId: "100" });
   assert.deepEqual([set.complete, set.failed.drillIndex, set.failed.code], [false, 0, "source_answer_unexpected"]);
@@ -1244,4 +1243,99 @@ test("B7.5 a refused players answer (F3c3 pilot follow-up): the acceptance rule 
   // The capability catalog says what the probe proved for row 7: the status only.
   const { REST_V1_CAPABILITIES } = await import("../src/gpexeRestV1Adapter.js");
   assert.match(REST_V1_CAPABILITIES.session_details.evidence, /status only/);
+});
+
+const { projectSessionDetails } = await import("../src/gpexeRestV1Adapter.js");
+const { buildGpexeImportPlan } = await import("../src/gpexeImportMapper.js");
+const { makeBundle, standardAthletes } = await import("./_gpexe-fixtures.mjs");
+
+test("B7.6 the whole-session projection (op=session_details only): the container, ids, bounds and metric-name guard are as before; of the values only tot_burst_events / tot_brake_events are read, validated by the same rule and copied into fresh objects; every other metric is neither read nor returned; the drill read keeps the full check", async () => {
+  const OK = { unit: "number", value: 3 };
+  // An unconsumed metric whose value must never be read: its getter throws.
+  const values = { tot_burst_events: { ...OK, extra: 9 }, tot_brake_events: { unit: "number", value: 1 } };
+  Object.defineProperty(values, "markerUnreadMetricZq", { enumerable: true, get() { throw new Error("an unconsumed metric value was read"); } });
+  const out = projectSessionDetails({ drills_count: 2, players: { 4711: values, 4712: { other: { a: 1, b: { c: 2 } } }, 4713: { tot_burst_events: null, tot_brake_events: {} } } }, 2);
+  assert.deepEqual(out, { players: { 4711: { tot_burst_events: OK, tot_brake_events: { unit: "number", value: 1 } }, 4712: {}, 4713: { tot_burst_events: null, tot_brake_events: {} } }, drills_count: 2 }, "only unit / value of the consumed fields; an athlete without them keeps {}; null and {} stay as they were (the mapper skips them as before)");
+  assert.equal(Object.getPrototypeOf(out.players[4711]), Object.prototype);
+  assert.notEqual(out.players[4711].tot_burst_events, values.tot_burst_events, "a fresh object, not the source's");
+  // The mapper's semantics on the projected output are the ones it had before.
+  for (const [label, players] of [["documented", { 1: { tot_burst_events: OK } }], ["unit other", { 1: { tot_burst_events: { unit: "count", value: 3 } } }]]) {
+    assert.deepEqual(projectSessionDetails({ players }).players, players, label);
+  }
+
+  // Still refused, as before: containers, ids, bounds, names, dangerous keys, the drill count.
+  const reason = (body, expected = null) => { try { projectSessionDetails(body, expected); return null; } catch (e) { assert.equal(e.code, "source_answer_unexpected"); return e.reason ?? "no_reason"; } };
+  assert.equal(reason(null), "no_reason");
+  assert.equal(reason([]), "no_reason");
+  for (const players of [undefined, null, [], "x", 1]) assert.equal(reason({ players }), "players_missing", String(players));
+  assert.equal(reason({ players: { "04711": OK } }), "athlete_id_not_canonical");
+  assert.equal(reason({ players: { 4711: {} } }), "player_values_missing");
+  assert.equal(reason({ players: { 4711: [] } }), "player_values_missing");
+  assert.equal(reason({ players: { 4711: Object.fromEntries(Array.from({ length: 257 }, (_, i) => [`m${i}`, 1])) } }), "player_values_too_many");
+  for (const name of ["__proto__", "constructor", "prototype", "bad name", "x".repeat(65), "9starts_with_digit"]) {
+    assert.equal(reason(JSON.parse(`{"players":{"4711":{"${name}":1,"tot_burst_events":{"unit":"number","value":1}}}}`)), "metric_name_unknown", name);
+  }
+  // A name refusal says which kind of name, as fixed words - never the name itself.
+  for (const [names, flags] of [[["__proto__"], "prototype_key"], [["markerBad Name"], "other_chars"], [["x".repeat(65), "constructor"], "prototype_key/too_long"]]) {
+    const body = JSON.parse(`{"players":{"987654321":{${names.map((n) => `"${n}":1`).join(",")}}}}`);
+    const e = (() => { try { projectSessionDetails(body); return null; } catch (err) { return err; } })();
+    assert.equal(e.message, `The source answer to the whole-session details names a metric in an unknown way. Diagnostic: op=session_details; names=${flags}.`, flags);
+    assert.ok(!e.message.includes("markerBad") && !e.message.includes("987654321") && !e.message.includes("xxxx"));
+  }
+  assert.equal(reason({ players: { 4711: { tot_burst_events: OK } }, drills_count: 3 }, 2), "drills_count_disagrees");
+
+  // A malformed consumed field fails, naming only that field and its kind.
+  for (const [field, value, kind] of [
+    ["tot_burst_events", [1, 2], "array"], ["tot_burst_events", { unit: "number", value: { n: 1 } }, "object"], ["tot_brake_events", "a free text that is long", "text_long"],
+    ["tot_burst_events", Infinity, "number_not_finite"], ["tot_brake_events", -Infinity, "number_not_finite"], ["tot_burst_events", NaN, "number_not_finite"],
+    ["tot_brake_events", { unit: "number", value: Infinity }, "object"], ["tot_burst_events", Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`k${i}`, 1])), "object"],
+  ]) {
+    const e = (() => { try { projectSessionDetails({ players: { 987654321: { [field]: value } } }); return null; } catch (err) { return err; } })();
+    assert.deepEqual([e?.code, e?.reason, e?.field], ["source_answer_unexpected", "consumed_field_shape_unknown", field], `${field} ${kind}`);
+    assert.equal(e.message, `The source answer to the whole-session details carries a consumed metric in an unknown shape. Diagnostic: op=session_details; field=${field}; kind=${kind}.`, "the sentence before the mark stays generic; the field is named after it");
+    assert.ok(!e.message.includes("987654321"));
+  }
+
+  // Through the adapter: the whole-session read projects; the drill read of the same answer keeps the full check.
+  const unrelated = { k1: null, k2: 2, k3: "ok", k4: "free text with spaces", k5: 5, k6: null, k7: "a-b", k8: 8 };
+  const { a } = await confirmedAdapter({ [WHOLE]: answer(200, details({ 4711: { tot_burst_events: OK, tot_brake_events: OK, markerObj: unrelated } })) });
+  assert.deepEqual((await a.getSessionDetails({ sessionId: "100" })).players, { 4711: { tot_burst_events: OK, tot_brake_events: OK } });
+  const { a: d } = await confirmedAdapter({ [D0]: answer(200, details({ 4711: { tot_burst_events: OK, markerObj: unrelated } })) });
+  const drill = await errorOf(d.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 }));
+  assert.deepEqual([drill?.code, drill?.reason], ["source_answer_unexpected", "metric_shape_unknown"], "the drill parsing is unchanged");
+});
+
+test("B7.7 architecture guard: the whole-session consumer (the mapper, through buildGpexeImportPlan) reads no player metric but tot_burst_events / tot_brake_events - every other key access, enumeration or descriptor read on a whole-session athlete's details fails this test", () => {
+  const bundle = makeBundle({ sessionId: 5001, gpexeTeamId: 77, athletes: standardAthletes(), detailsDrills: [0] });
+  const touched = new Set();
+  for (const [id, values] of Object.entries(bundle.details.full.players)) {
+    bundle.details.full.players[id] = new Proxy(values, {
+      get(target, prop, receiver) { if (typeof prop !== "string" || !DETAILS_CONSUMED_FIELDS.includes(prop)) touched.add(`get:${String(prop)}`); return Reflect.get(target, prop, receiver); },
+      has(target, prop) { touched.add(`has:${String(prop)}`); return Reflect.has(target, prop); },
+      ownKeys(target) { touched.add("ownKeys"); return Reflect.ownKeys(target); },
+      getOwnPropertyDescriptor(target, prop) { touched.add(`descriptor:${String(prop)}`); return Reflect.getOwnPropertyDescriptor(target, prop); },
+    });
+  }
+  const plan = buildGpexeImportPlan(bundle);
+  assert.ok(plan.participants.some((p) => p.results.some((r) => r.level === "full" && r.values.some((v) => v.metricKey === "gpexe_burst_events"))), "the consumed fields were read");
+  assert.deepEqual([...touched], [], "no other whole-session metric is read");
+});
+
+test("B7.8 static architecture guard: no consumer outside the adapter and the mapper reads the stored details (JS or SQL), and the mapper's own reads are exactly the whole-session / drill player lookup and detailsNumber's one field read", async () => {
+  const srcDir = path.resolve(ROOT, "backend/src");
+  const files = (await fsp.readdir(srcDir, { recursive: true })).filter((f) => f.endsWith(".js")).map((f) => path.join(srcDir, f));
+  const DETAILS_READ = /\bdetails\??\.(full|drills|players)\b|->>?\s*'details'|\[\s*['"]details['"]\s*\]/;
+  for (const file of files) {
+    if (/gpexeRestV1Adapter\.js$|gpexeImportMapper\.js$/.test(file)) continue;
+    assert.doesNotMatch(await fsp.readFile(file, "utf8"), DETAILS_READ, `${path.relative(ROOT, file)} reads the stored details`);
+  }
+  const mapper = await fsp.readFile(path.resolve(srcDir, "gpexeImportMapper.js"), "utf8");
+  const count = (re) => (mapper.match(re) || []).length;
+  assert.equal(count(/\bdetails\?\.full\b/g), 1, "one whole-session lookup");
+  assert.equal(count(/\bdetails\?\.drills\b/g), 1, "one drill lookup");
+  assert.equal(count(/\bdetails\?\.players\b/g), 1, "one athlete lookup");
+  assert.equal(count(/\bplayerDetails\[/g), 1, "detailsNumber's one field read");
+  assert.equal(count(/\bplayerDetails\??\./g), 0, "no other property of an athlete's details is read");
+  assert.equal(count(/detailsNumber\(playerDetails, "/g), DETAILS_CONSUMED_FIELDS.length, "detailsNumber is called only for the consumed fields");
+  for (const field of DETAILS_CONSUMED_FIELDS) assert.ok(mapper.includes(`detailsNumber(playerDetails, "${field}")`), field);
 });

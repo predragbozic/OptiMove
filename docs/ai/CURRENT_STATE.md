@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-05. Last `origin/main` commit checked: `673848e` (merge of PR #139,
-`fix/gpexe-imports-failed-check-details` → `main`; PR #138 `0788452` before it).
+Last reviewed: 2026-10-06. Last `origin/main` commit checked: `e13d251` (merge of PR #140,
+`fix/gpexe-session-details-metric-shape` → `main`; PR #139 `673848e` before it).
 
 ## Active phase
 
@@ -911,6 +911,38 @@ without it. A drill answer refused the same way keeps its description through th
 **Another owner-run check (one known date) waits for the external review of that branch** and
 returns only the "Diagnostic:" line.
 
+**That diagnostics branch is merged and deployed** (PR #140, merge commit `e13d251` on 2026-10-05
+17:12:04 UTC, merged exactly from head `dfd452a` after the owner-ordered final review found no
+BLOCKER / HIGH; `/api/health` served `e13d251` with `ok: true` three times in a row (17:13:04,
+17:13:15, 17:13:25 UTC); without a login the team status, check detail, candidates and both
+source-connection reads answered 401; GET only, no check started, no GPEXE request).
+
+**The owner's single re-test returned the diagnostic (sanitized, as reported by the owner; one
+check of one known date, nothing repeated):** code `source_answer_unexpected`, `op=session_details`,
+`consumed_failing=no`; `tot_burst_events` and `tot_brake_events` present for every athlete, all
+objects with `unit = "number"`, a finite `value` and only the keys `unit` / `value`; athletes
+17–64, metrics 65+, **exactly one failing metric** (its name not emitted), kind object, depth 1,
+5–16 keys, children null / number / short text / other-character text, neither a `unit` nor a
+`value` key. No candidate, preview, activity, result or import was written; the switch stays off;
+no Link athletes. **So the two consumed fields are proven in the documented shape on server3, and
+the refused metric is one the importer never reads.** Code search proves the only whole-session
+consumer is the mapper's `detailsNumber` (`tot_burst_events` / `tot_brake_events`, keys
+`unit` / `value`); the SQL readers of the stored snapshot read `teamSession` and
+`athleteSessions` only. **Fix (branch `fix/gpexe-session-details-projection`, owner order
+2026-10-06):** `getSessionDetails` now uses `projectSessionDetails()` — the container, athlete ids,
+per-athlete bounds and the metric-name guard (dangerous keys included) exactly as before; of the
+values only the two consumed fields are read, validated by the same rule and copied into fresh
+objects (an object keeps only its own `unit` / `value`); the projection never reads, copies,
+describes, stores or returns any other metric (the generic JSON parse still walks the whole body in
+memory, within the 5 MiB read cap, and keeps nothing of it); a missing field stays missing and an
+athlete without both keeps `{}`, so the mapper's skips are unchanged; a malformed consumed field still
+fails (the sentence stays generic, the field and its kind follow the " Diagnostic: " mark for an
+administrator), and a refused metric name says only which kind of name. The stored snapshot and its
+content hash now cover the projected answer only; no candidate read through a bound connection
+existed before (both real checks failed with nothing written), so none is re-seen as changed. The drill answers keep the full check (their consumers need their own
+evidence). An architecture test runs the real mapper on a bundle whose whole-session details record
+every key access and fails on any metric but the two.
+
 **F3c2g — the importer's credential resolver, the strict transition from `GPEXE_API_TOKEN` and
 migration v31 — is merged and deployed** (PR #137, merge commit `6382d25` on 2026-10-04 21:58:03 UTC,
 merged exactly from head `30c9600` after the owner's external review in five rounds — round 5 READY
@@ -1455,6 +1487,10 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #140 (`e13d251`, merged 2026-10-05 17:12:04 UTC exactly from head `dfd452a`) is deployed:
+  `/api/health` served `e13d251` with `ok: true` three times in a row (17:13:04–17:13:25 UTC); without
+  a login the team status, check detail, candidates and both source-connection reads answered 401. No
+  migration, no route change.
 - PR #139 (`673848e`, merged 2026-10-05 16:09:52 UTC exactly from head `8b51999`) is deployed:
   `/api/health` served `673848e` with `ok: true` three times in a row (16:10:50–16:11:12 UTC); the
   served bundle carries the new Technical-details labels; without a login the team status, check
@@ -1835,12 +1871,11 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-PR A (F3c3) and the Technical-details fix (PR #139) are merged and deployed; the owner's read-only
-pilot stopped on `source_answer_unexpected` (a whole-session details metric value in an unknown
-shape). Next: the external review of the diagnostics branch `fix/gpexe-session-details-metric-shape`
-(acceptance unchanged, a sanitized shape description on that refusal); after its merge and deploy,
-one owner-run check for a single known date that returns only the "Diagnostic:" line; then a parser
-change only for the shape that line proves, and one owner re-test; then PR B (the F3c4 cut-over, see the active step), then the second owner-run procedure for one
+PR A (F3c3), the Technical-details fix (PR #139) and the shape diagnostic (PR #140) are merged and
+deployed; the owner's diagnostic proved both consumed whole-session fields and one refused,
+unconsumed metric. Next: the external review of the projection branch
+`fix/gpexe-session-details-projection`; after its merge and deploy, one owner re-test for a single
+known date (on a separate order); then PR B (the F3c4 cut-over, see the active step), then the second owner-run procedure for one
 controlled real import; then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
