@@ -1369,6 +1369,83 @@ test("17. the database refuses the legacy path to a team with any gpexe binding,
   }
 });
 
+test("18. the import switch off - unset and explicitly 'false' - never touches a check: a connection-backed check reads only through the binding (the legacy factory a trap, the environment token never sent), succeeds and saves its check row, candidate, preview and snapshot; no other table of the training / training_load schemas gains a row; approving one candidate and the batch both answer 409 import_switch_off with nothing written; a source read that fails leaves the check failed with its own code, which the status reports apart from the switch's sentence", async () => {
+  // Every base table of the two schemas is measured, except what a check may
+  // write - so a table the writer or the materialize function gains later is
+  // covered without editing this list.
+  const CHECK_MAY_WRITE = new Set(["training_load.gpexe_import_checks", "training_load.gpexe_import_candidates", "training_load.gpexe_retention_runs"]);
+  const measured = (await q(
+    `select table_schema || '.' || table_name as t from information_schema.tables
+      where table_schema in ('training', 'training_load') and table_type = 'BASE TABLE' order by 1`,
+  )).map((r) => r.t).filter((t) => !CHECK_MAY_WRITE.has(t));
+  for (const t of ["training_load.metric_events", "training_load.metric_values", "training_load.metric_source_identities", "training_load.metric_definitions",
+    "training_load.gpexe_import_approvals", "training.activities", "training.activity_participants", "training.activity_metric_event_links",
+    "training.activity_component_metric_segment_links", "training.activity_source_observations"]) {
+    assert.ok(measured.includes(t), `the measured set includes ${t}`);
+  }
+  const importRows = async () => {
+    const out = {};
+    for (const t of measured) {
+      const [schema, table] = t.split(".");
+      out[t] = (await q(`select count(*)::int as n from ${schema}.${table}`))[0].n;
+    }
+    return out;
+  };
+  for (const switchValue of [undefined, "false"]) {
+    if (switchValue === undefined) delete process.env.GPEXE_IMPORT_APPLY_ENABLED; else process.env.GPEXE_IMPORT_APPLY_ENABLED = switchValue;
+    try {
+      const o = await org();
+      useSource();
+      const { conn, binding } = await bound(o);
+      process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+      legacyTrap();
+      src.serve(o.sourceTeamId);
+      const before = await importRows();
+
+      const row = await runCheck(o);
+      assert.equal(row.status, "succeeded", `switch ${switchValue ?? "unset"}: ${JSON.stringify(row)}`);
+      assert.equal(row.error_code, null);
+      assert.deepEqual([row.source_path, row.source_connection_id, row.source_binding_id], ["source_connection", conn.id, binding.bindingId], "pinned to the connection, never the environment token");
+      const saved = await q(`select id, status, preview is not null as has_preview, preview_hash, raw_bundle is not null as has_snapshot from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]);
+      assert.equal(saved.length, 1);
+      assert.ok(saved[0].has_preview && saved[0].preview_hash && saved[0].has_snapshot, "the check saved its candidate, preview and snapshot");
+      assert.deepEqual(await importRows(), before, "the check wrote nothing of an import (its preview is a rolled-back dry run)");
+      assert.ok(src.calls.every((c) => c.auth !== "ENV"), "the environment token never reached the source");
+
+      // The status reports the check and the switch apart.
+      const st = await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.padmin.cookie });
+      assert.equal(st.status, 200);
+      assert.deepEqual([st.body.lastCheck.status, st.body.lastCheck.error, st.body.importSwitch.enabled], ["succeeded", null, false]);
+
+      // Approving stays refused while the switch is off: one candidate and the batch, nothing written.
+      const list = await api(`/gpexe/teams/${o.teamId}/candidates`, { cookie: o.padmin.cookie });
+      assert.equal(list.status, 200);
+      const cand = list.body.candidates[0];
+      assert.ok(cand.approvalBlockers.includes("import_switch_off"));
+      const one = await api(`/gpexe/teams/${o.teamId}/candidates/${cand.id}/approve`, { method: "POST", cookie: o.padmin.cookie, body: { previewHash: cand.previewHash, acceptChanges: false } });
+      assert.deepEqual([one.status, one.body.error], [409, "import_switch_off"]);
+      const batch = await api(`/gpexe/teams/${o.teamId}/imports`, { method: "POST", cookie: o.padmin.cookie, body: { candidateIds: [cand.id], previewHashes: { [cand.id]: cand.previewHash } } });
+      assert.deepEqual([batch.status, batch.body.error], [409, "import_switch_off"]);
+      assert.deepEqual(await importRows(), before, "a refused approval writes nothing");
+      assert.equal((await q(`select status from training_load.gpexe_import_candidates where id = $1`, [cand.id]))[0].status, saved[0].status, "the candidate is unchanged");
+
+      // A source read that fails: the check fails with its own code - never succeeded, never a fallback.
+      src.state.faults.listStatus = 500;
+      const failed = await runCheck(o);
+      assert.equal(failed.status, "failed");
+      assert.equal(failed.error_code, "source_unavailable");
+      assert.equal(failed.source_path, "source_connection");
+      const st2 = await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.padmin.cookie });
+      assert.deepEqual([st2.body.lastCheck.status, st2.body.lastCheck.error?.code], ["failed", "source_unavailable"]);
+      assert.notEqual(st2.body.lastCheck.error.message, st2.body.importSwitch.message, "the check's reason is never the switch's sentence");
+      assert.deepEqual(await importRows(), before);
+      assert.ok(src.calls.every((c) => c.auth !== "ENV"));
+    } finally {
+      delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+    }
+  }
+});
+
 test("10. this suite runs on a disposable database only; every console line, check row, candidate row and connection column is free of the connection token, the environment token, the username, the password and the source's sentence", async () => {
   assert.match((await q("select current_database() as db"))[0].db, DISPOSABLE_DB_NAME_PATTERN);
   assert.ok(db.url !== ORIGINAL_DATABASE_URL);

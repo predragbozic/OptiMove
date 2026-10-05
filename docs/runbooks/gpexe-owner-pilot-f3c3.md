@@ -69,3 +69,28 @@ be used to look, but it shows only what the server holds now and never confirms 
 During the pilot *Acknowledge uncertainty and continue* is never chosen, and nothing is created,
 connected, reconnected, tested or bound again after a lost answer; for a lost Create this is the
 STOP rule of step 2.
+
+## After a failed check: read its code, then (only on a separate order) re-test one known date
+
+The first pilot (2026-10-05) stopped on a check that ended *failed*. The sentence "Import writing is
+switched off in this environment…" under the source card's *Technical details* is the import
+switch's state, not the check's reason: a check never consults the switch, only approving does.
+
+1. **Read the check's own code — sends nothing to GPEXE.** Training Load → Imports, the bound team.
+   In the red box "The last search (…) did not finish", open *Technical details* and read **Code**
+   and **Server message**. Once the fix PR for these details is deployed, the source card's own
+   *Technical details* also shows them as *Last check code* / *Last check message*, next to
+   *Last check status*. Report only the code and that sentence. Do not press *Find new sessions*.
+2. **Re-test only on a separate, explicit order**, after the cause of that code is understood (and,
+   if it is a code defect, after its fix is merged and deployed). Before it, look only: Settings →
+   Source connections shows *Verified* and the team bound to GPEXE Team ID 980. If it shows anything
+   else (for example *Needs reconnect*), stop and report the badge and the last problem shown; no
+   re-test.
+3. Training Load → Imports, the bound team → *Choose dates*: set **From** and **To** to the **same
+   single date** on which exactly one GPEXE session of team 980 is known to exist (not in the
+   future). Press *Find new sessions* **once** and wait until *Finding…* ends.
+4. Report only: the result line ("Sessions found … · N sessions in GPEXE: a not seen by OptiMove
+   before, b changed, c unchanged"), or — if it failed — the **Code** from the red box. Nothing is
+   approved or imported; `GPEXE_IMPORT_APPLY_ENABLED` stays unchanged.
+5. A failed or unknown result is not repeated: stop and report the code. No Reconnect, Unbind or
+   second check without a new order.

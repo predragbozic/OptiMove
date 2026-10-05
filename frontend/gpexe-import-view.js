@@ -351,7 +351,14 @@ function renderSourceCardHtml(source, gx, status) {
         ["Approval basis", viewer.approvalBasis || (viewer.canApprove ? "yes" : "none")],
         ["Last check id", check?.id],
         ["Last check status", check?.status],
-        ["Server message", sw.message],
+        // A failed check's own reason, beside its status (the code the
+        // server shows this viewer: precise for an administrator, the stable
+        // connection code for a coach). Never the switch sentence below.
+        ["Last check code", check?.status === "failed" ? check.error?.code : undefined],
+        ["Last check message", check?.status === "failed" ? check.error?.message : undefined],
+        // The import switch's state, whatever the check did: a check never
+        // depends on it (it only blocks approving).
+        ["Import switch", sw.message],
       ], `<div class="gpexe-replaced-toggle"><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-superseded" aria-pressed="${gx.includeSuperseded ? "true" : "false"}">${gx.includeSuperseded ? "Hide replaced versions" : "Show replaced versions"}</button></div>`)}
     </section>
   `;
@@ -516,6 +523,8 @@ function renderNextStepHtml(gx, status, source = IMPORT_SOURCES[0]) {
   else if (ready.length && reviewOnly) text = `Next step: ${plural(ready.length, "session can", "sessions can")} be reviewed. ${reviewOnly.replace(/^Review only - /, "").replace(/^\w/, (ch) => ch.toUpperCase())}`;
   else if (ready.length) text = `Next step: ${readyText} - tick the ones to import, or open one to review it.`;
   else if (!list.length && check?.status === "succeeded") text = `No sessions in ${source.name} for ${formatDate(check.window?.from)} - ${formatDate(check.window?.to)}. Choose other dates and find again.`;
+  // A failed search is not "nothing found": its reason is in the box above.
+  else if (!list.length && check?.status === "failed") text = "The last search did not finish - its reason is in the box above.";
   else if (!list.length) text = "Nothing found yet. Find new sessions to see what the source has.";
   else text = "Nothing needs attention. Find new sessions to see what's new.";
   return `<p class="gpexe-next" role="status">${escapeHtml(text)}</p>`;
