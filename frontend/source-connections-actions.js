@@ -10,12 +10,15 @@ import {
   HOST_PROFILES,
   ACCOUNT_LABEL_MAX,
   UNBIND_REASON_MAX,
+  acknowledgeUncertainty,
   bindTeam,
   checkUnconfirmed,
+  isIdempotentPending,
   connectionById,
   createConnection,
   loadSourceConnections,
   newRequestKey,
+  readCurrentState,
   resetSourceConnectionsForms,
   selectSourceConnectionsClub,
   sourceConnectionsAdminContext,
@@ -106,7 +109,25 @@ export async function handleSourceConnectionsAction(action, { render, openDataSo
     return true;
   }
   if (type === "source-connections-check-result") {
+    // Bind / Unbind only: the same request again, answered idempotently.
     await checkUnconfirmed(render);
+    return true;
+  }
+  if (type === "source-connections-read-state") {
+    // Connect / Reconnect / Test / create: a read that keeps the marker.
+    await readCurrentState(render);
+    return true;
+  }
+  if (type === "source-connections-acknowledge") {
+    // Local only: no fetch; asked first, declined changes nothing.
+    if (!d.unconfirmed || isIdempotentPending(d.unconfirmed)) return true;
+    const ask = globalThis.window?.confirm;
+    const confirmed = typeof ask === "function"
+      ? ask("The server may still be finishing the previous request, and its outcome stays unknown. Continuing only clears this warning here - nothing is sent and nothing is checked. A new Connect or Reconnect can change the stored credential. Continue?")
+      : false;
+    if (!confirmed) return true;
+    acknowledgeUncertainty();
+    render();
     return true;
   }
   if (type === "source-connections-cancel") {

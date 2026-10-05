@@ -785,9 +785,13 @@ a platform admin (platform workspace with a club picker, or a club workspace) an
 club's admin in that club's workspace — the tab is offered from the `/me` and `/api/organization`
 facts, the server decides again on every request, and a 404 reads as "No source connections are
 available in this workspace"; a coach never sees it. Create (the one approved profile `server3`,
-an account label) → Connect account (username and password typed once, sent once, kept nowhere;
-the browser asked not to offer or save the password; a double click sends one request; a lost
-answer is checked by reading the connection, never by resending the pair) → Test connection (the
+an account label) → Connect account (username and password typed once, sent once, not retained
+by OptiMove; the form says that the browser or a password manager may handle them according to
+its own settings, `autocomplete="current-password"` on the password field as a hint, never a
+guarantee; a double click sends one request; **a lost Connect / Reconnect / Test / create is never
+confirmed by a read** — *Read current state* refreshes the display and keeps the marker, every
+other write stays locked until the explicit *Acknowledge uncertainty and continue*, a local step
+that sends nothing; the pair is never resent) → Test connection (the
 five states as badges, the last verified time and problem, the server's `sourceTeams` exactly as
 presented — the club admin's approved intersection or the platform admin's annotated list, the
 truncated / unavailable notes) → Approve and bind (Bind only where a pair is approved; a platform

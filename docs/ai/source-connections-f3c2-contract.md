@@ -1086,24 +1086,39 @@ OptiMove team ↔ GPEXE Team ID stays there, platform admin only, unchanged).
   anything else —, an account label of 1–120 characters and `credentialKind: "exchanged_token"`):
   the Connect form opens on the new row at once.
 - **Connect account / Reconnect** (`POST …/connect` / `…/reconnect`): one form, username and
-  password typed once (`autocomplete="off"` on the form and the username, `new-password` on the
-  password — hints against the autofill of a stored OptiMove login, see below), sent in that one request body and kept
+  password typed once (`autocomplete="off"` on the form and the username, `current-password` on the
+  password — see below), sent in that one request body and kept
   nowhere — not in state, a dataset, a URL, storage, a log or a notice; the form is rebuilt empty
   after the request and submits natively as POST only (`method="post"`), never as a GET with the
   pair in the URL; a double click sends one request (the busy flag is set before the first
-  await). `autocomplete="new-password"` plus the password-manager hints stop the autofill of a
-  stored OptiMove login; they are hints — a browser may still offer to save or to generate a
-  password, which the pilot procedure tells the owner to dismiss. Every request is bounded on the
+  await). **The autocomplete choice (owner's external review of PR #138):** `current-password`
+  names what the field is — the existing password of a third-party account — so a browser treats
+  it as a sign-in field and does not offer to generate a new password (the offer `new-password`
+  invites); the username field keeps `autocomplete="off"` so a stored OptiMove login is not
+  suggested as a pair; the password-manager hints (`data-1p-ignore`, `data-lpignore`,
+  `data-bwignore`) stay. None of this is a guarantee: a browser or a password manager may still
+  offer to fill or to save, and the UI says exactly that — the sentence on the form is "OptiMove
+  does not retain the username or password after this request. Your browser or password manager
+  may handle them according to its own settings." (a doc-lint test pins the sentence and the
+  attribute). Every request is bounded on the
   client at 150 s (beyond the server's own worst case for an attempt); an abort, no answer at all, a
   `503 outcome_unknown` and any 5xx the service did not write itself (a proxy, a restart) are
   **lost answers** — *Result not confirmed*, never "nothing was changed"; a write that settled but
-  whose post-write read failed is shown as settled with a "facts may be out of date" note. The sentence on the form: the password is exchanged for an access token right away,
-  OptiMove stores only that token, encrypted, the password is not saved and can never be shown
-  again. Reconnect first names the source, the owning club, the account label and host, and the
+  whose post-write read failed is shown as settled with a "facts may be out of date" note.
+  Reconnect first names the source, the owning club, the account label and host, and the
   number of bound teams, and sends that as the `confirmation` the route requires; the old
-  credential is never shown. A lost answer (no answer at all, or `503 outcome_unknown`) shows
-  *Result not confirmed* with **Check result**, which reads the connection again (`GET …/:id`) and
-  reports its state — the pair is never sent a second time.
+  credential is never shown. **A lost Connect, Reconnect, Test or create is never confirmed by a
+  read** (owner's external review of PR #138): *Result not confirmed* offers **Read current
+  state**, which reads the connection (`GET …/:id`) or the club's list again and refreshes what is
+  shown but keeps the marker — a read cannot tell whether the lost attempt landed (a Reconnect on
+  a verified connection looks the same before and after; the server may still be finishing the
+  request; a list does not say which row an attempt created), and the backend returns no attempt
+  revision to compare, so nothing is invented. While the marker stands every other write control
+  stays locked. Only the explicit **Acknowledge uncertainty and continue** (a confirmation that says
+  the server may still be finishing the previous request and that a new Connect or Reconnect can
+  change the credential) clears the marker — locally, sending nothing. The pair is never sent a
+  second time. A bind and an Unbind keep **Check result**: the same pair / the same `requestKey`
+  again, which the server answers idempotently.
 - **Test connection** (`POST …/test`, an empty JSON object): the state badge (`Verified`,
   `Connected, not tested`, `Needs reconnect`, `Source unavailable`, `Not connected`), the last
   verified time, the last recorded problem as a sentence, and the result sentence (succeeded with

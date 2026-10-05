@@ -150,9 +150,12 @@ The steps, each behind a form or a confirmation that names what it touches:
    label (a name for the screen, not the username).
 2. **Connect account** — the GPEXE username and password, typed once. They travel in that one
    request; the server exchanges them for an access token, stores only the token encrypted, and
-   drops the pair. The password is never saved, never shown again, and the browser is asked not to
-   offer or save it. A double click sends one request. If the answer is lost, *Check result* reads
-   the connection again — the pair is never sent a second time.
+   drops the pair. OptiMove does not retain the username or password after this request; your
+   browser or password manager may handle them according to its own settings (the field is marked
+   `current-password`, a hint, not a guarantee). A double click sends one request. If the answer
+   is lost, *Read current state* refreshes what is shown but does not confirm the attempt — the
+   marker and the lock on other changes stay until you choose *Acknowledge uncertainty and
+   continue* (nothing is sent by either); the pair is never sent a second time.
 3. **Test connection** — the stored token is checked against the source (and every bound team is
    read); the state badge, the last verified time and any recorded problem are shown in plain
    language. After a verified Connect or Test the GPEXE teams the account sees are listed exactly

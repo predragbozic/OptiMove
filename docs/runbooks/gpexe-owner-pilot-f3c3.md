@@ -20,10 +20,10 @@ The steps:
    connection yet" and *Create connection*.
 2. **Create connection** — host profile `GPEXE server3`, an account label such as
    "Club GPEXE account". Expected: the Connect form opens on the new row.
-3. **Connect** — type the GPEXE username and password into the form, press *Connect* once. If the
-   browser or a password manager offers a saved password or a "strong password" suggestion,
-   dismiss it and type the GPEXE password yourself; do not let it save the pair afterwards (the
-   fields ask the browser not to, but that is a hint browsers may ignore). Type the password; do not
+3. **Connect** — type the GPEXE username and password into the form, press *Connect* once. OptiMove
+   does not retain the pair after the request, but your browser or password manager may offer to
+   fill or save it according to its own settings: if it offers a saved OptiMove password, decline
+   it and type the GPEXE password yourself; if it offers to save the pair afterwards, decline. Type the password; do not
    paste it from a note or a chat (a clipboard history such as Win+V keeps it) — if you must paste,
    clear the clipboard history afterwards. A private window without extensions is the simplest
    setting.
@@ -54,5 +54,6 @@ The steps:
    the check id and its counts — never the credential, never a token.
 
 If anything stops the pilot (a refused credential after a verified Connect, a `try_again` that
-does not clear, a lost answer whose Check result does not settle), stop there and report the
+does not clear, a lost answer — *Result not confirmed* — whose *Read current state* does not show
+the expected state; do not acknowledge the uncertainty without reporting first), stop there and report the
 screen's sentence and the code from *Technical details*; nothing else is retried.

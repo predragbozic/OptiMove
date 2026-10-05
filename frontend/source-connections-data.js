@@ -559,46 +559,37 @@ export async function unbindTeam(render, { fromUnconfirmed = false } = {}) {
   }
 }
 
-// "Check result" after a lost answer: an Unbind or a bind is repeated with
-// the same key / the same pair (both idempotent on the server); a Connect,
-// Reconnect, Test or create is never repeated - the connection (or the
-// club's list) is read again and the screen shows what the server holds.
+// Which lost answers can be settled, and which cannot. A bind and an Unbind
+// are repeated with the same pair / the same requestKey, which the server
+// answers idempotently: the repeat IS the outcome. A Connect, Reconnect, Test
+// or create has no such key: a read shows the state the server holds now, but
+// cannot tell whether the lost attempt landed (a Reconnect on a verified
+// connection looks the same before and after; a list does not say which row
+// an attempt created; the server may still be finishing the request). The
+// backend returns no attempt revision to compare against, so nothing here
+// pretends to - the marker stays, every other write stays locked, until the
+// administrator acknowledges the uncertainty explicitly (a local step).
+export const IDEMPOTENT_ACTIONS = Object.freeze(["bind", "unbind"]);
+export const isIdempotentPending = (pending) => Boolean(pending) && IDEMPOTENT_ACTIONS.includes(pending.action);
+const ACTION_NAME = Object.freeze({ connect: "Connect", reconnect: "Reconnect", test: "Test connection", create: "creation of the connection" });
+
+// "Check result" for a lost bind or Unbind: the same request again.
 export async function checkUnconfirmed(render) {
   const d = sc();
   const pending = d.unconfirmed;
   if (!pending || d.checkBusy) return;
+  if (!isIdempotentPending(pending)) return;
   if (pending.action === "unbind") return unbindTeam(render, { fromUnconfirmed: true });
   const generation = d.generation;
   d.checkBusy = true;
   render();
   try {
-    if (pending.action === "bind") {
-      const response = await request(`${BASE}/${encodeURIComponent(pending.connectionId)}/bindings`, { method: "POST", body: JSON.stringify(pending.body) });
-      if (generation !== d.generation) return;
-      await adoptAnswer(response, pending.connectionId);
-      if (generation !== d.generation) return;
-      d.noticeFor = String(pending.connectionId);
-      d.notice = `${pending.teamName} reads from ${SOURCE_NAME} team ${pending.body.sourceTeamId}${response.result?.idempotent ? " (the earlier request had gone through)" : ""}.`;
-    } else if (pending.action === "create") {
-      await loadSourceConnections(render);
-      if (generation !== d.generation) return;
-      if (d.error) {
-        // The list could not be read either: nothing is known yet, the
-        // outcome stays unconfirmed and Check result stays offered.
-        d.error = null;
-        d.notice = "";
-        d.noticeFor = "";
-        d.unconfirmed = pending;
-        return;
-      }
-      d.notice = "The list below is what the server holds now.";
-      d.noticeFor = "";
-    } else {
-      const connection = await reloadConnection(pending.connectionId);
-      if (generation !== d.generation) return;
-      d.noticeFor = String(pending.connectionId);
-      d.notice = `Read again: the connection's state is ${stateLabel(connection?.state)}${connection?.lastVerifiedAt ? `, last verified ${fmtDateTime(connection.lastVerifiedAt)}` : ""}. ${pending.action === "test" ? "" : "The username and password were not sent again. If the credential does not show as stored, the server may still be finishing the request: read again in a minute before connecting again."}`.trim();
-    }
+    const response = await request(`${BASE}/${encodeURIComponent(pending.connectionId)}/bindings`, { method: "POST", body: JSON.stringify(pending.body) });
+    if (generation !== d.generation) return;
+    await adoptAnswer(response, pending.connectionId);
+    if (generation !== d.generation) return;
+    d.noticeFor = String(pending.connectionId);
+    d.notice = `${pending.teamName} reads from ${SOURCE_NAME} team ${pending.body.sourceTeamId}${response.result?.idempotent ? " (the earlier request had gone through)" : ""}.`;
     d.unconfirmed = null;
   } catch (error) {
     if (generation !== d.generation) return;
@@ -615,6 +606,63 @@ export async function checkUnconfirmed(render) {
       render();
     }
   }
+}
+
+// "Read current state" for a lost Connect, Reconnect, Test or create: the
+// connection (or the club's list) is read and shown; the marker is NOT
+// cleared - this read proves nothing about the lost attempt - and nothing is
+// sent again.
+export async function readCurrentState(render) {
+  const d = sc();
+  const pending = d.unconfirmed;
+  if (!pending || d.checkBusy || isIdempotentPending(pending)) return;
+  const generation = d.generation;
+  d.checkBusy = true;
+  render();
+  try {
+    if (pending.action === "create") {
+      await loadSourceConnections(render);
+      if (generation !== d.generation) return;
+      d.unconfirmed = pending;
+      if (d.error) {
+        // The list could not be read either: nothing is known yet.
+        d.error = null;
+        d.notice = "";
+        d.noticeFor = "";
+        return;
+      }
+      d.notice = "The list below is what the server holds now. Which row, if any, the lost attempt created is not known; the server may still be finishing it.";
+      d.noticeFor = "";
+    } else {
+      const connection = await reloadConnection(pending.connectionId);
+      if (generation !== d.generation) return;
+      d.noticeFor = String(pending.connectionId);
+      d.notice = `Read current state: the connection is ${stateLabel(connection?.state)}${connection?.lastVerifiedAt ? `, last verified ${fmtDateTime(connection.lastVerifiedAt)}` : ""}. This read does not tell whether the lost ${ACTION_NAME[pending.action] || pending.action} landed - the server may still be finishing it. Nothing was sent again.`;
+    }
+  } catch (error) {
+    if (generation !== d.generation) return;
+    const info = errorInfo(error);
+    if (!lostAnswer(info)) d.testError = { ...info, connectionId: pending.connectionId };
+  } finally {
+    if (generation === d.generation) {
+      d.checkBusy = false;
+      render();
+    }
+  }
+}
+
+// The explicit, local step that lifts the lock after a lost Connect,
+// Reconnect, Test or create: nothing is sent, nothing is proven; the outcome
+// of the lost attempt stays unknown, and the next Connect or Reconnect may
+// change the stored credential. The caller asks the administrator first.
+export function acknowledgeUncertainty() {
+  const d = sc();
+  const pending = d.unconfirmed;
+  if (!pending || isIdempotentPending(pending)) return false;
+  d.unconfirmed = null;
+  d.noticeFor = pending.connectionId ? String(pending.connectionId) : "";
+  d.notice = `The uncertainty about the lost ${ACTION_NAME[pending.action] || pending.action} was acknowledged; its outcome stays unknown. A new Connect or Reconnect can change the stored credential.`;
+  return true;
 }
 
 export function stateLabel(value) {
