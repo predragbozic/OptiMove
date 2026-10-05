@@ -815,15 +815,23 @@ two MEDIUM applied — the lost-answer classification and `method="post"` on the
 re-check READY), `ux-design-reviewer` (NOT READY → all sentences and primaries corrected → READY),
 `mobile-qa` (READY WITH NON-BLOCKING NOTES, the long-unbroken-word clipping fixed; the iOS
 strong-password offer recorded as a physical check in the pilot procedure). Tests:
-`frontend/tests/source-connections.actions.test.mjs` (22 tests through the real handlers with a
+`frontend/tests/source-connections.actions.test.mjs` (through the real handlers with a
 fake fetch: tab visibility per basis and workspace type, the neutral 404, create and its lost
 answer, the one-request credential submit with the password in no state / HTML / URL — also while
 in flight —, the team list bounded to the server's rows, Test outcomes and the state-dependent
 sentences, bind review and body, a bind refused by the source, reconnect confirmation body, unbind
 body and history, lost answers with the same key / pair / a read only, uncoded 5xx and aborts as
 lost answers, the settled-but-stale note, the workspace switch, re-entry, the leave guards, every
-code's sentence, the coach and administrator sentences; twelve mutations of the key guards
-killed). Browser QA by the main session on a static harness running the
+code's sentence, the coach and administrator sentences; mutations of the key guards
+killed). **The owner's external review of `9726773` (NOT READY) was closed on the same branch:** a
+lost Connect / Reconnect / Test / create is never confirmed by a read (*Read current state* keeps
+the marker, every other write stays locked until *Acknowledge uncertainty and continue*, a local
+step behind a confirmation that names the consequence — for a create, a possible second connection,
+since the route has no idempotency key and a connection cannot be removed); none of these steps
+runs from another club's context; a repeated bind or Unbind refused as `try_again` keeps its
+marker; the form says "OptiMove does not retain the username or password after this request. Your
+browser or password manager may handle them according to its own settings." and asks the
+administrator to check that both fields hold the GPEXE pair, not the OptiMove sign-in. Browser QA by the main session on a static harness running the
 branch's real modules against an in-page fake of the routes (desktop 1280 px and 360 / 375 / 390
 px: no horizontal overflow, every control 44 px, every field 16 px). The owner-run pilot
 procedure: `docs/runbooks/gpexe-owner-pilot-f3c3.md`. **No real connection, binding, check or GPEXE

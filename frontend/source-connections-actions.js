@@ -3,17 +3,18 @@
 // Rules that hold everywhere here: opening a form or typing sends nothing;
 // every write goes through a form or a confirmation that names what it
 // touches; a username and a password are read from the form on submit, sent
-// once and kept nowhere (not in state, a dataset, a URL, storage or a log);
-// a second click while a write runs does nothing; Cancel only clears the
-// screen; a lost answer is checked, never resent blindly.
+// once and retained nowhere by this code (not in state, a dataset, a URL,
+// storage or a log); a second click while a write runs does nothing; Cancel
+// only clears the screen; a lost answer is never resent blindly.
 import {
   HOST_PROFILES,
   ACCOUNT_LABEL_MAX,
   UNBIND_REASON_MAX,
+  acknowledgeQuestion,
   acknowledgeUncertainty,
   bindTeam,
+  canAcknowledgeUncertainty,
   checkUnconfirmed,
-  isIdempotentPending,
   connectionById,
   createConnection,
   loadSourceConnections,
@@ -119,12 +120,11 @@ export async function handleSourceConnectionsAction(action, { render, openDataSo
     return true;
   }
   if (type === "source-connections-acknowledge") {
-    // Local only: no fetch; asked first, declined changes nothing.
-    if (!d.unconfirmed || isIdempotentPending(d.unconfirmed)) return true;
+    // Local only: no fetch; asked first, declined (or no way to ask) changes
+    // nothing. Never asked while a read runs or for another club's marker.
+    if (!canAcknowledgeUncertainty()) return true;
     const ask = globalThis.window?.confirm;
-    const confirmed = typeof ask === "function"
-      ? ask("The server may still be finishing the previous request, and its outcome stays unknown. Continuing only clears this warning here - nothing is sent and nothing is checked. A new Connect or Reconnect can change the stored credential. Continue?")
-      : false;
+    const confirmed = typeof ask === "function" ? ask(acknowledgeQuestion(d.unconfirmed)) : false;
     if (!confirmed) return true;
     acknowledgeUncertainty();
     render();

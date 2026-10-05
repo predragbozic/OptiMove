@@ -19,6 +19,7 @@ import {
   clubOptions,
   fmtDateTime,
   hostLabelOf,
+  isIdempotentPending,
   loadedForActiveClub,
   sourceConnectionsAdminContext,
   writeInFlight,
@@ -78,7 +79,7 @@ export function connectionMessage(info, context = "") {
     account_label_required: "Name the account (one line, so it can be told apart later).",
     account_label_too_long: `The account name is too long (at most ${ACCOUNT_LABEL_MAX} characters).`,
     credentials_required: "Enter the username and the password.",
-    no_answer: "We can't tell whether the change was made. Read the current state (or, for a binding, use Check result) before trying again.",
+    no_answer: "We can't tell whether the change was made. Use Read current state (for a binding or an Unbind, Check result) before trying again.",
   };
   if (BY_CODE[code]) return info.readAgainFailed ? `${BY_CODE[code].replace(/; the connection was read again and the list below is current\.|; it was read again\.|; the connection was read again\./, ".")} The connection could not be read again, so the list may be out of date; open the tab again.` : BY_CODE[code];
   if (info.status === 404) return "This connection, club or team is not available in your workspace (any more).";
@@ -139,8 +140,8 @@ export function renderSourceConnectionsPanelHtml() {
         <p class="eyebrow">${escapeHtml(ctx.workspaceType === "platform" ? "Platform" : clubName || "Club")}</p>
         <h3>Source connections</h3>
         <p class="muted">${ctx.basis === "platform_admin"
-          ? "A club's account at the system its training data comes from. The access token is stored encrypted on the server; a password is exchanged for it once and never kept. Teams read through it only after their approved pair (Settings > Data sources) is bound here."
-          : "Your club's account at the system its training data comes from. The access token is stored encrypted on the server; a password is exchanged for it once and never kept. A team reads through it only after a platform admin has approved its GPEXE team and you have bound that pair here."}</p>
+          ? "A club's account at the system its training data comes from. The access token is stored encrypted on the server; OptiMove exchanges a password for it once and does not retain the password. Teams read through it only after their approved pair (Settings > Data sources) is bound here."
+          : "Your club's account at the system its training data comes from. The access token is stored encrypted on the server; OptiMove exchanges a password for it once and does not retain the password. A team reads through it only after a platform admin has approved its GPEXE team and you have bound that pair here."}</p>
       </div>
       ${ctx.workspaceType === "platform" ? renderClubPickerHtml(d, clubId, clubName) : ""}
       ${clubId ? renderClubHtml(d, ctx, clubId, clubName) : ""}
@@ -168,8 +169,13 @@ function renderClubHtml(d, ctx, clubId, clubName) {
   if (!loadedForActiveClub() || (d.loading && !d.connections)) {
     if (!loadedForActiveClub() && writeInFlight()) {
       const previous = clubNameOf(d.clubId) || "the previous club";
+      // A bind / Unbind can be checked there; a lost Connect, Reconnect, Test
+      // or create can only be read or acknowledged there - never "checked".
+      const reloadExit = " If you can no longer open that workspace, reloading the page removes this warning; the outcome stays unknown.";
       return d.unconfirmed
-        ? `<p class="data-sources-warn" role="status">A change made for ${escapeHtml(previous)} is not confirmed yet. Open ${escapeHtml(previous)}'s workspace to check its result (from here the server answers only for this club); this club is read after that.</p>`
+        ? `<p class="data-sources-warn" role="status">A change made for ${escapeHtml(previous)} is not confirmed yet. ${isIdempotentPending(d.unconfirmed)
+          ? `Open ${escapeHtml(previous)}'s workspace to check its result (from here the server answers only for this club); this club is read after that.`
+          : `Open ${escapeHtml(previous)}'s workspace to read the current state or acknowledge the uncertainty there (a read cannot confirm whether that change went through; from here the server answers only for this club); this club is read after that.`}${reloadExit}</p>`
         : `<p class="muted" role="status">A change for ${escapeHtml(previous)} is still running; this club is read when it has finished.</p>`;
     }
     return `<p class="muted" role="status">Loading...</p>`;
@@ -193,7 +199,7 @@ function renderClubHtml(d, ctx, clubId, clubName) {
   if (!d.connections) return "";
   const pending = d.unconfirmed;
   return `
-    ${d.notice && !d.noticeFor ? `<p class="data-sources-notice" role="status">${escapeHtml(d.notice)}</p>` : ""}
+    ${d.notice && !d.noticeFor && !(pending && pending.action === "create") ? `<p class="data-sources-notice" role="status">${escapeHtml(d.notice)}</p>` : ""}
     ${pending && pending.action === "create" ? renderUnconfirmedHtml(d, pending) : ""}
     ${d.connections.length ? d.connections.map((connection) => renderConnectionCardHtml(d, ctx, connection, clubName)).join("") : renderEmptyHtml(d, clubName)}
   `;
@@ -252,7 +258,7 @@ function renderConnectionCardHtml(d, ctx, connection, clubName) {
         <h4>${escapeHtml(SOURCE_NAME)} · ${escapeHtml(hostLabelOf(connection))}</h4>
         <span class="data-sources-state ${badge.cls}">${escapeHtml(badge.label)}</span>
       </div>
-      ${d.notice && d.noticeFor === id ? `<p class="data-sources-notice" role="status">${escapeHtml(d.notice)}</p>` : ""}
+      ${d.notice && d.noticeFor === id && !pending ? `<p class="data-sources-notice" role="status">${escapeHtml(d.notice)}</p>` : ""}
       ${d.staleAfterWrite === id ? `<p class="data-sources-warn" role="status">The request was settled, but the connection could not be read again afterwards, so the facts below may be out of date. Open the tab again before the next change.</p>` : ""}
       <dl class="data-sources-facts">
         <dt>Account</dt><dd>${escapeHtml(connection.accountLabel || "")}</dd>
@@ -300,7 +306,9 @@ function renderActionsHtml(d, connection, attempt, busy) {
 // offer new-password invites); it is a hint only, and no value stops a
 // browser or a password manager from offering to fill or save, which the
 // sentence beside the form says. The username field is plain text with
-// autocomplete off, so a stored OptiMove login is not suggested as a pair.
+// autocomplete off, to discourage a stored OptiMove login being offered as
+// the pair; because a browser may fill both fields anyway, the form asks the
+// administrator to check both before pressing Connect.
 function renderCredentialFormHtml(d, connection, clubName) {
   const reconnect = d.credentialOpen.action === "reconnect";
   const bound = (connection.boundTeams || []).length;
@@ -318,7 +326,8 @@ function renderCredentialFormHtml(d, connection, clubName) {
       <label class="search-field"><span>${escapeHtml(SOURCE_NAME)} password</span>
         <input name="password" type="password" required maxlength="512" autocomplete="current-password" autocapitalize="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">
       </label>
-      <p class="muted source-connections-note">The password is exchanged for an access token right away, in this one request; OptiMove stores only that token, encrypted. OptiMove does not retain the username or password after this request. Your browser or password manager may handle them according to its own settings. ${escapeHtml(SOURCE_NAME)} is read once to check the token${bound ? " and every bound team" : ""}; nothing is imported.</p>
+      <p class="source-connections-note source-connections-check">Before you press ${reconnect ? "Reconnect" : "Connect"}, check that both fields hold the ${escapeHtml(SOURCE_NAME)} account's username and password, not your OptiMove sign-in. If your browser filled either field, clear both and type the ${escapeHtml(SOURCE_NAME)} username and password yourself.</p>
+      <p class="muted source-connections-note">The password is exchanged for an access token right away; OptiMove stores only that token, encrypted. OptiMove does not retain the username or password after this request. Your browser or password manager may handle them according to its own settings. ${escapeHtml(SOURCE_NAME)} is read once to check the token${bound ? " and every bound team" : ""}; nothing is imported.</p>
       ${errorHtml(d.credentialError, "credential")}
       <div class="data-sources-form-actions">
         <button class="plain-button data-sources-primary" type="submit" ${d.credentialBusy ? "disabled" : ""}>${d.credentialBusy ? (reconnect ? "Reconnecting..." : "Connecting...") : (reconnect ? "Reconnect" : "Connect")}</button>
@@ -328,21 +337,36 @@ function renderCredentialFormHtml(d, connection, clubName) {
   `;
 }
 
-// A lost answer. Nothing is repeated blindly: a Connect / Reconnect / Test is
-// checked by reading the connection again; an Unbind or a bind is asked of
-// the server again with the same key / pair, which it answers idempotently.
 // A lost answer. A bind or an Unbind is asked of the server again with the
 // same pair / key, which it answers idempotently (Check result). A Connect,
 // Reconnect, Test or create cannot be settled that way: Read current state
 // refreshes what is shown and keeps the marker; only the administrator's
 // explicit acknowledgement lifts it (locally, nothing sent).
+function unconfirmedTextHtml(pending) {
+  const name = pending.action === "reconnect" ? "Reconnect" : "Connect";
+  const tail = "Other changes stay locked so that none crosses it.";
+  if (pending.action === "create") {
+    return `<strong>Result not confirmed.</strong> The answer to the creation of the connection was lost, so this screen cannot tell whether the connection was created; the server may still be finishing it. ${tail} <strong>Read current state</strong> shows the club's connections as they are now (it sends nothing again) but cannot show whether one of them came from this request. <strong>Acknowledge uncertainty and continue</strong> unlocks the other changes; creating a connection again may then make a second one.`;
+  }
+  if (pending.action === "test") {
+    return `<strong>Result not confirmed.</strong> The answer to Test connection was lost, so this screen cannot tell whether the test went through; the server may still be finishing it. ${tail} <strong>Read current state</strong> shows the connection as it is now (it sends nothing again) but cannot show whether the test went through. <strong>Acknowledge uncertainty and continue</strong> unlocks the other changes.`;
+  }
+  return `<strong>Result not confirmed.</strong> The answer to ${name} was lost, so this screen cannot tell whether it went through; the server may still be finishing it. ${tail} <strong>Read current state</strong> shows the connection as it is now (it sends nothing again, not the username or password) but cannot show whether the ${name} went through. <strong>Acknowledge uncertainty and continue</strong> unlocks the other changes.`;
+}
+
 function renderUnconfirmedHtml(d, pending) {
-  const idempotent = pending.action === "unbind" || pending.action === "bind";
-  const what = pending.action === "unbind" ? "Unbind" : pending.action === "bind" ? "binding" : pending.action === "reconnect" ? "Reconnect" : pending.action === "test" ? "Test connection" : pending.action === "create" ? "creation of the connection" : "Connect";
+  const idempotent = isIdempotentPending(pending);
+  const what = pending.action === "unbind" ? "Unbind" : "binding";
+  // The result of the last read / check is shown here, beside the buttons
+  // that produced it (the card's own notice line is left out meanwhile).
+  const noticeHere = d.notice && (pending.action === "create" ? !d.noticeFor : d.noticeFor === String(pending.connectionId))
+    ? `<p class="data-sources-notice" role="status">${escapeHtml(d.notice)}</p>`
+    : "";
   if (idempotent) {
     return `
       <div class="data-sources-error source-connections-unconfirmed" role="alert">
         <p><strong>Result not confirmed.</strong> The answer to the ${escapeHtml(what)} was lost, so this screen cannot say whether it was made. Check result asks the server for the same request again - it is never done twice.</p>
+        ${noticeHere}
         <div class="data-sources-form-actions">
           <button class="plain-button data-sources-primary" type="button" data-action="source-connections-check-result" ${d.checkBusy ? "disabled" : ""}>${d.checkBusy ? "Checking..." : "Check result"}</button>
         </div>
@@ -351,7 +375,8 @@ function renderUnconfirmedHtml(d, pending) {
   }
   return `
     <div class="data-sources-error source-connections-unconfirmed" role="alert">
-      <p><strong>Result not confirmed.</strong> The answer to the ${escapeHtml(what)} was lost; the server may still be finishing it. <strong>Read current state</strong> refreshes what is shown ${pending.action === "create" ? "(the club's list)" : "(the connection)"} but cannot tell whether that attempt landed${pending.action === "create" ? "" : ", and sends no username or password again"}. Until you acknowledge this, no other change can be made here.</p>
+      <p>${unconfirmedTextHtml(pending)}</p>
+      ${noticeHere}
       <div class="data-sources-form-actions">
         <button class="plain-button data-sources-primary" type="button" data-action="source-connections-read-state" ${d.checkBusy ? "disabled" : ""}>${d.checkBusy ? "Reading..." : "Read current state"}</button>
         <button class="plain-button ghost" type="button" data-action="source-connections-acknowledge" ${d.checkBusy ? "disabled" : ""}>Acknowledge uncertainty and continue</button>

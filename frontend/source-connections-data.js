@@ -12,10 +12,11 @@
 // and everyone else the same 404 - so nothing here is the protection.
 //
 // Credentials: the username and the password are read from the form on
-// submit, sent in that one request body and never kept - not in this state,
-// not in a dataset, a URL, storage, a log or a notice. A lost answer to a
-// Connect / Reconnect is checked by reading the connection again, never by
-// sending the pair a second time. A double click sends one request: every
+// submit, sent in that one request body and retained nowhere by this code -
+// not in this state, a dataset, a URL, storage, a log or a notice. A lost
+// answer to a Connect / Reconnect is never settled by a read and never by
+// sending the pair a second time: its marker stays until the administrator
+// acknowledges the uncertainty. A double click sends one request: every
 // write sets its busy flag before its first await.
 import { api } from "./api.js";
 import { state } from "./state.js";
@@ -539,6 +540,11 @@ export async function unbindTeam(render, { fromUnconfirmed = false } = {}) {
       // ended twice.
       d.unconfirmed = { action: "unbind", connectionId: id, bindingId: open.bindingId, teamId: open.teamId, teamName: open.teamName, sourceTeamId: open.sourceTeamId, reason: open.reason, requestKey: open.requestKey };
       d.unbindOpen = null;
+    } else if (fromUnconfirmed && info.code === "try_again") {
+      // As for a bind: a repeat refused as "try again" (a lock held
+      // elsewhere) decides nothing - the marker and Check result stay.
+      d.noticeFor = id;
+      d.notice = TRY_AGAIN_NOTICE;
     } else if (fromUnconfirmed || info.code === "binding_already_ended" || info.code === "binding_mismatch") {
       // The binding is not what the screen showed: the connection is read
       // again (its bound list without that row) and the sentence stands
@@ -571,13 +577,32 @@ export async function unbindTeam(render, { fromUnconfirmed = false } = {}) {
 // administrator acknowledges the uncertainty explicitly (a local step).
 export const IDEMPOTENT_ACTIONS = Object.freeze(["bind", "unbind"]);
 export const isIdempotentPending = (pending) => Boolean(pending) && IDEMPOTENT_ACTIONS.includes(pending.action);
-const ACTION_NAME = Object.freeze({ connect: "Connect", reconnect: "Reconnect", test: "Test connection", create: "creation of the connection" });
+// The question before the acknowledgement names the consequence of acting
+// again for that action: a new Connect / Reconnect can change the stored
+// credential; a new create can add a second connection (the create route
+// has no idempotency key and the club no uniqueness rule, and no connection
+// can be removed from this screen).
+export function acknowledgeQuestion(pending) {
+  const head = "The server may still be finishing the previous request, and its outcome stays unknown. Continuing only removes this warning and unlocks the other changes on this screen - nothing is sent and nothing is checked. A new Connect or Reconnect can change the stored credential.";
+  const create = pending?.action === "create" ? " If the connection was created after all, creating it again makes a second connection, which this screen cannot remove." : "";
+  return `${head}${create} Continue?`;
+}
+const TRY_AGAIN_NOTICE = "Check result could not run: another change of this connection or of one of its teams was in progress (for example a test, a check or an import). Nothing was decided and the result is still not confirmed. Try Check result again in a minute.";
+const READ_FAILED_NOTICE = "The current state could not be read just now. Nothing was sent again, and the result is still not confirmed. Try Read current state again in a minute.";
+const LIST_READ_FAILED_NOTICE = "The club's connections could not be read just now. Nothing was sent again, and the result is still not confirmed. Try Read current state again in a minute.";
+const ACK_NOUN = Object.freeze({ connect: "Connect", reconnect: "Reconnect", test: "test" });
 
-// "Check result" for a lost bind or Unbind: the same request again.
+// "Check result" for a lost bind or Unbind: the same request again. A marker
+// belongs to the club whose list is loaded. After a workspace switch the
+// screen shows only a sentence for it, and none of these steps (Check result,
+// Read current state, the acknowledgement) runs from another club's context:
+// a read there would load (and reset to) the other club and drop the marker,
+// a repeat would be answered for the wrong workspace, an acknowledgement
+// would lift a lock the screen does not show.
 export async function checkUnconfirmed(render) {
   const d = sc();
   const pending = d.unconfirmed;
-  if (!pending || d.checkBusy) return;
+  if (!pending || d.checkBusy || !loadedForActiveClub()) return;
   if (!isIdempotentPending(pending)) return;
   if (pending.action === "unbind") return unbindTeam(render, { fromUnconfirmed: true });
   const generation = d.generation;
@@ -596,7 +621,10 @@ export async function checkUnconfirmed(render) {
     const info = errorInfo(error);
     // A repeat refused as "try again" (a lock held elsewhere) decides nothing:
     // the outcome stays unconfirmed and Check result stays offered.
-    if (!lostAnswer(info) && info.code !== "try_again") {
+    if (info.code === "try_again") {
+      d.noticeFor = String(pending.connectionId);
+      d.notice = TRY_AGAIN_NOTICE;
+    } else if (!lostAnswer(info)) {
       d.unconfirmed = null;
       d.testError = { ...info, connectionId: pending.connectionId };
     }
@@ -615,33 +643,41 @@ export async function checkUnconfirmed(render) {
 export async function readCurrentState(render) {
   const d = sc();
   const pending = d.unconfirmed;
-  if (!pending || d.checkBusy || isIdempotentPending(pending)) return;
+  if (!pending || d.checkBusy || isIdempotentPending(pending) || !loadedForActiveClub()) return;
   const generation = d.generation;
   d.checkBusy = true;
   render();
   try {
     if (pending.action === "create") {
-      await loadSourceConnections(render);
-      if (generation !== d.generation) return;
-      d.unconfirmed = pending;
-      if (d.error) {
-        // The list could not be read either: nothing is known yet.
-        d.error = null;
-        d.notice = "";
+      // The club's list, read directly: never through loadSourceConnections,
+      // whose club reset would drop the marker (a platform admin's club that
+      // left the picker meanwhile).
+      let response;
+      try {
+        response = await request(`${BASE}?clubId=${encodeURIComponent(d.clubId)}`);
+      } catch {
+        // The list could not be read either: nothing is known yet, and an
+        // older read's sentence is replaced so it never reads as this one.
+        if (generation !== d.generation) return;
+        d.notice = LIST_READ_FAILED_NOTICE;
         d.noticeFor = "";
         return;
       }
-      d.notice = "The list below is what the server holds now. Which row, if any, the lost attempt created is not known; the server may still be finishing it.";
+      if (generation !== d.generation) return;
+      d.connections = Array.isArray(response.connections) ? response.connections : [];
+      d.notice = "The connections below are what the server holds now. Whether one of them came from the lost request is not known; the server may still be finishing it.";
       d.noticeFor = "";
     } else {
       const connection = await reloadConnection(pending.connectionId);
       if (generation !== d.generation) return;
       d.noticeFor = String(pending.connectionId);
-      d.notice = `Read current state: the connection is ${stateLabel(connection?.state)}${connection?.lastVerifiedAt ? `, last verified ${fmtDateTime(connection.lastVerifiedAt)}` : ""}. This read does not tell whether the lost ${ACTION_NAME[pending.action] || pending.action} landed - the server may still be finishing it. Nothing was sent again.`;
+      d.notice = `Read current state: the connection is ${stateLabel(connection?.state)}${connection?.lastVerifiedAt ? `, last verified ${fmtDateTime(connection.lastVerifiedAt)}` : ""}. Nothing was sent again. The state can look the same whether or not the ${ACK_NOUN[pending.action] || pending.action} went through, and the server may still be finishing it, so the result stays not confirmed.`;
     }
   } catch (error) {
     if (generation !== d.generation) return;
     const info = errorInfo(error);
+    d.noticeFor = String(pending.connectionId);
+    d.notice = READ_FAILED_NOTICE;
     if (!lostAnswer(info)) d.testError = { ...info, connectionId: pending.connectionId };
   } finally {
     if (generation === d.generation) {
@@ -658,11 +694,20 @@ export async function readCurrentState(render) {
 export function acknowledgeUncertainty() {
   const d = sc();
   const pending = d.unconfirmed;
-  if (!pending || isIdempotentPending(pending)) return false;
+  if (!pending || isIdempotentPending(pending) || d.checkBusy || !loadedForActiveClub()) return false;
   d.unconfirmed = null;
   d.noticeFor = pending.connectionId ? String(pending.connectionId) : "";
-  d.notice = `The uncertainty about the lost ${ACTION_NAME[pending.action] || pending.action} was acknowledged; its outcome stays unknown. A new Connect or Reconnect can change the stored credential.`;
+  d.notice = pending.action === "create"
+    ? "You continued without knowing whether the connection was created. The list may be out of date: before creating a connection, choose Source connections again in Settings to read it, so the club does not get a second one."
+    : `You continued without knowing whether the ${ACK_NOUN[pending.action] || pending.action} went through; its outcome stays unknown. A new Connect or Reconnect can change the stored credential. What is shown may be out of date: before the next change, choose Source connections again in Settings to read it.`;
   return true;
+}
+
+// Whether the acknowledgement may be asked at all (the action asks the
+// administrator only when it would do something).
+export function canAcknowledgeUncertainty() {
+  const d = sc();
+  return Boolean(d.unconfirmed) && !isIdempotentPending(d.unconfirmed) && !d.checkBusy && loadedForActiveClub();
 }
 
 export function stateLabel(value) {

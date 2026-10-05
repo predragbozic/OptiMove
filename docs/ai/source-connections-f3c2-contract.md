@@ -1087,15 +1087,17 @@ OptiMove team ↔ GPEXE Team ID stays there, platform admin only, unchanged).
   the Connect form opens on the new row at once.
 - **Connect account / Reconnect** (`POST …/connect` / `…/reconnect`): one form, username and
   password typed once (`autocomplete="off"` on the form and the username, `current-password` on the
-  password — see below), sent in that one request body and kept
-  nowhere — not in state, a dataset, a URL, storage, a log or a notice; the form is rebuilt empty
+  password — see below), sent in that one request body and retained
+  by OptiMove in no place — not in state, a dataset, a URL, storage, a log or a notice; the form is rebuilt empty
   after the request and submits natively as POST only (`method="post"`), never as a GET with the
   pair in the URL; a double click sends one request (the busy flag is set before the first
   await). **The autocomplete choice (owner's external review of PR #138):** `current-password`
   names what the field is — the existing password of a third-party account — so a browser treats
   it as a sign-in field and does not offer to generate a new password (the offer `new-password`
-  invites); the username field keeps `autocomplete="off"` so a stored OptiMove login is not
-  suggested as a pair; the password-manager hints (`data-1p-ignore`, `data-lpignore`,
+  invites); the username field keeps `autocomplete="off"` to discourage a stored OptiMove login
+  being offered as the pair, and because a browser may fill both fields anyway the form asks the
+  administrator, before Connect / Reconnect, to check that both fields hold the GPEXE pair and to
+  clear both if the browser filled either; the password-manager hints (`data-1p-ignore`, `data-lpignore`,
   `data-bwignore`) stay. None of this is a guarantee: a browser or a password manager may still
   offer to fill or to save, and the UI says exactly that — the sentence on the form is "OptiMove
   does not retain the username or password after this request. Your browser or password manager
@@ -1116,9 +1118,15 @@ OptiMove team ↔ GPEXE Team ID stays there, platform admin only, unchanged).
   revision to compare, so nothing is invented. While the marker stands every other write control
   stays locked. Only the explicit **Acknowledge uncertainty and continue** (a confirmation that says
   the server may still be finishing the previous request and that a new Connect or Reconnect can
-  change the credential) clears the marker — locally, sending nothing. The pair is never sent a
+  change the credential) clears the marker — locally, sending nothing; for a lost create it also
+  says that creating again can make a second connection this screen cannot remove (the create
+  route has no idempotency key and v27 no per-club uniqueness for connections). A read that fails
+  says so and replaces an older read's sentence; a create's read reads the club's list directly and
+  never resets the club. The pair is never sent a
   second time. A bind and an Unbind keep **Check result**: the same pair / the same `requestKey`
-  again, which the server answers idempotently.
+  again, which the server answers idempotently; a repeat refused as `try_again` decides nothing and
+  keeps the marker. After a workspace switch a marker of the previous club is shown as one sentence
+  only, and neither a read, a repeat nor the acknowledgement runs from another club's context.
 - **Test connection** (`POST …/test`, an empty JSON object): the state badge (`Verified`,
   `Connected, not tested`, `Needs reconnect`, `Source unavailable`, `Not connected`), the last
   verified time, the last recorded problem as a sentence, and the result sentence (succeeded with

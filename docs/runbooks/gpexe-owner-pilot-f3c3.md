@@ -23,7 +23,10 @@ The steps:
 3. **Connect** — type the GPEXE username and password into the form, press *Connect* once. OptiMove
    does not retain the pair after the request, but your browser or password manager may offer to
    fill or save it according to its own settings: if it offers a saved OptiMove password, decline
-   it and type the GPEXE password yourself; if it offers to save the pair afterwards, decline. Type the password; do not
+   it and type the GPEXE password yourself; if it offers to save the pair afterwards, decline.
+   Before pressing *Connect*, check that both fields hold the GPEXE account's username and
+   password, not your OptiMove sign-in; if the browser filled either field, clear both and type the
+   GPEXE username and password yourself. Type the password; do not
    paste it from a note or a chat (a clipboard history such as Win+V keeps it) — if you must paste,
    clear the clipboard history afterwards. A private window without extensions is the simplest
    setting.
@@ -54,6 +57,7 @@ The steps:
    the check id and its counts — never the credential, never a token.
 
 If anything stops the pilot (a refused credential after a verified Connect, a `try_again` that
-does not clear, a lost answer — *Result not confirmed* — whose *Read current state* does not show
-the expected state; do not acknowledge the uncertainty without reporting first), stop there and report the
+does not clear, or any lost answer — *Result not confirmed*; *Read current state* shows only what
+the server holds now and never confirms the lost request, so do not acknowledge the uncertainty
+without reporting first), stop there and report the
 screen's sentence and the code from *Technical details*; nothing else is retried.

@@ -509,7 +509,7 @@ test("9b. Create with a lost answer: the form closes, no second create can be se
   assert.deepEqual(calls(), [`GET ${BASE}?clubId=${CLUB}`], "a read of the list, never a second create");
   assert.equal(state.sourceConnections.unconfirmed?.action, "create", "the list is refreshed, the attempt's outcome stays unknown");
   assert.match(html(), /Club account/);
-  assert.match(html(), /Which row, if any, the lost attempt created is not known/);
+  assert.match(html(), /Whether one of them came from the lost request is not known/);
 });
 
 test("9c. a workspace switch never shows the previous club's connections: the loaded list is treated as not loaded, the panel's one-shot read fires for the new club, and nothing fires while a write is in flight", async () => {
@@ -544,7 +544,9 @@ test("9c. a workspace switch never shows the previous club's connections: the lo
   // the marker (and an Unbind's requestKey) is kept until the admin is back in club A's workspace.
   installFetch(() => ({ status: 404, body: { error: "notFound" } }));
   const out2 = html();
-  assert.match(out2, /A change made for FK Borac is not confirmed yet\. Open FK Borac.{0,6}s workspace to check its result/);
+  assert.match(out2, /A change made for FK Borac is not confirmed yet\. Open FK Borac.{0,6}s workspace to read the current state or acknowledge the uncertainty there \(a read cannot confirm whether that change went through/);
+  assert.doesNotMatch(out2, /to check its result/, "a lost Connect is never 'checked'");
+  assert.match(out2, /reloading the page removes this warning; the outcome stays unknown/);
   assert.doesNotMatch(out2, /data-action="source-connections-check-result"/);
   assert.doesNotMatch(out2, /Club account|Loading\.\.\./);
   assert.equal(sourceConnectionsNeedLoad(), false, "nothing is read while the outcome is unconfirmed");
@@ -655,7 +657,7 @@ test("10. a lost answer is never resent blindly: after a lost Connect, Check res
   await submit("credential", { username: USERNAME, password: PASSWORD });
   let out = html();
   assert.match(out, /Result not confirmed/);
-  assert.match(out, /sends no username or password again/);
+  assert.match(out, /it sends nothing again, not the username or password/);
   assert.equal(state.sourceConnections.unconfirmed.action, "connect");
   assert.ok(writeInFlight(), "an unconfirmed outcome counts as in flight");
   assert.doesNotMatch(out, /data-action="source-connections-test"/, "no other write is offered meanwhile");
@@ -664,7 +666,7 @@ test("10. a lost answer is never resent blindly: after a lost Connect, Check res
   assert.deepEqual(calls(), [`GET ${BASE}/${CONN}`], "a read, never the pair again");
   assert.equal(state.sourceConnections.unconfirmed?.action, "connect", "a read never confirms the lost Connect");
   assert.match(html(), /Read current state: the connection is Verified/);
-  assert.match(html(), /does not tell whether the lost Connect landed/);
+  assert.match(html(), /The state can look the same whether or not the Connect went through/);
 
   // Unbind: the same key again.
   const keys = [];
@@ -724,7 +726,8 @@ test("14. a lost Connect, Reconnect, Test or create is never confirmed by a read
   assert.ok(writeInFlight(), "writes stay locked");
   let out = html();
   assert.match(out, /Read current state: the connection is Verified/);
-  assert.match(out, /does not tell whether the lost Reconnect landed/);
+  assert.match(out, /The state can look the same whether or not the Reconnect went through/);
+  assert.match(out, /source-connections-unconfirmed[\s\S]*Read current state: the connection is Verified[\s\S]*data-action="source-connections-read-state"/, "the read's result is shown inside the block, beside its buttons");
   assert.match(out, /data-action="source-connections-read-state"/);
   assert.match(out, /data-action="source-connections-acknowledge"/);
   assert.doesNotMatch(out, /data-action="source-connections-check-result"/, "no idempotent repeat is offered for a Reconnect");
@@ -736,9 +739,13 @@ test("14. a lost Connect, Reconnect, Test or create is never confirmed by a read
   assert.equal(calls().filter((c) => c.startsWith("POST")).length, 0, "nothing sent");
   // (d) the explicit acknowledgement: declined → nothing changes; accepted → the marker goes, nothing is sent, writes unlock.
   let asked = 0;
-  globalThis.window.confirm = () => { asked += 1; return false; };
+  let question = "";
+  globalThis.window.confirm = (message) => { asked += 1; question = message; return false; };
   await act("source-connections-acknowledge");
   assert.equal(asked, 1);
+  assert.match(question, /may still be finishing the previous request/, "the owner's required warning");
+  assert.match(question, /A new Connect or Reconnect can change the stored credential/, "the owner's required warning");
+  assert.match(question, /nothing is sent and nothing is checked/);
   assert.equal(state.sourceConnections.unconfirmed?.action, "reconnect", "declined changes nothing");
   globalThis.window.confirm = () => { asked += 1; return true; };
   const before = fetchCalls.length;
@@ -748,7 +755,7 @@ test("14. a lost Connect, Reconnect, Test or create is never confirmed by a read
   assert.equal(state.sourceConnections.unconfirmed, null);
   assert.equal(writeInFlight(), false, "writes unlock only now");
   out = html();
-  assert.match(out, /was acknowledged; its outcome stays unknown/);
+  assert.match(out, /You continued without knowing whether the Reconnect went through; its outcome stays unknown/);
   assert.match(out, /data-action="source-connections-test"(?![^>]*disabled)/);
   globalThis.window.confirm = () => true;
   // (b) lost Connect; the GET answers not_connected: the marker stays.
@@ -769,8 +776,22 @@ test("14. a lost Connect, Reconnect, Test or create is never confirmed by a read
   assert.deepEqual(calls(), [`GET ${BASE}?clubId=${CLUB}`]);
   assert.equal(state.sourceConnections.connections.length, 1, "the list is refreshed");
   assert.equal(state.sourceConnections.unconfirmed?.action, "create", "which row the lost attempt created is not known");
-  assert.match(html(), /Which row, if any, the lost attempt created is not known/);
+  assert.match(html(), /Whether one of them came from the lost request is not known/);
   assert.match(html(), /data-action="source-connections-connect-open"[^>]*disabled/, "the new row's writes stay locked");
+  // The acknowledgement of a lost create names its own consequence: a second connection.
+  question = "";
+  globalThis.window.confirm = (message) => { question = message; return false; };
+  await act("source-connections-acknowledge");
+  assert.match(question, /may still be finishing the previous request/);
+  assert.match(question, /creating it again makes a second connection, which this screen cannot remove/);
+  assert.match(question, /A new Connect or Reconnect can change the stored credential/, "the owner's required warning stays in every variant");
+  assert.equal(state.sourceConnections.unconfirmed?.action, "create", "declined changes nothing");
+  globalThis.window.confirm = () => true;
+  const sentBefore = fetchCalls.length;
+  await act("source-connections-acknowledge");
+  assert.equal(fetchCalls.length, sentBefore, "acknowledging a create sends nothing");
+  assert.equal(state.sourceConnections.unconfirmed, null);
+  assert.match(html(), /before creating a connection, choose Source connections again in Settings to read it, so the club does not get a second one/);
   // (e) a bind and an Unbind keep Check result: the same pair / key again, and the acknowledgement is not offered.
   await openClub({ list: [verified({ boundTeams: [BOUND] })], writes: { [`POST /${CONN}/bindings/${BINDING}/unbind`]: () => new TypeError("Failed to fetch") } });
   await act("source-connections-unbind-open", { connectionId: CONN, bindingId: BINDING, teamId: TEAM, teamName: "First team", sourceTeamId: "980" });
@@ -787,22 +808,183 @@ test("14. a lost Connect, Reconnect, Test or create is never confirmed by a read
 test("15. doc-lint: the credential form carries the agreed sentence and autocomplete=\"current-password\", and neither the screen nor the documents claim that the pair is 'not saved anywhere' or 'never shown again'", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const OVERCLAIM = /not saved anywhere|never shown again|neither offers nor saves|is never saved|never kept|kept\s+nowhere|not\s+suggested\s+as\s+a\s+pair/;
   await openClub({ list: [connection()] });
   await act("source-connections-connect-open", { connectionId: CONN });
   const out = html();
   assert.match(out, /OptiMove does not retain the username or password after this request\. Your browser or password manager may handle them according to its own settings\./);
+  assert.match(out, /Before you press Connect, check that both fields hold the GPEXE account.{1,6}s username and password, not your OptiMove sign-in\. If your browser filled either field, clear both and type the GPEXE username and password yourself\./);
   assert.match(out, /name="password" type="password"[^>]*autocomplete="current-password"/);
-  assert.doesNotMatch(out, /new-password|not saved anywhere|never shown again|neither offers nor saves/);
-  const root = path.resolve(new URL(".", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), "..", "..");
-  const files = ["frontend/source-connections-view.js", "docs/ai/source-connections-f3c2-contract.md", "docs/runbooks/gpexe-in-app-import.md", "docs/runbooks/gpexe-owner-pilot-f3c3.md"];
+  assert.doesNotMatch(out, /new-password/);
+  assert.doesNotMatch(out, OVERCLAIM);
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const files = ["frontend/source-connections-view.js", "docs/ai/source-connections-f3c2-contract.md", "docs/runbooks/gpexe-in-app-import.md", "docs/runbooks/gpexe-owner-pilot-f3c3.md", "docs/ai/CURRENT_STATE.md"];
   for (const file of files) {
     const text = fs.readFileSync(path.join(root, file), "utf8");
-    assert.doesNotMatch(text, /not saved anywhere|never shown again|neither offers nor saves|is never saved/, file);
+    assert.doesNotMatch(text, OVERCLAIM, file);
     assert.doesNotMatch(text, /autocomplete="new-password"|`new-password` on the/, `${file}: the old attribute`);
   }
+  const pilot = fs.readFileSync(path.join(root, "docs/runbooks/gpexe-owner-pilot-f3c3.md"), "utf8");
+  assert.match(pilot, /Before pressing \*Connect\*, check that both fields hold the GPEXE account's username and\s+password, not your OptiMove sign-in/);
   const contract = fs.readFileSync(path.join(root, "docs/ai/source-connections-f3c2-contract.md"), "utf8");
   assert.match(contract, /current-password/);
   assert.match(contract, /OptiMove\s+does not retain the username or password after this request\. Your browser or password manager\s+may handle them according to its own settings\./);
+});
+
+test("16. a marker of another club is never read, repeated or acknowledged from this club's context; the acknowledgement is not asked while a read runs and keeps the lock when the browser cannot ask; a repeated bind or Unbind refused as try_again keeps the marker and Check result", async () => {
+  const toOtherClub = () => {
+    state.currentUser.activeWorkspace = { type: "club", scopeId: OTHER_CLUB };
+    state.organization.data = orgData({ isPlatformAdmin: false, manageableClubIds: [OTHER_CLUB], clubs: [{ id: OTHER_CLUB, name: "FK Drugi" }] });
+  };
+  const backToClub = () => {
+    state.currentUser.activeWorkspace = { type: "club", scopeId: CLUB };
+    state.organization.data = orgData({ isPlatformAdmin: false, manageableClubIds: [CLUB], clubs: [{ id: CLUB, name: "FK Borac" }] });
+  };
+  let asked = 0;
+  // (a) a lost create, a lost Reconnect and a lost Unbind of club A; then club B's workspace.
+  for (const lost of ["create", "reconnect", "unbind"]) {
+    if (lost === "create") {
+      await openClub({ list: [], writes: { "POST ": () => new TypeError("Failed to fetch") } }, { who: asClubAdmin });
+      await act("source-connections-create-open");
+      await submit("create", { hostKey: "server3", accountLabel: "Club account" });
+    } else if (lost === "reconnect") {
+      await openClub({ list: [verified()], writes: { [`POST /${CONN}/reconnect`]: () => new TypeError("Failed to fetch") } }, { who: asClubAdmin });
+      await act("source-connections-reconnect-open", { connectionId: CONN });
+      await submit("credential", { username: USERNAME, password: PASSWORD });
+    } else {
+      await openClub({ list: [verified({ boundTeams: [BOUND] })], writes: { [`POST /${CONN}/bindings/${BINDING}/unbind`]: () => new TypeError("Failed to fetch") } }, { who: asClubAdmin });
+      await act("source-connections-unbind-open", { connectionId: CONN, bindingId: BINDING, teamId: TEAM, teamName: "First team", sourceTeamId: "980" });
+      await submit("unbind", { reason: "Season over" });
+    }
+    assert.equal(state.sourceConnections.unconfirmed?.action, lost);
+    toOtherClub();
+    installFetch(responder({ list: [] }).handler);
+    globalThis.window.confirm = () => { asked += 1; return true; };
+    await act("source-connections-read-state");
+    await act("source-connections-check-result");
+    await act("source-connections-acknowledge");
+    assert.deepEqual(calls(), [], `${lost}: nothing is read or repeated from club B's context`);
+    assert.equal(asked, 0, `${lost}: the acknowledgement is not even asked there`);
+    assert.equal(state.sourceConnections.unconfirmed?.action, lost, `${lost}: club A's marker is kept`);
+    assert.equal(state.sourceConnections.clubId, CLUB, `${lost}: club A's list is not replaced`);
+    backToClub();
+    assert.match(html(), lost === "unbind" ? /data-action="source-connections-check-result"/ : /data-action="source-connections-read-state"/, `${lost}: reachable again in club A`);
+  }
+
+  // (b) the acknowledgement is not asked while Read current state runs.
+  let releaseRead;
+  await openClub({ list: [verified()], writes: { [`POST /${CONN}/reconnect`]: () => new TypeError("Failed to fetch") } }, { who: asClubAdmin });
+  await act("source-connections-reconnect-open", { connectionId: CONN });
+  await submit("credential", { username: USERNAME, password: PASSWORD });
+  installFetch(() => new Promise((resolve) => { releaseRead = () => resolve({ status: 200, body: { connection: verified() } }); }));
+  const reading = act("source-connections-read-state");
+  assert.equal(state.sourceConnections.checkBusy, true);
+  asked = 0;
+  await act("source-connections-acknowledge");
+  assert.equal(asked, 0, "not asked while the read runs");
+  assert.equal(state.sourceConnections.unconfirmed?.action, "reconnect");
+  while (!releaseRead) await new Promise((resolve) => setTimeout(resolve, 0));
+  releaseRead();
+  await reading;
+  assert.equal(state.sourceConnections.unconfirmed?.action, "reconnect", "the read keeps the marker");
+
+  // (c) a browser that cannot ask (no window.confirm): the lock stays, nothing is sent.
+  const before = fetchCalls.length;
+  globalThis.window.confirm = undefined;
+  await act("source-connections-acknowledge");
+  assert.equal(state.sourceConnections.unconfirmed?.action, "reconnect", "no confirmation, no acknowledgement");
+  assert.ok(writeInFlight(), "the lock stays");
+  assert.equal(fetchCalls.length, before);
+  globalThis.window.confirm = () => true;
+
+  // (d) a repeated Unbind refused as try_again: the marker and Check result stay; the next repeat settles with the same key.
+  const keys = [];
+  let unbinds = 0;
+  await openClub({
+    list: [verified({ boundTeams: [BOUND] })],
+    writes: {
+      [`POST /${CONN}/bindings/${BINDING}/unbind`]: (call) => {
+        unbinds += 1;
+        keys.push(call.body.requestKey);
+        if (unbinds === 1) return new TypeError("Failed to fetch");
+        if (unbinds === 2) return { status: 409, body: { error: "try_again", message: "x", connectionId: CONN } };
+        return { status: 200, body: { result: { action: "unbind", binding: { ...BOUND, state: "ended" } }, connection: verified() } };
+      },
+    },
+  }, { who: asClubAdmin });
+  await act("source-connections-unbind-open", { connectionId: CONN, bindingId: BINDING, teamId: TEAM, teamName: "First team", sourceTeamId: "980" });
+  await submit("unbind", { reason: "Season over" });
+  await act("source-connections-check-result");
+  assert.equal(state.sourceConnections.unconfirmed?.action, "unbind", "try_again decides nothing");
+  assert.equal(state.sourceConnections.unbindError, null);
+  let out = html();
+  assert.match(out, /Check result could not run: another change of this connection or of one of its teams was in progress/);
+  assert.match(out, /source-connections-unconfirmed[\s\S]*Check result could not run[\s\S]*data-action="source-connections-check-result"/, "inside the block");
+  assert.match(out, /data-action="source-connections-check-result"/);
+  await act("source-connections-check-result");
+  assert.equal(unbinds, 3);
+  assert.equal(new Set(keys).size, 1, "one requestKey throughout");
+  assert.equal(state.sourceConnections.unconfirmed, null);
+  assert.match(html(), /no longer reads from GPEXE team 980/);
+
+  // (e) a repeated bind refused as try_again: the same.
+  let binds = 0;
+  await openClub({
+    list: [verified()],
+    writes: {
+      [`POST /${CONN}/test`]: () => ({ status: 200, body: { result: okResult("test"), connection: verified() } }),
+      [`POST /${CONN}/bindings`]: () => {
+        binds += 1;
+        if (binds === 1) return { status: 503, body: { error: "outcome_unknown", message: "x", connectionId: CONN } };
+        return { status: 409, body: { error: "try_again", message: "x", connectionId: CONN } };
+      },
+    },
+  }, { who: asClubAdmin });
+  await act("source-connections-test", { connectionId: CONN });
+  await act("source-connections-bind-open", { connectionId: CONN, teamId: TEAM, teamName: "First team", sourceTeamId: "980" });
+  await act("source-connections-bind-confirm");
+  await act("source-connections-check-result");
+  assert.equal(binds, 2);
+  assert.equal(state.sourceConnections.unconfirmed?.action, "bind");
+  out = html();
+  assert.match(out, /Check result could not run: another change of this connection or of one of its teams was in progress/);
+  assert.match(out, /source-connections-unconfirmed[\s\S]*Check result could not run[\s\S]*data-action="source-connections-check-result"/, "inside the block");
+  assert.match(out, /data-action="source-connections-check-result"/);
+});
+
+test("17. a platform admin's Read current state after a lost create never resets the club, even when the club left the picker meanwhile: the marker stays", async () => {
+  await openClub({ list: [], writes: { "POST ": () => new TypeError("Failed to fetch") } });
+  await act("source-connections-create-open");
+  await submit("create", { hostKey: "server3", accountLabel: "Club account" });
+  assert.equal(state.sourceConnections.unconfirmed?.action, "create");
+  // The organization data was refreshed and the club is no longer offered (archived meanwhile).
+  state.organization.data = orgData({ clubs: [{ id: OTHER_CLUB, name: "FK Drugi" }], manageableClubIds: [OTHER_CLUB] });
+  installFetch(responder({ list: [] }).handler);
+  await act("source-connections-read-state");
+  assert.deepEqual(calls(), [`GET ${BASE}?clubId=${CLUB}`], "the same club's list, read directly");
+  assert.equal(state.sourceConnections.unconfirmed?.action, "create", "the marker is never dropped by a read");
+  assert.equal(state.sourceConnections.clubId, CLUB);
+  // A read that fails keeps it as well, and says so.
+  installFetch(() => ({ status: 404, body: { error: "notFound" } }));
+  await act("source-connections-read-state");
+  assert.equal(state.sourceConnections.unconfirmed?.action, "create");
+  assert.match(html(), /The club.{1,6}s connections could not be read just now\. Nothing was sent again, and the result is still not confirmed/);
+  assert.doesNotMatch(html(), /The connections below are what the server holds now/, "an older read's sentence never reads as this one");
+
+  // A connection's read that fails replaces the older read's sentence; the marker stays.
+  await openClub({ list: [verified()], writes: { [`POST /${CONN}/reconnect`]: () => new TypeError("Failed to fetch") } });
+  await act("source-connections-reconnect-open", { connectionId: CONN });
+  await submit("credential", { username: USERNAME, password: PASSWORD });
+  installFetch(responder({ list: [verified()] }).handler);
+  await act("source-connections-read-state");
+  assert.match(html(), /Read current state: the connection is Verified/);
+  installFetch(() => new TypeError("Failed to fetch"));
+  await act("source-connections-read-state");
+  const out = html();
+  assert.match(out, /The current state could not be read just now\. Nothing was sent again, and the result is still not confirmed/);
+  assert.doesNotMatch(out, /Read current state: the connection is Verified/);
+  assert.equal(state.sourceConnections.unconfirmed?.action, "reconnect");
 });
 
 test("11. leaving: the section switch and beforeunload ask only while a write runs or an outcome is not confirmed", async () => {
