@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-05. Last `origin/main` commit checked: `6382d25` (merge of PR #137,
-`feature/gpexe-importer-resolver-f3c2g` → `main`; PR #136 `d285296` before it).
+Last reviewed: 2026-10-05. Last `origin/main` commit checked: `0788452` (merge of PR #138,
+`feature/gpexe-source-connections-ui-f3c3` → `main`; PR #137 `6382d25` before it).
 
 ## Active phase
 
@@ -778,7 +778,8 @@ Reconnect / Unbind works, one owner read-only pilot passes, the importer uses on
 connection, the legacy path is retired and a controlled first import is ready.
 
 **PR A (F3c3) as built** (branch `feature/gpexe-source-connections-ui-f3c3`, first commit the
-record above; frontend and docs only, no backend change; **not merged**): a new Settings sub-tab
+record above; frontend and docs only, no backend change; merged and deployed as PR #138, see
+below): a new Settings sub-tab
 **Source connections** (`frontend/source-connections-{view,data,actions}.js`, state slice
 `state.sourceConnections`; contract section 2.9, runbook section "Source connections (F3c3)") for
 a platform admin (platform workspace with a club picker, or a club workspace) and for the owning
@@ -841,6 +842,38 @@ branch's real modules against an in-page fake of the routes (desktop 1280 px and
 px: no horizontal overflow, every control 44 px, every field 16 px). The owner-run pilot
 procedure: `docs/runbooks/gpexe-owner-pilot-f3c3.md`. **No real connection, binding, check or GPEXE
 request; no credential anywhere.**
+
+**PR A (F3c3) is merged and deployed** (PR #138, merge commit `0788452` on 2026-10-05 13:47:15 UTC,
+merged exactly from head `4527470` after the owner's final external review READY; `/api/health`
+served `0788452` with `ok: true` three times in a row (13:48:41, 13:48:52, 13:49:02 UTC); without a
+login the list, the single GET, create, connect, test, bindings and unbind routes answered 401 (zero
+UUIDs, `{}` bodies, nothing else sent). No migration in it: v31 stays the last migration inferred on
+the deployed database. No GPEXE request by the main session; the Render environment,
+`GPEXE_API_TOKEN` and `GPEXE_IMPORT_APPLY_ENABLED` untouched.
+
+**The owner-run read-only pilot (2026-10-05, on `0788452`; sanitized, as reported by the owner):**
+Connect succeeded and the connection is *Verified*; the OptiMove team approved for GPEXE Team ID 980
+was bound to it; Training Load → Imports showed the team *Connected*; one *Find new sessions*
+without dates searched the default 14 days (22.09.2026 – 05.10.2026) and **the check ended
+`failed`** (not `outcome_unknown`). The owner stopped there, as the procedure says: no repeat, no
+further GPEXE request. `GPEXE_IMPORT_APPLY_ENABLED` stays off; nothing was imported, approved or
+linked. **What the failure is not:** the sentence "Import writing is switched off in this
+environment…" read under the source card's *Technical details* is the import switch's state, which
+that card printed under the label "Server message" whatever the check's outcome — a check never
+consults the switch (only approving one candidate or a batch does). **The check's own code is not
+recorded yet:** it is on the check row, shown to an administrator in the red "The last search … did
+not finish" box (*Technical details → Code*) and returned by `GET …/gpexe/teams/<team>/checks/<check
+id>`; reading it sends nothing to GPEXE. **Production state after the pilot (as far as known):** one
+club connection on `server3`, *Verified* at the Connect and at the Bind as the owner saw it — **its
+state after the failed check is not read yet** (a `source_auth_rejected` failure would have moved it
+to *Needs reconnect*); one active binding (the team ↔ 980); one failed check row whose
+`source_path` is `source_connection` by the v31 rule (inferred, not read). From now on that team
+reads only through its binding (the v31 rule: no return to the environment token). The fix PR on branch
+`fix/gpexe-imports-failed-check-details` names that line *Import switch*, shows a failed check's own
+code and message beside its status, says the last search did not finish instead of "Nothing found
+yet", and pins the boundary with a regression test (a connection-backed check succeeds with the
+switch off and writes nothing of an import; approving stays refused; a failed source read stays
+failed with its own code).
 
 **F3c2g — the importer's credential resolver, the strict transition from `GPEXE_API_TOKEN` and
 migration v31 — is merged and deployed** (PR #137, merge commit `6382d25` on 2026-10-04 21:58:03 UTC,
@@ -1386,6 +1419,11 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #138 (`0788452`, merged 2026-10-05 13:47:15 UTC exactly from head `4527470`) is deployed:
+  `/api/health` served `0788452` with `ok: true` three times in a row (13:48:41–13:49:02 UTC); without
+  a login every source-connection route answered 401. No migration in it. After the deploy the owner
+  ran the read-only pilot (see the active phase): one connection, one binding, one failed check; no
+  import.
 - PR #137 (`6382d25`, merged 2026-10-04 21:58 UTC exactly from head `30c9600` after five external
   review rounds) is deployed: `/api/health` served `6382d25` with `ok: true` three times in a row and
   once more two minutes later; without a login the check start (zero UUID, with and without a body),
@@ -1757,14 +1795,12 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-PR A of the combined F3c3 / F3c4 package (the administrator's Source connections screen in
-Settings — Connect account → Test connection → Approve and bind → Reconnect → Unbind — with frontend
-tests, browser QA at desktop and 360 / 375 / 390 px and the `code-reviewer` / `security-reviewer` /
-`ux-design-reviewer` / `mobile-qa` reviews), opened without a merge for the owner's external
-review; after its merge and deploy the owner-run read-only pilot through the deployed UI (the first
-real connection and binding, Team ID 980, one read-only check; nothing approved); then PR B (the
-F3c4 cut-over, see the active step), then the second owner-run procedure for one controlled real
-import; then **Phase 5a3c** (Complete and Needs review).
+PR A (F3c3) is merged and deployed (PR #138), and the owner's read-only pilot stopped on a failed
+check. Next: the owner reads that check's own code (no GPEXE request) while the small fix PR for the
+misleading *Technical details* (branch `fix/gpexe-imports-failed-check-details`) waits for the owner's
+review; depending on the code, a fix of that cause and one owner re-test for a single known date;
+then PR B (the F3c4 cut-over, see the active step), then the second owner-run procedure for one
+controlled real import; then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 

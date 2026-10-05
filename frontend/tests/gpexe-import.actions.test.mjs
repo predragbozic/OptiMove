@@ -92,11 +92,11 @@ function resetState(workspace = { type: "club", scopeId: "club-1" }) {
   renders = 0;
 }
 
-function status({ enabled = false, canApprove = true, settings = { gpexeTeamId: "980" } } = {}) {
+function status({ enabled = false, canApprove = true, settings = { gpexeTeamId: "980" }, lastCheck = null } = {}) {
   return {
     settings,
     importSwitch: { enabled, message: enabled ? "Approved imports can write results and activities in this environment." : "Import writing is switched off in this environment: checks and previews are saved, but no result or activity can be written." },
-    lastCheck: null,
+    lastCheck,
     viewer: { canApprove, approvalBasis: canApprove ? "team_grant" : null, isPlatformAdmin: false },
     approvalAvailable: true,
   };
@@ -153,7 +153,7 @@ function candidateDetail(overrides = {}) {
 
 // A GPEXE server fake: per-team status/candidates/links, and handlers for
 // candidate detail and approve.
-function gpexeServer({ onApprove, onCandidate, onApproval, teamStatus = {}, checks, sourceAthletes, onLink, links } = {}) {
+function gpexeServer({ onApprove, onCandidate, onApproval, teamStatus = {}, checks, sourceAthletes, onLink, links, candidateList } = {}) {
   return async (call) => {
     if (call.url === "/api/organization") return { status: 200, body: ORG };
     const m = call.url.match(/^\/api\/training-load\/gpexe\/teams\/([^/]+)(\/.*)$/);
@@ -167,7 +167,7 @@ function gpexeServer({ onApprove, onCandidate, onApproval, teamStatus = {}, chec
     }
     if (rest === "/athlete-links" && call.method === "GET" && links) return { status: 200, body: { links: typeof links === "function" ? links(call) : links } };
     if (rest === "/athlete-links" && call.method === "POST" && onLink) return onLink(call);
-    if (rest.startsWith("/candidates?") || rest === "/candidates") return { status: 200, body: { candidates: [candidateSummary({ label: `session of ${team}` })] } };
+    if (rest.startsWith("/candidates?") || rest === "/candidates") return { status: 200, body: { candidates: candidateList ?? [candidateSummary({ label: `session of ${team}` })] } };
     if (rest === "/athlete-links" && call.method === "GET") return { status: 200, body: { links: [{ id: "link-1", gpexeAthleteId: "101", athleteId: "ath-1", athleteName: "Ana Example" }] } };
     if (rest === "/athlete-links" && call.method === "POST") return { status: 201, body: { link: { id: "link-2" } } };
     if (/\/athlete-links\/[^/]+\/unlink$/.test(rest)) return { status: 200, body: { ok: true } };
@@ -1359,8 +1359,46 @@ test("Imports: the source card shows the source name, the connection, when sessi
   const open = card.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
   assert.ok(!/980|approvalBasis|team_grant|pending|Show replaced versions/.test(open), "nothing technical in the open");
   assert.match(card, /<dt>GPEXE team id<\/dt><dd>980<\/dd>/);
-  assert.match(card, /<dt>Server message<\/dt><dd>Import writing is switched off in this environment/);
+  assert.match(card, /<dt>Import switch<\/dt><dd>Import writing is switched off in this environment/, "the switch's state is named as the switch, never as a server message");
+  assert.doesNotMatch(card, /<dt>Server message<\/dt><dd>Import writing is switched off/);
   assert.match(card, /<details class="gpexe-tech">[\s\S]*Show replaced versions/);
+});
+
+test("Imports: a failed check shows its own code and message beside its status; the import switch's sentence is never presented as the check's reason; the next step never says 'nothing found' after a failed search", async () => {
+  resetState();
+  const failed = {
+    id: "check-failed-1", status: "failed", window: { from: "2026-09-22", to: "2026-10-05" }, startedAt: "2026-10-05T14:30:00Z", finishedAt: "2026-10-05T14:31:00Z",
+    sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0,
+    error: { code: "drill_set_incomplete", message: "The source did not answer every drill of a session; that session was not recorded and the check stopped." },
+  };
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: false, lastCheck: failed } }, candidateList: [], sourceAthletes: [] }));
+  await openImports();
+  const html = renderTrainingLoadCoachHtml();
+  const card = html.slice(html.indexOf('class="gpexe-panel imports-source"'), html.indexOf("</section>", html.indexOf('class="gpexe-panel imports-source"')));
+  const cardTech = card.slice(card.lastIndexOf('<details class="gpexe-tech">'));
+  assert.match(cardTech, /<dt>Last check status<\/dt><dd>failed<\/dd><dt>Last check code<\/dt><dd>drill_set_incomplete<\/dd><dt>Last check message<\/dt><dd>The source did not answer every drill/, "the check's own reason sits beside its status");
+  assert.match(cardTech, /<dt>Import switch<\/dt><dd>Import writing is switched off/);
+  assert.doesNotMatch(cardTech, /<dt>(Server message|Last check message)<\/dt><dd>Import writing is switched off/, "the switch's sentence is never the check's reason");
+  // The red box names the same code.
+  assert.match(card, /The last search \(.*\) did not finish\./);
+  assert.match(card, /<dt>Code<\/dt><dd>drill_set_incomplete<\/dd>/);
+  assert.match(html, /The last search did not finish - its reason is in the box above\./);
+  assert.doesNotMatch(html, /Nothing found yet\. Find new sessions/);
+  // A coach gets the server's masked code and sentence, shown as they arrive - never unmasked.
+  resetState();
+  const masked = { ...failed, error: { code: "source_connection_unavailable", message: "The team's source connection cannot be used right now; contact an administrator." } };
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: false, lastCheck: masked } }, candidateList: [], sourceAthletes: [] }));
+  await openImports();
+  const coachHtml = renderTrainingLoadCoachHtml();
+  assert.match(coachHtml, /<dt>Last check code<\/dt><dd>source_connection_unavailable<\/dd><dt>Last check message<\/dt><dd>The team.{1,6}s source connection cannot be used right now; contact an administrator\.<\/dd>/);
+  assert.doesNotMatch(coachHtml, /source_auth_rejected|binding_|connection_not_usable/);
+  // A succeeded check shows no check code at all.
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: false, lastCheck: { ...failed, status: "succeeded", error: null } } }, candidateList: [], sourceAthletes: [] }));
+  await openImports();
+  const ok = renderTrainingLoadCoachHtml();
+  assert.doesNotMatch(ok, /Last check code|Last check message/);
+  assert.match(ok, /<dt>Import switch<\/dt>/);
 });
 
 test("Imports: while importing is off, or the viewer may not approve, the next step never says 'import' - it says review", async () => {
