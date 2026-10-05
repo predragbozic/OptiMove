@@ -20,6 +20,12 @@ The steps:
    connection yet" and *Create connection*.
 2. **Create connection** — host profile `GPEXE server3`, an account label such as
    "Club GPEXE account". Expected: the Connect form opens on the new row.
+   **STOP rule for Create:** if Create shows *Result not confirmed*, do **not** choose
+   *Acknowledge uncertainty and continue*, do **not** create a new connection and do **not**
+   continue the pilot. The pilot stops there and the result is reported (the screen's sentence and
+   the code from *Technical details*). The create route has no idempotency key yet, so a second
+   Create after a lost answer could leave a duplicate connection that cannot be removed from the
+   screen; stopping here means the first real pilot cannot make one.
 3. **Connect** — type the GPEXE username and password into the form, press *Connect* once. OptiMove
    does not retain the pair after the request, but your browser or password manager may offer to
    fill or save it according to its own settings: if it offers a saved OptiMove password, decline
@@ -57,7 +63,9 @@ The steps:
    the check id and its counts — never the credential, never a token.
 
 If anything stops the pilot (a refused credential after a verified Connect, a `try_again` that
-does not clear, or any lost answer — *Result not confirmed*; *Read current state* shows only what
-the server holds now and never confirms the lost request, so do not acknowledge the uncertainty
-without reporting first), stop there and report the
-screen's sentence and the code from *Technical details*; nothing else is retried.
+does not clear, or any lost answer — *Result not confirmed*), stop there and report the screen's
+sentence and the code from *Technical details*; nothing else is retried. *Read current state* may
+be used to look, but it shows only what the server holds now and never confirms the lost request.
+During the pilot *Acknowledge uncertainty and continue* is never chosen, and nothing is created,
+connected, reconnected, tested or bound again after a lost answer; for a lost Create this is the
+STOP rule of step 2.

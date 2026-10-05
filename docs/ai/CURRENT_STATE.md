@@ -831,7 +831,12 @@ since the route has no idempotency key and a connection cannot be removed); none
 runs from another club's context; a repeated bind or Unbind refused as `try_again` keeps its
 marker; the form says "OptiMove does not retain the username or password after this request. Your
 browser or password manager may handle them according to its own settings." and asks the
-administrator to check that both fields hold the GPEXE pair, not the OptiMove sign-in. Browser QA by the main session on a static harness running the
+administrator to check that both fields hold the GPEXE pair, not the OptiMove sign-in. **The
+owner's external review of `1602238` (2026-10-05): READY WITH NON-BLOCKING FOLLOW-UP.** Owner
+decisions: `autocomplete="current-password"` stays (`off` guarantees nothing either); the
+possible duplicate connection after a lost Create does not block the merge and is a separate
+backend hardening task (see Separate tasks); the owner pilot procedure stops on a lost Create
+(never *Acknowledge uncertainty and continue*, never a new connection, report). Browser QA by the main session on a static harness running the
 branch's real modules against an in-page fake of the routes (desktop 1280 px and 360 / 375 / 390
 px: no horizontal overflow, every control 44 px, every field 16 px). The owner-run pilot
 procedure: `docs/runbooks/gpexe-owner-pilot-f3c3.md`. **No real connection, binding, check or GPEXE
@@ -1523,6 +1528,15 @@ pre-existing; pass/fail counts don't belong in this file
   `3ef6033`.
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
+
+- **Backend hardening: an idempotent Create of a source connection** (owner, 2026-10-05, at the
+  external review of PR #138). `POST /api/training-load/sources/:source/connections` has no
+  idempotency key, so after a lost answer a second Create can leave a duplicate connection that no
+  screen can remove (no Disconnect / Delete). The recommended fix is a `requestKey` with an
+  idempotent POST Create (the same key replays the saved answer), **not** a unique rule "one
+  connection per club" — a club may later legitimately hold several source accounts or servers.
+  Until then the UI names the risk in the acknowledgement, and the owner pilot stops on a lost
+  Create (`docs/runbooks/gpexe-owner-pilot-f3c3.md`, step 2).
 
 - **Hardening, non-blocking (owner's external review of PR #136, 2026-10-04; repeated as note 3 of
   the closing review of PR #137): the global PostgreSQL pool in `backend/src/db.js` sets no
