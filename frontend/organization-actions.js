@@ -1,5 +1,7 @@
 import { api } from "./api.js";
 import { enterDataSourcesSection } from "./data-sources-data.js";
+import { confirmLeaveSourceConnections } from "./source-connections-actions.js";
+import { enterSourceConnectionsSection } from "./source-connections-data.js";
 import { filterOrganizationSelect, syncOrganizationTeamSelect, validateFilterableSelects } from "./organization-select.js";
 import { state } from "./state.js";
 
@@ -258,11 +260,17 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     return true;
   }
   if (type === "organization-section") {
-    state.organization.section = action.dataset.section || "overview";
+    const next = action.dataset.section || "overview";
+    // Leaving Source connections while a write runs or its answer is not
+    // confirmed asks first; declined changes nothing.
+    if (state.organization.section === "sourceConnections" && next !== "sourceConnections" && !confirmLeaveSourceConnections()) return true;
+    state.organization.section = next;
     state.organization.addFormOpen = false;
     // Opening Data sources reads the chosen team again: another admin may
-    // have changed its connection or a grant since it was last read.
+    // have changed its connection or a grant since it was last read. Source
+    // connections reads its club again for the same reason.
     if (state.organization.section === "dataSources") enterDataSourcesSection();
+    if (state.organization.section === "sourceConnections") enterSourceConnectionsSection();
     void renderOrganizationPanel({ refresh: false });
     return true;
   }

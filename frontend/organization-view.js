@@ -1,4 +1,6 @@
 import { renderDataSourcesPanelHtml } from "./data-sources-view.js";
+import { sourceConnectionsAdminContext } from "./source-connections-data.js";
+import { renderSourceConnectionsPanelHtml } from "./source-connections-view.js";
 import { renderImage } from "./media.js";
 import { renderSettingsNavHtml } from "./navigation.js";
 import { renderFilterableSelect } from "./organization-select.js";
@@ -66,6 +68,7 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
   // An account that is no longer a platform admin (or a workspace that never
   // showed the tab) must not be left on a section it cannot see.
   if (state.organization.section === "dataSources" && !data.isPlatformAdmin) state.organization.section = "overview";
+  if (state.organization.section === "sourceConnections" && !sourceConnectionsAdminContext()) state.organization.section = "overview";
   return `
     <section class="content-section organization-view">
       <section class="panel organization-hero">
@@ -88,7 +91,7 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
       </section>
       ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
       ${renderSettingsNavHtml(data)}
-      ${state.organization.section === "dataSources" ? renderDataSourcesPanelHtml() : state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : state.organization.section === "joinLinks" ? `
+      ${state.organization.section === "dataSources" ? renderDataSourcesPanelHtml() : state.organization.section === "sourceConnections" ? renderSourceConnectionsPanelHtml() : state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : state.organization.section === "joinLinks" ? `
         ${renderOrganizationActions(data)}
         ${renderJoinLinksSection(data)}
       ` : `

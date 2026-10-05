@@ -777,6 +777,54 @@ approval only on a separate owner order). F3c counts as complete when the UI Con
 Reconnect / Unbind works, one owner read-only pilot passes, the importer uses only the stored
 connection, the legacy path is retired and a controlled first import is ready.
 
+**PR A (F3c3) as built** (branch `feature/gpexe-source-connections-ui-f3c3`, first commit the
+record above; frontend and docs only, no backend change; **not merged**): a new Settings sub-tab
+**Source connections** (`frontend/source-connections-{view,data,actions}.js`, state slice
+`state.sourceConnections`; contract section 2.9, runbook section "Source connections (F3c3)") for
+a platform admin (platform workspace with a club picker, or a club workspace) and for the owning
+club's admin in that club's workspace — the tab is offered from the `/me` and `/api/organization`
+facts, the server decides again on every request, and a 404 reads as "No source connections are
+available in this workspace"; a coach never sees it. Create (the one approved profile `server3`,
+an account label) → Connect account (username and password typed once, sent once, kept nowhere;
+the browser asked not to offer or save the password; a double click sends one request; a lost
+answer is checked by reading the connection, never by resending the pair) → Test connection (the
+five states as badges, the last verified time and problem, the server's `sourceTeams` exactly as
+presented — the club admin's approved intersection or the platform admin's annotated list, the
+truncated / unavailable notes) → Approve and bind (Bind only where a pair is approved; a platform
+admin is sent to Data sources to set one; the review names source, host, club, OptiMove team and
+GPEXE team; one confirmation, one binding; the idempotent answer named) → Reconnect (a
+confirmation naming the source, the owning club and the bound-team count travels with the new
+pair; the old credential never shown) → Unbind (a mandatory reason, both teams named, the "no
+fallback to the environment token" warning, a fresh `requestKey` per attempt reused by Check
+result after a lost answer, the ended binding as history). Every stable code of the routes reads
+as a sentence; a write in flight or an unconfirmed outcome disables the other controls and asks
+before a section switch or a reload. The coach's Imports screen now tells the coach to contact an
+administrator for `source_connection_unavailable` instead of "try again"; an administrator with a
+precise connection code on a failed check is pointed to Settings > Source connections. Every
+answer is classified honestly: no answer, an abort of the 150 s client bound, `503 outcome_unknown`
+and any 5xx the service did not write itself are *Result not confirmed* (never "nothing was
+changed"); a write that settled but whose post-write read failed is shown as settled with an
+out-of-date note; a lost outcome of a previous club stays marked until that club's workspace is
+opened again. Internal review rounds before the PR: `code-reviewer` (NOT READY → fixes → READY WITH
+NON-BLOCKING NOTES twice, all notes applied), `security-reviewer` (READY WITH NON-BLOCKING NOTES,
+two MEDIUM applied — the lost-answer classification and `method="post"` on the credential form —,
+re-check READY), `ux-design-reviewer` (NOT READY → all sentences and primaries corrected → READY),
+`mobile-qa` (READY WITH NON-BLOCKING NOTES, the long-unbroken-word clipping fixed; the iOS
+strong-password offer recorded as a physical check in the pilot procedure). Tests:
+`frontend/tests/source-connections.actions.test.mjs` (22 tests through the real handlers with a
+fake fetch: tab visibility per basis and workspace type, the neutral 404, create and its lost
+answer, the one-request credential submit with the password in no state / HTML / URL — also while
+in flight —, the team list bounded to the server's rows, Test outcomes and the state-dependent
+sentences, bind review and body, a bind refused by the source, reconnect confirmation body, unbind
+body and history, lost answers with the same key / pair / a read only, uncoded 5xx and aborts as
+lost answers, the settled-but-stale note, the workspace switch, re-entry, the leave guards, every
+code's sentence, the coach and administrator sentences; twelve mutations of the key guards
+killed). Browser QA by the main session on a static harness running the
+branch's real modules against an in-page fake of the routes (desktop 1280 px and 360 / 375 / 390
+px: no horizontal overflow, every control 44 px, every field 16 px). The owner-run pilot
+procedure: `docs/runbooks/gpexe-owner-pilot-f3c3.md`. **No real connection, binding, check or GPEXE
+request; no credential anywhere.**
+
 **F3c2g — the importer's credential resolver, the strict transition from `GPEXE_API_TOKEN` and
 migration v31 — is merged and deployed** (PR #137, merge commit `6382d25` on 2026-10-04 21:58:03 UTC,
 merged exactly from head `30c9600` after the owner's external review in five rounds — round 5 READY
@@ -1451,6 +1499,12 @@ pre-existing; pass/fail counts don't belong in this file
   `training.lock_activity_decider`; reproduced identically on a clean detached `origin/main`
   worktree (`f26120f`) on 2026-09-29. The cause is not established (the checked-out SQL files
   carry CRLF line endings on this workstation, which is a candidate, unverified). Not fixed.
+- `frontend/tests/builder-mobile-section-workflow.test.mjs` — test "16c. regression guard: the
+  reorder arrows stay vertical (up/down) at every width…" fails; reproduced identically on a clean
+  detached `origin/main` worktree (`6382d25`) on 2026-10-05 during the F3c3 work. Not fixed.
+- `frontend/tests/organization-panel-cache.test.mjs` — test "6. signOut clears the entire view
+  cache before/alongside its hard reload" fails; reproduced identically on a clean detached
+  `origin/main` worktree (`6382d25`) on 2026-10-05. Not fixed.
 - `backend/tests/training-load-metrics-builder-edit-draft.test.mjs` — refuses to start
   unless `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL` is set (deliberate guard, no database
   operation attempted), so a plain full backend run reports it as failed; same on

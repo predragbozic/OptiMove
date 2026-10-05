@@ -135,6 +135,46 @@ Deleting a connection is refused as well: there is no Disconnect yet, and the
 migration that designs it decides what happens to the candidates, links,
 approvals and imported events of that team.
 
+## Source connections (F3c3): the club's account, in Settings
+
+**Settings → Source connections** is where the club's GPEXE account lives (the F3c2d–F3c2f routes
+under `/api/training-load/sources/gpexe/connections`). Who sees it: a platform admin (in the
+platform workspace, choosing a club; or inside a club's workspace) and the owning club's admin
+inside that club's workspace. A coach never sees it; a club admin in another workspace, another
+club's admin, an archived club or a revoked role get the same 404 as a connection that does not
+exist, and the screen says only that no source connections are available in this workspace.
+
+The steps, each behind a form or a confirmation that names what it touches:
+
+1. **Create connection** — the one approved host profile (`server3`, rest/v1) and an account
+   label (a name for the screen, not the username).
+2. **Connect account** — the GPEXE username and password, typed once. They travel in that one
+   request; the server exchanges them for an access token, stores only the token encrypted, and
+   drops the pair. The password is never saved, never shown again, and the browser is asked not to
+   offer or save it. A double click sends one request. If the answer is lost, *Check result* reads
+   the connection again — the pair is never sent a second time.
+3. **Test connection** — the stored token is checked against the source (and every bound team is
+   read); the state badge, the last verified time and any recorded problem are shown in plain
+   language. After a verified Connect or Test the GPEXE teams the account sees are listed exactly
+   as the server presents them: a club admin sees only those approved for one of the club's teams
+   under Data sources; a platform admin sees the bounded, annotated list. The token and the
+   source's own answer are never shown.
+4. **Approve and bind** — the approved pair OptiMove team ↔ GPEXE Team ID is still set under
+   **Settings → Data sources** by a platform admin (the F3b route, with reason and history); here a
+   row with an approved pair offers *Bind*, the review names the source, the host, the club, the
+   OptiMove team and the GPEXE team, and one confirmation creates one binding. The same pair again
+   is the server's idempotent answer.
+5. **Reconnect** — a new username and password, after a confirmation that names the source, the
+   owning club and the number of bound teams; the old credential is never shown or recovered.
+6. **Unbind** — a mandatory reason and a confirmation naming both teams; the team then reads
+   nothing from GPEXE until it is bound again and **does not fall back to the environment token**;
+   the ended binding stays as history. A lost answer is checked with the same `requestKey`, so an
+   Unbind is never done twice.
+
+Every refusal of the routes reads as a sentence; the code and the server's own sentence stay under
+*Technical details*. A write in flight, or an outcome not yet confirmed, asks before the section
+is left or the page is reloaded.
+
 ## One GPEXE athlete id
 
 A GPEXE athlete id is `"0"` or digits without a leading zero, at most 12

@@ -1066,6 +1066,80 @@ on Render untouched.
   from the shared bundle fixture; the legacy path through a fake e03-style client; the legacy
   factory as a trap on the binding path; the resolver's own contract with a fake executor).
 
+### 2.9 F3c3 as built — the administrator's Source connections screen (owner order 2026-10-05; branch `feature/gpexe-source-connections-ui-f3c3`; PR A of the combined F3c3 / F3c4 package; not merged)
+
+Frontend and docs only, on the merged F3c2d–F3c2g routes; no backend contract change. One new
+Settings sub-tab, **Source connections** (`frontend/source-connections-{view,data,actions}.js`,
+state slice `state.sourceConnections`), beside the F3b **Data sources** tab (the approved pair
+OptiMove team ↔ GPEXE Team ID stays there, platform admin only, unchanged).
+
+- **Who is offered the tab (`sourceConnectionsAdminContext()`, from `/me` and `/api/organization`):**
+  a platform admin in the platform workspace (a club picker from the clubs Settings loaded; the
+  list route is called with that `clubId`) or inside a club workspace (that club), and an active
+  club admin inside their own club's workspace (`manageableClubIds` contains the workspace club).
+  A coach, a club admin in a team workspace or in another club's workspace, and an account without
+  those facts never see the tab, and a section they cannot see falls back to Overview. The server
+  decides again on every request: everything else is the same 404, and the screen renders a 404 as
+  "No source connections are available in this workspace" — never whether a connection exists.
+- **Create** (`POST …/connections` with `ownerScope: "club"`, the club, the host key of the one
+  approved profile the form offers — `server3`, a constant list in the client, the server refuses
+  anything else —, an account label of 1–120 characters and `credentialKind: "exchanged_token"`):
+  the Connect form opens on the new row at once.
+- **Connect account / Reconnect** (`POST …/connect` / `…/reconnect`): one form, username and
+  password typed once (`autocomplete="off"` on the form and the username, `new-password` on the
+  password — hints against the autofill of a stored OptiMove login, see below), sent in that one request body and kept
+  nowhere — not in state, a dataset, a URL, storage, a log or a notice; the form is rebuilt empty
+  after the request and submits natively as POST only (`method="post"`), never as a GET with the
+  pair in the URL; a double click sends one request (the busy flag is set before the first
+  await). `autocomplete="new-password"` plus the password-manager hints stop the autofill of a
+  stored OptiMove login; they are hints — a browser may still offer to save or to generate a
+  password, which the pilot procedure tells the owner to dismiss. Every request is bounded on the
+  client at 150 s (beyond the server's own worst case for an attempt); an abort, no answer at all, a
+  `503 outcome_unknown` and any 5xx the service did not write itself (a proxy, a restart) are
+  **lost answers** — *Result not confirmed*, never "nothing was changed"; a write that settled but
+  whose post-write read failed is shown as settled with a "facts may be out of date" note. The sentence on the form: the password is exchanged for an access token right away,
+  OptiMove stores only that token, encrypted, the password is not saved and can never be shown
+  again. Reconnect first names the source, the owning club, the account label and host, and the
+  number of bound teams, and sends that as the `confirmation` the route requires; the old
+  credential is never shown. A lost answer (no answer at all, or `503 outcome_unknown`) shows
+  *Result not confirmed* with **Check result**, which reads the connection again (`GET …/:id`) and
+  reports its state — the pair is never sent a second time.
+- **Test connection** (`POST …/test`, an empty JSON object): the state badge (`Verified`,
+  `Connected, not tested`, `Needs reconnect`, `Source unavailable`, `Not connected`), the last
+  verified time, the last recorded problem as a sentence, and the result sentence (succeeded with
+  N bound teams read / refused by the source → reconnect / did not succeed with the stable code's
+  sentence). After a verified Connect or Test the server's `sourceTeams` are listed exactly as
+  presented — a club admin only the approved intersection the server returned, a platform admin
+  the bounded annotated list — with the count, the `sourceTeamsTruncated` note and the
+  `sourceTeamsUnavailable` sentence; never a token, never the source's own answer, never a team the
+  server did not present.
+- **Approve and bind:** a row with an approved OptiMove team offers **Bind**; a row without one
+  shows "No approved OptiMove team yet" and, to a platform admin only, **Set the pair in Data
+  sources** (a switch to the existing F3b tab, where the pair is set through the F3b Settings
+  route — the club admin cannot approve a pair). The review names the source, the host, the club,
+  the OptiMove team and the GPEXE team (id and the presented name) and says the environment token
+  is never used for that team again, not even after an Unbind; **Confirm binding** sends
+  `{ teamId, sourceTeamId }` once; the server's idempotent answer reads "was already bound …
+  nothing changed"; a lost answer offers Check result, which repeats the same pair (the route
+  answers it idempotently).
+- **Unbind** (`POST …/bindings/:bindingId/unbind`): the confirmation names both teams, warns that
+  the team does not fall back to the environment token, and requires a reason (1–500 characters);
+  the body carries a fresh `requestKey` per attempt and the `expected` pair; a lost answer keeps
+  that key and Check result repeats the same request; the ended binding is shown as history
+  ("Ended just now") and the bound list no longer offers it.
+- **Every stable code of the source routes** reads as a sentence (`connectionMessage()`), the
+  server's own sentence and the code only inside "Technical details"; `429 source_auth_throttled`
+  says to wait about 15 minutes.
+- **States and guards:** loading, empty (no connection yet), forbidden-as-not-found, a failed read
+  with Try again, a lost answer, an archived bound team ("(archived)"); a write in flight or an
+  unconfirmed outcome disables every other write control, asks before a Settings section switch
+  (`confirmLeaveSourceConnections`) and before a reload / close (`beforeunload`).
+- **The coach's Imports screen** no longer says "Try again in a moment" for a check refused or
+  failed through the team's source connection (`source_connection_unavailable`): it shows the
+  server's sentence to contact an administrator.
+- **Owner-run pilot after the merge and deploy of PR A:** `docs/runbooks/gpexe-owner-pilot-f3c3.md`
+  — the main session prepares it and never runs it.
+
 ## 3. Test plan (written with the adapter; all on disposable `optimove_tests_gpexe_*` databases)
 
 Fake source server (in-process `http` server, as `gpexe-in-app-import.test.mjs` does): answers

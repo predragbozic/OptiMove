@@ -415,19 +415,34 @@ function datedHintText(dated) {
 }
 
 // Why finding could not start, and the one thing to do.
-function checkErrorText(error) {
+export function checkErrorText(error) {
   if (error.code === "check_already_running") return "Sessions are already being found for this team. Wait for it to finish.";
+  // The team's source connection (F3c2g / F3c3): the server's own sentence
+  // already says what a coach may know - contact an administrator.
+  if (error.code === "source_connection_unavailable") return error.message || "The team's source connection cannot be used right now; contact an administrator.";
   if (error.code === "invalid_window") return "Check the dates: From must not be after To, To must not be in the future, and at most 31 days can be searched at once.";
   if (error.code === "gpexe_token_missing") return "OptiMove has no access to GPEXE set up yet. Ask a platform admin to set it up.";
   if (error.code === "gpexe_team_not_configured") return "This team is not connected to a GPEXE team yet. Ask a platform admin to connect it in Settings > Data sources.";
   return "Finding new sessions could not start. Try again in a moment.";
 }
 
-function renderCheckSummaryHtml(check, source = IMPORT_SOURCES[0]) {
+export function renderCheckSummaryHtml(check, source = IMPORT_SOURCES[0]) {
   const counts = `${plural(check.sessionsSeen, "session", "sessions")} in ${source.name}: ${check.candidatesNew} not seen by OptiMove before, ${check.candidatesChanged} changed, ${check.candidatesUnchanged} unchanged`;
   if (check.status === "running") return `<p class="gpexe-check-state" role="status">Finding sessions ${escapeHtml(formatDate(check.window?.from))} - ${escapeHtml(formatDate(check.window?.to))}... ${escapeHtml(counts)} so far.</p>`;
   // A finished search is rendered by renderFoundHtml.
-  return `<div class="gpexe-error" role="alert"><p>The last search (${escapeHtml(fmtDateTime(check.startedAt))}) did not finish. Try again in a moment.</p>${techHtml([["Code", check.error?.code], ["Server message", check.error?.message]])}</div>`;
+  // A failed search through the team's source connection is not "try again":
+  // a coach sees the stable code and contacts an administrator; an
+  // administrator sees the precise code and acts under Settings > Source
+  // connections (F3c3).
+  const code = check.error?.code || "";
+  const connection = code === "source_connection_unavailable";
+  const connectionFact = /^(binding_|connection_|team_setting_)|^(host_not_allowed|adapter_not_available|key_missing|credential_unreadable|source_auth_rejected|source_access_refused|source_team_mismatch)$/.test(code);
+  const next = connection
+    ? "The team's source connection cannot be used right now; contact an administrator."
+    : connectionFact
+      ? "The team's source connection could not be used (the code is under Technical details); an administrator acts under Settings > Source connections."
+      : "Try again in a moment.";
+  return `<div class="gpexe-error" role="alert"><p>The last search (${escapeHtml(fmtDateTime(check.startedAt))}) did not finish. ${next}</p>${techHtml([["Code", check.error?.code], ["Server message", check.error?.message]])}</div>`;
 }
 
 // ---------------------------------------------------------------------------

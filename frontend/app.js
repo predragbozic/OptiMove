@@ -28,6 +28,8 @@ import {
 import { renderCheckInContent, renderCheckInPage as renderCheckInPageAction, submitCheckInLogin as submitCheckInLoginAction } from "./check-in-actions.js";
 import { handleDataSourcesAction, submitDataSourcesForm } from "./data-sources-actions.js";
 import { enterDataSourcesSection, loadDataSources } from "./data-sources-data.js";
+import { handleSourceConnectionsAction, handleSourceConnectionsBeforeUnload, submitSourceConnectionsForm } from "./source-connections-actions.js";
+import { enterSourceConnectionsSection, loadSourceConnections, sourceConnectionsNeedLoad } from "./source-connections-data.js";
 import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
 import { loadPendingCount as loadTestsPendingCount, loadTests, reportDeviceTimezone } from "./tests-data.js";
 import { renderTests, renderTestsBadge } from "./tests-view.js";
@@ -495,6 +497,9 @@ function bindEvents() {
   // Imports (phase 4b): a running batch import or an unconfirmed outcome
   // asks (the browser's own dialog) before a reload or close.
   window.addEventListener("beforeunload", handleTrainingLoadBeforeUnload);
+  // Settings -> Source connections (F3c3): a Connect / Test / bind / Unbind
+  // in flight, or an unconfirmed outcome, asks the same way.
+  window.addEventListener("beforeunload", handleSourceConnectionsBeforeUnload);
 }
 
 async function loadSession() {
@@ -580,6 +585,13 @@ async function handleContentSubmit(event) {
   if (dataSourcesForm) {
     event.preventDefault();
     await submitDataSourcesForm(dataSourcesForm, { render: renderDataSourcesSurface });
+    return;
+  }
+
+  const sourceConnectionsForm = event.target.closest("[data-source-connections-form]");
+  if (sourceConnectionsForm) {
+    event.preventDefault();
+    await submitSourceConnectionsForm(sourceConnectionsForm, { render: renderDataSourcesSurface });
     return;
   }
 
@@ -1916,6 +1928,7 @@ async function loadActiveTab() {
     // the entry event, never in renderOrganizationPanel itself - that one is
     // also the Data sources repaint, so a reset there would loop.
     if (state.organization.section === "dataSources") enterDataSourcesSection();
+    if (state.organization.section === "sourceConnections") enterSourceConnectionsSection();
     return renderOrganizationPanel({ refresh: false });
   }
   if (state.activeTab === "coach-home") return loadCoachHome();
@@ -2442,6 +2455,7 @@ async function handleContentClick(event) {
   if (handleCoachProfileAction(action, { renderCoachContext, renderCurrentNode })) return;
   if (handleTemplateLibraryAction(action, { loadTemplates, renderCoachContext, renderTemplateLibrary })) return;
   if (await handleDataSourcesAction(action, { render: renderDataSourcesSurface })) return;
+  if (await handleSourceConnectionsAction(action, { render: renderDataSourcesSurface, openDataSources: openDataSourcesFromSourceConnections })) return;
   if (await handleOrganizationAction(action, {
     loadAthletes,
     refreshOrganizationData,
@@ -2530,8 +2544,21 @@ function organizationContextKey() {
   return buildContextKey(currentUserWorkspaceContextParts());
 }
 
-// Settings -> Data sources repaints through the Settings panel it lives in.
+// Settings -> Data sources and Source connections repaint through the
+// Settings panel they live in - only while Settings is the active tab: a
+// Connect or Test can take many seconds, and its late answer must never paint
+// the Settings panel over another screen (the slice keeps the outcome; the
+// tab's re-entry shows it).
 function renderDataSourcesSurface() {
+  if (state.activeTab !== "organization") return;
+  void renderOrganizationPanel({ refresh: false });
+}
+
+// From Source connections to the approved pair: the existing Data sources
+// tab (platform admin only), where the GPEXE Team ID of a team is set.
+function openDataSourcesFromSourceConnections() {
+  state.organization.section = "dataSources";
+  enterDataSourcesSection();
   void renderOrganizationPanel({ refresh: false });
 }
 
@@ -2555,6 +2582,12 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     const dataSources = state.dataSources;
     if (state.organization.section === "dataSources" && dataSources.teamId && !dataSources.status && !dataSources.loading && !dataSources.error) {
       void loadDataSources(renderDataSourcesSurface);
+    }
+    // Source connections (F3c3): the same one-shot read of the club on
+    // screen - also after a workspace switch left a previous club loaded;
+    // without a chosen club (platform workspace) nothing is sent.
+    if (state.organization.section === "sourceConnections" && sourceConnectionsNeedLoad()) {
+      void loadSourceConnections(renderDataSourcesSurface);
     }
     const data = state.organization.data || { clubs: [], teams: [], athletes: [], users: [], canCreateClub: false, canCreateTeam: false, canCreateAthlete: true, canCreateUser: true };
     normalizeOrganizationSelection(data);
@@ -2608,6 +2641,9 @@ async function onWorkspaceChanged() {
   // later re-entry into it never renders a stale cross-workspace flash
   // before its own fresh fetch lands).
   resetTrainingLoadForWorkspaceChange();
+  // Source connections (F3c3): the new workspace may be another club; the
+  // loaded list is dropped (unless a write is in flight) and read again.
+  if (state.organization.section === "sourceConnections") enterSourceConnectionsSection();
   if (state.activeTab === "organization") return renderOrganizationPanel();
   if (state.activeTab === "coach-home") return loadCoachHome({ forceRefresh: true });
   if (state.activeTab === "coaches") return loadCoaches({ forceRefresh: true });
