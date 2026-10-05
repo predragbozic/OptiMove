@@ -94,3 +94,27 @@ switch's state, not the check's reason: a check never consults the switch, only 
    approved or imported; `GPEXE_IMPORT_APPLY_ENABLED` stays unchanged.
 5. A failed or unknown result is not repeated: stop and report the code. No Reconnect, Unbind or
    second check without a new order.
+
+## The diagnostic read for `source_answer_unexpected` (whole-session details)
+
+The first check's code was `source_answer_unexpected` ("The source answer to the whole-session
+details carries a metric value in an unknown shape."). The real shape of those metric values is
+not documented anywhere in the repository, so the acceptance rule is not widened. Instead the
+refusal now carries a sanitized description after " Diagnostic: " in its message. It holds only
+kinds, booleans and count buckets, and no name except `tot_burst_events` / `tot_brake_events`.
+It holds no athlete id, value, text or date.
+
+1. **Only after the external review of branch `fix/gpexe-session-details-metric-shape`, its merge
+   and its deploy, and on a separate, explicit order.** Look first: Settings → Source connections
+   shows *Verified* with the team bound to GPEXE Team ID 980; anything else, stop and report.
+2. One check for one known date, exactly as steps 3 and 4 above: From = To = one date with exactly
+   one known session of team 980, *Find new sessions* once.
+3. If it fails with `source_answer_unexpected` (whole session) or `drill_set_incomplete` (a drill),
+   the source card's *Technical details* → *Last check message* (as an administrator) holds the
+   sentence and then `Diagnostic: …` (for a drill: `drill_index=…; drill_code=…; op=…`). Return
+   **that whole line** and the Code. Nothing else from the screen is needed. No screenshot is
+   needed either, and never one of a form.
+4. If it succeeds, report the result line instead. Nothing is approved or imported, and the switch
+   stays off.
+5. Nothing is repeated. A parser change follows only for the shape that line proves, in a new PR
+   with its own review, and then one more single-date re-test.

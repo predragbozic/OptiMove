@@ -42,11 +42,11 @@ import crypto from "node:crypto";
 import { pool } from "./db.js";
 import { decryptCredential, keyringFromEnv } from "./sourceCredentialCrypto.js";
 import { resolveApprovedSourceHost } from "./sourceHosts.js";
-import { createSourceAdapter, SourceAdapterError } from "./sourceAdapters.js";
+import { createSourceAdapter, SourceAdapterError, DIAGNOSTIC_MARK } from "./sourceAdapters.js";
 
 // The importer sees the adapter's error class only through this module: the
 // resolver is the importer's one door to the source-connection infrastructure.
-export { SourceAdapterError };
+export { SourceAdapterError, DIAGNOSTIC_MARK };
 
 export const IMPORT_SOURCE_SYSTEM = "gpexe";
 // Only a connection a successful Test or Connect left `verified` is read by an
@@ -481,7 +481,17 @@ export function importClientFor(source) {
       const { drillsStatus, drillLabels, ...stored } = bundle;
       void drillLabels;
       if (!drillsStatus || drillsStatus.complete !== true) {
-        throw fail("drill_set_incomplete", { facts: { sessionId: String(sessionId), failedIndex: drillsStatus?.failed?.drillIndex ?? null } });
+        // A drill refused for a metric's shape carries the adapter's sanitized
+        // description (fixed words and buckets only, at most 900 characters);
+        // the check row shows it to an administrator after DIAGNOSTIC_MARK.
+        const failed = drillsStatus?.failed ?? null;
+        const failedIndex = Number.isInteger(failed?.drillIndex) ? failed.drillIndex : null;
+        const facts = { sessionId: String(sessionId), failedIndex };
+        if (failed && typeof failed.diagnosticText === "string" && failed.diagnosticText && failedIndex !== null) {
+          const failedCode = /^[a-z_]{1,64}$/.test(String(failed.code ?? "")) ? failed.code : "source_answer_unexpected";
+          throw new SourceImportResolveError("drill_set_incomplete", `${MESSAGES.drill_set_incomplete}${DIAGNOSTIC_MARK}drill_index=${failedIndex}; drill_code=${failedCode}; ${failed.diagnosticText.slice(0, 900)}`, { facts });
+        }
+        throw fail("drill_set_incomplete", { facts });
       }
       return stored;
     },

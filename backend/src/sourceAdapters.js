@@ -9,7 +9,7 @@
 //   gpexe / api       no adapter here. The e03 importer keeps its own client
 //                     (backend/src/gpexeClient.js), unchanged.
 import { resolveApprovedSourceHost } from "./sourceHosts.js";
-import { createGpexeRestV1Adapter, SourceAdapterError } from "./gpexeRestV1Adapter.js";
+import { createGpexeRestV1Adapter, SourceAdapterError, DIAGNOSTIC_MARK } from "./gpexeRestV1Adapter.js";
 
 const own = (object, key) => typeof key === "string" && Object.prototype.hasOwnProperty.call(object, key);
 
@@ -37,4 +37,7 @@ export function createSourceAdapter({ sourceSystem, hostKey, catalogRow, credent
   return create({ hostKey, catalogRow, credential, boundSourceTeamId, ...options });
 }
 
-export { SourceAdapterError };
+// DIAGNOSTIC_MARK: the separator before a refusal's sanitized shape
+// description, so the importer can keep it from a coach without naming an
+// adapter module (it reaches adapters through the resolver only).
+export { SourceAdapterError, DIAGNOSTIC_MARK };

@@ -237,12 +237,13 @@ function fakeSource({ token = TOKEN } = {}) {
       if (state.gates.track) await abortable(init, state.gates.track.p);
       return b.tracks[m[1]] ? json(200, b.tracks[m[1]]) : json(404, { detail: SOURCE_SENTENCE });
     }
-    if (key === `/rest/v1/team_session/${sid}/details/`) return json(200, { drills_count: 2, players: b.details.full.players, team: { aggregate: 1 }, teamsession: sid });
+    if (key === `/rest/v1/team_session/${sid}/details/`) return json(200, { drills_count: 2, players: state.faults.wholePlayers ?? b.details.full.players, team: { aggregate: 1 }, teamsession: sid });
     m = key.match(/^\/api\/team_session\/(\d+)\/details\/\?drill=(\d)$/);
     if (m) {
       const d = b.details.drills[m[2]];
       if (!d || state.faults.drillMissing === Number(m[2])) return json(404, { detail: SOURCE_SENTENCE });
-      return json(200, { drills_count: 2, players: d.players, team: { aggregate: 1 }, teamsession: sid * 1000 + Number(m[2]) + 1 });
+      const players = state.faults.drillPlayers && state.faults.drillPlayers.index === Number(m[2]) ? state.faults.drillPlayers.players : d.players;
+      return json(200, { drills_count: 2, players, team: { aggregate: 1 }, teamsession: sid * 1000 + Number(m[2]) + 1 });
     }
     if (key === `/api/team_session/${sid}/brief/`) return json(404, { detail: SOURCE_SENTENCE });
     if (key === `/rest/v1/team/${t}/thresholds/?valid_on=${DAY}`) return json(200, b.teamThresholds);
@@ -1444,6 +1445,80 @@ test("18. the import switch off - unset and explicitly 'false' - never touches a
       delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
     }
   }
+});
+
+test("19. a whole-session details answer whose metric value has an unknown shape (the F3c3 pilot's failure): the check fails closed with source_answer_unexpected and a sanitized shape description - shown to an administrator, never to a coach -, records no candidate, preview or snapshot, writes nothing of an import, sends nothing with the environment token, and the switch stays off", async () => {
+  const o = await org();
+  useSource();
+  const { conn } = await bound(o);
+  process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+  legacyTrap();
+  src.serve(o.sourceTeamId);
+  const players = structuredClone(src.state.bundle.details.full.players);
+  const firstId = Object.keys(players)[0];
+  players[firstId].markerMetricNameZq = [13579.2468, { inner: SOURCE_SENTENCE }];
+  src.state.faults.wholePlayers = players;
+  const tables = (await q(`select table_schema || '.' || table_name as t from information_schema.tables where table_schema in ('training', 'training_load') and table_type = 'BASE TABLE' and table_name not in ('gpexe_import_checks', 'gpexe_retention_runs') order by 1`)).map((r) => r.t);
+  const rows = async () => { const out = {}; for (const t of tables) { const [s, n] = t.split("."); out[t] = (await q(`select count(*)::int as n from ${s}.${n}`))[0].n; } return out; };
+  const before = await rows();
+
+  const row = await runCheck(o);
+  assert.deepEqual([row.status, row.error_code, row.source_path], ["failed", "source_answer_unexpected", "source_connection"], JSON.stringify(row));
+  assert.ok(row.error_message.startsWith("The source answer to the whole-session details carries a metric value in an unknown shape. Diagnostic: op=session_details;"), row.error_message);
+  for (const leak of [firstId, "markerMetricNameZq", "13579", "inner", SOURCE_SENTENCE]) assert.ok(!row.error_message.includes(leak), `${leak} is not on the check row`);
+  assert.deepEqual(await rows(), before, "no candidate, preview, snapshot or import row");
+  assert.equal(row.sessions_seen, 0);
+  assert.ok(src.calls.every((c) => c.auth !== "ENV"), "the environment token never reached the source");
+  assert.equal((await connRow(conn.id)).state, "verified", "a refused answer shape is not a refused credential");
+
+  // An administrator reads the description; a coach reads the sentence before it. Reading sends nothing.
+  const callsBefore = src.calls.length;
+  const admin = await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.cadmin.cookie });
+  const platform = await api(`/gpexe/teams/${o.teamId}/checks/${row.id}`, { cookie: o.padmin.cookie });
+  const coach = await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.coach.cookie });
+  const coachDetail = await api(`/gpexe/teams/${o.teamId}/checks/${row.id}`, { cookie: o.coach.cookie });
+  assert.equal(src.calls.length, callsBefore, "reading the failed check sends no source request");
+  assert.equal(admin.body.lastCheck.error.message, row.error_message);
+  assert.equal(platform.body.check.error.message, row.error_message);
+  for (const r of [coach.body.lastCheck, coachDetail.body.check]) {
+    assert.deepEqual(r.error, { code: "source_answer_unexpected", message: "The source answer to the whole-session details carries a metric value in an unknown shape." }, "the coach gets the sentence without the description");
+  }
+  assert.equal(admin.body.importSwitch.enabled, false);
+  src.state.faults.wholePlayers = null;
+});
+
+test("20. a drill answer whose metric value has an unknown shape: the check stops with drill_set_incomplete and the drill's sanitized description (index, code, shape) on its row - for an administrator only -, records nothing, and the check start's own answer applies the same rule (the coach view without the description, the administrator view with it)", async () => {
+  const o = await org();
+  useSource();
+  await bound(o);
+  process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+  legacyTrap();
+  src.serve(o.sourceTeamId);
+  const players = structuredClone(src.state.bundle.details.drills["0"].players);
+  const firstId = Object.keys(players)[0];
+  players[firstId].markerMetricNameZq = [13579.2468];
+  src.state.faults.drillPlayers = { index: 0, players };
+  const before = (await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n;
+  const BASE = "The source did not answer every drill of a session; that session was not recorded and the check stopped.";
+
+  // The check start's own answer (wait: true), as a coach would get it.
+  const coachView = await importer.startCheck(o.teamId, { userId: o.coach.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: false });
+  assert.deepEqual([coachView.status, coachView.error], ["failed", { code: "drill_set_incomplete", message: BASE }]);
+  const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [coachView.id]))[0];
+  assert.ok(row.error_message.startsWith(`${BASE} Diagnostic: drill_index=0; drill_code=source_answer_unexpected; op=session_drill_details; consumed_failing=no;`), row.error_message);
+  for (const leak of [firstId, "markerMetricNameZq", "13579", SOURCE_SENTENCE]) assert.ok(!row.error_message.includes(leak), `${leak} is not on the check row`);
+  assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n, before, "nothing recorded");
+  assert.ok(src.calls.every((c) => c.auth !== "ENV"));
+
+  // The same start, as an administrator would get it, carries the description.
+  const adminView = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+  assert.equal(adminView.error.code, "drill_set_incomplete");
+  assert.ok(adminView.error.message.startsWith(`${BASE} Diagnostic: drill_index=0;`), adminView.error.message);
+  const viaRoute = await api(`/gpexe/teams/${o.teamId}/checks/${adminView.id}`, { cookie: o.cadmin.cookie });
+  assert.equal(viaRoute.body.check.error.message, adminView.error.message);
+  const viaCoach = await api(`/gpexe/teams/${o.teamId}/checks/${adminView.id}`, { cookie: o.coach.cookie });
+  assert.equal(viaCoach.body.check.error.message, BASE);
+  src.state.faults.drillPlayers = null;
 });
 
 test("10. this suite runs on a disposable database only; every console line, check row, candidate row and connection column is free of the connection token, the environment token, the username, the password and the source's sentence", async () => {
