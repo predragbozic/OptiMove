@@ -1,4 +1,5 @@
 import { hasOrganizationAccess, isAthleteMode } from "./access.js";
+import { sourceConnectionsAdminContext } from "./source-connections-data.js";
 import { els } from "./dom.js";
 import { ATHLETE_TEMPLATE_SCOPES, TEMPLATE_SCOPES, state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -142,6 +143,11 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
     // tab is not the protection - every route behind it checks the active
     // platform_admin role again on the server.
     ...(data.isPlatformAdmin ? [["dataSources", "Data sources"]] : []),
+    // The club's source account (F3c3): a platform admin, or the owning
+    // club's admin inside that club's workspace. Hiding the tab is not the
+    // protection either - every route behind it resolves the same two bases
+    // again and answers 404 to everyone else.
+    ...(sourceConnectionsAdminContext() ? [["sourceConnections", "Source connections"]] : []),
   ];
   return `
     <nav class="settings-tabs" aria-label="Settings sections">

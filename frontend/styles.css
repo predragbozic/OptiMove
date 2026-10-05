@@ -16647,3 +16647,147 @@ button.tests-assignment-card {
     grid-column: 1 / -1;
   }
 }
+
+/* Settings -> Source connections (F3c3): on top of the Data sources styles
+   (44px targets, 16px fields). Two more state badges, the GPEXE team list
+   after a Connect / Test, and the bound-team list with its one destructive
+   button. Cards at phone widths, like the Data sources lists. */
+.data-sources-state.is-pending {
+  color: var(--accent);
+  background: var(--surface-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.data-sources-state.is-warn {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.source-connections-actions {
+  align-items: center;
+}
+.source-connections-actions .plain-button,
+.source-connections-team-list .plain-button,
+.source-connections-bound-list .plain-button,
+.source-connections-unconfirmed .plain-button {
+  min-height: 44px;
+}
+.source-connections-attempt,
+.source-connections-bound {
+  display: grid;
+  gap: 10px;
+}
+.source-connections-attempt > p,
+.source-connections-bound > p,
+.source-connections-teams p {
+  margin: 0;
+}
+.source-connections-teams {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.source-connections-team-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.source-connections-team-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.source-connections-team-list li > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.source-connections-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+.source-connections-credential input {
+  font-size: 16px;
+  min-height: 44px;
+}
+.source-connections-unconfirmed .data-sources-form-actions {
+  margin-top: 8px;
+}
+@media (max-width: 760px) {
+  .source-connections-team-list li,
+  .source-connections-bound-list li {
+    display: grid;
+  }
+  .source-connections-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  .source-connections-actions .plain-button,
+  .source-connections-team-list .plain-button,
+  .source-connections-bound-list .plain-button,
+  .source-connections-unconfirmed .plain-button {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* F3c3 mobile review: a long unbroken word (an email-like account label, a
+   long team name) must wrap instead of widening the card's single grid
+   track, which .panel { overflow: hidden } would then clip silently. */
+.source-connections {
+  overflow-wrap: anywhere;
+}
+.source-connections .data-sources-card,
+.source-connections .data-sources-form,
+.source-connections .data-sources-confirm {
+  grid-template-columns: minmax(0, 1fr);
+}
+/* The reason textarea and the host select fill the row like the inputs. */
+.data-sources textarea,
+.data-sources select {
+  width: 100%;
+}
+/* A disclosure marker on the summaries that display: flex removed. */
+.data-sources-tech summary::before,
+.data-sources-history summary::before {
+  content: "B8";
+  margin-right: 6px;
+}
+.data-sources-tech details[open] > summary::before,
+.data-sources-history[open] > summary::before,
+details[open] > .data-sources-tech-summary::before {
+  content: "BE";
+}
+.source-connections-team-list .data-sources-state {
+  justify-self: start;
+}
+@media (max-width: 760px) {
+  /* Technical details read as one column on a phone. */
+  .data-sources-tech dl {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .data-sources-tech dt {
+    margin-top: 6px;
+  }
+  /* Every Settings tab is a real touch target on a phone (pre-existing 38px). */
+  .settings-tab {
+    min-height: 44px;
+  }
+}
+.source-connections-note {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--line-strong);
+}

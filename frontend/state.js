@@ -956,6 +956,18 @@ export const createInitialState = () => ({
     revokeConfirm: null, revokeBusy: false, revokeError: null,
     historyOpen: false,
   },
+  // Settings -> Source connections (F3c3): the club's source credential
+  // connection. Never a username, a password or a token: states, facts,
+  // the forms that are open and the one result whose answer was lost.
+  sourceConnections: {
+    clubId: "", loading: false, error: null, connections: null, generation: 0, notice: "", noticeFor: "", ended: null,
+    createOpen: false, createDraft: { hostKey: "server3", accountLabel: "" }, createBusy: false, createError: null,
+    credentialOpen: null, credentialBusy: false, credentialError: null,
+    testBusy: "", testError: null, lastAttempt: {}, teamsOpen: "",
+    bindReview: null, bindBusy: false, bindError: null,
+    unbindOpen: null, unbindBusy: false, unbindError: null,
+    checkBusy: false, unconfirmed: null, staleAfterWrite: "",
+  },
   organizationEditor: { open: false, type: "", row: null },
   organizationUserManage: { open: false, userId: "", pending: false, error: "" },
   organizationInvite: { open: false, athleteId: "", pending: false, error: "", inviteUrl: "", mailtoUrl: "", copied: false },

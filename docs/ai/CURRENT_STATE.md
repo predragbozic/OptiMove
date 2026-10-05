@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-04. Last `origin/main` commit checked: `d285296` (merge of PR #136,
-`feature/gpexe-unbind-f3c2f` → `main`; PR #135 `440ad83` before it).
+Last reviewed: 2026-10-05. Last `origin/main` commit checked: `6382d25` (merge of PR #137,
+`feature/gpexe-importer-resolver-f3c2g` → `main`; PR #136 `d285296` before it).
 
 ## Active phase
 
@@ -754,14 +754,115 @@ bound again under every v30 rule, the ended row stays as history, and the v30 ro
 refused by it. Tests: `backend/tests/source-connections-f3c2f.test.mjs` (disposable database, fake
 source that is never called).
 
-**The active step is F3c2g — the importer's credential resolver and the controlled transition from
-`GPEXE_API_TOKEN`** (branch `feature/gpexe-importer-resolver-f3c2g` from `d285296`, owner order
-2026-10-04; backend service, resolver module, migration v31, tests and docs; **not merged, one route
-change (the importer router's error detail `reason`, administrators only), no UI, no real connection,
-binding or import, no GPEXE request, no credential; v31 applied to no persistent database (the local
-OPTIMOVE stays v21, the deployed database gets it only through a merge and deploy the owner decides);
-`GPEXE_API_TOKEN`
-neither removed from the configuration nor touched on Render; `GPEXE_IMPORT_APPLY_ENABLED` untouched**).
+**The active step is the combined F3c3 / F3c4 completion package** (owner order 2026-10-05; no new
+F3c2 letter, F3c2h does not exist): **PR A — F3c3**, the administrator's Source connections screen in
+Settings (Connect account → Test connection → Approve and bind → Reconnect → Unbind; platform admin
+and the owning club's admin; a coach gets only the stable sentence to contact an administrator;
+another club, the wrong workspace, an archived club or a revoked role never learn that a connection
+exists), on branch `feature/gpexe-source-connections-ui-f3c3` from `6382d25`, frontend and docs on
+the merged F3c2d–F3c2g routes, no backend contract change planned; then **the owner-run read-only
+pilot** through the deployed UI (Connect with the club's account, Test, choose the approved pair
+OptiMove team ↔ GPEXE Team ID 980, Review and Bind, one read-only Check for a small date window,
+read the source path / check result / sessions / athletes / drills; `GPEXE_IMPORT_APPLY_ENABLED`
+unchanged, no candidate approved; the credential never through chat, terminal, screenshot or log —
+the main session only prepares the procedure, never runs it); then **PR B — F3c4**, the final
+cut-over (a migration drops the `legacy_env` DEFAULT and forbids new legacy check rows in the
+database, historical legacy rows untouched; the importer no longer reads `GPEXE_API_TOKEN`; the
+legacy factory removed only once tests prove no production entry point depends on it; the Render
+variable removal reported, never done automatically; durable proof that every new check reads
+through `source_connection`; the `pool.connect()` timeout resolved or explicitly split out before
+F3c is declared complete; a full end-to-end test with the fake source on disposable databases),
+followed by a second owner-run procedure for one controlled real import (the apply switch and any
+approval only on a separate owner order). F3c counts as complete when the UI Connect / Test / Bind /
+Reconnect / Unbind works, one owner read-only pilot passes, the importer uses only the stored
+connection, the legacy path is retired and a controlled first import is ready.
+
+**PR A (F3c3) as built** (branch `feature/gpexe-source-connections-ui-f3c3`, first commit the
+record above; frontend and docs only, no backend change; **not merged**): a new Settings sub-tab
+**Source connections** (`frontend/source-connections-{view,data,actions}.js`, state slice
+`state.sourceConnections`; contract section 2.9, runbook section "Source connections (F3c3)") for
+a platform admin (platform workspace with a club picker, or a club workspace) and for the owning
+club's admin in that club's workspace — the tab is offered from the `/me` and `/api/organization`
+facts, the server decides again on every request, and a 404 reads as "No source connections are
+available in this workspace"; a coach never sees it. Create (the one approved profile `server3`,
+an account label) → Connect account (username and password typed once, sent once, not retained
+by OptiMove; the form says that the browser or a password manager may handle them according to
+its own settings, `autocomplete="current-password"` on the password field as a hint, never a
+guarantee; a double click sends one request; **a lost Connect / Reconnect / Test / create is never
+confirmed by a read** — *Read current state* refreshes the display and keeps the marker, every
+other write stays locked until the explicit *Acknowledge uncertainty and continue*, a local step
+that sends nothing; the pair is never resent) → Test connection (the
+five states as badges, the last verified time and problem, the server's `sourceTeams` exactly as
+presented — the club admin's approved intersection or the platform admin's annotated list, the
+truncated / unavailable notes) → Approve and bind (Bind only where a pair is approved; a platform
+admin is sent to Data sources to set one; the review names source, host, club, OptiMove team and
+GPEXE team; one confirmation, one binding; the idempotent answer named) → Reconnect (a
+confirmation naming the source, the owning club and the bound-team count travels with the new
+pair; the old credential never shown) → Unbind (a mandatory reason, both teams named, the "no
+fallback to the environment token" warning, a fresh `requestKey` per attempt reused by Check
+result after a lost answer, the ended binding as history). Every stable code of the routes reads
+as a sentence; a write in flight or an unconfirmed outcome disables the other controls and asks
+before a section switch or a reload. The coach's Imports screen now tells the coach to contact an
+administrator for `source_connection_unavailable` instead of "try again"; an administrator with a
+precise connection code on a failed check is pointed to Settings > Source connections. Every
+answer is classified honestly: no answer, an abort of the 150 s client bound, `503 outcome_unknown`
+and any 5xx the service did not write itself are *Result not confirmed* (never "nothing was
+changed"); a write that settled but whose post-write read failed is shown as settled with an
+out-of-date note; a lost outcome of a previous club stays marked until that club's workspace is
+opened again. Internal review rounds before the PR: `code-reviewer` (NOT READY → fixes → READY WITH
+NON-BLOCKING NOTES twice, all notes applied), `security-reviewer` (READY WITH NON-BLOCKING NOTES,
+two MEDIUM applied — the lost-answer classification and `method="post"` on the credential form —,
+re-check READY), `ux-design-reviewer` (NOT READY → all sentences and primaries corrected → READY),
+`mobile-qa` (READY WITH NON-BLOCKING NOTES, the long-unbroken-word clipping fixed; the iOS
+strong-password offer recorded as a physical check in the pilot procedure). Tests:
+`frontend/tests/source-connections.actions.test.mjs` (through the real handlers with a
+fake fetch: tab visibility per basis and workspace type, the neutral 404, create and its lost
+answer, the one-request credential submit with the password in no state / HTML / URL — also while
+in flight —, the team list bounded to the server's rows, Test outcomes and the state-dependent
+sentences, bind review and body, a bind refused by the source, reconnect confirmation body, unbind
+body and history, lost answers with the same key / pair / a read only, uncoded 5xx and aborts as
+lost answers, the settled-but-stale note, the workspace switch, re-entry, the leave guards, every
+code's sentence, the coach and administrator sentences; mutations of the key guards
+killed). **The owner's external review of `9726773` (NOT READY) was closed on the same branch:** a
+lost Connect / Reconnect / Test / create is never confirmed by a read (*Read current state* keeps
+the marker, every other write stays locked until *Acknowledge uncertainty and continue*, a local
+step behind a confirmation that names the consequence — for a create, a possible second connection,
+since the route has no idempotency key and a connection cannot be removed); none of these steps
+runs from another club's context; a repeated bind or Unbind refused as `try_again` keeps its
+marker; the form says "OptiMove does not retain the username or password after this request. Your
+browser or password manager may handle them according to its own settings." and asks the
+administrator to check that both fields hold the GPEXE pair, not the OptiMove sign-in. **The
+owner's external review of `1602238` (2026-10-05): READY WITH NON-BLOCKING FOLLOW-UP.** Owner
+decisions: `autocomplete="current-password"` stays (`off` guarantees nothing either); the
+possible duplicate connection after a lost Create does not block the merge and is a separate
+backend hardening task (see Separate tasks); the owner pilot procedure stops on a lost Create
+(never *Acknowledge uncertainty and continue*, never a new connection, report). Browser QA by the main session on a static harness running the
+branch's real modules against an in-page fake of the routes (desktop 1280 px and 360 / 375 / 390
+px: no horizontal overflow, every control 44 px, every field 16 px). The owner-run pilot
+procedure: `docs/runbooks/gpexe-owner-pilot-f3c3.md`. **No real connection, binding, check or GPEXE
+request; no credential anywhere.**
+
+**F3c2g — the importer's credential resolver, the strict transition from `GPEXE_API_TOKEN` and
+migration v31 — is merged and deployed** (PR #137, merge commit `6382d25` on 2026-10-04 21:58:03 UTC,
+merged exactly from head `30c9600` after the owner's external review in five rounds — round 5 READY
+WITH NON-BLOCKING NOTES, no BLOCKER / HIGH / MEDIUM; `/api/health` served `6382d25` with `ok: true`
+three times in a row (21:59:06, 21:59:26, 21:59:47 UTC) and once more at 22:01:47 UTC; without a login
+`POST …/gpexe/teams/<zero uuid>/checks` (no body and `{}`), `GET …/status` and
+`GET …/checks/<zero uuid>` answered 401; no check, Connect, Bind, Unbind or import was run, no
+credential used, no GPEXE request sent; the Render environment, `GPEXE_API_TOKEN` and
+`GPEXE_IMPORT_APPLY_ENABLED` untouched). **v31 on the deployed database is an indirect conclusion
+only**, from the server starting after the migration step (`npm start` runs `node src/migrate.js &&`
+the server); the deployed database was not queried with SQL. **F3c2 is finished with it; there is no
+F3c2h.** The three non-blocking notes of the owner's closing review are recorded as standing rules:
+(1) raw database writers must use the agreed `READ COMMITTED` isolation and the runbook — the v31
+legacy-path guard reads with the writer's snapshot, so a raw writer in `REPEATABLE READ` or
+`SERIALIZABLE` whose snapshot predates a bind's COMMIT is outside the guarantee (the application pins
+`READ COMMITTED`); (2) F3c4 removes the `DEFAULT 'legacy_env'`, forbids new legacy rows and does not
+rewrite the historical ones; (3) a bounded `pool.connect()` (`connectionTimeoutMillis`) stays a
+separate hardening task, to be resolved or explicitly split out before F3c is declared complete. As
+built (branch `feature/gpexe-importer-resolver-f3c2g` from `d285296`, owner order 2026-10-04;
+backend service, resolver module, migration v31, tests and docs; one route change — the importer
+router's error detail `reason` and a failed check's precise code are for administrators only; no UI):
 Discovery: `docs/ai/source-connections-f3c2g-discovery.md` (the check run is the importer's only
 network entry point; approve and preview read the stored snapshot; `createGpexeClient()` is the only
 reader of the variable and `startCheck()` its only caller). As built — contract section 2.8, runbook
@@ -1285,6 +1386,13 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #137 (`6382d25`, merged 2026-10-04 21:58 UTC exactly from head `30c9600` after five external
+  review rounds) is deployed: `/api/health` served `6382d25` with `ok: true` three times in a row and
+  once more two minutes later; without a login the check start (zero UUID, with and without a body),
+  the status and the check detail answered 401. **v31 on the deployed database is inferred** from the
+  server starting after the migration step — an indirect conclusion, not SQL proof. No check,
+  connection, binding, credential or GPEXE request at the merge or the deploy; the local OPTIMOVE
+  database stays v21.
 - PR #136 (`d285296`, merged 2026-10-04 15:17 UTC exactly from head `ea1674d` after two external
   review rounds) is deployed: `/api/health` served `d285296` with `ok: true` three times in a row
   (15:18 UTC) and once more at the smoke; without a login the Unbind route (zero UUIDs, with and
@@ -1408,6 +1516,12 @@ pre-existing; pass/fail counts don't belong in this file
   `training.lock_activity_decider`; reproduced identically on a clean detached `origin/main`
   worktree (`f26120f`) on 2026-09-29. The cause is not established (the checked-out SQL files
   carry CRLF line endings on this workstation, which is a candidate, unverified). Not fixed.
+- `frontend/tests/builder-mobile-section-workflow.test.mjs` — test "16c. regression guard: the
+  reorder arrows stay vertical (up/down) at every width…" fails; reproduced identically on a clean
+  detached `origin/main` worktree (`6382d25`) on 2026-10-05 during the F3c3 work. Not fixed.
+- `frontend/tests/organization-panel-cache.test.mjs` — test "6. signOut clears the entire view
+  cache before/alongside its hard reload" fails; reproduced identically on a clean detached
+  `origin/main` worktree (`6382d25`) on 2026-10-05. Not fixed.
 - `backend/tests/training-load-metrics-builder-edit-draft.test.mjs` — refuses to start
   unless `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL` is set (deliberate guard, no database
   operation attempted), so a plain full backend run reports it as failed; same on
@@ -1415,11 +1529,30 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
-- **Hardening, non-blocking (owner's external review of PR #136, 2026-10-04): the global PostgreSQL
-  pool in `backend/src/db.js` sets no `connectionTimeoutMillis`, so `pool.connect()` can wait
-  without a bound when the pool is exhausted** (every service path that checks out a client
-  inherits it; pre-existing, not changed in PR #136 or in F3c2g). Separate small task: a bounded
-  checkout with a stable refusal code, a test, and a note in the runbooks.
+- **Backend hardening: an idempotent Create of a source connection** (owner, 2026-10-05, at the
+  external review of PR #138). `POST /api/training-load/sources/:source/connections` has no
+  idempotency key, so after a lost answer a second Create can leave a duplicate connection that no
+  screen can remove (no Disconnect / Delete). The recommended fix is a `requestKey` with an
+  idempotent POST Create (the same key replays the saved answer), **not** a unique rule "one
+  connection per club" — a club may later legitimately hold several source accounts or servers.
+  Until then the UI names the risk in the acknowledgement, and the owner pilot stops on a lost
+  Create (`docs/runbooks/gpexe-owner-pilot-f3c3.md`, step 2).
+
+- **Hardening, non-blocking (owner's external review of PR #136, 2026-10-04; repeated as note 3 of
+  the closing review of PR #137): the global PostgreSQL pool in `backend/src/db.js` sets no
+  `connectionTimeoutMillis`, so `pool.connect()` can wait without a bound when the pool is
+  exhausted** (every service path that checks out a client inherits it; pre-existing, not changed in
+  PR #136 or in F3c2g). Separate small task: a bounded checkout with a stable refusal code, a test,
+  and a note in the runbooks — **to be resolved or explicitly split out in PR B (F3c4) before F3c is
+  declared complete** (owner, 2026-10-05).
+- **Standing rule for raw database writers (note 1 of the closing review of PR #137, 2026-10-04):**
+  a raw write to `training_load.gpexe_import_checks` (and to the source-connection tables) uses the
+  agreed `READ COMMITTED` isolation and follows the runbook; the v31 legacy-path guard reads with the
+  writer's snapshot, so a writer in `REPEATABLE READ` / `SERIALIZABLE` whose snapshot predates a bind's
+  COMMIT is outside its guarantee. The application pins `READ COMMITTED`.
+- **F3c4 (note 2 of the closing review of PR #137):** the migration that retires the environment
+  path drops the `DEFAULT 'legacy_env'` of `gpexe_import_checks.source_path`, makes the database
+  refuse every new legacy row, and leaves the historical legacy rows untouched — part of PR B.
 
 - **Mandatory before the F3c2 routes or any import: fix the drills filter of the `rest_v1`
   adapter's `listSessions()`** (owner, 2026-10-01, after the review of PR #132). **Done in the
@@ -1624,12 +1757,14 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's external review and merge decision on the F3c2g PR (the importer's credential resolver,
-the strict transition rule and migration v31 — v31 reaches the deployed database only through that
-merge and deploy); then, on the owner's order, the first production binding only on a separate
-explicit order, F3c3 (Settings UI: Connect account → Test connection → Choose GPEXE team → Choose the
-approved OptiMove team → Review → Confirm binding; Unbind; the coach's "contact an administrator"
-sentence) and F3c4, then **Phase 5a3c** (Complete and Needs review).
+PR A of the combined F3c3 / F3c4 package (the administrator's Source connections screen in
+Settings — Connect account → Test connection → Approve and bind → Reconnect → Unbind — with frontend
+tests, browser QA at desktop and 360 / 375 / 390 px and the `code-reviewer` / `security-reviewer` /
+`ux-design-reviewer` / `mobile-qa` reviews), opened without a merge for the owner's external
+review; after its merge and deploy the owner-run read-only pilot through the deployed UI (the first
+real connection and binding, Team ID 980, one read-only check; nothing approved); then PR B (the
+F3c4 cut-over, see the active step), then the second owner-run procedure for one controlled real
+import; then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 

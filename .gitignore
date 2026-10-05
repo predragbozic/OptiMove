@@ -14,3 +14,5 @@ __pycache__/
 *.docx
 # Legacy local script that holds plain credentials; it lives outside the repository.
 gpexe-code-check.js
+# Browser-QA harness of the F3c3 Source connections screen (session-local, never shipped)
+frontend/_qa-source-connections.html
