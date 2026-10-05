@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-05. Last `origin/main` commit checked: `0788452` (merge of PR #138,
-`feature/gpexe-source-connections-ui-f3c3` → `main`; PR #137 `6382d25` before it).
+Last reviewed: 2026-10-05. Last `origin/main` commit checked: `673848e` (merge of PR #139,
+`fix/gpexe-imports-failed-check-details` → `main`; PR #138 `0788452` before it).
 
 ## Active phase
 
@@ -875,6 +875,42 @@ yet", and pins the boundary with a regression test (a connection-backed check su
 switch off and writes nothing of an import; approving stays refused; a failed source read stays
 failed with its own code).
 
+**That fix is merged and deployed** (PR #139, merge commit `673848e` on 2026-10-05 16:09:52 UTC,
+merged exactly from head `8b51999` after the owner-ordered final review found no BLOCKER / HIGH;
+`/api/health` served `673848e` with `ok: true` three times in a row (16:10:50, 16:11:01, 16:11:12
+UTC); the served bundle carries the new labels; without a login the team status, the check detail
+and the candidates answered 401; GET only, no check started, no GPEXE request).
+
+**The failed pilot check's own code, read by the owner on the deployed screen (2026-10-05,
+sanitized; no new check, no GPEXE request):** `source_answer_unexpected` — "The source answer to the
+whole-session details carries a metric value in an unknown shape." The GPEXE connection works and
+the team stays bound to Team ID 980; nothing was imported, approved or linked; the switch stays off.
+**Where it comes from:** the server3 adapter's whole-session read (`getSessionDetails`,
+`rest/v1/team_session/<confirmed parent>/details/`, the `rest_v1` family) refuses the whole answer in
+`validatePlayersAnswer()` when ANY metric of ANY athlete is not a finite number, null, a boolean, a
+short unit-like text or a flat object of those (at most 32 keys) — or has a name outside
+`[A-Za-z_][A-Za-z0-9_]{0,63}` / a prototype key; the refusal happens before anything of the session
+is recorded. **What the importer consumes:** only `tot_burst_events` and `tot_brake_events` per
+athlete (the mapper's `detailsNumber`: `{ unit: "number", value: <finite number> }`, the shape of the
+real e03 responses kept in the test fixtures). **What the repository proves about server3:** the
+probe's `session_details` verdict "same" meant HTTP 200 only, and the drill answer was described by
+booleans only ("rows are objects with numbers and nested values", where nested includes lists); no
+value shape of a server3 details answer — not even of the two consumed fields — is documented, and
+the owner's legacy integration is not opened by the main session (it holds credentials). **So the
+real shape is not proven, and the parser is not widened.** Instead (owner order 2026-10-05, option B)
+branch `fix/gpexe-session-details-metric-shape` keeps the acceptance rule exactly as it is and adds a
+bounded, sanitized description to that one refusal (the check row's message after
+" Diagnostic: "): the operation; count buckets of athletes, metrics and failing metrics; whether a
+consumed field is among the failing ones; booleans for a bad metric name; the kinds, depth, length
+and child-kind buckets of the failing values and whether a failing object has `unit` / `value` keys;
+for the two consumed fields only, their presence, kinds and whether they match the documented
+`{ unit: "number", value: <finite> }`. It never carries an athlete id, any other metric name, a value,
+a text, a date or raw JSON; it sends nothing; an administrator reads it, a coach gets the sentence
+without it. A drill answer refused the same way keeps its description through the drill set, so a
+`drill_set_incomplete` check carries `drill_index`, `drill_code` and the same description too.
+**Another owner-run check (one known date) waits for the external review of that branch** and
+returns only the "Diagnostic:" line.
+
 **F3c2g — the importer's credential resolver, the strict transition from `GPEXE_API_TOKEN` and
 migration v31 — is merged and deployed** (PR #137, merge commit `6382d25` on 2026-10-04 21:58:03 UTC,
 merged exactly from head `30c9600` after the owner's external review in five rounds — round 5 READY
@@ -1419,6 +1455,10 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #139 (`673848e`, merged 2026-10-05 16:09:52 UTC exactly from head `8b51999`) is deployed:
+  `/api/health` served `673848e` with `ok: true` three times in a row (16:10:50–16:11:12 UTC); the
+  served bundle carries the new Technical-details labels; without a login the team status, check
+  detail and candidates answered 401. No migration, no route change.
 - PR #138 (`0788452`, merged 2026-10-05 13:47:15 UTC exactly from head `4527470`) is deployed:
   `/api/health` served `0788452` with `ok: true` three times in a row (13:48:41–13:49:02 UTC); without
   a login every source-connection route answered 401. No migration in it. After the deploy the owner
@@ -1795,11 +1835,12 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-PR A (F3c3) is merged and deployed (PR #138), and the owner's read-only pilot stopped on a failed
-check. Next: the owner reads that check's own code (no GPEXE request) while the small fix PR for the
-misleading *Technical details* (branch `fix/gpexe-imports-failed-check-details`) waits for the owner's
-review; depending on the code, a fix of that cause and one owner re-test for a single known date;
-then PR B (the F3c4 cut-over, see the active step), then the second owner-run procedure for one
+PR A (F3c3) and the Technical-details fix (PR #139) are merged and deployed; the owner's read-only
+pilot stopped on `source_answer_unexpected` (a whole-session details metric value in an unknown
+shape). Next: the external review of the diagnostics branch `fix/gpexe-session-details-metric-shape`
+(acceptance unchanged, a sanitized shape description on that refusal); after its merge and deploy,
+one owner-run check for a single known date that returns only the "Diagnostic:" line; then a parser
+change only for the shape that line proves, and one owner re-test; then PR B (the F3c4 cut-over, see the active step), then the second owner-run procedure for one
 controlled real import; then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.

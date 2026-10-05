@@ -1145,3 +1145,103 @@ test("B8.9 last started wins, fail-closed: with two held lists, the older one fi
   assert.equal((await b.getSession({ sessionId: "100" })).id, 100);
   await assert.rejects(b.getSession({ sessionId: "900" }), code("session_not_listed"));
 });
+
+const { describePlayersShape, formatPlayersShape, DETAILS_CONSUMED_FIELDS, DIAGNOSTIC_MARK } = await import("../src/gpexeRestV1Adapter.js");
+const { GPEXE_METRIC_SPECS } = await import("../src/gpexeImportMapper.js");
+
+test("B7.5 a refused players answer (F3c3 pilot follow-up): the acceptance rule is unchanged - the documented shape passes and every other shape still fails closed - and the refusal carries a bounded, sanitized description with no athlete id, no metric name but the two consumed ones, no value and no text", async () => {
+  // The consumed fields are exactly the mapper's details fields.
+  const mapperDetailsFields = GPEXE_METRIC_SPECS.map((s) => /^details\.players\[athlete\]\.(\w+)$/.exec(s.sourceContext?.field ?? "")?.[1]).filter(Boolean).sort();
+  assert.deepEqual([...DETAILS_CONSUMED_FIELDS].sort(), mapperDetailsFields);
+
+  // Unchanged acceptance: the documented e03 shape and the existing flat forms pass.
+  const accepted = { 4711: { tot_burst_events: { unit: "number", value: 3 }, tot_brake_events: { unit: "number", value: 1 }, total_distance: 1200.5, flag: true, none: null, unit_only: "km/h" } };
+  assert.deepEqual(validatePlayersAnswer({ players: accepted, drills_count: 2 }, "the whole-session details", 2).players, accepted);
+
+  // Marker values that must never appear in an error.
+  const ID = "987654321";
+  const SECRET_NAME = "markerMetricNameZq";
+  const SECRET_TEXT = "Marker Athlete Name in a free text";
+  const SECRET_NUMBER = 13579.2468;
+  const deep = (n) => (n === 0 ? SECRET_NUMBER : { [`${SECRET_NAME}${n}`]: deep(n - 1) });
+  const wide = Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`${SECRET_NAME}${i}`, i]));
+  const refused = [
+    ["a list", { [SECRET_NAME]: [SECRET_NUMBER, 2, 3] }, "array"],
+    ["a nested object", { [SECRET_NAME]: { inner: { v: SECRET_NUMBER } } }, "object"],
+    ["deep nesting", { [SECRET_NAME]: deep(40) }, "object"],
+    ["an object over 32 keys", { [SECRET_NAME]: wide }, "object_wide"],
+    ["a long text", { [SECRET_NAME]: SECRET_TEXT }, "text_long"],
+    ["a non-finite number", { [SECRET_NAME]: Infinity }, "number_not_finite"],
+    ["a nested non-finite number", { [SECRET_NAME]: { value: -Infinity } }, "object"],
+  ];
+  for (const [label, values, kind] of refused) {
+    const body = { players: { [ID]: values }, drills_count: 2 };
+    const error = (() => { try { validatePlayersAnswer(body, "the whole-session details", 2); return null; } catch (e) { return e; } })();
+    assert.ok(error instanceof SourceAdapterError, label);
+    assert.deepEqual([error.code, error.reason], ["source_answer_unexpected", "metric_shape_unknown"], label);
+    assert.ok(error.message.startsWith("The source answer to the whole-session details carries a metric value in an unknown shape." + DIAGNOSTIC_MARK + "op=session_details;"), label);
+    assert.ok(error.diagnostic.failing.kinds.includes(kind), `${label}: ${JSON.stringify(error.diagnostic.failing.kinds)}`);
+    const all = JSON.stringify({ message: error.message, diagnostic: error.diagnostic });
+    for (const leak of [ID, SECRET_NAME, "Marker Athlete Name", String(SECRET_NUMBER), "13579", "inner"]) assert.ok(!all.includes(leak), `${label}: ${leak} leaked`);
+    noNames({ message: error.message, diagnostic: error.diagnostic });
+  }
+  // Prototype keys and bad metric names still fail; only booleans describe them.
+  for (const [metric, flag] of [["__proto__", "prototypeKey"], ["constructor", "prototypeKey"], ["prototype", "prototypeKey"], [`${SECRET_NAME} with spaces`, "otherChars"], ["x".repeat(65), "tooLong"]]) {
+    const body = JSON.parse(`{"players":{"${ID}":{"${metric}":1}}}`);
+    const error = (() => { try { validatePlayersAnswer(body, "the drill details"); return null; } catch (e) { return e; } })();
+    assert.equal(error?.reason, "metric_shape_unknown", metric);
+    assert.equal(error.diagnostic.operation, "session_drill_details");
+    assert.equal(error.diagnostic.names[flag], true, metric);
+    assert.ok(!JSON.stringify(error.diagnostic).includes(SECRET_NAME) && !error.message.includes(SECRET_NAME) && !error.message.includes(ID), metric);
+  }
+
+  // The consumed fields are described by kind and by comparison with the documented shape only.
+  const mixed = { players: { 1: { tot_burst_events: 4, tot_brake_events: { unit: "number", value: 2 }, [SECRET_NAME]: [1, 2] }, 2: { tot_burst_events: { unit: "number", value: 5 }, tot_brake_events: { unit: "count", value: "x" } } } };
+  const d = describePlayersShape(mixed.players, "the whole-session details");
+  assert.deepEqual(d.consumed.tot_burst_events, { present: "all", kinds: ["number", "object"], unitNumber: "all", valueFinite: "all", onlyUnitValue: "all" });
+  assert.deepEqual(d.consumed.tot_brake_events, { present: "all", kinds: ["object"], unitNumber: "some", valueFinite: "some", onlyUnitValue: "all" });
+  assert.equal(d.consumedFieldFailing, false, "both consumed fields pass the unchanged rule; only the other metric fails");
+  assert.deepEqual([d.failingMetrics, d.failing.kinds, d.failing.arrayLengths, d.failing.arrayItemKinds], ["1", ["array"], ["2-4"], ["number"]]);
+  assert.ok(!formatPlayersShape(d).includes("count"), "a unit other than the documented one is never printed, only compared");
+
+  // Bounded: a very large answer is described quickly, with capped buckets and a capped message.
+  const many = {};
+  for (let i = 1; i <= 700; i += 1) many[String(i)] = { [SECRET_NAME]: Array.from({ length: 5000 }, (_, k) => ({ k: [k, { deeper: { deepest: [k] } }] })) };
+  const started = Date.now();
+  const big = (() => { try { validatePlayersAnswer({ players: many }, "the whole-session details"); return null; } catch (e) { return e; } })();
+  assert.ok(Date.now() - started < 2000, "described within a bound");
+  assert.deepEqual([big.diagnostic.players, big.diagnostic.failing.arrayLengths, big.diagnostic.failing.depths], ["65+", ["65+"], ["4+"]]);
+  assert.ok(big.message.length <= "The source answer to the whole-session details carries a metric value in an unknown shape.".length + DIAGNOSTIC_MARK.length + 900);
+
+  // Through the adapter: the whole-session read fails closed with the description; a drill keeps its per-drill code only.
+  const { a } = await confirmedAdapter({ [WHOLE]: answer(200, details({ [ID]: { tot_burst_events: { unit: "number", value: 1 }, [SECRET_NAME]: [SECRET_NUMBER] } })) });
+  const whole = await errorOf(a.getSessionDetails({ sessionId: "100" }));
+  assert.deepEqual([whole?.code, whole?.reason, whole?.diagnostic?.operation], ["source_answer_unexpected", "metric_shape_unknown", "session_details"]);
+  assert.ok(!whole.message.includes(ID) && !whole.message.includes(SECRET_NAME) && !whole.message.includes("13579"));
+  const { a: b } = await confirmedAdapter({ [D0]: answer(200, details({ [ID]: { [SECRET_NAME]: [1] } })) });
+  const set = await b.getSessionDrills({ sessionId: "100" });
+  assert.deepEqual([set.complete, set.failed.drillIndex, set.failed.code], [false, 0, "source_answer_unexpected"]);
+  assert.ok(set.failed.diagnosticText.startsWith("op=session_drill_details; consumed_failing=no;"), set.failed.diagnosticText);
+  for (const leak of [ID, SECRET_NAME, "13579"]) assert.ok(!set.failed.diagnosticText.includes(leak), leak);
+  // Any other drill failure keeps its code alone.
+  const { a: c } = await confirmedAdapter({ [D0]: answer(200, details({ [ID]: {} })) });
+  assert.deepEqual((await c.getSessionDrills({ sessionId: "100" })).failed, { drillIndex: 0, code: "source_answer_unexpected" });
+
+  // A consumed field itself in an unknown shape is named as such.
+  const consumedBad = (() => { try { validatePlayersAnswer({ players: { 1: { tot_burst_events: [1], tot_brake_events: { unit: "number", value: 1 } } } }, "the whole-session details"); return null; } catch (e) { return e; } })();
+  assert.equal(consumedBad.diagnostic.consumedFieldFailing, true);
+  assert.deepEqual(consumedBad.diagnostic.consumed.tot_burst_events.kinds, ["array"]);
+  assert.match(consumedBad.message, /Diagnostic: op=session_details; consumed_failing=yes; tot_burst_events all array;/);
+
+  // The athlete cap is real: only the first 500 athletes are described (the 550th's consumed field is not seen).
+  const capped = {};
+  for (let i = 1; i <= 600; i += 1) capped[String(i)] = { [SECRET_NAME]: [1] };
+  capped["550"].tot_burst_events = { unit: "number", value: 1 };
+  const cappedError = (() => { try { validatePlayersAnswer({ players: capped }, "the whole-session details"); return null; } catch (e) { return e; } })();
+  assert.equal(cappedError.diagnostic.consumed.tot_burst_events.present, "none");
+  assert.equal(cappedError.diagnostic.players, "65+");
+
+  // The capability catalog says what the probe proved for row 7: the status only.
+  const { REST_V1_CAPABILITIES } = await import("../src/gpexeRestV1Adapter.js");
+  assert.match(REST_V1_CAPABILITIES.session_details.evidence, /status only/);
+});

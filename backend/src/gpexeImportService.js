@@ -19,7 +19,7 @@ import { createGpexeClient, GpexeClientError } from "./gpexeClient.js";
 import {
   resolveImportSourceFacts, preflightImportSource, openImportSource, importClientFor, legacyImportClientFor, sameImportSource,
   importSourceIdentity, canonicalSourceTeamId, autoInvalidateImportSource, boundImportSideEffect, AUTO_INVALIDATE_BOUND_MS,
-  SourceImportResolveError, SourceAdapterError, PATH_SOURCE_CONNECTION, PATH_LEGACY_ENV, isConnectionConfigurationCode,
+  SourceImportResolveError, SourceAdapterError, PATH_SOURCE_CONNECTION, PATH_LEGACY_ENV, isConnectionConfigurationCode, DIAGNOSTIC_MARK,
 } from "./sourceImportCredentialResolver.js";
 import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCanonicalGpexeAthleteId } from "./gpexeImportMapper.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
@@ -367,6 +367,13 @@ export async function retentionStatus() {
 // the same rule as the 409 of a check start. General source answers and team
 // facts are shown to everyone as they are.
 export const COACH_CONNECTION_MESSAGE = "The team's source connection cannot be used right now; contact an administrator.";
+// A refused answer's sanitized shape description (the adapter's " Diagnostic: "
+// suffix) is for an administrator; a coach gets the sentence before it.
+function messageFor(message, adminViewer) {
+  if (adminViewer || typeof message !== "string") return message;
+  const at = message.indexOf(DIAGNOSTIC_MARK);
+  return at === -1 ? message : message.slice(0, at);
+}
 function checkView(row, { adminViewer = false } = {}) {
   const masked = Boolean(row.error_code) && !adminViewer && isConnectionConfigurationCode(row.error_code);
   return {
@@ -380,7 +387,7 @@ function checkView(row, { adminViewer = false } = {}) {
     candidatesChanged: row.candidates_changed,
     candidatesUnchanged: row.candidates_unchanged,
     error: row.error_code
-      ? (masked ? { code: "source_connection_unavailable", message: COACH_CONNECTION_MESSAGE } : { code: row.error_code, message: row.error_message })
+      ? (masked ? { code: "source_connection_unavailable", message: COACH_CONNECTION_MESSAGE } : { code: row.error_code, message: messageFor(row.error_message, adminViewer) })
       : null,
   };
 }

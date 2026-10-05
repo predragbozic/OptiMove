@@ -89,7 +89,7 @@ but OptiMove has never seen its answer: it is still **unknown** for the adapter.
 | 4 | One athlete row | `athlete_session/<id>/` | **same** | probe 2026-10-01: 200, names the same session | **implemented (F3c2c)**: `getAthleteSession({ sessionId, athleteSessionId })` under a confirmed parent; the detail must name that session |
 | 5 | Burst and brake events of an athlete row | `athlete_session/<id>/more/` | **same** | probe 2026-10-01: 200 | **implemented (F3c2c)**: `getAthleteSessionMore({ athleteSessionId })` for a row read under a confirmed parent |
 | 6 | Track (time zone, device restarts) | `track/<id>/` | **same** | probe 2026-10-01: 200, id from the confirmed athlete detail | **implemented (F3c2c)**: `getTrack({ trackId })` for a track a confirmed row named |
-| 7 | Whole-session values per athlete | `team_session/<id>/details/` | **same** | probe 2026-10-01: 200 | **implemented (F3c2c)**: `getSessionDetails({ sessionId })` on a confirmed parent; only `players` (canonical athlete ids → metric values) and `drills_count` leave the adapter |
+| 7 | Whole-session values per athlete | `team_session/<id>/details/` | **same** (status only — the probe's verdict was HTTP 200; no metric value shape is recorded) | probe 2026-10-01: 200; first real check 2026-10-05: refused as `source_answer_unexpected` / `metric_shape_unknown` | **implemented (F3c2c)**: `getSessionDetails({ sessionId })` on a confirmed parent; only `players` (canonical athlete ids → metric values) and `drills_count` leave the adapter. The value shapes of a server3 answer are **not proven**; the acceptance rule is unchanged, and a refusal carries a sanitized shape description (see below) |
 | 8 | Values per drill | `team_session/<id>/details/?drill=<n>` | **observed** in the `api` family (never yet **same**); still **unknown** on `rest_v1` | full probe 2026-10-01: no request sent. First drill-only run: a `drills` entry read as `team_session/<entry>/` answered an id other than the entry, so a `drills` entry is not read as a `team_session` id again. Structural evidence (section 1, item 6): the legacy integration reads `api/team_session/<parent id>/details/?drill=<zero-based index>`. Second drill-only run (2026-10-01): on a parent confirmed by its REST read and again by `api/team_session/<parent id>/`, `api/team_session/<parent id>/details/?drill=<first position>` answered 200 with an object whose top-level fields are `drills_count`, `players`, `team` and `teamsession`; `players` is a map of objects carrying numbers and nested values. That confirms the endpoint and its shape only: one read cannot show that the position selects one drill. The REST `?drill=` form stays withdrawn. Third drill-only run (2026-10-02, control sequence 0 → 1 → 0): the first `?drill=0` answered 200 with the same top-level fields, but its `team` was not a canonical id as a number or a string, so the run stopped as `team_unknown_shape` before `?drill=1`; no conclusion about the parameter. Diagnostic run (2026-10-02): that `team` is an **object without an `id`** (kept opaque), and the answer's `teamsession` is a canonical id that is **not the parent's**. Second diagnostic run (2026-10-02): the answer's `teamsession` is **not the parent's first `drills` entry** either, while that entry is exactly one row of the list page and that row names team 980; so the answer names a third session, which the final form of the probe would resolve against every entry of the parent's `drills`; that form was attempted twice on 2026-10-02 and did not reach a drill read (a list timeout, then a refused exchange; operational events, no conclusion). **F3c2b closed (owner, 2026-10-02): the drill endpoint is in practice **observed**, no further probe, sign-in attempt or rule change.** Final decision (owner, 2026-10-03, on the official handbook, section 1 item 12): the drill read is `api/team_session/<confirmed parent id>/details/?drill=<index>` with a zero-based index from `0` to `drills_count - 1`; drills stay in the future adapter and in the first planned import; `team` in a details answer is an aggregate, not a team id; `drills` entries and the answer's `teamsession` are used neither to build a URL nor as an identity guard; names come from an unambiguous `drillTags` mapping of the parent, fallback `Drill N` | **implemented (F3c2c) through one narrow builder**, `legacyDrillDetailsUrl()`: `getSessionDrillDetails({ sessionId, drillIndex })` and `getSessionDrills({ sessionId })` on a confirmed parent, index 0 to `drills_count - 1`; the answer accepted only as a players map of canonical athlete ids with metric values; the `api` family is still not part of the `server3` profile and `sourceApiUrl()` does not build this URL |
 | 9 | Threshold set valid on the session day | `team/<team>/thresholds/?valid_on=` | **same** | probe 2026-10-01: 200 on the confirmed session's day | **implemented (F3c2c)**: `getTeamThresholds({ sessionId })` on the confirmed session's day; null on 404 |
 | — | Units | no endpoint (numbers are SI on `e03`, verified in the pilot) | **unknown** | none; that `rest_v1` numbers are SI is not verified (the probe records no value) | unavailable (`units`) |
@@ -258,6 +258,38 @@ a different id. What such a row is, and why reading an entry that way answered a
 still open; no general rule follows from either, and nothing in the adapter or the importer may
 rely on either reading yet (see the
 mandatory `listSessions()` fix in CURRENT_STATE, Separate tasks).
+
+**The first real check on server3 (owner, 2026-10-05) was refused at row 7.** Code
+`source_answer_unexpected`, message "The source answer to the whole-session details carries a metric
+value in an unknown shape." What is known, and only that:
+- The importer reads two fields of a details answer per athlete, `tot_burst_events` and
+  `tot_brake_events`, each `{ unit: "number", value: <finite number> }` (the mapper's
+  `detailsNumber`; the real e03 shape kept in the test fixtures).
+- `validatePlayersAnswer()` checks every metric of every athlete. A metric must be a finite number,
+  null, a boolean, a short unit-like text or a flat object of those with at most 32 keys, and its
+  name must match `[A-Za-z_][A-Za-z0-9_]{0,63}` and not be a prototype key. One metric outside that
+  refuses the whole answer, before anything of the session is recorded.
+- The probe's row-7 verdict recorded status 200 only. The drill answer was described by booleans
+  ("objects with numbers and nested values"; nested includes lists).
+- No value shape of a server3 details answer is documented, not even of the two consumed fields.
+
+**So the rule is not widened.** Since branch `fix/gpexe-session-details-metric-shape`, that one
+refusal carries a sanitized description after " Diagnostic: " on the check row's message:
+- the operation;
+- count buckets of athletes, metrics and failing metrics;
+- whether a consumed field is among the failing ones;
+- booleans for a bad metric name (too long, other characters, prototype key);
+- for the failing values: their kinds, depth buckets, text-length, list-length and list-item kinds,
+  object key counts and child kinds, and whether a failing object has a `unit` / `value` key;
+- for the two consumed fields only: presence (none / some / all), kinds, and whether they match the
+  documented shape.
+
+It never carries an athlete id, any other metric name, a value, a text, a date or raw JSON. It sends
+no request, and a coach does not see it. A drill answer refused the same way keeps its description
+through the drill set: the `drill_set_incomplete` message then carries `drill_index`, `drill_code`
+and the description. A parser change follows only for a shape that this
+description, from one owner-run check of one known date, proves; that check waits for the external
+review of the branch.
 
 ## 4. What needs an owner-run read-only probe
 

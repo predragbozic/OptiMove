@@ -157,7 +157,7 @@ export const REST_V1_CAPABILITIES = Object.freeze({
   session_list: Object.freeze({ status: "proven", importerUse: "none as it is: the importer always lists with a date window", e03: "not sent without a date window", evidence: "probe 2026-09-29: GET team_session/?team=&limit=1 200, array, X-Total-Count, Link" }),
   session_list_by_date: Object.freeze({ status: "proven", importerUse: "team sessions of a date window", e03: "team_session/?team=&start_timestamp_gte=&start_timestamp_lte=&limit=", evidence: "probe 2026-10-01: the filter applied (every row inside the window, filtered count smaller than unfiltered)" }),
   session_read: Object.freeze({ status: "proven", importerUse: "one session, its team and drills_count", e03: "team_session/<id>/", evidence: "probe 2026-10-01: 200, object, team, drills_count, start_timestamp; no drills list on this read" }),
-  session_details: Object.freeze({ status: "proven", importerUse: "whole-session values per athlete", e03: "team_session/<id>/details/", evidence: "probe 2026-10-01: 200" }),
+  session_details: Object.freeze({ status: "proven", importerUse: "whole-session values per athlete", e03: "team_session/<id>/details/", evidence: "probe 2026-10-01: 200 (status only; no metric value shape recorded; first real check 2026-10-05 refused metric_shape_unknown)" }),
   session_drill_details: Object.freeze({ status: "observed", importerUse: "values per drill", e03: "team_session/<id>/details/?drill=<n>", evidence: "legacy api family on server3 (owner-run 2026-10-01: 200, object, players map); form per the GPEXE REST handbook pages 31-33; read through legacyDrillDetailsUrl() only" }),
   athlete_session_list: Object.freeze({ status: "proven", importerUse: "athlete rows of a session", e03: "athlete_session/?teamsession=<id>&limit=", evidence: "probe 2026-10-01: 200, every row of the asked session" }),
   athlete_session_read: Object.freeze({ status: "proven", importerUse: "one athlete row", e03: "athlete_session/<id>/", evidence: "probe 2026-10-01: 200, names the same session" }),
@@ -378,6 +378,150 @@ function metricValue(v) {
 }
 const PROTOTYPE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
+// --- A refused players answer, described for the administrator -------------
+// F3c3 pilot follow-up (owner order 2026-10-05): the first real check on
+// server3 was refused here (`metric_shape_unknown` on the whole-session
+// details), and nothing in the repository proves the real shape of those
+// metric values (the probe recorded only "numbers and nested values"). So the
+// acceptance rule above stays exactly as it is, and a refusal carries a
+// bounded description of the whole answer instead: kinds, booleans and count
+// buckets only. It never names an athlete id, a metric other than the two the
+// importer reads (DETAILS_CONSUMED_FIELDS), a value, a text, a date or any raw
+// JSON, and it sends no request. It is computed only when the answer is
+// refused, i.e. on a check that has already failed.
+export const DIAGNOSTIC_MARK = " Diagnostic: ";
+// The only details fields the importer reads (gpexeImportMapper.js detailsNumber):
+// a test pins this list to the mapper's metric specs.
+export const DETAILS_CONSUMED_FIELDS = Object.freeze(["tot_burst_events", "tot_brake_events"]);
+const DIAG_MAX_PLAYERS = 500;
+const DIAG_MAX_CHILDREN = 64;
+const DIAG_MAX_DEPTH = 4;
+const DIAG_MAX_MESSAGE = 900;
+const METRIC_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+function countBucket(n) {
+  if (n <= 0) return "0";
+  if (n === 1) return "1";
+  if (n <= 4) return "2-4";
+  if (n <= 16) return "5-16";
+  if (n <= 64) return "17-64";
+  return "65+";
+}
+function shareBucket(count, total) {
+  if (count === 0) return "none";
+  return count === total ? "all" : "some";
+}
+// The kind of one value, as a fixed word - never the value.
+function valueKind(v) {
+  if (v === null) return "null";
+  if (typeof v === "number") return Number.isFinite(v) ? "number" : "number_not_finite";
+  if (typeof v === "boolean") return "boolean";
+  if (typeof v === "string") return SHORT_TEXT.test(v) ? "text_short" : (v.length > 16 ? "text_long" : "text_other_chars");
+  if (Array.isArray(v)) return "array";
+  if (isPlainObject(v)) return "object";
+  return "other";
+}
+// Depth with a bound: a leaf is 0; at most DIAG_MAX_CHILDREN children of a
+// container are looked at, and the walk stops below DIAG_MAX_DEPTH.
+function boundedDepth(v, level = 0) {
+  if (!Array.isArray(v) && !isPlainObject(v)) return 0;
+  if (level >= DIAG_MAX_DEPTH) return 1;
+  const children = (Array.isArray(v) ? v : Object.values(v)).slice(0, DIAG_MAX_CHILDREN);
+  return 1 + children.reduce((max, child) => Math.max(max, boundedDepth(child, level + 1)), 0);
+}
+const depthBucket = (d) => (d >= DIAG_MAX_DEPTH ? `${DIAG_MAX_DEPTH}+` : String(d));
+const sortedKinds = (set) => [...set].sort();
+
+export function describePlayersShape(players, what = "") {
+  const operation = what === "the whole-session details" ? "session_details" : what === "the drill details" ? "session_drill_details" : "players_answer";
+  const ids = Object.keys(players).slice(0, DIAG_MAX_PLAYERS);
+  const consumed = Object.fromEntries(DETAILS_CONSUMED_FIELDS.map((f) => [f, { present: 0, kinds: new Set(), unitNumber: 0, valueFinite: 0, onlyUnitValue: 0, objects: 0 }]));
+  const failingNames = new Set();
+  const names = { tooLong: false, otherChars: false, prototypeKey: false };
+  const failing = { kinds: new Set(), arrayLengths: new Set(), arrayItemKinds: new Set(), objectKeyCounts: new Set(), objectChildKinds: new Set(), objectHasUnitKey: false, objectHasValueKey: false, depths: new Set(), textLengths: new Set() };
+  let consumedFailing = false;
+  let metricsSeen = 0;
+  for (const id of ids) {
+    const values = players[id];
+    if (!isPlainObject(values)) continue;
+    for (const [metric, value] of Object.entries(values).slice(0, 256)) {
+      metricsSeen += 1;
+      if (Object.prototype.hasOwnProperty.call(consumed, metric)) {
+        const c = consumed[metric];
+        c.present += 1;
+        c.kinds.add(valueKind(value));
+        if (isPlainObject(value)) {
+          c.objects += 1;
+          if (value.unit === "number") c.unitNumber += 1;
+          if (typeof value.value === "number" && Number.isFinite(value.value)) c.valueFinite += 1;
+          if (Object.keys(value).every((k) => k === "unit" || k === "value")) c.onlyUnitValue += 1;
+        }
+      }
+      const nameOk = METRIC_NAME.test(metric) && !PROTOTYPE_KEYS.has(metric);
+      if (!nameOk) {
+        if (PROTOTYPE_KEYS.has(metric)) names.prototypeKey = true;
+        else if (metric.length > 64) names.tooLong = true;
+        else names.otherChars = true;
+      }
+      if (nameOk && metricValue(value)) continue;
+      // A failing metric: counted by name internally, never named outward
+      // unless it is one of the two consumed fields.
+      failingNames.add(metric);
+      if (Object.prototype.hasOwnProperty.call(consumed, metric)) consumedFailing = true;
+      if (!nameOk) continue;
+      const kind = valueKind(value);
+      failing.kinds.add(kind === "object" && Object.keys(value).length > 32 ? "object_wide" : kind);
+      failing.depths.add(depthBucket(boundedDepth(value)));
+      if (kind === "text_long" || kind === "text_other_chars") failing.textLengths.add(countBucket(value.length));
+      if (kind === "array") {
+        failing.arrayLengths.add(countBucket(value.length));
+        for (const item of value.slice(0, DIAG_MAX_CHILDREN)) failing.arrayItemKinds.add(valueKind(item));
+      }
+      if (kind === "object") {
+        failing.objectKeyCounts.add(countBucket(Object.keys(value).length));
+        for (const child of Object.values(value).slice(0, DIAG_MAX_CHILDREN)) failing.objectChildKinds.add(valueKind(child));
+        if (Object.prototype.hasOwnProperty.call(value, "unit")) failing.objectHasUnitKey = true;
+        if (Object.prototype.hasOwnProperty.call(value, "value")) failing.objectHasValueKey = true;
+      }
+    }
+  }
+  const players_ = ids.length;
+  return {
+    operation,
+    players: countBucket(Object.keys(players).length),
+    metricsSeen: countBucket(metricsSeen),
+    failingMetrics: countBucket(failingNames.size),
+    consumedFieldFailing: consumedFailing,
+    names,
+    failing: {
+      kinds: sortedKinds(failing.kinds), depths: sortedKinds(failing.depths), textLengths: sortedKinds(failing.textLengths),
+      arrayLengths: sortedKinds(failing.arrayLengths), arrayItemKinds: sortedKinds(failing.arrayItemKinds),
+      objectKeyCounts: sortedKinds(failing.objectKeyCounts), objectChildKinds: sortedKinds(failing.objectChildKinds),
+      objectHasUnitKey: failing.objectHasUnitKey, objectHasValueKey: failing.objectHasValueKey,
+    },
+    consumed: Object.fromEntries(Object.entries(consumed).map(([field, c]) => [field, {
+      present: shareBucket(c.present, players_), kinds: sortedKinds(c.kinds),
+      unitNumber: c.objects ? shareBucket(c.unitNumber, c.objects) : null,
+      valueFinite: c.objects ? shareBucket(c.valueFinite, c.objects) : null,
+      onlyUnitValue: c.objects ? shareBucket(c.onlyUnitValue, c.objects) : null,
+    }])),
+  };
+}
+
+// One line for the check row's message (shown to an administrator only).
+export function formatPlayersShape(d) {
+  const list = (a) => (a.length ? a.join("/") : "-");
+  const f = d.failing;
+  const nameIssues = Object.entries(d.names).filter(([, v]) => v).map(([k]) => k);
+  const consumed = Object.entries(d.consumed).map(([field, c]) => `${field} ${c.present}${c.kinds.length ? ` ${list(c.kinds)}` : ""}${c.unitNumber ? ` unit=number:${c.unitNumber} value_finite:${c.valueFinite} only_unit_value:${c.onlyUnitValue}` : ""}`).join("; ");
+  // The consumed fields come first: a capped message never loses them.
+  const text = `op=${d.operation}; consumed_failing=${d.consumedFieldFailing ? "yes" : "no"}; ${consumed}; players=${d.players}; metrics=${d.metricsSeen}; failing=${d.failingMetrics}; `
+    + `names=${list(nameIssues)}; kinds=${list(f.kinds)}; depth=${list(f.depths)}; text_len=${list(f.textLengths)}; `
+    + `array_len=${list(f.arrayLengths)}; array_items=${list(f.arrayItemKinds)}; object_keys=${list(f.objectKeyCounts)}; object_children=${list(f.objectChildKinds)}; `
+    + `object_unit_key=${f.objectHasUnitKey ? "yes" : "no"}; object_value_key=${f.objectHasValueKey ? "yes" : "no"}.`;
+  return text.length > DIAG_MAX_MESSAGE ? `${text.slice(0, DIAG_MAX_MESSAGE - 1)}…` : text;
+}
+
 export function validatePlayersAnswer(body, what = "the details answer", expectedDrillsCount = null) {
   if (!isPlainObject(body)) throw unexpected(`The source server did not answer ${what} as an object.`);
   const players = body.players;
@@ -393,7 +537,19 @@ export function validatePlayersAnswer(body, what = "the details answer", expecte
     if (Object.keys(values).length > 256) throw unexpected(`The source answer to ${what} has too many metric values for one athlete.`, { reason: "player_values_too_many" });
     for (const [metric, value] of Object.entries(values)) {
       if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(metric) || PROTOTYPE_KEYS.has(metric) || !metricValue(value)) {
-        throw unexpected(`The source answer to ${what} carries a metric value in an unknown shape.`, { reason: "metric_shape_unknown" });
+        // The rule itself is unchanged (fail closed); the refusal only carries
+        // a sanitized description of the whole answer for the administrator.
+        // A fault in the description never replaces the refusal itself.
+        let diagnostic = null;
+        let text = "";
+        try {
+          diagnostic = describePlayersShape(players, what);
+          text = formatPlayersShape(diagnostic);
+        } catch {
+          diagnostic = null;
+          text = "";
+        }
+        throw unexpected(`The source answer to ${what} carries a metric value in an unknown shape.${text ? `${DIAGNOSTIC_MARK}${text}` : ""}`, { reason: "metric_shape_unknown", ...(diagnostic ? { diagnostic, diagnosticText: text } : {}) });
       }
     }
   }
@@ -958,7 +1114,11 @@ export function createGpexeRestV1Adapter({
           drills.push({ drillIndex: index, details: validatePlayersAnswer(body, "the drill details", parent.drillsCount) });
         } catch (error) {
           if (!(error instanceof SourceAdapterError) || isGlobal(error) || error.code === "session_refreshed") throw error;
-          return { complete: false, drillsCount: parent.drillsCount, drills, failed: { drillIndex: index, code: error.code ?? "source_drill_unavailable" } };
+          // A drill refused for a metric's shape keeps its sanitized
+          // description (fixed words and buckets only), so the check row can
+          // name it; every other failure keeps its code alone.
+          const diagnosticText = error.reason === "metric_shape_unknown" && typeof error.diagnosticText === "string" && error.diagnosticText ? error.diagnosticText : null;
+          return { complete: false, drillsCount: parent.drillsCount, drills, failed: { drillIndex: index, code: error.code ?? "source_drill_unavailable", ...(diagnosticText ? { diagnosticText } : {}) } };
         }
       }
       return { complete: true, drillsCount: parent.drillsCount, drills, failed: null };
