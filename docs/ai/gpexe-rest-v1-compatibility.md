@@ -624,10 +624,16 @@ own rules.
   (`otherFieldCount`, `otherResultFieldCount`).
 - **Header names:** only usual HTTP headers (`IDENTITY_HEADER_NAMES`); others are counted
   (`otherHeaderCount`).
-- **Header values and the scheme word:** `allow`, `contentType`, `gpexeVersion` and `totalCount`
-  are printed only in their expected shape (a method list, a media type, a version number, a
-  count), otherwise `<unprintable>`. The authentication scheme word is printed only as `Token`,
-  `Bearer`, `Basic` or `Digest`, otherwise `<other>`.
+- **Header values and the scheme word:** printed only from closed sets, otherwise
+  `<unprintable>`:
+  - `allow`: a list of HTTP methods;
+  - `contentType`: `application` / `text` with `json`, `html`, `plain` or `xml`, optionally
+    UTF-8;
+  - `gpexeVersion`: a dotted version of at most four groups of one to three digits;
+  - `totalCount` and a paginated answer's `count`: a whole count.
+
+  The authentication scheme word is printed only as `Token`, `Bearer`, `Basic` or `Digest`,
+  otherwise `<other>`.
 - **The index read** (`rest/v1/`) prints none of its keys: `fieldNames` is `<omitted>`, with
   their number.
 

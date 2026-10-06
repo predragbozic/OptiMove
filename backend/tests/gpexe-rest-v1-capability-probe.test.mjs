@@ -1331,8 +1331,12 @@ test("25. the identity run prints the source's header values and scheme word onl
     for (const [key, shape] of Object.entries(IDENTITY_HEADER_VALUE_SHAPES)) if (typeof r[key] === "string") assert.ok(shape.test(r[key]) || r[key] === "<unprintable>", `${r.path}: ${key}`);
     if (typeof r.authScheme === "string") assert.ok(IDENTITY_AUTH_SCHEMES.includes(r.authScheme) || r.authScheme === "<other>", r.path);
   }
+  // Strings that only look like the header's kind are placeholders too.
+  assert.deepEqual(identityFilterDescribed({ allow: "MARKERPERSON, MARKERFAMILY", contentType: "application/markerperson", gpexeVersion: "19900512", totalCount: "12", count: 1.5 }), { allow: "<unprintable>", contentType: "<unprintable>", gpexeVersion: "<unprintable>", totalCount: "12", count: "<unprintable>" });
+  assert.deepEqual(identityFilterDescribed({ gpexeVersion: "1990.05.12", count: 308 }), { gpexeVersion: "<unprintable>", count: 308 });
   // The usual values keep their shape.
   assert.deepEqual(identityFilterDescribed({ allow: "GET, HEAD, OPTIONS", contentType: "application/json; charset=utf-8", gpexeVersion: "9.11.8", totalCount: "308", authScheme: "Token" }), { allow: "GET, HEAD, OPTIONS", contentType: "application/json; charset=utf-8", gpexeVersion: "9.11.8", totalCount: "308", authScheme: "Token" });
+  assert.deepEqual(identityFilterDescribed({ allow: "GET,POST,HEAD,OPTIONS", contentType: "application/json;charset=UTF-8" }), { allow: "GET,POST,HEAD,OPTIONS", contentType: "application/json;charset=UTF-8" });
   // The full run is unchanged: it prints those values as before.
   const full = fakeServer({ ...happyRoutes(), "GET /rest/v1/track/900/": answer(200, { id: 900, timezone: MARKERS.tz }, { "x-gpexe-version": "9.11.8" }) });
   const fr = await runCapabilityProbe({}, ENV, full.fetchImpl);

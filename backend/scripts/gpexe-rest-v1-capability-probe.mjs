@@ -431,11 +431,14 @@ export const IDENTITY_HEADER_NAMES = Object.freeze([
   "x-frame-options", "x-gpexe-version", "x-request-id", "x-total-count", "x-xss-protection",
 ]);
 // The source's header VALUES and the authentication scheme word, as the identity run prints them:
-// only in their expected shape, otherwise `<unprintable>` / `<other>`.
+// only from closed sets — the HTTP methods, a few media types with a UTF-8 charset, a dotted version
+// of short numbers, a count — otherwise `<unprintable>` / `<other>`. An unusual but harmless
+// value only costs information.
+const HTTP_METHOD = "(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)";
 export const IDENTITY_HEADER_VALUE_SHAPES = Object.freeze({
-  allow: /^[A-Z]+(, ?[A-Z]+)*$/,
-  contentType: /^[a-z]+\/[a-z0-9.+-]+(; ?charset=[A-Za-z0-9-]+)?$/,
-  gpexeVersion: /^\d+(\.\d+){0,3}$/,
+  allow: new RegExp(`^${HTTP_METHOD}(, ?${HTTP_METHOD})*$`),
+  contentType: /^(application|text)\/(json|html|plain|xml)(; ?charset=(utf-8|UTF-8))?$/,
+  gpexeVersion: /^\d{1,3}(\.\d{1,3}){1,3}$/,
   totalCount: /^\d{1,9}$/,
 });
 export const IDENTITY_AUTH_SCHEMES = Object.freeze(["Token", "Bearer", "Basic", "Digest"]);
@@ -455,6 +458,8 @@ export function identityFilterDescribed(described, { index = false } = {}) {
     if (typeof described[key] === "string" && !shape.test(described[key])) described[key] = "<unprintable>";
   }
   if (typeof described.authScheme === "string" && !IDENTITY_AUTH_SCHEMES.includes(described.authScheme)) described.authScheme = "<other>";
+  // The `count` of a paginated answer is a source number: printed only as a whole count.
+  if ("count" in described && described.count !== null && !(Number.isInteger(described.count) && described.count >= 0 && described.count <= 999_999_999)) described.count = "<unprintable>";
   return described;
 }
 
