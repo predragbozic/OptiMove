@@ -21,8 +21,9 @@
 // The identity run (`--mode identity`, owner order 2026-10-06) asks where an
 // athlete's name and date of birth appear in the bound team's answers. It
 // prints key paths, kinds, counts and booleans of those fields and nothing of
-// their values; a second final guard refuses a report that would contain any
-// value seen under such a field.
+// their values; every source key it prints comes from a closed list, any other
+// is masked or only counted; a second final guard refuses a report that would
+// contain any value seen under such a field.
 //
 // Boundaries, each one tested (backend/tests/gpexe-rest-v1-capability-probe.test.mjs):
 // GET only after the one exchange; one host; the family and the URLs from the
@@ -247,13 +248,23 @@ const IDENTITY_CHILDREN_MAX = 10;
 // The only child keys of such an object that are printed as they are; any other child is
 // `<name_key>` / `<birth_key>`, so a small map keyed by people under a name key prints nobody.
 export const IDENTITY_CHILD_KEYS = Object.freeze(["first", "last", "given", "family", "middle", "full", "display", "short", "year", "month", "day", "date", "value", "text"]);
-// An identity key is printed only in this form: a lower-case letter first, as JSON field names are
-// written, so a capitalised key (a person used as a key) is never printed. A nested container is
-// printed only under one of these structural keys. Any other key on the way is `<key>`, and an
-// object keyed by ids is `<id>`. So a map keyed by people can never print a person.
-const IDENTITY_KEY_PRINTABLE = /^[a-z][A-Za-z0-9_]{0,40}$/;
-// The same rule for the key names the identity run prints elsewhere (field and resource names).
-const FIELD_NAME_FORM = /^[a-z_][A-Za-z0-9_]{0,63}$/;
+// The identity run prints a source key ONLY from a closed list (owner's external review of PR #143,
+// 2026-10-06): a key the source chooses could be a person, whatever its form. The regexes above only
+// find candidates; a candidate is printed under its own name only when it is one of these fields,
+// otherwise as `<name_key>` / `<birth_key>`. A nested container is printed only under one of the
+// structural keys below; any other key on the way is `<key>`, and an object keyed by ids is `<id>`.
+export const IDENTITY_NAME_FIELDS = Object.freeze([
+  "name", "first", "last", "given", "family", "middle", "surname", "nickname",
+  "first_name", "last_name", "middle_name", "full_name", "display_name", "short_name", "nick_name", "given_name", "family_name",
+  "firstname", "lastname", "fullname",
+  "firstName", "lastName", "middleName", "fullName", "displayName", "shortName", "nickName", "givenName", "familyName",
+  "athlete_name", "athleteName", "player_name", "playerName", "username", "user_name", "userName",
+  "team_name", "category_name", "session_name", "drill_name",
+]);
+export const IDENTITY_BIRTH_FIELDS = Object.freeze([
+  "birth", "birthdate", "birth_date", "birthDate", "date_of_birth", "dateOfBirth", "dob", "birthday", "birth_day", "birthDay",
+  "birth_year", "birthYear", "year_of_birth", "yearOfBirth", "yob", "bday", "bdate", "born", "born_on", "bornOn",
+]);
 export const IDENTITY_CONTAINER_KEYS = Object.freeze([
   "athlete", "athletes", "player", "players", "person", "persons", "people", "profile", "user", "users",
   "member", "members", "roster", "team", "teams", "results", "data", "items", "track", "tracks", "details",
@@ -337,10 +348,11 @@ export function describeIdentityFields(raw, { nowYear = new Date().getUTCFullYea
       const value = node[key];
       const own = IDENTITY_BIRTH_KEY.test(key) ? "birth" : IDENTITY_NAME_KEY.test(key) ? "name" : null;
       const category = own ?? inherited;
-      // A key is printed as it is only in field-name form, and a child that only inherits its category
-      // only from the closed list.
-      const label = !category ? null
-        : IDENTITY_KEY_PRINTABLE.test(key) && (own || IDENTITY_CHILD_KEYS.includes(key)) ? key : `<${category}_key>`;
+      // A key is printed as it is only from the closed lists: its own category's fields, or for a child
+      // that only inherits its category, the child list.
+      const closed = own === "name" ? IDENTITY_NAME_FIELDS.includes(key)
+        : own === "birth" ? IDENTITY_BIRTH_FIELDS.includes(key) : IDENTITY_CHILD_KEYS.includes(key);
+      const label = !category ? null : closed ? key : `<${category}_key>`;
       if (category) record(path, label, value, category);
       // A list under an identity key is described by its kind; its plain values still feed the guard.
       if (category && Array.isArray(value)) for (const item of value.slice(0, IDENTITY_MAX_ITEMS)) keep(item);
@@ -371,13 +383,12 @@ export function describeIdentityFields(raw, { nowYear = new Date().getUTCFullYea
   };
 }
 
-// The API's own index of resources (`rest/v1/`): its key names only, and where its `athlete` entry
-// points, as booleans. The probe never follows that URL (it builds its own from the catalog), so what
-// matters is that the resource sits on this host at the family's own path; a proxy may well report
-// `http`. The URLs are never printed.
+// The API's own index of resources (`rest/v1/`): booleans only — whether it lists `athlete` and where
+// that entry points. No resource name and no count of them is printed. The probe never follows that URL
+// (it builds its own from the catalog), so what matters is that the resource sits on this host at the
+// family's own path; a proxy may well report `http`. The URLs are never printed.
 export function describeResourceIndex(raw, expectedAthleteUrl) {
   const object = raw !== null && typeof raw === "object" && !Array.isArray(raw);
-  const names = object ? Object.keys(raw).sort() : [];
   const listed = object && Object.prototype.hasOwnProperty.call(raw, "athlete");
   const where = { parsable: false, https: false, sameHost: false, pathMatches: false };
   if (listed && typeof raw.athlete === "string") {
@@ -393,8 +404,7 @@ export function describeResourceIndex(raw, expectedAthleteUrl) {
     }
   }
   return {
-    bodyIsObject: object, resourceCount: names.length,
-    resourceNames: printableFieldNames(names) && names.every((k) => FIELD_NAME_FORM.test(k)) ? names : "<unprintable>",
+    bodyIsObject: object,
     athleteResourceListed: listed,
     athleteResourceUrlCanonical: listed && raw.athlete === expectedAthleteUrl,
     athleteResourceUrlParsable: where.parsable, athleteResourceUrlHttps: where.https,
@@ -402,13 +412,45 @@ export function describeResourceIndex(raw, expectedAthleteUrl) {
   };
 }
 
+// The source key names an identity run's request entry prints: closed lists. Field names: the fields
+// the importer reads, a few structural keys and the identity fields above; header names: the usual
+// HTTP headers. Every other key is only counted (`otherFieldCount`, `otherHeaderCount`), and the
+// API index prints none of its keys.
+export const IDENTITY_SCHEMA_FIELDS = Object.freeze([...new Set([
+  "id", "team", "teams", "athlete", "athletes", "player", "players", "track", "tracks", "teamsession", "drill", "drills",
+  "drills_count", "start_timestamp", "end_timestamp", "updated_on", "is_stats_valid", "total_time", "total_distance",
+  "max_v", "timezone", "timestamp", "utc_timestamp", "results", "count", "next", "previous", "number", "position", "role",
+  "gender", "height", "is_active", "active", "token", "non_field_errors", "detail",
+  ...IDENTITY_NAME_FIELDS, ...IDENTITY_BIRTH_FIELDS,
+])]);
+export const IDENTITY_HEADER_NAMES = Object.freeze([
+  "accept-ranges", "access-control-allow-origin", "age", "allow", "alt-svc", "cache-control", "connection", "content-encoding",
+  "content-language", "content-length", "content-security-policy", "content-type", "cross-origin-opener-policy", "date",
+  "etag", "expires", "keep-alive", "last-modified", "link", "pragma", "referrer-policy", "server", "set-cookie",
+  "strict-transport-security", "transfer-encoding", "vary", "via", "www-authenticate", "x-content-type-options",
+  "x-frame-options", "x-gpexe-version", "x-request-id", "x-total-count", "x-xss-protection",
+]);
+export function identityFilterDescribed(described, { index = false } = {}) {
+  for (const [key, countKey] of [["fieldNames", "otherFieldCount"], ["resultFieldNames", "otherResultFieldCount"]]) {
+    if (!Array.isArray(described[key])) continue;
+    const all = described[key];
+    described[key] = index ? "<omitted>" : all.filter((k) => IDENTITY_SCHEMA_FIELDS.includes(k));
+    described[countKey] = index ? all.length : all.length - described[key].length;
+  }
+  if (Array.isArray(described.headerNames)) {
+    const all = described.headerNames;
+    described.headerNames = all.filter((h) => IDENTITY_HEADER_NAMES.includes(h));
+    described.otherHeaderCount = all.length - described.headerNames.length;
+  }
+  return described;
+}
+
 // The report's own vocabulary: every key of the report, and every word of the slots that hold
-// names the probe prints for its own reasons. Those are its codes, verdicts, kinds and masked paths,
-// and the key names of the source (field, header and resource names, identity key paths), these only
-// in the form of a field name: a lower-case letter first. A capitalised key could be a person, so it
-// never exempts a value. A value equal to one of these words tells nothing about a person: the probe
-// prints the word whatever the source sends. Header VALUES (content type, allow, version) are source
-// data and stay checked.
+// names the probe prints for its own reasons: its codes, verdicts, kinds and masked request paths,
+// and the source key names from the closed lists above. A source key outside them never joins it,
+// however often it recurs. A value equal to one of these words tells nothing about a person: the
+// probe prints the word whatever the source sends. Header VALUES (content type, allow, version) are
+// source data and stay checked.
 // Slots whose words the probe itself chooses (`path` only for a request entry: an identity key path is
 // the source's).
 const PROBE_SLOTS = new Set([
@@ -416,26 +458,17 @@ const PROBE_SLOTS = new Set([
   "teamId", "nameLikeFieldIn", "birthLikeFieldIn", "athleteFieldKinds", "teamFieldKind", "teamsFieldKind", "error", "ranAt",
   "bodyEncoding",
 ]);
-// The source's key names of one answer. A word from these joins the vocabulary only in field-name form
-// and only when at least two different answers carry it: a schema key recurs across answers, while an
-// object keyed by people sits in one. Resource names, identity key paths and the scheme word never do.
+// Slots of the source's key names: only a name from the closed lists joins the vocabulary.
 const SOURCE_KEY_SLOTS = new Set(["fieldNames", "resultFieldNames", "headerNames"]);
-export const SOURCE_KEY_MIN_ANSWERS = 2;
+const CLOSED_SOURCE_NAMES = new Set([...IDENTITY_SCHEMA_FIELDS, ...IDENTITY_HEADER_NAMES]);
 const words = (s) => s.split(/[^\p{L}\p{N}_]+/u).filter(Boolean);
 export function reportVocabulary(report) {
   const vocabulary = new Set();
-  const sourceKeys = new Map();
   // `answer`: the index of the request entry being walked, or null outside one.
   const walk = (node, slot, answer) => {
     if (typeof node === "string") {
       if (PROBE_SLOTS.has(slot) || (slot === "path" && answer !== null)) for (const w of words(node)) vocabulary.add(w);
-      else if (SOURCE_KEY_SLOTS.has(slot) && answer !== null) {
-        for (const w of words(node)) {
-          if (!/^[a-z]/.test(w)) continue;
-          if (!sourceKeys.has(w)) sourceKeys.set(w, new Set());
-          sourceKeys.get(w).add(answer);
-        }
-      }
+      else if (SOURCE_KEY_SLOTS.has(slot) && answer !== null && CLOSED_SOURCE_NAMES.has(node)) for (const w of words(node)) vocabulary.add(w);
     } else if (Array.isArray(node)) {
       node.forEach((item, i) => walk(item, slot, slot === "requests" ? i : answer));
     } else if (node && typeof node === "object") {
@@ -446,7 +479,6 @@ export function reportVocabulary(report) {
     }
   };
   walk(report, null, null);
-  for (const [w, answers] of sourceKeys) if (answers.size >= SOURCE_KEY_MIN_ANSWERS) vocabulary.add(w);
   return vocabulary;
 }
 // Kind words the report prints in every run.
@@ -581,7 +613,9 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
         report.requests.push({ ...entry, status: res.status, error: "answer_too_large_or_unreadable" });
         return null;
       }
-      report.requests.push({ ...entry, ...sanitizeDescribed(describeResponse(res, body, { teamId: team })) });
+      const exchangeDescribed = describeResponse(res, body, { teamId: team });
+      if (mode === "identity") identityFilterDescribed(exchangeDescribed);
+      report.requests.push({ ...entry, ...sanitizeDescribed(exchangeDescribed) });
       const field = profile.exchange.tokenField;
       return res.status === 200 && body && typeof body === "object" && !Array.isArray(body) && Object.prototype.hasOwnProperty.call(body, field) && typeof body[field] === "string" && body[field] ? body[field] : null;
     } catch (e) {
@@ -646,14 +680,10 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       }
       // Key names are printed only when every one is an identifier: a body keyed by ids or dates,
       // at the top level or under `results`, prints none of its keys.
-      const described = sanitizeDescribed(describeResponse(res, body, { teamId: team }));
-      // The identity run prints a source key name only in the form of a field name (a lower-case
-      // letter first): a capitalised key could be a person.
-      if (mode === "identity") {
-        for (const key of ["fieldNames", "resultFieldNames"]) {
-          if (Array.isArray(described[key]) && !described[key].every((k) => FIELD_NAME_FORM.test(k))) described[key] = "<unprintable>";
-        }
-      }
+      const described = describeResponse(res, body, { teamId: team });
+      // The identity run prints source key names only from its closed lists, and none of the index's.
+      if (mode === "identity") identityFilterDescribed(described, { index: prefix === api && resourcePath === "" });
+      sanitizeDescribed(described);
       // A count is printed only when it is a count.
       if (described.totalCount !== null && !/^\d{1,9}$/.test(described.totalCount)) described.totalCount = "<unprintable>";
       report.requests.push({ ...entry, ...described });

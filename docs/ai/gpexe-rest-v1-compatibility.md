@@ -612,62 +612,81 @@ application's catalog, never through the index's link. It is read only when the 
 resource on this host, and only for an athlete GPEXE itself named twice inside a confirmed session
 of team 980. It is one record, read in memory only and never stored.
 
-**What it prints.** Everything the full run prints per request. In addition, for each answer
-whose identity is confirmed, some keys are described:
-- **Which keys:** a key that may hold a name (ending in `name`, or `first` / `last` / `given` /
-  `family` / `middle`) or a date of birth (`birth`, or the words `dob` / `bday` / `bdate` / `yob`
-  / `born`). Also the children of a small object under such a key, so
-  `name: { first, last }` gives `name.first` and `name.last`. Such a child key is printed only
-  from a closed list (`first`, `last`, `given`, `family`, `middle`, `full`, `display`, `short`,
-  `year`, `month`, `day`, `date`, `value`, `text`). Any other child is `<name_key>` /
-  `<birth_key>`, so a small map keyed by people under a name key prints nobody.
-- **Path:** its key path, through structural containers only (`athletes[].birthdate`,
-  `[].athlete_name`, `players.<id>.first_name`). Any other key on the way is `<key>`, and a map
-  keyed by ids is `<id>`. An identity key is printed only when it starts with a lower-case letter
-  and is a plain identifier, as JSON field names are written; otherwise it is `<name_key>` /
-  `<birth_key>`. So a capitalised key, such as a person used as a key, is never printed.
-- **Counts and kinds:** how often it is present, out of how many objects, and its value kinds.
+**Only closed lists of source keys are printed** (owner's external review of PR #143, 2026-10-06).
+A key the source chooses could be a person, whatever its form, so this run never prints one that is
+not on a fixed list. Every other key is masked or only counted. The full and drill runs keep their
+own rules.
+
+**What it prints per request.** The full run's entry, with the source's key names limited as follows:
+- **Field names** (top level, or under `results`): only names of the closed schema list
+  (`IDENTITY_SCHEMA_FIELDS`). That list holds the fields the importer reads, a few structural
+  keys, and the name and date-of-birth fields below. Every other key is only counted
+  (`otherFieldCount`, `otherResultFieldCount`).
+- **Header names:** only usual HTTP headers (`IDENTITY_HEADER_NAMES`); others are counted
+  (`otherHeaderCount`).
+- **The index read** (`rest/v1/`) prints none of its keys: `fieldNames` is `<omitted>`, with
+  their number.
+
+**What it prints per confirmed answer:** the keys that may hold a name or a date of birth.
+- **Which keys:** a candidate is found by a wide rule. For a name, a key ending in `name`, or
+  `first` / `last` / `given` / `family` / `middle`. For a date of birth, `birth`, or the
+  words `dob` / `bday` / `bdate` / `yob` / `born`. The children of a small object under such a
+  key are candidates too.
+- **Its name is printed only from a closed list:**
+  - `IDENTITY_NAME_FIELDS`: `name`, `first_name`, `last_name`, `full_name`, `username`,
+    `athlete_name`, `category_name`, their camelCase forms, and a few more;
+  - `IDENTITY_BIRTH_FIELDS`: `birthdate`, `birth_date`, `date_of_birth`, `dob`, `birthday`,
+    `birth_year`, `yob`, `born`, … ;
+  - for a child, `IDENTITY_CHILD_KEYS`: `first`, `last`, `given`, `family`, `middle`,
+    `full`, `display`, `short`, `year`, `month`, `day`, `date`, `value`, `text`.
+
+  Any other candidate is `<name_key>` / `<birth_key>` and is still described, so the owner learns
+  that something name-like exists without its key.
+- **Path:** the key path runs through the structural containers of a fixed list (`athletes`,
+  `players`, `profile`, …). Any other key on the way is `<key>`, and a map keyed by ids is
+  `<id>`. So a path holds only closed names and placeholders, for example `athletes[].birthdate`,
+  `[].athlete_name`, `players.<key>.first_name` or `athlete_name.<name_key>`.
+- **Counts and kinds:** how often the key is present, out of how many objects, and its value
+  kinds.
 - **For a name:** whether every value is non-empty text with a letter, whether any value has two
   words, and whether the values are distinct.
-- **For a date of birth:** how many are null, and, over the rest, whether every value is
+- **For a date of birth:** how many are null and, over the rest, whether every value is
   `YYYY-MM-DD`, starts like `YYYY-MM-DDT`, is a real calendar date, and has a year from 1900 to
   the current year.
 
-**The index read** adds its resource names and, about its `athlete` link, booleans only: listed,
-exactly the expected URL, a URL at all, `https`, the same host, the same path. **The athlete read**
-adds whether its `id` is the one asked for, and the kinds and booleans of its `team` / `teams`
-fields against team 980 (never another team's id). **The summary, `identity_fields`,** gives the
-number of reads described and the reads where a name-like or a birth-like key was seen. It is
-`not_read` when no answer was described.
-**"observed" means only that a key of that name was seen. Which key is the athlete's name or date
+**The index read** adds booleans only, about its `athlete` link: listed, exactly the expected URL,
+a URL at all, `https`, the same host, the same path. No resource name and no count of them is
+printed.
+
+**The athlete read** adds whether its `id` is the one asked for, and the kinds and booleans of
+its `team` / `teams` fields against team 980 (never another team's id).
+
+**The summary, `identity_fields`,** gives the number of reads described, and the reads where a
+name-like or a birth-like key was seen. It is `not_read` when no answer was described.
+**"observed" means only that a key of that kind was seen. Which key is the athlete's name or date
 of birth, and whether it is reliable, is the owner's decision after the result.**
 
-**What it never prints:** a value, a part of a value, an id, a URL, or a key that could be a
-value. The values are read in memory only. This is the one place the probe looks at an answer
-before the drop list.
+**What it never prints:** a value, a part of a value, an id, a URL, or a source key outside the
+closed lists. The values are read in memory only. This is the one place the probe looks at an
+answer before the drop list.
 
 **The second guard.** Besides the existing secret guard, a second final guard refuses to print a
 report that would carry any value seen under an identity key (`identity_value_in_report`; the run
 then prints nothing).
 - **Matching:** a value is matched quoted, or from four characters as a bare word. A word is
   letters, digits and `_`, as in an identifier, so a value is never found inside `team_session`.
-- **The report's own vocabulary is skipped:** its keys, codes, verdicts, kinds and masked request
-  paths, and the source's key names that look like a schema: written as field names (a lower-case
-  letter first) and carried by at least two different answers. A capitalised key, or a key of one
-  answer only (an object keyed by people sits in one answer), never exempts a value. Resource
-  names, identity key paths and the authentication scheme word never do either. In this run a
-  capitalised key is not printed in the field or resource names at all (`<unprintable>`).
-- **Known residual:** a lower-case key that is a person's identifier (an object keyed by user
-  names) and never appears as a value under an identity key is printed in that answer's field
-  names, as in every mode of this probe. No answer seen so far has that shape. A session called *rest day* or *team training* therefore never
-  refuses the run: the probe prints `rest` and `team` in its own paths whatever the source sends.
+- **The report's own vocabulary is skipped:** the probe's keys, codes, verdicts and kinds, its
+  masked request paths, and source key names that are on the closed lists. A source key outside
+  them never joins the vocabulary, however often it recurs. A session called *rest day* or *team
+  training* therefore never refuses the run: the probe prints `rest` and `team` in its own paths
+  whatever the source sends.
 - **Still checked:** header values (content type, allow, the GPEXE version), so a source that
   echoes a name into a printed header is refused.
-- **On a refusal**, standard error shows the code and the masked path of the read that first
+- **On a refusal,** standard error shows the code and the masked path of the read that first
   carried the value, never the value itself.
 
 Contract tests with made-up markers only, against a fake server
-(`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`, tests 15–22). Mutation evidence: each
+(`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`, tests 15–24). Mutation evidence: each
 of the guards above, when removed, fails the suite.
 
 **After the result (each a separate owner order):**
