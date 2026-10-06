@@ -679,8 +679,8 @@ name-like or a birth-like key was seen. It is `not_read` when no answer was desc
 of birth, and whether it is reliable, is the owner's decision after the result.**
 
 **What it never prints:** a value, a part of a value, an id, a URL, a source key outside the
-closed lists, or a header value outside its shape. The values are read in memory only. This is the one place the probe looks at an
-answer before the drop list.
+closed lists, or a header value outside its shape. The values are read in memory only. This is
+the one place the probe looks at an answer before the drop list.
 
 **The second guard.** Besides the existing secret guard, a second final guard refuses to print a
 report that would carry any value seen under an identity key (`identity_value_in_report`; the run
@@ -701,22 +701,71 @@ Contract tests with made-up markers only, against a fake server
 (`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`, tests 15–25). Mutation evidence: each
 of the guards above, when removed, fails the suite.
 
-**After the result (each a separate owner order):**
-- the owner chooses the endpoint and the fields;
-- an implementation PR for *Link athletes*, under the owner's constraints of 2026-10-06:
-  - the minimal projection: canonical id, sanitized name and normalized date of birth;
-  - "Date of birth not provided" when it is missing;
-  - visible to a platform admin and the active club admin of the team's club only (a coach and
-    another club get the existing 404 or masked answer);
-  - suggestions only: never an automatic link and never a preselection;
-  - warnings for duplicates, a missing date or a conflict with OptiMove data;
-  - a bounded retention and deletion of the identity snapshot;
-  - name and date never in a log, an audit row, a URL, an error code, a diagnostic, a fixture with
-    real data, a PR or chat;
-  - a security / privacy review before merge.
+**Result of the owner-run identity run** (2026-10-06, at `1cf2430`, after the owner's external
+review READY). The owner ran it once and returned the sanitized report. Only its verdicts are
+recorded here: no name, date, id or report.
+- **The run completed** (`stoppedBy: null`): one exchange and eight reads, each answered 200. Team
+  980 was confirmed by the team read and by the session's own read.
+- **The athlete resource is confirmed.** The API's index lists `athlete` at exactly
+  `rest/v1/athlete/`. `rest/v1/athlete/<id>/` answered with the same `id`, for the athlete of a row
+  confirmed twice under a session of team 980. The record carries no `team` / `teams` field, so
+  the athlete's membership of the bound team comes from the confirmed session, not from the record.
+- **Name fields on the athlete record:**
+  - `first_name` and `last_name`: each non-empty text of one word;
+  - `name`: non-empty text of more than one word;
+  - `short_name`: one word.
 
-**The PowerShell commands for the run are handed over only after the owner's external review of
-the identity run.**
+  The record has four more fields outside the probe's closed lists; they were not named.
+- **Date of birth:** the athlete record has the field `birthdate`, but its value was null for the
+  one athlete read. **Its format is therefore not proven**, nor whether GPEXE fills it for other
+  athletes.
+- **Not a source of identity:**
+  - the team read: only the team's own `name`, with no roster and no nested names;
+  - the athlete rows and their own reads: only the numeric `athlete` id;
+  - the session list: its `name` and `category_name` are session fields;
+  - the track: it carries an `athlete_name` (text of more than one word), which is not used.
+- **Not read:** the athlete list (`athlete/?team=…`), because its filter is not proven.
+- **Not printed:** the GPEXE version header did not fit the probe's closed version form and was
+  printed as `<unprintable>`.
+
+**Owner decisions after the result (2026-10-06):**
+- **Source:** `rest/v1/athlete/<id>/` is the confirmed identity source. There is no further
+  owner-run probe.
+- **Name:** `first_name` + `last_name`, each trimmed, with runs of whitespace collapsed to one. If
+  the two are not both usable, the fallback is `name`. `short_name` and the track's
+  `athlete_name` are not used.
+- **Date of birth (option A):**
+  - accepted: only a valid `YYYY-MM-DD`, or a valid ISO date-time, whose calendar date is taken
+    from its first ten characters without any time-zone shift;
+  - shown as "Date of birth not provided": `null`, empty, or any other form;
+  - an administrator may see only the number of values in an unrecognised form, never a value.
+
+**Boundaries of the implementation PR.** It is a separate PR, only after this PR is merged.
+- **Reads:**
+  - one athlete GET, only for a canonical GPEXE athlete id already seen through a confirmed
+    session of the bound team; the client never sends an athlete id that the backend then reads;
+  - at most 50 distinct identities per check, at most 3 requests in parallel;
+  - no retry, no redirect, no other host.
+- **The identity snapshot:**
+  - it lasts 14 days, and a later check reuses it while it is valid;
+  - it holds only the source connection / team provenance, the source athlete id, the sanitized
+    name, the normalized date of birth or null, `observed_at` and `expires_at`;
+  - it never holds the raw answer, `short_name`, the track's `athlete_name` or the four unnamed
+    fields;
+  - an expired snapshot must be deletable;
+  - an Unbind stops any new read and any display through the ended binding.
+- **The name:** Unicode text, whitespace trimmed and collapsed, a bounded length, and control,
+  bidi and invisible characters refused. The UI always escapes it.
+- **Visibility:** the name and the date of birth are visible only to a platform admin and the
+  active club admin of the owning club. A coach and another club get no identity.
+- ***Link athletes*** shows "First Last" (or the `name` fallback), with "Born DD.MM.YYYY" or "Date
+  of birth not provided" under it. The internal GPEXE id moves to Technical details.
+- **No automatic link:** no preselection, and no link by name or date alone. Duplicate names and a
+  conflicting date carry a clear warning.
+- **Not changed in it:** the importer, the metric / variable mapping and the import switch.
+- **Never shown anywhere:** the name and the date never go into a log, an audit row, a URL, an
+  error code, a diagnostic, a fixture with real data, a PR or chat.
+- **Before its merge:** a separate security / privacy review and a database review.
 
 ## 5. Rules the adapter keeps, whatever is added later
 
