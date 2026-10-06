@@ -18,6 +18,12 @@
 // a part of a body. A final guard refuses to print a report that contains
 // the credential, the issued token or any value from the environment.
 //
+// The identity run (`--mode identity`, owner order 2026-10-06) asks where an
+// athlete's name and date of birth appear in the bound team's answers. It
+// prints key paths, kinds, counts and booleans of those fields and nothing of
+// their values; a second final guard refuses a report that would contain any
+// value seen under such a field.
+//
 // Boundaries, each one tested (backend/tests/gpexe-rest-v1-capability-probe.test.mjs):
 // GET only after the one exchange; one host; the family and the URLs from the
 // application's catalog, except the drill-only run's two fixed legacy reads
@@ -217,9 +223,271 @@ export function describeDrillLink(body, parentRow, rows, team) {
 export const diagnosticLinkConfirmed = (link, playersPresent) =>
   link.teamsessionCanonical && link.teamsessionParentDrillMatchCount === 1 && link.teamsessionHasUniqueListRow && link.teamsessionListRowTeamIs980 && playersPresent;
 
-export const PROBE_MODES = Object.freeze(["full", "drill"]);
+export const PROBE_MODES = Object.freeze(["full", "drill", "identity"]);
 // The drill-only run: one exchange and these six reads, nothing else.
 export const DRILL_MODE_MAX_REQUESTS = 7;
+// The identity run (owner order 2026-10-06): one exchange and at most eight reads, nothing else.
+export const IDENTITY_MODE_MAX_REQUESTS = 9;
+
+// ---------------------------------------------------------------------------
+// The identity run: which answers of the bound team carry an athlete's name and date of birth,
+// under which field names and in which form. Its descriptions are the ONLY place this probe looks at
+// an answer before the importer's drop list (`redactGpexe`) removes the personal fields, because
+// those fields are exactly what the run must find. What leaves this block are key paths, kinds,
+// counts and booleans. Never a value, a part of a value, an id or a key that could be a value.
+//
+// A key is a candidate for a name when it ends in "name" (athlete_name, first_name, surname, ...)
+// or is one of first / last / given / family / middle, and for a date of birth when it mentions
+// birth or is a dob / bday / bdate / yob / born word. Keys outside the athlete's own fields, like
+// category_name, are reported too: the owner decides which field is the athlete's. The children of
+// a small object under such a key (name: { first, last }) are described with the same category.
+export const IDENTITY_NAME_KEY = /name$|^(first|last|given|family|middle)(_?name)?$/i;
+export const IDENTITY_BIRTH_KEY = /[Bb]irth|(^|_)(dob|DOB|bday|bdate|yob)(_|$)|^(dob|bday|bdate|yob)[A-Z]|(^|_)born(_|$)|^born[A-Z]/;
+const IDENTITY_CHILDREN_MAX = 10;
+// The only child keys of such an object that are printed as they are; any other child is
+// `<name_key>` / `<birth_key>`, so a small map keyed by people under a name key prints nobody.
+export const IDENTITY_CHILD_KEYS = Object.freeze(["first", "last", "given", "family", "middle", "full", "display", "short", "year", "month", "day", "date", "value", "text"]);
+// An identity key is printed only in this form: a lower-case letter first, as JSON field names are
+// written, so a capitalised key (a person used as a key) is never printed. A nested container is
+// printed only under one of these structural keys. Any other key on the way is `<key>`, and an
+// object keyed by ids is `<id>`. So a map keyed by people can never print a person.
+const IDENTITY_KEY_PRINTABLE = /^[a-z][A-Za-z0-9_]{0,40}$/;
+// The same rule for the key names the identity run prints elsewhere (field and resource names).
+const FIELD_NAME_FORM = /^[a-z_][A-Za-z0-9_]{0,63}$/;
+export const IDENTITY_CONTAINER_KEYS = Object.freeze([
+  "athlete", "athletes", "player", "players", "person", "persons", "people", "profile", "user", "users",
+  "member", "members", "roster", "team", "teams", "results", "data", "items", "track", "tracks", "details",
+]);
+export const IDENTITY_MAX_DEPTH = 4;
+export const IDENTITY_MAX_ITEMS = 200;
+export const IDENTITY_MAX_KEYS = 300;
+export const IDENTITY_MAX_PATHS = 40;
+const IDENTITY_MAX_VALUES = 10_000;
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T/;
+const kindOf = (v) => (v === null ? "null" : Array.isArray(v) ? "array" : typeof v);
+const joinPath = (path, segment) => (!path ? segment : segment.startsWith("[") ? `${path}${segment}` : `${path}.${segment}`);
+function calendarDate(text) {
+  const m = ISO_DATE.exec(text) ?? ISO_DATE_TIME.exec(text);
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const t = new Date(Date.UTC(y, mo - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d ? y : null;
+}
+
+// One answer, read in memory before redaction. Returns the printable description and, apart from
+// it, the set of values seen under identity keys. That set is never printed. It only feeds the
+// final guard, which refuses to print a report containing any of them.
+export function describeIdentityFields(raw, { nowYear = new Date().getUTCFullYear() } = {}) {
+  const stats = new Map();
+  const containers = new Map();
+  const values = new Set();
+  let truncated = false;
+  const keep = (v) => {
+    if (values.size >= IDENTITY_MAX_VALUES) return;
+    if (typeof v === "string") {
+      const t = v.trim();
+      if (t.length >= 2) values.add(t);
+      for (const part of t.split(/\s+/)) if (part.length >= 4) values.add(part);
+    } else if (typeof v === "number" && Number.isFinite(v) && String(v).length >= 6) {
+      values.add(String(v));
+    }
+  };
+  const record = (parent, label, value, category) => {
+    const path = joinPath(parent, label);
+    let s = stats.get(path);
+    if (!s) {
+      s = { path, parent, category, present: 0, kinds: new Set(), strings: 0, nonEmpty: 0, space: 0, letter: 0, distinct: new Set(), isoDate: 0, isoDateTime: 0, valid: 0, plausible: 0, nulls: 0 };
+      stats.set(path, s);
+    }
+    s.present += 1;
+    s.kinds.add(kindOf(value));
+    if (value === null) s.nulls += 1;
+    if (typeof value === "string") {
+      s.strings += 1;
+      if (/\S/.test(value)) s.nonEmpty += 1;
+      if (/\S\s+\S/.test(value.trim())) s.space += 1;
+      if (/\p{L}/u.test(value)) s.letter += 1;
+      s.distinct.add(value.trim().toLowerCase());
+      if (ISO_DATE.test(value)) s.isoDate += 1;
+      if (ISO_DATE_TIME.test(value)) s.isoDateTime += 1;
+      const year = calendarDate(value);
+      if (year !== null) {
+        s.valid += 1;
+        if (year >= 1900 && year <= nowYear) s.plausible += 1;
+      }
+    }
+    if (typeof value === "string" || typeof value === "number") keep(value);
+  };
+  // `inherit`: the category of the key this object sits under, when it sits directly under one.
+  const visit = (node, path, depth, inherit = null) => {
+    if (node === null || typeof node !== "object") return;
+    if (depth > IDENTITY_MAX_DEPTH) { truncated = true; return; }
+    if (Array.isArray(node)) {
+      if (node.length > IDENTITY_MAX_ITEMS) truncated = true;
+      for (const item of node.slice(0, IDENTITY_MAX_ITEMS)) visit(item, joinPath(path, "[]"), depth + 1);
+      return;
+    }
+    containers.set(path, (containers.get(path) ?? 0) + 1);
+    const keys = Object.keys(node);
+    if (keys.length > IDENTITY_MAX_KEYS) truncated = true;
+    const idKeyed = keys.length > 0 && keys.every((k) => ID.test(k));
+    const inherited = inherit && !idKeyed && keys.length <= IDENTITY_CHILDREN_MAX ? inherit : null;
+    for (const key of keys.slice(0, IDENTITY_MAX_KEYS)) {
+      const value = node[key];
+      const own = IDENTITY_BIRTH_KEY.test(key) ? "birth" : IDENTITY_NAME_KEY.test(key) ? "name" : null;
+      const category = own ?? inherited;
+      // A key is printed as it is only in field-name form, and a child that only inherits its category
+      // only from the closed list.
+      const label = !category ? null
+        : IDENTITY_KEY_PRINTABLE.test(key) && (own || IDENTITY_CHILD_KEYS.includes(key)) ? key : `<${category}_key>`;
+      if (category) record(path, label, value, category);
+      // A list under an identity key is described by its kind; its plain values still feed the guard.
+      if (category && Array.isArray(value)) for (const item of value.slice(0, IDENTITY_MAX_ITEMS)) keep(item);
+      if (value && typeof value === "object") {
+        const segment = idKeyed ? "<id>"
+          : category ? label
+          : IDENTITY_CONTAINER_KEYS.includes(key) ? key : "<key>";
+        visit(value, joinPath(path, segment), depth + 1, Array.isArray(value) ? null : own);
+      }
+    }
+  };
+  visit(raw, "", 0);
+  const all = (n, of) => (of === 0 ? null : n === of);
+  const fields = [...stats.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)).map((s) => {
+    const base = { path: s.path, category: s.category, present: s.present, of: containers.get(s.parent) ?? 0, kinds: [...s.kinds].sort() };
+    if (s.category === "name") {
+      return { ...base, allNonEmptyText: s.nonEmpty === s.present, anyContainsSpace: s.space > 0, allContainLetter: all(s.letter, s.strings), allDistinct: all(s.distinct.size, s.strings) };
+    }
+    const nonNull = s.present - s.nulls;
+    return {
+      ...base, nullCount: s.nulls, allIsoDate: all(s.isoDate, nonNull), allIsoDateTimePrefix: all(s.isoDateTime, nonNull),
+      allValidCalendarDate: all(s.valid, nonNull), allYearPlausible: all(s.plausible, nonNull),
+    };
+  });
+  return {
+    fields: fields.slice(0, IDENTITY_MAX_PATHS), fieldsTruncated: fields.length > IDENTITY_MAX_PATHS, walkTruncated: truncated,
+    nameLike: fields.some((f) => f.category === "name"), birthLike: fields.some((f) => f.category === "birth"), values,
+  };
+}
+
+// The API's own index of resources (`rest/v1/`): its key names only, and where its `athlete` entry
+// points, as booleans. The probe never follows that URL (it builds its own from the catalog), so what
+// matters is that the resource sits on this host at the family's own path; a proxy may well report
+// `http`. The URLs are never printed.
+export function describeResourceIndex(raw, expectedAthleteUrl) {
+  const object = raw !== null && typeof raw === "object" && !Array.isArray(raw);
+  const names = object ? Object.keys(raw).sort() : [];
+  const listed = object && Object.prototype.hasOwnProperty.call(raw, "athlete");
+  const where = { parsable: false, https: false, sameHost: false, pathMatches: false };
+  if (listed && typeof raw.athlete === "string") {
+    try {
+      const u = new URL(raw.athlete);
+      const e = new URL(expectedAthleteUrl);
+      where.parsable = true;
+      where.https = u.protocol === "https:";
+      where.sameHost = u.hostname === e.hostname;
+      where.pathMatches = u.pathname === e.pathname && u.search === "" && u.hash === "";
+    } catch {
+      // not a URL: every boolean stays false
+    }
+  }
+  return {
+    bodyIsObject: object, resourceCount: names.length,
+    resourceNames: printableFieldNames(names) && names.every((k) => FIELD_NAME_FORM.test(k)) ? names : "<unprintable>",
+    athleteResourceListed: listed,
+    athleteResourceUrlCanonical: listed && raw.athlete === expectedAthleteUrl,
+    athleteResourceUrlParsable: where.parsable, athleteResourceUrlHttps: where.https,
+    athleteResourceUrlSameHost: where.sameHost, athleteResourceUrlPathMatches: where.pathMatches,
+  };
+}
+
+// The report's own vocabulary: every key of the report, and every word of the slots that hold
+// names the probe prints for its own reasons. Those are its codes, verdicts, kinds and masked paths,
+// and the key names of the source (field, header and resource names, identity key paths), these only
+// in the form of a field name: a lower-case letter first. A capitalised key could be a person, so it
+// never exempts a value. A value equal to one of these words tells nothing about a person: the probe
+// prints the word whatever the source sends. Header VALUES (content type, allow, version) are source
+// data and stay checked.
+// Slots whose words the probe itself chooses (`path` only for a request entry: an identity key path is
+// the source's).
+const PROBE_SLOTS = new Set([
+  "kinds", "verdict", "reason", "mode", "method", "bodyKind", "category", "stoppedBy", "source", "hostKey", "apiFamily",
+  "teamId", "nameLikeFieldIn", "birthLikeFieldIn", "athleteFieldKinds", "teamFieldKind", "teamsFieldKind", "error", "ranAt",
+  "bodyEncoding",
+]);
+// The source's key names of one answer. A word from these joins the vocabulary only in field-name form
+// and only when at least two different answers carry it: a schema key recurs across answers, while an
+// object keyed by people sits in one. Resource names, identity key paths and the scheme word never do.
+const SOURCE_KEY_SLOTS = new Set(["fieldNames", "resultFieldNames", "headerNames"]);
+export const SOURCE_KEY_MIN_ANSWERS = 2;
+const words = (s) => s.split(/[^\p{L}\p{N}_]+/u).filter(Boolean);
+export function reportVocabulary(report) {
+  const vocabulary = new Set();
+  const sourceKeys = new Map();
+  // `answer`: the index of the request entry being walked, or null outside one.
+  const walk = (node, slot, answer) => {
+    if (typeof node === "string") {
+      if (PROBE_SLOTS.has(slot) || (slot === "path" && answer !== null)) for (const w of words(node)) vocabulary.add(w);
+      else if (SOURCE_KEY_SLOTS.has(slot) && answer !== null) {
+        for (const w of words(node)) {
+          if (!/^[a-z]/.test(w)) continue;
+          if (!sourceKeys.has(w)) sourceKeys.set(w, new Set());
+          sourceKeys.get(w).add(answer);
+        }
+      }
+    } else if (Array.isArray(node)) {
+      node.forEach((item, i) => walk(item, slot, slot === "requests" ? i : answer));
+    } else if (node && typeof node === "object") {
+      for (const [k, v] of Object.entries(node)) {
+        for (const w of words(k)) vocabulary.add(w);
+        walk(v, k, answer);
+      }
+    }
+  };
+  walk(report, null, null);
+  for (const [w, answers] of sourceKeys) if (answers.size >= SOURCE_KEY_MIN_ANSWERS) vocabulary.add(w);
+  return vocabulary;
+}
+// Kind words the report prints in every run.
+const REPORT_WORDS = new Set(["null", "none", "string", "number", "object", "array", "boolean", "undefined", "name", "birth", "true", "false"]);
+// The final guard of the identity run: the report text may contain none of the values seen under
+// identity keys, neither quoted nor, from four characters, as a bare word. A word is letters, digits
+// and `_`, as in an identifier, so a value is never found inside team_session. A value that is a word
+// of the report's own vocabulary is skipped (see reportVocabulary). A hit refuses the whole report.
+// The error names only the masked path of the read that carried the value.
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export function assertNoIdentityValueInReport(text, values, vocabulary = new Set()) {
+  const entries = values instanceof Map ? values : new Map([...values].map((v) => [v, null]));
+  for (const [v, where] of entries) {
+    if (REPORT_WORDS.has(v.toLowerCase()) || vocabulary.has(v)) continue;
+    const bare = v.length >= 4 && new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escapeRegExp(v)}(?:[^\\p{L}\\p{N}_]|$)`, "u").test(text);
+    if (text.includes(JSON.stringify(v)) || bare) {
+      const error = new Error("refusing to print: the report would contain a value seen under an identity field");
+      error.code = "identity_value_in_report";
+      if (where) error.where = where;
+      throw error;
+    }
+  }
+  return text;
+}
+// Only these parts of a description travel in the report.
+const identityPart = (d) => (d
+  ? { nameLikeField: d.nameLike, birthLikeField: d.birthLike, fields: d.fields, fieldsTruncated: d.fieldsTruncated, walkTruncated: d.walkTruncated }
+  : { nameLikeField: null, birthLikeField: null, fields: [], reason: "answer_unreadable" });
+const fieldKind = (o, k) => (o && typeof o === "object" && Object.prototype.hasOwnProperty.call(o, k) ? kindOf(o[k]) : "absent");
+
+// How an athlete record relates to the bound team, as kinds and booleans. Never the other team.
+export function describeAthleteTeams(body, team) {
+  const named = (v) => (v && typeof v === "object" && !Array.isArray(v) ? namesTeam(v.id, team) : namesTeam(v, team));
+  const teams = body?.teams;
+  return {
+    teamFieldKind: fieldKind(body, "team"),
+    teamNamesBoundTeam: fieldKind(body, "team") === "absent" ? null : named(body.team),
+    teamsFieldKind: fieldKind(body, "teams"),
+    teamsIncludesBoundTeam: Array.isArray(teams) ? teams.some((t) => named(t) === true) : null,
+  };
+}
 
 export function parseArgs(argv) {
   const opts = { host: PROBE_HOST, team: PROBE_TEAM, mode: "full" };
@@ -229,7 +497,7 @@ export function parseArgs(argv) {
     if (!["--host", "--team", "--mode"].includes(key) || value === undefined) throw new DiscoveryUsageError(`unknown or incomplete argument ${key}`);
     opts[key.slice(2)] = value;
   }
-  if (!PROBE_MODES.includes(opts.mode)) throw new DiscoveryUsageError("--mode must be full or drill");
+  if (!PROBE_MODES.includes(opts.mode)) throw new DiscoveryUsageError("--mode must be full, drill or identity");
   // This probe is for the one confirmed host and the one bound team: the
   // options exist so that a wrong value is refused loudly, not so that
   // another target can be chosen.
@@ -240,9 +508,10 @@ export function parseArgs(argv) {
 
 // maxRequests and timeoutMs exist for the tests; the defaults are the limits.
 export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM, mode = "full", maxRequests = MAX_REQUESTS, timeoutMs = REQUEST_TIMEOUT_MS } = {}, env, fetchImpl = globalThis.fetch) {
-  if (!PROBE_MODES.includes(mode)) throw new DiscoveryUsageError("mode must be full or drill");
-  // The drill-only run never sends more than its own six reads.
+  if (!PROBE_MODES.includes(mode)) throw new DiscoveryUsageError("mode must be full, drill or identity");
+  // The drill-only run never sends more than its own six reads, the identity run never more than its eight.
   if (mode === "drill") maxRequests = Math.min(maxRequests, DRILL_MODE_MAX_REQUESTS);
+  if (mode === "identity") maxRequests = Math.min(maxRequests, IDENTITY_MODE_MAX_REQUESTS);
   if (!Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > MAX_REQUESTS) throw new DiscoveryUsageError(`maxRequests is a whole number from 1 to ${MAX_REQUESTS}`);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > REQUEST_TIMEOUT_MS) throw new DiscoveryUsageError(`timeoutMs is a whole number up to ${REQUEST_TIMEOUT_MS}`);
   const profile = discoveryProfile(host, PROBE_FAMILY);
@@ -255,6 +524,9 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     source: "gpexe", hostKey: host, apiFamily: profile.apiFamily, teamId: team, mode, ranAt: new Date().toISOString(),
     requests: [], capabilities: {}, stoppedBy: null,
   };
+  // The identity run: every value seen under an identity key, with the masked path of the read that
+  // carried it first, for the final guard only.
+  const identityValues = new Map();
   let requests = 0;
   const countRequest = () => {
     requests += 1;
@@ -264,7 +536,19 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
   // The one exit: the drill-only run always names its drill verdict, whatever stopped it.
   const done = () => {
     if (mode === "drill" && report.stoppedBy && !report.capabilities.session_drill_details) verdict("session_drill_details", { verdict: "not_observed", reason: report.stoppedBy });
-    return finish(report, env, issued ?? null);
+    if (mode === "identity" && !report.capabilities.identity_fields) {
+      const described = Object.entries(report.capabilities).filter(([k, v]) => k.startsWith("identity_") && v?.verdict === "described");
+      const nameIn = described.filter(([, v]) => v.nameLikeField === true).map(([k]) => k);
+      const birthIn = described.filter(([, v]) => v.birthLikeField === true).map(([k]) => k);
+      // "observed" says only that a field of that name was seen in one read; which field is the
+      // athlete's name or date of birth, and whether it is reliable, is the owner's decision.
+      // "not_read": no answer was described at all (the run stopped before one).
+      verdict("identity_fields", {
+        verdict: described.length === 0 ? "not_read" : nameIn.length > 0 || birthIn.length > 0 ? "observed" : "not_observed",
+        readsDescribed: described.length, nameLikeFieldIn: nameIn, birthLikeFieldIn: birthIn,
+      });
+    }
+    return finish(report, env, issued ?? null, identityValues);
   };
 
   // 1. The one exchange, in the host's confirmed form, with the same timeout
@@ -342,9 +626,19 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       }
       const header = (name) => (typeof res.headers?.get === "function" ? res.headers.get(name) : null);
       let body;
+      let identity = null;
+      let index = null;
       try {
         const text = await readBounded(res, header("content-length"));
-        body = text === "" ? undefined : redactGpexe(JSON.parse(text));
+        const raw = text === "" ? undefined : JSON.parse(text);
+        // The identity run only: described in memory before the drop list removes the personal
+        // fields; the values themselves go only into the final guard's set.
+        if (mode === "identity" && raw !== undefined) {
+          identity = describeIdentityFields(raw);
+          for (const v of identity.values) if (identityValues.size < 50_000 && !identityValues.has(v)) identityValues.set(v, entry.path);
+          if (prefix === api && resourcePath === "") index = describeResourceIndex(raw, `${profile.baseUrl}${api}athlete/`);
+        }
+        body = raw === undefined ? undefined : redactGpexe(raw);
       } catch (e) {
         const error = e?.code === "source_answer_unexpected" ? "answer_too_large_or_unreadable" : "answer_unreadable";
         report.requests.push({ ...entry, status: res.status, error });
@@ -353,10 +647,17 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       // Key names are printed only when every one is an identifier: a body keyed by ids or dates,
       // at the top level or under `results`, prints none of its keys.
       const described = sanitizeDescribed(describeResponse(res, body, { teamId: team }));
+      // The identity run prints a source key name only in the form of a field name (a lower-case
+      // letter first): a capitalised key could be a person.
+      if (mode === "identity") {
+        for (const key of ["fieldNames", "resultFieldNames"]) {
+          if (Array.isArray(described[key]) && !described[key].every((k) => FIELD_NAME_FORM.test(k))) described[key] = "<unprintable>";
+        }
+      }
       // A count is printed only when it is a count.
       if (described.totalCount !== null && !/^\d{1,9}$/.test(described.totalCount)) described.totalCount = "<unprintable>";
       report.requests.push({ ...entry, ...described });
-      return { status: res.status, body, totalCount: header("x-total-count") };
+      return { status: res.status, body, totalCount: header("x-total-count"), identity, index };
     } finally {
       clearTimeout(timer);
     }
@@ -376,7 +677,138 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     }
   }
 
+  // The identity run (owner order 2026-10-06). It sends only reads the full run already proved, the
+  // API's own index (`rest/v1/`) and, only when that index lists `athlete` at exactly the family's
+  // place, ONE `athlete/<id>/` for the athlete of a row this chain confirmed twice under a session
+  // of team 980. No athlete list, no filter that is not proven, no other team, and no id from
+  // anywhere but an answer already checked. Every read is described by key paths, kinds and
+  // booleans only (describeIdentityFields).
+  async function runIdentity() {
+    // 2. The bound team's own read: its id must be 980; another team stops the run.
+    const teamRead = await get(`team/${team}/`);
+    const tb = teamRead.body;
+    const teamObject = Boolean(teamRead.status === 200 && tb && typeof tb === "object" && !Array.isArray(tb));
+    const teamNamed = teamObject ? namesTeam(tb.id, team) : null;
+    if (teamNamed === false) throw new ProbeStop("team_isolation_failed", "the team read answered another team");
+    verdict("identity_team_read", teamNamed === true
+      ? { verdict: "described", status: 200, teamConfirmed: true, ...identityPart(teamRead.identity) }
+      : { verdict: "not_observed", status: teamRead.status ?? null, teamConfirmed: false, reason: teamObject ? "team_id_unreadable" : "team_read_failed" });
+
+    // 3. The API's own index of resources: key names and two booleans.
+    const root = await get("");
+    verdict("identity_api_index", root.status === 200 && root.index
+      ? { verdict: "described", status: 200, ...root.index }
+      : { verdict: "not_observed", status: root.status ?? null, reason: root.redirected ? "redirected" : "index_unavailable" });
+    const index = root.status === 200 ? root.index : null;
+
+    // 4. The session list of team 980 (one page), the session chosen as in the full run.
+    const list = await get(teamScopedPath("team_session/", team, [["limit", LIST_LIMIT]]));
+    if (list.status !== 200 || !Array.isArray(list.body)) {
+      verdict("identity_session_list", { verdict: "not_observed", status: list.status ?? null, reason: "session_list_unavailable" });
+      report.stoppedBy = "session_list_unavailable";
+      return done();
+    }
+    const rows = list.body.filter((r) => r && typeof r === "object");
+    assertTeam(rows, "session list");
+    const named = new Set(rows.flatMap((r) => (Array.isArray(r.drills) ? r.drills.map((d) => safeId(d)).filter(Boolean) : [])));
+    const chosen = rows.find((r) => Array.isArray(r.drills) && r.drills.length > 0 && safeId(r.drills[0]) !== null && safeId(r.id) !== null)
+      ?? rows.find((r) => safeId(r.id) !== null && !named.has(safeId(r.id))) ?? null;
+    const sessionId = chosen ? safeId(chosen.id) : null;
+    verdict("identity_session_list", { verdict: "described", status: 200, rowCount: rows.length, sessionIdDerived: sessionId !== null, ...identityPart(list.identity) });
+    if (sessionId === null) {
+      report.stoppedBy = "no_safe_session_id";
+      return done();
+    }
+
+    // 5. The session's own read: team 980, or nothing below it is read.
+    const session = await get(`team_session/${sessionId}/`);
+    const sb = session.body;
+    const sessionOk = Boolean(session.status === 200 && sb && typeof sb === "object" && !Array.isArray(sb));
+    if (sessionOk) assertTeam([sb], "session");
+    const sessionTeamOk = sessionOk && namesTeam(sb.team, team) === true;
+    if (!sessionTeamOk) {
+      verdict("identity_session_read", { verdict: "not_observed", status: session.status ?? null, teamIs980: false, reason: "session_not_confirmed" });
+      report.stoppedBy = "session_not_confirmed";
+      return done();
+    }
+    verdict("identity_session_read", { verdict: "described", status: 200, teamIs980: true, ...identityPart(session.identity) });
+
+    // 6. The athlete rows of that session: a row of another session stops the run; rows that do
+    //    not all name it are not used.
+    const athletes = await get(`athlete_session/?teamsession=${sessionId}&limit=${LIST_LIMIT}`);
+    const arows = Array.isArray(athletes.body) ? athletes.body.filter((r) => r && typeof r === "object") : null;
+    if (arows && arows.some((r) => "teamsession" in r && safeId(r.teamsession) !== null && safeId(r.teamsession) !== sessionId)) {
+      throw new ProbeStop("team_isolation_failed", "athlete rows of another session were returned");
+    }
+    const allOfSession = Boolean(arows && arows.length > 0 && arows.every((r) => safeId(r.teamsession) === sessionId));
+    const first = allOfSession ? arows.find((r) => safeId(r.id) !== null && safeId(r.athlete) !== null) : null;
+    const athleteId = first ? safeId(first.id) : null;
+    const listAthlete = first ? safeId(first.athlete) : null;
+    if (!allOfSession) {
+      verdict("identity_athlete_session_list", { verdict: "not_observed", status: athletes.status ?? null, rowCount: arows ? arows.length : null, reason: arows && arows.length === 0 ? "no_rows" : "rows_do_not_name_session" });
+    } else {
+      verdict("identity_athlete_session_list", {
+        verdict: "described", status: 200, rowCount: arows.length, athleteFieldKinds: [...new Set(arows.map((r) => fieldKind(r, "athlete")))].sort(),
+        athleteIdDerived: listAthlete !== null, ...identityPart(athletes.identity),
+      });
+    }
+    if (athleteId === null) {
+      report.stoppedBy = "no_safe_athlete_row";
+      return done();
+    }
+
+    // 7. That row's own read: the same session (another one stops the run) and the same athlete.
+    const one = await get(`athlete_session/${athleteId}/`);
+    const ob = one.body;
+    const detailOk = Boolean(one.status === 200 && ob && typeof ob === "object" && !Array.isArray(ob));
+    const detailSession = detailOk && "teamsession" in ob ? safeId(ob.teamsession) : null;
+    if (detailSession !== null && detailSession !== sessionId) throw new ProbeStop("team_isolation_failed", "an athlete row's detail names another session");
+    const rowOk = Boolean(detailOk && detailSession === sessionId);
+    const athleteConfirmed = rowOk && safeId(ob.athlete) === listAthlete;
+    const trackId = rowOk && "track" in ob ? safeId(ob.track) : null;
+    verdict("identity_athlete_session_read", rowOk
+      ? { verdict: "described", status: 200, rowOfSession: true, athleteMatchesListRow: athleteConfirmed, trackIdDerived: trackId !== null, ...identityPart(one.identity) }
+      : { verdict: "not_observed", status: one.status ?? null, rowOfSession: false, reason: "detail_not_confirmed" });
+
+    // 8. Its track, the id taken from the confirmed detail only.
+    if (trackId !== null) {
+      const track = await get(`track/${trackId}/`);
+      const tk = track.body;
+      const trackOk = Boolean(track.status === 200 && tk && typeof tk === "object" && !Array.isArray(tk) && safeId(tk.id) === trackId);
+      verdict("identity_track_read", trackOk
+        ? { verdict: "described", status: 200, athleteMatchesRow: listAthlete !== null && safeId(tk.athlete) === listAthlete, ...identityPart(track.identity) }
+        : { verdict: "not_observed", status: track.status ?? null, reason: "track_not_confirmed" });
+    } else {
+      verdict("identity_track_read", { verdict: "not_observed", reason: "no_safe_track_id" });
+    }
+
+    // 9. ONE athlete record: only when the index lists `athlete` on this host at the family's own
+    //    path, only for the athlete of the row confirmed in steps 6 and 7, and only when that row's
+    //    own read did not already show both a name-like and a birth-like key (then the record would
+    //    add nothing to the question, and one athlete's whole profile is not read for nothing).
+    const gpexeAthleteId = athleteConfirmed ? listAthlete : null;
+    const rowRead = report.capabilities.identity_athlete_session_read;
+    const skip = !index ? "api_index_unavailable"
+      : !index.athleteResourceListed ? "athlete_resource_not_listed"
+      : !index.athleteResourceUrlSameHost || !index.athleteResourceUrlPathMatches ? "athlete_resource_url_unexpected"
+      : gpexeAthleteId === null ? "athlete_id_not_confirmed"
+      : rowRead?.nameLikeField === true && rowRead?.birthLikeField === true ? "already_observed" : null;
+    if (skip) {
+      verdict("identity_athlete_read", { verdict: "not_observed", reason: skip });
+      return done();
+    }
+    const athlete = await get(`athlete/${gpexeAthleteId}/`);
+    const ab = athlete.body;
+    const athleteObject = Boolean(athlete.status === 200 && ab && typeof ab === "object" && !Array.isArray(ab));
+    const idMatches = athleteObject && safeId(ab.id) === gpexeAthleteId;
+    verdict("identity_athlete_read", idMatches
+      ? { verdict: "described", status: 200, idMatchesRequested: true, ...describeAthleteTeams(ab, team), ...identityPart(athlete.identity) }
+      : { verdict: "not_observed", status: athlete.status ?? null, idMatchesRequested: athleteObject ? false : null, reason: athleteObject ? "athlete_answer_identity_unconfirmed" : "athlete_read_failed" });
+    return done();
+  }
+
   try {
+    if (mode === "identity") return await runIdentity();
     // 2. The unfiltered session list of this run (one page).
     const list = await get(teamScopedPath("team_session/", team, [["limit", LIST_LIMIT]]));
     const rows = Array.isArray(list.body) ? list.body.filter((r) => r && typeof r === "object") : [];
@@ -661,6 +1093,8 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     verdict("session_tags", { verdict: tags.status === 200 ? "observed" : "not_observed", status: tags.status ?? null, rowsNameATeam: trows ? trows.some((r) => r && typeof r === "object" && "team" in r) : null });
     verdict("units", { verdict: "not_observed", reason: "no endpoint; meanings are compared on a disposable database later" });
   } catch (error) {
+    // A refusal of the final guards is never turned into a report.
+    if (error?.code === "identity_value_in_report" || error?.code === "secret_in_report") throw error;
     if (error instanceof ProbeStop) {
       report.stoppedBy = error.code;
     } else {
@@ -670,7 +1104,7 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
   return done();
 }
 
-function finish(report, env, issued) {
+function finish(report, env, issued, identityValues = new Map()) {
   report.requestCount = report.requests.length;
   const text = assertNoSecretInReport(report, env);
   if (issued && text.includes(issued)) {
@@ -678,6 +1112,7 @@ function finish(report, env, issued) {
     error.code = "secret_in_report";
     throw error;
   }
+  assertNoIdentityValueInReport(text, identityValues, reportVocabulary(report));
   return report;
 }
 
@@ -689,7 +1124,8 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((e) => {
-    process.stderr.write(`${e?.name || "Error"}${e instanceof DiscoveryUsageError ? `: ${e.message}` : e?.code ? ` (${e.code})` : ""}\n`);
+    // A guard refusal names the masked path of the read that carried the value, never the value.
+    process.stderr.write(`${e?.name || "Error"}${e instanceof DiscoveryUsageError ? `: ${e.message}` : e?.code ? ` (${e.code})` : ""}${e?.where ? ` at ${e.where}` : ""}\n`);
     process.exit(1);
   });
 }

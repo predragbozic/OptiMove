@@ -7,7 +7,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, describeDrillLink, describeTeamValue, diagnosticLinkConfirmed, DRILL_MODE_MAX_REQUESTS, DRILL_POSITIONS, DRILL_READ_SEQUENCE, LEGACY_API_PATH, LEGACY_API_PREFIX, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId, TEAM_VALUE_KINDS,
+  answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, describeDrillLink, describeTeamValue, diagnosticLinkConfirmed, DRILL_MODE_MAX_REQUESTS, DRILL_POSITIONS, DRILL_READ_SEQUENCE, LEGACY_API_PATH, LEGACY_API_PREFIX, assertNoIdentityValueInReport, reportVocabulary, SOURCE_KEY_MIN_ANSWERS, IDENTITY_CHILD_KEYS, describeAthleteTeams, describeIdentityFields, describeResourceIndex, IDENTITY_BIRTH_KEY, IDENTITY_CONTAINER_KEYS, IDENTITY_MAX_DEPTH, IDENTITY_MAX_ITEMS, IDENTITY_MAX_PATHS, IDENTITY_MODE_MAX_REQUESTS, IDENTITY_NAME_KEY, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId, TEAM_VALUE_KINDS,
 } from "../scripts/gpexe-rest-v1-capability-probe.mjs";
 import { DiscoveryUsageError } from "../scripts/gpexe-auth-discovery.mjs";
 
@@ -517,8 +517,9 @@ test("8. limits: the request cap stops the run, a hanging read ends as a timeout
 test("9. the target cannot be changed: only server3 and Team ID 980 are accepted, and the credentials come from the environment only", async () => {
   assert.deepEqual(parseArgs([]), { host: PROBE_HOST, team: PROBE_TEAM, mode: "full" });
   assert.deepEqual(parseArgs(["--host", "server3", "--team", "980", "--mode", "drill"]), { host: "server3", team: "980", mode: "drill" });
-  assert.deepEqual([...PROBE_MODES], ["full", "drill"]);
-  for (const bad of [["--mode", "drills"], ["--mode", ""], ["--mode", "FULL"]]) assert.throws(() => parseArgs(bad), DiscoveryUsageError, bad.join(" "));
+  assert.deepEqual(parseArgs(["--mode", "identity"]), { host: PROBE_HOST, team: PROBE_TEAM, mode: "identity" });
+  assert.deepEqual([...PROBE_MODES], ["full", "drill", "identity"]);
+  for (const bad of [["--mode", "drills"], ["--mode", ""], ["--mode", "FULL"], ["--mode", "IDENTITY"], ["--mode", "names"]]) assert.throws(() => parseArgs(bad), DiscoveryUsageError, bad.join(" "));
   await assert.rejects(runCapabilityProbe({ mode: "all" }, ENV, fakeServer().fetchImpl), DiscoveryUsageError);
   for (const bad of [["--host", "e03"], ["--team", "981"], ["--host", "https://server3.gpexe.com/"], ["--team", "980", "--extra", "x"]]) assert.throws(() => parseArgs(bad), DiscoveryUsageError, bad.join(" "));
   const { calls, fetchImpl } = fakeServer();
@@ -569,7 +570,7 @@ test("11. the probe changes nothing else: the adapter, the discovery script and 
   assert.match(source, /if \(mode !== "drill" \|\| !LEGACY_API_PATH\.test\(resourcePath\)\) throw new ProbeStop\("path_refused"/, "the legacy closure refuses outside the drill-only run");
   // Every template path names only confirmed ids, the team, a day or a window.
   for (const m of source.matchAll(/(?:get|getLegacy)\(`([^`]*)`\)/g)) {
-    for (const v of m[1].matchAll(/\$\{([^}]*)\}/g)) assert.ok(["parentId", "sessionId", "athleteId", "trackId", "team", "day", "window", "LIST_LIMIT", "position"].includes(v[1].trim()), `${m[1]}: ${v[1]}`);
+    for (const v of m[1].matchAll(/\$\{([^}]*)\}/g)) assert.ok(["parentId", "sessionId", "athleteId", "trackId", "team", "day", "window", "LIST_LIMIT", "position", "gpexeAthleteId"].includes(v[1].trim()), `${m[1]}: ${v[1]}`);
   }
   assert.doesNotMatch(source, /get\(`[^`]*\?drill=/, "no REST drill read");
   for (const f of await fsp.readdir(path.resolve(ROOT, "backend/src/routes"))) {
@@ -873,4 +874,386 @@ test("14. the drill-only run stops before any drill read at the first parent ide
     const g = await drillRun(t.fetchImpl, { maxRequests: cap });
     assert.deepEqual([g.stoppedBy, t.calls.length, t.calls.filter((x) => x.url.includes("drill=0")).length, g.capabilities.session_drill_details], ["request_limit", cap, drill0Reads, { verdict: "not_observed", reason: "request_limit" }], String(cap));
   }
+});
+
+// ---------------------------------------------------------------------------
+// The identity run (owner order 2026-10-06): where do an athlete's name and date of birth appear in
+// the bound team's answers? Every person below is a made-up marker; the report may carry key paths,
+// kinds, counts and booleans, never one of these values, an id or a URL.
+const PEOPLE = {
+  given: "Markergiven", family: "Markerfamily", full: "Markergiven Markerfamily", dob: "1901-02-03",
+  otherGiven: "Markerother", otherFamily: "Markersecond", otherFull: "Markerother Markersecond",
+  email: "marker.person@example.invalid", teamName: "Marker Team Name",
+};
+const ROOT_INDEX = { team: `${R}team/`, team_session: `${R}team_session/`, athlete_session: `${R}athlete_session/`, track: `${R}track/`, athlete: `${R}athlete/` };
+const ROOT_INDEX_ROUTE = { "GET /rest/v1/": answer(200, ROOT_INDEX), "GET /rest/v1/athlete/4711/": answer(200, { id: 4711 }) };
+const IDENTITY_PATHS = [
+  "POST /api-token-auth/",
+  "GET /rest/v1/team/980/",
+  "GET /rest/v1/",
+  LIST,
+  "GET /rest/v1/team_session/100/",
+  "GET /rest/v1/athlete_session/?teamsession=100&limit=100",
+  "GET /rest/v1/athlete_session/500/",
+  "GET /rest/v1/track/900/",
+  "GET /rest/v1/athlete/4711/",
+];
+const aRow = (id, athlete, extra = {}) => ({ id, teamsession: 100, track: 900 + (id - 500), athlete, drill: null, total_distance: 5000.5, ...extra });
+function identityRoutes(over = {}) {
+  return {
+    "POST /api-token-auth/": happyRoutes()["POST /api-token-auth/"],
+    "GET /rest/v1/team/980/": answer(200, {
+      id: 980, name: PEOPLE.teamName,
+      athletes: [
+        { id: 4711, first_name: PEOPLE.given, last_name: PEOPLE.family, birthdate: PEOPLE.dob },
+        { id: 4712, first_name: PEOPLE.otherGiven, last_name: PEOPLE.otherFamily, birthdate: null },
+      ],
+    }),
+    "GET /rest/v1/": answer(200, ROOT_INDEX),
+    [LIST]: answer(200, [sess(100, 980, DAY, [101, 102]), sess(101, 980, DAY, []), sess(102, 980, DAY, [])], { "x-total-count": "3" }),
+    "GET /rest/v1/team_session/100/": answer(200, sess(100, 980, DAY, [101, 102])),
+    "GET /rest/v1/athlete_session/?teamsession=100&limit=100": answer(200, [aRow(500, 4711, { athlete_name: PEOPLE.full }), aRow(501, 4712, { athlete_name: PEOPLE.otherFull })], { "x-total-count": "2" }),
+    "GET /rest/v1/athlete_session/500/": answer(200, aRow(500, 4711, { athlete_name: PEOPLE.full })),
+    "GET /rest/v1/track/900/": answer(200, { id: 900, athlete: 4711, athlete_name: PEOPLE.full, timezone: MARKERS.tz }),
+    "GET /rest/v1/athlete/4711/": answer(200, { id: 4711, first_name: PEOPLE.given, last_name: PEOPLE.family, birthdate: PEOPLE.dob, email: PEOPLE.email, weight: 77.5, team: 980, teams: [980, 981] }),
+    ...over,
+  };
+}
+const identityRun = (fetchImpl, over = {}) => runCapabilityProbe({ mode: "identity", ...over }, ENV, fetchImpl);
+const fieldAt = (cap, p) => cap.fields.find((f) => f.path === p);
+function identityNoLeak(report) {
+  const text = JSON.stringify({ ...report, ranAt: "" });
+  for (const v of [...Object.values(PEOPLE), ...Object.values(MARKERS).map(String), ISSUED, USER, PASSWORD, DAY, "09-14", "1901", "02-03", "77.5", "5000.5", "Training", "https://", "server3.gpexe.com"]) {
+    assert.ok(!text.includes(v), `no ${v} in the report`);
+  }
+  for (const id of ["4711", "4712", "500", "501", "900", "901", "981"]) assert.ok(!new RegExp(`\\b${id}\\b`).test(text.replace(/"status":\d+/g, "")), `no id ${id}`);
+  for (const id of ["100", "101", "102"]) assert.ok(!new RegExp(`"[^"]*\\b${id}\\b`).test(text), `no id ${id} as a value`);
+  assert.ok(!text.replace('"teamId":"980"', "").replace(/"teamIs980"/g, "").includes("980"), "the team id appears only as the declared target");
+}
+
+test("15. the identity run: one exchange, then exactly eight GETs in a fixed order; every person field is described by path, kind, counts and booleans only; the one athlete read follows the API's own index and a row confirmed twice", async () => {
+  const { calls, fetchImpl } = fakeServer(identityRoutes());
+  const report = await identityRun(fetchImpl);
+  assert.equal(report.mode, "identity");
+  assert.equal(report.stoppedBy, null);
+  assert.equal(IDENTITY_MODE_MAX_REQUESTS, 9);
+  assert.deepEqual(paths(calls), IDENTITY_PATHS);
+  assert.ok(calls.slice(1).every((c) => c.method === "GET" && c.body === undefined && c.redirect === "manual" && c.headers.Authorization === `Token ${ISSUED}`));
+  assert.ok(calls.every((c) => new URL(c.url).origin === "https://server3.gpexe.com"));
+  // No athlete list, no filter on athletes, no other team, no drill, no legacy family.
+  assert.ok(!calls.some((c) => /\/athlete\/\?|athletes\/|team=981|\/981\/|drill=|\/api\//.test(c.url)), paths(calls).join(" | "));
+  const caps = report.capabilities;
+  assert.deepEqual(Object.keys(caps), [
+    "identity_team_read", "identity_api_index", "identity_session_list", "identity_session_read", "identity_athlete_session_list",
+    "identity_athlete_session_read", "identity_track_read", "identity_athlete_read", "identity_fields",
+  ]);
+  assert.deepEqual(caps.identity_fields, {
+    verdict: "observed", readsDescribed: 8,
+    nameLikeFieldIn: ["identity_team_read", "identity_session_list", "identity_session_read", "identity_athlete_session_list", "identity_athlete_session_read", "identity_track_read", "identity_athlete_read"],
+    birthLikeFieldIn: ["identity_team_read", "identity_athlete_read"],
+  });
+  assert.deepEqual(caps.identity_api_index, {
+    verdict: "described", status: 200, bodyIsObject: true, resourceCount: 5, resourceNames: ["athlete", "athlete_session", "team", "team_session", "track"],
+    athleteResourceListed: true, athleteResourceUrlCanonical: true, athleteResourceUrlParsable: true, athleteResourceUrlHttps: true,
+    athleteResourceUrlSameHost: true, athleteResourceUrlPathMatches: true,
+  });
+  const ar = caps.identity_athlete_read;
+  assert.deepEqual([ar.verdict, ar.idMatchesRequested, ar.teamFieldKind, ar.teamNamesBoundTeam, ar.teamsFieldKind, ar.teamsIncludesBoundTeam], ["described", true, "number", true, "array", true]);
+  assert.deepEqual(fieldAt(ar, "birthdate"), { path: "birthdate", category: "birth", present: 1, of: 1, kinds: ["string"], nullCount: 0, allIsoDate: true, allIsoDateTimePrefix: false, allValidCalendarDate: true, allYearPlausible: true });
+  assert.deepEqual(fieldAt(ar, "first_name"), { path: "first_name", category: "name", present: 1, of: 1, kinds: ["string"], allNonEmptyText: true, anyContainsSpace: false, allContainLetter: true, allDistinct: true });
+  assert.ok(fieldAt(ar, "last_name") && !ar.fields.some((f) => /email|weight/.test(f.path)), "only identity keys are described");
+  const tr = caps.identity_team_read;
+  assert.equal(tr.teamConfirmed, true);
+  assert.deepEqual(fieldAt(tr, "athletes[].birthdate"), { path: "athletes[].birthdate", category: "birth", present: 2, of: 2, kinds: ["null", "string"], nullCount: 1, allIsoDate: true, allIsoDateTimePrefix: false, allValidCalendarDate: true, allYearPlausible: true });
+  assert.equal(fieldAt(tr, "athletes[].first_name").present, 2);
+  assert.ok(fieldAt(tr, "name"), "the team's own name is reported as a name-like key; which field is the athlete's is the owner's decision");
+  const al = caps.identity_athlete_session_list;
+  assert.deepEqual([al.rowCount, al.athleteFieldKinds, al.athleteIdDerived], [2, ["number"], true]);
+  assert.deepEqual(fieldAt(al, "[].athlete_name"), { path: "[].athlete_name", category: "name", present: 2, of: 2, kinds: ["string"], allNonEmptyText: true, anyContainsSpace: true, allContainLetter: true, allDistinct: true });
+  assert.deepEqual([caps.identity_athlete_session_read.rowOfSession, caps.identity_athlete_session_read.athleteMatchesListRow], [true, true]);
+  assert.equal(caps.identity_track_read.athleteMatchesRow, true);
+  assert.ok(fieldAt(caps.identity_session_list, "[].category_name") && fieldAt(caps.identity_session_list, "[].name"));
+  // The per-request field names still come from the importer's drop list: personal fields are not
+  // named there; only the identity descriptions name them.
+  assert.ok(!report.requests.some((r) => Array.isArray(r.fieldNames) && (r.fieldNames.includes("athlete_name") || r.fieldNames.includes("birthdate") || r.fieldNames.includes("email"))));
+  identityNoLeak(report);
+});
+
+test("16. the identity run's one athlete read happens only when the index lists `athlete` at the family's own place and the row's athlete is confirmed by its own detail; otherwise nothing is guessed and nothing more is sent", async () => {
+  const eight = IDENTITY_PATHS.slice(0, 8);
+  const cases = [
+    [{ "GET /rest/v1/": answer(200, { team: ROOT_INDEX.team, team_session: ROOT_INDEX.team_session }) }, "athlete_resource_not_listed"],
+    [{ "GET /rest/v1/": answer(200, { ...ROOT_INDEX, athlete: "https://server3.gpexe.com/api/athlete/" }) }, "athlete_resource_url_unexpected"],
+    [{ "GET /rest/v1/": answer(200, { ...ROOT_INDEX, athlete: "https://elsewhere.example.invalid/rest/v1/athlete/" }) }, "athlete_resource_url_unexpected"],
+    [{ "GET /rest/v1/": answer(200, { ...ROOT_INDEX, athlete: { url: ROOT_INDEX.athlete } }) }, "athlete_resource_url_unexpected"],
+    [{ "GET /rest/v1/": answer(404, { detail: "Not found." }) }, "api_index_unavailable"],
+    [{ "GET /rest/v1/": answer(302, "", { location: ROOT_INDEX.athlete }) }, "api_index_unavailable"],
+    [{ "GET /rest/v1/": answer(200, "<html>not json</html>", { "content-type": "text/html" }) }, "api_index_unavailable"],
+    [{ "GET /rest/v1/athlete_session/500/": answer(200, aRow(500, 4799, { athlete_name: PEOPLE.full })) }, "athlete_id_not_confirmed"],
+    [{ "GET /rest/v1/athlete_session/500/": answer(200, aRow(500, "4711x")) }, "athlete_id_not_confirmed"],
+  ];
+  for (const [over, reason] of cases) {
+    const { calls, fetchImpl } = fakeServer(identityRoutes(over));
+    const report = await identityRun(fetchImpl);
+    assert.deepEqual(paths(calls), eight, reason);
+    assert.deepEqual(report.capabilities.identity_athlete_read, { verdict: "not_observed", reason }, reason);
+    assert.equal(report.stoppedBy, null);
+    identityNoLeak(report);
+  }
+  const redirected = await identityRun(fakeServer(identityRoutes({ "GET /rest/v1/": answer(302, "", { location: ROOT_INDEX.athlete }) })).fetchImpl);
+  assert.deepEqual(redirected.capabilities.identity_api_index, { verdict: "not_observed", status: 302, reason: "redirected" });
+  // An answer naming another athlete, or no answer: nothing of it is described.
+  for (const [route, reason, idMatches] of [
+    [answer(200, { id: 4712, first_name: PEOPLE.otherGiven, birthdate: PEOPLE.dob }), "athlete_answer_identity_unconfirmed", false],
+    [answer(200, [{ id: 4711, first_name: PEOPLE.given }]), "athlete_read_failed", null],
+    [answer(404, { detail: "Not found." }), "athlete_read_failed", null],
+    [answer(403, { detail: "You do not have permission." }), "athlete_read_failed", null],
+  ]) {
+    const { calls, fetchImpl } = fakeServer(identityRoutes({ "GET /rest/v1/athlete/4711/": route }));
+    const report = await identityRun(fetchImpl);
+    assert.deepEqual(paths(calls), IDENTITY_PATHS);
+    const ar = report.capabilities.identity_athlete_read;
+    assert.deepEqual([ar.verdict, ar.reason, ar.idMatchesRequested, "fields" in ar], ["not_observed", reason, idMatches, false]);
+    assert.deepEqual(report.capabilities.identity_fields.birthLikeFieldIn, ["identity_team_read"]);
+    identityNoLeak(report);
+  }
+  // An athlete record that names another team is reported by booleans only; nothing further is read.
+  const moved = fakeServer(identityRoutes({ "GET /rest/v1/athlete/4711/": answer(200, { id: 4711, first_name: PEOPLE.given, team: 981, teams: [{ id: 981 }] }) }));
+  const mr = await identityRun(moved.fetchImpl);
+  assert.deepEqual(paths(moved.calls), IDENTITY_PATHS);
+  const m = mr.capabilities.identity_athlete_read;
+  assert.deepEqual([m.teamFieldKind, m.teamNamesBoundTeam, m.teamsFieldKind, m.teamsIncludesBoundTeam], ["number", false, "array", false]);
+  identityNoLeak(mr);
+});
+
+test("17. the identity run keeps the team boundary: another team, an unconfirmed session or rows of another session stop the chain before the next request; the cap is nine whatever is asked", async () => {
+  const stops = [
+    [{ "GET /rest/v1/team/980/": answer(200, { id: 981, name: PEOPLE.teamName }) }, "team_isolation_failed", 2],
+    [{ [LIST]: answer(200, [sess(100, 980, DAY, [101]), sess(300, 981, DAY, [])], { "x-total-count": "2" }) }, "team_isolation_failed", 4],
+    [{ "GET /rest/v1/team_session/100/": answer(200, sess(100, 981, DAY, [101, 102])) }, "team_isolation_failed", 5],
+    [{ "GET /rest/v1/team_session/100/": answer(200, { id: 100, drills: [101, 102] }) }, "session_not_confirmed", 5],
+    [{ "GET /rest/v1/team_session/100/": answer(404, { detail: "Not found." }) }, "session_not_confirmed", 5],
+    [{ "GET /rest/v1/athlete_session/?teamsession=100&limit=100": answer(200, [aRow(500, 4711, { teamsession: 777 })]) }, "team_isolation_failed", 6],
+    [{ "GET /rest/v1/athlete_session/?teamsession=100&limit=100": answer(200, [aRow(500, 4711, { teamsession: null })]) }, "no_safe_athlete_row", 6],
+    [{ "GET /rest/v1/athlete_session/?teamsession=100&limit=100": answer(200, []) }, "no_safe_athlete_row", 6],
+    [{ "GET /rest/v1/athlete_session/500/": answer(200, aRow(500, 4711, { teamsession: 777 })) }, "team_isolation_failed", 7],
+    [{ [LIST]: answer(500, "") }, "session_list_unavailable", 4],
+  ];
+  for (const [over, stop, n] of stops) {
+    const { calls, fetchImpl } = fakeServer(identityRoutes(over));
+    const report = await identityRun(fetchImpl);
+    assert.deepEqual([report.stoppedBy, calls.length], [stop, n], stop);
+    assert.deepEqual(paths(calls), IDENTITY_PATHS.slice(0, n), stop);
+    assert.ok(report.capabilities.identity_fields, "the summary is always there");
+    identityNoLeak(report);
+  }
+  // A team read without a readable id is not a confirmed team: not described, the run goes on.
+  const noId = await identityRun(fakeServer(identityRoutes({ "GET /rest/v1/team/980/": answer(200, { name: PEOPLE.teamName, athletes: [{ first_name: PEOPLE.given }] }) })).fetchImpl);
+  assert.deepEqual(noId.capabilities.identity_team_read, { verdict: "not_observed", status: 200, teamConfirmed: false, reason: "team_id_unreadable" });
+  assert.equal(noId.stoppedBy, null);
+  // A track that is not the confirmed one: no track fields; the athlete read still follows the confirmed row.
+  const badTrack = fakeServer(identityRoutes({ "GET /rest/v1/track/900/": answer(200, { id: 901, athlete: 4711, athlete_name: PEOPLE.full }) }));
+  const bt = await identityRun(badTrack.fetchImpl);
+  assert.deepEqual(bt.capabilities.identity_track_read, { verdict: "not_observed", status: 200, reason: "track_not_confirmed" });
+  assert.deepEqual(paths(badTrack.calls), IDENTITY_PATHS);
+  // The cap: never more than nine requests, whatever maxRequests says; a smaller cap stops early.
+  const capped = fakeServer(identityRoutes());
+  const c = await identityRun(capped.fetchImpl, { maxRequests: 14 });
+  assert.deepEqual([capped.calls.length, c.stoppedBy], [9, null]);
+  const small = fakeServer(identityRoutes());
+  const s = await identityRun(small.fetchImpl, { maxRequests: 5 });
+  assert.deepEqual([small.calls.length, s.stoppedBy], [5, "request_limit"]);
+  identityNoLeak(s);
+});
+
+test("18. describeIdentityFields: key paths through id-keyed maps and unknown containers never print a key that could be a value; kinds, counts and the date checks are booleans; the values stay apart", () => {
+  const raw = {
+    players: { 4711: { athlete_name: PEOPLE.full, dateOfBirth: "1901-02-03T00:00:00Z" }, 4712: { athlete_name: PEOPLE.otherFull, dateOfBirth: null } },
+    Markerkey: { first_name: PEOPLE.given },
+    zzopaque: { surname: PEOPLE.family },
+    "first name": PEOPLE.given,
+    "birth date": PEOPLE.dob,
+    firstName: "Markercamel",
+    name: { first: PEOPLE.given, last: PEOPLE.family },
+    roster: [{ dob: "1901-02-30" }, { dob: "3001-01-01" }, { dob: "1901/02/03" }, { dob: 19010203 }],
+  };
+  const d = describeIdentityFields(raw, { nowYear: 2026 });
+  assert.deepEqual(d.fields.map((f) => f.path), [
+    "<birth_key>", "<key>.first_name", "<key>.surname", "<name_key>", "firstName", "name", "name.first", "name.last", "players.<id>.athlete_name", "players.<id>.dateOfBirth", "roster[].dob",
+  ]);
+  assert.deepEqual(d.fields.find((f) => f.path === "players.<id>.dateOfBirth"), { path: "players.<id>.dateOfBirth", category: "birth", present: 2, of: 2, kinds: ["null", "string"], nullCount: 1, allIsoDate: false, allIsoDateTimePrefix: true, allValidCalendarDate: true, allYearPlausible: true });
+  assert.deepEqual(d.fields.find((f) => f.path === "roster[].dob"), { path: "roster[].dob", category: "birth", present: 4, of: 4, kinds: ["number", "string"], nullCount: 0, allIsoDate: false, allIsoDateTimePrefix: false, allValidCalendarDate: false, allYearPlausible: false });
+  assert.deepEqual(d.fields.find((f) => f.path === "name").kinds, ["object"]);
+  assert.deepEqual([d.nameLike, d.birthLike, d.fieldsTruncated, d.walkTruncated], [true, true, false, false]);
+  const printed = JSON.stringify({ ...d, values: undefined });
+  for (const v of [...Object.values(PEOPLE), "Markercamel", "Markerkey", "zzopaque", "4711", "4712", "1901", "3001", "19010203"]) assert.ok(!printed.includes(v), `no ${v}`);
+  for (const v of [PEOPLE.full, PEOPLE.given, PEOPLE.family, "1901-02-03T00:00:00Z", "3001-01-01", "19010203"]) assert.ok(d.values.has(v), `the guard keeps ${v}`);
+  // Each date check on its own.
+  const one = (v) => describeIdentityFields({ birthdate: v }, { nowYear: 2026 }).fields[0];
+  assert.deepEqual([one("1901-02-03").allIsoDate, one("1901-02-03").allValidCalendarDate, one("1901-02-03").allYearPlausible], [true, true, true]);
+  assert.deepEqual([one("1901-02-30").allIsoDate, one("1901-02-30").allValidCalendarDate], [true, false]);
+  assert.deepEqual([one("1899-12-31").allYearPlausible, one("2027-01-01").allYearPlausible], [false, false]);
+  assert.deepEqual([one(null).allIsoDate, one(null).nullCount, one("").allValidCalendarDate], [null, 1, false]);
+  // Names: empty text, a single word, duplicates.
+  const names = describeIdentityFields([{ athlete_name: PEOPLE.full }, { athlete_name: " " }, { athlete_name: "markergiven markerfamily" }]).fields[0];
+  assert.deepEqual([names.present, names.of, names.allNonEmptyText, names.anyContainsSpace, names.allDistinct], [3, 3, false, true, false]);
+  // Bounds: depth, array length and the number of printed paths.
+  let deep = { first_name: PEOPLE.given };
+  for (let i = 0; i < 6; i += 1) deep = { athlete: deep };
+  assert.equal(describeIdentityFields(deep).walkTruncated, true);
+  assert.equal(describeIdentityFields(Array.from({ length: 201 }, () => ({ athlete_name: PEOPLE.full }))).walkTruncated, true);
+  const many = Object.fromEntries(Array.from({ length: 45 }, (_, i) => [`k${i}_name`, "Markerv"]));
+  const m = describeIdentityFields(many);
+  assert.deepEqual([m.fields.length, m.fieldsTruncated], [40, true]);
+  // A primitive answer describes nothing.
+  assert.deepEqual(describeIdentityFields("text").fields, []);
+  assert.deepEqual(describeResourceIndex([1, 2], `${R}athlete/`), { bodyIsObject: false, resourceCount: 0, resourceNames: [], athleteResourceListed: false, athleteResourceUrlCanonical: false, athleteResourceUrlParsable: false, athleteResourceUrlHttps: false, athleteResourceUrlSameHost: false, athleteResourceUrlPathMatches: false });
+  assert.equal(describeResourceIndex({ "Marker Person": `${R}x/` }, `${R}athlete/`).resourceNames, "<unprintable>");
+  assert.deepEqual(describeAthleteTeams({ teams: [{ id: "980" }] }, "980"), { teamFieldKind: "absent", teamNamesBoundTeam: null, teamsFieldKind: "array", teamsIncludesBoundTeam: true });
+  assert.ok(IDENTITY_NAME_KEY.test("athlete_name") && IDENTITY_BIRTH_KEY.test("birthdate") && IDENTITY_BIRTH_KEY.test("date_of_birth") && IDENTITY_BIRTH_KEY.test("dob") && !IDENTITY_BIRTH_KEY.test("doble"));
+  assert.ok(IDENTITY_CONTAINER_KEYS.includes("athlete") && !IDENTITY_CONTAINER_KEYS.includes("<key>"));
+  assert.deepEqual([IDENTITY_MAX_DEPTH, IDENTITY_MAX_ITEMS, IDENTITY_MAX_PATHS], [4, 200, 40]);
+});
+
+test("19. the identity guard refuses to print a report that would carry a value seen under an identity field, quoted or as a bare word; words of the report itself and parts of longer words do not trip it; the other runs never describe identity", async () => {
+  assert.throws(() => assertNoIdentityValueInReport('{"a":"Markergiven"}', new Set(["Markergiven"])), (e) => e.code === "identity_value_in_report");
+  assert.throws(() => assertNoIdentityValueInReport('{"a":"x Markergiven y"}', new Set(["Markergiven"])), (e) => e.code === "identity_value_in_report");
+  assert.throws(() => assertNoIdentityValueInReport('{"a":"1901-02-03"}', new Set(["1901-02-03"])), (e) => e.code === "identity_value_in_report");
+  assert.doesNotThrow(() => assertNoIdentityValueInReport('{"teamNamesBoundTeam":true}', new Set(["Team", "Bound"])));
+  assert.doesNotThrow(() => assertNoIdentityValueInReport('{"kinds":["null","string"]}', new Set(["null", "string", "None"])));
+  assert.doesNotThrow(() => assertNoIdentityValueInReport('{"a":"Markergivenx"}', new Set(["Markergiven"])));
+  assert.throws(() => assertNoIdentityValueInReport('{"a":"Ana"}', new Set(["Ana"])), (e) => e.code === "identity_value_in_report", "a short value quoted");
+  assert.doesNotThrow(() => assertNoIdentityValueInReport('{"a":"Analysis"}', new Set(["Ana"])), "a short value is checked quoted only");
+  // End to end: a source whose identity value equals a word the report prints standalone makes the
+  // whole run refuse to print, rather than print that value.
+  // A source that echoes an athlete's name into a header the report prints (the GPEXE version):
+  // the whole run refuses, and the error names only the masked path of the read.
+  const echo = fakeServer(identityRoutes({ "GET /rest/v1/athlete/4711/": answer(200, { id: 4711, first_name: "Markerecho", birthdate: PEOPLE.dob }, { "x-gpexe-version": "Markerecho" }) }));
+  await assert.rejects(identityRun(echo.fetchImpl), (e) => e.code === "identity_value_in_report" && e.where === "rest/v1/athlete/<id>/" && !String(e.message).includes("Markerecho"));
+  // A value that is a word the report prints for its own reasons does not refuse it.
+  const vocab = await identityRun(fakeServer(identityRoutes({ "GET /rest/v1/athlete/4711/": answer(200, { id: 4711, first_name: "described", last_name: "athlete", birthdate: PEOPLE.dob }) })).fetchImpl);
+  assert.equal(vocab.stoppedBy, null);
+  identityNoLeak(vocab);
+  // The full and drill runs never describe identity fields and never ask for the index or an athlete.
+  const full = fakeServer({ ...happyRoutes(), ...ROOT_INDEX_ROUTE });
+  const fr = await runCapabilityProbe({}, ENV, full.fetchImpl);
+  assert.equal(fr.stoppedBy, null);
+  assert.ok(!Object.keys(fr.capabilities).some((k) => k.startsWith("identity_")));
+  assert.ok(!full.calls.some((c) => /\/rest\/v1\/$|\/athlete\/\d/.test(new URL(c.url).pathname)));
+  const dr = fakeServer(drillRoutes(ROOT_INDEX_ROUTE));
+  const drr = await runCapabilityProbe({ mode: "drill" }, ENV, dr.fetchImpl);
+  assert.ok(!Object.keys(drr.capabilities).some((k) => k.startsWith("identity_")));
+  assert.ok(!dr.calls.some((c) => /\/rest\/v1\/$|\/athlete\/\d/.test(new URL(c.url).pathname)));
+  // The source: the identity description is computed only in the identity run, the index and the
+  // athlete read have one call site each, and no athlete list or athlete filter is ever built.
+  const source = (await fsp.readFile(path.resolve(ROOT, "backend/scripts/gpexe-rest-v1-capability-probe.mjs"), "utf8")).split(/\r?\n/).filter((l) => !l.trim().startsWith("//")).join("\n");
+  assert.equal((source.match(/describeIdentityFields\(raw\)/g) || []).length, 1);
+  assert.match(source, /if \(mode === "identity" && raw !== undefined\) \{\n\s+identity = describeIdentityFields\(raw\);/);
+  assert.equal((source.match(/get\(""\)/g) || []).length, 1, "one index read");
+  assert.equal((source.match(/get\(`athlete\//g) || []).length, 1, "one athlete read");
+  assert.match(source, /get\(`athlete\/\$\{gpexeAthleteId\}\/`\)/);
+  assert.doesNotMatch(source, /`athlete\/\?|"athlete\/\?|athletes\//, "no athlete list and no athlete filter");
+  assert.match(source, /if \(mode === "identity"\) return await runIdentity\(\);/);
+});
+
+test("20. ordinary session and team names never refuse the identity run: a word of the report's own paths, codes and key names is not a person, and `_` is part of a word", async () => {
+  const sessions = [
+    sess(100, 980, DAY, [101, 102], { name: "recovery session", category_name: "team" }),
+    sess(101, 980, DAY, [], { name: "rest day track work" }),
+    sess(102, 980, DAY, [], { name: "athlete testing" }),
+  ];
+  const { calls, fetchImpl } = fakeServer(identityRoutes({ [LIST]: answer(200, sessions, { "x-total-count": "3" }) }));
+  const report = await identityRun(fetchImpl);
+  assert.equal(report.stoppedBy, null);
+  assert.deepEqual(paths(calls), IDENTITY_PATHS);
+  const text = JSON.stringify(report);
+  for (const v of ["recovery", "testing", "rest day", "track work"]) assert.ok(!text.includes(v), v);
+  identityNoLeak(report);
+  // The word rule: inside an identifier a value is not found; standing alone it is.
+  assert.doesNotThrow(() => assertNoIdentityValueInReport('{"p":"rest/v1/team_session/"}', new Set(["session"])));
+  assert.throws(() => assertNoIdentityValueInReport('{"p":"rest/v1/team_session/"}', new Set(["rest"])), (e) => e.code === "identity_value_in_report");
+  assert.doesNotThrow(() => assertNoIdentityValueInReport('{"p":"rest/v1/team_session/"}', new Set(["rest"]), reportVocabulary({ requests: [{ path: "rest/v1/team_session/" }] })));
+  // Header VALUES are not vocabulary: a value printed there is still refused.
+  const req = { path: "rest/v1/athlete/<id>/", fieldNames: ["first_name"], headerNames: ["x-gpexe-version"], gpexeVersion: "Markergiven", contentType: "application/json" };
+  const v = reportVocabulary({ requests: [req, { ...req, path: "rest/v1/track/<id>/" }] });
+  assert.ok(v.has("rest") && v.has("first_name") && v.has("gpexeVersion") && v.has("x") && !v.has("Markergiven") && !v.has("application"));
+  // A source key name seen in one answer only is not vocabulary.
+  assert.equal(SOURCE_KEY_MIN_ANSWERS, 2);
+  const once = reportVocabulary({ requests: [{ path: "rest/v1/athlete/<id>/", fieldNames: ["markerlower"] }, { path: "rest/v1/track/<id>/", fieldNames: ["id"] }] });
+  assert.ok(!once.has("markerlower") && once.has("athlete"));
+  // A session called "drills" still prints: the key `drills` is in the list's and the session's own answer.
+  const drillsNamed = await identityRun(fakeServer(identityRoutes({ [LIST]: answer(200, [sess(100, 980, DAY, [101, 102], { name: "drills" }), sess(101, 980, DAY, []), sess(102, 980, DAY, [])], { "x-total-count": "3" }) })).fetchImpl);
+  assert.equal(drillsNamed.stoppedBy, null);
+  identityNoLeak(drillsNamed);
+});
+
+test("21. the athlete read: a proxy-style http link on the same host and path still allows it; another host or path never does; the index URL is described by booleans only; a row that already shows both fields makes the record unnecessary", async () => {
+  const proxied = fakeServer(identityRoutes({ "GET /rest/v1/": answer(200, { ...ROOT_INDEX, athlete: "http://server3.gpexe.com/rest/v1/athlete/" }) }));
+  const pr = await identityRun(proxied.fetchImpl);
+  assert.deepEqual(paths(proxied.calls), IDENTITY_PATHS);
+  const ix = pr.capabilities.identity_api_index;
+  assert.deepEqual([ix.athleteResourceUrlCanonical, ix.athleteResourceUrlParsable, ix.athleteResourceUrlHttps, ix.athleteResourceUrlSameHost, ix.athleteResourceUrlPathMatches], [false, true, false, true, true]);
+  assert.equal(pr.capabilities.identity_athlete_read.verdict, "described");
+  identityNoLeak(pr);
+  for (const [url, expect] of [
+    ["https://server3.gpexe.com/api/athlete/", [true, true, true, false]],
+    ["https://elsewhere.example.invalid/rest/v1/athlete/", [true, true, false, true]],
+    ["https://server3.gpexe.com/rest/v1/athlete/?team=981", [true, true, true, false]],
+    ["not a url", [false, false, false, false]],
+  ]) {
+    const d = describeResourceIndex({ athlete: url }, `${R}athlete/`);
+    assert.deepEqual([d.athleteResourceUrlParsable, d.athleteResourceUrlHttps, d.athleteResourceUrlSameHost, d.athleteResourceUrlPathMatches], expect, url);
+    assert.ok(!JSON.stringify(d).includes("elsewhere") && !JSON.stringify(d).includes("http"), "no URL printed");
+  }
+  // The row's own read already carries a name-like and a birth-like key: no athlete record is read.
+  const both = fakeServer(identityRoutes({ "GET /rest/v1/athlete_session/500/": answer(200, aRow(500, 4711, { athlete_name: PEOPLE.full, athlete_birthdate: PEOPLE.dob })) }));
+  const br = await identityRun(both.fetchImpl);
+  assert.deepEqual(paths(both.calls), IDENTITY_PATHS.slice(0, 8));
+  assert.deepEqual(br.capabilities.identity_athlete_read, { verdict: "not_observed", reason: "already_observed" });
+  assert.ok(br.capabilities.identity_athlete_session_read.fields.some((f) => f.path === "athlete_birthdate" && f.category === "birth"));
+  identityNoLeak(br);
+});
+
+test("22. a key that could be a person is never printed: capitalised keys and name-keyed maps are masked; the vocabulary covers the usual name and date variants; a run that read nothing says not_read", async () => {
+  const d = describeIdentityFields({ roster: { Borna: { x: 1 }, Luka: { last: PEOPLE.family } }, Bornstein: "Markerv", Markername: "Markerw", bday: "1901-02-03", yob: 1901, given: PEOPLE.given });
+  const printed = JSON.stringify(d.fields);
+  for (const k of ["Borna", "Luka", "Bornstein", "Markername"]) assert.ok(!printed.includes(k), k);
+  assert.ok(d.fields.some((f) => f.path === "<name_key>") && d.fields.some((f) => f.path === "bday" && f.category === "birth") && d.fields.some((f) => f.path === "yob" && f.category === "birth") && d.fields.some((f) => f.path === "given" && f.category === "name"));
+  for (const k of ["birthdate", "BirthDate", "dateOfBirth", "date_of_birth", "dob", "DOB", "athlete_dob", "bdate", "born", "born_on", "bornOn", "yob"]) assert.ok(IDENTITY_BIRTH_KEY.test(k), k);
+  for (const k of ["Borna", "borna", "Bornstein", "doble", "adobe", "stubborn", "yobbo"]) assert.ok(!IDENTITY_BIRTH_KEY.test(k), k);
+  for (const k of ["first", "last", "given_name", "family", "middle_name", "surname", "athlete_name"]) assert.ok(IDENTITY_NAME_KEY.test(k), k);
+  // Nested name parts and a list under a name key feed the guard; the parts are described.
+  const n = describeIdentityFields({ name: { first: "Markergiven", last: "Markerfamily" }, aliases_name: ["Markeralias"], birth: { year: 1901, month: 2, day: 3 }, athlete_name: { markerlower: 1, markerother: { x: 1 } } });
+  assert.ok(n.fields.some((f) => f.path === "name.first" && f.category === "name") && n.fields.some((f) => f.path === "birth.year" && f.category === "birth"));
+  // A child outside the closed list is never printed, nor any key below it.
+  assert.ok(n.fields.some((f) => f.path === "athlete_name.<name_key>") && !JSON.stringify(n.fields).includes("markerlower") && !JSON.stringify(n.fields).includes("markerother"));
+  assert.ok(IDENTITY_CHILD_KEYS.includes("first") && IDENTITY_CHILD_KEYS.includes("year") && !IDENTITY_CHILD_KEYS.includes("y"));
+  assert.ok(n.values.has("Markergiven") && n.values.has("Markeralias"));
+  assert.ok(!JSON.stringify({ ...n, values: undefined }).includes("Markergiven"));
+  // Nothing read: the summary says so.
+  const none = await identityRun(fakeServer(identityRoutes({ "GET /rest/v1/team/980/": answer(500, ""), "GET /rest/v1/": answer(500, ""), [LIST]: answer(500, "") })).fetchImpl);
+  assert.deepEqual(none.capabilities.identity_fields, { verdict: "not_read", readsDescribed: 0, nameLikeFieldIn: [], birthLikeFieldIn: [] });
+});
+
+test("23. a capitalised source key equal to a person's name is neither printed nor an exemption from the guard", async () => {
+  // In the identity run a capitalised key never reaches fieldNames: the report prints without it.
+  const keyed = fakeServer(identityRoutes({ "GET /rest/v1/athlete/4711/": answer(200, { id: 4711, first_name: PEOPLE.given, birthdate: PEOPLE.dob, [PEOPLE.given]: { x: 1 } }) }));
+  const report = await identityRun(keyed.fetchImpl);
+  assert.deepEqual(paths(keyed.calls), IDENTITY_PATHS);
+  assert.equal(report.requests.at(-1).fieldNames, "<unprintable>");
+  identityNoLeak(report);
+  // The full run keeps its own rule (unchanged): capitalised field names print there as before.
+  // The vocabulary never takes a capitalised source key name, so the guard still refuses it.
+  const r = { path: "rest/v1/athlete/<id>/", fieldNames: [PEOPLE.given, "first_name"], resourceNames: ["Markerres", "athlete"], authScheme: "markerscheme" };
+  const v = reportVocabulary({ requests: [r, { ...r }] });
+  assert.ok(v.has("first_name") && v.has("athlete") && !v.has(PEOPLE.given) && !v.has("Markerres") && !v.has("markerscheme"));
+  // An identity key path is the source's: its words never join the vocabulary.
+  const paths2 = reportVocabulary({ requests: [{ path: "rest/v1/athlete/<id>/" }], capabilities: { identity_athlete_read: { fields: [{ path: "athletes[].markerlower_name", category: "name" }] } } });
+  assert.ok(!paths2.has("markerlower_name") && !paths2.has("athletes") && paths2.has("category") && paths2.has("name"));
+  // A lower-case key of one answer that is also a name value (an object keyed by user names) is refused.
+  const lower = fakeServer(identityRoutes({ "GET /rest/v1/athlete/4711/": answer(200, { id: 4711, username: "markerlower", birthdate: PEOPLE.dob, markerlower: { x: 1 } }) }));
+  await assert.rejects(identityRun(lower.fetchImpl), (e) => e.code === "identity_value_in_report" && e.where === "rest/v1/athlete/<id>/" && !String(e.where).includes("markerlower"));
+  assert.throws(() => assertNoIdentityValueInReport(`{"fieldNames":["${PEOPLE.given}"]}`, new Map([[PEOPLE.given, "rest/v1/athlete/<id>/"]]), v), (e) => e.code === "identity_value_in_report" && e.where === "rest/v1/athlete/<id>/");
+  // The index prints resource names only in field-name form.
+  assert.equal(describeResourceIndex({ athlete: `${R}athlete/`, Markerperson: `${R}x/` }, `${R}athlete/`).resourceNames, "<unprintable>");
 });

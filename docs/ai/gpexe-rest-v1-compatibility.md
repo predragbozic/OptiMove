@@ -561,6 +561,132 @@ After each probe a row becomes **same**, **mapped**, **missing** or stays `not_o
 `not_observed` (section 2); the adapter implements the proven ones, and only then can the importer's mapper be compared value by value on one
 session (on a disposable database, as the pilot did for `e03`).
 
+## 4b. Athlete identity: name and date of birth (discovery 2026-10-06, the identity run)
+
+**Owner order (2026-10-06).** The *Link athletes* screen should identify a GPEXE athlete by
+the GPEXE name and date of birth. The internal GPEXE athlete id stays the key OptiMove stores, and
+moves to Technical details. Both values must come from a confirmed read-only GPEXE answer for the
+bound team 980; the endpoint and the field meaning are not guessed. First step: the exact,
+confirmed endpoint and field names. If the repository does not prove them, one owner-run read-only
+probe returns field names and booleans only.
+
+**Discovery result: not proven.** Nothing in the repository names a confirmed endpoint or field
+for an athlete's name or date of birth on `server3` / `rest_v1`:
+- **The adapter has no athlete resource.** Neither `REST_V1_CAPABILITIES` nor `BUNDLE_FIELDS`
+  has one. The athlete rows and tracks keep only the canonical GPEXE athlete id (`athlete`), and
+  the importer keys a link on it.
+- **The importer's drop list is a hint, not proof.** `redactGpexe` in `backend/src/gpexeClient.js`
+  removes `athlete_name` and `birthdate` (with weight, picture, e-mail, notes and others) before
+  anything is stored. The in-app import runbook says names appeared "on tracks". That list was
+  written in F1 for `e03` / `api`. It does not record which resource carried which field, in which
+  format, or what the field means, and it says nothing about `server3`.
+- **Earlier probes could not see these fields.** Every earlier probe run described an answer only
+  after that drop list (section 4), so no report could name them, and none did.
+- **The handbook is not available here.** The GPEXE handbook the owner holds
+  (`gpexe-v.6-api-rest-handbook.pdf`) is not in the repository, so no page of it can be cited for
+  these fields.
+- **Not used:** the owner's legacy integration holds credentials and is never opened. A private
+  table or a sheet is not a production source (owner).
+
+**The identity run** (`--mode identity`, `backend/scripts/gpexe-rest-v1-capability-probe.mjs`,
+owner-run only, same terminal rules as section 4) answers where those fields appear. It sends one
+exchange in the host's confirmed form and then at most eight GET requests for Team ID 980. The
+order is fixed, and each request runs only when the previous answer confirms what it needs:
+
+| # | Request | Sent only when | A stop |
+|---|---|---|---|
+| 1 | `team/980/` (proven read of the bound team) | always | the answer's `id` names another team: `team_isolation_failed` |
+| 2 | `rest/v1/` (the API's own index of its resources; **not a proven read**) | always | none; not a 200 JSON object: no athlete read |
+| 3 | `team_session/?team=980&limit=100` (proven) | always | a row of another team stops the run |
+| 4 | `team_session/<id>/` (proven); `<id>` chosen as in the full run | the list gave a safe id | not team 980: `session_not_confirmed`, nothing below |
+| 5 | `athlete_session/?teamsession=<id>&limit=100` (proven) | 4 confirmed team 980 | a row of another session stops the run; rows that do not all name the session: nothing below |
+| 6 | `athlete_session/<row id>/` (proven) | 5 gave a row with a canonical athlete id | another session stops the run |
+| 7 | `track/<track id>/` (proven); the id from 6 only | 6 confirmed the session | none |
+| 8 | `athlete/<athlete id>/` (**not a proven read**) | **all of:** the index (2) lists `athlete` on this host at the family's own path `/rest/v1/athlete/` (a proxy's `http` link counts; another host, path or query does not); the athlete id is canonical and the same in the list row (5) and in that row's own detail (6); and that detail did **not** already show both a name-like and a birth-like key (then `already_observed`: one athlete's whole record is not read for nothing) | none; the last request |
+
+The numbers in the table count the reads after the exchange (the script's comments count the
+exchange as step 1). There is no athlete list, no athlete filter, no other team, no drill read and
+no legacy family. **Two reads are not proven reads: the index (2) and the athlete record (8).** The
+index names no team and no person. The athlete record is read through the probe's own URL from the
+application's catalog, never through the index's link. It is read only when the index names that
+resource on this host, and only for an athlete GPEXE itself named twice inside a confirmed session
+of team 980. It is one record, read in memory only and never stored.
+
+**What it prints.** Everything the full run prints per request. In addition, for each answer
+whose identity is confirmed, some keys are described:
+- **Which keys:** a key that may hold a name (ending in `name`, or `first` / `last` / `given` /
+  `family` / `middle`) or a date of birth (`birth`, or the words `dob` / `bday` / `bdate` / `yob`
+  / `born`). Also the children of a small object under such a key, so
+  `name: { first, last }` gives `name.first` and `name.last`. Such a child key is printed only
+  from a closed list (`first`, `last`, `given`, `family`, `middle`, `full`, `display`, `short`,
+  `year`, `month`, `day`, `date`, `value`, `text`). Any other child is `<name_key>` /
+  `<birth_key>`, so a small map keyed by people under a name key prints nobody.
+- **Path:** its key path, through structural containers only (`athletes[].birthdate`,
+  `[].athlete_name`, `players.<id>.first_name`). Any other key on the way is `<key>`, and a map
+  keyed by ids is `<id>`. An identity key is printed only when it starts with a lower-case letter
+  and is a plain identifier, as JSON field names are written; otherwise it is `<name_key>` /
+  `<birth_key>`. So a capitalised key, such as a person used as a key, is never printed.
+- **Counts and kinds:** how often it is present, out of how many objects, and its value kinds.
+- **For a name:** whether every value is non-empty text with a letter, whether any value has two
+  words, and whether the values are distinct.
+- **For a date of birth:** how many are null, and, over the rest, whether every value is
+  `YYYY-MM-DD`, starts like `YYYY-MM-DDT`, is a real calendar date, and has a year from 1900 to
+  the current year.
+
+**The index read** adds its resource names and, about its `athlete` link, booleans only: listed,
+exactly the expected URL, a URL at all, `https`, the same host, the same path. **The athlete read**
+adds whether its `id` is the one asked for, and the kinds and booleans of its `team` / `teams`
+fields against team 980 (never another team's id). **The summary, `identity_fields`,** gives the
+number of reads described and the reads where a name-like or a birth-like key was seen. It is
+`not_read` when no answer was described.
+**"observed" means only that a key of that name was seen. Which key is the athlete's name or date
+of birth, and whether it is reliable, is the owner's decision after the result.**
+
+**What it never prints:** a value, a part of a value, an id, a URL, or a key that could be a
+value. The values are read in memory only. This is the one place the probe looks at an answer
+before the drop list.
+
+**The second guard.** Besides the existing secret guard, a second final guard refuses to print a
+report that would carry any value seen under an identity key (`identity_value_in_report`; the run
+then prints nothing).
+- **Matching:** a value is matched quoted, or from four characters as a bare word. A word is
+  letters, digits and `_`, as in an identifier, so a value is never found inside `team_session`.
+- **The report's own vocabulary is skipped:** its keys, codes, verdicts, kinds and masked request
+  paths, and the source's key names that look like a schema: written as field names (a lower-case
+  letter first) and carried by at least two different answers. A capitalised key, or a key of one
+  answer only (an object keyed by people sits in one answer), never exempts a value. Resource
+  names, identity key paths and the authentication scheme word never do either. In this run a
+  capitalised key is not printed in the field or resource names at all (`<unprintable>`).
+- **Known residual:** a lower-case key that is a person's identifier (an object keyed by user
+  names) and never appears as a value under an identity key is printed in that answer's field
+  names, as in every mode of this probe. No answer seen so far has that shape. A session called *rest day* or *team training* therefore never
+  refuses the run: the probe prints `rest` and `team` in its own paths whatever the source sends.
+- **Still checked:** header values (content type, allow, the GPEXE version), so a source that
+  echoes a name into a printed header is refused.
+- **On a refusal**, standard error shows the code and the masked path of the read that first
+  carried the value, never the value itself.
+
+Contract tests with made-up markers only, against a fake server
+(`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`, tests 15–22). Mutation evidence: each
+of the guards above, when removed, fails the suite.
+
+**After the result (each a separate owner order):**
+- the owner chooses the endpoint and the fields;
+- an implementation PR for *Link athletes*, under the owner's constraints of 2026-10-06:
+  - the minimal projection: canonical id, sanitized name and normalized date of birth;
+  - "Date of birth not provided" when it is missing;
+  - visible to a platform admin and the active club admin of the team's club only (a coach and
+    another club get the existing 404 or masked answer);
+  - suggestions only: never an automatic link and never a preselection;
+  - warnings for duplicates, a missing date or a conflict with OptiMove data;
+  - a bounded retention and deletion of the identity snapshot;
+  - name and date never in a log, an audit row, a URL, an error code, a diagnostic, a fixture with
+    real data, a PR or chat;
+  - a security / privacy review before merge.
+
+**The PowerShell commands for the run are handed over only after the owner's external review of
+the identity run.**
+
 ## 5. Rules the adapter keeps, whatever is added later
 
 - Selected by `(source_system, apiFamily)`; a family without an adapter is
