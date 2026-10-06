@@ -157,7 +157,7 @@ export const REST_V1_CAPABILITIES = Object.freeze({
   session_list: Object.freeze({ status: "proven", importerUse: "none as it is: the importer always lists with a date window", e03: "not sent without a date window", evidence: "probe 2026-09-29: GET team_session/?team=&limit=1 200, array, X-Total-Count, Link" }),
   session_list_by_date: Object.freeze({ status: "proven", importerUse: "team sessions of a date window", e03: "team_session/?team=&start_timestamp_gte=&start_timestamp_lte=&limit=", evidence: "probe 2026-10-01: the filter applied (every row inside the window, filtered count smaller than unfiltered)" }),
   session_read: Object.freeze({ status: "proven", importerUse: "one session, its team and drills_count", e03: "team_session/<id>/", evidence: "probe 2026-10-01: 200, object, team, drills_count, start_timestamp; no drills list on this read" }),
-  session_details: Object.freeze({ status: "proven", importerUse: "whole-session values per athlete", e03: "team_session/<id>/details/", evidence: "probe 2026-10-01: 200 (status only; no metric value shape recorded; first real check 2026-10-05 refused metric_shape_unknown)" }),
+  session_details: Object.freeze({ status: "proven", importerUse: "whole-session values per athlete", e03: "team_session/<id>/details/", evidence: "probe 2026-10-01: 200 (status only; no metric value shape recorded; first real check 2026-10-05 refused metric_shape_unknown); owner-run diagnostic 2026-10-06: tot_burst_events / tot_brake_events in the documented shape for every athlete, one unconsumed metric an object of another shape - the read is projected to the consumed fields" }),
   session_drill_details: Object.freeze({ status: "observed", importerUse: "values per drill", e03: "team_session/<id>/details/?drill=<n>", evidence: "legacy api family on server3 (owner-run 2026-10-01: 200, object, players map); form per the GPEXE REST handbook pages 31-33; read through legacyDrillDetailsUrl() only" }),
   athlete_session_list: Object.freeze({ status: "proven", importerUse: "athlete rows of a session", e03: "athlete_session/?teamsession=<id>&limit=", evidence: "probe 2026-10-01: 200, every row of the asked session" }),
   athlete_session_read: Object.freeze({ status: "proven", importerUse: "one athlete row", e03: "athlete_session/<id>/", evidence: "probe 2026-10-01: 200, names the same session" }),
@@ -561,6 +561,76 @@ export function validatePlayersAnswer(body, what = "the details answer", expecte
     throw unexpected(`The source answer to ${what} reports another number of drills than the confirmed session.`, { reason: "drills_count_disagrees" });
   }
   return { players, ...(Number.isInteger(body.drills_count) ? { drills_count: body.drills_count } : {}) };
+}
+
+// --- Whole-session details, projected to what the importer reads -----------
+// op=session_details only (owner order 2026-10-06, after the owner-run
+// diagnostic of 2026-10-05/06: on server3 both consumed fields arrived in the
+// documented shape for every athlete; the one refused metric was an
+// unconsumed object of another shape). The container, the athlete ids, the
+// per-athlete bounds and the metric-name guard (including the dangerous keys)
+// are exactly validatePlayersAnswer's. Of the metric VALUES only
+// DETAILS_CONSUMED_FIELDS are read: each is validated with the same rule as
+// before (metricValue) and copied into a fresh object - an object value keeps
+// only its own `unit` and `value`, the two keys the mapper reads. This
+// function never reads, copies, traverses, describes, logs, stores or returns
+// any other metric. (The generic JSON parse and redactGpexe in read() still
+// walk the whole body in memory, bounded by the 5 MiB read cap; nothing of an
+// unconsumed metric is kept.) A missing consumed field stays missing and an athlete without
+// either keeps an empty object, so the mapper's skips (field_missing,
+// unexpected_unit, value_missing) are unchanged. The drill answers keep
+// validatePlayersAnswer: their consumers need their own evidence.
+function projectConsumedValue(value) {
+  if (!isPlainObject(value)) return value;
+  const out = {};
+  if (Object.prototype.hasOwnProperty.call(value, "unit")) out.unit = value.unit;
+  if (Object.prototype.hasOwnProperty.call(value, "value")) out.value = value.value;
+  return out;
+}
+
+export function projectSessionDetails(body, expectedDrillsCount = null) {
+  const what = "the whole-session details";
+  if (!isPlainObject(body)) throw unexpected(`The source server did not answer ${what} as an object.`);
+  const players = body.players;
+  if (!isPlainObject(players)) throw unexpected(`The source answer to ${what} carries no players map.`, { reason: "players_missing" });
+  const out = {};
+  for (const key of Object.keys(players)) {
+    if (!ATHLETE_ID.test(key)) throw unexpected(`The source answer to ${what} names an athlete in an unknown way.`, { reason: "athlete_id_not_canonical" });
+    const values = players[key];
+    if (!isPlainObject(values) || Object.keys(values).length === 0) throw unexpected(`The source answer to ${what} has an athlete without metric values.`, { reason: "player_values_missing" });
+    const metrics = Object.keys(values);
+    if (metrics.length > 256) throw unexpected(`The source answer to ${what} has too many metric values for one athlete.`, { reason: "player_values_too_many" });
+    // The name guard covers every metric (names only - no value is read). A
+    // refusal says which kind of name it was, as fixed words - never the name.
+    for (const metric of metrics) {
+      if (!METRIC_NAME.test(metric) || PROTOTYPE_KEYS.has(metric)) {
+        const flags = new Set();
+        for (const m of metrics) {
+          if (PROTOTYPE_KEYS.has(m)) flags.add("prototype_key");
+          else if (m.length > 64) flags.add("too_long");
+          else if (!METRIC_NAME.test(m)) flags.add("other_chars");
+        }
+        throw unexpected(`The source answer to ${what} names a metric in an unknown way.${DIAGNOSTIC_MARK}op=session_details; names=${[...flags].sort().join("/")}.`, { reason: "metric_name_unknown" });
+      }
+    }
+    const projected = {};
+    for (const field of DETAILS_CONSUMED_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(values, field)) continue;
+      const value = values[field];
+      if (!metricValue(value)) {
+        // Only the consumed field is described: its constant name and kind.
+        // The sentence a coach sees stays generic; the field is named after the mark.
+        throw unexpected(`The source answer to ${what} carries a consumed metric in an unknown shape.${DIAGNOSTIC_MARK}op=session_details; field=${field}; kind=${valueKind(value)}.`, { reason: "consumed_field_shape_unknown", field });
+      }
+      projected[field] = projectConsumedValue(value);
+    }
+    // The key is a canonical athlete id (digits only), never a dangerous key.
+    out[key] = projected;
+  }
+  if (expectedDrillsCount !== null && body.drills_count !== undefined && body.drills_count !== null && body.drills_count !== expectedDrillsCount) {
+    throw unexpected(`The source answer to ${what} reports another number of drills than the confirmed session.`, { reason: "drills_count_disagrees" });
+  }
+  return { players: out, ...(Number.isInteger(body.drills_count) ? { drills_count: body.drills_count } : {}) };
 }
 
 // drillTags → a position-to-tag mapping, or null when the shape is not one
@@ -1081,7 +1151,8 @@ export function createGpexeRestV1Adapter({
       const epoch = epochOf(parent.id);
       const { body } = await read(`team_session/${parent.id}/details/`);
       refreshedDuring(parent.id, epoch);
-      return validatePlayersAnswer(body, "the whole-session details", parent.drillsCount);
+      // Projected to the consumed fields (the drills keep the full check).
+      return projectSessionDetails(body, parent.drillsCount);
     },
 
     // The drill at one zero-based position of a confirmed parent, through the

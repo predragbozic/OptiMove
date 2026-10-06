@@ -118,3 +118,23 @@ It holds no athlete id, value, text or date.
    stays off.
 5. Nothing is repeated. A parser change follows only for the shape that line proves, in a new PR
    with its own review, and then one more single-date re-test.
+
+## Re-test after the whole-session projection (one known date)
+
+The diagnostic of 2026-10-06 proved both consumed fields (`tot_burst_events`, `tot_brake_events`)
+in the documented shape. The one refused metric is not consumed. Branch
+`fix/gpexe-session-details-projection` therefore projects the whole-session read to those two
+fields. The drill answers keep the full check.
+
+1. **Only after the external review of that branch, its merge and deploy, and on a separate order.**
+   Look first: Settings → Source connections shows *Verified* with the team bound to GPEXE Team ID
+   980. If it shows anything else, stop and report.
+2. Training Load → Imports, the bound team → *Choose dates*: **From = To = the same known date** as
+   the last re-test. Press *Find new sessions* **once** and wait until *Finding…* ends.
+3. **If it succeeds**, report only the result line ("Sessions found … · N sessions in GPEXE: a not
+   seen by OptiMove before, b changed, c unchanged"). Do not open Import. Nothing is approved, linked
+   or imported, and `GPEXE_IMPORT_APPLY_ENABLED` stays unchanged.
+4. **If it fails**, report only the Code and the whole `Diagnostic: …` line from *Technical details →
+   Last check message*. A drill refusal reads `drill_set_incomplete` with
+   `drill_index=…; drill_code=…; op=session_drill_details; …`.
+5. **Nothing is repeated.** No Link athletes, no Import, no second check without a new order.

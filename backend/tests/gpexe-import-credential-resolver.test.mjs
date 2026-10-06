@@ -1447,43 +1447,79 @@ test("18. the import switch off - unset and explicitly 'false' - never touches a
   }
 });
 
-test("19. a whole-session details answer whose metric value has an unknown shape (the F3c3 pilot's failure): the check fails closed with source_answer_unexpected and a sanitized shape description - shown to an administrator, never to a coach -, records no candidate, preview or snapshot, writes nothing of an import, sends nothing with the environment token, and the switch stays off", async () => {
-  const o = await org();
-  useSource();
-  const { conn } = await bound(o);
-  process.env.GPEXE_API_TOKEN = ENV_TOKEN;
-  legacyTrap();
-  src.serve(o.sourceTeamId);
-  const players = structuredClone(src.state.bundle.details.full.players);
-  const firstId = Object.keys(players)[0];
-  players[firstId].markerMetricNameZq = [13579.2468, { inner: SOURCE_SENTENCE }];
-  src.state.faults.wholePlayers = players;
+test("19. the whole-session details are projected to the consumed fields (the F3c3 pilot's diagnostic): an unconsumed 5-16-key object metric no longer refuses the check - it completes, and that metric is absent from the candidate, its preview and the retained snapshot; a malformed tot_burst_events or tot_brake_events, a dangerous metric key and an invalid players container still fail closed with nothing recorded; the switch off still refuses single and batch approval; the environment token is never sent", async () => {
+  const MARKER_METRIC = "markerUnconsumedObjZq";
+  const MARKER_TEXT = "Marker free text value";
+  const MARKER_NUMBER = 24680.1357;
   const tables = (await q(`select table_schema || '.' || table_name as t from information_schema.tables where table_schema in ('training', 'training_load') and table_type = 'BASE TABLE' and table_name not in ('gpexe_import_checks', 'gpexe_retention_runs') order by 1`)).map((r) => r.t);
   const rows = async () => { const out = {}; for (const t of tables) { const [s, n] = t.split("."); out[t] = (await q(`select count(*)::int as n from ${s}.${n}`))[0].n; } return out; };
-  const before = await rows();
+  const setup = async (mutate) => {
+    const o = await org();
+    useSource();
+    const { conn } = await bound(o);
+    process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    const players = structuredClone(src.state.bundle.details.full.players);
+    mutate(players);
+    src.state.faults.wholePlayers = players;
+    return { o, conn, players };
+  };
 
-  const row = await runCheck(o);
-  assert.deepEqual([row.status, row.error_code, row.source_path], ["failed", "source_answer_unexpected", "source_connection"], JSON.stringify(row));
-  assert.ok(row.error_message.startsWith("The source answer to the whole-session details carries a metric value in an unknown shape. Diagnostic: op=session_details;"), row.error_message);
-  for (const leak of [firstId, "markerMetricNameZq", "13579", "inner", SOURCE_SENTENCE]) assert.ok(!row.error_message.includes(leak), `${leak} is not on the check row`);
-  assert.deepEqual(await rows(), before, "no candidate, preview, snapshot or import row");
-  assert.equal(row.sessions_seen, 0);
-  assert.ok(src.calls.every((c) => c.auth !== "ENV"), "the environment token never reached the source");
-  assert.equal((await connRow(conn.id)).state, "verified", "a refused answer shape is not a refused credential");
-
-  // An administrator reads the description; a coach reads the sentence before it. Reading sends nothing.
-  const callsBefore = src.calls.length;
-  const admin = await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.cadmin.cookie });
-  const platform = await api(`/gpexe/teams/${o.teamId}/checks/${row.id}`, { cookie: o.padmin.cookie });
-  const coach = await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.coach.cookie });
-  const coachDetail = await api(`/gpexe/teams/${o.teamId}/checks/${row.id}`, { cookie: o.coach.cookie });
-  assert.equal(src.calls.length, callsBefore, "reading the failed check sends no source request");
-  assert.equal(admin.body.lastCheck.error.message, row.error_message);
-  assert.equal(platform.body.check.error.message, row.error_message);
-  for (const r of [coach.body.lastCheck, coachDetail.body.check]) {
-    assert.deepEqual(r.error, { code: "source_answer_unexpected", message: "The source answer to the whole-session details carries a metric value in an unknown shape." }, "the coach gets the sentence without the description");
+  // (a) The production case: both consumed fields in the documented shape, plus one unconsumed
+  // object metric of another shape (8 keys; null, number, short text, other-character text; no unit / value key).
+  const unrelated = { k1: null, k2: MARKER_NUMBER, k3: "ok", k4: MARKER_TEXT, k5: 3, k6: null, k7: "a-b", k8: 7 };
+  const a = await setup((players) => { for (const id of Object.keys(players)) players[id][MARKER_METRIC] = { ...unrelated }; });
+  const row = await runCheck(a.o);
+  assert.equal(row.status, "succeeded", JSON.stringify(row));
+  assert.deepEqual([row.error_code, row.source_path], [null, "source_connection"]);
+  const candidates = await q(`select id, status, preview, preview_hash, raw_bundle from training_load.gpexe_import_candidates where owner_team_id = $1`, [a.o.teamId]);
+  assert.equal(candidates.length, 1, "the check completed and recorded its candidate");
+  const raw = candidates[0].raw_bundle;
+  for (const [id, values] of Object.entries(raw.details.full.players)) {
+    assert.deepEqual(Object.keys(values).sort(), ["tot_brake_events", "tot_burst_events"], `athlete ${id}: only the consumed fields are retained`);
+    for (const field of ["tot_burst_events", "tot_brake_events"]) assert.deepEqual(Object.keys(values[field]).sort(), ["unit", "value"]);
   }
-  assert.equal(admin.body.importSwitch.enabled, false);
+  const everything = JSON.stringify({ candidates, row });
+  for (const leak of [MARKER_METRIC, MARKER_TEXT, String(MARKER_NUMBER), "24680"]) assert.ok(!everything.includes(leak), `${leak} is absent from the candidate, its preview, the snapshot and the check row`);
+  assert.ok(candidates[0].preview && candidates[0].preview_hash, "the preview was computed");
+  // The switch is off: a successful check / preview is allowed, approving is not.
+  const list = await api(`/gpexe/teams/${a.o.teamId}/candidates`, { cookie: a.o.padmin.cookie });
+  const cand = list.body.candidates[0];
+  const before = await rows();
+  const one = await api(`/gpexe/teams/${a.o.teamId}/candidates/${cand.id}/approve`, { method: "POST", cookie: a.o.padmin.cookie, body: { previewHash: cand.previewHash, acceptChanges: false } });
+  const batch = await api(`/gpexe/teams/${a.o.teamId}/imports`, { method: "POST", cookie: a.o.padmin.cookie, body: { candidateIds: [cand.id], previewHashes: { [cand.id]: cand.previewHash } } });
+  assert.deepEqual([one.status, one.body.error, batch.status, batch.body.error], [409, "import_switch_off", 409, "import_switch_off"]);
+  assert.deepEqual(await rows(), before, "a refused approval writes nothing");
+  assert.ok(src.calls.every((c) => c.auth !== "ENV"), "the environment token never reached the source");
+
+  // (b)-(e) Still refused, nothing recorded: a malformed consumed field, a dangerous key, an invalid container.
+  const firstOf = (players) => Object.keys(players)[0];
+  const refused = [
+    ["tot_burst_events as a list", (p) => { p[firstOf(p)].tot_burst_events = [1, 2]; }, "The source answer to the whole-session details carries a consumed metric in an unknown shape.", "Diagnostic: op=session_details; field=tot_burst_events; kind=array."],
+    ["tot_brake_events nested", (p) => { p[firstOf(p)].tot_brake_events = { unit: "number", value: { n: 1 } }; }, "The source answer to the whole-session details carries a consumed metric in an unknown shape.", "Diagnostic: op=session_details; field=tot_brake_events; kind=object."],
+    ["a dangerous metric key", (p) => { Object.defineProperty(p[firstOf(p)], "__proto__", { value: 1, enumerable: true, configurable: true, writable: true }); }, "The source answer to the whole-session details names a metric in an unknown way.", "Diagnostic: op=session_details; names=prototype_key."],
+    ["an athlete without metric values", (p) => { p[firstOf(p)] = {}; }, "The source answer to the whole-session details has an athlete without metric values.", null],
+  ];
+  for (const [label, mutate, sentence, diagnostic] of refused) {
+    const r = await setup(mutate);
+    const beforeRefused = await rows();
+    const failed = await runCheck(r.o);
+    assert.deepEqual([failed.status, failed.error_code], ["failed", "source_answer_unexpected"], `${label}: ${JSON.stringify(failed)}`);
+    assert.ok(failed.error_message.startsWith(sentence), `${label}: ${failed.error_message}`);
+    if (diagnostic) assert.ok(failed.error_message.endsWith(diagnostic), `${label}: ${failed.error_message}`);
+    assert.deepEqual(await rows(), beforeRefused, `${label}: no candidate, preview, snapshot or import row`);
+    assert.equal((await connRow(r.conn.id)).state, "verified", `${label}: a refused answer shape is not a refused credential - the connection stays verified`);
+    const callsBefore = src.calls.length;
+    const admin = await api(`/gpexe/teams/${r.o.teamId}/checks/${failed.id}`, { cookie: r.o.cadmin.cookie });
+    const coach = await api(`/gpexe/teams/${r.o.teamId}/checks/${failed.id}`, { cookie: r.o.coach.cookie });
+    const status = await api(`/gpexe/teams/${r.o.teamId}/status`, { cookie: r.o.coach.cookie });
+    assert.equal(src.calls.length, callsBefore, `${label}: reading the failed check sends no source request`);
+    assert.equal(admin.body.check.error.message, failed.error_message, `${label}: the administrator reads the whole message`);
+    assert.equal(coach.body.check.error.message, sentence, `${label}: the coach reads the sentence only`);
+    assert.equal(status.body.importSwitch.enabled, false, label);
+    assert.ok(src.calls.every((c) => c.auth !== "ENV"), label);
+  }
   src.state.faults.wholePlayers = null;
 });
 
