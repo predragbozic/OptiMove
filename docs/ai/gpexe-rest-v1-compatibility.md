@@ -710,7 +710,8 @@ recorded here: no name, date, id or report.
   `rest/v1/athlete/`. `rest/v1/athlete/<id>/` answered with the same `id`, for the athlete of a row
   confirmed twice under a session of team 980. The record carries no `team` / `teams` field, so
   the athlete's membership of the bound team comes from the confirmed session, not from the record.
-- **Name fields on the athlete record:**
+- **Name fields on the athlete record** (forms as observed on the one athlete read; a name of
+  several words stays valid under the whitespace rule below):
   - `first_name` and `last_name`: each non-empty text of one word;
   - `name`: non-empty text of more than one word;
   - `short_name`: one word.
@@ -720,7 +721,8 @@ recorded here: no name, date, id or report.
   one athlete read. **Its format is therefore not proven**, nor whether GPEXE fills it for other
   athletes.
 - **Not a source of identity:**
-  - the team read: only the team's own `name`, with no roster and no nested names;
+  - the team read: no name-like or birth-like key besides the team's own `name` (its other keys
+    were not named, so whether it carries a list of athlete ids is not known);
   - the athlete rows and their own reads: only the numeric `athlete` id;
   - the session list: its `name` and `category_name` are session fields;
   - the track: it carries an `athlete_name` (text of more than one word), which is not used.
@@ -742,8 +744,10 @@ recorded here: no name, date, id or report.
 
 **Boundaries of the implementation PR.** It is a separate PR, only after this PR is merged.
 - **Reads:**
-  - one athlete GET, only for a canonical GPEXE athlete id already seen through a confirmed
-    session of the bound team; the client never sends an athlete id that the backend then reads;
+  - one athlete GET (`rest/v1/athlete/<id>/`, never a list or a filter), only for a canonical GPEXE
+    athlete id already seen through a confirmed session of the bound team, read through that team's
+    active binding (never the environment token); the client never sends an athlete id that the
+    backend then reads;
   - at most 50 distinct identities per check, at most 3 requests in parallel;
   - no retry, no redirect, no other host.
 - **The identity snapshot:**
@@ -758,13 +762,14 @@ recorded here: no name, date, id or report.
   bidi and invisible characters refused. The UI always escapes it.
 - **Visibility:** the name and the date of birth are visible only to a platform admin and the
   active club admin of the owning club. A coach and another club get no identity.
-- ***Link athletes*** shows "First Last" (or the `name` fallback), with "Born DD.MM.YYYY" or "Date
-  of birth not provided" under it. The internal GPEXE id moves to Technical details.
+- ***Link athletes*** shows, to those two roles only, "First Last" (or the `name` fallback), with
+  "Born DD.MM.YYYY" or "Date of birth not provided" under it. The internal GPEXE id moves to
+  Technical details.
 - **No automatic link:** no preselection, and no link by name or date alone. Duplicate names and a
   conflicting date carry a clear warning.
 - **Not changed in it:** the importer, the metric / variable mapping and the import switch.
-- **Never shown anywhere:** the name and the date never go into a log, an audit row, a URL, an
-  error code, a diagnostic, a fixture with real data, a PR or chat.
+- **Never recorded or sent elsewhere:** the name and the date never go into a log, an audit row, a
+  URL, an error code, a diagnostic, a fixture with real data, a PR or chat.
 - **Before its merge:** a separate security / privacy review and a database review.
 
 ## 5. Rules the adapter keeps, whatever is added later

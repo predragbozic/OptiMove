@@ -1030,8 +1030,8 @@ the internal id moved to Technical details.
 - **The probe (PR #143, branch `feature/gpexe-identity-field-probe`):** an owner-run
   `--mode identity` in the capability probe.
   - It sends one exchange and at most eight GET reads for team 980.
-  - It prints only key paths, kinds, counts and booleans. Every printed source key and header value
-    comes from a closed list.
+  - It prints only key paths, kinds, counts and booleans. Every printed source key comes from a
+    closed list, and every printed header value from a closed set or a bounded number form.
   - A final guard refuses any value seen under a name or date field.
   - The owner's external review was NOT READY at `517bdda` (a key that could be a person) and
     READY at `1cf2430`.
