@@ -624,6 +624,10 @@ own rules.
   (`otherFieldCount`, `otherResultFieldCount`).
 - **Header names:** only usual HTTP headers (`IDENTITY_HEADER_NAMES`); others are counted
   (`otherHeaderCount`).
+- **Header values and the scheme word:** `allow`, `contentType`, `gpexeVersion` and `totalCount`
+  are printed only in their expected shape (a method list, a media type, a version number, a
+  count), otherwise `<unprintable>`. The authentication scheme word is printed only as `Token`,
+  `Bearer`, `Basic` or `Digest`, otherwise `<other>`.
 - **The index read** (`rest/v1/`) prints none of its keys: `fieldNames` is `<omitted>`, with
   their number.
 
@@ -655,8 +659,8 @@ own rules.
   the current year.
 
 **The index read** adds booleans only, about its `athlete` link: listed, exactly the expected URL,
-a URL at all, `https`, the same host, the same path. No resource name and no count of them is
-printed.
+a URL at all, `https`, the same host, the same path. No resource name is printed; the index's
+request entry gives only their number (`otherFieldCount`).
 
 **The athlete read** adds whether its `id` is the one asked for, and the kinds and booleans of
 its `team` / `teams` fields against team 980 (never another team's id).
@@ -666,8 +670,8 @@ name-like or a birth-like key was seen. It is `not_read` when no answer was desc
 **"observed" means only that a key of that kind was seen. Which key is the athlete's name or date
 of birth, and whether it is reliable, is the owner's decision after the result.**
 
-**What it never prints:** a value, a part of a value, an id, a URL, or a source key outside the
-closed lists. The values are read in memory only. This is the one place the probe looks at an
+**What it never prints:** a value, a part of a value, an id, a URL, a source key outside the
+closed lists, or a header value outside its shape. The values are read in memory only. This is the one place the probe looks at an
 answer before the drop list.
 
 **The second guard.** Besides the existing secret guard, a second final guard refuses to print a
@@ -686,7 +690,7 @@ then prints nothing).
   carried the value, never the value itself.
 
 Contract tests with made-up markers only, against a fake server
-(`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`, tests 15–24). Mutation evidence: each
+(`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`, tests 15–25). Mutation evidence: each
 of the guards above, when removed, fails the suite.
 
 **After the result (each a separate owner order):**

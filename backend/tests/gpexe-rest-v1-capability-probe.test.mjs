@@ -7,7 +7,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, describeDrillLink, describeTeamValue, diagnosticLinkConfirmed, DRILL_MODE_MAX_REQUESTS, DRILL_POSITIONS, DRILL_READ_SEQUENCE, LEGACY_API_PATH, LEGACY_API_PREFIX, assertNoIdentityValueInReport, reportVocabulary, IDENTITY_CHILD_KEYS, IDENTITY_NAME_FIELDS, IDENTITY_BIRTH_FIELDS, IDENTITY_SCHEMA_FIELDS, IDENTITY_HEADER_NAMES, identityFilterDescribed, describeAthleteTeams, describeIdentityFields, describeResourceIndex, IDENTITY_BIRTH_KEY, IDENTITY_CONTAINER_KEYS, IDENTITY_MAX_DEPTH, IDENTITY_MAX_ITEMS, IDENTITY_MAX_PATHS, IDENTITY_MODE_MAX_REQUESTS, IDENTITY_NAME_KEY, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId, TEAM_VALUE_KINDS,
+  answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, describeDrillLink, describeTeamValue, diagnosticLinkConfirmed, DRILL_MODE_MAX_REQUESTS, DRILL_POSITIONS, DRILL_READ_SEQUENCE, LEGACY_API_PATH, LEGACY_API_PREFIX, assertNoIdentityValueInReport, reportVocabulary, IDENTITY_CHILD_KEYS, IDENTITY_NAME_FIELDS, IDENTITY_BIRTH_FIELDS, IDENTITY_SCHEMA_FIELDS, IDENTITY_HEADER_NAMES, IDENTITY_HEADER_VALUE_SHAPES, IDENTITY_AUTH_SCHEMES, identityFilterDescribed, describeAthleteTeams, describeIdentityFields, describeResourceIndex, IDENTITY_BIRTH_KEY, IDENTITY_CONTAINER_KEYS, IDENTITY_MAX_DEPTH, IDENTITY_MAX_ITEMS, IDENTITY_MAX_PATHS, IDENTITY_MODE_MAX_REQUESTS, IDENTITY_NAME_KEY, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId, TEAM_VALUE_KINDS,
 } from "../scripts/gpexe-rest-v1-capability-probe.mjs";
 import { DiscoveryUsageError } from "../scripts/gpexe-auth-discovery.mjs";
 
@@ -1131,8 +1131,13 @@ test("19. the identity guard refuses to print a report that would carry a value 
   // whole run refuse to print, rather than print that value.
   // A source that echoes an athlete's name into a header the report prints (the GPEXE version):
   // the whole run refuses, and the error names only the masked path of the read.
-  const echo = fakeServer(identityRoutes({ "GET /rest/v1/athlete/4711/": answer(200, { id: 4711, first_name: "Markerecho", birthdate: PEOPLE.dob }, { "x-gpexe-version": "Markerecho" }) }));
-  await assert.rejects(identityRun(echo.fetchImpl), (e) => e.code === "identity_value_in_report" && e.where === "rest/v1/athlete/<id>/" && !String(e.message).includes("Markerecho"));
+  // A name-like value printed through a header (a person string there is a placeholder since test 25,
+  // so this one has the header's own shape): the guard still refuses, naming only the masked path.
+  const echo = fakeServer(identityRoutes({ "GET /rest/v1/athlete/4711/": answer(200, { id: 4711, nickname: "7.7.7", birthdate: PEOPLE.dob }, { "x-gpexe-version": "7.7.7" }) }));
+  await assert.rejects(identityRun(echo.fetchImpl), (e) => e.code === "identity_value_in_report" && e.where === "rest/v1/athlete/<id>/" && !String(e.message).includes("7.7.7"));
+  // A person string in the same header is a placeholder: the report prints without it.
+  const named = await identityRun(fakeServer(identityRoutes({ "GET /rest/v1/athlete/4711/": answer(200, { id: 4711, first_name: "Markerecho", birthdate: PEOPLE.dob }, { "x-gpexe-version": "Markerecho" }) })).fetchImpl);
+  assert.ok(!JSON.stringify(named).includes("Markerecho"));
   // A value that is a word the report prints for its own reasons does not refuse it.
   const vocab = await identityRun(fakeServer(identityRoutes({ "GET /rest/v1/athlete/4711/": answer(200, { id: 4711, first_name: "described", last_name: "athlete", birthdate: PEOPLE.dob }) })).fetchImpl);
   assert.equal(vocab.stoppedBy, null);
@@ -1309,4 +1314,27 @@ test("24. the identity run prints no source key outside its closed lists: a pers
   const full = await runCapabilityProbe({}, ENV, fakeServer(happyRoutes()).fetchImpl);
   assert.ok(!full.requests.some((r) => "otherFieldCount" in r || "otherHeaderCount" in r));
   assert.ok(full.requests.some((r) => Array.isArray(r.fieldNames) && r.fieldNames.includes("teamsession")));
+});
+
+test("25. the identity run prints the source's header values and scheme word only in their expected shape: a person string in Allow, Content-Type, the GPEXE version or WWW-Authenticate becomes a placeholder, never a leak and never a refusal", async () => {
+  const odd = { allow: "Markerperson", "content-type": "application/json; name=Markerperson", "x-gpexe-version": "Markerperson", "www-authenticate": "Markerscheme realm=x" };
+  const { calls, fetchImpl } = fakeServer(identityRoutes({ "GET /rest/v1/track/900/": answer(200, { id: 900, athlete: 4711, athlete_name: PEOPLE.full, timezone: MARKERS.tz }, odd) }));
+  const report = await identityRun(fetchImpl);
+  assert.equal(report.stoppedBy, null);
+  assert.deepEqual(paths(calls), IDENTITY_PATHS);
+  const t = report.requests.find((r) => r.path === "rest/v1/track/<id>/");
+  assert.deepEqual([t.allow, t.contentType, t.gpexeVersion, t.authScheme], ["<unprintable>", "<unprintable>", "<unprintable>", "<other>"]);
+  assert.ok(!JSON.stringify(report).includes("Marker" + "person") && !JSON.stringify(report).includes("Markerscheme"));
+  identityNoLeak(report);
+  // Every header value and scheme word of the identity report is in its shape or a placeholder.
+  for (const r of report.requests) {
+    for (const [key, shape] of Object.entries(IDENTITY_HEADER_VALUE_SHAPES)) if (typeof r[key] === "string") assert.ok(shape.test(r[key]) || r[key] === "<unprintable>", `${r.path}: ${key}`);
+    if (typeof r.authScheme === "string") assert.ok(IDENTITY_AUTH_SCHEMES.includes(r.authScheme) || r.authScheme === "<other>", r.path);
+  }
+  // The usual values keep their shape.
+  assert.deepEqual(identityFilterDescribed({ allow: "GET, HEAD, OPTIONS", contentType: "application/json; charset=utf-8", gpexeVersion: "9.11.8", totalCount: "308", authScheme: "Token" }), { allow: "GET, HEAD, OPTIONS", contentType: "application/json; charset=utf-8", gpexeVersion: "9.11.8", totalCount: "308", authScheme: "Token" });
+  // The full run is unchanged: it prints those values as before.
+  const full = fakeServer({ ...happyRoutes(), "GET /rest/v1/track/900/": answer(200, { id: 900, timezone: MARKERS.tz }, { "x-gpexe-version": "9.11.8" }) });
+  const fr = await runCapabilityProbe({}, ENV, full.fetchImpl);
+  assert.equal(fr.requests.find((r) => r.path === "rest/v1/track/<id>/").gpexeVersion, "9.11.8");
 });

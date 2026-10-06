@@ -430,6 +430,15 @@ export const IDENTITY_HEADER_NAMES = Object.freeze([
   "strict-transport-security", "transfer-encoding", "vary", "via", "www-authenticate", "x-content-type-options",
   "x-frame-options", "x-gpexe-version", "x-request-id", "x-total-count", "x-xss-protection",
 ]);
+// The source's header VALUES and the authentication scheme word, as the identity run prints them:
+// only in their expected shape, otherwise `<unprintable>` / `<other>`.
+export const IDENTITY_HEADER_VALUE_SHAPES = Object.freeze({
+  allow: /^[A-Z]+(, ?[A-Z]+)*$/,
+  contentType: /^[a-z]+\/[a-z0-9.+-]+(; ?charset=[A-Za-z0-9-]+)?$/,
+  gpexeVersion: /^\d+(\.\d+){0,3}$/,
+  totalCount: /^\d{1,9}$/,
+});
+export const IDENTITY_AUTH_SCHEMES = Object.freeze(["Token", "Bearer", "Basic", "Digest"]);
 export function identityFilterDescribed(described, { index = false } = {}) {
   for (const [key, countKey] of [["fieldNames", "otherFieldCount"], ["resultFieldNames", "otherResultFieldCount"]]) {
     if (!Array.isArray(described[key])) continue;
@@ -442,6 +451,10 @@ export function identityFilterDescribed(described, { index = false } = {}) {
     described.headerNames = all.filter((h) => IDENTITY_HEADER_NAMES.includes(h));
     described.otherHeaderCount = all.length - described.headerNames.length;
   }
+  for (const [key, shape] of Object.entries(IDENTITY_HEADER_VALUE_SHAPES)) {
+    if (typeof described[key] === "string" && !shape.test(described[key])) described[key] = "<unprintable>";
+  }
+  if (typeof described.authScheme === "string" && !IDENTITY_AUTH_SCHEMES.includes(described.authScheme)) described.authScheme = "<other>";
   return described;
 }
 
@@ -1142,7 +1155,8 @@ function finish(report, env, issued, identityValues = new Map()) {
     error.code = "secret_in_report";
     throw error;
   }
-  assertNoIdentityValueInReport(text, identityValues, reportVocabulary(report));
+  // Only the identity run collects values; the other runs never reach the vocabulary.
+  if (identityValues.size > 0) assertNoIdentityValueInReport(text, identityValues, reportVocabulary(report));
   return report;
 }
 
