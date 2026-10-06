@@ -1023,6 +1023,37 @@ serving the exchange, the team reads and the rest_v1 session reads; the legacy f
 the binding path; the resolver's contract with a fake executor), with mutation evidence for the key
 guards.
 
+**GPEXE athlete identity for *Link athletes*** (owner order 2026-10-06; PR #143, not merged). The
+owner asked that *Link athletes* identify a GPEXE athlete by its GPEXE name and date of birth, with
+the internal id moved to Technical details.
+- **Discovery:** the repository proved no endpoint or field for either.
+- **The probe (PR #143, branch `feature/gpexe-identity-field-probe`):** an owner-run
+  `--mode identity` in the capability probe.
+  - It sends one exchange and at most eight GET reads for team 980.
+  - It prints only key paths, kinds, counts and booleans. Every printed source key comes from a
+    closed list, and every printed header value from a closed set or a bounded number form.
+  - A final guard refuses any value seen under a name or date field.
+  - The owner's external review was NOT READY at `517bdda` (a key that could be a person) and
+    READY at `1cf2430`.
+- **The owner ran it once (2026-10-06, sanitized):**
+  - The athlete resource `rest/v1/athlete/<id>/` is confirmed. It is listed in the API's own index,
+    and was read for the athlete of a row confirmed twice under a session of team 980.
+  - It carries `first_name`, `last_name`, `name` and `short_name`.
+  - It carries a `birthdate` field, but its value was null for the one athlete read, so the date's
+    format is not proven.
+  - The record has no team field. The team read, the athlete rows and the session list are not
+    identity sources.
+- **Owner decisions:**
+  - source: `rest/v1/athlete/<id>/`;
+  - name: `first_name` + `last_name` (trimmed, whitespace collapsed), fallback `name`;
+  - date of birth: only a valid `YYYY-MM-DD` or the first ten characters of a valid ISO date-time,
+    otherwise "Date of birth not provided";
+  - no further probe.
+- **The implementation** is a separate PR after PR #143 is merged. It reads only ids already seen,
+  at most 50 identities and 3 parallel requests per check. It keeps a 14-day identity snapshot with
+  only the minimal fields, shows the identity to administrators only, and never links
+  automatically. Its full boundaries are in `docs/ai/gpexe-rest-v1-compatibility.md` section 4b.
+
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
 runs the branch's real modules against an in-page fake of the 5a2 API, at 1280 px and
