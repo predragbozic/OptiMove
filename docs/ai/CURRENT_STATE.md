@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-06. Last `origin/main` commit checked: `e13d251` (merge of PR #140,
-`fix/gpexe-session-details-metric-shape` → `main`; PR #139 `673848e` before it).
+Last reviewed: 2026-10-06. Last `origin/main` commit checked: `3790782` (merge of PR #141,
+`fix/gpexe-session-details-projection` → `main`; PR #140 `e13d251` before it).
 
 ## Active phase
 
@@ -943,6 +943,64 @@ existed before (both real checks failed with nothing written), so none is re-see
 evidence). An architecture test runs the real mapper on a bundle whose whole-session details record
 every key access and fails on any metric but the two.
 
+**That projection is merged and deployed** (PR #141, merge commit `3790782` on 2026-10-06 00:18:51 UTC,
+merged exactly from head `8fb925f` on the owner's order; `/api/health` served `3790782` with
+`ok: true` three times in a row (00:19:55, 00:20:06, 00:20:17 UTC); without a login the team status,
+one check, the candidates, one candidate, the source athletes and the athlete links answered 401; GET
+only, no check started, no GPEXE request).
+
+**The owner's re-test succeeded (2026-10-06, sanitized, as reported by the owner):** one check for
+05.10.2026 – 05.10.2026 ended `succeeded`; 1 GPEXE session found, 1 not seen by OptiMove before,
+0 changed, 0 unchanged; GPEXE Team ID 980; the switch stayed off; no Link athletes, no Import, the
+check not repeated. **This is the first successful check through the bound connection** (the two
+earlier checks read the session list through it too and failed later, at the details answer).
+*Inferred from the counts and the code, not read from the deployed database:* one candidate of that
+session is stored for the team with its preview and its projected snapshot (raw retention 30 days for
+a candidate that is never approved), and the Imports screen lists it under *Needs attention*.
+
+**Discovery for the next owner step (main session, code only, 2026-10-06; no GPEXE request, no
+production read; code-reviewed):**
+- *Needs attention (1)* is one session whose row names one step. With no athlete linked the reason
+  is `no_linked_athlete` ("No linked athlete in this session yet - link the athletes under Link
+  athletes (below), then find new sessions."): the preview writes nothing, so the session's group is
+  "up to date", and its open reason puts it in *Needs attention*. **Why the *Next step* line read "1
+  item needs attention - see below":** that line names unlinked GPEXE athletes only when the Link
+  athletes list holds one, and **after a check ends the screen re-reads the status and the candidates
+  but not that list** (`pollGpexeCheck` → status + `reloadGpexeCandidates` only). A page opened
+  before the check keeps the empty list it read then, and its *Link athletes* screen says "No GPEXE
+  athlete has been seen yet. Find new sessions first." — which must **not** be followed (it is a GPEXE
+  request). A browser reload re-reads the list (`loadGpexeTeam` reads `/source-athletes`); then the
+  line names the unlinked athletes and the button shows *Link athletes (N)*. Recorded as a frontend
+  follow-up under Separate tasks.
+- Counts, read-only, on the *Link athletes* screen: the summary line "X linked · Y not linked" (plus
+  "· Z no longer in the team" when there are any); the group headings appear only for non-empty
+  groups. The session's review lists every recorded GPEXE athlete (`athlete_not_linked`) and the
+  team's athletes without a GPEXE record. OptiMove proposes no matches and preselects nothing: a GPEXE
+  athlete is shown by its id and the helper values of its last session (Time, Distance, Top speed,
+  Drills; GPEXE names are never stored), and two team athletes with the same name cannot be chosen.
+  One GPEXE athlete ↔ one OptiMove athlete per team is a database rule (v22 unique indexes).
+- Opening the session (`GET …/candidates/:id`), the Link athletes screen (the stored
+  `GET …/source-athletes` list) and Technical details reads stored data only: no GPEXE request, no
+  write. While nobody is linked the review shows the badge *Up to date* and "Nothing new to import -
+  no action needed." (its group, not the switch, hides *Approve import*) — misleading next to *Needs
+  attention*, recorded as a follow-up; the athlete rows are collapsed and show their values when
+  expanded. Writes need an explicit last click: *Link...* → *Confirm link* (one pair from the
+  review), *Review N links* → *Link N athletes* (the screen), *Unlink* (a browser question first),
+  *Find new sessions* (a GPEXE request).
+- The helper values come from the preview the mapper built from the server3 answer (seconds / 60 →
+  minutes, m/s × 3.6 → km/h, metres as they come). That `rest_v1` numbers have the units the mapper
+  assumes for e03 is **not verified** (row "Units" of the compatibility document). Comparing two or
+  three athletes' Time / Distance / Top speed with GPEXE's own session view of 05.10.2026 is a
+  read-only check of both the identification and the units.
+- **No code is needed for the review-only step** (a page reload replaces the missing re-read).
+  Before any athlete link is written (from the Link athletes screen or from a session's review), two
+  non-code gates: (1) the production-readiness check the owner recorded on 2026-09-24 — the owner
+  runs the count of non-canonical ids in the deployed `gpexe_athlete_links` read-only and reports only
+  the number (expected 0; it cannot be run from the development workstation); (2) the helper values
+  match GPEXE's own view. If (2) shows a unit mismatch, a code fix of the `rest_v1` unit semantics comes
+  before any link or import. After a link, the stored review is out of date until a new check (a
+  GPEXE request, a separate order) has seen the session.
+
 **F3c2g — the importer's credential resolver, the strict transition from `GPEXE_API_TOKEN` and
 migration v31 — is merged and deployed** (PR #137, merge commit `6382d25` on 2026-10-04 21:58:03 UTC,
 merged exactly from head `30c9600` after the owner's external review in five rounds — round 5 READY
@@ -1487,6 +1545,11 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #141 (`3790782`, merged 2026-10-06 00:18:51 UTC exactly from head `8fb925f`) is deployed:
+  `/api/health` served `3790782` with `ok: true` three times in a row (00:19:55–00:20:17 UTC); without
+  a login the team status, one check, the candidates, one candidate, the source athletes and the
+  athlete links answered 401. No migration, no route change. After it the owner's one-date re-test
+  succeeded (one session found; nothing linked or imported).
 - PR #140 (`e13d251`, merged 2026-10-05 17:12:04 UTC exactly from head `dfd452a`) is deployed:
   `/api/health` served `e13d251` with `ok: true` three times in a row (17:13:04–17:13:25 UTC); without
   a login the team status, check detail, candidates and both source-connection reads answered 401. No
@@ -1642,6 +1705,14 @@ pre-existing; pass/fail counts don't belong in this file
   `3ef6033`.
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
+
+- **Imports screen follow-ups found at the first successful check (code review, 2026-10-06; frontend
+  only, not scheduled):** (1) after a check ends, also re-read the source-athletes list
+  (`pollGpexeCheck` reloads only the status and the candidates), so the *Next step* line and *Link
+  athletes (N)* name the unlinked athletes without a page reload, and the Link athletes screen never
+  shows "Find new sessions first" for a session that was just found; (2) a session kept in *Needs
+  attention* by an open reason (`no_linked_athlete`) should not show the badge *Up to date* and
+  "Nothing new to import - no action needed." in its review. Each with a frontend test.
 
 - **Backend hardening: an idempotent Create of a source connection** (owner, 2026-10-05, at the
   external review of PR #138). `POST /api/training-load/sources/:source/connections` has no
@@ -1871,11 +1942,11 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-PR A (F3c3), the Technical-details fix (PR #139) and the shape diagnostic (PR #140) are merged and
-deployed; the owner's diagnostic proved both consumed whole-session fields and one refused,
-unconsumed metric. Next: the external review of the projection branch
-`fix/gpexe-session-details-projection`; after its merge and deploy, one owner re-test for a single
-known date (on a separate order); then PR B (the F3c4 cut-over, see the active step), then the second owner-run procedure for one
+PR A (F3c3), the Technical-details fix (PR #139), the shape diagnostic (PR #140) and the whole-session
+projection (PR #141) are merged and deployed, and the owner's one-date re-test succeeded (one session
+found, stored for review). Next: the owner's read-only review of that session and its athletes
+(`docs/runbooks/gpexe-owner-pilot-f3c3.md`, "Reviewing the first found session"); then, on a
+separate order and after the two gates named there, the first *Link athletes*; then PR B (the F3c4 cut-over, see the active step), then the second owner-run procedure for one
 controlled real import; then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.

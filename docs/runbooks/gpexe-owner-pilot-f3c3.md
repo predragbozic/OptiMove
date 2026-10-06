@@ -138,3 +138,46 @@ fields. The drill answers keep the full check.
    Last check message*. A drill refusal reads `drill_set_incomplete` with
    `drill_index=…; drill_code=…; op=session_drill_details; …`.
 5. **Nothing is repeated.** No Link athletes, no Import, no second check without a new order.
+
+## Reviewing the first found session (read-only)
+
+The re-test of 2026-10-06 found one session (05.10.2026) and stored it for review. Everything below
+reads data OptiMove already stored: no GPEXE request and no write. Stop at any step that does not
+look as described. **Report only the row's sentence, a count or an error Code, as text.** Never paste
+or screenshot the review or the Link athletes screen (they show athlete names, ids and values), and
+never put an athlete's id, name or value into chat. **Press nothing but what a step names:** no
+*Find new sessions*, *Link...*, *Confirm link*, *Unlink*, *Review N links*, *Link N athletes*,
+checkbox or Import.
+
+1. Training Load → Imports, the bound team. **Reload the browser page** (F5) first: the screen does
+   not re-read the Link athletes list after a check, and only a reload shows the athletes found by
+   the re-test. **Do not press** *Find new sessions* — at no step below.
+2. Check that the button reads **Link athletes (N)** with a number. If it reads *Link athletes*
+   without one, stop and report.
+3. In **Needs attention (1)**, read the row's sentence. Expected: "No linked athlete in this session
+   yet - link the athletes under Link athletes (below), then find new sessions." Report it if it is
+   another one.
+4. Click the session row to open its review. Expected while nobody is linked: the badge *Up to
+   date* and "Nothing new to import - no action needed." (misleading here, a known follow-up; ignore
+   it). Expand an athlete row to see "This GPEXE athlete is not linked to an OptiMove athlete of the
+   team", its GPS status and its values; the team's athletes without a GPEXE record are listed too.
+   **Do not press** *Link...*. Close it with ×.
+5. Click **Link athletes (N)**. Read the summary line ("X linked · Y not linked"); groups without
+   athletes have no heading. Each GPEXE athlete is shown by its id with Time, Distance, Top speed
+   and Drills of 05.10.2026; nothing is preselected. If the screen says "No GPEXE athlete has been
+   seen yet. Find new sessions first.", **stop and report — do not follow it**. **Do not choose**
+   anyone and **do not press** *Review N links* or *Link N athletes*. Close it with *Close*.
+6. Read-only comparison: open GPEXE's own view of the same session and compare Time / Distance / Top
+   speed for two or three athletes with OptiMove's values. Report only whether they match (yes / no,
+   and if no, roughly by what factor). No value, name or id goes into chat.
+7. Report: the row's sentence, the summary line's counts, and the result of step 6.
+
+**Before any athlete link is written** — from the Link athletes screen or from a session's review — on
+a separate order: the owner runs, read-only and themselves, the count recorded on 2026-09-24 against
+the deployed `gpexe_athlete_links` (`select count(*) from training_load.gpexe_athlete_links where
+gpexe_athlete_id !~ '^(0|[1-9][0-9]{0,11})If they do not match, a code fix of the server3 units comes first. After any link, the stored review
+is out of date until a new check (a GPEXE request, its own order) has seen the session.
+`, expected 0) and reports only the number — no connection
+string and no rows in chat; and step 6 shows that the values match.
+If they do not match, a code fix of the server3 units comes first. After any link, the stored review
+is out of date until a new check (a GPEXE request, its own order) has seen the session.
