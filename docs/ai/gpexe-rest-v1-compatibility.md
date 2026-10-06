@@ -633,7 +633,9 @@ own rules.
   - `totalCount` and a paginated answer's `count`: a whole count.
 
   The authentication scheme word is printed only as `Token`, `Bearer`, `Basic` or `Digest`,
-  otherwise `<other>`.
+  otherwise `<other>`. The version and the counts are bounded number forms, not finite sets: a
+  server would have to put a number derived from a person there for it to print. The final guard
+  still refuses a recognised name or date value printed in those forms.
 - **The index read** (`rest/v1/`) prints none of its keys: `fieldNames` is `<omitted>`, with
   their number.
 
