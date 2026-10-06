@@ -175,9 +175,7 @@ checkbox or Import.
 **Before any athlete link is written** — from the Link athletes screen or from a session's review — on
 a separate order: the owner runs, read-only and themselves, the count recorded on 2026-09-24 against
 the deployed `gpexe_athlete_links` (`select count(*) from training_load.gpexe_athlete_links where
-gpexe_athlete_id !~ '^(0|[1-9][0-9]{0,11})If they do not match, a code fix of the server3 units comes first. After any link, the stored review
-is out of date until a new check (a GPEXE request, its own order) has seen the session.
-`, expected 0) and reports only the number — no connection
+gpexe_athlete_id !~ '^(0|[1-9][0-9]{0,11})$'`, expected 0) and reports only the number — no connection
 string and no rows in chat; and step 6 shows that the values match.
 If they do not match, a code fix of the server3 units comes first. After any link, the stored review
 is out of date until a new check (a GPEXE request, its own order) has seen the session.
