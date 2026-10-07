@@ -15692,6 +15692,11 @@ button.tests-assignment-card {
   justify-content: space-between;
   gap: 8px;
 }
+.gpexe-link-list li > div {
+  flex: 1 1 14rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 /* Height: the shared dialog's own max-height (88dvh on phones) applies. */
 .gpexe-detail {
   width: min(760px, 100%);

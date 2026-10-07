@@ -137,13 +137,15 @@ test("an administrator: opening the screen reads the stored identities (no-store
   responder = server();
   await openMapping();
   // The Imports view reads them for an administrator, and opening Link athletes reads them again.
-  assert.ok(identityCalls().length >= 1);
+  assert.equal(identityCalls().length, 2, "exactly two reads: with the Imports team, and when Link athletes opens");
   assert.ok(identityCalls().every((c) => c.method === "GET" && c.cache === "no-store"));
   const html = mappingHtml();
   const visible = outsideTech(html);
-  assert.match(visible, /<strong>Mira Zedova<\/strong>\s*<span class="gpexe-map-born">Born 03\.02\.2001<\/span>/);
-  assert.match(visible, /<strong>Mira Zedova<\/strong>\s*<span class="gpexe-map-born">Date of birth not provided<\/span>/);
-  assert.match(visible, /<strong>Name not provided<\/strong>\s*<span class="gpexe-map-born">Born 31\.12\.1999<\/span>/);
+  // A GPEXE name shared by two athletes carries each one's place in the list.
+  const first = visible.match(/<strong>Mira Zedova \(GPEXE athlete (\d+)\)<\/strong>\s*<span class="gpexe-map-born">Born 03\.02\.2001<\/span>/);
+  const second = visible.match(/<strong>Mira Zedova \(GPEXE athlete (\d+)\)<\/strong>\s*<span class="gpexe-map-born">Date of birth not provided<\/span>/);
+  assert.ok(first && second && first[1] !== second[1], "the two same-name athletes stay distinct");
+  assert.match(visible, /<strong>Name not provided \(GPEXE athlete \d+\)<\/strong>\s*<span class="gpexe-map-born">Born 31\.12\.1999<\/span>/);
   assert.ok(!/GPEXE athlete 104|GPEXE athlete 105|GPEXE athlete 106/.test(visible), "a named row shows its id only under Technical details, also in its aria-label");
   assert.match(html, /<dt>GPEXE athlete id<\/dt><dd>104<\/dd>/);
   assert.match(visible, /<strong>Name not loaded \(GPEXE athlete \d+\)<\/strong>/, "with the identity view a row without an identity shows no id either");
@@ -166,7 +168,7 @@ test("a duplicate GPEXE name is warned on both rows; choosing an OptiMove athlet
   await act("training-load-gpexe-map-choose", { gpexeAthleteId: "104" }, { value: "ath-1" });
   await act("training-load-gpexe-map-confirm");
   html = mappingHtml();
-  assert.match(html, /<strong>Mira Zedova<\/strong> <span class="muted">\(Born 03\.02\.2001\)<\/span> → <strong>Ana Example<\/strong><span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name\.<\/span><span class="muted gpexe-map-born">Last seen [^<]*<\/span><span class="gpexe-map-caution" role="note">Check: the date of birth in GPEXE differs/);
+  assert.match(html, /<strong>Mira Zedova \(GPEXE athlete \d+\)<\/strong> <span class="muted">\(Born 03\.02\.2001\)<\/span> → <strong>Ana Example<\/strong><span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name\.<\/span><span class="muted gpexe-map-born">Last seen [^<]*<\/span><span class="gpexe-map-caution" role="note">Check: the date of birth in GPEXE differs/);
   assert.match(html, /OptiMove warns only when both dates of birth are known and differ\. No warning does not mean they match\./);
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-links") && c.method === "POST").length, 0, "nothing linked before Link");
   await act("training-load-gpexe-map-send");
@@ -306,8 +308,9 @@ test("locks: while a link is sent, or its confirmation is open, the load button 
 
 test("the identity lives only in the Imports view's memory: closing Link athletes keeps it for the other Imports screens; leaving Imports, a team switch and a workspace switch drop it; no browser storage is ever touched (a static scan of the three Imports modules agrees)", async () => {
   reset();
-  // Team B has no binding: its identity read is the 404.
-  responder = server({ identities: (call) => (call.url.includes(TEAM_B) ? { status: 404, body: { error: "notFound" } } : { status: 200, body: IDENTITIES }) });
+  // Team B answers its own list (one athlete foreign to team A), so a stale team A list would show.
+  const TEAM_B_IDENTITIES = { ...IDENTITIES, identities: [{ gpexeAthleteId: "999", name: "Other Team", birthDate: null }] };
+  responder = server({ identities: (call) => ({ status: 200, body: call.url.includes(TEAM_B) ? TEAM_B_IDENTITIES : IDENTITIES }) });
   await openMapping();
   assert.ok(state.trainingLoad.gpexe.identity.list);
   await act("training-load-gpexe-map-close");
@@ -318,7 +321,8 @@ test("the identity lives only in the Imports view's memory: closing Link athlete
   assert.ok(state.trainingLoad.gpexe.identity.list, "entering Imports again reads the stored names again (no GPEXE request)");
   await act("training-load-gpexe-team", {}, { value: TEAM_B });
   assert.equal(state.trainingLoad.gpexe.teamId, TEAM_B);
-  assert.equal(state.trainingLoad.gpexe.identity.list?.byId?.["104"] ?? null, null, "a team switch drops the other team's names");
+  const teamBIds = Object.keys(state.trainingLoad.gpexe.identity.list?.byId || {});
+  assert.ok(teamBIds.every((id) => id === "999"), `a team switch drops the other team's names: ${teamBIds.join(",")}`);
   resetTrainingLoadForWorkspaceChange();
   assert.equal(state.trainingLoad.gpexe.identity.list, null, "a workspace switch drops them");
   for (const file of ["gpexe-import-data.js", "gpexe-import-view.js", "gpexe-import-actions.js"]) {
@@ -357,7 +361,7 @@ test("with the identity view, no GPEXE id appears outside Technical details: not
   await act("training-load-gpexe-map-choose", { gpexeAthleteId: "104" }, { value: "ath-2" });
   await act("training-load-gpexe-map-confirm");
   html = mappingHtml();
-  assert.match(html, /chosen for two GPEXE athletes/);
+  assert.match(html, /chosen for the GPEXE athlete [^.]+ and [^.]+\. One athlete can be linked to one GPEXE athlete only\./);
   noIdOutside(html, "the error sentence");
   await act("training-load-gpexe-map-choose", { gpexeAthleteId: "104" }, { value: "" });
   await act("training-load-gpexe-map-confirm");

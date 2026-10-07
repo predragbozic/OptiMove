@@ -39,7 +39,7 @@ import {
   verifyGpexeApproval,
   cancelIdentityConfirm,
   checkIdentityLoad,
-  gpexeAthleteLabel,
+  gpexeAthleteSentence,
   maskGpexeIds,
   identityBusy,
   identityViewer,
@@ -60,8 +60,8 @@ function unlinkQuestion(gx, linkId) {
   if (maskGpexeIds(gx)) {
     // An administrator's Imports view never shows a GPEXE id outside
     // Technical details.
-    const label = gpexeAthleteLabel(link.gpexeAthleteId, gx);
-    return `Unlink the GPEXE athlete "${label}" from ${name}? In sessions not imported yet, that GPEXE athlete will be left out until linked again. Results already imported stay with ${name}; if they are wrong, they can't be changed here — contact a platform administrator.`;
+    const who = gpexeAthleteSentence(link.gpexeAthleteId, gx);
+    return `Unlink ${who} from ${name}? In sessions not imported yet, that GPEXE athlete will be left out until linked again. Results already imported stay with ${name}; if they are wrong, they can't be changed here — contact a platform administrator.`;
   }
   const id = link.gpexeAthleteId;
   return `Unlink GPEXE athlete ${id} from ${name}? In sessions not imported yet, athlete ${id} will be left out until linked again. Results already imported stay with ${name}; if they are wrong, they can't be changed here — contact a platform administrator.`;

@@ -220,7 +220,11 @@ export function confirmLeaveTrainingLoad(_nextTab, { discard = true } = {}) {
   // only local view of that outcome (same protection as an Imports result).
   if (!rosterMayBeLeft()) return false;
   if (!discard) return analysisEditorMayBeDiscarded() && analysisLayoutMayBeDiscarded();
-  return releaseAnalysisEditorDraft() && releaseAnalysisLayoutDraft();
+  const left = releaseAnalysisEditorDraft() && releaseAnalysisLayoutDraft();
+  // Leaving Training Load drops the GPEXE names and dates of birth the
+  // Imports view held (they live in the open view's memory only).
+  if (left && _nextTab !== "training-load") clearGpexeIdentities();
+  return left;
 }
 
 function importsBatchMayBeLeft(nextTab) {
@@ -259,6 +263,7 @@ export function discardTrainingLoadLeaveDrafts() {
   if (state.activeTab !== "training-load") return;
   discardAnalysisEditorDraft();
   discardAnalysisLayoutDraft();
+  clearGpexeIdentities();
 }
 
 // H2: widget Settings / Advanced settings / Delete reload the dashboard on

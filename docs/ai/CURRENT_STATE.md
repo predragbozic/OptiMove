@@ -1151,14 +1151,19 @@ Technical details.
   may be deployed, but *Load names and dates of birth* is not used until then.
 - **The GPEXE id on every administrator Imports screen** (owner order 2026-10-07; branch
   `feature/gpexe-imports-id-masking` from `bb3cfdd`; not merged; frontend and docs only).
-  - **Rule:** outside Technical details, an administrator sees a GPEXE name ("Name not provided"), "Name not
-    loaded (GPEXE athlete N)", or "GPEXE athlete N" when the team has no stored identity. N is the position
-    in the list on screen, never stored.
+  - **Rule:** outside Technical details, an administrator sees a GPEXE name (with "(GPEXE athlete N)" when
+    two GPEXE athletes share it), "Name not provided (GPEXE athlete N)", "Name not loaded (GPEXE athlete N)",
+    or "GPEXE athlete N" when the team has no stored identity. N is the place in the team's GPEXE athlete
+    list as the server orders it, not the id; an athlete that list does not hold yet gets the next free
+    number, in memory only. Numbers need not be consecutive inside one group; nothing of it is stored.
   - **Where:** on the Imports page, Link athletes, the session review, the last-link notice,
     confirmations, results, errors, aria-labels and the unlink question. The 13 places are listed in
     `docs/ai/gpexe-imports-id-masking-discovery.md`.
   - **Loading:** the administrator's Imports view reads the stored identities with the team (no GPEXE
-    request). They are dropped on leaving Imports, a team or workspace switch, or signing out.
+    request). They are dropped on leaving Imports or Training Load, a team or workspace switch, a status
+    without the identity right, or signing out; an identity answer still in flight never brings them back.
+    Only the state of a name load (in flight, its key, a result not confirmed) outlives a clear, so a lost
+    answer keeps its key for *Check result*.
   - **Coach:** a coach's screens are unchanged and get no sign of a snapshot.
   - **Unchanged:** backend, v32 and Link / Unlink.
 

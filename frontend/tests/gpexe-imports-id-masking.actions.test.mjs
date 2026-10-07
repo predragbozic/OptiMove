@@ -174,7 +174,8 @@ for (const role of ["club admin", "platform admin"]) {
     let html = pageHtml();
     // The page's own linked list.
     assertMasked(html, `${role}: Imports page`);
-    assert.match(outsideTech(html), /GPEXE: Name not loaded \(GPEXE athlete 1\)/, "the linked athlete without a stored identity, by its position");
+    assert.match(outsideTech(html), /Name not loaded \(GPEXE athlete 1\)/, "the linked athlete without a stored identity, by its position");
+    assert.ok(!/GPEXE: (GPEXE athlete|Name not)/.test(outsideTech(html)), "no doubled GPEXE wording");
     assertInTech(html, ID.linked, `${role}: Imports page linked list`);
 
     // Link athletes: rows, aria-labels, linked side.
@@ -183,7 +184,7 @@ for (const role of ["club admin", "platform admin"]) {
     assertMasked(html, `${role}: Link athletes`);
     const visible = outsideTech(html);
     assert.match(visible, /<strong>Mira Zedova<\/strong>/, "a valid name");
-    assert.match(visible, /<strong>Name not provided<\/strong>/, "a stored identity without a name");
+    assert.match(visible, /<strong>Name not provided \(GPEXE athlete \d+\)<\/strong>/, "a stored identity without a name, with its place in the list");
     assert.match(visible, /<strong>Name not loaded \(GPEXE athlete 4\)<\/strong>/, "no stored identity (never loaded or expired)");
     assert.match(visible, /<strong>Name not loaded \(GPEXE athlete 5\)<\/strong>/, "inside its 24-hour suppression: no identity either");
     assert.match(visible, /1 athlete GPEXE had no record for is left out of loads for 24 hours/);
@@ -196,7 +197,8 @@ for (const role of ["club admin", "platform admin"]) {
     await act("training-load-gpexe-map-choose", { gpexeAthleteId: ID.named }, { value: "ath-2" });
     await act("training-load-gpexe-map-confirm");
     html = pageHtml();
-    assert.match(html, /chosen for two GPEXE athletes/);
+    // Both rows are named, by their masked labels.
+    assert.match(html, /chosen for (the GPEXE athlete [^.]+|GPEXE athlete \d+[^.]*) and (the GPEXE athlete [^.]+|GPEXE athlete \d+[^.]*)\. One athlete can be linked/);
     assertMasked(html, `${role}: staged-choice error`);
     // A choice that is not linkable any more (the athlete was linked meanwhile): its error names no id.
     const links = state.trainingLoad.gpexe.links;
@@ -283,4 +285,132 @@ test("a coach keeps the screens as before: the GPEXE ids stay in the text, no id
   await act("training-load-gpexe-open", { candidateId: "cand-1" });
   const review = pageHtml();
   assert.match(outsideTech(review), new RegExp(`Find athlete ${ID.named} in GPEXE first`));
+});
+
+// ---------------------------------------------------------------------------
+// The lifetime of the names in memory (code-reviewer M1 / security MEDIUM on 8bc6921).
+const { confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts } = await import("../training-load-actions.js");
+function deferred() {
+  let resolve;
+  const promise = new Promise((r) => { resolve = r; });
+  return { promise, resolve };
+}
+const identityList = () => state.trainingLoad.gpexe.identity.list;
+
+test("leaving Training Load through the main navigation drops the GPEXE names, both through the leave check and the discard path", async () => {
+  for (const leave of [() => confirmLeaveTrainingLoad("athletes"), () => discardTrainingLoadLeaveDrafts()]) {
+    reset(VIEWERS["club admin"]);
+    state.activeTab = "training-load";
+    await openMapping();
+    assert.ok(identityList()?.byId?.[ID.named], "the names are held while the Imports view is open");
+    leave();
+    assert.equal(identityList(), null, "no name stays in memory after leaving Training Load");
+  }
+  // Staying in Training Load (the same tab) keeps them.
+  reset(VIEWERS["club admin"]);
+  state.activeTab = "training-load";
+  await openMapping();
+  confirmLeaveTrainingLoad("training-load");
+  assert.ok(identityList()?.byId?.[ID.named]);
+});
+
+test("an identity read still in flight when the administrator leaves Imports never brings the names back", async () => {
+  const gate = deferred();
+  reset(VIEWERS["club admin"], { identities: async () => { await gate.promise; return { status: 200, body: IDENTITIES }; } });
+  const opening = openImports();
+  await new Promise((r) => setImmediate(r));
+  await act("training-load-section", { section: "today" });
+  gate.resolve();
+  await opening;
+  for (let i = 0; i < 5; i += 1) await new Promise((r) => setImmediate(r));
+  assert.equal(identityList(), null, "the late answer is dropped");
+  assert.ok(!/Mira Zedova/.test(pageHtml()));
+});
+
+test("leaving Imports while a name load is in flight keeps its key: a lost answer is 'not confirmed' with the same requestKey, the names are not read back, and Check result repeats that key", async () => {
+  const gate = deferred();
+  const keys = [];
+  reset(VIEWERS["club admin"]);
+  const base = responder;
+  responder = async (call) => {
+    if (call.url.endsWith("/athlete-identities/loads")) {
+      keys.push(call.body.requestKey);
+      if (keys.length === 1) { await gate.promise; return { status: 502, body: "<html>" }; }
+      return { status: 200, body: { loaded: 1, notFound: 0, notRead: 0, replayed: true } };
+    }
+    return base(call);
+  };
+  await openMapping();
+  await act("training-load-gpexe-identity-open");
+  const sending = act("training-load-gpexe-identity-send");
+  await new Promise((r) => setImmediate(r));
+  const key = state.trainingLoad.gpexe.identity.requestKey;
+  assert.ok(key && state.trainingLoad.gpexe.identity.sending);
+  await act("training-load-section", { section: "today" });
+  assert.equal(identityList(), null, "the names go at once");
+  assert.equal(state.trainingLoad.gpexe.identity.requestKey, key, "the key of the load in flight stays");
+  const reads = fetchCalls.filter((c) => c.url.endsWith("/athlete-identities")).length;
+  gate.resolve();
+  await sending;
+  const identity = state.trainingLoad.gpexe.identity;
+  assert.equal(identity.list, null, "a late outcome brings no name back");
+  assert.ok(identity.unconfirmed, "a lost answer is not confirmed");
+  assert.equal(identity.requestKey, key, "with the same key");
+  assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-identities")).length, reads, "no names read after leaving");
+  // Back on Imports: the marker is still there, and Check result sends the same key.
+  await openMapping();
+  assert.ok(state.trainingLoad.gpexe.identity.unconfirmed, "the marker survives the return");
+  await act("training-load-gpexe-identity-check");
+  assert.deepEqual(keys, [key, key], "Check result repeats the same requestKey; never a new load");
+});
+
+test("with the source-athletes read refused, the review's unlinked athletes stay distinct and show no id", async () => {
+  reset(VIEWERS["club admin"], { identities: NO_IDENTITIES });
+  const base = responder;
+  responder = async (call) => (call.url.endsWith("/source-athletes") ? { status: 500, body: { error: "internal_error" } } : base(call));
+  await openReview();
+  const html = pageHtml();
+  assertMasked(html, "review without the source-athletes list");
+  const names = [...outsideTech(html).matchAll(/<summary[^>]*>[\s\S]*?<strong>([^<]*)<\/strong>/g)].map((m) => m[1]).filter((n) => /GPEXE athlete/.test(n));
+  assert.ok(names.length >= 2, `two unlinked athletes are named: ${names.join(" | ")}`);
+  assert.equal(new Set(names).size, names.length, "never one shared label");
+  assert.ok(names.every((n) => /^GPEXE athlete \d+$/.test(n)), "a number, never a bare 'GPEXE athlete'");
+});
+
+test("a status without the identity right (a role revoked meanwhile) drops the names the view held; identityOf answers nothing for such a viewer", async () => {
+  reset(VIEWERS["club admin"]);
+  await openMapping();
+  assert.ok(identityList()?.byId?.[ID.named]);
+  await act("training-load-gpexe-map-close");
+  responder = server({ viewer: VIEWERS.coach });
+  const { loadGpexeTeam } = await import("../gpexe-import-data.js");
+  await loadGpexeTeam(render);
+  assert.equal(identityList(), null, "nothing of the identity stays");
+  const { identityOf } = await import("../gpexe-import-data.js");
+  state.trainingLoad.gpexe.identity = { ...state.trainingLoad.gpexe.identity, available: true, list: { byId: { [ID.named]: { name: "Mira Zedova", birthDate: null } } } };
+  assert.equal(identityOf(ID.named), null, "never for a viewer without the right, whatever the state holds");
+});
+
+test("a name load that succeeds after the administrator left Imports records its counts but reads no name back", async () => {
+  const gate = deferred();
+  reset(VIEWERS["club admin"]);
+  const base = responder;
+  responder = async (call) => {
+    if (call.url.endsWith("/athlete-identities/loads")) { await gate.promise; return { status: 200, body: { loaded: 1, notFound: 0, notRead: 0 } }; }
+    return base(call);
+  };
+  await openMapping();
+  await act("training-load-gpexe-identity-open");
+  const sending = act("training-load-gpexe-identity-send");
+  await new Promise((r) => setImmediate(r));
+  await act("training-load-section", { section: "today" });
+  const reads = fetchCalls.filter((c) => c.url.endsWith("/athlete-identities")).length;
+  gate.resolve();
+  await sending;
+  for (let i = 0; i < 5; i += 1) await new Promise((r) => setImmediate(r));
+  const identity = state.trainingLoad.gpexe.identity;
+  assert.equal(identity.list, null, "no name comes back into memory");
+  assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-identities")).length, reads, "no identity read after leaving");
+  assert.equal(identity.requestKey, null, "the load is settled: its key is done");
+  assert.equal(identity.unconfirmed, null);
 });

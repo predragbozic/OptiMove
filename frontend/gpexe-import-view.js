@@ -40,8 +40,8 @@ import {
   identityNameKey,
   identityOf,
   gpexeAthleteLabel,
+  gpexeAthleteSentence,
   maskGpexeIds,
-  gpexeAthleteOrdinal,
 } from "./gpexe-import-data.js";
 
 // The bucket rules live in the data module (the batch selection needs them
@@ -239,18 +239,19 @@ function athleteName(candidate, athleteId, gpexeAthleteId) {
   return gpexeAthleteId ? gpexeAthleteLabel(gpexeAthleteId) : "Athlete";
 }
 
-// "GPEXE athlete 104" for a coach; for an administrator the masked label
-// (a GPEXE name, "Name not loaded (GPEXE athlete N)" or "GPEXE athlete N").
-// In a sentence: "the GPEXE athlete <name>", "GPEXE athlete N (no name in
-// GPEXE)", "GPEXE athlete N (name not loaded)" or "GPEXE athlete N".
+// One athlete inside a sentence, from the data module's one helper: the GPEXE
+// name, or "GPEXE athlete N (name not loaded)" and the like for an
+// administrator; "GPEXE athlete 104" for a coach, as before.
 function gpexeWho(gpexeAthleteId) {
-  if (!maskGpexeIds()) return gpexeAthleteLabel(gpexeAthleteId);
-  const who = identityOf(gpexeAthleteId);
-  if (who?.name) return `the GPEXE athlete ${who.name}`;
-  const n = gpexeAthleteOrdinal(gpexeAthleteId);
-  const ordinal = n ? `GPEXE athlete ${n}` : "a GPEXE athlete";
-  if (who) return `${ordinal} (no name in GPEXE)`;
-  return gpexeAthleteLabel(gpexeAthleteId).startsWith("Name not loaded") ? `${ordinal} (name not loaded)` : ordinal;
+  return gpexeAthleteSentence(gpexeAthleteId);
+}
+
+// The GPEXE side of a row: "GPEXE: <name>" when a name is loaded, otherwise
+// the label alone (it already says "GPEXE athlete N"), never "GPEXE: GPEXE
+// athlete N".
+function gpexeSideText(gpexeAthleteId, gx) {
+  const label = gpexeAthleteLabel(gpexeAthleteId, gx);
+  return identityOf(gpexeAthleteId, gx)?.name ? `GPEXE: ${label}` : label;
 }
 
 // The id under Technical details, for an administrator only (a coach sees it
@@ -957,7 +958,7 @@ function renderLinksHtml(gx) {
         <ul class="gpexe-link-list">
           ${links.map((l) => `
             <li>
-              <span><strong>${escapeHtml(l.athleteName)}</strong> <span class="muted">${escapeHtml(maskGpexeIds() ? `GPEXE: ${gpexeAthleteLabel(l.gpexeAthleteId)}` : `GPEXE athlete ${l.gpexeAthleteId}`)}</span>${idTechHtml(l.gpexeAthleteId)}</span>
+              <div><strong>${escapeHtml(l.athleteName)}</strong> <span class="muted">${escapeHtml(maskGpexeIds() ? gpexeSideText(l.gpexeAthleteId) : `GPEXE athlete ${l.gpexeAthleteId}`)}</span>${idTechHtml(l.gpexeAthleteId)}</div>
               <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(l.id)}" ${gx.linkBusy ? "disabled" : ""}>Unlink</button>
             </li>
           `).join("")}
@@ -1048,7 +1049,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
           ${conflictHtml(id, chosen, gx)}
         </div>
         ${choices.length ? `<label class="gpexe-map-choice"><span>Link to</span>
-          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(maskGpexeIds(gx) ? `the GPEXE athlete ${gpexeLabel(id, gx)}${named ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}` : `GPEXE athlete ${id}`)} to" ${writeOff ? "disabled" : ""}>
+          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(maskGpexeIds(gx) ? `${gpexeAthleteSentence(id, gx)}${named ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}` : `GPEXE athlete ${id}`)} to" ${writeOff ? "disabled" : ""}>
             <option value="" ${chosen ? "" : "selected"}>Not now</option>
             ${choices.map((o) => `<option value="${escapeAttr(o.id)}" ${chosen === o.id ? "selected" : ""} ${o.duplicate ? "disabled" : ""}>${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
           </select>
@@ -1059,7 +1060,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
   }
   const inactive = a.status === "linked_inactive";
   const who = identityOf(id, gx);
-  const gpexeSide = who ? `GPEXE: ${who.name || "Name not provided"} · ${bornText(who.birthDate)}` : maskGpexeIds(gx) ? `GPEXE: ${gpexeLabel(id, gx)}` : `GPEXE athlete ${id}`;
+  const gpexeSide = who ? `${gpexeSideText(id, gx)} · ${bornText(who.birthDate)}` : maskGpexeIds(gx) ? gpexeSideText(id, gx) : `GPEXE athlete ${id}`;
   return `
     <li class="gpexe-map-row ${inactive ? "is-inactive" : "is-linked"}">
       <div class="gpexe-map-main">
@@ -1275,6 +1276,7 @@ function renderTeamMappingHtml(gx, teams) {
         </div>
         <div class="gpexe-detail-body">
           <p class="gpexe-map-summary">${escapeHtml([`${linked.length} linked`, `${unlinked.length} not linked`, ...(inactive.length ? [`${inactive.length} no longer in the team`] : [])].join(" · "))}</p>
+          ${maskGpexeIds(gx) ? `<p class="muted">"GPEXE athlete N" is the athlete's place in this list, not the GPEXE id; the id is under Technical details.</p>` : ""}
           ${body}
           ${footer}
         </div>
@@ -1499,6 +1501,7 @@ function renderLinkHtml(a, c, unlinkedChoices) {
   return `
     <div class="gpexe-link">
       <p><strong>Find ${escapeHtml(maskGpexeIds() ? gpexeWho(id) : `athlete ${id}`)} in GPEXE first. Link only if you are sure.</strong></p>
+      ${maskGpexeIds() && duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the date of birth and the session values before you choose.</p>` : ""}
       ${renderLinkContextHtml(a)}
       <div class="gpexe-link-row">
         <label><span>Link ${escapeHtml(gpexeWho(id))} to</span>
