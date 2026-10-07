@@ -153,6 +153,9 @@ export async function loadGpexeTeam(render) {
     // helper read must not hold it back either.
     gx.loading = false;
     finishLoad(gx, status, render);
+    // An administrator's Imports view also holds the stored GPEXE names (no
+    // GPEXE request): every screen of it names athletes without their id.
+    if (identityViewer(gx)) void loadGpexeIdentities(render);
     const sourceAthletes = await sourceAthletesRead;
     if (generation !== gx.generation) return;
     applySourceAthletesRead(gx, sourceAthletes);
@@ -522,6 +525,7 @@ async function reloadGpexeLinks(generation) {
   if (generation !== gx.generation) return;
   if (!links.error) gx.links = links.links;
   applySourceAthletesRead(gx, sourceAthletes);
+  if (identityViewer(gx)) void loadGpexeIdentities(() => {});
   if (links.error) gx.sourceAthletesError = links.error;
   if (gx.mapping?.open) {
     pruneTeamMappingChoices(gx);
@@ -566,7 +570,21 @@ export function openTeamMapping() {
   const gx = g();
   gx.mapping = { ...emptyMapping(), open: true };
   gx.linkError = null;
-  gx.identity = emptyGpexeIdentityState();
+  gx.identity = keepIdentityList(gx.identity);
+}
+
+// The stored names stay for the open Imports view; a load's own state (a
+// confirmation, a result, an error, an unconfirmed key) belongs to the Link
+// athletes screen and goes with it.
+function keepIdentityList(identity) {
+  const fresh = emptyGpexeIdentityState();
+  return identity?.available ? { ...fresh, available: true, list: identity.list } : fresh;
+}
+
+// Leaving the Imports view drops every GPEXE name and date of birth it held.
+export function clearGpexeIdentities() {
+  const gx = g();
+  if (gx) gx.identity = emptyGpexeIdentityState();
 }
 
 // Returns true when the screen had staged choices (the caller asked first).
@@ -575,7 +593,7 @@ export function closeTeamMapping() {
   const gx = g();
   const had = Object.keys(gx.mapping.choices).length > 0;
   gx.mapping = emptyMapping();
-  gx.identity = emptyGpexeIdentityState();
+  gx.identity = keepIdentityList(gx.identity);
   return had;
 }
 
@@ -616,10 +634,10 @@ export function stagedTeamMapping(gx = g()) {
     // Without a usable GPEXE name the athlete is told apart by its last session (never by its id).
     const lastSighting = (gx.sourceAthletes || []).find((x) => x.gpexeAthleteId === gpexeAthleteId)?.lastSeen;
     const when = lastSighting?.sessionStartedAt ? ` (last seen ${new Date(lastSighting.sessionStartedAt).toLocaleString()})` : "";
-    const label = gx.identity?.available ? `the GPEXE athlete "${gpexeAthleteLabel(gpexeAthleteId, gx)}"${identityOf(gpexeAthleteId, gx)?.name ? "" : when}` : `GPEXE athlete ${gpexeAthleteId}`;
+    const label = maskGpexeIds(gx) ? `the GPEXE athlete "${gpexeAthleteLabel(gpexeAthleteId, gx)}"${identityOf(gpexeAthleteId, gx)?.name ? "" : when}` : `GPEXE athlete ${gpexeAthleteId}`;
     if (!choice) return { error: `The athlete chosen for ${label} is not linkable any more (already linked, or no longer in the team). Choose again.` };
     if (choice.duplicate) return { error: `More than one athlete of the team is called ${choice.name}. Give them different names in Settings > Athletes first, then link.` };
-    if (seen.has(athleteId)) return { error: gx.identity?.available ? `${choice.name} is chosen for two GPEXE athletes. One athlete can be linked to one GPEXE athlete only.` : `${choice.name} is chosen for GPEXE athletes ${seen.get(athleteId)} and ${gpexeAthleteId}. One athlete can be linked to one GPEXE athlete only.` };
+    if (seen.has(athleteId)) return { error: maskGpexeIds(gx) ? `${choice.name} is chosen for two GPEXE athletes. One athlete can be linked to one GPEXE athlete only.` : `${choice.name} is chosen for GPEXE athletes ${seen.get(athleteId)} and ${gpexeAthleteId}. One athlete can be linked to one GPEXE athlete only.` };
     seen.set(athleteId, gpexeAthleteId);
     pairs.push({ gpexeAthleteId, athleteId, athleteName: choice.name });
   }
@@ -1218,7 +1236,7 @@ function identityList(answer) {
 // screen shows nothing of it, without an error.
 export async function loadGpexeIdentities(render) {
   const gx = g();
-  if (!identityViewer(gx) || !gx.teamId || !gx.mapping.open) return;
+  if (!identityViewer(gx) || !gx.teamId) return;
   const generation = gx.generation;
   const teamId = gx.teamId;
   // The outcome of a load (result / error) stays while the list is read again.
@@ -1226,10 +1244,10 @@ export async function loadGpexeIdentities(render) {
   render();
   try {
     const answer = await identityRequest(teamPath(teamId, "/athlete-identities"));
-    if (generation !== gx.generation || !gx.mapping.open) return;
+    if (generation !== gx.generation) return;
     gx.identity = { ...gx.identity, available: true, loading: false, list: identityList(answer) };
   } catch (error) {
-    if (generation !== gx.generation || !gx.mapping.open) return;
+    if (generation !== gx.generation) return;
     const info = errorInfo(error);
     gx.identity = info.status === 404 ? { ...emptyGpexeIdentityState(), error: gx.identity.error } : { ...gx.identity, loading: false, readError: info };
   }
@@ -1285,7 +1303,7 @@ async function postIdentityLoad(render, { check }) {
   } catch (error) {
     info = errorInfo(error);
   }
-  if (generation !== gx.generation || !gx.mapping.open) return;
+  if (generation !== gx.generation) return;
   if (answer) {
     gx.identity = { ...gx.identity, sending: false, requestKey: null, unconfirmed: null, result: identityResult(answer) };
     render();
@@ -1353,17 +1371,40 @@ export function identityNameKey(name) {
   return String(name || "").toLocaleLowerCase().replace(/\s+/g, " ").trim();
 }
 
-// How a GPEXE athlete is named on the Link athletes screen. While the
-// administrator's identity view is available, the GPEXE id is shown only
-// under Technical details (owner decision): a loaded athlete by its GPEXE
-// name ("Name not provided" when GPEXE gave none), any other athlete as
-// "Name not loaded" - GPEXE having no record for it included. Without the
-// identity view (a coach) the screen keeps the id, as before.
+// How a GPEXE athlete is named on every Imports screen of an administrator
+// (owner decisions 2026-10-07): the GPEXE id is shown only under Technical
+// details.
+//   * a valid stored identity: its GPEXE name ("Name not provided" when GPEXE
+//     gave none);
+//   * the team has stored identities, this athlete none (never loaded,
+//     expired, GPEXE had no record): "Name not loaded (GPEXE athlete N)";
+//   * no stored identity at all: "GPEXE athlete N".
+// N is the athlete's position in the GPEXE athlete list on screen (stable for
+// that list, never stored, never the id). A coach - who gets no identity and
+// no sign that one exists - keeps the id, as before.
 export function gpexeAthleteLabel(gpexeAthleteId, gx = g()) {
-  if (!gx.identity?.available) return `GPEXE athlete ${gpexeAthleteId}`;
+  if (!identityViewer(gx)) return `GPEXE athlete ${gpexeAthleteId}`;
   const who = identityOf(gpexeAthleteId, gx);
-  if (!who) return "Name not loaded";
-  return who.name || "Name not provided";
+  if (who) return who.name || "Name not provided";
+  const n = gpexeAthleteOrdinal(gpexeAthleteId, gx);
+  const ordinal = n ? `GPEXE athlete ${n}` : "GPEXE athlete";
+  return hasStoredIdentities(gx) ? `Name not loaded (${ordinal})` : ordinal;
+}
+
+// The athlete's 1-based position in the team's GPEXE athlete list as shown
+// (the server orders it); null when it is not in the list.
+export function gpexeAthleteOrdinal(gpexeAthleteId, gx = g()) {
+  const index = (gx.sourceAthletes || []).findIndex((a) => String(a.gpexeAthleteId) === String(gpexeAthleteId));
+  return index >= 0 ? index + 1 : null;
+}
+
+function hasStoredIdentities(gx) {
+  return Object.keys(gx.identity?.list?.byId || {}).length > 0;
+}
+
+// True when the screen must not show a GPEXE id outside Technical details.
+export function maskGpexeIds(gx = g()) {
+  return identityViewer(gx);
 }
 
 export function identityOf(gpexeAthleteId, gx = g()) {

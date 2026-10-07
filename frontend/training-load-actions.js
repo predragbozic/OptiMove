@@ -1,6 +1,7 @@
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImportState, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
-import { importsUnloadShouldWarn, loadGpexeImports } from "./gpexe-import-data.js";
+import {
+  clearGpexeIdentities, importsUnloadShouldWarn, loadGpexeImports } from "./gpexe-import-data.js";
 import { handleActivityRosterAction, loadRosterForOpenActivity, rosterMayBeLeft, rosterUnloadShouldWarn } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
 import { addDaysIso, addMonthsIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthStartIso, weekMondayIso } from "./utils.js";
@@ -122,6 +123,8 @@ export function loadTrainingLoadSectionData(section, render) {
 }
 
 export function setTrainingLoadSection(section) {
+  // Leaving Imports drops the GPEXE names and dates of birth it held.
+  if (state.trainingLoad.section === "imports" && section !== "imports") clearGpexeIdentities();
   state.trainingLoad.section = section;
   if (section === "today" || section === "results" || section === "analysis" || section === "overview" || section === "imports") {
     state.trainingLoad.lastDataAnalysisSection = section;

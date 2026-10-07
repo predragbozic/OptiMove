@@ -712,12 +712,19 @@ connection, the binding, the team, the caller's role and user rows and the club 
 assembled. A revocation, an archive or an Unbind that commits first answers the identical 404; one
 that comes later waits for the read.
 
-**The GPEXE id on this screen.** With the identity view, the id is shown only under Technical details:
-- a loaded athlete is named by its GPEXE name ("Name not provided" when GPEXE gave none);
-- any other athlete reads "Name not loaded", including one GPEXE had no record for.
+**The GPEXE id on every administrator Imports screen** (owner order 2026-10-07): the id is shown only
+under Technical details. Everywhere else an athlete is named one of three ways:
+- a loaded athlete by its GPEXE name ("Name not provided" when GPEXE gave none);
+- an athlete without a stored identity, while the team has some, as "Name not loaded (GPEXE athlete N)";
+- every athlete, when the team has none, as "GPEXE athlete N".
 
-This holds in the rows, the select labels, the confirmation, the results, the error sentences and the
-unlink question. A coach's screen keeps the id, as before.
+N is the position in the list on screen and is never stored. The rule covers the Imports page (the linked
+list and the last-link notice), Link athletes, the session review (rows, link controls, blocked steps,
+changes), confirmations, results, errors, aria-labels and the unlink question.
+
+The administrator's Imports view reads the stored identities with the team, with no GPEXE request. They
+are dropped on leaving Imports, a team or workspace switch, or signing out. A coach's screens keep the id,
+as before, and show no sign of a snapshot.
 
 **Who sees it.** Only these two can use the identity panel on *Link athletes*:
 - a platform admin, in the platform workspace or the team's club workspace;
