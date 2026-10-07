@@ -1171,7 +1171,11 @@ Discovery: `docs/ai/gpexe-athlete-identity-discovery.md`. Source and field rules
 `docs/runbooks/gpexe-athlete-identities-v32-rollback.sql`.
 
 **Routes** (GPEXE import router, `requireAuth`). Every answer, a 404 included, carries
-`Cache-Control: no-store`.
+`Cache-Control: no-store`. The GET reads the right and the data in one bounded transaction. Connection,
+binding, team, role and user rows and the club are locked `FOR SHARE` in the write path's order before
+any identity row is read, and held until the answer is assembled. That makes it fail-closed against a
+revocation, an archive or an Unbind that commits after the route's own check (external review of PR
+#144, HIGH).
 - `GET /api/training-load/gpexe/teams/:teamId/athlete-identities` reads the stored, unexpired
   identities of the team's active binding. It also returns:
   - `pendingCount`: eligible athletes without a valid identity;
@@ -1211,8 +1215,8 @@ Discovery: `docs/ai/gpexe-athlete-identity-discovery.md`. Source and field rules
     manual`, one attempt), which projects five keys into the sanitized identity. An answer for another
     id is `source_identity_mismatch`.
 - **What a source answer does:**
-  - 404 is counted as not found and stored as a row without a name or a date (not read again for 14
-    days);
+  - 404 is counted as not found and stored nowhere (no negative cache); the athlete stays pending
+    for the next explicit load;
   - 401 marks the load failed first, then auto-invalidates the connection (trigger `identity_read`);
   - 403, an id mismatch, or a binding, connection, credential or team change saves nothing;
   - 429, 5xx, a timeout or a malformed answer stops the load and keeps what was confirmed (`partial`).
@@ -1247,7 +1251,9 @@ Discovery: `docs/ai/gpexe-athlete-identity-discovery.md`. Source and field rules
 - **Lost answer:** *Result not confirmed* · *Check result*, the same key, never by itself.
 - **Locks:** the load and the link writes lock each other.
 - **Rows:** a row with an identity shows the name ("Name not provided") and "Born DD.MM.YYYY" ("Date
-  of birth not provided"). The id moves to Technical details. A row without an identity keeps its id.
+  of birth not provided"). A row without an identity reads "Name not loaded". With the identity view
+  the id is only under Technical details: rows, aria-labels, confirmation, results, error sentences and
+  the unlink question (external review of PR #144).
 - **Warnings:**
   - a duplicate name;
   - a date-of-birth conflict for the chosen OptiMove athlete, on the row and in the confirmation.

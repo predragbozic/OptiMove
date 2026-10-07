@@ -105,6 +105,7 @@ let finalizeHold = null;
 let commitFault = null;
 let verifyFault = null;
 let insertFault = null;
+let listHold = null;
 export function setIdentityFetchForTests(fn) { fetchForIdentity = fn ?? null; }
 export function setIdentityTimingForTests(t) { timing = t ?? null; }
 // Runs inside the write transaction after every lock and check, right before
@@ -113,6 +114,10 @@ export function setIdentityFinalizeHoldForTests(fn) { finalizeHold = fn ?? null;
 export function setIdentityCommitFaultForTests(fn) { commitFault = fn ?? null; }
 export function setIdentityVerifyFaultForTests(fn) { verifyFault = fn ?? null; }
 export function setIdentityInsertFaultForTests(fn) { insertFault = fn ?? null; }
+// The identity read: called with "before" after the route's own check and
+// before the read transaction, and with "locked" once every lock is held and
+// before the first identity row is read. Tests race a revocation there.
+export function setIdentityListHoldForTests(fn) { listHold = fn ?? null; }
 const t = (key, value) => (timing && Number.isInteger(timing[key]) ? timing[key] : value);
 
 function guardClient(client) {
@@ -211,46 +216,105 @@ export async function purgeExpiredIdentities(limit = 200) {
 // ---------------------------------------------------------------------------
 // Read: what an administrator sees on Link athletes.
 // ---------------------------------------------------------------------------
-export async function listIdentities(teamId, ctx) {
-  const binding = await activeBinding(pool, teamId);
-  if (!binding) return null;
-  if (!(await rightHolds(pool, ctx, binding.club_id))) return null;
-  // Readers never show an expired row; deleting it here too keeps the
-  // physical deletion close to the expiry on a quiet server (DB review M3).
+// The right and the data are read in ONE bounded transaction (external review
+// of PR #144, HIGH): the binding, the connection, the team, the caller's role
+// and user rows and the club are locked FOR SHARE in the write path's order
+// (connection -> binding -> team -> right and club) before a single identity
+// row is read, and stay locked until the answer is assembled. A revocation,
+// an archive or an Unbind that commits before these locks is seen here and
+// answers the same 404 as no right at all; one that comes later waits for
+// this read to finish. Fail-closed: anything unexpected is no answer.
+// Lock order (fixed, shared with finalize and the v32 insert trigger): the
+// connection, the binding, the team, then the caller's role and user rows,
+// then the club. A future club-archive cascade must lock the teams before the
+// club, or it would invert this order (bounded by lock_timeout, never a leak).
+export async function listIdentities(teamId, ctx, { expectedClubId = null } = {}) {
+  if (listHold) await listHold("before");
+  // Readers never show an expired row; deleting it first keeps the physical
+  // deletion close to the expiry on a quiet server (DB review M3).
   await purgeExpiredIdentities().catch((error) => console.error(`[gpexe-identity] purge before a read failed: ${error?.code ?? ""}`));
-  const identities = (await pool.query(
-    `select gpexe_athlete_id, display_name, to_char(birth_date, 'YYYY-MM-DD') as birth_date, source_record_missing
-       from training_load.gpexe_athlete_identities
-      where binding_id = $1 and owner_team_id = $2 and expires_at > now()
-      order by length(gpexe_athlete_id), gpexe_athlete_id`,
-    [binding.id, teamId],
-  )).rows;
-  const { pending } = await eligibleAthletes(pool, teamId, binding.id);
-  // A known GPEXE date of birth that differs from the date of birth OptiMove
-  // holds: only the pair is returned (for a warning when that pair is
-  // chosen), never OptiMove's date itself, and only for the pairs the screen
-  // can stage — a GPEXE athlete without an active link and an active athlete
-  // of the team without one (security review M1: no wider date-of-birth
-  // comparison than the warning needs).
-  const conflicts = (await pool.query(
-    `select i.gpexe_athlete_id, a.id as athlete_id
-       from training_load.gpexe_athlete_identities i
-       join public.athlete_memberships m on m.team_id = i.owner_team_id and m.membership_type = 'team' and m.status = 'active'
-       join public.athletes a on a.id = m.athlete_id
-      where i.binding_id = $1 and i.expires_at > now()
-        and i.birth_date is not null and a.birth_date is not null and a.birth_date <> i.birth_date
-        and not exists (select 1 from training_load.gpexe_athlete_links l
-                         where l.owner_team_id = i.owner_team_id and l.unlinked_at is null
-                           and (l.gpexe_athlete_id = i.gpexe_athlete_id or l.athlete_id = a.id))`,
-    [binding.id],
-  )).rows;
-  return {
-    identities: identities.map((r) => ({ gpexeAthleteId: r.gpexe_athlete_id, name: r.display_name, birthDate: r.birth_date, ...(r.source_record_missing ? { sourceRecordMissing: true } : {}) })),
-    pendingCount: pending.length,
-    maxPerLoad: IDENTITY_MAX_PER_LOAD,
-    retentionDays: IDENTITY_TTL_DAYS,
-    birthDateConflicts: conflicts.map((r) => ({ gpexeAthleteId: r.gpexe_athlete_id, athleteId: r.athlete_id })),
-  };
+  const client = await pool.connect();
+  const release = guardClient(client);
+  let released = false;
+  try {
+    await client.query("begin isolation level read committed");
+    await client.query(`set local statement_timeout = '${t("statementTimeout", IDENTITY_STATEMENT_TIMEOUT_MS)}ms'`);
+    await client.query(`set local lock_timeout = '${IDENTITY_ROW_LOCK_TIMEOUT_MS}ms'`);
+    await client.query(`set local idle_in_transaction_session_timeout = '${IDENTITY_STATEMENT_TIMEOUT_MS * 3}ms'`);
+    // Which connection to lock first: the team's active binding, unlocked.
+    const pre = (await client.query(
+      `select id, connection_id from training_load.source_team_bindings where team_id = $1 and source_system = $2 and state = 'active'`,
+      [teamId, IMPORT_SOURCE_SYSTEM],
+    )).rows[0];
+    if (!pre) return closeNull();
+    const conn = (await client.query(`select id, owner_club_id from training_load.source_credential_connections where id = $1 for share`, [pre.connection_id])).rows[0];
+    const binding = (await client.query(`select id, team_id, state, source_system from training_load.source_team_bindings where id = $1 for share`, [pre.id])).rows[0];
+    const team = (await client.query(`select id, club_id, coalesce(is_active, true) as active from public.teams where id = $1 for share`, [teamId])).rows[0];
+    if (!conn || !binding || binding.state !== "active" || binding.source_system !== IMPORT_SOURCE_SYSTEM || String(binding.team_id) !== String(teamId)
+      || !team || team.active !== true || !team.club_id || String(conn.owner_club_id) !== String(team.club_id)
+      // The club the route resolved the caller's workspace for must still be
+      // the team's club under the lock (a team moved meanwhile reads nothing).
+      || (expectedClubId && String(team.club_id) !== String(expectedClubId))) return closeNull();
+    if (!(await rightHolds(client, ctx, team.club_id, { lock: true }))) return closeNull();
+    if (listHold) await listHold("locked", client);
+    const identities = (await client.query(
+      `select gpexe_athlete_id, display_name, to_char(birth_date, 'YYYY-MM-DD') as birth_date
+         from training_load.gpexe_athlete_identities
+        where binding_id = $1 and owner_team_id = $2 and expires_at > now()
+        order by length(gpexe_athlete_id), gpexe_athlete_id`,
+      [binding.id, teamId],
+    )).rows;
+    const { pending } = await eligibleAthletes(client, teamId, binding.id);
+    // A known GPEXE date of birth that differs from the date of birth OptiMove
+    // holds: only the pair is returned (for a warning when that pair is
+    // chosen), never OptiMove's date itself, and only for the pairs the screen
+    // can stage - a GPEXE athlete without an active link and an active athlete
+    // of the team without one (owner decision: the mismatch boolean is
+    // allowed for these two administrators).
+    const conflicts = (await client.query(
+      `select i.gpexe_athlete_id, a.id as athlete_id
+         from training_load.gpexe_athlete_identities i
+         join public.athlete_memberships m on m.team_id = i.owner_team_id and m.membership_type = 'team' and m.status = 'active'
+         join public.athletes a on a.id = m.athlete_id
+        where i.binding_id = $1 and i.expires_at > now()
+          and i.birth_date is not null and a.birth_date is not null and a.birth_date <> i.birth_date
+          and not exists (select 1 from training_load.gpexe_athlete_links l
+                           where l.owner_team_id = i.owner_team_id and l.unlinked_at is null
+                             and (l.gpexe_athlete_id = i.gpexe_athlete_id or l.athlete_id = a.id))`,
+      [binding.id],
+    )).rows;
+    const answer = {
+      identities: identities.map((r) => ({ gpexeAthleteId: r.gpexe_athlete_id, name: r.display_name, birthDate: r.birth_date })),
+      pendingCount: pending.length,
+      maxPerLoad: IDENTITY_MAX_PER_LOAD,
+      retentionDays: IDENTITY_TTL_DAYS,
+      birthDateConflicts: conflicts.map((r) => ({ gpexeAthleteId: r.gpexe_athlete_id, athleteId: r.athlete_id })),
+    };
+    // The answer is complete while every lock is still held; only then is
+    // the read transaction ended.
+    await client.query("commit");
+    released = true;
+    release();
+    return answer;
+  } catch (error) {
+    if (!released) {
+      let dead = false;
+      await withinBound(client.query("rollback"), 5_000).catch(() => { dead = true; });
+      released = true;
+      release(dead);
+    }
+    if (error?.code === "55P03" || error?.code === "40P01" || error?.code === "57014") throw refusal("try_again");
+    console.error(`[gpexe-identity] a read failed: ${error?.code ?? error?.name ?? ""}`);
+    throw refusal("internal_error");
+  }
+
+  async function closeNull() {
+    released = true;
+    let dead = false;
+    await withinBound(client.query("rollback"), 5_000).catch(() => { dead = true; });
+    release(dead);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -502,11 +566,10 @@ async function readIdentities(facts, targets) {
         } catch (error) {
           if (error instanceof SourceImportResolveError) { out.resolveError = error; halt(error.code, { discard: true }); return; }
           const code = error instanceof SourceAdapterError ? error.code : null;
-          if (code === "source_not_found") {
-            out.notFound += 1;
-            out.identities.set(athleteId, { gpexeAthleteId: athleteId, displayName: null, birthDate: null, observedAt: new Date(), notFound: true });
-            continue;
-          }
+          // GPEXE has no such athlete: counted in this answer only. Nothing is
+          // stored, so the athlete stays pending and the next explicit load
+          // reads it again (external review of PR #144: no negative cache).
+          if (code === "source_not_found") { out.notFound += 1; continue; }
           out.failed += 1;
           if (code === "source_auth_rejected") { out.authRejected = true; halt(code, { discard: true }); return; }
           if (["source_access_refused", "source_identity_mismatch", "source_team_mismatch", "host_not_allowed", "path_not_allowed"].includes(code)) { halt(code, { discard: true }); return; }
@@ -573,18 +636,17 @@ async function finalize({ teamId, ctx, facts, request, targets, outcome }) {
       if (insertFault) await insertFault(client);
       const r = await client.query(
         `insert into training_load.gpexe_athlete_identities
-           (owner_team_id, binding_id, connection_id, source_team_id, gpexe_athlete_id, display_name, birth_date, observed_at, expires_at, source_record_missing)
-         values ($1, $2, $3, $4, $5, $6, $7::date, $8::timestamptz, $8::timestamptz + make_interval(hours => $9), $10::boolean)
+           (owner_team_id, binding_id, connection_id, source_team_id, gpexe_athlete_id, display_name, birth_date, observed_at, expires_at)
+         values ($1, $2, $3, $4, $5, $6, $7::date, $8::timestamptz, $8::timestamptz + make_interval(hours => $9))
          on conflict (binding_id, gpexe_athlete_id) do nothing`,
-        [teamId, facts.bindingId, facts.connectionId, facts.sourceTeamId, identity.gpexeAthleteId, identity.displayName, identity.birthDate, identity.observedAt.toISOString(), IDENTITY_TTL_DAYS * 24, identity.notFound === true],
+        [teamId, facts.bindingId, facts.connectionId, facts.sourceTeamId, identity.gpexeAthleteId, identity.displayName, identity.birthDate, identity.observedAt.toISOString(), IDENTITY_TTL_DAYS * 24],
       );
-      if (!identity.notFound) loaded += r.rowCount;
+      loaded += r.rowCount;
     }
     // Not read: chosen but never answered (the load stopped, or the one read
     // that failed), plus the athletes beyond this load's 50. A "no such
-    // athlete" answer is counted in notFound and kept as a row without a
-    // name or a date, so it is not read again for 14 days.
-    const notRead = targets.length - outcome.identities.size + (request.notReadLater ?? 0);
+    // athlete" answer is counted in notFound and stored nowhere.
+    const notRead = targets.length - outcome.identities.size - outcome.notFound + (request.notReadLater ?? 0);
     const saved = (await client.query(
       `update training_load.gpexe_athlete_identity_requests
           set status = 'completed', finished_at = now(), loaded = $2, not_found = $3, not_read = $4, error_code = $5

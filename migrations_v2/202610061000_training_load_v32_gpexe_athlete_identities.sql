@@ -14,7 +14,7 @@
 --      expires_at = observed_at + 336 hours exactly (CHECK: 14 days
 --      of elapsed time, independent of the session time zone). Never the raw
 --      answer, first / last name apart, short_name, a track's athlete_name,
---      (source_record_missing marks GPEXE's 404: no name, no date)
+--      A GPEXE 404 is never stored here (no negative cache).
 --      an unrecognised date form or a reason that carries a value.
 --      * BEFORE INSERT (gpexe_athlete_identities_check): the binding is
 --        ACTIVE, gpexe, of this team, this connection and this source team;
@@ -80,11 +80,6 @@ create table training_load.gpexe_athlete_identities (
     ),
   birth_date date
     constraint gpexe_athlete_identities_birth_date check (birth_date is null or birth_date >= date '1900-01-01'),
-  -- GPEXE answered 404 for this athlete: kept (without a name or a date) so
-  -- that the next loads do not read it again within the 14 days, and shown
-  -- as "GPEXE has no record for this athlete" with its id.
-  source_record_missing boolean not null default false,
-  constraint gpexe_athlete_identities_missing_is_empty check (not source_record_missing or (display_name is null and birth_date is null)),
   observed_at timestamptz not null,
   expires_at timestamptz not null,
   constraint gpexe_athlete_identities_ttl check (expires_at = observed_at + interval '336 hours'),

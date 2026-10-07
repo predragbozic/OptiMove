@@ -39,7 +39,7 @@ import {
   identityLocked,
   identityNameKey,
   identityOf,
-  sourceRecordMissing,
+  gpexeAthleteLabel,
 } from "./gpexe-import-data.js";
 
 // The bucket rules live in the data module (the batch selection needs them
@@ -981,13 +981,10 @@ export function bornText(birthDate) {
 // The GPEXE side of a row or a pair: the GPEXE name when it is loaded (the
 // id then lives in Technical details only), otherwise the id as before.
 function gpexeLabel(id, gx) {
-  const who = identityOf(id, gx);
-  if (!who) return `GPEXE athlete ${id}`;
-  return who.name || "Name not provided";
+  return gpexeAthleteLabel(id, gx);
 }
 
 function identityLinesHtml(id, gx, duplicates) {
-  if (sourceRecordMissing(id, gx)) return `<span class="gpexe-map-born">GPEXE has no record for this athlete.</span>`;
   const who = identityOf(id, gx);
   if (!who) return "";
   const duplicate = who.name && duplicates.has(identityNameKey(who.name));
@@ -1029,7 +1026,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
           ${conflictHtml(id, chosen, gx)}
         </div>
         ${choices.length ? `<label class="gpexe-map-choice"><span>Link to</span>
-          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(named ? `GPEXE athlete ${gpexeLabel(id, gx)}` : `GPEXE athlete ${id}`)} to" ${writeOff ? "disabled" : ""}>
+          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(gx.identity?.available ? `the GPEXE athlete ${gpexeLabel(id, gx)}${named ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}` : `GPEXE athlete ${id}`)} to" ${writeOff ? "disabled" : ""}>
             <option value="" ${chosen ? "" : "selected"}>Not now</option>
             ${choices.map((o) => `<option value="${escapeAttr(o.id)}" ${chosen === o.id ? "selected" : ""} ${o.duplicate ? "disabled" : ""}>${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
           </select>
@@ -1040,7 +1037,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
   }
   const inactive = a.status === "linked_inactive";
   const who = identityOf(id, gx);
-  const gpexeSide = who ? `GPEXE: ${who.name || "Name not provided"} · ${bornText(who.birthDate)}` : `GPEXE athlete ${id}`;
+  const gpexeSide = who ? `GPEXE: ${who.name || "Name not provided"} · ${bornText(who.birthDate)}` : gx.identity?.available ? `GPEXE: ${gpexeLabel(id, gx)}` : `GPEXE athlete ${id}`;
   return `
     <li class="gpexe-map-row ${inactive ? "is-inactive" : "is-linked"}">
       <div class="gpexe-map-main">
@@ -1062,7 +1059,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
 function identityResultText(r) {
   const parts = [r.loaded === 1 ? "Read 1 athlete from GPEXE." : `Read ${r.loaded} athletes from GPEXE.`];
   if (r.loaded) parts.push("Where GPEXE gives no name or date of birth, the athlete's row says so.");
-  if (r.notFound) parts.push(r.notFound === 1 ? "GPEXE has no record for 1 athlete; loading again within 14 days does not read it again." : `GPEXE has no record for ${r.notFound} athletes; loading again within 14 days does not read them again.`);
+  if (r.notFound) parts.push(r.notFound === 1 ? "GPEXE has no record for 1 athlete; it stays without a name, and a later load asks GPEXE again." : `GPEXE has no record for ${r.notFound} athletes; they stay without a name, and a later load asks GPEXE again.`);
   if (r.stopped) parts.push("GPEXE stopped answering before every athlete was read.");
   if (r.notRead) parts.push(r.notRead === 1 ? "1 athlete is still without a name - load again to read it." : `${r.notRead} athletes are still without a name - load again to read them.`);
   if (r.unrecognised) parts.push(r.unrecognised === 1 ? "1 date of birth was in a form OptiMove does not accept and is shown as not provided." : `${r.unrecognised} dates of birth were in a form OptiMove does not accept and are shown as not provided.`);
@@ -1118,7 +1115,7 @@ function renderIdentityPanelHtml(gx) {
     body = pending
       ? `<p class="muted">${pending === 1 ? "1 GPEXE athlete has" : `${pending} GPEXE athletes have`} no name loaded yet. The names help you recognise athletes; they never link anyone by themselves.</p>
          <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-identity-open" ${locked ? "disabled" : ""}>Load names and dates of birth</button>`
-      : `<p class="muted">No more GPEXE names to load right now. An athlete shown only by number was seen in a session OptiMove cannot read names for.</p>`;
+      : `<p class="muted">No more GPEXE names to load right now. An athlete whose name is not loaded was seen only in a session OptiMove cannot read names for.</p>`;
   }
   return `
     <section class="gpexe-identity" aria-label="GPEXE names and dates of birth">
@@ -1147,9 +1144,9 @@ function mapOutcomeText(r, label = `GPEXE athlete ${r.gpexeAthleteId}`) {
 // duplicate, or no name) the last session is named too.
 function renderPairHtml(p, gx, list, duplicates) {
   const who = identityOf(p.gpexeAthleteId, gx);
-  const unclear = who && (!who.name || duplicates.has(identityNameKey(who.name)));
+  const unclear = gx.identity?.available && (!who || !who.name || duplicates.has(identityNameKey(who.name)));
   const a = unclear ? list.find((x) => x.gpexeAthleteId === p.gpexeAthleteId) : null;
-  return `<li class="gpexe-link-pair"><strong>${escapeHtml(gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${who ? techHtml([["GPEXE athlete id", p.gpexeAthleteId]]) : ""}</li>`;
+  return `<li class="gpexe-link-pair"><strong>${escapeHtml(gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${gx.identity?.available ? techHtml([["GPEXE athlete id", p.gpexeAthleteId]]) : ""}</li>`;
 }
 
 function renderTeamMappingHtml(gx, teams) {
@@ -1184,7 +1181,7 @@ function renderTeamMappingHtml(gx, teams) {
       <section class="gpexe-map-results" aria-label="Result">
         <h4>Result</h4>
         <ul>
-          ${m.results.map((r) => `<li><strong>${escapeHtml(gpexeLabel(r.gpexeAthleteId, gx))} → ${escapeHtml(r.athleteName)}</strong>: ${escapeHtml(mapOutcomeText(r, gpexeLabel(r.gpexeAthleteId, gx)))}${r.error ? errorTech(r.error) : ""}</li>`).join("")}
+          ${m.results.map((r) => `<li><strong>${escapeHtml(gpexeLabel(r.gpexeAthleteId, gx))} → ${escapeHtml(r.athleteName)}</strong>: ${escapeHtml(mapOutcomeText(r, gpexeLabel(r.gpexeAthleteId, gx)))}${r.error ? errorTech(r.error) : ""}${gx.identity?.available ? techHtml([["GPEXE athlete id", r.gpexeAthleteId]]) : ""}</li>`).join("")}
         </ul>
         ${m.results.some((r) => r.outcome !== "refused") ? `<p>Find new sessions to update the reviews - approving waits until then. A wrong link can be removed with Unlink before an import is approved.</p>` : ""}
         ${staleHtml}

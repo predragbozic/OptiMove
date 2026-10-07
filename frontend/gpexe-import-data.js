@@ -613,9 +613,13 @@ export function stagedTeamMapping(gx = g()) {
   for (const gpexeAthleteId of ids) {
     const athleteId = choices[gpexeAthleteId];
     const choice = byId.get(athleteId);
-    if (!choice) return { error: `The athlete chosen for GPEXE athlete ${gpexeAthleteId} is not linkable any more (already linked, or no longer in the team). Choose again.` };
+    // Without a usable GPEXE name the athlete is told apart by its last session (never by its id).
+    const lastSighting = (gx.sourceAthletes || []).find((x) => x.gpexeAthleteId === gpexeAthleteId)?.lastSeen;
+    const when = lastSighting?.sessionStartedAt ? ` (last seen ${new Date(lastSighting.sessionStartedAt).toLocaleString()})` : "";
+    const label = gx.identity?.available ? `the GPEXE athlete "${gpexeAthleteLabel(gpexeAthleteId, gx)}"${identityOf(gpexeAthleteId, gx)?.name ? "" : when}` : `GPEXE athlete ${gpexeAthleteId}`;
+    if (!choice) return { error: `The athlete chosen for ${label} is not linkable any more (already linked, or no longer in the team). Choose again.` };
     if (choice.duplicate) return { error: `More than one athlete of the team is called ${choice.name}. Give them different names in Settings > Athletes first, then link.` };
-    if (seen.has(athleteId)) return { error: `${choice.name} is chosen for GPEXE athletes ${seen.get(athleteId)} and ${gpexeAthleteId}. One athlete can be linked to one GPEXE athlete only.` };
+    if (seen.has(athleteId)) return { error: gx.identity?.available ? `${choice.name} is chosen for two GPEXE athletes. One athlete can be linked to one GPEXE athlete only.` : `${choice.name} is chosen for GPEXE athletes ${seen.get(athleteId)} and ${gpexeAthleteId}. One athlete can be linked to one GPEXE athlete only.` };
     seen.set(athleteId, gpexeAthleteId);
     pairs.push({ gpexeAthleteId, athleteId, athleteName: choice.name });
   }
@@ -1198,15 +1202,9 @@ function identityRequest(path, options = {}) {
 
 function identityList(answer) {
   const byId = {};
-  for (const i of answer.identities || []) {
-    // GPEXE's "no such athlete" keeps the row's id on screen (no name to show).
-    if (i.sourceRecordMissing === true) continue;
-    byId[String(i.gpexeAthleteId)] = { name: typeof i.name === "string" ? i.name : null, birthDate: typeof i.birthDate === "string" ? i.birthDate : null };
-  }
-  const missing = new Set((answer.identities || []).filter((i) => i.sourceRecordMissing === true).map((i) => String(i.gpexeAthleteId)));
+  for (const i of answer.identities || []) byId[String(i.gpexeAthleteId)] = { name: typeof i.name === "string" ? i.name : null, birthDate: typeof i.birthDate === "string" ? i.birthDate : null };
   return {
     byId,
-    missing,
     pendingCount: Number.isInteger(answer.pendingCount) ? answer.pendingCount : 0,
     maxPerLoad: Number.isInteger(answer.maxPerLoad) ? answer.maxPerLoad : 50,
     retentionDays: Number.isInteger(answer.retentionDays) ? answer.retentionDays : 14,
@@ -1354,8 +1352,17 @@ export function identityNameKey(name) {
   return String(name || "").toLocaleLowerCase().replace(/\s+/g, " ").trim();
 }
 
-export function sourceRecordMissing(gpexeAthleteId, gx = g()) {
-  return Boolean(gx.identity?.list?.missing?.has(String(gpexeAthleteId)));
+// How a GPEXE athlete is named on the Link athletes screen. While the
+// administrator's identity view is available, the GPEXE id is shown only
+// under Technical details (owner decision): a loaded athlete by its GPEXE
+// name ("Name not provided" when GPEXE gave none), any other athlete as
+// "Name not loaded" - GPEXE having no record for it included. Without the
+// identity view (a coach) the screen keeps the id, as before.
+export function gpexeAthleteLabel(gpexeAthleteId, gx = g()) {
+  if (!gx.identity?.available) return `GPEXE athlete ${gpexeAthleteId}`;
+  const who = identityOf(gpexeAthleteId, gx);
+  if (!who) return "Name not loaded";
+  return who.name || "Name not provided";
 }
 
 export function identityOf(gpexeAthleteId, gx = g()) {

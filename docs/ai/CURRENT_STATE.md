@@ -1076,16 +1076,20 @@ Technical details.
   - **Snapshot (v32):**
     - only the provenance, the canonical id, a sanitized display name or NULL, a normalized date or
       NULL, `observed_at`, and `expires_at` = `observed_at` + 336 hours (CHECK);
-    - never updated or extended; GPEXE's "no such athlete" is kept as a row without a name or a
-      date, so it is not read again within the 14 days;
+    - never updated or extended; GPEXE's "no such athlete" is counted in the load's answer and never
+      stored (no negative cache), so the next explicit load reads it again;
     - an expired row is never shown and is deleted by the purge (every check, the server's schedule,
       the CLI, and before every load);
     - an Unbind, a team archive and a club archive delete the rows in the same transaction (database
       triggers);
     - the personal columns are plaintext, with no index (see the security review).
   - **UI:**
-    - the name and "Born DD.MM.YYYY" ("Name not provided" / "Date of birth not provided"); the id
-      in Technical details;
+    - the name and "Born DD.MM.YYYY" ("Name not provided" / "Date of birth not provided"), "Name not
+      loaded" for any other athlete; the id only in Technical details (rows, aria-labels,
+      confirmation, results, errors, the unlink question);
+    - the stored list is read in one transaction holding the `FOR SHARE` locks of the connection,
+      binding, team, role, user and club until the answer is assembled (fail-closed against a
+      revocation after the route's check);
     - a warning for a duplicate name and for a date-of-birth conflict with the chosen OptiMove
       athlete (the server returns the pair only, never OptiMove's date);
     - no automatic link, no preselection;
@@ -1095,6 +1099,18 @@ Technical details.
     administrator-only snapshot. The coach's lists still carry no GPEXE name.
   - **No GPEXE request, credential, Render change or persistent-database migration was made**; v32
     is applied nowhere persistent.
+  - **Owner's external review of `5642a1d` (2026-10-07): NOT READY.**
+    - Findings: HIGH, the authorization race on the read; MEDIUM, the id outside Technical details;
+      MEDIUM, the 404 cached for 14 days; LOW, ISO offsets up to ±23:59.
+    - All four were fixed in a follow-up commit on the same branch, each with a test and a mutation that
+      the test kills.
+    - **Accepted by the owner:**
+      - plaintext columns within the existing database trust boundary;
+      - the date-of-birth mismatch boolean for the two administrator roles;
+      - a strict 14-day TTL in the live table, while a backup follows its own policy with the purge
+        required before a restored copy is used.
+  - **Production-use gate:** before the first real identity load, the owner confirms the legal basis
+    and the notice for processing names and dates of birth, minors included.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1898,9 +1914,13 @@ pre-existing; pass/fail counts don't belong in this file
 
 - **Backups can outlive the 14-day identity snapshot** (identity implementation, 2026-10-06). The v32
   rows are deleted from the live database after 14 days or on an Unbind or archive, but a database
-  backup taken meanwhile keeps them for the backup's own retention. The decision not to encrypt the two
-  columns at the application level is recorded in the PR's security review. A backup-retention rule for
-  personal data is the owner's decision.
+  backup taken meanwhile keeps them for the backup's own retention. Owner decision (2026-10-07): the
+  live table keeps its strict 14 days and a backup may follow its own policy, but the runbook requires
+  the purge before a restored copy is put to use; plaintext columns are accepted inside the existing
+  database trust boundary.
+- **GPEXE athletes with no GPEXE record are read again by every explicit load** (no negative cache, owner
+  decision 2026-10-07). With more than 50 such athletes at the front of the newest-first order, later
+  athletes would wait for a load after them; a short negative TTL needs a new explicit owner decision.
 
 - **Dashboards ignores the shell Club/Team/Athletes filter** (Phase F, decision (b),
   2026-09-16). `POST /api/training-load/dashboards/:id/query` only receives the runtime

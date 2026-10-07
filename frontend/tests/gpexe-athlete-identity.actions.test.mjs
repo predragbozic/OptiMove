@@ -144,9 +144,9 @@ test("an administrator: opening the screen reads the stored identities (no-store
   assert.match(visible, /<strong>Mira Zedova<\/strong>\s*<span class="gpexe-map-born">Born 03\.02\.2001<\/span>/);
   assert.match(visible, /<strong>Mira Zedova<\/strong>\s*<span class="gpexe-map-born">Date of birth not provided<\/span>/);
   assert.match(visible, /<strong>Name not provided<\/strong>\s*<span class="gpexe-map-born">Born 31\.12\.1999<\/span>/);
-  assert.ok(!/GPEXE athlete 104|GPEXE athlete 105|GPEXE athlete 106/.test(visible.replace(/aria-label="[^"]*"/g, "")), "a named row shows its id only under Technical details");
+  assert.ok(!/GPEXE athlete 104|GPEXE athlete 105|GPEXE athlete 106/.test(visible), "a named row shows its id only under Technical details, also in its aria-label");
   assert.match(html, /<dt>GPEXE athlete id<\/dt><dd>104<\/dd>/);
-  assert.match(visible, /<strong>GPEXE athlete 107<\/strong>/, "a row without an identity keeps its id");
+  assert.match(visible, /<strong>Name not loaded<\/strong>/, "with the identity view a row without an identity shows no id either");
   assert.match(visible, /1 GPEXE athlete has no name loaded yet/);
   assert.match(visible, /data-action="training-load-gpexe-identity-open"[^>]*>Load names and dates of birth<\/button>/);
 });
@@ -198,7 +198,7 @@ test("the load: the confirmation says at most how many, read-only and 14 days be
   assert.equal(loadPosts()[0].cache, "no-store");
   assert.ok(loadPosts()[0].signal, "bounded on the client");
   const after = outsideTech(mappingHtml());
-  assert.match(after, /Read 2 athletes from GPEXE\. Where GPEXE gives no name or date of birth, the athlete(&#039;|')s row says so\. GPEXE has no record for 1 athlete; loading again within 14 days does not read it again\. GPEXE stopped answering before every athlete was read\. 3 athletes are still without a name - load again to read them\. 1 date of birth was in a form OptiMove does not accept and is shown as not provided\./);
+  assert.match(after, /Read 2 athletes from GPEXE\. Where GPEXE gives no name or date of birth, the athlete(&#039;|')s row says so\. GPEXE has no record for 1 athlete; it stays without a name, and a later load asks GPEXE again\. GPEXE stopped answering before every athlete was read\. 3 athletes are still without a name - load again to read them\. 1 date of birth was in a form OptiMove does not accept and is shown as not provided\./);
   const notice = after.match(/<p class="gpexe-notice" role="status">([^<]*)<\/p>/)[1];
   assert.ok(!/Mira|Zedova|104|2001/.test(notice), "the result names counts only");
   assert.equal(identityCalls().filter((c) => c.method === "GET").length, 2, "the identities are read again after the load");
@@ -324,12 +324,51 @@ test("the identity lives only in memory: Close drops it, a team switch drops it,
   }
 });
 
-test("GPEXE's 'no such athlete' keeps the row's id visible and says GPEXE has no record; it is not counted as a loaded name", async () => {
+test("with the identity view, no GPEXE id appears outside Technical details: not in a loaded row, not in a row without a name (GPEXE's 404 included), not in an aria-label, the confirmation, the results, an error sentence or the unlink question", async () => {
   reset();
-  responder = server({ identities: { ...IDENTITIES, identities: [...IDENTITIES.identities, { gpexeAthleteId: "107", name: null, birthDate: null, sourceRecordMissing: true }] } });
+  // 107 has no identity (never loaded, or GPEXE answered 404 - which is never stored).
+  responder = server({ onLink: () => ({ status: 409, body: { error: "already_linked", message: "That GPEXE athlete or athlete is already linked." } }) });
   await openMapping();
-  const visible = outsideTech(mappingHtml());
-  assert.match(visible, /<strong>GPEXE athlete 107<\/strong>\s*<span class="gpexe-map-born">GPEXE has no record for this athlete\.<\/span>/);
+  const ids = ["104", "105", "106", "107"];
+  const visibleText = (html) => outsideTech(html)
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&[a-z#0-9]+;/g, " ");
+  const ariaLabels = (html) => [...outsideTech(html).matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1]);
+  const noIdOutside = (html, where) => {
+    const text = visibleText(html);
+    const labels = ariaLabels(html).join(" | ");
+    for (const id of ids) {
+      assert.ok(!new RegExp(`\\b${id}\\b`).test(text), `${where}: id ${id} outside Technical details`);
+      assert.ok(!new RegExp(`\\b${id}\\b`).test(labels), `${where}: id ${id} in an aria-label`);
+    }
+  };
+  let html = mappingHtml();
+  noIdOutside(html, "the list");
+  // Two athletes without a name (106: "Name not provided", 107: not loaded) never share one select label.
+  const labels = ariaLabels(html).filter((l) => l.startsWith("Link the GPEXE athlete"));
+  assert.equal(new Set(labels).size, labels.length, `every select label is distinct: ${labels.join(" | ")}`);
+  assert.match(outsideTech(html), /<strong>Name not loaded<\/strong>/, "a row without an identity is named without its id");
+  for (const id of ids) assert.match(html, new RegExp(`<dt>GPEXE athlete id</dt><dd>${id}</dd>`), `id ${id} is under Technical details`);
+  // A stale choice: the error sentence names no id.
+  await act("training-load-gpexe-map-choose", { gpexeAthleteId: "107" }, { value: "ath-2" });
+  await act("training-load-gpexe-map-choose", { gpexeAthleteId: "104" }, { value: "ath-2" });
+  await act("training-load-gpexe-map-confirm");
+  html = mappingHtml();
+  assert.match(html, /chosen for two GPEXE athletes/);
+  noIdOutside(html, "the error sentence");
+  await act("training-load-gpexe-map-choose", { gpexeAthleteId: "104" }, { value: "" });
+  await act("training-load-gpexe-map-confirm");
+  html = mappingHtml();
+  noIdOutside(html, "the confirmation");
+  await act("training-load-gpexe-map-send");
+  html = mappingHtml();
+  noIdOutside(html, "the results");
+  // The unlink question on this screen.
+  state.trainingLoad.gpexe.links = [{ id: "link-9", gpexeAthleteId: "106", athleteId: "ath-1", athleteName: "Ana Example" }];
+  confirmAnswer = false;
+  await act("training-load-gpexe-unlink", { linkId: "link-9" });
+  const question = confirmQuestions.at(-1);
+  assert.ok(question && !/\b106\b/.test(question), question);
 });
 
 test("a stale Review click while the name confirmation is open opens nothing (only one confirmation at a time)", async () => {

@@ -250,7 +250,7 @@ function identityHandle(fn) {
 }
 
 router.get("/teams/:teamId/athlete-identities", identityHandle(async (req, res, access, ctx) => {
-  const answer = await identity.listIdentities(access.teamId, ctx);
+  const answer = await identity.listIdentities(access.teamId, ctx, { expectedClubId: access.clubId });
   if (!answer) return notFound(res);
   res.json(answer);
 }));

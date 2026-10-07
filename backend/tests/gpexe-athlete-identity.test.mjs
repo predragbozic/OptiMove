@@ -106,6 +106,7 @@ afterEach(() => {
   identity.setIdentityCommitFaultForTests(null);
   identity.setIdentityVerifyFaultForTests(null);
   identity.setIdentityInsertFaultForTests(null);
+  identity.setIdentityListHoldForTests(null);
   resolver.setImportSourceRevalidateHoldForTests(null);
   importer.setCheckRunObserver(null);
 });
@@ -330,6 +331,9 @@ test("2. the pure rules: a date of birth is a valid YYYY-MM-DD or a valid ISO da
   assert.deepEqual(P("1999-12-31T23:30:00-05:00"), { birthDate: "1999-12-31", unrecognised: false }, "no shift to UTC");
   assert.deepEqual(P("1999-12-31T23:30:00+14:00"), { birthDate: "1999-12-31", unrecognised: false });
   assert.deepEqual(P("2001-01-01T00:00Z"), { birthDate: "2001-01-01", unrecognised: false });
+  // UTC offsets: at most +-14:00 (external review of PR #144).
+  for (const ok of ["2001-01-01T10:00+14:00", "2001-01-01T10:00-14:00", "2001-01-01T10:00+1400", "2001-01-01T10:00+13:59", "2001-01-01T10:00-12:00", "2001-01-01T10:00+05:45"]) assert.deepEqual(P(ok), { birthDate: "2001-01-01", unrecognised: false }, ok);
+  for (const bad of ["2001-01-01T10:00+14:01", "2001-01-01T10:00-14:01", "2001-01-01T10:00+14:30", "2001-01-01T10:00+15:00", "2001-01-01T10:00+23:59", "2001-01-01T10:00-23:59", "2001-01-01T10:00+1401"]) assert.deepEqual(P(bad), { birthDate: null, unrecognised: true }, bad);
   assert.deepEqual(P("2001-01-01T00:00:00.123456Z"), { birthDate: "2001-01-01", unrecognised: false });
   assert.deepEqual(P(null), { birthDate: null, unrecognised: false });
   assert.deepEqual(P(undefined), { birthDate: null, unrecognised: false });
@@ -375,7 +379,7 @@ test("3. a real check through the binding loads no identity (zero athlete reques
   assert.deepEqual(rows.map((x) => [x.gpexe_athlete_id, x.display_name, x.birth_date]), ["101", "102", "103"].map((id) => [id, `${FIRST}${id} ${LAST}${id}`, DOB(id)]));
   assert.ok(rows.every((x) => x.binding_id === binding.bindingId && x.connection_id === conn.id && x.source_team_id === o.sourceTeamId));
   const columns = (await q(`select column_name from information_schema.columns where table_schema = 'training_load' and table_name = 'gpexe_athlete_identities' order by ordinal_position`)).map((c) => c.column_name);
-  assert.deepEqual(columns, ["id", "owner_team_id", "binding_id", "connection_id", "source_team_id", "gpexe_athlete_id", "display_name", "birth_date", "source_record_missing", "observed_at", "expires_at"], "no raw answer, no name parts, no short name, no extra field");
+  assert.deepEqual(columns, ["id", "owner_team_id", "binding_id", "connection_id", "source_team_id", "gpexe_athlete_id", "display_name", "birth_date", "observed_at", "expires_at"], "no raw answer, no name parts, no short name, no extra field");
   const dump = JSON.stringify(await q(`select * from training_load.gpexe_athlete_identities where owner_team_id = $1`, [o.teamId]));
   assert.ok(!dump.includes(SHORT) && !dump.includes(EXTRA) && !dump.includes(" full"), "short_name, the extra fields and the name fallback are not stored when first + last are usable");
   const after = await list(o);
@@ -439,6 +443,83 @@ test("4. authorization and information hiding: a platform admin (platform or the
   assert.equal(athleteCalls().length, 0, "nothing was read for any refused caller");
 });
 
+test("4b. the right and the identity rows are read atomically (external review of PR #144, HIGH): a revocation, a team or club archive or an Unbind that commits after the route's own check but before the read gives the identical 404 with no PII, for both bases; a revocation that comes while the read holds its locks waits for the read, and the next read is 404", async () => {
+  const scenarios = [
+    ["platform admin revoked", "padmin", async (x) => q(`update public.user_global_roles set is_active = false where user_id = $1`, [x.o.padmin.id])],
+    ["platform admin user deactivated", "padmin", async (x) => q(`update public.users set is_active = false where id = $1`, [x.o.padmin.id])],
+    ["club admin revoked", "cadmin", async (x) => q(`update public.user_club_roles set is_active = false where user_id = $1`, [x.o.cadmin.id])],
+    ["club admin, club archived", "cadmin", async (x) => q(`update public.clubs set is_active = false where id = $1`, [x.o.clubId])],
+    ["club admin, team archived", "cadmin", async (x) => q(`update public.teams set is_active = false where id = $1`, [x.o.teamId])],
+    ["platform admin, binding ended", "padmin", async (x) => q(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'race test' where id = $1`, [x.binding.bindingId, x.o.padmin.id])],
+  ];
+  for (const [name, who, change] of scenarios) {
+    const x = await ready(2, 1001);
+    assert.equal((await load(x.o)).body.loaded, 2, name);
+    let fired = false;
+    identity.setIdentityListHoldForTests(async (stage) => {
+      if (stage !== "before" || fired) return;
+      fired = true;
+      await change(x);
+    });
+    const r = await list(x.o, x.o[who].cookie);
+    identity.setIdentityListHoldForTests(null);
+    assert.ok(fired, `${name}: the change ran after the route's check`);
+    assert.deepEqual([r.status, r.body], [404, { error: "notFound" }], `${name}: ${r.text}`);
+    assert.equal(r.cacheControl, "no-store");
+    noPii(r.text, `${name}: the 404`);
+    assert.ok(!/pending|identit|retention/i.test(r.text), `${name}: no signal that a snapshot exists`);
+  }
+  // A change while the read holds its locks waits for the read (which still had the right), then the next read is 404:
+  // a role revocation for both bases, a user deactivation, a club archive, a team archive and an ended binding.
+  const lockedChanges = [
+    ["padmin", "platform admin role revoked", (x) => [`update public.user_global_roles set is_active = false where user_id = $1`, [x.o.padmin.id]]],
+    ["cadmin", "club admin role revoked", (x) => [`update public.user_club_roles set is_active = false where user_id = $1`, [x.o.cadmin.id]]],
+    ["padmin", "platform admin user deactivated", (x) => [`update public.users set is_active = false where id = $1`, [x.o.padmin.id]]],
+    ["cadmin", "club archived", (x) => [`update public.clubs set is_active = false where id = $1`, [x.o.clubId]]],
+    ["cadmin", "team archived", (x) => [`update public.teams set is_active = false where id = $1`, [x.o.teamId]]],
+    ["padmin", "binding ended", (x) => [`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'race test' where id = $1`, [x.binding.bindingId, x.o.padmin.id]]],
+  ];
+  for (const [who, label, sqlOf] of lockedChanges) {
+    const x = await ready(2, 1051);
+    assert.equal((await load(x.o)).body.loaded, 2);
+    const other = new pg.Client({ connectionString: db.url });
+    await other.connect();
+    try {
+      let revoking = null;
+      let revokedAt = 0;
+      let answeredAt = 0;
+      identity.setIdentityListHoldForTests(async (stage) => {
+        if (stage !== "locked") return;
+        const [sql, params] = sqlOf(x);
+        revoking = other.query(sql, params).then(() => { revokedAt = Date.now(); });
+        await new Promise((r) => setTimeout(r, 300));
+        answeredAt = Date.now();
+      });
+      const r = await list(x.o, x.o[who].cookie);
+      identity.setIdentityListHoldForTests(null);
+      assert.equal(r.status, 200, `${label}: the read that held the locks first completes`);
+      await revoking;
+      assert.ok(revokedAt >= answeredAt, `${label}: the change waited for the read's locks`);
+      const after = await list(x.o, x.o[who].cookie);
+      if (label === "platform admin user deactivated") {
+        // An inactive user's session itself is refused by requireAuth (401) before any identity route runs.
+        assert.equal(after.status, 401, `${label}: the next request is refused at sign-in`);
+        noPii(after.text, `${label}: the refusal`);
+      } else assert.deepEqual([after.status, after.body], [404, { error: "notFound" }], `${label}: the next read is 404`);
+    } finally {
+      await other.end();
+    }
+  }
+});
+
+test("4c. the club the route resolved the workspace for is re-checked under the lock: a call with another expected club reads nothing", async () => {
+  const { o } = await ready(1, 1091);
+  assert.equal((await load(o)).body.loaded, 1);
+  const ctx = { userId: String(o.padmin.id), basis: "platform_admin" };
+  assert.ok(await identity.listIdentities(o.teamId, ctx, { expectedClubId: o.clubId }), "the team's own club reads");
+  assert.equal(await identity.listIdentities(o.teamId, ctx, { expectedClubId: crypto.randomUUID() }), null, "another club reads nothing");
+});
+
 test("5. the athletes are derived on the server only: a body with anything but requestKey is 400 with nothing read; a failed check, a legacy-path check, another (ended) binding's check and an expired or purged candidate give no athlete; only the succeeded chain of the current binding is read", async () => {
   const o = await org();
   useSource();
@@ -489,7 +570,7 @@ test("6. at most 50 athletes per load and at most 3 requests at once: 60 eligibl
 
 test("7. source answers: 404 counts as not found and the rest is saved; a 429, a 5xx, a non-JSON answer, a JSON array and a redirect stop the load without retry or redirect follow and keep what was already confirmed; an answer for another athlete id saves nothing at all", async () => {
   const cases = [
-    ["404", { status: 404 }, { outcome: "completed", stopCode: null, saved: 3, notFound: 1, keptEmpty: true }],
+    ["404", { status: 404 }, { outcome: "completed", stopCode: null, saved: 2, notFound: 1, notCached: true }],
     ["429", { status: 429 }, { outcome: "partial", stopCode: "source_unavailable" }],
     ["503", { status: 503 }, { outcome: "partial", stopCode: "source_unavailable" }],
     ["non-JSON", { raw: "<html>" }, { outcome: "partial", stopCode: "source_answer_unexpected" }],
@@ -512,19 +593,18 @@ test("7. source answers: 404 counts as not found and the rest is saved; a 429, a
     if (expected.saved !== undefined) assert.equal(rows.length, expected.saved, name);
     if (expected.notFound !== undefined) assert.equal(r.body.notFound, expected.notFound, name);
     assert.ok(rows.some((x) => x.gpexe_athlete_id === "801"), `${name}: the confirmed answer before the stop is kept`);
-    if (expected.keptEmpty) {
-      assert.deepEqual(rows.filter((x) => x.gpexe_athlete_id === "802").map((x) => [x.display_name, x.birth_date]), [[null, null]], `${name}: GPEXE's "no such athlete" is kept as a row without a name or a date`);
-      assert.equal(r.body.loaded, 2, `${name}: loaded counts the athletes GPEXE has`);
-      assert.equal((await q(`select source_record_missing from training_load.gpexe_athlete_identities where owner_team_id = $1 and gpexe_athlete_id = '802'`, [o.teamId]))[0].source_record_missing, true);
-      const g = await list(o);
-      assert.deepEqual(g.body.identities.find((i) => i.gpexeAthleteId === "802"), { gpexeAthleteId: "802", name: null, birthDate: null, sourceRecordMissing: true });
-      assert.equal(g.body.identities.find((i) => i.gpexeAthleteId === "801").sourceRecordMissing, undefined);
-      // It is not read again by the next load (it cannot starve the others).
-      const before = athleteCalls().length;
+    assert.ok(!rows.some((x) => x.gpexe_athlete_id === "802"), `${name}: nothing stored for 802`);
+    if (expected.notCached) {
+      // External review of PR #144: GPEXE's 404 is counted in this answer only and never cached; the
+      // athlete stays pending and only the NEXT explicit load reads it again (no automatic retry).
+      assert.deepEqual([r.body.loaded, r.body.notFound, r.body.notRead], [2, 1, 0], `${name}: a 404 is counted once, never also as not read`);
+      assert.equal((await list(o)).body.pendingCount, 1, `${name}: still pending`);
+      assert.equal(athleteCalls().filter((c) => c.key === "/rest/v1/athlete/802/").length, 1, `${name}: no automatic retry`);
       const again = await load(o);
-      assert.deepEqual([again.status, again.body.loaded], [200, 0]);
-      assert.equal(athleteCalls().length, before, `${name}: nothing read again`);
-    } else assert.ok(!rows.some((x) => x.gpexe_athlete_id === "802"), name);
+      assert.deepEqual([again.status, again.body.loaded, again.body.notFound, again.body.notRead], [200, 0, 1, 0]);
+      assert.equal(athleteCalls().filter((c) => c.key === "/rest/v1/athlete/802/").length, 2, `${name}: read again by the next explicit load`);
+      assert.ok(!(await rowsOf(o.teamId)).some((x) => x.gpexe_athlete_id === "802"));
+    }
   }
   const { o } = await ready(3, 851);
   src.st.athlete.set("852", { body: { id: 999, first_name: `${FIRST}x`, last_name: `${LAST}x` } });
@@ -932,8 +1012,6 @@ test("18. migration v32 applies on v31 (two tables, five triggers, the purge), e
     await k.query(`insert into training_load.gpexe_athlete_identities (owner_team_id, binding_id, connection_id, source_team_id, gpexe_athlete_id, observed_at, expires_at) values ($1, $2, $3, '981', '901', timestamptz '2026-10-20 12:00+00', timestamptz '2026-10-20 12:00+00' + interval '336 hours')`, [team, binding, conn]);
     const dstRefused = await k.query(`insert into training_load.gpexe_athlete_identities (owner_team_id, binding_id, connection_id, source_team_id, gpexe_athlete_id, observed_at, expires_at) values ($1, $2, $3, '981', '902', timestamptz '2026-10-20 12:00+00', timestamptz '2026-10-20 12:00+00' + interval '14 days')`, [team, binding, conn]).then(() => null, (e) => e);
     assert.equal(dstRefused?.constraint, "gpexe_athlete_identities_ttl", "calendar days across a DST change are refused");
-    const missing = await k.query(`insert into training_load.gpexe_athlete_identities (owner_team_id, binding_id, connection_id, source_team_id, gpexe_athlete_id, display_name, observed_at, expires_at, source_record_missing) values ($1, $2, $3, '981', '903', 'Ana B', now(), now() + interval '336 hours', true)`, [team, binding, conn]).then(() => null, (e) => e);
-    assert.equal(missing?.constraint, "gpexe_athlete_identities_missing_is_empty");
     await k.query(`delete from training_load.gpexe_athlete_identities where gpexe_athlete_id in ('901')`);
     await k.query(`alter table training_load.gpexe_athlete_identities enable trigger gpexe_athlete_identities_check`);
     await k.query(`set time zone 'UTC'`);

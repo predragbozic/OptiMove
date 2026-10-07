@@ -61,9 +61,10 @@ export function displayNameOf({ first_name: first, last_name: last, name } = {})
 const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 // A valid ISO 8601 date-time in its extended form: a calendar date, "T", hours
 // and minutes, optional seconds with an optional fraction, an optional "Z" or
-// numeric offset. Its calendar date is the first ten characters, taken as
+// numeric offset of at most +-14:00 (the range real UTC offsets use). Its
+// calendar date is the first ten characters, taken as
 // written: never shifted by the offset or by a time zone.
-const DATE_TIME = /^(\d{4}-\d{2}-\d{2})T([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d)(?:\.\d{1,9})?)?(?:Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)?$/;
+const DATE_TIME = /^(\d{4}-\d{2}-\d{2})T([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d)(?:\.\d{1,9})?)?(?:Z|[+-](?:(?:0\d|1[0-3]):?[0-5]\d|14:?00))?$/;
 export const BIRTH_YEAR_MIN = 1900;
 
 function calendarDate(text, today) {
