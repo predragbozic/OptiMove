@@ -1357,6 +1357,7 @@ async function postIdentityLoad(render, { check }) {
   const teamId = gx.teamId;
   const requestKey = gx.identity.requestKey || globalThis.crypto.randomUUID();
   const priorChecks = gx.identity.unconfirmed?.checks || 0;
+  const priorRunning = gx.identity.unconfirmed?.running === true;
   gx.identity = { ...gx.identity, sending: true, confirming: false, requestKey, error: null, result: null };
   // Until the answer arrives the load is not confirmed: a team change in the
   // meantime keeps its key for this team.
@@ -1384,7 +1385,13 @@ async function postIdentityLoad(render, { check }) {
   // says nothing about the original load: it stays not confirmed, key kept.
   // (request_key_reused - the key belongs to another binding or team - can
   // never be answered here, so it settles like any stated refusal.)
-  else if (check && info.data?.replayed !== true && code !== "request_key_reused") outcome = { settled: false, unconfirmed: { checks, running: false } };
+  // The refusal itself is shown in the box (its stable status, code and
+  // reason only - never a name or an id), and what was known of the load
+  // (still running or not) is kept: the refusal says nothing new about it.
+  else if (check && info.data?.replayed !== true && code !== "request_key_reused") {
+    const reason = typeof info.data?.reason === "string" && /^[a-z_]{1,64}$/.test(info.data.reason) ? info.data.reason : null;
+    outcome = { settled: false, unconfirmed: { checks, running: priorRunning, lastRefusal: { status: Number(info.status) || 0, code: typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? code : null, reason } } };
+  }
   else if (isDefiniteRefusal(info) || (info.status >= 500 && typeof code === "string" && code !== "outcome_unknown")) {
     outcome = { settled: true, fields: { error: info }, reread: code === "identity_load_abandoned" || code === "source_auth_rejected" };
   } else outcome = { settled: false, unconfirmed: { checks, running: false } };

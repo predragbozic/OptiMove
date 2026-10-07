@@ -586,3 +586,35 @@ test("a status without the identity right (a role revoked) drops the kept key: w
   assert.equal(state.trainingLoad.gpexe.identity.requestKey, null, "no old key after the right returns");
   assert.equal(state.trainingLoad.gpexe.identity.unconfirmed, null);
 });
+
+test("a Check result refused for a cause (a busy server, a connection that needs attention) keeps the key and the not-confirmed state, says why inside the box, and never claims that nothing was saved", async () => {
+  const kept = await loseOneLoadOnTeamA();
+  for (const [body, pattern] of [
+    [{ error: "try_again", message: "The server is busy right now. Your request was not carried out; try again in a moment." }, /Check result could not run because OptiMove or the server is busy\. The result is still not confirmed/],
+    [{ error: "source_connection_unavailable", reason: "connection_not_usable", message: "x" }, /Check result could not run: the team(?:'|&#0?39;|&#x27;)s GPEXE connection needs attention/],
+  ]) {
+    responder = server({ onLoad: () => ({ status: 409, body }) });
+    await act("training-load-gpexe-identity-check");
+    const identity = state.trainingLoad.gpexe.identity;
+    assert.equal(identity.requestKey, kept, `${body.error}: the same key`);
+    assert.ok(identity.unconfirmed, `${body.error}: still not confirmed`);
+    assert.equal(pendingIdentityLoadsSnapshot()[0]?.requestKey, kept);
+    const html = outsideTech(mappingHtml());
+    const box = html.slice(html.indexOf('class="gpexe-unknown"'));
+    assert.match(box, pattern, `${body.error}: the cause is named in the box`);
+    assert.ok(!/Check result could not run[^<]*Nothing was saved/.test(box), "a refused Check result never says nothing was saved");
+    assert.match(box, /data-action="training-load-gpexe-identity-check"/, "Check result stays available");
+  }
+  // A load that was still running stays "still running" after a refusal.
+  responder = server({ onLoad: () => ({ status: 409, body: { error: "identity_load_running", replayed: true } }) });
+  await act("training-load-gpexe-identity-check");
+  assert.equal(state.trainingLoad.gpexe.identity.unconfirmed.running, true);
+  responder = server({ onLoad: () => ({ status: 409, body: { error: "try_again" } }) });
+  await act("training-load-gpexe-identity-check");
+  assert.equal(state.trainingLoad.gpexe.identity.unconfirmed.running, true, "the refusal says nothing new about the load");
+  // The answer then settles it and the cause goes.
+  responder = server();
+  await act("training-load-gpexe-identity-check");
+  assert.equal(state.trainingLoad.gpexe.identity.unconfirmed, null);
+  assert.ok(!/Check result could not run/.test(mappingHtml()));
+});
