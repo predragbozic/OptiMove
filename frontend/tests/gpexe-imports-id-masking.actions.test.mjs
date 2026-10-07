@@ -414,6 +414,8 @@ test("a name load that succeeds after the administrator left Imports records its
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-identities")).length, reads, "no identity read after leaving");
   assert.equal(identity.requestKey, null, "the load is settled: its key is done");
   assert.equal(identity.unconfirmed, null);
+  await openMapping();
+  assert.equal(state.trainingLoad.gpexe.identity.result, null, "a load that settled while away shows no counts after the return");
 });
 
 test("a name load that settles after the administrator left Imports and came back re-reads the names once, and the panel never promises a fresh start by closing", async () => {
@@ -440,6 +442,7 @@ test("a name load that settles after the administrator left Imports and came bac
   for (let i = 0; i < 5; i += 1) await new Promise((r) => setImmediate(r));
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-identities")).length, reads + 1, "one re-read for the view open now");
   assert.equal(state.trainingLoad.gpexe.identity.list?.byId?.[ID.notLoaded]?.name, "Lea Novak");
+  assert.equal(state.trainingLoad.gpexe.identity.result?.loaded, 1, "a load settling after the return shows its counts");
 
   // A lost answer: the panel says Check result, never "open it again to start over".
   const gate2 = deferred();
@@ -470,4 +473,25 @@ test("the session review: an unnamed athlete's number is explained as a place in
   html = outsideTech(pageHtml());
   assert.match(html, /The number in &quot;GPEXE athlete 4&quot; is this athlete's place in OptiMove's list, not the GPEXE id|The number in "GPEXE athlete 4" is this athlete's place in OptiMove's list, not the GPEXE id/);
   assertMasked(pageHtml(), "review number note");
+});
+
+test("a name load that succeeds after the administrator left Training Load through the sidebar reads no name, although the section is still imports", async () => {
+  const gate = deferred();
+  reset(VIEWERS["club admin"]);
+  const base = responder;
+  responder = async (call) => (call.url.endsWith("/athlete-identities/loads") ? (await gate.promise, { status: 200, body: { loaded: 1, notFound: 0, notRead: 0 } }) : base(call));
+  await openMapping();
+  await act("training-load-gpexe-identity-open");
+  const sending = act("training-load-gpexe-identity-send");
+  await new Promise((r) => setImmediate(r));
+  confirmLeaveTrainingLoad("athletes");
+  state.activeTab = "athletes";
+  assert.equal(state.trainingLoad.section, "imports", "the sidebar leaves the section as it was");
+  const reads = fetchCalls.filter((c) => c.url.endsWith("/athlete-identities")).length;
+  gate.resolve();
+  await sending;
+  for (let i = 0; i < 5; i += 1) await new Promise((r) => setImmediate(r));
+  assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-identities")).length, reads, "no identity read on another tab");
+  assert.equal(state.trainingLoad.gpexe.identity.list, null);
+  assert.equal(state.trainingLoad.gpexe.identity.requestKey, null, "the load is settled");
 });

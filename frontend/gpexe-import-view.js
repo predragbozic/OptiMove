@@ -1122,7 +1122,7 @@ function renderIdentityPanelHtml(gx) {
     body = `
       <div class="gpexe-unknown" role="status">
         <p><strong>Result not confirmed.</strong> ${id.unconfirmed.running ? "The load is still running, or its result is not settled yet." : "The answer was lost, so we can't tell yet what was saved."} Check result asks OptiMove what happened; GPEXE is never read twice for this request.</p>
-        <p class="muted">Linking is off until the result is confirmed. Check result asks OptiMove what happened; closing Link athletes does not start over.</p>
+        <p class="muted">Linking is off until the result is confirmed. Closing Link athletes does not start over.</p>
         <div class="gpexe-link-actions"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-identity-check">Check result</button></div>
       </div>`;
   } else if (id.confirming) {

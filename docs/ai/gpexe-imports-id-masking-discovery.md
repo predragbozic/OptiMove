@@ -52,9 +52,10 @@ request), not only while Link athletes is open.
   the identity right and signing out drop them (in memory only, as before). A clear moves an epoch, so an
   identity answer still in flight is dropped.
 - The state of a name load (in flight, its `requestKey`, a result not confirmed) carries no name and outlives a
-  clear: a lost answer keeps its key and *Check result* repeats it. A load that settles after the clear reads the
-  names again only if an Imports view of the same team is open at that moment; its counts are not shown after a
-  return (the re-read list shows what was loaded).
+  clear: a lost answer keeps its key and *Check result* repeats it. A load that settles while the administrator is
+  away records its outcome but reads no names, and its counts are not shown after a return. A load that settles
+  while an Imports view of the same team is open (Training Load active, including one reopened meanwhile) shows
+  its counts and reads the names again.
 - A coach's view never asks; `identityOf` answers nothing for a viewer without the identity right.
 
 ## Tests and mutations
