@@ -14,7 +14,7 @@
 --      expires_at = observed_at + 336 hours exactly (CHECK: 14 days
 --      of elapsed time, independent of the session time zone). Never the raw
 --      answer, first / last name apart, short_name, a track's athlete_name,
---      A GPEXE 404 is never stored here (no negative cache).
+--      A GPEXE 404 is never stored here; see 3b (its 24-hour retry suppression).
 --      an unrecognised date form or a reason that carries a value.
 --      * BEFORE INSERT (gpexe_athlete_identities_check): the binding is
 --        ACTIVE, gpexe, of this team, this connection and this source team;

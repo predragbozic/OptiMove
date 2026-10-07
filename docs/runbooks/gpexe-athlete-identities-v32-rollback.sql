@@ -11,7 +11,8 @@
 --   * a fresh, restore-verified backup exists;
 --   * the owner approved this database specifically.
 -- It drops exactly what v32 created: three tables (with their indexes,
--- constraints and foreign keys), the five triggers and their functions, and
+-- constraints and foreign keys), the seven triggers (the three guards and the three delete paths, plus
+-- the no-update trigger of the identities) and their functions, and
 -- the purge function. It is forward-safe: it refuses, changing nothing, when
 --   * any migrations_v2 migration newer than v32 is recorded;
 --   * a load request row exists that is not 'failed' — a completed or running

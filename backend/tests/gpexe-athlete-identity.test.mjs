@@ -692,6 +692,32 @@ test("7c. 404s cannot starve the other athletes: with 60 pending and the first 5
   }
 });
 
+test("7d. a re-404 after the expiry replaces the expired suppression with a new 24-hour one, even when the expired row is still there at the write (the purge before the load did not remove it)", async () => {
+  const x = await ready(1, 5201);
+  src.st.athlete.set("5201", { status: 404 });
+  assert.equal((await load(x.o)).body.notFound, 1);
+  await ageSuppressions(x.o.teamId, ["5201"]);
+  // Inside the write transaction the expired row is put back (as if the pre-load purge had failed).
+  identity.setIdentityFinalizeHoldForTests(async (client) => {
+    await client.query(`delete from training_load.gpexe_athlete_identity_suppressions where owner_team_id = $1`, [x.o.teamId]);
+    await client.query(`alter table training_load.gpexe_athlete_identity_suppressions disable trigger gpexe_athlete_identity_suppressions_guard`);
+    await client.query(`insert into training_load.gpexe_athlete_identity_suppressions (owner_team_id, binding_id, gpexe_athlete_id, observed_at, retry_after) values ($1, $2, '5201', now() - interval '25 hours', now() - interval '1 hour')`, [x.o.teamId, x.binding.bindingId]);
+    await client.query(`alter table training_load.gpexe_athlete_identity_suppressions enable trigger gpexe_athlete_identity_suppressions_guard`);
+  });
+  const r = await load(x.o);
+  identity.setIdentityFinalizeHoldForTests(null);
+  assert.deepEqual([r.status, r.body.notFound], [200, 1], r.text);
+  const rows = (await q(`select gpexe_athlete_id, retry_after > now() + interval '23 hours' as fresh from training_load.gpexe_athlete_identity_suppressions where owner_team_id = $1`, [x.o.teamId]));
+  assert.deepEqual(rows.map((y) => [y.gpexe_athlete_id, y.fresh]), [["5201", true]], "exactly one, fresh 24-hour suppression");
+});
+
+test("7e. no stale contract text: the code and v32 describe the 24-hour suppression, not the removed no-negative-cache rule", async () => {
+  const svc = await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeAthleteIdentityService.js"), "utf8");
+  const mig = await fsp.readFile(path.resolve(ROOT, "migrations_v2", V32), "utf8");
+  assert.ok(!/next explicit load\s+(\/\/\s*)?reads it again/.test(svc), "service comment");
+  assert.ok(!/no negative cache\)/.test(mig), "migration header");
+});
+
 test("8. a 401 moves the connection to needs_reconnect through the auto-invalidate path (one audit row, basis system, trigger identity_read) and saves nothing; a 403 saves nothing and changes nothing of the credential's state", async () => {
   const a = await ready(2, 901);
   src.st.athlete.set("902", { status: 401 });
@@ -1040,7 +1066,7 @@ test("17. static boundaries: the check run never reaches the identity module; th
   assert.match(adapter, /sourceApiUrl\(ADAPTER_SOURCE, hostKey, catalogRow, `athlete\/\$\{id\}\/`\)/);
 });
 
-test("18. migration v32 applies on v31 (two tables, five triggers, the purge), enforces its invariants (the active binding of the row's team, connection and source team; an active team and club; the 14-day TTL; the name and date guards; no UPDATE; one running load per team; a finished request is final), rolls back to exactly the v31 catalog, applies again identically, refuses to roll back under a later migration and while a completed load exists, and a file that fails at its last statement applies nothing", async () => {
+test("18. migration v32 applies on v31 (three tables, seven triggers, two purges), enforces its invariants (the active binding of the row's team, connection and source team; an active team and club; the 14-day TTL; the name and date guards; no UPDATE; one running load per team; a finished request is final), rolls back to exactly the v31 catalog, applies again identically, refuses to roll back under a later migration and while a completed load exists, and a file that fails at its last statement applies nothing", async () => {
   const m = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v32mig", migrations: UP_TO_V31 });
   const k = new pg.Client({ connectionString: m.url });
   await k.connect();

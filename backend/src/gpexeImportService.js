@@ -313,13 +313,19 @@ export async function runRetention(triggerSource) {
         identitiesPurged += n;
         if (n < RETENTION_BATCH_SIZE) break;
       }
+    } catch (error) {
+      identityError = error;
+    }
+    // The 24-hour suppressions in their own step: a failure of the identity
+    // purge never keeps them, and the run still reports that failure.
+    try {
       for (let batch = 0; batch < RETENTION_MAX_BATCHES; batch += 1) {
         const n = (await query(`select training_load.purge_expired_gpexe_athlete_identity_suppressions($1) as n`, [RETENTION_BATCH_SIZE])).rows[0].n;
         suppressionsPurged += n;
         if (n < RETENTION_BATCH_SIZE) break;
       }
     } catch (error) {
-      identityError = error;
+      identityError = identityError ?? error;
     }
     for (let batch = 0; batch < RETENTION_MAX_BATCHES; batch += 1) {
       const n = (await query(`select training_load.purge_expired_gpexe_raw($1) as n`, [RETENTION_BATCH_SIZE])).rows[0].n;

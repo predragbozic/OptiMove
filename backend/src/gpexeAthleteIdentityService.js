@@ -218,8 +218,13 @@ async function eligibleAthletes(executor, teamId, bindingId) {
 // Best effort, any caller: one bounded batch of expired rows. The readers
 // never depend on it (they filter on expires_at).
 export async function purgeExpiredIdentities(limit = 200) {
-  const r = await pool.query(`select training_load.purge_expired_gpexe_athlete_identities($1) as n`, [limit]);
-  await pool.query(`select training_load.purge_expired_gpexe_athlete_identity_suppressions($1) as n`, [limit]);
+  const r = await pool.query(`select training_load.purge_expired_gpexe_athlete_identities($1) as n`, [limit])
+    .catch((error) => ({ error }));
+  // Its own call: a failure of the identity purge never keeps expired
+  // suppressions, and the other way round.
+  await pool.query(`select training_load.purge_expired_gpexe_athlete_identity_suppressions($1) as n`, [limit])
+    .catch((error) => console.error(`[gpexe-identity] suppression purge failed: ${error?.code ?? ""}`));
+  if (r.error) throw r.error;
   return r.rows[0].n;
 }
 
@@ -579,9 +584,9 @@ async function readIdentities(facts, targets) {
         } catch (error) {
           if (error instanceof SourceImportResolveError) { out.resolveError = error; halt(error.code, { discard: true }); return; }
           const code = error instanceof SourceAdapterError ? error.code : null;
-          // GPEXE has no such athlete: counted in this answer only. Nothing is
-          // stored, so the athlete stays pending and the next explicit load
-          // reads it again (external review of PR #144: no negative cache).
+          // GPEXE has no such athlete: counted in this answer (no id) and, in
+          // finalize, suppressed for 24 hours - never an identity (owner
+          // decision 2026-10-07, after the external review of 94ec914).
           if (code === "source_not_found") { out.notFound += 1; out.notFoundIds.push({ gpexeAthleteId: athleteId, observedAt: new Date() }); continue; }
           out.failed += 1;
           if (code === "source_auth_rejected") { out.authRejected = true; halt(code, { discard: true }); return; }
