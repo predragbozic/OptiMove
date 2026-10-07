@@ -1,6 +1,7 @@
 // Purges raw GPEXE snapshots whose retention has expired (30 days after last
-// seen for a candidate that was never imported, 90 days after import), and
-// prints the retention status. Meant for an external scheduler (a Render Cron
+// seen for a candidate that was never imported, 90 days after import) and
+// GPEXE athlete identity rows past their 14 days (v32), and prints the
+// retention status. Meant for an external scheduler (a Render Cron
 // Job, Windows Task Scheduler), so the purge does not depend on the web
 // server process running every day:
 //
@@ -15,16 +16,16 @@ import { retentionStatus, runRetention } from "./gpexeImportService.js";
 export async function runGpexeRetentionOnce() {
   const run = await runRetention("cli");
   const status = await retentionStatus();
-  return { purged: run.purged, status };
+  return { purged: run.purged, identitiesPurged: run.identitiesPurged, status };
 }
 
 const isMainModule = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMainModule) {
   try {
-    const { purged, status } = await runGpexeRetentionOnce();
-    console.log(JSON.stringify({ purged, ...status }, null, 2));
+    const { purged, identitiesPurged, status } = await runGpexeRetentionOnce();
+    console.log(JSON.stringify({ purged, identitiesPurged, ...status }, null, 2));
     if (!status.healthy) {
-      console.error(`[gpexe] ${status.expiredNotPurged} expired snapshot(s) are still stored.`);
+      console.error(`[gpexe] ${status.expiredNotPurged} expired snapshot(s) and ${status.expiredIdentitiesNotPurged} expired identity row(s) are still stored.`);
       process.exitCode = 1;
     }
   } catch (error) {

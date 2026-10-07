@@ -29,7 +29,9 @@ export async function resolveGpexeTeamAccess(req, teamId, { query }) {
     (workspace?.type === "team" && String(workspace.scopeId) === String(team.id)) ||
     (workspace?.type === "club" && String(workspace.scopeId) === String(team.club_id) && (platformAdmin || holdsClubAdminRole(req.authz, team.club_id)));
   if (!inWorkspace) return null;
-  return { teamId: String(team.id), clubId: team.club_id ? String(team.club_id) : null, platformAdmin };
+  // The workspace the access was resolved in, for a route whose right is
+  // narrower than "manages the team" (the identity load: no team workspace).
+  return { teamId: String(team.id), clubId: team.club_id ? String(team.club_id) : null, platformAdmin, workspace: { type: workspace.type, scopeId: workspace.scopeId ? String(workspace.scopeId) : null } };
 }
 
 // Live read, never the cached req.authz: a revoked grant or role must stop

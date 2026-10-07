@@ -148,7 +148,7 @@ test("4. GET only: the adapter exposes named reads and nothing generic — no re
   assert.deepEqual(names, [
     "capabilities", "countVisibleTeams", "fetchSessionBundle", "getAthleteSession", "getAthleteSessionMore", "getDrillLabels", "getSession",
     "getSessionDetails", "getSessionDrillDetails", "getSessionDrills", "getTeamThresholds", "getTrack", "getUnits", "listAthleteSessions",
-    "listSessionTags", "listSessions", "listSessionsByDay", "listVisibleTeams", "verifyBoundTeam",
+    "listSessionTags", "listSessions", "listSessionsByDay", "listVisibleTeams", "readAthleteIdentity", "verifyBoundTeam",
   ]);
   for (const forbidden of ["request", "get", "read", "fetch", "post", "put", "patch", "delete", "send", "call", "getAllPages"]) assert.equal(a[forbidden], undefined, forbidden);
   // An option that tries to carry a method, a URL or a path changes nothing.
@@ -540,7 +540,7 @@ test("12. units stays source_capability_unavailable; every other capability is i
   const declared = a.capabilities();
   assert.deepEqual(declared, Object.fromEntries(Object.entries(REST_V1_CAPABILITIES).map(([k, v]) => [k, { status: v.status, available: v.status === "proven" || v.status === "observed" }])));
   assert.deepEqual(Object.entries(REST_V1_CAPABILITIES).filter(([, v]) => v.status === "proven").map(([k]) => k),
-    ["team_list", "team_read", "session_list", "session_list_by_date", "session_read", "session_details", "athlete_session_list", "athlete_session_read", "athlete_session_more", "track_read", "team_thresholds"]);
+    ["team_list", "team_read", "session_list", "session_list_by_date", "session_read", "session_details", "athlete_session_list", "athlete_session_read", "athlete_session_more", "track_read", "team_thresholds", "athlete_read"]);
   assert.deepEqual(Object.entries(REST_V1_CAPABILITIES).filter(([, v]) => v.status === "observed").map(([k]) => k), ["session_drill_details", "session_tags"]);
   assert.deepEqual(Object.entries(REST_V1_CAPABILITIES).filter(([, v]) => v.status === "unknown").map(([k]) => k), ["units"]);
   // The table says what the e03 client really sends: it never lists sessions without a date window.
@@ -552,7 +552,7 @@ test("12. units stays source_capability_unavailable; every other capability is i
   // only through the two narrow builders.
   const source = (await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeRestV1Adapter.js"), "utf8")).split(/\r?\n/).filter((l) => !l.trim().startsWith("//")).join("\n");
   const code_ = source.slice(source.indexOf("export function createGpexeRestV1Adapter"));
-  for (const resource of ["team/", "team_session/", "athlete_session/", "track/", "thresholds/", "team_session_tag/", "details/", "more/"]) assert.ok(code_.includes(resource), `a request is built for ${resource}`);
+  for (const resource of ["team/", "team_session/", "athlete_session/", "track/", "thresholds/", "team_session_tag/", "details/", "more/", "athlete/"]) assert.ok(code_.includes(resource), `a request is built for ${resource}`);
   assert.doesNotMatch(code_, /api\/team_session|brief\/|\?drill=/, "the legacy forms are built by the exported builders only, never inline");
   assert.equal((source.match(/legacyDrillDetailsUrl\(\{/g) || []).length, 2, "the drill builder: its definition and its one caller");
   assert.equal((source.match(/legacyBriefUrl\(\{/g) || []).length, 2, "the brief builder: its definition and its one caller");
@@ -619,4 +619,27 @@ test("F3c2e-1. listVisibleTeams: one GET on team/, each row reduced to its canon
   await assert.rejects(bad(Array.from({ length: 101 }, (_, i) => ({ id: 1000 + i })), { "x-total-count": "101" }), code("source_answer_unexpected"), "more rows than a page");
   await assert.rejects(bad([{ id: 980 }], {}), code("source_answer_unexpected"), "no total");
   assert.deepEqual(await bad([], { "x-total-count": "0" }), { teamCount: 0, firstPageOnly: false, teams: [] });
+});
+
+test("14. identity read and the projection's own failure: readAthleteIdentity builds athlete/<id>/ only, refuses a non-canonical id before any request, projects the sanitized identity (no short_name, no extra field), refuses an answer for another id as source_identity_mismatch; an answer nested deep enough to overflow the projection is the stable source_answer_unexpected on every read, never a raw error", async () => {
+  const deep = "[".repeat(200000) + "]".repeat(200000);
+  const { calls, fetchImpl } = fakeServer({ routes: {
+    "/rest/v1/athlete/7/": answer(200, { id: 7, first_name: "Ana", last_name: "Bee", name: "X Y", short_name: "SHORTMARK", birthdate: "2000-01-02", extra: "EXTRAMARK" }),
+    "/rest/v1/athlete/8/": answer(200, { id: 9, first_name: "Ana", last_name: "Bee" }),
+    "/rest/v1/athlete/10/": () => new Response(`{"id":10,"x":${deep}}`, { status: 200, headers: { "content-type": "application/json" } }),
+    "/rest/v1/team/980/": () => new Response(deep, { status: 200, headers: { "content-type": "application/json" } }),
+  } });
+  const a = make(fetchImpl);
+  for (const bad of ["07", "-1", "abc", 1.5, null]) await assert.rejects(a.readAthleteIdentity({ athleteId: bad }), code("invalid_id"));
+  assert.equal(calls.length, 0);
+  const r = await a.readAthleteIdentity({ athleteId: "7" });
+  assert.deepEqual(r, { identity: { gpexeAthleteId: "7", displayName: "Ana Bee", birthDate: "2000-01-02" }, birthDateUnrecognised: false });
+  assert.ok(!JSON.stringify(r).includes("MARK"));
+  assert.equal(calls[0].url, "https://server3.gpexe.com/rest/v1/athlete/7/");
+  assert.deepEqual([calls[0].method, calls[0].redirect], ["GET", "manual"]);
+  await assert.rejects(a.readAthleteIdentity({ athleteId: "8" }), code("source_identity_mismatch"));
+  // The identity projection reads five keys and never walks the rest: a deep field is simply ignored.
+  assert.deepEqual(await a.readAthleteIdentity({ athleteId: "10" }), { identity: { gpexeAthleteId: "10", displayName: null, birthDate: null }, birthDateUnrecognised: false });
+  await assert.rejects(a.verifyBoundTeam(), code("source_answer_unexpected"), "the drop list's recursion on an existing read too");
+  await assert.rejects(a.readAthleteIdentity({ athleteId: "7", teamId: "981" }), code("team_param_not_allowed"));
 });

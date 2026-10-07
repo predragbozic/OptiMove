@@ -1163,6 +1163,107 @@ OptiMove team ↔ GPEXE Team ID stays there, platform admin only, unchanged).
 - **Owner-run pilot after the merge and deploy of PR A:** `docs/runbooks/gpexe-owner-pilot-f3c3.md`
   — the main session prepares it and never runs it.
 
+### 2.10 GPEXE athlete identity as built (owner order 2026-10-06; branch `feature/gpexe-athlete-identity`; not merged)
+
+Discovery: `docs/ai/gpexe-athlete-identity-discovery.md`. Source and field rules:
+`docs/ai/gpexe-rest-v1-compatibility.md` section 4b. Migration v32
+(`migrations_v2/202610061000_training_load_v32_gpexe_athlete_identities.sql`); rollback
+`docs/runbooks/gpexe-athlete-identities-v32-rollback.sql`.
+
+**Routes** (GPEXE import router, `requireAuth`). Every answer, a 404 included, carries
+`Cache-Control: no-store`. The GET reads the right and the data in one bounded transaction. Connection,
+binding, team, role and user rows and the club are locked `FOR SHARE` in the write path's order before
+any identity row is read, and held until the answer is assembled. That makes it fail-closed against a
+revocation, an archive or an Unbind that commits after the route's own check (external review of PR
+#144, HIGH).
+- `GET /api/training-load/gpexe/teams/:teamId/athlete-identities` reads the stored, unexpired
+  identities of the team's active binding. It also returns:
+  - `pendingCount`: eligible athletes without a valid identity;
+  - `maxPerLoad: 50` and `retentionDays: 14`;
+  - `birthDateConflicts`: the pairs whose known dates of birth differ, limited to the pairs the screen
+    can stage. That is a GPEXE athlete without an active link and an active OptiMove athlete of the team
+    without one. OptiMove's own date is never returned.
+- `POST …/athlete-identities/loads` takes `{ requestKey }` and nothing else.
+- **Who:** an identity admin only (`identityAdminBasis()`): a platform admin in the platform or the
+  team's club workspace, or the team's club admin in that club's workspace. The right is read live on
+  every request and `FOR SHARE` before the write. Everyone else gets the router's `404 {error:"notFound"}`:
+  - a coach, a team workspace, another club;
+  - a revoked or inactive role;
+  - an archived team or club;
+  - a team without an active binding, or one whose binding ended.
+
+  The team status adds `viewer.identityAdmin: true` for an identity admin only. A coach's status is
+  unchanged.
+
+**The load** (`backend/src/gpexeAthleteIdentityService.js`):
+- **Replay:** the same user's same key returns the saved counts, after the right is re-checked. The
+  same key on another team, or after an Unbind under another binding, is `409 request_key_reused`.
+- **Claim** (one short transaction):
+  - the F3c2g facts and the key ring, without a decrypt;
+  - the right;
+  - closing stale running loads (`abandoned` after 180 s);
+  - the eligible athletes: available candidates first or last seen by a **succeeded**
+    `source_connection` check of **this** binding, canonical preview ids, newest session first, without
+    a valid identity, at most 50;
+  - one `running` request row. A partial unique index allows one per team; a second load meanwhile gets
+    `409 identity_load_running`.
+- **Network,** with no database connection held:
+  - `openImportSource` with a 15 s request timeout and a 45 s budget signal;
+  - `identityReaderFor`, which refuses any id it was not given;
+  - at most 3 workers; the facts re-validated before every read and after the last;
+  - the adapter's `readAthleteIdentity` (GET `athlete/<id>/` through `sourceApiUrl`, `redirect:
+    manual`, one attempt), which projects five keys into the sanitized identity. An answer for another
+    id is `source_identity_mismatch`.
+- **What a source answer does:**
+  - 404 is counted as not found and is never an identity. A 24-hour retry suppression (binding, team,
+    id, `observed_at`, `retry_after`) leaves the athlete out of the next loads' choice, is never extended,
+    and is deleted by the identity delete paths and its own purge. The list answers `retryLaterCount`
+    (a count only). There is no automatic retry (owner decision 2026-10-07);
+  - 401 marks the load failed first, then auto-invalidates the connection (trigger `identity_read`);
+  - 403, an id mismatch, or a binding, connection, credential or team change saves nothing;
+  - 429, 5xx, a timeout or a malformed answer stops the load and keeps what was confirmed (`partial`).
+- **Write:** locks the connection, the binding and the team `FOR SHARE`, then the right and the club
+  `FOR SHARE`, then the request row `FOR UPDATE`. That order matches a bind or Unbind (connection
+  first). It then re-validates the facts, deletes expired rows of the same athletes, inserts the new
+  rows (`ON CONFLICT DO NOTHING`), completes the request with counts, and runs the bounded COMMIT:
+  `verified_after_commit_error`, or `503 outcome_unknown` with the requestKey.
+- **Answer:** counts only (`loaded`, `notFound`, `notRead`, `stopCode`, `unrecognisedBirthDates`). The
+  last is in this answer only and `null` on a replay.
+
+**The database (v32):**
+- **`gpexe_athlete_identities`:**
+  - holds the provenance (team, binding, connection, source team), the canonical id, `display_name`
+    or NULL, `birth_date` or NULL, `observed_at`, and `expires_at` = `observed_at` + 336 hours (CHECK,
+    independent of the session time zone);
+  - an INSERT guard requires the active binding of this team, connection and source team, an active
+    team and club, the reading time, and a date of birth that is not in the future;
+  - every UPDATE is refused;
+  - delete triggers act on a binding that ends, a team archive and a club archive.
+- **`gpexe_athlete_identity_requests`:** counts and a stable code only. An INSERT needs the active
+  binding; a finished request is final.
+- **Purge:** `purge_expired_gpexe_athlete_identities()`, called by `runRetention()` (first, on its
+  own), on every read of the list and before every load.
+- **Personal columns are plaintext.** There is no index on either.
+
+**The UI** (`frontend/gpexe-import-{data,view,actions}.js`, Link athletes):
+- **Panel:** for an identity admin only. It reads the stored identities when the screen opens; *Load
+  names and dates of birth* opens the confirmation (at most 50, read-only, deleted after 14 days,
+  backups noted); its button of the same name sends one POST, so a double click sends one request. A
+  fresh load refused because another load runs is a refusal, not an unconfirmed result.
+- **Lost answer:** *Result not confirmed* · *Check result*, the same key, never by itself.
+- **Locks:** the load and the link writes lock each other.
+- **Rows:** a row with an identity shows the name ("Name not provided") and "Born DD.MM.YYYY" ("Date
+  of birth not provided"). A row without an identity reads "Name not loaded". With the identity view
+  the id is only under Technical details: rows, aria-labels, confirmation, results, error sentences and
+  the unlink question (external review of PR #144).
+- **Warnings:**
+  - a duplicate name;
+  - a date-of-birth conflict for the chosen OptiMove athlete, on the row and in the confirmation.
+- **Linking:** a link is still made only by the final *Link N athletes*, through the existing route
+  and its guards.
+- **Storage:** in memory only; dropped on Close, a team switch, a workspace switch or sign-out.
+- **Not in this step:** the single-athlete link from a session's review shows no identity.
+
 ## 3. Test plan (written with the adapter; all on disposable `optimove_tests_gpexe_*` databases)
 
 Fake source server (in-process `http` server, as `gpexe-in-app-import.test.mjs` does): answers

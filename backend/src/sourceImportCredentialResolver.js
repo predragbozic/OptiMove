@@ -382,8 +382,12 @@ function withinBound(promise, ms) {
 // it: a failure is logged by code only. Idempotent, and conditional on the
 // credential the run held (its fingerprint): a connection already out of
 // `verified`, or reconnected meanwhile, is left as it is (no second row).
-export async function autoInvalidateImportSource(source, { errorCode = "source_auth_rejected" } = {}) {
+// Which read refused the credential, as the audit row's `trigger` fact: an
+// import's check run or an administrator's identity load.
+const AUTO_INVALIDATE_TRIGGERS = new Set(["import_read", "identity_read"]);
+export async function autoInvalidateImportSource(source, { errorCode = "source_auth_rejected", trigger = "import_read" } = {}) {
   if (!source || !ISSUED.has(source) || source.path !== PATH_SOURCE_CONNECTION) return false;
+  if (!AUTO_INVALIDATE_TRIGGERS.has(trigger)) return false;
   let client = null;
   let dead = false;
   let commitSent = false;
@@ -420,7 +424,7 @@ export async function autoInvalidateImportSource(source, { errorCode = "source_a
       await client.query(
         `insert into training_load.source_connection_audit (connection_id, team_id, action, outcome, error_code, performed_by_user_id, basis, metadata)
          values ($1, $2, 'auto_invalidate', 'ok', $3, null, 'system', $4::jsonb)`,
-        [source.connectionId, source.teamId, errorCode, JSON.stringify({ host_key: moved.rows[0].host_key, credential_kind: moved.rows[0].credential_kind, binding_id: String(source.bindingId), source_team_id: source.sourceTeamId, trigger: "import_read" })],
+        [source.connectionId, source.teamId, errorCode, JSON.stringify({ host_key: moved.rows[0].host_key, credential_kind: moved.rows[0].credential_kind, binding_id: String(source.bindingId), source_team_id: source.sourceTeamId, trigger })],
       );
     }
     commitSent = true;
@@ -494,6 +498,31 @@ export function importClientFor(source) {
         throw fail("drill_set_incomplete", { facts });
       }
       return stored;
+    },
+  });
+}
+
+// An administrator's identity load (owner order 2026-10-06) reads through the
+// same opened source: one athlete record at a time, only for an id of the set
+// the caller derived server-side from the stored, successful checks of this
+// binding (frozen here; any other id is refused before a request), with the
+// facts re-validated before every read. The caller re-validates once more
+// after the last read and again, under locks, before it writes.
+export const IDENTITY_IDS_MAX = 50;
+export function identityReaderFor(source, athleteIds) {
+  requireIssued(source);
+  if (source.path !== PATH_SOURCE_CONNECTION) throw fail("binding_ambiguous");
+  if (!Array.isArray(athleteIds) || athleteIds.length > IDENTITY_IDS_MAX || athleteIds.some((id) => typeof id !== "string" || !/^(0|[1-9][0-9]{0,11})$/.test(id))) throw fail("context_not_issued");
+  const allowed = new Set(athleteIds);
+  const { adapter } = source;
+  return Object.freeze({
+    async readAthleteIdentity(athleteId) {
+      if (!allowed.has(athleteId)) throw fail("context_not_issued");
+      await assertImportSourceStillUsable(source);
+      return adapter.readAthleteIdentity({ athleteId });
+    },
+    async assertStillUsable() {
+      await assertImportSourceStillUsable(source);
     },
   });
 }

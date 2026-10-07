@@ -7,6 +7,7 @@ import { query } from "../db.js";
 import { canApproveGpexeImport, resolveGpexeTeamAccess } from "../gpexeImportAccess.js";
 import { holdsClubAdminRole } from "../authz.js";
 import * as service from "../gpexeImportService.js";
+import * as identity from "../gpexeAthleteIdentityService.js";
 
 const router = Router();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -83,7 +84,9 @@ router.get("/teams/:teamId/status", handle(async (req, res) => {
     settings: settings && (access.platformAdmin ? settings : { gpexeTeamId: settings.gpexeTeamId, configuredAt: settings.configuredAt }),
     importSwitch: service.applySwitchInfo(),
     lastCheck,
-    viewer: { canApprove: approval.canApprove, approvalBasis: approval.basis, isPlatformAdmin: access.platformAdmin },
+    // identityAdmin only when true: a coach's answer carries no trace of the
+    // administrator-only identity load.
+    viewer: { canApprove: approval.canApprove, approvalBasis: approval.basis, isPlatformAdmin: access.platformAdmin, ...(identity.identityAdminBasis(req, access) ? { identityAdmin: true } : {}) },
     approvalAvailable: true,
   });
 }));
@@ -214,6 +217,48 @@ router.get("/teams/:teamId/source-athletes", handle(async (req, res) => {
     units: service.SOURCE_ATHLETE_UNITS,
     lastSeenRule: "newest session date among the team's available snapshots (not expired, not purged); same date: current version before a replaced one, then the later sighting; a refused session's raw snapshot counts only for an athlete no available preview names (evidence raw_snapshot)",
   });
+}));
+
+// GPEXE athlete identity (owner order 2026-10-06, v32): the name and date of
+// birth of the team's GPEXE athletes, for a platform admin or the team's club
+// admin only, in the platform or the club's workspace. Everyone else - a
+// coach included - and a team without an active binding get the router's
+// identical 404. Every answer, the 404 included, is no-store.
+function identityHandle(fn) {
+  return async (req, res, next) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const access = await teamAccess(req, res);
+      if (!access) return;
+      const basis = identity.identityAdminBasis(req, access);
+      if (!basis) return notFound(res);
+      await fn(req, res, access, { userId: String(req.user.id), basis });
+    } catch (error) {
+      if (error instanceof identity.GpexeIdentityError) {
+        if (error.status === 404) return notFound(res);
+        const { reason, replayed, requestKey } = error.details || {};
+        return res.status(error.status).json({
+          error: error.code, message: error.message,
+          ...(typeof reason === "string" ? { reason } : {}),
+          ...(replayed ? { replayed: true } : {}),
+          ...(typeof requestKey === "string" ? { requestKey } : {}),
+        });
+      }
+      next(error);
+    }
+  };
+}
+
+router.get("/teams/:teamId/athlete-identities", identityHandle(async (req, res, access, ctx) => {
+  const answer = await identity.listIdentities(access.teamId, ctx, { expectedClubId: access.clubId });
+  if (!answer) return notFound(res);
+  res.json(answer);
+}));
+
+// Body: { requestKey } and nothing else. The athletes are derived by the
+// server; the answer carries counts only.
+router.post("/teams/:teamId/athlete-identities/loads", identityHandle(async (req, res, access, ctx) => {
+  res.json(await identity.loadIdentities(access.teamId, { ctx, body: req.body }));
 }));
 
 router.get("/teams/:teamId/athlete-links", handle(async (req, res) => {

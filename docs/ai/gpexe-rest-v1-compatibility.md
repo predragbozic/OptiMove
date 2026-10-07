@@ -772,6 +772,20 @@ recorded here: no name, date, id or report.
   URL, an error code, a diagnostic, a fixture with real data, a PR or chat.
 - **Before its merge:** a separate security / privacy review and a database review.
 
+**The implementation, as built** (owner order 2026-10-06, branch `feature/gpexe-athlete-identity`, not
+merged; contract `docs/ai/source-connections-f3c2-contract.md` section 2.10):
+- **Capability:** the adapter's capability table carries `athlete_read` (proven by the identity run).
+- **The read:** `readAthleteIdentity()` is the one read whose provenance is the caller's. The athlete
+  record names no team. The identity service takes the id only from the stored, succeeded checks of the
+  team's current binding, and the resolver's `identityReaderFor()` refuses any other id.
+- **The projection:** the answer is projected through `identityFromAnswer()`
+  (`backend/src/gpexeAthleteIdentity.js`) before anything else sees it. Exactly the keys `id`,
+  `first_name`, `last_name`, `name` and `birthdate` are read, as own properties only.
+- **One owner rule tightened:** "at most 50 per check" became **at most 50 per explicit administrator
+  load**. A check never reads an athlete record (owner order of 2026-10-06 for the implementation).
+- **Date of birth, the one concretisation of option A:** a date before 1900-01-01 or after today (UTC)
+  counts as "an impossible date". It is shown as not provided and counted as unrecognised.
+
 ## 5. Rules the adapter keeps, whatever is added later
 
 - Selected by `(source_system, apiFamily)`; a family without an adapter is
