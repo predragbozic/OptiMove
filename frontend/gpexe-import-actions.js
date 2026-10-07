@@ -37,6 +37,13 @@ import {
   startGpexeCheck,
   unlinkGpexeAthlete,
   verifyGpexeApproval,
+  cancelIdentityConfirm,
+  checkIdentityLoad,
+  identityBusy,
+  identityViewer,
+  loadGpexeIdentities,
+  openIdentityConfirm,
+  sendIdentityLoad,
 } from "./gpexe-import-data.js";
 
 // Names the link being removed (from the loaded link list, or the link just
@@ -173,9 +180,10 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     return true;
   }
   if (type === "training-load-gpexe-unlink") {
-    // In the Link athletes screen, not while the list may be out of date: the
-    // button is disabled, this only guards a stale click.
-    if (gx.mapping.open && gx.sourceAthletesError) return true;
+    // In the Link athletes screen, not while the list may be out of date or a
+    // name load runs or is not confirmed: the button is disabled, this only
+    // guards a stale click.
+    if (gx.mapping.open && (gx.sourceAthletesError || identityBusy(gx))) return true;
     if (!globalThis.window?.confirm?.(unlinkQuestion(gx, action.dataset.linkId))) return true;
     await unlinkGpexeAthlete(action.dataset.linkId, renderTrainingLoad);
     return true;
@@ -189,6 +197,9 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     if (!gx.sourceAthletes || gx.sourceAthletesError) return true;
     openTeamMapping();
     renderTrainingLoad();
+    // An administrator also sees the GPEXE names and dates of birth already
+    // stored (no GPEXE request); a coach's screen never asks.
+    if (identityViewer(gx)) await loadGpexeIdentities(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-sources-retry") {
@@ -196,15 +207,17 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     return true;
   }
   if (type === "training-load-gpexe-map-close") {
-    if (gx.mapping.sending) return true;
+    if (gx.mapping.sending || gx.identity.sending) return true;
+    if (gx.identity.unconfirmed && !globalThis.window?.confirm?.("The result of the last name load is not confirmed. Close anyway? Nothing is read from GPEXE again; you can open Link athletes later to see what was saved.")) return true;
     if (Object.keys(gx.mapping.choices).length && !globalThis.window?.confirm?.("Leave without linking the athletes you chose? Nothing was sent.")) return true;
     closeTeamMapping();
     renderTrainingLoad();
     return true;
   }
   if (type === "training-load-gpexe-map-choose") {
-    // Nothing is staged from a list that may be out of date (the select is disabled).
-    if (gx.sourceAthletesError) return true;
+    // Nothing is staged from a list that may be out of date, nor while a name
+    // load runs (the select is disabled).
+    if (gx.sourceAthletesError || identityBusy(gx)) return true;
     // A click on the select reaches here too: an unchanged value repaints nothing.
     if ((gx.mapping.choices[action.dataset.gpexeAthleteId] || "") === (action.value || "")) return true;
     chooseTeamMapping(action.dataset.gpexeAthleteId, action.value || "");
@@ -212,6 +225,7 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     return true;
   }
   if (type === "training-load-gpexe-map-confirm") {
+    if (identityBusy(gx) || gx.identity.confirming) return true;
     confirmTeamMapping();
     renderTrainingLoad();
     return true;
@@ -222,8 +236,43 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     return true;
   }
   if (type === "training-load-gpexe-map-send") {
-    if (!gx.mapping.confirming || gx.mapping.sending) return true;
+    if (!gx.mapping.confirming || gx.mapping.sending || identityBusy(gx)) return true;
     await sendTeamMapping(renderTrainingLoad);
+    return true;
+  }
+  // GPEXE names and dates of birth (administrators only): the explicit,
+  // read-only load. "Load…" only opens the confirmation; "Load names" sends
+  // one request; "Check result" repeats the same request after a lost answer.
+  if (type === "training-load-gpexe-identity-open") {
+    if (openIdentityConfirm()) {
+      renderTrainingLoad();
+      // On a phone the list may be scrolled: bring the confirmation (its
+      // read-only and 14-day sentences) into view.
+      try {
+        globalThis.document?.querySelector?.(".gpexe-identity .gpexe-link-confirm")?.scrollIntoView?.({ block: "nearest" });
+      } catch {
+        // Scrolling is a convenience only.
+      }
+    }
+    return true;
+  }
+  if (type === "training-load-gpexe-identity-cancel") {
+    if (cancelIdentityConfirm()) renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-identity-send") {
+    if (gx.identity.sending || !gx.identity.confirming) return true;
+    await sendIdentityLoad(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-identity-reload") {
+    if (gx.identity.loading || gx.identity.sending) return true;
+    await loadGpexeIdentities(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-identity-check") {
+    if (gx.identity.sending || !gx.identity.unconfirmed) return true;
+    await checkIdentityLoad(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-map-done") {

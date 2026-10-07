@@ -300,13 +300,29 @@ export async function runRetention(triggerSource) {
   try {
     // Short batches until one comes back smaller than the batch size.
     let purged = 0;
+    let identitiesPurged = 0;
+    // The identity snapshot (v32) is purged by the same runners (the check,
+    // the server's schedule and the CLI), first and on its own: a failure of
+    // the raw purge never keeps an expired name or date of birth stored.
+    // Counted apart from the raw snapshots.
+    let identityError = null;
+    try {
+      for (let batch = 0; batch < RETENTION_MAX_BATCHES; batch += 1) {
+        const n = (await query(`select training_load.purge_expired_gpexe_athlete_identities($1) as n`, [RETENTION_BATCH_SIZE])).rows[0].n;
+        identitiesPurged += n;
+        if (n < RETENTION_BATCH_SIZE) break;
+      }
+    } catch (error) {
+      identityError = error;
+    }
     for (let batch = 0; batch < RETENTION_MAX_BATCHES; batch += 1) {
       const n = (await query(`select training_load.purge_expired_gpexe_raw($1) as n`, [RETENTION_BATCH_SIZE])).rows[0].n;
       purged += n;
       if (n < RETENTION_BATCH_SIZE) break;
     }
+    if (identityError) throw identityError;
     await query(`update training_load.gpexe_retention_runs set finished_at = now(), purged_count = $2 where id = $1`, [run.id, purged]);
-    return { runId: run.id, purged };
+    return { runId: run.id, purged, identitiesPurged };
   } catch (error) {
     await query(`update training_load.gpexe_retention_runs set finished_at = now(), error_message = $2 where id = $1`, [run.id, String(error.message).slice(0, 300)]).catch(() => {});
     throw error;
@@ -346,13 +362,18 @@ export async function retentionStatus() {
     `select finished_at, trigger_source, error_message from training_load.gpexe_retention_runs
      where error_message is not null order by finished_at desc limit 1`,
   )).rows[0] ?? null;
+  const identities = (await query(
+    `select count(*)::int as stored, count(*) filter (where expires_at <= now())::int as expired_not_purged from training_load.gpexe_athlete_identities`,
+  )).rows[0];
   return {
+    storedIdentities: identities.stored,
+    expiredIdentitiesNotPurged: identities.expired_not_purged,
     storedSnapshots: counts.stored,
     expiredNotPurged: counts.expired_not_purged,
     nextExpiry: counts.next_expiry,
     lastSuccessfulRun: lastOk ? { at: lastOk.finished_at, trigger: lastOk.trigger_source, purged: lastOk.purged_count } : null,
     lastFailedRun: lastFailed ? { at: lastFailed.finished_at, trigger: lastFailed.trigger_source, error: lastFailed.error_message } : null,
-    healthy: counts.expired_not_purged === 0,
+    healthy: counts.expired_not_purged === 0 && identities.expired_not_purged === 0,
   };
 }
 

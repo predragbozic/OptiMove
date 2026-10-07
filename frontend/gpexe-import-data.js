@@ -7,7 +7,7 @@
 // A response for a team the coach has since switched away from is dropped
 // (generation guard), so an older answer never paints over a newer team.
 import { api } from "./api.js";
-import { state } from "./state.js";
+import { emptyGpexeIdentityState, state } from "./state.js";
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 
 const BASE = "/api/training-load/gpexe/teams";
@@ -111,6 +111,7 @@ function resetGpexeTeamState(teamId) {
   gx.sourceAthletesError = null;
   gx.sourceAthletesRetrying = false;
   gx.mapping = emptyMapping();
+  gx.identity = emptyGpexeIdentityState();
 }
 
 function emptyMapping() {
@@ -565,13 +566,16 @@ export function openTeamMapping() {
   const gx = g();
   gx.mapping = { ...emptyMapping(), open: true };
   gx.linkError = null;
+  gx.identity = emptyGpexeIdentityState();
 }
 
 // Returns true when the screen had staged choices (the caller asked first).
+// The GPEXE names and dates of birth held for the screen go with it.
 export function closeTeamMapping() {
   const gx = g();
   const had = Object.keys(gx.mapping.choices).length > 0;
   gx.mapping = emptyMapping();
+  gx.identity = emptyGpexeIdentityState();
   return had;
 }
 
@@ -1167,4 +1171,199 @@ export function importsUnloadShouldWarn(gx = g()) {
   const marked = Object.keys(gx?.uncertain || {});
   if (!marked.length) return false;
   return (gx.candidates || []).some((c) => marked.includes(c.id) && c.status !== "imported" && c.status !== "superseded");
+}
+
+// ---------------------------------------------------------------------------
+// GPEXE athlete identity (administrators only, v32): the name and date of
+// birth of the team's GPEXE athletes on the Link athletes screen.
+// ---------------------------------------------------------------------------
+
+// The server's own bound of one load (45 s of network plus its database
+// steps) stays below this: a request still open after it is a lost answer.
+export const IDENTITY_REQUEST_BOUND_MS = 90_000;
+
+// Only an administrator's status says so; a coach's carries nothing, so a
+// coach's screen never asks for an identity at all.
+export function identityViewer(gx = g()) {
+  return gx.status?.viewer?.identityAdmin === true;
+}
+
+// Nothing of an identity answer may be kept by the browser: no HTTP cache
+// (the server says no-store too), no storage of any kind — the answer lives
+// in gx.identity until the screen closes.
+function identityRequest(path, options = {}) {
+  const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(IDENTITY_REQUEST_BOUND_MS) : undefined;
+  return api(path, { ...options, cache: "no-store", ...(signal ? { signal } : {}) });
+}
+
+function identityList(answer) {
+  const byId = {};
+  for (const i of answer.identities || []) {
+    // GPEXE's "no such athlete" keeps the row's id on screen (no name to show).
+    if (i.sourceRecordMissing === true) continue;
+    byId[String(i.gpexeAthleteId)] = { name: typeof i.name === "string" ? i.name : null, birthDate: typeof i.birthDate === "string" ? i.birthDate : null };
+  }
+  const missing = new Set((answer.identities || []).filter((i) => i.sourceRecordMissing === true).map((i) => String(i.gpexeAthleteId)));
+  return {
+    byId,
+    missing,
+    pendingCount: Number.isInteger(answer.pendingCount) ? answer.pendingCount : 0,
+    maxPerLoad: Number.isInteger(answer.maxPerLoad) ? answer.maxPerLoad : 50,
+    retentionDays: Number.isInteger(answer.retentionDays) ? answer.retentionDays : 14,
+    conflicts: new Set((answer.birthDateConflicts || []).map((c) => `${c.gpexeAthleteId}|${c.athleteId}`)),
+  };
+}
+
+// The stored identities of the open screen (no GPEXE request). A 404 means
+// the identity is not available here (no active binding, no right): the
+// screen shows nothing of it, without an error.
+export async function loadGpexeIdentities(render) {
+  const gx = g();
+  if (!identityViewer(gx) || !gx.teamId || !gx.mapping.open) return;
+  const generation = gx.generation;
+  const teamId = gx.teamId;
+  // The outcome of a load (result / error) stays while the list is read again.
+  gx.identity = { ...gx.identity, loading: true, readError: null };
+  render();
+  try {
+    const answer = await identityRequest(teamPath(teamId, "/athlete-identities"));
+    if (generation !== gx.generation || !gx.mapping.open) return;
+    gx.identity = { ...gx.identity, available: true, loading: false, list: identityList(answer) };
+  } catch (error) {
+    if (generation !== gx.generation || !gx.mapping.open) return;
+    const info = errorInfo(error);
+    gx.identity = info.status === 404 ? { ...emptyGpexeIdentityState(), error: gx.identity.error } : { ...gx.identity, loading: false, readError: info };
+  }
+  render();
+}
+
+// Locked while another change runs: a link or unlink, the Link N athletes
+// batch, or its confirmation step. And the other way round (identityBusy).
+export function identityLocked(gx = g()) {
+  return Boolean(gx.linkBusy || gx.mapping.sending || gx.mapping.confirming || gx.sourceAthletesError);
+}
+export function identityBusy(gx = g()) {
+  return Boolean(gx.identity?.sending || gx.identity?.unconfirmed);
+}
+
+export function openIdentityConfirm() {
+  const gx = g();
+  if (!gx.identity.available || identityBusy(gx) || identityLocked(gx)) return false;
+  gx.identity = { ...gx.identity, confirming: true, result: null, error: null };
+  return true;
+}
+
+export function cancelIdentityConfirm() {
+  const gx = g();
+  if (gx.identity.sending) return false;
+  gx.identity = { ...gx.identity, confirming: false };
+  return true;
+}
+
+// The counts of a load, never a name, a date or an id.
+function identityResult(answer) {
+  const n = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+  return { loaded: n(answer.loaded), notFound: n(answer.notFound), notRead: n(answer.notRead), stopped: Boolean(answer.stopCode), unrecognised: Number.isInteger(answer.unrecognisedBirthDates) ? answer.unrecognisedBirthDates : null, replayed: answer.replayed === true };
+}
+
+// One POST with one requestKey: the confirmed load, or Check result (the
+// same key again after a lost answer). A double click sends one request; a
+// lost answer is never resent by itself.
+async function postIdentityLoad(render, { check }) {
+  const gx = g();
+  if (gx.identity.sending) return;
+  if (!check && (!gx.identity.confirming || gx.identity.unconfirmed || identityLocked(gx))) return;
+  if (check && !gx.identity.unconfirmed) return;
+  const generation = gx.generation;
+  const teamId = gx.teamId;
+  const requestKey = gx.identity.requestKey || globalThis.crypto.randomUUID();
+  gx.identity = { ...gx.identity, sending: true, confirming: false, requestKey, error: null, result: null };
+  render();
+  let answer = null;
+  let info = null;
+  try {
+    answer = await identityRequest(teamPath(teamId, "/athlete-identities/loads"), { method: "POST", body: JSON.stringify({ requestKey }) });
+  } catch (error) {
+    info = errorInfo(error);
+  }
+  if (generation !== gx.generation || !gx.mapping.open) return;
+  if (answer) {
+    gx.identity = { ...gx.identity, sending: false, requestKey: null, unconfirmed: null, result: identityResult(answer) };
+    render();
+    await loadGpexeIdentities(render);
+    return;
+  }
+  if (info.status === 404) {
+    // Not available any more (the binding ended, the right changed): nothing
+    // of it stays on screen.
+    gx.identity = { ...emptyGpexeIdentityState(), error: info };
+    render();
+    return;
+  }
+  const code = info.data?.error;
+  const checks = (gx.identity.unconfirmed?.checks || 0) + (check ? 1 : 0);
+  if (code === "identity_load_running" && !check && info.data?.replayed !== true) {
+    // Another load of the team (perhaps another administrator's) is running:
+    // this one never started. A refusal; the next load gets a new key.
+    gx.identity = { ...gx.identity, sending: false, requestKey: null, unconfirmed: null, error: info };
+    render();
+    return;
+  }
+  if (code === "identity_load_running") {
+    // Still running, or a lost answer of this key not yet settled: keep the
+    // key, offer Check result again.
+    gx.identity = { ...gx.identity, sending: false, unconfirmed: { checks, running: true } };
+    render();
+    return;
+  }
+  if (isDefiniteRefusal(info) || (info.status >= 500 && typeof code === "string" && code !== "outcome_unknown")) {
+    // A stated outcome: nothing was saved (the sentence says why). The next
+    // load gets a new key.
+    gx.identity = { ...gx.identity, sending: false, requestKey: null, unconfirmed: null, error: info };
+    render();
+    if (code === "identity_load_abandoned" || code === "source_auth_rejected") await loadGpexeIdentities(render);
+    return;
+  }
+  // No answer, an abort, outcome_unknown or an uncoded 5xx: the result is not
+  // confirmed. The key stays for Check result; nothing is sent by itself.
+  gx.identity = { ...gx.identity, sending: false, unconfirmed: { checks, running: false } };
+  render();
+}
+
+export function sendIdentityLoad(render) {
+  return postIdentityLoad(render, { check: false });
+}
+
+export function checkIdentityLoad(render) {
+  return postIdentityLoad(render, { check: true });
+}
+
+// Duplicate GPEXE names among the identities on screen (case and spacing
+// folded): each gets a warning, none is chosen or hidden for it.
+export function duplicateIdentityNames(gx = g()) {
+  const counts = new Map();
+  for (const i of Object.values(gx.identity?.list?.byId || {})) {
+    if (!i.name) continue;
+    const key = identityNameKey(i.name);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return new Set([...counts].filter(([, n]) => n > 1).map(([key]) => key));
+}
+
+export function identityNameKey(name) {
+  return String(name || "").toLocaleLowerCase().replace(/\s+/g, " ").trim();
+}
+
+export function sourceRecordMissing(gpexeAthleteId, gx = g()) {
+  return Boolean(gx.identity?.list?.missing?.has(String(gpexeAthleteId)));
+}
+
+export function identityOf(gpexeAthleteId, gx = g()) {
+  return gx.identity?.list?.byId?.[String(gpexeAthleteId)] || null;
+}
+
+// A known GPEXE date of birth that differs from the OptiMove athlete's (the
+// server compares; the OptiMove date never reaches the browser).
+export function birthDateConflict(gpexeAthleteId, athleteId, gx = g()) {
+  return Boolean(athleteId && gx.identity?.list?.conflicts?.has(`${gpexeAthleteId}|${athleteId}`));
 }

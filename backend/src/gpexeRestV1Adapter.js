@@ -36,11 +36,16 @@
 //   * errors carry a stable code and OptiMove's own sentence, never the
 //     source's text; the credential is only ever in the Authorization header;
 //     the importer's drop list of personal fields (redactGpexe) is applied to
-//     every answer before anything is kept, so no athlete name is returned.
+//     every answer before anything is kept, so no athlete name is returned —
+//     with ONE exception: readAthleteIdentity() returns the sanitized display
+//     name and the normalized date of birth of one athlete record, projected
+//     from exactly five keys before anything else sees the answer, for an
+//     administrator's explicit identity load (docs/ai/gpexe-athlete-identity-discovery.md).
 //
 // The existing e03 importer (backend/src/gpexeClient.js) is not changed and
 // does not use this file.
 import { redactGpexe } from "./gpexeClient.js";
+import { identityFromAnswer } from "./gpexeAthleteIdentity.js";
 import { resolveApprovedSourceHost, sourceApiUrl, sourceHost } from "./sourceHosts.js";
 
 export const ADAPTER_SOURCE = "gpexe";
@@ -166,6 +171,7 @@ export const REST_V1_CAPABILITIES = Object.freeze({
   team_thresholds: Object.freeze({ status: "proven", importerUse: "threshold set valid on the session day", e03: "team/<team>/thresholds/?valid_on=", evidence: "probe 2026-10-01: 200 on the confirmed session's day" }),
   units: Object.freeze({ status: "unknown", importerUse: "none (numbers are SI on e03)", e03: "no endpoint used", evidence: "none; that rest_v1 numbers are SI is not verified" }),
   session_tags: Object.freeze({ status: "observed", importerUse: "drill names through drillTags", e03: "not used", evidence: "probe 2026-10-01: team_session_tag/?team=&limit= 200, asked for the bound team" }),
+  athlete_read: Object.freeze({ status: "proven", importerUse: "none: an administrator's identity load (display name and date of birth only)", e03: "not used", evidence: "identity run 2026-10-06: athlete/<id>/ on server3 200, the same id, first_name / last_name / name / birthdate; birthdate null in the one record read (format not proven)" }),
 });
 const AVAILABLE_STATUSES = new Set(["proven", "observed"]);
 
@@ -760,7 +766,11 @@ export function createGpexeRestV1Adapter({
   // The ONLY network function. GET, one URL that a builder of this file
   // made, nothing else. Every rest_v1 read goes through sourceApiUrl(); the
   // two legacy reads go through legacyDrillDetailsUrl() / legacyBriefUrl().
-  async function fetchBuilt(url) {
+  // `project` turns the parsed answer into what may leave this function. Every
+  // read but one drops the importer's personal fields (redactGpexe); the
+  // identity read projects its five keys into the sanitized identity at once,
+  // before anything else sees the answer (gpexeAthleteIdentity.js).
+  async function fetchBuilt(url, project = redactGpexe) {
     let last = null;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       let res;
@@ -795,9 +805,17 @@ export function createGpexeRestV1Adapter({
       const text = await readBounded(res, header("content-length"));
       let body;
       try {
-        body = redactGpexe(JSON.parse(text));
+        body = JSON.parse(text);
       } catch {
         throw new SourceAdapterError("source_answer_unexpected", "The source server answered with something that cannot be read as JSON.");
+      }
+      // The projection (the drop list, or the identity's five keys) can fail on
+      // an answer JSON.parse accepted (a nesting deep enough to overflow the
+      // recursion): the same stable refusal, never a raw error.
+      try {
+        body = project(body);
+      } catch {
+        throw new SourceAdapterError("source_answer_unexpected", "The source server answered with something that cannot be read.");
       }
       return { body, totalCount: header("x-total-count"), link: header("link") };
     }
@@ -988,7 +1006,7 @@ export function createGpexeRestV1Adapter({
   };
   // Errors that end a whole operation whatever it was reading: the credential
   // or the team is the problem, not one resource.
-  const isGlobal = (e) => ["source_auth_rejected", "source_access_refused", "source_team_mismatch", "host_not_allowed", "path_not_allowed", "credential_missing"].includes(e?.code);
+  const isGlobal = (e) => ["source_auth_rejected", "source_access_refused", "source_team_mismatch", "source_identity_mismatch", "host_not_allowed", "path_not_allowed", "credential_missing"].includes(e?.code);
 
   const adapter = {
     sourceSystem: ADAPTER_SOURCE,
@@ -1268,6 +1286,27 @@ export function createGpexeRestV1Adapter({
       refreshedDuring(owner, epoch);
       if (!isPlainObject(body) || canonicalId(body.id) !== id) throw unexpected("The source server answered another track than the one asked.");
       return pick(body, BUNDLE_FIELDS.track);
+    },
+
+    // One athlete's identity (an administrator's identity load, owner order
+    // 2026-10-06): GET rest/v1/athlete/<id>/, never a list or a filter. The
+    // athlete record carries no team, so this read cannot be confirmed through
+    // a session of THIS instance: its id comes from the caller, which takes it
+    // only from the stored, successful checks of the bound team's active
+    // binding (backend/src/gpexeAthleteIdentityService.js, through the
+    // resolver's identityReaderFor, which refuses any id it was not given).
+    // The answer is projected at once into the sanitized identity: its own
+    // `id` must be the id asked for (source_identity_mismatch otherwise, an
+    // error that ends the whole load), and nothing but the display name and
+    // the date of birth leaves this read.
+    async readAthleteIdentity(options) {
+      const { athleteId } = only(options, ["athleteId"]);
+      const id = canonicalId(athleteId);
+      if (id === null || !ATHLETE_ID.test(id)) throw new SourceAdapterError("invalid_id", "The athlete id is not a canonical source id.");
+      const { body } = await fetchBuilt(sourceApiUrl(ADAPTER_SOURCE, hostKey, catalogRow, `athlete/${id}/`), (parsed) => identityFromAnswer(parsed, id));
+      if (!body.ok && body.reason === "id_mismatch") throw new SourceAdapterError("source_identity_mismatch", "The source server answered for another athlete than the one asked.");
+      if (!body.ok) throw unexpected("The source server did not answer the athlete as an object.");
+      return { identity: body.identity, birthDateUnrecognised: body.birthDateUnrecognised === true };
     },
 
     // The threshold set of the bound team valid on a confirmed session's day;

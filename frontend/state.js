@@ -619,6 +619,25 @@ export const emptyExternalScheduleDetail = (overrides = {}) => ({
 // team at a time; `generation` drops answers for a team no longer shown.
 // `detail` is the open candidate; its `outcome` is the approval's answer:
 // imported / refused (nothing written) / unknown (COMMIT not confirmed).
+// GPEXE athlete identity on the Link athletes screen (administrators only,
+// v32): the names and dates of birth read from the server's 14-day snapshot,
+// held in memory for the open screen only — never in localStorage,
+// sessionStorage, IndexedDB or any cache, and dropped when the screen
+// closes, the team or workspace changes, or the user signs out.
+//   available  false until GET …/athlete-identities answered 200 (a 404 —
+//              no binding, no right — leaves it false and shows nothing);
+//   list       { byId: { gpexeAthleteId: { name, birthDate } }, pendingCount,
+//              maxPerLoad, retentionDays, conflicts: Set of "gid|athleteId" };
+//   confirming the "Load names?" step; sending a load in flight;
+//   requestKey the key of the load in flight or not confirmed (reused by
+//              Check result, never resent by itself); unconfirmed the lost
+//              answer; result the counts of the last load; error the stated
+//              outcome of the last load; readError a failed read of the list.
+export const emptyGpexeIdentityState = () => ({
+  available: false, loading: false, list: null, confirming: false, sending: false,
+  requestKey: null, unconfirmed: null, result: null, error: null, readError: null,
+});
+
 export const emptyGpexeImportState = () => ({
   teamId: "",
   generation: 0,
@@ -663,6 +682,7 @@ export const emptyGpexeImportState = () => ({
   sourceAthletesError: null,
   sourceAthletesRetrying: false,
   mapping: { open: false, choices: {}, confirming: false, sending: false, results: null, error: null },
+  identity: emptyGpexeIdentityState(),
   // Batch import (Imports phase 4b): the Ready sessions chosen for one
   // POST /imports, by candidate id -> the previewHash of the list row that
   // was chosen (an opaque token, never shown); the confirmation step; the

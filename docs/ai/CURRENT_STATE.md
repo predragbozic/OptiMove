@@ -1,7 +1,8 @@
 # Current state
 
-Last reviewed: 2026-10-06. Last `origin/main` commit checked: `e13d251` (merge of PR #140,
-`fix/gpexe-session-details-metric-shape` → `main`; PR #139 `673848e` before it).
+Last reviewed: 2026-10-06. Last `origin/main` commit checked: `2458ac5` (merge of PR #143,
+`feature/gpexe-identity-field-probe` → `main`; PR #141 `3790782` before it, recorded by the open docs
+PR #142).
 
 ## Active phase
 
@@ -1023,36 +1024,77 @@ serving the exchange, the team reads and the rest_v1 session reads; the legacy f
 the binding path; the resolver's contract with a fake executor), with mutation evidence for the key
 guards.
 
-**GPEXE athlete identity for *Link athletes*** (owner order 2026-10-06; PR #143, not merged). The
-owner asked that *Link athletes* identify a GPEXE athlete by its GPEXE name and date of birth, with
-the internal id moved to Technical details.
-- **Discovery:** the repository proved no endpoint or field for either.
-- **The probe (PR #143, branch `feature/gpexe-identity-field-probe`):** an owner-run
-  `--mode identity` in the capability probe.
-  - It sends one exchange and at most eight GET reads for team 980.
-  - It prints only key paths, kinds, counts and booleans. Every printed source key comes from a
-    closed list, and every printed header value from a closed set or a bounded number form.
-  - A final guard refuses any value seen under a name or date field.
-  - The owner's external review was NOT READY at `517bdda` (a key that could be a person) and
-    READY at `1cf2430`.
-- **The owner ran it once (2026-10-06, sanitized):**
-  - The athlete resource `rest/v1/athlete/<id>/` is confirmed. It is listed in the API's own index,
-    and was read for the athlete of a row confirmed twice under a session of team 980.
-  - It carries `first_name`, `last_name`, `name` and `short_name`.
-  - It carries a `birthdate` field, but its value was null for the one athlete read, so the date's
-    format is not proven.
-  - The record has no team field. The team read, the athlete rows and the session list are not
-    identity sources.
-- **Owner decisions:**
-  - source: `rest/v1/athlete/<id>/`;
-  - name: `first_name` + `last_name` (trimmed, whitespace collapsed), fallback `name`;
-  - date of birth: only a valid `YYYY-MM-DD` or the first ten characters of a valid ISO date-time,
-    otherwise "Date of birth not provided";
-  - no further probe.
-- **The implementation** is a separate PR after PR #143 is merged. It reads only ids already seen,
-  at most 50 identities and 3 parallel requests per check. It keeps a 14-day identity snapshot with
-  only the minimal fields, shows the identity to administrators only, and never links
-  automatically. Its full boundaries are in `docs/ai/gpexe-rest-v1-compatibility.md` section 4b.
+**GPEXE athlete identity for *Link athletes*** (owner order 2026-10-06). The owner asked that *Link
+athletes* identify a GPEXE athlete by its GPEXE name and date of birth, with the internal id moved to
+Technical details.
+- **The probe is merged and deployed:** PR #143 (`--mode identity` in the capability probe, branch
+  `feature/gpexe-identity-field-probe`).
+  - Merge commit `2458ac5` on 2026-10-06 at 13:22:52 UTC, pinned to head `9ec076f` on the owner's
+    order.
+  - The owner's external review was NOT READY at `517bdda` (a key that could be a person) and READY
+    at `1cf2430`.
+  - `/api/health` served `2458ac5` with `ok: true` from 13:24:10 UTC, then three times in a row
+    (13:24:15, 13:24:26 and 13:24:36 UTC).
+  - Docs and probe only: no route, no migration. The identity run was not repeated, and no GPEXE
+    request was sent.
+- **The owner ran the probe once (2026-10-06, sanitized):**
+  - `rest/v1/athlete/<id>/` is confirmed, with `first_name`, `last_name`, `name`, `short_name` and
+    `birthdate`;
+  - `birthdate` was null for the one athlete read, so the date's format is not proven;
+  - the record has no team field.
+
+  The source, the name rule (`first_name` + `last_name`, fallback `name`) and the date rule (a valid
+  `YYYY-MM-DD` or the first ten characters of a valid ISO date-time) are the owner's decisions. They
+  are recorded in `docs/ai/gpexe-rest-v1-compatibility.md` section 4b. There is no further probe.
+- **The implementation, as built** (branch `feature/gpexe-athlete-identity` from `2458ac5`, not merged;
+  migration v32, backend, frontend, tests and docs). Discovery:
+  `docs/ai/gpexe-athlete-identity-discovery.md`; contract section 2.10 of
+  `docs/ai/source-connections-f3c2-contract.md`; runbook section "GPEXE names and dates of birth" of
+  `docs/runbooks/gpexe-in-app-import.md`.
+  - **Who:** a platform admin (platform or the team's club workspace) and the active admin of the
+    team's club (that club's workspace). Everyone else gets the router's identical 404, no-store:
+    - a coach, another club, a team workspace;
+    - a revoked role;
+    - an archived team or club;
+    - a team without an active binding.
+
+    A coach's screen and status carry no trace of the feature.
+  - **Network:**
+    - only the explicit *Load names and dates of birth*, never during a check;
+    - the server derives the athletes from the stored candidates that a succeeded check read through
+      the team's current binding;
+    - at most 50 per load and 3 at once; no retry, no redirect, no environment token;
+    - a 15 s timeout per request and a 45 s budget, below the client's 90 s bound;
+    - every answer must name the id asked for;
+    - the binding facts (binding, connection state and club, host, credential fingerprint) are
+      re-validated before every read and under `FOR SHARE` locks before the write;
+    - a 401 moves the connection to *Needs reconnect* through the existing auto-invalidate path, and
+      a 403 changes nothing.
+  - **Idempotency:** a requestKey per load; one running load per team (a partial unique index); a
+    lost answer is *Result not confirmed* · *Check result*, the same key, never sent by itself; the
+    bounded COMMIT with `verified_after_commit_error` / `503 outcome_unknown`.
+  - **Snapshot (v32):**
+    - only the provenance, the canonical id, a sanitized display name or NULL, a normalized date or
+      NULL, `observed_at`, and `expires_at` = `observed_at` + 336 hours (CHECK);
+    - never updated or extended; GPEXE's "no such athlete" is kept as a row without a name or a
+      date, so it is not read again within the 14 days;
+    - an expired row is never shown and is deleted by the purge (every check, the server's schedule,
+      the CLI, and before every load);
+    - an Unbind, a team archive and a club archive delete the rows in the same transaction (database
+      triggers);
+    - the personal columns are plaintext, with no index (see the security review).
+  - **UI:**
+    - the name and "Born DD.MM.YYYY" ("Name not provided" / "Date of birth not provided"); the id
+      in Technical details;
+    - a warning for a duplicate name and for a date-of-birth conflict with the chosen OptiMove
+      athlete (the server returns the pair only, never OptiMove's date);
+    - no automatic link, no preselection;
+    - in memory only, dropped on Close or a team or workspace change.
+  - **Not changed:** the importer, the metric mapping, the import switch, F3c4.
+  - **Supersedes** the sentence "GPEXE names are never stored" of PR #142's discovery note, for this
+    administrator-only snapshot. The coach's lists still carry no GPEXE name.
+  - **No GPEXE request, credential, Render change or persistent-database migration was made**; v32
+    is applied nowhere persistent.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1180,7 +1222,7 @@ nothing imported is visible in the app.
   team's GPEXE athletes once each — every athlete seen in a snapshot that is still
   available (not purged, not expired) plus every athlete with an active link — with
   `status` (`linked` / `unlinked` / `linked_inactive`), the link (the OptiMove name only
-  from it; no GPEXE name, it is never stored), a deterministic `lastSeen` (newest session
+  from it; no GPEXE name, it is never stored - at the time; since v32 an administrator-only 14-day identity snapshot exists, see the active phase), a deterministic `lastSeen` (newest session
   date; same date: current before replaced, then the later sighting, then the larger id;
   `evidence` `preview` or `raw_snapshot`; the session's own `sessionDrillsCount`) and the
   athlete's `values` (`duration`, `distance`, `maxSpeed`; missing = `null`). A refused
@@ -1518,6 +1560,10 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #143 (`2458ac5`, merged 2026-10-06 13:22:52 UTC exactly from head `9ec076f`) is deployed:
+  `/api/health` served `2458ac5` with `ok: true` three times in a row (13:24:15–13:24:36 UTC). Docs and
+  probe only: no migration, no route change; v31 stays the last migration inferred on the deployed
+  database.
 - PR #140 (`e13d251`, merged 2026-10-05 17:12:04 UTC exactly from head `dfd452a`) is deployed:
   `/api/health` served `e13d251` with `ok: true` three times in a row (17:13:04–17:13:25 UTC); without
   a login the team status, check detail, candidates and both source-connection reads answered 401. No
@@ -1673,6 +1719,11 @@ pre-existing; pass/fail counts don't belong in this file
   `3ef6033`.
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
+
+- **GPEXE identity follow-ups (found in the identity implementation, 2026-10-06, not scheduled):**
+  (1) the single-athlete link from a session's review shows no GPEXE name or date of birth yet (only
+  the Link athletes screen does); (2) the Imports page's list "GPEXE athletes linked to this team" keeps
+  the GPEXE id (the identity lives in the open Link athletes screen only).
 
 - **Backend hardening: an idempotent Create of a source connection** (owner, 2026-10-05, at the
   external review of PR #138). `POST /api/training-load/sources/:source/connections` has no
@@ -1845,6 +1896,12 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Open risks
 
+- **Backups can outlive the 14-day identity snapshot** (identity implementation, 2026-10-06). The v32
+  rows are deleted from the live database after 14 days or on an Unbind or archive, but a database
+  backup taken meanwhile keeps them for the backup's own retention. The decision not to encrypt the two
+  columns at the application level is recorded in the PR's security review. A backup-retention rule for
+  personal data is the owner's decision.
+
 - **Dashboards ignores the shell Club/Team/Athletes filter** (Phase F, decision (b),
   2026-09-16). `POST /api/training-load/dashboards/:id/query` only receives the runtime
   activity/component filter (`analysisRuntimeFilterPayload`,
@@ -1902,12 +1959,13 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-PR A (F3c3), the Technical-details fix (PR #139) and the shape diagnostic (PR #140) are merged and
-deployed; the owner's diagnostic proved both consumed whole-session fields and one refused,
-unconsumed metric. Next: the external review of the projection branch
-`fix/gpexe-session-details-projection`; after its merge and deploy, one owner re-test for a single
-known date (on a separate order); then PR B (the F3c4 cut-over, see the active step), then the second owner-run procedure for one
-controlled real import; then **Phase 5a3c** (Complete and Needs review).
+PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141, recorded by the open docs
+PR #142) and the identity probe (PR #143) are merged and deployed. Next: the owner's external review of
+the identity implementation (branch `feature/gpexe-athlete-identity`, migration v32; external-review
+triggers 1 and 2). After its merge and deploy, and on a separate order, the owner may load the names
+once on the deployed Link athletes screen (a GPEXE request). Then the first *Link athletes* after the
+gates of PR #142's runbook; then PR B (the F3c4 cut-over, see the active step); then the second
+owner-run procedure for one controlled real import; then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 

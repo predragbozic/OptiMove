@@ -701,6 +701,85 @@ That is the only way back.
   - the last successful run, and the last failed one.
 - Every run is recorded in `training_load.gpexe_retention_runs`.
 
+## GPEXE names and dates of birth (administrators, v32)
+
+Owner order of 2026-10-06. Discovery: `docs/ai/gpexe-athlete-identity-discovery.md`. Contract:
+`docs/ai/source-connections-f3c2-contract.md` section 2.10.
+
+**Who sees it.** Only these two can use the identity panel on *Link athletes*:
+- a platform admin, in the platform workspace or the team's club workspace;
+- the active admin of the team's club, in that club's workspace.
+
+A coach sees the screen as before, with no trace of an identity. Every other caller gets the router's
+identical 404: another club, a team workspace, an inactive admin, an archived team or club, and a team
+without an active binding.
+
+**What it does.** *Load names and dates of birth* first opens a confirmation. It says:
+- how many athletes will be read, at most 50 per load;
+- that the load only reads from GPEXE;
+- that OptiMove deletes the answer from its database after at most 14 days, while a backup taken meanwhile can keep it longer.
+
+The confirmation's button *Load names and dates of birth* then sends one `POST …/gpexe/teams/:teamId/athlete-identities/loads` with
+`{ requestKey }` and nothing else. The server then works like this:
+- **Which athletes:** it derives them itself from the team's stored candidates, using only those a
+  **succeeded** check read through the team's **current** binding.
+- **How they are read:** `rest/v1/athlete/<id>/`, through the binding's stored credential. At most 3
+  requests at once; no retry, no redirect, no environment token.
+- **Limits:** a 15 s timeout per request and a 45 s network budget for the whole load.
+- **What is stored:** only the sanitized display name and the normalized date of birth, for exactly 336
+  hours (14 days of elapsed time, whatever the session time zone). GPEXE's "no such athlete" (404) is
+  stored as a row without a name or a date, so the next load does not read it again within the 14 days.
+
+A check never reads an athlete record.
+
+**What the answer says.** Counts only: names loaded, athletes GPEXE has no record for, athletes still
+without a name, and dates of birth in a form OptiMove does not accept. The last count is in this answer
+only. It is never stored, so a replay cannot repeat it. No name, date or id appears in the answer, a
+log line, an audit row or an error.
+
+**A lost answer.** No answer, a 503 `outcome_unknown` or an uncoded 5xx is shown as *Result not
+confirmed*.
+- *Check result* repeats the same requestKey. The server answers the saved counts, or says the load is
+  still running.
+- A load still `running` after 180 s is closed as abandoned. It saved nothing, so a new load can start.
+- Nothing is ever sent by itself, and one key is never read twice.
+
+**The source refuses.**
+- **401:** the connection becomes *Needs reconnect*, with one `auto_invalidate` audit row whose trigger
+  is `identity_read`, and nothing is saved.
+- **403:** nothing is saved and the connection's state is unchanged.
+- **An answer for another athlete id:** nothing at all is saved.
+- **429, 5xx, timeout or an unreadable answer:** the load stops. What was already confirmed is kept,
+  and the rest stays for a later load.
+
+**When the snapshot is deleted (database triggers, same transaction):**
+- an Unbind deletes that binding's rows;
+- archiving a team deletes that team's rows;
+- archiving a club deletes the rows of every team in it;
+- the purge `training_load.purge_expired_gpexe_athlete_identities` deletes expired rows. It runs with the
+  raw-snapshot purge (every check, the server at start and every 6 hours, and the CLI
+  `npm --prefix backend run gpexe:retention`), and before every load.
+
+Every read of the stored list purges too, and the identity purge runs before the raw one, so a failing
+raw purge never keeps an expired identity. `GET …/gpexe/retention` and the CLI report
+`expiredIdentitiesNotPurged`, which must be 0. The worst case: an expired row is never shown, and it
+is physically deleted at the next of these runs (at most 6 h on a server that is awake).
+
+**Backups.** A database dump or a Supabase backup taken while identity rows exist keeps them for the
+backup's own retention. Before a restored copy is used, run the purge until it returns 0:
+
+```sql
+select training_load.purge_expired_gpexe_athlete_identities(1000);
+``` A row is never
+updated: a reuse never extends `expires_at`. Readers never show or use an expired row, even before the
+purge has run.
+
+**Not here:** an automatic link, a preselection, or a search by name or date. Nothing is copied into an
+OptiMove athlete profile.
+
+**Browser storage:** none. The identity lives in the open screen's memory only. Closing the screen, a
+team or workspace change, or signing out drops it.
+
 ## Not in F1 and F2
 
 - Any screen (F3).
