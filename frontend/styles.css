@@ -15781,6 +15781,11 @@ button.tests-assignment-card {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* The value tables inside keep their own sizing: they scroll sideways in
+   .gpexe-values-wrap instead of breaking a metric name or a number. */
+.gpexe-athletes .gpexe-values {
+  overflow-wrap: normal;
+}
 .gpexe-result p {
   margin: 8px 0 4px;
   font-weight: 500;

@@ -512,6 +512,7 @@ test("the session review keeps a long unbroken name readable: the grid tracks ma
   assert.match(rule(".gpexe-athlete summary"), /grid-template-columns:\s*minmax\(0,\s*1fr\)/, "the athlete row's track can shrink");
   assert.match(rule(".gpexe-athlete summary > span"), /overflow-wrap:\s*anywhere/, "the name wraps instead of being clipped");
   assert.match(rule(".gpexe-athlete summary > span"), /min-width:\s*0/);
+  assert.match(rule(".gpexe-athletes .gpexe-values"), /overflow-wrap:\s*normal/, "the value tables keep their own sizing (they scroll, never break a metric name)");
   // The full name is in the markup, not shortened.
   const long = "A".repeat(56);
   reset(VIEWERS["club admin"]);
