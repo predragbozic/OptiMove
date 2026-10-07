@@ -521,6 +521,7 @@ test("a stated refusal on Check result removes the kept key; the kept state hold
   assert.equal(entry.key, `user-1|${TEAM_A}`, "indexed by the sign-in and the OptiMove team");
   assert.ok(KEY.test(entry.requestKey));
   assert.ok(typeof entry.unconfirmed.checks === "number" && typeof entry.unconfirmed.running === "boolean");
+  assert.equal(entry.unconfirmed.running, false, "a lost answer is kept as settled-not-confirmed, not as still in flight");
   responder = server({ onLoad: () => ({ status: 409, body: { error: "identity_load_not_available", message: "x" } }) });
   await act("training-load-gpexe-identity-check");
   assert.equal(state.trainingLoad.gpexe.identity.unconfirmed, null, "a stated refusal settles it");
@@ -533,4 +534,44 @@ test("a stated refusal on Check result removes the kept key; the kept state hold
   const app = fs.readFileSync(path.resolve(__dirname, "..", "app.js"), "utf8");
   const signOut = app.slice(app.indexOf("async function signOut()"), app.indexOf("function startInboxPolling()"));
   assert.match(signOut, /clearPendingIdentityLoads\(\);[\s\S]*window\.location\.replace\("\/"\)/, "signOut clears the kept keys before it reloads");
+});
+
+test("back on the team before the answer arrives: the load is shown as not confirmed with its own key (never a fresh Load), and the answer that lands then settles it", async () => {
+  const gate = deferredGate();
+  reset();
+  responder = server({ onLoad: async () => { await gate.promise; return { status: 200, body: { loaded: 1, notFound: 0, notRead: 0 } }; } });
+  await openMapping();
+  await act("training-load-gpexe-identity-open");
+  const sending = act("training-load-gpexe-identity-send");
+  await new Promise((r) => setImmediate(r));
+  const key = state.trainingLoad.gpexe.identity.requestKey;
+  await act("training-load-gpexe-map-close");
+  await act("training-load-gpexe-team", {}, { value: TEAM_B });
+  await act("training-load-gpexe-team", {}, { value: TEAM_A });
+  let identity = state.trainingLoad.gpexe.identity;
+  assert.equal(identity.requestKey, key, "the same key while the request is still in flight");
+  assert.equal(identity.unconfirmed?.running, true, "shown as still running");
+  assert.equal(loadPosts().length, 1, "nothing sent again");
+  gate.resolve();
+  await sending;
+  identity = state.trainingLoad.gpexe.identity;
+  assert.equal(identity.unconfirmed, null, "the answer settled it in the view open now");
+  assert.equal(identity.requestKey, null);
+  assert.deepEqual(pendingIdentityLoadsSnapshot(), []);
+});
+
+test("a status without the identity right (a role revoked) drops the kept key: when the right returns, no old key comes back", async () => {
+  await loseOneLoadOnTeamA();
+  assert.equal(pendingIdentityLoadsSnapshot().length, 1);
+  await act("training-load-gpexe-map-close");
+  await act("training-load-gpexe-team", {}, { value: TEAM_B });
+  responder = server({ admin: false });
+  await act("training-load-gpexe-team", {}, { value: TEAM_A });
+  assert.equal(state.trainingLoad.gpexe.identity.requestKey, null, "a viewer without the right holds no key");
+  assert.deepEqual(pendingIdentityLoadsSnapshot(), [], "the kept key is gone");
+  responder = server();
+  await act("training-load-gpexe-team", {}, { value: TEAM_B });
+  await act("training-load-gpexe-team", {}, { value: TEAM_A });
+  assert.equal(state.trainingLoad.gpexe.identity.requestKey, null, "no old key after the right returns");
+  assert.equal(state.trainingLoad.gpexe.identity.unconfirmed, null);
 });
