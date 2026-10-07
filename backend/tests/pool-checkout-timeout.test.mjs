@@ -282,33 +282,127 @@ test("login takes ONE checkout before any decision: when every later checkout ti
   noLeakInLogs("login");
 });
 
-test("forgot password and the verification resend answer the same generic body for an existing account (or pending application) whose second checkout times out as for an unknown email", { timeout: 10_000 }, async () => {
-  const active = `forgot-${uid()}@test.local`;
-  await q(`insert into public.users (email, full_name, display_name, is_active) values ($1, 'Forgot Test', 'Forgot Test', true)`, [active]);
-  const unknown = `nobody-${uid()}@test.local`;
-  const forgot = (email) => call("/api/auth/password/forgot", { method: "POST", body: { email } });
-  const unknownAnswer = await forgot(unknown);
-  dbModule.setPoolCheckoutFaultForTests(failAfterFirst());
-  const activeAnswer = await forgot(active);
-  dbModule.setPoolCheckoutFaultForTests(null);
-  assert.equal(unknownAnswer.status, 200);
-  assert.deepEqual([activeAnswer.status, activeAnswer.body], [unknownAnswer.status, unknownAnswer.body], "forgot: the same generic answer");
-
-  const pending = `pending-${uid()}@test.local`;
-  // The disposable database carries the GPEXE migration set only. The
-  // resend's first step reads just these columns, and its second checkout is
-  // the one that fails here, so a minimal table of this disposable database
-  // is enough when the real one is missing.
-  if (!(await q(`select to_regclass('public.athlete_join_applications') as t`))[0].t) {
-    await q(`create table public.athlete_join_applications (id uuid primary key default gen_random_uuid(), join_link_id uuid not null, email text not null, applicant_user_id uuid, status text not null default 'pending', submitted_at timestamptz not null default now())`);
+// The legacy auth tables the two public routes use, applied to this
+// DISPOSABLE database only (idempotent files; never OPTIMOVE).
+async function ensureAuthTables() {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  for (const file of ["20260807_athlete_join_links.sql", "20260809_email_verification.sql", "20260810_password_reset.sql"]) {
+    await admin.query(fs.readFileSync(path.join(root, "migrations", file), "utf8"));
   }
-  await q(`insert into public.athlete_join_applications (join_link_id, email) values ($1, $2)`, [crypto.randomUUID(), pending]);
-  const resend = (email) => call("/api/auth/email-verifications/resend", { method: "POST", body: { email } });
-  const resendUnknown = await resend(unknown);
-  dbModule.setPoolCheckoutFaultForTests(failAfterFirst());
-  const resendPending = await resend(pending);
+}
+// Counts every checkout (both forms) of the request's own path up to its
+// database decision; fails none. The fire-and-forget "mark sent" after a
+// successful email runs after the client was released and never delays the
+// answer, so it is not part of that path.
+function countCheckouts() {
+  const seen = { n: 0, background: 0 };
+  dbModule.setPoolCheckoutFaultForTests(() => {
+    if (/mark(PasswordReset|Verification)TokenSent/.test(new Error().stack)) seen.background += 1; else seen.n += 1;
+    return null;
+  });
+  return seen;
+}
+async function seedAccounts() {
+  await ensureAuthTables();
+  const active = `forgot-active-${uid()}@test.local`;
+  const inactive = `forgot-inactive-${uid()}@test.local`;
+  await q(`insert into public.users (email, full_name, display_name, is_active) values ($1, 'Active', 'Active', true), ($2, 'Inactive', 'Inactive', false)`, [active, inactive]);
+  const pending = `resend-pending-${uid()}@test.local`;
+  const link = (await q(`insert into public.athlete_join_links (token_hash, context_type, context_id, expires_at) values ($1, 'private_coach', null, now() + interval '1 day') returning id`, [crypto.randomBytes(16).toString("hex")]))[0].id;
+  await q(`insert into public.athlete_join_applications (join_link_id, email, status_token_hash, password_hash) values ($1, $2, $3, 'not-a-real-hash')`, [link, pending, crypto.randomBytes(16).toString("hex")]);
+  return { active, inactive, unknown: `nobody-${uid()}@test.local`, pending };
+}
+const forgot = (email) => call("/api/auth/password/forgot", { method: "POST", body: { email } });
+const resend = (email) => call("/api/auth/email-verifications/resend", { method: "POST", body: { email } });
+// The generic answer without the development-only token field (present only
+// when a token was really issued, outside production).
+const generic = (r) => { const { devResetToken, devVerificationToken, ...rest } = r.body; return { status: r.status, body: rest, issued: Boolean(devResetToken || devVerificationToken) }; };
+
+test("forgot password: an active, an unknown and an inactive account take exactly ONE checkout each; with that checkout failing they answer the identical generic body and nothing is issued", { timeout: 15_000 }, async () => {
+  const a = await seedAccounts();
+  const counts = {};
+  for (const [name, email] of [["active", a.active], ["unknown", a.unknown], ["inactive", a.inactive]]) {
+    const seen = countCheckouts();
+    const r = await forgot(email);
+    dbModule.setPoolCheckoutFaultForTests(null);
+    assert.equal(r.status, 200, `${name}: ${r.text}`);
+    counts[name] = seen.n;
+  }
+  assert.deepEqual(counts, { active: 1, unknown: 1, inactive: 1 }, "one checkout whatever the account");
+
+  dbModule.setPoolCheckoutFaultForTests(() => timeoutError());
+  const answers = {};
+  for (const [name, email] of [["active", a.active], ["unknown", a.unknown], ["inactive", a.inactive]]) answers[name] = generic(await forgot(email));
   dbModule.setPoolCheckoutFaultForTests(null);
-  assert.equal(resendUnknown.status, 200);
-  assert.deepEqual([resendPending.status, resendPending.body], [resendUnknown.status, resendUnknown.body], "resend: the same generic answer");
-  noLeakInLogs("forgot / resend");
+  assert.deepEqual(answers.active, answers.unknown, "active vs unknown: identical");
+  assert.deepEqual(answers.inactive, answers.unknown, "inactive vs unknown: identical");
+  assert.equal(answers.active.status, 200);
+  assert.equal(answers.active.issued, false, "no token issued, so no email is fired");
+  noLeakInLogs("forgot");
+});
+
+test("forgot password under a really exhausted pool: every account waits the one bound, then the same floor - no multi-second difference by account", { timeout: 20_000 }, async () => {
+  const a = await seedAccounts();
+  const held = await holdAll();
+  const took = {};
+  try {
+    for (const [name, email] of [["active", a.active], ["unknown", a.unknown], ["inactive", a.inactive]]) {
+      const started = Date.now();
+      const r = await forgot(email);
+      took[name] = Date.now() - started;
+      assert.equal(r.status, 200, name);
+    }
+  } finally {
+    for (const client of held) client.release();
+  }
+  const spread = Math.max(...Object.values(took)) - Math.min(...Object.values(took));
+  assert.ok(Object.values(took).every((ms) => ms >= BOUND_MS - 50 && ms < BOUND_MS + 2_000), `each waits one bound: ${JSON.stringify(took)}`);
+  assert.ok(spread < 600, `no account-dependent wait: ${JSON.stringify(took)}`);
+});
+
+test("forgot password releases its one client BEFORE the timing floor (and before the fire-and-forget email)", { timeout: 15_000 }, async () => {
+  const a = await seedAccounts();
+  const events = [];
+  const onAcquire = () => events.push(["acquire", Date.now()]);
+  const onRelease = () => events.push(["release", Date.now()]);
+  appPool.on("acquire", onAcquire);
+  appPool.on("release", onRelease);
+  try {
+    const r = await forgot(a.active);
+    const answeredAt = Date.now();
+    assert.equal(r.status, 200);
+    const firstAcquire = events.find(([kind]) => kind === "acquire");
+    const firstRelease = events.find(([kind]) => kind === "release");
+    assert.ok(firstAcquire && firstRelease && firstRelease[1] >= firstAcquire[1], "the request's one client was checked out and released");
+    assert.ok(answeredAt - firstRelease[1] >= 200, `the client was free ${answeredAt - firstRelease[1]} ms before the answer - the floor runs without it`);
+  } finally {
+    appPool.off("acquire", onAcquire);
+    appPool.off("release", onRelease);
+  }
+});
+
+test("verification resend: an existing and a missing pending application take exactly ONE checkout each; with that checkout failing they answer the identical generic body and nothing is issued; the client is released before the email", { timeout: 15_000 }, async () => {
+  const a = await seedAccounts();
+  const counts = {};
+  for (const [name, email] of [["pending", a.pending], ["unknown", a.unknown]]) {
+    const seen = countCheckouts();
+    const r = await resend(email);
+    dbModule.setPoolCheckoutFaultForTests(null);
+    assert.equal(r.status, 200, `${name}: ${r.text}`);
+    counts[name] = seen.n;
+  }
+  assert.deepEqual(counts, { pending: 1, unknown: 1 }, "one checkout whether or not a pending application exists (before the email)");
+
+  dbModule.setPoolCheckoutFaultForTests(() => timeoutError());
+  const pendingAnswer = generic(await resend(a.pending));
+  const unknownAnswer = generic(await resend(a.unknown));
+  dbModule.setPoolCheckoutFaultForTests(null);
+  assert.deepEqual(pendingAnswer, unknownAnswer, "identical status and body");
+  assert.equal(pendingAnswer.status, 200, "the route's usual generic answer, never a distinct 503");
+  assert.match(String(pendingAnswer.body.message || ""), /If a pending request needs email verification/);
+  assert.equal(pendingAnswer.issued, false, "no token issued, no email sent");
+  noLeakInLogs("resend");
 });

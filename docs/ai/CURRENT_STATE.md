@@ -1194,9 +1194,11 @@ Technical details.
     source-connection routes (Unbind included), the importer and the identity routes their `try_again`
     (every uncaught checkout there is the first step of the requested operation, before any of it is written
     or sent); an identity load whose finalize checkout times out closes its request row as failed and answers
-    `try_again`, or `outcome_unknown` when even that cannot run; the roster command `roster_busy`. Login takes
-    one checkout before any decision, and forgot password and the verification resend keep their generic
-    answer, so a busy pool never tells accounts or passwords apart (security review). A *Check result* of an
+    `try_again`, or `outcome_unknown` when even that cannot run; the roster command `roster_busy`. Login, forgot
+    password and the verification resend each take one checkout before any decision and run the lookup and
+    any transaction on it, with their usual answer on a timeout, so a busy pool never tells accounts,
+    pending applications or passwords apart by status, body or wait (security review; owner's external
+    review of PR #146). A *Check result* of an
     identity load refused for any reason but the original load's saved outcome stays not confirmed. No
     lock, COMMIT boundary, statement or lock timeout changed. Why 5 s fits the HTTP budgets: see the runbook
     section "Database pool checkout bound" in `docs/runbooks/gpexe-in-app-import.md`.

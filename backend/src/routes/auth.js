@@ -645,47 +645,53 @@ router.post("/password/forgot", async (req, res, next) => {
     const ip = requestIp(req);
     if (!allowForgotAttemptForIp(ip)) return await respondGeneric();
 
-    const candidate = await query(`select id, is_active from public.users where lower(email) = $1 limit 1`, [email]);
-    const user = candidate.rows[0];
-    // No account, or an account that's deactivated - never sends a reset
-    // link for either case (a deactivated account can't log in even with a
-    // new password), but the response must stay identical either way.
-    if (!user || !user.is_active) return await respondGeneric();
-
+    // ONE checkout for the lookup and, only for an active account, the
+    // transaction - taken before anything about the email is known. A busy
+    // pool therefore costs every email the same (the same bound, the same
+    // generic answer), and no second checkout exists whose wait would tell an
+    // active account apart. The client is released before the timing floor
+    // and before the fire-and-forget email, never held through either.
     const client = await pool.connect();
     let resetToken;
     let tokenId;
     let expiresAt;
     let recipientName;
     let shouldSend = false;
+    let inTransaction = false;
     try {
-      await client.query("begin");
-      const exec = (text, params) => client.query(text, params);
-      await lockPasswordResetActions(exec, user.id);
-
-      // Re-load fresh, under the lock - the account could have been
-      // disabled between the unlocked read above and here. Deliberately
-      // structured as nested ifs, not early returns, so every branch below
-      // still reaches the single commit/finally at the bottom of this
-      // block - the pool client must always be released BEFORE
-      // respondGeneric's timing-floor wait (and before the fire-and-forget
-      // email dispatch) run, never while it's still checked out.
-      const fresh = await client.query(`select id, is_active, full_name, display_name from public.users where id = $1 limit 1 for update`, [user.id]);
-      const freshUser = fresh.rows[0];
-      if (freshUser && freshUser.is_active) {
-        const lastSentAt = await loadLastPasswordResetTokenSentAt(exec, user.id);
-        if (!resetResendTooSoon(lastSentAt)) {
-          const issued = await issuePasswordResetToken(exec, user.id);
-          resetToken = issued.rawToken;
-          tokenId = issued.tokenId;
-          expiresAt = issued.expiresAt;
-          recipientName = freshUser.display_name || freshUser.full_name || "";
-          shouldSend = true;
+      const candidate = await client.query(`select id, is_active from public.users where lower(email) = $1 limit 1`, [email]);
+      const user = candidate.rows[0];
+      // No account, or an account that's deactivated - never sends a reset
+      // link for either case (a deactivated account can't log in even with a
+      // new password), but the response must stay identical either way.
+      // Deliberately structured as nested ifs, not early returns, so every
+      // branch reaches the single finally below - the client is released
+      // BEFORE respondGeneric's timing-floor wait.
+      if (user && user.is_active) {
+        await client.query("begin");
+        inTransaction = true;
+        const exec = (text, params) => client.query(text, params);
+        await lockPasswordResetActions(exec, user.id);
+        // Re-load fresh, under the lock - the account could have been
+        // disabled between the unlocked read above and here.
+        const fresh = await client.query(`select id, is_active, full_name, display_name from public.users where id = $1 limit 1 for update`, [user.id]);
+        const freshUser = fresh.rows[0];
+        if (freshUser && freshUser.is_active) {
+          const lastSentAt = await loadLastPasswordResetTokenSentAt(exec, user.id);
+          if (!resetResendTooSoon(lastSentAt)) {
+            const issued = await issuePasswordResetToken(exec, user.id);
+            resetToken = issued.rawToken;
+            tokenId = issued.tokenId;
+            expiresAt = issued.expiresAt;
+            recipientName = freshUser.display_name || freshUser.full_name || "";
+            shouldSend = true;
+          }
         }
+        await client.query("commit");
+        inTransaction = false;
       }
-      await client.query("commit");
     } catch (error) {
-      await client.query("rollback").catch(() => {});
+      if (inTransaction) await client.query("rollback").catch(() => {});
       throw error;
     } finally {
       client.release();
@@ -706,9 +712,9 @@ router.post("/password/forgot", async (req, res, next) => {
     return await respondGeneric();
   } catch (error) {
     // No free database connection within the checkout bound (db.js): the
-    // same generic answer as every other exit. The second checkout is reached
-    // only for an active account, so a distinct 503 would tell which emails
-    // have one. Nothing was issued or sent.
+    // route's one checkout comes before anything about the email is known, so
+    // this exit is the same for every email - the same generic answer through
+    // the same floor. Nothing was issued or sent.
     if (isPoolCheckoutTimeout(error) && !res.headersSent) {
       console.error(`[db] ${POOL_CHECKOUT_TIMEOUT}: POST /api/auth/password/forgot`);
       return await respondGeneric();
@@ -1387,15 +1393,11 @@ router.post("/email-verifications/resend", async (req, res, next) => {
     const ip = requestIp(req);
     if (!allowResendAttemptForIp(ip)) return genericResponse();
 
-    const candidate = await query(
-      `select id, join_link_id from public.athlete_join_applications
-       where lower(email) = $1 and applicant_user_id is null and status = 'pending'
-       order by submitted_at desc
-       limit 1`,
-      [email],
-    );
-    if (!candidate.rows[0]) return genericResponse();
-
+    // ONE checkout for the lookup and, only when a pending application
+    // exists, the transaction - taken before anything about the email is
+    // known, so a busy pool costs every email the same and no second checkout
+    // exists whose wait would reveal a pending application. The client is
+    // released before the email is sent.
     const client = await pool.connect();
     let verificationToken;
     let verificationTokenId;
@@ -1404,8 +1406,19 @@ router.post("/email-verifications/resend", async (req, res, next) => {
     let recipientEmail;
     let recipientName;
     let shouldSend = false;
+    let inTransaction = false;
     try {
+      const candidate = await client.query(
+        `select id, join_link_id from public.athlete_join_applications
+         where lower(email) = $1 and applicant_user_id is null and status = 'pending'
+         order by submitted_at desc
+         limit 1`,
+        [email],
+      );
+      if (!candidate.rows[0]) return genericResponse();
+
       await client.query("begin");
+      inTransaction = true;
       const exec = (text, params) => client.query(text, params);
       await lockJoinLinkActions(exec, candidate.rows[0].join_link_id);
 
@@ -1452,8 +1465,9 @@ router.post("/email-verifications/resend", async (req, res, next) => {
       recipientName = application.first_name || application.display_name || "";
       shouldSend = true;
       await client.query("commit");
+      inTransaction = false;
     } catch (error) {
-      await client.query("rollback").catch(() => {});
+      if (inTransaction) await client.query("rollback").catch(() => {});
       throw error;
     } finally {
       client.release();
@@ -1477,8 +1491,8 @@ router.post("/email-verifications/resend", async (req, res, next) => {
     return genericResponse();
   } catch (error) {
     // No free database connection within the checkout bound (db.js): the
-    // same generic answer - the second checkout runs only when a pending
-    // application exists, so a distinct 503 would reveal one.
+    // route's one checkout comes before anything about the email is known, so
+    // this exit is the same for every email - the same generic answer.
     if (isPoolCheckoutTimeout(error) && !res.headersSent) {
       console.error(`[db] ${POOL_CHECKOUT_TIMEOUT}: POST /api/auth/email-verifications/resend`);
       return genericResponse();

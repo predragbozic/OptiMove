@@ -853,10 +853,13 @@ to the flow's existing worst case, which stays inside the client's bound:
   for one key. A *Check result* refused for any reason other than the original load's saved outcome (a
   busy server included) stays *Result not confirmed* with the same key;
 - the roster command: `503 roster_busy`;
-- login, forgot password and the verification resend: login takes one checkout for the lookup and the
-  session, before any decision, so a busy pool answers the same `503 database_busy` whatever the password;
-  forgot password and the resend answer their usual generic body when their second checkout times out
-  (it runs only for an existing account or a pending application);
+- login, forgot password and the verification resend each take ONE checkout, before anything about the
+  email or password is known, and do the lookup and any transaction on it (owner's external review of
+  PR #146): login answers the same `503 database_busy` whatever the password; forgot password and the
+  resend answer their usual generic body (forgot through its timing floor), the same for an existing, a
+  missing or an inactive account and for an existing or a missing pending application. The client is
+  released before the timing floor and before the email; a fire-and-forget "mark sent" after a successful
+  email is a later, separate checkout that never delays the answer;
 - every other route: `503 database_busy` from the global handler, `Retry-After: 5`. It does not claim
   that nothing changed.
 
