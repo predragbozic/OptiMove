@@ -40,6 +40,9 @@ import {
   identityNameKey,
   identityOf,
   gpexeAthleteLabel,
+  gpexeAthleteSentence,
+  gpexeAthleteOrdinal,
+  maskGpexeIds,
 } from "./gpexe-import-data.js";
 
 // The bucket rules live in the data module (the batch selection needs them
@@ -176,7 +179,7 @@ const SKIP_TEXT = {
 function coachStep(s, c) {
   const name = s.previousAthleteId ? athleteName(c, s.previousAthleteId, null) : "the athlete";
   const undo = "Or ask a platform admin to undo the earlier import.";
-  if (s.action === "relink_athlete") return `Link GPEXE athlete ${s.gpexeAthleteId} again to ${name} (the athlete their earlier results belong to), then find new sessions.`;
+  if (s.action === "relink_athlete") return `Link ${gpexeWho(s.gpexeAthleteId)} again to ${name} (the athlete their earlier results belong to), then find new sessions.`;
   if (s.action === "restore_team_membership") return `Make ${name} an active member of the team again, then find new sessions. ${undo}`;
   if (s.action === "fix_in_gpexe_or_undo") return `Fix this athlete's data in GPEXE (one track, valid statistics), then find new sessions. ${undo}`;
   if (s.action === "undo_earlier_import") return "GPEXE no longer lists some results that were imported earlier. Ask a platform admin to undo the earlier import.";
@@ -234,7 +237,28 @@ function sessionTitle(c) {
 function athleteName(candidate, athleteId, gpexeAthleteId) {
   const name = athleteId ? candidate.athletes?.[athleteId]?.name : "";
   if (name) return name;
-  return gpexeAthleteId ? `GPEXE athlete ${gpexeAthleteId}` : "Athlete";
+  return gpexeAthleteId ? gpexeAthleteLabel(gpexeAthleteId) : "Athlete";
+}
+
+// One athlete inside a sentence, from the data module's one helper: the GPEXE
+// name, or "GPEXE athlete N (name not loaded)" and the like for an
+// administrator; "GPEXE athlete 104" for a coach, as before.
+function gpexeWho(gpexeAthleteId) {
+  return gpexeAthleteSentence(gpexeAthleteId);
+}
+
+// The GPEXE side of a row: "GPEXE: <name>" when a name is loaded, otherwise
+// the label alone (it already says "GPEXE athlete N"), never "GPEXE: GPEXE
+// athlete N".
+function gpexeSideText(gpexeAthleteId, gx) {
+  const label = gpexeAthleteLabel(gpexeAthleteId, gx);
+  return identityOf(gpexeAthleteId, gx)?.name ? `GPEXE: ${label}` : label;
+}
+
+// The id under Technical details, for an administrator only (a coach sees it
+// in the text, as before).
+function idTechHtml(gpexeAthleteId) {
+  return maskGpexeIds() && gpexeAthleteId ? techHtml([["GPEXE athlete id", gpexeAthleteId]]) : "";
 }
 
 function errorText(error, fallback) {
@@ -935,7 +959,7 @@ function renderLinksHtml(gx) {
         <ul class="gpexe-link-list">
           ${links.map((l) => `
             <li>
-              <span><strong>${escapeHtml(l.athleteName)}</strong> <span class="muted">GPEXE athlete ${escapeHtml(l.gpexeAthleteId)}</span></span>
+              <div><strong>${escapeHtml(l.athleteName)}</strong> <span class="muted">${escapeHtml(maskGpexeIds() ? gpexeSideText(l.gpexeAthleteId) : `GPEXE athlete ${l.gpexeAthleteId}`)}</span>${idTechHtml(l.gpexeAthleteId)}</div>
               <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(l.id)}" ${gx.linkBusy ? "disabled" : ""}>Unlink</button>
             </li>
           `).join("")}
@@ -1026,7 +1050,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
           ${conflictHtml(id, chosen, gx)}
         </div>
         ${choices.length ? `<label class="gpexe-map-choice"><span>Link to</span>
-          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(gx.identity?.available ? `the GPEXE athlete ${gpexeLabel(id, gx)}${named ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}` : `GPEXE athlete ${id}`)} to" ${writeOff ? "disabled" : ""}>
+          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link ${escapeAttr(maskGpexeIds(gx) ? `${gpexeAthleteSentence(id, gx)}${named ? `, ${bornText(identityOf(id, gx).birthDate)}` : ""}${!identityOf(id, gx)?.name ? `, ${mapLastSeenText(a)}` : ""}` : `GPEXE athlete ${id}`)} to" ${writeOff ? "disabled" : ""}>
             <option value="" ${chosen ? "" : "selected"}>Not now</option>
             ${choices.map((o) => `<option value="${escapeAttr(o.id)}" ${chosen === o.id ? "selected" : ""} ${o.duplicate ? "disabled" : ""}>${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
           </select>
@@ -1037,7 +1061,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
   }
   const inactive = a.status === "linked_inactive";
   const who = identityOf(id, gx);
-  const gpexeSide = who ? `GPEXE: ${who.name || "Name not provided"} · ${bornText(who.birthDate)}` : gx.identity?.available ? `GPEXE: ${gpexeLabel(id, gx)}` : `GPEXE athlete ${id}`;
+  const gpexeSide = who ? `${gpexeSideText(id, gx)} · ${bornText(who.birthDate)}` : maskGpexeIds(gx) ? gpexeSideText(id, gx) : `GPEXE athlete ${id}`;
   return `
     <li class="gpexe-map-row ${inactive ? "is-inactive" : "is-linked"}">
       <div class="gpexe-map-main">
@@ -1098,7 +1122,7 @@ function renderIdentityPanelHtml(gx) {
     body = `
       <div class="gpexe-unknown" role="status">
         <p><strong>Result not confirmed.</strong> ${id.unconfirmed.running ? "The load is still running, or its result is not settled yet." : "The answer was lost, so we can't tell yet what was saved."} Check result asks OptiMove what happened; GPEXE is never read twice for this request.</p>
-        <p class="muted">Linking is off until the result is confirmed. You can close Link athletes and open it again to start over.</p>
+        <p class="muted">Linking is off until the result is confirmed. Closing Link athletes does not start over.</p>
         <div class="gpexe-link-actions"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-identity-check">Check result</button></div>
       </div>`;
   } else if (id.confirming) {
@@ -1147,9 +1171,9 @@ function mapOutcomeText(r, label = `GPEXE athlete ${r.gpexeAthleteId}`) {
 // duplicate, or no name) the last session is named too.
 function renderPairHtml(p, gx, list, duplicates) {
   const who = identityOf(p.gpexeAthleteId, gx);
-  const unclear = gx.identity?.available && (!who || !who.name || duplicates.has(identityNameKey(who.name)));
+  const unclear = maskGpexeIds(gx) && (!who || !who.name || duplicates.has(identityNameKey(who.name)));
   const a = unclear ? list.find((x) => x.gpexeAthleteId === p.gpexeAthleteId) : null;
-  return `<li class="gpexe-link-pair"><strong>${escapeHtml(gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${gx.identity?.available ? techHtml([["GPEXE athlete id", p.gpexeAthleteId]]) : ""}</li>`;
+  return `<li class="gpexe-link-pair"><strong>${escapeHtml(gpexeLabel(p.gpexeAthleteId, gx))}</strong>${who ? ` <span class="muted">(${escapeHtml(bornText(who.birthDate))})</span>` : ""} → <strong>${escapeHtml(p.athleteName)}</strong>${who && who.name && duplicates.has(identityNameKey(who.name)) ? `<span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name.</span>` : ""}${a ? `<span class="muted gpexe-map-born">${escapeHtml(mapLastSeenText(a))} · ${escapeHtml(mapValuesText(a))}</span>` : ""}${conflictHtml(p.gpexeAthleteId, p.athleteId, gx)}${idTechHtml(p.gpexeAthleteId)}</li>`;
 }
 
 function renderTeamMappingHtml(gx, teams) {
@@ -1184,7 +1208,7 @@ function renderTeamMappingHtml(gx, teams) {
       <section class="gpexe-map-results" aria-label="Result">
         <h4>Result</h4>
         <ul>
-          ${m.results.map((r) => `<li><strong>${escapeHtml(gpexeLabel(r.gpexeAthleteId, gx))} → ${escapeHtml(r.athleteName)}</strong>: ${escapeHtml(mapOutcomeText(r, gpexeLabel(r.gpexeAthleteId, gx)))}${r.error ? errorTech(r.error) : ""}${gx.identity?.available ? techHtml([["GPEXE athlete id", r.gpexeAthleteId]]) : ""}</li>`).join("")}
+          ${m.results.map((r) => `<li><strong>${escapeHtml(gpexeLabel(r.gpexeAthleteId, gx))} → ${escapeHtml(r.athleteName)}</strong>: ${escapeHtml(mapOutcomeText(r, gpexeLabel(r.gpexeAthleteId, gx)))}${r.error ? errorTech(r.error) : ""}${idTechHtml(r.gpexeAthleteId)}</li>`).join("")}
         </ul>
         ${m.results.some((r) => r.outcome !== "refused") ? `<p>Find new sessions to update the reviews - approving waits until then. A wrong link can be removed with Unlink before an import is approved.</p>` : ""}
         ${staleHtml}
@@ -1253,6 +1277,7 @@ function renderTeamMappingHtml(gx, teams) {
         </div>
         <div class="gpexe-detail-body">
           <p class="gpexe-map-summary">${escapeHtml([`${linked.length} linked`, `${unlinked.length} not linked`, ...(inactive.length ? [`${inactive.length} no longer in the team`] : [])].join(" · "))}</p>
+          ${maskGpexeIds(gx) ? `<p class="muted">The number in "GPEXE athlete 1", "GPEXE athlete 2" and so on is the athlete's place in this list, not the GPEXE id; the id is under Technical details.</p>` : ""}
           ${body}
           ${footer}
         </div>
@@ -1269,7 +1294,7 @@ function renderLastLinkHtml(gx) {
   const dates = l.sessionDate ? ` (with dates that include ${formatDate(l.sessionDate)})` : "";
   return `
     <div class="gpexe-notice gpexe-last-link" role="status">
-      <p><strong>GPEXE athlete ${escapeHtml(l.gpexeAthleteId)} is now linked to ${escapeHtml(l.athleteName)}.</strong> Find new sessions${escapeHtml(dates)} to update the review - approving waits until then.</p>
+      <p><strong>${escapeHtml(gpexeWho(l.gpexeAthleteId).replace(/^(the|a) /, (w) => w[0].toUpperCase() + w.slice(1)))} is now linked to ${escapeHtml(l.athleteName)}.</strong> Find new sessions${escapeHtml(dates)} to update the review - approving waits until then.</p>
       <p>Wrong athlete? Unlink it before an import is approved.
         <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(l.linkId)}" ${gx.linkBusy ? "disabled" : ""}>Unlink ${escapeHtml(l.athleteName)}</button>
       </p>
@@ -1391,6 +1416,7 @@ function renderChangesHtml(preview, c) {
           <li>
             <p><strong>${escapeHtml(athleteName(c, ch.athleteId, ch.gpexeAthleteId))}</strong> · ${escapeHtml(resultLabel(ch))} · ${escapeHtml(OUTCOME_TEXT[ch.outcome] || ch.outcome)}</p>
             <p class="muted">${escapeHtml(ch.message || "")}${ch.manualCorrectionKept ? " A manual correction stays current." : ""}</p>
+            ${ch.athleteId ? "" : idTechHtml(ch.gpexeAthleteId)}
             ${renderValueTableHtml(ch.values, true)}
           </li>
         `).join("")}
@@ -1442,7 +1468,7 @@ function renderLinkContextHtml(a) {
   const drills = new Set((a.results || []).filter((r) => r.level === "drill").map((r) => r.drillIndex)).size;
   if (!values.length && !drills) return `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`;
   return `
-    <p class="muted">Recorded by GPEXE for athlete ${escapeHtml(a.gpexeAthleteId)} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>
+    <p class="muted">Recorded by GPEXE for ${escapeHtml(maskGpexeIds() ? gpexeWho(a.gpexeAthleteId) : `athlete ${a.gpexeAthleteId}`)} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>
     <ul class="gpexe-link-context">
       ${values.map((v) => `<li><span>${escapeHtml(metricName(v))}</span> <strong>${escapeHtml(fmtValue(v.value, v.unit))}</strong></li>`).join("")}
       ${drills ? `<li><span>Drills</span> <strong>${drills}</strong></li>` : ""}
@@ -1459,8 +1485,9 @@ function renderLinkHtml(a, c, unlinkedChoices) {
   if (pending) {
     return `
       <div class="gpexe-link-confirm" role="group" aria-label="Confirm the link">
-        <p class="gpexe-link-pair"><strong>GPEXE athlete ${escapeHtml(id)}</strong> → <strong>${escapeHtml(pending.athleteName)}</strong></p>
-        <p>Link GPEXE athlete ${escapeHtml(id)} to ${escapeHtml(pending.athleteName)}? After you find new sessions and approve the import, athlete ${escapeHtml(id)}'s results in this session, and in every GPEXE session imported later, will be imported as ${escapeHtml(pending.athleteName)}.</p>
+        <p class="gpexe-link-pair"><strong>${escapeHtml(maskGpexeIds() ? gpexeAthleteLabel(id) : `GPEXE athlete ${id}`)}</strong> → <strong>${escapeHtml(pending.athleteName)}</strong></p>
+        <p>Link ${escapeHtml(gpexeWho(id))} to ${escapeHtml(pending.athleteName)}? After you find new sessions and approve the import, ${escapeHtml(maskGpexeIds() ? "this GPEXE athlete" : `athlete ${id}`)}'s results in this session, and in every GPEXE session imported later, will be imported as ${escapeHtml(pending.athleteName)}.</p>
+        ${idTechHtml(id)}
         <p>You can unlink it before an import is approved. Unlinking doesn't change results that are already imported: if the link turns out wrong after an import, those results can't be changed here — contact a platform administrator.</p>
         <div class="gpexe-link-actions">
           <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link-cancel" ${gx.linkBusy ? "disabled" : ""}>Cancel</button>
@@ -1470,14 +1497,16 @@ function renderLinkHtml(a, c, unlinkedChoices) {
     `;
   }
   if (!unlinkedChoices.length) {
-    return `<p class="muted">Every athlete of the team without a GPEXE record here is already linked. If athlete ${escapeHtml(id)} is one of them, close this review and check "GPEXE athletes linked to this team".</p>`;
+    return `<p class="muted">Every athlete of the team without a GPEXE record here is already linked. If ${escapeHtml(maskGpexeIds() ? "this GPEXE athlete" : `athlete ${id}`)} is one of them, close this review and check "GPEXE athletes linked to this team".</p>${idTechHtml(id)}`;
   }
   return `
     <div class="gpexe-link">
-      <p><strong>Find athlete ${escapeHtml(id)} in GPEXE first. Link only if you are sure.</strong></p>
+      <p><strong>Find ${escapeHtml(maskGpexeIds() ? gpexeWho(id) : `athlete ${id}`)} in GPEXE first. Link only if you are sure.</strong></p>
+      ${maskGpexeIds() && duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below, and the date of birth on Link athletes, before you choose.</p>` : ""}
+      ${maskGpexeIds() && !identityOf(id)?.name ? `<p class="muted">The number in "${escapeHtml(`GPEXE athlete ${gpexeAthleteOrdinal(id)}`)}" is this athlete's place in OptiMove's list, not the GPEXE id; the id is under Technical details.</p>` : ""}
       ${renderLinkContextHtml(a)}
       <div class="gpexe-link-row">
-        <label><span>Link GPEXE athlete ${escapeHtml(id)} to</span>
+        <label><span>Link ${escapeHtml(gpexeWho(id))} to</span>
           <select class="gpexe-select" data-gpexe-link-select="${escapeAttr(id)}">
             <option value="" selected>Choose an athlete of the team</option>
             ${unlinkedChoices.map((o) => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
@@ -1485,6 +1514,7 @@ function renderLinkHtml(a, c, unlinkedChoices) {
         </label>
         <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link" data-gpexe-athlete-id="${escapeAttr(id)}" ${gx.linkBusy ? "disabled" : ""}>Link...</button>
       </div>
+      ${idTechHtml(id)}
     </div>
   `;
 }
@@ -1515,6 +1545,7 @@ function renderAthleteHtml(a, c, unlinkedChoices) {
   // otherwise close it under them).
   const open = unlinked && gx.linkOpen === a.gpexeAthleteId;
   const tech = [
+    ...(maskGpexeIds() && a.gpexeAthleteId ? [["GPEXE athlete id", a.gpexeAthleteId]] : []),
     ...metricNamesTech([...shownResults.flatMap((r) => r.values || []), ...(a.skippedValues || [])]),
     ...((a.skippedValues || []).length ? [["Left-out codes", [...new Set(a.skippedValues.map((s) => s.reason))].join(", ")]] : []),
   ];

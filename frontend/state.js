@@ -683,6 +683,9 @@ export const emptyGpexeImportState = () => ({
   sourceAthletesRetrying: false,
   mapping: { open: false, choices: {}, confirming: false, sending: false, results: null, error: null },
   identity: emptyGpexeIdentityState(),
+  // In-memory positions of GPEXE athletes the source-athletes list does not
+  // hold yet (an administrator's labels; never stored, never the id).
+  extraOrdinals: {},
   // Batch import (Imports phase 4b): the Ready sessions chosen for one
   // POST /imports, by candidate id -> the previewHash of the list row that
   // was chosen (an opaque token, never shown); the confirmation step; the

@@ -1,8 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-06. Last `origin/main` commit checked: `2458ac5` (merge of PR #143,
-`feature/gpexe-identity-field-probe` → `main`; PR #141 `3790782` before it, recorded by the open docs
-PR #142).
+Last reviewed: 2026-10-07. Last `origin/main` commit checked: `bb3cfdd` (merge of PR #144,
+`feature/gpexe-athlete-identity` → `main`; PR #143 `2458ac5` before it).
 
 ## Active phase
 
@@ -944,6 +943,22 @@ existed before (both real checks failed with nothing written), so none is re-see
 evidence). An architecture test runs the real mapper on a bundle whose whole-session details record
 every key access and fails on any metric but the two.
 
+**That projection is merged and deployed** (PR #141, merge commit `3790782` on 2026-10-06 00:18:51 UTC,
+merged exactly from head `8fb925f` on the owner's order).
+- `/api/health` served `3790782` with `ok: true` three times in a row (00:19:55, 00:20:06, 00:20:17 UTC).
+- Without a login, these answered 401: the team status, one check, the candidates, one candidate, the
+  source athletes and the athlete links.
+- GET only; no check started, no GPEXE request. (Carried over from the open docs PR #142.)
+
+**The owner's re-test succeeded (2026-10-06, sanitized, as reported by the owner).** One check for
+05.10.2026 – 05.10.2026 ended `succeeded`.
+- It found 1 GPEXE session: 1 not seen by OptiMove before, 0 changed, 0 unchanged. GPEXE Team ID 980.
+- The switch stayed off. There was no Link athletes and no Import, and the check was not repeated.
+- This is the first successful check through the bound connection.
+- *Inferred from the counts and the code, not read from the deployed database:* one candidate of that
+  session is stored for the team, with its preview and its projected snapshot. The Imports screen lists it
+  under *Needs attention*.
+
 **F3c2g — the importer's credential resolver, the strict transition from `GPEXE_API_TOKEN` and
 migration v31 — is merged and deployed** (PR #137, merge commit `6382d25` on 2026-10-04 21:58:03 UTC,
 merged exactly from head `30c9600` after the owner's external review in five rounds — round 5 READY
@@ -1119,6 +1134,38 @@ Technical details.
       deleted with the identities, and no automatic retry. It is built in v32 (still unapplied) with a
       deterministic test of more than 50 athletes and four killed mutations.
     - `pool.connect()` stays the existing hardening task.
+  - **Owner's external review of `407c8c1` (2026-10-07): READY**, with no BLOCKER, HIGH or MEDIUM.
+- **PR #144 is merged and deployed.**
+  - Reviewed head `407c8c1`, merge commit `bb3cfdd` (parents `2458ac5` and `407c8c1`) on 2026-10-07 at
+    07:52:33 UTC, merged exactly from that head on the owner's order.
+  - `/api/health` first served `bb3cfdd` with `ok: true` at 07:53:33 UTC, then three times in a row
+    (07:53:43, 07:53:54 and 07:54:05 UTC).
+  - Without a login, with the zero UUID and no real data, these answered 401: `GET …/athlete-identities`,
+    and `POST …/athlete-identities/loads` both with `{}` and without a body.
+  - **v32 on the deployed database is inferred** from the server starting after the migration step. It was
+    not queried with SQL.
+  - **No identity load and no GPEXE request was made**, at the merge, the deploy or since. Render and the
+    import switch were not touched.
+- **Production-use gate (closed):** the first real identity load is forbidden until the owner separately
+  confirms the legal basis and the notice for processing names and dates of birth, minors included. The UI
+  may be deployed, but *Load names and dates of birth* is not used until then.
+- **The GPEXE id on every administrator Imports screen** (owner order 2026-10-07; branch
+  `feature/gpexe-imports-id-masking` from `bb3cfdd`; not merged; frontend and docs only).
+  - **Rule:** outside Technical details, an administrator sees a GPEXE name (with "(GPEXE athlete N)" when
+    two GPEXE athletes share it), "Name not provided (GPEXE athlete N)", "Name not loaded (GPEXE athlete N)",
+    or "GPEXE athlete N" when the team has no stored identity. N is the place in the team's GPEXE athlete
+    list as the server orders it, not the id; an athlete that list does not hold yet gets the next free
+    number, in memory only. Numbers need not be consecutive inside one group; nothing of it is stored.
+  - **Where:** on the Imports page, Link athletes, the session review, the last-link notice,
+    confirmations, results, errors, aria-labels and the unlink question. The 13 places are listed in
+    `docs/ai/gpexe-imports-id-masking-discovery.md`.
+  - **Loading:** the administrator's Imports view reads the stored identities with the team (no GPEXE
+    request). They are dropped on leaving Imports or Training Load, a team or workspace switch, a status
+    without the identity right, or signing out; an identity answer still in flight never brings them back.
+    Only the state of a name load (in flight, its key, a result not confirmed) outlives a clear, so a lost
+    answer keeps its key for *Check result*.
+  - **Coach:** a coach's screens are unchanged and get no sign of a snapshot.
+  - **Unchanged:** backend, v32 and Link / Unlink.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1584,6 +1631,15 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #144 (`bb3cfdd`, merged 2026-10-07 07:52:33 UTC exactly from head `407c8c1`) is deployed:
+  `/api/health` served `bb3cfdd` with `ok: true` three times in a row (07:53:43–07:54:05 UTC); without a
+  login the identity GET and POST answered 401. **v32 on the deployed database is inferred** from the
+  migrator's successful start, not SQL proof. No identity load, no GPEXE request.
+- PR #141 (`3790782`, merged 2026-10-06 00:18:51 UTC exactly from head `8fb925f`) is deployed:
+  `/api/health` served `3790782` with `ok: true` three times in a row (00:19:55–00:20:17 UTC); without a
+  login the team status, one check, the candidates, one candidate, the source athletes and the athlete
+  links answered 401. No migration, no route change. The owner's one-date re-test then succeeded (one
+  session found; nothing linked or imported). (Carried over from PR #142.)
 - PR #143 (`2458ac5`, merged 2026-10-06 13:22:52 UTC exactly from head `9ec076f`) is deployed:
   `/api/health` served `2458ac5` with `ok: true` three times in a row (13:24:15–13:24:36 UTC). Docs and
   probe only: no migration, no route change; v31 stays the last migration inferred on the deployed
@@ -1744,13 +1800,28 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
-- **GPEXE identity follow-ups (found in the identity implementation, 2026-10-06, not scheduled):**
-  (1) the single-athlete link from a session's review shows no GPEXE name or date of birth yet (only
-  the Link athletes screen does); (2) the Imports page's list "GPEXE athletes linked to this team" keeps
-  the GPEXE id (the identity lives in the open Link athletes screen only), and so does the last-link
-  notice. Owner, 2026-10-07: the id rule of PR #144 covers Link athletes. Hiding the id on the other
-  Imports surfaces is a separate follow-up; it **must be finished before a wider administrator pilot**,
-  and it does not block PR #144.
+- **GPEXE identity follow-up (not scheduled):** the single-athlete link from a session's review names the
+  athlete by its GPEXE name or label since the id-masking branch, but it shows no date of birth or
+  date-of-birth conflict warning (only Link athletes does). The id on the other Imports surfaces is handled
+  by the id-masking branch (see the active phase).
+
+- **Imports screen follow-ups found at the first successful check** (code review, 2026-10-06; frontend
+  only, not scheduled; carried over from the open docs PR #142):
+  1. After a check ends, also re-read the source-athletes list. `pollGpexeCheck` reloads only the status
+     and the candidates, so the *Next step* line and *Link athletes (N)* miss the unlinked athletes
+     without a page reload. The Link athletes screen can then show "Find new sessions first" for a
+     session that was just found.
+  2. A session kept in *Needs attention* by an open reason (`no_linked_athlete`) should not show the
+     badge *Up to date* and "Nothing new to import - no action needed." in its review.
+
+  Each needs a frontend test.
+- **Gates before any athlete link is written** (carried over from PR #142; owner-run, read-only, on a
+  separate order):
+  - **(1)** the production-readiness count of 2026-09-24 on the deployed `gpexe_athlete_links`:
+    non-canonical ids, expected 0. The owner reports only the number.
+  - **(2)** the helper values (Time, Distance, Top speed) match GPEXE's own view of the same session for
+    two or three athletes. That the `rest_v1` numbers have the units the mapper assumes for e03 is not
+    verified. If they do not match, a code fix of the units comes first.
 
 - **Backend hardening: an idempotent Create of a source connection** (owner, 2026-10-05, at the
   external review of PR #138). `POST /api/training-load/sources/:source/connections` has no
@@ -1987,13 +2058,17 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141, recorded by the open docs
-PR #142) and the identity probe (PR #143) are merged and deployed. Next: the owner's external review of
-the identity implementation (branch `feature/gpexe-athlete-identity`, migration v32; external-review
-triggers 1 and 2). After its merge and deploy, and on a separate order, the owner may load the names
-once on the deployed Link athletes screen (a GPEXE request). Then the first *Link athletes* after the
-gates of PR #142's runbook; then PR B (the F3c4 cut-over, see the active step); then the second
-owner-run procedure for one controlled real import; then **Phase 5a3c** (Complete and Needs review).
+PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143)
+and the identity implementation (PR #144, v32) are merged and deployed. Next steps, in order:
+1. The owner's external review of the id-masking branch `feature/gpexe-imports-id-masking`.
+2. The production-use gate: legal basis and notice, minors included, confirmed by the owner. Only then,
+   and on a separate order, one name load on the deployed Link athletes screen (a GPEXE request).
+3. The first *Link athletes*, after the two gates under Separate tasks.
+4. PR B, the F3c4 cut-over (see the active step).
+5. The second owner-run procedure for one controlled real import.
+6. **Phase 5a3c** (Complete and Needs review).
+
+The `pool.connect()` timeout is a separate backend-hardening PR.
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 

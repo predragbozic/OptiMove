@@ -102,6 +102,7 @@ function reset(workspace = { type: "club", scopeId: "club-1" }) {
   clearAllViewCache();
   state.currentUser = { id: "user-1", activeWorkspace: workspace };
   state.trainingLoad = emptyTrainingLoadState();
+  state.activeTab = "training-load"; // the Imports view lives in Training Load
   confirmAnswer = true;
   confirmQuestions = [];
   fetchCalls = [];
@@ -136,17 +137,19 @@ test("an administrator: opening the screen reads the stored identities (no-store
   reset();
   responder = server();
   await openMapping();
-  assert.equal(identityCalls().length, 1);
-  assert.equal(identityCalls()[0].method, "GET");
-  assert.equal(identityCalls()[0].cache, "no-store");
+  // The Imports view reads them for an administrator, and opening Link athletes reads them again.
+  assert.equal(identityCalls().length, 2, "exactly two reads: with the Imports team, and when Link athletes opens");
+  assert.ok(identityCalls().every((c) => c.method === "GET" && c.cache === "no-store"));
   const html = mappingHtml();
   const visible = outsideTech(html);
-  assert.match(visible, /<strong>Mira Zedova<\/strong>\s*<span class="gpexe-map-born">Born 03\.02\.2001<\/span>/);
-  assert.match(visible, /<strong>Mira Zedova<\/strong>\s*<span class="gpexe-map-born">Date of birth not provided<\/span>/);
-  assert.match(visible, /<strong>Name not provided<\/strong>\s*<span class="gpexe-map-born">Born 31\.12\.1999<\/span>/);
+  // A GPEXE name shared by two athletes carries each one's place in the list.
+  const first = visible.match(/<strong>Mira Zedova \(GPEXE athlete (\d+)\)<\/strong>\s*<span class="gpexe-map-born">Born 03\.02\.2001<\/span>/);
+  const second = visible.match(/<strong>Mira Zedova \(GPEXE athlete (\d+)\)<\/strong>\s*<span class="gpexe-map-born">Date of birth not provided<\/span>/);
+  assert.ok(first && second && first[1] !== second[1], "the two same-name athletes stay distinct");
+  assert.match(visible, /<strong>Name not provided \(GPEXE athlete \d+\)<\/strong>\s*<span class="gpexe-map-born">Born 31\.12\.1999<\/span>/);
   assert.ok(!/GPEXE athlete 104|GPEXE athlete 105|GPEXE athlete 106/.test(visible), "a named row shows its id only under Technical details, also in its aria-label");
   assert.match(html, /<dt>GPEXE athlete id<\/dt><dd>104<\/dd>/);
-  assert.match(visible, /<strong>Name not loaded<\/strong>/, "with the identity view a row without an identity shows no id either");
+  assert.match(visible, /<strong>Name not loaded \(GPEXE athlete \d+\)<\/strong>/, "with the identity view a row without an identity shows no id either");
   assert.match(visible, /1 GPEXE athlete has no name loaded yet/);
   assert.match(visible, /data-action="training-load-gpexe-identity-open"[^>]*>Load names and dates of birth<\/button>/);
 });
@@ -166,7 +169,7 @@ test("a duplicate GPEXE name is warned on both rows; choosing an OptiMove athlet
   await act("training-load-gpexe-map-choose", { gpexeAthleteId: "104" }, { value: "ath-1" });
   await act("training-load-gpexe-map-confirm");
   html = mappingHtml();
-  assert.match(html, /<strong>Mira Zedova<\/strong> <span class="muted">\(Born 03\.02\.2001\)<\/span> → <strong>Ana Example<\/strong><span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name\.<\/span><span class="muted gpexe-map-born">Last seen [^<]*<\/span><span class="gpexe-map-caution" role="note">Check: the date of birth in GPEXE differs/);
+  assert.match(html, /<strong>Mira Zedova \(GPEXE athlete \d+\)<\/strong> <span class="muted">\(Born 03\.02\.2001\)<\/span> → <strong>Ana Example<\/strong><span class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name\.<\/span><span class="muted gpexe-map-born">Last seen [^<]*<\/span><span class="gpexe-map-caution" role="note">Check: the date of birth in GPEXE differs/);
   assert.match(html, /OptiMove warns only when both dates of birth are known and differ\. No warning does not mean they match\./);
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-links") && c.method === "POST").length, 0, "nothing linked before Link");
   await act("training-load-gpexe-map-send");
@@ -201,7 +204,8 @@ test("the load: the confirmation says at most how many, read-only and 14 days be
   assert.match(after, /Read 2 athletes from GPEXE\. Where GPEXE gives no name or date of birth, the athlete(&#039;|')s row says so\. GPEXE has no record for 1 athlete; it stays without a name and can be loaded again after 24 hours\. GPEXE stopped answering before every athlete was read\. 3 athletes are still without a name - load again to read them\. 1 date of birth was in a form OptiMove does not accept and is shown as not provided\./);
   const notice = after.match(/<p class="gpexe-notice" role="status">([^<]*)<\/p>/)[1];
   assert.ok(!/Mira|Zedova|104|2001/.test(notice), "the result names counts only");
-  assert.equal(identityCalls().filter((c) => c.method === "GET").length, 2, "the identities are read again after the load");
+  assert.ok(identityCalls().filter((c) => c.method === "GET").length >= 2, "the identities are read again after the load");
+  assert.ok(fetchCalls.findLastIndex((c) => c.url.endsWith("/athlete-identities")) > fetchCalls.findIndex((c) => c.url.endsWith("/athlete-identities/loads")), "a read follows the load");
 });
 
 test("a lost answer is 'Result not confirmed' with Check result: nothing is resent by itself, every link control is off meanwhile, Check result repeats the same requestKey, 'still running' keeps the marker, and the saved answer clears it", async () => {
@@ -303,21 +307,25 @@ test("locks: while a link is sent, or its confirmation is open, the load button 
   await sending;
 });
 
-test("the identity lives only in memory: Close drops it, a team switch drops it, a workspace switch drops it, and no browser storage is ever touched (a static scan of the three Imports modules agrees)", async () => {
+test("the identity lives only in the Imports view's memory: closing Link athletes keeps it for the other Imports screens; leaving Imports, a team switch and a workspace switch drop it; no browser storage is ever touched (a static scan of the three Imports modules agrees)", async () => {
   reset();
-  responder = server();
+  // Team B answers its own list (one athlete foreign to team A), so a stale team A list would show.
+  const TEAM_B_IDENTITIES = { ...IDENTITIES, identities: [{ gpexeAthleteId: "999", name: "Other Team", birthDate: null }] };
+  responder = server({ identities: (call) => ({ status: 200, body: call.url.includes(TEAM_B) ? TEAM_B_IDENTITIES : IDENTITIES }) });
   await openMapping();
   assert.ok(state.trainingLoad.gpexe.identity.list);
   await act("training-load-gpexe-map-close");
-  assert.equal(state.trainingLoad.gpexe.identity.list, null);
-  assert.ok(!/Mira Zedova/.test(renderTrainingLoadCoachHtml()));
-  await act("training-load-gpexe-map-open");
-  assert.ok(state.trainingLoad.gpexe.identity.list, "reopening reads the stored identities again (no GPEXE request)");
+  assert.ok(state.trainingLoad.gpexe.identity.list, "the Imports view keeps the names for its other screens");
+  await act("training-load-section", { section: "today" });
+  assert.equal(state.trainingLoad.gpexe.identity.list, null, "leaving Imports drops them");
+  await act("training-load-section", { section: "imports" });
+  assert.ok(state.trainingLoad.gpexe.identity.list, "entering Imports again reads the stored names again (no GPEXE request)");
   await act("training-load-gpexe-team", {}, { value: TEAM_B });
-  if (state.trainingLoad.gpexe.teamId === TEAM_B) assert.equal(state.trainingLoad.gpexe.identity.list, null, "a team switch drops it");
-  await act("training-load-gpexe-map-open");
+  assert.equal(state.trainingLoad.gpexe.teamId, TEAM_B);
+  const teamBIds = Object.keys(state.trainingLoad.gpexe.identity.list?.byId || {});
+  assert.ok(teamBIds.every((id) => id === "999"), `a team switch drops the other team's names: ${teamBIds.join(",")}`);
   resetTrainingLoadForWorkspaceChange();
-  assert.equal(state.trainingLoad.gpexe.identity.list, null, "a workspace switch drops it");
+  assert.equal(state.trainingLoad.gpexe.identity.list, null, "a workspace switch drops them");
   for (const file of ["gpexe-import-data.js", "gpexe-import-view.js", "gpexe-import-actions.js"]) {
     const source = fs.readFileSync(path.resolve(__dirname, "..", file), "utf8");
     assert.doesNotMatch(source, /localStorage|sessionStorage|indexedDB|caches\.|serviceWorker/, file);
@@ -347,14 +355,14 @@ test("with the identity view, no GPEXE id appears outside Technical details: not
   // Two athletes without a name (106: "Name not provided", 107: not loaded) never share one select label.
   const labels = ariaLabels(html).filter((l) => l.startsWith("Link the GPEXE athlete"));
   assert.equal(new Set(labels).size, labels.length, `every select label is distinct: ${labels.join(" | ")}`);
-  assert.match(outsideTech(html), /<strong>Name not loaded<\/strong>/, "a row without an identity is named without its id");
+  assert.match(outsideTech(html), /<strong>Name not loaded \(GPEXE athlete \d+\)<\/strong>/, "a row without an identity is named without its id");
   for (const id of ids) assert.match(html, new RegExp(`<dt>GPEXE athlete id</dt><dd>${id}</dd>`), `id ${id} is under Technical details`);
   // A stale choice: the error sentence names no id.
   await act("training-load-gpexe-map-choose", { gpexeAthleteId: "107" }, { value: "ath-2" });
   await act("training-load-gpexe-map-choose", { gpexeAthleteId: "104" }, { value: "ath-2" });
   await act("training-load-gpexe-map-confirm");
   html = mappingHtml();
-  assert.match(html, /chosen for two GPEXE athletes/);
+  assert.match(html, /chosen for the GPEXE athlete [^.]+ and [^.]+\. One athlete can be linked to one GPEXE athlete only\./);
   noIdOutside(html, "the error sentence");
   await act("training-load-gpexe-map-choose", { gpexeAthleteId: "104" }, { value: "" });
   await act("training-load-gpexe-map-confirm");
@@ -378,7 +386,7 @@ test("athletes GPEXE had no record for in the last 24 hours are a count only: a 
   const html = outsideTech(mappingHtml());
   assert.match(html, /2 athletes GPEXE had no record for are left out of loads for 24 hours, then can be loaded again\./);
   assert.match(html, /or GPEXE had no record for it in the last 24 hours/);
-  assert.match(html, /<strong>Name not loaded<\/strong>/, "the athlete's row is still unnamed");
+  assert.match(html, /<strong>Name not loaded \(GPEXE athlete \d+\)<\/strong>/, "the athlete's row is still unnamed");
 });
 
 test("a stale Review click while the name confirmation is open opens nothing (only one confirmation at a time)", async () => {

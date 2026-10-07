@@ -39,7 +39,8 @@ import {
   verifyGpexeApproval,
   cancelIdentityConfirm,
   checkIdentityLoad,
-  gpexeAthleteLabel,
+  gpexeAthleteSentence,
+  maskGpexeIds,
   identityBusy,
   identityViewer,
   loadGpexeIdentities,
@@ -56,11 +57,11 @@ function unlinkQuestion(gx, linkId) {
     return "Unlink this GPEXE athlete? Their next GPEXE sessions will be left out until linked again. Results already imported can't be changed here — contact a platform administrator.";
   }
   const name = link.athleteName;
-  if (gx.mapping?.open && gx.identity?.available) {
-    // On the Link athletes screen with GPEXE names loaded, the id stays in
+  if (maskGpexeIds(gx)) {
+    // An administrator's Imports view never shows a GPEXE id outside
     // Technical details.
-    const label = gpexeAthleteLabel(link.gpexeAthleteId, gx);
-    return `Unlink the GPEXE athlete "${label}" from ${name}? In sessions not imported yet, that GPEXE athlete will be left out until linked again. Results already imported stay with ${name}; if they are wrong, they can't be changed here — contact a platform administrator.`;
+    const who = gpexeAthleteSentence(link.gpexeAthleteId, gx);
+    return `Unlink ${who} from ${name}? In sessions not imported yet, that GPEXE athlete will be left out until linked again. Results already imported stay with ${name}; if they are wrong, they can't be changed here — contact a platform administrator.`;
   }
   const id = link.gpexeAthleteId;
   return `Unlink GPEXE athlete ${id} from ${name}? In sessions not imported yet, athlete ${id} will be left out until linked again. Results already imported stay with ${name}; if they are wrong, they can't be changed here — contact a platform administrator.`;
@@ -215,7 +216,7 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-map-close") {
     if (gx.mapping.sending || gx.identity.sending) return true;
-    if (gx.identity.unconfirmed && !globalThis.window?.confirm?.("The result of the last name load is not confirmed. Close anyway? Nothing is read from GPEXE again; you can open Link athletes later to see what was saved.")) return true;
+    if (gx.identity.unconfirmed && !globalThis.window?.confirm?.("The result of the last name load is not confirmed. Close anyway? Nothing is read from GPEXE again; the result stays unconfirmed, and Check result on Link athletes asks OptiMove what happened.")) return true;
     if (Object.keys(gx.mapping.choices).length && !globalThis.window?.confirm?.("Leave without linking the athletes you chose? Nothing was sent.")) return true;
     closeTeamMapping();
     renderTrainingLoad();
