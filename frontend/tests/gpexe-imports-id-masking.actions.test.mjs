@@ -37,6 +37,7 @@ const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js")
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
 const { setGpexePollDelayForTests } = await import("../gpexe-import-data.js");
+const { clearPendingIdentityLoads: clearPendingIdentityLoadsForReset } = await import("../gpexe-import-data.js");
 setGpexePollDelayForTests(() => Promise.resolve());
 
 const TEAM = "aaaaaaaa-0000-4000-8000-000000000001";
@@ -128,6 +129,7 @@ function reset(viewer, opts = {}) {
   state.currentUser = { id: "user-1", activeWorkspace: { type: "club", scopeId: "club-1" } };
   state.trainingLoad = emptyTrainingLoadState();
   state.activeTab = "training-load"; // the Imports view lives in Training Load
+  clearPendingIdentityLoadsForReset(); // a fresh sign-in: no unconfirmed name load of an earlier test
   confirmAnswer = false;
   confirmQuestions = [];
   selectValues = {};
