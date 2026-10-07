@@ -360,7 +360,9 @@ test("forgot password under a really exhausted pool: every account waits the one
   }
   const spread = Math.max(...Object.values(took)) - Math.min(...Object.values(took));
   assert.ok(Object.values(took).every((ms) => ms >= BOUND_MS - 50 && ms < BOUND_MS + 2_000), `each waits one bound: ${JSON.stringify(took)}`);
-  assert.ok(spread < 600, `no account-dependent wait: ${JSON.stringify(took)}`);
+  // Every account waits the same one bound, then the floor (its jitter is
+  // 120 ms): an extra bound for one account would exceed this.
+  assert.ok(spread < 250, `no account-dependent wait: ${JSON.stringify(took)}`);
 });
 
 test("forgot password releases its one client BEFORE the timing floor (and before the fire-and-forget email)", { timeout: 15_000 }, async () => {
@@ -384,7 +386,7 @@ test("forgot password releases its one client BEFORE the timing floor (and befor
   }
 });
 
-test("verification resend: an existing and a missing pending application take exactly ONE checkout each; with that checkout failing they answer the identical generic body and nothing is issued; the client is released before the email", { timeout: 15_000 }, async () => {
+test("verification resend: an existing and a missing pending application take exactly ONE checkout each; with that checkout failing they answer the identical generic body and nothing is issued", { timeout: 15_000 }, async () => {
   const a = await seedAccounts();
   const counts = {};
   for (const [name, email] of [["pending", a.pending], ["unknown", a.unknown]]) {
