@@ -1,6 +1,6 @@
 import { Router } from "express";
 import crypto from "node:crypto";
-import { isPoolCheckoutTimeout, pool, query } from "../db.js";
+import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT, query } from "../db.js";
 import {
   clearSessionCookie,
   createSession,
@@ -709,7 +709,10 @@ router.post("/password/forgot", async (req, res, next) => {
     // same generic answer as every other exit. The second checkout is reached
     // only for an active account, so a distinct 503 would tell which emails
     // have one. Nothing was issued or sent.
-    if (isPoolCheckoutTimeout(error) && !res.headersSent) return await respondGeneric();
+    if (isPoolCheckoutTimeout(error) && !res.headersSent) {
+      console.error(`[db] ${POOL_CHECKOUT_TIMEOUT}: POST /api/auth/password/forgot`);
+      return await respondGeneric();
+    }
     next(error);
   }
 });
@@ -1476,7 +1479,10 @@ router.post("/email-verifications/resend", async (req, res, next) => {
     // No free database connection within the checkout bound (db.js): the
     // same generic answer - the second checkout runs only when a pending
     // application exists, so a distinct 503 would reveal one.
-    if (isPoolCheckoutTimeout(error) && !res.headersSent) return genericResponse();
+    if (isPoolCheckoutTimeout(error) && !res.headersSent) {
+      console.error(`[db] ${POOL_CHECKOUT_TIMEOUT}: POST /api/auth/email-verifications/resend`);
+      return genericResponse();
+    }
     next(error);
   }
 });
