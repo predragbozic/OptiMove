@@ -39,7 +39,7 @@ export function connectionMessage(info, context = "") {
     return `${SOURCE_NAME} refused this username and password. Nothing was stored; check them and try once more (every attempt counts toward 5 in 15 minutes).`;
   }
   const BY_CODE = {
-    try_again: "Another change of this connection or of one of its teams is running (a test, a reconnect, a bind, an unbind, a check or an import). Try again when it has finished.",
+    try_again: "OptiMove is busy right now: another change of this connection or of one of its teams may be running (a test, a reconnect, a bind, an unbind, a check or an import), or the server is under load. Nothing was changed. Try again in a moment.",
     rights_changed: "Your administrator rights changed while the request ran. Nothing was stored. Reload the app.",
     team_setting_missing: "That OptiMove team has no approved GPEXE Team ID yet. A platform admin sets the pair under Settings > Data sources first.",
     team_setting_mismatch: "The chosen GPEXE team is not the one approved for that OptiMove team under Data sources. Nothing was bound.",

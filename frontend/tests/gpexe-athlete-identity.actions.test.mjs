@@ -522,9 +522,20 @@ test("a stated refusal on Check result removes the kept key; the kept state hold
   assert.ok(KEY.test(entry.requestKey));
   assert.ok(typeof entry.unconfirmed.checks === "number" && typeof entry.unconfirmed.running === "boolean");
   assert.equal(entry.unconfirmed.running, false, "a lost answer is kept as settled-not-confirmed, not as still in flight");
-  responder = server({ onLoad: () => ({ status: 409, body: { error: "identity_load_not_available", message: "x" } }) });
+  // A Check result refused for a reason that is not the original load's
+  // saved outcome (a busy server's try_again) says nothing about that load:
+  // still not confirmed, the same key kept.
+  const kept = entry.requestKey;
+  responder = server({ onLoad: () => ({ status: 409, body: { error: "try_again", message: "The server is busy right now. Your request was not carried out; try again in a moment." } }) });
   await act("training-load-gpexe-identity-check");
-  assert.equal(state.trainingLoad.gpexe.identity.unconfirmed, null, "a stated refusal settles it");
+  assert.ok(state.trainingLoad.gpexe.identity.unconfirmed, "a busy server's try_again on Check result keeps it not confirmed");
+  assert.equal(state.trainingLoad.gpexe.identity.requestKey, kept);
+  assert.equal(pendingIdentityLoadsSnapshot()[0]?.requestKey, kept, "the kept key stays");
+  // The server's saved outcome of the original load (a refusal it marks as
+  // replayed) settles it.
+  responder = server({ onLoad: () => ({ status: 409, body: { error: "source_auth_rejected", message: "x", replayed: true } }) });
+  await act("training-load-gpexe-identity-check");
+  assert.equal(state.trainingLoad.gpexe.identity.unconfirmed, null, "the original load's stated refusal settles it");
   assert.deepEqual(pendingIdentityLoadsSnapshot(), [], "and removes the kept key");
 
   await loseOneLoadOnTeamA();

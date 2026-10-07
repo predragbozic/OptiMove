@@ -587,7 +587,7 @@ export function acknowledgeQuestion(pending) {
   const create = pending?.action === "create" ? " If the connection was created after all, creating it again makes a second connection, which this screen cannot remove." : "";
   return `${head}${create} Continue?`;
 }
-const TRY_AGAIN_NOTICE = "Check result could not run: another change of this connection or of one of its teams was in progress (for example a test, a check or an import). Nothing was decided and the result is still not confirmed. Try Check result again in a minute.";
+const TRY_AGAIN_NOTICE = "Check result could not run: another change of this connection or of one of its teams may be in progress (for example a test, a check or an import), or the server is busy. Nothing was decided and the result is still not confirmed. Try Check result again in a minute.";
 const READ_FAILED_NOTICE = "The current state could not be read just now. Nothing was sent again, and the result is still not confirmed. Try Read current state again in a minute.";
 const LIST_READ_FAILED_NOTICE = "The club's connections could not be read just now. Nothing was sent again, and the result is still not confirmed. Try Read current state again in a minute.";
 const ACK_NOUN = Object.freeze({ connect: "Connect", reconnect: "Reconnect", test: "test" });

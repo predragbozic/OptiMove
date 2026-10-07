@@ -1372,10 +1372,10 @@ async function signOut() {
     // resetMessagesState() - a typed-but-not-yet-cleared search must never
     // be attributable to whichever account logs in next.
     clearAllViewCache();
-    resetMessagesState();
     // The unconfirmed GPEXE name loads (a request key per team, memory only)
     // belong to this sign-in alone.
     clearPendingIdentityLoads();
+    resetMessagesState();
     window.location.replace("/");
   }
 }

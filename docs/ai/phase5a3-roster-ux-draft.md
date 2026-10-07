@@ -244,7 +244,7 @@ When the roster answer flags `decisions_disagree`, the row shows `Two states` in
 | The activity was replaced and there is no current session the viewer can open (`activity_superseded`) | `This session was replaced and can no longer be changed here. Nothing was saved.` | **Back to activities** | **1** |
 | The viewer no longer has permission (403) | `Your access changed before this choice was saved. Nothing was saved.` | **Back to activities** | **1** |
 | The session is no longer available through this workspace (404) | `This session is not available any more. Nothing was saved.` | **Back to activities** | **1** |
-| Another roster operation holds the session (`roster_busy`) | `Someone else is saving this session. Try again. Nothing was saved.` | **Try again** after the automatic reread | **1** |
+| Another roster operation holds the session (`roster_busy`) | `This session or the server is busy right now. Try again. Nothing was saved.` | **Try again** after the automatic reread | **1** |
 | The server refused the write before it was committed (`internal_error`) | `Nothing was saved. Try again.` Technical details contain only the stable error code. | **Try again** | **1** |
 | A reason disappeared (`unknown_reason`) | `This reason is no longer available. Choose another. Nothing was saved.` | Keep the reason list open | **1** |
 | A state was already removed (`nothing_to_clear`) | `Ivan Marković has no state to remove any more.` + the current state after reload + `Nothing was saved.` | none | **0** |
@@ -305,7 +305,7 @@ Other outcomes follow section 7:
 - `revision_changed`: after the reload, `{coach} completed this session a moment ago. Nothing was saved.` only when the roster names that coach; otherwise `This session was changed a moment ago. Nothing was saved.` **[Show]** uses the reloaded roster;
 - `roster_incomplete`: `{n} athletes still need a state. Nothing was saved. [Show them]`;
 - `roster_empty`: `Nobody is on this session's roster, so it cannot be completed.`;
-- `roster_busy`: `Someone else is saving this session. Try again. Nothing was saved.`;
+- `roster_busy`: `This session or the server is busy right now. Try again. Nothing was saved.`;
 - `outcome_unknown`: `The completion result is not confirmed yet. [Check result]`, with the same `requestKey` and the screen locked against another Complete;
 - `internal_error`: `Nothing was completed. Try again.`;
 - 403/404 or a replaced session: the corresponding access/session message from section 7.

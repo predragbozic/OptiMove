@@ -1100,7 +1100,7 @@ function identityErrorText(error) {
   if (code === "identity_load_abandoned") return "The last load did not finish and saved nothing. You can load the names again.";
   if (code === "identity_load_running") return "Another load of GPEXE names is running for this team, possibly started by another administrator. Nothing was started. Load again when it has finished.";
   if (code === "source_auth_rejected") return "GPEXE refused the connection's credential, so nothing was saved. Until it is reconnected in Settings > Source connections, no search or load can run for this team.";
-  if (code === "try_again") return "OptiMove is busy with this team's GPEXE connection (a search, an import or a connection change). Try again in a moment; nothing was read.";
+  if (code === "try_again") return "OptiMove is busy right now (another change of this team's GPEXE connection, or the server itself). Nothing was saved; try again in a moment.";
   return errorText(error, "The names could not be loaded; nothing was saved.");
 }
 

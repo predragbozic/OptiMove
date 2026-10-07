@@ -1378,6 +1378,13 @@ async function postIdentityLoad(render, { check }) {
   else if (info.status === 404) outcome = { settled: true, gone: true, fields: { error: info } };
   else if (code === "identity_load_running" && !check && info.data?.replayed !== true) outcome = { settled: true, fields: { error: info } };
   else if (code === "identity_load_running") outcome = { settled: false, unconfirmed: { checks, running: true } };
+  // Check result asks about the ORIGINAL load: only the server's saved
+  // outcome of that key (a refusal it marks as replayed) settles it. Any
+  // other refusal - a busy server's try_again, a busy database, a coded 5xx -
+  // says nothing about the original load: it stays not confirmed, key kept.
+  // (request_key_reused - the key belongs to another binding or team - can
+  // never be answered here, so it settles like any stated refusal.)
+  else if (check && info.data?.replayed !== true && code !== "request_key_reused") outcome = { settled: false, unconfirmed: { checks, running: false } };
   else if (isDefiniteRefusal(info) || (info.status >= 500 && typeof code === "string" && code !== "outcome_unknown")) {
     outcome = { settled: true, fields: { error: info }, reread: code === "identity_load_abandoned" || code === "source_auth_rejected" };
   } else outcome = { settled: false, unconfirmed: { checks, running: false } };

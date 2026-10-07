@@ -169,7 +169,7 @@ function refusalNotice(roster, result, ctx) {
   if (code === "nothing_to_clear") {
     return { tone: "refused", text: `${name} has no state to remove any more (now: ${currentText(roster, data.current)}). ${NOTHING_SAVED}`, action: null, code };
   }
-  if (code === "roster_busy") return { tone: "refused", text: `Someone else is saving this session. Try again. ${NOTHING_SAVED}`, action: TRY_AGAIN, code };
+  if (code === "roster_busy") return { tone: "refused", text: `This session or the server is busy right now. Try again. ${NOTHING_SAVED}`, action: TRY_AGAIN, code };
   if (code === "unknown_reason") return { tone: "refused", text: `This reason is no longer available. Choose another. ${NOTHING_SAVED}`, action: null, code, keepPicker: true };
   if (code === "too_many_athletes") return { tone: "refused", text: `Choose at most ${MAX_BULK_ATHLETES} athletes at once. ${NOTHING_SAVED}`, action: null, code };
   if (code === "bulk_conflict") {
