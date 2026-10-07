@@ -245,7 +245,7 @@ function rosterCommandRoute(run) {
       // (db.js): the command's first step, before anything was written -
       // the roster's own busy answer.
       if (isPoolCheckoutTimeout(error)) {
-        console.error(`[roster] ${req.method} ${req.path} failed: ${POOL_CHECKOUT_TIMEOUT}`);
+        console.error(`[db] ${POOL_CHECKOUT_TIMEOUT}: ${req.method} ${String(req.baseUrl || "")}${String(req.route?.path || "")}`);
         return res.status(503).json({ error: "roster_busy", message: "The session is being changed. Try again." });
       }
       console.error(`[roster] ${req.method} ${req.path} failed: ${error?.code ?? ""} ${error?.message}`);

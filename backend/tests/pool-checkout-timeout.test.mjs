@@ -105,6 +105,8 @@ async function holdAll() {
   return held;
 }
 const timeoutError = () => new Error("timeout exceeded when trying to connect");
+// Only pool.connect() fails: the session lookup (pool.query) still works.
+const promiseCheckoutsFail = (form) => (form === "promise" ? timeoutError() : null);
 function noLeakInLogs(where) {
   for (const line of logLines) {
     assert.ok(!line.includes(MARKER_BODY), `${where}: a log line carries the request body`);
@@ -166,7 +168,7 @@ test("the process stays alive and answers: with the pool exhausted, a request ge
 
 test("a route that checks out before its own try (Express 4 would drop the rejection): the timeout reaches the error handler as 503, never an unhandled rejection that ends the process", { timeout: 10_000 }, async () => {
   const user = await platformAdmin();
-  dbModule.setPoolCheckoutFaultForTests(timeoutError);
+  dbModule.setPoolCheckoutFaultForTests(promiseCheckoutsFail);
   const res = await call(`/api/tests/assignments/${ZERO}/submit`, { method: "POST", cookie: user.cookie, body: { values: {}, note: MARKER_BODY } });
   dbModule.setPoolCheckoutFaultForTests(null);
   assert.equal(res.status, 503);
@@ -178,7 +180,7 @@ test("a route that checks out before its own try (Express 4 would drop the rejec
 test("the source-connection routes (create, Test, Unbind), the importer's link and the identity read answer their stable try_again; the roster command answers roster_busy", { timeout: 10_000 }, async () => {
   const user = await platformAdmin();
   const { club, team } = await clubAndTeam();
-  dbModule.setPoolCheckoutFaultForTests(timeoutError);
+  dbModule.setPoolCheckoutFaultForTests(promiseCheckoutsFail);
   try {
     const cases = [
       ["source create", "/api/training-load/sources/gpexe/connections", "POST", { ownerScope: "club", ownerClubId: club, hostKey: "server3", accountLabel: "Club account", credentialKind: "exchanged_token" }],
@@ -190,7 +192,7 @@ test("the source-connection routes (create, Test, Unbind), the importer's link a
     for (const [name, path, method, body] of cases) {
       const res = await call(path, { method, cookie: user.cookie, body });
       assert.equal(res.status, 409, `${name}: ${res.status} ${res.text}`);
-      assert.deepEqual(res.body, { error: "try_again", message: "The server is busy right now. Nothing was changed; try again in a moment." }, name);
+      assert.deepEqual(res.body, { error: "try_again", message: "The server is busy right now. Your request was not carried out; try again in a moment." }, name);
       assert.equal(res.headers.get("retry-after"), "5", name);
     }
     const roster = await call(`/api/training-activity/${ZERO}/roster/${ZERO}/decision`, { method: "PUT", cookie: user.cookie, body: { requestKey: crypto.randomUUID(), kind: "participated_no_values", expectedDecisionId: null } });
@@ -245,4 +247,68 @@ test("a new connection that opens only after its waiter timed out is released at
   assert.equal(late, null, "the waiter never received the late client");
   assert.equal(appPool.totalCount - appPool.idleCount, held.length, "the late client went back to the pool; only the clients still held are checked out");
   for (const client of held) client.release();
+});
+
+// The auth routes whose answers must not tell accounts apart (security
+// review of f7636e0): a checkout that runs only for a correct password, an
+// active account or a pending application must not turn a busy pool into an
+// oracle.
+function failAfterFirst() {
+  let n = 0;
+  return () => { n += 1; return n > 1 ? timeoutError() : null; };
+}
+
+test("login takes ONE checkout before any decision: when every later checkout times out, a correct password still signs in and a wrong one is the usual 401; when the checkout itself times out, a correct and a wrong password get the identical 503", { timeout: 10_000 }, async () => {
+  const { hashPassword } = await import("../src/auth.js");
+  const email = `login-${uid()}@test.local`;
+  const password = "Correct-Horse-Battery-9";
+  await q(`insert into public.users (email, full_name, display_name, password_hash, is_active) values ($1, 'Login Test', 'Login Test', $2, true)`, [email, hashPassword(password)]);
+  const login = (pw) => call("/api/auth/login", { method: "POST", body: { email, password: pw } });
+
+  dbModule.setPoolCheckoutFaultForTests(failAfterFirst());
+  const right = await login(password);
+  dbModule.setPoolCheckoutFaultForTests(failAfterFirst());
+  const wrong = await login("Wrong-password-1");
+  dbModule.setPoolCheckoutFaultForTests(null);
+  assert.equal(right.status, 200, `a correct password needs no second checkout: ${right.text}`);
+  assert.equal(wrong.status, 401);
+
+  dbModule.setPoolCheckoutFaultForTests(() => timeoutError());
+  const rightBusy = await login(password);
+  const wrongBusy = await login("Wrong-password-1");
+  dbModule.setPoolCheckoutFaultForTests(null);
+  assert.equal(rightBusy.status, 503);
+  assert.deepEqual([rightBusy.status, rightBusy.body], [wrongBusy.status, wrongBusy.body], "a busy pool answers the same whatever the password");
+  noLeakInLogs("login");
+});
+
+test("forgot password and the verification resend answer the same generic body for an existing account (or pending application) whose second checkout times out as for an unknown email", { timeout: 10_000 }, async () => {
+  const active = `forgot-${uid()}@test.local`;
+  await q(`insert into public.users (email, full_name, display_name, is_active) values ($1, 'Forgot Test', 'Forgot Test', true)`, [active]);
+  const unknown = `nobody-${uid()}@test.local`;
+  const forgot = (email) => call("/api/auth/password/forgot", { method: "POST", body: { email } });
+  const unknownAnswer = await forgot(unknown);
+  dbModule.setPoolCheckoutFaultForTests(failAfterFirst());
+  const activeAnswer = await forgot(active);
+  dbModule.setPoolCheckoutFaultForTests(null);
+  assert.equal(unknownAnswer.status, 200);
+  assert.deepEqual([activeAnswer.status, activeAnswer.body], [unknownAnswer.status, unknownAnswer.body], "forgot: the same generic answer");
+
+  const pending = `pending-${uid()}@test.local`;
+  // The disposable database carries the GPEXE migration set only. The
+  // resend's first step reads just these columns, and its second checkout is
+  // the one that fails here, so a minimal table of this disposable database
+  // is enough when the real one is missing.
+  if (!(await q(`select to_regclass('public.athlete_join_applications') as t`))[0].t) {
+    await q(`create table public.athlete_join_applications (id uuid primary key default gen_random_uuid(), join_link_id uuid not null, email text not null, applicant_user_id uuid, status text not null default 'pending', submitted_at timestamptz not null default now())`);
+  }
+  await q(`insert into public.athlete_join_applications (join_link_id, email) values ($1, $2)`, [crypto.randomUUID(), pending]);
+  const resend = (email) => call("/api/auth/email-verifications/resend", { method: "POST", body: { email } });
+  const resendUnknown = await resend(unknown);
+  dbModule.setPoolCheckoutFaultForTests(failAfterFirst());
+  const resendPending = await resend(pending);
+  dbModule.setPoolCheckoutFaultForTests(null);
+  assert.equal(resendUnknown.status, 200);
+  assert.deepEqual([resendPending.status, resendPending.body], [resendUnknown.status, resendUnknown.body], "resend: the same generic answer");
+  noLeakInLogs("forgot / resend");
 });

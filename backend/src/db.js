@@ -60,12 +60,21 @@ const baseConnect = pool.connect.bind(pool);
 let checkoutFault = null;
 pool.connect = function connect(callback) {
   if (typeof callback === "function") {
+    if (checkoutFault) {
+      // Tests only (see setPoolCheckoutFaultForTests).
+      const fault = checkoutFault("callback");
+      if (fault) {
+        const error = markCheckoutError(fault);
+        process.nextTick(() => callback(error, undefined, () => {}));
+        return undefined;
+      }
+    }
     return baseConnect((error, client, done) => callback(markCheckoutError(error), client, done));
   }
   if (checkoutFault) {
-    // Tests only: the next promise-form checkout fails the way pg-pool fails
-    // a timed-out one (its own sentence, no code), through the same marking.
-    const fault = checkoutFault();
+    // Tests only: the checkout fails the way pg-pool fails a timed-out one
+    // (its own sentence, no code), through the same marking.
+    const fault = checkoutFault("promise");
     if (fault) return Promise.reject(markCheckoutError(fault));
   }
   return baseConnect().catch((error) => {
@@ -73,9 +82,9 @@ pool.connect = function connect(callback) {
   });
 };
 
-// Tests only: fn() is asked before every promise-form checkout and returns an
-// Error to fail it with, or null to check out normally. pool.query() (the
-// callback form, used by the session lookup) is never affected.
+// Tests only: fn(form) is asked before every checkout - form "promise" for
+// pool.connect(), "callback" for pool.query() and a callback connect - and
+// returns an Error to fail it with, or null to check out normally.
 export function setPoolCheckoutFaultForTests(fn) {
   checkoutFault = typeof fn === "function" ? fn : null;
 }

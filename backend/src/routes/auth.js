@@ -1,6 +1,6 @@
 import { Router } from "express";
 import crypto from "node:crypto";
-import { pool, query } from "../db.js";
+import { isPoolCheckoutTimeout, pool, query } from "../db.js";
 import {
   clearSessionCookie,
   createSession,
@@ -502,31 +502,41 @@ router.post("/login", async (req, res, next) => {
     const password = String(req.body?.password || "");
     if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
 
-    // Look up without filtering is_active first: a wrong password must always
-    // return the same generic error whether or not the account is disabled,
-    // so a login attempt can never be used to probe which emails exist or
-    // which accounts are active. Only after the password is proven correct
-    // do we reveal the more specific "this account is disabled" message.
-    const result = await query(
-      `
-      select id, email, full_name, display_name, role_hint, password_hash, is_active
-      from public.users
-      where lower(email) = $1
-      limit 1
-      `,
-      [email],
-    );
-    const user = result.rows[0];
-    if (!user || !verifyPassword(password, user.password_hash)) {
-      return res.status(401).json({ error: "Invalid email or password." });
-    }
-    if (!user.is_active) {
-      return res.status(403).json({ error: "This account has been disabled. Contact your coach or platform admin." });
-    }
+    // One checkout for the lookup AND the session insert, taken before
+    // anything is decided: when the pool has no free connection within its
+    // bound (db.js) every caller gets the same 503, whatever the password -
+    // a second checkout reached only after a correct password would make a
+    // busy pool tell a correct password from a wrong one.
+    const client = await pool.connect();
+    try {
+      // Look up without filtering is_active first: a wrong password must always
+      // return the same generic error whether or not the account is disabled,
+      // so a login attempt can never be used to probe which emails exist or
+      // which accounts are active. Only after the password is proven correct
+      // do we reveal the more specific "this account is disabled" message.
+      const result = await client.query(
+        `
+        select id, email, full_name, display_name, role_hint, password_hash, is_active
+        from public.users
+        where lower(email) = $1
+        limit 1
+        `,
+        [email],
+      );
+      const user = result.rows[0];
+      if (!user || !verifyPassword(password, user.password_hash)) {
+        return res.status(401).json({ error: "Invalid email or password." });
+      }
+      if (!user.is_active) {
+        return res.status(403).json({ error: "This account has been disabled. Contact your coach or platform admin." });
+      }
 
-    const token = await createSession(user.id);
-    res.setHeader("Set-Cookie", sessionCookie(token, req.secure || req.headers["x-forwarded-proto"] === "https"));
-    res.json({ user: publicUser(user) });
+      const token = await createSession(user.id, client);
+      res.setHeader("Set-Cookie", sessionCookie(token, req.secure || req.headers["x-forwarded-proto"] === "https"));
+      res.json({ user: publicUser(user) });
+    } finally {
+      client.release();
+    }
   } catch (error) {
     next(error);
   }
@@ -695,6 +705,11 @@ router.post("/password/forgot", async (req, res, next) => {
     }
     return await respondGeneric();
   } catch (error) {
+    // No free database connection within the checkout bound (db.js): the
+    // same generic answer as every other exit. The second checkout is reached
+    // only for an active account, so a distinct 503 would tell which emails
+    // have one. Nothing was issued or sent.
+    if (isPoolCheckoutTimeout(error) && !res.headersSent) return await respondGeneric();
     next(error);
   }
 });
@@ -1458,6 +1473,10 @@ router.post("/email-verifications/resend", async (req, res, next) => {
     }
     return genericResponse();
   } catch (error) {
+    // No free database connection within the checkout bound (db.js): the
+    // same generic answer - the second checkout runs only when a pending
+    // application exists, so a distinct 503 would reveal one.
+    if (isPoolCheckoutTimeout(error) && !res.headersSent) return genericResponse();
     next(error);
   }
 });

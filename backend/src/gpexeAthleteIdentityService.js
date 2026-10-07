@@ -404,6 +404,7 @@ function mapResolveError(error) {
 
 // Marks a load failed in its own short, bounded transaction (never with a
 // value; the code is a stable word). Best effort: a failure is logged by code.
+// Returns true when the update ran, false when it could not.
 async function markFailed(requestId, code) {
   try {
     // A checkout that arrives after the bound is released at once.
@@ -427,12 +428,14 @@ async function markFailed(requestId, code) {
       );
       await client.query(`set statement_timeout = 0`);
       release();
+      return true;
     } catch (error) {
       release(true);
       throw error;
     }
   } catch (error) {
     console.error(`[gpexe-identity] a load could not be marked failed: ${error?.code ?? error?.name ?? ""}`);
+    return false;
   }
 }
 
@@ -540,14 +543,17 @@ export async function loadIdentities(teamId, { ctx, body }) {
   // 4. The write, under the locks that order it against an Unbind, a
   //    Reconnect, an archive and a change of the right. Its checkout is its
   //    first step: when the pool has no free connection within the bound
-  //    (db.js) nothing of the load was written, the request row is closed as
-  //    failed (best effort, bounded) and the answer is try_again.
+  //    (db.js) nothing of the load was written. The request row is closed as
+  //    failed (bounded) and the answer is try_again; when even that update
+  //    cannot run, the row stays running until the stale sweep, so the answer
+  //    is outcome_unknown instead: the client keeps the key and Check result
+  //    settles it (a fresh key would only meet identity_load_running).
   try {
     return await finalize({ teamId, ctx, facts, request, targets, outcome });
   } catch (error) {
     if (!isPoolCheckoutTimeout(error)) throw error;
-    await markFailed(request.id, "try_again");
-    throw refusal("try_again");
+    const closed = await markFailed(request.id, "try_again");
+    throw refusal(closed ? "try_again" : "outcome_unknown");
   }
 }
 

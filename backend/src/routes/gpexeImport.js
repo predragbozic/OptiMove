@@ -31,12 +31,13 @@ function adminViewerOf(req) {
 
 // The database pool had no free connection within its checkout bound (db.js).
 // In this module every checkout that is not caught by its own code is the
-// first step of an operation, before anything is written or sent, so the
-// answer is the module's own try_again; only the code and the route are logged.
+// first step of the requested operation, before any of it is written or
+// sent, so the answer is the module's own try_again; only the code and the
+// route template are logged.
 function poolBusy(req, res) {
   console.error(`[db] ${POOL_CHECKOUT_TIMEOUT}: ${req.method} ${String(req.baseUrl || "")}${String(req.route?.path || "")}`);
   res.setHeader("Retry-After", "5");
-  return res.status(409).json({ error: "try_again", message: "The server is busy right now. Nothing was changed; try again in a moment." });
+  return res.status(409).json({ error: "try_again", message: "The server is busy right now. Your request was not carried out; try again in a moment." });
 }
 
 function handle(fn) {
