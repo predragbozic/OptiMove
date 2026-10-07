@@ -3,7 +3,7 @@
 // and retention status (phase F1); approving a candidate, the only route
 // that writes measurements, an event and an activity (phase F2).
 import { Router } from "express";
-import { query } from "../db.js";
+import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT, query } from "../db.js";
 import { canApproveGpexeImport, resolveGpexeTeamAccess } from "../gpexeImportAccess.js";
 import { holdsClubAdminRole } from "../authz.js";
 import * as service from "../gpexeImportService.js";
@@ -29,11 +29,22 @@ function adminViewerOf(req) {
   return Boolean(access && (access.platformAdmin || (access.clubId && holdsClubAdminRole(req.authz, access.clubId))));
 }
 
+// The database pool had no free connection within its checkout bound (db.js).
+// In this module every checkout that is not caught by its own code is the
+// first step of an operation, before anything is written or sent, so the
+// answer is the module's own try_again; only the code and the route are logged.
+function poolBusy(req, res) {
+  console.error(`[db] ${POOL_CHECKOUT_TIMEOUT}: ${req.method} ${String(req.baseUrl || "")}${String(req.route?.path || "")}`);
+  res.setHeader("Retry-After", "5");
+  return res.status(409).json({ error: "try_again", message: "The server is busy right now. Nothing was changed; try again in a moment." });
+}
+
 function handle(fn) {
   return async (req, res, next) => {
     try {
       await fn(req, res);
     } catch (error) {
+      if (isPoolCheckoutTimeout(error) && !res.headersSent) return poolBusy(req, res);
       if (error instanceof service.GpexeImportServiceError) {
         if (error.status === 404) return notFound(res);
         // Only the known detail fields, so a detail can never replace error/message.
@@ -234,6 +245,7 @@ function identityHandle(fn) {
       if (!basis) return notFound(res);
       await fn(req, res, access, { userId: String(req.user.id), basis });
     } catch (error) {
+      if (isPoolCheckoutTimeout(error) && !res.headersSent) return poolBusy(req, res);
       if (error instanceof identity.GpexeIdentityError) {
         if (error.status === 404) return notFound(res);
         const { reason, replayed, requestKey } = error.details || {};

@@ -35,7 +35,7 @@
 //     shown or used and is deleted by the purge;
 //   * no name, date or athlete id in a log line, an audit row, an error, a
 //     URL or the load's answer (counts only).
-import { pool } from "./db.js";
+import { isPoolCheckoutTimeout, pool } from "./db.js";
 import { holdsClubAdminRole } from "./authz.js";
 import {
   IMPORT_SOURCE_SYSTEM, PATH_SOURCE_CONNECTION, SourceAdapterError, SourceImportResolveError,
@@ -538,8 +538,17 @@ export async function loadIdentities(teamId, { ctx, body }) {
   }
 
   // 4. The write, under the locks that order it against an Unbind, a
-  //    Reconnect, an archive and a change of the right.
-  return finalize({ teamId, ctx, facts, request, targets, outcome });
+  //    Reconnect, an archive and a change of the right. Its checkout is its
+  //    first step: when the pool has no free connection within the bound
+  //    (db.js) nothing of the load was written, the request row is closed as
+  //    failed (best effort, bounded) and the answer is try_again.
+  try {
+    return await finalize({ teamId, ctx, facts, request, targets, outcome });
+  } catch (error) {
+    if (!isPoolCheckoutTimeout(error)) throw error;
+    await markFailed(request.id, "try_again");
+    throw refusal("try_again");
+  }
 }
 
 // Up to three workers over the targets, inside the network budget. Returns

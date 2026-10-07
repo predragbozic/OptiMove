@@ -13,7 +13,7 @@
 // restore-verified backup of it exists (operational gate, recorded in
 // docs/runbooks/gpexe-in-app-import.md); nothing here checks or claims a
 // backup.
-import { pool, query } from "./db.js";
+import { isPoolCheckoutTimeout, pool, query } from "./db.js";
 import { canApproveGpexeImport } from "./gpexeImportAccess.js";
 import { createGpexeClient, GpexeClientError } from "./gpexeClient.js";
 import {
@@ -948,6 +948,9 @@ export async function getCandidate(teamId, candidateId) {
 
 function mapTriggerError(error, fallbackCode) {
   if (error instanceof GpexeImportServiceError) return error;
+  // No free database connection within the checkout bound (db.js): the
+  // write's first step, nothing written - the route answers try_again.
+  if (isPoolCheckoutTimeout(error)) return error;
   if (error.code === "23505") return new GpexeImportServiceError(409, "already_linked", "This GPEXE athlete or this OptiMove athlete is already linked in this team.");
   if (error.code === "42501") return new GpexeImportServiceError(403, "forbidden", "Not allowed.");
   if (error.code === "P0001") return new GpexeImportServiceError(409, fallbackCode, "The change was refused by the database rules.");
