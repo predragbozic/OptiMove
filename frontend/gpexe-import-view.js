@@ -1100,8 +1100,20 @@ function identityErrorText(error) {
   if (code === "identity_load_abandoned") return "The last load did not finish and saved nothing. You can load the names again.";
   if (code === "identity_load_running") return "Another load of GPEXE names is running for this team, possibly started by another administrator. Nothing was started. Load again when it has finished.";
   if (code === "source_auth_rejected") return "GPEXE refused the connection's credential, so nothing was saved. Until it is reconnected in Settings > Source connections, no search or load can run for this team.";
-  if (code === "try_again") return "OptiMove is busy with this team's GPEXE connection (a search, an import or a connection change). Try again in a moment; nothing was read.";
+  if (code === "try_again") return "OptiMove is busy right now (another change of this team's GPEXE connection, or the server itself). Nothing was saved; try again in a moment.";
   return errorText(error, "The names could not be loaded; nothing was saved.");
+}
+
+// A Check result the server refused for a reason other than the original
+// load's saved outcome: the load is still not confirmed, so these never say
+// that nothing was saved.
+function identityCheckRefusalText(refusal) {
+  const busy = refusal.code === "try_again" || refusal.code === "database_busy" || refusal.code === "roster_busy";
+  if (refusal.code === "source_connection_unavailable") {
+    return "Check result could not run: the team's GPEXE connection needs attention (test or reconnect it in Settings > Source connections). The result is still not confirmed.";
+  }
+  if (busy) return "Check result could not run because OptiMove or the server is busy. The result is still not confirmed; try Check result again in a moment.";
+  return "Check result could not run (the code is under Technical details). The result is still not confirmed; try Check result again in a moment.";
 }
 
 function renderIdentityPanelHtml(gx) {
@@ -1123,6 +1135,7 @@ function renderIdentityPanelHtml(gx) {
       <div class="gpexe-unknown" role="status">
         <p><strong>Result not confirmed.</strong> ${id.unconfirmed.running ? "The load is still running, or its result is not settled yet." : "The answer was lost, so we can't tell yet what was saved."} Check result asks OptiMove what happened; GPEXE is never read twice for this request.</p>
         <p class="muted">Linking is off until the result is confirmed. Closing Link athletes does not start over.</p>
+        ${id.unconfirmed.lastRefusal ? `<p class="gpexe-error" role="alert">${escapeHtml(identityCheckRefusalText(id.unconfirmed.lastRefusal))}</p>${techHtml([["HTTP status", id.unconfirmed.lastRefusal.status || "no answer"], ["Code", id.unconfirmed.lastRefusal.code], ["Reason", id.unconfirmed.lastRefusal.reason]])}` : ""}
         <div class="gpexe-link-actions"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-identity-check">Check result</button></div>
       </div>`;
   } else if (id.confirming) {

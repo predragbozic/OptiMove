@@ -16,6 +16,7 @@
 // anything, exactly like the rest of this app's write paths.
 import { Router } from "express";
 import { resolveActiveWorkspace } from "../workspace.js";
+import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 import { resolveActivityWorkspaceScope, activityScopeForWorkspace } from "../trainingActivityAccess.js";
 import {
   materializeActivityParticipant, materializeGroupFromExternalOccurrence, materializeGroupFromMetricEvent,
@@ -214,6 +215,9 @@ router.get("/:activityId/roster", async (req, res, next) => {
       if (error.status === 404) return res.status(404).json({ error: "notFound" });
       return res.status(error.status).json({ error: error.code, message: error.message });
     }
+    // No free database connection within the checkout bound: the global
+    // handler's stable 503 (db.js), never this route's generic 500.
+    if (isPoolCheckoutTimeout(error)) return next(error);
     // Logged only. Unlike respondToServiceError above, this route never
     // forwards a database message to the client.
     console.error(`[roster] read of activity ${req.params.activityId} failed: ${error?.code ?? ""} ${error?.message}`);
@@ -236,6 +240,13 @@ function rosterCommandRoute(run) {
       if (error instanceof RosterError) {
         if (error.status === 404) return res.status(404).json({ error: "notFound" });
         return res.status(error.status).json({ error: error.code, message: error.message, ...(error.details ?? {}) });
+      }
+      // The database pool had no free connection within its checkout bound
+      // (db.js): the command's first step, before anything was written -
+      // the roster's own busy answer.
+      if (isPoolCheckoutTimeout(error)) {
+        console.error(`[db] ${POOL_CHECKOUT_TIMEOUT}: ${req.method} ${String(req.baseUrl || "")}${String(req.route?.path || "")}`);
+        return res.status(503).json({ error: "roster_busy", message: "The session is being changed. Try again." });
       }
       console.error(`[roster] ${req.method} ${req.path} failed: ${error?.code ?? ""} ${error?.message}`);
       // Everything that reaches here failed before the COMMIT: a certain

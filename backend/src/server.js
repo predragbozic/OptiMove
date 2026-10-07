@@ -1,5 +1,8 @@
 import "dotenv/config";
 import express from "express";
+// Before any router is used: an async route handler's rejection reaches the
+// error handler below instead of ending the process (expressAsyncErrors.js).
+import "./expressAsyncErrors.js";
 import cors from "cors";
 import path from "node:path";
 import { existsSync } from "node:fs";
@@ -28,7 +31,7 @@ import gpexeImportRouter from "./routes/gpexeImport.js";
 import sourceConnectionsRouter from "./routes/sourceConnections.js";
 import { startGpexeRetentionSchedule } from "./gpexeImportService.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
-import { pool } from "./db.js";
+import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT } from "./db.js";
 import { realtimeRouter } from "./realtime.js";
 import { assertEmailConfigValid } from "./email.js";
 
@@ -169,7 +172,18 @@ app.use((req, res) => {
   res.status(404).json({ error: "Not found", path: req.path });
 });
 
-app.use((error, _req, res, _next) => {
+app.use((error, req, res, next) => {
+  // An answer already started cannot be replaced: Express's own handler
+  // closes the connection.
+  if (res.headersSent) return next(error);
+  // The database pool had no free connection within its checkout bound
+  // (db.js): a stable 503, never a stack. Only the code and the route are
+  // logged; nothing of the request.
+  if (isPoolCheckoutTimeout(error)) {
+    console.error(`[db] ${POOL_CHECKOUT_TIMEOUT}: ${req.method} ${String(req.baseUrl || "")}${String(req.route?.path || "")}`);
+    res.setHeader("Retry-After", "5");
+    return res.status(503).json({ error: "database_busy", message: "The server is busy right now. Try again in a moment." });
+  }
   // A body the JSON parser could not read: body-parser attaches the RAW
   // request text to the error (`body`) and its message can quote the input.
   // Such a body may carry a credential (the source-connection routes take a

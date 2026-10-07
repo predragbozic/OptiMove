@@ -156,7 +156,14 @@ export async function loadGpexeTeam(render) {
     gx.loading = false;
     // A status without the identity right (a role revoked meanwhile) drops
     // any name the view still held before anything is painted.
-    if (!identityViewer(gx)) clearGpexeIdentities({ keepOutcome: false });
+    if (!identityViewer(gx)) {
+      clearGpexeIdentities({ keepOutcome: false });
+      dropPendingIdentityLoad(teamId);
+    } else {
+      // The team's own name load whose result is not confirmed comes back
+      // with its key (a team or workspace change kept it).
+      restorePendingIdentityLoad(gx);
+    }
     finishLoad(gx, status, render);
     // An administrator's Imports view also holds the stored GPEXE names (no
     // GPEXE request): every screen of it names athletes without their id.
@@ -1269,6 +1276,7 @@ export async function loadGpexeIdentities(render) {
   } catch (error) {
     if (generation !== gx.generation || epoch !== identityEpoch) return;
     const info = errorInfo(error);
+    if (info.status === 404) dropPendingIdentityLoad(teamId);
     gx.identity = info.status === 404 ? { ...emptyGpexeIdentityState(), error: gx.identity.error } : { ...gx.identity, loading: false, readError: info };
   }
   render();
@@ -1303,6 +1311,40 @@ function identityResult(answer) {
   return { loaded: n(answer.loaded), notFound: n(answer.notFound), notRead: n(answer.notRead), stopped: Boolean(answer.stopCode), unrecognised: Number.isInteger(answer.unrecognisedBirthDates) ? answer.unrecognisedBirthDates : null, replayed: answer.replayed === true };
 }
 
+// The unconfirmed name loads of this sign-in, by OptiMove team, in memory
+// only (never browser storage): the request key and the Check result count -
+// never a name, a date of birth or a GPEXE id. A team or workspace change
+// keeps the entry, so Check result back on the same team repeats the same key;
+// another team never sees or sends it; nothing is sent by itself; a settled
+// load (an answer, a stated refusal, the 404) removes it; sign-out reloads the
+// page and clearPendingIdentityLoads() drops them all.
+const pendingIdentityLoads = new Map();
+function pendingIdentityKey(teamId) {
+  return `${state.currentUser?.id || ""}|${teamId}`;
+}
+function savePendingIdentityLoad(teamId, requestKey, unconfirmed) {
+  pendingIdentityLoads.set(pendingIdentityKey(teamId), {
+    requestKey,
+    unconfirmed: { checks: Number.isInteger(unconfirmed?.checks) ? unconfirmed.checks : 0, running: unconfirmed?.running === true },
+  });
+}
+function dropPendingIdentityLoad(teamId) {
+  pendingIdentityLoads.delete(pendingIdentityKey(teamId));
+}
+export function clearPendingIdentityLoads() {
+  pendingIdentityLoads.clear();
+}
+// A copy for the tests (the entries hold a key and a count only).
+export function pendingIdentityLoadsSnapshot() {
+  return [...pendingIdentityLoads.entries()].map(([key, value]) => ({ key, ...value, unconfirmed: { ...value.unconfirmed } }));
+}
+// The open team's own unconfirmed load, if any, back into the view.
+function restorePendingIdentityLoad(gx) {
+  const saved = pendingIdentityLoads.get(pendingIdentityKey(gx.teamId));
+  if (!saved || gx.identity.sending || gx.identity.unconfirmed) return;
+  gx.identity = { ...gx.identity, requestKey: saved.requestKey, unconfirmed: { ...saved.unconfirmed } };
+}
+
 // One POST with one requestKey: the confirmed load, or Check result (the
 // same key again after a lost answer). A double click sends one request; a
 // lost answer is never resent by itself.
@@ -1314,7 +1356,12 @@ async function postIdentityLoad(render, { check }) {
   const generation = gx.generation;
   const teamId = gx.teamId;
   const requestKey = gx.identity.requestKey || globalThis.crypto.randomUUID();
+  const priorChecks = gx.identity.unconfirmed?.checks || 0;
+  const priorRunning = gx.identity.unconfirmed?.running === true;
   gx.identity = { ...gx.identity, sending: true, confirming: false, requestKey, error: null, result: null };
+  // Until the answer arrives the load is not confirmed: a team change in the
+  // meantime keeps its key for this team.
+  savePendingIdentityLoad(teamId, requestKey, { checks: priorChecks, running: true });
   render();
   let answer = null;
   let info = null;
@@ -1323,53 +1370,66 @@ async function postIdentityLoad(render, { check }) {
   } catch (error) {
     info = errorInfo(error);
   }
-  if (generation !== gx.generation) return;
-  // The outcome of the load is recorded even after the view was cleared (the
-  // key must not be lost), but the names are read again only while an
-  // Imports view of this team is open now - the one that sent it, or one the
-  // administrator came back to (loadGpexeIdentities takes its own epoch, so a
-  // later clear still drops that read).
-  const viewOpen = () => identityViewer(gx) && gx.teamId === teamId && state.activeTab === "training-load" && state.trainingLoad?.section === "imports";
-  if (answer) {
-    gx.identity = { ...gx.identity, sending: false, requestKey: null, unconfirmed: null, result: identityResult(answer) };
-    render();
-    if (viewOpen()) await loadGpexeIdentities(render);
-    return;
+  // The outcome, decided once: settled (an answer, a stated refusal, the
+  // 404) or not confirmed (the key stays for Check result).
+  const checks = priorChecks + (check ? 1 : 0);
+  const code = info?.data?.error;
+  let outcome;
+  if (answer) outcome = { settled: true, fields: { result: identityResult(answer) }, reread: true };
+  else if (info.status === 404) outcome = { settled: true, gone: true, fields: { error: info } };
+  else if (code === "identity_load_running" && !check && info.data?.replayed !== true) outcome = { settled: true, fields: { error: info } };
+  else if (code === "identity_load_running") outcome = { settled: false, unconfirmed: { checks, running: true } };
+  // Check result asks about the ORIGINAL load: only the server's saved
+  // outcome of that key (a refusal it marks as replayed) settles it. Any
+  // other refusal - a busy server's try_again, a busy database, a coded 5xx -
+  // says nothing about the original load: it stays not confirmed, key kept.
+  // (request_key_reused - the key belongs to another binding or team - can
+  // never be answered here, so it settles like any stated refusal.)
+  // The refusal itself is shown in the box (its stable status, code and
+  // reason only - never a name or an id), and what was known of the load
+  // (still running or not) is kept: the refusal says nothing new about it.
+  // A refusal the server STATED (a coded 4xx, or a coded 5xx other than
+  // outcome_unknown) names its cause in the box. No answer, an abort, an
+  // uncoded 5xx or outcome_unknown says nothing about whether the request ran
+  // - it may itself have been the load - so it stays not confirmed with no
+  // claim at all.
+  else if (check && info.data?.replayed !== true && code !== "request_key_reused") {
+    const stated = isDefiniteRefusal(info) || (info.status >= 500 && typeof code === "string" && code !== "outcome_unknown");
+    const reason = typeof info.data?.reason === "string" && /^[a-z_]{1,64}$/.test(info.data.reason) ? info.data.reason : null;
+    outcome = stated
+      ? { settled: false, unconfirmed: { checks, running: priorRunning, lastRefusal: { status: Number(info.status) || 0, code: typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? code : null, reason } } }
+      : { settled: false, unconfirmed: { checks, running: false } };
   }
-  if (info.status === 404) {
+  else if (isDefiniteRefusal(info) || (info.status >= 500 && typeof code === "string" && code !== "outcome_unknown")) {
+    outcome = { settled: true, fields: { error: info }, reread: code === "identity_load_abandoned" || code === "source_auth_rejected" };
+  } else outcome = { settled: false, unconfirmed: { checks, running: false } };
+  if (outcome.settled) dropPendingIdentityLoad(teamId);
+  else savePendingIdentityLoad(teamId, requestKey, outcome.unconfirmed);
+
+  // The view to show it in: the one that sent it, or - after a team or
+  // workspace change and a return - the view of the same team open now.
+  // Another team's view is never touched.
+  const view = generation === gx.generation ? gx : g();
+  if (!view || view.teamId !== teamId || !identityViewer(view)) return;
+  if (view !== gx && view.identity.sending) return;
+  // The names are read again only while an Imports view of this team is open
+  // now (loadGpexeIdentities takes its own epoch, so a later clear still drops
+  // that read).
+  const viewOpen = () => identityViewer(view) && view.teamId === teamId && g() === view && state.activeTab === "training-load" && state.trainingLoad?.section === "imports";
+  if (outcome.gone) {
     // Not available any more (the binding ended, the right changed): nothing
     // of it stays on screen.
-    gx.identity = { ...emptyGpexeIdentityState(), error: info };
+    view.identity = { ...emptyGpexeIdentityState(), error: info };
     render();
     return;
   }
-  const code = info.data?.error;
-  const checks = (gx.identity.unconfirmed?.checks || 0) + (check ? 1 : 0);
-  if (code === "identity_load_running" && !check && info.data?.replayed !== true) {
-    // Another load of the team (perhaps another administrator's) is running:
-    // this one never started. A refusal; the next load gets a new key.
-    gx.identity = { ...gx.identity, sending: false, requestKey: null, unconfirmed: null, error: info };
+  if (outcome.settled) {
+    view.identity = { ...view.identity, sending: false, requestKey: null, unconfirmed: null, ...outcome.fields };
     render();
+    if (outcome.reread && viewOpen()) await loadGpexeIdentities(render);
     return;
   }
-  if (code === "identity_load_running") {
-    // Still running, or a lost answer of this key not yet settled: keep the
-    // key, offer Check result again.
-    gx.identity = { ...gx.identity, sending: false, unconfirmed: { checks, running: true } };
-    render();
-    return;
-  }
-  if (isDefiniteRefusal(info) || (info.status >= 500 && typeof code === "string" && code !== "outcome_unknown")) {
-    // A stated outcome: nothing was saved (the sentence says why). The next
-    // load gets a new key.
-    gx.identity = { ...gx.identity, sending: false, requestKey: null, unconfirmed: null, error: info };
-    render();
-    if (viewOpen() && (code === "identity_load_abandoned" || code === "source_auth_rejected")) await loadGpexeIdentities(render);
-    return;
-  }
-  // No answer, an abort, outcome_unknown or an uncoded 5xx: the result is not
-  // confirmed. The key stays for Check result; nothing is sent by itself.
-  gx.identity = { ...gx.identity, sending: false, unconfirmed: { checks, running: false } };
+  view.identity = { ...view.identity, sending: false, requestKey, unconfirmed: outcome.unconfirmed };
   render();
 }
 

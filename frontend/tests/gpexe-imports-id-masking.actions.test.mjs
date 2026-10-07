@@ -37,6 +37,7 @@ const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js")
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
 const { setGpexePollDelayForTests } = await import("../gpexe-import-data.js");
+const { clearPendingIdentityLoads: clearPendingIdentityLoadsForReset } = await import("../gpexe-import-data.js");
 setGpexePollDelayForTests(() => Promise.resolve());
 
 const TEAM = "aaaaaaaa-0000-4000-8000-000000000001";
@@ -128,6 +129,7 @@ function reset(viewer, opts = {}) {
   state.currentUser = { id: "user-1", activeWorkspace: { type: "club", scopeId: "club-1" } };
   state.trainingLoad = emptyTrainingLoadState();
   state.activeTab = "training-load"; // the Imports view lives in Training Load
+  clearPendingIdentityLoadsForReset(); // a fresh sign-in: no unconfirmed name load of an earlier test
   confirmAnswer = false;
   confirmQuestions = [];
   selectValues = {};
@@ -494,4 +496,38 @@ test("a name load that succeeds after the administrator left Training Load throu
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-identities")).length, reads, "no identity read on another tab");
   assert.equal(state.trainingLoad.gpexe.identity.list, null);
   assert.equal(state.trainingLoad.gpexe.identity.requestKey, null, "the load is settled");
+});
+
+test("the session review keeps a long unbroken name readable: the grid tracks may shrink and the athlete row wraps anywhere (55+ characters)", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const css = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "styles.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rule = (selector) => {
+    const all = [...css.matchAll(new RegExp(`(^|\n)([^{}]*?)\{([^{}]*)\}`, "g"))].filter((m) => m[2].split(",").map((s) => s.trim()).includes(selector));
+    return all.map((m) => m[3]).join("\n");
+  };
+  assert.match(rule(".gpexe-detail-body"), /grid-template-columns:\s*minmax\(0,\s*1fr\)/, "the dialog body's track can shrink below a long word");
+  assert.match(rule(".gpexe-detail-body > *"), /min-width:\s*0/);
+  assert.match(rule(".gpexe-athlete summary"), /grid-template-columns:\s*minmax\(0,\s*1fr\)/, "the athlete row's track can shrink");
+  assert.match(rule(".gpexe-athlete summary > span"), /overflow-wrap:\s*anywhere/, "the name wraps instead of being clipped");
+  assert.match(rule(".gpexe-athlete summary > span"), /min-width:\s*0/);
+  assert.match(rule(".gpexe-athletes .gpexe-values"), /overflow-wrap:\s*normal/, "the value tables keep their own sizing (they scroll, never break a metric name)");
+  // The full name is in the markup, not shortened.
+  const long = "A".repeat(56);
+  reset(VIEWERS["club admin"]);
+  state.trainingLoad = emptyTrainingLoadState();
+  state.activeTab = "training-load";
+  const base = server({ viewer: VIEWERS["club admin"] });
+  responder = async (call) => {
+    const answer = await base(call);
+    if (call.url === "/api/organization") return { status: 200, body: { ...ORG, athletes: ORG.athletes.map((a) => (a.id === "ath-1" ? { ...a, name: long } : a)) } };
+    if (call.url.endsWith("/candidates/cand-1")) {
+      const candidate = answer.body.candidate;
+      return { status: 200, body: { ...answer.body, candidate: { ...candidate, athletes: { ...candidate.athletes, "ath-1": { name: long } } } } };
+    }
+    return answer;
+  };
+  await openReview();
+  assert.ok(pageHtml().includes(`<strong>${long}</strong>`), "the whole name is rendered");
 });

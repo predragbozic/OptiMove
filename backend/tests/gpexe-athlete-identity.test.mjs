@@ -867,6 +867,44 @@ test("11. a lost COMMIT answer: when the COMMIT happened, the answer is the coun
   assert.equal(fresh.body.loaded, 2);
 });
 
+test("11b. a bounded pool checkout (db.js) at the write: when finalize cannot check out within the bound after the GPEXE reads, nothing is saved, the request row is closed as failed and the answer is try_again (a new key loads again); when even closing the row cannot check out, the answer is 503 outcome_unknown and the same key settles later (identity_load_running, then identity_load_abandoned) - never a second read", async () => {
+  const dbModule = await import("../src/db.js");
+  const timeout = () => new Error("timeout exceeded when trying to connect");
+  const at = (...names) => (form) => (form === "promise" && names.some((n) => new RegExp(`\\b${n} \\(`).test(new Error().stack)) ? timeout() : null);
+  try {
+    const a = await ready(2, 1701);
+    dbModule.setPoolCheckoutFaultForTests(at("finalize"));
+    const r = await load(a.o);
+    dbModule.setPoolCheckoutFaultForTests(null);
+    assert.deepEqual([r.status, r.body.error], [409, "try_again"], r.text);
+    assert.equal((await rowsOf(a.o.teamId)).length, 0, "nothing saved");
+    const [req] = await requestsOf(a.o.teamId);
+    assert.deepEqual([req.status, req.error_code], ["failed", "try_again"], "the request row was closed");
+    const again = await load(a.o);
+    assert.equal(again.status, 200, again.text);
+    assert.equal(again.body.loaded, 2, "a new key loads again");
+
+    const b = await ready(2, 1751);
+    const key = crypto.randomUUID();
+    dbModule.setPoolCheckoutFaultForTests(at("finalize", "markFailed"));
+    const u = await load(b.o, b.o.padmin.cookie, key);
+    dbModule.setPoolCheckoutFaultForTests(null);
+    assert.deepEqual([u.status, u.body.error], [503, "outcome_unknown"], u.text);
+    assert.equal((await rowsOf(b.o.teamId)).length, 0);
+    assert.equal((await requestsOf(b.o.teamId))[0].status, "running", "the row could not be closed");
+    const n = athleteCalls().length;
+    const replay = await load(b.o, b.o.padmin.cookie, key);
+    assert.deepEqual([replay.status, replay.body.error], [409, "identity_load_running"]);
+    identity.setIdentityTimingForTests({ staleSeconds: 0 });
+    await new Promise((r2) => setTimeout(r2, 50));
+    const stale = await load(b.o, b.o.padmin.cookie, key);
+    assert.deepEqual([stale.status, stale.body.error], [409, "identity_load_abandoned"]);
+    assert.equal(athleteCalls().length, n, "the same key is never read again");
+  } finally {
+    dbModule.setPoolCheckoutFaultForTests(null);
+  }
+});
+
 test("12. a change while GPEXE is read: a Reconnect-like credential change, an Unbind, a team archive, a club archive and a revoked right during the reads each stop the load with nothing saved (the precise code or the identical 404)", async () => {
   const scenarios = [
     ["credential", async (x) => q(`update training_load.source_credential_connections set credential_nonce = gen_random_bytes(12) where id = $1`, [x.conn.id]), 409, "source_connection_unavailable"],

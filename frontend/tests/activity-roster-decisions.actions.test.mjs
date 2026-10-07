@@ -327,7 +327,7 @@ test("outcome_unknown and an uncoded 5xx are not confirmed; internal_error and r
   await act("training-load-roster-select-needing");
   await act("training-load-roster-bulk", { kind: "participated_no_values" });
   await act("training-load-roster-bulk-apply");
-  assert.equal(roster.notices.top.text, "Someone else is saving this session. Try again. Nothing was saved.");
+  assert.equal(roster.notices.top.text, "This session or the server is busy right now. Try again. Nothing was saved.");
   assert.equal(roster.selected.length, 3, "roster_busy keeps the selection");
   assert.doesNotMatch(html(), /The session is being changed/, "server text never reaches the coach");
   answer = { status: 500, body: { error: "internal_error", message: "Nothing was saved. Try again." } };

@@ -42,6 +42,7 @@ const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js")
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
 const { setGpexePollDelayForTests } = await import("../gpexe-import-data.js");
+const { clearPendingIdentityLoads: clearPendingIdentityLoadsForReset } = await import("../gpexe-import-data.js");
 setGpexePollDelayForTests(() => Promise.resolve());
 
 const TEAM_A = "aaaaaaaa-0000-4000-8000-000000000001";
@@ -103,6 +104,7 @@ function reset(workspace = { type: "club", scopeId: "club-1" }) {
   state.currentUser = { id: "user-1", activeWorkspace: workspace };
   state.trainingLoad = emptyTrainingLoadState();
   state.activeTab = "training-load"; // the Imports view lives in Training Load
+  clearPendingIdentityLoadsForReset(); // a fresh sign-in: no unconfirmed name load of an earlier test
   confirmAnswer = true;
   confirmQuestions = [];
   fetchCalls = [];
@@ -407,4 +409,231 @@ test("names are escaped: markup in a GPEXE name is shown as text, never as HTML"
   const html = mappingHtml();
   assert.ok(!html.includes("<img src=x"), "no raw markup");
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+});
+
+// ---------------------------------------------------------------------------
+// The request key of a name load whose result is not confirmed survives a team
+// or workspace change (owner order 2026-10-07): in memory only, by OptiMove
+// team, never a name, a date of birth or a GPEXE id; Check result back on the
+// same team repeats the same key; another team never sees or sends it; nothing
+// is sent by itself; a settled load removes it; sign-out drops everything.
+const { pendingIdentityLoadsSnapshot, clearPendingIdentityLoads } = await import("../gpexe-import-data.js");
+const lost = () => ({ status: 502, body: "<html>" });
+function deferredGate() {
+  let resolve;
+  const promise = new Promise((r) => { resolve = r; });
+  return { promise, resolve };
+}
+async function loseOneLoadOnTeamA(onLoad) {
+  reset();
+  responder = server({ onLoad: onLoad || lost });
+  await openMapping();
+  assert.equal(state.trainingLoad.gpexe.teamId, TEAM_A);
+  await act("training-load-gpexe-identity-open");
+  await act("training-load-gpexe-identity-send");
+  const identity = state.trainingLoad.gpexe.identity;
+  assert.ok(identity.unconfirmed && KEY.test(identity.requestKey), "the answer was lost: not confirmed, with a key");
+  return identity.requestKey;
+}
+const postsFor = (teamId) => loadPosts().filter((c) => c.url.includes(teamId));
+
+test("a lost name load survives a team change: the other team neither shows nor sends the key, nothing is sent by itself, and Check result back on the first team repeats the same key", async () => {
+  const key = await loseOneLoadOnTeamA();
+  const postsBefore = loadPosts().length;
+  await act("training-load-gpexe-map-close");
+  await act("training-load-gpexe-team", {}, { value: TEAM_B });
+  assert.equal(state.trainingLoad.gpexe.teamId, TEAM_B);
+  let identity = state.trainingLoad.gpexe.identity;
+  assert.equal(identity.requestKey, null, "team B holds no key");
+  assert.equal(identity.unconfirmed, null, "team B shows no unconfirmed load");
+  await act("training-load-gpexe-map-open");
+  assert.ok(!/training-load-gpexe-identity-check/.test(mappingHtml()), "no Check result on team B");
+  await act("training-load-gpexe-map-close");
+  await act("training-load-gpexe-team", {}, { value: TEAM_A });
+  identity = state.trainingLoad.gpexe.identity;
+  assert.equal(identity.requestKey, key, "back on team A: the same key");
+  assert.ok(identity.unconfirmed, "back on team A: still not confirmed");
+  assert.equal(loadPosts().length, postsBefore, "no POST was sent by itself");
+  assert.equal(postsFor(TEAM_B).length, 0, "nothing was ever sent for team B");
+  await act("training-load-gpexe-map-open");
+  assert.match(mappingHtml(), /training-load-gpexe-identity-check/);
+  responder = server();
+  await act("training-load-gpexe-identity-check");
+  assert.equal(loadPosts().at(-1).body.requestKey, key, "Check result repeats the same key");
+  assert.equal(state.trainingLoad.gpexe.identity.unconfirmed, null, "a settled load");
+  assert.deepEqual(pendingIdentityLoadsSnapshot(), [], "a settled load removes the kept key");
+});
+
+test("a lost name load survives a workspace change and the return to the same team", async () => {
+  const key = await loseOneLoadOnTeamA();
+  resetTrainingLoadForWorkspaceChange();
+  assert.equal(state.trainingLoad.gpexe.identity.requestKey, null, "the new workspace's view starts empty");
+  state.currentUser = { ...state.currentUser, activeWorkspace: { type: "club", scopeId: "club-2" } };
+  resetTrainingLoadForWorkspaceChange();
+  state.currentUser = { ...state.currentUser, activeWorkspace: { type: "club", scopeId: "club-1" } };
+  await act("training-load-section", { section: "today" });
+  await act("training-load-section", { section: "imports" });
+  assert.equal(state.trainingLoad.gpexe.teamId, TEAM_A);
+  const identity = state.trainingLoad.gpexe.identity;
+  assert.equal(identity.requestKey, key, "the same key after the workspace round trip");
+  assert.ok(identity.unconfirmed);
+  responder = server();
+  await act("training-load-gpexe-map-open");
+  await act("training-load-gpexe-identity-check");
+  assert.equal(loadPosts().at(-1).body.requestKey, key);
+});
+
+test("a name load still in flight during a team change: a lost answer is kept for its own team only; a success that lands meanwhile removes it", async () => {
+  for (const settle of ["lost", "success"]) {
+    const gate = deferredGate();
+    reset();
+    responder = server({ onLoad: async () => { await gate.promise; return settle === "lost" ? lost() : { status: 200, body: { loaded: 1, notFound: 0, notRead: 0 } }; } });
+    await openMapping();
+    await act("training-load-gpexe-identity-open");
+    const sending = act("training-load-gpexe-identity-send");
+    await new Promise((r) => setImmediate(r));
+    const key = state.trainingLoad.gpexe.identity.requestKey;
+    await act("training-load-gpexe-map-close");
+    await act("training-load-gpexe-team", {}, { value: TEAM_B });
+    gate.resolve();
+    await sending;
+    assert.equal(state.trainingLoad.gpexe.identity.requestKey, null, `${settle}: team B's view is never touched`);
+    assert.equal(state.trainingLoad.gpexe.identity.unconfirmed, null);
+    await act("training-load-gpexe-team", {}, { value: TEAM_A });
+    const identity = state.trainingLoad.gpexe.identity;
+    if (settle === "lost") {
+      assert.equal(identity.requestKey, key, "lost: back on team A with the same key");
+      assert.ok(identity.unconfirmed);
+    } else {
+      assert.equal(identity.requestKey, null, "success: nothing kept");
+      assert.equal(identity.unconfirmed, null);
+      assert.deepEqual(pendingIdentityLoadsSnapshot(), []);
+    }
+  }
+});
+
+test("a stated refusal on Check result removes the kept key; the kept state holds a key and a count only, never a name, a date or a GPEXE id; sign-out drops everything", async () => {
+  await loseOneLoadOnTeamA();
+  const [entry, ...rest] = pendingIdentityLoadsSnapshot();
+  assert.equal(rest.length, 0);
+  assert.deepEqual(Object.keys(entry).sort(), ["key", "requestKey", "unconfirmed"]);
+  assert.deepEqual(Object.keys(entry.unconfirmed).sort(), ["checks", "running"]);
+  assert.equal(entry.key, `user-1|${TEAM_A}`, "indexed by the sign-in and the OptiMove team");
+  assert.ok(KEY.test(entry.requestKey));
+  assert.ok(typeof entry.unconfirmed.checks === "number" && typeof entry.unconfirmed.running === "boolean");
+  assert.equal(entry.unconfirmed.running, false, "a lost answer is kept as settled-not-confirmed, not as still in flight");
+  // A Check result refused for a reason that is not the original load's
+  // saved outcome (a busy server's try_again) says nothing about that load:
+  // still not confirmed, the same key kept.
+  const kept = entry.requestKey;
+  responder = server({ onLoad: () => ({ status: 409, body: { error: "try_again", message: "The server is busy right now. Your request was not carried out; try again in a moment." } }) });
+  await act("training-load-gpexe-identity-check");
+  assert.ok(state.trainingLoad.gpexe.identity.unconfirmed, "a busy server's try_again on Check result keeps it not confirmed");
+  assert.equal(state.trainingLoad.gpexe.identity.requestKey, kept);
+  assert.equal(pendingIdentityLoadsSnapshot()[0]?.requestKey, kept, "the kept key stays");
+  // The server's saved outcome of the original load (a refusal it marks as
+  // replayed) settles it.
+  responder = server({ onLoad: () => ({ status: 409, body: { error: "source_auth_rejected", message: "x", replayed: true } }) });
+  await act("training-load-gpexe-identity-check");
+  assert.equal(state.trainingLoad.gpexe.identity.unconfirmed, null, "the original load's stated refusal settles it");
+  assert.deepEqual(pendingIdentityLoadsSnapshot(), [], "and removes the kept key");
+
+  await loseOneLoadOnTeamA();
+  assert.equal(pendingIdentityLoadsSnapshot().length, 1);
+  clearPendingIdentityLoads();
+  assert.deepEqual(pendingIdentityLoadsSnapshot(), [], "sign-out's clear drops everything");
+  const app = fs.readFileSync(path.resolve(__dirname, "..", "app.js"), "utf8");
+  const signOut = app.slice(app.indexOf("async function signOut()"), app.indexOf("function startInboxPolling()"));
+  assert.match(signOut, /clearPendingIdentityLoads\(\);[\s\S]*window\.location\.replace\("\/"\)/, "signOut clears the kept keys before it reloads");
+});
+
+test("back on the team before the answer arrives: the load is shown as not confirmed with its own key (never a fresh Load), and the answer that lands then settles it", async () => {
+  const gate = deferredGate();
+  reset();
+  responder = server({ onLoad: async () => { await gate.promise; return { status: 200, body: { loaded: 1, notFound: 0, notRead: 0 } }; } });
+  await openMapping();
+  await act("training-load-gpexe-identity-open");
+  const sending = act("training-load-gpexe-identity-send");
+  await new Promise((r) => setImmediate(r));
+  const key = state.trainingLoad.gpexe.identity.requestKey;
+  await act("training-load-gpexe-map-close");
+  await act("training-load-gpexe-team", {}, { value: TEAM_B });
+  await act("training-load-gpexe-team", {}, { value: TEAM_A });
+  let identity = state.trainingLoad.gpexe.identity;
+  assert.equal(identity.requestKey, key, "the same key while the request is still in flight");
+  assert.equal(identity.unconfirmed?.running, true, "shown as still running");
+  assert.equal(loadPosts().length, 1, "nothing sent again");
+  gate.resolve();
+  await sending;
+  identity = state.trainingLoad.gpexe.identity;
+  assert.equal(identity.unconfirmed, null, "the answer settled it in the view open now");
+  assert.equal(identity.requestKey, null);
+  assert.deepEqual(pendingIdentityLoadsSnapshot(), []);
+});
+
+test("a status without the identity right (a role revoked) drops the kept key: when the right returns, no old key comes back", async () => {
+  await loseOneLoadOnTeamA();
+  assert.equal(pendingIdentityLoadsSnapshot().length, 1);
+  await act("training-load-gpexe-map-close");
+  await act("training-load-gpexe-team", {}, { value: TEAM_B });
+  responder = server({ admin: false });
+  await act("training-load-gpexe-team", {}, { value: TEAM_A });
+  assert.equal(state.trainingLoad.gpexe.identity.requestKey, null, "a viewer without the right holds no key");
+  assert.deepEqual(pendingIdentityLoadsSnapshot(), [], "the kept key is gone");
+  responder = server();
+  await act("training-load-gpexe-team", {}, { value: TEAM_B });
+  await act("training-load-gpexe-team", {}, { value: TEAM_A });
+  assert.equal(state.trainingLoad.gpexe.identity.requestKey, null, "no old key after the right returns");
+  assert.equal(state.trainingLoad.gpexe.identity.unconfirmed, null);
+});
+
+test("a Check result refused for a cause (a busy server, a connection that needs attention) keeps the key and the not-confirmed state, says why inside the box, and never claims that nothing was saved", async () => {
+  const kept = await loseOneLoadOnTeamA();
+  for (const [body, pattern] of [
+    [{ error: "try_again", message: "The server is busy right now. Your request was not carried out; try again in a moment." }, /Check result could not run because OptiMove or the server is busy\. The result is still not confirmed/],
+    [{ error: "source_connection_unavailable", reason: "connection_not_usable", message: "x" }, /Check result could not run: the team(?:'|&#0?39;|&#x27;)s GPEXE connection needs attention/],
+  ]) {
+    responder = server({ onLoad: () => ({ status: 409, body }) });
+    await act("training-load-gpexe-identity-check");
+    const identity = state.trainingLoad.gpexe.identity;
+    assert.equal(identity.requestKey, kept, `${body.error}: the same key`);
+    assert.ok(identity.unconfirmed, `${body.error}: still not confirmed`);
+    assert.equal(pendingIdentityLoadsSnapshot()[0]?.requestKey, kept);
+    const html = outsideTech(mappingHtml());
+    const box = html.slice(html.indexOf('class="gpexe-unknown"'));
+    assert.match(box, pattern, `${body.error}: the cause is named in the box`);
+    assert.ok(!/Check result could not run[^<]*Nothing was saved/.test(box), "a refused Check result never says nothing was saved");
+    assert.match(box, /data-action="training-load-gpexe-identity-check"/, "Check result stays available");
+  }
+  // A load that was still running stays "still running" after a refusal.
+  responder = server({ onLoad: () => ({ status: 409, body: { error: "identity_load_running", replayed: true } }) });
+  await act("training-load-gpexe-identity-check");
+  assert.equal(state.trainingLoad.gpexe.identity.unconfirmed.running, true);
+  responder = server({ onLoad: () => ({ status: 409, body: { error: "try_again" } }) });
+  await act("training-load-gpexe-identity-check");
+  assert.equal(state.trainingLoad.gpexe.identity.unconfirmed.running, true, "the refusal says nothing new about the load");
+  // The answer then settles it and the cause goes.
+  responder = server();
+  await act("training-load-gpexe-identity-check");
+  assert.equal(state.trainingLoad.gpexe.identity.unconfirmed, null);
+  assert.ok(!/Check result could not run/.test(mappingHtml()));
+});
+
+test("a Check result whose answer is lost, aborted, an uncoded 5xx or outcome_unknown never says it could not run: it may itself have been the load - not confirmed, the same key, no claim", async () => {
+  const kept = await loseOneLoadOnTeamA();
+  for (const [name, onLoad] of [
+    ["network failure", () => "throw"],
+    ["uncoded 5xx", () => ({ status: 502, body: "<html>" })],
+    ["outcome_unknown", () => ({ status: 503, body: { error: "outcome_unknown", message: "x" } })],
+  ]) {
+    responder = server({ onLoad });
+    await act("training-load-gpexe-identity-check");
+    const identity = state.trainingLoad.gpexe.identity;
+    assert.equal(identity.requestKey, kept, `${name}: the same key`);
+    assert.ok(identity.unconfirmed, `${name}: still not confirmed`);
+    assert.equal(identity.unconfirmed.lastRefusal, undefined, `${name}: no refusal recorded`);
+    const html = mappingHtml();
+    assert.ok(!/Check result could not run/.test(html), `${name}: no claim that it did not run`);
+    assert.match(html, /Result not confirmed/);
+  }
 });

@@ -61,11 +61,14 @@ export function clearSessionCookie() {
   return `${COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`;
 }
 
-export async function createSession(userId) {
+// `client`: an already checked-out pool client to write the session with
+// (the login route does its lookup and this insert on one checkout, so a
+// checkout timeout can never come between the password check and the session).
+export async function createSession(userId, client = null) {
   const token = crypto.randomBytes(32).toString("base64url");
   const tokenHash = hashSessionToken(token);
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
-  await query(
+  await (client ? client.query.bind(client) : query)(
     `insert into public.auth_sessions (user_id, token_hash, expires_at) values ($1, $2, $3)`,
     [userId, tokenHash, expiresAt],
   );

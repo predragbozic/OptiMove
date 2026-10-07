@@ -316,7 +316,7 @@ test("6. Test: a refused credential moves the badge to Needs reconnect with the 
   // In this state Reconnect is the primary and Test the plain button.
   assert.match(out, /class="plain-button data-sources-primary" type="button" data-action="source-connections-reconnect-open"/);
   assert.match(out, /class="plain-button " type="button" data-action="source-connections-test"/);
-  for (const [status, code, pattern] of [[429, "source_auth_throttled", /Too many attempts reached GPEXE/], [409, "try_again", /Another change of this connection/], [403, "forbidden", /administrator right your account does not hold/]]) {
+  for (const [status, code, pattern] of [[429, "source_auth_throttled", /Too many attempts reached GPEXE/], [409, "try_again", /another change of this connection or of one of its teams may be running/], [403, "forbidden", /administrator right your account does not hold/]]) {
     installFetch(responder({ list: [verified()], writes: { [`POST /${CONN}/test`]: () => ({ status, body: { error: code, message: "server text with host https://server3.gpexe.com/ and token abc" } }) } }).handler);
     await act("source-connections-test", { connectionId: CONN });
     out = html();
@@ -919,7 +919,7 @@ test("16. a marker of another club is never read, repeated or acknowledged from 
   assert.equal(state.sourceConnections.unconfirmed?.action, "unbind", "try_again decides nothing");
   assert.equal(state.sourceConnections.unbindError, null);
   let out = html();
-  assert.match(out, /Check result could not run: another change of this connection or of one of its teams was in progress/);
+  assert.match(out, /Check result could not run: another change of this connection or of one of its teams may be in progress/);
   assert.match(out, /source-connections-unconfirmed[\s\S]*Check result could not run[\s\S]*data-action="source-connections-check-result"/, "inside the block");
   assert.match(out, /data-action="source-connections-check-result"/);
   await act("source-connections-check-result");
@@ -948,7 +948,7 @@ test("16. a marker of another club is never read, repeated or acknowledged from 
   assert.equal(binds, 2);
   assert.equal(state.sourceConnections.unconfirmed?.action, "bind");
   out = html();
-  assert.match(out, /Check result could not run: another change of this connection or of one of its teams was in progress/);
+  assert.match(out, /Check result could not run: another change of this connection or of one of its teams may be in progress/);
   assert.match(out, /source-connections-unconfirmed[\s\S]*Check result could not run[\s\S]*data-action="source-connections-check-result"/, "inside the block");
   assert.match(out, /data-action="source-connections-check-result"/);
 });

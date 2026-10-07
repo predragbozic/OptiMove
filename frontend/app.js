@@ -65,7 +65,7 @@ import { renderCoachHomeHtml } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { calendarToggled as importsCalendarToggled } from "./gpexe-import-data.js";
+import { calendarToggled as importsCalendarToggled, clearPendingIdentityLoads } from "./gpexe-import-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay } from "./activity-roster-actions.js";
 import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
@@ -1372,6 +1372,9 @@ async function signOut() {
     // resetMessagesState() - a typed-but-not-yet-cleared search must never
     // be attributable to whichever account logs in next.
     clearAllViewCache();
+    // The unconfirmed GPEXE name loads (a request key per team, memory only)
+    // belong to this sign-in alone.
+    clearPendingIdentityLoads();
     resetMessagesState();
     window.location.replace("/");
   }
