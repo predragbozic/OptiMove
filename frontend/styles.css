@@ -15763,6 +15763,24 @@ button.tests-assignment-card {
   min-height: 44px;
   align-content: center;
 }
+/* Session review: a long OptiMove or GPEXE name (one unbroken word included)
+   wraps inside the row instead of widening the grid and being clipped by the
+   dialog - the whole name stays readable at 360-390 px. */
+.gpexe-detail-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+.gpexe-detail-body > * {
+  min-width: 0;
+}
+.gpexe-athlete summary {
+  grid-template-columns: minmax(0, 1fr);
+}
+.gpexe-athlete summary > span,
+.gpexe-athletes,
+.gpexe-norecord {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .gpexe-result p {
   margin: 8px 0 4px;
   font-weight: 500;
