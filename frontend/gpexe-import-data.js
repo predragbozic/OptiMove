@@ -1206,6 +1206,7 @@ function identityList(answer) {
   return {
     byId,
     pendingCount: Number.isInteger(answer.pendingCount) ? answer.pendingCount : 0,
+    retryLaterCount: Number.isInteger(answer.retryLaterCount) ? answer.retryLaterCount : 0,
     maxPerLoad: Number.isInteger(answer.maxPerLoad) ? answer.maxPerLoad : 50,
     retentionDays: Number.isInteger(answer.retentionDays) ? answer.retentionDays : 14,
     conflicts: new Set((answer.birthDateConflicts || []).map((c) => `${c.gpexeAthleteId}|${c.athleteId}`)),

@@ -41,6 +41,9 @@
 --        its identity rows in the same transaction;
 --      * AFTER UPDATE OF is_active on public.clubs: an archived club loses
 --        the identity rows of all its teams in the same transaction.
+--   3b. training_load.gpexe_athlete_identity_suppressions: a GPEXE 404 left
+--      out of the next loads' choice for exactly 24 hours (no identity, no
+--      name, no date), deleted by the same paths and its own purge.
 --   4. training_load.purge_expired_gpexe_athlete_identities(p_limit): plain
 --      SQL any runner calls (the retention run at start, every 6 hours, every
 --      check, the CLI, and every identity load). Readers never show or use
@@ -209,12 +212,71 @@ create trigger gpexe_athlete_identity_requests_guard
   for each row execute function training_load.gpexe_athlete_identity_request_guard();
 
 -- ---------------------------------------------------------------------------
+-- Retry suppression of a GPEXE 404 (owner decision 2026-10-07, after the
+-- external review of 94ec914): GPEXE's "no such athlete" is never an
+-- identity, but an athlete it answered 404 for is left out of the next
+-- loads' choice for exactly 24 hours, so a run of 404s at the front of the
+-- newest-first order cannot starve the athletes behind it. Only the
+-- binding, the team, the canonical id, observed_at and retry_after =
+-- observed_at + 24 hours are kept: no name, no date, nothing of the answer.
+-- Never updated or extended; a new 404 after the expiry is a new row. Deleted
+-- with the identities by an Unbind, a team or club archive and the purge.
+-- Nothing is ever sent to GPEXE because of a row here.
+-- ---------------------------------------------------------------------------
+create table training_load.gpexe_athlete_identity_suppressions (
+  id uuid primary key default gen_random_uuid(),
+  owner_team_id uuid not null references public.teams(id) on delete cascade,
+  binding_id uuid not null references training_load.source_team_bindings(id) on delete cascade,
+  gpexe_athlete_id text not null
+    constraint gpexe_athlete_identity_suppressions_athlete_format check (gpexe_athlete_id ~ '^(0|[1-9][0-9]{0,11})$'),
+  observed_at timestamptz not null,
+  retry_after timestamptz not null,
+  constraint gpexe_athlete_identity_suppressions_ttl check (retry_after = observed_at + interval '24 hours'),
+  constraint gpexe_athlete_identity_suppressions_one_per_athlete unique (binding_id, gpexe_athlete_id)
+);
+create index gpexe_athlete_identity_suppressions_team_idx on training_load.gpexe_athlete_identity_suppressions (owner_team_id);
+create index gpexe_athlete_identity_suppressions_retry_idx on training_load.gpexe_athlete_identity_suppressions (retry_after);
+
+create function training_load.gpexe_athlete_identity_suppression_guard() returns trigger as $$
+declare
+  b record;
+  team_active boolean;
+begin
+  if tg_op = 'UPDATE' then
+    raise exception 'gpexe_athlete_identity_suppressions: a row is never changed or extended; delete it and record a new 404'
+      using errcode = 'check_violation', constraint = 'gpexe_athlete_identity_suppressions_no_update';
+  end if;
+  select team_id, state, source_system into b from training_load.source_team_bindings where id = new.binding_id for share;
+  if not found or b.state <> 'active' or b.source_system <> 'gpexe' or b.team_id is distinct from new.owner_team_id then
+    raise exception 'gpexe_athlete_identity_suppressions: binding % is not an active gpexe binding of team %', new.binding_id, new.owner_team_id
+      using errcode = 'check_violation', constraint = 'gpexe_athlete_identities_active_binding';
+  end if;
+  select coalesce(t.is_active, true) and coalesce(c.is_active, true) into team_active
+    from public.teams t join public.clubs c on c.id = t.club_id where t.id = new.owner_team_id for share of t, c;
+  if team_active is not true then
+    raise exception 'gpexe_athlete_identity_suppressions: team % or its club is not active', new.owner_team_id
+      using errcode = 'check_violation', constraint = 'gpexe_athlete_identities_active_team';
+  end if;
+  if new.observed_at > clock_timestamp() + interval '1 minute' or new.observed_at < clock_timestamp() - interval '10 minutes' then
+    raise exception 'gpexe_athlete_identity_suppressions: observed_at is not the reading time'
+      using errcode = 'check_violation', constraint = 'gpexe_athlete_identity_suppressions_observed_at';
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger gpexe_athlete_identity_suppressions_guard
+  before insert or update on training_load.gpexe_athlete_identity_suppressions
+  for each row execute function training_load.gpexe_athlete_identity_suppression_guard();
+
+-- ---------------------------------------------------------------------------
 -- The delete paths.
 -- ---------------------------------------------------------------------------
 create function training_load.gpexe_athlete_identities_drop_for_binding() returns trigger as $$
 begin
   if old.state = 'active' and new.state <> 'active' then
     delete from training_load.gpexe_athlete_identities where binding_id = new.id;
+    delete from training_load.gpexe_athlete_identity_suppressions where binding_id = new.id;
   end if;
   return null;
 end;
@@ -228,6 +290,7 @@ create function training_load.gpexe_athlete_identities_drop_for_team() returns t
 begin
   if coalesce(new.is_active, true) = false then
     delete from training_load.gpexe_athlete_identities where owner_team_id = new.id;
+    delete from training_load.gpexe_athlete_identity_suppressions where owner_team_id = new.id;
   end if;
   return null;
 end;
@@ -243,6 +306,9 @@ begin
     delete from training_load.gpexe_athlete_identities i
      using public.teams t
      where t.id = i.owner_team_id and t.club_id = new.id;
+    delete from training_load.gpexe_athlete_identity_suppressions s
+     using public.teams t
+     where t.id = s.owner_team_id and t.club_id = new.id;
   end if;
   return null;
 end;
@@ -265,6 +331,24 @@ begin
      select id from training_load.gpexe_athlete_identities
       where expires_at <= now()
       order by expires_at
+      limit greatest(p_limit, 1)
+      for update skip locked
+   );
+  get diagnostics purged = row_count;
+  return purged;
+end;
+$$ language plpgsql;
+
+-- The same purge for the 24-hour retry suppressions.
+create function training_load.purge_expired_gpexe_athlete_identity_suppressions(p_limit integer default 200) returns integer as $$
+declare
+  purged integer;
+begin
+  delete from training_load.gpexe_athlete_identity_suppressions
+   where id in (
+     select id from training_load.gpexe_athlete_identity_suppressions
+      where retry_after <= now()
+      order by retry_after
       limit greatest(p_limit, 1)
       for update skip locked
    );

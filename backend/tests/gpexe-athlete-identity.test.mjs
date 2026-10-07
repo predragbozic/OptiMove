@@ -595,14 +595,18 @@ test("7. source answers: 404 counts as not found and the rest is saved; a 429, a
     assert.ok(rows.some((x) => x.gpexe_athlete_id === "801"), `${name}: the confirmed answer before the stop is kept`);
     assert.ok(!rows.some((x) => x.gpexe_athlete_id === "802"), `${name}: nothing stored for 802`);
     if (expected.notCached) {
-      // External review of PR #144: GPEXE's 404 is counted in this answer only and never cached; the
-      // athlete stays pending and only the NEXT explicit load reads it again (no automatic retry).
+      // GPEXE's 404 is never an identity; it is left out of the next loads for 24 hours (owner decision
+      // 2026-10-07), with no automatic retry, and counted in the answer without its id.
       assert.deepEqual([r.body.loaded, r.body.notFound, r.body.notRead], [2, 1, 0], `${name}: a 404 is counted once, never also as not read`);
-      assert.equal((await list(o)).body.pendingCount, 1, `${name}: still pending`);
+      noPii(r.text, `${name}: the answer`);
+      assert.ok(!/\b802\b/.test(r.text), `${name}: no id in the answer`);
+      const g = await list(o);
+      assert.deepEqual([g.body.pendingCount, g.body.retryLaterCount], [0, 1], `${name}: suppressed, counted apart`);
+      assert.ok(!g.body.identities.some((i) => i.gpexeAthleteId === "802"), `${name}: never an identity`);
       assert.equal(athleteCalls().filter((c) => c.key === "/rest/v1/athlete/802/").length, 1, `${name}: no automatic retry`);
       const again = await load(o);
-      assert.deepEqual([again.status, again.body.loaded, again.body.notFound, again.body.notRead], [200, 0, 1, 0]);
-      assert.equal(athleteCalls().filter((c) => c.key === "/rest/v1/athlete/802/").length, 2, `${name}: read again by the next explicit load`);
+      assert.deepEqual([again.status, again.body.loaded, again.body.notFound, again.body.notRead], [200, 0, 0, 0]);
+      assert.equal(athleteCalls().filter((c) => c.key === "/rest/v1/athlete/802/").length, 1, `${name}: not read again within 24 hours`);
       assert.ok(!(await rowsOf(o.teamId)).some((x) => x.gpexe_athlete_id === "802"));
     }
   }
@@ -614,6 +618,78 @@ test("7. source answers: 404 counts as not found and the rest is saved; a 429, a
   noPii(r.text, "the mismatch answer");
   assert.equal((await rowsOf(o.teamId)).length, 0, "an answer for another athlete saves nothing at all");
   assert.equal((await requestsOf(o.teamId))[0].status, "failed");
+});
+
+// Ages the 24-hour suppressions of the given athletes past their retry time (the update guard is lifted
+// for this one statement only; a real row is never changed).
+async function ageSuppressions(teamId, athleteIds) {
+  await q(`alter table training_load.gpexe_athlete_identity_suppressions disable trigger gpexe_athlete_identity_suppressions_guard`);
+  try {
+    await q(`update training_load.gpexe_athlete_identity_suppressions set observed_at = now() - interval '25 hours', retry_after = now() - interval '1 hour' where owner_team_id = $1 and gpexe_athlete_id = any($2::text[])`, [teamId, athleteIds]);
+  } finally {
+    await q(`alter table training_load.gpexe_athlete_identity_suppressions enable trigger gpexe_athlete_identity_suppressions_guard`);
+  }
+}
+const suppressionsOf = (teamId) => q(`select gpexe_athlete_id, observed_at, retry_after from training_load.gpexe_athlete_identity_suppressions where owner_team_id = $1 order by length(gpexe_athlete_id), gpexe_athlete_id`, [teamId]);
+
+test("7c. 404s cannot starve the other athletes: with 60 pending and the first 50 answering 404, the second explicit load within 24 hours reads none of them again and reaches the next 10; after the expiry one of them is eligible again; opening the screen never extends retry_after; no suppression is ever returned as an identity; the purge, an Unbind, a team archive and a club archive delete the suppressions", async () => {
+  const o = await org();
+  useSource();
+  const b = await bound(o);
+  await seedChain(o, b, ids(3000, 30), { startedAt: "2026-09-12T10:00:00Z" });
+  await seedChain(o, b, ids(4000, 30), { startedAt: "2026-09-10T10:00:00Z" });
+  // The newest-first order: 3000..3029, then 4000..4029. The first 50 answer 404.
+  const first50 = [...ids(3000, 30), ...ids(4000, 20)];
+  const last10 = ids(4020, 10);
+  for (const id of first50) src.st.athlete.set(id, { status: 404 });
+  const r1 = await load(o);
+  assert.deepEqual([r1.status, r1.body.loaded, r1.body.notFound, r1.body.notRead], [200, 0, 50, 10], r1.text);
+  assert.ok(!first50.some((id) => r1.text.includes(`"${id}"`)), "no id in the answer");
+  let sup = await suppressionsOf(o.teamId);
+  assert.deepEqual(sup.map((x) => x.gpexe_athlete_id).sort(), [...first50].sort());
+  for (const x of sup) assert.equal(new Date(x.retry_after).getTime() - new Date(x.observed_at).getTime(), 24 * 3_600_000, "exactly 24 hours");
+  const columns = (await q(`select column_name from information_schema.columns where table_schema = 'training_load' and table_name = 'gpexe_athlete_identity_suppressions' order by ordinal_position`)).map((c) => c.column_name);
+  assert.deepEqual(columns, ["id", "owner_team_id", "binding_id", "gpexe_athlete_id", "observed_at", "retry_after"], "no name, no date, nothing of the answer");
+  // Opening / reloading the screen twice: nothing extends, nothing becomes an identity.
+  const g1 = await list(o);
+  const g2 = await list(o);
+  assert.deepEqual([g2.body.pendingCount, g2.body.retryLaterCount, g2.body.identities.length], [10, 50, 0]);
+  assert.deepEqual((await suppressionsOf(o.teamId)).map((x) => x.retry_after.toISOString()), sup.map((x) => x.retry_after.toISOString()), "reading never extends retry_after");
+  assert.ok(!g1.text.includes('"3000"') && !g2.text.includes('"4000"'), "no suppressed id in the read");
+  // The second explicit load reaches the next 10, and none of the 50 is read again.
+  const calls = athleteCalls().length;
+  const r2 = await load(o);
+  assert.deepEqual([r2.status, r2.body.loaded, r2.body.notFound, r2.body.notRead], [200, 10, 0, 0], r2.text);
+  assert.deepEqual(athleteCalls().slice(calls).map((c) => c.key.match(/athlete\/(\d+)/)[1]).sort(), [...last10].sort());
+  const g3 = await list(o);
+  assert.deepEqual(g3.body.identities.map((i) => i.gpexeAthleteId).sort(), [...last10].sort(), "only the 10 real identities, never a suppression");
+  // After the expiry one of the 50 is eligible again (and only on an explicit load).
+  await ageSuppressions(o.teamId, ["3000"]);
+  assert.equal((await list(o)).body.pendingCount, 1);
+  src.st.athlete.set("3000", {});
+  const c3 = athleteCalls().length;
+  const r3 = await load(o);
+  assert.deepEqual([r3.body.loaded, r3.body.notFound], [1, 0]);
+  assert.deepEqual(athleteCalls().slice(c3).map((c) => c.key), ["/rest/v1/athlete/3000/"]);
+  // The purge deletes an expired suppression.
+  await ageSuppressions(o.teamId, ["3001"]);
+  await importer.runRetention("cli");
+  assert.ok(!(await suppressionsOf(o.teamId)).some((x) => x.gpexe_athlete_id === "3001"), "the retention run deletes it");
+  assert.equal((await importer.retentionStatus()).expiredSuppressionsNotPurged, 0);
+  // An Unbind deletes the suppressions of the binding.
+  assert.ok((await suppressionsOf(o.teamId)).length > 0);
+  assert.equal((await unbind(o, b.conn, b.binding)).status, 200);
+  assert.equal((await suppressionsOf(o.teamId)).length, 0, "an Unbind deletes them");
+  // A team archive and a club archive delete them too.
+  for (const scope of ["team", "club"]) {
+    const x = await ready(2, scope === "team" ? 5001 : 5101);
+    for (const id of (scope === "team" ? ["5001", "5002"] : ["5101", "5102"])) src.st.athlete.set(id, { status: 404 });
+    assert.equal((await load(x.o)).body.notFound, 2);
+    assert.equal((await suppressionsOf(x.o.teamId)).length, 2);
+    if (scope === "team") await q(`update public.teams set is_active = false where id = $1`, [x.o.teamId]);
+    else await q(`update public.clubs set is_active = false where id = $1`, [x.o.clubId]);
+    assert.equal((await suppressionsOf(x.o.teamId)).length, 0, `a ${scope} archive deletes them`);
+  }
 });
 
 test("8. a 401 moves the connection to needs_reconnect through the auto-invalidate path (one audit row, basis system, trigger identity_read) and saves nothing; a 403 saves nothing and changes nothing of the credential's state", async () => {
@@ -981,9 +1057,10 @@ test("18. migration v32 applies on v31 (two tables, five triggers, the purge), e
     const v31 = await catalog();
     await applyGpexeTestMigrations(m.url, [...UP_TO_V31, V32]);
     const v32 = await catalog();
-    assert.deepEqual(v32.tables.filter((x) => !v31.tables.some((y) => y.table_name === x.table_name)).map((x) => x.table_name).sort(), ["gpexe_athlete_identities", "gpexe_athlete_identity_requests"]);
-    assert.deepEqual(v32.triggers.filter((x) => !v31.triggers.some((y) => y.tgname === x.tgname)).map((x) => x.tgname).sort(), ["clubs_drop_gpexe_athlete_identities", "gpexe_athlete_identities_check", "gpexe_athlete_identities_no_update", "gpexe_athlete_identity_requests_guard", "source_team_bindings_drop_identities", "teams_drop_gpexe_athlete_identities"]);
+    assert.deepEqual(v32.tables.filter((x) => !v31.tables.some((y) => y.table_name === x.table_name)).map((x) => x.table_name).sort(), ["gpexe_athlete_identities", "gpexe_athlete_identity_requests", "gpexe_athlete_identity_suppressions"]);
+    assert.deepEqual(v32.triggers.filter((x) => !v31.triggers.some((y) => y.tgname === x.tgname)).map((x) => x.tgname).sort(), ["clubs_drop_gpexe_athlete_identities", "gpexe_athlete_identities_check", "gpexe_athlete_identities_no_update", "gpexe_athlete_identity_requests_guard", "gpexe_athlete_identity_suppressions_guard", "source_team_bindings_drop_identities", "teams_drop_gpexe_athlete_identities"]);
     assert.ok(v32.functions.some((f) => f.proname === "purge_expired_gpexe_athlete_identities"));
+    assert.ok(v32.functions.some((f) => f.proname === "purge_expired_gpexe_athlete_identity_suppressions"));
     // Fixture: a club, two teams, a user, a connection and an active binding.
     const club = (await k.query(`insert into public.clubs (name) values ('C') returning id`)).rows[0].id;
     const team = (await k.query(`insert into public.teams (club_id, name) values ($1, 'T') returning id`, [club])).rows[0].id;
@@ -1046,14 +1123,30 @@ test("18. migration v32 applies on v31 (two tables, five triggers, the purge), e
     await assert.rejects(k.query(rollbackSql), /later migrations are applied/);
     await k.query("rollback").catch(() => {});
     await k.query(`delete from public.schema_migrations where migration_name = 'migrations_v2/209912312359_later.sql'`);
+    // The 24-hour suppression: exactly 24 hours, an active binding of the row's team, never updated.
+    const supp = (over = {}) => {
+      const v = { team, binding, athlete: "70", observed: "now()", hours: "24", ...over };
+      return k.query(`insert into training_load.gpexe_athlete_identity_suppressions (owner_team_id, binding_id, gpexe_athlete_id, observed_at, retry_after) values ($1, $2, $3, ${v.observed}, ${v.observed} + interval '${v.hours} hours')`, [v.team, v.binding, v.athlete]);
+    };
+    await supp();
+    const suppRefused = async (over, pattern) => { const e = await supp(over).then(() => null, (err) => err); assert.ok(e, JSON.stringify(over)); assert.match(String(e.message), pattern, JSON.stringify(over)); };
+    await suppRefused({ athlete: "70" }, /one_per_athlete|duplicate/);
+    await suppRefused({ athlete: "71", hours: "25" }, /suppressions_ttl/);
+    await suppRefused({ athlete: "71", team: team2 }, /not an active gpexe binding/);
+    await suppRefused({ athlete: "071" }, /athlete_format/);
+    await suppRefused({ athlete: "71", observed: "now() - interval '1 hour'" }, /reading time/);
+    await assert.rejects(k.query(`update training_load.gpexe_athlete_identity_suppressions set retry_after = retry_after + interval '1 hour'`), /never changed or extended/);
     // A team archive and an Unbind delete the snapshot in the same statement's transaction.
     await insert({ athlete: "11" });
     await k.query(`update public.teams set is_active = false where id = $1`, [team]);
     assert.equal((await k.query(`select count(*)::int as n from training_load.gpexe_athlete_identities where owner_team_id = $1`, [team])).rows[0].n, 0);
+    assert.equal((await k.query(`select count(*)::int as n from training_load.gpexe_athlete_identity_suppressions where owner_team_id = $1`, [team])).rows[0].n, 0, "a team archive deletes the suppressions");
     await k.query(`update public.teams set is_active = true where id = $1`, [team]);
     await insert({ athlete: "12" });
+    await supp({ athlete: "72" });
     await k.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'test' where id = $1`, [binding, user]);
     assert.equal((await k.query(`select count(*)::int as n from training_load.gpexe_athlete_identities`)).rows[0].n, 0, "an ended binding leaves no identity");
+    assert.equal((await k.query(`select count(*)::int as n from training_load.gpexe_athlete_identity_suppressions`)).rows[0].n, 0, "nor a suppression");
     await refused({ athlete: "13" }, /not an active gpexe binding/);
     // With only failed requests left, the rollback runs and returns exactly the v31 catalog.
     await k.query(`alter table training_load.gpexe_athlete_identity_requests disable trigger gpexe_athlete_identity_requests_guard`);

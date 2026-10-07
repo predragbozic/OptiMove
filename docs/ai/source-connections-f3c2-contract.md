@@ -1215,8 +1215,10 @@ revocation, an archive or an Unbind that commits after the route's own check (ex
     manual`, one attempt), which projects five keys into the sanitized identity. An answer for another
     id is `source_identity_mismatch`.
 - **What a source answer does:**
-  - 404 is counted as not found and stored nowhere (no negative cache); the athlete stays pending
-    for the next explicit load;
+  - 404 is counted as not found and is never an identity. A 24-hour retry suppression (binding, team,
+    id, `observed_at`, `retry_after`) leaves the athlete out of the next loads' choice, is never extended,
+    and is deleted by the identity delete paths and its own purge. The list answers `retryLaterCount`
+    (a count only). There is no automatic retry (owner decision 2026-10-07);
   - 401 marks the load failed first, then auto-invalidates the connection (trigger `identity_read`);
   - 403, an id mismatch, or a binding, connection, credential or team change saves nothing;
   - 429, 5xx, a timeout or a malformed answer stops the load and keeps what was confirmed (`partial`).

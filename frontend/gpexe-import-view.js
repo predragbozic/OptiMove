@@ -1059,7 +1059,7 @@ function renderMapRowHtml(a, gx, choices, duplicates = new Set()) {
 function identityResultText(r) {
   const parts = [r.loaded === 1 ? "Read 1 athlete from GPEXE." : `Read ${r.loaded} athletes from GPEXE.`];
   if (r.loaded) parts.push("Where GPEXE gives no name or date of birth, the athlete's row says so.");
-  if (r.notFound) parts.push(r.notFound === 1 ? "GPEXE has no record for 1 athlete; it stays without a name, and a later load asks GPEXE again." : `GPEXE has no record for ${r.notFound} athletes; they stay without a name, and a later load asks GPEXE again.`);
+  if (r.notFound) parts.push(r.notFound === 1 ? "GPEXE has no record for 1 athlete; it stays without a name and can be loaded again after 24 hours." : `GPEXE has no record for ${r.notFound} athletes; they stay without a name and can be loaded again after 24 hours.`);
   if (r.stopped) parts.push("GPEXE stopped answering before every athlete was read.");
   if (r.notRead) parts.push(r.notRead === 1 ? "1 athlete is still without a name - load again to read it." : `${r.notRead} athletes are still without a name - load again to read them.`);
   if (r.unrecognised) parts.push(r.unrecognised === 1 ? "1 date of birth was in a form OptiMove does not accept and is shown as not provided." : `${r.unrecognised} dates of birth were in a form OptiMove does not accept and are shown as not provided.`);
@@ -1087,6 +1087,8 @@ function renderIdentityPanelHtml(gx) {
   const max = list?.maxPerLoad || 50;
   const days = list?.retentionDays || 14;
   const pending = list?.pendingCount || 0;
+  const retryLater = list?.retryLaterCount || 0;
+  const retryLaterHtml = retryLater ? `<p class="muted">${retryLater === 1 ? "1 athlete GPEXE had no record for is" : `${retryLater} athletes GPEXE had no record for are`} left out of loads for 24 hours, then can be loaded again.</p>` : "";
   const locked = identityLocked(gx) || identityBusy(gx);
   const head = `<h4>GPEXE names and dates of birth</h4>`;
   let body = "";
@@ -1115,7 +1117,8 @@ function renderIdentityPanelHtml(gx) {
     body = pending
       ? `<p class="muted">${pending === 1 ? "1 GPEXE athlete has" : `${pending} GPEXE athletes have`} no name loaded yet. The names help you recognise athletes; they never link anyone by themselves.</p>
          <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-identity-open" ${locked ? "disabled" : ""}>Load names and dates of birth</button>`
-      : `<p class="muted">No more GPEXE names to load right now. An athlete whose name is not loaded was seen only in a session OptiMove cannot read names for.</p>`;
+      : `<p class="muted">No more GPEXE names to load right now. An athlete whose name is not loaded was seen only in a session OptiMove cannot read names for${retryLater ? ", or GPEXE had no record for it in the last 24 hours" : ""}.</p>`;
+    body += retryLaterHtml;
   }
   return `
     <section class="gpexe-identity" aria-label="GPEXE names and dates of birth">

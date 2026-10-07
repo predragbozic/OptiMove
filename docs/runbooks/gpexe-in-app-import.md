@@ -741,8 +741,17 @@ The confirmation's button *Load names and dates of birth* then sends one `POST â
 - **Limits:** a 15 s timeout per request and a 45 s network budget for the whole load.
 - **What is stored:** only the sanitized display name and the normalized date of birth, for exactly 336
   hours (14 days of elapsed time, whatever the session time zone). GPEXE's "no such athlete" (404) is
-  counted in the load's answer and **never stored**. The athlete stays pending, and only the next explicit
-  load reads it again; there is no automatic retry.
+  counted in the load's answer (without its id) and is **never an identity**. Only a retry suppression is
+  kept: binding, team, the canonical id, `observed_at` and `retry_after` = +24 hours exactly. There is no
+  name, no date and nothing of the answer.
+  - While it is active, the athlete is left out of the next loads' choice, so a run of 404s cannot starve
+    the athletes behind it.
+  - After it expires, the athlete is eligible again, but only for a new explicit load: there is no
+    automatic retry, and nothing is sent to GPEXE because of a suppression.
+  - Reading the screen never extends it.
+  - It is deleted with the identities by an Unbind, a team or club archive and the purge
+    `training_load.purge_expired_gpexe_athlete_identity_suppressions`.
+  - The list answer reports `retryLaterCount`, a count only.
 
 A check never reads an athlete record.
 

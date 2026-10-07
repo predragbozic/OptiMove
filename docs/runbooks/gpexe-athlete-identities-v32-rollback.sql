@@ -10,7 +10,7 @@
 --     routes read and write the two tables);
 --   * a fresh, restore-verified backup exists;
 --   * the owner approved this database specifically.
--- It drops exactly what v32 created: two tables (with their indexes,
+-- It drops exactly what v32 created: three tables (with their indexes,
 -- constraints and foreign keys), the five triggers and their functions, and
 -- the purge function. It is forward-safe: it refuses, changing nothing, when
 --   * any migrations_v2 migration newer than v32 is recorded;
@@ -28,6 +28,7 @@ set local lock_timeout = '5s';
 -- change nothing; run it again when quiet.
 lock table training_load.gpexe_athlete_identity_requests in access exclusive mode nowait;
 lock table training_load.gpexe_athlete_identities in access exclusive mode nowait;
+lock table training_load.gpexe_athlete_identity_suppressions in access exclusive mode nowait;
 lock table training_load.source_team_bindings in access exclusive mode nowait;
 lock table training_load.source_credential_connections in access exclusive mode nowait;
 lock table public.teams in access exclusive mode nowait;
@@ -61,6 +62,9 @@ drop function if exists training_load.gpexe_athlete_identities_drop_for_team();
 drop trigger if exists source_team_bindings_drop_identities on training_load.source_team_bindings;
 drop function if exists training_load.gpexe_athlete_identities_drop_for_binding();
 drop function if exists training_load.purge_expired_gpexe_athlete_identities(integer);
+drop function if exists training_load.purge_expired_gpexe_athlete_identity_suppressions(integer);
+drop table if exists training_load.gpexe_athlete_identity_suppressions;
+drop function if exists training_load.gpexe_athlete_identity_suppression_guard();
 drop table if exists training_load.gpexe_athlete_identity_requests;
 drop function if exists training_load.gpexe_athlete_identity_request_guard();
 drop table if exists training_load.gpexe_athlete_identities;

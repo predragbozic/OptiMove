@@ -44,6 +44,9 @@ import {
 } from "./sourceImportCredentialResolver.js";
 
 export const IDENTITY_TTL_DAYS = 14;
+// A GPEXE 404 leaves the athlete out of the next loads' choice for exactly
+// this long (owner decision 2026-10-07): never an identity, never extended.
+export const IDENTITY_NOT_FOUND_RETRY_HOURS = 24;
 export const IDENTITY_MAX_PER_LOAD = 50;
 export const IDENTITY_CONCURRENCY = 3;
 export const IDENTITY_REQUEST_TIMEOUT_MS = 15_000;
@@ -192,24 +195,31 @@ const ELIGIBLE_SQL = `
      and a.entry->>'gpexeAthleteId' ~ $3
    group by 1`;
 
+// Pending: eligible, without a valid identity, and not inside an active
+// 24-hour retry suppression of a GPEXE 404 (those are counted apart, so a
+// run of 404s at the front of the order cannot starve the athletes behind it).
 async function eligibleAthletes(executor, teamId, bindingId) {
   const rows = (await executor.query(
     `with eligible as (${ELIGIBLE_SQL})
      select e.gpexe_athlete_id,
             exists (select 1 from training_load.gpexe_athlete_identities i
-                     where i.binding_id = $2 and i.gpexe_athlete_id = e.gpexe_athlete_id and i.expires_at > now()) as has_identity
+                     where i.binding_id = $2 and i.gpexe_athlete_id = e.gpexe_athlete_id and i.expires_at > now()) as has_identity,
+            exists (select 1 from training_load.gpexe_athlete_identity_suppressions s
+                     where s.binding_id = $2 and s.gpexe_athlete_id = e.gpexe_athlete_id and s.retry_after > now()) as suppressed
        from eligible e
       order by e.last_seen desc nulls last, length(e.gpexe_athlete_id), e.gpexe_athlete_id`,
     [teamId, bindingId, ATHLETE_ID_PATTERN],
   )).rows;
-  const pending = rows.filter((r) => !r.has_identity).map((r) => r.gpexe_athlete_id);
-  return { eligible: rows.length, pending };
+  const pending = rows.filter((r) => !r.has_identity && !r.suppressed).map((r) => r.gpexe_athlete_id);
+  const retryLater = rows.filter((r) => !r.has_identity && r.suppressed).length;
+  return { eligible: rows.length, pending, retryLater };
 }
 
 // Best effort, any caller: one bounded batch of expired rows. The readers
 // never depend on it (they filter on expires_at).
 export async function purgeExpiredIdentities(limit = 200) {
   const r = await pool.query(`select training_load.purge_expired_gpexe_athlete_identities($1) as n`, [limit]);
+  await pool.query(`select training_load.purge_expired_gpexe_athlete_identity_suppressions($1) as n`, [limit]);
   return r.rows[0].n;
 }
 
@@ -264,7 +274,7 @@ export async function listIdentities(teamId, ctx, { expectedClubId = null } = {}
         order by length(gpexe_athlete_id), gpexe_athlete_id`,
       [binding.id, teamId],
     )).rows;
-    const { pending } = await eligibleAthletes(client, teamId, binding.id);
+    const { pending, retryLater } = await eligibleAthletes(client, teamId, binding.id);
     // A known GPEXE date of birth that differs from the date of birth OptiMove
     // holds: only the pair is returned (for a warning when that pair is
     // chosen), never OptiMove's date itself, and only for the pairs the screen
@@ -286,6 +296,9 @@ export async function listIdentities(teamId, ctx, { expectedClubId = null } = {}
     const answer = {
       identities: identities.map((r) => ({ gpexeAthleteId: r.gpexe_athlete_id, name: r.display_name, birthDate: r.birth_date })),
       pendingCount: pending.length,
+      // Athletes GPEXE had no record for within the last 24 hours: a count
+      // only, never an identity, a name, a date or an id.
+      retryLaterCount: retryLater,
       maxPerLoad: IDENTITY_MAX_PER_LOAD,
       retentionDays: IDENTITY_TTL_DAYS,
       birthDateConflicts: conflicts.map((r) => ({ gpexeAthleteId: r.gpexe_athlete_id, athleteId: r.athlete_id })),
@@ -533,7 +546,7 @@ async function readIdentities(facts, targets) {
   const timer = setTimeout(() => controller.abort(), budgetMs);
   const base = fetchForIdentity ?? globalThis.fetch;
   const budgetFetch = (url, init = {}) => base(url, { ...init, signal: init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal });
-  const out = { identities: new Map(), notFound: 0, unrecognised: 0, failed: 0, stop: null, discard: false, authRejected: false, resolveError: null, source: null };
+  const out = { identities: new Map(), notFound: 0, notFoundIds: [], unrecognised: 0, failed: 0, stop: null, discard: false, authRejected: false, resolveError: null, source: null };
   const halt = (code, { discard = false } = {}) => {
     if (!out.stop) out.stop = code;
     if (discard) out.discard = true;
@@ -569,7 +582,7 @@ async function readIdentities(facts, targets) {
           // GPEXE has no such athlete: counted in this answer only. Nothing is
           // stored, so the athlete stays pending and the next explicit load
           // reads it again (external review of PR #144: no negative cache).
-          if (code === "source_not_found") { out.notFound += 1; continue; }
+          if (code === "source_not_found") { out.notFound += 1; out.notFoundIds.push({ gpexeAthleteId: athleteId, observedAt: new Date() }); continue; }
           out.failed += 1;
           if (code === "source_auth_rejected") { out.authRejected = true; halt(code, { discard: true }); return; }
           if (["source_access_refused", "source_identity_mismatch", "source_team_mismatch", "host_not_allowed", "path_not_allowed"].includes(code)) { halt(code, { discard: true }); return; }
@@ -643,9 +656,26 @@ async function finalize({ teamId, ctx, facts, request, targets, outcome }) {
       );
       loaded += r.rowCount;
     }
+    // GPEXE's "no such athlete": no identity, only the 24-hour retry
+    // suppression (binding, team, id, observed_at, retry_after); an expired
+    // one of the same athlete is replaced, an active one never extended.
+    if (outcome.notFoundIds.length) {
+      await client.query(
+        `delete from training_load.gpexe_athlete_identity_suppressions where binding_id = $1 and gpexe_athlete_id = any($2::text[]) and retry_after <= now()`,
+        [facts.bindingId, outcome.notFoundIds.map((x) => x.gpexeAthleteId)],
+      );
+      for (const miss of outcome.notFoundIds) {
+        await client.query(
+          `insert into training_load.gpexe_athlete_identity_suppressions (owner_team_id, binding_id, gpexe_athlete_id, observed_at, retry_after)
+           values ($1, $2, $3, $4::timestamptz, $4::timestamptz + make_interval(hours => $5))
+           on conflict (binding_id, gpexe_athlete_id) do nothing`,
+          [teamId, facts.bindingId, miss.gpexeAthleteId, miss.observedAt.toISOString(), IDENTITY_NOT_FOUND_RETRY_HOURS],
+        );
+      }
+    }
     // Not read: chosen but never answered (the load stopped, or the one read
     // that failed), plus the athletes beyond this load's 50. A "no such
-    // athlete" answer is counted in notFound and stored nowhere.
+    // athlete" answer is counted in notFound (and suppressed for 24 hours).
     const notRead = targets.length - outcome.identities.size - outcome.notFound + (request.notReadLater ?? 0);
     const saved = (await client.query(
       `update training_load.gpexe_athlete_identity_requests

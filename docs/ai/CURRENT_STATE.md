@@ -1076,8 +1076,10 @@ Technical details.
   - **Snapshot (v32):**
     - only the provenance, the canonical id, a sanitized display name or NULL, a normalized date or
       NULL, `observed_at`, and `expires_at` = `observed_at` + 336 hours (CHECK);
-    - never updated or extended; GPEXE's "no such athlete" is counted in the load's answer and never
-      stored (no negative cache), so the next explicit load reads it again;
+    - never updated or extended; GPEXE's "no such athlete" is never an identity: only a 24-hour retry
+      suppression (binding, team, id, `observed_at`, `retry_after`) leaves it out of the next loads'
+      choice, so 404s cannot starve the others; it is never extended, is deleted with the identities,
+      and is followed by no automatic retry;
     - an expired row is never shown and is deleted by the purge (every check, the server's schedule,
       the CLI, and before every load);
     - an Unbind, a team archive and a club archive delete the rows in the same transaction (database
@@ -1111,6 +1113,12 @@ Technical details.
         required before a restored copy is used.
   - **Production-use gate:** before the first real identity load, the owner confirms the legal basis
     and the notice for processing names and dates of birth, minors included.
+  - **Owner's external review of `94ec914` (2026-10-07):** the four earlier findings are closed. One new
+    MEDIUM: repeated 404s could permanently starve the other pending athletes.
+    - The owner decided on a 24-hour retry suppression of a GPEXE 404, with no identity, never extended,
+      deleted with the identities, and no automatic retry. It is built in v32 (still unapplied) with a
+      deterministic test of more than 50 athletes and four killed mutations.
+    - `pool.connect()` stays the existing hardening task.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1739,7 +1747,10 @@ pre-existing; pass/fail counts don't belong in this file
 - **GPEXE identity follow-ups (found in the identity implementation, 2026-10-06, not scheduled):**
   (1) the single-athlete link from a session's review shows no GPEXE name or date of birth yet (only
   the Link athletes screen does); (2) the Imports page's list "GPEXE athletes linked to this team" keeps
-  the GPEXE id (the identity lives in the open Link athletes screen only).
+  the GPEXE id (the identity lives in the open Link athletes screen only), and so does the last-link
+  notice. Owner, 2026-10-07: the id rule of PR #144 covers Link athletes. Hiding the id on the other
+  Imports surfaces is a separate follow-up; it **must be finished before a wider administrator pilot**,
+  and it does not block PR #144.
 
 - **Backend hardening: an idempotent Create of a source connection** (owner, 2026-10-05, at the
   external review of PR #138). `POST /api/training-load/sources/:source/connections` has no
@@ -1918,9 +1929,6 @@ pre-existing; pass/fail counts don't belong in this file
   live table keeps its strict 14 days and a backup may follow its own policy, but the runbook requires
   the purge before a restored copy is put to use; plaintext columns are accepted inside the existing
   database trust boundary.
-- **GPEXE athletes with no GPEXE record are read again by every explicit load** (no negative cache, owner
-  decision 2026-10-07). With more than 50 such athletes at the front of the newest-first order, later
-  athletes would wait for a load after them; a short negative TTL needs a new explicit owner decision.
 
 - **Dashboards ignores the shell Club/Team/Athletes filter** (Phase F, decision (b),
   2026-09-16). `POST /api/training-load/dashboards/:id/query` only receives the runtime

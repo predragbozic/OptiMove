@@ -198,7 +198,7 @@ test("the load: the confirmation says at most how many, read-only and 14 days be
   assert.equal(loadPosts()[0].cache, "no-store");
   assert.ok(loadPosts()[0].signal, "bounded on the client");
   const after = outsideTech(mappingHtml());
-  assert.match(after, /Read 2 athletes from GPEXE\. Where GPEXE gives no name or date of birth, the athlete(&#039;|')s row says so\. GPEXE has no record for 1 athlete; it stays without a name, and a later load asks GPEXE again\. GPEXE stopped answering before every athlete was read\. 3 athletes are still without a name - load again to read them\. 1 date of birth was in a form OptiMove does not accept and is shown as not provided\./);
+  assert.match(after, /Read 2 athletes from GPEXE\. Where GPEXE gives no name or date of birth, the athlete(&#039;|')s row says so\. GPEXE has no record for 1 athlete; it stays without a name and can be loaded again after 24 hours\. GPEXE stopped answering before every athlete was read\. 3 athletes are still without a name - load again to read them\. 1 date of birth was in a form OptiMove does not accept and is shown as not provided\./);
   const notice = after.match(/<p class="gpexe-notice" role="status">([^<]*)<\/p>/)[1];
   assert.ok(!/Mira|Zedova|104|2001/.test(notice), "the result names counts only");
   assert.equal(identityCalls().filter((c) => c.method === "GET").length, 2, "the identities are read again after the load");
@@ -369,6 +369,16 @@ test("with the identity view, no GPEXE id appears outside Technical details: not
   await act("training-load-gpexe-unlink", { linkId: "link-9" });
   const question = confirmQuestions.at(-1);
   assert.ok(question && !/\b106\b/.test(question), question);
+});
+
+test("athletes GPEXE had no record for in the last 24 hours are a count only: a sentence, never a row identity or an id", async () => {
+  reset();
+  responder = server({ identities: { ...IDENTITIES, pendingCount: 0, retryLaterCount: 2 } });
+  await openMapping();
+  const html = outsideTech(mappingHtml());
+  assert.match(html, /2 athletes GPEXE had no record for are left out of loads for 24 hours, then can be loaded again\./);
+  assert.match(html, /or GPEXE had no record for it in the last 24 hours/);
+  assert.match(html, /<strong>Name not loaded<\/strong>/, "the athlete's row is still unnamed");
 });
 
 test("a stale Review click while the name confirmation is open opens nothing (only one confirmation at a time)", async () => {
