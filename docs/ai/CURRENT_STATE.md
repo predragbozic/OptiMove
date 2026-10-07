@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-07. Last `origin/main` commit checked: `bb3cfdd` (merge of PR #144,
-`feature/gpexe-athlete-identity` → `main`; PR #143 `2458ac5` before it).
+Last reviewed: 2026-10-07. Last `origin/main` commit checked: `0271acb` (merge of PR #145,
+`feature/gpexe-imports-id-masking` → `main`; PR #144 `bb3cfdd` before it).
 
 ## Active phase
 
@@ -1149,8 +1149,8 @@ Technical details.
 - **Production-use gate (closed):** the first real identity load is forbidden until the owner separately
   confirms the legal basis and the notice for processing names and dates of birth, minors included. The UI
   may be deployed, but *Load names and dates of birth* is not used until then.
-- **The GPEXE id on every administrator Imports screen** (owner order 2026-10-07; branch
-  `feature/gpexe-imports-id-masking` from `bb3cfdd`; not merged; frontend and docs only).
+- **The GPEXE id on every administrator Imports screen** (owner order 2026-10-07; PR #145, frontend and
+  docs only; merged and deployed, see below).
   - **Rule:** outside Technical details, an administrator sees a GPEXE name (with "(GPEXE athlete N)" when
     two GPEXE athletes share it), "Name not provided (GPEXE athlete N)", "Name not loaded (GPEXE athlete N)",
     or "GPEXE athlete N" when the team has no stored identity. N is the place in the team's GPEXE athlete
@@ -1166,6 +1166,43 @@ Technical details.
     answer keeps its key for *Check result*.
   - **Coach:** a coach's screens are unchanged and get no sign of a snapshot.
   - **Unchanged:** backend, v32 and Link / Unlink.
+- **PR #145 is merged and deployed.**
+  - Reviewed head `782903e` (the owner's external review READY, no BLOCKER, HIGH or MEDIUM), merge commit
+    `0271acb` (parents `bb3cfdd` and `782903e`) on 2026-10-07 at 09:54:28 UTC, merged exactly from that head
+    on the owner's order.
+  - `/api/health` first served `0271acb` with `ok: true` at 09:55:23 UTC, then three times in a row (09:55:34,
+    09:55:44 and 09:55:54 UTC). The served bundle carries the neutral labels and both notes that "GPEXE
+    athlete N" is not the GPEXE id.
+  - Read-only smoke without a login, zero UUID, GET only: the team status, the candidates, the source
+    athletes, the athlete links, the athlete identities, one check and one candidate answered 401.
+  - **No Load identities, Check, Connect, Bind, Link, Unlink or Import was run** and no GPEXE request was
+    sent; Render, credentials and the import switch were not touched.
+  - **PR #142 is closed as superseded** (on the owner's order, after the deploy): not merged, its branch
+    `docs/gpexe-pilot-retest-and-link-discovery` kept, a comment says that its still-true facts were carried
+    into PR #145 and that its own CURRENT_STATE is no longer accurate.
+- **Production-use gate (still closed):** no real *Load names and dates of birth* until the owner separately
+  confirms the legal basis and the notice, minors included.
+- **Hardening after PR #145** (owner order 2026-10-07; branch `fix/pool-checkout-timeout-and-identity-key`
+  from `0271acb`; not merged; backend, frontend and docs, no migration):
+  - **A bounded pool checkout.** The global pool in `backend/src/db.js` sets `connectionTimeoutMillis` =
+    5 s (`PG_POOL_CHECKOUT_TIMEOUT_MS` only for tests); every timed-out checkout - `pool.connect()` in both
+    forms and `pool.query()` - carries the stable code `pool_checkout_timeout`. pg-pool removes a waiter that
+    timed out, releases a client that arrives for it later and ends a new connection that could not open in
+    time. Express 4 drops a rejected async handler, so 21 routes that check out before their own `try`
+    would have ended the process: `backend/src/expressAsyncErrors.js` hands such a rejection to the error
+    handler. Answers: the global handler 503 `database_busy` (Retry-After, nothing of the request logged); the
+    source-connection routes (Unbind included), the importer and the identity routes their `try_again`
+    (every uncaught checkout there is the operation's first step, before anything is written or sent; the
+    identity load's finalize closes its request row as failed first); the roster command `roster_busy`. No
+    lock, COMMIT boundary, statement or lock timeout changed. Why 5 s fits the HTTP budgets: see the runbook
+    section "Database pool checkout bound" in `docs/runbooks/gpexe-in-app-import.md`.
+  - **An unconfirmed identity load keeps its key across a team or workspace change.** In memory only,
+    indexed by sign-in and OptiMove team: the request key and the Check result count, never a name, a date
+    of birth or a GPEXE id. Back on the same team *Check result* repeats the same key; another team never
+    shows or sends it; nothing is sent by itself; a settled load (an answer, a stated refusal, the 404)
+    removes it; sign-out clears all.
+  - **A long name in the session review** (a 55+ character unbroken word included) wraps inside the
+    athlete row instead of being clipped; checked at 360, 375 and 390 px.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1631,6 +1668,10 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #145 (`0271acb`, merged 2026-10-07 09:54:28 UTC exactly from head `782903e`) is deployed:
+  `/api/health` served `0271acb` with `ok: true` three times in a row (09:55:34–09:55:54 UTC); the served
+  bundle carries the new labels; without a login seven Imports and identity GET routes answered 401. No
+  migration, no route change. No identity load, no GPEXE request.
 - PR #144 (`bb3cfdd`, merged 2026-10-07 07:52:33 UTC exactly from head `407c8c1`) is deployed:
   `/api/health` served `bb3cfdd` with `ok: true` three times in a row (07:53:43–07:54:05 UTC); without a
   login the identity GET and POST answered 401. **v32 on the deployed database is inferred** from the
@@ -1801,9 +1842,8 @@ pre-existing; pass/fail counts don't belong in this file
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
 - **GPEXE identity follow-up (not scheduled):** the single-athlete link from a session's review names the
-  athlete by its GPEXE name or label since the id-masking branch, but it shows no date of birth or
-  date-of-birth conflict warning (only Link athletes does). The id on the other Imports surfaces is handled
-  by the id-masking branch (see the active phase).
+  athlete by its GPEXE name or label since PR #145, but it shows no date of birth or date-of-birth conflict
+  warning (only Link athletes does).
 
 - **Imports screen follow-ups found at the first successful check** (code review, 2026-10-06; frontend
   only, not scheduled; carried over from the open docs PR #142):
@@ -1832,13 +1872,9 @@ pre-existing; pass/fail counts don't belong in this file
   Until then the UI names the risk in the acknowledgement, and the owner pilot stops on a lost
   Create (`docs/runbooks/gpexe-owner-pilot-f3c3.md`, step 2).
 
-- **Hardening, non-blocking (owner's external review of PR #136, 2026-10-04; repeated as note 3 of
-  the closing review of PR #137): the global PostgreSQL pool in `backend/src/db.js` sets no
-  `connectionTimeoutMillis`, so `pool.connect()` can wait without a bound when the pool is
-  exhausted** (every service path that checks out a client inherits it; pre-existing, not changed in
-  PR #136 or in F3c2g). Separate small task: a bounded checkout with a stable refusal code, a test,
-  and a note in the runbooks — **to be resolved or explicitly split out in PR B (F3c4) before F3c is
-  declared complete** (owner, 2026-10-05).
+- **The bounded `pool.connect()`** (owner's external review of PR #136, 2026-10-04; note 3 of the closing
+  review of PR #137) is built on the hardening branch after PR #145 (see the active phase) and waits for the
+  owner's external review; once merged, this entry is closed.
 - **Standing rule for raw database writers (note 1 of the closing review of PR #137, 2026-10-04):**
   a raw write to `training_load.gpexe_import_checks` (and to the source-connection tables) uses the
   agreed `READ COMMITTED` isolation and follows the runbook; the v31 legacy-path guard reads with the
@@ -2058,9 +2094,11 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143)
-and the identity implementation (PR #144, v32) are merged and deployed. Next steps, in order:
-1. The owner's external review of the id-masking branch `feature/gpexe-imports-id-masking`.
+PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
+the identity implementation (PR #144, v32) and the id masking (PR #145) are merged and deployed; PR #142 is
+closed as superseded. Next steps, in order:
+1. The owner's external review of the hardening branch `fix/pool-checkout-timeout-and-identity-key`
+   (the bounded pool checkout, the kept identity key, the long name).
 2. The production-use gate: legal basis and notice, minors included, confirmed by the owner. Only then,
    and on a separate order, one name load on the deployed Link athletes screen (a GPEXE request).
 3. The first *Link athletes*, after the two gates under Separate tasks.
@@ -2068,7 +2106,6 @@ and the identity implementation (PR #144, v32) are merged and deployed. Next ste
 5. The second owner-run procedure for one controlled real import.
 6. **Phase 5a3c** (Complete and Needs review).
 
-The `pool.connect()` timeout is a separate backend-hardening PR.
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 

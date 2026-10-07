@@ -778,6 +778,10 @@ confirmed*.
   still running.
 - A load still `running` after 180 s is closed as abandoned. It saved nothing, so a new load can start.
 - Nothing is ever sent by itself, and one key is never read twice.
+- A team or workspace change keeps the key of a load whose result is not confirmed, in memory only and per
+  OptiMove team: back on the same team *Check result* repeats it; another team never shows or sends it; a
+  settled load removes it; signing out drops all. The kept state is the key and the Check result count -
+  never a name, a date of birth or a GPEXE id.
 
 **The source refuses.**
 - **401:** the connection becomes *Needs reconnect*, with one `auto_invalidate` audit row whose trigger
@@ -820,6 +824,41 @@ OptiMove athlete profile.
 
 **Browser storage:** none. The identity lives in the open screen's memory only. Closing the screen, a
 team or workspace change, or signing out drops it.
+
+## Database pool checkout bound
+
+The global PostgreSQL pool (`backend/src/db.js`) never lets a checkout wait without a bound:
+`connectionTimeoutMillis` is **5 s**. A normal checkout takes milliseconds; 5 s means the pool's ten
+connections stayed busy for that long.
+
+**Why 5 s fits every HTTP budget.** The checkout is the first step of every flow below, so its bound adds
+to the flow's existing worst case, which stays inside the client's bound:
+- roster write (client 45 s): 5 s checkout + 15 s lock + 15 s COMMIT + 5 s outcome check = 40 s;
+- identity load (client 90 s): 5 s claim + 45 s network budget + 5 s finalize checkout + 15 s COMMIT + 5 s
+  verification = 75 s;
+- source-connection attempt (client 150 s): 20 s user lock + 5 s checkout + 90 s network budget + 15 s
+  COMMIT + 5 s verification = 135 s.
+
+**What a timeout answers.** The stable code `pool_checkout_timeout` is internal; the routes answer:
+- the source-connection routes (Create, Connect, Reconnect, Test, Bind, Unbind), the importer routes and
+  the identity routes: `409 try_again` ("The server is busy right now. Nothing was changed; try again in a
+  moment."), `Retry-After: 5`. In these modules every checkout their own code does not catch is the
+  operation's first step, before anything is written or sent. An identity load whose finalize checkout
+  times out (after its GPEXE reads) closes its request row as failed first, best effort, so a new load can
+  start;
+- the roster command: `503 roster_busy`;
+- every other route: `503 database_busy` from the global handler, `Retry-After: 5`. It does not claim
+  that nothing changed.
+
+The log line names the code and the route only: no SQL, no value, no request body, no credential.
+
+**Nothing stays held.** pg-pool removes a waiter that timed out from its queue, releases a client that
+becomes free for it later, and ends a new connection that could not open in time. Express 4 drops a
+rejected async route handler; `backend/src/expressAsyncErrors.js` hands such a rejection to the error
+handler, so a route that checks out before its own `try` never ends the process.
+
+`PG_POOL_CHECKOUT_TIMEOUT_MS` (an integer, 100 to 60000) exists for tests; production keeps the 5 s default.
+Bounded checkouts the code already had (5 s or 15 s, each releasing a late client) are unchanged.
 
 ## Not in F1 and F2
 
