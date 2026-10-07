@@ -1388,9 +1388,17 @@ async function postIdentityLoad(render, { check }) {
   // The refusal itself is shown in the box (its stable status, code and
   // reason only - never a name or an id), and what was known of the load
   // (still running or not) is kept: the refusal says nothing new about it.
+  // A refusal the server STATED (a coded 4xx, or a coded 5xx other than
+  // outcome_unknown) names its cause in the box. No answer, an abort, an
+  // uncoded 5xx or outcome_unknown says nothing about whether the request ran
+  // - it may itself have been the load - so it stays not confirmed with no
+  // claim at all.
   else if (check && info.data?.replayed !== true && code !== "request_key_reused") {
+    const stated = isDefiniteRefusal(info) || (info.status >= 500 && typeof code === "string" && code !== "outcome_unknown");
     const reason = typeof info.data?.reason === "string" && /^[a-z_]{1,64}$/.test(info.data.reason) ? info.data.reason : null;
-    outcome = { settled: false, unconfirmed: { checks, running: priorRunning, lastRefusal: { status: Number(info.status) || 0, code: typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? code : null, reason } } };
+    outcome = stated
+      ? { settled: false, unconfirmed: { checks, running: priorRunning, lastRefusal: { status: Number(info.status) || 0, code: typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? code : null, reason } } }
+      : { settled: false, unconfirmed: { checks, running: false } };
   }
   else if (isDefiniteRefusal(info) || (info.status >= 500 && typeof code === "string" && code !== "outcome_unknown")) {
     outcome = { settled: true, fields: { error: info }, reread: code === "identity_load_abandoned" || code === "source_auth_rejected" };

@@ -1108,7 +1108,7 @@ function identityErrorText(error) {
 // load's saved outcome: the load is still not confirmed, so these never say
 // that nothing was saved.
 function identityCheckRefusalText(refusal) {
-  const busy = refusal.code === "try_again" || refusal.code === "database_busy" || refusal.status >= 500;
+  const busy = refusal.code === "try_again" || refusal.code === "database_busy" || refusal.code === "roster_busy";
   if (refusal.code === "source_connection_unavailable") {
     return "Check result could not run: the team's GPEXE connection needs attention (test or reconnect it in Settings > Source connections). The result is still not confirmed.";
   }

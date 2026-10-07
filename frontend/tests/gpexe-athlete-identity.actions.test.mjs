@@ -618,3 +618,22 @@ test("a Check result refused for a cause (a busy server, a connection that needs
   assert.equal(state.trainingLoad.gpexe.identity.unconfirmed, null);
   assert.ok(!/Check result could not run/.test(mappingHtml()));
 });
+
+test("a Check result whose answer is lost, aborted, an uncoded 5xx or outcome_unknown never says it could not run: it may itself have been the load - not confirmed, the same key, no claim", async () => {
+  const kept = await loseOneLoadOnTeamA();
+  for (const [name, onLoad] of [
+    ["network failure", () => "throw"],
+    ["uncoded 5xx", () => ({ status: 502, body: "<html>" })],
+    ["outcome_unknown", () => ({ status: 503, body: { error: "outcome_unknown", message: "x" } })],
+  ]) {
+    responder = server({ onLoad });
+    await act("training-load-gpexe-identity-check");
+    const identity = state.trainingLoad.gpexe.identity;
+    assert.equal(identity.requestKey, kept, `${name}: the same key`);
+    assert.ok(identity.unconfirmed, `${name}: still not confirmed`);
+    assert.equal(identity.unconfirmed.lastRefusal, undefined, `${name}: no refusal recorded`);
+    const html = mappingHtml();
+    assert.ok(!/Check result could not run/.test(html), `${name}: no claim that it did not run`);
+    assert.match(html, /Result not confirmed/);
+  }
+});
