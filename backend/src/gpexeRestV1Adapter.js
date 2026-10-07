@@ -139,6 +139,64 @@ const validDay = (value) => {
 const dayBefore = (day) => new Date(Date.parse(`${day}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
 const dayOf = (timestamp) => (typeof timestamp === "string" && DAY.test(timestamp.slice(0, 10)) ? timestamp.slice(0, 10) : null);
 
+// The sanitized description of a refused date-window answer (owner order
+// 2026-10-07, after a check of a two-day window ended source_filter_ignored):
+// counts and fixed words only - never an id, a date, a time, a timestamp, a
+// name, a URL or any raw value. It is computed only when the answer is
+// refused, sends nothing, and changes nothing of the refusal itself.
+const NAIVE_TIME = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/;
+const naiveMillis = (timestamp) => {
+  const m = typeof timestamp === "string" ? NAIVE_TIME.exec(timestamp) : null;
+  if (!m) return null;
+  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
+  return Number.isFinite(ms) ? ms : null;
+};
+function timezoneShape(timestamp) {
+  if (typeof timestamp !== "string" || !NAIVE_TIME.test(timestamp)) return "other";
+  const rest = timestamp.slice(19).replace(/^\.\d{1,9}/, "");
+  if (rest === "") return "none";
+  if (rest === "Z") return "Z";
+  if (/^[+-]\d{2}(:?\d{2})?$/.test(rest)) return "offset";
+  return "other";
+}
+const WINDOW_DIAGNOSTIC = /^op=session_list_by_date; rows=\d{1,4}; before_lookback=\d{1,4}; after_end=\d{1,4}; unreadable=\d{1,4}; outside_named_drill=\d{1,4}; distance=under_3h:\d{1,4},3h_to_24h:\d{1,4},over_24h:\d{1,4},unknown:\d{1,4}; tz=Z:\d{1,4},offset:\d{1,4},none:\d{1,4},other:\d{1,4}\.$/;
+export function describeWindowRefusal(rows, { lookFrom, from, to }) {
+  const low = Date.parse(`${lookFrom}T00:00:00Z`);
+  const high = Date.parse(`${to}T23:59:59Z`);
+  const parentDrills = new Set();
+  for (const row of rows) {
+    const day = dayOf(row?.start_timestamp);
+    if (day === null || day < from || day > to || !Array.isArray(row.drills)) continue;
+    for (const entry of row.drills) { const id = canonicalId(entry); if (id !== null) parentDrills.add(id); }
+  }
+  const count = { before: 0, after: 0, unreadable: 0, namedDrill: 0 };
+  const distance = { under_3h: 0, "3h_to_24h": 0, over_24h: 0, unknown: 0 };
+  const tz = { Z: 0, offset: 0, none: 0, other: 0 };
+  for (const row of rows) {
+    tz[timezoneShape(row?.start_timestamp)] += 1;
+    const day = dayOf(row?.start_timestamp);
+    let gap = null;
+    if (day === null) count.unreadable += 1;
+    else if (day < lookFrom || day > to) {
+      // Only a row with a readable day outside the read is a named drill
+      // candidate; an unreadable one is counted as unreadable only.
+      if (parentDrills.has(canonicalId(row?.id))) count.namedDrill += 1;
+      const t = naiveMillis(row.start_timestamp);
+      if (day < lookFrom) { count.before += 1; if (t !== null) gap = low - t; }
+      else { count.after += 1; if (t !== null) gap = t - high; }
+    } else continue;
+    if (gap === null || gap < 0) distance.unknown += 1;
+    else if (gap < 3 * 3_600_000) distance.under_3h += 1;
+    else if (gap <= 24 * 3_600_000) distance["3h_to_24h"] += 1;
+    else distance.over_24h += 1;
+  }
+  const n = (v) => Math.min(Number.isInteger(v) && v >= 0 ? v : 0, 9999);
+  const text = `op=session_list_by_date; rows=${n(rows.length)}; before_lookback=${n(count.before)}; after_end=${n(count.after)}; unreadable=${n(count.unreadable)}; outside_named_drill=${n(count.namedDrill)}; distance=under_3h:${n(distance.under_3h)},3h_to_24h:${n(distance["3h_to_24h"])},over_24h:${n(distance.over_24h)},unknown:${n(distance.unknown)}; tz=Z:${n(tz.Z)},offset:${n(tz.offset)},none:${n(tz.none)},other:${n(tz.other)}.`;
+  // The final guard: only the fixed grammar above leaves here - anything else
+  // (a value that slipped in) drops the description, never the refusal.
+  return WINDOW_DIAGNOSTIC.test(text) ? text : "";
+}
+
 export class SourceAdapterError extends Error {
   constructor(code, message, extra = {}) {
     super(message);
@@ -1119,9 +1177,11 @@ export function createGpexeRestV1Adapter({
       const path = teamScopedPath("team_session/", team, [["start_timestamp_gte", `${lookFrom}%2000%3A00%3A00`], ["start_timestamp_lte", `${to}%2023%3A59%3A59`], ["limit", SESSION_PAGE_LIMIT_MAX]]);
       const { rows, total } = await wholeList(path, (next) => nextPath(next, "team_session/"), "the session list");
       checkSessionRows(rows);
-      for (const row of rows) {
-        const day = dayOf(row.start_timestamp);
-        if (day === null || day < lookFrom || day > to) throw new SourceAdapterError("source_filter_ignored", "The source server returned sessions outside the asked window; the window cannot be trusted.");
+      if (rows.some((row) => { const day = dayOf(row.start_timestamp); return day === null || day < lookFrom || day > to; })) {
+        // Refused exactly as before; an administrator reads why after the
+        // mark (a coach gets the sentence before it).
+        const text = describeWindowRefusal(rows, { lookFrom, from, to });
+        throw new SourceAdapterError("source_filter_ignored", `The source server returned sessions outside the asked window; the window cannot be trusted.${text ? `${DIAGNOSTIC_MARK}${text}` : ""}`);
       }
       const { parents, drillsLeftOut, drillReferencesNotListed } = classifyParents(rows);
       recordClassification(rows, parents, ticket);

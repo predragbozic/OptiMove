@@ -825,6 +825,28 @@ OptiMove athlete profile.
 **Browser storage:** none. The identity lives in the open screen's memory only. Closing the screen, a
 team or workspace change, or signing out drops it.
 
+## A refused date window (`source_filter_ignored`)
+
+A check on the binding path reads the session list for the window from one day earlier (the look-back).
+Every row the source returns must start inside that read - its day is the first ten characters of
+`start_timestamp` - or the whole answer is refused as `source_filter_ignored`, with nothing recorded and no
+retry. The check row's message then carries, after " Diagnostic: ", only counts and fixed words:
+
+`op=session_list_by_date; rows=N; before_lookback=N; after_end=N; unreadable=N; outside_named_drill=N;
+distance=under_3h:N,3h_to_24h:N,over_24h:N,unknown:N; tz=Z:N,offset:N,none:N,other:N.`
+
+- `rows`: every row of the answer; `before_lookback` / `after_end` / `unreadable`: rows before the look-back
+  day, after the last day, and with an empty or unreadable start;
+- `outside_named_drill`: of the rows before the look-back day or after the last day (an unreadable row is
+  never counted here), those a parent inside the asked period names as a drill;
+- `distance`: how far each row outside starts from the nearest edge of the read (00:00:00 of the look-back
+  day, 23:59:59 of the last day), on the naive time, in fixed buckets; `unknown` when it cannot be read;
+- `tz`: the shape after the seconds of every row's `start_timestamp` - `Z`, an offset, none, or other.
+
+Counts stop at 9999. No id, date, time, timestamp, name, URL or JSON is ever in it; a fixed-grammar guard
+drops the description rather than let anything else through. A platform admin and the team's club admin
+read it (Technical details); a coach gets the sentence before it. Reading it sends nothing to the source.
+
 ## Database pool checkout bound
 
 The global PostgreSQL pool (`backend/src/db.js`) never lets a checkout wait without a bound:
