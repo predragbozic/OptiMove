@@ -579,9 +579,10 @@ export function openTeamMapping() {
   gx.identity = keepIdentityList(gx.identity);
 }
 
-// The stored names stay for the open Imports view; a load's own state (a
-// confirmation, a result, an error, an unconfirmed key) belongs to the Link
-// athletes screen and goes with it.
+// The stored names stay for the open Imports view. A load's confirmation, its
+// result and its error belong to the Link athletes screen and go with it; a
+// load in flight, its key and an unconfirmed result stay (identityOutcome), so
+// closing never starts over.
 function keepIdentityList(identity) {
   const fresh = { ...emptyGpexeIdentityState(), ...identityOutcome(identity) };
   return identity?.available ? { ...fresh, available: true, list: identity.list } : fresh;
@@ -1311,7 +1312,6 @@ async function postIdentityLoad(render, { check }) {
   if (!check && (!gx.identity.confirming || gx.identity.unconfirmed || identityLocked(gx))) return;
   if (check && !gx.identity.unconfirmed) return;
   const generation = gx.generation;
-  const epoch = identityEpoch;
   const teamId = gx.teamId;
   const requestKey = gx.identity.requestKey || globalThis.crypto.randomUUID();
   gx.identity = { ...gx.identity, sending: true, confirming: false, requestKey, error: null, result: null };
@@ -1325,13 +1325,15 @@ async function postIdentityLoad(render, { check }) {
   }
   if (generation !== gx.generation) return;
   // The outcome of the load is recorded even after the view was cleared (the
-  // key must not be lost), but the names are read again only while the view
-  // that sent it is still open.
-  const cleared = epoch !== identityEpoch;
+  // key must not be lost), but the names are read again only while an
+  // Imports view of this team is open now - the one that sent it, or one the
+  // administrator came back to (loadGpexeIdentities takes its own epoch, so a
+  // later clear still drops that read).
+  const viewOpen = () => identityViewer(gx) && gx.teamId === teamId && state.activeTab === "training-load" && state.trainingLoad?.section === "imports";
   if (answer) {
     gx.identity = { ...gx.identity, sending: false, requestKey: null, unconfirmed: null, result: identityResult(answer) };
     render();
-    if (!cleared) await loadGpexeIdentities(render);
+    if (viewOpen()) await loadGpexeIdentities(render);
     return;
   }
   if (info.status === 404) {
@@ -1362,7 +1364,7 @@ async function postIdentityLoad(render, { check }) {
     // load gets a new key.
     gx.identity = { ...gx.identity, sending: false, requestKey: null, unconfirmed: null, error: info };
     render();
-    if (!cleared && (code === "identity_load_abandoned" || code === "source_auth_rejected")) await loadGpexeIdentities(render);
+    if (viewOpen() && (code === "identity_load_abandoned" || code === "source_auth_rejected")) await loadGpexeIdentities(render);
     return;
   }
   // No answer, an abort, outcome_unknown or an uncoded 5xx: the result is not

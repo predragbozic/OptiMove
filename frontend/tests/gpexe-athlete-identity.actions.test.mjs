@@ -102,6 +102,7 @@ function reset(workspace = { type: "club", scopeId: "club-1" }) {
   clearAllViewCache();
   state.currentUser = { id: "user-1", activeWorkspace: workspace };
   state.trainingLoad = emptyTrainingLoadState();
+  state.activeTab = "training-load"; // the Imports view lives in Training Load
   confirmAnswer = true;
   confirmQuestions = [];
   fetchCalls = [];

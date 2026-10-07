@@ -41,6 +41,7 @@ import {
   identityOf,
   gpexeAthleteLabel,
   gpexeAthleteSentence,
+  gpexeAthleteOrdinal,
   maskGpexeIds,
 } from "./gpexe-import-data.js";
 
@@ -1121,7 +1122,7 @@ function renderIdentityPanelHtml(gx) {
     body = `
       <div class="gpexe-unknown" role="status">
         <p><strong>Result not confirmed.</strong> ${id.unconfirmed.running ? "The load is still running, or its result is not settled yet." : "The answer was lost, so we can't tell yet what was saved."} Check result asks OptiMove what happened; GPEXE is never read twice for this request.</p>
-        <p class="muted">Linking is off until the result is confirmed. You can close Link athletes and open it again to start over.</p>
+        <p class="muted">Linking is off until the result is confirmed. Check result asks OptiMove what happened; closing Link athletes does not start over.</p>
         <div class="gpexe-link-actions"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-identity-check">Check result</button></div>
       </div>`;
   } else if (id.confirming) {
@@ -1276,7 +1277,7 @@ function renderTeamMappingHtml(gx, teams) {
         </div>
         <div class="gpexe-detail-body">
           <p class="gpexe-map-summary">${escapeHtml([`${linked.length} linked`, `${unlinked.length} not linked`, ...(inactive.length ? [`${inactive.length} no longer in the team`] : [])].join(" · "))}</p>
-          ${maskGpexeIds(gx) ? `<p class="muted">"GPEXE athlete N" is the athlete's place in this list, not the GPEXE id; the id is under Technical details.</p>` : ""}
+          ${maskGpexeIds(gx) ? `<p class="muted">The number in "GPEXE athlete 1", "GPEXE athlete 2" and so on is the athlete's place in this list, not the GPEXE id; the id is under Technical details.</p>` : ""}
           ${body}
           ${footer}
         </div>
@@ -1501,7 +1502,8 @@ function renderLinkHtml(a, c, unlinkedChoices) {
   return `
     <div class="gpexe-link">
       <p><strong>Find ${escapeHtml(maskGpexeIds() ? gpexeWho(id) : `athlete ${id}`)} in GPEXE first. Link only if you are sure.</strong></p>
-      ${maskGpexeIds() && duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the date of birth and the session values before you choose.</p>` : ""}
+      ${maskGpexeIds() && duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below, and the date of birth on Link athletes, before you choose.</p>` : ""}
+      ${maskGpexeIds() && !identityOf(id)?.name ? `<p class="muted">The number in "${escapeHtml(`GPEXE athlete ${gpexeAthleteOrdinal(id)}`)}" is this athlete's place in OptiMove's list, not the GPEXE id; the id is under Technical details.</p>` : ""}
       ${renderLinkContextHtml(a)}
       <div class="gpexe-link-row">
         <label><span>Link ${escapeHtml(gpexeWho(id))} to</span>

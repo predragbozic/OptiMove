@@ -127,6 +127,7 @@ function reset(viewer, opts = {}) {
   clearAllViewCache();
   state.currentUser = { id: "user-1", activeWorkspace: { type: "club", scopeId: "club-1" } };
   state.trainingLoad = emptyTrainingLoadState();
+  state.activeTab = "training-load"; // the Imports view lives in Training Load
   confirmAnswer = false;
   confirmQuestions = [];
   selectValues = {};
@@ -413,4 +414,60 @@ test("a name load that succeeds after the administrator left Imports records its
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-identities")).length, reads, "no identity read after leaving");
   assert.equal(identity.requestKey, null, "the load is settled: its key is done");
   assert.equal(identity.unconfirmed, null);
+});
+
+test("a name load that settles after the administrator left Imports and came back re-reads the names once, and the panel never promises a fresh start by closing", async () => {
+  const gate = deferred();
+  let named = false;
+  reset(VIEWERS["club admin"], {
+    identities: () => ({ status: 200, body: named ? { ...IDENTITIES, identities: [...IDENTITIES.identities, { gpexeAthleteId: ID.notLoaded, name: "Lea Novak", birthDate: null }] } : IDENTITIES }),
+  });
+  const base = responder;
+  responder = async (call) => {
+    if (call.url.endsWith("/athlete-identities/loads")) { await gate.promise; named = true; return { status: 200, body: { loaded: 1, notFound: 0, notRead: 0 } }; }
+    return base(call);
+  };
+  await openMapping();
+  await act("training-load-gpexe-identity-open");
+  const sending = act("training-load-gpexe-identity-send");
+  await new Promise((r) => setImmediate(r));
+  await act("training-load-section", { section: "today" });
+  await openMapping();
+  assert.ok(!state.trainingLoad.gpexe.identity.list?.byId?.[ID.notLoaded], "before the settle the athlete has no name");
+  const reads = fetchCalls.filter((c) => c.url.endsWith("/athlete-identities")).length;
+  gate.resolve();
+  await sending;
+  for (let i = 0; i < 5; i += 1) await new Promise((r) => setImmediate(r));
+  assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-identities")).length, reads + 1, "one re-read for the view open now");
+  assert.equal(state.trainingLoad.gpexe.identity.list?.byId?.[ID.notLoaded]?.name, "Lea Novak");
+
+  // A lost answer: the panel says Check result, never "open it again to start over".
+  const gate2 = deferred();
+  reset(VIEWERS["club admin"]);
+  const base2 = responder;
+  responder = async (call) => (call.url.endsWith("/athlete-identities/loads") ? (await gate2.promise, { status: 502, body: "<html>" }) : base2(call));
+  await openMapping();
+  await act("training-load-gpexe-identity-open");
+  const lost = act("training-load-gpexe-identity-send");
+  gate2.resolve();
+  await lost;
+  confirmAnswer = true;
+  await act("training-load-gpexe-map-close");
+  await act("training-load-gpexe-map-open");
+  const html = pageHtml();
+  assert.ok(!/open it again to start over/.test(html));
+  assert.match(html, /data-action="training-load-gpexe-identity-check"/, "Check result stays after close and reopen");
+});
+
+test("the session review: an unnamed athlete's number is explained as a place in OptiMove's list, and the same-name caution points to what this screen shows", async () => {
+  reset(VIEWERS["club admin"], { identities: { ...IDENTITIES, identities: [...IDENTITIES.identities, { gpexeAthleteId: ID.notLoaded, name: "Mira Zedova", birthDate: null }] } });
+  await openReview();
+  let html = outsideTech(pageHtml());
+  assert.match(html, /Compare the session values below, and the date of birth on Link athletes, before you choose\./);
+  assert.ok(!/Compare the date of birth and the session values before you choose/.test(html.split("gpexe-detail")[1] || ""), "the review never asks for a date it does not show");
+  reset(VIEWERS["club admin"]);
+  await openReview();
+  html = outsideTech(pageHtml());
+  assert.match(html, /The number in &quot;GPEXE athlete 4&quot; is this athlete's place in OptiMove's list, not the GPEXE id|The number in "GPEXE athlete 4" is this athlete's place in OptiMove's list, not the GPEXE id/);
+  assertMasked(pageHtml(), "review number note");
 });

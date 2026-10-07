@@ -216,7 +216,7 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-map-close") {
     if (gx.mapping.sending || gx.identity.sending) return true;
-    if (gx.identity.unconfirmed && !globalThis.window?.confirm?.("The result of the last name load is not confirmed. Close anyway? Nothing is read from GPEXE again; you can open Link athletes later to see what was saved.")) return true;
+    if (gx.identity.unconfirmed && !globalThis.window?.confirm?.("The result of the last name load is not confirmed. Close anyway? Nothing is read from GPEXE again; the result stays unconfirmed, and Check result on Link athletes asks OptiMove what happened.")) return true;
     if (Object.keys(gx.mapping.choices).length && !globalThis.window?.confirm?.("Leave without linking the athletes you chose? Nothing was sent.")) return true;
     closeTeamMapping();
     renderTrainingLoad();
