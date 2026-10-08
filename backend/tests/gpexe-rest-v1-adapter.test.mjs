@@ -540,9 +540,9 @@ test("12. units stays source_capability_unavailable; every other capability is i
   const declared = a.capabilities();
   assert.deepEqual(declared, Object.fromEntries(Object.entries(REST_V1_CAPABILITIES).map(([k, v]) => [k, { status: v.status, available: v.status === "proven" || v.status === "observed" }])));
   assert.deepEqual(Object.entries(REST_V1_CAPABILITIES).filter(([, v]) => v.status === "proven").map(([k]) => k),
-    ["team_list", "team_read", "session_list", "session_list_by_date", "session_read", "session_details", "athlete_session_list", "athlete_session_read", "athlete_session_more", "track_read", "team_thresholds", "athlete_read"]);
+    ["team_list", "team_read", "session_list", "session_read", "session_details", "athlete_session_list", "athlete_session_read", "athlete_session_more", "track_read", "team_thresholds", "athlete_read"]);
   assert.deepEqual(Object.entries(REST_V1_CAPABILITIES).filter(([, v]) => v.status === "observed").map(([k]) => k), ["session_drill_details", "session_tags"]);
-  assert.deepEqual(Object.entries(REST_V1_CAPABILITIES).filter(([, v]) => v.status === "unknown").map(([k]) => k), ["units"]);
+  assert.deepEqual(Object.entries(REST_V1_CAPABILITIES).filter(([, v]) => v.status === "unknown").map(([k]) => k), ["session_list_by_date", "units"]);
   // The table says what the e03 client really sends: it never lists sessions without a date window.
   const client = await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeClient.js"), "utf8");
   assert.doesNotMatch(client, /team_session\/\?team=\$\{team\}&limit=/);

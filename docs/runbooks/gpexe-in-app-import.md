@@ -207,8 +207,11 @@ hidden, never rewritten); before Phase 3b check the deployed table read-only:
 2. It lists the team's parent sessions in the window. The default window is the
    last 14 days, and the maximum is 31.
    - Drills are part of their parent, not candidates of their own.
-   - The list is read from one day earlier. That way a drill whose parent
-     started the evening before is still recognized as a drill.
+   - On the legacy (e03) path the list is read from one day earlier. That way a
+     drill whose parent started the evening before is still recognized as a
+     drill. On the binding path (server3 / `rest_v1`) the whole team list is
+     read and filtered locally - see "How a check finds the sessions of its
+     window".
    - **Lists are read to the end.** GPEXE pages with headers: the body is a
      plain array, `X-Total-Count` gives the total, and `Link: <…>; rel="next"`
      gives the next page. A `{count, next, results}` body is accepted too.
@@ -825,32 +828,58 @@ OptiMove athlete profile.
 **Browser storage:** none. The identity lives in the open screen's memory only. Closing the screen, a
 team or workspace change, or signing out drops it.
 
-## A refused date window (`source_filter_ignored`)
+## How a check finds the sessions of its window (server3 / `rest_v1`)
 
-A check on the binding path reads the session list for the window from one day earlier (the look-back).
-Every row the source returns must start inside that read - its day is the first ten characters of
-`start_timestamp` - or the whole answer is refused as `source_filter_ignored`, with no retry. The failed
-check row with that code is stored; no candidate, preview, import, activity or result row is written and
-nothing is imported. The check row's stored message (not any log) then carries, after " Diagnostic: ", only counts and fixed words:
+Owner decision 2026-10-08 (option (c)), after an owner-run check of 05.10 - 06.10.2026 whose
+date-filtered answer carried five rows after the window (`source_filter_ignored`; sanitized
+diagnostic `rows=13; after_end=5`, all five 3 - 24 hours after the end, no zone suffix): the server's
+date filter is no longer sent or trusted. A check on the binding path reads the **whole session
+list of the bound team** (`team_session/?team=<id>&limit=100`, header paged) and picks the window
+out itself:
 
-`op=session_list_by_date; rows=N; before_lookback=N; after_end=N; unreadable=N; outside_named_drill=N;
-distance=under_3h:N,3h_to_24h:N,over_24h:N,unknown:N; tz=Z:N,offset:N,none:N,other:N.`
+1. every page answers a list with the same `X-Total-Count`; every next link stays on the host, the
+   `rest/v1/` family, the `team_session/` resource and the bound team, carries only `limit=100` and
+   an `offset` equal to the rows read so far (never a date bound); a row seen twice, a total that
+   changes or does not match the rows read, or a link that would skip or repeat rows refuses the
+   list (`source_list_changed` / `source_list_incomplete` / `source_answer_unexpected` /
+   `source_team_mismatch`);
+2. at most `SESSION_LIST_MAX_ROWS` (2000) rows - 20 pages of 100: a longer list is refused at the
+   first page by its `X-Total-Count`, before any further request (`source_list_too_large`);
+3. every row names the bound team in a known form;
+4. parents and drills are told apart on the whole list (a drill row is never a session, whichever
+   day its parent started);
+5. every start must be a real calendar date and time (`YYYY-MM-DD[T ]HH:MM:SS`, never normalised);
+   one that is not - anywhere in the list - refuses it (`source_session_start_unreadable`): where it
+   belongs is never guessed;
+6. only then are the parents whose day (the source's naive day) lies inside the window returned; a
+   parent of the day before (the one-day look-back) and of any other day is left out.
 
-- `rows`: every row of the answer; `before_lookback` / `after_end` / `unreadable`: rows before the look-back
-  day, after the last day, and with an empty or unreadable start - unreadable meaning no real calendar date
-  and time `YYYY-MM-DD[T ]HH:MM:SS` (a month 13, 31 April, hour 24 or minute 60 is never normalised into
-  another moment). `unreadable` counts every such row, including one whose first ten characters lie inside
-  the read and which the filter itself therefore accepted - such a row is not by itself a cause of the
-  refusal;
-- `outside_named_drill`: of the rows before the look-back day or after the last day (an unreadable row is
-  never counted here), those a parent inside the asked period names as a drill;
-- `distance`: how far each row outside starts from the nearest edge of the read (00:00:00 of the look-back
-  day, 23:59:59 of the last day), on the naive time, in fixed buckets; `unknown` when it cannot be read;
-- `tz`: the shape after the seconds of every row's `start_timestamp` - `Z`, an offset, none, or other.
+Any refusal fails the check with its own code: the failed check row is stored, no candidate,
+preview, import, activity or result row is written, no bundle is read, nothing is retried, and the
+server-side filter is never used as a fallback.
 
-Counts stop at 9999. No id, date, time, timestamp, name, URL or JSON is ever in it; a fixed-grammar guard
-drops the description rather than let anything else through. A platform admin and the team's club admin
-read it (Technical details); a coach gets the sentence before it. Reading it sends nothing to the source.
+**Operational notes (fail-closed, deliberate):**
+
+- the whole history is checked, not only the window: one session with an unreadable start
+  (`source_session_start_unreadable`), one ambiguous parent / drill pair anywhere in the list
+  (`source_list_ambiguous`, with its `reason`), or a list longer than 2000 sessions
+  (`source_list_too_large`) fails every check of that team until the row is corrected in GPEXE (or,
+  for the cap, until the cap is changed in code); there is no fix inside the app;
+- **the form of a server3 next link has never been observed** (only that a `Link` header is sent):
+  the adapter accepts only `limit=100` and `offset=<rows read>`; a page-number or cursor link refuses
+  the list (`source_answer_unexpected`, "a parameter this adapter does not follow"). Team 980's list
+  held 308 rows on 2026-09-29, so the first real check after this change is the first proof of the
+  paging and of the classification of the whole history; on any of these codes the owner stops and
+  reports only the code;
+- **residual risk of offset paging:** a session deleted and another created between two page reads
+  (the total unchanged) shifts the offsets, and one row can be missed without any check noticing (the
+  e03 path and the earlier filtered read had the same property). If the missed row is a parent with
+  drills, its drill rows are no longer named by any listed row and are treated as parents: when they
+  fall inside the window, the check records them as candidate sessions (a drill as a session of its
+  own). A later check that sees the parent does not withdraw those candidates, and approving one (with
+  the import switch on) would write the drill's values a second time. Today the switch is off and a
+  candidate is only reviewed. A stronger guard (for example reading the whole list a second time and
+  requiring the same ids, or re-reading the first page) is an owner decision, not built.
 
 ## Database pool checkout bound
 

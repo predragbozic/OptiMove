@@ -213,14 +213,15 @@ function fakeSource({ token = TOKEN } = {}) {
     const t = state.served; const b = state.bundle;
     if (t === null) return json(404, { detail: "no team served" });
     const sid = b.teamSession.id;
-    if (key === `/rest/v1/team_session/?team=${t}&start_timestamp_gte=2026-09-13%2000%3A00%3A00&start_timestamp_lte=${DAY}%2023%3A59%3A59&limit=100`) {
+    if (key === `/rest/v1/team_session/?team=${t}&limit=100`) {
       if (state.gates.list) await abortable(init, state.gates.list.p);
       if (state.faults.listStatus !== 200) return json(state.faults.listStatus, { detail: SOURCE_SENTENCE });
       if (state.faults.emptyList) return json(200, [], { "x-total-count": "0" });
       const base = { team: Number(t), category_name: "DRILL", start_timestamp: b.teamSession.start_timestamp, end_timestamp: b.teamSession.end_timestamp, updated_on: b.teamSession.updated_on, is_stats_valid: true, drills: [], drills_count: 0 };
       const rows = [{ ...b.teamSession, drills: [sid * 1000 + 1, sid * 1000 + 2], drills_count: 2 }, { ...base, id: sid * 1000 + 1 }, { ...base, id: sid * 1000 + 2 }];
       if (state.faults.listExtraRows) rows.push(...state.faults.listExtraRows.map((r) => ({ ...base, ...r })));
-      return json(200, rows, { "x-total-count": String(rows.length) });
+      const total = state.faults.listTotal === undefined ? String(rows.length) : state.faults.listTotal;
+      return json(200, rows, total === null ? {} : { "x-total-count": total });
     }
     if (key === `/rest/v1/team_session/${sid}/`) return json(200, { ...b.teamSession, drills_count: 2 });
     if (key === `/rest/v1/athlete_session/?teamsession=${sid}&limit=100`) {
@@ -620,14 +621,14 @@ test("6. concurrency: an Unbind holding the team lock, a Test / bind in flight o
     const started = await startCheck(o);
     assert.equal(started.status, 202, JSON.stringify(started.body));
     await waitFor(() => holds === 2);
-    const listReads = importReads().filter((c) => c.key.includes("start_timestamp_gte")).length;
+    const listReads = importReads().filter((c) => c.key.includes("/team_session/?team=")).length;
     await mutate();
     g.release();
     await started.done.p;
     resolver.setImportSourceRevalidateHoldForTests(null);
     const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [started.body.check.id]))[0];
     assert.deepEqual([row.status, row.error_code], ["failed", code], JSON.stringify(row));
-    assert.equal(importReads().filter((c) => c.key.includes("start_timestamp_gte")).length, listReads, "no further list read");
+    assert.equal(importReads().filter((c) => c.key.includes("/team_session/?team=")).length, listReads, "no further list read");
     assert.equal((await candidatesOf(o.teamId)).length, 0, "the session was not recorded");
     await restore();
   }
@@ -1029,7 +1030,7 @@ test("13. the facts are re-validated after a list too, empty or not: a binding e
     src.state.gates.list = gate();
     const started = await startCheck(o);
     assert.equal(started.status, 202, JSON.stringify(started.body));
-    await waitFor(() => src.calls.some((c) => c.key.includes("start_timestamp_gte")));
+    await waitFor(() => src.calls.some((c) => c.key.includes("/team_session/?team=")));
     assert.equal((await unbind(o, conn, binding)).status, 200);
     const readsBefore = importReads().length;
     src.state.gates.list.release();
@@ -1051,7 +1052,7 @@ test("13. the facts are re-validated after a list too, empty or not: a binding e
     src.state.gates.list = gate();
     const started = await startCheck(o);
     assert.equal(started.status, 202, JSON.stringify(started.body));
-    await waitFor(() => src.calls.some((c) => c.key.includes("start_timestamp_gte")));
+    await waitFor(() => src.calls.some((c) => c.key.includes("/team_session/?team=")));
     const re = await api(`/sources/gpexe/connections/${conn.id}/reconnect`, { method: "POST", cookie: o.cadmin.cookie, body: { username: USERNAME, password: PASSWORD, confirmation: { sourceSystem: "gpexe", ownerClubId: o.clubId, affectedTeamCount: 1 } }, allowed: [SOURCE_TEAM_NAME_MARKER] });
     assert.equal(re.status, 200, JSON.stringify(re.body));
     src.state.gates.list.release();
@@ -1558,42 +1559,37 @@ test("20. a drill answer whose metric value has an unknown shape: the check stop
   src.state.faults.drillPlayers = null;
 });
 
-test("21. a date window the source does not keep: the check still ends source_filter_ignored with no candidate and no retry; the stored failed check row carries the sanitized description after Diagnostic: (counts and fixed words only) - for an administrator only; nothing of it is written anywhere else", async () => {
+test("21. option (c): the window is picked out of the whole team list - five sessions after the period and one of the look-back day are left out and only the window's session becomes a candidate (no bundle read for the others); a start that cannot be read or an unstable X-Total-Count fails the check with its own code, writes no candidate and reads no bundle; no date bound is ever sent", async () => {
   const o = await org();
   useSource();
   await bound(o);
   process.env.GPEXE_API_TOKEN = ENV_TOKEN;
   legacyTrap();
   src.serve(o.sourceTeamId);
-  // A row far after the window (no parent names it) and a row with no start.
-  src.state.faults.listExtraRows = [
-    { id: 991234567, start_timestamp: "2026-09-20T10:00:00", category_name: "Marker Category Zq" },
-    { id: 991234568, start_timestamp: null },
-  ];
-  const before = (await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n;
-  const logBefore = logLines.length;
-  const STABLE = "The source server returned sessions outside the asked window; the window cannot be trusted.";
+  const candidates = async () => (await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n;
   try {
-    const coachView = await importer.startCheck(o.teamId, { userId: o.coach.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: false });
-    assert.deepEqual([coachView.status, coachView.error], ["failed", { code: "source_filter_ignored", message: STABLE }], "a coach gets the stable sentence only");
-    const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [coachView.id]))[0];
-    assert.equal(row.error_code, "source_filter_ignored");
-    assert.match(row.error_message, /^The source server returned sessions outside the asked window; the window cannot be trusted\. Diagnostic: op=session_list_by_date; rows=5; before_lookback=0; after_end=1; unreadable=1; outside_named_drill=0; distance=under_3h:0,3h_to_24h:0,over_24h:1,unknown:1; tz=Z:\d+,offset:\d+,none:\d+,other:\d+\.$/);
-    for (const leak of ["991234567", "991234568", "2026-09-20", "10:00", "Marker", String(o.sourceTeamId), SOURCE_SENTENCE]) assert.ok(!row.error_message.includes(leak), `${leak} is not on the check row`);
-    assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n, before, "no candidate recorded");
-    assert.equal(src.calls.filter((c) => c.key.includes("start_timestamp_gte")).length, 1, "one list read, no retry");
-    assert.ok(!src.calls.some((c) => c.key.includes("/details/") || c.key.includes("athlete_session")), "no read after the refused list");
-    const viaAdmin = await api(`/gpexe/teams/${o.teamId}/checks/${coachView.id}`, { cookie: o.cadmin.cookie });
-    assert.equal(viaAdmin.body.check.error.message, row.error_message, "the club admin reads the description");
-    const viaPlatform = await api(`/gpexe/teams/${o.teamId}/checks/${coachView.id}`, { cookie: o.padmin.cookie });
-    assert.equal(viaPlatform.body.check.error.message, row.error_message, "a platform admin reads the description");
-    const viaCoach = await api(`/gpexe/teams/${o.teamId}/checks/${coachView.id}`, { cookie: o.coach.cookie });
-    assert.equal(viaCoach.body.check.error.message, STABLE, "the coach does not");
-    const statusCoach = await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.coach.cookie });
-    assert.ok(!JSON.stringify(statusCoach.body).includes("Diagnostic"), "nor in the coach's status");
-    for (const line of logLines.slice(logBefore)) assert.ok(!line.includes("op=session_list_by_date") && !line.includes("991234567"), `not written to a log line: ${line.slice(0, 120)}`);
+    src.state.faults.listExtraRows = [
+      ...[0, 1, 2, 3, 4].map((i) => ({ id: 991234560 + i, start_timestamp: `2026-09-16T0${i + 1}:00:00`, category_name: "Training" })),
+      { id: 991234569, start_timestamp: "2026-09-13T20:00:00", category_name: "Training" },
+    ];
+    const ok = await importer.startCheck(o.teamId, { userId: o.coach.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+    assert.equal(ok.status, "succeeded", JSON.stringify(ok.error));
+    assert.equal(await candidates(), 1, "only the window's session");
+    assert.ok(!src.calls.some((c) => /99123456\d/.test(c.key)), "no session outside the window was read");
+    assert.ok(!src.calls.some((c) => c.key.includes("start_timestamp")), "no date bound is sent");
+    const before = await candidates();
+    for (const [fault, expected] of [[{ listExtraRows: [{ id: 991234570, start_timestamp: null }] }, "source_session_start_unreadable"], [{ listExtraRows: [], listTotal: "99" }, "source_list_incomplete"], [{ listExtraRows: [], listTotal: null }, "source_answer_unexpected"]]) {
+      Object.assign(src.state.faults, { listTotal: undefined }, fault);
+      const callsBefore = src.calls.length;
+      const failed = await importer.startCheck(o.teamId, { userId: o.coach.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+      assert.deepEqual([failed.status, failed.error?.code], ["failed", expected], JSON.stringify(fault));
+      assert.equal(await candidates(), before, `${expected}: no candidate`);
+      assert.ok(!src.calls.slice(callsBefore).some((c) => /\/team_session\/\d+\//.test(c.key) || c.key.includes("athlete_session")), `${expected}: no bundle read`);
+      assert.equal(src.calls.slice(callsBefore).filter((c) => c.key.includes("/team_session/?team=")).length, 1, `${expected}: one list read, no retry`);
+    }
   } finally {
     src.state.faults.listExtraRows = null;
+    src.state.faults.listTotal = undefined;
   }
 });
 

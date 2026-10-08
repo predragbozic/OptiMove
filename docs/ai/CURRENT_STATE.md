@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-07. Last `origin/main` commit checked: `5436c6d` (merge of PR #146,
-`fix/pool-checkout-timeout-and-identity-key` → `main`; PR #145 `0271acb` before it).
+Last reviewed: 2026-10-08. Last `origin/main` commit checked: `39176b8` (merge of PR #147,
+`fix/gpexe-source-filter-ignored-diagnostic` → `main`; PR #146 `5436c6d` before it).
 
 ## Active phase
 
@@ -1240,8 +1240,9 @@ Technical details.
     the first ten characters of `start_timestamp` (no zone), accepts the look-back day, and reports a row
     outside the window and an unreadable start under the same code; the same request form passed for
     05.10 – 05.10 and in the probe.
-- **A sanitized diagnostic for `source_filter_ignored`** (owner order 2026-10-07; branch
-  `fix/gpexe-source-filter-ignored-diagnostic` from `5436c6d`; not merged; backend adapter, tests and docs):
+- **A sanitized diagnostic for `source_filter_ignored`** (owner order 2026-10-07; PR #147, branch
+  `fix/gpexe-source-filter-ignored-diagnostic` from `5436c6d`; merged and deployed, see below; superseded
+  by option (c), which removed the refusal and its description):
   the refusal is unchanged (the same code, no candidate, preview, import, activity or result row, nothing
   imported, no retry, no extra request; the failed check row is stored as before); the check row's stored
   message gains after " Diagnostic: " only counts and fixed words -
@@ -1253,7 +1254,44 @@ Technical details.
   the team's club admin read it; a coach gets the stable sentence. The filtering rule, the period, the
   timezone rule, the classification and the fail-closed behaviour are unchanged; the options (a) a drill
   row past midnight, (b) a zone rule, (c) the whole list filtered locally wait for the diagnostic's result.
-  Runbook section "A refused date window (`source_filter_ignored`)".
+- **PR #147 is merged and deployed.**
+  - Reviewed head `13b3938` (the owner's external review READY after round 2 - a strict start reading and
+    the stored-check-row wording), merge commit `39176b8` (parents `5436c6d` and `13b3938`) on 2026-10-08
+    at 09:28:28 UTC, merged exactly from that head on the owner's order (`--match-head-commit`).
+  - `/api/health` first served `39176b8` with `ok: true` at 09:29:21 UTC, then three times in a row
+    (09:29:31, 09:29:41 and 09:29:52 UTC).
+  - Read-only smoke without a login, zero UUID, GET only: the GPEXE team status, one check, the candidates,
+    one candidate, the source athletes, the athlete links, the athlete identities, the source-connection
+    list and one connection answered 401. No migration; no check or GPEXE request at the merge.
+- **The owner's controlled check of the same window (2026-10-08, run once, sanitized, as reported by the
+  owner):** `op=session_list_by_date; rows=13; before_lookback=0; after_end=5; unreadable=0;
+  outside_named_drill=0; distance=under_3h:0,3h_to_24h:5,over_24h:0,unknown:0;
+  tz=Z:0,offset:0,none:13,other:0.` - five rows of the server's date-filtered answer start 3 to 24 hours
+  after the asked period, none named as a drill, every start readable and without a zone suffix. **Owner
+  decision: option (c)**: the importer no longer trusts the server-side date filter for completeness.
+- **Option (c) - the whole list, filtered locally** (owner order 2026-10-08; branch
+  `fix/gpexe-rest-v1-local-window-filter` from `39176b8`; not merged; backend adapter, tests and docs):
+  `listSessionsByDay` reads the whole session list of the bound team (`team_session/?team=&limit=100`,
+  the proven row-1a read) - every page with the same `X-Total-Count`, every next link on the same host,
+  family, resource and team with only `limit=100` and an `offset` equal to the rows read so far, at most
+  2000 rows (20 pages; a longer list refused at its first page as `source_list_too_large`) - classifies
+  parents and drills on the whole list, refuses a start that is not a real date and time anywhere in it
+  (`source_session_start_unreadable`), and only then returns the parents of the window by their naive
+  day (the look-back day's parents and every other day's left out; only the window's parents become
+  readable). Any refusal fails the check with its own code (the failed check row stored; no candidate,
+  preview, import, activity or result row; no bundle read; no retry). No server-side date filter, no
+  fallback to it, no other host, no environment token; Link, Import, drill and metric rules unchanged.
+  The `source_filter_ignored` refusal and its sanitized description are gone with the filter. Runbook
+  section "How a check finds the sessions of its window". **Fail-closed consequences:** the whole
+  history is checked - a list longer than 2000 sessions, one session with an unreadable start or one
+  ambiguous parent / drill pair anywhere fails every check of the team until it is corrected in GPEXE.
+  **Not yet observed on server3:** the form of a next link (only `limit` / `offset` is accepted) and the
+  classification of team 980's whole history (308 rows on 2026-09-29, so at least four pages); the first
+  real check after the merge is the first proof of both. **Residual risk (offset paging):** a delete plus
+  an insert between two page reads can miss one row unnoticed; if that row is a parent with drills, its
+  drill rows inside the window are recorded as candidate sessions of their own, which a later check does
+  not withdraw (approving one with the switch on would write the drill's values twice). A stronger guard
+  (a second whole read compared by ids, or a re-read of the first page) is an owner decision, not built.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1719,6 +1757,10 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #147 (`39176b8`, merged 2026-10-08 09:28:28 UTC exactly from head `13b3938`) is deployed:
+  `/api/health` served `39176b8` with `ok: true` three times in a row (09:29:31–09:29:52 UTC); without a
+  login nine protected GPEXE and source-connection GET routes answered 401. No migration. No check or GPEXE
+  request at the merge; the owner's controlled check followed on a separate order.
 - PR #146 (`5436c6d`, merged 2026-10-07 13:06:18 UTC exactly from head `cafe502`) is deployed:
   `/api/health` served `5436c6d` with `ok: true` three times in a row (13:08:28–13:08:49 UTC); without a
   login nine protected routes answered 401. No migration. No identity load or GPEXE request at the merge.
@@ -2153,11 +2195,11 @@ pre-existing; pass/fail counts don't belong in this file
 ## Most likely next step
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
-the identity implementation (PR #144, v32), the id masking (PR #145) and the hardening (PR #146) are merged
-and deployed; PR #142 is closed as superseded. Next steps, in order:
-1. The owner's external review of the diagnostic branch `fix/gpexe-source-filter-ignored-diagnostic`.
-2. After its merge and deploy, on a separate owner order, one check of the same window; the owner returns
-   only the " Diagnostic: " line, then decides between options (a), (b) and (c) (see the active phase).
+the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146) and the
+window diagnostic (PR #147) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
+1. The owner's external review of option (c), branch `fix/gpexe-rest-v1-local-window-filter`.
+2. After its merge and deploy, on a separate owner order, one check of the same window through the whole
+   list.
 3. The owner states the state of the production-use gate and of the two gates before a link (an identity
    load and one link were run after PR #146; whether those gates were confirmed is not recorded here).
 4. The separate resend timing task (see Separate tasks), when the owner schedules it.

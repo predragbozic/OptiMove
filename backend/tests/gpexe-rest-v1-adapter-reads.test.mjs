@@ -171,12 +171,12 @@ const D1 = "/api/team_session/100/details/?drill=1";
 const BRIEF = "/api/team_session/100/brief/";
 const TAGS = "/rest/v1/team_session_tag/?team=980&limit=100";
 const THRESH = "/rest/v1/team/980/thresholds/?valid_on=2026-09-14";
-const WINDOW = "/rest/v1/team_session/?team=980&start_timestamp_gte=2026-09-13%2000%3A00%3A00&start_timestamp_lte=2026-09-15%2023%3A59%3A59&limit=100";
+// A date window reads the whole team list (owner decision 2026-10-08): the same request as LIST.
+const WINDOW = LIST;
 function fullRoutes(over = {}) {
   return {
     "/rest/v1/team/980/": answer(200, { id: 980, name: "FK Marker" }),
-    [LIST]: answer(200, [parent(100, [101, 102]), session(101), session(102), session(200)], { "x-total-count": "4" }),
-    [WINDOW]: answer(200, [parent(100, [101, 102]), session(101), session(102)], { "x-total-count": "3" }),
+    [LIST]: answer(200, [parent(100, [101, 102]), session(101), session(102), session(200, 980, { start_timestamp: "2026-09-20T10:00:00" })], { "x-total-count": "4" }),
     [PARENT]: answer(200, { id: 100, team: 980, category_name: "Training", is_stats_valid: true, drills_count: 2, start_timestamp: "2026-09-14T10:00:00", end_timestamp: "2026-09-14T11:00:00", updated_on: "2026-09-14T12:00:00", drill: null, name: "Marker Session", notes: "private" }),
     [ATHLETES]: answer(200, [athleteRow(500, 4711), athleteRow(501, 4712, { track: 901 })], { "x-total-count": "2" }),
     "/rest/v1/athlete_session/500/": answer(200, athleteRow(500, 4711)),
@@ -241,7 +241,7 @@ test("B2.1 the eight reads, each a GET on server3 under /rest/v1/ for the bound 
   // The window read: the proved encoding, every row inside the window, the same classification.
   const w = await a.listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
   assert.deepEqual(idsOf(w), ["100"]);
-  assert.deepEqual([w.drillsLeftOut, w.fromDay, w.toDay, w.total], [2, "2026-09-14", "2026-09-15", 3]);
+  assert.deepEqual([w.drillsLeftOut, w.fromDay, w.toDay, w.total, w.otherParentsLeftOut], [2, "2026-09-14", "2026-09-15", 4, 1]);
   assert.equal(pathsOf(calls).pop(), WINDOW);
 });
 
@@ -330,35 +330,35 @@ test("B2.3 athlete rows: whole or refused, every row of the confirmed session; a
   assert.ok(!calls.some((x) => x.url.includes("teamsession=200")));
 });
 
-test("B2.4 the date window: two calendar days, forward, at most 31 days, the proved encoding; a source that returns a row outside the window is refused as a whole; the same parent/drill classification and the same team rules apply", async () => {
+test("B2.4 the date window: two calendar days, forward, at most 31 days; the WHOLE team list is read (never a server-side date filter) and the window is picked out locally; the same parent/drill classification and the same team rules apply", async () => {
   const { a, calls } = await confirmedAdapter();
   for (const bad of [{ fromDay: "2026-09-14" }, { toDay: "2026-09-14" }, { fromDay: "2026-9-14", toDay: "2026-09-15" }, { fromDay: "2026-02-30", toDay: "2026-03-01" }, { fromDay: "2026-09-15", toDay: "2026-09-14" }, { fromDay: "2026-09-01", toDay: "2026-10-02" }, { fromDay: "2026-09-14", toDay: "2026-09-15", limit: 5 }, { fromDay: "2026-09-14 00:00:00", toDay: "2026-09-15" }, { fromDay: "2026-09-14%2000", toDay: "2026-09-15" }]) {
     await assert.rejects(a.listSessionsByDay(bad), code("invalid_options"), JSON.stringify(bad));
   }
-  assert.ok(!calls.some((c) => c.url.includes("start_timestamp")), "nothing was sent for a bad window");
+  assert.equal(calls.length, 0, "nothing was sent for a bad window");
   const ok = await a.listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
   assert.deepEqual(idsOf(ok), ["100"]);
   const sent = new URL(calls[calls.length - 1].url);
-  assert.equal(sent.search, "?team=980&start_timestamp_gte=2026-09-13%2000%3A00%3A00&start_timestamp_lte=2026-09-15%2023%3A59%3A59&limit=100");
-  // Exactly 31 days is allowed, 32 is not.
-  const thirtyOne = fakeServer(fullRoutes({ "/rest/v1/team_session/?team=980&start_timestamp_gte=2026-08-31%2000%3A00%3A00&start_timestamp_lte=2026-10-01%2023%3A59%3A59&limit=100": answer(200, [], { "x-total-count": "0" }) }));
-  assert.deepEqual(idsOf(await make(thirtyOne.fetchImpl).listSessionsByDay({ fromDay: "2026-09-01", toDay: "2026-10-01" })), []);
-  // A row outside the window: the filter was ignored, the whole answer is refused.
+  assert.equal(sent.search, "?team=980&limit=100", "no date bound is ever sent");
+  assert.ok(!calls.some((c) => c.url.includes("start_timestamp")), "the server-side date filter is never used");
+  // Exactly 31 days is allowed, 32 is not (the whole list either way).
+  assert.deepEqual(idsOf(await make(full().fetchImpl).listSessionsByDay({ fromDay: "2026-09-01", toDay: "2026-10-01" })), ["100", "200"]);
+  // A row outside the window is left out locally, not refused.
   const outside = full({ [WINDOW]: answer(200, [parent(100, [101, 102]), session(101), session(102), session(200, 980, { start_timestamp: "2026-09-20T10:00:00" })], { "x-total-count": "4" }) });
-  await assert.rejects(make(outside.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" }), code("source_filter_ignored"));
+  const o = await make(outside.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
+  assert.deepEqual([idsOf(o), o.otherParentsLeftOut], [["100"], 1]);
   const noDay = full({ [WINDOW]: answer(200, [session(300, 980, { start_timestamp: null })], { "x-total-count": "1" }) });
-  await assert.rejects(make(noDay.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" }), code("source_filter_ignored"));
+  await assert.rejects(make(noDay.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" }), code("source_session_start_unreadable"));
   const foreign = full({ [WINDOW]: answer(200, [session(300, 981)], { "x-total-count": "1" }) });
   await assert.rejects(make(foreign.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" }), code("source_team_mismatch"));
   const ambiguousPage = full({ [WINDOW]: answer(200, [parent(100, [101]), parent(200, [101]), session(101)], { "x-total-count": "3" }) });
   await assert.rejects(make(ambiguousPage.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" }), code("source_list_ambiguous"));
-  // A next page of the window keeps the window (the server's link, decoded by the URL parser, goes out re-encoded).
+  // A next page: the page size and the offset only.
   const paged = fakeServer(fullRoutes({
-    [WINDOW]: answer(200, [parent(100, [101, 102]), session(101)], { "x-total-count": "3", link: '<https://server3.gpexe.com/rest/v1/team_session/?team=980&start_timestamp_gte=2026-09-13%2000%3A00%3A00&start_timestamp_lte=2026-09-15%2023%3A59%3A59&limit=100&offset=2>; rel="next"' }),
-    "/rest/v1/team_session/?team=980&start_timestamp_gte=2026-09-13%2000%3A00%3A00&start_timestamp_lte=2026-09-15%2023%3A59%3A59&limit=100&offset=2": answer(200, [session(102)], { "x-total-count": "3" }),
+    [WINDOW]: answer(200, [parent(100, [101, 102]), session(101)], { "x-total-count": "3", link: '<https://server3.gpexe.com/rest/v1/team_session/?team=980&limit=100&offset=2>; rel="next"' }),
+    [`${WINDOW}&offset=2`]: answer(200, [session(102)], { "x-total-count": "3" }),
   }));
-  const p = make(paged.fetchImpl);
-  assert.deepEqual(idsOf(await p.listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" })), ["100"]);
+  assert.deepEqual(idsOf(await make(paged.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" })), ["100"]);
   assert.equal(paged.calls.length, 2);
 });
 
@@ -635,7 +635,9 @@ test("B5.2 parseDrillTags on its own: the two candidate shapes and nothing else"
 test("B6. regression: the capabilities say what is implemented, the e03 importer and the host allowlist are untouched, and nothing writes", async () => {
   const { a } = await confirmedAdapter();
   const declared = a.capabilities();
-  for (const name of ["session_list_by_date", "session_read", "session_details", "athlete_session_list", "athlete_session_read", "athlete_session_more", "track_read", "team_thresholds"]) assert.deepEqual(declared[name], { status: "proven", available: true }, name);
+  assert.deepEqual(declared.session_list, { status: "proven", available: true });
+  assert.deepEqual(declared.session_list_by_date, { status: "unknown", available: false }, "the server-side date filter is not trusted (owner decision 2026-10-08)");
+  for (const name of ["session_read", "session_details", "athlete_session_list", "athlete_session_read", "athlete_session_more", "track_read", "team_thresholds"]) assert.deepEqual(declared[name], { status: "proven", available: true }, name);
   assert.deepEqual(declared.session_drill_details, { status: "observed", available: true });
   assert.deepEqual(declared.session_tags, { status: "observed", available: true });
   assert.deepEqual(declared.units, { status: "unknown", available: false });
@@ -669,7 +671,7 @@ test("B6b. the one widening of the host path rule is exactly two percent sequenc
 // ---------------------------------------------------------------------------
 // B7. Review fixes of 2026-10-03 (code-reviewer HIGH/MEDIUM/LOW, security-reviewer MEDIUM/LOW).
 // ---------------------------------------------------------------------------
-test("B7.1 the date window reads exactly one day back: a drill row inside the window whose parent started the evening before is not listed as a session, the parent of that extra day is left out again, two days back is never read, and a row before the extra day still refuses the whole answer", async () => {
+test("B7.1 the one-day look-back on the whole list: a drill row inside the window whose parent started the evening before is not listed as a session and the parent of that extra day is left out; a row two or more days earlier is classified with the rest and left out too; month and year boundaries", async () => {
   const rows = [
     parent(100, [101, 102], 980, { start_timestamp: "2026-09-13T23:30:00" }),
     session(101, 980, { start_timestamp: "2026-09-14T00:05:00" }),
@@ -679,21 +681,16 @@ test("B7.1 the date window reads exactly one day back: a drill row inside the wi
   const server = full({ [WINDOW]: answer(200, rows, { "x-total-count": "4" }) });
   const r = await make(server.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
   assert.deepEqual(idsOf(r), ["300"]);
-  assert.equal(r.drillsLeftOut, 2);
-  assert.equal(r.lookBackParentsLeftOut, 1);
-  assert.equal(r.lookBackDays, 1);
+  assert.deepEqual([r.drillsLeftOut, r.lookBackParentsLeftOut, r.otherParentsLeftOut, r.lookBackDays], [2, 1, 0, 1]);
   assert.deepEqual(pathsOf(server.calls), [WINDOW]);
-  assert.ok(!server.calls.some((c) => c.url.includes("2026-09-12")), "two days back is never read");
-  // A parent of the extra day with no drill in the window is left out too — it is not of the window.
   const quiet = full({ [WINDOW]: answer(200, [session(99, 980, { start_timestamp: "2026-09-13T18:00:00" }), session(300)], { "x-total-count": "2" }) });
   assert.deepEqual(idsOf(await make(quiet.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" })), ["300"]);
-  // A row before the extra day: the filter was ignored.
   const early = full({ [WINDOW]: answer(200, [session(98, 980, { start_timestamp: "2026-09-12T23:59:59" }), session(300)], { "x-total-count": "2" }) });
-  await assert.rejects(make(early.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" }), code("source_filter_ignored"));
-  // Month and year boundaries of the look-back day.
-  const jan = fakeServer(fullRoutes({ "/rest/v1/team_session/?team=980&start_timestamp_gte=2025-12-31%2000%3A00%3A00&start_timestamp_lte=2026-01-01%2023%3A59%3A59&limit=100": answer(200, [], { "x-total-count": "0" }) }));
-  assert.deepEqual(idsOf(await make(jan.fetchImpl).listSessionsByDay({ fromDay: "2026-01-01", toDay: "2026-01-01" })), []);
-  assert.equal(pathsOf(jan.calls)[0], "/rest/v1/team_session/?team=980&start_timestamp_gte=2025-12-31%2000%3A00%3A00&start_timestamp_lte=2026-01-01%2023%3A59%3A59&limit=100");
+  const e = await make(early.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
+  assert.deepEqual([idsOf(e), e.lookBackParentsLeftOut, e.otherParentsLeftOut], [["300"], 0, 1]);
+  const jan = full({ [WINDOW]: answer(200, [session(1, 980, { start_timestamp: "2025-12-31T22:00:00" }), session(2, 980, { start_timestamp: "2026-01-01T09:00:00" }), session(3, 980, { start_timestamp: "2026-01-02T00:00:00" })], { "x-total-count": "3" }) });
+  const j = await make(jan.fetchImpl).listSessionsByDay({ fromDay: "2026-01-01", toDay: "2026-01-01" });
+  assert.deepEqual([idsOf(j), j.lookBackParentsLeftOut, j.otherParentsLeftOut], [["2"], 1, 1]);
 });
 
 const { validatePlayersAnswer } = await import("../src/gpexeRestV1Adapter.js");
@@ -832,13 +829,17 @@ test("B8.1 a session is read only when a session list of this instance classifie
     await assert.rejects(a.fetchSessionBundle({ sessionId: drill }), code("session_not_listed"), drill);
   }
   assert.equal(server.calls.length, sent);
-  // A parent of the list is readable; a window list classifies too (its look-back parents as well).
+  // A parent of the list is readable. A window list classifies the whole list,
+  // but only the parents of the window become readable: a look-back parent,
+  // another day's parent and a drill row stay unreadable, with no request.
   assert.equal((await a.getSession({ sessionId: "100" })).id, 100);
-  const windowed = full({ [WINDOW]: answer(200, [parent(300, [301], 980, { start_timestamp: "2026-09-13T23:30:00" }), session(301, 980, { start_timestamp: "2026-09-14T00:05:00" })], { "x-total-count": "2" }), "/rest/v1/team_session/300/": answer(200, { id: 300, team: 980, drills_count: 1, start_timestamp: "2026-09-13T23:30:00" }) });
+  const windowed = full({ [WINDOW]: answer(200, [parent(300, [301], 980, { start_timestamp: "2026-09-13T23:30:00" }), session(301, 980, { start_timestamp: "2026-09-14T00:05:00" }), session(302, 980, { start_timestamp: "2026-09-14T10:00:00" }), session(303, 980, { start_timestamp: "2026-09-20T10:00:00" })], { "x-total-count": "4" }), "/rest/v1/team_session/302/": answer(200, { id: 302, team: 980, drills_count: 0, start_timestamp: "2026-09-14T10:00:00" }) });
   const w = make(windowed.fetchImpl);
   await w.listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
-  assert.equal((await w.getSession({ sessionId: "300" })).id, 300);
-  await assert.rejects(w.getSession({ sessionId: "301" }), code("session_not_listed"));
+  assert.equal((await w.getSession({ sessionId: "302" })).id, 302);
+  const listed = windowed.calls.length;
+  for (const id of ["300", "301", "303"]) await assert.rejects(w.getSession({ sessionId: id }), code("session_not_listed"), id);
+  assert.equal(windowed.calls.length, listed, "nothing was sent for a session outside the window");
   // Reclassification: a page on which 100 is named as a drill of 900 withdraws 100 and everything under it.
   let page = fullRoutes()[LIST];
   const flip = fakeServer({ ...fullRoutes(), [LIST]: () => page });
@@ -1065,13 +1066,15 @@ test("B8.6 round-2 hardening: an older session list answering after a newer one 
 });
 
 test("B8.7 a row this instance already classified as a drill never comes back as a parent through a later list that lacks its parent: the contradicting list is refused and the id stays unreadable", async () => {
-  const server = fakeServer(fullRoutes({
-    [LIST]: answer(200, [parent(100, [101]), session(101)], { "x-total-count": "2" }),
-    [WINDOW]: answer(200, [session(101, 980, { start_timestamp: "2026-09-14T00:05:00" })], { "x-total-count": "1" }),
+  let page = answer(200, [parent(100, [101]), session(101)], { "x-total-count": "2" });
+  const server = fakeServer({
+    ...fullRoutes(),
+    [LIST]: () => page,
     "/rest/v1/team_session/101/": answer(200, { id: 101, team: 980, drills_count: 0, start_timestamp: "2026-09-14T00:05:00" }),
-  }));
+  });
   const a = make(server.fetchImpl);
   await a.listSessions();
+  page = answer(200, [session(101, 980, { start_timestamp: "2026-09-14T00:05:00" })], { "x-total-count": "1" });
   const e = await errorOf(a.listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" }));
   assert.equal(e?.code, "source_list_ambiguous");
   assert.equal(e.reason, "classification_conflict");
@@ -1341,118 +1344,245 @@ test("B7.8 static architecture guard: no consumer outside the adapter and the ma
 });
 
 // ---------------------------------------------------------------------------
-// The sanitized description of a refused date window (owner order 2026-10-07,
-// after a check of 05.10–06.10.2026 ended source_filter_ignored). The refusal
-// is exactly as before - same code, nothing returned, no retry, no extra
-// request - and the message gains, after " Diagnostic: ", counts and fixed
-// words only: never an id, a date, a time, a timestamp, a name, a URL or JSON.
-const STABLE = "The source server returned sessions outside the asked window; the window cannot be trusted.";
-const refusedWith = async (rows) => {
-  const server = full({ [WINDOW]: answer(200, rows, { "x-total-count": String(rows.length) }) });
-  let caught = null;
-  try {
-    await make(server.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
-  } catch (error) {
-    caught = error;
-  }
-  assert.ok(caught instanceof SourceAdapterError, "refused");
-  assert.equal(caught.code, "source_filter_ignored", "the same code as before");
-  assert.ok(caught.message.startsWith(`${STABLE} Diagnostic: `), caught.message);
-  assert.deepEqual(server.calls.map((c) => new URL(c.url).pathname + new URL(c.url).search), [WINDOW], "one request, no retry, nothing else read");
-  return caught.message.slice(`${STABLE} Diagnostic: `.length);
-};
-const noValueIn = (text, values) => {
-  for (const v of values) assert.ok(!text.includes(String(v)), `the diagnostic carries a source value: ${v}`);
-  assert.ok(!/\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2}|https?:|[{}"]/.test(text), `no date, time, URL or JSON: ${text}`);
-};
+// Option (c) (owner decision 2026-10-08, after the owner-run check of
+// 05.10–06.10.2026 whose date-filtered answer carried five rows after the
+// window): a date window reads the WHOLE team list, header paged with
+// limit=100, every page checked, at most SESSION_LIST_MAX_ROWS rows, and picks
+// the window out locally after the parent/drill classification. Any failed
+// check refuses the whole list: never a part of it.
+const { SESSION_LIST_MAX_ROWS } = await import("../src/gpexeRestV1Adapter.js");
+const NEXT = (offset, extra = "") => `<https://server3.gpexe.com/rest/v1/team_session/?team=980&limit=100&offset=${offset}${extra}>; rel="next"`;
+// The whole list as the server pages it: 100 rows a page, X-Total-Count on every page.
+function pagedList(rows, { total: totalGiven, totals = [], links = [], pages = null } = {}) {
+  const routes = {};
+  const chunks = pages ?? Array.from({ length: Math.max(1, Math.ceil(rows.length / 100)) }, (_, i) => rows.slice(i * 100, i * 100 + 100));
+  const total = totalGiven ?? chunks.reduce((n, c) => n + c.length, 0);
+  let offset = 0;
+  chunks.forEach((chunk, i) => {
+    const key = i === 0 ? LIST : `${LIST}&offset=${offset}`;
+    offset += chunk.length;
+    const last = i === chunks.length - 1;
+    const headers = {};
+    const t = totals[i] === undefined ? total : totals[i];
+    if (t !== null) headers["x-total-count"] = String(t);
+    const link = links[i] === undefined ? (last ? null : NEXT(offset)) : links[i];
+    if (link !== null) headers.link = link;
+    routes[key] = answer(200, chunk, headers);
+  });
+  return routes;
+}
+// N sessions, one a day from a start day, every third a parent of the next two.
+function history(n, startDay = "2026-06-01") {
+  const rows = [];
+  const base = Date.parse(`${startDay}T10:00:00Z`);
+  for (let i = 0; i < n; i += 1) rows.push(session(5000 + i, 980, { start_timestamp: new Date(base + i * 86_400_000).toISOString().slice(0, 19) }));
+  return rows;
+}
+const byDay = (a, w = { fromDay: "2026-10-05", toDay: "2026-10-06" }) => a.listSessionsByDay(w);
+const listCalls = (calls) => pathsOf(calls).filter((p) => p.startsWith("/rest/v1/team_session/?"));
 
-test("diagnostic: a drill row just after midnight, named by a parent inside the period, is counted as after_end, named drill, under_3h, naive", async () => {
-  const text = await refusedWith([
-    session(7001, 980, { start_timestamp: "2026-09-15T23:30:00", drills: [7002], drills_count: 1 }),
-    session(7002, 980, { start_timestamp: "2026-09-16T00:20:00" }),
-  ]);
-  assert.equal(text, "op=session_list_by_date; rows=2; before_lookback=0; after_end=1; unreadable=0; outside_named_drill=1; distance=under_3h:1,3h_to_24h:0,over_24h:0,unknown:0; tz=Z:0,offset:0,none:2,other:0.");
-  noValueIn(text, [7001, 7002, "2026-09-16", "00:20"]);
+test("C1. four and more pages: the whole list is read page by page (limit=100, offset = rows read so far) and the result is exactly the parents of the window - complete, nothing from another day", async () => {
+  // 350 sessions from 2026-01-01, one a day: 2026-10-05 and 2026-10-06 are rows 277 and 278.
+  const rows = history(350, "2026-01-01");
+  const server = fakeServer({ ...fullRoutes(), ...pagedList(rows) });
+  const r = await byDay(make(server.fetchImpl));
+  assert.deepEqual(idsOf(r), ["5277", "5278"]);
+  assert.deepEqual([r.total, r.drillsLeftOut, r.lookBackParentsLeftOut, r.otherParentsLeftOut], [350, 0, 1, 347]);
+  assert.deepEqual(listCalls(server.calls), [LIST, `${LIST}&offset=100`, `${LIST}&offset=200`, `${LIST}&offset=300`]);
+  assert.ok(server.calls.every((c) => c.method === "GET" && new URL(c.url).origin === "https://server3.gpexe.com" && !c.url.includes("start_timestamp")));
 });
 
-test("diagnostic: a parent or unnamed row far outside the window is counted without the named-drill mark (a parent outside the period never marks one), over_24h; one a few hours late is 3h_to_24h", async () => {
-  const text = await refusedWith([
-    session(7101, 980, { start_timestamp: "2026-09-14T10:00:00" }),
-    session(7102, 980, { start_timestamp: "2026-09-20T10:00:00", drills: [7103], drills_count: 1 }),
-    session(7103, 980, { start_timestamp: "2026-09-16T08:00:00" }),
-  ]);
-  assert.equal(text, "op=session_list_by_date; rows=3; before_lookback=0; after_end=2; unreadable=0; outside_named_drill=0; distance=under_3h:0,3h_to_24h:1,over_24h:1,unknown:0; tz=Z:0,offset:0,none:3,other:0.");
-  noValueIn(text, [7101, 7102, 7103]);
-});
-
-test("diagnostic: timezone shapes are fixed categories (Z, offset, none, other); a row before the look-back start is counted by its naive distance", async () => {
-  const text = await refusedWith([
-    session(7201, 980, { start_timestamp: "2026-09-12T23:00:00Z" }),
-    session(7202, 980, { start_timestamp: "2026-09-14T10:00:00+02:00" }),
-    session(7203, 980, { start_timestamp: "2026-09-14T11:00:00.250Z" }),
-    session(7204, 980, { start_timestamp: "2026-09-14T12:00:00" }),
-    session(7205, 980, { start_timestamp: "2026-09-14T13:00:00 Europe/Rome" }),
-  ]);
-  assert.equal(text, "op=session_list_by_date; rows=5; before_lookback=1; after_end=0; unreadable=0; outside_named_drill=0; distance=under_3h:1,3h_to_24h:0,over_24h:0,unknown:0; tz=Z:2,offset:1,none:1,other:1.");
-  noValueIn(text, [7201, 7202, "Europe", "Rome", "+02:00"]);
-});
-
-test("diagnostic: a null or unreadable start_timestamp is unreadable, distance unknown, timezone other", async () => {
-  const text = await refusedWith([
-    session(7301, 980, { start_timestamp: null }),
-    session(7302, 980, { start_timestamp: "yesterday evening" }),
-    session(7303, 980, { start_timestamp: "2026-09-14T10:00:00" }),
-  ]);
-  assert.equal(text, "op=session_list_by_date; rows=3; before_lookback=0; after_end=0; unreadable=2; outside_named_drill=0; distance=under_3h:0,3h_to_24h:0,over_24h:0,unknown:2; tz=Z:0,offset:0,none:1,other:2.");
-  noValueIn(text, [7301, 7302, "yesterday", "evening"]);
-});
-
-test("diagnostic: a named drill whose start is unreadable is counted as unreadable only, never as an outside named drill", async () => {
-  const text = await refusedWith([
-    session(7401, 980, { start_timestamp: "2026-09-15T23:30:00", drills: [7402, 7403], drills_count: 2 }),
-    session(7402, 980, { start_timestamp: null }),
-    session(7403, 980, { start_timestamp: "2026-09-16T00:20:00" }),
-  ]);
-  assert.equal(text, "op=session_list_by_date; rows=3; before_lookback=0; after_end=1; unreadable=1; outside_named_drill=1; distance=under_3h:1,3h_to_24h:0,over_24h:0,unknown:1; tz=Z:0,offset:0,none:2,other:1.");
-  noValueIn(text, [7401, 7402, 7403]);
-});
-
-test("diagnostic: an impossible month, day, hour, minute or second is unreadable, distance unknown, timezone other - never a moment Date.UTC normalised it into; a real leap day is read", async () => {
-  // Every impossible value starts after the asked period by its first ten
-  // characters (or names a day the filter refuses), so the refusal is the
-  // same; only the description must not read it as a real moment.
-  const text = await refusedWith([
-    session(7501, 980, { start_timestamp: "2026-13-01T10:00:00Z" }),
-    session(7502, 980, { start_timestamp: "2026-09-31T10:00:00Z" }),
-    session(7503, 980, { start_timestamp: "2026-09-16T24:00:00Z" }),
-    session(7504, 980, { start_timestamp: "2026-09-16T10:60:00Z" }),
-    session(7505, 980, { start_timestamp: "2026-09-16T10:00:60Z" }),
-    session(7506, 980, { start_timestamp: "2026-02-29T10:00:00Z" }),
-    session(7507, 980, { start_timestamp: "2026-09-14T10:00:00" }),
-  ]);
-  assert.equal(text, "op=session_list_by_date; rows=7; before_lookback=0; after_end=0; unreadable=6; outside_named_drill=0; distance=under_3h:0,3h_to_24h:0,over_24h:0,unknown:6; tz=Z:0,offset:0,none:1,other:6.");
-  noValueIn(text, [7501, 7506, "2026-13", "24:00", "10:60"]);
-  const { describeWindowRefusal } = await import("../src/gpexeRestV1Adapter.js");
-  const leap = describeWindowRefusal([{ id: 1, team: 980, start_timestamp: "2024-02-29T10:00:00Z", drills: [] }], { lookFrom: "2024-03-01", from: "2024-03-02", to: "2024-03-03" });
-  assert.equal(leap, "op=session_list_by_date; rows=1; before_lookback=1; after_end=0; unreadable=0; outside_named_drill=0; distance=under_3h:0,3h_to_24h:1,over_24h:0,unknown:0; tz=Z:1,offset:0,none:0,other:0.", "a real leap day is a real moment");
-});
-
-test("diagnostic: a start whose day is inside the read but whose time is impossible is counted unreadable (the filter accepted it); the refusal comes from the other row", async () => {
-  const text = await refusedWith([
-    session(7601, 980, { start_timestamp: "2026-09-14T24:00:00Z" }),
-    session(7602, 980, { start_timestamp: "2026-09-16T08:00:00" }),
-  ]);
-  assert.equal(text, "op=session_list_by_date; rows=2; before_lookback=0; after_end=1; unreadable=1; outside_named_drill=0; distance=under_3h:0,3h_to_24h:1,over_24h:0,unknown:1; tz=Z:0,offset:0,none:1,other:1.");
-  noValueIn(text, [7601, 7602]);
-});
-
-test("diagnostic: the final guard - the description has one fixed grammar; a source value can never pass into it (crafted ids, names and timestamps stay out)", async () => {
-  const { describeWindowRefusal } = await import("../src/gpexeRestV1Adapter.js");
-  const crafted = [
-    { id: "8001", team: 980, start_timestamp: "2026-09-16T00:01:00Z; rows=9999", drills: ["8002"], name: "Marker Name https://evil.example/x" },
-    { id: "8002", team: 980, start_timestamp: "2026-09-15T22:00:00", drills: ["8001"], name: "{\"json\":1}" },
+test("C2. the five rows after the period of the owner-run check are left out locally, and the parents inside it are returned; nothing is refused for them", async () => {
+  const rows = [
+    session(1, 980, { start_timestamp: "2026-10-05T09:00:00" }),
+    parent(2, [3, 4], 980, { start_timestamp: "2026-10-06T17:00:00" }),
+    session(3, 980, { start_timestamp: "2026-10-06T17:10:00" }),
+    session(4, 980, { start_timestamp: "2026-10-06T17:40:00" }),
+    ...[10, 11, 12, 13, 14].map((id, i) => session(id, 980, { start_timestamp: `2026-10-07T0${i + 3}:00:00` })),
   ];
-  const text = describeWindowRefusal(crafted, { lookFrom: "2026-09-13", from: "2026-09-14", to: "2026-09-15" });
-  assert.match(text, /^op=session_list_by_date; rows=\d+; before_lookback=\d+; after_end=\d+; unreadable=\d+; outside_named_drill=\d+; distance=under_3h:\d+,3h_to_24h:\d+,over_24h:\d+,unknown:\d+; tz=Z:\d+,offset:\d+,none:\d+,other:\d+\.$/);
-  noValueIn(text, ["8001", "8002", "Marker", "evil", "9999", "json"]);
+  const server = fakeServer({ ...fullRoutes(), ...pagedList(rows) });
+  const r = await byDay(make(server.fetchImpl));
+  assert.deepEqual(idsOf(r), ["1", "2"]);
+  assert.deepEqual([r.drillsLeftOut, r.otherParentsLeftOut], [2, 5]);
+});
+
+test("C3. the classification runs on the whole list before the window is picked out: a drill row inside the window whose parent started days earlier is never a session, and a parent outside the window still makes its drills drill rows", async () => {
+  const rows = [
+    parent(20, [21, 22], 980, { start_timestamp: "2026-10-02T23:00:00" }),
+    session(21, 980, { start_timestamp: "2026-10-05T00:10:00" }),
+    session(22, 980, { start_timestamp: "2026-10-05T00:30:00" }),
+    session(23, 980, { start_timestamp: "2026-10-05T11:00:00" }),
+  ];
+  const r = await byDay(make(fakeServer({ ...fullRoutes(), ...pagedList(rows) }).fetchImpl));
+  assert.deepEqual(idsOf(r), ["23"], "the two drill rows of an earlier parent are not sessions of the window");
+  assert.deepEqual([r.drillsLeftOut, r.otherParentsLeftOut], [2, 1]);
+  // The same parent named on another page than its drills: still one classification.
+  const split = fakeServer({ ...fullRoutes(), ...pagedList([], { pages: [[...history(99, "2025-01-01"), rows[0]], [rows[1], rows[2], rows[3]]] }) });
+  assert.deepEqual(idsOf(await byDay(make(split.fetchImpl))), ["23"]);
+});
+
+test("C4. a parent of the look-back day is classified and left out; its drill rows inside the window are drill rows, not sessions", async () => {
+  const rows = [
+    parent(30, [31], 980, { start_timestamp: "2026-10-04T23:40:00" }),
+    session(31, 980, { start_timestamp: "2026-10-05T00:15:00" }),
+    session(32, 980, { start_timestamp: "2026-10-06T08:00:00" }),
+  ];
+  const r = await byDay(make(fakeServer({ ...fullRoutes(), ...pagedList(rows) }).fetchImpl));
+  assert.deepEqual(idsOf(r), ["32"]);
+  assert.deepEqual([r.lookBackParentsLeftOut, r.drillsLeftOut, r.otherParentsLeftOut], [1, 1, 0]);
+});
+
+test("C5. X-Total-Count must be there and stable on every page: missing on the first or a later page, changed between pages, or more or fewer rows than it says - the whole list is refused, with no partial result", async () => {
+  const rows = history(250);
+  const cases = [
+    ["missing on the first page", { totals: [null] }, "source_answer_unexpected"],
+    ["missing on a later page", { totals: [250, null] }, "source_answer_unexpected"],
+    ["not a number", { totals: [250, "abc"] }, "source_answer_unexpected"],
+    ["changed between pages", { totals: [250, 251] }, "source_list_changed"],
+    ["more rows than it says", { total: 249 }, "source_list_changed"],
+  ];
+  for (const [name, opts, expected] of cases) {
+    const server = fakeServer({ ...fullRoutes(), ...pagedList(rows, opts) });
+    await assert.rejects(byDay(make(server.fetchImpl)), code(expected), name);
+  }
+  // Fewer rows than it says: the last page has no next link.
+  const short = fakeServer({ ...fullRoutes(), ...pagedList(rows, { total: 260 }) });
+  await assert.rejects(byDay(make(short.fetchImpl)), code("source_list_incomplete"));
+});
+
+test("C6. a row repeated, skipped or added between pages refuses the whole list", async () => {
+  const rows = history(250);
+  // Repeated: the second page starts with the last row of the first.
+  const repeated = fakeServer({ ...fullRoutes(), ...pagedList([], { total: 250, pages: [rows.slice(0, 100), [rows[99], ...rows.slice(100, 199)], rows.slice(199)] }) });
+  await assert.rejects(byDay(make(repeated.fetchImpl)), code("source_list_changed"), "repeated");
+  // Skipped: the server's next link jumps past a row.
+  const skipped = fakeServer({ ...fullRoutes(), ...pagedList(rows, { links: [NEXT(101)] }), [`${LIST}&offset=101`]: answer(200, rows.slice(101, 201), { "x-total-count": "250", link: NEXT(201) }) });
+  await assert.rejects(byDay(make(skipped.fetchImpl)), code("source_list_changed"), "skipped by the link");
+  // Skipped silently: the right links, but one row missing - fewer rows than the total.
+  const silent = fakeServer({ ...fullRoutes(), ...pagedList([], { total: 250, pages: [rows.slice(0, 100), rows.slice(101, 200), rows.slice(200)] }) });
+  await assert.rejects(byDay(make(silent.fetchImpl)), code("source_list_incomplete"), "skipped silently");
+  // Added between pages: the total changes.
+  const added = fakeServer({ ...fullRoutes(), ...pagedList([], { totals: [250, 251, 251], pages: [rows.slice(0, 100), rows.slice(100, 200), [...rows.slice(200), session(9999, 980, { start_timestamp: "2026-10-05T10:00:00" })]] }) });
+  await assert.rejects(byDay(make(added.fetchImpl)), code("source_list_changed"), "added");
+});
+
+test("C7. an unsafe next link refuses the whole list before it is followed: another host, scheme, family or resource, another team, a server-side date bound, another page size, an unknown parameter, a repeated one", async () => {
+  const rows = history(150);
+  const links = [
+    ["another host", '<https://e03.gpexe.com/rest/v1/team_session/?team=980&limit=100&offset=100>; rel="next"', "source_answer_unexpected"],
+    ["plain http", '<http://server3.gpexe.com/rest/v1/team_session/?team=980&limit=100&offset=100>; rel="next"', "source_answer_unexpected"],
+    ["another family", '<https://server3.gpexe.com/api/team_session/?team=980&limit=100&offset=100>; rel="next"', "source_answer_unexpected"],
+    ["another resource", '<https://server3.gpexe.com/rest/v1/athlete_session/?team=980&limit=100&offset=100>; rel="next"', "source_answer_unexpected"],
+    ["another team", '<https://server3.gpexe.com/rest/v1/team_session/?team=981&limit=100&offset=100>; rel="next"', "source_team_mismatch"],
+    ["a date bound", NEXT(100, "&start_timestamp_gte=2026-10-04%2000%3A00%3A00"), "source_answer_unexpected"],
+    ["another page size", '<https://server3.gpexe.com/rest/v1/team_session/?team=980&limit=50&offset=100>; rel="next"', "source_answer_unexpected"],
+    ["no page size", '<https://server3.gpexe.com/rest/v1/team_session/?team=980&offset=100>; rel="next"', "source_answer_unexpected"],
+    ["an unknown parameter", NEXT(100, "&cursor=abc"), "source_answer_unexpected"],
+    ["a repeated parameter", NEXT(100, "&offset=100"), "source_answer_unexpected"],
+    ["user info", '<https://x:y@server3.gpexe.com/rest/v1/team_session/?team=980&limit=100&offset=100>; rel="next"', "source_answer_unexpected"],
+  ];
+  for (const [name, link, expected] of links) {
+    const server = fakeServer({ ...fullRoutes(), ...pagedList(rows, { links: [link] }) });
+    await assert.rejects(byDay(make(server.fetchImpl)), code(expected), name);
+    assert.deepEqual(listCalls(server.calls), [LIST], `${name}: the link was not followed`);
+  }
+  // A next link after the last row.
+  const extra = fakeServer({ ...fullRoutes(), ...pagedList(history(100), { links: [NEXT(100)] }) });
+  await assert.rejects(byDay(make(extra.fetchImpl)), code("source_answer_unexpected"));
+});
+
+test("C8. a row of another team, or a team in an unreadable shape, anywhere in the whole list refuses it", async () => {
+  const rows = history(150);
+  for (const [team, expected] of [[981, "source_team_mismatch"], ["980x", "source_answer_unexpected"], [{ id: 980 }, "source_answer_unexpected"], [null, "source_answer_unexpected"]]) {
+    const bad = rows.map((r, i) => (i === 120 ? { ...r, team } : r));
+    await assert.rejects(byDay(make(fakeServer({ ...fullRoutes(), ...pagedList(bad) }).fetchImpl)), code(expected), JSON.stringify(team));
+  }
+});
+
+test("C9. a start that is not a real date and time anywhere in the list - a parent, a drill row or another day's row - refuses the whole list (where it belongs is never guessed); a real leap day is read", async () => {
+  const rows = [parent(40, [41], 980, { start_timestamp: "2026-10-05T10:00:00" }), session(41, 980, { start_timestamp: "2026-10-05T10:20:00" }), session(42, 980, { start_timestamp: "2026-03-01T10:00:00" })];
+  for (const [at, value] of [[0, null], [0, "yesterday"], [1, "2026-10-05T24:00:00"], [1, "2026-10-05"], [2, "2026-02-29T10:00:00"], [2, "2026-13-01T10:00:00"], [2, "2026-09-31T10:00:00"], [2, "2026-03-01T10:60:00"], [2, 1789000000], [2, "0099-03-01T10:00:00"]]) {
+    const bad = rows.map((r, i) => (i === at ? { ...r, start_timestamp: value } : r));
+    await assert.rejects(byDay(make(fakeServer({ ...fullRoutes(), ...pagedList(bad) }).fetchImpl)), code("source_session_start_unreadable"), JSON.stringify(value));
+  }
+  const leap = rows.map((r, i) => (i === 2 ? { ...r, start_timestamp: "2024-02-29T10:00:00" } : r));
+  assert.deepEqual(idsOf(await byDay(make(fakeServer({ ...fullRoutes(), ...pagedList(leap) }).fetchImpl))), ["40"]);
+});
+
+test("C10. the hard cap: a list whose X-Total-Count is above SESSION_LIST_MAX_ROWS is refused at the first page, before any further request; exactly the cap is read whole", async () => {
+  assert.equal(SESSION_LIST_MAX_ROWS, 2000);
+  const over = fakeServer({ ...fullRoutes(), ...pagedList(history(100), { total: 2001, links: [NEXT(100)] }) });
+  await assert.rejects(byDay(make(over.fetchImpl)), code("source_list_too_large"));
+  assert.deepEqual(listCalls(over.calls), [LIST], "one request only");
+  const atCap = fakeServer({ ...fullRoutes(), ...pagedList(history(2000, "2021-01-01")) });
+  const r = await byDay(make(atCap.fetchImpl), { fromDay: "2026-06-01", toDay: "2026-06-02" });
+  assert.equal(r.total, 2000);
+  assert.equal(listCalls(atCap.calls).length, 20);
+  // A list that keeps announcing pages past the page cap is refused too.
+  const endless = fakeServer({ ...fullRoutes(), ...pagedList([], { total: 2000, pages: Array.from({ length: 21 }, (_, i) => history(95, "2021-01-01").map((r) => ({ ...r, id: 100000 + i * 100 + (r.id - 5000) }))), links: Array.from({ length: 21 }, (_, i) => NEXT((i + 1) * 95)) }) });
+  await assert.rejects(byDay(make(endless.fetchImpl)), code("source_list_incomplete"));
+  assert.equal(listCalls(endless.calls).length, 20, "never more than the page cap");
+});
+
+test("C12. the whole history is classified: an ambiguous pair of rows long before the window refuses every window (source_list_ambiguous), never a thinned list", async () => {
+  const rows = [
+    parent(1, [3], 980, { start_timestamp: "2025-03-01T10:00:00" }),
+    parent(2, [3], 980, { start_timestamp: "2025-03-01T11:00:00" }),
+    session(3, 980, { start_timestamp: "2025-03-01T10:10:00" }),
+    session(4, 980, { start_timestamp: "2026-10-05T10:00:00" }),
+  ];
+  const e = await errorOf(byDay(make(fakeServer({ ...fullRoutes(), ...pagedList(rows) }).fetchImpl)));
+  assert.deepEqual([e?.code, e?.reason], ["source_list_ambiguous", "entry_named_twice"]);
+});
+
+test("C13. after a window list exactly that list's window parents are readable: a parent made readable by an earlier whole list of the same instance is withdrawn when a window list leaves it out", async () => {
+  const server = full({ "/rest/v1/team_session/200/": answer(200, { id: 200, team: 980, drills_count: 0, start_timestamp: "2026-09-20T10:00:00" }) });
+  const a = make(server.fetchImpl);
+  await a.listSessions();
+  assert.equal((await a.getSession({ sessionId: "200" })).id, 200);
+  await a.listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
+  const sent = server.calls.length;
+  await assert.rejects(a.getSession({ sessionId: "200" }), code("session_not_listed"));
+  await assert.rejects(a.getSessionDetails({ sessionId: "200" }), code("session_not_confirmed"));
+  assert.equal(server.calls.length, sent, "nothing was sent");
+  assert.equal((await a.getSession({ sessionId: "100" })).id, 100);
+});
+
+test("C14. the runbook's window section names every whole-list fail-closed cause, the unobserved next-link form and the offset-paging residual risk", async () => {
+  const runbook = await fsp.readFile(path.resolve(ROOT, "docs/runbooks/gpexe-in-app-import.md"), "utf8");
+  const start = runbook.indexOf("## How a check finds the sessions of its window");
+  assert.ok(start >= 0);
+  const section = runbook.slice(start, runbook.indexOf("\n## ", start + 3));
+  for (const c of ["source_list_too_large", "source_session_start_unreadable", "source_list_ambiguous", "source_list_changed", "source_list_incomplete", "source_team_mismatch", "source_answer_unexpected"]) assert.ok(section.includes(c), c);
+  assert.match(section, /next link[^.]*never been observed/i);
+  assert.match(section, /residual risk/i);
+  assert.doesNotMatch(section, /nothing wrong is written/i, "the residual risk is not played down");
+  assert.match(section, /drill rows[^.]*treated as parents/i);
+  assert.match(section, /candidate sessions/i);
+});
+
+test("C15. characterisation of the accepted residual risk (offset paging, owner decision pending): a row lost between pages with a stable total and consistent links is not noticed; when it is a parent with drills, its drill rows inside the window come back as sessions", async () => {
+  // Row 100 of the first read is the parent P of two drills inside the window;
+  // the second page starts one row late (a delete before and an insert after),
+  // the links stay consistent with the rows read and the total stays 250.
+  const rows = history(250, "2025-01-01");
+  rows[100] = parent(7000, [7001, 7002], 980, { start_timestamp: "2026-10-05T09:00:00" });
+  rows[101] = session(7001, 980, { start_timestamp: "2026-10-05T09:10:00" });
+  rows[102] = session(7002, 980, { start_timestamp: "2026-10-05T09:40:00" });
+  const shifted = [rows.slice(0, 100), rows.slice(101, 201), [...rows.slice(201), session(7999, 980, { start_timestamp: "2026-11-01T10:00:00" })]];
+  const r = await byDay(make(fakeServer({ ...fullRoutes(), ...pagedList([], { total: 250, pages: shifted }) }).fetchImpl));
+  assert.deepEqual(idsOf(r), ["7001", "7002"], "the two drill rows are returned as sessions - the risk the runbook names");
+  // If a guard is built, this test is turned into a refusal (source_list_changed).
+});
+
+test("C11. any failed check returns nothing: no session of the window is returned or made readable when a later page fails, and the window result never falls back to a server-side date filter", async () => {
+  const rows = history(250, "2026-08-01");
+  const routes = { ...fullRoutes(), ...pagedList(rows, { totals: [250, 250, 251] }) };
+  const server = fakeServer(routes);
+  const a = make(server.fetchImpl);
+  const e = await errorOf(a.listSessionsByDay({ fromDay: "2026-08-01", toDay: "2026-08-02" }));
+  assert.equal(e?.code, "source_list_changed");
+  await assert.rejects(a.getSession({ sessionId: "5000" }), code("session_not_listed"), "nothing of the refused list became readable");
+  assert.ok(!server.calls.some((c) => c.url.includes("start_timestamp")), "no fallback to the date filter");
+  assert.equal(listCalls(server.calls).length, 3, "no retry");
 });
