@@ -829,14 +829,19 @@ team or workspace change, or signing out drops it.
 
 A check on the binding path reads the session list for the window from one day earlier (the look-back).
 Every row the source returns must start inside that read - its day is the first ten characters of
-`start_timestamp` - or the whole answer is refused as `source_filter_ignored`, with nothing recorded and no
-retry. The check row's message then carries, after " Diagnostic: ", only counts and fixed words:
+`start_timestamp` - or the whole answer is refused as `source_filter_ignored`, with no retry. The failed
+check row with that code is stored; no candidate, preview, import, activity or result row is written and
+nothing is imported. The check row's stored message (not any log) then carries, after " Diagnostic: ", only counts and fixed words:
 
 `op=session_list_by_date; rows=N; before_lookback=N; after_end=N; unreadable=N; outside_named_drill=N;
 distance=under_3h:N,3h_to_24h:N,over_24h:N,unknown:N; tz=Z:N,offset:N,none:N,other:N.`
 
 - `rows`: every row of the answer; `before_lookback` / `after_end` / `unreadable`: rows before the look-back
-  day, after the last day, and with an empty or unreadable start;
+  day, after the last day, and with an empty or unreadable start - unreadable meaning no real calendar date
+  and time `YYYY-MM-DD[T ]HH:MM:SS` (a month 13, 31 April, hour 24 or minute 60 is never normalised into
+  another moment). `unreadable` counts every such row, including one whose first ten characters lie inside
+  the read and which the filter itself therefore accepted - such a row is not by itself a cause of the
+  refusal;
 - `outside_named_drill`: of the rows before the look-back day or after the last day (an unreadable row is
   never counted here), those a parent inside the asked period names as a drill;
 - `distance`: how far each row outside starts from the nearest edge of the read (00:00:00 of the look-back

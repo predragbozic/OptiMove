@@ -1558,7 +1558,7 @@ test("20. a drill answer whose metric value has an unknown shape: the check stop
   src.state.faults.drillPlayers = null;
 });
 
-test("21. a date window the source does not keep: the check still ends source_filter_ignored with nothing recorded and no retry; the check row carries the sanitized description after Diagnostic: (counts and fixed words only) - for an administrator only; nothing of it is written anywhere else", async () => {
+test("21. a date window the source does not keep: the check still ends source_filter_ignored with no candidate and no retry; the stored failed check row carries the sanitized description after Diagnostic: (counts and fixed words only) - for an administrator only; nothing of it is written anywhere else", async () => {
   const o = await org();
   useSource();
   await bound(o);
@@ -1580,7 +1580,7 @@ test("21. a date window the source does not keep: the check still ends source_fi
     assert.equal(row.error_code, "source_filter_ignored");
     assert.match(row.error_message, /^The source server returned sessions outside the asked window; the window cannot be trusted\. Diagnostic: op=session_list_by_date; rows=5; before_lookback=0; after_end=1; unreadable=1; outside_named_drill=0; distance=under_3h:0,3h_to_24h:0,over_24h:1,unknown:1; tz=Z:\d+,offset:\d+,none:\d+,other:\d+\.$/);
     for (const leak of ["991234567", "991234568", "2026-09-20", "10:00", "Marker", String(o.sourceTeamId), SOURCE_SENTENCE]) assert.ok(!row.error_message.includes(leak), `${leak} is not on the check row`);
-    assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n, before, "nothing recorded");
+    assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n, before, "no candidate recorded");
     assert.equal(src.calls.filter((c) => c.key.includes("start_timestamp_gte")).length, 1, "one list read, no retry");
     assert.ok(!src.calls.some((c) => c.key.includes("/details/") || c.key.includes("athlete_session")), "no read after the refused list");
     const viaAdmin = await api(`/gpexe/teams/${o.teamId}/checks/${coachView.id}`, { cookie: o.cadmin.cookie });

@@ -1417,6 +1417,35 @@ test("diagnostic: a named drill whose start is unreadable is counted as unreadab
   noValueIn(text, [7401, 7402, 7403]);
 });
 
+test("diagnostic: an impossible month, day, hour, minute or second is unreadable, distance unknown, timezone other - never a moment Date.UTC normalised it into; a real leap day is read", async () => {
+  // Every impossible value starts after the asked period by its first ten
+  // characters (or names a day the filter refuses), so the refusal is the
+  // same; only the description must not read it as a real moment.
+  const text = await refusedWith([
+    session(7501, 980, { start_timestamp: "2026-13-01T10:00:00Z" }),
+    session(7502, 980, { start_timestamp: "2026-09-31T10:00:00Z" }),
+    session(7503, 980, { start_timestamp: "2026-09-16T24:00:00Z" }),
+    session(7504, 980, { start_timestamp: "2026-09-16T10:60:00Z" }),
+    session(7505, 980, { start_timestamp: "2026-09-16T10:00:60Z" }),
+    session(7506, 980, { start_timestamp: "2026-02-29T10:00:00Z" }),
+    session(7507, 980, { start_timestamp: "2026-09-14T10:00:00" }),
+  ]);
+  assert.equal(text, "op=session_list_by_date; rows=7; before_lookback=0; after_end=0; unreadable=6; outside_named_drill=0; distance=under_3h:0,3h_to_24h:0,over_24h:0,unknown:6; tz=Z:0,offset:0,none:1,other:6.");
+  noValueIn(text, [7501, 7506, "2026-13", "24:00", "10:60"]);
+  const { describeWindowRefusal } = await import("../src/gpexeRestV1Adapter.js");
+  const leap = describeWindowRefusal([{ id: 1, team: 980, start_timestamp: "2024-02-29T10:00:00Z", drills: [] }], { lookFrom: "2024-03-01", from: "2024-03-02", to: "2024-03-03" });
+  assert.equal(leap, "op=session_list_by_date; rows=1; before_lookback=1; after_end=0; unreadable=0; outside_named_drill=0; distance=under_3h:0,3h_to_24h:1,over_24h:0,unknown:0; tz=Z:1,offset:0,none:0,other:0.", "a real leap day is a real moment");
+});
+
+test("diagnostic: a start whose day is inside the read but whose time is impossible is counted unreadable (the filter accepted it); the refusal comes from the other row", async () => {
+  const text = await refusedWith([
+    session(7601, 980, { start_timestamp: "2026-09-14T24:00:00Z" }),
+    session(7602, 980, { start_timestamp: "2026-09-16T08:00:00" }),
+  ]);
+  assert.equal(text, "op=session_list_by_date; rows=2; before_lookback=0; after_end=1; unreadable=1; outside_named_drill=0; distance=under_3h:0,3h_to_24h:1,over_24h:0,unknown:1; tz=Z:0,offset:0,none:1,other:1.");
+  noValueIn(text, [7601, 7602]);
+});
+
 test("diagnostic: the final guard - the description has one fixed grammar; a source value can never pass into it (crafted ids, names and timestamps stay out)", async () => {
   const { describeWindowRefusal } = await import("../src/gpexeRestV1Adapter.js");
   const crafted = [

@@ -144,16 +144,26 @@ const dayOf = (timestamp) => (typeof timestamp === "string" && DAY.test(timestam
 // counts and fixed words only - never an id, a date, a time, a timestamp, a
 // name, a URL or any raw value. It is computed only when the answer is
 // refused, sends nothing, and changes nothing of the refusal itself.
+// A strict reading of a start, for the description only (the filter keeps its
+// own rule): a real calendar date and a time of 00-23 / 00-59 / 00-59, checked
+// by a round trip through Date.UTC - every component must come back unchanged,
+// so a value Date.UTC would normalise (month 13, 31 September, 29 February
+// outside a leap year, hour 24, minute or second 60, a year below 100) is never
+// read as another moment. Anything else is not a base at all.
 const NAIVE_TIME = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/;
-const naiveMillis = (timestamp) => {
+function strictBase(timestamp) {
   const m = typeof timestamp === "string" ? NAIVE_TIME.exec(timestamp) : null;
   if (!m) return null;
-  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
-  return Number.isFinite(ms) ? ms : null;
-};
-function timezoneShape(timestamp) {
-  if (typeof timestamp !== "string" || !NAIVE_TIME.test(timestamp)) return "other";
-  const rest = timestamp.slice(19).replace(/^\.\d{1,9}/, "");
+  const [y, mo, d, h, mi, s] = m.slice(1).map(Number);
+  const ms = Date.UTC(y, mo - 1, d, h, mi, s);
+  const t = new Date(ms);
+  if (!Number.isFinite(ms) || t.getUTCFullYear() !== y || t.getUTCMonth() !== mo - 1 || t.getUTCDate() !== d
+    || t.getUTCHours() !== h || t.getUTCMinutes() !== mi || t.getUTCSeconds() !== s) return null;
+  return { day: timestamp.slice(0, 10), ms, rest: timestamp.slice(19) };
+}
+function timezoneShape(base) {
+  if (base === null) return "other";
+  const rest = base.rest.replace(/^\.\d{1,9}/, "");
   if (rest === "") return "none";
   if (rest === "Z") return "Z";
   if (/^[+-]\d{2}(:?\d{2})?$/.test(rest)) return "offset";
@@ -165,7 +175,7 @@ export function describeWindowRefusal(rows, { lookFrom, from, to }) {
   const high = Date.parse(`${to}T23:59:59Z`);
   const parentDrills = new Set();
   for (const row of rows) {
-    const day = dayOf(row?.start_timestamp);
+    const day = strictBase(row?.start_timestamp)?.day ?? null;
     if (day === null || day < from || day > to || !Array.isArray(row.drills)) continue;
     for (const entry of row.drills) { const id = canonicalId(entry); if (id !== null) parentDrills.add(id); }
   }
@@ -173,17 +183,17 @@ export function describeWindowRefusal(rows, { lookFrom, from, to }) {
   const distance = { under_3h: 0, "3h_to_24h": 0, over_24h: 0, unknown: 0 };
   const tz = { Z: 0, offset: 0, none: 0, other: 0 };
   for (const row of rows) {
-    tz[timezoneShape(row?.start_timestamp)] += 1;
-    const day = dayOf(row?.start_timestamp);
+    const base = strictBase(row?.start_timestamp);
+    tz[timezoneShape(base)] += 1;
+    const day = base?.day ?? null;
     let gap = null;
     if (day === null) count.unreadable += 1;
     else if (day < lookFrom || day > to) {
       // Only a row with a readable day outside the read is a named drill
       // candidate; an unreadable one is counted as unreadable only.
       if (parentDrills.has(canonicalId(row?.id))) count.namedDrill += 1;
-      const t = naiveMillis(row.start_timestamp);
-      if (day < lookFrom) { count.before += 1; if (t !== null) gap = low - t; }
-      else { count.after += 1; if (t !== null) gap = t - high; }
+      if (day < lookFrom) { count.before += 1; gap = low - base.ms; }
+      else { count.after += 1; gap = base.ms - high; }
     } else continue;
     if (gap === null || gap < 0) distance.unknown += 1;
     else if (gap < 3 * 3_600_000) distance.under_3h += 1;

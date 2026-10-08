@@ -1233,7 +1233,8 @@ Technical details.
     notice, minors included) or the two gates before a link (under Separate tasks); their state is the
     owner's to state, and they are kept below as written until then;**
   - one check for 05.10.2026 – 06.10.2026 ended **`source_filter_ignored`** ("The source server returned
-    sessions outside the asked window; the window cannot be trusted."): nothing was imported or recorded.
+    sessions outside the asked window; the window cannot be trusted."): the failed check row with that code
+    is stored; no candidate, preview, import, activity or result row was written and nothing was imported.
     **No conclusion about its cause.** The code review (main session, no GPEXE request) found that the
     window guard runs over every returned row before the parent / drill classification, reads a row's day as
     the first ten characters of `start_timestamp` (no zone), accepts the look-back day, and reports a row
@@ -1241,11 +1242,14 @@ Technical details.
     05.10 – 05.10 and in the probe.
 - **A sanitized diagnostic for `source_filter_ignored`** (owner order 2026-10-07; branch
   `fix/gpexe-source-filter-ignored-diagnostic` from `5436c6d`; not merged; backend adapter, tests and docs):
-  the refusal is unchanged (the same code, nothing returned or recorded, no retry, no extra request); the
-  check row's message gains after " Diagnostic: " only counts and fixed words -
+  the refusal is unchanged (the same code, no candidate, preview, import, activity or result row, nothing
+  imported, no retry, no extra request; the failed check row is stored as before); the check row's stored
+  message gains after " Diagnostic: " only counts and fixed words -
   `op=session_list_by_date; rows=N; before_lookback=N; after_end=N; unreadable=N; outside_named_drill=N;
   distance=under_3h:N,3h_to_24h:N,over_24h:N,unknown:N; tz=Z:N,offset:N,none:N,other:N.` - checked by a
-  final fixed-grammar guard (anything else drops the description, never the refusal). A platform admin and
+  final fixed-grammar guard (anything else drops the description, never the refusal); a start that is not a
+  real calendar date and time (checked strictly, never normalised) counts as unreadable. The description is
+  stored on the check row and in no log. A platform admin and
   the team's club admin read it; a coach gets the stable sentence. The filtering rule, the period, the
   timezone rule, the classification and the fail-closed behaviour are unchanged; the options (a) a drill
   row past midnight, (b) a zone rule, (c) the whole list filtered locally wait for the diagnostic's result.
