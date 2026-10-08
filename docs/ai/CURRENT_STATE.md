@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-07. Last `origin/main` commit checked: `0271acb` (merge of PR #145,
-`feature/gpexe-imports-id-masking` → `main`; PR #144 `bb3cfdd` before it).
+Last reviewed: 2026-10-07. Last `origin/main` commit checked: `5436c6d` (merge of PR #146,
+`fix/pool-checkout-timeout-and-identity-key` → `main`; PR #145 `0271acb` before it).
 
 ## Active phase
 
@@ -1146,7 +1146,8 @@ Technical details.
     not queried with SQL.
   - **No identity load and no GPEXE request was made**, at the merge, the deploy or since. Render and the
     import switch were not touched.
-- **Production-use gate (closed):** the first real identity load is forbidden until the owner separately
+- **Production-use gate (recorded as closed; whether it was confirmed before the owner's load after PR #146
+  is not recorded, see below):** the first real identity load is forbidden until the owner separately
   confirms the legal basis and the notice for processing names and dates of birth, minors included. The UI
   may be deployed, but *Load names and dates of birth* is not used until then.
 - **The GPEXE id on every administrator Imports screen** (owner order 2026-10-07; PR #145, frontend and
@@ -1180,10 +1181,12 @@ Technical details.
   - **PR #142 is closed as superseded** (on the owner's order, after the deploy): not merged, its branch
     `docs/gpexe-pilot-retest-and-link-discovery` kept, a comment says that its still-true facts were carried
     into PR #145 and that its own CURRENT_STATE is no longer accurate.
-- **Production-use gate (still closed):** no real *Load names and dates of birth* until the owner separately
+- **Production-use gate (recorded as closed; see "After PR #146" below - a load was run by the owner, and
+  whether this gate was confirmed is not recorded):** no real *Load names and dates of birth* until the owner separately
   confirms the legal basis and the notice, minors included.
-- **Hardening after PR #145** (owner order 2026-10-07; branch `fix/pool-checkout-timeout-and-identity-key`
-  from `0271acb`; not merged; backend, frontend and docs, no migration):
+- **Hardening after PR #145** (owner order 2026-10-07; PR #146, branch
+  `fix/pool-checkout-timeout-and-identity-key` from `0271acb`; backend, frontend and docs, no migration;
+  merged and deployed, see below):
   - **A bounded pool checkout.** The global pool in `backend/src/db.js` sets `connectionTimeoutMillis` =
     5 s (`PG_POOL_CHECKOUT_TIMEOUT_MS` only for tests); every timed-out checkout - `pool.connect()` in both
     forms and `pool.query()` - carries the stable code `pool_checkout_timeout`. pg-pool removes a waiter that
@@ -1209,6 +1212,48 @@ Technical details.
     removes it; sign-out clears all.
   - **A long name in the session review** (a 55+ character unbroken word included) wraps inside the
     athlete row instead of being clipped; checked at 360, 375 and 390 px.
+  - **Owner's external review of `6c8bbcd`: NOT READY** (MEDIUM: forgot password and the verification resend
+    took a second checkout only for an existing account / pending application, a timing oracle under a
+    saturated pool). Fixed in `c2b2c37`: each route takes ONE checkout before anything about the email is
+    known and runs the lookup and any transaction on it; the client is released before the timing floor and
+    the email. **Owner's external review of `cafe502`: READY.**
+- **PR #146 is merged and deployed.**
+  - Reviewed head `cafe502`, merge commit `5436c6d` (parents `0271acb` and `cafe502`) on 2026-10-07 at
+    13:06:18 UTC, merged exactly from that head on the owner's order.
+  - `/api/health` first served `5436c6d` with `ok: true` at 13:08:18 UTC, then three times in a row
+    (13:08:28, 13:08:38 and 13:08:49 UTC).
+  - Read-only smoke without a login, zero UUID, GET only: nine protected GPEXE, source-connection, roster and
+    organization routes answered 401 (`/auth/me`, a public route, answered 200 with no user).
+  - No Load identities, Check, Connect, Bind, Link or Import at the merge or the deploy; Render and the import
+    switch untouched. No answer showed `database_busy` or `pool_checkout_timeout`; the Render logs were not
+    read from this workstation.
+- **After PR #146 (owner-run, 2026-10-07; sanitized, as reported by the owner):**
+  - one identity load succeeded and one athlete link was made. No name, date of birth or id is recorded
+    here. **This record does not say whether the owner confirmed the production-use gate (legal basis and
+    notice, minors included) or the two gates before a link (under Separate tasks); their state is the
+    owner's to state, and they are kept below as written until then;**
+  - one check for 05.10.2026 – 06.10.2026 ended **`source_filter_ignored`** ("The source server returned
+    sessions outside the asked window; the window cannot be trusted."): the failed check row with that code
+    is stored; no candidate, preview, import, activity or result row was written and nothing was imported.
+    **No conclusion about its cause.** The code review (main session, no GPEXE request) found that the
+    window guard runs over every returned row before the parent / drill classification, reads a row's day as
+    the first ten characters of `start_timestamp` (no zone), accepts the look-back day, and reports a row
+    outside the window and an unreadable start under the same code; the same request form passed for
+    05.10 – 05.10 and in the probe.
+- **A sanitized diagnostic for `source_filter_ignored`** (owner order 2026-10-07; branch
+  `fix/gpexe-source-filter-ignored-diagnostic` from `5436c6d`; not merged; backend adapter, tests and docs):
+  the refusal is unchanged (the same code, no candidate, preview, import, activity or result row, nothing
+  imported, no retry, no extra request; the failed check row is stored as before); the check row's stored
+  message gains after " Diagnostic: " only counts and fixed words -
+  `op=session_list_by_date; rows=N; before_lookback=N; after_end=N; unreadable=N; outside_named_drill=N;
+  distance=under_3h:N,3h_to_24h:N,over_24h:N,unknown:N; tz=Z:N,offset:N,none:N,other:N.` - checked by a
+  final fixed-grammar guard (anything else drops the description, never the refusal); a start that is not a
+  real calendar date and time (checked strictly, never normalised) counts as unreadable. The description is
+  stored on the check row and in no log. A platform admin and
+  the team's club admin read it; a coach gets the stable sentence. The filtering rule, the period, the
+  timezone rule, the classification and the fail-closed behaviour are unchanged; the options (a) a drill
+  row past midnight, (b) a zone rule, (c) the whole list filtered locally wait for the diagnostic's result.
+  Runbook section "A refused date window (`source_filter_ignored`)".
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1674,6 +1719,9 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #146 (`5436c6d`, merged 2026-10-07 13:06:18 UTC exactly from head `cafe502`) is deployed:
+  `/api/health` served `5436c6d` with `ok: true` three times in a row (13:08:28–13:08:49 UTC); without a
+  login nine protected routes answered 401. No migration. No identity load or GPEXE request at the merge.
 - PR #145 (`0271acb`, merged 2026-10-07 09:54:28 UTC exactly from head `782903e`) is deployed:
   `/api/health` served `0271acb` with `ok: true` three times in a row (09:55:34–09:55:54 UTC); the served
   bundle carries the new labels; without a login seven Imports and identity GET routes answered 401. No
@@ -1879,8 +1927,12 @@ pre-existing; pass/fail counts don't belong in this file
   Create (`docs/runbooks/gpexe-owner-pilot-f3c3.md`, step 2).
 
 - **The bounded `pool.connect()`** (owner's external review of PR #136, 2026-10-04; note 3 of the closing
-  review of PR #137) is built on the hardening branch after PR #145 (see the active phase) and waits for the
-  owner's external review; once merged, this entry is closed.
+  review of PR #137): **done**, PR #146 merged and deployed (see the active phase).
+- **Security follow-up, accepted by the owner (2026-10-07, at the review of PR #146): the verification
+  resend's timing channel.** `POST /api/auth/email-verifications/resend` has no timing floor and, when a
+  pending application exists, answers only after its transaction and the awaited email provider call,
+  while an unknown email answers at once - a timing difference that predates PR #146 and does not depend
+  on the pool. Not fixed; a separate task. See the runbook section "Database pool checkout bound".
 - **Standing rule for raw database writers (note 1 of the closing review of PR #137, 2026-10-04):**
   a raw write to `training_load.gpexe_import_checks` (and to the source-connection tables) uses the
   agreed `READ COMMITTED` isolation and follows the runbook; the v31 legacy-path guard reads with the
@@ -2101,16 +2153,17 @@ pre-existing; pass/fail counts don't belong in this file
 ## Most likely next step
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
-the identity implementation (PR #144, v32) and the id masking (PR #145) are merged and deployed; PR #142 is
-closed as superseded. Next steps, in order:
-1. The owner's external review of the hardening branch `fix/pool-checkout-timeout-and-identity-key`
-   (the bounded pool checkout, the kept identity key, the long name).
-2. The production-use gate: legal basis and notice, minors included, confirmed by the owner. Only then,
-   and on a separate order, one name load on the deployed Link athletes screen (a GPEXE request).
-3. The first *Link athletes*, after the two gates under Separate tasks.
-4. PR B, the F3c4 cut-over (see the active step).
-5. The second owner-run procedure for one controlled real import.
-6. **Phase 5a3c** (Complete and Needs review).
+the identity implementation (PR #144, v32), the id masking (PR #145) and the hardening (PR #146) are merged
+and deployed; PR #142 is closed as superseded. Next steps, in order:
+1. The owner's external review of the diagnostic branch `fix/gpexe-source-filter-ignored-diagnostic`.
+2. After its merge and deploy, on a separate owner order, one check of the same window; the owner returns
+   only the " Diagnostic: " line, then decides between options (a), (b) and (c) (see the active phase).
+3. The owner states the state of the production-use gate and of the two gates before a link (an identity
+   load and one link were run after PR #146; whether those gates were confirmed is not recorded here).
+4. The separate resend timing task (see Separate tasks), when the owner schedules it.
+5. PR B, the F3c4 cut-over (see the active step).
+6. The second owner-run procedure for one controlled real import.
+7. **Phase 5a3c** (Complete and Needs review).
 
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.

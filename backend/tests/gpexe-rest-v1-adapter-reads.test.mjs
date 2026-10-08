@@ -1339,3 +1339,120 @@ test("B7.8 static architecture guard: no consumer outside the adapter and the ma
   assert.equal(count(/detailsNumber\(playerDetails, "/g), DETAILS_CONSUMED_FIELDS.length, "detailsNumber is called only for the consumed fields");
   for (const field of DETAILS_CONSUMED_FIELDS) assert.ok(mapper.includes(`detailsNumber(playerDetails, "${field}")`), field);
 });
+
+// ---------------------------------------------------------------------------
+// The sanitized description of a refused date window (owner order 2026-10-07,
+// after a check of 05.10–06.10.2026 ended source_filter_ignored). The refusal
+// is exactly as before - same code, nothing returned, no retry, no extra
+// request - and the message gains, after " Diagnostic: ", counts and fixed
+// words only: never an id, a date, a time, a timestamp, a name, a URL or JSON.
+const STABLE = "The source server returned sessions outside the asked window; the window cannot be trusted.";
+const refusedWith = async (rows) => {
+  const server = full({ [WINDOW]: answer(200, rows, { "x-total-count": String(rows.length) }) });
+  let caught = null;
+  try {
+    await make(server.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught instanceof SourceAdapterError, "refused");
+  assert.equal(caught.code, "source_filter_ignored", "the same code as before");
+  assert.ok(caught.message.startsWith(`${STABLE} Diagnostic: `), caught.message);
+  assert.deepEqual(server.calls.map((c) => new URL(c.url).pathname + new URL(c.url).search), [WINDOW], "one request, no retry, nothing else read");
+  return caught.message.slice(`${STABLE} Diagnostic: `.length);
+};
+const noValueIn = (text, values) => {
+  for (const v of values) assert.ok(!text.includes(String(v)), `the diagnostic carries a source value: ${v}`);
+  assert.ok(!/\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2}|https?:|[{}"]/.test(text), `no date, time, URL or JSON: ${text}`);
+};
+
+test("diagnostic: a drill row just after midnight, named by a parent inside the period, is counted as after_end, named drill, under_3h, naive", async () => {
+  const text = await refusedWith([
+    session(7001, 980, { start_timestamp: "2026-09-15T23:30:00", drills: [7002], drills_count: 1 }),
+    session(7002, 980, { start_timestamp: "2026-09-16T00:20:00" }),
+  ]);
+  assert.equal(text, "op=session_list_by_date; rows=2; before_lookback=0; after_end=1; unreadable=0; outside_named_drill=1; distance=under_3h:1,3h_to_24h:0,over_24h:0,unknown:0; tz=Z:0,offset:0,none:2,other:0.");
+  noValueIn(text, [7001, 7002, "2026-09-16", "00:20"]);
+});
+
+test("diagnostic: a parent or unnamed row far outside the window is counted without the named-drill mark (a parent outside the period never marks one), over_24h; one a few hours late is 3h_to_24h", async () => {
+  const text = await refusedWith([
+    session(7101, 980, { start_timestamp: "2026-09-14T10:00:00" }),
+    session(7102, 980, { start_timestamp: "2026-09-20T10:00:00", drills: [7103], drills_count: 1 }),
+    session(7103, 980, { start_timestamp: "2026-09-16T08:00:00" }),
+  ]);
+  assert.equal(text, "op=session_list_by_date; rows=3; before_lookback=0; after_end=2; unreadable=0; outside_named_drill=0; distance=under_3h:0,3h_to_24h:1,over_24h:1,unknown:0; tz=Z:0,offset:0,none:3,other:0.");
+  noValueIn(text, [7101, 7102, 7103]);
+});
+
+test("diagnostic: timezone shapes are fixed categories (Z, offset, none, other); a row before the look-back start is counted by its naive distance", async () => {
+  const text = await refusedWith([
+    session(7201, 980, { start_timestamp: "2026-09-12T23:00:00Z" }),
+    session(7202, 980, { start_timestamp: "2026-09-14T10:00:00+02:00" }),
+    session(7203, 980, { start_timestamp: "2026-09-14T11:00:00.250Z" }),
+    session(7204, 980, { start_timestamp: "2026-09-14T12:00:00" }),
+    session(7205, 980, { start_timestamp: "2026-09-14T13:00:00 Europe/Rome" }),
+  ]);
+  assert.equal(text, "op=session_list_by_date; rows=5; before_lookback=1; after_end=0; unreadable=0; outside_named_drill=0; distance=under_3h:1,3h_to_24h:0,over_24h:0,unknown:0; tz=Z:2,offset:1,none:1,other:1.");
+  noValueIn(text, [7201, 7202, "Europe", "Rome", "+02:00"]);
+});
+
+test("diagnostic: a null or unreadable start_timestamp is unreadable, distance unknown, timezone other", async () => {
+  const text = await refusedWith([
+    session(7301, 980, { start_timestamp: null }),
+    session(7302, 980, { start_timestamp: "yesterday evening" }),
+    session(7303, 980, { start_timestamp: "2026-09-14T10:00:00" }),
+  ]);
+  assert.equal(text, "op=session_list_by_date; rows=3; before_lookback=0; after_end=0; unreadable=2; outside_named_drill=0; distance=under_3h:0,3h_to_24h:0,over_24h:0,unknown:2; tz=Z:0,offset:0,none:1,other:2.");
+  noValueIn(text, [7301, 7302, "yesterday", "evening"]);
+});
+
+test("diagnostic: a named drill whose start is unreadable is counted as unreadable only, never as an outside named drill", async () => {
+  const text = await refusedWith([
+    session(7401, 980, { start_timestamp: "2026-09-15T23:30:00", drills: [7402, 7403], drills_count: 2 }),
+    session(7402, 980, { start_timestamp: null }),
+    session(7403, 980, { start_timestamp: "2026-09-16T00:20:00" }),
+  ]);
+  assert.equal(text, "op=session_list_by_date; rows=3; before_lookback=0; after_end=1; unreadable=1; outside_named_drill=1; distance=under_3h:1,3h_to_24h:0,over_24h:0,unknown:1; tz=Z:0,offset:0,none:2,other:1.");
+  noValueIn(text, [7401, 7402, 7403]);
+});
+
+test("diagnostic: an impossible month, day, hour, minute or second is unreadable, distance unknown, timezone other - never a moment Date.UTC normalised it into; a real leap day is read", async () => {
+  // Every impossible value starts after the asked period by its first ten
+  // characters (or names a day the filter refuses), so the refusal is the
+  // same; only the description must not read it as a real moment.
+  const text = await refusedWith([
+    session(7501, 980, { start_timestamp: "2026-13-01T10:00:00Z" }),
+    session(7502, 980, { start_timestamp: "2026-09-31T10:00:00Z" }),
+    session(7503, 980, { start_timestamp: "2026-09-16T24:00:00Z" }),
+    session(7504, 980, { start_timestamp: "2026-09-16T10:60:00Z" }),
+    session(7505, 980, { start_timestamp: "2026-09-16T10:00:60Z" }),
+    session(7506, 980, { start_timestamp: "2026-02-29T10:00:00Z" }),
+    session(7507, 980, { start_timestamp: "2026-09-14T10:00:00" }),
+  ]);
+  assert.equal(text, "op=session_list_by_date; rows=7; before_lookback=0; after_end=0; unreadable=6; outside_named_drill=0; distance=under_3h:0,3h_to_24h:0,over_24h:0,unknown:6; tz=Z:0,offset:0,none:1,other:6.");
+  noValueIn(text, [7501, 7506, "2026-13", "24:00", "10:60"]);
+  const { describeWindowRefusal } = await import("../src/gpexeRestV1Adapter.js");
+  const leap = describeWindowRefusal([{ id: 1, team: 980, start_timestamp: "2024-02-29T10:00:00Z", drills: [] }], { lookFrom: "2024-03-01", from: "2024-03-02", to: "2024-03-03" });
+  assert.equal(leap, "op=session_list_by_date; rows=1; before_lookback=1; after_end=0; unreadable=0; outside_named_drill=0; distance=under_3h:0,3h_to_24h:1,over_24h:0,unknown:0; tz=Z:1,offset:0,none:0,other:0.", "a real leap day is a real moment");
+});
+
+test("diagnostic: a start whose day is inside the read but whose time is impossible is counted unreadable (the filter accepted it); the refusal comes from the other row", async () => {
+  const text = await refusedWith([
+    session(7601, 980, { start_timestamp: "2026-09-14T24:00:00Z" }),
+    session(7602, 980, { start_timestamp: "2026-09-16T08:00:00" }),
+  ]);
+  assert.equal(text, "op=session_list_by_date; rows=2; before_lookback=0; after_end=1; unreadable=1; outside_named_drill=0; distance=under_3h:0,3h_to_24h:1,over_24h:0,unknown:1; tz=Z:0,offset:0,none:1,other:1.");
+  noValueIn(text, [7601, 7602]);
+});
+
+test("diagnostic: the final guard - the description has one fixed grammar; a source value can never pass into it (crafted ids, names and timestamps stay out)", async () => {
+  const { describeWindowRefusal } = await import("../src/gpexeRestV1Adapter.js");
+  const crafted = [
+    { id: "8001", team: 980, start_timestamp: "2026-09-16T00:01:00Z; rows=9999", drills: ["8002"], name: "Marker Name https://evil.example/x" },
+    { id: "8002", team: 980, start_timestamp: "2026-09-15T22:00:00", drills: ["8001"], name: "{\"json\":1}" },
+  ];
+  const text = describeWindowRefusal(crafted, { lookFrom: "2026-09-13", from: "2026-09-14", to: "2026-09-15" });
+  assert.match(text, /^op=session_list_by_date; rows=\d+; before_lookback=\d+; after_end=\d+; unreadable=\d+; outside_named_drill=\d+; distance=under_3h:\d+,3h_to_24h:\d+,over_24h:\d+,unknown:\d+; tz=Z:\d+,offset:\d+,none:\d+,other:\d+\.$/);
+  noValueIn(text, ["8001", "8002", "Marker", "evil", "9999", "json"]);
+});
