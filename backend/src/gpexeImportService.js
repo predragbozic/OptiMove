@@ -376,153 +376,158 @@ export async function runRetention(triggerSource) {
 // server's schedule, the CLI), so a snapshot stored before the projections
 // keeps no unconsumed metric even when no later check supersedes it. An
 // imported candidate is never touched (its record stays as it was approved);
-// the row's identity and bundle_hash stay. The approval recomputes its plan
-// from the snapshot, and the mapper reads only those two fields, so the
-// preview of a projected snapshot is the same.
+// the row's identity, bundle_hash and retention dates stay. The approval
+// recomputes its plan from the snapshot, and the mapper reads only those two
+// fields, so the preview of a projected snapshot is the same.
 //
-// Bounded in time and in what it holds (owner's external review of 5bd4ee0
-// and the narrow reviews after it, 2026-10-09), because it runs at the start
-// of every check and in the scheduled job:
-// - ids are listed in keyset pages (id only, never a snapshot), from a cursor
+// Bounded in time, in what it holds and in what one bad row can cost (owner's
+// external reviews of 5bd4ee0 and 8a7cee0 and the narrow reviews after them,
+// 2026-10-09), because it runs at the start of every check and in the
+// scheduled job:
+// - ids are listed in keyset pages (id only, never a snapshot) from a cursor
 //   kept across runs in this process, so a large backlog makes progress run
-//   after run instead of starting again from the first id; the page read is
-//   its own short transaction with the same SET LOCAL statement_timeout and
-//   lock_timeout as a row;
-// - every row is its own short transaction on a checked-out connection with
-//   SET LOCAL statement_timeout, lock_timeout and
-//   idle_in_transaction_session_timeout (the last ends a transaction whose
-//   client vanished, so an abandoned row lock is released by the server);
-//   it locks and reads ONE snapshot with FOR UPDATE SKIP LOCKED (a row
-//   another session holds is skipped, never waited on), writes the projection
-//   only if it changed, and commits - at most one row lock and one snapshot
-//   at a time;
-// - every await is bounded by min(its own bound, the time left in the run's
-//   budget): the connection checkout, each statement and the server-side
-//   statement_timeout; the COMMIT is awaited at most PROJECTION_COMMIT_BOUND_MS
-//   and a ROLLBACK before a sent COMMIT at most PROJECTION_ROLLBACK_BOUND_MS;
-//   a connection whose statement, COMMIT or ROLLBACK did not answer is closed
-//   (release(true)), never reused or awaited again, and the step stops there
-//   - nothing is retried in that run (the next run is idempotent either way).
+//   after run; each page read is its own short read-only transaction;
+// - every row is its own short transaction: it locks and reads ONE snapshot
+//   with FOR UPDATE SKIP LOCKED (a row another session holds is skipped,
+//   never waited on), writes the projection only if it changed, and commits -
+//   at most one row lock and one snapshot at a time;
+// - every page and row transaction sets SET LOCAL statement_timeout,
+//   lock_timeout and idle_in_transaction_session_timeout (the last ends a
+//   transaction whose client vanished, so nothing stays open or locked);
+// - the run's budget is checked only BEFORE a new page or row is started:
+//   when it is spent, nothing new is sent and the step ends cleanly (no
+//   error). An operation that has started runs under its own bounds, never
+//   cut by the budget - its checkout and statements together within
+//   PROJECTION_OPERATION_BOUND_MS (each statement also under the server's
+//   statement_timeout), the COMMIT within PROJECTION_COMMIT_BOUND_MS, a
+//   ROLLBACK before a sent COMMIT within PROJECTION_ROLLBACK_BOUND_MS - and
+//   reports its real outcome: projection_timeout, projection_commit_unknown
+//   or projection_failed. A connection whose statement, COMMIT or ROLLBACK did
+//   not answer is closed (release(true)) and never awaited again;
+// - a row that fails is not retried in the same run: the cursor moves past
+//   it and the run goes on with the next row while the budget lasts, at most
+//   PROJECTION_FAILURE_CAP failed rows per run. The failed row stays eligible
+//   (its retention dates are not touched) and is tried again when a later run
+//   reaches it after the cursor wraps at the end of the list;
+// - a run that had a failed row is recorded with a stable code and sentence
+//   (projection_commit_unknown before projection_timeout before
+//   projection_failed) - never a snapshot, an id, a metric or a value - and
+//   runRetention keeps the purge count and an earlier step's error.
 // So one run's projection step takes at most PROJECTION_RUN_BUDGET_MS plus one
-// COMMIT bound (10 + 5 = 15 s with the defaults), whatever the backlog.
-// Reaching the budget is the normal way a large backlog is split across runs,
-// not a failure: a timeout whose bound came from the time left in the budget
-// (and not from the statement's own bound) ends the step cleanly - the row in
-// flight is rolled back (its client closed when a statement was still
-// running), the cursor stays after the last completed row, and the run records
-// no error. A failure carries a stable code only (projection_timeout,
-// projection_commit_unknown, projection_failed) - never a snapshot, an id, a
-// metric or a value - and runRetention keeps the purge count and an earlier
-// step's error (its own isolation). A COMMIT bound is never cut by the budget,
-// so an unanswered COMMIT is always projection_commit_unknown.
+// started operation (10 + 4 + 5 = 19 s with the defaults), whatever the
+// backlog.
 export const PROJECTION_STATEMENT_TIMEOUT_MS = 2_000;
 export const PROJECTION_LOCK_TIMEOUT_MS = 1_000;
 export const PROJECTION_IDLE_IN_TRANSACTION_MS = 5_000;
-export const PROJECTION_CLIENT_MARGIN_MS = 1_000;
+export const PROJECTION_OPERATION_BOUND_MS = 4_000;
 export const PROJECTION_COMMIT_BOUND_MS = 5_000;
 export const PROJECTION_ROLLBACK_BOUND_MS = 2_000;
 export const PROJECTION_RUN_BUDGET_MS = 10_000;
 export const PROJECTION_ID_PAGE = 200;
+export const PROJECTION_FAILURE_CAP = 3;
 const PROJECTION_DEFAULTS = Object.freeze({
   statementTimeoutMs: PROJECTION_STATEMENT_TIMEOUT_MS,
   lockTimeoutMs: PROJECTION_LOCK_TIMEOUT_MS,
   idleInTransactionMs: PROJECTION_IDLE_IN_TRANSACTION_MS,
-  clientMarginMs: PROJECTION_CLIENT_MARGIN_MS,
+  operationBoundMs: PROJECTION_OPERATION_BOUND_MS,
   commitBoundMs: PROJECTION_COMMIT_BOUND_MS,
   rollbackBoundMs: PROJECTION_ROLLBACK_BOUND_MS,
   runBudgetMs: PROJECTION_RUN_BUDGET_MS,
   idPage: PROJECTION_ID_PAGE,
+  failureCap: PROJECTION_FAILURE_CAP,
 });
 let projectionBounds = { ...PROJECTION_DEFAULTS };
 // The id after which the next run continues (a process-local cursor; it
 // wraps to the start when a run reaches the end of the list).
 let projectionCursor = null;
-// Tests shorten the bounds and hold the checkout, a statement, the COMMIT or
-// the ROLLBACK of one row's transaction (each fault gets that row's client).
+// Tests shorten the bounds and hold the checkout, a statement of a row or of
+// a page, the COMMIT or the ROLLBACK (each fault gets that client, and a row
+// fault also the row's id - test-only, never logged), and observe every
+// checked-out client.
 let projectionConnectFault = null;
 let projectionStatementFault = null;
+let projectionPageFault = null;
 let projectionCommitFault = null;
 let projectionRollbackFault = null;
 let projectionClientObserver = null;
-let projectionPageFault = null;
-export function setProjectionBoundsForTests(bounds = null, { connectFault = null, statementFault = null, commitFault = null, rollbackFault = null, clientObserver = null, pageFault = null, resetCursor = true } = {}) {
+export function setProjectionBoundsForTests(bounds = null, { connectFault = null, statementFault = null, pageFault = null, commitFault = null, rollbackFault = null, clientObserver = null, resetCursor = true } = {}) {
   projectionBounds = { ...PROJECTION_DEFAULTS, ...(bounds ?? {}) };
   projectionConnectFault = connectFault;
   projectionStatementFault = statementFault;
+  projectionPageFault = pageFault;
   projectionCommitFault = commitFault;
   projectionRollbackFault = rollbackFault;
   projectionClientObserver = clientObserver;
-  projectionPageFault = pageFault;
   if (resetCursor) projectionCursor = null;
 }
+const PROJECTION_MESSAGES = Object.freeze({
+  projection_timeout: "The snapshot projection step ran out of time; the next retention run continues it.",
+  projection_commit_unknown: "The snapshot projection step could not confirm its last write; the next retention run continues it.",
+  projection_failed: "The snapshot projection step failed; the next retention run continues it.",
+});
 export class ProjectionStepError extends Error {
   constructor(code) {
-    const messages = {
-      projection_timeout: "The snapshot projection step ran out of time; the next retention run continues it.",
-      projection_commit_unknown: "The snapshot projection step could not confirm its last write; the next retention run continues it.",
-      projection_failed: "The snapshot projection step failed; the next retention run continues it.",
-    };
-    super(messages[code] ?? messages.projection_failed);
+    super(PROJECTION_MESSAGES[code] ?? PROJECTION_MESSAGES.projection_failed);
     this.name = "ProjectionStepError";
-    this.code = messages[code] ? code : "projection_failed";
+    this.code = PROJECTION_MESSAGES[code] ? code : "projection_failed";
   }
 }
 const isProjectionTimeout = (error) => error?.code === "57014" || error?.code === "55P03" || error?.code === "25P03"
   || isPoolCheckoutTimeout(error) || /no answer within/.test(String(error?.message));
-// The budget of the run was reached: a clean stop, never recorded as an error.
-class ProjectionBudgetReached extends Error {}
+const toProjectionError = (error) => (error instanceof ProjectionStepError ? error
+  : new ProjectionStepError(isProjectionTimeout(error) ? "projection_timeout" : "projection_failed"));
+// The code a run reports when several rows failed.
+const PROJECTION_CODE_RANK = Object.freeze({ projection_commit_unknown: 3, projection_timeout: 2, projection_failed: 1 });
 
 export async function projectUnimportedSnapshots() {
   const b = projectionBounds;
   const deadline = Date.now() + b.runBudgetMs;
-  const left = () => deadline - Date.now();
-  const statementBound = b.statementTimeoutMs + b.clientMarginMs;
-  // Every bound is min(its own, the time left). A scope (one checkout, one
-  // page read, one row) remembers whether any bound in it was cut by the
-  // budget, so a timeout there is told apart: the budget reached (a clean
-  // stop) or the statement's own bound (projection_timeout).
-  const scope = () => {
-    const sc = { byBudget: false };
-    sc.cap = (own) => {
-      const l = left();
-      if (l < own) sc.byBudget = true;
-      return Math.max(1, Math.floor(Math.min(own, l)));
-    };
-    sc.fail = (error) => {
-      if (error instanceof ProjectionStepError || error instanceof ProjectionBudgetReached) return error;
-      if (isProjectionTimeout(error)) return sc.byBudget ? new ProjectionBudgetReached() : new ProjectionStepError("projection_timeout");
-      return new ProjectionStepError("projection_failed");
-    };
-    return sc;
+  const budgetLeft = () => deadline - Date.now() > 0;
+  const statementBound = b.statementTimeoutMs + 1_000;
+
+  // One started operation (a page read or a row): its checkout and its
+  // statements share its own bound, never the run's budget.
+  const operation = () => {
+    const ends = Date.now() + b.operationBoundMs;
+    const cap = (own) => Math.max(1, Math.floor(Math.min(own, ends - Date.now())));
+    return { cap };
   };
   // A connection checked out in time; one that arrives after its bound is
   // closed at once, never kept.
-  const connect = async () => {
-    const sc = scope();
+  const connect = async (op) => {
     const connecting = Promise.resolve().then(() => (projectionConnectFault ? projectionConnectFault() : pool.connect()));
     try {
-      return await withinBound(connecting, sc.cap(statementBound));
+      return await withinBound(connecting, op.cap(statementBound));
     } catch (error) {
       connecting.then((late) => late?.release?.(true), () => {});
-      throw sc.fail(error);
+      throw toProjectionError(error);
     }
   };
-  // The id page: a short read-only transaction with the same server-side
-  // bounds as a row. Any failure closes the client (a read: nothing to keep).
+  // The server-side bounds of a row's transaction (the id page sets the same
+  // three itself).
+  const setLocalBounds = async (run, op) => {
+    await run(`set local statement_timeout = '${op.cap(b.statementTimeoutMs)}ms'`);
+    await run(`set local lock_timeout = '${Math.max(1, Math.floor(b.lockTimeoutMs))}ms'`);
+    await run(`set local idle_in_transaction_session_timeout = '${Math.max(1, Math.floor(b.idleInTransactionMs))}ms'`);
+  };
+  // The id page: a short read-only transaction. Any failure closes the
+  // client (a read: nothing to keep or confirm).
   const readIdPage = async (cursor) => {
-    const client = await connect();
+    const op = operation();
+    const client = await connect(op);
     const onError = () => {};
     client.on("error", onError);
-    const sc = scope();
-    const run = (text, values) => withinBound(client.query(text, values), sc.cap(statementBound));
+    if (projectionClientObserver) projectionClientObserver(client);
+    const run = (text, values) => withinBound(client.query(text, values), op.cap(statementBound));
     try {
       await run("begin isolation level read committed read only");
-      await run(`set local statement_timeout = '${sc.cap(b.statementTimeoutMs)}ms'`);
+      await run(`set local statement_timeout = '${op.cap(b.statementTimeoutMs)}ms'`);
       await run(`set local lock_timeout = '${Math.max(1, Math.floor(b.lockTimeoutMs))}ms'`);
+      await run(`set local idle_in_transaction_session_timeout = '${Math.max(1, Math.floor(b.idleInTransactionMs))}ms'`);
       if (projectionPageFault) {
         const held = Promise.resolve().then(() => projectionPageFault(client));
         held.catch(() => {});
-        await withinBound(held, sc.cap(statementBound));
+        await withinBound(held, op.cap(statementBound));
       }
       const rows = (await run(
         `select id from training_load.gpexe_import_candidates
@@ -536,14 +541,14 @@ export async function projectUnimportedSnapshots() {
       return rows;
     } catch (error) {
       client.release(true);
-      throw sc.fail(error);
+      throw toProjectionError(error);
     }
   };
   // One row's transaction: lock and read its snapshot, write the projection
   // if it changed, commit. Returns 1 when it wrote, 0 otherwise.
   const projectOne = async (id) => {
-    const client = await connect();
-    const sc = scope();
+    const op = operation();
+    const client = await connect(op);
     // Kept on a closed client too: a late socket error never crashes the process.
     const onError = () => {};
     client.on("error", onError);
@@ -555,17 +560,14 @@ export async function projectUnimportedSnapshots() {
       released = true;
       client.release(true);
     };
-    const bound = () => sc.cap(statementBound);
-    const run = (text, values) => withinBound(client.query(text, values), bound());
+    const run = (text, values) => withinBound(client.query(text, values), op.cap(statementBound));
     try {
       await run("begin isolation level read committed");
-      await run(`set local statement_timeout = '${sc.cap(b.statementTimeoutMs)}ms'`);
-      await run(`set local lock_timeout = '${Math.max(1, Math.floor(b.lockTimeoutMs))}ms'`);
-      await run(`set local idle_in_transaction_session_timeout = '${Math.max(1, Math.floor(b.idleInTransactionMs))}ms'`);
+      await setLocalBounds(run, op);
       if (projectionStatementFault) {
-        const held = Promise.resolve().then(() => projectionStatementFault(client));
+        const held = Promise.resolve().then(() => projectionStatementFault(client, id));
         held.catch(() => {});
-        await withinBound(held, bound());
+        await withinBound(held, op.cap(statementBound));
       }
       const row = (await run(
         `select raw_bundle from training_load.gpexe_import_candidates
@@ -587,9 +589,9 @@ export async function projectUnimportedSnapshots() {
           wrote = done.rowCount;
         }
       }
-      // The COMMIT under its bound (the F2 discipline): once sent, its outcome
-      // may be unknown; the client is then closed and nothing is awaited on it
-      // again, and the step stops - nothing is retried in this run.
+      // The COMMIT under its own bound (the F2 discipline): once sent, its
+      // outcome may be unknown; the client is then closed and nothing is
+      // awaited on it again.
       commitSent = true;
       const committing = Promise.resolve().then(() => (projectionCommitFault ? projectionCommitFault(client) : client.query("commit")));
       committing.catch(() => {});
@@ -615,7 +617,7 @@ export async function projectUnimportedSnapshots() {
       }
       // A statement that timed out or did not answer: never reuse the client.
       if (isProjectionTimeout(error)) destroy();
-      throw sc.fail(error);
+      throw toProjectionError(error);
     } finally {
       if (!released) {
         released = true;
@@ -626,30 +628,47 @@ export async function projectUnimportedSnapshots() {
   };
 
   let projected = 0;
-  try {
-    for (let page = 0; page < RETENTION_MAX_BATCHES; page += 1) {
-      if (left() <= 0) break;
-      const ids = await readIdPage(projectionCursor);
-      if (!ids.length) {
-        // The end of the list: the next run starts from the beginning.
-        projectionCursor = null;
-        break;
-      }
-      for (const { id } of ids) {
-        if (left() <= 0) return projected;
-        projected += await projectOne(id);
-        projectionCursor = id;
-      }
-      if (ids.length < b.idPage) {
-        projectionCursor = null;
-        break;
-      }
+  let failed = 0;
+  let failure = null;
+  const fail = (error) => {
+    failed += 1;
+    if (!failure || PROJECTION_CODE_RANK[error.code] > PROJECTION_CODE_RANK[failure.code]) failure = error;
+  };
+  pages: for (let page = 0; page < RETENTION_MAX_BATCHES; page += 1) {
+    // The budget is checked only before something new is started.
+    if (!budgetLeft()) break;
+    let ids;
+    try {
+      ids = await readIdPage(projectionCursor);
+    } catch (error) {
+      // No ids to move past: the step stops here with the page's own outcome.
+      fail(error);
+      break;
     }
-  } catch (error) {
-    // The budget reached: the rest is the next run's; nothing to record.
-    if (error instanceof ProjectionBudgetReached) return projected;
-    throw error;
+    if (!ids.length) {
+      // The end of the list: the next run starts from the beginning.
+      projectionCursor = null;
+      break;
+    }
+    for (const { id } of ids) {
+      if (!budgetLeft() || failed >= b.failureCap) break pages;
+      try {
+        projected += await projectOne(id);
+      } catch (error) {
+        // Recorded for the run; the row is not retried in this run and the
+        // cursor moves past it, so later rows are not starved.
+        fail(error);
+      }
+      projectionCursor = id;
+    }
+    if (ids.length < b.idPage) {
+      // The end of the list, also when the cap was reached on its last row.
+      projectionCursor = null;
+      break;
+    }
+    if (failed >= b.failureCap) break;
   }
+  if (failure) throw failure;
   return projected;
 }
 

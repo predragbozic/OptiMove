@@ -1331,18 +1331,19 @@ Technical details.
   in GPEXE - and its older pending candidate becomes `superseded`. **Every stored snapshot that was never
   imported is projected to the two consumed fields too** (owner's external review of `8087b81`,
   2026-10-09): a superseded one in the transaction that supersedes it, and every pending / blocked /
-  superseded one by each retention run (every check, the server's 6-hour schedule, the CLI), with a write
-  conditional on the snapshot it read - so the pending 05.10 candidate is projected by the first retention
+  superseded one by each retention run (every check, the server's 6-hour schedule, the CLI), each under
+  its row lock - so the pending 05.10 candidate is projected by the first retention
   run after the deploy, whether or not the next check succeeds. The retention projection step is bounded
-  in time (owner's external review of `5bd4ee0` and the narrow reviews after it): every row its own
-  short transaction (one snapshot read with `FOR UPDATE SKIP LOCKED`, at most one row lock held) with
-  `SET LOCAL statement_timeout` 2 s, `lock_timeout` 1 s and `idle_in_transaction_session_timeout` 5 s,
-  ids listed from a cursor kept across runs (each id page its own short transaction with the same
-  `statement_timeout` / `lock_timeout`), every await limited by the time left in a 10 s budget -
-  reaching the budget is a clean stop that records no error, the rest goes to the next run -, a
-  bounded COMMIT (5 s) and ROLLBACK (2 s) with the connection closed on no answer and no retry in that
-  run - at most about 15 s per run; failures carry a stable code only and keep the purge count and an
-  earlier step's error. The only copy is
+  in time (owner's external reviews of `5bd4ee0` and `8a7cee0` and the narrow reviews after them): every
+  row its own short transaction (one snapshot read with `FOR UPDATE SKIP LOCKED`, at most one row lock
+  held) and every id page its own short read-only transaction, each with `SET LOCAL statement_timeout`
+  2 s, `lock_timeout` 1 s and `idle_in_transaction_session_timeout` 5 s; ids from a cursor kept across
+  runs; the 10 s budget checked only before a new page or row starts (a spent budget is a clean stop
+  that records no error), a started operation under its own bounds (4 s for its statements, COMMIT 5 s,
+  ROLLBACK 2 s, the connection closed on no answer) reporting its real outcome; a failed row is not
+  retried in the same run, the cursor moves past it and the run goes on, at most 3 failed rows per run,
+  the failed row eligible again in a later run with its retention dates untouched - at most about 19 s
+  per run; failures carry a stable code only and keep the purge count and an earlier step's error. The only copy is
   `gpexe_import_candidates.raw_bundle`, no route returns it, the preview holds only the mapper's values, a
   superseded candidate cannot be approved, and an imported candidate is never touched (none exists on the
   deployed database); the row's identity, content hash and preview hash stay - `bundle_hash` is the

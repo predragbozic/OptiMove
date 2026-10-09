@@ -679,37 +679,40 @@ drill, and of each details part only `players` and `drills_count`.
 - Every **retention run** (each check, the server's 6-hour schedule, the CLI) projects every stored
   snapshot of a candidate that was never imported - pending, blocked or superseded - so a snapshot
   stored before the projections that no later check supersedes (for example the pending candidate of
-  a session whose next check fails) keeps its unconsumed metrics at most until the next retention
-  run, not until its 30-day expiry. The write is conditional on the row still holding the snapshot it
-  read, so a check that refreshed it meanwhile is never overwritten, and takes its row with
-  `FOR UPDATE SKIP LOCKED`, so it never waits on a row another session holds.
-- **The projection step is bounded in time and in what it holds** (it runs at the start of every
-  check, so a check may start up to about 15 s later on a large backlog or a busy pool): ids are listed
-  in pages of 200 (id only), each page in its own short read-only transaction with the same
-  `statement_timeout` and `lock_timeout`, from a cursor kept across runs in the server process, so a
-  large backlog progresses run after run; **every row is its own short transaction** on a
-  checked-out connection with `SET LOCAL statement_timeout = 2000ms`, `lock_timeout = 1000ms` and
-  `idle_in_transaction_session_timeout = 5000ms` (a transaction whose client vanished - a stalled
-  network - is ended by the server, so its row lock is released); it locks and reads **one** snapshot
-  (`FOR UPDATE SKIP LOCKED`: a row another session holds is skipped, never waited on), writes the
-  projection only if it changed, and commits - at most one row lock and one snapshot at a time. Every
-  await (the connection checkout, each statement, the server-side statement bound) is limited to
-  min(its own bound, the time left in the run's 10 s budget); the COMMIT is awaited at most 5 s and a
-  ROLLBACK before a sent COMMIT at most 2 s; a connection whose statement, COMMIT or ROLLBACK did not
-  answer is closed, never reused, and the step stops (nothing is retried in that run; the next run is
-  idempotent). **One run's projection step therefore takes at most about 15 s** (10 s budget + the 5 s
-  COMMIT bound), whatever the backlog; the rest is taken by the next run. **Reaching the budget is not a
-  failure:** a timeout whose bound was cut by the time left in the budget ends the step cleanly (the row
-  in flight rolled back, its connection closed when a statement was still running, the cursor after the
-  last completed row) and the run records no error; only a timeout of a statement's own bound, an
-  unanswered COMMIT or another error is a failure. A row whose own transaction fails in every run
-  (for example one that always exceeds 2 s) stops the cursor at that row until it is projected or
-  purged after its 30 days; such runs are recorded with `projection_timeout`, which is the signal to
-  look. A failure is recorded on the retention run with a stable sentence and
-  logged with a stable code only (`projection_timeout`, `projection_commit_unknown`,
-  `projection_failed`) - never a snapshot, an id, a metric or a value - and it never loses the purge
-  count or an earlier step's error. No global `statement_timeout` is set; other statements are
-  unchanged.
+  a session whose next check fails) keeps no unconsumed metric for long. The read and the write happen
+  under the row lock taken with `FOR UPDATE SKIP LOCKED`, so a check that refreshes the row waits for
+  it or is skipped, and the step never waits on a row another session holds; a row that is locked, is
+  reached only after the run's budget, or fails is projected by a later run (at most until its 30-day
+  expiry).
+- **The projection step is bounded in time, in what it holds and in what one bad row can cost** (it
+  runs at the start of every check, so a check may start up to about 19 s later on a large backlog or a
+  busy pool):
+  - ids are listed in pages of 200 (id only) from a cursor kept across runs in the server process, so a
+    large backlog progresses run after run; each page is its own short read-only transaction;
+  - **every row is its own short transaction**: it locks and reads **one** snapshot
+    (`FOR UPDATE SKIP LOCKED`: a row another session holds is skipped, never waited on), writes the
+    projection only if it changed, and commits - at most one row lock and one snapshot at a time;
+  - every page and row transaction sets `SET LOCAL statement_timeout = 2000ms`, `lock_timeout = 1000ms`
+    and `idle_in_transaction_session_timeout = 5000ms` (a transaction whose client vanished - a stalled
+    network - is ended by the server, so nothing stays open or holds a lock that would block DDL);
+  - **the run's 10 s budget is checked only before a new page or row is started.** When it is spent,
+    nothing new is sent and the step ends cleanly - the run records no error and the next run continues
+    from the cursor. An operation that has started is never cut by the budget: its checkout and
+    statements share their own 4 s bound (each statement also under the server's `statement_timeout`),
+    the COMMIT is awaited at most 5 s and a ROLLBACK before a sent COMMIT at most 2 s, and it reports its
+    real outcome - `projection_timeout`, `projection_commit_unknown` or `projection_failed`. A
+    connection whose statement, COMMIT or ROLLBACK did not answer is closed and never reused;
+  - **a row that fails is not retried in the same run**: the cursor moves past it and the run goes on
+    with the next row while the budget lasts, at most 3 failed rows per run. The failed row keeps its
+    retention dates and stays eligible; a later run tries it again once the cursor wraps at the end of
+    the list. A page read that fails stops the step (there is no id to move past);
+  - a run with a failed row or page is recorded on the retention run with a stable sentence and logged
+    with a stable code only (`projection_commit_unknown` before `projection_timeout` before
+    `projection_failed`) - never a snapshot, an id, a metric or a value - and it never loses the purge
+    count or an earlier step's error;
+  - **one run's projection step therefore takes at most about 19 s** (10 s budget + one started
+    operation: 4 s + the 5 s COMMIT bound), whatever the backlog. No global `statement_timeout` is set;
+    other statements are unchanged.
 - `bundle_hash` is the permanent fingerprint of the answer as it was read (the sha256 of its canonical JSON at that moment) and never changes. After a later projection of the stored snapshot it no longer equals the hash of the stored `raw_bundle`, and nothing compares the two: a check compares the hash of a freshly read answer with the column, and the approval copies the column. A later fresh read of the same data therefore counts as changed once its form differs.
 - The row's identity, content hash and preview hash stay as they were (the mapper reads only the two
   fields, so the approval recomputes the same preview); **an imported candidate is never touched**
