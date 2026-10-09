@@ -198,10 +198,18 @@ router.get("/", async (req, res, next) => {
     const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
     const params = [req.user.id];
     let where = `where ${exerciseScope}`;
+    let searchOrder = "";
 
     if (search) {
       params.push(`%${search}%`);
       where += ` and (e.name ilike $${params.length} or e.exercise_code ilike $${params.length})`;
+      params.push(search);
+      const searchParam = `$${params.length}`;
+      searchOrder = `case
+        when lower(e.name) = lower(${searchParam}) or lower(e.exercise_code) = lower(${searchParam}) then 0
+        when left(lower(e.name), length(${searchParam})) = lower(${searchParam}) then 1
+        else 2
+      end, `;
     }
 
     const addExistsFilter = (value, sql) => {
@@ -295,7 +303,7 @@ router.get("/", async (req, res, next) => {
       left join library.attractors a on a.id = e.attractor_id
       left join library.exercise_favorites fav on fav.exercise_id = e.id and fav.user_id = $1
       ${where}
-      order by nullif(regexp_replace(e.exercise_code, '\\D', '', 'g'), '')::int nulls last, e.name, e.id
+      order by ${searchOrder}nullif(regexp_replace(e.exercise_code, '\\D', '', 'g'), '')::int nulls last, e.name, e.id
       limit $${params.length - 1} offset $${params.length}
       `,
       params,
