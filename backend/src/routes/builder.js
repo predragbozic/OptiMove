@@ -149,7 +149,8 @@ router.get("/drafts", async (req, res, next) => {
   try {
     const result = await query(
       `select
-         coalesce(p.builder_batch_id::text, p.id::text) as group_key,
+         case when coalesce(p.is_edit_draft, false) then p.id::text
+              else coalesce(p.builder_batch_id::text, p.id::text) end as group_key,
          p.plan_type,
          p.week_start,
          max(p.name) as name,
@@ -160,10 +161,9 @@ router.get("/drafts", async (req, res, next) => {
        from plans.plans p
        left join public.athletes a on a.id = p.athlete_id
        where p.created_by_user_id = $1
-         and p.source_type = 'builder'
+         and p.source_type in ('builder', 'builder_edit_draft')
          and p.status = 'draft'
-         and coalesce(p.is_active, true)
-         and not coalesce(p.is_edit_draft, false)
+         and (coalesce(p.is_active, true) or coalesce(p.is_edit_draft, false))
        group by group_key, p.plan_type, p.week_start
        order by max(p.updated_at) desc`,
       [req.user.id],

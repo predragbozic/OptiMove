@@ -131,6 +131,8 @@ export const emptyBuilderState = (overrides = {}) => ({
   exerciseOffset: 0,
   exerciseSearchKey: "",
   exerciseLoading: false,
+  itemMovePending: null,
+  leaving: false,
   athletePickerOpen: false,
   sectionPickerOpen: false,
   createAthleteId: "",

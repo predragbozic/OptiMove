@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { acknowledgeBuilderItemEdit, clearBuilderItemEdits, pendingBuilderItemEdit, preserveBuilderItemEdits } from "./builder-item-edits.js";
 import { invalidateBuilderDraftsCache, loadBuilderNodePresets } from "./builder-data.js";
 import { findBuilderNode, findBuilderSession } from "./builder-helpers.js";
 import { invalidateCoachHomeCache } from "./coach-home-data.js";
@@ -75,7 +76,7 @@ function setBuilderDraft(nextDraft, options = {}) {
   const previousDraft = state.builder.draft;
   const previousBatch = previousDraft?.batch;
   const previousBatchId = getBuilderBatchId(previousDraft);
-  state.builder.draft = nextDraft;
+  state.builder.draft = preserveBuilderItemEdits(nextDraft);
   if (
     options.preserveBatch !== false &&
     previousBatch?.plans?.length > 1 &&
@@ -137,10 +138,15 @@ function forgetBatchPlan(planId) {
 }
 
 async function exitBuilderToPlanContext(plan, handlers) {
+  clearBuilderItemEdits();
   state.builder = emptyBuilderState();
   state.navStack = [];
   if (plan?.athleteId) state.selectedAthleteId = String(plan.athleteId);
   if (plan?.planType === "weekly") {
+    if (plan.weekStart) {
+      state.viewedWeekStart = String(plan.weekStart).slice(0, 10);
+      state.selectedWeekDay = state.viewedWeekStart;
+    }
     state.activeTab = "weekly";
     state.weekSelectorOpen = false;
     handlers.renderTabs();
@@ -1240,6 +1246,8 @@ export async function handleBuilderDraftAction(action, handlers) {
     const originalHTML = action.innerHTML;
     action.textContent = "Saving…";
     try {
+      await handlers.flushBuilderAutosaves?.();
+      await builderMutationQueue;
       const currentDraft = state.builder.draft || draft;
       const result = await api(`/api/builder/plans/${encodeURIComponent(currentDraft.plan.id)}/submit`, {
         method: "POST",
@@ -1260,11 +1268,11 @@ export async function handleBuilderDraftAction(action, handlers) {
       // still sitting in the clipboard from before this Finish now points
       // at rows that no longer exist, so pasting it would 404 ("Source node
       // or target session not found"). A brand-new plan's first-ever
-      // submit never touches its ids (just flips status), so the clipboard
-      // stays valid and is deliberately left alone in that case.
+      // submit never touches its ids (just flips status). Exiting below
+      // clears the clipboard for both kinds of plan.
       if (currentDraft.plan.isEditDraft) state.builder.clipboard = null;
       setBuilderDraft(result);
-      handlers.renderBuilder();
+      await exitBuilderToPlanContext(result?.plan || draft.plan, handlers);
     } catch (error) {
       // A failed save must not look like a success (no navigation, no
       // "Saved" state) and must not lose the coach's local edits -
@@ -1281,10 +1289,19 @@ export async function handleBuilderDraftAction(action, handlers) {
   }
   if (type === "builder-cancel") {
     const plan = state.builder.draft?.plan;
-    if (plan?.isEditDraft) {
-      if (!window.confirm("Discard these changes and keep the original unchanged?")) return true;
-      await api(`/api/builder/plans/${encodeURIComponent(plan.id)}`, { method: "DELETE" });
-    }
+    await handlers.flushBuilderAutosaves?.();
+    await builderMutationQueue;
+    invalidateBuilderDraftsCache();
+    await exitBuilderToPlanContext(plan, handlers);
+    return true;
+  }
+  if (type === "builder-discard-current-draft") {
+    const plan = state.builder.draft?.plan;
+    if (!plan || plan.status !== "draft" || !window.confirm("Discard all changes in this draft? The original plan will stay unchanged.")) return true;
+    await handlers.cancelBuilderAutosaves?.();
+    await builderMutationQueue;
+    await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(plan.id)}`, { method: "DELETE" });
+    invalidateBuilderDraftsCache();
     await exitBuilderToPlanContext(plan, handlers);
     return true;
   }
@@ -1403,19 +1420,23 @@ export async function handleBuilderItemAction(action, handlers) {
     return true;
   }
   if (type === "builder-move-item") {
+    if (state.builder.itemMovePending) return true;
     const node = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
     const currentIndex = node?.items.findIndex((item) => item.id === action.dataset.itemId) ?? -1;
     const targetIndex = currentIndex + (action.dataset.direction === "up" ? -1 : 1);
     if (!node || currentIndex < 0 || targetIndex < 0 || targetIndex >= node.items.length) return true;
     [node.items[currentIndex], node.items[targetIndex]] = [node.items[targetIndex], node.items[currentIndex]];
+    state.builder.itemMovePending = { planId: state.builder.draft.plan.id, nodeId: node.id, itemIds: node.items.map((item) => item.id) };
     if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
     try {
       setBuilderDraft(await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}/move`, {
         method: "POST",
         body: JSON.stringify(withBatchSyncPayload({ direction: action.dataset.direction })),
       }));
+      state.builder.itemMovePending = null;
       if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
     } catch (error) {
+      state.builder.itemMovePending = null;
       await handlers.refreshBuilderDraft();
       throw error;
     }
@@ -1423,7 +1444,8 @@ export async function handleBuilderItemAction(action, handlers) {
   }
   if (type === "builder-delete-item") {
     if (!window.confirm("Remove this exercise from the program?")) return true;
-    const result = await api(withBatchSyncUrl(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}`), { method: "DELETE" });
+    await handlers.cancelBuilderItemAutosave?.(action.dataset.itemId);
+    const result = await queuedBuilderApi(withBatchSyncUrl(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}`), { method: "DELETE" });
     // Removing exactly one duplicate/item must never disturb any other item
     // (independent sets/reps/load/instruction, independent order) - if the
     // just-removed item was open in the single-item edit view, fall back to
@@ -1515,7 +1537,10 @@ export async function submitBuilderForm(form, handlers) {
     markExerciseJustAdded(form.dataset.nodeId);
   }
   if (mode === "update-item") {
-    setBuilderDraft(await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(form.dataset.itemId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
+    const edit = pendingBuilderItemEdit(form.dataset.itemId);
+    const result = await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(form.dataset.itemId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(edit?.data || data)) });
+    acknowledgeBuilderItemEdit(form.dataset.itemId, edit);
+    setBuilderDraft(result);
     if (handlers.renderBuilderSectionItems?.()) return;
   }
   handlers.renderBuilder();

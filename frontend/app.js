@@ -53,6 +53,7 @@ import {
 import { loadBuilderDrafts, loadBuilderExercises, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
 import { renderBuilder, renderBuilderAddFeedback, renderBuilderSectionItems } from "./builder-view.js";
+import { clearBuilderItemEdits, rememberBuilderItemEdit } from "./builder-item-edits.js";
 import {
   handleCoachProfileAction,
   loadCoaches as loadCoachesAction,
@@ -1273,15 +1274,19 @@ const BUILDER_ITEM_AUTOSAVE_DEBOUNCE_MS = 500;
 // - already scheduled by that later keystroke - reads the DOM fresh and
 // will supersede it shortly) but never touches what's on screen.
 const builderItemAutosaveGeneration = new Map();
+const builderItemAutosaveTasks = new Map();
+const builderItemAutosaveInFlight = new Set();
 function scheduleBuilderItemAutosave(form) {
   const key = form.dataset.itemId || form;
+  rememberBuilderItemEdit(key, Object.fromEntries(new FormData(form)));
   const generation = (builderItemAutosaveGeneration.get(key) || 0) + 1;
   builderItemAutosaveGeneration.set(key, generation);
   clearTimeout(builderAutosaveTimers.get(key));
-  builderAutosaveTimers.set(key, setTimeout(() => {
+  const save = () => {
     builderAutosaveTimers.delete(key);
+    builderItemAutosaveTasks.delete(key);
     const isStale = () => builderItemAutosaveGeneration.get(key) !== generation;
-    submitBuilderFormAction(form, {
+    const request = submitBuilderFormAction(form, {
       loadBuilderExercises,
       renderBuilder: () => { if (!isStale()) renderBuilder(); },
       // Returning true when stale mirrors renderBuilderSectionItems()'s own
@@ -1290,8 +1295,47 @@ function scheduleBuilderItemAutosave(form) {
       // response is fully handled by doing nothing to the screen.
       renderBuilderSectionItems: () => (isStale() ? true : renderBuilderSectionItems()),
       renderBuilderAddFeedback,
-    }).catch(renderBuilderError);
-  }, BUILDER_ITEM_AUTOSAVE_DEBOUNCE_MS));
+    });
+    builderItemAutosaveInFlight.add(request);
+    request.then(() => builderItemAutosaveInFlight.delete(request), () => {
+      builderItemAutosaveInFlight.delete(request);
+      if (!isStale()) builderItemAutosaveTasks.set(key, save);
+    });
+    request.catch(renderBuilderError);
+    return request;
+  };
+  builderItemAutosaveTasks.set(key, save);
+  builderAutosaveTimers.set(key, setTimeout(save, BUILDER_ITEM_AUTOSAVE_DEBOUNCE_MS));
+}
+
+async function flushBuilderAutosaves() {
+  while (builderItemAutosaveTasks.size || builderItemAutosaveInFlight.size) {
+    const requests = [...builderItemAutosaveInFlight];
+    for (const [key, save] of [...builderItemAutosaveTasks]) {
+      clearTimeout(builderAutosaveTimers.get(key));
+      requests.push(save());
+    }
+    await Promise.all(requests);
+  }
+}
+
+async function cancelBuilderAutosaves() {
+  for (const key of builderItemAutosaveGeneration.keys()) {
+    clearTimeout(builderAutosaveTimers.get(key));
+    builderItemAutosaveGeneration.set(key, builderItemAutosaveGeneration.get(key) + 1);
+  }
+  builderAutosaveTimers.clear();
+  builderItemAutosaveTasks.clear();
+  await Promise.allSettled([...builderItemAutosaveInFlight]);
+  clearBuilderItemEdits();
+}
+
+async function cancelBuilderItemAutosave(key) {
+  clearTimeout(builderAutosaveTimers.get(key));
+  builderAutosaveTimers.delete(key);
+  builderItemAutosaveTasks.delete(key);
+  builderItemAutosaveGeneration.set(key, (builderItemAutosaveGeneration.get(key) || 0) + 1);
+  await Promise.allSettled([...builderItemAutosaveInFlight]);
 }
 
 let builderSearchTimer = null;
@@ -3289,10 +3333,23 @@ function renderCopyPlanSource() {
 }
 
 async function handleBuilderAction(action) {
-  if (await handleBuilderPlanAction(action, { renderBuilder, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
-  if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises })) return;
-  if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft })) return;
-  if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback, renderBuilderError, refreshBuilderDraft })) return;
+  if (state.builder.leaving) return;
+  const leaving = ["builder-submit-plan", "builder-cancel", "builder-discard-current-draft"].includes(action.dataset.action);
+  if (leaving) {
+    state.builder.leaving = true;
+    document.querySelector(".builder-workspace")?.setAttribute("inert", "");
+  }
+  try {
+    if (await handleBuilderPlanAction(action, { renderBuilder, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
+    if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises })) return;
+    if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft, flushBuilderAutosaves, cancelBuilderAutosaves })) return;
+    if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback, renderBuilderError, refreshBuilderDraft, cancelBuilderItemAutosave })) return;
+  } finally {
+    if (leaving) {
+      state.builder.leaving = false;
+      document.querySelector(".builder-workspace")?.removeAttribute("inert");
+    }
+  }
 }
 
 function renderBuilderError(error) {

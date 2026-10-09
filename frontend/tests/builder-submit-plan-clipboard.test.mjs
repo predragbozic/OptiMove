@@ -7,10 +7,8 @@ import assert from "node:assert/strict";
 // recreates it under the original plan with brand-new ids
 // (applyEditDraft, backend/src/routes/builder.js) - a node/section still
 // sitting in the clipboard from before that Finish points at rows that no
-// longer exist. The Builder deliberately stays open through Finish, so a
-// coach can click Paste right after - this must not resurrect a 404 for
-// them. A brand-new plan's very first submit never touches its own ids
-// (only flips status), so its clipboard must be left alone.
+// longer exist. Saving exits Builder, so the clipboard must be cleared
+// for both edit drafts and new plans before another Builder is opened.
 
 const fakeElements = new Map();
 function fakeElement() {
@@ -38,7 +36,7 @@ function installFetchMock(responseFor) {
 }
 
 function noopHandlers() {
-  return { renderBuilder: () => {}, renderBuilderError: () => {} };
+  return { renderBuilder: () => {}, renderBuilderError: () => {}, renderTabs: () => {}, renderLibraryNav: () => {}, loadWeekly: async () => {} };
 }
 
 function fakeAction() {
@@ -72,7 +70,7 @@ test("finishing an EDIT DRAFT clears the clipboard - its node/section ids no lon
   assert.equal(state.builder.clipboard, null);
 });
 
-test("finishing a BRAND-NEW plan's first-ever submit leaves the clipboard untouched - its ids are never regenerated", async () => {
+test("saving a new plan exits Builder and clears its clipboard", async () => {
   state.builder.draft = draftWith({ plan: { id: "plan-1", isEditDraft: false } });
   state.builder.clipboard = { type: "section", nodeId: "section-1", name: "Warmup" };
   installFetchMock((url) => {
@@ -82,5 +80,7 @@ test("finishing a BRAND-NEW plan's first-ever submit leaves the clipboard untouc
 
   await handleBuilderDraftAction(fakeAction(), noopHandlers());
 
-  assert.deepEqual(state.builder.clipboard, { type: "section", nodeId: "section-1", name: "Warmup" });
+  assert.equal(state.builder.clipboard, null);
+  assert.equal(state.builder.draft, null);
+  assert.equal(state.activeTab, "weekly");
 });

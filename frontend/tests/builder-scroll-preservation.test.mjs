@@ -58,7 +58,9 @@ dom.window.HTMLElement.prototype.scrollIntoView = function scrollIntoView(option
 
 const { els } = await import("../dom.js");
 const { state, emptyBuilderState } = await import("../state.js");
-const { renderBuilder } = await import("../builder-view.js");
+const { renderBuilder, renderBuilderSectionItems } = await import("../builder-view.js");
+const { rememberBuilderItemEdit, clearBuilderItemEdits } = await import("../builder-item-edits.js");
+globalThis.CSS = { escape: (value) => String(value) };
 
 function minimalBlock(id, index, extra = {}) {
   return { id, index, name: "", date: null, note: "", sessions: [], ...extra };
@@ -77,8 +79,49 @@ function waitForRestore() {
 }
 
 beforeEach(() => {
+  clearBuilderItemEdits();
   state.builder = emptyBuilderState();
   state.athletes = [];
+});
+
+function sectionDraft() {
+  const node = { id: "section-1", type: "section", name: "Strength", items: [
+    { id: "item-1", title: "Knee extension", sets: "", reps: "", load: "", description: "" },
+    { id: "item-2", title: "Squat", sets: "", reps: "", load: "", description: "" },
+  ] };
+  return { plan: { id: "dose-plan", status: "draft" }, blocks: [minimalBlock("dose-block", 1, { sessions: [{ id: "session-1", nodes: [node] }] })] };
+}
+
+test("section rebuild preserves unsaved Sets/Reps, focused field, and cursor", () => {
+  state.builder.draft = sectionDraft();
+  state.builder.selectedSessionId = "session-1";
+  state.builder.selectedNodeId = "section-1";
+  renderBuilder();
+  rememberBuilderItemEdit("item-1", { sets: "3", reps: "12", load: "", description: "" });
+  const selector = '.builder-added-list-desktop [data-item-id="item-1"]';
+  const field = els.content.querySelector(`${selector} [name="reps"]`);
+  field.value = "12";
+  field.focus();
+  field.setSelectionRange(2, 2);
+  state.builder.draft = sectionDraft();
+  assert.equal(renderBuilderSectionItems(), true);
+  assert.equal(els.content.querySelector(`${selector} [name="sets"]`).value, "3");
+  assert.equal(document.activeElement.value, "12");
+  assert.equal(document.activeElement.selectionStart, 2);
+});
+
+test("pending move disables every move arrow until the server response", () => {
+  state.builder.draft = sectionDraft();
+  state.builder.selectedSessionId = "session-1";
+  state.builder.selectedNodeId = "section-1";
+  state.builder.itemMovePending = { planId: "dose-plan", nodeId: "section-1", itemIds: ["item-2", "item-1"] };
+  renderBuilder();
+  const buttons = [...els.content.querySelectorAll('[data-action="builder-move-item"]')];
+  assert.ok(buttons.length > 0);
+  assert.ok(buttons.every((button) => button.disabled && button.title === "Moving..."));
+  state.builder.itemMovePending = null;
+  renderBuilderSectionItems();
+  assert.ok([...els.content.querySelectorAll('[data-action="builder-move-item"]')].some((button) => !button.disabled));
 });
 
 test("1. editing a block (same block count) restores the exact prior scrollLeft", async () => {

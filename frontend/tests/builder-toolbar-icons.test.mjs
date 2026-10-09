@@ -34,12 +34,12 @@ test("builder-structure.js exports ICON_DOOR_EXIT - a door+arrow icon, not a bar
   assert.match(builderStructureSource, /export const ICON_DOOR_EXIT = `<svg/);
 });
 
-test("the toolbar's Exit button is icon-only (no text label), uses ICON_DOOR_EXIT, and keeps the edit-draft vs normal tooltip distinction", () => {
+test("Exit keeps the draft for later in both editing modes", () => {
   const toolbar = sliceToolbar();
   assert.match(toolbar, /class="plain-button icon-button builder-exit-button"/);
   assert.match(toolbar, /\$\{ICON_DOOR_EXIT\}<\/button>/);
-  assert.match(toolbar, /isEditDraft \? "Discard edit draft" : "Exit"/);
-  assert.match(toolbar, /Discard this edit draft and keep the original unchanged\./);
+  assert.match(toolbar, /aria-label="Exit"/);
+  assert.match(toolbar, /Exit and keep this draft for later\./);
 });
 
 test("there is no separate Cancel button or passive Saved indicator anymore - Exit is the single unified button for both modes", () => {
@@ -57,10 +57,11 @@ test("the Finish button is icon-only (no text label) but keeps its tooltip wordi
   assert.doesNotMatch(toolbar, /<span>\$\{saveLabel\}<\/span>/);
 });
 
-test("the Delete button is unchanged - still icon-only with ICON_TRASH and its own tooltip", () => {
+test("a separate X discards the draft in both editing modes", () => {
   const toolbar = sliceToolbar();
-  assert.match(toolbar, /data-action="builder-delete-plan"/);
-  assert.match(toolbar, /\$\{ICON_TRASH\}<\/button>/);
+  assert.match(toolbar, /data-action="builder-discard-current-draft"/);
+  assert.match(toolbar, /aria-label="Discard changes"/);
+  assert.match(toolbar, /\$\{ICON_X\}/);
 });
 
 test("Assign to athlete keeps its own text label - it's not one of the three unified icon-only buttons", () => {

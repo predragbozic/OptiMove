@@ -10,6 +10,7 @@ import {
   sessionLabel,
 } from "./builder-helpers.js";
 import { renderBuilderAddConfirmation, renderBuilderExerciseResults, renderBuilderStickyBar } from "./builder-exercises.js";
+import { preserveBuilderItemEdits } from "./builder-item-edits.js";
 import { renderBlockPickerModal, renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal, renderOverwriteDayConfirmHtml } from "./builder-modals.js";
 import { renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
 import { renderPastelSwatches } from "./taxonomy-view.js";
@@ -17,6 +18,7 @@ import {
   ICON_CHECK,
   ICON_DOOR_EXIT,
   ICON_TRASH,
+  ICON_X,
   renderBuilderAddBlockCard,
   renderBuilderBlock,
   renderBuilderStructureModal,
@@ -263,10 +265,21 @@ function restoreBuilderScrollState(captured) {
   });
 }
 
+function disablePendingMoveButtons() {
+  if (!state.builder.itemMovePending) return;
+  document.querySelectorAll('[data-action="builder-move-item"]').forEach((button) => {
+    button.disabled = true;
+    button.title = "Moving...";
+  });
+}
+
 export function renderBuilder() {
+  preserveBuilderItemEdits(state.builder.draft);
   const scrollState = captureBuilderScrollState();
   renderBuilderInner();
   restoreBuilderScrollState(scrollState);
+  disablePendingMoveButtons();
+  if (state.builder.leaving) els.content.querySelector(".builder-workspace")?.setAttribute("inert", "");
 }
 
 // Dose/instruction edits, move up/down, and delete only change which exercises are
@@ -277,6 +290,7 @@ export function renderBuilder() {
 // Returns false (caller should fall back to renderBuilder()) if the section editor
 // isn't currently open.
 export function renderBuilderSectionItems() {
+  preserveBuilderItemEdits(state.builder.draft);
   const selectedNode = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
   const container = els.content.querySelector(".builder-section-added");
   if (!container || !selectedNode || selectedNode.type !== "section") return false;
@@ -307,6 +321,7 @@ export function renderBuilderSectionItems() {
     : null;
 
   container.innerHTML = renderBuilderAddedPanelContent(state, selectedNode);
+  disablePendingMoveButtons();
 
   if (scrollEl && scrollTop !== null) scrollEl.scrollTop = scrollTop;
   if (focusState) {
@@ -430,7 +445,7 @@ function renderBuilderInner() {
   const selectedNode = findBuilderNode(draft, state.builder.selectedNodeId);
   const isWeekly = draft.plan.planType === "weekly";
   const isEditDraft = Boolean(draft.plan.isEditDraft);
-  const saveLabel = isEditDraft ? "Apply changes" : "Save and finish";
+  const saveLabel = "Save";
   const structureContext = builderStructureContext();
   const batchPlans = Array.isArray(draft.batch?.plans) ? draft.batch.plans : [];
   const batchIndex = batchPlans.findIndex((plan) => String(plan.id) === String(draft.plan.id));
@@ -441,10 +456,10 @@ function renderBuilderInner() {
         <div><p class="eyebrow">${isEditDraft ? "Editing original" : isWeekly ? "Weekly plan" : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><form class="builder-plan-name-inline" data-builder-form="update-plan" data-builder-autosave><input name="name" class="builder-plan-title-input" value="${escapeAttr(draft.plan.name || "")}" placeholder="${isWeekly ? "e.g. Match week" : "Program name"}" aria-label="${isWeekly ? "Weekly plan name" : "Program name"}">${isWeekly ? "" : `<input name="coverImageUrl" type="url" class="builder-plan-cover-input" value="${escapeAttr(draft.plan.coverImageUrl || "")}" placeholder="Cover image URL (optional)" aria-label="Cover image URL">`}</form><p class="muted">${escapeHtml(isEditDraft ? "Changes are saved only when applied." : draft.plan.athleteName || "Private coach template")}</p></div>
         <div class="builder-program-actions">
           <span class="item-badge">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span>
-          <button class="plain-button icon-button builder-exit-button" type="button" data-action="builder-cancel" aria-label="${isEditDraft ? "Discard edit draft" : "Exit"}" title="${isEditDraft ? "Discard this edit draft and keep the original unchanged." : "Exit — find this draft again later from where you started it. Every change saves automatically."}">${ICON_DOOR_EXIT}</button>
+          <button class="plain-button icon-button builder-exit-button" type="button" data-action="builder-cancel" aria-label="Exit" title="Exit and keep this draft for later.">${ICON_DOOR_EXIT}</button>
           ${draft.plan.isTemplate && !isWeekly ? `<button class="plain-button builder-assign-button" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(draft.plan.id)}" data-plan-type="program" data-intent="assign" data-is-edit-draft="${isEditDraft ? "true" : "false"}">${ICON_CHECK}<span>Assign to athlete</span></button>` : ""}
           ${draft.plan.status === "draft" ? `<button class="plain-button icon-button builder-finish-button" type="button" data-action="builder-submit-plan" aria-label="${saveLabel}" title="${isEditDraft ? "Apply changes to the original plan." : "Save and finish — marks this plan as active."}">${ICON_CHECK}</button>` : `<span class="builder-finished-label">Saved</span>`}
-          ${isEditDraft ? "" : `<button class="plain-button icon-button danger-action" type="button" data-action="builder-delete-plan" aria-label="Discard draft" title="Permanently discard this draft and everything in it.">${ICON_TRASH}</button>`}
+          ${draft.plan.status === "draft" ? `<button class="plain-button icon-button danger-action" type="button" data-action="builder-discard-current-draft" aria-label="Discard changes" title="Discard all changes in this draft.">${ICON_X}</button>` : ""}
         </div>
       </header>
       ${state.builder.assignResult ? renderBuilderAssignResultBanner(state.builder.assignResult) : ""}

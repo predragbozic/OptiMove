@@ -74,9 +74,10 @@ test("scheduleBuilderItemAutosave itself debounces per item, and a debounced sav
   const body = sliceFunction(appJsSource, "scheduleBuilderItemAutosave", 1600);
   assert.match(body, /const key = form\.dataset\.itemId \|\| form;/);
   assert.match(body, /clearTimeout\(builderAutosaveTimers\.get\(key\)\);/);
-  assert.match(body, /builderAutosaveTimers\.set\(key, setTimeout\(\(\) => \{/);
+  assert.match(body, /const save = \(\) => \{/);
   assert.match(body, /submitBuilderFormAction\(form, \{/);
-  assert.match(body, /\}\)\.catch\(renderBuilderError\);/);
+  assert.match(appJsSource, /request\.catch\(renderBuilderError\);/);
+  assert.match(appJsSource, /builderAutosaveTimers\.set\(key, setTimeout\(save, BUILDER_ITEM_AUTOSAVE_DEBOUNCE_MS\)\)/);
 });
 
 test("every keystroke bumps a per-item generation counter, and only a still-current generation's response is allowed to touch the screen (Round 4 - a stale round trip must never clobber newer, in-flight typing)", () => {

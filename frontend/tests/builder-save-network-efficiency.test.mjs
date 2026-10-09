@@ -61,13 +61,16 @@ function installFetchMock(responses) {
 function installHeldFetchMock() {
   const calls = [];
   let release;
+  let notifyStarted;
+  const started = new Promise((resolve) => { notifyStarted = resolve; });
   const held = new Promise((resolve) => { release = resolve; });
   globalThis.fetch = async (url, options = {}) => {
     calls.push({ url, method: options.method || "GET" });
+    notifyStarted();
     const body = await held;
     return { ok: true, status: 200, statusText: "", json: async () => body };
   };
-  return { calls, release: (body = {}) => release(body) };
+  return { calls, started, release: (body = {}) => release(body) };
 }
 
 function fakeAction(dataset, { disabled = false, textContent = "", innerHTML = "" } = {}) {
@@ -94,6 +97,9 @@ function noopHandlers(overrides = {}) {
     renderTabs: () => {},
     renderLibraryNav: () => {},
     loadBuilderExercises: async () => {},
+    loadTemplates: async () => {},
+    loadWeekly: async () => {},
+    loadPrograms: async () => {},
     ...overrides,
   };
 }
@@ -136,7 +142,7 @@ test("2. Save shows a 'Saving…' state immediately, before the request resolves
 
 test("3. a second Save click while the first request is genuinely still unresolved does not send a second request", async () => {
   state.builder.draft = makeDraft();
-  const { calls, release } = installHeldFetchMock();
+  const { calls, started, release } = installHeldFetchMock();
   const action = fakeAction({ action: "builder-submit-plan" }, { textContent: "Save and finish" });
 
   // Fire the first click and let it run up to (and including) the fetch
@@ -144,7 +150,7 @@ test("3. a second Save click while the first request is genuinely still unresolv
   // pending (it won't resolve until release() below), a real concurrent
   // situation, not one call finishing before the next starts.
   const firstCall = handleBuilderDraftAction(action, noopHandlers());
-  await Promise.resolve();
+  await started;
   assert.equal(action.disabled, true, "the button must already be disabled before the second click can even be dispatched");
   assert.equal(calls.length, 1, "the first click must have already reached the fetch call");
 
