@@ -20,6 +20,7 @@ export function invalidateBuilderDraftsCache() {
 }
 
 let builderExerciseRequestId = 0;
+let builderExerciseController;
 
 function builderExerciseSearchKey() {
   return JSON.stringify([state.currentUser?.id, state.builder.exerciseQuery.trim(), state.builder.exerciseFilters]);
@@ -30,6 +31,9 @@ export async function loadBuilderExercises(options = {}) {
   const searchKey = builderExerciseSearchKey();
   if (options.append && (state.builder.exerciseLoading || !state.builder.exerciseHasMore || state.builder.exerciseSearchKey !== searchKey)) return;
   const requestId = ++builderExerciseRequestId;
+  builderExerciseController?.abort();
+  const controller = new AbortController();
+  builderExerciseController = controller;
   const query = state.builder.exerciseQuery.trim();
   const filters = { ...state.builder.exerciseFilters };
   const offset = options.append ? state.builder.exerciseOffset : 0;
@@ -37,10 +41,11 @@ export async function loadBuilderExercises(options = {}) {
   const moreButton = document.querySelector('[data-action="builder-load-more-exercises"]');
   if (moreButton) moreButton.disabled = true;
   try {
-    await loadExerciseFilterOptions();
-    if (requestId !== builderExerciseRequestId || searchKey !== builderExerciseSearchKey() || state.activeTab !== "builder") return;
     const url = `${exerciseSearchUrl(query, 18, filters)}&offset=${offset}`;
-    const data = await api(url);
+    const [data] = await Promise.all([
+      api(url, { signal: controller.signal }),
+      loadExerciseFilterOptions(),
+    ]);
     if (requestId !== builderExerciseRequestId || searchKey !== builderExerciseSearchKey() || state.activeTab !== "builder") return;
     const exercises = data.exercises || [];
     const filtered = applyClientExerciseFilters(exercises, filters);
@@ -49,9 +54,13 @@ export async function loadBuilderExercises(options = {}) {
     const localMarkedOnly = filters.marked && !filters.favorite && !EXERCISE_FILTERS.some((filter) => filters[filter.key]);
     state.builder.exerciseHasMore = Boolean(data.hasMore) && !localMarkedOnly;
     state.builder.exerciseSearchKey = searchKey;
+  } catch (error) {
+    if (error.name === "AbortError" || requestId !== builderExerciseRequestId) return;
+    throw error;
   } finally {
     if (requestId === builderExerciseRequestId) {
       state.builder.exerciseLoading = false;
+      builderExerciseController = null;
       if (moreButton) moreButton.disabled = false;
     }
   }
@@ -69,7 +78,7 @@ export async function loadBuilderExercises(options = {}) {
     const scrollTop = resultsContainer.scrollTop;
     resultsContainer.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedSection, { hasMore: state.builder.exerciseHasMore });
     resultsContainer.scrollTop = options.append ? scrollTop : 0;
-  } else {
+  } else if (options.forceFullRender) {
     renderBuilder();
   }
   options.afterRender?.();

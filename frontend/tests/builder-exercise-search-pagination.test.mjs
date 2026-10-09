@@ -114,3 +114,50 @@ test("double clicks do not fetch the same page twice; failed pages can be retrie
   await loadBuilderExercises({ append: true });
   assert.equal(state.builder.exercises.length, 36);
 });
+
+test("new searches abort the previous fetch without surfacing a cancellation error", async () => {
+  let previousSignal;
+  const searchFetch = globalThis.fetch;
+  globalThis.fetch = (path, options) => {
+    if (new URL(path, "http://localhost").searchParams.get("search") === "Squat") {
+      previousSignal = options.signal;
+      return new Promise((resolve, reject) => options.signal.addEventListener("abort", () => reject(new DOMException("Canceled", "AbortError")), { once: true }));
+    }
+    return searchFetch(path);
+  };
+  const oldSearch = loadBuilderExercises();
+  state.builder.exerciseQuery = "Squat variation 39";
+  await loadBuilderExercises();
+  await oldSearch;
+  assert.equal(previousSignal.aborted, true);
+  assert.deepEqual(state.builder.exercises, [exercises[39]]);
+  assert.equal(state.builder.exerciseLoading, false);
+});
+
+test("search starts without waiting for filter options", async () => {
+  state.exerciseSearch.options.purposes = [];
+  let resolveOptions;
+  const searchFetch = globalThis.fetch;
+  let searchStarted = false;
+  globalThis.fetch = (path) => {
+    if (path === "/api/exercises/options") return new Promise((resolve) => { resolveOptions = resolve; });
+    searchStarted = true;
+    return searchFetch(path);
+  };
+  const loading = loadBuilderExercises();
+  assert.equal(searchStarted, true);
+  resolveOptions(response({ purposes: ["Strength"] }));
+  await loading;
+  assert.equal(state.builder.exercises.length, 18);
+});
+
+test("loading exercises without an open section does not rebuild the Builder", async () => {
+  const originalQuerySelector = document.querySelector;
+  document.querySelector = (selector) => selector === ".builder-exercise-results" ? null : button;
+  button.innerHTML = "Existing Builder";
+  try {
+    await loadBuilderExercises();
+    assert.equal(button.innerHTML, "Existing Builder");
+    assert.equal(state.builder.exercises.length, 18);
+  } finally { document.querySelector = originalQuerySelector; }
+});

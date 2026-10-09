@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 globalThis.window = { confirm: () => true };
 const { state, emptyBuilderState } = await import("../state.js");
-const { handleBuilderPlanAction, handleBuilderDraftAction, handleBuilderItemAction } = await import("../builder-actions.js");
+const { handleBuilderPlanAction, handleBuilderDraftAction, handleBuilderItemAction, submitBuilderForm } = await import("../builder-actions.js");
 const { rememberBuilderItemEdit, pendingBuilderItemEdit, acknowledgeBuilderItemEdit, preserveBuilderItemEdits, clearBuilderItemEdits } = await import("../builder-item-edits.js");
 
 function draft() {
@@ -190,4 +190,40 @@ test("moving is immediate, remains stable through another response, and ignores 
   await move;
   assert.equal(state.builder.itemMovePending, null);
   assert.deepEqual(items(state.builder.draft).map((item) => item.id), ["a", "c", "b"]);
+});
+
+test("compact item saves preserve the tree and newer pending inputs", async () => {
+  const originalFormData = globalThis.FormData;
+  globalThis.FormData = class { *[Symbol.iterator]() { yield ["sets", "3"]; yield ["reps", "8"]; } };
+  try {
+    const tree = state.builder.draft;
+    const oldEdit = rememberBuilderItemEdit("a", { sets: "3", reps: "8" });
+    let newEdit;
+    globalThis.fetch = async (url, options) => {
+      assert.equal(JSON.parse(options.body).responseMode, "item");
+      assert.equal(JSON.parse(options.body).reps, "8");
+      newEdit = rememberBuilderItemEdit("a", { sets: "4", reps: "12" });
+      return response({ planId: "draft-1", item: { id: "a", sets: "3", reps: "8", load: "", description: "" } });
+    };
+    await submitBuilderForm({ dataset: { builderForm: "update-item", itemId: "a" } }, handlers());
+    assert.equal(state.builder.draft, tree);
+    assert.equal(items(tree)[0].reps, "12");
+    assert.equal(items(tree)[0].sets, "4");
+    assert.equal(pendingBuilderItemEdit("a"), newEdit);
+    assert.notEqual(newEdit, oldEdit);
+    assert.equal(items(tree).length, 3);
+  } finally { globalThis.FormData = originalFormData; }
+});
+
+test("item saves still accept a full draft from older servers and batch synchronization", async () => {
+  const originalFormData = globalThis.FormData;
+  globalThis.FormData = class { *[Symbol.iterator]() { yield ["reps", "8"]; } };
+  try {
+    const incoming = draft();
+    items(incoming)[0].reps = "8";
+    globalThis.fetch = async () => response(incoming);
+    await submitBuilderForm({ dataset: { builderForm: "update-item", itemId: "a" } }, handlers());
+    assert.equal(state.builder.draft, incoming);
+    assert.equal(items(state.builder.draft)[0].reps, "8");
+  } finally { globalThis.FormData = originalFormData; }
 });

@@ -854,14 +854,21 @@ router.post("/plans/:planId/edit", async (req, res, next) => {
 });
 
 router.delete("/plans/:planId", async (req, res, next) => {
+  let client;
   try {
     const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
-    const blocks = await query("select id from plans.plan_days where plan_id = $1", [plan.id]);
-    for (const block of blocks.rows) await deleteBlockTree(block.id);
-    await query("delete from plans.plans where id = $1", [plan.id]);
+    client = await pool.connect();
+    await client.query("begin");
+    await client.query("select id from plans.plans where id = $1 for update", [plan.id]);
+    await deleteBuilderPlanContent(client, plan.id);
+    await client.query("delete from plans.plans where id = $1", [plan.id]);
+    await client.query("commit");
     res.json({ deleted: true, planId: plan.id });
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} }
+    next(error);
+  } finally { client?.release(); }
 });
 
 router.post("/plans/:planId/blocks", async (req, res, next) => {
@@ -1581,10 +1588,16 @@ router.patch("/items/:itemId", async (req, res, next) => {
   try {
     const item = await getEditableItem(req, req.params.itemId);
     if (!item) return res.status(404).json({ error: "Program item not found" });
-    await query(
-      `update plans.plan_items set sets = $2, reps = $3, load = $4, description = $5, updated_at = now() where id = $1`,
+    const updated = await query(
+      `update plans.plan_items set sets = $2, reps = $3, load = $4, description = $5, updated_at = now() where id = $1
+       returning id, sets, reps, load, description`,
       [item.id, nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), nullableText(req.body?.description)],
     );
+    if (req.body?.responseMode === "item" && !wantsBatchSync(req, item.plan)) {
+      const row = updated.rows[0];
+      if (!row) return res.status(404).json({ error: "Program item not found" });
+      return res.json({ planId: item.plan.id, item: { id: row.id, sets: row.sets || "", reps: row.reps || "", load: row.load || "", description: row.description || "" } });
+    }
     return respondWithDraft(req, res, req.user, item.plan);
   } catch (error) { next(error); }
 });

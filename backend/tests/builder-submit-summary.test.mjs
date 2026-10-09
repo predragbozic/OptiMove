@@ -14,11 +14,15 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
   let calls;
   let failWrite;
   let hasContent;
+  let failDelete;
   const rows = (values) => ({ rows: values, rowCount: values.length });
   async function query(sql, params = []) {
     calls.push({ sql, params });
     const normalized = sql.replace(/\s+/g, " ").trim();
+    if (normalized.startsWith("select pi.id")) return rows([{ id: "item-1", plan_id: "plan-1", plan_node_id: "node-1" }]);
+    if (normalized.startsWith("update plans.plan_items")) return rows([{ id: params[0], sets: params[1], reps: params[2], load: params[3], description: params[4] }]);
     if (normalized.startsWith("select p.id")) return rows(plans.has(params[0]) ? [plans.get(params[0])] : []);
+    if (normalized.startsWith("select id from plans.plans")) return rows(plans.has(params[0]) ? [{ id: params[0] }] : []);
     if (normalized.startsWith("select id, created_by_user_id")) return rows([plans.get(params[0])]);
     if (normalized.includes("for update")) return rows([plans.get(params[0])]);
     if (normalized.startsWith("update plans.plans")) {
@@ -28,7 +32,10 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
       return rows([{ ...plan, athlete_id: null }]);
     }
     if (normalized.startsWith("delete from plans.plans")) { plans.delete(params[0]); return rows([]); }
-    if (/^delete from plans\.plan_(items|nodes|sessions|days)\b/.test(normalized)) return rows([]);
+    if (/^delete from plans\.plan_(items|nodes|sessions|days)\b/.test(normalized)) {
+      if (failDelete) throw new Error("Delete failed");
+      return rows([]);
+    }
     if (normalized.startsWith("insert into plans.plans")) {
       plans.set("copy-1", plan({ id: "copy-1" }));
       return rows([{ id: "copy-1" }]);
@@ -46,16 +53,18 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
   mock.module("../src/realtime.js", { namedExports: { emitRealtimeEvent() {} } });
   mock.module("../src/trainingLoadAccess.js", { namedExports: { isAthleteInWorkspaceScope() {}, resolveExternalScheduleWorkspaceScope() {} } });
   const { default: router } = await import("../src/routes/builder.js");
-  const handler = (path) => router.stack.find((layer) => layer.route?.path === path && layer.route.methods.post).route.stack[0].handle;
+  const handler = (path, method = "post") => router.stack.find((layer) => layer.route?.path === path && layer.route.methods[method]).route.stack[0].handle;
   const submit = handler("/plans/:planId/submit");
   const edit = handler("/plans/:planId/edit");
   const duplicate = handler("/plans/:planId/duplicate");
+  const updateItem = handler("/items/:itemId", "patch");
+  const deletePlan = handler("/plans/:planId", "delete");
   const plan = (extra = {}) => ({ id: "plan-1", plan_type: "program", name: "Program", is_template: true, status: "draft", source_type: "builder", ...extra });
-  beforeEach(() => { plans = new Map([["plan-1", plan()]]); calls = []; failWrite = false; hasContent = true; });
+  beforeEach(() => { plans = new Map([["plan-1", plan()]]); calls = []; failWrite = false; failDelete = false; hasContent = true; });
   async function invoke(route, id = "plan-1", body = {}) {
     const result = { status: 200, headers: {} };
     const res = { status(value) { result.status = value; return this; }, setHeader(name, value) { result.headers[name] = value; }, json(value) { result.body = value; return this; } };
-    await route({ params: { planId: id }, body, user: { id: "coach-1" } }, res, (error) => { result.error = error; });
+    await route({ params: { planId: id, itemId: "item-1" }, body, user: { id: "coach-1" } }, res, (error) => { result.error = error; });
     return result;
   }
 
@@ -69,6 +78,57 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
     assert.ok(calls.some(({ sql }) => sql === "commit"));
     assert.ok(!calls.some(({ sql }) => sql.includes("select pd.id as block_id") || sql.includes("where p.builder_batch_id")));
     assert.match(result.headers["Server-Timing"], /access;dur=.*response;dur=.*total;dur=/);
+  });
+
+  test("item response updates dose fields without reading the full draft", async () => {
+    const result = await invoke(updateItem, "plan-1", { responseMode: "item", sets: "3", reps: "12", load: "20 kg", description: "Controlled" });
+    assert.equal(result.error, undefined);
+    assert.deepEqual(result.body, { planId: "plan-1", item: { id: "item-1", sets: "3", reps: "12", load: "20 kg", description: "Controlled" } });
+    assert.equal(calls.length, 3);
+    assert.ok(!calls.some(({ sql }) => sql.includes("select pd.id as block_id")));
+  });
+
+  test("older item clients and syncBatch requests still receive a full draft", async () => {
+    for (const body of [{ sets: "3" }, { responseMode: "item", syncBatch: true, reps: "8" }]) {
+      const result = await invoke(updateItem, "plan-1", body);
+      assert.equal(result.error, undefined);
+      assert.equal(result.body.plan.id, "plan-1");
+      assert.equal(result.body.blocks.length, 1);
+    }
+  });
+
+  test("compact item response does not bypass plan access", async () => {
+    plans.clear();
+    const result = await invoke(updateItem, "plan-1", { responseMode: "item", reps: "12" });
+    assert.equal(result.status, 404);
+    assert.ok(!calls.some(({ sql }) => sql.startsWith("update")));
+  });
+
+  test("discard deletes plan content in four scoped queries and commits before replying", async () => {
+    const result = await invoke(deletePlan);
+    assert.equal(result.error, undefined);
+    assert.deepEqual(result.body, { deleted: true, planId: "plan-1" });
+    const deletes = calls.filter(({ sql }) => sql.startsWith("delete"));
+    assert.equal(deletes.length, 5);
+    assert.ok(deletes.every(({ params }) => params[0] === "plan-1"));
+    assert.equal(calls.at(-2).sql, "commit");
+    assert.equal(calls.at(-1).sql, "release");
+  });
+
+  test("discard failure rolls back and releases without reporting success", async () => {
+    failDelete = true;
+    const result = await invoke(deletePlan);
+    assert.equal(result.error.message, "Delete failed");
+    assert.equal(result.body, undefined);
+    assert.equal(plans.has("plan-1"), true);
+    assert.equal(calls.at(-2).sql, "rollback");
+    assert.equal(calls.at(-1).sql, "release");
+  });
+
+  test("discard keeps the existing access gate", async () => {
+    const result = await invoke(deletePlan, "missing-plan");
+    assert.equal(result.status, 404);
+    assert.equal(calls.length, 1);
   });
 
   test("default response stays a full draft for Assign and older clients", async () => {
