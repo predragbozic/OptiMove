@@ -266,7 +266,8 @@ value in an unknown shape." What is known, and only that:
 - The importer reads two fields of a details answer per athlete, `tot_burst_events` and
   `tot_brake_events`, each `{ unit: "number", value: <finite number> }` (the mapper's
   `detailsNumber`; the real e03 shape kept in the test fixtures).
-- `validatePlayersAnswer()` checks every metric of every athlete. A metric must be a finite number,
+- (Historical, as of 2026-10-05; the validator was removed on 2026-10-09.) `validatePlayersAnswer()`
+  checked every metric of every athlete. A metric must be a finite number,
   null, a boolean, a short unit-like text or a flat object of those with at most 32 keys, and its
   name must match `[A-Za-z_][A-Za-z0-9_]{0,63}` and not be a prototype key. One metric outside that
   refuses the whole answer, before anything of the session is recorded.
@@ -308,12 +309,14 @@ copies, describes, stores or returns any other metric; the generic JSON parse an
 malformed consumed field still refuses the answer as `consumed_field_shape_unknown`: the sentence
 stays generic, and the field and its kind follow the " Diagnostic: " mark (administrators only). A
 refused metric name says only which kind of name (`names=prototype_key / too_long / other_chars`).
-The stored snapshot and its content hash cover the projected answer only; no candidate read through
-a bound connection existed before the projection, so none is re-seen as changed.
+A new read's snapshot and its content hash cover the projected answer only; no candidate read
+through a bound connection existed before the projection, so none is re-seen as changed. `bundle_hash` is the permanent fingerprint of the answer as it was read (the sha256 of its canonical JSON at that moment) and never changes. After a later projection of the stored snapshot it no longer equals the hash of the stored `raw_bundle`, and nothing compares the two: a check compares the hash of a freshly read answer with the column, and the approval copies the column. A later fresh read of the same data therefore counts as changed once its form differs.
 
-The drill answers keep `validatePlayersAnswer()` and its description: their consumers need their
-own evidence. An architecture test runs the real mapper on a bundle whose whole-session details
-record every key access, and fails if any other metric is read.
+Since 2026-10-09 (PR #149) the drill answers are projected the same way, and every stored snapshot of
+a candidate that was never imported is projected too (in the supersede transaction and by each
+retention run); `validatePlayersAnswer()` and its whole-answer description were removed. An
+architecture test runs the real mapper on a bundle whose whole-session and drill details record
+every key access, and fails if any other metric is read.
 
 ## 4. What needs an owner-run read-only probe
 

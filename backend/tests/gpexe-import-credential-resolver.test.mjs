@@ -1694,6 +1694,12 @@ test("23. the retention run projects every stored snapshot that was never import
   assert.deepEqual([after.status, after.bundle_hash, after.preview_hash], [row.status, row.bundle_hash, row.preview_hash], "status, content hash and preview hash unchanged");
   for (const leak of [MARKER, "Marker text", "markerAggregateZq"]) assert.ok(!JSON.stringify(after.raw_bundle).includes(leak), `${leak} is not kept`);
   assert.deepEqual(after.raw_bundle, row.raw_bundle, "the projection of the old snapshot is exactly the projected snapshot a read stores");
+  // bundle_hash is the fingerprint of the answer as read: a later projection does not change it, and it is
+  // then no longer the hash of the stored snapshot (nothing compares the two).
+  const { sha256Hex, canonicalJson } = await import("../src/gpexeImportPreview.js");
+  assert.equal(sha256Hex(canonicalJson(old)) === row.bundle_hash, false, "the injected old snapshot was never what was hashed");
+  assert.notEqual(sha256Hex(canonicalJson(old)), after.bundle_hash);
+  assert.equal(after.bundle_hash, row.bundle_hash);
   // A second run has nothing left to project.
   assert.equal((await importer.runRetention("cli")).projected, 0);
   // The conditional write: a snapshot that changed after it was read is not overwritten.
@@ -1736,6 +1742,24 @@ test("24. the retention projection never waits on a candidate another session ho
   const next = await importer.runRetention("cli");
   assert.ok(next.projected >= 1, JSON.stringify(next));
   assert.ok(!JSON.stringify((await q(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [row.id]))[0].raw_bundle).includes(MARKER), "projected once released");
+});
+
+test("25. a failure of the snapshot projection step keeps the retention run's purge count and an earlier step's error: the run row records purged_count and the projection's error, and the run reports the failure", async () => {
+  importer.setProjectionFaultForTests(() => { throw new Error("projection step failed (test)"); });
+  try {
+    const error = await importer.runRetention("cli").then(() => null, (e) => e);
+    assert.equal(error?.message, "projection step failed (test)");
+    const [run] = await q(`select purged_count, error_message, finished_at from training_load.gpexe_retention_runs order by started_at desc limit 1`);
+    assert.ok(Number.isInteger(run.purged_count), JSON.stringify(run));
+    assert.equal(run.error_message, "projection step failed (test)");
+    assert.ok(run.finished_at);
+  } finally {
+    importer.setProjectionFaultForTests(null);
+  }
+  const ok = await importer.runRetention("cli");
+  assert.ok(Number.isInteger(ok.projected));
+  const [last] = await q(`select purged_count, error_message from training_load.gpexe_retention_runs order by started_at desc limit 1`);
+  assert.deepEqual([Number.isInteger(last.purged_count), last.error_message], [true, null]);
 });
 
 test("21. option (c): the window is picked out of the whole team list - five sessions after the period and one of the look-back day are left out and only the window's session becomes a candidate (no bundle read for the others); a start that cannot be read or an unstable X-Total-Count fails the check with its own code, writes no candidate and reads no bundle; no date bound is ever sent", async () => {

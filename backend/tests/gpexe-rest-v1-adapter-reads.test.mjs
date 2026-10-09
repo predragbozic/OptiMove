@@ -1354,6 +1354,14 @@ test("B7.8 static architecture guard: no consumer outside the adapter and the ma
   assert.doesNotMatch(supersedeBlock + retentionBlock, /'imported'/, "no projection names the imported status");
   assert.match(retentionBlock, /and raw_bundle = \$3::jsonb/, "the retention write is conditional on the snapshot it read");
   assert.match(retentionBlock, /for update skip locked/, "the retention write never waits on a row another session holds");
+  // The docs do not claim a removed validator, and they say what bundle_hash is after a projection.
+  const compat = await fsp.readFile(path.resolve(ROOT, "docs/ai/gpexe-rest-v1-compatibility.md"), "utf8");
+  assert.doesNotMatch(compat, /drill answers keep `validatePlayersAnswer/);
+  for (const doc of ["docs/ai/gpexe-rest-v1-compatibility.md", "docs/runbooks/gpexe-in-app-import.md"]) {
+    const text = (await fsp.readFile(path.resolve(ROOT, doc), "utf8")).replace(/\s+/g, " ");
+    assert.match(text, /`bundle_hash` is the permanent fingerprint of the answer as it was read/, doc);
+    assert.match(text, /nothing compares the two/, doc);
+  }
   assert.match(svc.slice(svc.indexOf("export async function runRetention"), svc.indexOf("export const RETENTION_INTERVAL_HOURS")), /await projectUnimportedSnapshots()/, "every retention run projects");
 });
 

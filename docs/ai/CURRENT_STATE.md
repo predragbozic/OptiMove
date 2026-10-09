@@ -1336,7 +1336,9 @@ Technical details.
   run after the deploy, whether or not the next check succeeds. The only copy is
   `gpexe_import_candidates.raw_bundle`, no route returns it, the preview holds only the mapper's values, a
   superseded candidate cannot be approved, and an imported candidate is never touched (none exists on the
-  deployed database); the row's identity, content hash and preview hash stay. A database backup keeps what
+  deployed database); the row's identity, content hash and preview hash stay - `bundle_hash` is the
+  permanent fingerprint of the answer as it was read, no longer equal to the hash of a later projected
+  `raw_bundle`, and nothing compares the two. A database backup keeps what
   it held for its own retention; a restored copy runs the retention before use. The legacy e03 path does
   not project on read (covered by the retention run; F3c4 retires it). The full validator
   `validatePlayersAnswer` (and its whole-answer description) is removed: no read path called it after both

@@ -294,6 +294,10 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
 // ---------------------------------------------------------------------------
 
 export const RETENTION_BATCH_SIZE = 200;
+// Tests make the snapshot projection step of a retention run fail, to prove a
+// failure there keeps the purge count and an earlier step's error.
+let projectionFault = null;
+export function setProjectionFaultForTests(fn) { projectionFault = fn ?? null; }
 const RETENTION_MAX_BATCHES = 500;
 
 export async function runRetention(triggerSource) {
@@ -334,13 +338,28 @@ export async function runRetention(triggerSource) {
       if (n < RETENTION_BATCH_SIZE) break;
     }
     // Then every snapshot that is still stored and was never imported keeps
-    // only the details fields the importer reads (owner order 2026-10-09).
-    const projected = await projectUnimportedSnapshots();
-    if (identityError) throw identityError;
-    await query(`update training_load.gpexe_retention_runs set finished_at = now(), purged_count = $2 where id = $1`, [run.id, purged]);
+    // only the details fields the importer reads (owner order 2026-10-09), in
+    // its own step: a failure here never loses the purge count or an earlier
+    // step's error.
+    let projected = 0;
+    let projectionError = null;
+    try {
+      if (projectionFault) await projectionFault();
+      projected = await projectUnimportedSnapshots();
+    } catch (error) {
+      projectionError = error;
+    }
+    const stepError = identityError ?? projectionError;
+    await query(
+      `update training_load.gpexe_retention_runs set finished_at = now(), purged_count = $2, error_message = $3 where id = $1`,
+      [run.id, purged, stepError ? String(stepError.message).slice(0, 300) : null],
+    );
+    if (stepError) throw Object.assign(stepError, { retentionRunRecorded: true });
     return { runId: run.id, purged, identitiesPurged, suppressionsPurged, projected };
   } catch (error) {
-    await query(`update training_load.gpexe_retention_runs set finished_at = now(), error_message = $2 where id = $1`, [run.id, String(error.message).slice(0, 300)]).catch(() => {});
+    if (!error?.retentionRunRecorded) {
+      await query(`update training_load.gpexe_retention_runs set finished_at = now(), error_message = $2 where id = $1`, [run.id, String(error.message).slice(0, 300)]).catch(() => {});
+    }
     throw error;
   }
 }

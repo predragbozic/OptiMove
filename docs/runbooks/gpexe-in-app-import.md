@@ -682,6 +682,7 @@ drill, and of each details part only `players` and `drills_count`.
   a session whose next check fails) keeps its unconsumed metrics at most until the next retention
   run, not until its 30-day expiry. The write is conditional on the row still holding the snapshot it
   read, so a check that refreshed it meanwhile is never overwritten.
+- `bundle_hash` is the permanent fingerprint of the answer as it was read (the sha256 of its canonical JSON at that moment) and never changes. After a later projection of the stored snapshot it no longer equals the hash of the stored `raw_bundle`, and nothing compares the two: a check compares the hash of a freshly read answer with the column, and the approval copies the column. A later fresh read of the same data therefore counts as changed once its form differs.
 - The row's identity, content hash and preview hash stay as they were (the mapper reads only the two
   fields, so the approval recomputes the same preview); **an imported candidate is never touched**
   (none exists on the deployed database).
