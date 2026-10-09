@@ -222,7 +222,7 @@ function fakeSource() {
     const t = st.served; const b = st.bundle;
     if (t === null) return json(404, { detail: "no team served" });
     const sid = b.teamSession.id;
-    if (key === `/rest/v1/team_session/?team=${t}&start_timestamp_gte=2026-09-13%2000%3A00%3A00&start_timestamp_lte=${DAY}%2023%3A59%3A59&limit=100`) {
+    if (key === `/rest/v1/team_session/?team=${t}&limit=100`) {
       const base = { team: Number(t), category_name: "DRILL", start_timestamp: b.teamSession.start_timestamp, end_timestamp: b.teamSession.end_timestamp, updated_on: b.teamSession.updated_on, is_stats_valid: true, drills: [], drills_count: 0 };
       const rows = [{ ...b.teamSession, drills: [sid * 1000 + 1, sid * 1000 + 2], drills_count: 2 }, { ...base, id: sid * 1000 + 1 }, { ...base, id: sid * 1000 + 2 }];
       return json(200, rows, { "x-total-count": String(rows.length) });

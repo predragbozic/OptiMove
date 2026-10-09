@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-07. Last `origin/main` commit checked: `5436c6d` (merge of PR #146,
-`fix/pool-checkout-timeout-and-identity-key` → `main`; PR #145 `0271acb` before it).
+Last reviewed: 2026-10-08. Last `origin/main` commit checked: `39176b8` (merge of PR #147,
+`fix/gpexe-source-filter-ignored-diagnostic` → `main`; PR #146 `5436c6d` before it).
 
 ## Active phase
 
@@ -1240,8 +1240,9 @@ Technical details.
     the first ten characters of `start_timestamp` (no zone), accepts the look-back day, and reports a row
     outside the window and an unreadable start under the same code; the same request form passed for
     05.10 – 05.10 and in the probe.
-- **A sanitized diagnostic for `source_filter_ignored`** (owner order 2026-10-07; branch
-  `fix/gpexe-source-filter-ignored-diagnostic` from `5436c6d`; not merged; backend adapter, tests and docs):
+- **A sanitized diagnostic for `source_filter_ignored`** (owner order 2026-10-07; PR #147, branch
+  `fix/gpexe-source-filter-ignored-diagnostic` from `5436c6d`; merged and deployed, see below; superseded
+  by option (c), which removed the refusal and its description):
   the refusal is unchanged (the same code, no candidate, preview, import, activity or result row, nothing
   imported, no retry, no extra request; the failed check row is stored as before); the check row's stored
   message gains after " Diagnostic: " only counts and fixed words -
@@ -1253,7 +1254,49 @@ Technical details.
   the team's club admin read it; a coach gets the stable sentence. The filtering rule, the period, the
   timezone rule, the classification and the fail-closed behaviour are unchanged; the options (a) a drill
   row past midnight, (b) a zone rule, (c) the whole list filtered locally wait for the diagnostic's result.
-  Runbook section "A refused date window (`source_filter_ignored`)".
+- **PR #147 is merged and deployed.**
+  - Reviewed head `13b3938` (the owner's external review READY after round 2 - a strict start reading and
+    the stored-check-row wording), merge commit `39176b8` (parents `5436c6d` and `13b3938`) on 2026-10-08
+    at 09:28:28 UTC, merged exactly from that head on the owner's order (`--match-head-commit`).
+  - `/api/health` first served `39176b8` with `ok: true` at 09:29:21 UTC, then three times in a row
+    (09:29:31, 09:29:41 and 09:29:52 UTC).
+  - Read-only smoke without a login, zero UUID, GET only: the GPEXE team status, one check, the candidates,
+    one candidate, the source athletes, the athlete links, the athlete identities, the source-connection
+    list and one connection answered 401. No migration; no check or GPEXE request at the merge.
+- **The owner's controlled check of the same window (2026-10-08, run once, sanitized, as reported by the
+  owner):** `op=session_list_by_date; rows=13; before_lookback=0; after_end=5; unreadable=0;
+  outside_named_drill=0; distance=under_3h:0,3h_to_24h:5,over_24h:0,unknown:0;
+  tz=Z:0,offset:0,none:13,other:0.` - five rows of the server's date-filtered answer start 3 to 24 hours
+  after the asked period, none named as a drill, every start readable and without a zone suffix. **Owner
+  decision: option (c)**: the importer no longer trusts the server-side date filter for completeness.
+- **Option (c) - the whole list, filtered locally** (owner order 2026-10-08; branch
+  `fix/gpexe-rest-v1-local-window-filter` from `39176b8`; not merged; backend adapter, tests and docs):
+  `listSessionsByDay` reads the whole session list of the bound team (`team_session/?team=&limit=100`,
+  the proven row-1a read) - every page with the same `X-Total-Count`, every next link on the same host,
+  family, resource and team with only `limit=100` and an `offset` equal to the rows read so far, at most
+  2000 rows (20 pages; a longer list refused at its first page as `source_list_too_large`) - classifies
+  parents and drills on the whole list, refuses a start that is not a real date and time anywhere in it
+  (`source_session_start_unreadable`), and only then returns the parents of the window by their naive
+  day (the look-back day's parents and every other day's left out; only the window's parents become
+  readable). Any refusal fails the check with its own code (the failed check row stored; no candidate,
+  preview, import, activity or result row; no bundle read; no retry). No server-side date filter, no
+  fallback to it, no other host, no environment token; Link, Import, drill and metric rules unchanged.
+  The `source_filter_ignored` refusal and its sanitized description are gone with the filter. Runbook
+  section "How a check finds the sessions of its window". **Fail-closed consequences:** the whole
+  history is checked - a list longer than 2000 sessions, one session with an unreadable start or one
+  ambiguous parent / drill pair anywhere fails every check of the team until it is corrected in GPEXE.
+  **Not yet observed on server3:** the form of a next link (only `limit` / `offset` is accepted) and the
+  classification of team 980's whole history (308 rows on 2026-09-29, so at least four pages); the first
+  real check after the merge is the first proof of both. **Two complete reads (owner decision
+  2026-10-09, after the internal review found the offset-paging blind spot):** the whole list is read
+  twice, snapshot A then snapshot B, each with every check above; they must agree on the total, the ids
+  in the same order and, per id, `team`, `drills` (order), `drills_count`, `start_timestamp`,
+  `category_name`, `end_timestamp`, `updated_on` and `is_stats_valid`, otherwise `source_list_changed`
+  (no partial result, no session left readable; B is not sent after a failed A; only B is used and
+  recorded; the importer re-checks the binding, connection and credential between A and B, so B is
+  never sent after an Unbind or a Reconnect during A). About eight list GETs per check for 308 - 350 rows (four pages, twice), at most 40 at the
+  cap. This closes the known delete + insert blind spot; it is **not a transactional snapshot** - a
+  change that lands identically in both reads stays a residual risk.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1719,6 +1762,10 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #147 (`39176b8`, merged 2026-10-08 09:28:28 UTC exactly from head `13b3938`) is deployed:
+  `/api/health` served `39176b8` with `ok: true` three times in a row (09:29:31–09:29:52 UTC); without a
+  login nine protected GPEXE and source-connection GET routes answered 401. No migration. No check or GPEXE
+  request at the merge; the owner's controlled check followed on a separate order.
 - PR #146 (`5436c6d`, merged 2026-10-07 13:06:18 UTC exactly from head `cafe502`) is deployed:
   `/api/health` served `5436c6d` with `ok: true` three times in a row (13:08:28–13:08:49 UTC); without a
   login nine protected routes answered 401. No migration. No identity load or GPEXE request at the merge.
@@ -1961,7 +2008,7 @@ pre-existing; pass/fail counts don't belong in this file
 
 - **In-app GPEXE import — conditions before the switch is turned on** (owner, 2026-09-18).
   F1, F2, F3a and F3b are merged (see above); F4 is the first real local import. `GPEXE_IMPORT_APPLY_ENABLED` stays off in an
-  environment until conditions 1–3 hold there; condition 4 is required before regular
+  environment until conditions 1–3 and 6 hold there; condition 4 is required before regular
   production imports:
   1. **A fresh, restore-verified backup of that environment.** This is an operational
      gate: `docs/runbooks/gpexe-in-app-import.md` has a record table (backup path or
@@ -1989,6 +2036,13 @@ pre-existing; pass/fail counts don't belong in this file
      candidates — the background job does not re-resolve access (PR #118 closed the routes
      only). Not a blocker for the guard PR or Phase 3b; must be fixed before regular
      production imports are switched on.
+  6. **Mandatory before the import switch is turned on in any environment** (owner, 2026-10-09, at the
+     review of option (c)): a later successful check must withdraw or supersede the earlier unapproved
+     candidates of the same team and period that it no longer confirms as parent sessions. Today a
+     candidate stays pending when a later check of the same window does not list it (for example a drill
+     row recorded as a session of its own by a check whose list missed its parent), and approving it
+     would import a drill's values a second time. Not built in option (c); a separate PR with its own
+     tests.
   - Planned shape (as built in F1–F2):
     - "Check now" fetches from GPEXE;
     - a list of import candidates;
@@ -2153,20 +2207,22 @@ pre-existing; pass/fail counts don't belong in this file
 ## Most likely next step
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
-the identity implementation (PR #144, v32), the id masking (PR #145) and the hardening (PR #146) are merged
-and deployed; PR #142 is closed as superseded. Next steps, in order:
-1. The owner's external review of the diagnostic branch `fix/gpexe-source-filter-ignored-diagnostic`.
-2. After its merge and deploy, on a separate owner order, one check of the same window; the owner returns
-   only the " Diagnostic: " line, then decides between options (a), (b) and (c) (see the active phase).
-3. The owner states the state of the production-use gate and of the two gates before a link (an identity
+the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146) and the
+window diagnostic (PR #147) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
+1. The owner's external review of option (c), branch `fix/gpexe-rest-v1-local-window-filter`.
+2. After its merge and deploy, on a separate owner order, one check of the same window through the whole
+   list (two complete reads).
+3. Condition 6 under the switch conditions (withdraw candidates a later check no longer confirms) - a
+   separate PR, before the switch is ever turned on.
+4. The owner states the state of the production-use gate and of the two gates before a link (an identity
    load and one link were run after PR #146; whether those gates were confirmed is not recorded here).
-4. The separate resend timing task (see Separate tasks), when the owner schedules it.
-5. PR B, the F3c4 cut-over (see the active step).
-6. The second owner-run procedure for one controlled real import.
-7. **Phase 5a3c** (Complete and Needs review).
+5. The separate resend timing task (see Separate tasks), when the owner schedules it.
+6. PR B, the F3c4 cut-over (see the active step).
+7. The second owner-run procedure for one controlled real import.
+8. **Phase 5a3c** (Complete and Needs review).
 
-Conditions 1–3 under Separate tasks still come before the first real local import, and
-conditions 4–5 before regular production imports.
+Conditions 1–3 and 6 under Separate tasks come before the first real local import (and before the
+switch is turned on in any environment), and conditions 4–5 before regular production imports.
 
 The other Separate tasks wait until the owner schedules them.
 

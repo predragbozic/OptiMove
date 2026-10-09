@@ -465,7 +465,10 @@ export function importClientFor(source) {
     async listTeamSessions({ gpexeTeamId, fromDay, toDay, onProgress = null } = {}) {
       sameTeam(gpexeTeamId);
       await assertImportSourceStillUsable(source);
-      const result = await adapter.listSessionsByDay({ fromDay, toDay });
+      // The facts are re-checked between the adapter's two complete reads of
+      // the list too, so the second read is never sent after an Unbind, a
+      // Reconnect or a state change during the first.
+      const result = await adapter.listSessionsByDay({ fromDay, toDay, beforeSecondRead: () => assertImportSourceStillUsable(source) });
       if (onProgress) await onProgress();
       // A list — empty or not — is returned only when the facts still hold
       // after the read: a binding that ended or a credential replaced while

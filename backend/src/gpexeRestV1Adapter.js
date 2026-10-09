@@ -52,6 +52,18 @@ export const ADAPTER_SOURCE = "gpexe";
 export const ADAPTER_API_FAMILY = "rest_v1";
 export const SESSION_PAGE_LIMIT_MAX = 100;
 export const MAX_PAGES = 20;
+// The whole session list of the bound team is read for a date window (owner
+// decision 2026-10-08, option (c)): at most this many rows, the page cap times
+// the page size. A team whose list is longer is refused at the first page, by
+// its X-Total-Count, before any further request: never a part of the list.
+export const SESSION_LIST_MAX_ROWS = MAX_PAGES * SESSION_PAGE_LIMIT_MAX;
+// The fields of a session row that decide its classification or its candidate:
+// two whole reads of the list must agree on every one of them, row by row, in
+// the same order (owner decision 2026-10-09).
+export const SNAPSHOT_FIELDS = Object.freeze(["team", "drills", "drills_count", "start_timestamp", "category_name", "end_timestamp", "updated_on", "is_stats_valid"]);
+const sameField = (x, y) => (Array.isArray(x) || Array.isArray(y)
+  ? Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => Object.is(v, y[i]))
+  : Object.is(x, y));
 // One answer is at most this many BYTES (5 MiB). A larger one is refused:
 // unread when it is announced, cancelled when it is counted.
 export const MAX_ANSWER_BYTES = 5 * 1024 * 1024;
@@ -103,6 +115,9 @@ export function projectMore(body) {
 }
 // The only query parameters a server-given next-page link may carry back.
 const NEXT_LINK_KEYS = new Set(["limit", "offset", "start_timestamp_gte", "start_timestamp_lte"]);
+// ... and of the whole session list read for a date window: the page
+// position only, never a server-side date bound.
+const WHOLE_LIST_NEXT_KEYS = new Set(["limit", "offset"]);
 // The legacy drill reads: the only `api/` host key and the only two shapes.
 export const LEGACY_DRILL_HOST_KEY = "server3";
 export const LEGACY_API_PREFIX = "api/";
@@ -139,19 +154,14 @@ const validDay = (value) => {
 const dayBefore = (day) => new Date(Date.parse(`${day}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
 const dayOf = (timestamp) => (typeof timestamp === "string" && DAY.test(timestamp.slice(0, 10)) ? timestamp.slice(0, 10) : null);
 
-// The sanitized description of a refused date-window answer (owner order
-// 2026-10-07, after a check of a two-day window ended source_filter_ignored):
-// counts and fixed words only - never an id, a date, a time, a timestamp, a
-// name, a URL or any raw value. It is computed only when the answer is
-// refused, sends nothing, and changes nothing of the refusal itself.
-// A strict reading of a start, for the description only (the filter keeps its
-// own rule): a real calendar date and a time of 00-23 / 00-59 / 00-59, checked
-// by a round trip through Date.UTC - every component must come back unchanged,
-// so a value Date.UTC would normalise (month 13, 31 September, 29 February
-// outside a leap year, hour 24, minute or second 60, a year below 100) is never
-// read as another moment. Anything else is not a base at all.
+// A strict reading of a session's start (owner decisions 2026-10-07 / 2026-10-08):
+// a real calendar date and a time of 00-23 / 00-59 / 00-59, checked by a round
+// trip through Date.UTC - every component must come back unchanged, so a value
+// Date.UTC would normalise (month 13, 31 September, 29 February outside a leap
+// year, hour 24, minute or second 60, a year below 100) is never read as
+// another moment. The day is the source's naive day (no zone conversion).
 const NAIVE_TIME = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/;
-function strictBase(timestamp) {
+function strictDay(timestamp) {
   const m = typeof timestamp === "string" ? NAIVE_TIME.exec(timestamp) : null;
   if (!m) return null;
   const [y, mo, d, h, mi, s] = m.slice(1).map(Number);
@@ -159,52 +169,7 @@ function strictBase(timestamp) {
   const t = new Date(ms);
   if (!Number.isFinite(ms) || t.getUTCFullYear() !== y || t.getUTCMonth() !== mo - 1 || t.getUTCDate() !== d
     || t.getUTCHours() !== h || t.getUTCMinutes() !== mi || t.getUTCSeconds() !== s) return null;
-  return { day: timestamp.slice(0, 10), ms, rest: timestamp.slice(19) };
-}
-function timezoneShape(base) {
-  if (base === null) return "other";
-  const rest = base.rest.replace(/^\.\d{1,9}/, "");
-  if (rest === "") return "none";
-  if (rest === "Z") return "Z";
-  if (/^[+-]\d{2}(:?\d{2})?$/.test(rest)) return "offset";
-  return "other";
-}
-const WINDOW_DIAGNOSTIC = /^op=session_list_by_date; rows=\d{1,4}; before_lookback=\d{1,4}; after_end=\d{1,4}; unreadable=\d{1,4}; outside_named_drill=\d{1,4}; distance=under_3h:\d{1,4},3h_to_24h:\d{1,4},over_24h:\d{1,4},unknown:\d{1,4}; tz=Z:\d{1,4},offset:\d{1,4},none:\d{1,4},other:\d{1,4}\.$/;
-export function describeWindowRefusal(rows, { lookFrom, from, to }) {
-  const low = Date.parse(`${lookFrom}T00:00:00Z`);
-  const high = Date.parse(`${to}T23:59:59Z`);
-  const parentDrills = new Set();
-  for (const row of rows) {
-    const day = strictBase(row?.start_timestamp)?.day ?? null;
-    if (day === null || day < from || day > to || !Array.isArray(row.drills)) continue;
-    for (const entry of row.drills) { const id = canonicalId(entry); if (id !== null) parentDrills.add(id); }
-  }
-  const count = { before: 0, after: 0, unreadable: 0, namedDrill: 0 };
-  const distance = { under_3h: 0, "3h_to_24h": 0, over_24h: 0, unknown: 0 };
-  const tz = { Z: 0, offset: 0, none: 0, other: 0 };
-  for (const row of rows) {
-    const base = strictBase(row?.start_timestamp);
-    tz[timezoneShape(base)] += 1;
-    const day = base?.day ?? null;
-    let gap = null;
-    if (day === null) count.unreadable += 1;
-    else if (day < lookFrom || day > to) {
-      // Only a row with a readable day outside the read is a named drill
-      // candidate; an unreadable one is counted as unreadable only.
-      if (parentDrills.has(canonicalId(row?.id))) count.namedDrill += 1;
-      if (day < lookFrom) { count.before += 1; gap = low - base.ms; }
-      else { count.after += 1; gap = base.ms - high; }
-    } else continue;
-    if (gap === null || gap < 0) distance.unknown += 1;
-    else if (gap < 3 * 3_600_000) distance.under_3h += 1;
-    else if (gap <= 24 * 3_600_000) distance["3h_to_24h"] += 1;
-    else distance.over_24h += 1;
-  }
-  const n = (v) => Math.min(Number.isInteger(v) && v >= 0 ? v : 0, 9999);
-  const text = `op=session_list_by_date; rows=${n(rows.length)}; before_lookback=${n(count.before)}; after_end=${n(count.after)}; unreadable=${n(count.unreadable)}; outside_named_drill=${n(count.namedDrill)}; distance=under_3h:${n(distance.under_3h)},3h_to_24h:${n(distance["3h_to_24h"])},over_24h:${n(distance.over_24h)},unknown:${n(distance.unknown)}; tz=Z:${n(tz.Z)},offset:${n(tz.offset)},none:${n(tz.none)},other:${n(tz.other)}.`;
-  // The final guard: only the fixed grammar above leaves here - anything else
-  // (a value that slipped in) drops the description, never the refusal.
-  return WINDOW_DIAGNOSTIC.test(text) ? text : "";
+  return timestamp.slice(0, 10);
 }
 
 export class SourceAdapterError extends Error {
@@ -227,8 +192,8 @@ export class SourceAdapterError extends Error {
 export const REST_V1_CAPABILITIES = Object.freeze({
   team_list: Object.freeze({ status: "proven", importerUse: "verify the bound team is visible", e03: "not used", evidence: "probe 2026-09-29: GET team/ 200, array, X-Total-Count" }),
   team_read: Object.freeze({ status: "proven", importerUse: "verify the bound team is visible", e03: "not used", evidence: "probe 2026-09-29: GET team/<id>/ 200, object" }),
-  session_list: Object.freeze({ status: "proven", importerUse: "none as it is: the importer always lists with a date window", e03: "not sent without a date window", evidence: "probe 2026-09-29: GET team_session/?team=&limit=1 200, array, X-Total-Count, Link" }),
-  session_list_by_date: Object.freeze({ status: "proven", importerUse: "team sessions of a date window", e03: "team_session/?team=&start_timestamp_gte=&start_timestamp_lte=&limit=", evidence: "probe 2026-10-01: the filter applied (every row inside the window, filtered count smaller than unfiltered)" }),
+  session_list: Object.freeze({ status: "proven", importerUse: "the whole team list, read for a date window and filtered locally (owner decision 2026-10-08)", e03: "not sent without a date window", evidence: "probe 2026-09-29: GET team_session/?team=&limit=1 200, array, X-Total-Count, Link" }),
+  session_list_by_date: Object.freeze({ status: "unknown", importerUse: "none: the server-side date filter is not sent (owner decision 2026-10-08)", e03: "team_session/?team=&start_timestamp_gte=&start_timestamp_lte=&limit=", evidence: "probe 2026-10-01: the filter applied once; owner-run check 2026-10-07: the filtered answer carried rows after the asked window (refused source_filter_ignored) - not trusted for completeness" }),
   session_read: Object.freeze({ status: "proven", importerUse: "one session, its team and drills_count", e03: "team_session/<id>/", evidence: "probe 2026-10-01: 200, object, team, drills_count, start_timestamp; no drills list on this read" }),
   session_details: Object.freeze({ status: "proven", importerUse: "whole-session values per athlete", e03: "team_session/<id>/details/", evidence: "probe 2026-10-01: 200 (status only; no metric value shape recorded; first real check 2026-10-05 refused metric_shape_unknown); owner-run diagnostic 2026-10-06: tot_burst_events / tot_brake_events in the documented shape for every athlete, one unconsumed metric an object of another shape - the read is projected to the consumed fields" }),
   session_drill_details: Object.freeze({ status: "observed", importerUse: "values per drill", e03: "team_session/<id>/details/?drill=<n>", evidence: "legacy api family on server3 (owner-run 2026-10-01: 200, object, players map); form per the GPEXE REST handbook pages 31-33; read through legacyDrillDetailsUrl() only" }),
@@ -805,15 +770,25 @@ export function createGpexeRestV1Adapter({
   const refreshedDuring = (id, epoch) => {
     if (epochOf(id) !== epoch) throw new SourceAdapterError("session_refreshed", "That session was refreshed while this read was in flight; the answer is discarded.");
   };
+  // Every parent this instance holds as readable is withdrawn, with all it
+  // confirmed (a failed or disagreeing second read of a window list).
+  const withdrawAllParents = () => {
+    for (const id of [...knownParents]) { knownParents.delete(id); revokeSession(id); }
+  };
   let listSequence = 0;
   const nextListTicket = () => { listSequence += 1; return listSequence; };
-  const recordClassification = (rows, parents, ticket) => {
+  // `readable` (default: every parent) are the parents a later getSession may
+  // read; a parent of the list outside them is neither readable nor a drill,
+  // and stops being readable if an earlier list of this instance made it so:
+  // after a window list exactly the window's parents of that list are readable.
+  const recordClassification = (rows, parents, ticket, readable = parents) => {
     // Last started wins, fail-closed: only the most recently started list may
     // record its classification. An answer of any other list — older, whether
     // it lands before or after the newer one — is discarded before any change
     // to the classification or the confirmations.
     if (ticket !== listSequence) throw new SourceAdapterError("session_list_refreshed", "A newer session list was started while this one was in flight; this answer is discarded.");
     const parentIds = new Set(parents.map((p) => canonicalId(p.id)));
+    const readableIds = new Set(readable.map((p) => canonicalId(p.id)));
     // A row this instance already saw as a drill cannot come back as a parent
     // on a page that simply lacks its parent: that is a contradiction, and the
     // whole list is refused rather than the last page having the last word.
@@ -823,7 +798,11 @@ export function createGpexeRestV1Adapter({
     }
     for (const row of rows) {
       const id = canonicalId(row.id);
-      if (parentIds.has(id)) { knownParents.add(id); continue; }
+      if (parentIds.has(id)) {
+        if (readableIds.has(id)) knownParents.add(id);
+        else { knownParents.delete(id); revokeSession(id); }
+        continue;
+      }
       // Now a drill row: whatever this instance held about it is withdrawn.
       knownDrills.add(id);
       knownParents.delete(id);
@@ -932,6 +911,22 @@ export function createGpexeRestV1Adapter({
       throw unexpected("The source server pointed to a next page that cannot be read.");
     }
   }
+  // A next-page link of the whole session list (read for a date window): the
+  // checks of nextPath(), and then nothing but the page size asked and an
+  // offset that is exactly the number of rows read so far - a link that would
+  // skip or repeat rows, or carries a date bound, is refused.
+  function nextWholeSessionListPath(next, rowsRead) {
+    const path = nextPath(next, "team_session/");
+    const params = new URL(next).searchParams;
+    const keys = [...params.keys()].filter((k) => k !== "team");
+    if (keys.some((k) => !WHOLE_LIST_NEXT_KEYS.has(k)) || params.get("limit") !== String(SESSION_PAGE_LIMIT_MAX)) {
+      throw unexpected("The source server pointed to a next page of the session list with a parameter this adapter does not follow.");
+    }
+    if (params.get("offset") !== String(rowsRead)) {
+      throw new SourceAdapterError("source_list_changed", "The next page of the session list does not start after the rows already read; read it again.");
+    }
+    return path;
+  }
   // A list of a session's athlete rows pages with teamsession=<id>, not team=.
   function nextAthletePath(next, sessionId) {
     if (typeof next !== "string" || !next.startsWith(root)) throw unexpected("The source server pointed to a next page outside its own API.");
@@ -956,7 +951,7 @@ export function createGpexeRestV1Adapter({
 
   // One page of a header-paged list, whole or refused; `follow` builds the
   // next relative path from the server's link.
-  async function wholeList(firstPath, follow, what, maxPages = MAX_PAGES) {
+  async function wholeList(firstPath, follow, what, maxPages = MAX_PAGES, maxRows = null) {
     const rows = [];
     const ids = new Set();
     let total = null;
@@ -968,8 +963,11 @@ export function createGpexeRestV1Adapter({
       if (res.totalCount === null || res.totalCount === undefined || res.totalCount === "" || !Number.isInteger(pageTotal) || pageTotal < 0) {
         throw unexpected(`The source server did not say how many rows ${what} has.`);
       }
-      if (total === null) total = pageTotal;
-      else if (total !== pageTotal) throw new SourceAdapterError("source_list_changed", `The number of rows of ${what} changed while it was read; read it again.`);
+      if (total === null) {
+        total = pageTotal;
+        // A list longer than the cap is refused before a second request.
+        if (maxRows !== null && total > maxRows) throw new SourceAdapterError("source_list_too_large", `${what} has more rows than this adapter reads at once.`);
+      } else if (total !== pageTotal) throw new SourceAdapterError("source_list_changed", `The number of rows of ${what} changed while it was read; read it again.`);
       for (const row of res.body) {
         if (!isPlainObject(row)) throw unexpected(`A row of ${what} is not an object.`);
         const id = canonicalId(row.id);
@@ -985,7 +983,7 @@ export function createGpexeRestV1Adapter({
         return { rows, total };
       }
       if (rows.length === total) throw unexpected(`The source announced another page of ${what} after the last row.`);
-      path = follow(next);
+      path = follow(next, rows.length);
     }
     throw new SourceAdapterError("source_list_incomplete", `${what} has more pages than the allowed number.`);
   }
@@ -1167,36 +1165,87 @@ export function createGpexeRestV1Adapter({
     },
 
     // The parent sessions of the bound team that start inside a date window
-    // (naive source timestamps, the window inclusive on both days, at most
-    // 31 days). Every returned row must lie inside the window: a source that
-    // ignores the filter is refused, never passed on as the window.
+    // (naive source days, the window inclusive on both days, at most 31 days).
+    // Owner decision 2026-10-08 (option (c)), after an owner-run check whose
+    // date-filtered answer carried rows after the asked window: the server's
+    // date filter is not trusted for completeness and is not sent. The WHOLE
+    // list of the bound team is read (team_session/?team=&limit=100, header
+    // paged, a stable X-Total-Count, every next link checked, at most
+    // SESSION_LIST_MAX_ROWS rows), its rows checked, parents and drills told
+    // apart on the whole list and every start read strictly (one that is not
+    // a real date and time refuses the list: where it belongs is never guessed).
+    // Owner decision 2026-10-09: the whole list is read TWICE, one complete
+    // read after the other, each with every check of its own; the second is
+    // used only when both agree on the total, on every id in the same order and
+    // on every field in SNAPSHOT_FIELDS - otherwise source_list_changed. This
+    // closes the blind spot of offset paging (a row deleted and another
+    // created between two pages, the total unchanged); it is not a
+    // transactional snapshot: a change that lands identically in both reads
+    // stays a residual risk. The first read changes no state of this adapter;
+    // a failed second read or a difference leaves no session readable. Only
+    // then are the parents of the window picked out locally from the second
+    // read: a parent of the day before the window (the one-day look-back) and
+    // of every other day is left out; a drill row is never returned as a session.
     async listSessionsByDay(options) {
-      const { fromDay, toDay } = only(options, ["fromDay", "toDay"]);
+      // `beforeSecondRead` (optional): the caller's re-check of its own facts
+      // between the two complete reads (the importer: the binding, connection
+      // and credential still hold), so snapshot B is never sent when they
+      // changed during A.
+      const { fromDay, toDay, beforeSecondRead = null } = only(options, ["fromDay", "toDay", "beforeSecondRead"]);
+      if (beforeSecondRead !== null && typeof beforeSecondRead !== "function") throw new SourceAdapterError("invalid_options", "beforeSecondRead is a function.");
       const from = validDay(fromDay);
       const to = validDay(toDay);
       if (from === null || to === null) throw new SourceAdapterError("invalid_options", "A date window is two days as YYYY-MM-DD.");
       const span = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000;
       if (span < 0 || span + 1 > MAX_WINDOW_DAYS) throw new SourceAdapterError("invalid_options", `A date window runs forward and covers at most ${MAX_WINDOW_DAYS} days.`);
-      // Exactly one day earlier than asked, as the e03 importer reads: a drill
-      // that starts inside the window can belong to a parent that started the
-      // evening before, and is told apart only through that parent's `drills`.
-      // The parents of that extra day are left out again after the
-      // classification; a drill row is never returned as a session.
       const lookFrom = dayBefore(from);
       const ticket = nextListTicket();
-      const path = teamScopedPath("team_session/", team, [["start_timestamp_gte", `${lookFrom}%2000%3A00%3A00`], ["start_timestamp_lte", `${to}%2023%3A59%3A59`], ["limit", SESSION_PAGE_LIMIT_MAX]]);
-      const { rows, total } = await wholeList(path, (next) => nextPath(next, "team_session/"), "the session list");
-      checkSessionRows(rows);
-      if (rows.some((row) => { const day = dayOf(row.start_timestamp); return day === null || day < lookFrom || day > to; })) {
-        // Refused exactly as before; an administrator reads why after the
-        // mark (a coach gets the sentence before it).
-        const text = describeWindowRefusal(rows, { lookFrom, from, to });
-        throw new SourceAdapterError("source_filter_ignored", `The source server returned sessions outside the asked window; the window cannot be trusted.${text ? `${DIAGNOSTIC_MARK}${text}` : ""}`);
+      const path = teamScopedPath("team_session/", team, [["limit", SESSION_PAGE_LIMIT_MAX]]);
+      // One complete read with every check of its own; pure: no adapter state.
+      const snapshot = async () => {
+        const { rows, total } = await wholeList(path, nextWholeSessionListPath, "the session list", MAX_PAGES, SESSION_LIST_MAX_ROWS);
+        checkSessionRows(rows);
+        const classified = classifyParents(rows);
+        const days = new Map(rows.map((row) => [canonicalId(row.id), strictDay(row.start_timestamp)]));
+        if ([...days.values()].some((day) => day === null)) {
+          throw new SourceAdapterError("source_session_start_unreadable", "A session of the team's list has a start that cannot be read as a date and time; the window cannot be told apart.");
+        }
+        return { rows, total, classified, days };
+      };
+      const first = await snapshot();
+      let second;
+      try {
+        if (beforeSecondRead) await beforeSecondRead();
+        second = await snapshot();
+        const same = first.total === second.total && first.rows.length === second.rows.length
+          && first.rows.every((rowA, k) => {
+            const rowB = second.rows[k];
+            return canonicalId(rowA.id) === canonicalId(rowB.id) && SNAPSHOT_FIELDS.every((field) => sameField(rowA[field], rowB[field]));
+          });
+        if (!same) throw new SourceAdapterError("source_list_changed", "The session list changed between two complete reads; read it again.");
+      } catch (error) {
+        // No partial result: no session of this instance stays readable.
+        withdrawAllParents();
+        throw error;
       }
-      const { parents, drillsLeftOut, drillReferencesNotListed } = classifyParents(rows);
-      recordClassification(rows, parents, ticket);
-      const inWindow = parents.filter((p) => dayOf(p.start_timestamp) >= from);
-      return { sessions: inWindow.map(summary), total, drillsLeftOut, drillReferencesNotListed, lookBackParentsLeftOut: parents.length - inWindow.length, lookBackDays: 1, fromDay: from, toDay: to };
+      const { rows, total, days } = second;
+      const { parents, drillsLeftOut, drillReferencesNotListed } = second.classified;
+      const dayOfRow = (row) => days.get(canonicalId(row.id));
+      const inWindow = parents.filter((p) => dayOfRow(p) >= from && dayOfRow(p) <= to);
+      const lookBackParentsLeftOut = parents.filter((p) => dayOfRow(p) === lookFrom).length;
+      recordClassification(rows, parents, ticket, inWindow);
+      return {
+        sessions: inWindow.map(summary),
+        total,
+        drillsLeftOut,
+        drillReferencesNotListed,
+        lookBackParentsLeftOut,
+        otherParentsLeftOut: parents.length - inWindow.length - lookBackParentsLeftOut,
+        lookBackDays: 1,
+        listReads: 2,
+        fromDay: from,
+        toDay: to,
+      };
     },
 
     // One session, read by its id: its answer must name the bound team and
