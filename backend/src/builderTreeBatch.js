@@ -86,3 +86,28 @@ export async function deleteBuilderPlanContent(client, planId) {
   await client.query("delete from plans.plan_sessions where plan_day_id in (select id from plans.plan_days where plan_id = $1)", [planId]);
   await client.query("delete from plans.plan_days where plan_id = $1", [planId]);
 }
+
+export async function copyBuilderDaySessions(client, dayMap, { preserveLogicalId = false } = {}) {
+  if (!dayMap.size) return new Map();
+  const sessions = await client.query(
+    "select * from plans.plan_sessions where plan_day_id = any($1::uuid[]) order by plan_day_id, session_order",
+    [[...dayMap.keys()]],
+  );
+  const fields = ["am_pm", "bta", "session_time", "session_order", "name", "rpe_enabled", "training_load_enabled"];
+  if (preserveLogicalId) fields.push("logical_session_id");
+  const created = await insertRows(client, "plan_sessions", `plan_day_id, ${fields.join(", ")}`,
+    sessions.rows.map((session) => [dayMap.get(session.plan_day_id), ...fields.map((field) => session[field])]), true);
+  return new Map(sessions.rows.map((session, index) => [session.id, created[index].id]));
+}
+
+export async function updateBuilderWeeklyDays(client, days, weekStart) {
+  if (!days.length) return;
+  await client.query(
+    `update plans.plan_days pd
+     set date = $2::date + (d.weekday - 1), block_name = d.block_name,
+         block_type = d.block_type, day_note = d.day_note, block_order = d.block_order, updated_at = now()
+     from jsonb_to_recordset($1::jsonb) as d(id uuid, weekday integer, block_name text, block_type text, day_note text, block_order numeric)
+     where pd.id = d.id`,
+    [JSON.stringify(days), weekStart],
+  );
+}

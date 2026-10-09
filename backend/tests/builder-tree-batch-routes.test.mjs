@@ -21,7 +21,7 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
   }
   mock.module("../src/db.js", { namedExports: { query, pool: { connect: async () => client } } });
   mock.module("../src/access.js", { namedExports: { athleteAccessPredicate: () => "false", canAccessAllAthletes: () => false, canAccessPlan: async () => true } });
-  const { default: router, copyProgramTree, copyDaySessions, copySessionContent } = await import("../src/routes/builder.js");
+  const { default: router, copyProgramTree, copyDaySessions, copySessionContent, copyWeeklyPlanTree } = await import("../src/routes/builder.js");
   const edit = router.stack.find((layer) => layer.route?.path === "/plans/:planId/edit").route.stack[0].handle;
 
   function makeClient(days, sessions, { failContent = false } = {}) {
@@ -144,5 +144,35 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
     assert.equal(response.body, undefined);
     assert.ok(client.calls.some(({ sql }) => sql === "rollback"));
     assert.ok(!client.calls.some(({ sql }) => sql === "commit"));
+  });
+
+  test("whole Weekly copy batches all seven days and preserves replacement and identity rules", async () => {
+    const days = Array.from({ length: 7 }, (_, i) => ({ id: `source-day-${i}`, day_order: i + 1,
+      block_name: `Day ${i}`, block_type: "session", day_note: `Note ${i}`, block_order: i + 0.5 }));
+    const sessions = days.flatMap((day, i) => [session(`am-${i}`, day.id), session(`pm-${i}`, day.id)]);
+    for (const targetIsNew of [false, true]) {
+      for (const preserveLogicalId of [false, true]) {
+        client = makeClient(days, sessions);
+        await copyWeeklyPlanTree(client, "source", "target", "2026-10-12", { targetIsNew, preserveLogicalId });
+        assert.equal(client.calls.length, targetIsNew ? 10 : 14);
+        assert.equal(client.calls.filter(({ sql }) => sql.startsWith("delete")).length, targetIsNew ? 0 : 4);
+        const update = client.calls.find(({ sql }) => sql.startsWith("update plans.plan_days"));
+        assert.equal(update.params[1], "2026-10-12");
+        const updates = JSON.parse(update.params[0]);
+        assert.equal(updates.length, 7);
+        assert.deepEqual(updates.map((row) => row.weekday), [1, 2, 3, 4, 5, 6, 7]);
+        assert.deepEqual(updates.map((row) => row.day_note), days.map((day) => day.day_note));
+        assert.equal(client.inserts.plan_sessions.length, 14);
+        assert.equal(client.inserts.plan_items.length, 14);
+        for (const copied of client.inserts.plan_sessions) {
+          const original = sessions.find((row) => row.name === copied.name);
+          assert.equal(copied.plan_day_id, `day-${days.findIndex((day) => day.id === original.plan_day_id)}`);
+          assert.equal(copied.logical_session_id, preserveLogicalId ? original.logical_session_id : undefined);
+          assert.equal(copied.rpe_enabled, false);
+          assert.equal(copied.training_load_enabled, false);
+          assert.equal(copied.session_time, "16:30:00");
+        }
+      }
+    }
   });
 }

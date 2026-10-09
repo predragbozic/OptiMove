@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { copyBuilderSessionContents, deleteBuilderPlanContent } from "../src/builderTreeBatch.js";
+import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySessions, updateBuilderWeeklyDays } from "../src/builderTreeBatch.js";
 
 function fixture(sessionCount, itemsPerSession = 2) {
   const sessionMap = new Map();
@@ -153,4 +153,59 @@ test("delete failures propagate without starting a separate transaction", async 
     if (calls.length === 2) throw new Error("delete failure");
   } }, "target-plan"), /delete failure/);
   assert.equal(calls.length, 2);
+});
+
+test("Weekly session skeleton needs two queries for 48 sessions and bounds large insert batches", async () => {
+  for (const count of [48, 501]) {
+    const dayMap = new Map([["day-a", "target-a"], ["day-b", "target-b"]]);
+    const sessions = Array.from({ length: count }, (_, i) => ({ id: `session-${i}`, plan_day_id: i % 2 ? "day-a" : "day-b",
+      name: `Session ${i}`, session_order: i, session_time: "10:30:00", am_pm: "AM", bta: "BT",
+      rpe_enabled: false, training_load_enabled: false, logical_session_id: `logical-${i}` }));
+    const calls = [];
+    const inserted = [];
+    const client = { query: async (sql, params) => {
+      calls.push({ sql, params });
+      if (sql.startsWith("select")) {
+        assert.deepEqual(params, [["day-a", "day-b"]]);
+        return { rows: sessions };
+      }
+      const fields = sql.match(/\(([^)]+)\)/)[1].split(", ");
+      const rows = [];
+      for (let offset = 0; offset < params.length; offset += fields.length) {
+        const row = Object.fromEntries(fields.map((field, i) => [field, params[offset + i]]));
+        row.id = `target-session-${inserted.length}`;
+        rows.push(row);
+        inserted.push(row);
+      }
+      return { rows };
+    } };
+    const map = await copyBuilderDaySessions(client, dayMap, { preserveLogicalId: true });
+    assert.equal(calls.length, count === 48 ? 2 : 3);
+    assert.equal(map.size, count);
+    for (const [i, row] of inserted.entries()) {
+      assert.equal(row.plan_day_id, dayMap.get(sessions[i].plan_day_id));
+      assert.equal(row.logical_session_id, sessions[i].logical_session_id);
+      assert.equal(row.rpe_enabled, false);
+      assert.equal(row.training_load_enabled, false);
+      assert.equal(map.get(sessions[i].id), row.id);
+    }
+  }
+});
+
+test("empty Weekly skeleton and metadata patches do not query the database", async () => {
+  const client = { query: () => assert.fail("unexpected query") };
+  assert.equal((await copyBuilderDaySessions(client, new Map())).size, 0);
+  await updateBuilderWeeklyDays(client, [], "2026-10-12");
+});
+
+test("Weekly metadata patch is parameterized and preserves nulls and fractional order", async () => {
+  const patches = [{ id: "target-day", weekday: 7, block_name: "Sunday's session", block_type: null, day_note: null, block_order: 1.5 }];
+  const calls = [];
+  await updateBuilderWeeklyDays({ query: async (sql, params) => calls.push({ sql, params }) }, patches, "2026-10-12");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(JSON.parse(calls[0].params[0]), patches);
+  assert.equal(calls[0].params[1], "2026-10-12");
+  assert.ok(calls[0].sql.includes("jsonb_to_recordset($1::jsonb)"));
+  assert.ok(calls[0].sql.includes("$2::date + (d.weekday - 1)"));
+  assert.ok(!calls[0].sql.includes("Sunday's"));
 });

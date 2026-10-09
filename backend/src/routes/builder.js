@@ -2,7 +2,7 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { createBuilderTiming } from "../builderTiming.js";
-import { copyBuilderSessionContents, deleteBuilderPlanContent } from "../builderTreeBatch.js";
+import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySessions, updateBuilderWeeklyDays } from "../builderTreeBatch.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
 import { isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
@@ -552,7 +552,7 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     // client that doesn't send this field at all.
     const intent = text(req.body?.intent) === "assign" ? "assign" : "copy";
     const targetAthleteExternalIds = requestedAthleteIds(req.body);
-    const { athletes: targetAthletes, missing, archived } = await findRequestedAthletes(targetAthleteExternalIds);
+    const { athletes: targetAthletes, missing, archived } = await timing.measure("targets", () => findRequestedAthletes(targetAthleteExternalIds));
     if (missing.length) return res.status(404).json({ error: `Athlete not found: ${missing.join(", ")}` });
     if (archived.length) return res.status(400).json({ error: `Athlete is archived, restore them first: ${archived.join(", ")}` });
     if (intent === "assign" && !source.is_template) {
@@ -576,9 +576,9 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     // request never partially claims that slot.
     let weeklyPlanOwnerScope = null;
     if (source.plan_type === "weekly") {
-      weeklyPlanOwnerScope = await resolveWeeklyPlanOwnerScope(req, res);
+      weeklyPlanOwnerScope = await timing.measure("workspace", () => resolveWeeklyPlanOwnerScope(req, res));
       if (!weeklyPlanOwnerScope) return;
-      const outsider = await findAthleteOutsideScope(weeklyPlanOwnerScope, targetAthletes);
+      const outsider = await timing.measure("scope", () => findAthleteOutsideScope(weeklyPlanOwnerScope, targetAthletes));
       if (outsider) return res.status(403).json({ error: `Athlete ${outsider.externalId || outsider.id} is outside your current workspace.` });
     }
 
@@ -684,7 +684,7 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     if (source.plan_type === "weekly") {
       const conflicts = [];
       for (const target of targets) {
-        const conflict = await ensureWeeklySlot(client, req.user.id, target, targetWeekStart);
+        const conflict = await timing.measure("slot", () => ensureWeeklySlot(client, req.user.id, target, targetWeekStart));
         if (conflict) conflicts.push(conflict);
       }
       if (conflicts.length) {
@@ -716,7 +716,7 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
       createdIds.push(created.rows[0].id);
       await timing.measure("copy", async () => {
         if (source.plan_type === "weekly") {
-          await copyWeeklyPlanTree(client, source.id, created.rows[0].id, targetWeekStart);
+          await copyWeeklyPlanTree(client, source.id, created.rows[0].id, targetWeekStart, { targetIsNew: true });
           await insertPlanOwnershipSnapshot(client, created.rows[0].id, planOwner);
         } else {
           await copyProgramTree(client, source.id, created.rows[0].id);
@@ -829,7 +829,7 @@ router.post("/plans/:planId/edit", async (req, res, next) => {
     // training_load.session_feedback's stable identity.
     await timing.measure("copy", async () => {
       if (plan.plan_type === "weekly") {
-        await copyWeeklyPlanTree(client, plan.id, created.rows[0].id, plan.week_start, { preserveLogicalId: true });
+        await copyWeeklyPlanTree(client, plan.id, created.rows[0].id, plan.week_start, { preserveLogicalId: true, targetIsNew: true });
         // The edit-draft represents the EXACT same real plan mid-edit, not
         // a new one - its own ownership snapshot is copied verbatim from
         // the source (see this file's own header comment on
@@ -2096,8 +2096,8 @@ export async function copyProgramTree(client, sourcePlanId, targetPlanId) {
   )), copyLegacySession);
 }
 
-async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeekStart, { preserveLogicalId = false } = {}) {
-  await deleteBuilderPlanContent(client, targetPlanId);
+export async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeekStart, { preserveLogicalId = false, targetIsNew = false } = {}) {
+  if (!targetIsNew) await deleteBuilderPlanContent(client, targetPlanId);
   await createWeeklyDays(client, targetPlanId, targetWeekStart);
   const sourceDays = await client.query("select * from plans.plan_days where plan_id = $1 order by day_order, block_index", [sourcePlanId]);
   const targetDays = await client.query("select * from plans.plan_days where plan_id = $1 order by day_order, block_index", [targetPlanId]);
@@ -2116,6 +2116,7 @@ async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeek
   // inserted, and crashing the whole copy on plan_days_plan_date_unique.
   const targetByWeekday = new Map(targetDays.rows.map((day) => [normalizedWeekday(day.day_order), day]));
   const sourcesByTargetDay = new Map();
+  const dayUpdates = new Map();
   for (const sourceDay of sourceDays.rows) {
     const weekday = normalizedWeekday(sourceDay.day_order);
     let targetDay = targetByWeekday.get(weekday);
@@ -2141,33 +2142,15 @@ async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeek
       targetDay = created.rows[0];
       targetByWeekday.set(weekday, targetDay);
     }
-    await client.query(
-      `update plans.plan_days
-       set date = $2::date + ($3::integer - 1),
-           block_name = $4,
-           block_type = $5,
-           day_note = $6,
-           block_order = $7,
-           updated_at = now()
-       where id = $1`,
-      [
-        targetDay.id,
-        targetWeekStart,
-        weekday,
-        sourceDay.block_name,
-        sourceDay.block_type,
-        sourceDay.day_note,
-        sourceDay.block_order,
-      ],
-    );
+    dayUpdates.set(targetDay.id, { id: targetDay.id, weekday, block_name: sourceDay.block_name,
+      block_type: sourceDay.block_type, day_note: sourceDay.day_note, block_order: sourceDay.block_order });
     // Fresh target days have no sessions. For duplicate normalized weekdays,
     // the last source day wins, just as the former delete-then-copy loop did.
     sourcesByTargetDay.set(targetDay.id, sourceDay.id);
   }
-  const contentCopies = new Map();
-  for (const [targetDayId, sourceDayId] of sourcesByTargetDay) {
-    await copyDaySessions(client, sourceDayId, targetDayId, { preserveLogicalId, contentCopies });
-  }
+  await updateBuilderWeeklyDays(client, [...dayUpdates.values()], targetWeekStart);
+  const contentCopies = await copyBuilderDaySessions(client,
+    new Map([...sourcesByTargetDay].map(([targetId, sourceId]) => [sourceId, targetId])), { preserveLogicalId });
   await copyBuilderSessionContents(client, contentCopies, copyLegacySession);
 }
 
