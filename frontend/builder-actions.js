@@ -1251,7 +1251,7 @@ export async function handleBuilderDraftAction(action, handlers) {
       const currentDraft = state.builder.draft || draft;
       const result = await api(`/api/builder/plans/${encodeURIComponent(currentDraft.plan.id)}/submit`, {
         method: "POST",
-        body: JSON.stringify(withBatchSyncPayload({})),
+        body: JSON.stringify(withBatchSyncPayload({ responseMode: "summary" })),
       });
       // This plan has left 'draft' status either way - the cached drafts
       // list (see loadBuilderDrafts) must never keep showing it once the
@@ -1271,14 +1271,12 @@ export async function handleBuilderDraftAction(action, handlers) {
       // submit never touches its ids (just flips status). Exiting below
       // clears the clipboard for both kinds of plan.
       if (currentDraft.plan.isEditDraft) state.builder.clipboard = null;
-      setBuilderDraft(result);
       await exitBuilderToPlanContext(result?.plan || draft.plan, handlers);
     } catch (error) {
       // A failed save must not look like a success (no navigation, no
       // "Saved" state) and must not lose the coach's local edits -
-      // state.builder.draft is never touched on this path (setBuilderDraft
-      // is only reached after a successful response above), so whatever the
-      // coach had open is exactly as they left it; restoring the button
+      // no local draft is cleared before a successful response, so the
+      // coach can retry with the same edits; restoring the button
       // (same pattern as the Add-exercise error path above) makes a retry
       // available immediately instead of leaving it stuck on "Saving…".
       action.disabled = false;

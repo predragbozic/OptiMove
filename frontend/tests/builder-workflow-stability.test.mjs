@@ -53,7 +53,11 @@ test("Exit flushes pending inputs, keeps the edit draft, and returns to its athl
 test("Save waits for the last input before submitting and exits after success", async () => {
   const flush = deferred();
   const calls = [];
-  globalThis.fetch = async (url, options) => { calls.push({ url, method: options.method }); return response({ ...draft(), plan: { ...draft().plan, id: "original-1", status: "active" } }); };
+  globalThis.fetch = async (url, options) => {
+    assert.equal(JSON.parse(options.body).responseMode, "summary");
+    calls.push({ url, method: options.method });
+    return response({ saved: true, plan: { ...draft().plan, id: "original-1", status: "active" } });
+  };
   const save = handleBuilderDraftAction(action("builder-submit-plan"), handlers({ flushBuilderAutosaves: () => flush.promise }));
   assert.equal(calls.length, 0);
   assert.equal(state.activeTab, "builder");

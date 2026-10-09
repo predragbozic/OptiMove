@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
+import { createBuilderTiming } from "../builderTiming.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
 import { isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
@@ -431,8 +432,9 @@ router.post("/plans", async (req, res, next) => {
 
 router.post("/plans/:planId/submit", async (req, res, next) => {
   let client;
+  const timing = createBuilderTiming(res);
   try {
-    const plan = await requirePlan(req, req.params.planId, res);
+    const plan = await timing.measure("access", () => requirePlan(req, req.params.planId, res));
     if (!plan) return;
     // Re-editing an already-active plan: applyEditDraft() sets the
     // ORIGINAL plan back to 'active' (it never left that status from the
@@ -440,8 +442,8 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
     // must never reach the notification logic below, and it doesn't:
     // this branch returns before either does.
     if (plan.is_edit_draft && plan.edit_source_plan_id) {
-      const updated = await applyEditDraft(req, plan);
-      return res.json(await buildDraft(updated));
+      const updated = await timing.measure("apply", () => applyEditDraft(req, plan));
+      return timing.json(await timing.measure("response", () => buildSubmitResponse(req, updated)));
     }
     const shouldSyncBatch = wantsBatchSync(req, plan);
     // Non-batch: the empty-draft check stays its OWN separate, quick
@@ -452,11 +454,11 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
     // alongside sync and activation, in the SAME transaction - see that
     // function's own header comment for why (correction round 4).
     if (!shouldSyncBatch) {
-      const emptyDraft = await removeEmptyDraftOnSubmit(req.user, plan, req);
-      if (emptyDraft) return res.json(emptyDraft);
+      const emptyDraft = await timing.measure("empty_check", () => removeEmptyDraftOnSubmit(req.user, plan, req));
+      if (emptyDraft) return timing.json(emptyDraft);
     }
 
-    client = await pool.connect();
+    client = await timing.measure("pool", () => pool.connect());
     await client.query("begin");
     // `and status = 'draft'` on the single-plan UPDATE below (and inside
     // syncAndActivateBatchWithClient's own activation UPDATE) is what
@@ -482,12 +484,12 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
     // whichever of the two reaches the row first.
     let activatedPlans;
     if (shouldSyncBatch) {
-      const result = await syncAndActivateBatchWithClient(client, plan.id, req.user);
+      const result = await timing.measure("batch", () => syncAndActivateBatchWithClient(client, plan.id, req.user));
       if (result.emptyDraftResponse) {
         await client.query("commit");
         client.release();
         client = null;
-        return res.json(result.emptyDraftResponse);
+        return timing.json(result.emptyDraftResponse);
       }
       if (result.activatedPlans !== null) {
         activatedPlans = result.activatedPlans;
@@ -515,14 +517,14 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
       );
       activatedPlans = updated.rows;
     }
-    const notifiedUserIds = await notifyPlanAssignments(client, activatedPlans, req.user.id);
+    const notifiedUserIds = await timing.measure("notifications", () => notifyPlanAssignments(client, activatedPlans, req.user.id));
     await client.query("commit");
     client.release();
     client = null;
     // Only after commit - a realtime push implying a notification exists
     // must never fire ahead of the transaction that actually created it.
     emitPlanAssignedRealtime(notifiedUserIds);
-    res.json(await buildDraft(await getEditablePlan(req, plan.id)));
+    timing.json(await timing.measure("response", async () => buildSubmitResponse(req, await getEditablePlan(req, plan.id))));
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -534,8 +536,9 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
 
 router.post("/plans/:planId/duplicate", async (req, res, next) => {
   let client;
+  const timing = createBuilderTiming(res);
   try {
-    const source = await getCopySource(req, req.params.planId);
+    const source = await timing.measure("access", () => getCopySource(req, req.params.planId));
     if (!source) return res.status(404).json({ error: "Program or template not found." });
     if (source.is_template && source.can_copy === false && !canAccessAllAthletes(req) && String(source.created_by_user_id) !== String(req.user.id)) {
       return res.status(403).json({ error: "This template cannot be copied." });
@@ -625,7 +628,7 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     // workspace B. A plain program/template duplicate (plan_type !==
     // "weekly") never needs one at all.
     const planOwner = source.plan_type === "weekly" ? weeklyPlanOwnerScope.ownerContext : null;
-    client = await pool.connect();
+    client = await timing.measure("pool", () => pool.connect());
     await client.query("begin");
 
     if (intent === "assign") {
@@ -666,7 +669,8 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
         await client.query("commit");
         client.release();
         client = null;
-        return res.status(201).json({ ...(await buildDraft(await getEditablePlan(req, replay.planId))), assignments: replay.assignments });
+        res.status(201);
+        return timing.json({ ...(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, replay.planId)))), assignments: replay.assignments });
       }
       if (!claimed) {
         await client.query("rollback");
@@ -709,12 +713,14 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
         [source.plan_type, req.user.id, target?.id || null, planName, source.note, source.icon_url, source.color, isTemplate, status, source.start_date, source.duration_days, targetWeekStart, batchId, Boolean(source.track_training_load_default), Boolean(source.request_rpe_default)],
       );
       createdIds.push(created.rows[0].id);
-      if (source.plan_type === "weekly") {
-        await copyWeeklyPlanTree(client, source.id, created.rows[0].id, targetWeekStart);
-        await insertPlanOwnershipSnapshot(client, created.rows[0].id, planOwner);
-      } else {
-        await copyProgramTree(client, source.id, created.rows[0].id);
-      }
+      await timing.measure("copy", async () => {
+        if (source.plan_type === "weekly") {
+          await copyWeeklyPlanTree(client, source.id, created.rows[0].id, targetWeekStart);
+          await insertPlanOwnershipSnapshot(client, created.rows[0].id, planOwner);
+        } else {
+          await copyProgramTree(client, source.id, created.rows[0].id);
+        }
+      });
       // target is never null here - intent === "assign" already required at
       // least one real athlete target above, so this loop only ever
       // produces real, athlete-owned rows when it's populating this list.
@@ -755,7 +761,8 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     client.release();
     client = null;
     emitPlanAssignedRealtime(notifiedUserIds);
-    res.status(201).json({ ...(await buildDraft(await getEditablePlan(req, createdIds[0]))), assignments });
+    res.status(201);
+    timing.json({ ...(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, createdIds[0])))), assignments });
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -767,15 +774,16 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
 
 router.post("/plans/:planId/edit", async (req, res, next) => {
   let client;
+  const timing = createBuilderTiming(res);
   try {
-    const plan = await getEditablePlan(req, req.params.planId);
+    const plan = await timing.measure("access", () => getEditablePlan(req, req.params.planId));
     if (!plan) return res.status(404).json({ error: "Program not found or not editable." });
-    if (plan.is_edit_draft) return res.json(await buildDraft(plan));
+    if (plan.is_edit_draft) return timing.json(await timing.measure("response", () => buildDraft(plan)));
     if (plan.status === "draft" && plan.source_type === "builder" && !plan.edit_source_plan_id) {
-      return res.json(await buildDraft(plan));
+      return timing.json(await timing.measure("response", () => buildDraft(plan)));
     }
 
-    const existingDraft = await query(
+    const existingDraft = await timing.measure("lookup", () => query(
       `select id
        from plans.plans
        where edit_source_plan_id = $1
@@ -784,12 +792,12 @@ router.post("/plans/:planId/edit", async (req, res, next) => {
        order by updated_at desc
        limit 1`,
       [plan.id, req.user.id],
-    );
+    ));
     if (existingDraft.rows[0]) {
-      return res.json(await buildDraft(await getEditablePlan(req, existingDraft.rows[0].id)));
+      return timing.json(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, existingDraft.rows[0].id))));
     }
 
-    client = await pool.connect();
+    client = await timing.measure("pool", () => pool.connect());
     await client.query("begin");
     const created = await client.query(
       // Training Activity Integration 2A: track_training_load_default/
@@ -818,21 +826,23 @@ router.post("/plans/:planId/edit", async (req, res, next) => {
     // session the coach is about to edit, not a new one - see
     // copyDaySessions' own comment on why that distinction matters for
     // training_load.session_feedback's stable identity.
-    if (plan.plan_type === "weekly") {
-      await copyWeeklyPlanTree(client, plan.id, created.rows[0].id, plan.week_start, { preserveLogicalId: true });
-      // The edit-draft represents the EXACT same real plan mid-edit, not
-      // a new one - its own ownership snapshot is copied verbatim from
-      // the source (see this file's own header comment on
-      // training_load.plan_workspace_ownership), never re-resolved from
-      // whatever workspace the editing coach happens to be in right now.
-      await copyPlanOwnershipSnapshot(client, plan.id, created.rows[0].id);
-    } else {
-      await copyProgramTree(client, plan.id, created.rows[0].id);
-    }
+    await timing.measure("copy", async () => {
+      if (plan.plan_type === "weekly") {
+        await copyWeeklyPlanTree(client, plan.id, created.rows[0].id, plan.week_start, { preserveLogicalId: true });
+        // The edit-draft represents the EXACT same real plan mid-edit, not
+        // a new one - its own ownership snapshot is copied verbatim from
+        // the source (see this file's own header comment on
+        // training_load.plan_workspace_ownership), never re-resolved from
+        // whatever workspace the editing coach happens to be in right now.
+        await copyPlanOwnershipSnapshot(client, plan.id, created.rows[0].id);
+      } else {
+        await copyProgramTree(client, plan.id, created.rows[0].id);
+      }
+    });
     await client.query("commit");
     client.release();
     client = null;
-    res.json(await buildDraft(await getEditablePlan(req, created.rows[0].id)));
+    timing.json(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, created.rows[0].id))));
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -1608,6 +1618,24 @@ router.delete("/items/:itemId", async (req, res, next) => {
     return respondWithDraft(req, res, req.user, item.plan);
   } catch (error) { next(error); }
 });
+
+async function buildSubmitResponse(req, plan) {
+  // Save exits Builder; Assign and older clients still need the complete tree.
+  if (req.body?.responseMode !== "summary") return buildDraft(plan);
+  return {
+    saved: true,
+    plan: {
+      id: plan.id,
+      planType: plan.plan_type,
+      weekStart: plan.week_start || "",
+      name: plan.name,
+      isTemplate: plan.is_template,
+      athleteId: plan.athlete_source_external_id || plan.athlete_id || "",
+      status: plan.status,
+      isEditDraft: Boolean(plan.is_edit_draft),
+    },
+  };
+}
 
 async function buildDraft(plan) {
   const result = await query(
