@@ -1350,10 +1350,12 @@ test("B7.8 static architecture guard: no consumer outside the adapter and the ma
   const supersedeBlock = svc.slice(svc.indexOf("const superseded = (await client.query("), svc.indexOf("const projected = projectStoredDetails(row.raw_bundle);") + 300);
   assert.equal((supersedeBlock.match(/status = 'superseded'/g) || []).length, 2, "the supersede projection selects and writes superseded rows only");
   const retentionBlock = svc.slice(svc.indexOf("export async function projectUnimportedSnapshots"), svc.indexOf("export const RETENTION_INTERVAL_HOURS"));
-  assert.equal((retentionBlock.match(/status in \('pending', 'blocked', 'superseded'\)/g) || []).length, 2, "the retention projection selects and writes unimported rows only");
+  assert.equal((retentionBlock.match(/status in \('pending', 'blocked', 'superseded'\)/g) || []).length, 3, "the retention projection lists, locks and writes unimported rows only");
   assert.doesNotMatch(supersedeBlock + retentionBlock, /'imported'/, "no projection names the imported status");
-  assert.match(retentionBlock, /and raw_bundle = \$3::jsonb/, "the retention write is conditional on the snapshot it read");
-  assert.match(retentionBlock, /for update skip locked/, "the retention write never waits on a row another session holds");
+  assert.match(retentionBlock, /for update skip locked/, "the retention projection locks the row it reads and never waits on a row another session holds");
+  assert.match(retentionBlock, /set local statement_timeout/, "a database-level statement bound per row");
+  assert.match(retentionBlock, /set local idle_in_transaction_session_timeout/, "an abandoned row transaction is ended by the server");
+  assert.doesNotMatch(retentionBlock, /select id, raw_bundle/, "no statement reads a page of snapshots");
   // The docs do not claim a removed validator, and they say what bundle_hash is after a projection.
   const compat = await fsp.readFile(path.resolve(ROOT, "docs/ai/gpexe-rest-v1-compatibility.md"), "utf8");
   assert.doesNotMatch(compat, /drill answers keep `validatePlayersAnswer/);

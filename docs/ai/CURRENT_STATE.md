@@ -1333,7 +1333,16 @@ Technical details.
   2026-10-09): a superseded one in the transaction that supersedes it, and every pending / blocked /
   superseded one by each retention run (every check, the server's 6-hour schedule, the CLI), with a write
   conditional on the snapshot it read - so the pending 05.10 candidate is projected by the first retention
-  run after the deploy, whether or not the next check succeeds. The only copy is
+  run after the deploy, whether or not the next check succeeds. The retention projection step is bounded
+  in time (owner's external review of `5bd4ee0` and the narrow reviews after it): every row its own
+  short transaction (one snapshot read with `FOR UPDATE SKIP LOCKED`, at most one row lock held) with
+  `SET LOCAL statement_timeout` 2 s, `lock_timeout` 1 s and `idle_in_transaction_session_timeout` 5 s,
+  ids listed from a cursor kept across runs (each id page its own short transaction with the same
+  `statement_timeout` / `lock_timeout`), every await limited by the time left in a 10 s budget -
+  reaching the budget is a clean stop that records no error, the rest goes to the next run -, a
+  bounded COMMIT (5 s) and ROLLBACK (2 s) with the connection closed on no answer and no retry in that
+  run - at most about 15 s per run; failures carry a stable code only and keep the purge count and an
+  earlier step's error. The only copy is
   `gpexe_import_candidates.raw_bundle`, no route returns it, the preview holds only the mapper's values, a
   superseded candidate cannot be approved, and an imported candidate is never touched (none exists on the
   deployed database); the row's identity, content hash and preview hash stay - `bundle_hash` is the

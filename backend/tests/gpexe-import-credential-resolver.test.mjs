@@ -1616,9 +1616,12 @@ test("22. a superseded candidate keeps no unconsumed metric: a pending candidate
     // own retention run, so that run cannot project what is injected now.
     src.state.bundle.teamSession.updated_on = "2026-09-14T23:00:00";
     src.state.gates.list = gate();
+    // Only a list request of THIS check counts (the first check's are already recorded): it is sent after
+    // this check's retention run has finished.
+    const callsBefore = src.calls.length;
     const started = await startCheck(o, o.cadmin.cookie);
     assert.equal(started.status, 202, JSON.stringify(started.body));
-    await waitFor(() => src.calls.some((c) => c.key.includes("/team_session/?team=")));
+    await waitFor(() => src.calls.slice(callsBefore).some((c) => c.key.includes("/team_session/?team=")));
     // (3) A snapshot as a read stored it before the projections: the third metric in drill 0 and in the whole session.
     const old = structuredClone(a.raw_bundle);
     for (const id of Object.keys(old.details.drills["0"].players)) old.details.drills["0"].players[id][MARKER] = { k1: null, k2: 24680.1357, k3: MARKER_TEXT };
@@ -1762,6 +1765,139 @@ test("25. a failure of the snapshot projection step keeps the retention run's pu
   assert.deepEqual([Number.isInteger(last.purged_count), last.error_message], [true, null]);
 });
 
+// A pending candidate whose stored snapshot holds an unconsumed metric (as stored before the
+// projections), for the bounded-projection tests below.
+async function pendingWithMarker(marker) {
+  const o = await org();
+  useSource();
+  await bound(o);
+  process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+  legacyTrap();
+  src.serve(o.sourceTeamId);
+  const view = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+  assert.equal(view.status, "succeeded", JSON.stringify(view.error));
+  const [row] = await q(`select id, raw_bundle from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]);
+  const old = structuredClone(row.raw_bundle);
+  for (const id of Object.keys(old.details.full.players)) old.details.full.players[id][marker] = { k1: `${marker} text` };
+  await q(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [row.id, old]);
+  return { o, row };
+}
+const holdsMarker = async (rowId, marker) => JSON.stringify((await q(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [rowId]))[0].raw_bundle).includes(marker);
+const raceWith = (promise, ms) => Promise.race([promise.then((v) => ({ v }), (e) => ({ e })), new Promise((r) => setTimeout(() => r("timeout"), ms))]);
+const lastRun = async () => (await q(`select purged_count, error_message, finished_at from training_load.gpexe_retention_runs order by started_at desc limit 1`))[0];
+const openTransactions = async () => (await q(`select count(*)::int as n from pg_stat_activity where datname = current_database() and state like 'idle in transaction%' and pid <> pg_backend_pid()`))[0].n;
+
+test("26. a held projection statement ends by the database's statement_timeout within its bound: the server cancels it (no backend keeps running it), the client and its transaction are released, the run keeps purged_count and an earlier step's error, the log carries a stable code only, and the next run projects normally", async () => {
+  const MARKER = "markerHeldStatementZq";
+  const { row } = await pendingWithMarker(MARKER);
+  const logBefore = logLines.length;
+  importer.setProjectionBoundsForTests({ statementTimeoutMs: 300, clientMarginMs: 3000, rollbackBoundMs: 2000 }, { statementFault: (client) => client.query("select pg_sleep(5) /* projection-held-zq */") });
+  try {
+    const started = Date.now();
+    const outcome = await raceWith(importer.runRetention("cli"), 4500);
+    assert.notEqual(outcome, "timeout", "the run did not hang");
+    assert.equal(outcome.e?.code, "projection_timeout", JSON.stringify(outcome.e));
+    assert.ok(Date.now() - started < 3000, `ended by the database bound (${Date.now() - started} ms)`);
+    const still = (await q(`select count(*)::int as n from pg_stat_activity where state = 'active' and query like '%projection-held-zq%' and pid <> pg_backend_pid()`))[0].n;
+    assert.equal(still, 0, "the server cancelled the statement: no backend still runs it");
+    assert.equal(await openTransactions(), 0, "no transaction left open");
+    const run = await lastRun();
+    assert.ok(Number.isInteger(run.purged_count), JSON.stringify(run));
+    assert.equal(run.error_message, "The snapshot projection step ran out of time; the next retention run continues it.");
+    assert.ok(await holdsMarker(row.id, MARKER), "nothing was written by the timed-out batch");
+    const lines = logLines.slice(logBefore);
+    assert.ok(lines.some((l) => l.includes("retention projection step failed: projection_timeout")), lines.join("\n"));
+    for (const l of lines) for (const leak of [MARKER, row.id, "raw_bundle", "tot_burst_events"]) assert.ok(!l.includes(leak), `${leak} in a log line: ${l.slice(0, 160)}`);
+    // An earlier step's error is never hidden by the projection's.
+    importer.setIdentityPurgeFaultForTests(() => { throw new Error("identity purge failed (test)"); });
+    const both = await raceWith(importer.runRetention("cli"), 4500);
+    assert.equal(both.e?.message, "identity purge failed (test)");
+    const run2 = await lastRun();
+    assert.deepEqual([Number.isInteger(run2.purged_count), run2.error_message], [true, "identity purge failed (test)"]);
+  } finally {
+    importer.setIdentityPurgeFaultForTests(null);
+    importer.setProjectionBoundsForTests(null);
+  }
+  const next = await importer.runRetention("cli");
+  assert.ok(next.projected >= 1, JSON.stringify(next));
+  assert.equal(await holdsMarker(row.id, MARKER), false, "the next run projected it");
+  assert.equal(await openTransactions(), 0);
+});
+
+test("27. a ROLLBACK that does not answer is bounded: the batch's client is destroyed (never reused), the run ends within the rollback bound with a stable code, and the next run works", async () => {
+  const MARKER = "markerHeldRollbackZq";
+  const { row } = await pendingWithMarker(MARKER);
+  const clients = [];
+  importer.setProjectionBoundsForTests({ rollbackBoundMs: 400 }, {
+    statementFault: () => { throw Object.assign(new Error("statement failed (test)"), { code: "XX000" }); },
+    rollbackFault: () => new Promise(() => {}),
+    clientObserver: (client) => clients.push(client),
+  });
+  try {
+    const started = Date.now();
+    const outcome = await raceWith(importer.runRetention("cli"), 4000);
+    assert.notEqual(outcome, "timeout", "the run did not wait on the ROLLBACK");
+    assert.equal(outcome.e?.code, "projection_failed", JSON.stringify(outcome.e));
+    assert.ok(Date.now() - started < 2500, `bounded (${Date.now() - started} ms)`);
+    assert.equal(clients.length, 1);
+    assert.equal(clients[0]._ending, true, "the client whose ROLLBACK did not answer was destroyed");
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+  const next = await importer.runRetention("cli");
+  assert.ok(next.projected >= 1, JSON.stringify(next));
+  assert.equal(await holdsMarker(row.id, MARKER), false);
+});
+
+test("28. a COMMIT that does not answer is bounded: the client is destroyed and never awaited again, the step stops (no UPDATE is sent again in that run), the run reports projection_commit_unknown within the bound, and the next run's conditional write projects the row exactly once", async () => {
+  const MARKER = "markerHeldCommitZq";
+  const { row } = await pendingWithMarker(MARKER);
+  const clients = [];
+  let updates = 0;
+  // Only a transaction that wrote gets the COMMIT that never answers.
+  importer.setProjectionBoundsForTests({ commitBoundMs: 400 }, {
+    commitFault: (client) => (client.sentUpdateZq ? new Promise(() => {}) : client.query("commit")),
+    clientObserver: (client) => {
+      // A pooled client serves several rows: the flag is per checkout, the wrapper installed once.
+      client.sentUpdateZq = false;
+      clients.push({ client, checkout: clients.length });
+      if (client.wrappedZq) return;
+      client.wrappedZq = true;
+      const original = client.query.bind(client);
+      client.query = (text, ...rest) => {
+        if (typeof text === "string" && text.includes("update training_load.gpexe_import_candidates set raw_bundle")) { updates += 1; client.sentUpdateZq = true; }
+        return original(text, ...rest);
+      };
+    },
+  });
+  try {
+    const started = Date.now();
+    const outcome = await raceWith(importer.runRetention("cli"), 4000);
+    assert.notEqual(outcome, "timeout", "the run did not wait on the COMMIT");
+    assert.equal(outcome.e?.code, "projection_commit_unknown", JSON.stringify(outcome.e));
+    assert.ok(Date.now() - started < 2500, `bounded (${Date.now() - started} ms)`);
+    assert.equal(updates, 1, "exactly one transaction wrote");
+    const last = clients[clients.length - 1].client;
+    assert.equal(last.sentUpdateZq, true, "no further row was started after the unknown COMMIT");
+    assert.equal(last._ending, true, "the client with the unanswered COMMIT was destroyed");
+    assert.ok(updates >= 1);
+    const sentInRun = updates;
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(updates, sentInRun, "no UPDATE was sent again");
+    const run = await lastRun();
+    assert.equal(run.error_message, "The snapshot projection step could not confirm its last write; the next retention run continues it.");
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+  // The COMMIT was never sent here, so the server ended the transaction with the client: the next run projects it.
+  for (let i = 0; i < 80 && (await openTransactions()) !== 0; i += 1) await new Promise((r) => setTimeout(r, 25));
+  assert.equal(await openTransactions(), 0, "the server ended the transaction of the destroyed client");
+  const next = await importer.runRetention("cli");
+  assert.ok(next.projected >= 1, JSON.stringify(next));
+  assert.equal(await holdsMarker(row.id, MARKER), false);
+  assert.equal((await importer.runRetention("cli")).projected, 0, "idempotent");
+});
+
 test("21. option (c): the window is picked out of the whole team list - five sessions after the period and one of the look-back day are left out and only the window's session becomes a candidate (no bundle read for the others); a start that cannot be read or an unstable X-Total-Count fails the check with its own code, writes no candidate and reads no bundle; no date bound is ever sent", async () => {
   const o = await org();
   useSource();
@@ -1806,4 +1942,175 @@ test("10. this suite runs on a disposable database only; every console line, che
   for (const r of await q(`select to_jsonb(c) - 'raw_bundle' as j, raw_bundle::text as raw from training_load.gpexe_import_candidates c`)) { noSecret(JSON.stringify(r.j), "a candidate row"); noSecret(r.raw, "a raw bundle"); }
   for (const r of await q(`select to_jsonb(c) - 'credential_ciphertext' - 'credential_nonce' - 'credential_auth_tag' as j from training_load.source_credential_connections c`)) noSecret(JSON.stringify(r.j), "a connection row");
   for (const r of await q(`select to_jsonb(a) as j from training_load.source_connection_audit a`)) noSecret(JSON.stringify(r.j), "an audit row");
+});
+
+test("29. the projection reads one snapshot per statement and keeps progress across runs: no statement returns more than one raw_bundle, every pending snapshot is projected, and a run stopped by its budget continues where it stopped in the next run", async () => {
+  const MARKER = "markerPerRowZq";
+  const seeded = [await pendingWithMarker(MARKER), await pendingWithMarker(MARKER), await pendingWithMarker(MARKER)];
+  let maxSnapshotsPerStatement = 0;
+  importer.setProjectionBoundsForTests(null, {
+    clientObserver: (client) => {
+      const original = client.query.bind(client);
+      client.query = async (text, ...rest) => {
+        const result = await original(text, ...rest);
+        if (typeof text === "string" && /select[\s\S]*raw_bundle[\s\S]*from/i.test(text)) maxSnapshotsPerStatement = Math.max(maxSnapshotsPerStatement, result.rows.length);
+        return result;
+      };
+    },
+  });
+  try {
+    await importer.runRetention("cli");
+    assert.equal(maxSnapshotsPerStatement, 1, "one snapshot per statement");
+    for (const { row } of seeded) assert.equal(await holdsMarker(row.id, MARKER), false, "projected");
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+  // Progress: every row's transaction is slow (220 ms before its read) and a run's budget is 400 ms, so a
+  // run completes one row and runs out of time in the next one. The cursor makes the next run continue
+  // after the completed row; without it every run would redo the first row and never reach the rest.
+  const more = [await pendingWithMarker(`${MARKER}2`), await pendingWithMarker(`${MARKER}2`)];
+  const backlog = (await q(`select count(*)::int as n from training_load.gpexe_import_candidates where raw_bundle is not null and status in ('pending', 'blocked', 'superseded')`))[0].n;
+  const slow = { statementFault: async () => { await new Promise((r) => setTimeout(r, 220)); } };
+  importer.setProjectionBoundsForTests({ runBudgetMs: 400 }, slow);
+  let runs = 0;
+  try {
+    while (runs < backlog + 5 && (await Promise.all(more.map(({ row }) => holdsMarker(row.id, `${MARKER}2`)))).some(Boolean)) {
+      runs += 1;
+      await importer.runRetention("cli").catch(() => {});
+      importer.setProjectionBoundsForTests({ runBudgetMs: 400 }, { ...slow, resetCursor: false });
+    }
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+  for (const { row } of more) assert.equal(await holdsMarker(row.id, `${MARKER}2`), false, `every row was reached (${runs} runs, backlog ${backlog})`);
+});
+
+test("30. a client that vanishes after its COMMIT was not answered does not keep the row locked: the server ends the abandoned transaction by idle_in_transaction_session_timeout, the row is free again, and the next run projects it", async () => {
+  const MARKER = "markerVanishedClientZq";
+  const { row } = await pendingWithMarker(MARKER);
+  importer.setProjectionBoundsForTests({ commitBoundMs: 200, idleInTransactionMs: 500 }, {
+    commitFault: (client) => (client.sentUpdateZq ? new Promise(() => {}) : client.query("commit")),
+    clientObserver: (client) => {
+      client.sentUpdateZq = false;
+      if (client.wrappedVanishZq) return;
+      client.wrappedVanishZq = true;
+      const original = client.query.bind(client);
+      client.query = (text, ...rest) => {
+        if (typeof text === "string" && text.includes("update training_load.gpexe_import_candidates set raw_bundle")) {
+          client.sentUpdateZq = true;
+          // A stalled network: closing this client never reaches the server.
+          client.end = () => Promise.resolve();
+        }
+        return original(text, ...rest);
+      };
+    },
+  });
+  try {
+    const outcome = await raceWith(importer.runRetention("cli"), 4000);
+    assert.equal(outcome.e?.code, "projection_commit_unknown", JSON.stringify(outcome.e));
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+  for (let i = 0; i < 120 && (await openTransactions()) !== 0; i += 1) await new Promise((r) => setTimeout(r, 25));
+  assert.equal(await openTransactions(), 0, "the server ended the abandoned transaction");
+  const locked = await q(`select id from training_load.gpexe_import_candidates where id = $1 for update skip locked`, [row.id]);
+  assert.equal(locked.length, 1, "the row is free again");
+  const next = await importer.runRetention("cli");
+  assert.ok(next.projected >= 1, JSON.stringify(next));
+  assert.equal(await holdsMarker(row.id, MARKER), false);
+});
+
+test("31. the projection step ends within its budget plus one COMMIT or ROLLBACK bound, even when every statement of a row is slow: no await outlives the time left in the run", async () => {
+  await pendingWithMarker("markerDeadlineZq");
+  importer.setProjectionBoundsForTests({ runBudgetMs: 300, commitBoundMs: 200, rollbackBoundMs: 200 }, {
+    clientObserver: (client) => {
+      const original = client.query.bind(client);
+      client.query = async (text, ...rest) => {
+        if (typeof text === "string" && /^(begin|set local)/.test(text)) await new Promise((r) => setTimeout(r, 1500));
+        return original(text, ...rest);
+      };
+    },
+  });
+  try {
+    const started = Date.now();
+    await importer.runRetention("cli").catch(() => {});
+    const projectionStep = Date.now() - started;
+    assert.ok(projectionStep < 300 + 200 + 1000, `the run took ${projectionStep} ms`);
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+});
+
+test("32. a connection checkout that times out in the projection step is recorded with the stable code and sentence, and the run keeps its purge count", async () => {
+  importer.setProjectionBoundsForTests(null, { connectFault: () => Promise.reject(Object.assign(new Error("timeout exceeded when trying to connect"), { code: "pool_checkout_timeout" })) });
+  try {
+    const error = await importer.runRetention("cli").then(() => null, (e) => e);
+    assert.equal(error?.code, "projection_timeout");
+    const run = await lastRun();
+    assert.deepEqual([Number.isInteger(run.purged_count), run.error_message], [true, "The snapshot projection step ran out of time; the next retention run continues it."]);
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+});
+
+test("33. reaching the run's budget is a clean stop, not a failed run: a backlog larger than one run's budget is split across runs, every run resolves and records no error, and the runs together project every row", async () => {
+  const MARKER = "markerBudgetStopZq";
+  const seeded = [await pendingWithMarker(MARKER), await pendingWithMarker(MARKER), await pendingWithMarker(MARKER)];
+  const backlog = (await q(`select count(*)::int as n from training_load.gpexe_import_candidates where raw_bundle is not null and status in ('pending', 'blocked', 'superseded')`))[0].n;
+  // Every row takes 220 ms before its read, a run may take 400 ms: each run completes one row and reaches
+  // its budget inside the next one.
+  const slow = { statementFault: async () => { await new Promise((r) => setTimeout(r, 220)); } };
+  importer.setProjectionBoundsForTests({ runBudgetMs: 400 }, slow);
+  let runs = 0;
+  try {
+    while (runs < backlog + 5 && (await Promise.all(seeded.map(({ row }) => holdsMarker(row.id, MARKER)))).some(Boolean)) {
+      runs += 1;
+      const result = await importer.runRetention("cli");
+      assert.ok(Number.isInteger(result.projected), JSON.stringify(result));
+      const run = await lastRun();
+      assert.equal(run.error_message, null, `run ${runs} recorded no error`);
+      assert.ok(run.finished_at, "the run finished");
+      importer.setProjectionBoundsForTests({ runBudgetMs: 400 }, { ...slow, resetCursor: false });
+    }
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+  assert.ok(runs >= 2, `the backlog needed more than one run (${runs})`);
+  for (const { row } of seeded) assert.equal(await holdsMarker(row.id, MARKER), false, `projected (${runs} runs, backlog ${backlog})`);
+});
+
+test("34. the id page read has its own server-side bounds: behind a table lock it is ended by the server's lock_timeout, and a held statement in it by the server's statement_timeout - no backend keeps waiting or running, the step reports projection_timeout within its bound, and the next run works", async () => {
+  await pendingWithMarker("markerPageReadZq");
+  // (a) a table lock held by another session: the page read waits only lock_timeout.
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await holder.query("lock table training_load.gpexe_import_candidates in access exclusive mode");
+    importer.setProjectionBoundsForTests({ lockTimeoutMs: 300 });
+    const started = Date.now();
+    const outcome = await raceWith(importer.projectUnimportedSnapshots(), 6000);
+    assert.equal(outcome.e?.code, "projection_timeout", JSON.stringify(outcome));
+    assert.ok(Date.now() - started < 1500, `ended by the server's lock_timeout (${Date.now() - started} ms)`);
+    const waiting = (await q(`select count(*)::int as n from pg_stat_activity where query like 'select id from training_load.gpexe_import_candidates%' and state = 'active' and pid <> pg_backend_pid()`))[0].n;
+    assert.equal(waiting, 0, "no backend keeps waiting on the lock");
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end();
+    importer.setProjectionBoundsForTests(null);
+  }
+  // (b) a statement held inside the page transaction: the server cancels it by statement_timeout.
+  importer.setProjectionBoundsForTests({ statementTimeoutMs: 300 }, { pageFault: (client) => client.query("select pg_sleep(5) /* page-held-zq */") });
+  try {
+    const started = Date.now();
+    const outcome = await raceWith(importer.projectUnimportedSnapshots(), 6000);
+    assert.equal(outcome.e?.code, "projection_timeout", JSON.stringify(outcome));
+    assert.ok(Date.now() - started < 1500, `bounded (${Date.now() - started} ms)`);
+    const running = (await q(`select count(*)::int as n from pg_stat_activity where query like '%page-held-zq%' and state = 'active' and pid <> pg_backend_pid() and query not like '%pg_stat_activity%'`))[0].n;
+    assert.equal(running, 0, "the server cancelled the held statement");
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+  const next = await importer.projectUnimportedSnapshots();
+  assert.ok(Number.isInteger(next), "the next run works");
 });
