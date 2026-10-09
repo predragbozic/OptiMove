@@ -699,7 +699,7 @@ test("B7.1 the one-day look-back on the whole list: a drill row inside the windo
   assert.deepEqual([idsOf(j), j.lookBackParentsLeftOut, j.otherParentsLeftOut], [["2"], 1, 1]);
 });
 
-const { validatePlayersAnswer } = await import("../src/gpexeRestV1Adapter.js");
+const { projectSessionDetails: projectDetails } = await import("../src/gpexeRestV1Adapter.js");
 const fsp = (await import("node:fs/promises")).default;
 const path = (await import("node:path")).default;
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..", "..");
@@ -717,14 +717,14 @@ test("B7.2 an empty players map is a valid answer (a drill not yet computed): th
     const s = await b.getSessionDrills({ sessionId: "100" });
     assert.equal(s.complete, false, label);
     assert.deepEqual(s.failed, { drillIndex: 1, code: "source_answer_unexpected" }, label);
-    assert.throws(() => validatePlayersAnswer(body, "x"), code("source_answer_unexpected"), label);
+    assert.throws(() => projectDetails(body, null, { what: "x" }), code("source_answer_unexpected"), label);
   }
   // The prototype-named metrics are refused; a details drill count that disagrees with the confirmed one is refused.
   for (const metric of ["__proto__", "constructor", "prototype"]) {
-    assert.throws(() => validatePlayersAnswer({ players: { 4711: JSON.parse(`{"${metric}": 1}`) } }, "x"), code("source_answer_unexpected"), metric);
+    assert.throws(() => projectDetails({ players: { 4711: JSON.parse(`{"${metric}": 1}`) } }, null, { what: "x" }), code("source_answer_unexpected"), metric);
   }
-  assert.throws(() => validatePlayersAnswer({ players: { 4711: { a: 1 } }, drills_count: 3 }, "x", 2), code("source_answer_unexpected"));
-  assert.deepEqual(validatePlayersAnswer({ players: { 4711: { a: 1 } }, drills_count: 2 }, "x", 2), { players: { 4711: { a: 1 } }, drills_count: 2 });
+  assert.throws(() => projectDetails({ players: { 4711: { a: 1 } }, drills_count: 3 }, 2, { what: "x" }), code("source_answer_unexpected"));
+  assert.deepEqual(projectDetails({ players: { 4711: { a: 1 } }, drills_count: 2 }, 2, { what: "x" }), { players: { 4711: {} }, drills_count: 2 }, "an unconsumed metric is dropped");
 });
 
 test("B7.3 no retry by default: a 5xx and a network failure each cost exactly one request with the default adapter; a caller may ask for at most three attempts; and a programming error inside a drill read propagates instead of becoming a failed drill", async () => {
@@ -1155,72 +1155,21 @@ test("B8.9 last started wins, fail-closed: with two held lists, the older one fi
   await assert.rejects(b.getSession({ sessionId: "900" }), code("session_not_listed"));
 });
 
-const { describePlayersShape, formatPlayersShape, DETAILS_CONSUMED_FIELDS, DIAGNOSTIC_MARK } = await import("../src/gpexeRestV1Adapter.js");
+const { DETAILS_CONSUMED_FIELDS, DIAGNOSTIC_MARK } = await import("../src/gpexeRestV1Adapter.js");
 const { GPEXE_METRIC_SPECS } = await import("../src/gpexeImportMapper.js");
 
-test("B7.5 a refused players answer (F3c3 pilot follow-up): the acceptance rule is unchanged - the documented shape passes and every other shape still fails closed - and the refusal carries a bounded, sanitized description with no athlete id, no metric name but the two consumed ones, no value and no text", async () => {
+test("B7.5 the administrator's description of a refused details answer: fixed words only (the operation, a consumed field's constant name and kind, or the kind of a bad name), never an athlete id, another metric name, a value or a text; the full validator of 2026-10-05 is gone and nothing can call it", async () => {
   // The consumed fields are exactly the mapper's details fields.
   const mapperDetailsFields = GPEXE_METRIC_SPECS.map((s) => /^details\.players\[athlete\]\.(\w+)$/.exec(s.sourceContext?.field ?? "")?.[1]).filter(Boolean).sort();
   assert.deepEqual([...DETAILS_CONSUMED_FIELDS].sort(), mapperDetailsFields);
+  assert.equal(DIAGNOSTIC_MARK, " Diagnostic: ");
+  const mod = await import("../src/gpexeRestV1Adapter.js");
+  for (const gone of ["validatePlayersAnswer", "describePlayersShape", "formatPlayersShape"]) assert.equal(mod[gone], undefined, `${gone} is not exported any more`);
 
-  // Unchanged acceptance: the documented e03 shape and the existing flat forms pass.
-  const accepted = { 4711: { tot_burst_events: { unit: "number", value: 3 }, tot_brake_events: { unit: "number", value: 1 }, total_distance: 1200.5, flag: true, none: null, unit_only: "km/h" } };
-  assert.deepEqual(validatePlayersAnswer({ players: accepted, drills_count: 2 }, "the whole-session details", 2).players, accepted);
-
-  // Marker values that must never appear in an error.
+  // Marker values that must never appear in a description.
   const ID = "987654321";
   const SECRET_NAME = "markerMetricNameZq";
-  const SECRET_TEXT = "Marker Athlete Name in a free text";
   const SECRET_NUMBER = 13579.2468;
-  const deep = (n) => (n === 0 ? SECRET_NUMBER : { [`${SECRET_NAME}${n}`]: deep(n - 1) });
-  const wide = Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`${SECRET_NAME}${i}`, i]));
-  const refused = [
-    ["a list", { [SECRET_NAME]: [SECRET_NUMBER, 2, 3] }, "array"],
-    ["a nested object", { [SECRET_NAME]: { inner: { v: SECRET_NUMBER } } }, "object"],
-    ["deep nesting", { [SECRET_NAME]: deep(40) }, "object"],
-    ["an object over 32 keys", { [SECRET_NAME]: wide }, "object_wide"],
-    ["a long text", { [SECRET_NAME]: SECRET_TEXT }, "text_long"],
-    ["a non-finite number", { [SECRET_NAME]: Infinity }, "number_not_finite"],
-    ["a nested non-finite number", { [SECRET_NAME]: { value: -Infinity } }, "object"],
-  ];
-  for (const [label, values, kind] of refused) {
-    const body = { players: { [ID]: values }, drills_count: 2 };
-    const error = (() => { try { validatePlayersAnswer(body, "the whole-session details", 2); return null; } catch (e) { return e; } })();
-    assert.ok(error instanceof SourceAdapterError, label);
-    assert.deepEqual([error.code, error.reason], ["source_answer_unexpected", "metric_shape_unknown"], label);
-    assert.ok(error.message.startsWith("The source answer to the whole-session details carries a metric value in an unknown shape." + DIAGNOSTIC_MARK + "op=session_details;"), label);
-    assert.ok(error.diagnostic.failing.kinds.includes(kind), `${label}: ${JSON.stringify(error.diagnostic.failing.kinds)}`);
-    const all = JSON.stringify({ message: error.message, diagnostic: error.diagnostic });
-    for (const leak of [ID, SECRET_NAME, "Marker Athlete Name", String(SECRET_NUMBER), "13579", "inner"]) assert.ok(!all.includes(leak), `${label}: ${leak} leaked`);
-    noNames({ message: error.message, diagnostic: error.diagnostic });
-  }
-  // Prototype keys and bad metric names still fail; only booleans describe them.
-  for (const [metric, flag] of [["__proto__", "prototypeKey"], ["constructor", "prototypeKey"], ["prototype", "prototypeKey"], [`${SECRET_NAME} with spaces`, "otherChars"], ["x".repeat(65), "tooLong"]]) {
-    const body = JSON.parse(`{"players":{"${ID}":{"${metric}":1}}}`);
-    const error = (() => { try { validatePlayersAnswer(body, "the drill details"); return null; } catch (e) { return e; } })();
-    assert.equal(error?.reason, "metric_shape_unknown", metric);
-    assert.equal(error.diagnostic.operation, "session_drill_details");
-    assert.equal(error.diagnostic.names[flag], true, metric);
-    assert.ok(!JSON.stringify(error.diagnostic).includes(SECRET_NAME) && !error.message.includes(SECRET_NAME) && !error.message.includes(ID), metric);
-  }
-
-  // The consumed fields are described by kind and by comparison with the documented shape only.
-  const mixed = { players: { 1: { tot_burst_events: 4, tot_brake_events: { unit: "number", value: 2 }, [SECRET_NAME]: [1, 2] }, 2: { tot_burst_events: { unit: "number", value: 5 }, tot_brake_events: { unit: "count", value: "x" } } } };
-  const d = describePlayersShape(mixed.players, "the whole-session details");
-  assert.deepEqual(d.consumed.tot_burst_events, { present: "all", kinds: ["number", "object"], unitNumber: "all", valueFinite: "all", onlyUnitValue: "all" });
-  assert.deepEqual(d.consumed.tot_brake_events, { present: "all", kinds: ["object"], unitNumber: "some", valueFinite: "some", onlyUnitValue: "all" });
-  assert.equal(d.consumedFieldFailing, false, "both consumed fields pass the unchanged rule; only the other metric fails");
-  assert.deepEqual([d.failingMetrics, d.failing.kinds, d.failing.arrayLengths, d.failing.arrayItemKinds], ["1", ["array"], ["2-4"], ["number"]]);
-  assert.ok(!formatPlayersShape(d).includes("count"), "a unit other than the documented one is never printed, only compared");
-
-  // Bounded: a very large answer is described quickly, with capped buckets and a capped message.
-  const many = {};
-  for (let i = 1; i <= 700; i += 1) many[String(i)] = { [SECRET_NAME]: Array.from({ length: 5000 }, (_, k) => ({ k: [k, { deeper: { deepest: [k] } }] })) };
-  const started = Date.now();
-  const big = (() => { try { validatePlayersAnswer({ players: many }, "the whole-session details"); return null; } catch (e) { return e; } })();
-  assert.ok(Date.now() - started < 2000, "described within a bound");
-  assert.deepEqual([big.diagnostic.players, big.diagnostic.failing.arrayLengths, big.diagnostic.failing.depths], ["65+", ["65+"], ["4+"]]);
-  assert.ok(big.message.length <= "The source answer to the whole-session details carries a metric value in an unknown shape.".length + DIAGNOSTIC_MARK.length + 900);
 
   // Through the adapter: since the projections (B7.6; drills since 2026-10-09) an unconsumed metric
   // refuses neither read - it is dropped; a consumed field in an unknown shape still refuses a drill,
@@ -1243,20 +1192,6 @@ test("B7.5 a refused players answer (F3c3 pilot follow-up): the acceptance rule 
   // Any other drill failure keeps its code alone.
   const { a: c } = await confirmedAdapter({ [D0]: answer(200, details({ [ID]: {} })) });
   assert.deepEqual((await c.getSessionDrills({ sessionId: "100" })).failed, { drillIndex: 0, code: "source_answer_unexpected" });
-
-  // A consumed field itself in an unknown shape is named as such.
-  const consumedBad = (() => { try { validatePlayersAnswer({ players: { 1: { tot_burst_events: [1], tot_brake_events: { unit: "number", value: 1 } } } }, "the whole-session details"); return null; } catch (e) { return e; } })();
-  assert.equal(consumedBad.diagnostic.consumedFieldFailing, true);
-  assert.deepEqual(consumedBad.diagnostic.consumed.tot_burst_events.kinds, ["array"]);
-  assert.match(consumedBad.message, /Diagnostic: op=session_details; consumed_failing=yes; tot_burst_events all array;/);
-
-  // The athlete cap is real: only the first 500 athletes are described (the 550th's consumed field is not seen).
-  const capped = {};
-  for (let i = 1; i <= 600; i += 1) capped[String(i)] = { [SECRET_NAME]: [1] };
-  capped["550"].tot_burst_events = { unit: "number", value: 1 };
-  const cappedError = (() => { try { validatePlayersAnswer({ players: capped }, "the whole-session details"); return null; } catch (e) { return e; } })();
-  assert.equal(cappedError.diagnostic.consumed.tot_burst_events.present, "none");
-  assert.equal(cappedError.diagnostic.players, "65+");
 
   // The capability catalog says what the probe proved for row 7: the status only.
   const { REST_V1_CAPABILITIES } = await import("../src/gpexeRestV1Adapter.js");
@@ -1322,6 +1257,35 @@ test("B7.6 the whole-session projection (op=session_details only): the container
   assert.deepEqual((await d.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 })).players, { 4711: { tot_burst_events: OK } }, "the drill answer is projected the same way");
 });
 
+test("B7.6b projectStoredDetails: a stored bundle keeps, for every athlete of the whole session and of every drill, only the consumed fields (an object only its unit / value); the input is untouched; an empty players map stays empty; the rest of the bundle is unchanged", async () => {
+  const { projectStoredDetails } = await import("../src/gpexeRestV1Adapter.js");
+  const marker = { k1: null, k2: 13579.2468, k3: "free text value" };
+  const stored = {
+    teamSession: { id: 100, team: 980 },
+    athleteSessions: [{ id: 500, athlete: 4711 }],
+    details: {
+      full: { players: { 4711: { tot_burst_events: { unit: "number", value: 1, extra: 7 }, markerMetricNameZq: marker } }, drills_count: 2, team: { markerTeamAggregateZq: 1 } },
+      drills: { 0: { players: { 4711: { tot_brake_events: { unit: "number", value: 2 }, markerMetricNameZq: marker } }, drills_count: 2 }, 1: { players: {}, drills_count: 2 } },
+    },
+  };
+  const before = JSON.stringify(stored);
+  const out = projectStoredDetails(stored);
+  assert.equal(JSON.stringify(stored), before, "the input is untouched");
+  assert.deepEqual(out.details.full.players, { 4711: { tot_burst_events: { unit: "number", value: 1 } } });
+  assert.deepEqual(out.details.drills["0"].players, { 4711: { tot_brake_events: { unit: "number", value: 2 } } });
+  assert.deepEqual(out.details.drills["1"], { players: {}, drills_count: 2 });
+  assert.deepEqual([out.teamSession, out.athleteSessions, out.details.full.drills_count], [stored.teamSession, stored.athleteSessions, 2]);
+  for (const leak of ["markerMetricNameZq", "13579", "free text value", "extra", "markerTeamAggregateZq"]) assert.ok(!JSON.stringify(out).includes(leak), leak);
+  assert.deepEqual(Object.keys(out.details.full).sort(), ["drills_count", "players"], "a details part keeps only players and drills_count (a legacy top-level aggregate is dropped)");
+  // Idempotent: an already projected bundle, and a part without players, come back exactly as they are.
+  const { canonicalJson } = await import("../src/gpexeImportPreview.js");
+  assert.equal(canonicalJson(projectStoredDetails(out)), canonicalJson(out));
+  const noPlayers = { details: { full: { players: {} }, drills: { 0: { drills_count: 2 } } } };
+  assert.equal(canonicalJson(projectStoredDetails(noPlayers)), canonicalJson(noPlayers), "a part without players gets no players key");
+  assert.equal(projectStoredDetails(null), null);
+  assert.deepEqual(projectStoredDetails({ teamSession: { id: 1 } }), { teamSession: { id: 1 } }, "a bundle without details is returned as it is");
+});
+
 test("B7.7 architecture guard: the whole-session consumer (the mapper, through buildGpexeImportPlan) reads no player metric but tot_burst_events / tot_brake_events - every other key access, enumeration or descriptor read on a whole-session athlete's details fails this test", () => {
   const bundle = makeBundle({ sessionId: 5001, gpexeTeamId: 77, athletes: standardAthletes(), detailsDrills: [0] });
   const touched = new Set();
@@ -1380,7 +1344,17 @@ test("B7.8 static architecture guard: no consumer outside the adapter and the ma
   // the full validator is on no read path (only its own definition names it).
   const adapterSrc = await fsp.readFile(path.resolve(srcDir, "gpexeRestV1Adapter.js"), "utf8");
   assert.doesNotMatch(adapterSrc, /drills keep the full check|op=session_details only/);
-  assert.equal((adapterSrc.match(/validatePlayersAnswer\(/g) || []).length, 1, "only the definition, no read path calls it");
+  assert.doesNotMatch(adapterSrc, /validatePlayersAnswer|describePlayersShape|formatPlayersShape/, "the full validator is not reintroduced");
+  // The stored-snapshot projections never touch an imported candidate: both SQL statements of each path name only unimported statuses.
+  const svc = await fsp.readFile(path.resolve(srcDir, "gpexeImportService.js"), "utf8");
+  const supersedeBlock = svc.slice(svc.indexOf("const superseded = (await client.query("), svc.indexOf("const projected = projectStoredDetails(row.raw_bundle);") + 300);
+  assert.equal((supersedeBlock.match(/status = 'superseded'/g) || []).length, 2, "the supersede projection selects and writes superseded rows only");
+  const retentionBlock = svc.slice(svc.indexOf("export async function projectUnimportedSnapshots"), svc.indexOf("export const RETENTION_INTERVAL_HOURS"));
+  assert.equal((retentionBlock.match(/status in \('pending', 'blocked', 'superseded'\)/g) || []).length, 2, "the retention projection selects and writes unimported rows only");
+  assert.doesNotMatch(supersedeBlock + retentionBlock, /'imported'/, "no projection names the imported status");
+  assert.match(retentionBlock, /and raw_bundle = \$3::jsonb/, "the retention write is conditional on the snapshot it read");
+  assert.match(retentionBlock, /for update skip locked/, "the retention write never waits on a row another session holds");
+  assert.match(svc.slice(svc.indexOf("export async function runRetention"), svc.indexOf("export const RETENTION_INTERVAL_HOURS")), /await projectUnimportedSnapshots()/, "every retention run projects");
 });
 
 // ---------------------------------------------------------------------------

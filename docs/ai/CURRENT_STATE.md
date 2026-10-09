@@ -1328,8 +1328,19 @@ Technical details.
   **Effect on what is already stored:** the stored bundle and its hash now carry projected drill answers,
   so a session recorded before this change with drills (the 05.10.2026 session of the 2026-10-06 check)
   is expected to come back from the next check as **changed** - because of the projection, not a change
-  in GPEXE - and its older pending candidate becomes `superseded`; that superseded row keeps its full
-  drill answers in `raw_bundle` until its raw expiry or purge (30 days, about 2026-11-05).
+  in GPEXE - and its older pending candidate becomes `superseded`. **Every stored snapshot that was never
+  imported is projected to the two consumed fields too** (owner's external review of `8087b81`,
+  2026-10-09): a superseded one in the transaction that supersedes it, and every pending / blocked /
+  superseded one by each retention run (every check, the server's 6-hour schedule, the CLI), with a write
+  conditional on the snapshot it read - so the pending 05.10 candidate is projected by the first retention
+  run after the deploy, whether or not the next check succeeds. The only copy is
+  `gpexe_import_candidates.raw_bundle`, no route returns it, the preview holds only the mapper's values, a
+  superseded candidate cannot be approved, and an imported candidate is never touched (none exists on the
+  deployed database); the row's identity, content hash and preview hash stay. A database backup keeps what
+  it held for its own retention; a restored copy runs the retention before use. The legacy e03 path does
+  not project on read (covered by the retention run; F3c4 retires it). The full validator
+  `validatePlayersAnswer` (and its whole-answer description) is removed: no read path called it after both
+  projections, and a test refuses its return.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2012,11 +2023,12 @@ pre-existing; pass/fail counts don't belong in this file
 
 - **The bounded `pool.connect()`** (owner's external review of PR #136, 2026-10-04; note 3 of the closing
   review of PR #137): **done**, PR #146 merged and deployed (see the active phase).
-- **Remove `validatePlayersAnswer`** (and `describePlayersShape` / `formatPlayersShape`) from
-  `backend/src/gpexeRestV1Adapter.js` (code review of the drill projection, 2026-10-09): since the
-  whole-session and the drill reads are both projected it is on no read path - a test pins that nothing
-  calls it -, but an exported fail-closed full validator is easy to put back by mistake. A separate small
-  PR with the parts of test B7.5 that call it directly.
+- **Bound the COMMIT of `recordCandidate`** (code review of PR #149, 2026-10-09; pre-existing): a check's
+  candidate transaction sends COMMIT without a bound or an outcome check, so a lost COMMIT answer marks the
+  check `failed` / `internal_error` although the candidate (and, since PR #149, a superseded snapshot's
+  projection) may be committed. No duplicate can follow (the unique key and the idempotent projection), but
+  "written" and "unknown" are not told apart. Fix in the `approveCandidate` style: on a COMMIT error look
+  the row up on another connection and continue, or fail with an `outcome_unknown`-class code.
 - **Security follow-up, accepted by the owner (2026-10-07, at the review of PR #146): the verification
   resend's timing channel.** `POST /api/auth/email-verifications/resend` has no timing floor and, when a
   pending application exists, answers only after its transaction and the awaited email provider call,
@@ -2253,7 +2265,9 @@ the identity implementation (PR #144, v32), the id masking (PR #145), the harden
 window diagnostic (PR #147) and the whole-list window (PR #148) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
 1. The owner's external review of the drill projection, branch `fix/gpexe-drill-details-projection`.
 2. After its merge and deploy, on a separate owner order, one check of the same window (05.10 - 06.10.2026);
-   the 05.10 session is expected as "changed" (the projection, not GPEXE data - see the active phase).
+   the 05.10 session is expected as "changed" (the projection, not GPEXE data - see the active phase); its
+   older candidate's snapshot is projected by the retention run that starts the check, and again when it
+   is superseded.
 3. Condition 6 under the switch conditions (withdraw candidates a later check no longer confirms) - a
    separate PR, before the switch is ever turned on.
 4. The owner states the state of the production-use gate and of the two gates before a link (an identity

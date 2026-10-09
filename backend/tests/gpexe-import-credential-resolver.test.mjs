@@ -1593,6 +1593,151 @@ test("20. drill answers are projected like the whole session (2026-10-09, after 
   }
 });
 
+test("22. a superseded candidate keeps no unconsumed metric: a pending candidate whose stored snapshot holds a full drill answer (as stored before the drill projection) is superseded by the next check of changed content, and in the same transaction its snapshot keeps only the consumed fields; neither it nor the new candidate exposes the third metric through the candidate list (replaced versions included), the candidate detail or the preview; the superseded one cannot be approved; the switch stays off and no result or activity row is written", async () => {
+  const MARKER = "markerUnconsumedObjZq";
+  const MARKER_TEXT = "Marker free text value";
+  const tables = (await q(`select table_schema || '.' || table_name as t from information_schema.tables where table_schema in ('training', 'training_load') and table_type = 'BASE TABLE' and table_name not in ('gpexe_import_checks', 'gpexe_import_candidates', 'gpexe_retention_runs') order by 1`)).map((r) => r.t);
+  const counts = async () => { const out = {}; for (const t of tables) { const [s, n] = t.split("."); out[t] = (await q(`select count(*)::int as n from ${s}.${n}`))[0].n; } return out; };
+  const o = await org();
+  useSource();
+  await bound(o);
+  process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+  delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  legacyTrap();
+  src.serve(o.sourceTeamId);
+  const originalUpdatedOn = src.state.bundle.teamSession.updated_on;
+  try {
+    const before = await counts();
+    // (1) The first check stores candidate A (projected).
+    const first = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+    assert.equal(first.status, "succeeded", JSON.stringify(first.error));
+    const [a] = await q(`select id, raw_bundle, bundle_hash from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]);
+    // (2) GPEXE shows changed content of the same session; the next check is held at its list read - after its
+    // own retention run, so that run cannot project what is injected now.
+    src.state.bundle.teamSession.updated_on = "2026-09-14T23:00:00";
+    src.state.gates.list = gate();
+    const started = await startCheck(o, o.cadmin.cookie);
+    assert.equal(started.status, 202, JSON.stringify(started.body));
+    await waitFor(() => src.calls.some((c) => c.key.includes("/team_session/?team=")));
+    // (3) A snapshot as a read stored it before the projections: the third metric in drill 0 and in the whole session.
+    const old = structuredClone(a.raw_bundle);
+    for (const id of Object.keys(old.details.drills["0"].players)) old.details.drills["0"].players[id][MARKER] = { k1: null, k2: 24680.1357, k3: MARKER_TEXT };
+    for (const id of Object.keys(old.details.full.players)) old.details.full.players[id][MARKER] = { k1: MARKER_TEXT };
+    await q(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [a.id, old]);
+    // (4) The check goes on and supersedes A: the supersede transaction itself projects the old snapshot.
+    src.state.gates.list.release();
+    await started.done.p;
+    src.state.gates.list = null;
+    const second = (await q(`select status, error_code, candidates_changed from training_load.gpexe_import_checks where id = $1`, [started.body.check.id]))[0];
+    assert.equal(second.status, "succeeded", JSON.stringify(second));
+    assert.equal(second.candidates_changed, 1, "the session is re-seen as changed");
+    const rows = await q(`select id, status, superseded_by_candidate_id, raw_bundle, preview, preview_hash, bundle_hash from training_load.gpexe_import_candidates where owner_team_id = $1 order by first_seen_at`, [o.teamId]);
+    assert.equal(rows.length, 2);
+    const [oldRow, newRow] = rows;
+    assert.deepEqual([oldRow.id, oldRow.status, oldRow.superseded_by_candidate_id], [a.id, "superseded", newRow.id]);
+    assert.equal(oldRow.bundle_hash, a.bundle_hash, "the record of what was seen is unchanged");
+    for (const row of rows) {
+      for (const [index, drill] of Object.entries(row.raw_bundle.details.drills)) {
+        for (const values of Object.values(drill.players)) assert.ok(Object.keys(values).every((k) => ["tot_burst_events", "tot_brake_events"].includes(k)), `${row.status} drill ${index}`);
+      }
+      for (const values of Object.values(row.raw_bundle.details.full.players)) assert.ok(Object.keys(values).every((k) => ["tot_burst_events", "tot_brake_events"].includes(k)), `${row.status} whole session`);
+      const stored = JSON.stringify({ raw: row.raw_bundle, preview: row.preview });
+      for (const leak of [MARKER, MARKER_TEXT, "24680"]) assert.ok(!stored.includes(leak), `${leak} is not stored on the ${row.status} candidate`);
+    }
+    // Not exposed by any read: the list with replaced versions, the detail of each candidate, through the routes as the club admin.
+    const list = await api(`/gpexe/teams/${o.teamId}/candidates?includeSuperseded=true`, { cookie: o.cadmin.cookie });
+    assert.equal(list.status, 200, JSON.stringify(list.body));
+    const details = [];
+    for (const row of rows) details.push(await api(`/gpexe/teams/${o.teamId}/candidates/${row.id}`, { cookie: o.cadmin.cookie }));
+    assert.ok(details.every((d) => d.status === 200), JSON.stringify(details.map((d) => d.status)));
+    const exposed = JSON.stringify([list.body, details.map((d) => d.body), await importer.listCandidates(o.teamId, { includeSuperseded: true })]);
+    for (const leak of [MARKER, MARKER_TEXT, "24680"]) assert.ok(!exposed.includes(leak), `${leak} is exposed by a read`);
+    // The superseded candidate cannot be approved; the current one is refused while the switch is off.
+    const approveOld = await api(`/gpexe/teams/${o.teamId}/candidates/${oldRow.id}/approve`, { method: "POST", cookie: o.padmin.cookie, body: { previewHash: oldRow.preview_hash, acceptChanges: true } });
+    assert.ok(approveOld.status >= 400 && approveOld.status < 500, JSON.stringify(approveOld.body));
+    assert.ok(["superseded_by_newer_data", "import_switch_off"].includes(approveOld.body.error), JSON.stringify(approveOld.body));
+    // With the switch on, the superseded one is still refused - and nothing is written (the refusal comes first).
+    process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+    try {
+      const refused = await importer.approveCandidate(o.teamId, oldRow.id, { userId: o.padmin.id, previewHash: oldRow.preview_hash, acceptChanges: true }).then(() => null, (e) => e);
+      assert.equal(refused?.code, "superseded_by_newer_data", JSON.stringify(refused));
+    } finally {
+      delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+    }
+    const approveNew = await api(`/gpexe/teams/${o.teamId}/candidates/${newRow.id}/approve`, { method: "POST", cookie: o.padmin.cookie, body: { previewHash: newRow.preview_hash, acceptChanges: true } });
+    assert.equal(approveNew.body.error, "import_switch_off", JSON.stringify(approveNew.body));
+    assert.deepEqual(await counts(), before, "no result, activity or other training row was written");
+  } finally {
+    src.state.bundle.teamSession.updated_on = originalUpdatedOn;
+  }
+});
+
+test("23. the retention run projects every stored snapshot that was never imported: a pending candidate whose snapshot holds unconsumed metrics (stored before the projections) and that no later check supersedes keeps only the consumed fields after the next retention run - its status, content hash and preview hash unchanged; a snapshot refreshed between the read and the write is not overwritten; the run reports what it projected", async () => {
+  const MARKER = "markerPendingUnconsumedZq";
+  const o = await org();
+  useSource();
+  await bound(o);
+  process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+  legacyTrap();
+  src.serve(o.sourceTeamId);
+  const view = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+  assert.equal(view.status, "succeeded", JSON.stringify(view.error));
+  const [row] = await q(`select id, status, raw_bundle, bundle_hash, preview_hash from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]);
+  const old = structuredClone(row.raw_bundle);
+  for (const drill of Object.values(old.details.drills)) for (const id of Object.keys(drill.players)) drill.players[id][MARKER] = { k1: "Marker text" };
+  for (const id of Object.keys(old.details.full.players)) old.details.full.players[id][MARKER] = 1;
+  old.details.full.team = { markerAggregateZq: 2 };
+  await q(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [row.id, old]);
+  const run = await importer.runRetention("cli");
+  assert.ok(run.projected >= 1, JSON.stringify(run));
+  const [after] = await q(`select status, raw_bundle, bundle_hash, preview_hash from training_load.gpexe_import_candidates where id = $1`, [row.id]);
+  assert.deepEqual([after.status, after.bundle_hash, after.preview_hash], [row.status, row.bundle_hash, row.preview_hash], "status, content hash and preview hash unchanged");
+  for (const leak of [MARKER, "Marker text", "markerAggregateZq"]) assert.ok(!JSON.stringify(after.raw_bundle).includes(leak), `${leak} is not kept`);
+  assert.deepEqual(after.raw_bundle, row.raw_bundle, "the projection of the old snapshot is exactly the projected snapshot a read stores");
+  // A second run has nothing left to project.
+  assert.equal((await importer.runRetention("cli")).projected, 0);
+  // The conditional write: a snapshot that changed after it was read is not overwritten.
+  const changedMeanwhile = structuredClone(old);
+  changedMeanwhile.teamSession.updated_on = "2026-09-14T22:22:22";
+  await q(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [row.id, old]);
+  const done = await q(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1 and status in ('pending', 'blocked', 'superseded') and raw_bundle = $3::jsonb returning id`, [row.id, row.raw_bundle, changedMeanwhile]);
+  assert.equal(done.length, 0, "the guarded write does not apply to a snapshot it did not read");
+  assert.ok(JSON.stringify((await q(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [row.id]))[0].raw_bundle).includes(MARKER), "the row kept what it held");
+  await importer.runRetention("cli");
+  assert.ok(!JSON.stringify((await q(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [row.id]))[0].raw_bundle).includes(MARKER));
+});
+
+test("24. the retention projection never waits on a candidate another session holds: with the row locked FOR UPDATE on another connection (an approval in flight) the run finishes promptly and skips it; once released, the next run projects it", async () => {
+  const MARKER = "markerLockedRowZq";
+  const o = await org();
+  useSource();
+  await bound(o);
+  process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+  legacyTrap();
+  src.serve(o.sourceTeamId);
+  const view = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+  assert.equal(view.status, "succeeded", JSON.stringify(view.error));
+  const [row] = await q(`select id, raw_bundle from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]);
+  const old = structuredClone(row.raw_bundle);
+  for (const id of Object.keys(old.details.full.players)) old.details.full.players[id][MARKER] = 1;
+  await q(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [row.id, old]);
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await holder.query(`select 1 from training_load.gpexe_import_candidates where id = $1 for update`, [row.id]);
+    const outcome = await Promise.race([importer.runRetention("cli").then((r) => r), new Promise((r) => setTimeout(() => r("timeout"), 4000))]);
+    assert.notEqual(outcome, "timeout", "the run did not wait on the locked row");
+    assert.ok(JSON.stringify((await q(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [row.id]))[0].raw_bundle).includes(MARKER), "the locked row was skipped");
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end().catch(() => {});
+  }
+  const next = await importer.runRetention("cli");
+  assert.ok(next.projected >= 1, JSON.stringify(next));
+  assert.ok(!JSON.stringify((await q(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [row.id]))[0].raw_bundle).includes(MARKER), "projected once released");
+});
+
 test("21. option (c): the window is picked out of the whole team list - five sessions after the period and one of the look-back day are left out and only the window's session becomes a candidate (no bundle read for the others); a start that cannot be read or an unstable X-Total-Count fails the check with its own code, writes no candidate and reads no bundle; no date bound is ever sent", async () => {
   const o = await org();
   useSource();

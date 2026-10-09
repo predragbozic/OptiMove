@@ -20,6 +20,7 @@ import {
   resolveImportSourceFacts, preflightImportSource, openImportSource, importClientFor, legacyImportClientFor, sameImportSource,
   importSourceIdentity, canonicalSourceTeamId, autoInvalidateImportSource, boundImportSideEffect, AUTO_INVALIDATE_BOUND_MS,
   SourceImportResolveError, SourceAdapterError, PATH_SOURCE_CONNECTION, PATH_LEGACY_ENV, isConnectionConfigurationCode, DIAGNOSTIC_MARK,
+  projectStoredDetails,
 } from "./sourceImportCredentialResolver.js";
 import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCanonicalGpexeAthleteId } from "./gpexeImportMapper.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
@@ -332,13 +333,58 @@ export async function runRetention(triggerSource) {
       purged += n;
       if (n < RETENTION_BATCH_SIZE) break;
     }
+    // Then every snapshot that is still stored and was never imported keeps
+    // only the details fields the importer reads (owner order 2026-10-09).
+    const projected = await projectUnimportedSnapshots();
     if (identityError) throw identityError;
     await query(`update training_load.gpexe_retention_runs set finished_at = now(), purged_count = $2 where id = $1`, [run.id, purged]);
-    return { runId: run.id, purged, identitiesPurged, suppressionsPurged };
+    return { runId: run.id, purged, identitiesPurged, suppressionsPurged, projected };
   } catch (error) {
     await query(`update training_load.gpexe_retention_runs set finished_at = now(), error_message = $2 where id = $1`, [run.id, String(error.message).slice(0, 300)]).catch(() => {});
     throw error;
   }
+}
+
+// A stored snapshot of a candidate that was never imported - pending,
+// blocked or superseded - reduced to the details fields the importer reads
+// (projectStoredDetails). Runs with every retention run (each check, the
+// server's schedule, the CLI), so a snapshot stored before the projections
+// keeps no unconsumed metric even when no later check supersedes it. An
+// imported candidate is never touched (its record stays as it was approved);
+// the row's identity and bundle_hash stay. Keyset batches by id; each write is
+// conditional on the row still holding the snapshot that was read, so a check
+// that refreshed it meanwhile is never overwritten, and it never waits: a row
+// another session holds (an approval in flight) is skipped and taken by the
+// next run, as the purge does. The approval recomputes
+// its plan from the snapshot, and the mapper reads only those two fields, so
+// the preview of a projected snapshot is the same.
+export async function projectUnimportedSnapshots() {
+  let projected = 0;
+  let after = null;
+  for (let batch = 0; batch < RETENTION_MAX_BATCHES; batch += 1) {
+    const rows = (await query(
+      `select id, raw_bundle from training_load.gpexe_import_candidates
+        where raw_bundle is not null and status in ('pending', 'blocked', 'superseded') and ($1::uuid is null or id > $1::uuid)
+        order by id limit $2`,
+      [after, RETENTION_BATCH_SIZE],
+    )).rows;
+    for (const row of rows) {
+      const next = projectStoredDetails(row.raw_bundle);
+      if (canonicalJson(next) === canonicalJson(row.raw_bundle)) continue;
+      const done = await query(
+        `update training_load.gpexe_import_candidates c set raw_bundle = $2
+           from (select id from training_load.gpexe_import_candidates
+                  where id = $1 and status in ('pending', 'blocked', 'superseded') and raw_bundle = $3::jsonb
+                  for update skip locked) s
+          where c.id = s.id`,
+        [row.id, next, row.raw_bundle],
+      );
+      projected += done.rowCount;
+    }
+    if (rows.length < RETENTION_BATCH_SIZE) break;
+    after = rows[rows.length - 1].id;
+  }
+  return projected;
 }
 
 export const RETENTION_INTERVAL_HOURS = 6;
@@ -805,6 +851,23 @@ async function recordCandidate(checkId, { teamId, userId, bundle }) {
         where owner_team_id = $1 and gpexe_team_session_id = $2 and id <> $3 and status in ('pending', 'blocked')`,
       [teamId, sessionId, currentId],
     );
+    // In the same transaction, every superseded snapshot of this session that
+    // still holds one keeps only the details fields the importer reads (owner
+    // order 2026-10-09): a snapshot stored before the projections never keeps
+    // an unconsumed metric once newer content replaced it. An imported
+    // candidate is never touched; the row's identity and bundle_hash (the
+    // record of what was seen) stay as they are.
+    const superseded = (await client.query(
+      `select id, raw_bundle from training_load.gpexe_import_candidates
+        where owner_team_id = $1 and gpexe_team_session_id = $2 and id <> $3 and status = 'superseded' and raw_bundle is not null`,
+      [teamId, sessionId, currentId],
+    )).rows;
+    for (const row of superseded) {
+      const projected = projectStoredDetails(row.raw_bundle);
+      if (canonicalJson(projected) !== canonicalJson(row.raw_bundle)) {
+        await client.query(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1 and status = 'superseded'`, [row.id, projected]);
+      }
+    }
     await client.query("commit");
     return kind;
   } catch (error) {

@@ -417,39 +417,19 @@ function metricValue(v) {
 }
 const PROTOTYPE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
-// --- A refused players answer, described for the administrator -------------
-// F3c3 pilot follow-up (owner order 2026-10-05): the first real check on
-// server3 was refused here (`metric_shape_unknown` on the whole-session
-// details), and nothing in the repository proves the real shape of those
-// metric values (the probe recorded only "numbers and nested values"). So the
-// acceptance rule above stays exactly as it is, and a refusal carries a
-// bounded description of the whole answer instead: kinds, booleans and count
-// buckets only. It never names an athlete id, a metric other than the two the
-// importer reads (DETAILS_CONSUMED_FIELDS), a value, a text, a date or any raw
-// JSON, and it sends no request. It is computed only when the answer is
-// refused, i.e. on a check that has already failed.
+// --- The administrator's description of a refused details answer -----------
+// A refusal of a details answer carries, after DIAGNOSTIC_MARK, fixed words
+// only (the operation, a consumed field's constant name and its kind, or the
+// kind of a bad metric name): never an athlete id, another metric name, a
+// value, a text, a date or raw JSON. (The full validator of 2026-10-05 and its
+// whole-answer description were removed on 2026-10-09: both details reads are
+// projected, so nothing called them.)
 export const DIAGNOSTIC_MARK = " Diagnostic: ";
 // The only details fields the importer reads (gpexeImportMapper.js detailsNumber):
 // a test pins this list to the mapper's metric specs.
 export const DETAILS_CONSUMED_FIELDS = Object.freeze(["tot_burst_events", "tot_brake_events"]);
-const DIAG_MAX_PLAYERS = 500;
-const DIAG_MAX_CHILDREN = 64;
-const DIAG_MAX_DEPTH = 4;
-const DIAG_MAX_MESSAGE = 900;
 const METRIC_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
-function countBucket(n) {
-  if (n <= 0) return "0";
-  if (n === 1) return "1";
-  if (n <= 4) return "2-4";
-  if (n <= 16) return "5-16";
-  if (n <= 64) return "17-64";
-  return "65+";
-}
-function shareBucket(count, total) {
-  if (count === 0) return "none";
-  return count === total ? "all" : "some";
-}
 // The kind of one value, as a fixed word - never the value.
 function valueKind(v) {
   if (v === null) return "null";
@@ -460,159 +440,13 @@ function valueKind(v) {
   if (isPlainObject(v)) return "object";
   return "other";
 }
-// Depth with a bound: a leaf is 0; at most DIAG_MAX_CHILDREN children of a
-// container are looked at, and the walk stops below DIAG_MAX_DEPTH.
-function boundedDepth(v, level = 0) {
-  if (!Array.isArray(v) && !isPlainObject(v)) return 0;
-  if (level >= DIAG_MAX_DEPTH) return 1;
-  const children = (Array.isArray(v) ? v : Object.values(v)).slice(0, DIAG_MAX_CHILDREN);
-  return 1 + children.reduce((max, child) => Math.max(max, boundedDepth(child, level + 1)), 0);
-}
-const depthBucket = (d) => (d >= DIAG_MAX_DEPTH ? `${DIAG_MAX_DEPTH}+` : String(d));
-const sortedKinds = (set) => [...set].sort();
-
-export function describePlayersShape(players, what = "") {
-  const operation = what === "the whole-session details" ? "session_details" : what === "the drill details" ? "session_drill_details" : "players_answer";
-  const ids = Object.keys(players).slice(0, DIAG_MAX_PLAYERS);
-  const consumed = Object.fromEntries(DETAILS_CONSUMED_FIELDS.map((f) => [f, { present: 0, kinds: new Set(), unitNumber: 0, valueFinite: 0, onlyUnitValue: 0, objects: 0 }]));
-  const failingNames = new Set();
-  const names = { tooLong: false, otherChars: false, prototypeKey: false };
-  const failing = { kinds: new Set(), arrayLengths: new Set(), arrayItemKinds: new Set(), objectKeyCounts: new Set(), objectChildKinds: new Set(), objectHasUnitKey: false, objectHasValueKey: false, depths: new Set(), textLengths: new Set() };
-  let consumedFailing = false;
-  let metricsSeen = 0;
-  for (const id of ids) {
-    const values = players[id];
-    if (!isPlainObject(values)) continue;
-    for (const [metric, value] of Object.entries(values).slice(0, 256)) {
-      metricsSeen += 1;
-      if (Object.prototype.hasOwnProperty.call(consumed, metric)) {
-        const c = consumed[metric];
-        c.present += 1;
-        c.kinds.add(valueKind(value));
-        if (isPlainObject(value)) {
-          c.objects += 1;
-          if (value.unit === "number") c.unitNumber += 1;
-          if (typeof value.value === "number" && Number.isFinite(value.value)) c.valueFinite += 1;
-          if (Object.keys(value).every((k) => k === "unit" || k === "value")) c.onlyUnitValue += 1;
-        }
-      }
-      const nameOk = METRIC_NAME.test(metric) && !PROTOTYPE_KEYS.has(metric);
-      if (!nameOk) {
-        if (PROTOTYPE_KEYS.has(metric)) names.prototypeKey = true;
-        else if (metric.length > 64) names.tooLong = true;
-        else names.otherChars = true;
-      }
-      if (nameOk && metricValue(value)) continue;
-      // A failing metric: counted by name internally, never named outward
-      // unless it is one of the two consumed fields.
-      failingNames.add(metric);
-      if (Object.prototype.hasOwnProperty.call(consumed, metric)) consumedFailing = true;
-      if (!nameOk) continue;
-      const kind = valueKind(value);
-      failing.kinds.add(kind === "object" && Object.keys(value).length > 32 ? "object_wide" : kind);
-      failing.depths.add(depthBucket(boundedDepth(value)));
-      if (kind === "text_long" || kind === "text_other_chars") failing.textLengths.add(countBucket(value.length));
-      if (kind === "array") {
-        failing.arrayLengths.add(countBucket(value.length));
-        for (const item of value.slice(0, DIAG_MAX_CHILDREN)) failing.arrayItemKinds.add(valueKind(item));
-      }
-      if (kind === "object") {
-        failing.objectKeyCounts.add(countBucket(Object.keys(value).length));
-        for (const child of Object.values(value).slice(0, DIAG_MAX_CHILDREN)) failing.objectChildKinds.add(valueKind(child));
-        if (Object.prototype.hasOwnProperty.call(value, "unit")) failing.objectHasUnitKey = true;
-        if (Object.prototype.hasOwnProperty.call(value, "value")) failing.objectHasValueKey = true;
-      }
-    }
-  }
-  const players_ = ids.length;
-  return {
-    operation,
-    players: countBucket(Object.keys(players).length),
-    metricsSeen: countBucket(metricsSeen),
-    failingMetrics: countBucket(failingNames.size),
-    consumedFieldFailing: consumedFailing,
-    names,
-    failing: {
-      kinds: sortedKinds(failing.kinds), depths: sortedKinds(failing.depths), textLengths: sortedKinds(failing.textLengths),
-      arrayLengths: sortedKinds(failing.arrayLengths), arrayItemKinds: sortedKinds(failing.arrayItemKinds),
-      objectKeyCounts: sortedKinds(failing.objectKeyCounts), objectChildKinds: sortedKinds(failing.objectChildKinds),
-      objectHasUnitKey: failing.objectHasUnitKey, objectHasValueKey: failing.objectHasValueKey,
-    },
-    consumed: Object.fromEntries(Object.entries(consumed).map(([field, c]) => [field, {
-      present: shareBucket(c.present, players_), kinds: sortedKinds(c.kinds),
-      unitNumber: c.objects ? shareBucket(c.unitNumber, c.objects) : null,
-      valueFinite: c.objects ? shareBucket(c.valueFinite, c.objects) : null,
-      onlyUnitValue: c.objects ? shareBucket(c.onlyUnitValue, c.objects) : null,
-    }])),
-  };
-}
-
-// One line for the check row's message (shown to an administrator only).
-export function formatPlayersShape(d) {
-  const list = (a) => (a.length ? a.join("/") : "-");
-  const f = d.failing;
-  const nameIssues = Object.entries(d.names).filter(([, v]) => v).map(([k]) => k);
-  const consumed = Object.entries(d.consumed).map(([field, c]) => `${field} ${c.present}${c.kinds.length ? ` ${list(c.kinds)}` : ""}${c.unitNumber ? ` unit=number:${c.unitNumber} value_finite:${c.valueFinite} only_unit_value:${c.onlyUnitValue}` : ""}`).join("; ");
-  // The consumed fields come first: a capped message never loses them.
-  const text = `op=${d.operation}; consumed_failing=${d.consumedFieldFailing ? "yes" : "no"}; ${consumed}; players=${d.players}; metrics=${d.metricsSeen}; failing=${d.failingMetrics}; `
-    + `names=${list(nameIssues)}; kinds=${list(f.kinds)}; depth=${list(f.depths)}; text_len=${list(f.textLengths)}; `
-    + `array_len=${list(f.arrayLengths)}; array_items=${list(f.arrayItemKinds)}; object_keys=${list(f.objectKeyCounts)}; object_children=${list(f.objectChildKinds)}; `
-    + `object_unit_key=${f.objectHasUnitKey ? "yes" : "no"}; object_value_key=${f.objectHasValueKey ? "yes" : "no"}.`;
-  return text.length > DIAG_MAX_MESSAGE ? `${text.slice(0, DIAG_MAX_MESSAGE - 1)}…` : text;
-}
-
-// Not on any read path since 2026-10-09 (the whole-session and the drill reads
-// both use projectSessionDetails); kept, with its sanitized description, until
-// a separate removal (recorded in docs/ai/CURRENT_STATE.md). A test pins that
-// nothing calls it.
-export function validatePlayersAnswer(body, what = "the details answer", expectedDrillsCount = null) {
-  if (!isPlainObject(body)) throw unexpected(`The source server did not answer ${what} as an object.`);
-  const players = body.players;
-  if (!isPlainObject(players)) throw unexpected(`The source answer to ${what} carries no players map.`, { reason: "players_missing" });
-  // An empty map is a valid answer: a drill whose details are not yet
-  // computed (the e03 pilot fixtures carry it, the importer skips such
-  // values). Only a missing, null, array or otherwise wrong `players` fails.
-  const keys = Object.keys(players);
-  for (const key of keys) {
-    if (!ATHLETE_ID.test(key)) throw unexpected(`The source answer to ${what} names an athlete in an unknown way.`, { reason: "athlete_id_not_canonical" });
-    const values = players[key];
-    if (!isPlainObject(values) || Object.keys(values).length === 0) throw unexpected(`The source answer to ${what} has an athlete without metric values.`, { reason: "player_values_missing" });
-    if (Object.keys(values).length > 256) throw unexpected(`The source answer to ${what} has too many metric values for one athlete.`, { reason: "player_values_too_many" });
-    for (const [metric, value] of Object.entries(values)) {
-      if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(metric) || PROTOTYPE_KEYS.has(metric) || !metricValue(value)) {
-        // The rule itself is unchanged (fail closed); the refusal only carries
-        // a sanitized description of the whole answer for the administrator.
-        // A fault in the description never replaces the refusal itself.
-        let diagnostic = null;
-        let text = "";
-        try {
-          diagnostic = describePlayersShape(players, what);
-          text = formatPlayersShape(diagnostic);
-        } catch {
-          diagnostic = null;
-          text = "";
-        }
-        throw unexpected(`The source answer to ${what} carries a metric value in an unknown shape.${text ? `${DIAGNOSTIC_MARK}${text}` : ""}`, { reason: "metric_shape_unknown", ...(diagnostic ? { diagnostic, diagnosticText: text } : {}) });
-      }
-    }
-  }
-  // Only what the importer reads leaves the adapter: the players map and the
-  // drill count. The top-level `team` (aggregated parameters, an opaque
-  // object on server3) and `teamsession` are neither identity nor needed,
-  // and are not returned.
-  if (expectedDrillsCount !== null && body.drills_count !== undefined && body.drills_count !== null && body.drills_count !== expectedDrillsCount) {
-    throw unexpected(`The source answer to ${what} reports another number of drills than the confirmed session.`, { reason: "drills_count_disagrees" });
-  }
-  return { players, ...(Number.isInteger(body.drills_count) ? { drills_count: body.drills_count } : {}) };
-}
-
 // --- Details answers (whole session and drill), projected to what the importer reads ---
 // The whole session since 2026-10-06 (owner order after the owner-run
 // diagnostic of 2026-10-05/06: on server3 both consumed fields arrived in the
 // documented shape for every athlete; the one refused metric was an
 // unconsumed object of another shape). The container, the athlete ids, the
 // per-athlete bounds and the metric-name guard (including the dangerous keys)
-// are exactly validatePlayersAnswer's. Of the metric VALUES only
+// are those of the former full check. Of the metric VALUES only
 // DETAILS_CONSUMED_FIELDS are read: each is validated with the same rule as
 // before (metricValue) and copied into a fresh object - an object value keeps
 // only its own `unit` and `value`, the two keys the mapper reads. This
@@ -637,7 +471,7 @@ function projectConsumedValue(value) {
 // first whole-list check stopped on a drill answer with one unconsumed object
 // metric while both consumed fields were in the documented shape). The
 // container, the athlete ids, the per-athlete bounds and the metric-name guard
-// are checked exactly as validatePlayersAnswer does; of the values only the
+// are checked exactly as the former full check did; of the values only the
 // fields the mapper reads (DETAILS_CONSUMED_FIELDS) are validated and copied.
 // An empty players map stays valid (a drill not yet computed).
 export function projectSessionDetails(body, expectedDrillsCount = null, { what = "the whole-session details", op = "session_details" } = {}) {
@@ -694,6 +528,41 @@ export function projectSessionDetails(body, expectedDrillsCount = null, { what =
 // tag: <tag id> }, each drill at most once. A tag id used at two positions,
 // a length that disagrees with drills_count, an index out of range or
 // anything else is ambiguous: null, and every drill falls back to Drill N.
+// A STORED bundle reduced to what the importer reads of its details (owner
+// order 2026-10-09): every athlete of the whole-session details and of every
+// drill keeps only DETAILS_CONSUMED_FIELDS, an object value only its own
+// `unit` / `value`. Used on every snapshot that was never imported (a superseded one in the
+// transaction that supersedes it, every pending / blocked / superseded one by
+// the retention run), so no stored snapshot keeps an unconsumed metric a read
+// stored before the projections. A details part keeps only `players` and
+// `drills_count` (a legacy answer's top-level aggregates are dropped too).
+// Pure: a fresh object, the input untouched; a `players` that is not a map is
+// left as it is (the stored snapshot was validated when it was read).
+export function projectStoredDetails(bundle) {
+  if (!isPlainObject(bundle) || !isPlainObject(bundle.details)) return bundle;
+  const players = (map) => {
+    if (!isPlainObject(map)) return map;
+    const out = {};
+    for (const [id, values] of Object.entries(map)) {
+      if (!isPlainObject(values)) { out[id] = values; continue; }
+      const kept = {};
+      for (const field of DETAILS_CONSUMED_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(values, field)) kept[field] = projectConsumedValue(values[field]);
+      }
+      out[id] = kept;
+    }
+    return out;
+  };
+  const own = (d, key) => Object.prototype.hasOwnProperty.call(d, key);
+  const part = (d) => (isPlainObject(d)
+    ? { ...(own(d, "players") ? { players: players(d.players) } : {}), ...(own(d, "drills_count") ? { drills_count: d.drills_count } : {}) }
+    : d);
+  const details = { ...bundle.details };
+  if (details.full !== undefined) details.full = part(details.full);
+  if (isPlainObject(details.drills)) details.drills = Object.fromEntries(Object.entries(details.drills).map(([k, d]) => [k, part(d)]));
+  return { ...bundle, details };
+}
+
 export function parseDrillTags(drillTags, drillsCount) {
   if (!Array.isArray(drillTags) || !Number.isInteger(drillsCount) || drillsCount < 0) return null;
   const byIndex = new Map();

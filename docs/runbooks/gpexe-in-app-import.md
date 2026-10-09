@@ -668,6 +668,31 @@ Each request waits at most 30 s and is tried twice. **The whole run stops at
 | never approved (pending, blocked, superseded) | **30 days** after it was last seen by a check |
 | imported (F2) | **90 days** after the import (the approval sets it) |
 
+**What a snapshot holds of the details (since 2026-10-09):** only the two fields the importer
+reads (`tot_burst_events`, `tot_brake_events`) for every athlete of the whole session and of every
+drill, and of each details part only `players` and `drills_count`.
+- A new snapshot read **through a source connection** (server3 / `rest_v1`) is projected when it is
+  read. The legacy e03 path (a team that never had a binding) does not project on read; F3c4 retires
+  it, and the two steps below cover what it stores.
+- When a newer candidate supersedes an older one of the same session, the older one's snapshot is
+  projected **in the same transaction**.
+- Every **retention run** (each check, the server's 6-hour schedule, the CLI) projects every stored
+  snapshot of a candidate that was never imported - pending, blocked or superseded - so a snapshot
+  stored before the projections that no later check supersedes (for example the pending candidate of
+  a session whose next check fails) keeps its unconsumed metrics at most until the next retention
+  run, not until its 30-day expiry. The write is conditional on the row still holding the snapshot it
+  read, so a check that refreshed it meanwhile is never overwritten.
+- The row's identity, content hash and preview hash stay as they were (the mapper reads only the two
+  fields, so the approval recomputes the same preview); **an imported candidate is never touched**
+  (none exists on the deployed database).
+- The only copy in the application is `training_load.gpexe_import_candidates.raw_bundle`; no route
+  returns it (the candidate list and detail return the preview, which holds only the mapper's
+  values), and a superseded candidate can never be approved (`superseded_by_newer_data`).
+- `training_load.purge_expired_gpexe_raw()` still removes the whole snapshot and preview 30 days after
+  the last sighting (90 after an import). **A database backup** keeps whatever it held for its own
+  retention: a restored copy must run the retention (`npm --prefix backend run gpexe:retention`)
+  before it is used, as for the identity snapshot.
+
 What stays after the purge:
 - the content hash;
 - the source mapping;
