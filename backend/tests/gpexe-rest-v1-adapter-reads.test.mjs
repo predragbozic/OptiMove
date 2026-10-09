@@ -359,7 +359,7 @@ test("B2.4 the date window: two calendar days, forward, at most 31 days; the WHO
     [`${WINDOW}&offset=2`]: answer(200, [session(102)], { "x-total-count": "3" }),
   }));
   assert.deepEqual(idsOf(await make(paged.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" })), ["100"]);
-  assert.equal(paged.calls.length, 2);
+  assert.equal(paged.calls.length, 4, "two complete reads of two pages");
 });
 
 test("B2.5 thresholds: read for the confirmed session's day only, null on 404, refused for another team or an unknown shape; and a 404 elsewhere stays a refusal", async () => {
@@ -682,7 +682,7 @@ test("B7.1 the one-day look-back on the whole list: a drill row inside the windo
   const r = await make(server.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
   assert.deepEqual(idsOf(r), ["300"]);
   assert.deepEqual([r.drillsLeftOut, r.lookBackParentsLeftOut, r.otherParentsLeftOut, r.lookBackDays], [2, 1, 0, 1]);
-  assert.deepEqual(pathsOf(server.calls), [WINDOW]);
+  assert.deepEqual(pathsOf(server.calls), [WINDOW, WINDOW], "two complete reads");
   const quiet = full({ [WINDOW]: answer(200, [session(99, 980, { start_timestamp: "2026-09-13T18:00:00" }), session(300)], { "x-total-count": "2" }) });
   assert.deepEqual(idsOf(await make(quiet.fetchImpl).listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" })), ["300"]);
   const early = full({ [WINDOW]: answer(200, [session(98, 980, { start_timestamp: "2026-09-12T23:59:59" }), session(300)], { "x-total-count": "2" }) });
@@ -1388,7 +1388,9 @@ test("C1. four and more pages: the whole list is read page by page (limit=100, o
   const r = await byDay(make(server.fetchImpl));
   assert.deepEqual(idsOf(r), ["5277", "5278"]);
   assert.deepEqual([r.total, r.drillsLeftOut, r.lookBackParentsLeftOut, r.otherParentsLeftOut], [350, 0, 1, 347]);
-  assert.deepEqual(listCalls(server.calls), [LIST, `${LIST}&offset=100`, `${LIST}&offset=200`, `${LIST}&offset=300`]);
+  const onePass = [LIST, `${LIST}&offset=100`, `${LIST}&offset=200`, `${LIST}&offset=300`];
+  assert.deepEqual(listCalls(server.calls), [...onePass, ...onePass], "snapshot A, then snapshot B, each first to last page");
+  assert.equal(r.listReads, 2);
   assert.ok(server.calls.every((c) => c.method === "GET" && new URL(c.url).origin === "https://server3.gpexe.com" && !c.url.includes("start_timestamp")));
 });
 
@@ -1517,11 +1519,11 @@ test("C10. the hard cap: a list whose X-Total-Count is above SESSION_LIST_MAX_RO
   const atCap = fakeServer({ ...fullRoutes(), ...pagedList(history(2000, "2021-01-01")) });
   const r = await byDay(make(atCap.fetchImpl), { fromDay: "2026-06-01", toDay: "2026-06-02" });
   assert.equal(r.total, 2000);
-  assert.equal(listCalls(atCap.calls).length, 20);
+  assert.equal(listCalls(atCap.calls).length, 40, "20 pages, read twice");
   // A list that keeps announcing pages past the page cap is refused too.
   const endless = fakeServer({ ...fullRoutes(), ...pagedList([], { total: 2000, pages: Array.from({ length: 21 }, (_, i) => history(95, "2021-01-01").map((r) => ({ ...r, id: 100000 + i * 100 + (r.id - 5000) }))), links: Array.from({ length: 21 }, (_, i) => NEXT((i + 1) * 95)) }) });
   await assert.rejects(byDay(make(endless.fetchImpl)), code("source_list_incomplete"));
-  assert.equal(listCalls(endless.calls).length, 20, "never more than the page cap");
+  assert.equal(listCalls(endless.calls).length, 20, "never more than the page cap; snapshot B is not sent after A failed");
 });
 
 test("C12. the whole history is classified: an ambiguous pair of rows long before the window refuses every window (source_list_ambiguous), never a thinned list", async () => {
@@ -1557,22 +1559,221 @@ test("C14. the runbook's window section names every whole-list fail-closed cause
   assert.match(section, /next link[^.]*never been observed/i);
   assert.match(section, /residual risk/i);
   assert.doesNotMatch(section, /nothing wrong is written/i, "the residual risk is not played down");
-  assert.match(section, /drill rows[^.]*treated as parents/i);
-  assert.match(section, /candidate sessions/i);
+  assert.match(section, /twice/i);
+  assert.match(section, /not a transactional snapshot/i, "the two reads are not claimed to be a snapshot");
+  assert.match(section, /eight GET requests/i, "the request budget is stated");
+  assert.match(section, /condition 6/i, "the candidate-withdrawal blocker is referenced");
+  const state = await fsp.readFile(path.resolve(ROOT, "docs/ai/CURRENT_STATE.md"), "utf8");
+  const next = state.slice(state.indexOf("## Most likely next step"));
+  assert.match(next, /conditions 1–3 and 6/i, "the closing summary names condition 6 as a switch blocker");
 });
 
-test("C15. characterisation of the accepted residual risk (offset paging, owner decision pending): a row lost between pages with a stable total and consistent links is not noticed; when it is a parent with drills, its drill rows inside the window come back as sessions", async () => {
-  // Row 100 of the first read is the parent P of two drills inside the window;
-  // the second page starts one row late (a delete before and an insert after),
-  // the links stay consistent with the rows read and the total stays 250.
-  const rows = history(250, "2025-01-01");
-  rows[100] = parent(7000, [7001, 7002], 980, { start_timestamp: "2026-10-05T09:00:00" });
-  rows[101] = session(7001, 980, { start_timestamp: "2026-10-05T09:10:00" });
-  rows[102] = session(7002, 980, { start_timestamp: "2026-10-05T09:40:00" });
-  const shifted = [rows.slice(0, 100), rows.slice(101, 201), [...rows.slice(201), session(7999, 980, { start_timestamp: "2026-11-01T10:00:00" })]];
-  const r = await byDay(make(fakeServer({ ...fullRoutes(), ...pagedList([], { total: 250, pages: shifted }) }).fetchImpl));
-  assert.deepEqual(idsOf(r), ["7001", "7002"], "the two drill rows are returned as sessions - the risk the runbook names");
-  // If a guard is built, this test is turned into a refusal (source_list_changed).
+// A list that lives on the fake server and can change between any two
+// requests: `rowsAt(n)` gives the rows the n-th list request sees (1-based),
+// `totalAt(n)` the X-Total-Count it reports. Pages of 100, offset links.
+function liveList({ rowsAt, totalAt = null, extra = {} }) {
+  let n = 0;
+  const serve = (offset) => () => {
+    n += 1;
+    const rows = rowsAt(n);
+    const page = rows.slice(offset, offset + 100);
+    const headers = { "x-total-count": String(totalAt ? totalAt(n) : rows.length) };
+    if (offset + 100 < rows.length) headers.link = NEXT(offset + 100);
+    return answer(200, page, headers);
+  };
+  const routes = { ...fullRoutes(), ...extra, [LIST]: serve(0) };
+  for (let off = 100; off < 3000; off += 100) routes[`${LIST}&offset=${off}`] = serve(off);
+  return fakeServer(routes);
+}
+const WIN = { fromDay: "2026-10-05", toDay: "2026-10-06" };
+// 350 sessions from 2026-01-01 (2026-10-05 is index 277), one a parent with two drills.
+function stable350() {
+  const rows = history(350, "2026-01-01");
+  rows[180] = parent(8000, [8001, 8002], 980, { start_timestamp: "2026-06-30T09:00:00" });
+  rows[181] = session(8001, 980, { start_timestamp: "2026-06-30T09:10:00" });
+  rows[182] = session(8002, 980, { start_timestamp: "2026-06-30T09:40:00" });
+  return rows;
+}
+const changedCopy = (rows, index, patch) => rows.map((r, i) => (i === index ? { ...r, ...patch } : r));
+
+test("C15. the delete+insert race of offset paging is now refused: a row deleted before the second page and another created at the end of the list (the total unchanged) makes snapshot A miss a parent with drills; snapshot B differs from A and the whole list is refused - the drill rows are never returned as sessions", async () => {
+  // L0: P (7000) with drills 7001 / 7002 inside the window at index 100. After
+  // the first page of A, row 50 is deleted and 7999 created: L1. A = L0[0..99]
+  // + L1[100..] misses P; B is all of L1. A and B differ.
+  const L0 = history(250, "2025-01-01");
+  L0[100] = parent(7000, [7001, 7002], 980, { start_timestamp: "2026-10-05T09:00:00" });
+  L0[101] = session(7001, 980, { start_timestamp: "2026-10-05T09:10:00" });
+  L0[102] = session(7002, 980, { start_timestamp: "2026-10-05T09:40:00" });
+  const L1 = [...L0.slice(0, 50), ...L0.slice(51), session(7999, 980, { start_timestamp: "2026-11-01T10:00:00" })];
+  const server = liveList({ rowsAt: (n) => (n === 1 ? L0 : L1) });
+  const a = make(server.fetchImpl);
+  const e = await errorOf(a.listSessionsByDay(WIN));
+  assert.equal(e?.code, "source_list_changed");
+  for (const id of ["7000", "7001", "7002"]) await assert.rejects(a.getSession({ sessionId: id }), code("session_not_listed"), id);
+  assert.equal(listCalls(server.calls).length, 6, "A and B read whole (3 pages each), no retry");
+});
+
+test("D1. a stable list of 350 rows on four pages is read whole twice and gives exactly the window's parents", async () => {
+  const rows = stable350();
+  const server = liveList({ rowsAt: () => rows });
+  const r = await byDay(make(server.fetchImpl), WIN);
+  assert.deepEqual(idsOf(r), ["5277", "5278"]);
+  assert.deepEqual([r.total, r.listReads, listCalls(server.calls).length], [350, 2, 8]);
+});
+
+test("D2. a change on page 2 or later between the two reads refuses the whole list (source_list_changed)", async () => {
+  const rows = stable350();
+  for (const index of [150, 250, 320, 349]) {
+    const changed = changedCopy(rows, index, { updated_on: "2026-12-31T23:59:59" });
+    const server = liveList({ rowsAt: (n) => (n <= 4 ? rows : changed) });
+    await assert.rejects(byDay(make(server.fetchImpl), WIN), code("source_list_changed"), `row ${index}`);
+    assert.equal(listCalls(server.calls).length, 8, `row ${index}: B read whole, no retry`);
+  }
+});
+
+test("D3. the same ids in another order in snapshot B refuse the whole list", async () => {
+  const rows = stable350();
+  const swapped = [...rows];
+  [swapped[120], swapped[121]] = [swapped[121], swapped[120]];
+  await assert.rejects(byDay(make(liveList({ rowsAt: (n) => (n <= 4 ? rows : swapped) }).fetchImpl), WIN), code("source_list_changed"));
+  const rotated = [...rows.slice(300), ...rows.slice(0, 300)];
+  await assert.rejects(byDay(make(liveList({ rowsAt: (n) => (n <= 4 ? rows : rotated) }).fetchImpl), WIN), code("source_list_changed"));
+});
+
+test("D4. a change of any classification or candidate field between the two reads refuses the whole list: team, drills (order), drills_count, start_timestamp, category_name, end_timestamp, updated_on, is_stats_valid", async () => {
+  const { SNAPSHOT_FIELDS } = await import("../src/gpexeRestV1Adapter.js");
+  const rows = stable350();
+  const changes = {
+    team: [200, { team: "980" }],
+    drills: [180, { drills: [8002, 8001] }],
+    drills_count: [200, { drills_count: null }],
+    start_timestamp: [200, { start_timestamp: "2026-07-20T10:00:01" }],
+    category_name: [200, { category_name: "Match" }],
+    end_timestamp: [200, { end_timestamp: "2026-07-20T12:00:00" }],
+    updated_on: [200, { updated_on: "2026-07-21T12:00:00" }],
+    is_stats_valid: [200, { is_stats_valid: false }],
+  };
+  assert.deepEqual(Object.keys(changes).sort(), [...SNAPSHOT_FIELDS].sort(), "every compared field has a case");
+  for (const [field, [index, patch]] of Object.entries(changes)) {
+    const changed = changedCopy(rows, index, patch);
+    await assert.rejects(byDay(make(liveList({ rowsAt: (n) => (n <= 4 ? rows : changed) }).fetchImpl), WIN), code("source_list_changed"), field);
+  }
+  // A field outside the list (one the importer never reads) may differ.
+  const noted = changedCopy(rows, 200, { notes: "another private note" });
+  assert.deepEqual(idsOf(await byDay(make(liveList({ rowsAt: (n) => (n <= 4 ? rows : noted) }).fetchImpl), WIN)), ["5277", "5278"]);
+});
+
+test("D5. snapshot A fails: snapshot B is not sent and nothing changes in the adapter", async () => {
+  const rows = stable350();
+  const server = liveList({ rowsAt: () => rows, totalAt: (n) => (n === 3 ? 351 : 350) });
+  const a = make(server.fetchImpl);
+  await assert.rejects(a.listSessionsByDay(WIN), code("source_list_changed"));
+  assert.equal(listCalls(server.calls).length, 3, "B never started");
+  await assert.rejects(a.getSession({ sessionId: "5277" }), code("session_not_listed"));
+});
+
+test("D6. snapshot B fails or differs: no partial result - no session of the window, and none an earlier list made readable, stays readable, and no bundle request is sent", async () => {
+  const rows = stable350();
+  const readable = { "/rest/v1/team_session/5277/": answer(200, { id: 5277, team: 980, drills_count: 0, start_timestamp: "2026-10-05T10:00:00" }) };
+  for (const [name, opts, expected] of [
+    ["B differs", { rowsAt: (n) => (n <= 12 ? rows : changedCopy(rows, 10, { updated_on: "x" })) }, "source_list_changed"],
+    ["B total changes inside B", { rowsAt: () => rows, totalAt: (n) => (n === 14 ? 351 : 350) }, "source_list_changed"],
+    ["B has an unreadable start", { rowsAt: (n) => (n <= 12 ? rows : changedCopy(rows, 10, { start_timestamp: null })) }, "source_session_start_unreadable"],
+    ["B has a row of another team", { rowsAt: (n) => (n <= 12 ? rows : changedCopy(rows, 10, { team: 981 })) }, "source_team_mismatch"],
+  ]) {
+    const server = liveList({ ...opts, extra: readable });
+    const a = make(server.fetchImpl);
+    // A first successful window list (requests 1-8) makes 5277 readable and
+    // confirmed; the second list is A = requests 9-12, B = 13-16.
+    await byDay(a, WIN);
+    assert.equal((await a.getSession({ sessionId: "5277" })).id, 5277);
+    const sent = server.calls.length;
+    await assert.rejects(byDay(a, WIN), code(expected), name);
+    const afterList = server.calls.length;
+    await assert.rejects(a.getSession({ sessionId: "5277" }), code("session_not_listed"), `${name}: nothing stays readable`);
+    await assert.rejects(a.fetchSessionBundle({ sessionId: "5277" }), code("session_not_listed"), `${name}: no bundle`);
+    await assert.rejects(a.getSessionDetails({ sessionId: "5277" }), code("session_not_confirmed"), `${name}: the confirmation is gone`);
+    assert.equal(server.calls.length, afterList, `${name}: no request after the refused list`);
+    assert.ok(server.calls.slice(sent).every((c) => new URL(c.url).pathname === "/rest/v1/team_session/"), `${name}: only list requests`);
+  }
+});
+
+test("D7. the cap and the page cap hold for each snapshot on its own: B over the cap is refused at its first page, B with more pages than allowed is refused at the page cap, A over the cap sends nothing more", async () => {
+  const rows = history(300, "2026-01-01");
+  const overB = liveList({ rowsAt: () => rows, totalAt: (n) => (n <= 3 ? 300 : 2001) });
+  await assert.rejects(byDay(make(overB.fetchImpl), WIN), code("source_list_too_large"));
+  assert.equal(listCalls(overB.calls).length, 4, "A whole, then one request of B");
+  const overA = liveList({ rowsAt: () => rows, totalAt: () => 2001 });
+  await assert.rejects(byDay(make(overA.fetchImpl), WIN), code("source_list_too_large"));
+  assert.equal(listCalls(overA.calls).length, 1);
+  // B announces a next page after its last counted row (2100 rows served while it says 2000).
+  const big = history(2100, "2021-01-01");
+  const endlessB = liveList({ rowsAt: (n) => (n <= 3 ? rows : big), totalAt: (n) => (n <= 3 ? 300 : 2000) });
+  await assert.rejects(byDay(make(endlessB.fetchImpl), WIN), code("source_answer_unexpected"));
+  assert.equal(listCalls(endlessB.calls).length, 3 + 20, "a next link after the last counted row of B is refused");
+  const twentyOne = liveList({ rowsAt: (n) => (n <= 3 ? rows : big.slice(0, 2000)), totalAt: (n) => (n <= 3 ? 300 : 2000) });
+  const pagesOfB = await errorOf(byDay(make(twentyOne.fetchImpl), WIN));
+  assert.equal(pagesOfB?.code, "source_list_changed", "B (2000 rows, 20 pages) is read whole and differs from A");
+  assert.equal(listCalls(twentyOne.calls).length, 3 + 20);
+});
+
+test("D7b. snapshot B over the page cap itself: pages of 95 rows, consistent links and a total of 2000 announce a 21st page - B is refused at the page cap (source_list_incomplete) after exactly 20 requests of its own", async () => {
+  const rows = history(300, "2026-01-01");
+  const big = history(2000, "2021-01-01");
+  let n = 0;
+  const serve = (offset) => () => {
+    n += 1;
+    if (n <= 3) {
+      const page = rows.slice(offset, offset + 100);
+      return answer(200, page, { "x-total-count": "300", ...(offset + 100 < 300 ? { link: NEXT(offset + 100) } : {}) });
+    }
+    return answer(200, big.slice(offset, offset + 95), { "x-total-count": "2000", link: NEXT(offset + 95) });
+  };
+  const routes = { ...fullRoutes(), [LIST]: serve(0) };
+  for (let off = 1; off < 3000; off += 1) routes[`${LIST}&offset=${off}`] = serve(off);
+  const server = fakeServer(routes);
+  await assert.rejects(byDay(make(server.fetchImpl), WIN), code("source_list_incomplete"));
+  assert.equal(listCalls(server.calls).length, 3 + 20, "A whole, then exactly the page cap of B");
+});
+
+test("D10. the caller's facts are re-checked between the two complete reads: beforeSecondRead runs after A and before B; when it refuses, B is never sent, the error is the caller's own, and nothing stays readable", async () => {
+  const rows = stable350();
+  const server = liveList({ rowsAt: () => rows });
+  const a = make(server.fetchImpl);
+  let calledAfter = null;
+  await byDay(a, { ...WIN, beforeSecondRead: async () => { calledAfter = listCalls(server.calls).length; } });
+  assert.equal(calledAfter, 4, "after the four pages of A, before B");
+  const refusing = liveList({ rowsAt: () => rows });
+  const b = make(refusing.fetchImpl);
+  await byDay(b, WIN);
+  const before = listCalls(refusing.calls).length;
+  const err = Object.assign(new Error("binding ended"), { code: "binding_ended" });
+  const e = await errorOf(b.listSessionsByDay({ ...WIN, beforeSecondRead: async () => { throw err; } }));
+  assert.equal(e, err);
+  assert.equal(listCalls(refusing.calls).length - before, 4, "A only; B never sent");
+  await assert.rejects(b.getSession({ sessionId: "5277" }), code("session_not_listed"));
+  await assert.rejects(b.listSessionsByDay({ ...WIN, beforeSecondRead: "yes" }), code("invalid_options"));
+});
+
+test("D8. neither snapshot records anything before A and B are confirmed equal: a refused pair leaves no drill classification behind, so a later list in which that row is a parent is accepted", async () => {
+  const P = parent(9000, [9001], 980, { start_timestamp: "2026-10-05T09:00:00" });
+  const D = session(9001, 980, { start_timestamp: "2026-10-05T09:20:00" });
+  const X = (updated) => session(9002, 980, { start_timestamp: "2026-10-05T12:00:00", updated_on: updated });
+  // Read 1 (A) and read 2 (B) both see 9001 as a drill of 9000 and differ only in 9002;
+  // reads 3 and 4 see the list after 9000 was deleted: 9001 is a parent now.
+  const server = liveList({ rowsAt: (n) => (n === 1 ? [P, D, X("v1")] : n === 2 ? [P, D, X("v2")] : [D, X("v2")]) });
+  const a = make(server.fetchImpl);
+  await assert.rejects(a.listSessionsByDay(WIN), code("source_list_changed"));
+  const r = await a.listSessionsByDay(WIN);
+  assert.deepEqual(idsOf(r), ["9001", "9002"], "no classification_conflict: the refused reads recorded nothing");
+});
+
+test("D9. snapshot B with one more row at the end (or one fewer), every common row equal, refuses the whole list: the totals and lengths are compared, not only the rows of A", async () => {
+  const rows = stable350();
+  const longer = [...rows, session(9999, 980, { start_timestamp: "2026-12-01T10:00:00" })];
+  await assert.rejects(byDay(make(liveList({ rowsAt: (n) => (n <= 4 ? rows : longer) }).fetchImpl), WIN), code("source_list_changed"), "one row more in B");
+  const shorter = rows.slice(0, 349);
+  await assert.rejects(byDay(make(liveList({ rowsAt: (n) => (n <= 4 ? rows : shorter) }).fetchImpl), WIN), code("source_list_changed"), "one row fewer in B");
 });
 
 test("C11. any failed check returns nothing: no session of the window is returned or made readable when a later page fails, and the window result never falls back to a server-side date filter", async () => {
@@ -1584,5 +1785,5 @@ test("C11. any failed check returns nothing: no session of the window is returne
   assert.equal(e?.code, "source_list_changed");
   await assert.rejects(a.getSession({ sessionId: "5000" }), code("session_not_listed"), "nothing of the refused list became readable");
   assert.ok(!server.calls.some((c) => c.url.includes("start_timestamp")), "no fallback to the date filter");
-  assert.equal(listCalls(server.calls).length, 3, "no retry");
+  assert.equal(listCalls(server.calls).length, 3, "no retry, and snapshot B is not sent after A failed");
 });

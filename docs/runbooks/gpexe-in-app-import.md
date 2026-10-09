@@ -834,8 +834,9 @@ Owner decision 2026-10-08 (option (c)), after an owner-run check of 05.10 - 06.1
 date-filtered answer carried five rows after the window (`source_filter_ignored`; sanitized
 diagnostic `rows=13; after_end=5`, all five 3 - 24 hours after the end, no zone suffix): the server's
 date filter is no longer sent or trusted. A check on the binding path reads the **whole session
-list of the bound team** (`team_session/?team=<id>&limit=100`, header paged) and picks the window
-out itself:
+list of the bound team** (`team_session/?team=<id>&limit=100`, header paged) **twice**, one
+complete read after the other (owner decision 2026-10-09), and picks the window out itself. Each of
+the two reads - snapshot A, then snapshot B - passes steps 1 to 5 on its own:
 
 1. every page answers a list with the same `X-Total-Count`; every next link stays on the host, the
    `rest/v1/` family, the `team_session/` resource and the bound team, carries only `limit=100` and
@@ -851,8 +852,20 @@ out itself:
 5. every start must be a real calendar date and time (`YYYY-MM-DD[T ]HH:MM:SS`, never normalised);
    one that is not - anywhere in the list - refuses it (`source_session_start_unreadable`): where it
    belongs is never guessed;
-6. only then are the parents whose day (the source's naive day) lies inside the window returned; a
-   parent of the day before (the one-day look-back) and of any other day is left out.
+6. A and B must agree: the same total, the same ids in the same order, and for every id the same
+   `team`, `drills` (in the same order), `drills_count`, `start_timestamp`, `category_name`,
+   `end_timestamp`, `updated_on` and `is_stats_valid`; any difference refuses the list
+   (`source_list_changed`). A changes no state of the adapter; snapshot B is not sent when A fails,
+   nor when the binding, connection or credential changed during A (they are re-checked between the
+   reads); when B fails or differs, no session stays readable;
+7. only then, from snapshot B, are the parents whose day (the source's naive day) lies inside the
+   window returned; a parent of the day before (the one-day look-back) and of any other day is left
+   out.
+
+**Request budget:** the list costs two complete reads - for team 980's 308 - 350 sessions about
+eight GET requests per check (four pages, twice), at most 40 at the 2000-row cap - plus the bundle
+reads of the window's sessions. No retry; no request budget other than the per-request timeout
+bounds a check (the 90 s budget is Connect / Test's).
 
 Any refusal fails the check with its own code: the failed check row is stored, no candidate,
 preview, import, activity or result row is written, no bundle is read, nothing is retried, and the
@@ -871,15 +884,18 @@ server-side filter is never used as a fallback.
   held 308 rows on 2026-09-29, so the first real check after this change is the first proof of the
   paging and of the classification of the whole history; on any of these codes the owner stops and
   reports only the code;
-- **residual risk of offset paging:** a session deleted and another created between two page reads
-  (the total unchanged) shifts the offsets, and one row can be missed without any check noticing (the
-  e03 path and the earlier filtered read had the same property). If the missed row is a parent with
-  drills, its drill rows are no longer named by any listed row and are treated as parents: when they
-  fall inside the window, the check records them as candidate sessions (a drill as a session of its
-  own). A later check that sees the parent does not withdraw those candidates, and approving one (with
-  the import switch on) would write the drill's values a second time. Today the switch is off and a
-  candidate is only reviewed. A stronger guard (for example reading the whole list a second time and
-  requiring the same ids, or re-reading the first page) is an owner decision, not built.
+- **what the two reads close, and what stays a residual risk:** offset paging alone cannot see a
+  session deleted and another created between two page reads (the total unchanged): one row is
+  missed, and if it is a parent with drills, its drill rows are no longer named by any listed row and
+  are treated as parents - the check would record them as candidate sessions. The second complete
+  read closes that known blind spot: such a race leaves A and B different, and the list is refused.
+  **The two reads are not a transactional snapshot:** a change that happens identically in both reads
+  (for example a parent deleted before A and still deleted during B, or the same shift landing at the
+  same place in both) is not seen, and stays a residual risk;
+- **a candidate recorded by an earlier check is not withdrawn** by a later check that no longer
+  confirms it as a parent session (for example a drill row recorded as a session before this change).
+  This is a mandatory blocker before the import switch is turned on - see condition 6 under
+  "conditions before the switch is turned on" in `docs/ai/CURRENT_STATE.md`.
 
 ## Database pool checkout bound
 

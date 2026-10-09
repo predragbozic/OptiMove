@@ -183,7 +183,7 @@ function bundleFor(sourceTeamId, { detailsDrills = [0, 1], emptyDrill = null } =
 }
 function fakeSource({ token = TOKEN } = {}) {
   const calls = [];
-  const state = { served: null, bundle: null, gates: { team: null, list: null, athletes: null, track: null }, faults: { listStatus: 200, drillMissing: null, refuseAllReads: false, emptyList: false } };
+  const state = { served: null, bundle: null, listCount: 0, gates: { team: null, list: null, athletes: null, track: null }, faults: { listStatus: 200, drillMissing: null, refuseAllReads: false, emptyList: false } };
   const json = (status, body, headers = {}) => new Response(typeof body === "string" ? body : JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
   const abortable = (init, p) => new Promise((resolve, reject) => {
     if (init.signal?.aborted) return reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
@@ -220,6 +220,9 @@ function fakeSource({ token = TOKEN } = {}) {
       const base = { team: Number(t), category_name: "DRILL", start_timestamp: b.teamSession.start_timestamp, end_timestamp: b.teamSession.end_timestamp, updated_on: b.teamSession.updated_on, is_stats_valid: true, drills: [], drills_count: 0 };
       const rows = [{ ...b.teamSession, drills: [sid * 1000 + 1, sid * 1000 + 2], drills_count: 2 }, { ...base, id: sid * 1000 + 1 }, { ...base, id: sid * 1000 + 2 }];
       if (state.faults.listExtraRows) rows.push(...state.faults.listExtraRows.map((r) => ({ ...base, ...r })));
+      state.listCount += 1;
+      // The second complete read of a check sees a change (owner decision 2026-10-09: two reads must agree).
+      if (state.faults.listChangeOnEvenRead && state.listCount % 2 === 0) rows[0] = { ...rows[0], updated_on: "2026-09-14T23:59:59" };
       const total = state.faults.listTotal === undefined ? String(rows.length) : state.faults.listTotal;
       return json(200, rows, total === null ? {} : { "x-total-count": total });
     }
@@ -615,12 +618,13 @@ test("6. concurrency: an Unbind holding the team lock, a Test / bind in flight o
     [() => q(`update training_load.source_host_catalog set state = 'retired' where host_key = 'server3'`), "host_not_allowed", () => q(`update training_load.source_host_catalog set state = 'approved' where host_key = 'server3'`)],
   ]) {
     const g = gate(); let holds = 0;
-    // The first re-validation (before the list) passes; the mutation lands before the second one (after the list,
-    // before any bundle): re-validations are list-pre (1), list-post (2), bundle-pre (3), bundle-post (4).
-    resolver.setImportSourceRevalidateHoldForTests(async () => { holds += 1; if (holds === 2) await g.p; });
+    // The first two re-validations (before the list, between its two complete reads) pass; the mutation lands
+    // before the third one (after the list, before any bundle): re-validations are list-pre (1), between the
+    // reads (2), list-post (3), bundle-pre (4), bundle-post (5).
+    resolver.setImportSourceRevalidateHoldForTests(async () => { holds += 1; if (holds === 3) await g.p; });
     const started = await startCheck(o);
     assert.equal(started.status, 202, JSON.stringify(started.body));
-    await waitFor(() => holds === 2);
+    await waitFor(() => holds === 3);
     const listReads = importReads().filter((c) => c.key.includes("/team_session/?team=")).length;
     await mutate();
     g.release();
@@ -769,10 +773,10 @@ test("12. round-2 hardening: a Reconnect during a run stops it with connection_c
     legacyTrap();
     src.serve(o.sourceTeamId);
     const g = gate(); let holds = 0;
-    resolver.setImportSourceRevalidateHoldForTests(async () => { holds += 1; if (holds === 2) await g.p; });
+    resolver.setImportSourceRevalidateHoldForTests(async () => { holds += 1; if (holds === 3) await g.p; });
     const started = await startCheck(o);
     assert.equal(started.status, 202, JSON.stringify(started.body));
-    await waitFor(() => holds === 2);
+    await waitFor(() => holds === 3);
     const fpBefore = (await q(`select encode(sha256(credential_nonce), 'hex') as fp from training_load.source_credential_connections where id = $1`, [conn.id]))[0].fp;
     const re = await api(`/sources/gpexe/connections/${conn.id}/reconnect`, { method: "POST", cookie: o.cadmin.cookie, body: { username: USERNAME, password: PASSWORD, confirmation: { sourceSystem: "gpexe", ownerClubId: o.clubId, affectedTeamCount: 1 } }, allowed: [SOURCE_TEAM_NAME_MARKER] });
     assert.equal(re.status, 200, JSON.stringify(re.body));
@@ -799,10 +803,10 @@ test("12. round-2 hardening: a Reconnect during a run stops it with connection_c
     legacyTrap();
     src.serve(o.sourceTeamId);
     const g = gate(); let holds = 0;
-    resolver.setImportSourceRevalidateHoldForTests(async () => { holds += 1; if (holds === 2) await g.p; });
+    resolver.setImportSourceRevalidateHoldForTests(async () => { holds += 1; if (holds === 3) await g.p; });
     const started = await startCheck(o);
     assert.equal(started.status, 202, JSON.stringify(started.body));
-    await waitFor(() => holds === 2);
+    await waitFor(() => holds === 3);
     const u = await unbind(o, conn, binding);
     assert.equal(u.status, 200, JSON.stringify(u.body));
     const b2 = await api(`/sources/gpexe/connections/${conn.id}/bindings`, { method: "POST", cookie: o.cadmin.cookie, body: { teamId: o.teamId, sourceTeamId: o.sourceTeamId } });
@@ -940,12 +944,13 @@ test("12. round-2 hardening: a Reconnect during a run stops it with connection_c
     const { conn, binding } = await bound(o);
     legacyTrap();
     src.serve(o.sourceTeamId);
-    // Re-validations in order: list-pre (1), list-post (2), bundle-pre (3), bundle-post (4).
+    // Re-validations in order: list-pre (1), between the list's two complete reads (2), list-post (3),
+    // bundle-pre (4), bundle-post (5).
     const g = gate(); let holds = 0;
-    resolver.setImportSourceRevalidateHoldForTests(async () => { holds += 1; if (holds === 4) await g.p; });
+    resolver.setImportSourceRevalidateHoldForTests(async () => { holds += 1; if (holds === 5) await g.p; });
     const started = await startCheck(o);
     assert.equal(started.status, 202, JSON.stringify(started.body));
-    await waitFor(() => holds === 4);
+    await waitFor(() => holds === 5);
     assert.ok(importReads().some((c) => c.key.includes("/details/")), "the bundle was read before the hold");
     const u = await unbind(o, conn, binding);
     assert.equal(u.status, 200, JSON.stringify(u.body));
@@ -1037,7 +1042,8 @@ test("13. the facts are re-validated after a list too, empty or not: a binding e
     await started.done.p;
     const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [started.body.check.id]))[0];
     assert.deepEqual([row.status, row.error_code], ["failed", "binding_ended"], JSON.stringify(row));
-    assert.equal(importReads().length, readsBefore, "nothing more was read");
+    assert.equal(importReads().length, readsBefore, "nothing more was read - the facts are re-checked between the two complete reads, so snapshot B is never sent");
+    assert.equal(src.calls.filter((c) => c.key.includes("/team_session/?team=")).length, 1, "one list read only");
     assert.equal((await candidatesOf(o.teamId)).length, 0);
     assert.ok(src.calls.every((c) => c.auth !== "ENV"));
   }
@@ -1167,10 +1173,10 @@ test("15. both paths pin the team's club: a legacy team moved to another club du
     legacyTrap();
     src.serve(o.sourceTeamId);
     const g = gate(); let holds = 0;
-    resolver.setImportSourceRevalidateHoldForTests(async () => { holds += 1; if (holds === 4) await g.p; });
+    resolver.setImportSourceRevalidateHoldForTests(async () => { holds += 1; if (holds === 5) await g.p; });
     const started = await startCheck(o);
     assert.equal(started.status, 202, JSON.stringify(started.body));
-    await waitFor(() => holds === 4);
+    await waitFor(() => holds === 5);
     await q(`update public.clubs set is_active = false where id = $1`, [o.clubId]);
     g.release();
     await started.done.p;
@@ -1578,18 +1584,20 @@ test("21. option (c): the window is picked out of the whole team list - five ses
     assert.ok(!src.calls.some((c) => /99123456\d/.test(c.key)), "no session outside the window was read");
     assert.ok(!src.calls.some((c) => c.key.includes("start_timestamp")), "no date bound is sent");
     const before = await candidates();
-    for (const [fault, expected] of [[{ listExtraRows: [{ id: 991234570, start_timestamp: null }] }, "source_session_start_unreadable"], [{ listExtraRows: [], listTotal: "99" }, "source_list_incomplete"], [{ listExtraRows: [], listTotal: null }, "source_answer_unexpected"]]) {
-      Object.assign(src.state.faults, { listTotal: undefined }, fault);
+    for (const [fault, expected, listReads] of [[{ listExtraRows: [{ id: 991234570, start_timestamp: null }] }, "source_session_start_unreadable", 1], [{ listExtraRows: [], listTotal: "99" }, "source_list_incomplete", 1], [{ listExtraRows: [], listTotal: null }, "source_answer_unexpected", 1], [{ listExtraRows: [], listChangeOnEvenRead: true }, "source_list_changed", 2]]) {
+      Object.assign(src.state.faults, { listTotal: undefined, listChangeOnEvenRead: false }, fault);
+      src.state.listCount = 0;
       const callsBefore = src.calls.length;
       const failed = await importer.startCheck(o.teamId, { userId: o.coach.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
       assert.deepEqual([failed.status, failed.error?.code], ["failed", expected], JSON.stringify(fault));
       assert.equal(await candidates(), before, `${expected}: no candidate`);
       assert.ok(!src.calls.slice(callsBefore).some((c) => /\/team_session\/\d+\//.test(c.key) || c.key.includes("athlete_session")), `${expected}: no bundle read`);
-      assert.equal(src.calls.slice(callsBefore).filter((c) => c.key.includes("/team_session/?team=")).length, 1, `${expected}: one list read, no retry`);
+      assert.equal(src.calls.slice(callsBefore).filter((c) => c.key.includes("/team_session/?team=")).length, listReads, `${expected}: ${listReads} list read(s) - snapshot B only after a good A - no retry`);
     }
   } finally {
     src.state.faults.listExtraRows = null;
     src.state.faults.listTotal = undefined;
+    src.state.faults.listChangeOnEvenRead = false;
   }
 });
 

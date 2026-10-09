@@ -57,6 +57,13 @@ export const MAX_PAGES = 20;
 // the page size. A team whose list is longer is refused at the first page, by
 // its X-Total-Count, before any further request: never a part of the list.
 export const SESSION_LIST_MAX_ROWS = MAX_PAGES * SESSION_PAGE_LIMIT_MAX;
+// The fields of a session row that decide its classification or its candidate:
+// two whole reads of the list must agree on every one of them, row by row, in
+// the same order (owner decision 2026-10-09).
+export const SNAPSHOT_FIELDS = Object.freeze(["team", "drills", "drills_count", "start_timestamp", "category_name", "end_timestamp", "updated_on", "is_stats_valid"]);
+const sameField = (x, y) => (Array.isArray(x) || Array.isArray(y)
+  ? Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => Object.is(v, y[i]))
+  : Object.is(x, y));
 // One answer is at most this many BYTES (5 MiB). A larger one is refused:
 // unread when it is announced, cancelled when it is counted.
 export const MAX_ANSWER_BYTES = 5 * 1024 * 1024;
@@ -763,6 +770,11 @@ export function createGpexeRestV1Adapter({
   const refreshedDuring = (id, epoch) => {
     if (epochOf(id) !== epoch) throw new SourceAdapterError("session_refreshed", "That session was refreshed while this read was in flight; the answer is discarded.");
   };
+  // Every parent this instance holds as readable is withdrawn, with all it
+  // confirmed (a failed or disagreeing second read of a window list).
+  const withdrawAllParents = () => {
+    for (const id of [...knownParents]) { knownParents.delete(id); revokeSession(id); }
+  };
   let listSequence = 0;
   const nextListTicket = () => { listSequence += 1; return listSequence; };
   // `readable` (default: every parent) are the parents a later getSession may
@@ -1159,15 +1171,28 @@ export function createGpexeRestV1Adapter({
     // date filter is not trusted for completeness and is not sent. The WHOLE
     // list of the bound team is read (team_session/?team=&limit=100, header
     // paged, a stable X-Total-Count, every next link checked, at most
-    // SESSION_LIST_MAX_ROWS rows) or refused; then parents and drills are told
-    // apart on the whole list, every start must be a real date and time (one
-    // that is not refuses the list: where it belongs is never guessed), and
-    // only then are the parents of the window picked out locally. A parent of
-    // the day before the window (the one-day look-back the e03 importer reads,
-    // for a drill whose parent started the evening before) is classified with
-    // the rest and left out; a drill row is never returned as a session.
+    // SESSION_LIST_MAX_ROWS rows), its rows checked, parents and drills told
+    // apart on the whole list and every start read strictly (one that is not
+    // a real date and time refuses the list: where it belongs is never guessed).
+    // Owner decision 2026-10-09: the whole list is read TWICE, one complete
+    // read after the other, each with every check of its own; the second is
+    // used only when both agree on the total, on every id in the same order and
+    // on every field in SNAPSHOT_FIELDS - otherwise source_list_changed. This
+    // closes the blind spot of offset paging (a row deleted and another
+    // created between two pages, the total unchanged); it is not a
+    // transactional snapshot: a change that lands identically in both reads
+    // stays a residual risk. The first read changes no state of this adapter;
+    // a failed second read or a difference leaves no session readable. Only
+    // then are the parents of the window picked out locally from the second
+    // read: a parent of the day before the window (the one-day look-back) and
+    // of every other day is left out; a drill row is never returned as a session.
     async listSessionsByDay(options) {
-      const { fromDay, toDay } = only(options, ["fromDay", "toDay"]);
+      // `beforeSecondRead` (optional): the caller's re-check of its own facts
+      // between the two complete reads (the importer: the binding, connection
+      // and credential still hold), so snapshot B is never sent when they
+      // changed during A.
+      const { fromDay, toDay, beforeSecondRead = null } = only(options, ["fromDay", "toDay", "beforeSecondRead"]);
+      if (beforeSecondRead !== null && typeof beforeSecondRead !== "function") throw new SourceAdapterError("invalid_options", "beforeSecondRead is a function.");
       const from = validDay(fromDay);
       const to = validDay(toDay);
       if (from === null || to === null) throw new SourceAdapterError("invalid_options", "A date window is two days as YYYY-MM-DD.");
@@ -1176,13 +1201,35 @@ export function createGpexeRestV1Adapter({
       const lookFrom = dayBefore(from);
       const ticket = nextListTicket();
       const path = teamScopedPath("team_session/", team, [["limit", SESSION_PAGE_LIMIT_MAX]]);
-      const { rows, total } = await wholeList(path, nextWholeSessionListPath, "the session list", MAX_PAGES, SESSION_LIST_MAX_ROWS);
-      checkSessionRows(rows);
-      const { parents, drillsLeftOut, drillReferencesNotListed } = classifyParents(rows);
-      const days = new Map(rows.map((row) => [canonicalId(row.id), strictDay(row.start_timestamp)]));
-      if ([...days.values()].some((day) => day === null)) {
-        throw new SourceAdapterError("source_session_start_unreadable", "A session of the team's list has a start that cannot be read as a date and time; the window cannot be told apart.");
+      // One complete read with every check of its own; pure: no adapter state.
+      const snapshot = async () => {
+        const { rows, total } = await wholeList(path, nextWholeSessionListPath, "the session list", MAX_PAGES, SESSION_LIST_MAX_ROWS);
+        checkSessionRows(rows);
+        const classified = classifyParents(rows);
+        const days = new Map(rows.map((row) => [canonicalId(row.id), strictDay(row.start_timestamp)]));
+        if ([...days.values()].some((day) => day === null)) {
+          throw new SourceAdapterError("source_session_start_unreadable", "A session of the team's list has a start that cannot be read as a date and time; the window cannot be told apart.");
+        }
+        return { rows, total, classified, days };
+      };
+      const first = await snapshot();
+      let second;
+      try {
+        if (beforeSecondRead) await beforeSecondRead();
+        second = await snapshot();
+        const same = first.total === second.total && first.rows.length === second.rows.length
+          && first.rows.every((rowA, k) => {
+            const rowB = second.rows[k];
+            return canonicalId(rowA.id) === canonicalId(rowB.id) && SNAPSHOT_FIELDS.every((field) => sameField(rowA[field], rowB[field]));
+          });
+        if (!same) throw new SourceAdapterError("source_list_changed", "The session list changed between two complete reads; read it again.");
+      } catch (error) {
+        // No partial result: no session of this instance stays readable.
+        withdrawAllParents();
+        throw error;
       }
+      const { rows, total, days } = second;
+      const { parents, drillsLeftOut, drillReferencesNotListed } = second.classified;
       const dayOfRow = (row) => days.get(canonicalId(row.id));
       const inWindow = parents.filter((p) => dayOfRow(p) >= from && dayOfRow(p) <= to);
       const lookBackParentsLeftOut = parents.filter((p) => dayOfRow(p) === lookFrom).length;
@@ -1195,6 +1242,7 @@ export function createGpexeRestV1Adapter({
         lookBackParentsLeftOut,
         otherParentsLeftOut: parents.length - inWindow.length - lookBackParentsLeftOut,
         lookBackDays: 1,
+        listReads: 2,
         fromDay: from,
         toDay: to,
       };

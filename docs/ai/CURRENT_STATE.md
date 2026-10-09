@@ -1287,11 +1287,16 @@ Technical details.
   ambiguous parent / drill pair anywhere fails every check of the team until it is corrected in GPEXE.
   **Not yet observed on server3:** the form of a next link (only `limit` / `offset` is accepted) and the
   classification of team 980's whole history (308 rows on 2026-09-29, so at least four pages); the first
-  real check after the merge is the first proof of both. **Residual risk (offset paging):** a delete plus
-  an insert between two page reads can miss one row unnoticed; if that row is a parent with drills, its
-  drill rows inside the window are recorded as candidate sessions of their own, which a later check does
-  not withdraw (approving one with the switch on would write the drill's values twice). A stronger guard
-  (a second whole read compared by ids, or a re-read of the first page) is an owner decision, not built.
+  real check after the merge is the first proof of both. **Two complete reads (owner decision
+  2026-10-09, after the internal review found the offset-paging blind spot):** the whole list is read
+  twice, snapshot A then snapshot B, each with every check above; they must agree on the total, the ids
+  in the same order and, per id, `team`, `drills` (order), `drills_count`, `start_timestamp`,
+  `category_name`, `end_timestamp`, `updated_on` and `is_stats_valid`, otherwise `source_list_changed`
+  (no partial result, no session left readable; B is not sent after a failed A; only B is used and
+  recorded; the importer re-checks the binding, connection and credential between A and B, so B is
+  never sent after an Unbind or a Reconnect during A). About eight list GETs per check for 308 - 350 rows (four pages, twice), at most 40 at the
+  cap. This closes the known delete + insert blind spot; it is **not a transactional snapshot** - a
+  change that lands identically in both reads stays a residual risk.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2003,7 +2008,7 @@ pre-existing; pass/fail counts don't belong in this file
 
 - **In-app GPEXE import — conditions before the switch is turned on** (owner, 2026-09-18).
   F1, F2, F3a and F3b are merged (see above); F4 is the first real local import. `GPEXE_IMPORT_APPLY_ENABLED` stays off in an
-  environment until conditions 1–3 hold there; condition 4 is required before regular
+  environment until conditions 1–3 and 6 hold there; condition 4 is required before regular
   production imports:
   1. **A fresh, restore-verified backup of that environment.** This is an operational
      gate: `docs/runbooks/gpexe-in-app-import.md` has a record table (backup path or
@@ -2031,6 +2036,13 @@ pre-existing; pass/fail counts don't belong in this file
      candidates — the background job does not re-resolve access (PR #118 closed the routes
      only). Not a blocker for the guard PR or Phase 3b; must be fixed before regular
      production imports are switched on.
+  6. **Mandatory before the import switch is turned on in any environment** (owner, 2026-10-09, at the
+     review of option (c)): a later successful check must withdraw or supersede the earlier unapproved
+     candidates of the same team and period that it no longer confirms as parent sessions. Today a
+     candidate stays pending when a later check of the same window does not list it (for example a drill
+     row recorded as a session of its own by a check whose list missed its parent), and approving it
+     would import a drill's values a second time. Not built in option (c); a separate PR with its own
+     tests.
   - Planned shape (as built in F1–F2):
     - "Check now" fetches from GPEXE;
     - a list of import candidates;
@@ -2199,16 +2211,18 @@ the identity implementation (PR #144, v32), the id masking (PR #145), the harden
 window diagnostic (PR #147) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
 1. The owner's external review of option (c), branch `fix/gpexe-rest-v1-local-window-filter`.
 2. After its merge and deploy, on a separate owner order, one check of the same window through the whole
-   list.
-3. The owner states the state of the production-use gate and of the two gates before a link (an identity
+   list (two complete reads).
+3. Condition 6 under the switch conditions (withdraw candidates a later check no longer confirms) - a
+   separate PR, before the switch is ever turned on.
+4. The owner states the state of the production-use gate and of the two gates before a link (an identity
    load and one link were run after PR #146; whether those gates were confirmed is not recorded here).
-4. The separate resend timing task (see Separate tasks), when the owner schedules it.
-5. PR B, the F3c4 cut-over (see the active step).
-6. The second owner-run procedure for one controlled real import.
-7. **Phase 5a3c** (Complete and Needs review).
+5. The separate resend timing task (see Separate tasks), when the owner schedules it.
+6. PR B, the F3c4 cut-over (see the active step).
+7. The second owner-run procedure for one controlled real import.
+8. **Phase 5a3c** (Complete and Needs review).
 
-Conditions 1–3 under Separate tasks still come before the first real local import, and
-conditions 4–5 before regular production imports.
+Conditions 1–3 and 6 under Separate tasks come before the first real local import (and before the
+switch is turned on in any environment), and conditions 4–5 before regular production imports.
 
 The other Separate tasks wait until the owner schedules them.
 
