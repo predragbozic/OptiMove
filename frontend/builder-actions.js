@@ -1225,6 +1225,7 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
 
 export async function handleBuilderDraftAction(action, handlers) {
   const type = action.dataset.action;
+  if (state.builder.discardingDraftId) return true;
   if (type === "builder-submit-plan") {
     const draft = state.builder.draft;
     if (!draft) return true;
@@ -1295,11 +1296,24 @@ export async function handleBuilderDraftAction(action, handlers) {
   }
   if (type === "builder-discard-current-draft") {
     const plan = state.builder.draft?.plan;
-    if (!plan || plan.status !== "draft" || !window.confirm("Discard all changes in this draft? The original plan will stay unchanged.")) return true;
-    await handlers.cancelBuilderAutosaves?.();
-    await builderMutationQueue;
-    await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(plan.id)}`, { method: "DELETE" });
-    invalidateBuilderDraftsCache();
+    if (action.disabled || !plan || plan.status !== "draft" || !window.confirm("Discard all changes in this draft? The original plan will stay unchanged.")) return true;
+    state.builder.discardingDraftId = plan.id;
+    action.disabled = true;
+    handlers.renderBuilderDiscardProgress?.();
+    try {
+      await handlers.cancelBuilderAutosaves?.();
+      await builderMutationQueue;
+      await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(plan.id)}`, { method: "DELETE" });
+      invalidateBuilderDraftsCache();
+    } catch (error) {
+      state.builder.discardingDraftId = "";
+      action.disabled = false;
+      handlers.renderBuilderDiscardProgress?.();
+      handlers.renderBuilderError(error);
+      return true;
+    }
+    // Deletion succeeded: a subsequent navigation failure must never make
+    // the deleted draft available for another discard attempt.
     await exitBuilderToPlanContext(plan, handlers);
     return true;
   }

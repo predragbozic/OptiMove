@@ -52,7 +52,7 @@ import {
 } from "./builder-actions.js";
 import { loadBuilderDrafts, loadBuilderExercises, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
-import { renderBuilder, renderBuilderAddFeedback, renderBuilderSectionItems } from "./builder-view.js";
+import { renderBuilder, renderBuilderAddFeedback, renderBuilderSectionItems, renderBuilderDiscardProgress } from "./builder-view.js";
 import { clearBuilderItemEdits, rememberBuilderItemEdit } from "./builder-item-edits.js";
 import {
   handleCoachProfileAction,
@@ -3342,7 +3342,7 @@ async function handleBuilderAction(action) {
   try {
     if (await handleBuilderPlanAction(action, { renderBuilder, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
     if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises })) return;
-    if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft, flushBuilderAutosaves, cancelBuilderAutosaves })) return;
+    if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderDiscardProgress, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft, flushBuilderAutosaves, cancelBuilderAutosaves })) return;
     if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback, renderBuilderError, refreshBuilderDraft, cancelBuilderItemAutosave })) return;
   } finally {
     if (leaving) {

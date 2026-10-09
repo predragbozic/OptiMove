@@ -279,7 +279,23 @@ export function renderBuilder() {
   renderBuilderInner();
   restoreBuilderScrollState(scrollState);
   disablePendingMoveButtons();
+  renderBuilderDiscardProgress();
   if (state.builder.leaving) els.content.querySelector(".builder-workspace")?.setAttribute("inert", "");
+}
+
+export function renderBuilderDiscardProgress() {
+  const pending = Boolean(state.builder.discardingDraftId);
+  const status = els.content.querySelector("[data-builder-discard-status]");
+  if (status) {
+    status.hidden = !pending;
+    status.textContent = pending ? "Discarding..." : "";
+  }
+  const button = els.content.querySelector('[data-action="builder-discard-current-draft"]');
+  if (button) {
+    button.disabled = pending;
+    button.setAttribute("aria-busy", String(pending));
+    button.title = pending ? "Discarding changes..." : "Discard all changes in this draft.";
+  }
 }
 
 // Dose/instruction edits, move up/down, and delete only change which exercises are
@@ -460,6 +476,7 @@ function renderBuilderInner() {
           ${draft.plan.isTemplate && !isWeekly ? `<button class="plain-button builder-assign-button" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(draft.plan.id)}" data-plan-type="program" data-intent="assign" data-is-edit-draft="${isEditDraft ? "true" : "false"}">${ICON_CHECK}<span>Assign to athlete</span></button>` : ""}
           ${draft.plan.status === "draft" ? `<button class="plain-button icon-button builder-finish-button" type="button" data-action="builder-submit-plan" aria-label="${saveLabel}" title="${isEditDraft ? "Apply changes to the original plan." : "Save and finish — marks this plan as active."}">${ICON_CHECK}</button>` : `<span class="builder-finished-label">Saved</span>`}
           ${draft.plan.status === "draft" ? `<button class="plain-button icon-button danger-action" type="button" data-action="builder-discard-current-draft" aria-label="Discard changes" title="Discard all changes in this draft.">${ICON_X}</button>` : ""}
+          <span class="builder-discard-status" data-builder-discard-status role="status" aria-live="polite" hidden></span>
         </div>
       </header>
       ${state.builder.assignResult ? renderBuilderAssignResultBanner(state.builder.assignResult) : ""}

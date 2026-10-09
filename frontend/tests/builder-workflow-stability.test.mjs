@@ -104,6 +104,52 @@ test("X cannot discard an active original plan", async () => {
   assert.equal(state.builder.draft.plan.id, "draft-1");
 });
 
+test("X shows progress before waiting and ignores repeated clicks including a fresh button", async () => {
+  const held = deferred();
+  const started = deferred();
+  let requests = 0;
+  let confirmations = 0;
+  window.confirm = () => { confirmations++; return true; };
+  globalThis.fetch = async () => { requests++; started.resolve(); await held.promise; return response({ deleted: true }); };
+  const button = action("builder-discard-current-draft");
+  const progress = [];
+  const activeHandlers = handlers({ renderBuilderDiscardProgress: () => progress.push(state.builder.discardingDraftId) });
+  const pending = handleBuilderDraftAction(button, activeHandlers);
+  assert.equal(button.disabled, true);
+  assert.deepEqual(progress, ["draft-1"]);
+  await started.promise;
+  await handleBuilderDraftAction(button, activeHandlers);
+  await handleBuilderDraftAction(action("builder-discard-current-draft"), activeHandlers);
+  await handleBuilderDraftAction(action("builder-submit-plan"), activeHandlers);
+  await handleBuilderDraftAction(action("builder-cancel"), activeHandlers);
+  assert.equal(requests, 1);
+  assert.equal(confirmations, 1);
+  held.resolve();
+  await pending;
+  assert.equal(state.builder.discardingDraftId, "");
+  assert.equal(state.builder.draft, null);
+});
+
+test("failed X restores the button and draft so the coach can retry", async () => {
+  const button = action("builder-discard-current-draft");
+  const current = state.builder.draft;
+  const progress = [];
+  let failure;
+  globalThis.fetch = async () => { throw new Error("Delete failed"); };
+  const activeHandlers = handlers({ renderBuilderDiscardProgress: () => progress.push(state.builder.discardingDraftId),
+    renderBuilderError: (error) => { failure = error; } });
+  await handleBuilderDraftAction(button, activeHandlers);
+  assert.equal(failure.message, "Delete failed");
+  assert.deepEqual(progress, ["draft-1", ""]);
+  assert.equal(button.disabled, false);
+  assert.equal(state.builder.discardingDraftId, "");
+  assert.equal(state.builder.draft, current);
+  assert.equal(state.activeTab, "builder");
+  globalThis.fetch = async () => response({ deleted: true });
+  await handleBuilderDraftAction(button, activeHandlers);
+  assert.equal(state.builder.draft, null);
+});
+
 test("a response for another item preserves both locally edited dose fields", () => {
   rememberBuilderItemEdit("a", { sets: "3", reps: "12" });
   rememberBuilderItemEdit("b", { sets: "4", reps: "8" });
