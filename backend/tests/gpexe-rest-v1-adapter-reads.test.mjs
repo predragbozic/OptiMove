@@ -448,12 +448,18 @@ test("B3.2 the adapter sends the legacy reads only through the builders: never f
   await assert.rejects((await primed(many.fetchImpl)).getSession({ sessionId: "100" }), code("drills_count_out_of_range"));
 });
 
-test("B4.1 a drill answer is accepted only as a 200 JSON object whose players is a map of canonical athlete ids with metric values; its team and teamsession are not read as identity", async () => {
+test("B4.1 a drill answer is accepted only as a 200 JSON object whose players is a map of canonical athlete ids with metric values; its team and teamsession are not read as identity; since 2026-10-09 it is projected like the whole session: only the consumed fields leave, an unconsumed metric of any shape is dropped", async () => {
   const good = details(PLAYERS(5), { team: OPAQUE_TEAM, teamsession: 424242 });
   const { a } = await confirmedAdapter({ [D0]: answer(200, good) });
   const d = await a.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 });
   assert.deepEqual(Object.keys(d.players), ["4711", "4712"]);
+  for (const values of Object.values(d.players)) assert.ok(Object.keys(values).every((k) => DETAILS_CONSUMED_FIELDS.includes(k)), JSON.stringify(values));
   noNames(d, ["Marker"]);
+  // An unconsumed metric that is free text, nested, a list or an object of other keys is dropped, not refused.
+  for (const [label, extra] of [["free text", { note: "Marker Athlete Name scored" }], ["nested", { zones: { z1: { v: 1 } } }], ["a list", { zones: [1, 2] }], ["an object of other keys", { obj: { k1: null, k2: 2, k3: "ok", k4: "free text", k5: 5 } }]]) {
+    const { a: b } = await confirmedAdapter({ [D0]: answer(200, details({ 4711: { tot_burst_events: { unit: "number", value: 3 }, ...extra } })) });
+    assert.deepEqual((await b.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 })).players, { 4711: { tot_burst_events: { unit: "number", value: 3 } } }, label);
+  }
   const refused = [
     ["no players", { drills_count: 2, team: 980 }, "players_missing"],
     ["players a list", { players: [{ id: 4711 }] }, "players_missing"],
@@ -463,10 +469,10 @@ test("B4.1 a drill answer is accepted only as a 200 JSON object whose players is
     ["a too long numeric key", { players: { "4711471147114": { a: 1 } } }, "athlete_id_not_canonical"],
     ["an athlete without values", { players: { 4711: {} } }, "player_values_missing"],
     ["an athlete with a list", { players: { 4711: [1, 2] } }, "player_values_missing"],
-    ["a metric that is free text", { players: { 4711: { note: "Marker Athlete Name scored" } } }, "metric_shape_unknown"],
-    ["a metric nested too deep", { players: { 4711: { zones: { z1: { v: 1 } } } } }, "metric_shape_unknown"],
-    ["a metric that is a list", { players: { 4711: { zones: [1, 2] } } }, "metric_shape_unknown"],
-    ["a metric with a bad name", { players: { 4711: { "tot burst": 1 } } }, "metric_shape_unknown"],
+    ["a metric with a bad name", { players: { 4711: { "tot burst": 1 } } }, "metric_name_unknown"],
+    ["a consumed field as free text", { players: { 4711: { tot_burst_events: "Marker Athlete Name" } } }, "consumed_field_shape_unknown"],
+    ["a consumed field as a list", { players: { 4711: { tot_brake_events: [1, 2] } } }, "consumed_field_shape_unknown"],
+    ["a consumed field nested too deep", { players: { 4711: { tot_burst_events: { unit: "number", value: { v: 1 } } } } }, "consumed_field_shape_unknown"],
   ];
   for (const [label, body, reason] of refused) {
     const { a: b } = await confirmedAdapter({ [D0]: answer(200, body) });
@@ -528,13 +534,13 @@ test("B4.2 statuses and transport on a drill read: 401 and 403 end the whole ope
   assert.deepEqual([set2.complete, set2.drills.map((d) => d.drillIndex), set2.failed], [false, [0], { drillIndex: 1, code: "source_unavailable" }]);
   // A body exactly at the limit is read whole.
   // Padding is JSON whitespace between tokens, so the body is valid at exactly the limit.
-  const head = '{"players":{"4711":{"a":1}}';
+  const head = '{"players":{"4711":{"tot_burst_events":{"unit":"number","value":1}}}';
   const tail = "}";
   const exact = `${head}${" ".repeat(MAX_ANSWER_BYTES - head.length - tail.length)}${tail}`;
   assert.equal(new TextEncoder().encode(exact).byteLength, MAX_ANSWER_BYTES);
   const { a: atLimit } = await confirmedAdapter({ [D0]: streamedBody([bytesOf(exact.slice(0, MiB)), bytesOf(exact.slice(MiB))]) });
   const okAtLimit = await atLimit.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 });
-  assert.equal(typeof okAtLimit.players["4711"].a, "number");
+  assert.equal(okAtLimit.players["4711"].tot_burst_events.value, 1);
   // Global refusals end the whole operation and the bundle.
   for (const [status, expected] of [[401, "source_auth_rejected"], [403, "source_access_refused"]]) {
     const { a } = await confirmedAdapter({ [D0]: answer(status, "") });
@@ -1216,15 +1222,24 @@ test("B7.5 a refused players answer (F3c3 pilot follow-up): the acceptance rule 
   assert.deepEqual([big.diagnostic.players, big.diagnostic.failing.arrayLengths, big.diagnostic.failing.depths], ["65+", ["65+"], ["4+"]]);
   assert.ok(big.message.length <= "The source answer to the whole-session details carries a metric value in an unknown shape.".length + DIAGNOSTIC_MARK.length + 900);
 
-  // Through the adapter: since the projection (B7.6) an unconsumed metric no longer refuses the
-  // whole-session read - it is dropped; the drill read keeps the full check and its description.
+  // Through the adapter: since the projections (B7.6; drills since 2026-10-09) an unconsumed metric
+  // refuses neither read - it is dropped; a consumed field in an unknown shape still refuses a drill,
+  // and the drill set keeps the sanitized description (field and kind only).
   const { a } = await confirmedAdapter({ [WHOLE]: answer(200, details({ [ID]: { tot_burst_events: { unit: "number", value: 1 }, [SECRET_NAME]: [SECRET_NUMBER] } })) });
   assert.deepEqual(await a.getSessionDetails({ sessionId: "100" }), { players: { [ID]: { tot_burst_events: { unit: "number", value: 1 } } }, drills_count: 2 });
-  const { a: b } = await confirmedAdapter({ [D0]: answer(200, details({ [ID]: { [SECRET_NAME]: [1] } })) });
+  const { a: b0 } = await confirmedAdapter({ [D0]: answer(200, details({ [ID]: { tot_burst_events: { unit: "number", value: 2 }, [SECRET_NAME]: [1] } })) });
+  const ok = await b0.getSessionDrills({ sessionId: "100" });
+  assert.equal(ok.complete, true);
+  assert.deepEqual(ok.drills[0].details.players, { [ID]: { tot_burst_events: { unit: "number", value: 2 } } });
+  const { a: b } = await confirmedAdapter({ [D0]: answer(200, details({ [ID]: { tot_burst_events: [SECRET_NUMBER], [SECRET_NAME]: [1] } })) });
   const set = await b.getSessionDrills({ sessionId: "100" });
   assert.deepEqual([set.complete, set.failed.drillIndex, set.failed.code], [false, 0, "source_answer_unexpected"]);
-  assert.ok(set.failed.diagnosticText.startsWith("op=session_drill_details; consumed_failing=no;"), set.failed.diagnosticText);
+  assert.equal(set.failed.diagnosticText, "op=session_drill_details; field=tot_burst_events; kind=array.");
   for (const leak of [ID, SECRET_NAME, "13579"]) assert.ok(!set.failed.diagnosticText.includes(leak), leak);
+  // A bad metric name in a drill is described by its kind of name only.
+  const { a: bn } = await confirmedAdapter({ [D0]: answer(200, JSON.parse(`{"players":{"${ID}":{"${SECRET_NAME} with spaces":1}}}`)) });
+  const named = await bn.getSessionDrills({ sessionId: "100" });
+  assert.equal(named.failed.diagnosticText, "op=session_drill_details; names=other_chars.");
   // Any other drill failure keeps its code alone.
   const { a: c } = await confirmedAdapter({ [D0]: answer(200, details({ [ID]: {} })) });
   assert.deepEqual((await c.getSessionDrills({ sessionId: "100" })).failed, { drillIndex: 0, code: "source_answer_unexpected" });
@@ -1299,13 +1314,12 @@ test("B7.6 the whole-session projection (op=session_details only): the container
     assert.ok(!e.message.includes("987654321"));
   }
 
-  // Through the adapter: the whole-session read projects; the drill read of the same answer keeps the full check.
+  // Through the adapter: the whole-session read projects, and since 2026-10-09 the drill read of the same answer too.
   const unrelated = { k1: null, k2: 2, k3: "ok", k4: "free text with spaces", k5: 5, k6: null, k7: "a-b", k8: 8 };
   const { a } = await confirmedAdapter({ [WHOLE]: answer(200, details({ 4711: { tot_burst_events: OK, tot_brake_events: OK, markerObj: unrelated } })) });
   assert.deepEqual((await a.getSessionDetails({ sessionId: "100" })).players, { 4711: { tot_burst_events: OK, tot_brake_events: OK } });
   const { a: d } = await confirmedAdapter({ [D0]: answer(200, details({ 4711: { tot_burst_events: OK, markerObj: unrelated } })) });
-  const drill = await errorOf(d.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 }));
-  assert.deepEqual([drill?.code, drill?.reason], ["source_answer_unexpected", "metric_shape_unknown"], "the drill parsing is unchanged");
+  assert.deepEqual((await d.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 })).players, { 4711: { tot_burst_events: OK } }, "the drill answer is projected the same way");
 });
 
 test("B7.7 architecture guard: the whole-session consumer (the mapper, through buildGpexeImportPlan) reads no player metric but tot_burst_events / tot_brake_events - every other key access, enumeration or descriptor read on a whole-session athlete's details fails this test", () => {
@@ -1322,6 +1336,27 @@ test("B7.7 architecture guard: the whole-session consumer (the mapper, through b
   const plan = buildGpexeImportPlan(bundle);
   assert.ok(plan.participants.some((p) => p.results.some((r) => r.level === "full" && r.values.some((v) => v.metricKey === "gpexe_burst_events"))), "the consumed fields were read");
   assert.deepEqual([...touched], [], "no other whole-session metric is read");
+});
+
+test("B7.7b architecture guard for drills: the mapper reads no drill player metric but tot_burst_events / tot_brake_events - every other key access, enumeration or descriptor read on a drill athlete's details fails this test", () => {
+  const bundle = makeBundle({ sessionId: 5001, gpexeTeamId: 77, athletes: standardAthletes(), detailsDrills: [0] });
+  const touched = new Set();
+  let wrapped = 0;
+  for (const drill of Object.values(bundle.details.drills)) {
+    for (const [id, values] of Object.entries(drill.players)) {
+      wrapped += 1;
+      drill.players[id] = new Proxy(values, {
+        get(target, prop, receiver) { if (typeof prop !== "string" || !DETAILS_CONSUMED_FIELDS.includes(prop)) touched.add(`get:${String(prop)}`); return Reflect.get(target, prop, receiver); },
+        has(target, prop) { touched.add(`has:${String(prop)}`); return Reflect.has(target, prop); },
+        ownKeys(target) { touched.add("ownKeys"); return Reflect.ownKeys(target); },
+        getOwnPropertyDescriptor(target, prop) { touched.add(`descriptor:${String(prop)}`); return Reflect.getOwnPropertyDescriptor(target, prop); },
+      });
+    }
+  }
+  assert.ok(wrapped > 0, "the bundle carries drill details");
+  const plan = buildGpexeImportPlan(bundle);
+  assert.ok(plan.participants.some((p) => p.results.some((r) => r.level !== "full" && r.values.some((v) => v.metricKey === "gpexe_burst_events"))), "the consumed drill fields were read");
+  assert.deepEqual([...touched], [], "no other drill metric is read");
 });
 
 test("B7.8 static architecture guard: no consumer outside the adapter and the mapper reads the stored details (JS or SQL), and the mapper's own reads are exactly the whole-session / drill player lookup and detailsNumber's one field read", async () => {
@@ -1341,6 +1376,11 @@ test("B7.8 static architecture guard: no consumer outside the adapter and the ma
   assert.equal(count(/\bplayerDetails\??\./g), 0, "no other property of an athlete's details is read");
   assert.equal(count(/detailsNumber\(playerDetails, "/g), DETAILS_CONSUMED_FIELDS.length, "detailsNumber is called only for the consumed fields");
   for (const field of DETAILS_CONSUMED_FIELDS) assert.ok(mapper.includes(`detailsNumber(playerDetails, "${field}")`), field);
+  // Since 2026-10-09 both details reads are projected: no comment claims the old drill contract, and
+  // the full validator is on no read path (only its own definition names it).
+  const adapterSrc = await fsp.readFile(path.resolve(srcDir, "gpexeRestV1Adapter.js"), "utf8");
+  assert.doesNotMatch(adapterSrc, /drills keep the full check|op=session_details only/);
+  assert.equal((adapterSrc.match(/validatePlayersAnswer\(/g) || []).length, 1, "only the definition, no read path calls it");
 });
 
 // ---------------------------------------------------------------------------

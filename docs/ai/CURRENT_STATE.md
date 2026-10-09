@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-08. Last `origin/main` commit checked: `39176b8` (merge of PR #147,
-`fix/gpexe-source-filter-ignored-diagnostic` → `main`; PR #146 `5436c6d` before it).
+Last reviewed: 2026-10-09. Last `origin/main` commit checked: `33d4f45` (merge of PR #148,
+`fix/gpexe-rest-v1-local-window-filter` → `main`; PR #147 `39176b8` before it).
 
 ## Active phase
 
@@ -1269,8 +1269,9 @@ Technical details.
   tz=Z:0,offset:0,none:13,other:0.` - five rows of the server's date-filtered answer start 3 to 24 hours
   after the asked period, none named as a drill, every start readable and without a zone suffix. **Owner
   decision: option (c)**: the importer no longer trusts the server-side date filter for completeness.
-- **Option (c) - the whole list, filtered locally** (owner order 2026-10-08; branch
-  `fix/gpexe-rest-v1-local-window-filter` from `39176b8`; not merged; backend adapter, tests and docs):
+- **Option (c) - the whole list, filtered locally** (owner order 2026-10-08; PR #148, branch
+  `fix/gpexe-rest-v1-local-window-filter` from `39176b8`; merged and deployed, see below; backend adapter,
+  tests and docs):
   `listSessionsByDay` reads the whole session list of the bound team (`team_session/?team=&limit=100`,
   the proven row-1a read) - every page with the same `X-Total-Count`, every next link on the same host,
   family, resource and team with only `limit=100` and an `offset` equal to the rows read so far, at most
@@ -1297,6 +1298,38 @@ Technical details.
   never sent after an Unbind or a Reconnect during A). About eight list GETs per check for 308 - 350 rows (four pages, twice), at most 40 at the
   cap. This closes the known delete + insert blind spot; it is **not a transactional snapshot** - a
   change that lands identically in both reads stays a residual risk.
+- **PR #148 is merged and deployed.**
+  - Reviewed head `f34291d` (the owner's external review READY), merge commit `33d4f45` (parents `39176b8`
+    and `f34291d`) on 2026-10-09 at 07:55:17 UTC, merged exactly from that head on the owner's order
+    (`--match-head-commit`).
+  - `/api/health` first served `33d4f45` with `ok: true` at 07:56:20 UTC, then three times in a row
+    (07:56:30, 07:56:40 and 07:56:51 UTC).
+  - Read-only smoke without a login, zero UUID, GET only: nine protected GPEXE and source-connection routes
+    answered 401. No migration; the switch untouched.
+- **The first whole-list check (2026-10-09, run once on the owner's order, 05.10.2026 - 06.10.2026):**
+  the preconditions held (`33d4f45` served; the connection *Verified* on server3; one active binding of
+  the team to GPEXE Team ID 980; the import switch off). The check passed the list stage (two complete
+  reads, the window picked out) and read one session, then ended **`drill_set_incomplete`** with the
+  administrator's description `drill_index=0; drill_code=source_answer_unexpected;
+  op=session_drill_details; consumed_failing=no;` - `tot_burst_events` and `tot_brake_events` present for
+  every athlete in the documented shape, exactly one failing metric, an object of 5 - 16 keys with no
+  `unit` / `value` key (the same shape the whole-session read met on 2026-10-05). Nothing was recorded;
+  the check was not repeated.
+- **Drill answers projected to the consumed fields** (owner request 2026-10-09; branch
+  `fix/gpexe-drill-details-projection` from `33d4f45`; not merged; backend adapter, tests and docs): the
+  drill read (`getSessionDrillDetails`, `getSessionDrills`) now uses the same `projectSessionDetails()` as
+  the whole-session read (PR #141) with `op=session_drill_details` - container, athlete ids, per-athlete
+  bounds and the metric-name guard unchanged, an empty `players` map still valid, of the values only
+  `tot_burst_events` / `tot_brake_events` validated and copied; an unconsumed metric of any shape is
+  dropped, a consumed field in an unknown shape or a bad metric name still ends the drill set with
+  `drill_set_incomplete` and a description of fixed words only (`field=<consumed field>; kind=<kind>` or
+  `names=<kind of name>`). The mapper is the only consumer of drill details and reads only those two
+  fields (B7.7b proxy guard, B7.8 static guard). No change to the list, Link, Import or the switch.
+  **Effect on what is already stored:** the stored bundle and its hash now carry projected drill answers,
+  so a session recorded before this change with drills (the 05.10.2026 session of the 2026-10-06 check)
+  is expected to come back from the next check as **changed** - because of the projection, not a change
+  in GPEXE - and its older pending candidate becomes `superseded`; that superseded row keeps its full
+  drill answers in `raw_bundle` until its raw expiry or purge (30 days, about 2026-11-05).
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -1762,6 +1795,10 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #148 (`33d4f45`, merged 2026-10-09 07:55:17 UTC exactly from head `f34291d`) is deployed:
+  `/api/health` served `33d4f45` with `ok: true` three times in a row (07:56:30–07:56:51 UTC); without a
+  login nine protected routes answered 401. No migration. The owner's first whole-list check followed on a
+  separate order (`drill_set_incomplete`, see the active phase).
 - PR #147 (`39176b8`, merged 2026-10-08 09:28:28 UTC exactly from head `13b3938`) is deployed:
   `/api/health` served `39176b8` with `ok: true` three times in a row (09:29:31–09:29:52 UTC); without a
   login nine protected GPEXE and source-connection GET routes answered 401. No migration. No check or GPEXE
@@ -1975,6 +2012,11 @@ pre-existing; pass/fail counts don't belong in this file
 
 - **The bounded `pool.connect()`** (owner's external review of PR #136, 2026-10-04; note 3 of the closing
   review of PR #137): **done**, PR #146 merged and deployed (see the active phase).
+- **Remove `validatePlayersAnswer`** (and `describePlayersShape` / `formatPlayersShape`) from
+  `backend/src/gpexeRestV1Adapter.js` (code review of the drill projection, 2026-10-09): since the
+  whole-session and the drill reads are both projected it is on no read path - a test pins that nothing
+  calls it -, but an exported fail-closed full validator is easy to put back by mistake. A separate small
+  PR with the parts of test B7.5 that call it directly.
 - **Security follow-up, accepted by the owner (2026-10-07, at the review of PR #146): the verification
   resend's timing channel.** `POST /api/auth/email-verifications/resend` has no timing floor and, when a
   pending application exists, answers only after its transaction and the awaited email provider call,
@@ -2208,10 +2250,10 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146) and the
-window diagnostic (PR #147) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
-1. The owner's external review of option (c), branch `fix/gpexe-rest-v1-local-window-filter`.
-2. After its merge and deploy, on a separate owner order, one check of the same window through the whole
-   list (two complete reads).
+window diagnostic (PR #147) and the whole-list window (PR #148) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
+1. The owner's external review of the drill projection, branch `fix/gpexe-drill-details-projection`.
+2. After its merge and deploy, on a separate owner order, one check of the same window (05.10 - 06.10.2026);
+   the 05.10 session is expected as "changed" (the projection, not GPEXE data - see the active phase).
 3. Condition 6 under the switch conditions (withdraw candidates a later check no longer confirms) - a
    separate PR, before the switch is ever turned on.
 4. The owner states the state of the production-use gate and of the two gates before a link (an identity

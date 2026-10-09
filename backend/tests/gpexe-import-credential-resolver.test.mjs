@@ -1531,38 +1531,66 @@ test("19. the whole-session details are projected to the consumed fields (the F3
   src.state.faults.wholePlayers = null;
 });
 
-test("20. a drill answer whose metric value has an unknown shape: the check stops with drill_set_incomplete and the drill's sanitized description (index, code, shape) on its row - for an administrator only -, records nothing, and the check start's own answer applies the same rule (the coach view without the description, the administrator view with it)", async () => {
-  const o = await org();
-  useSource();
-  await bound(o);
-  process.env.GPEXE_API_TOKEN = ENV_TOKEN;
-  legacyTrap();
-  src.serve(o.sourceTeamId);
-  const players = structuredClone(src.state.bundle.details.drills["0"].players);
-  const firstId = Object.keys(players)[0];
-  players[firstId].markerMetricNameZq = [13579.2468];
-  src.state.faults.drillPlayers = { index: 0, players };
-  const before = (await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n;
+test("20. drill answers are projected like the whole session (2026-10-09, after the first whole-list check stopped on drill 0): an unconsumed object metric of another shape no longer stops the check - it succeeds and that metric is in neither the candidate's snapshot nor its preview; a consumed field in an unknown shape still stops it with drill_set_incomplete and the drill's sanitized description (index, code, field, kind) on its row - for an administrator only -, recording nothing", async () => {
+  const MARKER_METRIC = "markerMetricNameZq";
   const BASE = "The source did not answer every drill of a session; that session was not recorded and the check stopped.";
-
-  // The check start's own answer (wait: true), as a coach would get it.
-  const coachView = await importer.startCheck(o.teamId, { userId: o.coach.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: false });
-  assert.deepEqual([coachView.status, coachView.error], ["failed", { code: "drill_set_incomplete", message: BASE }]);
-  const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [coachView.id]))[0];
-  assert.ok(row.error_message.startsWith(`${BASE} Diagnostic: drill_index=0; drill_code=source_answer_unexpected; op=session_drill_details; consumed_failing=no;`), row.error_message);
-  for (const leak of [firstId, "markerMetricNameZq", "13579", SOURCE_SENTENCE]) assert.ok(!row.error_message.includes(leak), `${leak} is not on the check row`);
-  assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n, before, "nothing recorded");
-  assert.ok(src.calls.every((c) => c.auth !== "ENV"));
-
-  // The same start, as an administrator would get it, carries the description.
-  const adminView = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
-  assert.equal(adminView.error.code, "drill_set_incomplete");
-  assert.ok(adminView.error.message.startsWith(`${BASE} Diagnostic: drill_index=0;`), adminView.error.message);
-  const viaRoute = await api(`/gpexe/teams/${o.teamId}/checks/${adminView.id}`, { cookie: o.cadmin.cookie });
-  assert.equal(viaRoute.body.check.error.message, adminView.error.message);
-  const viaCoach = await api(`/gpexe/teams/${o.teamId}/checks/${adminView.id}`, { cookie: o.coach.cookie });
-  assert.equal(viaCoach.body.check.error.message, BASE);
-  src.state.faults.drillPlayers = null;
+  // (a) The production case of 2026-10-09: drill 0 carries both consumed fields in the documented shape
+  // plus one unconsumed object metric (5-16 keys; null, number, short text, other-character text; no unit / value key).
+  {
+    const o = await org();
+    useSource();
+    await bound(o);
+    process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    const players = structuredClone(src.state.bundle.details.drills["0"].players);
+    for (const id of Object.keys(players)) players[id][MARKER_METRIC] = { k1: null, k2: 13579.2468, k3: "ok", k4: "free text value", k5: 3, k6: "a-b" };
+    src.state.faults.drillPlayers = { index: 0, players };
+    try {
+      const view = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+      assert.equal(view.status, "succeeded", JSON.stringify(view.error));
+      const candidates = await q(`select preview, raw_bundle from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]);
+      assert.equal(candidates.length, 1, "the session was recorded");
+      for (const [index, drill] of Object.entries(candidates[0].raw_bundle.details.drills)) {
+        for (const [id, values] of Object.entries(drill.players)) assert.ok(Object.keys(values).every((k) => ["tot_burst_events", "tot_brake_events"].includes(k)), `drill ${index} athlete ${id}: only the consumed fields are retained`);
+      }
+      const stored = JSON.stringify(candidates[0]);
+      for (const leak of [MARKER_METRIC, "13579", "free text value"]) assert.ok(!stored.includes(leak), `${leak} is not stored`);
+      assert.ok(src.calls.every((c) => c.auth !== "ENV"));
+    } finally {
+      src.state.faults.drillPlayers = null;
+    }
+  }
+  // (b) A consumed field of a drill in an unknown shape still stops the check before the session is recorded.
+  {
+    const o = await org();
+    useSource();
+    await bound(o);
+    process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    const players = structuredClone(src.state.bundle.details.drills["0"].players);
+    const firstId = Object.keys(players)[0];
+    players[firstId].tot_burst_events = [13579.2468];
+    src.state.faults.drillPlayers = { index: 0, players };
+    try {
+      const before = (await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n;
+      const coachView = await importer.startCheck(o.teamId, { userId: o.coach.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: false });
+      assert.deepEqual([coachView.status, coachView.error], ["failed", { code: "drill_set_incomplete", message: BASE }]);
+      const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [coachView.id]))[0];
+      assert.equal(row.error_message, `${BASE} Diagnostic: drill_index=0; drill_code=source_answer_unexpected; op=session_drill_details; field=tot_burst_events; kind=array.`);
+      for (const leak of [firstId, "13579", SOURCE_SENTENCE]) assert.ok(!row.error_message.includes(leak), `${leak} is not on the check row`);
+      assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n, before, "nothing recorded");
+      const adminView = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+      assert.equal(adminView.error.message, row.error_message, "the administrator gets the description");
+      const viaRoute = await api(`/gpexe/teams/${o.teamId}/checks/${adminView.id}`, { cookie: o.cadmin.cookie });
+      assert.equal(viaRoute.body.check.error.message, adminView.error.message);
+      const viaCoach = await api(`/gpexe/teams/${o.teamId}/checks/${adminView.id}`, { cookie: o.coach.cookie });
+      assert.equal(viaCoach.body.check.error.message, BASE);
+    } finally {
+      src.state.faults.drillPlayers = null;
+    }
+  }
 });
 
 test("21. option (c): the window is picked out of the whole team list - five sessions after the period and one of the look-back day are left out and only the window's session becomes a candidate (no bundle read for the others); a start that cannot be read or an unstable X-Total-Count fails the check with its own code, writes no candidate and reads no bundle; no date bound is ever sent", async () => {
