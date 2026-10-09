@@ -258,23 +258,15 @@ async function buildDays(planId, dayCount, sessionsPerDay) {
   }
 }
 
-// Each session copyProgramTree/copyDaySessions creates still gets its own
-// copySessionContent() call (that function's own already-constant
-// per-session cost, proven separately above, is untouched by this fix) -
-// so the query count for the SKELETON build (day/session rows themselves)
-// is isolated below by subtracting exactly that many session-content
-// copies' worth of queries, measured empirically against a real
-// content-less session rather than hard-coded, so this stays correct even
-// if copySessionContent's own internals change later.
+// Standalone day copies retain their existing per-session content path.
+// Whole-program copies now batch the content across all sessions instead.
 async function measurePerSessionContentCost() {
   const source = (await client.query(`insert into plans.plan_sessions (label) values ('baseline') returning id`)).rows[0].id;
   const target = (await client.query(`insert into plans.plan_sessions (label) values ('baseline-target') returning id`)).rows[0].id;
   return countQueriesDuring(client, () => copySessionContent(client, source, target));
 }
 
-test("copyProgramTree(): the day/session skeleton's own query count does not scale with day/session count", async () => {
-  const perSessionCost = await measurePerSessionContentCost();
-
+test("copyProgramTree(): whole-tree query count does not scale with empty session count", async () => {
   const smallPlan = crypto.randomUUID();
   const smallTargetPlan = crypto.randomUUID();
   await buildDays(smallPlan, 1, 1); // 1 day, 1 session
@@ -285,10 +277,8 @@ test("copyProgramTree(): the day/session skeleton's own query count does not sca
   await buildDays(largePlan, 12, 4); // 12 days, 4 sessions/day = 48 sessions
   const largeCount = await countQueriesDuring(client, () => copyProgramTree(client, largePlan, largeTargetPlan));
 
-  const smallSkeletonCost = smallCount - perSessionCost * 1;
-  const largeSkeletonCost = largeCount - perSessionCost * 48;
-  assert.ok(smallSkeletonCost <= 4, `expected a small constant skeleton cost, got ${smallSkeletonCost}`);
-  assert.equal(largeSkeletonCost, smallSkeletonCost, "the day/session skeleton's own query count (days query+insert, sessions query+insert) must be identical for a 1-day/1-session program and a 12-day/48-session program - proof it no longer scales per day or per session");
+  assert.ok(largeCount <= 6, `expected at most six whole-tree queries, got ${largeCount}`);
+  assert.equal(largeCount, smallCount, "empty sessions must not add per-session content queries");
 
   const verify = await client.query(
     `select (select count(*) from plans.plan_days where plan_id=$1) as days,

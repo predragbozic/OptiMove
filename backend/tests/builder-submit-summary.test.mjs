@@ -28,6 +28,7 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
       return rows([{ ...plan, athlete_id: null }]);
     }
     if (normalized.startsWith("delete from plans.plans")) { plans.delete(params[0]); return rows([]); }
+    if (/^delete from plans\.plan_(items|nodes|sessions|days)\b/.test(normalized)) return rows([]);
     if (normalized.startsWith("insert into plans.plans")) {
       plans.set("copy-1", plan({ id: "copy-1" }));
       return rows([{ id: "copy-1" }]);

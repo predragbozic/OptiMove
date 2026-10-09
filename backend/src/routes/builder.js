@@ -2,6 +2,7 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { createBuilderTiming } from "../builderTiming.js";
+import { copyBuilderSessionContents, deleteBuilderPlanContent } from "../builderTreeBatch.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
 import { isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
@@ -442,7 +443,7 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
     // must never reach the notification logic below, and it doesn't:
     // this branch returns before either does.
     if (plan.is_edit_draft && plan.edit_source_plan_id) {
-      const updated = await timing.measure("apply", () => applyEditDraft(req, plan));
+      const updated = await timing.measure("apply", () => applyEditDraft(req, plan, timing));
       return timing.json(await timing.measure("response", () => buildSubmitResponse(req, updated)));
     }
     const shouldSyncBatch = wantsBatchSync(req, plan);
@@ -1862,11 +1863,7 @@ async function syncBatchContentWithClient(client, sourceRow, siblingRows) {
     if (sourceRow.plan_type === "weekly") {
       await copyWeeklyPlanTree(client, sourceRow.id, sibling.id, sibling.week_start || sourceRow.week_start);
     } else {
-      const blocks = await client.query(
-        "select id from plans.plan_days where plan_id = $1 order by block_order nulls last, block_index",
-        [sibling.id],
-      );
-      for (const block of blocks.rows) await deleteBlockTreeWithClient(client, block.id);
+      await deleteBuilderPlanContent(client, sibling.id);
       await copyProgramTree(client, sourceRow.id, sibling.id);
     }
     await client.query(
@@ -1969,7 +1966,7 @@ async function syncAndActivateBatchWithClient(client, sourcePlanId, user) {
   return { activatedPlans: updated.rows };
 }
 
-async function applyEditDraft(req, draftPlan) {
+async function applyEditDraft(req, draftPlan, timing) {
   let client;
   try {
     client = await pool.connect();
@@ -2003,8 +2000,9 @@ async function applyEditDraft(req, draftPlan) {
     }
     const source = await getEditablePlan(req, freshDraft.edit_source_plan_id);
     if (!source) throw new Error("Original program not found or not editable.");
-    const sourceDays = await client.query("select id from plans.plan_days where plan_id = $1", [source.id]);
-    for (const day of sourceDays.rows) await deleteBlockTreeWithClient(client, day.id);
+    if (freshDraft.plan_type !== "weekly") {
+      await timing.measure("apply_delete", () => deleteBuilderPlanContent(client, source.id));
+    }
     await client.query(
       `update plans.plans
        set name = $2,
@@ -2026,10 +2024,11 @@ async function applyEditDraft(req, draftPlan) {
     // session tree (assign/duplicate to a new plan, batch-sync to a
     // sibling plan) is a genuinely different logical session and must
     // never pass this flag.
-    if (freshDraft.plan_type === "weekly") await copyWeeklyPlanTree(client, freshDraft.id, source.id, freshDraft.week_start, { preserveLogicalId: true });
-    else await copyProgramTree(client, freshDraft.id, source.id);
-    const draftDays = await client.query("select id from plans.plan_days where plan_id = $1", [freshDraft.id]);
-    for (const day of draftDays.rows) await deleteBlockTreeWithClient(client, day.id);
+    await timing.measure("apply_copy", async () => {
+      if (freshDraft.plan_type === "weekly") await copyWeeklyPlanTree(client, freshDraft.id, source.id, freshDraft.week_start, { preserveLogicalId: true });
+      else await copyProgramTree(client, freshDraft.id, source.id);
+    });
+    await timing.measure("apply_delete", () => deleteBuilderPlanContent(client, freshDraft.id));
     await client.query("delete from plans.plans where id = $1", [freshDraft.id]);
     await client.query("commit");
     client.release();
@@ -2045,14 +2044,11 @@ async function applyEditDraft(req, draftPlan) {
 }
 
 // Copies every day AND every session across those days in two batched
-// round trips total, instead of one INSERT per day PLUS one query-then-
+// INSERT round trips, instead of one INSERT per day PLUS one query-then-
 // INSERT-per-session for every one of those days (a multi-week program's
 // "open for editing"/"save" path used to mean dozens of sequential awaited
 // queries just for the day/session skeleton, before a single node or item
-// was ever touched - the dominant cost behind Edit/Copy taking 5-10s to
-// open the Builder on a large program). Node/item content per session
-// still goes through copySessionContent() (itself already a small,
-// constant number of round trips per session, per the comment above it).
+// was ever touched). Content is also batched across all sessions.
 export async function copyProgramTree(client, sourcePlanId, targetPlanId) {
   const days = await client.query("select * from plans.plan_days where plan_id = $1 order by block_order nulls last, block_index", [sourcePlanId]);
   if (!days.rowCount) return;
@@ -2095,14 +2091,13 @@ export async function copyProgramTree(client, sourcePlanId, targetPlanId) {
      values ${sessionValues.join(", ")} returning id`,
     sessionParams,
   );
-  for (let index = 0; index < sessions.rows.length; index++) {
-    await copySessionContent(client, sessions.rows[index].id, createdSessions.rows[index].id);
-  }
+  await copyBuilderSessionContents(client, new Map(sessions.rows.map((session, index) =>
+    [session.id, createdSessions.rows[index].id],
+  )), copyLegacySession);
 }
 
 async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeekStart, { preserveLogicalId = false } = {}) {
-  const existingTargetDays = await client.query("select id from plans.plan_days where plan_id = $1", [targetPlanId]);
-  for (const targetDay of existingTargetDays.rows) await deleteBlockTreeWithClient(client, targetDay.id);
+  await deleteBuilderPlanContent(client, targetPlanId);
   await createWeeklyDays(client, targetPlanId, targetWeekStart);
   const sourceDays = await client.query("select * from plans.plan_days where plan_id = $1 order by day_order, block_index", [sourcePlanId]);
   const targetDays = await client.query("select * from plans.plan_days where plan_id = $1 order by day_order, block_index", [targetPlanId]);
@@ -2120,6 +2115,7 @@ async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeek
   // for a date that createWeeklyDays() had, by construction, already
   // inserted, and crashing the whole copy on plan_days_plan_date_unique.
   const targetByWeekday = new Map(targetDays.rows.map((day) => [normalizedWeekday(day.day_order), day]));
+  const sourcesByTargetDay = new Map();
   for (const sourceDay of sourceDays.rows) {
     const weekday = normalizedWeekday(sourceDay.day_order);
     let targetDay = targetByWeekday.get(weekday);
@@ -2164,9 +2160,15 @@ async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeek
         sourceDay.block_order,
       ],
     );
-    await deleteDayContentWithClient(client, targetDay.id);
-    await copyDaySessions(client, sourceDay.id, targetDay.id, { preserveLogicalId });
+    // Fresh target days have no sessions. For duplicate normalized weekdays,
+    // the last source day wins, just as the former delete-then-copy loop did.
+    sourcesByTargetDay.set(targetDay.id, sourceDay.id);
   }
+  const contentCopies = new Map();
+  for (const [targetDayId, sourceDayId] of sourcesByTargetDay) {
+    await copyDaySessions(client, sourceDayId, targetDayId, { preserveLogicalId, contentCopies });
+  }
+  await copyBuilderSessionContents(client, contentCopies, copyLegacySession);
 }
 
 // A weekly plan's day_order is meant to be the 1-indexed weekday within its
@@ -2198,7 +2200,7 @@ function normalizedWeekday(dayOrder) {
 // inherit it - the default false here simply omits the column from the
 // INSERT, so plans.plan_sessions' own `default gen_random_uuid()` mints a
 // fresh identity, exactly as a brand-new session would get.
-export async function copyDaySessions(client, sourceDayId, targetDayId, { preserveLogicalId = false } = {}) {
+export async function copyDaySessions(client, sourceDayId, targetDayId, { preserveLogicalId = false, contentCopies } = {}) {
   const sessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [sourceDayId]);
   if (!sessions.rowCount) return;
   // session_time/rpe_enabled/training_load_enabled are CONTENT properties
@@ -2230,12 +2232,15 @@ export async function copyDaySessions(client, sourceDayId, targetDayId, { preser
     params,
   );
   for (let index = 0; index < sessions.rows.length; index++) {
-    await copySessionContent(client, sessions.rows[index].id, created.rows[index].id);
+    if (contentCopies) contentCopies.set(sessions.rows[index].id, created.rows[index].id);
+    else await copySessionContent(client, sessions.rows[index].id, created.rows[index].id);
   }
 }
 
-async function copyLegacySession(client, sourceSessionId, targetSessionId) {
-  const items = await client.query("select * from plans.plan_items where plan_session_id = $1 order by item_order", [sourceSessionId]);
+async function copyLegacySession(client, sourceSessionId, targetSessionId, loadedItems) {
+  const items = loadedItems
+    ? { rows: loadedItems }
+    : await client.query("select * from plans.plan_items where plan_session_id = $1 order by item_order", [sourceSessionId]);
   if (!items.rows.length) return;
   const { nodesToInsert, itemSectionTempId } = planLegacyNodeTree(items.rows);
   const tempIdToRealId = await insertLegacyNodesBatch(client, targetSessionId, nodesToInsert);
@@ -2963,13 +2968,12 @@ async function nextNodeOrder(sessionId, parentId) {
 }
 
 async function createWeeklyDays(client, planId, weekStart) {
-  for (let index = 0; index < 7; index += 1) {
-    await client.query(
-      `insert into plans.plan_days (plan_id, date, day_order, block_index, block_order, block_name, block_type)
-       values ($1, $2::date + $3::integer, $4::numeric, $4::integer, $4::numeric, null, 'session')`,
-      [planId, weekStart, index, index + 1],
-    );
-  }
+  await client.query(
+    `insert into plans.plan_days (plan_id, date, day_order, block_index, block_order, block_name, block_type)
+     select $1, $2::date + day_index, day_index + 1, day_index + 1, day_index + 1, null, 'session'
+     from generate_series(0, 6) as day_index`,
+    [planId, weekStart],
+  );
 }
 
 function normalizedWeekStart(value) {
