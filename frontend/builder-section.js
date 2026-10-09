@@ -71,7 +71,7 @@ function renderBuilderSectionPanel(state, selectedNode) {
           </div>
           ${renderBuilderAddConfirmation(state.builder.addConfirmation)}
           <div class="builder-exercise-results">
-            ${renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode)}
+            ${renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode, { hasMore: state.builder.exerciseHasMore, loading: state.builder.exerciseLoading })}
           </div>
         </section>
         <section class="builder-section-added">

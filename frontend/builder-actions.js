@@ -507,6 +507,10 @@ export async function handleBuilderPlanAction(action, handlers) {
 
 export async function handleBuilderWorkspaceAction(action, handlers) {
   const type = action.dataset.action;
+  if (type === "builder-load-more-exercises") {
+    await handlers.loadBuilderExercises({ append: true });
+    return true;
+  }
   if (type === "builder-toggle-batch-sync") {
     state.builder.batchSync = Boolean(action.checked);
     handlers.renderBuilder();

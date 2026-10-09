@@ -69,9 +69,10 @@ export function renderBuilderExerciseResult(exercise, markedExerciseIds, addedCo
 // builder-pick-exercise handler and builder-view.js's
 // renderBuilderAddFeedback, which call this alongside the sticky-bar and
 // confirmation-banner patches.
-export function renderBuilderExerciseResults(exercises, markedExerciseIds, node) {
+export function renderBuilderExerciseResults(exercises, markedExerciseIds, node, { hasMore = false, loading = false } = {}) {
   const addedCounts = builderAddedCounts(node);
-  return exercises.map((exercise) => renderBuilderExerciseResult(exercise, markedExerciseIds, addedCounts.get(exercise.id) || 0)).join("") || `<div class="empty">No matching exercises.</div>`;
+  const results = exercises.map((exercise) => renderBuilderExerciseResult(exercise, markedExerciseIds, addedCounts.get(exercise.id) || 0)).join("") || `<div class="empty">No matching exercises.</div>`;
+  return results + (hasMore ? `<button type="button" class="plain-button" data-action="builder-load-more-exercises" ${loading ? "disabled" : ""}>${loading ? "Loading..." : "Load more"}</button>` : "");
 }
 
 // Container/image/fallback classes are passed explicitly rather than

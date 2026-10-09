@@ -194,6 +194,8 @@ router.get("/", async (req, res, next) => {
     };
     const limit = Math.min(Number(req.query.limit || 100), 500);
     const queryLimit = limit + 1;
+    const requestedOffset = Number(req.query.offset || 0);
+    const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
     const params = [req.user.id];
     let where = `where ${exerciseScope}`;
 
@@ -258,6 +260,7 @@ router.get("/", async (req, res, next) => {
     }
 
     params.push(queryLimit);
+    params.push(offset);
     const result = await query(
       `
       select
@@ -292,8 +295,8 @@ router.get("/", async (req, res, next) => {
       left join library.attractors a on a.id = e.attractor_id
       left join library.exercise_favorites fav on fav.exercise_id = e.id and fav.user_id = $1
       ${where}
-      order by nullif(regexp_replace(e.exercise_code, '\\D', '', 'g'), '')::int nulls last, e.name
-      limit $${params.length}
+      order by nullif(regexp_replace(e.exercise_code, '\\D', '', 'g'), '')::int nulls last, e.name, e.id
+      limit $${params.length - 1} offset $${params.length}
       `,
       params,
     );

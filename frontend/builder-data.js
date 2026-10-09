@@ -3,7 +3,7 @@ import { renderBuilderExerciseResults } from "./builder-exercises.js";
 import { findBuilderNode } from "./builder-helpers.js";
 import { renderBuilder, renderBuilderSectionItems } from "./builder-view.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions } from "./exercise-data.js";
-import { state } from "./state.js";
+import { EXERCISE_FILTERS, state } from "./state.js";
 import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
 
 const BUILDER_DRAFTS_CACHE_NAMESPACE = "builderDrafts";
@@ -21,14 +21,41 @@ export function invalidateBuilderDraftsCache() {
 
 let builderExerciseRequestId = 0;
 
+function builderExerciseSearchKey() {
+  return JSON.stringify([state.currentUser?.id, state.builder.exerciseQuery.trim(), state.builder.exerciseFilters]);
+}
+
 export async function loadBuilderExercises(options = {}) {
   if (state.activeTab !== "builder") return;
+  const searchKey = builderExerciseSearchKey();
+  if (options.append && (state.builder.exerciseLoading || !state.builder.exerciseHasMore || state.builder.exerciseSearchKey !== searchKey)) return;
   const requestId = ++builderExerciseRequestId;
-  await loadExerciseFilterOptions();
   const query = state.builder.exerciseQuery.trim();
-  const data = await api(exerciseSearchUrl(query, 18, state.builder.exerciseFilters));
-  if (requestId !== builderExerciseRequestId) return;
-  state.builder.exercises = applyClientExerciseFilters(data.exercises || [], state.builder.exerciseFilters);
+  const filters = { ...state.builder.exerciseFilters };
+  const offset = options.append ? state.builder.exerciseOffset : 0;
+  state.builder.exerciseLoading = true;
+  const moreButton = document.querySelector('[data-action="builder-load-more-exercises"]');
+  if (moreButton) moreButton.disabled = true;
+  try {
+    await loadExerciseFilterOptions();
+    if (requestId !== builderExerciseRequestId || searchKey !== builderExerciseSearchKey() || state.activeTab !== "builder") return;
+    const url = `${exerciseSearchUrl(query, 18, filters)}&offset=${offset}`;
+    const data = await api(url);
+    if (requestId !== builderExerciseRequestId || searchKey !== builderExerciseSearchKey() || state.activeTab !== "builder") return;
+    const exercises = data.exercises || [];
+    const filtered = applyClientExerciseFilters(exercises, filters);
+    state.builder.exercises = options.append ? [...state.builder.exercises, ...filtered] : filtered;
+    state.builder.exerciseOffset = offset + exercises.length;
+    const localMarkedOnly = filters.marked && !filters.favorite && !EXERCISE_FILTERS.some((filter) => filters[filter.key]);
+    state.builder.exerciseHasMore = Boolean(data.hasMore) && !localMarkedOnly;
+    state.builder.exerciseSearchKey = searchKey;
+  } finally {
+    if (requestId === builderExerciseRequestId) {
+      state.builder.exerciseLoading = false;
+      if (moreButton) moreButton.disabled = false;
+    }
+  }
+  if (requestId !== builderExerciseRequestId || searchKey !== builderExerciseSearchKey() || state.activeTab !== "builder") return;
   // A results-only refresh (instead of the full renderBuilder()) so typing in the
   // search box never touches the search input itself or any other in-progress edit
   // (sets/reps/instruction, scroll position) elsewhere on the same screen.
@@ -39,7 +66,9 @@ export async function loadBuilderExercises(options = {}) {
     // not just right after an add - re-derive it from whichever section is
     // currently open, same as renderBuilderSectionPanel's own initial render.
     const selectedSection = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
-    resultsContainer.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedSection);
+    const scrollTop = resultsContainer.scrollTop;
+    resultsContainer.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedSection, { hasMore: state.builder.exerciseHasMore });
+    resultsContainer.scrollTop = options.append ? scrollTop : 0;
   } else {
     renderBuilder();
   }

@@ -340,7 +340,7 @@ export function renderBuilderAddFeedback() {
   panel.dataset.mobileMode = state.builder.mobileMode;
 
   const resultsEl = panel.querySelector(".builder-exercise-results");
-  if (resultsEl) resultsEl.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode);
+  if (resultsEl) resultsEl.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode, { hasMore: state.builder.exerciseHasMore, loading: state.builder.exerciseLoading });
 
   const confirmationSlot = panel.querySelector(".builder-add-confirmation");
   const confirmationHtml = renderBuilderAddConfirmation(state.builder.addConfirmation);
