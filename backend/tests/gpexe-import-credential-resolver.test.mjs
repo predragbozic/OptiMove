@@ -1531,39 +1531,270 @@ test("19. the whole-session details are projected to the consumed fields (the F3
   src.state.faults.wholePlayers = null;
 });
 
-test("20. a drill answer whose metric value has an unknown shape: the check stops with drill_set_incomplete and the drill's sanitized description (index, code, shape) on its row - for an administrator only -, records nothing, and the check start's own answer applies the same rule (the coach view without the description, the administrator view with it)", async () => {
+test("20. drill answers are projected like the whole session (2026-10-09, after the first whole-list check stopped on drill 0): an unconsumed object metric of another shape no longer stops the check - it succeeds and that metric is in neither the candidate's snapshot nor its preview; a consumed field in an unknown shape still stops it with drill_set_incomplete and the drill's sanitized description (index, code, field, kind) on its row - for an administrator only -, recording nothing", async () => {
+  const MARKER_METRIC = "markerMetricNameZq";
+  const BASE = "The source did not answer every drill of a session; that session was not recorded and the check stopped.";
+  // (a) The production case of 2026-10-09: drill 0 carries both consumed fields in the documented shape
+  // plus one unconsumed object metric (5-16 keys; null, number, short text, other-character text; no unit / value key).
+  {
+    const o = await org();
+    useSource();
+    await bound(o);
+    process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    const players = structuredClone(src.state.bundle.details.drills["0"].players);
+    for (const id of Object.keys(players)) players[id][MARKER_METRIC] = { k1: null, k2: 13579.2468, k3: "ok", k4: "free text value", k5: 3, k6: "a-b" };
+    src.state.faults.drillPlayers = { index: 0, players };
+    try {
+      const view = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+      assert.equal(view.status, "succeeded", JSON.stringify(view.error));
+      const candidates = await q(`select preview, raw_bundle from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]);
+      assert.equal(candidates.length, 1, "the session was recorded");
+      for (const [index, drill] of Object.entries(candidates[0].raw_bundle.details.drills)) {
+        for (const [id, values] of Object.entries(drill.players)) assert.ok(Object.keys(values).every((k) => ["tot_burst_events", "tot_brake_events"].includes(k)), `drill ${index} athlete ${id}: only the consumed fields are retained`);
+      }
+      const stored = JSON.stringify(candidates[0]);
+      for (const leak of [MARKER_METRIC, "13579", "free text value"]) assert.ok(!stored.includes(leak), `${leak} is not stored`);
+      assert.ok(src.calls.every((c) => c.auth !== "ENV"));
+    } finally {
+      src.state.faults.drillPlayers = null;
+    }
+  }
+  // (b) A consumed field of a drill in an unknown shape still stops the check before the session is recorded.
+  {
+    const o = await org();
+    useSource();
+    await bound(o);
+    process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    const players = structuredClone(src.state.bundle.details.drills["0"].players);
+    const firstId = Object.keys(players)[0];
+    players[firstId].tot_burst_events = [13579.2468];
+    src.state.faults.drillPlayers = { index: 0, players };
+    try {
+      const before = (await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n;
+      const coachView = await importer.startCheck(o.teamId, { userId: o.coach.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: false });
+      assert.deepEqual([coachView.status, coachView.error], ["failed", { code: "drill_set_incomplete", message: BASE }]);
+      const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [coachView.id]))[0];
+      assert.equal(row.error_message, `${BASE} Diagnostic: drill_index=0; drill_code=source_answer_unexpected; op=session_drill_details; field=tot_burst_events; kind=array.`);
+      for (const leak of [firstId, "13579", SOURCE_SENTENCE]) assert.ok(!row.error_message.includes(leak), `${leak} is not on the check row`);
+      assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n, before, "nothing recorded");
+      const adminView = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+      assert.equal(adminView.error.message, row.error_message, "the administrator gets the description");
+      const viaRoute = await api(`/gpexe/teams/${o.teamId}/checks/${adminView.id}`, { cookie: o.cadmin.cookie });
+      assert.equal(viaRoute.body.check.error.message, adminView.error.message);
+      const viaCoach = await api(`/gpexe/teams/${o.teamId}/checks/${adminView.id}`, { cookie: o.coach.cookie });
+      assert.equal(viaCoach.body.check.error.message, BASE);
+    } finally {
+      src.state.faults.drillPlayers = null;
+    }
+  }
+});
+
+test("22. a superseded candidate keeps no unconsumed metric: a pending candidate whose stored snapshot holds a full drill answer (as stored before the drill projection) is superseded by the next check of changed content, and in the same transaction its snapshot keeps only the consumed fields; neither it nor the new candidate exposes the third metric through the candidate list (replaced versions included), the candidate detail or the preview; the superseded one cannot be approved; the switch stays off and no result or activity row is written", async () => {
+  const MARKER = "markerUnconsumedObjZq";
+  const MARKER_TEXT = "Marker free text value";
+  const tables = (await q(`select table_schema || '.' || table_name as t from information_schema.tables where table_schema in ('training', 'training_load') and table_type = 'BASE TABLE' and table_name not in ('gpexe_import_checks', 'gpexe_import_candidates', 'gpexe_retention_runs') order by 1`)).map((r) => r.t);
+  const counts = async () => { const out = {}; for (const t of tables) { const [s, n] = t.split("."); out[t] = (await q(`select count(*)::int as n from ${s}.${n}`))[0].n; } return out; };
+  const o = await org();
+  useSource();
+  await bound(o);
+  process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+  delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  legacyTrap();
+  src.serve(o.sourceTeamId);
+  const originalUpdatedOn = src.state.bundle.teamSession.updated_on;
+  try {
+    const before = await counts();
+    // (1) The first check stores candidate A (projected).
+    const first = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+    assert.equal(first.status, "succeeded", JSON.stringify(first.error));
+    const [a] = await q(`select id, raw_bundle, bundle_hash from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]);
+    // (2) GPEXE shows changed content of the same session; the next check is held at its list read - after its
+    // own retention run, so that run cannot project what is injected now.
+    src.state.bundle.teamSession.updated_on = "2026-09-14T23:00:00";
+    src.state.gates.list = gate();
+    // Only a list request of THIS check counts (the first check's are already recorded): it is sent after
+    // this check's retention run has finished.
+    const callsBefore = src.calls.length;
+    const started = await startCheck(o, o.cadmin.cookie);
+    assert.equal(started.status, 202, JSON.stringify(started.body));
+    await waitFor(() => src.calls.slice(callsBefore).some((c) => c.key.includes("/team_session/?team=")));
+    // (3) A snapshot as a read stored it before the projections: the third metric in drill 0 and in the whole session.
+    const old = structuredClone(a.raw_bundle);
+    for (const id of Object.keys(old.details.drills["0"].players)) old.details.drills["0"].players[id][MARKER] = { k1: null, k2: 24680.1357, k3: MARKER_TEXT };
+    for (const id of Object.keys(old.details.full.players)) old.details.full.players[id][MARKER] = { k1: MARKER_TEXT };
+    await q(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [a.id, old]);
+    // (4) The check goes on and supersedes A: the supersede transaction itself projects the old snapshot.
+    src.state.gates.list.release();
+    await started.done.p;
+    src.state.gates.list = null;
+    const second = (await q(`select status, error_code, candidates_changed from training_load.gpexe_import_checks where id = $1`, [started.body.check.id]))[0];
+    assert.equal(second.status, "succeeded", JSON.stringify(second));
+    assert.equal(second.candidates_changed, 1, "the session is re-seen as changed");
+    const rows = await q(`select id, status, superseded_by_candidate_id, raw_bundle, preview, preview_hash, bundle_hash from training_load.gpexe_import_candidates where owner_team_id = $1 order by first_seen_at`, [o.teamId]);
+    assert.equal(rows.length, 2);
+    const [oldRow, newRow] = rows;
+    assert.deepEqual([oldRow.id, oldRow.status, oldRow.superseded_by_candidate_id], [a.id, "superseded", newRow.id]);
+    assert.equal(oldRow.bundle_hash, a.bundle_hash, "the record of what was seen is unchanged");
+    for (const row of rows) {
+      for (const [index, drill] of Object.entries(row.raw_bundle.details.drills)) {
+        for (const values of Object.values(drill.players)) assert.ok(Object.keys(values).every((k) => ["tot_burst_events", "tot_brake_events"].includes(k)), `${row.status} drill ${index}`);
+      }
+      for (const values of Object.values(row.raw_bundle.details.full.players)) assert.ok(Object.keys(values).every((k) => ["tot_burst_events", "tot_brake_events"].includes(k)), `${row.status} whole session`);
+      const stored = JSON.stringify({ raw: row.raw_bundle, preview: row.preview });
+      for (const leak of [MARKER, MARKER_TEXT, "24680"]) assert.ok(!stored.includes(leak), `${leak} is not stored on the ${row.status} candidate`);
+    }
+    // Not exposed by any read: the list with replaced versions, the detail of each candidate, through the routes as the club admin.
+    const list = await api(`/gpexe/teams/${o.teamId}/candidates?includeSuperseded=true`, { cookie: o.cadmin.cookie });
+    assert.equal(list.status, 200, JSON.stringify(list.body));
+    const details = [];
+    for (const row of rows) details.push(await api(`/gpexe/teams/${o.teamId}/candidates/${row.id}`, { cookie: o.cadmin.cookie }));
+    assert.ok(details.every((d) => d.status === 200), JSON.stringify(details.map((d) => d.status)));
+    const exposed = JSON.stringify([list.body, details.map((d) => d.body), await importer.listCandidates(o.teamId, { includeSuperseded: true })]);
+    for (const leak of [MARKER, MARKER_TEXT, "24680"]) assert.ok(!exposed.includes(leak), `${leak} is exposed by a read`);
+    // The superseded candidate cannot be approved; the current one is refused while the switch is off.
+    const approveOld = await api(`/gpexe/teams/${o.teamId}/candidates/${oldRow.id}/approve`, { method: "POST", cookie: o.padmin.cookie, body: { previewHash: oldRow.preview_hash, acceptChanges: true } });
+    assert.ok(approveOld.status >= 400 && approveOld.status < 500, JSON.stringify(approveOld.body));
+    assert.ok(["superseded_by_newer_data", "import_switch_off"].includes(approveOld.body.error), JSON.stringify(approveOld.body));
+    // With the switch on, the superseded one is still refused - and nothing is written (the refusal comes first).
+    process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+    try {
+      const refused = await importer.approveCandidate(o.teamId, oldRow.id, { userId: o.padmin.id, previewHash: oldRow.preview_hash, acceptChanges: true }).then(() => null, (e) => e);
+      assert.equal(refused?.code, "superseded_by_newer_data", JSON.stringify(refused));
+    } finally {
+      delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+    }
+    const approveNew = await api(`/gpexe/teams/${o.teamId}/candidates/${newRow.id}/approve`, { method: "POST", cookie: o.padmin.cookie, body: { previewHash: newRow.preview_hash, acceptChanges: true } });
+    assert.equal(approveNew.body.error, "import_switch_off", JSON.stringify(approveNew.body));
+    assert.deepEqual(await counts(), before, "no result, activity or other training row was written");
+  } finally {
+    src.state.bundle.teamSession.updated_on = originalUpdatedOn;
+  }
+});
+
+test("23. the retention run projects every stored snapshot that was never imported: a pending candidate whose snapshot holds unconsumed metrics (stored before the projections) and that no later check supersedes keeps only the consumed fields after the next retention run - its status, content hash and preview hash unchanged; a snapshot refreshed between the read and the write is not overwritten; the run reports what it projected", async () => {
+  const MARKER = "markerPendingUnconsumedZq";
   const o = await org();
   useSource();
   await bound(o);
   process.env.GPEXE_API_TOKEN = ENV_TOKEN;
   legacyTrap();
   src.serve(o.sourceTeamId);
-  const players = structuredClone(src.state.bundle.details.drills["0"].players);
-  const firstId = Object.keys(players)[0];
-  players[firstId].markerMetricNameZq = [13579.2468];
-  src.state.faults.drillPlayers = { index: 0, players };
-  const before = (await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n;
-  const BASE = "The source did not answer every drill of a session; that session was not recorded and the check stopped.";
-
-  // The check start's own answer (wait: true), as a coach would get it.
-  const coachView = await importer.startCheck(o.teamId, { userId: o.coach.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: false });
-  assert.deepEqual([coachView.status, coachView.error], ["failed", { code: "drill_set_incomplete", message: BASE }]);
-  const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [coachView.id]))[0];
-  assert.ok(row.error_message.startsWith(`${BASE} Diagnostic: drill_index=0; drill_code=source_answer_unexpected; op=session_drill_details; consumed_failing=no;`), row.error_message);
-  for (const leak of [firstId, "markerMetricNameZq", "13579", SOURCE_SENTENCE]) assert.ok(!row.error_message.includes(leak), `${leak} is not on the check row`);
-  assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n, before, "nothing recorded");
-  assert.ok(src.calls.every((c) => c.auth !== "ENV"));
-
-  // The same start, as an administrator would get it, carries the description.
-  const adminView = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
-  assert.equal(adminView.error.code, "drill_set_incomplete");
-  assert.ok(adminView.error.message.startsWith(`${BASE} Diagnostic: drill_index=0;`), adminView.error.message);
-  const viaRoute = await api(`/gpexe/teams/${o.teamId}/checks/${adminView.id}`, { cookie: o.cadmin.cookie });
-  assert.equal(viaRoute.body.check.error.message, adminView.error.message);
-  const viaCoach = await api(`/gpexe/teams/${o.teamId}/checks/${adminView.id}`, { cookie: o.coach.cookie });
-  assert.equal(viaCoach.body.check.error.message, BASE);
-  src.state.faults.drillPlayers = null;
+  const view = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+  assert.equal(view.status, "succeeded", JSON.stringify(view.error));
+  const [row] = await q(`select id, status, raw_bundle, bundle_hash, preview_hash from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]);
+  const old = structuredClone(row.raw_bundle);
+  for (const drill of Object.values(old.details.drills)) for (const id of Object.keys(drill.players)) drill.players[id][MARKER] = { k1: "Marker text" };
+  for (const id of Object.keys(old.details.full.players)) old.details.full.players[id][MARKER] = 1;
+  old.details.full.team = { markerAggregateZq: 2 };
+  await q(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [row.id, old]);
+  const run = await importer.runRetention("cli");
+  assert.ok(run.projected >= 1, JSON.stringify(run));
+  const [after] = await q(`select status, raw_bundle, bundle_hash, preview_hash from training_load.gpexe_import_candidates where id = $1`, [row.id]);
+  assert.deepEqual([after.status, after.bundle_hash, after.preview_hash], [row.status, row.bundle_hash, row.preview_hash], "status, content hash and preview hash unchanged");
+  for (const leak of [MARKER, "Marker text", "markerAggregateZq"]) assert.ok(!JSON.stringify(after.raw_bundle).includes(leak), `${leak} is not kept`);
+  assert.deepEqual(after.raw_bundle, row.raw_bundle, "the projection of the old snapshot is exactly the projected snapshot a read stores");
+  // bundle_hash is the fingerprint of the answer as read: a later projection does not change it, and it is
+  // then no longer the hash of the stored snapshot (nothing compares the two).
+  const { sha256Hex, canonicalJson } = await import("../src/gpexeImportPreview.js");
+  assert.equal(sha256Hex(canonicalJson(old)) === row.bundle_hash, false, "the injected old snapshot was never what was hashed");
+  assert.notEqual(sha256Hex(canonicalJson(old)), after.bundle_hash);
+  assert.equal(after.bundle_hash, row.bundle_hash);
+  // A second run has nothing left to project.
+  assert.equal((await importer.runRetention("cli")).projected, 0);
+  // The conditional write: a snapshot that changed after it was read is not overwritten.
+  const changedMeanwhile = structuredClone(old);
+  changedMeanwhile.teamSession.updated_on = "2026-09-14T22:22:22";
+  await q(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [row.id, old]);
+  const done = await q(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1 and status in ('pending', 'blocked', 'superseded') and raw_bundle = $3::jsonb returning id`, [row.id, row.raw_bundle, changedMeanwhile]);
+  assert.equal(done.length, 0, "the guarded write does not apply to a snapshot it did not read");
+  assert.ok(JSON.stringify((await q(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [row.id]))[0].raw_bundle).includes(MARKER), "the row kept what it held");
+  await importer.runRetention("cli");
+  assert.ok(!JSON.stringify((await q(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [row.id]))[0].raw_bundle).includes(MARKER));
 });
+
+test("24. the retention projection never waits on a candidate another session holds: with the row locked FOR UPDATE on another connection (an approval in flight) the run finishes promptly and skips it; once released, the next run projects it", async () => {
+  const MARKER = "markerLockedRowZq";
+  const o = await org();
+  useSource();
+  await bound(o);
+  process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+  legacyTrap();
+  src.serve(o.sourceTeamId);
+  const view = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+  assert.equal(view.status, "succeeded", JSON.stringify(view.error));
+  const [row] = await q(`select id, raw_bundle from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]);
+  const old = structuredClone(row.raw_bundle);
+  for (const id of Object.keys(old.details.full.players)) old.details.full.players[id][MARKER] = 1;
+  await q(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [row.id, old]);
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await holder.query(`select 1 from training_load.gpexe_import_candidates where id = $1 for update`, [row.id]);
+    const outcome = await Promise.race([importer.runRetention("cli").then((r) => r), new Promise((r) => setTimeout(() => r("timeout"), 4000))]);
+    assert.notEqual(outcome, "timeout", "the run did not wait on the locked row");
+    assert.ok(JSON.stringify((await q(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [row.id]))[0].raw_bundle).includes(MARKER), "the locked row was skipped");
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end().catch(() => {});
+  }
+  const next = await importer.runRetention("cli");
+  assert.ok(next.projected >= 1, JSON.stringify(next));
+  assert.ok(!JSON.stringify((await q(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [row.id]))[0].raw_bundle).includes(MARKER), "projected once released");
+});
+
+test("25. a failure of the snapshot projection step keeps the retention run's purge count and an earlier step's error: the run row records purged_count and the projection's error, and the run reports the failure", async () => {
+  importer.setProjectionFaultForTests(() => { throw new Error("projection step failed (test)"); });
+  try {
+    const error = await importer.runRetention("cli").then(() => null, (e) => e);
+    assert.equal(error?.message, "projection step failed (test)");
+    const [run] = await q(`select purged_count, error_message, finished_at from training_load.gpexe_retention_runs order by started_at desc limit 1`);
+    assert.ok(Number.isInteger(run.purged_count), JSON.stringify(run));
+    assert.equal(run.error_message, "projection step failed (test)");
+    assert.ok(run.finished_at);
+  } finally {
+    importer.setProjectionFaultForTests(null);
+  }
+  const ok = await importer.runRetention("cli");
+  assert.ok(Number.isInteger(ok.projected));
+  const [last] = await q(`select purged_count, error_message from training_load.gpexe_retention_runs order by started_at desc limit 1`);
+  assert.deepEqual([Number.isInteger(last.purged_count), last.error_message], [true, null]);
+});
+
+// A pending candidate whose stored snapshot holds an unconsumed metric (as stored before the
+// projections), for the bounded-projection tests below.
+// Every candidate is created first and marked afterwards: each check runs a retention run of its own,
+// which would project a marker injected before it.
+async function pendingRows(n, marker) {
+  const created = [];
+  for (let i = 0; i < n; i += 1) {
+    const o = await org();
+    useSource();
+    await bound(o);
+    process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    const view = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+    assert.equal(view.status, "succeeded", JSON.stringify(view.error));
+    const [row] = await q(`select id, raw_bundle from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]);
+    created.push({ o, row });
+  }
+  for (const { row } of created) {
+    const old = structuredClone(row.raw_bundle);
+    for (const id of Object.keys(old.details.full.players)) old.details.full.players[id][marker] = { k1: `${marker} text` };
+    await q(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [row.id, old]);
+  }
+  return created;
+}
+const pendingWithMarker = async (marker) => (await pendingRows(1, marker))[0];
+const holdsMarker = async (rowId, marker) => JSON.stringify((await q(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [rowId]))[0].raw_bundle).includes(marker);
+const raceWith = (promise, ms) => Promise.race([promise.then((v) => ({ v }), (e) => ({ e })), new Promise((r) => setTimeout(() => r("timeout"), ms))]);
+const lastRun = async () => (await q(`select purged_count, error_message, finished_at from training_load.gpexe_retention_runs order by started_at desc limit 1`))[0];
+const openTransactions = async () => (await q(`select count(*)::int as n from pg_stat_activity where datname = current_database() and state like 'idle in transaction%' and pid <> pg_backend_pid()`))[0].n;
 
 test("21. option (c): the window is picked out of the whole team list - five sessions after the period and one of the look-back day are left out and only the window's session becomes a candidate (no bundle read for the others); a start that cannot be read or an unstable X-Total-Count fails the check with its own code, writes no candidate and reads no bundle; no date bound is ever sent", async () => {
   const o = await org();
@@ -1609,4 +1840,406 @@ test("10. this suite runs on a disposable database only; every console line, che
   for (const r of await q(`select to_jsonb(c) - 'raw_bundle' as j, raw_bundle::text as raw from training_load.gpexe_import_candidates c`)) { noSecret(JSON.stringify(r.j), "a candidate row"); noSecret(r.raw, "a raw bundle"); }
   for (const r of await q(`select to_jsonb(c) - 'credential_ciphertext' - 'credential_nonce' - 'credential_auth_tag' as j from training_load.source_credential_connections c`)) noSecret(JSON.stringify(r.j), "a connection row");
   for (const r of await q(`select to_jsonb(a) as j from training_load.source_connection_audit a`)) noSecret(JSON.stringify(r.j), "an audit row");
+});
+
+// A COMMIT or ROLLBACK that "does not answer" is a gate() the test releases at its end: a bound that works
+// gives up long before, and a missing bound fails the test within seconds instead of hanging it.
+const PROJECTION_TIMEOUT_SENTENCE = "The snapshot projection step ran out of time; the next retention run continues it.";
+const PROJECTION_FAILED_SENTENCE = "The snapshot projection step failed; the next retention run continues it.";
+const PROJECTION_COMMIT_SENTENCE = "The snapshot projection step could not confirm its last write; the next retention run continues it.";
+const failRow = () => { throw Object.assign(new Error("statement failed (test)"), { code: "XX000" }); };
+const noLeak = (lines, leaks) => { for (const l of lines) for (const leak of leaks) assert.ok(!l.includes(leak), `${leak} in a log line: ${l.slice(0, 160)}`); };
+
+test("26. a held projection statement ends by the database's statement_timeout within its bound: the server cancels it (no backend keeps running it), the client and its transaction are released, the run goes on with the next row, keeps purged_count and an earlier step's error, the log carries a stable code only, and the next run projects normally", { timeout: 60_000 }, async () => {
+  const MARKER = "markerHeldStatementZq";
+  // Sorted in processing order (by id): the row that times out is the first, so the second proves the run went on.
+  const [row, after] = (await pendingRows(2, MARKER)).map((x) => x.row).sort((x, y) => (x.id < y.id ? -1 : 1));
+  const logBefore = logLines.length;
+  importer.setProjectionBoundsForTests({ statementTimeoutMs: 300 }, { statementFault: (client, id) => (id === row.id ? client.query("select pg_sleep(5) /* projection-held-zq */") : undefined) });
+  try {
+    const started = Date.now();
+    const outcome = await raceWith(importer.runRetention("cli"), 4500);
+    assert.notEqual(outcome, "timeout", "the run did not hang");
+    assert.equal(outcome.e?.code, "projection_timeout", JSON.stringify(outcome.e));
+    assert.ok(Date.now() - started < 3000, `ended by the database bound (${Date.now() - started} ms)`);
+    const still = (await q(`select count(*)::int as n from pg_stat_activity where state = 'active' and query like '%projection-held-zq%' and pid <> pg_backend_pid()`))[0].n;
+    assert.equal(still, 0, "the server cancelled the statement: no backend still runs it");
+    assert.equal(await openTransactions(), 0, "no transaction left open");
+    const run = await lastRun();
+    assert.deepEqual([Number.isInteger(run.purged_count), run.error_message], [true, PROJECTION_TIMEOUT_SENTENCE]);
+    assert.ok(await holdsMarker(row.id, MARKER), "nothing was written by the timed-out row");
+    assert.equal(await holdsMarker(after.id, MARKER), false, "the run went on with the next row after the timeout");
+    const lines = logLines.slice(logBefore);
+    assert.ok(lines.some((l) => l.includes("retention projection step failed: projection_timeout")), lines.join("\n"));
+    noLeak(lines, [MARKER, row.id, "raw_bundle", "tot_burst_events"]);
+    // An earlier step's error is never hidden by the projection's.
+    importer.setIdentityPurgeFaultForTests(() => { throw new Error("identity purge failed (test)"); });
+    const both = await raceWith(importer.runRetention("cli"), 4500);
+    assert.equal(both.e?.message, "identity purge failed (test)");
+    const run2 = await lastRun();
+    assert.deepEqual([Number.isInteger(run2.purged_count), run2.error_message], [true, "identity purge failed (test)"]);
+  } finally {
+    importer.setIdentityPurgeFaultForTests(null);
+    importer.setProjectionBoundsForTests(null);
+  }
+  const next = await importer.runRetention("cli");
+  assert.ok(next.projected >= 1, JSON.stringify(next));
+  assert.equal(await holdsMarker(row.id, MARKER), false, "the next run projected it");
+  assert.equal(await openTransactions(), 0);
+});
+
+test("27. a ROLLBACK that does not answer is bounded: the row's client is destroyed (never reused), the run goes on and ends within the rollback bound with a stable code, and the next run works - shown with a gate, never a hang", { timeout: 60_000 }, async () => {
+  const MARKER = "markerHeldRollbackZq";
+  const [row, after] = (await pendingRows(2, MARKER)).map((x) => x.row).sort((x, y) => (x.id < y.id ? -1 : 1));
+  const held = gate();
+  let rowClient = null;
+  importer.setProjectionBoundsForTests({ rollbackBoundMs: 400 }, {
+    statementFault: (client, id) => { if (id === row.id) { rowClient = client; failRow(); } },
+    rollbackFault: (client) => (client === rowClient ? held.p.then(() => client.query("rollback")) : client.query("rollback")),
+  });
+  try {
+    const started = Date.now();
+    const outcome = await raceWith(importer.runRetention("cli"), 4000);
+    assert.notEqual(outcome, "timeout", "the run did not wait on the ROLLBACK");
+    assert.equal(outcome.e?.code, "projection_failed", JSON.stringify(outcome.e));
+    assert.ok(Date.now() - started < 2500, `bounded (${Date.now() - started} ms)`);
+    assert.equal(rowClient?._ending, true, "the client whose ROLLBACK did not answer was destroyed");
+    assert.equal(await holdsMarker(after.id, MARKER), false, "the run went on with the next row");
+  } finally {
+    held.release();
+    importer.setProjectionBoundsForTests(null);
+  }
+  for (let i = 0; i < 80 && (await openTransactions()) !== 0; i += 1) await new Promise((r) => setTimeout(r, 25));
+  const next = await importer.runRetention("cli");
+  assert.ok(next.projected >= 1, JSON.stringify(next));
+  assert.equal(await holdsMarker(row.id, MARKER), false);
+});
+
+test("28. a COMMIT that does not answer is bounded: the client is destroyed and never awaited again, the row's UPDATE is never sent again in that run, the run goes on with the next row and reports projection_commit_unknown within the bound, and the next run projects the row exactly once - shown with a gate, never a hang", { timeout: 60_000 }, async () => {
+  const MARKER = "markerHeldCommitZq";
+  const [row, after] = (await pendingRows(2, MARKER)).map((x) => x.row).sort((x, y) => (x.id < y.id ? -1 : 1));
+  const held = gate();
+  let rowClient = null;
+  let rowUpdates = 0;
+  importer.setProjectionBoundsForTests({ commitBoundMs: 400 }, {
+    statementFault: (client, id) => {
+      if (id !== row.id) return;
+      rowClient = client;
+      const original = client.query.bind(client);
+      client.query = (text, ...rest) => {
+        if (typeof text === "string" && text.includes("update training_load.gpexe_import_candidates set raw_bundle")) rowUpdates += 1;
+        return original(text, ...rest);
+      };
+    },
+    commitFault: (client) => (client === rowClient ? held.p.then(() => client.query("commit")) : client.query("commit")),
+  });
+  try {
+    const started = Date.now();
+    const outcome = await raceWith(importer.runRetention("cli"), 4000);
+    assert.notEqual(outcome, "timeout", "the run did not wait on the COMMIT");
+    assert.equal(outcome.e?.code, "projection_commit_unknown", JSON.stringify(outcome.e));
+    assert.ok(Date.now() - started < 2500, `bounded (${Date.now() - started} ms)`);
+    assert.equal(rowUpdates, 1, "the row's UPDATE was sent once");
+    assert.equal(rowClient._ending, true, "the client with the unanswered COMMIT was destroyed");
+    assert.equal(await holdsMarker(after.id, MARKER), false, "the run went on with the next row after the unknown COMMIT");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(rowUpdates, 1, "no UPDATE was sent again");
+    assert.equal((await lastRun()).error_message, PROJECTION_COMMIT_SENTENCE);
+  } finally {
+    held.release();
+    importer.setProjectionBoundsForTests(null);
+  }
+  // The COMMIT never reached the server, so it ended the transaction with the client: the next run projects it.
+  for (let i = 0; i < 80 && (await openTransactions()) !== 0; i += 1) await new Promise((r) => setTimeout(r, 25));
+  assert.equal(await openTransactions(), 0, "the server ended the transaction of the destroyed client");
+  const next = await importer.runRetention("cli");
+  assert.ok(next.projected >= 1, JSON.stringify(next));
+  assert.equal(await holdsMarker(row.id, MARKER), false);
+  assert.equal((await importer.runRetention("cli")).projected, 0, "idempotent");
+});
+
+test("29. the projection reads one snapshot per statement: no statement returns more than one raw_bundle, and every pending snapshot is projected", { timeout: 60_000 }, async () => {
+  const MARKER = "markerPerRowZq";
+  const seeded = await pendingRows(3, MARKER);
+  let maxSnapshotsPerStatement = 0;
+  importer.setProjectionBoundsForTests(null, {
+    clientObserver: (client) => {
+      if (client.wrappedPerRowZq) return;
+      client.wrappedPerRowZq = true;
+      const original = client.query.bind(client);
+      client.query = async (text, ...rest) => {
+        const result = await original(text, ...rest);
+        if (typeof text === "string" && /select[\s\S]*raw_bundle[\s\S]*from/i.test(text)) maxSnapshotsPerStatement = Math.max(maxSnapshotsPerStatement, result.rows.length);
+        return result;
+      };
+    },
+  });
+  try {
+    await importer.runRetention("cli");
+    assert.equal(maxSnapshotsPerStatement, 1, "one snapshot per statement");
+    for (const { row } of seeded) assert.equal(await holdsMarker(row.id, MARKER), false, "projected");
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+});
+
+test("30. a client that vanishes after its COMMIT was not answered does not keep the row locked: the server ends the abandoned transaction by idle_in_transaction_session_timeout, the row is free again, and the next run projects it", { timeout: 60_000 }, async () => {
+  const MARKER = "markerVanishedClientZq";
+  const { row } = await pendingWithMarker(MARKER);
+  const held = gate();
+  let rowClient = null;
+  importer.setProjectionBoundsForTests({ commitBoundMs: 200, idleInTransactionMs: 500 }, {
+    statementFault: (client, id) => {
+      if (id !== row.id) return;
+      rowClient = client;
+      // A stalled network: closing this client never reaches the server.
+      client.end = () => Promise.resolve();
+    },
+    commitFault: (client) => (client === rowClient ? held.p.then(() => client.query("commit")) : client.query("commit")),
+  });
+  try {
+    try {
+      const outcome = await raceWith(importer.runRetention("cli"), 4000);
+      assert.equal(outcome.e?.code, "projection_commit_unknown", JSON.stringify(outcome.e));
+    } finally {
+      importer.setProjectionBoundsForTests(null);
+    }
+    for (let i = 0; i < 120 && (await openTransactions()) !== 0; i += 1) await new Promise((r) => setTimeout(r, 25));
+    assert.equal(await openTransactions(), 0, "the server ended the abandoned transaction");
+  } finally {
+    // Released only after the server ended the transaction (or the test failed): never left pending.
+    held.release();
+  }
+  const locked = await q(`select id from training_load.gpexe_import_candidates where id = $1 for update skip locked`, [row.id]);
+  assert.equal(locked.length, 1, "the row is free again");
+  const next = await importer.runRetention("cli");
+  assert.ok(next.projected >= 1, JSON.stringify(next));
+  assert.equal(await holdsMarker(row.id, MARKER), false);
+});
+
+test("31. the budget is checked only before something new is started: a row started inside the budget runs to its own end (not cut by the budget), then no new page or row is sent and the run ends cleanly; with no budget left nothing at all is sent", { timeout: 60_000 }, async () => {
+  const MARKER = "markerBudgetBeforeStartZq";
+  await pendingRows(2, MARKER);
+  let checkouts = 0;
+  let rowsStarted = 0;
+  importer.setProjectionBoundsForTests({ runBudgetMs: 200 }, {
+    clientObserver: () => { checkouts += 1; },
+    statementFault: async () => { rowsStarted += 1; await new Promise((r) => setTimeout(r, 600)); },
+  });
+  try {
+    const started = Date.now();
+    const result = await importer.runRetention("cli");
+    const took = Date.now() - started;
+    assert.ok(Number.isInteger(result.projected), JSON.stringify(result));
+    assert.equal((await lastRun()).error_message, null, "a clean stop records no error");
+    assert.equal(rowsStarted, 1, "one row started inside the budget, none after it");
+    assert.equal(checkouts, 2, "the page read and that one row - nothing new after the budget");
+    assert.ok(took >= 600, `the started row was not cut by the budget (${took} ms)`);
+    assert.ok(took < 600 + 1500, `and nothing else ran (${took} ms)`);
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+  // No budget at all: not one statement is sent, and the run is clean.
+  checkouts = 0;
+  importer.setProjectionBoundsForTests({ runBudgetMs: 0 }, { clientObserver: () => { checkouts += 1; } });
+  try {
+    const result = await importer.runRetention("cli");
+    assert.equal(result.projected, 0);
+    assert.equal(checkouts, 0, "nothing was checked out or sent");
+    assert.equal((await lastRun()).error_message, null);
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+});
+
+test("32. a real SQL timeout at the end of the budget stays projection_timeout: a row started inside the budget whose statement the server cancels after the budget has run out is recorded as a timeout, never as a clean budget stop", { timeout: 60_000 }, async () => {
+  const MARKER = "markerTimeoutAtBudgetEndZq";
+  const { row } = await pendingWithMarker(MARKER);
+  importer.setProjectionBoundsForTests({ runBudgetMs: 200, statementTimeoutMs: 300 }, {
+    statementFault: (client) => client.query("select pg_sleep(5) /* projection-budget-end-zq */"),
+  });
+  try {
+    const outcome = await raceWith(importer.runRetention("cli"), 4000);
+    assert.equal(outcome.e?.code, "projection_timeout", JSON.stringify(outcome));
+    assert.equal((await lastRun()).error_message, PROJECTION_TIMEOUT_SENTENCE);
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+  await importer.runRetention("cli");
+  assert.equal(await holdsMarker(row.id, MARKER), false);
+});
+
+test("33. a connection checkout that times out in the projection step is recorded with the stable code and sentence, and the run keeps its purge count", { timeout: 60_000 }, async () => {
+  importer.setProjectionBoundsForTests(null, { connectFault: () => Promise.reject(Object.assign(new Error("timeout exceeded when trying to connect"), { code: "pool_checkout_timeout" })) });
+  try {
+    const error = await importer.runRetention("cli").then(() => null, (e) => e);
+    assert.equal(error?.code, "projection_timeout");
+    const run = await lastRun();
+    assert.deepEqual([Number.isInteger(run.purged_count), run.error_message], [true, PROJECTION_TIMEOUT_SENTENCE]);
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+});
+
+test("34. a backlog larger than one run's budget is split across runs: every run resolves and records no error, the cursor continues where the last run stopped, and the runs together project every row", { timeout: 120_000 }, async () => {
+  const MARKER = "markerBudgetStopZq";
+  const seeded = await pendingRows(3, MARKER);
+  const backlog = (await q(`select count(*)::int as n from training_load.gpexe_import_candidates where raw_bundle is not null and status in ('pending', 'blocked', 'superseded')`))[0].n;
+  // Every row takes 220 ms before its read and a run may start rows for 300 ms: two rows per run.
+  const slow = { statementFault: async () => { await new Promise((r) => setTimeout(r, 220)); } };
+  importer.setProjectionBoundsForTests({ runBudgetMs: 300 }, slow);
+  let runs = 0;
+  try {
+    while (runs < backlog + 5 && (await Promise.all(seeded.map(({ row }) => holdsMarker(row.id, MARKER)))).some(Boolean)) {
+      runs += 1;
+      const result = await importer.runRetention("cli");
+      assert.ok(Number.isInteger(result.projected), JSON.stringify(result));
+      assert.equal((await lastRun()).error_message, null, `run ${runs} recorded no error`);
+      importer.setProjectionBoundsForTests({ runBudgetMs: 300 }, { ...slow, resetCursor: false });
+    }
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+  assert.ok(runs >= 2, `the backlog needed more than one run (${runs})`);
+  for (const { row } of seeded) assert.equal(await holdsMarker(row.id, MARKER), false, `projected (${runs} runs, backlog ${backlog})`);
+});
+
+test("35. the id page read has its own server-side bounds: behind a table lock it is ended by lock_timeout, a held statement in it by statement_timeout, and a page transaction whose client vanished before its COMMIT is ended by idle_in_transaction_session_timeout - no backend keeps waiting, running or holding a lock that would block DDL, and the next run works", { timeout: 60_000 }, async () => {
+  await pendingWithMarker("markerPageReadZq");
+  // (a) a table lock held by another session: the page read waits only lock_timeout.
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await holder.query("lock table training_load.gpexe_import_candidates in access exclusive mode");
+    importer.setProjectionBoundsForTests({ lockTimeoutMs: 300 });
+    const started = Date.now();
+    const outcome = await raceWith(importer.projectUnimportedSnapshots(), 6000);
+    assert.equal(outcome.e?.code, "projection_timeout", JSON.stringify(outcome));
+    assert.ok(Date.now() - started < 1500, `ended by the server's lock_timeout (${Date.now() - started} ms)`);
+    const waiting = (await q(`select count(*)::int as n from pg_stat_activity where query like 'select id from training_load.gpexe_import_candidates%' and state = 'active' and pid <> pg_backend_pid()`))[0].n;
+    assert.equal(waiting, 0, "no backend keeps waiting on the lock");
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end();
+    importer.setProjectionBoundsForTests(null);
+  }
+  // (b) a statement held inside the page transaction: the server cancels it by statement_timeout.
+  importer.setProjectionBoundsForTests({ statementTimeoutMs: 300 }, { pageFault: (client) => client.query("select pg_sleep(5) /* page-held-zq */") });
+  try {
+    const started = Date.now();
+    const outcome = await raceWith(importer.projectUnimportedSnapshots(), 6000);
+    assert.equal(outcome.e?.code, "projection_timeout", JSON.stringify(outcome));
+    assert.ok(Date.now() - started < 1500, `bounded (${Date.now() - started} ms)`);
+    const running = (await q(`select count(*)::int as n from pg_stat_activity where query like '%page-held-zq%' and state = 'active' and pid <> pg_backend_pid() and query not like '%pg_stat_activity%'`))[0].n;
+    assert.equal(running, 0, "the server cancelled the held statement");
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+  // (c) the page's client vanishes after its read, before its COMMIT reaches the server.
+  importer.setProjectionBoundsForTests({ operationBoundMs: 800, idleInTransactionMs: 500 }, {
+    pageFault: (client) => {
+      client.end = () => Promise.resolve();
+      const original = client.query.bind(client);
+      client.query = (text, ...rest) => (text === "commit" ? new Promise(() => {}) : original(text, ...rest));
+    },
+  });
+  try {
+    const outcome = await raceWith(importer.projectUnimportedSnapshots(), 6000);
+    assert.equal(outcome.e?.code, "projection_timeout", JSON.stringify(outcome));
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+  for (let i = 0; i < 120 && (await openTransactions()) !== 0; i += 1) await new Promise((r) => setTimeout(r, 25));
+  assert.equal(await openTransactions(), 0, "the server ended the page transaction of the vanished client");
+  const ddl = new pg.Client({ connectionString: db.url });
+  await ddl.connect();
+  try {
+    await ddl.query("begin");
+    await ddl.query("lock table training_load.gpexe_import_candidates in access exclusive mode nowait");
+    await ddl.query("rollback");
+  } finally {
+    await ddl.end();
+  }
+  const next = await importer.projectUnimportedSnapshots();
+  assert.ok(Number.isInteger(next), "the next run works");
+});
+
+test("36. one bad row never starves the rest: a row that fails every time is tried once per run, the cursor moves past it and the later rows are projected in the same run; the failed row stays eligible (its retention dates untouched) and is tried again in a later run; no row is processed twice in one run; the log and the run record carry no id, snapshot or value", { timeout: 120_000 }, async () => {
+  const MARKER = "markerStarvationZq";
+  const seeded = (await pendingRows(3, MARKER)).map(({ row }) => row.id).sort();
+  const [bad, ...good] = seeded;
+  const datesBefore = (await q(`select raw_expires_at, raw_purged_at from training_load.gpexe_import_candidates where id = $1`, [bad]))[0];
+  let attempts = new Map();
+  const faults = (failing) => ({
+    statementFault: (client, id) => {
+      attempts.set(id, (attempts.get(id) ?? 0) + 1);
+      if (failing && id === bad) failRow();
+    },
+  });
+  const logBefore = logLines.length;
+  // One id per page, so the cursor moves page by page inside a run.
+  importer.setProjectionBoundsForTests({ idPage: 1 }, faults(true));
+  try {
+    const first = await raceWith(importer.runRetention("cli"), 20_000);
+    assert.equal(first.e?.code, "projection_failed", JSON.stringify(first));
+    assert.equal(attempts.get(bad), 1, "the bad row was tried once in the run");
+    for (const id of attempts.keys()) assert.equal(attempts.get(id), 1, "no row was processed twice in one run");
+    for (const id of good) assert.equal(await holdsMarker(id, MARKER), false, "the later rows were projected in the same run");
+    assert.ok(await holdsMarker(bad, MARKER), "the bad row keeps its snapshot");
+    const run = await lastRun();
+    assert.deepEqual([Number.isInteger(run.purged_count), run.error_message], [true, PROJECTION_FAILED_SENTENCE]);
+    // A later run tries it again.
+    attempts = new Map();
+    importer.setProjectionBoundsForTests({ idPage: 1 }, { ...faults(true), resetCursor: false });
+    const second = await raceWith(importer.runRetention("cli"), 20_000);
+    assert.equal(second.e?.code, "projection_failed", JSON.stringify(second));
+    assert.equal(attempts.get(bad), 1, "the bad row stays eligible and is tried again in a later run");
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+  const datesAfter = (await q(`select raw_expires_at, raw_purged_at from training_load.gpexe_import_candidates where id = $1`, [bad]))[0];
+  assert.deepEqual(datesAfter, datesBefore, "no retention date was extended");
+  noLeak(logLines.slice(logBefore), [MARKER, ...seeded, "raw_bundle", "tot_burst_events"]);
+  // Once it no longer fails, it is projected.
+  await importer.runRetention("cli");
+  assert.equal(await holdsMarker(bad, MARKER), false);
+});
+
+test("37. several bad rows respect the failure cap and the budget: a run stops after the cap of failed rows (each tried once), records the failure with a stable code, keeps purged_count and an earlier step's error, and the log carries no id or value", { timeout: 120_000 }, async () => {
+  const MARKER = "markerFailureCapZq";
+  const ids = (await pendingRows(5, MARKER)).map(({ row }) => row.id);
+  const badSet = new Set(ids);
+  const attempts = new Map();
+  const logBefore = logLines.length;
+  importer.setProjectionBoundsForTests({ failureCap: 3, runBudgetMs: 5000 }, {
+    statementFault: (client, id) => {
+      attempts.set(id, (attempts.get(id) ?? 0) + 1);
+      if (badSet.has(id)) failRow();
+    },
+  });
+  importer.setIdentityPurgeFaultForTests(() => { throw new Error("identity purge failed (test)"); });
+  try {
+    const started = Date.now();
+    const outcome = await raceWith(importer.runRetention("cli"), 20_000);
+    assert.equal(outcome.e?.message, "identity purge failed (test)", "the earlier step's error is the run's error");
+    assert.ok(Date.now() - started < 5000 + 4000 + 5000, `within the budget and one operation (${Date.now() - started} ms)`);
+    const triedBad = ids.filter((id) => attempts.has(id));
+    assert.equal(triedBad.length, 3, "the run stopped at the failure cap");
+    for (const id of triedBad) assert.equal(attempts.get(id), 1, "each bad row was tried once");
+    const run = await lastRun();
+    assert.deepEqual([Number.isInteger(run.purged_count), run.error_message], [true, "identity purge failed (test)"]);
+  } finally {
+    importer.setIdentityPurgeFaultForTests(null);
+  }
+  try {
+    const alone = await raceWith(importer.runRetention("cli"), 20_000);
+    assert.equal(alone.e?.code, "projection_failed", JSON.stringify(alone));
+    assert.equal((await lastRun()).error_message, PROJECTION_FAILED_SENTENCE);
+  } finally {
+    importer.setProjectionBoundsForTests(null);
+  }
+  noLeak(logLines.slice(logBefore), [MARKER, ...ids, "raw_bundle", "tot_burst_events"]);
+  await importer.runRetention("cli");
+  for (const id of ids) assert.equal(await holdsMarker(id, MARKER), false);
 });

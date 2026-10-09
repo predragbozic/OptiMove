@@ -42,11 +42,11 @@ import crypto from "node:crypto";
 import { pool } from "./db.js";
 import { decryptCredential, keyringFromEnv } from "./sourceCredentialCrypto.js";
 import { resolveApprovedSourceHost } from "./sourceHosts.js";
-import { createSourceAdapter, SourceAdapterError, DIAGNOSTIC_MARK } from "./sourceAdapters.js";
+import { createSourceAdapter, SourceAdapterError, DIAGNOSTIC_MARK, projectStoredDetails } from "./sourceAdapters.js";
 
 // The importer sees the adapter's error class only through this module: the
 // resolver is the importer's one door to the source-connection infrastructure.
-export { SourceAdapterError, DIAGNOSTIC_MARK };
+export { SourceAdapterError, DIAGNOSTIC_MARK, projectStoredDetails };
 
 export const IMPORT_SOURCE_SYSTEM = "gpexe";
 // Only a connection a successful Test or Connect left `verified` is read by an

@@ -20,6 +20,7 @@ import {
   resolveImportSourceFacts, preflightImportSource, openImportSource, importClientFor, legacyImportClientFor, sameImportSource,
   importSourceIdentity, canonicalSourceTeamId, autoInvalidateImportSource, boundImportSideEffect, AUTO_INVALIDATE_BOUND_MS,
   SourceImportResolveError, SourceAdapterError, PATH_SOURCE_CONNECTION, PATH_LEGACY_ENV, isConnectionConfigurationCode, DIAGNOSTIC_MARK,
+  projectStoredDetails,
 } from "./sourceImportCredentialResolver.js";
 import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCanonicalGpexeAthleteId } from "./gpexeImportMapper.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
@@ -293,6 +294,13 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
 // ---------------------------------------------------------------------------
 
 export const RETENTION_BATCH_SIZE = 200;
+// Tests make the snapshot projection step of a retention run fail, to prove a
+// failure there keeps the purge count and an earlier step's error.
+let projectionFault = null;
+export function setProjectionFaultForTests(fn) { projectionFault = fn ?? null; }
+// Tests make the identity purge step fail, to prove a later step never hides it.
+let identityPurgeFault = null;
+export function setIdentityPurgeFaultForTests(fn) { identityPurgeFault = fn ?? null; }
 const RETENTION_MAX_BATCHES = 500;
 
 export async function runRetention(triggerSource) {
@@ -308,6 +316,7 @@ export async function runRetention(triggerSource) {
     // Counted apart from the raw snapshots.
     let identityError = null;
     try {
+      if (identityPurgeFault) await identityPurgeFault();
       for (let batch = 0; batch < RETENTION_MAX_BATCHES; batch += 1) {
         const n = (await query(`select training_load.purge_expired_gpexe_athlete_identities($1) as n`, [RETENTION_BATCH_SIZE])).rows[0].n;
         identitiesPurged += n;
@@ -332,13 +341,335 @@ export async function runRetention(triggerSource) {
       purged += n;
       if (n < RETENTION_BATCH_SIZE) break;
     }
-    if (identityError) throw identityError;
-    await query(`update training_load.gpexe_retention_runs set finished_at = now(), purged_count = $2 where id = $1`, [run.id, purged]);
-    return { runId: run.id, purged, identitiesPurged, suppressionsPurged };
+    // Then every snapshot that is still stored and was never imported keeps
+    // only the details fields the importer reads (owner order 2026-10-09), in
+    // its own step: a failure here never loses the purge count or an earlier
+    // step's error.
+    let projected = 0;
+    let projectionError = null;
+    try {
+      if (projectionFault) await projectionFault();
+      projected = await projectUnimportedSnapshots();
+    } catch (error) {
+      projectionError = error;
+      // A stable code only: never a snapshot, an id, a metric or a value.
+      console.error(`[gpexe] retention projection step failed: ${error instanceof ProjectionStepError ? error.code : "projection_failed"}`);
+    }
+    const stepError = identityError ?? projectionError;
+    await query(
+      `update training_load.gpexe_retention_runs set finished_at = now(), purged_count = $2, error_message = $3 where id = $1`,
+      [run.id, purged, stepError ? String(stepError.message).slice(0, 300) : null],
+    );
+    if (stepError) throw Object.assign(stepError, { retentionRunRecorded: true });
+    return { runId: run.id, purged, identitiesPurged, suppressionsPurged, projected };
   } catch (error) {
-    await query(`update training_load.gpexe_retention_runs set finished_at = now(), error_message = $2 where id = $1`, [run.id, String(error.message).slice(0, 300)]).catch(() => {});
+    if (!error?.retentionRunRecorded) {
+      await query(`update training_load.gpexe_retention_runs set finished_at = now(), error_message = $2 where id = $1`, [run.id, String(error.message).slice(0, 300)]).catch(() => {});
+    }
     throw error;
   }
+}
+
+// A stored snapshot of a candidate that was never imported - pending,
+// blocked or superseded - reduced to the details fields the importer reads
+// (projectStoredDetails). Runs with every retention run (each check, the
+// server's schedule, the CLI), so a snapshot stored before the projections
+// keeps no unconsumed metric even when no later check supersedes it. An
+// imported candidate is never touched (its record stays as it was approved);
+// the row's identity, bundle_hash and retention dates stay. The approval
+// recomputes its plan from the snapshot, and the mapper reads only those two
+// fields, so the preview of a projected snapshot is the same.
+//
+// Bounded in time, in what it holds and in what one bad row can cost (owner's
+// external reviews of 5bd4ee0 and 8a7cee0 and the narrow reviews after them,
+// 2026-10-09), because it runs at the start of every check and in the
+// scheduled job:
+// - ids are listed in keyset pages (id only, never a snapshot) from a cursor
+//   kept across runs in this process, so a large backlog makes progress run
+//   after run; each page read is its own short read-only transaction;
+// - every row is its own short transaction: it locks and reads ONE snapshot
+//   with FOR UPDATE SKIP LOCKED (a row another session holds is skipped,
+//   never waited on), writes the projection only if it changed, and commits -
+//   at most one row lock and one snapshot at a time;
+// - every page and row transaction sets SET LOCAL statement_timeout,
+//   lock_timeout and idle_in_transaction_session_timeout (the last ends a
+//   transaction whose client vanished, so nothing stays open or locked);
+// - the run's budget is checked only BEFORE a new page or row is started:
+//   when it is spent, nothing new is sent and the step ends cleanly (no
+//   error). An operation that has started runs under its own bounds, never
+//   cut by the budget - its checkout and statements together within
+//   PROJECTION_OPERATION_BOUND_MS (each statement also under the server's
+//   statement_timeout), the COMMIT within PROJECTION_COMMIT_BOUND_MS, a
+//   ROLLBACK before a sent COMMIT within PROJECTION_ROLLBACK_BOUND_MS - and
+//   reports its real outcome: projection_timeout, projection_commit_unknown
+//   or projection_failed. A connection whose statement, COMMIT or ROLLBACK did
+//   not answer is closed (release(true)) and never awaited again;
+// - a row that fails is not retried in the same run: the cursor moves past
+//   it and the run goes on with the next row while the budget lasts, at most
+//   PROJECTION_FAILURE_CAP failed rows per run. The failed row stays eligible
+//   (its retention dates are not touched) and is tried again when a later run
+//   reaches it after the cursor wraps at the end of the list;
+// - a run that had a failed row is recorded with a stable code and sentence
+//   (projection_commit_unknown before projection_timeout before
+//   projection_failed) - never a snapshot, an id, a metric or a value - and
+//   runRetention keeps the purge count and an earlier step's error.
+// So one run's projection step takes at most PROJECTION_RUN_BUDGET_MS plus one
+// started operation (10 + 4 + 5 = 19 s with the defaults), whatever the
+// backlog.
+export const PROJECTION_STATEMENT_TIMEOUT_MS = 2_000;
+export const PROJECTION_LOCK_TIMEOUT_MS = 1_000;
+export const PROJECTION_IDLE_IN_TRANSACTION_MS = 5_000;
+export const PROJECTION_OPERATION_BOUND_MS = 4_000;
+export const PROJECTION_COMMIT_BOUND_MS = 5_000;
+export const PROJECTION_ROLLBACK_BOUND_MS = 2_000;
+export const PROJECTION_RUN_BUDGET_MS = 10_000;
+export const PROJECTION_ID_PAGE = 200;
+export const PROJECTION_FAILURE_CAP = 3;
+const PROJECTION_DEFAULTS = Object.freeze({
+  statementTimeoutMs: PROJECTION_STATEMENT_TIMEOUT_MS,
+  lockTimeoutMs: PROJECTION_LOCK_TIMEOUT_MS,
+  idleInTransactionMs: PROJECTION_IDLE_IN_TRANSACTION_MS,
+  operationBoundMs: PROJECTION_OPERATION_BOUND_MS,
+  commitBoundMs: PROJECTION_COMMIT_BOUND_MS,
+  rollbackBoundMs: PROJECTION_ROLLBACK_BOUND_MS,
+  runBudgetMs: PROJECTION_RUN_BUDGET_MS,
+  idPage: PROJECTION_ID_PAGE,
+  failureCap: PROJECTION_FAILURE_CAP,
+});
+let projectionBounds = { ...PROJECTION_DEFAULTS };
+// The id after which the next run continues (a process-local cursor; it
+// wraps to the start when a run reaches the end of the list).
+let projectionCursor = null;
+// Tests shorten the bounds and hold the checkout, a statement of a row or of
+// a page, the COMMIT or the ROLLBACK (each fault gets that client, and a row
+// fault also the row's id - test-only, never logged), and observe every
+// checked-out client.
+let projectionConnectFault = null;
+let projectionStatementFault = null;
+let projectionPageFault = null;
+let projectionCommitFault = null;
+let projectionRollbackFault = null;
+let projectionClientObserver = null;
+export function setProjectionBoundsForTests(bounds = null, { connectFault = null, statementFault = null, pageFault = null, commitFault = null, rollbackFault = null, clientObserver = null, resetCursor = true } = {}) {
+  projectionBounds = { ...PROJECTION_DEFAULTS, ...(bounds ?? {}) };
+  projectionConnectFault = connectFault;
+  projectionStatementFault = statementFault;
+  projectionPageFault = pageFault;
+  projectionCommitFault = commitFault;
+  projectionRollbackFault = rollbackFault;
+  projectionClientObserver = clientObserver;
+  if (resetCursor) projectionCursor = null;
+}
+const PROJECTION_MESSAGES = Object.freeze({
+  projection_timeout: "The snapshot projection step ran out of time; the next retention run continues it.",
+  projection_commit_unknown: "The snapshot projection step could not confirm its last write; the next retention run continues it.",
+  projection_failed: "The snapshot projection step failed; the next retention run continues it.",
+});
+export class ProjectionStepError extends Error {
+  constructor(code) {
+    super(PROJECTION_MESSAGES[code] ?? PROJECTION_MESSAGES.projection_failed);
+    this.name = "ProjectionStepError";
+    this.code = PROJECTION_MESSAGES[code] ? code : "projection_failed";
+  }
+}
+const isProjectionTimeout = (error) => error?.code === "57014" || error?.code === "55P03" || error?.code === "25P03"
+  || isPoolCheckoutTimeout(error) || /no answer within/.test(String(error?.message));
+const toProjectionError = (error) => (error instanceof ProjectionStepError ? error
+  : new ProjectionStepError(isProjectionTimeout(error) ? "projection_timeout" : "projection_failed"));
+// The code a run reports when several rows failed.
+const PROJECTION_CODE_RANK = Object.freeze({ projection_commit_unknown: 3, projection_timeout: 2, projection_failed: 1 });
+
+export async function projectUnimportedSnapshots() {
+  const b = projectionBounds;
+  const deadline = Date.now() + b.runBudgetMs;
+  const budgetLeft = () => deadline - Date.now() > 0;
+  const statementBound = b.statementTimeoutMs + 1_000;
+
+  // One started operation (a page read or a row): its checkout and its
+  // statements share its own bound, never the run's budget.
+  const operation = () => {
+    const ends = Date.now() + b.operationBoundMs;
+    const cap = (own) => Math.max(1, Math.floor(Math.min(own, ends - Date.now())));
+    return { cap };
+  };
+  // A connection checked out in time; one that arrives after its bound is
+  // closed at once, never kept.
+  const connect = async (op) => {
+    const connecting = Promise.resolve().then(() => (projectionConnectFault ? projectionConnectFault() : pool.connect()));
+    try {
+      return await withinBound(connecting, op.cap(statementBound));
+    } catch (error) {
+      connecting.then((late) => late?.release?.(true), () => {});
+      throw toProjectionError(error);
+    }
+  };
+  // The server-side bounds of a row's transaction (the id page sets the same
+  // three itself).
+  const setLocalBounds = async (run, op) => {
+    await run(`set local statement_timeout = '${op.cap(b.statementTimeoutMs)}ms'`);
+    await run(`set local lock_timeout = '${Math.max(1, Math.floor(b.lockTimeoutMs))}ms'`);
+    await run(`set local idle_in_transaction_session_timeout = '${Math.max(1, Math.floor(b.idleInTransactionMs))}ms'`);
+  };
+  // The id page: a short read-only transaction. Any failure closes the
+  // client (a read: nothing to keep or confirm).
+  const readIdPage = async (cursor) => {
+    const op = operation();
+    const client = await connect(op);
+    const onError = () => {};
+    client.on("error", onError);
+    if (projectionClientObserver) projectionClientObserver(client);
+    const run = (text, values) => withinBound(client.query(text, values), op.cap(statementBound));
+    try {
+      await run("begin isolation level read committed read only");
+      await run(`set local statement_timeout = '${op.cap(b.statementTimeoutMs)}ms'`);
+      await run(`set local lock_timeout = '${Math.max(1, Math.floor(b.lockTimeoutMs))}ms'`);
+      await run(`set local idle_in_transaction_session_timeout = '${Math.max(1, Math.floor(b.idleInTransactionMs))}ms'`);
+      if (projectionPageFault) {
+        const held = Promise.resolve().then(() => projectionPageFault(client));
+        held.catch(() => {});
+        await withinBound(held, op.cap(statementBound));
+      }
+      const rows = (await run(
+        `select id from training_load.gpexe_import_candidates
+          where raw_bundle is not null and status in ('pending', 'blocked', 'superseded') and ($1::uuid is null or id > $1::uuid)
+          order by id limit $2`,
+        [cursor, b.idPage],
+      )).rows;
+      await run("commit");
+      client.removeListener("error", onError);
+      client.release();
+      return rows;
+    } catch (error) {
+      client.release(true);
+      throw toProjectionError(error);
+    }
+  };
+  // One row's transaction: lock and read its snapshot, write the projection
+  // if it changed, commit. Returns 1 when it wrote, 0 otherwise.
+  const projectOne = async (id) => {
+    const op = operation();
+    const client = await connect(op);
+    // Kept on a closed client too: a late socket error never crashes the process.
+    const onError = () => {};
+    client.on("error", onError);
+    if (projectionClientObserver) projectionClientObserver(client);
+    let released = false;
+    let commitSent = false;
+    const destroy = () => {
+      if (released) return;
+      released = true;
+      client.release(true);
+    };
+    const run = (text, values) => withinBound(client.query(text, values), op.cap(statementBound));
+    try {
+      await run("begin isolation level read committed");
+      await setLocalBounds(run, op);
+      if (projectionStatementFault) {
+        const held = Promise.resolve().then(() => projectionStatementFault(client, id));
+        held.catch(() => {});
+        await withinBound(held, op.cap(statementBound));
+      }
+      const row = (await run(
+        `select raw_bundle from training_load.gpexe_import_candidates
+          where id = $1 and raw_bundle is not null and status in ('pending', 'blocked', 'superseded')
+          for update skip locked`,
+        [id],
+      )).rows[0];
+      let wrote = 0;
+      if (row) {
+        const next = projectStoredDetails(row.raw_bundle);
+        if (canonicalJson(next) !== canonicalJson(row.raw_bundle)) {
+          // The row is locked by this transaction: the status guard is the
+          // last word, never an imported row.
+          const done = await run(
+            `update training_load.gpexe_import_candidates set raw_bundle = $2
+              where id = $1 and status in ('pending', 'blocked', 'superseded')`,
+            [id, next],
+          );
+          wrote = done.rowCount;
+        }
+      }
+      // The COMMIT under its own bound (the F2 discipline): once sent, its
+      // outcome may be unknown; the client is then closed and nothing is
+      // awaited on it again.
+      commitSent = true;
+      const committing = Promise.resolve().then(() => (projectionCommitFault ? projectionCommitFault(client) : client.query("commit")));
+      committing.catch(() => {});
+      try {
+        await withinBound(committing, b.commitBoundMs);
+      } catch {
+        destroy();
+        throw new ProjectionStepError("projection_commit_unknown");
+      }
+      return wrote;
+    } catch (error) {
+      if (!commitSent) {
+        // A bounded ROLLBACK before any COMMIT was sent; a ROLLBACK that does
+        // not answer closes the client (the server ends the transaction, and
+        // idle_in_transaction_session_timeout ends it if that never arrives).
+        const rolling = Promise.resolve().then(() => (projectionRollbackFault ? projectionRollbackFault(client) : client.query("rollback")));
+        rolling.catch(() => {});
+        try {
+          await withinBound(rolling, b.rollbackBoundMs);
+        } catch {
+          destroy();
+        }
+      }
+      // A statement that timed out or did not answer: never reuse the client.
+      if (isProjectionTimeout(error)) destroy();
+      throw toProjectionError(error);
+    } finally {
+      if (!released) {
+        released = true;
+        client.removeListener("error", onError);
+        client.release();
+      }
+    }
+  };
+
+  let projected = 0;
+  let failed = 0;
+  let failure = null;
+  const fail = (error) => {
+    failed += 1;
+    if (!failure || PROJECTION_CODE_RANK[error.code] > PROJECTION_CODE_RANK[failure.code]) failure = error;
+  };
+  pages: for (let page = 0; page < RETENTION_MAX_BATCHES; page += 1) {
+    // The budget is checked only before something new is started.
+    if (!budgetLeft()) break;
+    let ids;
+    try {
+      ids = await readIdPage(projectionCursor);
+    } catch (error) {
+      // No ids to move past: the step stops here with the page's own outcome.
+      fail(error);
+      break;
+    }
+    if (!ids.length) {
+      // The end of the list: the next run starts from the beginning.
+      projectionCursor = null;
+      break;
+    }
+    for (const { id } of ids) {
+      if (!budgetLeft() || failed >= b.failureCap) break pages;
+      try {
+        projected += await projectOne(id);
+      } catch (error) {
+        // Recorded for the run; the row is not retried in this run and the
+        // cursor moves past it, so later rows are not starved.
+        fail(error);
+      }
+      projectionCursor = id;
+    }
+    if (ids.length < b.idPage) {
+      // The end of the list, also when the cap was reached on its last row.
+      projectionCursor = null;
+      break;
+    }
+    if (failed >= b.failureCap) break;
+  }
+  if (failure) throw failure;
+  return projected;
 }
 
 export const RETENTION_INTERVAL_HOURS = 6;
@@ -805,6 +1136,23 @@ async function recordCandidate(checkId, { teamId, userId, bundle }) {
         where owner_team_id = $1 and gpexe_team_session_id = $2 and id <> $3 and status in ('pending', 'blocked')`,
       [teamId, sessionId, currentId],
     );
+    // In the same transaction, every superseded snapshot of this session that
+    // still holds one keeps only the details fields the importer reads (owner
+    // order 2026-10-09): a snapshot stored before the projections never keeps
+    // an unconsumed metric once newer content replaced it. An imported
+    // candidate is never touched; the row's identity and bundle_hash (the
+    // record of what was seen) stay as they are.
+    const superseded = (await client.query(
+      `select id, raw_bundle from training_load.gpexe_import_candidates
+        where owner_team_id = $1 and gpexe_team_session_id = $2 and id <> $3 and status = 'superseded' and raw_bundle is not null`,
+      [teamId, sessionId, currentId],
+    )).rows;
+    for (const row of superseded) {
+      const projected = projectStoredDetails(row.raw_bundle);
+      if (canonicalJson(projected) !== canonicalJson(row.raw_bundle)) {
+        await client.query(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1 and status = 'superseded'`, [row.id, projected]);
+      }
+    }
     await client.query("commit");
     return kind;
   } catch (error) {
