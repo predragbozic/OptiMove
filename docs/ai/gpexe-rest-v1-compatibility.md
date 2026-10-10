@@ -288,8 +288,10 @@ refusal carries a sanitized description after " Diagnostic: " on the check row's
 
 It never carries an athlete id, any other metric name, a value, a text, a date or raw JSON. It sends
 no request, and a coach does not see it. A drill answer refused the same way keeps its description
-through the drill set: the `drill_set_incomplete` message then carries `drill_index`, `drill_code`
-and the description. A parser change follows only for a shape that this
+through the drill set. (Superseded on 2026-10-10: every incomplete drill set now keeps its reason in
+one closed-grammar line - `op=drill_set; session_position; expected; completed; failed_index; code`,
+plus the consumed field's short name and value kind for a shape refusal - see the runbook's section on
+the binding path.) A parser change follows only for a shape that this
 description, from one owner-run check of one known date, proves; that check waits for the external
 review of the branch.
 
