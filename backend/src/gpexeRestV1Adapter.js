@@ -473,6 +473,19 @@ export function drillFailureReason(error) {
   }
   return "drill_unknown";
 }
+// What a details answer said its drill count was, for an administrator only
+// (owner order 2026-10-10, after a check stopped with drills_count_disagrees):
+// the kind of the value as one closed word, whether it is a canonical whole
+// number from 0 to MAX_DRILLS, whether that number is the expected one, and
+// the number itself only when canonical. Never the raw value of any other
+// kind (a string is described as "string", never quoted).
+export function describeAnswerCount(value, expected) {
+  const kind = value === undefined ? "absent" : value === null ? "null" : typeof value === "number" ? "number"
+    : typeof value === "string" ? "string" : typeof value === "boolean" ? "boolean" : Array.isArray(value) ? "array"
+      : isPlainObject(value) ? "object" : "other";
+  const canonical = Number.isInteger(value) && value >= 0 && value <= MAX_DRILLS;
+  return { kind, canonical, matchesExpected: canonical && value === expected, ...(canonical ? { value } : {}) };
+}
 // The kind of a consumed field's value, as one word of a closed set.
 const CONSUMED_KIND = Object.freeze({ null: "null", number: "number", number_not_finite: "other", boolean: "boolean",
   text_short: "string", text_long: "string", text_other_chars: "string", array: "array", object: "object", other: "other" });
@@ -553,7 +566,7 @@ export function projectSessionDetails(body, expectedDrillsCount = null, { what =
     out[key] = projected;
   }
   if (expectedDrillsCount !== null && body.drills_count !== undefined && body.drills_count !== null && body.drills_count !== expectedDrillsCount) {
-    throw unexpected(`The source answer to ${what} reports another number of drills than the confirmed session.`, { reason: "drills_count_disagrees" });
+    throw unexpected(`The source answer to ${what} reports another number of drills than the confirmed session.`, { reason: "drills_count_disagrees", answerCount: describeAnswerCount(body.drills_count, expectedDrillsCount) });
   }
   return { players: out, ...(Number.isInteger(body.drills_count) ? { drills_count: body.drills_count } : {}) };
 }
@@ -1255,7 +1268,8 @@ export function createGpexeRestV1Adapter({
           const reason = drillFailureReason(error);
           const consumed = reason === "consumed_field_shape_unknown" && CONSUMED_SHORT[error.field] && CONSUMED_KIND[error.valueKind]
             ? { consumedField: CONSUMED_SHORT[error.field], valueKind: CONSUMED_KIND[error.valueKind] } : {};
-          return { complete: false, drillsCount: parent.drillsCount, drills, failed: { drillIndex: index, code: error.code ?? "source_drill_unavailable", reason, completed: drills.length, ...consumed, ...(diagnosticText ? { diagnosticText } : {}) } };
+          const answerCount = reason === "drills_count_disagrees" && error.answerCount ? { answerCount: error.answerCount } : {};
+          return { complete: false, drillsCount: parent.drillsCount, drills, failed: { drillIndex: index, code: error.code ?? "source_drill_unavailable", reason, completed: drills.length, ...consumed, ...answerCount, ...(diagnosticText ? { diagnosticText } : {}) } };
         }
       }
       return { complete: true, drillsCount: parent.drillsCount, drills, failed: null };

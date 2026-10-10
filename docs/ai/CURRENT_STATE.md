@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-10. Last `origin/main` commit checked: `b618ae9` (merge of PR #149,
-`fix/gpexe-drill-details-projection` → `main`; PR #148 `33d4f45` before it).
+Last reviewed: 2026-10-11. Last `origin/main` commit checked: `c01a120` (frontend Home and sidebar icon work
+merged after PR #150's merge `ce759b6`; PR #149 `b618ae9` before it).
 
 ## Active phase
 
@@ -1382,6 +1382,27 @@ Technical details.
   check's own list of the window, never an id; a final guard (`drillDiagnosticAccepted()`) drops the line,
   never the refusal, if anything else would come out; a coach sees the sentence only. The runbook lists the
   reasons.
+- **PR #150 is merged and deployed.**
+  - Reviewed head `d2e4824` (the owner's external review READY), merge commit `ce759b6` on 2026-10-10 at
+    21:20:07 UTC, merged exactly from that head (`--match-head-commit`).
+  - `/api/health` first served `ce759b6` with `ok: true` at 21:21:10 UTC, then three times in a row (21:21:20,
+    21:21:31 and 21:21:41 UTC).
+  - Read-only smoke without a login, zero UUID, GET only: nine protected GPEXE and source-connection routes
+    answered 401. No migration; the switch untouched.
+- **The check of 05.10.2026 - 06.10.2026 after PR #150 (2026-10-10, run once on the owner's order):** the
+  preconditions held (`ce759b6` served; the connection *Verified* on server3; one active binding to GPEXE Team
+  ID 980; the switch off). It ended `drill_set_incomplete` with the administrator's line `op=drill_set;
+  session_position=2; expected=5; completed=0; failed_index=0; code=drills_count_disagrees.` - the first drill
+  answer of the second session in the check's list gave a drill count that is not exactly the confirmed 5
+  (absent and null are accepted, so it was another value). What it gave is not recorded by that code. **No
+  conclusion about the cause.**
+- **A drill-count diagnostic** (owner order 2026-10-10; branch `fix/gpexe-drill-count-diagnostic` from
+  `5be4ae9`; not merged; backend adapter, resolver, tests and docs; the acceptance rule, requests, retry, the
+  list, the mapper, the projection, Link, Import and the switch unchanged): for `code=drills_count_disagrees`
+  the administrator's line also carries `answer_count_kind` (closed set), `answer_count_canonical`,
+  `answer_count_matches_expected` and `answer_count=N` only for a canonical whole number 0 - 30
+  (`describeAnswerCount()` in the adapter, rebuilt from closed words and a bounded integer in the resolver,
+  the final guard extended); a coach sees the sentence only.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2308,10 +2329,10 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148) and the drill projection (PR #149) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
-1. The owner's external review of the drill-set diagnostic, branch `fix/gpexe-drill-set-diagnostic`.
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149) and the drill-set diagnostic (PR #150) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
+1. The owner's external review of the drill-count diagnostic, branch `fix/gpexe-drill-count-diagnostic`.
 2. After its merge and deploy, on a separate owner order, one check of the same window (05.10 - 06.10.2026)
-   that returns only the "Diagnostic:" line of the administrator's check detail.
+   that returns only the Code and the "Diagnostic:" line of the administrator's check detail.
 3. Condition 6 under the switch conditions (withdraw candidates a later check no longer confirms) - a
    separate PR, before the switch is ever turned on.
 4. The owner states the state of the production-use gate and of the two gates before a link (an identity

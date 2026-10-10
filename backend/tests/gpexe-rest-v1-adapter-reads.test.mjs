@@ -1821,7 +1821,7 @@ test("B9.1 every per-drill failure keeps a closed reason: an answer that is not 
     ["an array answer", answer(200, []), "answer_not_object", {}],
     ["a non-canonical athlete key", answer(200, { drills_count: 2, players: { "0471": { tot_burst_events: { unit: "number", value: 1 } } } }), "athlete_id_not_canonical", {}],
     ["too many metric values", answer(200, { drills_count: 2, players: { 4711: many } }), "player_values_too_many", {}],
-    ["a disagreeing drill count", answer(200, { drills_count: 3, players: {} }), "drills_count_disagrees", {}],
+    ["a disagreeing drill count", answer(200, { drills_count: 3, players: {} }), "drills_count_disagrees", { answerCount: { kind: "number", canonical: true, matchesExpected: false, value: 3 } }],
     ["brake as a string", answer(200, { drills_count: 2, players: { 4711: { tot_brake_events: "Marker Athlete Name" } } }), "consumed_field_shape_unknown", { consumedField: "brake", valueKind: "string" }],
     ["burst as an object without a number", answer(200, { drills_count: 2, players: { 4711: { tot_burst_events: { unit: "number", value: { deep: 1 } } } } }), "consumed_field_shape_unknown", { consumedField: "burst", valueKind: "object" }],
     ["burst as a list", answer(200, { drills_count: 2, players: { 4711: { tot_burst_events: [1, 2] } } }), "consumed_field_shape_unknown", { consumedField: "burst", valueKind: "array" }],
@@ -1852,4 +1852,47 @@ test("B9.2 every runbook names the current drill description: no runbook quotes 
   }
   const pilot = await fsp.readFile(path.join(dir, "gpexe-owner-pilot-f3c3.md"), "utf8");
   assert.match(pilot, /op=drill_set; session_position=N; expected=N; completed=N; failed_index=N; code=<reason>/);
+});
+
+test("B9.4 a drill answer whose drills_count disagrees keeps what it said, described only: its kind, whether it is a canonical whole number 0..30, whether that is the expected count, and the number only when canonical; absent, null and the expected number are still accepted (the rule is unchanged) and a string that looks like the expected number is still refused", async () => {
+  const { describeAnswerCount } = await import("../src/gpexeRestV1Adapter.js");
+  const drillWith = (count) => {
+    const body = { players: { 4711: { tot_burst_events: { unit: "number", value: 1 } } } };
+    if (count !== "__absent__") body.drills_count = count;
+    return answer(200, body);
+  };
+  // The confirmed parent has drills_count 2: these are accepted exactly as before.
+  for (const [label, count] of [["absent", "__absent__"], ["null", null], ["the expected number", 2]]) {
+    const { a } = await confirmedAdapter({ [D1]: drillWith(count) });
+    const set = await a.getSessionDrills({ sessionId: "100" });
+    assert.deepEqual([set.complete, set.failed], [true, null], label);
+  }
+  const refused = [
+    ["5", 5, { kind: "number", canonical: true, matchesExpected: false, value: 5 }],
+    ["the string \"5\"", "5", { kind: "string", canonical: false, matchesExpected: false }],
+    ["the string \"2\" (looks like the expected count)", "2", { kind: "string", canonical: false, matchesExpected: false }],
+    ["0", 0, { kind: "number", canonical: true, matchesExpected: false, value: 0 }],
+    ["1", 1, { kind: "number", canonical: true, matchesExpected: false, value: 1 }],
+    ["a negative number", -1, { kind: "number", canonical: false, matchesExpected: false }],
+    ["a number over 30", 31, { kind: "number", canonical: false, matchesExpected: false }],
+    ["a fraction", 2.5, { kind: "number", canonical: false, matchesExpected: false }],
+    ["an object", { n: 2 }, { kind: "object", canonical: false, matchesExpected: false }],
+    ["an array", [2], { kind: "array", canonical: false, matchesExpected: false }],
+    ["a boolean", true, { kind: "boolean", canonical: false, matchesExpected: false }],
+  ];
+  for (const [label, count, expected] of refused) {
+    const { a } = await confirmedAdapter({ [D1]: drillWith(count) });
+    const set = await a.getSessionDrills({ sessionId: "100" });
+    assert.equal(set.complete, false, label);
+    assert.deepEqual([set.failed.drillIndex, set.failed.code, set.failed.reason, set.failed.completed, set.failed.answerCount], [1, "source_answer_unexpected", "drills_count_disagrees", 1, expected], label);
+    assert.ok(!JSON.stringify(set.failed).includes('"n"'), label);
+  }
+  // The pure description, absent included; a matching canonical number reads matchesExpected true.
+  assert.deepEqual(describeAnswerCount(undefined, 2), { kind: "absent", canonical: false, matchesExpected: false });
+  assert.deepEqual(describeAnswerCount(null, 2), { kind: "null", canonical: false, matchesExpected: false });
+  assert.deepEqual(describeAnswerCount(5, 5), { kind: "number", canonical: true, matchesExpected: true, value: 5 });
+  assert.deepEqual(describeAnswerCount("Marker Athlete Name", 5), { kind: "string", canonical: false, matchesExpected: false });
+  // The whole-session details keep their own refusal unchanged.
+  const { a: whole } = await confirmedAdapter({ [WHOLE]: answer(200, { drills_count: "2", players: {} }) });
+  await assert.rejects(whole.getSessionDetails({ sessionId: "100" }), code("source_answer_unexpected"));
 });
