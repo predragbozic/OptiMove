@@ -52,7 +52,22 @@ credential — are re-checked before and after every read of a running check, wh
 `binding_ended`, `connection_not_usable`, `connection_credential_changed` (a Reconnect landed
 meanwhile) or `host_not_allowed` when they change; a check running through the legacy token stops
 with `binding_started` when a binding appears; `drill_set_incomplete` stops a check when the
-source does not answer every drill of a session (nothing of that session is recorded). A `401`
+source does not answer every drill of a session (nothing of that session is recorded). Its stored
+message carries, for an administrator only, after " Diagnostic: ", one line of a closed grammar:
+`op=drill_set; session_position=N; expected=N; completed=N; failed_index=N; code=<reason>` and, when
+a consumed field had an unknown shape, `; consumed_field=burst|brake; value_kind=<kind>` - the
+position of the session in the check's own list of the window (never an id), the drills expected and
+read before the failure, the failed position, and a reason from a closed set (`source_not_found`,
+`source_unavailable`, `source_rate_limited`, `source_server_error`, `source_redirect`,
+`source_status_unexpected`, `answer_too_large`, `answer_unreadable`, `answer_not_json`,
+`answer_not_object`, `players_missing`, `athlete_id_not_canonical`, `player_values_missing`,
+`player_values_too_many`, `metric_name_unknown`, `consumed_field_shape_unknown`,
+`drills_count_disagrees`, `drill_index_invalid`, `drills_count_out_of_range`, otherwise
+`drill_unknown`); the kind is one of `absent`, `null`, `number`, `string`, `object`, `array`,
+`boolean`, `other` (a number that is not finite reads `other`). `session_position` follows the order
+of the check's own list of the window as the source returned it. A final guard drops the whole line (never the refusal) if anything else would
+come out; no id, date, name, URL, metric name, value or source text is ever in it, and a coach sees
+the sentence before the mark only. A `401`
 from the source moves the connection to `needs_reconnect` with one `auto_invalidate` audit row
 (basis `system`; written after the check's own outcome, never changing it; skipped and logged when
 a Test / Reconnect holds the row at that moment — the attempt's own outcome then sets the state and

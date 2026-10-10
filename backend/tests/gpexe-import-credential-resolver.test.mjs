@@ -691,6 +691,8 @@ test("8. drills on the binding path: a drill the source does not answer makes th
   src.state.faults.drillMissing = 1;
   let row = await runCheck(o);
   assert.deepEqual([row.status, row.error_code], ["failed", "drill_set_incomplete"], JSON.stringify(row));
+  // The reason is kept for an administrator: the second drill (index 1) of the first session answered 404.
+  assert.equal(row.error_message, "The source did not answer every drill of a session; that session was not recorded and the check stopped. Diagnostic: op=drill_set; session_position=1; expected=2; completed=1; failed_index=1; code=source_not_found.");
   assert.equal((await candidatesOf(o.teamId)).length, 0, "an incomplete drill set is never recorded");
   src.state.faults.drillMissing = null;
   src.serve(o.sourceTeamId, { emptyDrill: 1 });
@@ -1578,7 +1580,7 @@ test("20. drill answers are projected like the whole session (2026-10-09, after 
       const coachView = await importer.startCheck(o.teamId, { userId: o.coach.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: false });
       assert.deepEqual([coachView.status, coachView.error], ["failed", { code: "drill_set_incomplete", message: BASE }]);
       const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [coachView.id]))[0];
-      assert.equal(row.error_message, `${BASE} Diagnostic: drill_index=0; drill_code=source_answer_unexpected; op=session_drill_details; field=tot_burst_events; kind=array.`);
+      assert.equal(row.error_message, `${BASE} Diagnostic: op=drill_set; session_position=1; expected=2; completed=0; failed_index=0; code=consumed_field_shape_unknown; consumed_field=burst; value_kind=array.`);
       for (const leak of [firstId, "13579", SOURCE_SENTENCE]) assert.ok(!row.error_message.includes(leak), `${leak} is not on the check row`);
       assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))[0].n, before, "nothing recorded");
       const adminView = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
@@ -2242,4 +2244,73 @@ test("37. several bad rows respect the failure cap and the budget: a run stops a
   noLeak(logLines.slice(logBefore), [MARKER, ...ids, "raw_bundle", "tot_burst_events"]);
   await importer.runRetention("cli");
   for (const id of ids) assert.equal(await holdsMarker(id, MARKER), false);
+});
+
+test("38. an incomplete drill set keeps its reason for an administrator in a closed grammar, whatever the reason: the failed position, the counts, the closed code and, for a consumed field, its short name and the kind of its value; a coach sees the sentence only (start answer, status and check detail); nothing is recorded; no id, date, name, URL or value reaches the row or a log", async () => {
+  const BASE = "The source did not answer every drill of a session; that session was not recorded and the check stopped.";
+  const cases = [
+    ["a non-canonical athlete key in drill 1", (p) => ({ index: 1, players: { "0471": Object.values(p)[0] } }), "op=drill_set; session_position=1; expected=2; completed=1; failed_index=1; code=athlete_id_not_canonical."],
+    ["players as an array in drill 0", () => ({ index: 0, players: [] }), "op=drill_set; session_position=1; expected=2; completed=0; failed_index=0; code=players_missing."],
+    ["brake as a string in drill 1", (p) => ({ index: 1, players: { [Object.keys(p)[0]]: { tot_brake_events: "Marker Athlete Name 2026-10-06 https://evil.example/" } } }), "op=drill_set; session_position=1; expected=2; completed=1; failed_index=1; code=consumed_field_shape_unknown; consumed_field=brake; value_kind=string."],
+  ];
+  for (const [label, fault, expected] of cases) {
+    const o = await org();
+    useSource();
+    await bound(o);
+    process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    const players = structuredClone(src.state.bundle.details.drills["1"].players);
+    src.state.faults.drillPlayers = fault(players);
+    const logBefore = logLines.length;
+    try {
+      const coach = await importer.startCheck(o.teamId, { userId: o.coach.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: false });
+      assert.deepEqual([coach.status, coach.error], ["failed", { code: "drill_set_incomplete", message: BASE }], label);
+      const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [coach.id]))[0];
+      assert.equal(row.error_message, `${BASE} Diagnostic: ${expected}`, label);
+      for (const leak of [...Object.keys(players), o.sourceTeamId, "Marker Athlete Name", "2026-10-06", "https://", "tot_brake_events", "tot_burst_events"]) assert.ok(!row.error_message.includes(leak), `${label}: ${leak}`);
+      const viaAdmin = await api(`/gpexe/teams/${o.teamId}/checks/${coach.id}`, { cookie: o.cadmin.cookie });
+      assert.equal(viaAdmin.body.check.error.message, row.error_message, `${label}: the administrator reads the description`);
+      const viaCoach = await api(`/gpexe/teams/${o.teamId}/checks/${coach.id}`, { cookie: o.coach.cookie });
+      assert.equal(viaCoach.body.check.error.message, BASE, `${label}: the coach does not`);
+      const status = await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.coach.cookie });
+      assert.ok(!JSON.stringify(status.body).includes("Diagnostic"), `${label}: no description in the coach's status`);
+      assert.equal((await candidatesOf(o.teamId)).length, 0, `${label}: nothing recorded`);
+      for (const l of logLines.slice(logBefore)) assert.ok(!l.includes("Diagnostic") && !Object.keys(players).some((id) => l.includes(id)), `${label}: log line ${l.slice(0, 120)}`);
+    } finally {
+      src.state.faults.drillPlayers = null;
+    }
+  }
+});
+
+test("39. the description's final guard: drillSetDiagnostic builds only the closed grammar - an unknown reason becomes drill_unknown, a planted id, date, name, URL or value in any field never comes out, out-of-range or non-integer counts drop the whole description, and a consumed field outside burst / brake or a kind outside the set is left out", () => {
+  const f = resolver.drillSetDiagnostic;
+  const ok = { drillsCount: 4, failed: { drillIndex: 2, completed: 2, reason: "source_server_error" } };
+  assert.equal(f(ok, { sessionPosition: 3 }), "op=drill_set; session_position=3; expected=4; completed=2; failed_index=2; code=source_server_error.");
+  for (const reason of ["something_new", "987654321", "2026-10-06", "Marker Athlete Name", "https://evil.example/", "code=x; y", undefined]) {
+    const line = f({ drillsCount: 4, failed: { drillIndex: 1, completed: 1, reason } }, { sessionPosition: 1 });
+    assert.equal(line, "op=drill_set; session_position=1; expected=4; completed=1; failed_index=1; code=drill_unknown.", String(reason));
+  }
+  for (const [consumedField, valueKind] of [["987654321", "array"], ["burst", "2026-10-06"], ["tot_burst_events", "array"], ["brake", "Marker"], ["burst", "13579.2468"]]) {
+    const line = f({ drillsCount: 4, failed: { drillIndex: 0, completed: 0, reason: "consumed_field_shape_unknown", consumedField, valueKind } }, { sessionPosition: 1 });
+    assert.equal(line, "op=drill_set; session_position=1; expected=4; completed=0; failed_index=0; code=consumed_field_shape_unknown.", `${consumedField}/${valueKind}`);
+  }
+  for (const [label, status, opts] of [
+    ["position missing", ok, {}], ["position 0", ok, { sessionPosition: 0 }], ["position as text", ok, { sessionPosition: "2" }], ["position too large", ok, { sessionPosition: 10_000 }],
+    ["a session id as position", ok, { sessionPosition: 987654321 }],
+    ["expected not an integer", { drillsCount: "4", failed: ok.failed }, { sessionPosition: 1 }],
+    ["completed negative", { drillsCount: 4, failed: { ...ok.failed, completed: -1 } }, { sessionPosition: 1 }],
+    ["index fractional", { drillsCount: 4, failed: { ...ok.failed, drillIndex: 1.5 } }, { sessionPosition: 1 }],
+    ["no failure", { drillsCount: 4, failed: null }, { sessionPosition: 1 }],
+  ]) assert.equal(f(status, opts), null, label);
+  // The guard itself accepts the grammar and refuses every planted variant.
+  const g = resolver.drillDiagnosticAccepted;
+  const good = "op=drill_set; session_position=2; expected=5; completed=3; failed_index=3; code=consumed_field_shape_unknown; consumed_field=brake; value_kind=string.";
+  assert.equal(g(good), true);
+  for (const bad of [
+    good.replace("session_position=2", "session_position=987654321"), good.replace("code=consumed_field_shape_unknown", "code=Marker Athlete Name"),
+    good.replace("value_kind=string", "value_kind=13579.2468"), good.replace("consumed_field=brake", "consumed_field=tot_brake_events"),
+    `${good} 2026-10-06`, `${good.slice(0, -1)}; url=https://evil.example/.`, good.replace("expected=5", "expected=05"), good.replace("op=drill_set", "op=session_details"),
+    "op=drill_set; session_position=1; expected=1; completed=0; failed_index=0; code=drill_unknown", "", null, 42,
+  ]) assert.equal(g(bad), false, String(bad));
 });

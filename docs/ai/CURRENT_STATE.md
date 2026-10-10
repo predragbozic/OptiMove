@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-09. Last `origin/main` commit checked: `33d4f45` (merge of PR #148,
-`fix/gpexe-rest-v1-local-window-filter` → `main`; PR #147 `39176b8` before it).
+Last reviewed: 2026-10-10. Last `origin/main` commit checked: `b618ae9` (merge of PR #149,
+`fix/gpexe-drill-details-projection` → `main`; PR #148 `33d4f45` before it).
 
 ## Active phase
 
@@ -1354,6 +1354,35 @@ Technical details.
   `validatePlayersAnswer` (and its whole-answer description) is removed: no read path called it after both
   projections, and a test refuses its return.
 
+- **PR #149 is merged and deployed.**
+  - Reviewed head `44d7130` (the owner's external review READY WITH FINAL NARROW RE-REVIEW; the narrow
+    database re-review READY, the code re-review READY WITH NON-BLOCKING NOTES, no code change asked), merge
+    commit `b618ae9` on 2026-10-09 at 20:32:08 UTC, merged exactly from that head (`--match-head-commit`).
+  - `/api/health` first served `b618ae9` with `ok: true` at 20:33:06 UTC, then three times in a row
+    (20:33:16, 20:33:26 and 20:33:36 UTC).
+  - Read-only smoke without a login, zero UUID, GET only: nine protected GPEXE and source-connection routes
+    answered 401. No migration; the switch untouched.
+- **The check of 05.10.2026 - 06.10.2026 after PR #149 (2026-10-10, run once on the owner's order):** the
+  preconditions held (`b618ae9` served; the connection *Verified* on server3; one active binding of the team
+  to GPEXE Team ID 980; the import switch off). The check ended `failed` with **`drill_set_incomplete`**
+  after about 4 min 18 s, having recorded one session of the window as unchanged before it. The stored
+  message carried no reason: the code then kept a drill's reason only for a metric-shape refusal, so the
+  failed position, the counts and the reason were lost before the check row was written. **No conclusion
+  about the cause.** The owner's own view of GPEXE for the window (no value recorded) shows three parent
+  sessions, one of which has drills.
+- **A drill-set diagnostic** (owner order 2026-10-10; branch `fix/gpexe-drill-set-diagnostic` from
+  `b618ae9`; not merged; backend adapter, resolver, check service, tests and docs; no change to acceptance,
+  requests, timeouts, the projection, the list, the mapper, Link, Import or the switch, and no retry): every
+  incomplete drill set now keeps its reason for an administrator - the adapter gives each failed drill a
+  closed reason (`drillFailureReason()`, from the error's code and fixed facts only), the drills read before
+  it and, for a consumed field's shape, the field's short name and the kind of its value; the resolver writes
+  one line of a closed grammar after " Diagnostic: " (`op=drill_set; session_position=N; expected=N;
+  completed=N; failed_index=N; code=<closed reason>`, plus `consumed_field` / `value_kind` for a shape
+  refusal; an unknown reason is `drill_unknown`); `session_position` is the session's 1-based place in the
+  check's own list of the window, never an id; a final guard (`drillDiagnosticAccepted()`) drops the line,
+  never the refusal, if anything else would come out; a coach sees the sentence only. The runbook lists the
+  reasons.
+
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
 runs the branch's real modules against an in-page fake of the 5a2 API, at 1280 px and
@@ -2035,6 +2064,11 @@ pre-existing; pass/fail counts don't belong in this file
 
 - **The bounded `pool.connect()`** (owner's external review of PR #136, 2026-10-04; note 3 of the closing
   review of PR #137): **done**, PR #146 merged and deployed (see the active phase).
+- **The duration and progress of a check (UX / performance; owner, 2026-10-10, not scheduled):** the check
+  of 05.10 - 06.10.2026 ran about 4 min 18 s (two complete reads of the whole list, then every session and
+  drill of the window) while the Imports screen showed only that it was running, and a failure ends with a
+  generic sentence. A separate task: a progress display (phase, sessions done) and a clearer failed-check
+  message; any change to the number of requests is its own decision.
 - **Bound the COMMIT of `recordCandidate`** (code review of PR #149, 2026-10-09; pre-existing): a check's
   candidate transaction sends COMMIT without a bound or an outcome check, so a lost COMMIT answer marks the
   check `failed` / `internal_error` although the candidate (and, since PR #149, a superseded snapshot's
@@ -2273,13 +2307,11 @@ pre-existing; pass/fail counts don't belong in this file
 ## Most likely next step
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
-the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146) and the
-window diagnostic (PR #147) and the whole-list window (PR #148) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
-1. The owner's external review of the drill projection, branch `fix/gpexe-drill-details-projection`.
-2. After its merge and deploy, on a separate owner order, one check of the same window (05.10 - 06.10.2026);
-   the 05.10 session is expected as "changed" (the projection, not GPEXE data - see the active phase); its
-   older candidate's snapshot is projected by the retention run that starts the check, and again when it
-   is superseded.
+the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
+window diagnostic (PR #147), the whole-list window (PR #148) and the drill projection (PR #149) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
+1. The owner's external review of the drill-set diagnostic, branch `fix/gpexe-drill-set-diagnostic`.
+2. After its merge and deploy, on a separate owner order, one check of the same window (05.10 - 06.10.2026)
+   that returns only the "Diagnostic:" line of the administrator's check detail.
 3. Condition 6 under the switch conditions (withdraw candidates a later check no longer confirms) - a
    separate PR, before the switch is ever turned on.
 4. The owner states the state of the production-use gate and of the two gates before a link (an identity
