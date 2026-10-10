@@ -1,5 +1,6 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 const { renderCoachHomeHtml, renderCoachHomeAthleteRows } = await import("../coach-home.js");
 const { loadCoachHome } = await import("../coach-home-data.js");
@@ -34,6 +35,14 @@ test("Today opens a searchable list limited to athletes training today", () => {
   assert.match(renderCoachHomeAthleteRows(rows, { mode: "today", query: "Marko" }), /No athletes match/);
   assert.match(renderCoachHomeAthleteRows([rows[1]], { mode: "today" }), /No athletes have a session scheduled today/);
   assert.match(renderCoachHomeAthleteRows([], { mode: "today" }), /No athletes have a session scheduled today/);
+});
+test("sidebar and Home Training Load icons have identical paths", () => {
+  const shell = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const sidebar = shell.match(/data-library-tab="training-load"[^>]*>[\s\S]*?<svg[^>]*>([\s\S]*?)<\/svg>/)?.[1];
+  const home = renderCoachHomeHtml({ user: state.currentUser }).match(/data-mode="load"><svg[^>]*>(.*?)<\/svg>/)?.[1];
+  assert.ok(sidebar);
+  assert.ok(home);
+  assert.equal(sidebar.trim(), home.trim());
 });
 test("admin Home shows only available workspaces, no combined roster", () => {
   const user = { activeWorkspace: { type: "platform" }, availableWorkspaces: [{ type: "private_coach" }, { type: "club", scopeId: "club-a", label: "My Club" }] };
