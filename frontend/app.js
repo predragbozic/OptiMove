@@ -62,7 +62,7 @@ import {
   submitCoachProfileForm as submitCoachProfileFormAction,
 } from "./coach-profile-actions.js";
 import { renderCoachesHtml } from "./coach-profiles.js";
-import { renderCoachHomeHtml } from "./coach-home.js";
+import { renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
@@ -228,6 +228,9 @@ import { closeWorkspaceSwitcherIfOutside, handleWorkspaceAction, renderWorkspace
 import { buildContextKey, clearAllViewCache, dedupeRequest, loadCachedView, setCacheData, setCacheError } from "./view-cache.js";
 
 let inboxPollId = null;
+let coachHomeRows = [];
+let coachHomePicker = { mode: "", query: "" };
+let workspaceRosterGeneration = 0;
 
 init();
 
@@ -959,6 +962,12 @@ function normalizeTouchPointerEvent(event) {
 }
 
 function handleContentInput(event) {
+  if (event.target.matches("[data-coach-home-search]")) {
+    coachHomePicker.query = event.target.value;
+    const list = els.content.querySelector(".coach-home-picker-list");
+    if (list) list.innerHTML = renderCoachHomeAthleteRows(coachHomeRows, coachHomePicker);
+    return;
+  }
   // The create-form's name input has no value= binding to state, so a full
   // re-render (e.g. opening the athlete picker) would otherwise wipe it -
   // mirror every keystroke into state, same idea as createAthleteId.
@@ -1627,6 +1636,7 @@ async function handleGlobalClick(event) {
   if (action.dataset.action === "close-media") closeMedia();
   if (action.dataset.action === "home") goHome();
   if (action.dataset.action === "brand-home") {
+    closeMobileNav();
     if (document.body.classList.contains("athlete-mode")) {
       goHome();
     } else if (state.activeTab !== "coach-home") {
@@ -1998,6 +2008,7 @@ async function loadCoaches({ forceRefresh = false } = {}) {
 }
 
 async function loadCoachHome({ forceRefresh = false } = {}) {
+  coachHomePicker = { mode: "", query: "" };
   state.navStack = [];
   els.context.textContent = "Overview";
   els.title.textContent = "Home";
@@ -2006,7 +2017,26 @@ async function loadCoachHome({ forceRefresh = false } = {}) {
 }
 
 function renderCoachHome({ rows, error }) {
-  els.content.innerHTML = renderCoachHomeHtml({ rows, error });
+  coachHomeRows = rows || [];
+  els.content.innerHTML = renderCoachHomeHtml({ rows: coachHomeRows, error, user: state.currentUser, picker: coachHomePicker });
+  const dialog = els.content.querySelector(".coach-home-picker");
+  if (dialog) {
+    dialog.showModal();
+    dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeCoachHomePicker(); });
+    dialog.addEventListener("click", (event) => {
+      if (event.target !== dialog) return;
+      const rect = dialog.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeCoachHomePicker();
+    });
+    dialog.querySelector("input")?.focus();
+  }
+}
+
+function closeCoachHomePicker() {
+  const mode = coachHomePicker.mode;
+  els.content.querySelector(".coach-home-picker")?.close();
+  coachHomePicker = { mode: "", query: "" };
+  els.content.querySelector(`[data-action="coach-home-picker-open"][data-mode="${mode}"]`)?.focus();
 }
 
 async function loadAthleteHome({ forceRefresh = false } = {}) {
@@ -2365,7 +2395,37 @@ async function handleContentClick(event) {
     await submitEmailChangeAction(type, action);
     return;
   }
+  if (type === "coach-home-picker-open") {
+    coachHomePicker = { mode: action.dataset.mode === "load" ? "load" : "plan", query: "" };
+    renderCoachHome({ rows: coachHomeRows, error: "" });
+    return;
+  }
+  if (type === "coach-home-picker-close") {
+    closeCoachHomePicker();
+    return;
+  }
   if (type === "coach-home-open-athlete") {
+    const row = coachHomeRows.find((entry) => entry.athleteId === action.dataset.athleteId);
+    if (!row) return;
+    if (action.dataset.mode === "load") {
+      if (!row.athleteUuid) return;
+      closeCoachHomePicker();
+      pushAppHistory();
+      collapseRailAfterNav();
+      state.trainingLoad.filter.athleteIds = [row.athleteUuid];
+      state.trainingLoad.filter.clubIds = [];
+      state.trainingLoad.filter.teamIds = [];
+      state.selectedAthleteId = row.athleteId;
+      els.context.textContent = "Training Load";
+      els.title.textContent = row.athlete;
+      els.toolbar.innerHTML = "";
+      renderAthleteList();
+      await openTrainingLoadResults();
+      await handleTrainingLoadAction({ dataset: { action: "training-load-results-open-athlete", athleteId: row.athleteUuid } }, { renderTrainingLoad, openWeeklyPlanForAthleteOnDate });
+      return;
+    }
+    closeCoachHomePicker();
+    pushAppHistory();
     state.selectedAthleteId = action.dataset.athleteId;
     state.athletesExpanded = false;
     state.activeTab = "weekly";
@@ -2680,6 +2740,14 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
 // workspace this account happened to already visit earlier in the session
 // is re-verified against the server rather than trusted purely from cache.
 async function onWorkspaceChanged() {
+  const generation = ++workspaceRosterGeneration;
+  const contextKey = buildContextKey(currentUserWorkspaceContextParts());
+  coachHomeRows = [];
+  coachHomePicker = { mode: "", query: "" };
+  state.athletes = [];
+  state.selectedAthleteId = null;
+  renderAthleteList();
+  if (state.activeTab === "weekly" || state.activeTab === "programs") state.activeTab = "coach-home";
   // Correction: a workspace switch changes WHICH athletes' data Training
   // load's coach scope resolves to (see backend/src/routes/trainingLoad.js's
   // coachWorkspaceScopeSql) - the OLD workspace's filter selection, org-
@@ -2688,6 +2756,19 @@ async function onWorkspaceChanged() {
   // later re-entry into it never renders a stale cross-workspace flash
   // before its own fresh fetch lands).
   resetTrainingLoadForWorkspaceChange();
+  renderTabs();
+  renderLibraryNav();
+  if (["organization", "coach-home", "coaches", "templates", "exercises", "tests", "training-load"].includes(state.activeTab)) setLoading("Loading workspace...");
+  try {
+    const roster = await api("/api/admin/athletes");
+    if (generation !== workspaceRosterGeneration || contextKey !== buildContextKey(currentUserWorkspaceContextParts())) return;
+    state.athletes = roster.adminRows || [];
+    renderAthleteList();
+  } catch (error) {
+    if (generation !== workspaceRosterGeneration || contextKey !== buildContextKey(currentUserWorkspaceContextParts())) return;
+    renderError(error);
+    return;
+  }
   // Source connections (F3c3): the new workspace may be another club; the
   // loaded list is dropped (unless a write is in flight) and read again.
   if (state.organization.section === "sourceConnections") enterSourceConnectionsSection();

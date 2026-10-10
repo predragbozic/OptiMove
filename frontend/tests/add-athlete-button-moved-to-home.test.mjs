@@ -52,12 +52,11 @@ test("renderAthleteHeaderToolbarHtml (the Weekly plans / Specific programs toolb
   assert.ok(!athleteModeHtml.includes("home-add-athlete"), "athlete-mode's own toolbar never had this button either (it was coach-only) and still doesn't");
 });
 
-test("renderCoachHomeHtml's Add athlete button sits in the Today summary panel's own header row, not buried inside the athlete card list below", () => {
+test("renderCoachHomeHtml's Add athlete button stays in the Home header", () => {
   const html = renderCoachHomeHtml({ rows: [], error: null });
-  const summaryStart = html.indexOf('class="panel coach-home-summary"');
-  const summaryEnd = html.indexOf("</section>", summaryStart);
-  const headStart = html.indexOf('class="coach-home-summary-head"');
+  const headStart = html.indexOf('class="coach-home-header"');
+  const summaryEnd = html.indexOf("</header>", headStart);
   const buttonIndex = html.indexOf('data-action="home-add-athlete"');
-  assert.ok(summaryStart >= 0 && headStart > summaryStart, "coach-home-summary-head must be inside the Today summary panel");
-  assert.ok(buttonIndex > headStart && buttonIndex < summaryEnd, "the Add athlete button must be inside that same summary panel, next to the Today text - not in the athlete cards list below");
+  assert.ok(headStart >= 0);
+  assert.ok(buttonIndex > headStart && buttonIndex < summaryEnd, "Add athlete remains available in the Home header");
 });

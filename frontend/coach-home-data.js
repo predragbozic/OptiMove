@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { state } from "./state.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
 
@@ -23,6 +24,9 @@ export function invalidateCoachHomeCache() {
 }
 
 export async function loadCoachHome({ setLoading, renderCoachHome, forceRefresh = false } = {}) {
+  if (state.currentUser?.activeWorkspace?.type === "platform") {
+    return renderCoachHome({ rows: [], error: "" });
+  }
   const contextKey = coachHomeContextKey();
   await loadCachedView({
     namespace: COACH_HOME_CACHE_NAMESPACE,

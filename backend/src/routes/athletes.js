@@ -1,13 +1,14 @@
 import { Router } from "express";
 import { query } from "../db.js";
 import { buildPrograms, buildWeeks } from "../utils/grouping.js";
-import { athleteListAccessFilter, canAccessAthlete } from "../access.js";
+import { canAccessAthlete } from "../access.js";
+import { currentAthleteRosterScope } from "../athleteRosterScope.js";
 
 const router = Router();
 
 router.get("/", async (req, res, next) => {
   try {
-    const filter = athleteListAccessFilter(req, "a");
+    const filter = await currentAthleteRosterScope(req, "a");
     const result = await query(`
       select
         a.id as athlete_uuid,
@@ -51,7 +52,7 @@ router.get("/", async (req, res, next) => {
 
 router.get("/today", async (req, res, next) => {
   try {
-    const filter = athleteListAccessFilter(req, "a");
+    const filter = await currentAthleteRosterScope(req, "a");
     const result = await query(`
       select
         a.id as athlete_uuid,
@@ -250,7 +251,7 @@ async function getAdminRows(req = null) {
 }
 
 async function getAthleteRows(req = null) {
-  const filter = athleteListAccessFilter(req, "a");
+  const filter = await currentAthleteRosterScope(req, "a");
   const result = await query(`
     select
       a.id as athlete_uuid,
