@@ -450,11 +450,11 @@ export const DRILL_FAILURE_REASONS = Object.freeze([
   "source_rate_limited", "source_server_error", "source_redirect", "source_status_unexpected",
   "answer_too_large", "answer_unreadable", "answer_not_json", "answer_not_object", "players_missing",
   "athlete_id_not_canonical", "player_values_missing", "player_values_too_many", "metric_name_unknown",
-  "consumed_field_shape_unknown", "drills_count_disagrees", "drill_unknown",
+  "consumed_field_shape_unknown", "drill_unknown",
 ]);
 const ANSWER_REASONS = new Set(["answer_too_large", "answer_unreadable", "answer_not_json", "answer_not_object", "players_missing",
   "athlete_id_not_canonical", "player_values_missing", "player_values_too_many", "metric_name_unknown",
-  "consumed_field_shape_unknown", "drills_count_disagrees"]);
+  "consumed_field_shape_unknown"]);
 export function drillFailureReason(error) {
   const code = error?.code;
   const status = Number.isInteger(error?.status) ? error.status : null;
@@ -472,19 +472,6 @@ export function drillFailureReason(error) {
     if (ANSWER_REASONS.has(error?.reason)) return error.reason;
   }
   return "drill_unknown";
-}
-// What a details answer said its drill count was, for an administrator only
-// (owner order 2026-10-10, after a check stopped with drills_count_disagrees):
-// the kind of the value as one closed word, whether it is a canonical whole
-// number from 0 to MAX_DRILLS, whether that number is the expected one, and
-// the number itself only when canonical. Never the raw value of any other
-// kind (a string is described as "string", never quoted).
-export function describeAnswerCount(value, expected) {
-  const kind = value === undefined ? "absent" : value === null ? "null" : typeof value === "number" ? "number"
-    : typeof value === "string" ? "string" : typeof value === "boolean" ? "boolean" : Array.isArray(value) ? "array"
-      : isPlainObject(value) ? "object" : "other";
-  const canonical = Number.isInteger(value) && value >= 0 && value <= MAX_DRILLS;
-  return { kind, canonical, matchesExpected: canonical && value === expected, ...(canonical ? { value } : {}) };
 }
 // The kind of a consumed field's value, as one word of a closed set.
 const CONSUMED_KIND = Object.freeze({ null: "null", number: "number", number_not_finite: "other", boolean: "boolean",
@@ -525,7 +512,12 @@ function projectConsumedValue(value) {
 // are checked exactly as the former full check did; of the values only the
 // fields the mapper reads (DETAILS_CONSUMED_FIELDS) are validated and copied.
 // An empty players map stays valid (a drill not yet computed).
-export function projectSessionDetails(body, expectedDrillsCount = null, { what = "the whole-session details", op = "session_details" } = {}) {
+// A drill answer's own drills_count (owner decision 2026-10-10, after the
+// production evidence answer_count=0 for a parent confirmed with 5 drills) is
+// not the parent's drill count: it is neither compared, returned, stored nor
+// used as a bound - the only drill count is the confirmed parent's. The
+// whole-session answer keeps its comparison and its count.
+export function projectSessionDetails(body, expectedDrillsCount = null, { what = "the whole-session details", op = "session_details", drillAnswer = false } = {}) {
   if (!isPlainObject(body)) throw unexpected(`The source server did not answer ${what} as an object.`, { reason: "answer_not_object" });
   const players = body.players;
   if (!isPlainObject(players)) throw unexpected(`The source answer to ${what} carries no players map.`, { reason: "players_missing" });
@@ -565,8 +557,9 @@ export function projectSessionDetails(body, expectedDrillsCount = null, { what =
     // The key is a canonical athlete id (digits only), never a dangerous key.
     out[key] = projected;
   }
+  if (drillAnswer) return { players: out };
   if (expectedDrillsCount !== null && body.drills_count !== undefined && body.drills_count !== null && body.drills_count !== expectedDrillsCount) {
-    throw unexpected(`The source answer to ${what} reports another number of drills than the confirmed session.`, { reason: "drills_count_disagrees", answerCount: describeAnswerCount(body.drills_count, expectedDrillsCount) });
+    throw unexpected(`The source answer to ${what} reports another number of drills than the confirmed session.`, { reason: "drills_count_disagrees" });
   }
   return { players: out, ...(Number.isInteger(body.drills_count) ? { drills_count: body.drills_count } : {}) };
 }
@@ -608,9 +601,12 @@ export function projectStoredDetails(bundle) {
   const part = (d) => (isPlainObject(d)
     ? { ...(own(d, "players") ? { players: players(d.players) } : {}), ...(own(d, "drills_count") ? { drills_count: d.drills_count } : {}) }
     : d);
+  // A drill part keeps its players only: a drill answer's own drills_count is
+  // not the parent's count and is never stored (owner decision 2026-10-10).
+  const drillPart = (d) => (isPlainObject(d) ? (own(d, "players") ? { players: players(d.players) } : {}) : d);
   const details = { ...bundle.details };
   if (details.full !== undefined) details.full = part(details.full);
-  if (isPlainObject(details.drills)) details.drills = Object.fromEntries(Object.entries(details.drills).map(([k, d]) => [k, part(d)]));
+  if (isPlainObject(details.drills)) details.drills = Object.fromEntries(Object.entries(details.drills).map(([k, d]) => [k, drillPart(d)]));
   return { ...bundle, details };
 }
 
@@ -1235,10 +1231,12 @@ export function createGpexeRestV1Adapter({
       const parent = confirmed(sessionId);
       if (parent.drillsCount < 1) throw new SourceAdapterError("invalid_drill_index", "That session has no drills.");
       const { body } = await readDrill(parent.id, drillIndex, parent.drillsCount);
-      return projectSessionDetails(body, parent.drillsCount, { what: "the drill details", op: "session_drill_details" });
+      return projectSessionDetails(body, null, { what: "the drill details", op: "session_drill_details", drillAnswer: true });
     },
 
-    // Every drill of a confirmed parent, in position order. One drill that
+    // Every drill of a confirmed parent, in position order: exactly the
+    // indexes 0..drillsCount-1 of the confirmed parent (0..30), each read at
+    // most once; nothing in a drill answer changes the bound. One drill that
     // cannot be read ends the reading there: what was read is returned with
     // complete: false and the failed position's stable code — never as a
     // complete set, and never with another index, host or form tried instead.
@@ -1253,7 +1251,7 @@ export function createGpexeRestV1Adapter({
           const epoch = epochOf(parent.id);
           const { body } = await readDrill(parent.id, index, parent.drillsCount);
           refreshedDuring(parent.id, epoch);
-          drills.push({ drillIndex: index, details: projectSessionDetails(body, parent.drillsCount, { what: "the drill details", op: "session_drill_details" }) });
+          drills.push({ drillIndex: index, details: projectSessionDetails(body, null, { what: "the drill details", op: "session_drill_details", drillAnswer: true }) });
         } catch (error) {
           if (!(error instanceof SourceAdapterError) || isGlobal(error) || error.code === "session_refreshed") throw error;
           // A drill refused for a consumed field's shape or a metric's name
@@ -1268,8 +1266,7 @@ export function createGpexeRestV1Adapter({
           const reason = drillFailureReason(error);
           const consumed = reason === "consumed_field_shape_unknown" && CONSUMED_SHORT[error.field] && CONSUMED_KIND[error.valueKind]
             ? { consumedField: CONSUMED_SHORT[error.field], valueKind: CONSUMED_KIND[error.valueKind] } : {};
-          const answerCount = reason === "drills_count_disagrees" && error.answerCount ? { answerCount: error.answerCount } : {};
-          return { complete: false, drillsCount: parent.drillsCount, drills, failed: { drillIndex: index, code: error.code ?? "source_drill_unavailable", reason, completed: drills.length, ...consumed, ...answerCount, ...(diagnosticText ? { diagnosticText } : {}) } };
+          return { complete: false, drillsCount: parent.drillsCount, drills, failed: { drillIndex: index, code: error.code ?? "source_drill_unavailable", reason, completed: drills.length, ...consumed, ...(diagnosticText ? { diagnosticText } : {}) } };
         }
       }
       return { complete: true, drillsCount: parent.drillsCount, drills, failed: null };

@@ -456,24 +456,9 @@ export async function autoInvalidateImportSource(source, { errorCode = "source_a
 // the refusal) when anything else would come out. Never a session, athlete or
 // team id, a date, a name, a URL, a metric name, a value or source text.
 const DRILL_KINDS = ["absent", "null", "number", "string", "object", "array", "boolean", "other"];
-// For drills_count_disagrees only (owner order 2026-10-10): what the drill
-// answer said its count was - its kind, whether it is a canonical whole number
-// 0..30, whether that equals the expected count, and the number only when
-// canonical. Never the raw value of any other kind.
-const ANSWER_COUNT_MAX = 30;
 const DRILL_DIAGNOSTIC_GRAMMAR = new RegExp(
-  `^op=drill_set; session_position=[1-9][0-9]{0,3}; expected=(?:0|[1-9][0-9]{0,3}); completed=(?:0|[1-9][0-9]{0,3}); failed_index=(?:0|[1-9][0-9]{0,3}); code=(?:${DRILL_FAILURE_REASONS.join("|")})`
-  + `(?:; consumed_field=(?:burst|brake); value_kind=(?:${DRILL_KINDS.join("|")})`
-  + `|; answer_count_kind=(?:${DRILL_KINDS.join("|")}); answer_count_canonical=(?:true|false); answer_count_matches_expected=(?:true|false)(?:; answer_count=(?:[0-9]|[12][0-9]|30))?)?\\.$`,
+  `^op=drill_set; session_position=[1-9][0-9]{0,3}; expected=(?:0|[1-9][0-9]{0,3}); completed=(?:0|[1-9][0-9]{0,3}); failed_index=(?:0|[1-9][0-9]{0,3}); code=(?:${DRILL_FAILURE_REASONS.join("|")})(?:; consumed_field=(?:burst|brake); value_kind=(?:${DRILL_KINDS.join("|")}))?\\.$`,
 );
-// The answer-count suffix, rebuilt from closed words and a bounded integer -
-// the adapter's facts are re-checked here, never passed through as text.
-function answerCountText(answerCount, expected) {
-  if (!answerCount || !DRILL_KINDS.includes(answerCount.kind)) return "";
-  const canonical = answerCount.kind === "number" && answerCount.canonical === true && Number.isInteger(answerCount.value) && answerCount.value >= 0 && answerCount.value <= ANSWER_COUNT_MAX;
-  const matches = canonical && answerCount.value === expected;
-  return `; answer_count_kind=${answerCount.kind}; answer_count_canonical=${canonical}; answer_count_matches_expected=${matches}${canonical ? `; answer_count=${answerCount.value}` : ""}`;
-}
 // The final guard, on its own so it can be shown to refuse anything else.
 export function drillDiagnosticAccepted(line) {
   return typeof line === "string" && line.length <= 300 && DRILL_DIAGNOSTIC_GRAMMAR.test(line);
@@ -489,8 +474,7 @@ export function drillSetDiagnostic(drillsStatus, { sessionPosition } = {}) {
   const code = DRILL_FAILURE_REASONS.includes(failed.reason) ? failed.reason : "drill_unknown";
   const consumed = code === "consumed_field_shape_unknown" && (failed.consumedField === "burst" || failed.consumedField === "brake") && DRILL_KINDS.includes(failed.valueKind)
     ? `; consumed_field=${failed.consumedField}; value_kind=${failed.valueKind}` : "";
-  const count = code === "drills_count_disagrees" ? answerCountText(failed.answerCount, expected) : "";
-  const line = `op=drill_set; session_position=${position}; expected=${expected}; completed=${completed}; failed_index=${failedIndex}; code=${code}${consumed}${count}.`;
+  const line = `op=drill_set; session_position=${position}; expected=${expected}; completed=${completed}; failed_index=${failedIndex}; code=${code}${consumed}.`;
   return drillDiagnosticAccepted(line) ? line : null;
 }
 

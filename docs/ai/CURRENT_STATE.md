@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-11. Last `origin/main` commit checked: `c01a120` (frontend Home and sidebar icon work
-merged after PR #150's merge `ce759b6`; PR #149 `b618ae9` before it).
+Last reviewed: 2026-10-11. Last `origin/main` commit checked: `d6fd559` (merge of PR #151,
+`fix/gpexe-drill-count-diagnostic` → `main`; frontend `c01a120` and PR #150 `ce759b6` before it).
 
 ## Active phase
 
@@ -1402,7 +1402,32 @@ Technical details.
   the administrator's line also carries `answer_count_kind` (closed set), `answer_count_canonical`,
   `answer_count_matches_expected` and `answer_count=N` only for a canonical whole number 0 - 30
   (`describeAnswerCount()` in the adapter, rebuilt from closed words and a bounded integer in the resolver,
-  the final guard extended); a coach sees the sentence only.
+  the final guard extended); a coach sees the sentence only. (Its answer-count part was removed again by the
+  next fix, see below; the evidence it produced stays recorded.)
+- **PR #151 is merged and deployed.**
+  - Reviewed head `e4aa26e` (the owner's external review READY), merge commit `d6fd559` on 2026-10-10 at
+    22:27:39 UTC, merged exactly from that head (`--match-head-commit`).
+  - `/api/health` first served `d6fd559` with `ok: true` at 22:28:42 UTC, then three times in a row (22:28:52,
+    22:29:03 and 22:29:13 UTC).
+  - Read-only smoke without a login, zero UUID, GET only: nine protected GPEXE and source-connection routes
+    answered 401. No migration; the switch untouched.
+- **The check of 05.10.2026 - 06.10.2026 after PR #151 (2026-10-10, run once on the owner's order):** the
+  preconditions held. It ended `drill_set_incomplete` with `op=drill_set; session_position=2; expected=5;
+  completed=0; failed_index=0; code=drills_count_disagrees; answer_count_kind=number;
+  answer_count_canonical=true; answer_count_matches_expected=false; answer_count=0.` - the drill answer's own
+  `drills_count` field is 0 for a parent confirmed with 5 drills: it is not the parent's drill count. **Owner
+  decision (2026-10-10):** a drill answer's `drills_count` is no longer used for acceptance or identity; the
+  only drill count is the confirmed parent's.
+- **A drill answer's drills_count ignored** (owner order 2026-10-10; branch
+  `fix/gpexe-drill-response-count-ignored` from `d6fd559`; not merged; backend adapter, resolver, tests and
+  docs): the drill reads no longer compare a drill answer's `drills_count` with the parent's, never return it,
+  and the stored snapshot keeps a drill's players only; the loop stays bounded by the confirmed parent count
+  (0 - 30), each index read once in order, the first real failure still ends the set (`complete: false`, the
+  failed index, a closed reason; no skip, no retry, no partial candidate); `drills_count_disagrees` left the
+  drill reasons and the answer-count diagnostic of PR #151 is removed; the whole-session comparison, the list,
+  the parent confirmation, the drill URL, zero-based indexes, the mapper, Link, Import and the switch are
+  unchanged. Existing pending snapshots lose a drill's stored `drills_count` at the next retention run (the
+  mapper never read it).
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2329,8 +2354,9 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149) and the drill-set diagnostic (PR #150) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
-1. The owner's external review of the drill-count diagnostic, branch `fix/gpexe-drill-count-diagnostic`.
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150) and the drill-count diagnostic (PR #151) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
+1. The owner's external review of the fix that ignores a drill answer's drills_count, branch
+   `fix/gpexe-drill-response-count-ignored`.
 2. After its merge and deploy, on a separate owner order, one check of the same window (05.10 - 06.10.2026)
    that returns only the Code and the "Diagnostic:" line of the administrator's check detail.
 3. Condition 6 under the switch conditions (withdraw candidates a later check no longer confirms) - a
