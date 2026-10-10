@@ -7,7 +7,9 @@
 .coach-home-actions svg { width: 28px; height: 28px; flex: 0 0 28px; fill: none; stroke: currentColor; stroke-width: 1.7; }
 .coach-home-actions > button:first-child { color: var(--accent); }
 .coach-home-actions > button:last-child { color: #934c65; }
-.coach-home-today { color: var(--muted); font-size: 14px; }
+.coach-home-today { color: var(--muted); font-size: 14px; width: 100%; min-height: 48px; border: 0; padding: 12px 0; background: transparent; text-align: left; cursor: pointer; }
+.coach-home-today strong { font-size: 20px; }
+.coach-home-today:hover { color: var(--accent); }
 .coach-home-workspaces { display: grid; gap: 0; margin-top: 20px; border-top: 1px solid var(--line); }
 .coach-home-workspace { display: flex; justify-content: space-between; align-items: center; gap: 20px; min-height: 72px; border: 0; border-bottom: 1px solid var(--line); padding: 16px; background: transparent; text-align: left; color: var(--text); }
 .coach-home-workspace strong { overflow-wrap: anywhere; }

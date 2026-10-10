@@ -2396,7 +2396,7 @@ async function handleContentClick(event) {
     return;
   }
   if (type === "coach-home-picker-open") {
-    coachHomePicker = { mode: action.dataset.mode === "load" ? "load" : "plan", query: "" };
+    coachHomePicker = { mode: ["load", "today"].includes(action.dataset.mode) ? action.dataset.mode : "plan", query: "" };
     renderCoachHome({ rows: coachHomeRows, error: "" });
     return;
   }
@@ -2437,7 +2437,8 @@ async function handleContentClick(event) {
     renderAthleteList();
     renderTabs();
     renderLibraryNav();
-    await loadWeekly();
+    if (action.dataset.mode === "today") await openWeeklyPlanOnDate(localDateIso());
+    else await loadWeekly();
     return;
   }
   if (type === "athlete-home-open-today" || type === "athlete-home-open-day") {
