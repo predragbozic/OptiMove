@@ -1012,10 +1012,11 @@ async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpex
     await runRetention("check").catch((error) => console.error(`[gpexe] retention during check failed: ${error?.message}`));
     const sessions = await gpexe.listTeamSessions({ gpexeTeamId, fromDay: window.from, toDay: window.to, onProgress: alive });
     await alive();
-    for (const session of sessions) {
+    for (const [index, session] of sessions.entries()) {
       // A heartbeat after every GPEXE request: one slow session must not look
-      // like a dead check.
-      const bundle = await gpexe.fetchSessionBundle({ gpexeTeamId, sessionId: session.id, onProgress: alive });
+      // like a dead check. The 1-based position in this check's own list (never
+      // an id) lets an administrator's description name the session that failed.
+      const bundle = await gpexe.fetchSessionBundle({ gpexeTeamId, sessionId: session.id, sessionPosition: index + 1, onProgress: alive });
       await alive();
       const kind = await recordCandidate(checkId, { teamId, userId, bundle });
       counts.sessions += 1;

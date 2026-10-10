@@ -496,33 +496,34 @@ test("B4.2 statuses and transport on a drill read: 401 and 403 end the whole ope
   const streamedBody = (chunks, headers = {}) => ({ status: 200, headers: new Headers({ ...json, ...headers }), body: streamOf(chunks), text: async () => { throw new Error("whole body"); } });
   const bigChunks = () => [bytesOf('{"players":{"4711":{"a":'), new Uint8Array(5 * MiB).fill(0x31), bytesOf("}}}")];
   const perDrill = [
-    ["404", () => answer(404, { detail: "Not found. Marker Athlete Name" }), "source_not_found"],
-    ["429", () => answer(429, "slow down"), "source_unavailable"],
-    ["500", () => answer(500, "<html>Marker Athlete Name</html>"), "source_unavailable"],
-    ["503", () => answer(503, ""), "source_unavailable"],
-    ["a redirect", () => ({ status: 302, headers: new Headers({ location: "https://evil.example/" }), body: null }), "source_answer_unexpected"],
-    ["418", () => answer(418, ""), "source_answer_unexpected"],
-    ["an announced oversize", () => answer(200, "{}", { "content-length": String(MAX_ANSWER_BYTES + 1) }), "source_answer_unexpected"],
-    ["one byte over the limit, chunked", () => streamedBody(bigChunks()), "source_answer_unexpected"],
-    ["a falsely small content-length", () => streamedBody(bigChunks(), { "content-length": "10" }), "source_answer_unexpected"],
-    ["a body without a stream", () => ({ status: 200, headers: new Headers(json), body: "{}", text: async () => "{}" }), "source_answer_unexpected"],
-    ["a broken stream", () => ({ status: 200, headers: new Headers(json), body: new ReadableStream({ pull(c) { c.error(new Error("reset Marker Athlete Name")); } }) }), "source_unavailable"],
-    ["a timeout", () => (u, init) => new Promise((_, reject) => { init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))); }), "source_unavailable"],
+    ["404", () => answer(404, { detail: "Not found. Marker Athlete Name" }), "source_not_found", "source_not_found"],
+    ["429", () => answer(429, "slow down"), "source_unavailable", "source_rate_limited"],
+    ["500", () => answer(500, "<html>Marker Athlete Name</html>"), "source_unavailable", "source_server_error"],
+    ["503", () => answer(503, ""), "source_unavailable", "source_server_error"],
+    ["a redirect", () => ({ status: 302, headers: new Headers({ location: "https://evil.example/" }), body: null }), "source_answer_unexpected", "source_redirect"],
+    ["418", () => answer(418, ""), "source_answer_unexpected", "source_status_unexpected"],
+    ["an announced oversize", () => answer(200, "{}", { "content-length": String(MAX_ANSWER_BYTES + 1) }), "source_answer_unexpected", "answer_too_large"],
+    ["one byte over the limit, chunked", () => streamedBody(bigChunks()), "source_answer_unexpected", "answer_too_large"],
+    ["a falsely small content-length", () => streamedBody(bigChunks(), { "content-length": "10" }), "source_answer_unexpected", "answer_too_large"],
+    ["a body without a stream", () => ({ status: 200, headers: new Headers(json), body: "{}", text: async () => "{}" }), "source_answer_unexpected", "answer_unreadable"],
+    ["a broken stream", () => ({ status: 200, headers: new Headers(json), body: new ReadableStream({ pull(c) { c.error(new Error("reset Marker Athlete Name")); } }) }), "source_unavailable", "source_unavailable"],
+    ["a timeout", () => (u, init) => new Promise((_, reject) => { init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))); }), "source_unavailable", "source_unavailable"],
+    ["not JSON", () => answer(200, "not json at all"), "source_answer_unexpected", "answer_not_json"],
   ];
-  for (const [label, resp, expected] of perDrill) {
+  for (const [label, resp, expected, reason] of perDrill) {
     const { a, calls } = await confirmedAdapter({ [D0]: resp() }, (f) => make(f, { timeoutMs: 50 }));
     const single = await errorOf(a.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 }));
     assert.equal(single?.code, expected, label);
     noNames({ ...single, message: single.message });
     const { a: b, calls: calls2 } = await confirmedAdapter({ [D0]: resp() }, (f) => make(f, { timeoutMs: 50 }));
     const set = await b.getSessionDrills({ sessionId: "100" });
-    assert.deepEqual([set.complete, set.drills.length, set.failed], [false, 0, { drillIndex: 0, code: expected }], label);
+    assert.deepEqual([set.complete, set.drills.length, set.failed], [false, 0, { drillIndex: 0, code: expected, reason, completed: 0 }], label);
     assert.ok(!calls.some((c) => c.url.includes("drill=1")) && !calls2.some((c) => c.url.includes("drill=1")), `${label}: the next index is not tried`);
     assert.ok([...calls, ...calls2].every((c) => new URL(c.url).origin === "https://server3.gpexe.com" && !c.url.includes("/rest/v1/team_session/100/details/?drill")), `${label}: no other host or form`);
     // The whole-session data are untouched by the drill failure; the labels are still read.
     const { a: c } = await confirmedAdapter({ [D0]: resp() }, (f) => make(f, { timeoutMs: 50 }));
     const bundle = await c.fetchSessionBundle({ sessionId: "100" });
-    assert.deepEqual(bundle.drillsStatus, { complete: false, drillsCount: 2, failed: { drillIndex: 0, code: expected } }, label);
+    assert.deepEqual(bundle.drillsStatus, { complete: false, drillsCount: 2, failed: { drillIndex: 0, code: expected, reason, completed: 0 } }, label);
     assert.deepEqual(Object.keys(bundle.details.full.players), ["4711", "4712"]);
     assert.deepEqual(bundle.details.drills, {});
     assert.equal(bundle.drillLabels.length, 2);
@@ -531,7 +532,7 @@ test("B4.2 statuses and transport on a drill read: 401 and 403 end the whole ope
   // A failure on the second drill keeps the first and is not complete.
   const { a: second } = await confirmedAdapter({ [D1]: answer(503, "") });
   const set2 = await second.getSessionDrills({ sessionId: "100" });
-  assert.deepEqual([set2.complete, set2.drills.map((d) => d.drillIndex), set2.failed], [false, [0], { drillIndex: 1, code: "source_unavailable" }]);
+  assert.deepEqual([set2.complete, set2.drills.map((d) => d.drillIndex), set2.failed], [false, [0], { drillIndex: 1, code: "source_unavailable", reason: "source_server_error", completed: 1 }]);
   // A body exactly at the limit is read whole.
   // Padding is JSON whitespace between tokens, so the body is valid at exactly the limit.
   const head = '{"players":{"4711":{"tot_burst_events":{"unit":"number","value":1}}}';
@@ -716,7 +717,7 @@ test("B7.2 an empty players map is a valid answer (a drill not yet computed): th
     const { a: b } = await confirmedAdapter({ [D1]: answer(200, body) });
     const s = await b.getSessionDrills({ sessionId: "100" });
     assert.equal(s.complete, false, label);
-    assert.deepEqual(s.failed, { drillIndex: 1, code: "source_answer_unexpected" }, label);
+    assert.deepEqual(s.failed, { drillIndex: 1, code: "source_answer_unexpected", reason: "players_missing", completed: 1 }, label);
     assert.throws(() => projectDetails(body, null, { what: "x" }), code("source_answer_unexpected"), label);
   }
   // The prototype-named metrics are refused; a details drill count that disagrees with the confirmed one is refused.
@@ -1182,16 +1183,17 @@ test("B7.5 the administrator's description of a refused details answer: fixed wo
   assert.deepEqual(ok.drills[0].details.players, { [ID]: { tot_burst_events: { unit: "number", value: 2 } } });
   const { a: b } = await confirmedAdapter({ [D0]: answer(200, details({ [ID]: { tot_burst_events: [SECRET_NUMBER], [SECRET_NAME]: [1] } })) });
   const set = await b.getSessionDrills({ sessionId: "100" });
-  assert.deepEqual([set.complete, set.failed.drillIndex, set.failed.code], [false, 0, "source_answer_unexpected"]);
+  assert.deepEqual([set.complete, set.failed.drillIndex, set.failed.code, set.failed.reason, set.failed.completed, set.failed.consumedField, set.failed.valueKind], [false, 0, "source_answer_unexpected", "consumed_field_shape_unknown", 0, "burst", "array"]);
   assert.equal(set.failed.diagnosticText, "op=session_drill_details; field=tot_burst_events; kind=array.");
   for (const leak of [ID, SECRET_NAME, "13579"]) assert.ok(!set.failed.diagnosticText.includes(leak), leak);
   // A bad metric name in a drill is described by its kind of name only.
   const { a: bn } = await confirmedAdapter({ [D0]: answer(200, JSON.parse(`{"players":{"${ID}":{"${SECRET_NAME} with spaces":1}}}`)) });
   const named = await bn.getSessionDrills({ sessionId: "100" });
   assert.equal(named.failed.diagnosticText, "op=session_drill_details; names=other_chars.");
+  assert.equal(named.failed.reason, "metric_name_unknown");
   // Any other drill failure keeps its code alone.
   const { a: c } = await confirmedAdapter({ [D0]: answer(200, details({ [ID]: {} })) });
-  assert.deepEqual((await c.getSessionDrills({ sessionId: "100" })).failed, { drillIndex: 0, code: "source_answer_unexpected" });
+  assert.deepEqual((await c.getSessionDrills({ sessionId: "100" })).failed, { drillIndex: 0, code: "source_answer_unexpected", reason: "player_values_missing", completed: 0 });
 
   // The capability catalog says what the probe proved for row 7: the status only.
   const { REST_V1_CAPABILITIES } = await import("../src/gpexeRestV1Adapter.js");
@@ -1218,8 +1220,8 @@ test("B7.6 the whole-session projection (op=session_details only): the container
 
   // Still refused, as before: containers, ids, bounds, names, dangerous keys, the drill count.
   const reason = (body, expected = null) => { try { projectSessionDetails(body, expected); return null; } catch (e) { assert.equal(e.code, "source_answer_unexpected"); return e.reason ?? "no_reason"; } };
-  assert.equal(reason(null), "no_reason");
-  assert.equal(reason([]), "no_reason");
+  assert.equal(reason(null), "answer_not_object");
+  assert.equal(reason([]), "answer_not_object");
   for (const players of [undefined, null, [], "x", 1]) assert.equal(reason({ players }), "players_missing", String(players));
   assert.equal(reason({ players: { "04711": OK } }), "athlete_id_not_canonical");
   assert.equal(reason({ players: { 4711: {} } }), "player_values_missing");
@@ -1810,4 +1812,44 @@ test("C11. any failed check returns nothing: no session of the window is returne
   await assert.rejects(a.getSession({ sessionId: "5000" }), code("session_not_listed"), "nothing of the refused list became readable");
   assert.ok(!server.calls.some((c) => c.url.includes("start_timestamp")), "no fallback to the date filter");
   assert.equal(listCalls(server.calls).length, 3, "no retry, and snapshot B is not sent after A failed");
+});
+
+test("B9.1 every per-drill failure keeps a closed reason: an answer that is not an object, a non-canonical athlete key, too many metric values, a drill count that disagrees, a consumed field of every kind; a code outside the set is drill_unknown; a refreshed session or a refused credential is not a per-drill failure", async () => {
+  const { drillFailureReason, DRILL_FAILURE_REASONS } = await import("../src/gpexeRestV1Adapter.js");
+  const many = Object.fromEntries(Array.from({ length: 257 }, (_, i) => [`m${i}`, 1]));
+  const cases = [
+    ["an array answer", answer(200, []), "answer_not_object", {}],
+    ["a non-canonical athlete key", answer(200, { drills_count: 2, players: { "0471": { tot_burst_events: { unit: "number", value: 1 } } } }), "athlete_id_not_canonical", {}],
+    ["too many metric values", answer(200, { drills_count: 2, players: { 4711: many } }), "player_values_too_many", {}],
+    ["a disagreeing drill count", answer(200, { drills_count: 3, players: {} }), "drills_count_disagrees", {}],
+    ["brake as a string", answer(200, { drills_count: 2, players: { 4711: { tot_brake_events: "Marker Athlete Name" } } }), "consumed_field_shape_unknown", { consumedField: "brake", valueKind: "string" }],
+    ["burst as an object without a number", answer(200, { drills_count: 2, players: { 4711: { tot_burst_events: { unit: "number", value: { deep: 1 } } } } }), "consumed_field_shape_unknown", { consumedField: "burst", valueKind: "object" }],
+    ["burst as a list", answer(200, { drills_count: 2, players: { 4711: { tot_burst_events: [1, 2] } } }), "consumed_field_shape_unknown", { consumedField: "burst", valueKind: "array" }],
+    ["burst as a number that is not finite (1e999)", answer(200, '{"drills_count":2,"players":{"4711":{"tot_burst_events":1e999}}}'), "consumed_field_shape_unknown", { consumedField: "burst", valueKind: "other" }],
+  ];
+  for (const [label, resp, reason, extra] of cases) {
+    const { a } = await confirmedAdapter({ [D1]: resp });
+    const set = await a.getSessionDrills({ sessionId: "100" });
+    assert.equal(set.complete, false, label);
+    assert.deepEqual({ ...set.failed, diagnosticText: undefined }, { drillIndex: 1, code: "source_answer_unexpected", reason, completed: 1, ...extra, diagnosticText: undefined }, label);
+    assert.ok(DRILL_FAILURE_REASONS.includes(set.failed.reason), label);
+    noNames(set.failed);
+  }
+  // A code or a reason outside the closed set is drill_unknown; nothing from a message is used.
+  for (const e of [{ code: "something_new" }, { code: "source_answer_unexpected", reason: "unheard_of" }, { code: "source_answer_unexpected", reason: "row_of_another_session" }, null, { message: "players_missing" }]) {
+    assert.equal(drillFailureReason(e), "drill_unknown", JSON.stringify(e));
+  }
+  // A refreshed session or a refused credential ends the whole operation, never a drill reason.
+  const { a: auth } = await confirmedAdapter({ [D1]: answer(401, "") });
+  await assert.rejects(auth.getSessionDrills({ sessionId: "100" }), code("source_auth_rejected"));
+});
+
+test("B9.2 every runbook names the current drill description: no runbook quotes the old drill_index= / drill_code= form (the owner-run procedures included)", async () => {
+  const dir = path.join(ROOT, "docs", "runbooks");
+  for (const f of await fsp.readdir(dir)) {
+    const t = await fsp.readFile(path.join(dir, f), "utf8");
+    assert.ok(!/drill_index=|drill_code=/.test(t), f);
+  }
+  const pilot = await fsp.readFile(path.join(dir, "gpexe-owner-pilot-f3c3.md"), "utf8");
+  assert.match(pilot, /op=drill_set; session_position=N; expected=N; completed=N; failed_index=N; code=<reason>/);
 });

@@ -111,7 +111,7 @@ It holds no athlete id, value, text or date.
    one known session of team 980, *Find new sessions* once.
 3. If it fails with `source_answer_unexpected` (whole session) or `drill_set_incomplete` (a drill),
    the source card's *Technical details* → *Last check message* (as an administrator) holds the
-   sentence and then `Diagnostic: …` (for a drill: `drill_index=…; drill_code=…; op=…`). Return
+   sentence and then `Diagnostic: …` (for a drill: `op=drill_set; session_position=N; expected=N; completed=N; failed_index=N; code=<reason>`, plus `consumed_field` / `value_kind` for a consumed field's shape - the reasons are listed in `gpexe-in-app-import.md`). Return
    **that whole line** and the Code. Nothing else from the screen is needed. No screenshot is
    needed either, and never one of a form.
 4. If it succeeds, report the result line instead. Nothing is approved or imported, and the switch
@@ -136,7 +136,7 @@ fields. The drill answers keep the full check.
    or imported, and `GPEXE_IMPORT_APPLY_ENABLED` stays unchanged.
 4. **If it fails**, report only the Code and the whole `Diagnostic: …` line from *Technical details →
    Last check message*. A drill refusal reads `drill_set_incomplete` with
-   `drill_index=…; drill_code=…; op=session_drill_details; …`.
+   `op=drill_set; session_position=N; expected=N; completed=N; failed_index=N; code=<reason>`, plus `consumed_field` / `value_kind` for a consumed field's shape - the reasons are listed in `gpexe-in-app-import.md`.
 5. **Nothing is repeated.** No Link athletes, no Import, no second check without a new order.
 
 ## Reviewing the first found session (read-only)

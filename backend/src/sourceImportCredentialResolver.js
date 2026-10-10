@@ -42,7 +42,7 @@ import crypto from "node:crypto";
 import { pool } from "./db.js";
 import { decryptCredential, keyringFromEnv } from "./sourceCredentialCrypto.js";
 import { resolveApprovedSourceHost } from "./sourceHosts.js";
-import { createSourceAdapter, SourceAdapterError, DIAGNOSTIC_MARK, projectStoredDetails } from "./sourceAdapters.js";
+import { createSourceAdapter, SourceAdapterError, DIAGNOSTIC_MARK, projectStoredDetails, DRILL_FAILURE_REASONS } from "./sourceAdapters.js";
 
 // The importer sees the adapter's error class only through this module: the
 // resolver is the importer's one door to the source-connection infrastructure.
@@ -446,6 +446,38 @@ export async function autoInvalidateImportSource(source, { errorCode = "source_a
   }
 }
 
+// The administrator's description of an incomplete drill set (owner order
+// 2026-10-10, after a check stopped with drill_set_incomplete and no reason
+// kept): one line of a closed grammar - the parent's position in the check's
+// own (locally filtered) session list, the expected and completed drill
+// counts, the failed position, the closed reason, and for a consumed field's
+// shape the field's short name and the kind of its value. Built from integers
+// and closed words only; the final guard drops the whole description (never
+// the refusal) when anything else would come out. Never a session, athlete or
+// team id, a date, a name, a URL, a metric name, a value or source text.
+const DRILL_KINDS = ["absent", "null", "number", "string", "object", "array", "boolean", "other"];
+const DRILL_DIAGNOSTIC_GRAMMAR = new RegExp(
+  `^op=drill_set; session_position=[1-9][0-9]{0,3}; expected=(?:0|[1-9][0-9]{0,3}); completed=(?:0|[1-9][0-9]{0,3}); failed_index=(?:0|[1-9][0-9]{0,3}); code=(?:${DRILL_FAILURE_REASONS.join("|")})(?:; consumed_field=(?:burst|brake); value_kind=(?:${DRILL_KINDS.join("|")}))?\\.$`,
+);
+// The final guard, on its own so it can be shown to refuse anything else.
+export function drillDiagnosticAccepted(line) {
+  return typeof line === "string" && line.length <= 300 && DRILL_DIAGNOSTIC_GRAMMAR.test(line);
+}
+const boundedInt = (v, min) => (Number.isInteger(v) && v >= min && v <= 9999 ? v : null);
+export function drillSetDiagnostic(drillsStatus, { sessionPosition } = {}) {
+  const failed = drillsStatus?.failed ?? null;
+  const position = boundedInt(sessionPosition, 1);
+  const expected = boundedInt(drillsStatus?.drillsCount, 0);
+  const completed = boundedInt(failed?.completed, 0);
+  const failedIndex = boundedInt(failed?.drillIndex, 0);
+  if (!failed || position === null || expected === null || completed === null || failedIndex === null) return null;
+  const code = DRILL_FAILURE_REASONS.includes(failed.reason) ? failed.reason : "drill_unknown";
+  const consumed = code === "consumed_field_shape_unknown" && (failed.consumedField === "burst" || failed.consumedField === "brake") && DRILL_KINDS.includes(failed.valueKind)
+    ? `; consumed_field=${failed.consumedField}; value_kind=${failed.valueKind}` : "";
+  const line = `op=drill_set; session_position=${position}; expected=${expected}; completed=${completed}; failed_index=${failedIndex}; code=${code}${consumed}.`;
+  return drillDiagnosticAccepted(line) ? line : null;
+}
+
 // The importer reads through the same two operations whatever the path. For
 // the binding path they are the adapter's reads, with the re-validation
 // before each, the bound team enforced, and the drill rules of the owner
@@ -476,7 +508,7 @@ export function importClientFor(source) {
       await assertImportSourceStillUsable(source);
       return result.sessions.map((s) => ({ ...s }));
     },
-    async fetchSessionBundle({ gpexeTeamId, sessionId, onProgress = null } = {}) {
+    async fetchSessionBundle({ gpexeTeamId, sessionId, sessionPosition = null, onProgress = null } = {}) {
       sameTeam(gpexeTeamId);
       await assertImportSourceStillUsable(source);
       const bundle = await adapter.fetchSessionBundle({ sessionId });
@@ -488,16 +520,14 @@ export function importClientFor(source) {
       const { drillsStatus, drillLabels, ...stored } = bundle;
       void drillLabels;
       if (!drillsStatus || drillsStatus.complete !== true) {
-        // A drill refused for a metric's shape carries the adapter's sanitized
-        // description (fixed words and buckets only, at most 900 characters);
-        // the check row shows it to an administrator after DIAGNOSTIC_MARK.
+        // Every incomplete drill set keeps its reason for an administrator:
+        // the closed-grammar line after DIAGNOSTIC_MARK (drillSetDiagnostic).
+        // A coach gets the sentence before the mark (gpexeImportService checkView).
         const failed = drillsStatus?.failed ?? null;
         const failedIndex = Number.isInteger(failed?.drillIndex) ? failed.drillIndex : null;
         const facts = { sessionId: String(sessionId), failedIndex };
-        if (failed && typeof failed.diagnosticText === "string" && failed.diagnosticText && failedIndex !== null) {
-          const failedCode = /^[a-z_]{1,64}$/.test(String(failed.code ?? "")) ? failed.code : "source_answer_unexpected";
-          throw new SourceImportResolveError("drill_set_incomplete", `${MESSAGES.drill_set_incomplete}${DIAGNOSTIC_MARK}drill_index=${failedIndex}; drill_code=${failedCode}; ${failed.diagnosticText.slice(0, 900)}`, { facts });
-        }
+        const line = drillSetDiagnostic(drillsStatus, { sessionPosition });
+        if (line) throw new SourceImportResolveError("drill_set_incomplete", `${MESSAGES.drill_set_incomplete}${DIAGNOSTIC_MARK}${line}`, { facts });
         throw fail("drill_set_incomplete", { facts });
       }
       return stored;

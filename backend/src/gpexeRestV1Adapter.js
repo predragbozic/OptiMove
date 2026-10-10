@@ -329,7 +329,7 @@ function namesBoundTeam(value, boundTeamId) {
   return null;
 }
 
-const tooLarge = () => new SourceAdapterError("source_answer_unexpected", "The source server answered with more than can be read.");
+const tooLarge = () => new SourceAdapterError("source_answer_unexpected", "The source server answered with more than can be read.", { reason: "answer_too_large" });
 
 // The body of an answer, as text, or a refusal — never part of it.
 // MAX_ANSWER_BYTES is a limit in BYTES on what is really received: the body
@@ -356,7 +356,7 @@ export async function readBounded(res, contentLength = null, limit = MAX_ANSWER_
   }
   if (stream === null || stream === undefined) return "";
   if (typeof stream.getReader !== "function") {
-    throw new SourceAdapterError("source_answer_unexpected", "The source server's answer cannot be read as a stream.");
+    throw new SourceAdapterError("source_answer_unexpected", "The source server's answer cannot be read as a stream.", { reason: "answer_unreadable" });
   }
   const reader = stream.getReader();
   const chunks = [];
@@ -440,6 +440,44 @@ function valueKind(v) {
   if (isPlainObject(v)) return "object";
   return "other";
 }
+// --- Why one drill of a drill set could not be read (a closed set) ----------
+// Decided from the error's stable code and its fixed facts (status class,
+// reason) only - never from a message or anything the source sent. Anything
+// not listed is drill_unknown. The check row's administrator description
+// (sourceImportCredentialResolver.js) accepts only these words.
+export const DRILL_FAILURE_REASONS = Object.freeze([
+  "drill_index_invalid", "drills_count_out_of_range", "source_not_found", "source_unavailable",
+  "source_rate_limited", "source_server_error", "source_redirect", "source_status_unexpected",
+  "answer_too_large", "answer_unreadable", "answer_not_json", "answer_not_object", "players_missing",
+  "athlete_id_not_canonical", "player_values_missing", "player_values_too_many", "metric_name_unknown",
+  "consumed_field_shape_unknown", "drills_count_disagrees", "drill_unknown",
+]);
+const ANSWER_REASONS = new Set(["answer_too_large", "answer_unreadable", "answer_not_json", "answer_not_object", "players_missing",
+  "athlete_id_not_canonical", "player_values_missing", "player_values_too_many", "metric_name_unknown",
+  "consumed_field_shape_unknown", "drills_count_disagrees"]);
+export function drillFailureReason(error) {
+  const code = error?.code;
+  const status = Number.isInteger(error?.status) ? error.status : null;
+  if (code === "invalid_drill_index") return "drill_index_invalid";
+  if (code === "drills_count_out_of_range") return "drills_count_out_of_range";
+  if (code === "source_not_found") return "source_not_found";
+  if (code === "source_unavailable") {
+    if (status === 429) return "source_rate_limited";
+    if (status !== null && status >= 500) return "source_server_error";
+    return "source_unavailable";
+  }
+  if (code === "source_answer_unexpected") {
+    if (error?.reason === "redirect") return "source_redirect";
+    if (error?.reason === "status_unexpected") return "source_status_unexpected";
+    if (ANSWER_REASONS.has(error?.reason)) return error.reason;
+  }
+  return "drill_unknown";
+}
+// The kind of a consumed field's value, as one word of a closed set.
+const CONSUMED_KIND = Object.freeze({ null: "null", number: "number", number_not_finite: "other", boolean: "boolean",
+  text_short: "string", text_long: "string", text_other_chars: "string", array: "array", object: "object", other: "other" });
+const CONSUMED_SHORT = Object.freeze({ tot_burst_events: "burst", tot_brake_events: "brake" });
+
 // --- Details answers (whole session and drill), projected to what the importer reads ---
 // The whole session since 2026-10-06 (owner order after the owner-run
 // diagnostic of 2026-10-05/06: on server3 both consumed fields arrived in the
@@ -475,7 +513,7 @@ function projectConsumedValue(value) {
 // fields the mapper reads (DETAILS_CONSUMED_FIELDS) are validated and copied.
 // An empty players map stays valid (a drill not yet computed).
 export function projectSessionDetails(body, expectedDrillsCount = null, { what = "the whole-session details", op = "session_details" } = {}) {
-  if (!isPlainObject(body)) throw unexpected(`The source server did not answer ${what} as an object.`);
+  if (!isPlainObject(body)) throw unexpected(`The source server did not answer ${what} as an object.`, { reason: "answer_not_object" });
   const players = body.players;
   if (!isPlainObject(players)) throw unexpected(`The source answer to ${what} carries no players map.`, { reason: "players_missing" });
   const out = {};
@@ -507,7 +545,7 @@ export function projectSessionDetails(body, expectedDrillsCount = null, { what =
         // Only the consumed field is described: its constant name and kind.
         // The sentence a coach sees stays generic; the field is named after the mark.
         const diagnosticText = `op=${op}; field=${field}; kind=${valueKind(value)}.`;
-        throw unexpected(`The source answer to ${what} carries a consumed metric in an unknown shape.${DIAGNOSTIC_MARK}${diagnosticText}`, { reason: "consumed_field_shape_unknown", field, diagnosticText });
+        throw unexpected(`The source answer to ${what} carries a consumed metric in an unknown shape.${DIAGNOSTIC_MARK}${diagnosticText}`, { reason: "consumed_field_shape_unknown", field, valueKind: valueKind(value), diagnosticText });
       }
       projected[field] = projectConsumedValue(value);
     }
@@ -712,12 +750,12 @@ export function createGpexeRestV1Adapter({
           signal: AbortSignal.timeout(timeoutMs),
         });
       } catch {
-        last = new SourceAdapterError("source_unavailable", "The source server did not answer.");
+        last = new SourceAdapterError("source_unavailable", "The source server did not answer.", { reason: "no_answer" });
         if (attempt < attempts) await sleep(retryDelayMs * attempt);
         continue;
       }
       const status = res.status;
-      if (status >= 300 && status < 400) throw new SourceAdapterError("source_answer_unexpected", "The source server answered with a redirect, which is refused.", { status });
+      if (status >= 300 && status < 400) throw new SourceAdapterError("source_answer_unexpected", "The source server answered with a redirect, which is refused.", { status, reason: "redirect" });
       // 401: the credential itself was refused. 403: the credential was read
       // but may not do this; the two are told apart for the administrator.
       if (status === 401) throw new SourceAdapterError("source_auth_rejected", "The source server refused the credential.", { status });
@@ -730,14 +768,14 @@ export function createGpexeRestV1Adapter({
         if (attempt < attempts) await sleep(retryDelayMs * attempt);
         continue;
       }
-      if (status !== 200) throw new SourceAdapterError("source_answer_unexpected", "The source server answered in a way that is not expected.", { status });
+      if (status !== 200) throw new SourceAdapterError("source_answer_unexpected", "The source server answered in a way that is not expected.", { status, reason: "status_unexpected" });
       const header = (name) => (typeof res.headers?.get === "function" ? res.headers.get(name) : null);
       const text = await readBounded(res, header("content-length"));
       let body;
       try {
         body = JSON.parse(text);
       } catch {
-        throw new SourceAdapterError("source_answer_unexpected", "The source server answered with something that cannot be read as JSON.");
+        throw new SourceAdapterError("source_answer_unexpected", "The source server answered with something that cannot be read as JSON.", { reason: "answer_not_json" });
       }
       // The projection (the drop list, or the identity's five keys) can fail on
       // an answer JSON.parse accepted (a nesting deep enough to overflow the
@@ -745,7 +783,7 @@ export function createGpexeRestV1Adapter({
       try {
         body = project(body);
       } catch {
-        throw new SourceAdapterError("source_answer_unexpected", "The source server answered with something that cannot be read.");
+        throw new SourceAdapterError("source_answer_unexpected", "The source server answered with something that cannot be read.", { reason: "answer_unreadable" });
       }
       return { body, totalCount: header("x-total-count"), link: header("link") };
     }
@@ -1211,7 +1249,13 @@ export function createGpexeRestV1Adapter({
           // so the check row can name it; every other failure keeps its code alone.
           const DESCRIBED = new Set(["consumed_field_shape_unknown", "metric_name_unknown"]);
           const diagnosticText = DESCRIBED.has(error.reason) && typeof error.diagnosticText === "string" && error.diagnosticText ? error.diagnosticText : null;
-          return { complete: false, drillsCount: parent.drillsCount, drills, failed: { drillIndex: index, code: error.code ?? "source_drill_unavailable", ...(diagnosticText ? { diagnosticText } : {}) } };
+          // Every failure also carries its closed reason and how many drills
+          // were read before it; a consumed field's shape names the field and
+          // the kind of its value as fixed words (never the value).
+          const reason = drillFailureReason(error);
+          const consumed = reason === "consumed_field_shape_unknown" && CONSUMED_SHORT[error.field] && CONSUMED_KIND[error.valueKind]
+            ? { consumedField: CONSUMED_SHORT[error.field], valueKind: CONSUMED_KIND[error.valueKind] } : {};
+          return { complete: false, drillsCount: parent.drillsCount, drills, failed: { drillIndex: index, code: error.code ?? "source_drill_unavailable", reason, completed: drills.length, ...consumed, ...(diagnosticText ? { diagnosticText } : {}) } };
         }
       }
       return { complete: true, drillsCount: parent.drillsCount, drills, failed: null };
