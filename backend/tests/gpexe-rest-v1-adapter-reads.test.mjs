@@ -710,7 +710,7 @@ test("B7.2 an empty players map is a valid answer (a drill not yet computed): th
   const set = await a.getSessionDrills({ sessionId: "100" });
   assert.equal(set.complete, true);
   assert.equal(set.failed, null);
-  assert.deepEqual(set.drills[1].details, { players: {}, drills_count: 2 });
+  assert.deepEqual(set.drills[1].details, { players: {} }, "a drill answer's own drills_count is never returned");
   assert.deepEqual(await a.getSessionDetails({ sessionId: "100" }), { players: {}, drills_count: 2 });
   for (const [label, players] of [["missing", undefined], ["null", null], ["an array", []], ["an array of players", [{ 4711: { a: 1 } }]], ["a string", "4711"], ["a number", 1], ["a boolean", true]]) {
     const body = players === undefined ? { drills_count: 2 } : { drills_count: 2, players };
@@ -1275,7 +1275,7 @@ test("B7.6b projectStoredDetails: a stored bundle keeps, for every athlete of th
   assert.equal(JSON.stringify(stored), before, "the input is untouched");
   assert.deepEqual(out.details.full.players, { 4711: { tot_burst_events: { unit: "number", value: 1 } } });
   assert.deepEqual(out.details.drills["0"].players, { 4711: { tot_brake_events: { unit: "number", value: 2 } } });
-  assert.deepEqual(out.details.drills["1"], { players: {}, drills_count: 2 });
+  assert.deepEqual(out.details.drills["1"], { players: {} }, "a drill part never keeps the drill answer's drills_count");
   assert.deepEqual([out.teamSession, out.athleteSessions, out.details.full.drills_count], [stored.teamSession, stored.athleteSessions, 2]);
   for (const leak of ["markerMetricNameZq", "13579", "free text value", "extra", "markerTeamAggregateZq"]) assert.ok(!JSON.stringify(out).includes(leak), leak);
   assert.deepEqual(Object.keys(out.details.full).sort(), ["drills_count", "players"], "a details part keeps only players and drills_count (a legacy top-level aggregate is dropped)");
@@ -1283,7 +1283,7 @@ test("B7.6b projectStoredDetails: a stored bundle keeps, for every athlete of th
   const { canonicalJson } = await import("../src/gpexeImportPreview.js");
   assert.equal(canonicalJson(projectStoredDetails(out)), canonicalJson(out));
   const noPlayers = { details: { full: { players: {} }, drills: { 0: { drills_count: 2 } } } };
-  assert.equal(canonicalJson(projectStoredDetails(noPlayers)), canonicalJson(noPlayers), "a part without players gets no players key");
+  assert.deepEqual(projectStoredDetails(noPlayers), { details: { full: { players: {} }, drills: { 0: {} } } }, "a part without players gets no players key; a drill keeps no drills_count");
   assert.equal(projectStoredDetails(null), null);
   assert.deepEqual(projectStoredDetails({ teamSession: { id: 1 } }), { teamSession: { id: 1 } }, "a bundle without details is returned as it is");
 });
@@ -1814,14 +1814,13 @@ test("C11. any failed check returns nothing: no session of the window is returne
   assert.equal(listCalls(server.calls).length, 3, "no retry, and snapshot B is not sent after A failed");
 });
 
-test("B9.1 every per-drill failure keeps a closed reason: an answer that is not an object, a non-canonical athlete key, too many metric values, a drill count that disagrees, a consumed field of every kind; a code outside the set is drill_unknown; a refreshed session or a refused credential is not a per-drill failure", async () => {
+test("B9.1 every per-drill failure keeps a closed reason: an answer that is not an object, a non-canonical athlete key, too many metric values, a consumed field of every kind; a code outside the set is drill_unknown; a refreshed session or a refused credential is not a per-drill failure", async () => {
   const { drillFailureReason, DRILL_FAILURE_REASONS } = await import("../src/gpexeRestV1Adapter.js");
   const many = Object.fromEntries(Array.from({ length: 257 }, (_, i) => [`m${i}`, 1]));
   const cases = [
     ["an array answer", answer(200, []), "answer_not_object", {}],
     ["a non-canonical athlete key", answer(200, { drills_count: 2, players: { "0471": { tot_burst_events: { unit: "number", value: 1 } } } }), "athlete_id_not_canonical", {}],
     ["too many metric values", answer(200, { drills_count: 2, players: { 4711: many } }), "player_values_too_many", {}],
-    ["a disagreeing drill count", answer(200, { drills_count: 3, players: {} }), "drills_count_disagrees", { answerCount: { kind: "number", canonical: true, matchesExpected: false, value: 3 } }],
     ["brake as a string", answer(200, { drills_count: 2, players: { 4711: { tot_brake_events: "Marker Athlete Name" } } }), "consumed_field_shape_unknown", { consumedField: "brake", valueKind: "string" }],
     ["burst as an object without a number", answer(200, { drills_count: 2, players: { 4711: { tot_burst_events: { unit: "number", value: { deep: 1 } } } } }), "consumed_field_shape_unknown", { consumedField: "burst", valueKind: "object" }],
     ["burst as a list", answer(200, { drills_count: 2, players: { 4711: { tot_burst_events: [1, 2] } } }), "consumed_field_shape_unknown", { consumedField: "burst", valueKind: "array" }],
@@ -1854,45 +1853,78 @@ test("B9.2 every runbook names the current drill description: no runbook quotes 
   assert.match(pilot, /op=drill_set; session_position=N; expected=N; completed=N; failed_index=N; code=<reason>/);
 });
 
-test("B9.4 a drill answer whose drills_count disagrees keeps what it said, described only: its kind, whether it is a canonical whole number 0..30, whether that is the expected count, and the number only when canonical; absent, null and the expected number are still accepted (the rule is unchanged) and a string that looks like the expected number is still refused", async () => {
-  const { describeAnswerCount } = await import("../src/gpexeRestV1Adapter.js");
-  const drillWith = (count) => {
-    const body = { players: { 4711: { tot_burst_events: { unit: "number", value: 1 } } } };
-    if (count !== "__absent__") body.drills_count = count;
-    return answer(200, body);
+
+// A parent confirmed with N drills (0..30) and N drill answers; `answers` overrides single drill routes.
+function withDrills(n, answers = {}) {
+  const ids = Array.from({ length: n }, (_, i) => 1000 + i);
+  const over = {
+    [LIST]: answer(200, [parent(100, ids), ...ids.map((id) => session(id))], { "x-total-count": String(n + 1) }),
+    [PARENT]: answer(200, { id: 100, team: 980, category_name: "Training", is_stats_valid: true, drills_count: n, start_timestamp: "2026-09-14T10:00:00", end_timestamp: "2026-09-14T11:00:00", updated_on: "2026-09-14T12:00:00" }),
+    // The whole-session answer keeps its own (unchanged) comparison with the parent.
+    [WHOLE]: answer(200, details(PLAYERS(9), { drills_count: n })),
   };
-  // The confirmed parent has drills_count 2: these are accepted exactly as before.
-  for (const [label, count] of [["absent", "__absent__"], ["null", null], ["the expected number", 2]]) {
-    const { a } = await confirmedAdapter({ [D1]: drillWith(count) });
-    const set = await a.getSessionDrills({ sessionId: "100" });
-    assert.deepEqual([set.complete, set.failed], [true, null], label);
+  for (let i = 0; i < n; i += 1) over[`/api/team_session/100/details/?drill=${i}`] = answers[i] ?? answer(200, details(PLAYERS(i + 1), { drills_count: 0 }));
+  return over;
+}
+const drillCalls = (calls) => pathsOf(calls).filter((u) => u.startsWith("/api/team_session/100/details/?drill="));
+
+test("B9.4 a drill answer's own drills_count is ignored (owner decision 2026-10-10, production evidence answer_count=0 for a parent confirmed with 5): a parent of 5 whose five drill answers all say drills_count 0 reads exactly indexes 0..4 once each and is complete; absent, null, a string, an object or another number in a drill answer changes nothing and never comes out", async () => {
+  const { a, calls } = await confirmedAdapter(withDrills(5));
+  const set = await a.getSessionDrills({ sessionId: "100" });
+  assert.deepEqual([set.complete, set.failed, set.drillsCount, set.drills.map((d) => d.drillIndex)], [true, null, 5, [0, 1, 2, 3, 4]]);
+  assert.deepEqual(drillCalls(calls), [0, 1, 2, 3, 4].map((i) => `/api/team_session/100/details/?drill=${i}`), "each index once, in order");
+  for (const d of set.drills) assert.deepEqual(Object.keys(d.details), ["players"], "no drills_count leaves the adapter");
+  const variants = [["absent", undefined], ["null", null], ["the string \"5\"", "5"], ["a text", "Marker Athlete Name"], ["an object", { n: 5 }], ["an array", [5]], ["a boolean", true], ["0", 0], ["31", 31], ["-1", -1], ["2.5", 2.5], ["the parent count", 5]];
+  for (const [label, value] of variants) {
+    const body = { players: PLAYERS(3) };
+    if (value !== undefined) body.drills_count = value;
+    const { a: b, calls: c } = await confirmedAdapter(withDrills(5, { 2: answer(200, body) }));
+    const s2 = await b.getSessionDrills({ sessionId: "100" });
+    assert.deepEqual([s2.complete, s2.failed, s2.drills.length], [true, null, 5], label);
+    assert.equal(drillCalls(c).length, 5, `${label}: the parent count alone decides the requests`);
+    assert.ok(!JSON.stringify(s2).includes("drills_count"), `${label}: never comes out`);
+    assert.ok(!JSON.stringify(s2).includes("Marker Athlete Name"), label);
+    const single = await (await confirmedAdapter(withDrills(5, { 2: answer(200, body) }))).a.getSessionDrillDetails({ sessionId: "100", drillIndex: 2 });
+    assert.deepEqual(Object.keys(single), ["players"], `${label}: the single drill read returns players only`);
   }
-  const refused = [
-    ["5", 5, { kind: "number", canonical: true, matchesExpected: false, value: 5 }],
-    ["the string \"5\"", "5", { kind: "string", canonical: false, matchesExpected: false }],
-    ["the string \"2\" (looks like the expected count)", "2", { kind: "string", canonical: false, matchesExpected: false }],
-    ["0", 0, { kind: "number", canonical: true, matchesExpected: false, value: 0 }],
-    ["1", 1, { kind: "number", canonical: true, matchesExpected: false, value: 1 }],
-    ["a negative number", -1, { kind: "number", canonical: false, matchesExpected: false }],
-    ["a number over 30", 31, { kind: "number", canonical: false, matchesExpected: false }],
-    ["a fraction", 2.5, { kind: "number", canonical: false, matchesExpected: false }],
-    ["an object", { n: 2 }, { kind: "object", canonical: false, matchesExpected: false }],
-    ["an array", [2], { kind: "array", canonical: false, matchesExpected: false }],
-    ["a boolean", true, { kind: "boolean", canonical: false, matchesExpected: false }],
-  ];
-  for (const [label, count, expected] of refused) {
-    const { a } = await confirmedAdapter({ [D1]: drillWith(count) });
-    const set = await a.getSessionDrills({ sessionId: "100" });
-    assert.equal(set.complete, false, label);
-    assert.deepEqual([set.failed.drillIndex, set.failed.code, set.failed.reason, set.failed.completed, set.failed.answerCount], [1, "source_answer_unexpected", "drills_count_disagrees", 1, expected], label);
-    assert.ok(!JSON.stringify(set.failed).includes('"n"'), label);
+  // The bundle of the importer carries no drill drills_count either.
+  const bundle = await (await confirmedAdapter(withDrills(5))).a.fetchSessionBundle({ sessionId: "100" });
+  for (const d of Object.values(bundle.details.drills)) assert.ok(!("drills_count" in d));
+  assert.equal(bundle.teamSession.drills_count, 5, "the parent's own count is the one the mapper reads");
+});
+
+test("B9.5 the parent count alone bounds the drill reads: 0 sends no drill request, 30 sends exactly 30, a parent of 31 stays refused at the session read; a failure at index 2 of 5 stops before index 3 with complete:false, the failed index and its closed reason", async () => {
+  const { a: zero, calls: zc } = await confirmedAdapter(withDrills(0));
+  assert.deepEqual(await zero.getSessionDrills({ sessionId: "100" }), { complete: true, drillsCount: 0, drills: [], failed: null });
+  assert.equal(drillCalls(zc).length, 0, "no drill request for a parent of 0");
+  const { a: thirty, calls: tc } = await confirmedAdapter(withDrills(30));
+  const set30 = await thirty.getSessionDrills({ sessionId: "100" });
+  assert.deepEqual([set30.complete, set30.drills.length], [true, 30]);
+  assert.deepEqual(drillCalls(tc), Array.from({ length: 30 }, (_, i) => `/api/team_session/100/details/?drill=${i}`));
+  const over31 = withDrills(30);
+  over31[PARENT] = answer(200, { id: 100, team: 980, drills_count: 31, start_timestamp: "2026-09-14T10:00:00" });
+  const s31 = full(over31);
+  await assert.rejects((await primed(s31.fetchImpl)).getSession({ sessionId: "100" }), code("drills_count_out_of_range"));
+  const { a: two, calls: c2 } = await confirmedAdapter(withDrills(5, { 2: answer(503, "") }));
+  const set2 = await two.getSessionDrills({ sessionId: "100" });
+  assert.deepEqual([set2.complete, set2.drills.map((d) => d.drillIndex), set2.failed], [false, [0, 1], { drillIndex: 2, code: "source_unavailable", reason: "source_server_error", completed: 2 }]);
+  assert.deepEqual(drillCalls(c2), [0, 1, 2].map((i) => `/api/team_session/100/details/?drill=${i}`), "nothing after the failed index, no retry, no skip");
+});
+
+test("B9.6 static guard: no drill read passes the parent count to the projection or reads a drill answer's drills_count for a decision, the drill loop is bounded by the confirmed parent only, and drills_count_disagrees is not a drill failure reason", async () => {
+  const src = await fsp.readFile(path.join(ROOT, "backend", "src", "gpexeRestV1Adapter.js"), "utf8");
+  const block = (start, end) => { const a = src.indexOf(start); const b = src.indexOf(end, a); assert.ok(a !== -1 && b !== -1, start); return src.slice(a, b); };
+  const drills = block("    async getSessionDrills(options) {", "    async listAthleteSessions(options) {");
+  const single = block("    async getSessionDrillDetails(options) {", "    async getSessionDrills(options) {");
+  for (const [name, text] of [["getSessionDrills", drills], ["getSessionDrillDetails", single]]) {
+    assert.doesNotMatch(text, /projectSessionDetails\(body,\s*parent\.drillsCount/, `${name}: no comparison with the parent count`);
+    assert.match(text, /drillAnswer:\s*true/, `${name}: a drill answer is projected as such`);
+    assert.doesNotMatch(text, /body\.drills_count|\.drills_count\b/, `${name}: a drill answer's drills_count is never read`);
   }
-  // The pure description, absent included; a matching canonical number reads matchesExpected true.
-  assert.deepEqual(describeAnswerCount(undefined, 2), { kind: "absent", canonical: false, matchesExpected: false });
-  assert.deepEqual(describeAnswerCount(null, 2), { kind: "null", canonical: false, matchesExpected: false });
-  assert.deepEqual(describeAnswerCount(5, 5), { kind: "number", canonical: true, matchesExpected: true, value: 5 });
-  assert.deepEqual(describeAnswerCount("Marker Athlete Name", 5), { kind: "string", canonical: false, matchesExpected: false });
-  // The whole-session details keep their own refusal unchanged.
-  const { a: whole } = await confirmedAdapter({ [WHOLE]: answer(200, { drills_count: "2", players: {} }) });
-  await assert.rejects(whole.getSessionDetails({ sessionId: "100" }), code("source_answer_unexpected"));
+  assert.match(drills, /for \(let index = 0; index < parent\.drillsCount; index \+= 1\)/, "the loop is bounded by the confirmed parent only");
+  const { DRILL_FAILURE_REASONS, projectSessionDetails } = await import("../src/gpexeRestV1Adapter.js");
+  assert.ok(!DRILL_FAILURE_REASONS.includes("drills_count_disagrees"));
+  assert.deepEqual(projectSessionDetails({ players: {}, drills_count: 0 }, 5, { what: "x", op: "session_drill_details", drillAnswer: true }), { players: {} }, "even with an expected count, a drill answer is never compared");
+  // The whole-session comparison is unchanged.
+  assert.throws(() => projectSessionDetails({ players: {}, drills_count: 0 }, 5, { what: "x" }), code("source_answer_unexpected"));
 });
