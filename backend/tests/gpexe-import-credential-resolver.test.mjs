@@ -248,7 +248,8 @@ function fakeSource({ token = TOKEN } = {}) {
       const d = b.details.drills[m[2]];
       if (!d || state.faults.drillMissing === Number(m[2])) return json(404, { detail: SOURCE_SENTENCE });
       const players = state.faults.drillPlayers && state.faults.drillPlayers.index === Number(m[2]) ? state.faults.drillPlayers.players : d.players;
-      return json(200, { drills_count: 2, players, team: { aggregate: 1 }, teamsession: sid * 1000 + Number(m[2]) + 1 });
+      const drillsCount = state.faults.drillCount && state.faults.drillCount.index === Number(m[2]) ? state.faults.drillCount.value : 2;
+      return json(200, { drills_count: drillsCount, players, team: { aggregate: 1 }, teamsession: sid * 1000 + Number(m[2]) + 1 });
     }
     if (key === `/api/team_session/${sid}/brief/`) return json(404, { detail: SOURCE_SENTENCE });
     if (key === `/rest/v1/team/${t}/thresholds/?valid_on=${DAY}`) return json(200, b.teamThresholds);
@@ -2313,4 +2314,70 @@ test("39. the description's final guard: drillSetDiagnostic builds only the clos
     `${good} 2026-10-06`, `${good.slice(0, -1)}; url=https://evil.example/.`, good.replace("expected=5", "expected=05"), good.replace("op=drill_set", "op=session_details"),
     "op=drill_set; session_position=1; expected=1; completed=0; failed_index=0; code=drill_unknown", "", null, 42,
   ]) assert.equal(g(bad), false, String(bad));
+});
+
+test("40. a drill answer whose drills_count disagrees keeps, for an administrator only, what the answer said - kind, canonical, matches-expected and the number only when canonical; the check still ends drill_set_incomplete, nothing is recorded, a coach sees the sentence only, and no raw value reaches the row or a log", async () => {
+  const BASE = "The source did not answer every drill of a session; that session was not recorded and the check stopped.";
+  const cases = [
+    ["the string \"2\" in drill 0", { index: 0, value: "2" }, "op=drill_set; session_position=1; expected=2; completed=0; failed_index=0; code=drills_count_disagrees; answer_count_kind=string; answer_count_canonical=false; answer_count_matches_expected=false."],
+    ["5 in drill 1", { index: 1, value: 5 }, "op=drill_set; session_position=1; expected=2; completed=1; failed_index=1; code=drills_count_disagrees; answer_count_kind=number; answer_count_canonical=true; answer_count_matches_expected=false; answer_count=5."],
+    ["a text in drill 0", { index: 0, value: "Marker Athlete Name 2026-10-06 https://evil.example/" }, "op=drill_set; session_position=1; expected=2; completed=0; failed_index=0; code=drills_count_disagrees; answer_count_kind=string; answer_count_canonical=false; answer_count_matches_expected=false."],
+  ];
+  for (const [label, fault, expected] of cases) {
+    const o = await org();
+    useSource();
+    await bound(o);
+    process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    src.state.faults.drillCount = fault;
+    const logBefore = logLines.length;
+    try {
+      const coach = await importer.startCheck(o.teamId, { userId: o.coach.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: false });
+      assert.deepEqual([coach.status, coach.error], ["failed", { code: "drill_set_incomplete", message: BASE }], label);
+      const row = (await q(`select * from training_load.gpexe_import_checks where id = $1`, [coach.id]))[0];
+      assert.equal(row.error_message, `${BASE} Diagnostic: ${expected}`, label);
+      for (const leak of ["Marker Athlete Name", "2026-10-06", "https://", o.sourceTeamId]) assert.ok(!row.error_message.includes(leak), `${label}: ${leak}`);
+      const viaAdmin = await api(`/gpexe/teams/${o.teamId}/checks/${coach.id}`, { cookie: o.cadmin.cookie });
+      assert.equal(viaAdmin.body.check.error.message, row.error_message, `${label}: the administrator reads it`);
+      const viaCoach = await api(`/gpexe/teams/${o.teamId}/checks/${coach.id}`, { cookie: o.coach.cookie });
+      assert.equal(viaCoach.body.check.error.message, BASE, `${label}: the coach does not`);
+      const status = await api(`/gpexe/teams/${o.teamId}/status`, { cookie: o.coach.cookie });
+      assert.ok(!JSON.stringify(status.body).includes("answer_count"), `${label}: nothing in the coach's status`);
+      assert.equal((await candidatesOf(o.teamId)).length, 0, `${label}: nothing recorded`);
+      for (const l of logLines.slice(logBefore)) assert.ok(!l.includes("answer_count") && !l.includes("Marker Athlete Name"), `${label}: log line ${l.slice(0, 120)}`);
+    } finally {
+      src.state.faults.drillCount = null;
+    }
+  }
+});
+
+test("41. the answer-count suffix is rebuilt from closed words and a bounded integer: a planted kind, a non-integer or out-of-range number, a string number or a canonical flag without a canonical number never come out; it appears only for drills_count_disagrees; the final guard refuses every planted variant", () => {
+  const f = resolver.drillSetDiagnostic;
+  const line = (answerCount, reason = "drills_count_disagrees") => f({ drillsCount: 5, failed: { drillIndex: 0, completed: 0, reason, answerCount } }, { sessionPosition: 2 });
+  const head = "op=drill_set; session_position=2; expected=5; completed=0; failed_index=0; code=drills_count_disagrees";
+  assert.equal(line({ kind: "number", canonical: true, matchesExpected: false, value: 4 }), `${head}; answer_count_kind=number; answer_count_canonical=true; answer_count_matches_expected=false; answer_count=4.`);
+  assert.equal(line({ kind: "number", canonical: true, matchesExpected: true, value: 5 }), `${head}; answer_count_kind=number; answer_count_canonical=true; answer_count_matches_expected=true; answer_count=5.`);
+  for (const [label, ac] of [
+    ["canonical flag on a string number", { kind: "string", canonical: true, value: "5" }],
+    ["canonical flag and an integer under another kind", { kind: "string", canonical: true, value: 5 }],
+    ["canonical flag on 31", { kind: "number", canonical: true, value: 31 }],
+    ["canonical flag on -1", { kind: "number", canonical: true, value: -1 }],
+    ["canonical flag on 2.5", { kind: "number", canonical: true, value: 2.5 }],
+    ["canonical flag on an id", { kind: "number", canonical: true, value: 987654321 }],
+    ["canonical flag without a value", { kind: "number", canonical: true }],
+    ["a matches flag without canonical", { kind: "number", canonical: false, matchesExpected: true }],
+  ]) assert.equal(line(ac), `${head}; answer_count_kind=${ac.kind}; answer_count_canonical=false; answer_count_matches_expected=false.`, label);
+  for (const kind of ["987654321", "2026-10-06", "Marker", "https://evil.example/", "string; x=1"]) assert.equal(line({ kind, canonical: false }), `${head}.`, kind);
+  // Only for drills_count_disagrees.
+  assert.equal(line({ kind: "number", canonical: true, value: 4 }, "players_missing"), "op=drill_set; session_position=2; expected=5; completed=0; failed_index=0; code=players_missing.");
+  // The final guard.
+  const g = resolver.drillDiagnosticAccepted;
+  const good = `${head}; answer_count_kind=number; answer_count_canonical=true; answer_count_matches_expected=false; answer_count=30.`;
+  assert.equal(g(good), true);
+  for (const bad of [good.replace("answer_count=30", "answer_count=31"), good.replace("answer_count=30", "answer_count=05"), good.replace("answer_count=30", "answer_count=987654321"),
+    good.replace("answer_count_kind=number", "answer_count_kind=Marker"), good.replace("answer_count_canonical=true", "answer_count_canonical=yes"),
+    good.replace("; answer_count=30", "; answer_count=\"5\""), `${good.slice(0, -1)}; consumed_field=burst; value_kind=array.`, good.replace("answer_count=30.", "answer_count=30; url=https://evil.example/.")]) {
+    assert.equal(g(bad), false, bad);
+  }
 });

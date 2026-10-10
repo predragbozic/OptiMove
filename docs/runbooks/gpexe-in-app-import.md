@@ -65,7 +65,14 @@ read before the failure, the failed position, and a reason from a closed set (`s
 `drills_count_disagrees`, `drill_index_invalid`, `drills_count_out_of_range`, otherwise
 `drill_unknown`); the kind is one of `absent`, `null`, `number`, `string`, `object`, `array`,
 `boolean`, `other` (a number that is not finite reads `other`). `session_position` follows the order
-of the check's own list of the window as the source returned it. A final guard drops the whole line (never the refusal) if anything else would
+of the check's own list of the window as the source returned it. For `code=drills_count_disagrees` the line
+also says what the drill answer gave as its drill count: `; answer_count_kind=<kind>;
+answer_count_canonical=true|false; answer_count_matches_expected=true|false` and, only when the value
+is a canonical whole number from 0 to 30, `; answer_count=N` - never the raw value of any other kind (a
+string reads `answer_count_kind=string`, never quoted). Under the current rule
+`answer_count_matches_expected` is always `false` on this refusal (a matching count is not refused); it
+is kept as a tripwire should the rule ever change. The rule itself is unchanged: an absent or null
+count is accepted, any other value that is not exactly the confirmed count is refused. A final guard drops the whole line (never the refusal) if anything else would
 come out; no id, date, name, URL, metric name, value or source text is ever in it, and a coach sees
 the sentence before the mark only. A `401`
 from the source moves the connection to `needs_reconnect` with one `auto_invalidate` audit row
