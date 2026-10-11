@@ -248,7 +248,8 @@ function fakeSource({ token = TOKEN } = {}) {
       const d = b.details.drills[m[2]];
       if (!d || state.faults.drillMissing === Number(m[2])) return json(404, { detail: SOURCE_SENTENCE });
       const players = state.faults.drillPlayers && state.faults.drillPlayers.index === Number(m[2]) ? state.faults.drillPlayers.players : d.players;
-      return json(200, { drills_count: 2, players, team: { aggregate: 1 }, teamsession: sid * 1000 + Number(m[2]) + 1 });
+      const drillsCount = state.faults.drillCountAll !== undefined && state.faults.drillCountAll !== null ? state.faults.drillCountAll : 2;
+      return json(200, { drills_count: drillsCount, players, team: { aggregate: 1 }, teamsession: sid * 1000 + Number(m[2]) + 1 });
     }
     if (key === `/api/team_session/${sid}/brief/`) return json(404, { detail: SOURCE_SENTENCE });
     if (key === `/rest/v1/team/${t}/thresholds/?valid_on=${DAY}`) return json(200, b.teamThresholds);
@@ -462,7 +463,7 @@ test("4. the resolver's own contract (a fake executor): no binding → legacy_en
   assert.equal(await code([{ ...none, has_ended_binding: true }]), "binding_ended", "a team that had a binding never returns to the legacy path");
   // Every code this module can put on a check row is classified: masked for a coach (a connection fact) or deliberately
   // visible (a team fact, a source-data fact). A new code fails here until it is classified.
-  const coachVisible = ["team_not_available", "team_club_changed", "drill_set_incomplete"];
+  const coachVisible = ["team_not_available", "team_club_changed", "drill_set_incomplete", "check_finalize_busy", "check_finalize_failed", "check_finalize_outcome_unknown"];
   for (const c of resolver.IMPORT_RESOLVE_CODES) assert.ok(resolver.isConnectionConfigurationCode(c) !== coachVisible.includes(c), `${c} is classified exactly once`);
   for (const c of ["source_auth_rejected", "source_access_refused"]) assert.ok(resolver.isConnectionConfigurationCode(c), `${c} (the adapter's credential answers) is masked`);
   for (const c of ["source_unavailable", "source_answer_unexpected", "source_list_ambiguous", "internal_error", "abandoned"]) assert.ok(!resolver.isConnectionConfigurationCode(c), `${c} stays visible`);
@@ -2313,4 +2314,31 @@ test("39. the description's final guard: drillSetDiagnostic builds only the clos
     `${good} 2026-10-06`, `${good.slice(0, -1)}; url=https://evil.example/.`, good.replace("expected=5", "expected=05"), good.replace("op=drill_set", "op=session_details"),
     "op=drill_set; session_position=1; expected=1; completed=0; failed_index=0; code=drill_unknown", "", null, 42,
   ]) assert.equal(g(bad), false, String(bad));
+});
+
+
+test("40. a drill answer's own drills_count is ignored end to end: every drill answer of the session says drills_count 0 (the production evidence), the check succeeds through the parent's confirmed count, and neither the stored snapshot, the preview nor the candidate API carries a drill answer's drills_count", async () => {
+  const o = await org();
+  useSource();
+  await bound(o);
+  process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+  legacyTrap();
+  src.serve(o.sourceTeamId);
+  src.state.faults.drillCountAll = 0;
+  try {
+    const view = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+    assert.equal(view.status, "succeeded", JSON.stringify(view.error));
+    const drillReads = src.calls.filter((c) => /\/api\/team_session\/\d+\/details\/\?drill=\d$/.test(c.key));
+    assert.equal(drillReads.length, 2, "exactly the parent's two drills were read");
+    const [candidate] = await q(`select id, raw_bundle, preview from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]);
+    for (const [index, drill] of Object.entries(candidate.raw_bundle.details.drills)) assert.ok(!("drills_count" in drill), `drill ${index}: no drills_count stored`);
+    assert.equal(candidate.raw_bundle.teamSession.drills_count, 2, "the parent's count is kept");
+    const previewDrills = JSON.stringify(candidate.preview);
+    assert.ok(!/"drills_count":0/.test(previewDrills), "the preview carries no drill answer's count");
+    const detail = await api(`/gpexe/teams/${o.teamId}/candidates/${candidate.id}`, { cookie: o.cadmin.cookie });
+    assert.equal(detail.status, 200);
+    assert.ok(!/"drills_count":0/.test(JSON.stringify(detail.body)), "the candidate API carries no drill answer's count");
+  } finally {
+    src.state.faults.drillCountAll = null;
+  }
 });

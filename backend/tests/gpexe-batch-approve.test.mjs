@@ -8,7 +8,12 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import pg from "pg";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
-import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
+import { makeBundle as makeFixtureBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
+
+// v33 (the drill-parameter guard): a session with two or more drills is
+// importable only when at least two drill answers are non-empty and pairwise
+// distinct, so these sessions carry both drills' details.
+const makeBundle = (options) => makeFixtureBundle({ detailsDrills: [0, 1], ...options });
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;

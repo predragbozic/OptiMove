@@ -231,7 +231,7 @@ test("B2.1 the eight reads, each a GET on server3 under /rest/v1/ for the bound 
   assert.deepEqual(Object.keys(bundle.details.full.players), ["4711", "4712"]);
   assert.deepEqual(Object.keys(bundle.details.drills), ["0", "1"]);
   assert.equal(bundle.details.drills["0"].players["4711"].tot_burst_events.value, 5);
-  assert.deepEqual(bundle.drillsStatus, { complete: true, drillsCount: 2, failed: null });
+  assert.deepEqual(bundle.drillsStatus, { complete: true, drillsCount: 2, failed: null, parameterEffect: "confirmed" });
   assert.deepEqual(bundle.drillLabels, [
     { drillIndex: 0, label: "Rondo", tagId: "31", tagName: "Rondo", labelEvidence: "drill_tags" },
     { drillIndex: 1, label: "Small-sided game", tagId: "32", tagName: "Small-sided game", labelEvidence: "drill_tags" },
@@ -435,7 +435,7 @@ test("B3.2 the adapter sends the legacy reads only through the builders: never f
   // A confirmed parent with no drills: no drill read at all.
   const none = await confirmedAdapter({ [PARENT]: answer(200, { id: 100, team: 980, drills_count: 0, start_timestamp: "2026-09-14T10:00:00" }) });
   await assert.rejects(none.a.getSessionDrillDetails({ sessionId: "100", drillIndex: 0 }), code("invalid_drill_index"));
-  assert.deepEqual(await none.a.getSessionDrills({ sessionId: "100" }), { complete: true, drillsCount: 0, drills: [], failed: null });
+  assert.deepEqual(await none.a.getSessionDrills({ sessionId: "100" }), { complete: true, drillsCount: 0, drills: [], failed: null, parameterEffect: "not_required" });
   assert.deepEqual(await none.a.getDrillLabels({ sessionId: "100" }), []);
   assert.ok(!none.calls.some((c) => c.url.includes("/api/")));
   // One drill: index 0 is the last.
@@ -710,7 +710,7 @@ test("B7.2 an empty players map is a valid answer (a drill not yet computed): th
   const set = await a.getSessionDrills({ sessionId: "100" });
   assert.equal(set.complete, true);
   assert.equal(set.failed, null);
-  assert.deepEqual(set.drills[1].details, { players: {}, drills_count: 2 });
+  assert.deepEqual(set.drills[1].details, { players: {} }, "a drill answer's own drills_count is never returned");
   assert.deepEqual(await a.getSessionDetails({ sessionId: "100" }), { players: {}, drills_count: 2 });
   for (const [label, players] of [["missing", undefined], ["null", null], ["an array", []], ["an array of players", [{ 4711: { a: 1 } }]], ["a string", "4711"], ["a number", 1], ["a boolean", true]]) {
     const body = players === undefined ? { drills_count: 2 } : { drills_count: 2, players };
@@ -1275,7 +1275,7 @@ test("B7.6b projectStoredDetails: a stored bundle keeps, for every athlete of th
   assert.equal(JSON.stringify(stored), before, "the input is untouched");
   assert.deepEqual(out.details.full.players, { 4711: { tot_burst_events: { unit: "number", value: 1 } } });
   assert.deepEqual(out.details.drills["0"].players, { 4711: { tot_brake_events: { unit: "number", value: 2 } } });
-  assert.deepEqual(out.details.drills["1"], { players: {}, drills_count: 2 });
+  assert.deepEqual(out.details.drills["1"], { players: {} }, "a drill part never keeps the drill answer's drills_count");
   assert.deepEqual([out.teamSession, out.athleteSessions, out.details.full.drills_count], [stored.teamSession, stored.athleteSessions, 2]);
   for (const leak of ["markerMetricNameZq", "13579", "free text value", "extra", "markerTeamAggregateZq"]) assert.ok(!JSON.stringify(out).includes(leak), leak);
   assert.deepEqual(Object.keys(out.details.full).sort(), ["drills_count", "players"], "a details part keeps only players and drills_count (a legacy top-level aggregate is dropped)");
@@ -1283,7 +1283,7 @@ test("B7.6b projectStoredDetails: a stored bundle keeps, for every athlete of th
   const { canonicalJson } = await import("../src/gpexeImportPreview.js");
   assert.equal(canonicalJson(projectStoredDetails(out)), canonicalJson(out));
   const noPlayers = { details: { full: { players: {} }, drills: { 0: { drills_count: 2 } } } };
-  assert.equal(canonicalJson(projectStoredDetails(noPlayers)), canonicalJson(noPlayers), "a part without players gets no players key");
+  assert.deepEqual(projectStoredDetails(noPlayers), { details: { full: { players: {} }, drills: { 0: {} } } }, "a part without players gets no players key; a drill keeps no drills_count");
   assert.equal(projectStoredDetails(null), null);
   assert.deepEqual(projectStoredDetails({ teamSession: { id: 1 } }), { teamSession: { id: 1 } }, "a bundle without details is returned as it is");
 });
@@ -1349,7 +1349,9 @@ test("B7.8 static architecture guard: no consumer outside the adapter and the ma
   assert.doesNotMatch(adapterSrc, /validatePlayersAnswer|describePlayersShape|formatPlayersShape/, "the full validator is not reintroduced");
   // The stored-snapshot projections never touch an imported candidate: both SQL statements of each path name only unimported statuses.
   const svc = await fsp.readFile(path.resolve(srcDir, "gpexeImportService.js"), "utf8");
-  const supersedeBlock = svc.slice(svc.indexOf("const superseded = (await client.query("), svc.indexOf("const projected = projectStoredDetails(row.raw_bundle);") + 300);
+  // Since v33 the supersede projection runs in the check's finalization.
+  const supersedeBlock = svc.slice(svc.indexOf("// 5. What was superseded keeps only the consumed fields."), svc.indexOf("// 6. The publication"));
+  assert.ok(supersedeBlock.length > 100, "the finalization's projection step is found");
   assert.equal((supersedeBlock.match(/status = 'superseded'/g) || []).length, 2, "the supersede projection selects and writes superseded rows only");
   const retentionBlock = svc.slice(svc.indexOf("export async function projectUnimportedSnapshots"), svc.indexOf("export const RETENTION_INTERVAL_HOURS"));
   assert.equal((retentionBlock.match(/status in \('pending', 'blocked', 'superseded'\)/g) || []).length, 3, "the retention projection lists, locks and writes unimported rows only");
@@ -1591,7 +1593,7 @@ test("C14. the runbook's window section names every whole-list fail-closed cause
   assert.match(section, /condition 6/i, "the candidate-withdrawal blocker is referenced");
   const state = await fsp.readFile(path.resolve(ROOT, "docs/ai/CURRENT_STATE.md"), "utf8");
   const next = state.slice(state.indexOf("## Most likely next step"));
-  assert.match(next, /conditions 1–3 and 6/i, "the closing summary names condition 6 as a switch blocker");
+  assert.match(next, /conditions 1–3, 6 and 7/i, "the closing summary names conditions 6 and 7 as switch blockers");
 });
 
 // A list that lives on the fake server and can change between any two
@@ -1814,14 +1816,13 @@ test("C11. any failed check returns nothing: no session of the window is returne
   assert.equal(listCalls(server.calls).length, 3, "no retry, and snapshot B is not sent after A failed");
 });
 
-test("B9.1 every per-drill failure keeps a closed reason: an answer that is not an object, a non-canonical athlete key, too many metric values, a drill count that disagrees, a consumed field of every kind; a code outside the set is drill_unknown; a refreshed session or a refused credential is not a per-drill failure", async () => {
+test("B9.1 every per-drill failure keeps a closed reason: an answer that is not an object, a non-canonical athlete key, too many metric values, a consumed field of every kind; a code outside the set is drill_unknown; a refreshed session or a refused credential is not a per-drill failure", async () => {
   const { drillFailureReason, DRILL_FAILURE_REASONS } = await import("../src/gpexeRestV1Adapter.js");
   const many = Object.fromEntries(Array.from({ length: 257 }, (_, i) => [`m${i}`, 1]));
   const cases = [
     ["an array answer", answer(200, []), "answer_not_object", {}],
     ["a non-canonical athlete key", answer(200, { drills_count: 2, players: { "0471": { tot_burst_events: { unit: "number", value: 1 } } } }), "athlete_id_not_canonical", {}],
     ["too many metric values", answer(200, { drills_count: 2, players: { 4711: many } }), "player_values_too_many", {}],
-    ["a disagreeing drill count", answer(200, { drills_count: 3, players: {} }), "drills_count_disagrees", {}],
     ["brake as a string", answer(200, { drills_count: 2, players: { 4711: { tot_brake_events: "Marker Athlete Name" } } }), "consumed_field_shape_unknown", { consumedField: "brake", valueKind: "string" }],
     ["burst as an object without a number", answer(200, { drills_count: 2, players: { 4711: { tot_burst_events: { unit: "number", value: { deep: 1 } } } } }), "consumed_field_shape_unknown", { consumedField: "burst", valueKind: "object" }],
     ["burst as a list", answer(200, { drills_count: 2, players: { 4711: { tot_burst_events: [1, 2] } } }), "consumed_field_shape_unknown", { consumedField: "burst", valueKind: "array" }],
@@ -1852,4 +1853,207 @@ test("B9.2 every runbook names the current drill description: no runbook quotes 
   }
   const pilot = await fsp.readFile(path.join(dir, "gpexe-owner-pilot-f3c3.md"), "utf8");
   assert.match(pilot, /op=drill_set; session_position=N; expected=N; completed=N; failed_index=N; code=<reason>/);
+});
+
+
+// A parent confirmed with N drills (0..30) and N drill answers; `answers` overrides single drill routes.
+function withDrills(n, answers = {}) {
+  const ids = Array.from({ length: n }, (_, i) => 1000 + i);
+  const over = {
+    [LIST]: answer(200, [parent(100, ids), ...ids.map((id) => session(id))], { "x-total-count": String(n + 1) }),
+    [PARENT]: answer(200, { id: 100, team: 980, category_name: "Training", is_stats_valid: true, drills_count: n, start_timestamp: "2026-09-14T10:00:00", end_timestamp: "2026-09-14T11:00:00", updated_on: "2026-09-14T12:00:00" }),
+    // The whole-session answer keeps its own (unchanged) comparison with the parent.
+    [WHOLE]: answer(200, details(PLAYERS(9), { drills_count: n })),
+  };
+  for (let i = 0; i < n; i += 1) over[`/api/team_session/100/details/?drill=${i}`] = answers[i] ?? answer(200, details(PLAYERS(i + 1), { drills_count: 0 }));
+  return over;
+}
+const drillCalls = (calls) => pathsOf(calls).filter((u) => u.startsWith("/api/team_session/100/details/?drill="));
+
+test("B9.4 a drill answer's own drills_count is ignored (owner decision 2026-10-10, production evidence answer_count=0 for a parent confirmed with 5): a parent of 5 whose five drill answers all say drills_count 0 reads exactly indexes 0..4 once each and is complete; absent, null, a string, an object or another number in a drill answer changes nothing and never comes out", async () => {
+  const { a, calls } = await confirmedAdapter(withDrills(5));
+  const set = await a.getSessionDrills({ sessionId: "100" });
+  assert.deepEqual([set.complete, set.failed, set.drillsCount, set.drills.map((d) => d.drillIndex)], [true, null, 5, [0, 1, 2, 3, 4]]);
+  assert.deepEqual(drillCalls(calls), [0, 1, 2, 3, 4].map((i) => `/api/team_session/100/details/?drill=${i}`), "each index once, in order");
+  for (const d of set.drills) assert.deepEqual(Object.keys(d.details), ["players"], "no drills_count leaves the adapter");
+  const variants = [["absent", undefined], ["null", null], ["the string \"5\"", "5"], ["a text", "Marker Athlete Name"], ["an object", { n: 5 }], ["an array", [5]], ["a boolean", true], ["0", 0], ["31", 31], ["-1", -1], ["2.5", 2.5], ["the parent count", 5]];
+  for (const [label, value] of variants) {
+    const body = { players: PLAYERS(3) };
+    if (value !== undefined) body.drills_count = value;
+    const { a: b, calls: c } = await confirmedAdapter(withDrills(5, { 2: answer(200, body) }));
+    const s2 = await b.getSessionDrills({ sessionId: "100" });
+    assert.deepEqual([s2.complete, s2.failed, s2.drills.length], [true, null, 5], label);
+    assert.equal(drillCalls(c).length, 5, `${label}: the parent count alone decides the requests`);
+    assert.ok(!JSON.stringify(s2).includes("drills_count"), `${label}: never comes out`);
+    assert.ok(!JSON.stringify(s2).includes("Marker Athlete Name"), label);
+    const single = await (await confirmedAdapter(withDrills(5, { 2: answer(200, body) }))).a.getSessionDrillDetails({ sessionId: "100", drillIndex: 2 });
+    assert.deepEqual(Object.keys(single), ["players"], `${label}: the single drill read returns players only`);
+  }
+  // The bundle of the importer carries no drill drills_count either.
+  const bundle = await (await confirmedAdapter(withDrills(5))).a.fetchSessionBundle({ sessionId: "100" });
+  for (const d of Object.values(bundle.details.drills)) assert.ok(!("drills_count" in d));
+  assert.equal(bundle.teamSession.drills_count, 5, "the parent's own count is the one the mapper reads");
+});
+
+test("B9.5 the parent count alone bounds the drill reads: 0 sends no drill request, 30 sends exactly 30, a parent of 31 stays refused at the session read; a failure at index 2 of 5 stops before index 3 with complete:false, the failed index and its closed reason", async () => {
+  const { a: zero, calls: zc } = await confirmedAdapter(withDrills(0));
+  assert.deepEqual(await zero.getSessionDrills({ sessionId: "100" }), { complete: true, drillsCount: 0, drills: [], failed: null, parameterEffect: "not_required" });
+  assert.equal(drillCalls(zc).length, 0, "no drill request for a parent of 0");
+  const { a: thirty, calls: tc } = await confirmedAdapter(withDrills(30));
+  const set30 = await thirty.getSessionDrills({ sessionId: "100" });
+  assert.deepEqual([set30.complete, set30.drills.length], [true, 30]);
+  assert.deepEqual(drillCalls(tc), Array.from({ length: 30 }, (_, i) => `/api/team_session/100/details/?drill=${i}`));
+  const over31 = withDrills(30);
+  over31[PARENT] = answer(200, { id: 100, team: 980, drills_count: 31, start_timestamp: "2026-09-14T10:00:00" });
+  const s31 = full(over31);
+  await assert.rejects((await primed(s31.fetchImpl)).getSession({ sessionId: "100" }), code("drills_count_out_of_range"));
+  const { a: two, calls: c2 } = await confirmedAdapter(withDrills(5, { 2: answer(503, "") }));
+  const set2 = await two.getSessionDrills({ sessionId: "100" });
+  assert.deepEqual([set2.complete, set2.drills.map((d) => d.drillIndex), set2.failed], [false, [0, 1], { drillIndex: 2, code: "source_unavailable", reason: "source_server_error", completed: 2 }]);
+  assert.deepEqual(drillCalls(c2), [0, 1, 2].map((i) => `/api/team_session/100/details/?drill=${i}`), "nothing after the failed index, no retry, no skip");
+});
+
+test("B9.6 static guard: no drill read passes the parent count to the projection or reads a drill answer's drills_count for a decision, the drill loop is bounded by the confirmed parent only, and drills_count_disagrees is not a drill failure reason", async () => {
+  const src = await fsp.readFile(path.join(ROOT, "backend", "src", "gpexeRestV1Adapter.js"), "utf8");
+  const block = (start, end) => { const a = src.indexOf(start); const b = src.indexOf(end, a); assert.ok(a !== -1 && b !== -1, start); return src.slice(a, b); };
+  const drills = block("    async getSessionDrills(options) {", "    async listAthleteSessions(options) {");
+  const single = block("    async getSessionDrillDetails(options) {", "    async getSessionDrills(options) {");
+  for (const [name, text] of [["getSessionDrills", drills], ["getSessionDrillDetails", single]]) {
+    assert.doesNotMatch(text, /projectSessionDetails\(body,\s*parent\.drillsCount/, `${name}: no comparison with the parent count`);
+    assert.match(text, /drillAnswer:\s*true/, `${name}: a drill answer is projected as such`);
+    assert.doesNotMatch(text, /body\.drills_count|\.drills_count\b/, `${name}: a drill answer's drills_count is never read`);
+  }
+  assert.match(drills, /for \(let index = 0; index < parent\.drillsCount; index \+= 1\)/, "the loop is bounded by the confirmed parent only");
+  const { DRILL_FAILURE_REASONS, projectSessionDetails } = await import("../src/gpexeRestV1Adapter.js");
+  assert.ok(!DRILL_FAILURE_REASONS.includes("drills_count_disagrees"));
+  assert.deepEqual(projectSessionDetails({ players: {}, drills_count: 0 }, 5, { what: "x", op: "session_drill_details", drillAnswer: true }), { players: {} }, "even with an expected count, a drill answer is never compared");
+  // The whole-session comparison is unchanged.
+  assert.throws(() => projectSessionDetails({ players: {}, drills_count: 0 }, 5, { what: "x" }), code("source_answer_unexpected"));
+});
+
+// ---------------------------------------------------------------------------
+// B10. The drill-parameter guard (owner order 2026-10-11): whether ?drill=<index>
+// really changes the answer is not proven on server3. Each non-empty drill
+// answer's full players map is reduced in memory to a canonical SHA-256; the
+// set's only output is the derived effect.
+// ---------------------------------------------------------------------------
+const guard = await import("../src/gpexeRestV1Adapter.js");
+const SAME = { 4711: { tot_burst_events: { unit: "number", value: 7 }, tot_brake_events: { unit: "number", value: 1 }, total_distance: 1200.5, hidden_metric_marker: { a: 1 } } };
+const HEX64 = /\b[0-9a-f]{64}\b/;
+
+test("B10.1 five different non-empty drill answers are confirmed; the set returns the effect and the projected players only - no fingerprint, no full map, no unconsumed metric", async () => {
+  const { a } = await confirmedAdapter(withDrills(5));
+  const set = await a.getSessionDrills({ sessionId: "100" });
+  assert.equal(set.parameterEffect, "confirmed");
+  assert.deepEqual(Object.keys(set).sort(), ["complete", "drills", "drillsCount", "failed", "parameterEffect"]);
+  const text = JSON.stringify(set);
+  assert.doesNotMatch(text, HEX64, "no fingerprint leaves the adapter");
+  assert.ok(!text.includes("total_distance"), "no unconsumed metric of the full map");
+  for (const p of [1, 2, 3, 4, 5].map((i) => PLAYERS(i))) assert.ok(!text.includes(guard.drillAnswerFingerprint(p)));
+  const bundle = await (await confirmedAdapter(withDrills(5))).a.fetchSessionBundle({ sessionId: "100" });
+  assert.equal(bundle.drillsStatus.parameterEffect, "confirmed");
+  assert.doesNotMatch(JSON.stringify(bundle), HEX64);
+});
+
+test("B10.2 the same non-empty answer for all five drills is not_distinguishable (fail-closed); so are only two equal answers among five, wherever they stand; teamsession and a drill answer's drills_count are no identity", async () => {
+  const same = Object.fromEntries([0, 1, 2, 3, 4].map((i) => [i, answer(200, details(structuredClone(SAME), { drills_count: 0, teamsession: 9000 + i }))]));
+  const { a } = await confirmedAdapter(withDrills(5, same));
+  const set = await a.getSessionDrills({ sessionId: "100" });
+  assert.deepEqual([set.complete, set.parameterEffect, set.drills.length], [true, "not_distinguishable", 5], "every index was read once; the conclusion is the guard's");
+  const bundle = await (await confirmedAdapter(withDrills(5, same))).a.fetchSessionBundle({ sessionId: "100" });
+  assert.equal(bundle.drillsStatus.parameterEffect, "not_distinguishable");
+  for (const [i, j] of [[0, 1], [0, 4], [2, 3], [1, 4]]) {
+    const pair = { [i]: answer(200, details(structuredClone(SAME), { drills_count: 0 })), [j]: answer(200, details(structuredClone(SAME), { drills_count: 0 })) };
+    const r = await (await confirmedAdapter(withDrills(5, pair))).a.getSessionDrills({ sessionId: "100" });
+    assert.equal(r.parameterEffect, "not_distinguishable", `drills ${i} and ${j} equal`);
+  }
+  const disguised = { 0: answer(200, details(structuredClone(SAME), { drills_count: 5, teamsession: 1 })), 1: answer(200, details(structuredClone(SAME), { drills_count: 9, teamsession: 2 })) };
+  assert.equal((await (await confirmedAdapter(withDrills(2, disguised))).a.getSessionDrills({ sessionId: "100" })).parameterEffect, "not_distinguishable");
+});
+
+test("B10.3 canonical form: key order is irrelevant at every depth, array order is kept, and null / boolean / number / string never collapse; the form is deterministic", () => {
+  const f = guard.drillAnswerFingerprint;
+  assert.equal(f({ a: 1, b: { c: 2, d: [1, { x: true, y: null }] } }), f({ b: { d: [1, { y: null, x: true }], c: 2 }, a: 1 }));
+  assert.notEqual(f({ a: [1, 2] }), f({ a: [2, 1] }), "array order kept");
+  const kinds = [{ v: null }, { v: true }, { v: false }, { v: 1 }, { v: "1" }, { v: "true" }, { v: "null" }, { v: 0 }, { v: "" }, { v: [] }, { v: {} }];
+  assert.equal(new Set(kinds.map(f)).size, kinds.length, "every kind is distinct");
+  assert.notEqual(f({ a: 1.5 }), f({ a: 1.50001 }), "two different contents, two different fingerprints");
+  assert.equal(f(SAME), f(structuredClone(SAME)), "deterministic");
+  assert.match(f(SAME), /^[0-9a-f]{64}$/);
+  const reordered = { 4711: { hidden_metric_marker: { a: 1 }, total_distance: 1200.5, tot_brake_events: { value: 1, unit: "number" }, tot_burst_events: { value: 7, unit: "number" } } };
+  assert.equal(f(SAME), f(reordered), "the same content in another key order is equal");
+});
+
+test("B10.4 empty players maps are not fingerprinted: all five empty and only one non-empty are not_observed; a parent of 0 or 1 drill is not_required; the effect function and the legacy-bundle form agree", async () => {
+  const empty = Object.fromEntries([0, 1, 2, 3, 4].map((i) => [i, answer(200, details({}, { drills_count: 0 }))]));
+  assert.equal((await (await confirmedAdapter(withDrills(5, empty))).a.getSessionDrills({ sessionId: "100" })).parameterEffect, "not_observed");
+  const oneFull = { ...empty, 3: answer(200, details(PLAYERS(3), { drills_count: 0 })) };
+  assert.equal((await (await confirmedAdapter(withDrills(5, oneFull))).a.getSessionDrills({ sessionId: "100" })).parameterEffect, "not_observed");
+  const mixed = { 0: answer(200, details({}, { drills_count: 0 })), 2: answer(200, details({}, { drills_count: 0 })) };
+  assert.equal((await (await confirmedAdapter(withDrills(5, mixed))).a.getSessionDrills({ sessionId: "100" })).parameterEffect, "confirmed", "an empty answer is no evidence either way");
+  assert.equal((await (await confirmedAdapter(withDrills(1))).a.getSessionDrills({ sessionId: "100" })).parameterEffect, "not_required");
+  assert.equal((await (await confirmedAdapter(withDrills(0))).a.getSessionDrills({ sessionId: "100" })).parameterEffect, "not_required");
+  const e = guard.drillParameterEffect;
+  assert.equal(e(0, []), "not_required");
+  assert.equal(e(1, ["a".repeat(64)]), "not_required");
+  assert.equal(e(2, [null, null]), "not_observed");
+  assert.equal(e(5, [null, "b".repeat(64), null, null, null]), "not_observed");
+  assert.equal(e(2, ["a".repeat(64), "b".repeat(64)]), "confirmed");
+  assert.equal(e(3, ["a".repeat(64), null, "a".repeat(64)]), "not_distinguishable");
+  const legacy = (drills, count = drills.length) => ({ teamSession: { drills_count: count }, details: { drills: Object.fromEntries(drills.map((p, i) => [String(i), { players: p }])) } });
+  assert.equal(guard.drillParameterEffectOfFullBundle(legacy([PLAYERS(1), PLAYERS(2)])), "confirmed");
+  assert.equal(guard.drillParameterEffectOfFullBundle(legacy([SAME, structuredClone(SAME)])), "not_distinguishable");
+  assert.equal(guard.drillParameterEffectOfFullBundle(legacy([PLAYERS(1)], 2)), "not_observed", "a drill without details is no evidence");
+  assert.equal(guard.drillParameterEffectOfFullBundle(legacy([PLAYERS(1)], 1)), "not_required");
+});
+
+test("B10.5 fail-closed limits: a prototype-like key at any depth, depth over 12, more than 250 000 nodes and a non-finite number are refused before hashing; through the adapter the drill set ends at that drill with the closed reason answer_fingerprint_refused and no conclusion", async () => {
+  const refused = (fn) => assert.throws(fn, (e) => e instanceof SourceAdapterError && e.code === "source_answer_unexpected" && e.reason === "answer_fingerprint_refused");
+  for (const key of ["__proto__", "constructor", "prototype"]) refused(() => guard.canonicalFingerprintInput(JSON.parse(`{"4711": {"m": {"${key}": 1}}}`)));
+  let deep = 1;
+  for (let i = 0; i < 13; i += 1) deep = { d: deep };
+  refused(() => guard.canonicalFingerprintInput(deep));
+  let ok = 1;
+  for (let i = 0; i < 12; i += 1) ok = { d: ok };
+  assert.doesNotThrow(() => guard.canonicalFingerprintInput(ok), "depth 12 is allowed");
+  refused(() => guard.canonicalFingerprintInput({ big: Array.from({ length: 250_001 }, () => 0) }));
+  // A huge flat object is refused when its keys are counted, before any key is inspected, sorted or walked:
+  // not one of its values is read.
+  let reads = 0;
+  const flat = new Proxy(Object.fromEntries(Array.from({ length: 260_000 }, (_, i) => [`k${i}`, 0])), { get(target, key) { reads += 1; return target[key]; } });
+  refused(() => guard.canonicalFingerprintInput({ 4711: flat }));
+  assert.equal(reads, 0, "refused before the walk");
+  // The legacy-bundle form keeps the same 30-drill bound as every drill read.
+  assert.throws(() => guard.drillParameterEffectOfFullBundle({ teamSession: { drills_count: 31 }, details: { drills: {} } }), (e) => e.reason === "answer_fingerprint_refused");
+  refused(() => guard.canonicalFingerprintInput({ n: Number.NaN }));
+  refused(() => guard.canonicalFingerprintInput({ n: Number.POSITIVE_INFINITY }));
+  refused(() => guard.canonicalFingerprintInput({ u: undefined }));
+  const routes = withDrills(3);
+  routes["/api/team_session/100/details/?drill=1"] = answer(200, JSON.parse('{"drills_count":0,"players":{"4711":{"tot_burst_events":{"unit":"number","value":2},"m":{"constructor":{"x":1}}}},"team":{},"teamsession":1}'));
+  const set = await (await confirmedAdapter(routes)).a.getSessionDrills({ sessionId: "100" });
+  assert.deepEqual([set.complete, set.failed?.drillIndex, set.failed?.reason, set.parameterEffect], [false, 1, "answer_fingerprint_refused", undefined]);
+  const top = withDrills(2);
+  top["/api/team_session/100/details/?drill=0"] = answer(200, JSON.parse('{"drills_count":0,"players":{"4711":{"__proto__":{"x":1}}},"team":{},"teamsession":1}'));
+  const topSet = await (await confirmedAdapter(top)).a.getSessionDrills({ sessionId: "100" });
+  assert.deepEqual([topSet.complete, topSet.failed?.drillIndex, topSet.failed?.reason], [false, 0, "metric_name_unknown"], "a prototype-like metric name is still refused by the projection first");
+  assert.ok(guard.DRILL_FAILURE_REASONS.includes("answer_fingerprint_refused"));
+});
+
+test("B10.6 static guard: the fingerprint is computed only in the adapter's drill set and the legacy-bundle effect, never put into a returned object, never logged; no other module names it; the guard reads neither teamsession nor a drill answer's drills_count", async () => {
+  const srcDir = path.resolve(ROOT, "backend/src");
+  const adapter = await fsp.readFile(path.join(srcDir, "gpexeRestV1Adapter.js"), "utf8");
+  assert.equal((adapter.match(/drillAnswerFingerprint\(/g) || []).length, 3, "the definition, the drill set and the legacy-bundle effect");
+  const guardBlock = adapter.slice(adapter.indexOf("// --- The drill-parameter guard"), adapter.indexOf("// --- Details answers"));
+  assert.ok(guardBlock.length > 500);
+  assert.doesNotMatch(guardBlock, /console\./);
+  assert.doesNotMatch(guardBlock, /teamsession/);
+  assert.doesNotMatch(guardBlock, /body\.drills_count/);
+  const drills = adapter.slice(adapter.indexOf("    async getSessionDrills(options) {"), adapter.indexOf("    async listAthleteSessions(options) {"));
+  assert.doesNotMatch(drills, /console\./);
+  assert.match(drills, /fingerprints\.push\(/);
+  assert.doesNotMatch(drills, /\bfingerprints\s*[,}]/, "the fingerprints array is never put into a returned object");
+  const files = (await fsp.readdir(srcDir, { recursive: true })).filter((f) => f.endsWith(".js") && !/gpexeRestV1Adapter\.js$/.test(f));
+  for (const f of files) {
+    assert.doesNotMatch(await fsp.readFile(path.join(srcDir, f), "utf8"), /drillAnswerFingerprint|canonicalFingerprintInput/, `${f} names the fingerprint`);
+  }
 });

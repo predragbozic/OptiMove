@@ -55,6 +55,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202610041000_training_load_v30_gpexe_team_settings_bound_final.sql",
   "202610041200_training_load_v31_gpexe_import_checks_source_path.sql",
   "202610061000_training_load_v32_gpexe_athlete_identities.sql",
+  "202610111000_training_load_v33_gpexe_check_finalization.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to

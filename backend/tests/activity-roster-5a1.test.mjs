@@ -258,7 +258,9 @@ function bundleFor(sessionId, { with104 = false, oneTrack103 = false, gpexeTeamI
     a104.parts = a104.parts.map((p, i) => ({ ...p, track: p.track === undefined ? undefined : a104.tracks[i] }));
     athletes.push(a104);
   }
-  return makeBundle({ sessionId, gpexeTeamId, start: "2026-09-14T18:08:12", updatedOn, athletes });
+  // v33 (the drill-parameter guard): both drills' details, so the two drill
+  // answers are non-empty and distinct and the session is importable.
+  return makeBundle({ sessionId, gpexeTeamId, start: "2026-09-14T18:08:12", updatedOn, athletes, detailsDrills: [0, 1] });
 }
 
 async function newClient() {
