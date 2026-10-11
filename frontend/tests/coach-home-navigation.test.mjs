@@ -1,6 +1,7 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { JSDOM } from "jsdom";
 globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 const { renderCoachHomeHtml, renderCoachHomeAthleteRows } = await import("../coach-home.js");
 const { loadCoachHome } = await import("../coach-home-data.js");
@@ -50,6 +51,28 @@ test("admin Home shows only available workspaces, no combined roster", () => {
   assert.match(html, /data-workspace-type="private_coach"/);
   assert.match(html, /data-workspace-scope-id="club-a"/);
   assert.doesNotMatch(html, /Ana Test|Marko Test|coach-home-picker-open/);
+});
+test("admin Home nests available teams under their club and keeps other teams independent", () => {
+  const user = { activeWorkspace: { type: "platform" }, availableWorkspaces: [
+    { type: "platform" }, { type: "private_coach" },
+    { type: "team", scopeId: "team-a", clubId: "club-a", label: "First Team" },
+    { type: "club", scopeId: "club-a", label: "My Club" },
+    { type: "team", scopeId: "solo", clubId: "unavailable-club", label: "Independent Team" },
+  ] };
+  const dom = new JSDOM(renderCoachHomeHtml({ user }));
+  const doc = dom.window.document;
+  const nested = doc.querySelector(".coach-home-workspace-teams");
+  assert.equal(nested.getAttribute("aria-label"), "My Club teams");
+  assert.equal(nested.querySelector("button").dataset.workspaceScopeId, "team-a");
+  assert.equal(nested.parentElement.querySelector("button").dataset.workspaceScopeId, "club-a");
+  assert.equal(doc.querySelectorAll('[data-workspace-scope-id="team-a"]').length, 1);
+  assert.equal(doc.querySelector('[data-workspace-scope-id="solo"]').closest("ul").className, "coach-home-workspaces");
+  for (const button of doc.querySelectorAll(".coach-home-workspace")) {
+    assert.ok(button.querySelector('svg[aria-hidden="true"]'));
+    assert.equal(button.dataset.action, "workspace-select");
+  }
+  assert.equal(doc.querySelectorAll('[data-workspace-type="platform"]').length, 0);
+  dom.window.close();
 });
 test("admin Home avoids fetching all athletes", async () => {
   state.currentUser.activeWorkspace = { type: "platform" };

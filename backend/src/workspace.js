@@ -50,14 +50,14 @@ export async function loadAvailableWorkspaces(authz) {
       ? query(`select id, name from public.clubs where id = any($1::uuid[]) and coalesce(is_active, true)`, [clubIds])
       : { rows: [] },
     teamIds.length
-      ? query(`select id, name from public.teams where id = any($1::uuid[]) and coalesce(is_active, true)`, [teamIds])
+      ? query(`select id, name, club_id from public.teams where id = any($1::uuid[]) and coalesce(is_active, true)`, [teamIds])
       : { rows: [] },
   ]);
   for (const club of sortByLabel(clubsResult.rows)) {
     workspaces.push({ type: "club", scopeId: club.id, label: club.name, role: "club_admin" });
   }
   for (const team of sortByLabel(teamsResult.rows)) {
-    workspaces.push({ type: "team", scopeId: team.id, label: team.name, role: "team_coach" });
+    workspaces.push({ type: "team", scopeId: team.id, clubId: team.club_id || null, label: team.name, role: "team_coach" });
   }
 
   if (authz.isAthlete) {
