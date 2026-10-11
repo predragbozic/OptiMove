@@ -463,7 +463,7 @@ test("4. the resolver's own contract (a fake executor): no binding → legacy_en
   assert.equal(await code([{ ...none, has_ended_binding: true }]), "binding_ended", "a team that had a binding never returns to the legacy path");
   // Every code this module can put on a check row is classified: masked for a coach (a connection fact) or deliberately
   // visible (a team fact, a source-data fact). A new code fails here until it is classified.
-  const coachVisible = ["team_not_available", "team_club_changed", "drill_set_incomplete"];
+  const coachVisible = ["team_not_available", "team_club_changed", "drill_set_incomplete", "check_finalize_busy", "check_finalize_failed", "check_finalize_outcome_unknown"];
   for (const c of resolver.IMPORT_RESOLVE_CODES) assert.ok(resolver.isConnectionConfigurationCode(c) !== coachVisible.includes(c), `${c} is classified exactly once`);
   for (const c of ["source_auth_rejected", "source_access_refused"]) assert.ok(resolver.isConnectionConfigurationCode(c), `${c} (the adapter's credential answers) is masked`);
   for (const c of ["source_unavailable", "source_answer_unexpected", "source_list_ambiguous", "internal_error", "abandoned"]) assert.ok(!resolver.isConnectionConfigurationCode(c), `${c} stays visible`);

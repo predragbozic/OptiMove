@@ -44,6 +44,7 @@
 //
 // The existing e03 importer (backend/src/gpexeClient.js) is not changed and
 // does not use this file.
+import { createHash } from "node:crypto";
 import { redactGpexe } from "./gpexeClient.js";
 import { identityFromAnswer } from "./gpexeAthleteIdentity.js";
 import { resolveApprovedSourceHost, sourceApiUrl, sourceHost } from "./sourceHosts.js";
@@ -450,11 +451,11 @@ export const DRILL_FAILURE_REASONS = Object.freeze([
   "source_rate_limited", "source_server_error", "source_redirect", "source_status_unexpected",
   "answer_too_large", "answer_unreadable", "answer_not_json", "answer_not_object", "players_missing",
   "athlete_id_not_canonical", "player_values_missing", "player_values_too_many", "metric_name_unknown",
-  "consumed_field_shape_unknown", "drill_unknown",
+  "consumed_field_shape_unknown", "answer_fingerprint_refused", "drill_unknown",
 ]);
 const ANSWER_REASONS = new Set(["answer_too_large", "answer_unreadable", "answer_not_json", "answer_not_object", "players_missing",
   "athlete_id_not_canonical", "player_values_missing", "player_values_too_many", "metric_name_unknown",
-  "consumed_field_shape_unknown"]);
+  "consumed_field_shape_unknown", "answer_fingerprint_refused"]);
 export function drillFailureReason(error) {
   const code = error?.code;
   const status = Number.isInteger(error?.status) ? error.status : null;
@@ -477,6 +478,80 @@ export function drillFailureReason(error) {
 const CONSUMED_KIND = Object.freeze({ null: "null", number: "number", number_not_finite: "other", boolean: "boolean",
   text_short: "string", text_long: "string", text_other_chars: "string", array: "array", object: "object", other: "other" });
 const CONSUMED_SHORT = Object.freeze({ tot_burst_events: "burst", tot_brake_events: "brake" });
+
+// --- The drill-parameter guard (owner order 2026-10-11) ----------------------
+// Whether ?drill=<index> really changes the answer is not proven on server3.
+// Each non-empty drill answer's FULL players map (before the projection) is
+// reduced, in memory only, to a canonical SHA-256; the fingerprints are
+// compared and dropped at once. Nothing of the full map, no fingerprint and no
+// extra metric is ever stored, logged or returned - only the derived effect:
+//   not_required        - the parent has fewer than two drills;
+//   confirmed           - at least two non-empty answers, pairwise distinct;
+//   not_observed        - fewer than two non-empty answers (no conclusion);
+//   not_distinguishable - two non-empty answers with the same fingerprint
+//                         (fail-closed: the session is not recorded).
+// Distinct fingerprints prove only that the parameter did not return the same
+// content - never the semantic order of the drills. An empty players map is no
+// evidence either way and is not fingerprinted.
+const FINGERPRINT_MAX_DEPTH = 12;
+const FINGERPRINT_MAX_NODES = 250_000;
+// A deterministic canonical form: object keys sorted recursively, array order
+// kept, every value tagged with its type (null, boolean, number, string are
+// never confused); a non-finite number, a prototype-like key at any depth and
+// anything deeper or larger than the bounds are refused before any hashing.
+const FINGERPRINT_REFUSED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+export function canonicalFingerprintInput(value) {
+  let nodes = 0;
+  const walk = (v, depth) => {
+    nodes += 1;
+    if (nodes > FINGERPRINT_MAX_NODES || depth > FINGERPRINT_MAX_DEPTH) throw new SourceAdapterError("source_answer_unexpected", "A drill answer is too large or too deep to compare.", { reason: "answer_fingerprint_refused" });
+    if (v === null) return "n";
+    if (v === true) return "t";
+    if (v === false) return "f";
+    if (typeof v === "number") {
+      if (!Number.isFinite(v)) throw new SourceAdapterError("source_answer_unexpected", "A drill answer carries a number that cannot be compared.", { reason: "answer_fingerprint_refused" });
+      return `d${JSON.stringify(v)}`;
+    }
+    if (typeof v === "string") return `s${JSON.stringify(v)}`;
+    if (Array.isArray(v)) return `[${v.map((x) => walk(x, depth + 1)).join(",")}]`;
+    if (isPlainObject(v)) {
+      const keys = Object.keys(v);
+      // Counted before the keys are inspected or sorted: a huge flat object is
+      // refused without paying for its sort.
+      if (nodes + keys.length > FINGERPRINT_MAX_NODES) throw new SourceAdapterError("source_answer_unexpected", "A drill answer is too large or too deep to compare.", { reason: "answer_fingerprint_refused" });
+      if (keys.some((k) => FINGERPRINT_REFUSED_KEYS.has(k))) throw new SourceAdapterError("source_answer_unexpected", "A drill answer carries a key that cannot be compared.", { reason: "answer_fingerprint_refused" });
+      return `{${keys.sort().map((k) => `${JSON.stringify(k)}:${walk(v[k], depth + 1)}`).join(",")}}`;
+    }
+    throw new SourceAdapterError("source_answer_unexpected", "A drill answer carries a value that cannot be compared.", { reason: "answer_fingerprint_refused" });
+  };
+  return walk(value, 0);
+}
+export function drillAnswerFingerprint(players) {
+  return createHash("sha256").update(canonicalFingerprintInput(players)).digest("hex");
+}
+// The effect from the fingerprints of the non-empty answers (an empty map is
+// passed as null). The array is the caller's and is dropped after the call.
+export function drillParameterEffect(drillsCount, fingerprints) {
+  if (!Number.isInteger(drillsCount) || drillsCount < 2) return "not_required";
+  const nonEmpty = fingerprints.filter((f) => typeof f === "string");
+  if (new Set(nonEmpty).size !== nonEmpty.length) return "not_distinguishable";
+  return nonEmpty.length >= 2 ? "confirmed" : "not_observed";
+}
+// The same effect for a bundle whose drills keep their full players maps (the
+// legacy e03 path stores the full answer; the retention projects it later).
+export function drillParameterEffectOfFullBundle(bundle) {
+  const drillsCount = Number(bundle?.teamSession?.drills_count ?? 0);
+  if (!Number.isInteger(drillsCount) || drillsCount < 2) return "not_required";
+  // The same bound as every drill read (the legacy client refuses more first).
+  if (drillsCount > 30) throw new SourceAdapterError("source_answer_unexpected", "A session claims more drills than can be compared.", { reason: "answer_fingerprint_refused" });
+  const drills = isPlainObject(bundle?.details?.drills) ? bundle.details.drills : {};
+  const fingerprints = [];
+  for (let i = 0; i < drillsCount; i += 1) {
+    const players = drills[String(i)]?.players;
+    fingerprints.push(isPlainObject(players) && Object.keys(players).length > 0 ? drillAnswerFingerprint(players) : null);
+  }
+  return drillParameterEffect(drillsCount, fingerprints);
+}
 
 // --- Details answers (whole session and drill), projected to what the importer reads ---
 // The whole session since 2026-10-06 (owner order after the owner-run
@@ -1246,12 +1321,19 @@ export function createGpexeRestV1Adapter({
       const { sessionId } = only(options, ["sessionId"]);
       const parent = confirmed(sessionId);
       const drills = [];
+      // In memory only (the drill-parameter guard): one fingerprint per
+      // non-empty answer, null for an empty one; dropped when this returns.
+      const fingerprints = [];
       for (let index = 0; index < parent.drillsCount; index += 1) {
         try {
           const epoch = epochOf(parent.id);
           const { body } = await readDrill(parent.id, index, parent.drillsCount);
           refreshedDuring(parent.id, epoch);
-          drills.push({ drillIndex: index, details: projectSessionDetails(body, null, { what: "the drill details", op: "session_drill_details", drillAnswer: true }) });
+          const details = projectSessionDetails(body, null, { what: "the drill details", op: "session_drill_details", drillAnswer: true });
+          // The full map passed the projection's guards (canonical athlete
+          // ids, metric names, bounds) before it is fingerprinted.
+          fingerprints.push(Object.keys(details.players).length > 0 ? drillAnswerFingerprint(body.players) : null);
+          drills.push({ drillIndex: index, details });
         } catch (error) {
           if (!(error instanceof SourceAdapterError) || isGlobal(error) || error.code === "session_refreshed") throw error;
           // A drill refused for a consumed field's shape or a metric's name
@@ -1269,7 +1351,7 @@ export function createGpexeRestV1Adapter({
           return { complete: false, drillsCount: parent.drillsCount, drills, failed: { drillIndex: index, code: error.code ?? "source_drill_unavailable", reason, completed: drills.length, ...consumed, ...(diagnosticText ? { diagnosticText } : {}) } };
         }
       }
-      return { complete: true, drillsCount: parent.drillsCount, drills, failed: null };
+      return { complete: true, drillsCount: parent.drillsCount, drills, failed: null, parameterEffect: drillParameterEffect(parent.drillsCount, fingerprints) };
     },
 
     // The athlete rows of a confirmed parent: every row must name that
@@ -1473,7 +1555,7 @@ export function createGpexeRestV1Adapter({
       return {
         teamSession, teamThresholds, athleteSessions, more, tracks,
         details: { full, drills },
-        drillsStatus: { complete: drillSet.complete, drillsCount: drillSet.drillsCount, failed: drillSet.failed },
+        drillsStatus: { complete: drillSet.complete, drillsCount: drillSet.drillsCount, failed: drillSet.failed, ...(drillSet.complete ? { parameterEffect: drillSet.parameterEffect } : {}) },
         drillLabels: labels,
       };
     },

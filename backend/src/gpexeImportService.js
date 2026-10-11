@@ -20,7 +20,8 @@ import {
   resolveImportSourceFacts, preflightImportSource, openImportSource, importClientFor, legacyImportClientFor, sameImportSource,
   importSourceIdentity, canonicalSourceTeamId, autoInvalidateImportSource, boundImportSideEffect, AUTO_INVALIDATE_BOUND_MS,
   SourceImportResolveError, SourceAdapterError, PATH_SOURCE_CONNECTION, PATH_LEGACY_ENV, isConnectionConfigurationCode, DIAGNOSTIC_MARK,
-  projectStoredDetails,
+  projectStoredDetails, DRILL_PARAMETER_EFFECT, drillParameterEffectOfFullBundle, importRefusal,
+  assertImportSourceStillUsable, assertLegacyPathStillOpen,
 } from "./sourceImportCredentialResolver.js";
 import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCanonicalGpexeAthleteId } from "./gpexeImportMapper.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
@@ -341,6 +342,19 @@ export async function runRetention(triggerSource) {
       purged += n;
       if (n < RETENTION_BATCH_SIZE) break;
     }
+    // v33: checks that stopped reporting are closed as abandoned (every team)
+    // and the staged observations of every check that is no longer running
+    // (failed, abandoned, an unknown outcome that did not commit) are
+    // discarded; its own bounded step, so a failure here never loses the counts.
+    let observationsDiscarded = 0;
+    let checksAbandoned = 0;
+    let observationsError = null;
+    try {
+      ({ discarded: observationsDiscarded, abandoned: checksAbandoned } = await sweepCheckStaging());
+    } catch (error) {
+      observationsError = error;
+      console.error(`[gpexe] retention: staged observations not discarded (${error?.code ?? error?.name ?? "unknown"})`);
+    }
     // Then every snapshot that is still stored and was never imported keeps
     // only the details fields the importer reads (owner order 2026-10-09), in
     // its own step: a failure here never loses the purge count or an earlier
@@ -355,13 +369,13 @@ export async function runRetention(triggerSource) {
       // A stable code only: never a snapshot, an id, a metric or a value.
       console.error(`[gpexe] retention projection step failed: ${error instanceof ProjectionStepError ? error.code : "projection_failed"}`);
     }
-    const stepError = identityError ?? projectionError;
+    const stepError = identityError ?? projectionError ?? observationsError;
     await query(
       `update training_load.gpexe_retention_runs set finished_at = now(), purged_count = $2, error_message = $3 where id = $1`,
       [run.id, purged, stepError ? String(stepError.message).slice(0, 300) : null],
     );
     if (stepError) throw Object.assign(stepError, { retentionRunRecorded: true });
-    return { runId: run.id, purged, identitiesPurged, suppressionsPurged, projected };
+    return { runId: run.id, purged, identitiesPurged, suppressionsPurged, projected, observationsDiscarded, checksAbandoned };
   } catch (error) {
     if (!error?.retentionRunRecorded) {
       await query(`update training_load.gpexe_retention_runs set finished_at = now(), error_message = $2 where id = $1`, [run.id, String(error.message).slice(0, 300)]).catch(() => {});
@@ -955,7 +969,7 @@ export async function startCheck(teamId, { userId, window, wait = false, adminVi
   }
   const identity = importSourceIdentity(facts);
   console.info(`[gpexe] check ${row.id} of team ${teamId} reads through ${identity.path}${identity.path === PATH_SOURCE_CONNECTION ? ` (connection ${identity.connectionId}, binding ${identity.bindingId}, source team ${identity.sourceTeamId})` : " (GPEXE_API_TOKEN, a team without a source binding)"}`);
-  const job = runCheck(row.id, { teamId, userId, gpexeTeamId, window, gpexe: client, source });
+  const job = runCheck(row.id, { teamId, userId, gpexeTeamId, window, gpexe: client, source, legacy: facts.path === PATH_LEGACY_ENV ? facts : null });
   if (wait) await job;
   else job.catch((error) => console.error(`[gpexe] check ${row.id} failed outside its own handler: ${error?.name}`));
   return checkView(wait ? (await query(`select * from training_load.gpexe_import_checks where id = $1`, [row.id])).rows[0] : row, { adminViewer });
@@ -998,7 +1012,7 @@ async function runCheck(checkId, options) {
   }
 }
 
-async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpexe, source = null }) {
+async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpexe, source = null, legacy = null }) {
   const counts = { sessions: 0, new: 0, changed: 0, unchanged: 0 };
   const alive = () => heartbeat(checkId, counts);
   // The binding path's adapter sends many requests per operation; every
@@ -1018,12 +1032,30 @@ async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpex
       // an id) lets an administrator's description name the session that failed.
       const bundle = await gpexe.fetchSessionBundle({ gpexeTeamId, sessionId: session.id, sessionPosition: index + 1, onProgress: alive });
       await alive();
-      const kind = await recordCandidate(checkId, { teamId, userId, bundle });
+      // The drill-parameter effect: from the binding path's adapter (it saw the
+      // full drill answers), or from the legacy bundle's full drill maps.
+      let drillParameterEffect;
+      try {
+        drillParameterEffect = source ? (bundle[DRILL_PARAMETER_EFFECT] ?? null) : drillParameterEffectOfFullBundle(bundle);
+      } catch (error) {
+        // A drill answer the guard cannot compare (too deep, too large, a
+        // prototype-like key): as on the binding path, the drill set is
+        // incomplete - one sentence, no word about the comparison.
+        if (error instanceof SourceAdapterError && error.reason === "answer_fingerprint_refused") throw importRefusal("drill_set_incomplete");
+        throw error;
+      }
+      if (drillParameterEffect === "not_distinguishable") {
+        throw importRefusal("drill_parameter_effect_not_distinguishable");
+      }
+      if (!["not_required", "confirmed", "not_observed"].includes(drillParameterEffect)) drillParameterEffect = null;
+      const kind = await recordCandidate(checkId, { teamId, userId, bundle, drillParameterEffect });
       counts.sessions += 1;
       counts[kind] += 1;
       await alive();
     }
-    await query(`update training_load.gpexe_import_checks set status = 'succeeded', finished_at = now() where id = $1 and status = 'running'`, [checkId]);
+    // One atomic finalization publishes what this check saw, supersedes what
+    // it replaced or no longer confirms, and marks it succeeded (v33).
+    await finalizeCheck(checkId, { teamId, window, withdraw: Boolean(source), source, legacy, sessionsSeen: counts.sessions });
   } catch (error) {
     if (error instanceof CheckClosedElsewhere) return;
     // A known refusal carries its own stable code and our own sentence (an
@@ -1051,6 +1083,8 @@ async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpex
     if (source && error?.code === "source_auth_rejected") {
       await boundImportSideEffect(autoInvalidateImportSource(source, { errorCode: "source_auth_rejected" }), 3 * AUTO_INVALIDATE_BOUND_MS + 15_000).catch(() => false);
     }
+    // v33: nothing of this check was published; its staged observations go.
+    await discardCheckObservations(checkId);
   }
 }
 
@@ -1061,11 +1095,15 @@ function sessionStartInstant(bundle) {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-// One session of a check: store (or refresh) its candidate. Returns "new",
-// "changed" or "unchanged". Repeated checks of unchanged data only refresh
-// the same row — the unique (team, session, content hash) key makes a second
-// row impossible.
-async function recordCandidate(checkId, { teamId, userId, bundle }) {
+// One session of a check: stage what the check saw (v33). Returns "new",
+// "changed" or "unchanged" against the team's published candidates - read
+// only, nothing of them changes while the check runs. The observation (the
+// snapshot, its hash, the preview, the status it would have, the drill
+// effect) is written to gpexe_import_check_observations, bound to this
+// running check; the finalization publishes it, or it is discarded with the
+// check. So a running, failed or outcome-unknown check never changes a
+// published candidate, never shows a new one and never withdraws one.
+async function recordCandidate(checkId, { teamId, userId, bundle, drillParameterEffect = null }) {
   const sessionId = String(bundle.teamSession.id);
   const bundleHash = sha256Hex(canonicalJson(bundle));
 
@@ -1081,86 +1119,107 @@ async function recordCandidate(checkId, { teamId, userId, bundle }) {
   const status = preview.status === "blocked" ? "blocked" : "pending";
   const label = preview.session?.name ?? `GPEXE ${preview.session?.categoryName ?? "session"} ${preview.session?.startTimestamp ?? ""}`.trim();
 
-  const client = await pool.connect();
+  // What the published candidates say about this session - the kind this
+  // check reports in its counts. A plain read: no lock, no change.
+  const existing = (await query(
+    `select bundle_hash from training_load.gpexe_import_candidates where owner_team_id = $1 and gpexe_team_session_id = $2`,
+    [teamId, sessionId],
+  )).rows;
+  const kind = existing.some((c) => c.bundle_hash === bundleHash) ? "unchanged" : existing.length ? "changed" : "new";
   try {
-    await client.query("begin");
-    // Serializes two checks of the same session (the one-running-check index
-    // already prevents two checks per team; this also covers the CLI).
-    await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`gpexe-candidate:${teamId}:${sessionId}`]);
-    const existing = (await client.query(
-      `select id, bundle_hash, status, imported_at from training_load.gpexe_import_candidates
-       where owner_team_id = $1 and gpexe_team_session_id = $2 order by first_seen_at for update`,
-      [teamId, sessionId],
-    )).rows;
-    const same = existing.find((c) => c.bundle_hash === bundleHash);
-    let currentId;
-    let kind;
-    if (same && same.status === "imported") {
-      // Already imported with exactly this content: nothing to review. Only
-      // the sighting is recorded; the snapshot keeps its own 90-day clock and
-      // is never re-stored after it.
-      kind = "unchanged";
-      await client.query(
-        `update training_load.gpexe_import_candidates set last_seen_check_id = $2, last_seen_at = now() where id = $1`,
-        [same.id, checkId],
-      );
-      currentId = same.id;
-    } else if (same) {
-      kind = "unchanged";
-      // Refreshing re-stores the snapshot and restarts its 30 days, and the
-      // preview is recomputed against today's state. A candidate whose
-      // snapshot had expired becomes reviewable again only this way.
-      await client.query(
-        `update training_load.gpexe_import_candidates
-            set raw_bundle = $2, raw_purged_at = null, raw_expires_at = now() + make_interval(days => $3),
-                status = $4, superseded_by_candidate_id = null,
-                preview = $5, preview_hash = $6, preview_computed_at = now(),
-                last_seen_check_id = $7, last_seen_at = now(), session_started_at = $8, session_label = $9
-          where id = $1`,
-        [same.id, bundle, RAW_RETENTION_UNAPPROVED_DAYS, status, preview, previewHash, checkId, sessionStartInstant(bundle), label],
-      );
-      currentId = same.id;
-    } else {
-      kind = existing.length ? "changed" : "new";
-      currentId = (await client.query(
-        `insert into training_load.gpexe_import_candidates
-           (owner_team_id, gpexe_team_session_id, session_started_at, session_label, bundle_hash, raw_bundle, raw_expires_at,
-            status, preview, preview_hash, preview_computed_at, first_seen_check_id, last_seen_check_id)
-         values ($1,$2,$3,$4,$5,$6, now() + make_interval(days => $7), $8,$9,$10, now(), $11, $11) returning id`,
-        [teamId, sessionId, sessionStartInstant(bundle), label, bundleHash, bundle, RAW_RETENTION_UNAPPROVED_DAYS, status, preview, previewHash, checkId],
-      )).rows[0].id;
-    }
-    // Older content of the same session that was never imported is replaced
-    // by what GPEXE shows now; an imported one stays as the record.
-    await client.query(
-      `update training_load.gpexe_import_candidates set status = 'superseded', superseded_by_candidate_id = $3
-        where owner_team_id = $1 and gpexe_team_session_id = $2 and id <> $3 and status in ('pending', 'blocked')`,
-      [teamId, sessionId, currentId],
+    await query(
+      `insert into training_load.gpexe_import_check_observations
+         (check_id, owner_team_id, gpexe_team_session_id, session_started_at, session_label, bundle_hash, raw_bundle, status, preview, preview_hash, drill_parameter_effect)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [checkId, teamId, sessionId, sessionStartInstant(bundle), label, bundleHash, bundle, status, preview, previewHash, drillParameterEffect],
     );
-    // In the same transaction, every superseded snapshot of this session that
-    // still holds one keeps only the details fields the importer reads (owner
-    // order 2026-10-09): a snapshot stored before the projections never keeps
-    // an unconsumed metric once newer content replaced it. An imported
-    // candidate is never touched; the row's identity and bundle_hash (the
-    // record of what was seen) stay as they are.
-    const superseded = (await client.query(
-      `select id, raw_bundle from training_load.gpexe_import_candidates
-        where owner_team_id = $1 and gpexe_team_session_id = $2 and id <> $3 and status = 'superseded' and raw_bundle is not null`,
-      [teamId, sessionId, currentId],
-    )).rows;
-    for (const row of superseded) {
-      const projected = projectStoredDetails(row.raw_bundle);
-      if (canonicalJson(projected) !== canonicalJson(row.raw_bundle)) {
-        await client.query(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1 and status = 'superseded'`, [row.id, projected]);
-      }
-    }
-    await client.query("commit");
-    return kind;
   } catch (error) {
-    await client.query("rollback").catch(() => {});
+    // The guard refuses an observation for a check that is no longer running
+    // (closed as abandoned): this run stops and writes nothing more.
+    if (error?.code === "23514" && /is not running/.test(String(error.message))) throw new CheckClosedElsewhere();
+    throw error;
+  }
+  return kind;
+}
+
+// Every retention run: a check that stopped reporting for CHECK_STALE_AFTER_MINUTES
+// (a restart mid-run) is closed as abandoned - the rule startCheck applies to
+// its own team, here for every team - and then the staging of every check
+// that is no longer running is discarded, so a dead check's staging never
+// outlives the next retention run, whether or not its team ever checks again.
+// One short transaction under server-side bounds (statement 2 s, lock 1 s,
+// idle 5 s) and a client bound: a held row ends this step with a stable code,
+// never a hang, and the run goes on (the purge count is kept).
+export const CHECK_STAGING_SWEEP_BOUND_MS = 5_000;
+async function sweepCheckStaging() {
+  const client = await pool.connect();
+  // A late socket error (the server ending the connection, the idle timeout's
+  // kill, a reset after release(true)) never crashes the process.
+  const onError = () => {};
+  client.on("error", onError);
+  let destroyed = false;
+  try {
+    return await withinBound((async () => {
+      await client.query("begin");
+      await client.query("set local statement_timeout = '2s'");
+      await client.query("set local lock_timeout = '1s'");
+      await client.query("set local idle_in_transaction_session_timeout = '5s'");
+      // A stale row another transaction holds (a finalization of the same
+      // check) is skipped, never waited on: the rest of the sweep goes on.
+      const abandoned = (await client.query(
+        `update training_load.gpexe_import_checks
+            set status = 'failed', finished_at = now(), error_code = 'abandoned',
+                error_message = 'The check stopped reporting progress (for example the server restarted).'
+          where id in (select id from training_load.gpexe_import_checks
+                        where status = 'running' and heartbeat_at < now() - make_interval(mins => $1)
+                          for update skip locked)`,
+        [CHECK_STALE_AFTER_MINUTES],
+      )).rowCount;
+      const discarded = (await client.query(
+        `delete from training_load.gpexe_import_check_observations o using training_load.gpexe_import_checks k
+          where k.id = o.check_id and k.status <> 'running'`,
+      )).rowCount;
+      await client.query("commit");
+      return { abandoned, discarded };
+    })(), CHECK_STAGING_SWEEP_BOUND_MS);
+  } catch (error) {
+    // A server answer (a lock or statement timeout, a constraint): the aborted
+    // transaction is rolled back and the connection returned. No answer within
+    // a bound: the connection is closed, never returned.
+    const answered = typeof error?.code === "string" && !/^no answer within/.test(String(error?.message));
+    if (answered) {
+      try {
+        await withinBound(client.query("rollback"), 2_000);
+      } catch {
+        destroyed = true;
+        client.release(true);
+      }
+    } else {
+      destroyed = true;
+      client.release(true);
+    }
     throw error;
   } finally {
-    client.release();
+    if (!destroyed) {
+      client.removeListener("error", onError);
+      client.release();
+    }
+  }
+}
+
+// The staged observations of a check that did not succeed are discarded -
+// bounded, best effort; the retention run removes what is left. Never for a
+// check that is still running.
+export const CHECK_OBSERVATIONS_DISCARD_BOUND_MS = 5_000;
+async function discardCheckObservations(checkId) {
+  try {
+    await withinBound(query(
+      `delete from training_load.gpexe_import_check_observations o using training_load.gpexe_import_checks k
+        where o.check_id = $1 and k.id = o.check_id and k.status <> 'running'`,
+      [checkId],
+    ), CHECK_OBSERVATIONS_DISCARD_BOUND_MS);
+  } catch (error) {
+    console.error(`[gpexe] check ${checkId}: staged observations not discarded (${error?.code ?? error?.name ?? "unknown"}); the retention run removes them`);
   }
 }
 
@@ -1180,12 +1239,24 @@ function snapshotState(row) {
 function approvalBlockers(row, snapshot, preview) {
   const blockers = [];
   if (!applyEnabled()) blockers.push("import_switch_off");
-  if (row.status === "superseded") blockers.push("superseded_by_newer_data");
+  if (row.status === "superseded") blockers.push(row.superseded_by_check_id ? "not_confirmed_for_import" : "superseded_by_newer_data");
   if (row.status === "imported") blockers.push("already_imported");
   if (row.status === "blocked") blockers.push("blocked");
   if (!snapshot.available) blockers.push("snapshot_expired_check_again");
   if (preview && preview.status === "no_changes") blockers.push("nothing_to_import");
+  // v33: a candidate of a check that has not (atomically) succeeded, one
+  // waiting to reappear, or one without a confirmed drill-parameter effect.
+  // One generic word: never the proof or the reason.
+  if ((row.status === "pending" || row.status === "blocked") && !candidateRowActionable(row)) blockers.push("not_confirmed_for_import");
   return blockers;
+}
+
+// The list's and the batch's in-memory form of the approval gate (the row
+// carries last_seen_check_status from the same statement); approveCandidate
+// and the database decide again under their locks.
+function candidateRowActionable(row) {
+  return row.last_seen_check_status === "succeeded"
+    && ["not_required", "confirmed"].includes(row.drill_parameter_effect);
 }
 
 function candidateSummary(row) {
@@ -1208,6 +1279,8 @@ function candidateSummary(row) {
     lastSeenAt: row.last_seen_at,
     importedAt: row.imported_at,
     supersededByCandidateId: row.superseded_by_candidate_id,
+    // v33: superseded by a complete, successful check that no longer confirmed it.
+    supersededByCheckId: row.superseded_by_check_id ?? null,
     snapshot,
     approvalBlockers: approvalBlockers(row, snapshot, preview),
     // Phase 2b, additive: why the session is blocked and what keeps it out of
@@ -1218,7 +1291,10 @@ function candidateSummary(row) {
 }
 
 const CANDIDATE_COLUMNS = `id, gpexe_team_session_id, session_label, session_started_at, status, preview, preview_hash,
-  first_seen_at, last_seen_at, imported_at, superseded_by_candidate_id, raw_expires_at, raw_purged_at`;
+  first_seen_at, last_seen_at, imported_at, superseded_by_candidate_id, raw_expires_at, raw_purged_at,
+  superseded_by_check_id, drill_parameter_effect,
+  (select k.status from training_load.gpexe_import_checks k
+    where k.id = gpexe_import_candidates.last_seen_check_id and k.owner_team_id = gpexe_import_candidates.owner_team_id) as last_seen_check_status`;
 
 export async function listCandidates(teamId, { includeSuperseded = false } = {}) {
   const rows = (await query(
@@ -1755,6 +1831,263 @@ export function gpexeRosterObservations(preview) {
   return { unusable, imported };
 }
 
+// v33: actionable = the candidate's last sighting is a check of this team
+// that succeeded (the finalization is the only writer of last_seen_check_id,
+// so it is the last successfully finalized check), and its drill-parameter
+// effect allows it.
+async function candidateActionable(client, row, teamId) {
+  if (!["not_required", "confirmed"].includes(row.drill_parameter_effect)) return false;
+  const seen = (await client.query(`select status from training_load.gpexe_import_checks where id = $1 and owner_team_id = $2`, [row.last_seen_check_id, teamId])).rows[0];
+  return seen?.status === "succeeded";
+}
+
+// ---------------------------------------------------------------------------
+// The finalization of a check (owner order 2026-10-11, condition 6; v33)
+// ---------------------------------------------------------------------------
+// A check stages what it saw, session by session, in
+// gpexe_import_check_observations while it runs; no candidate row changes
+// before this. An approval needs the candidate's last_seen check to be a
+// 'succeeded' check of the team (application and database), and
+// last_seen_check_id is written only here - so it always names the last
+// successfully finalized check. This one transaction makes the check's
+// results the team's state:
+//   1. applies every observation whose content a candidate row already has:
+//      an imported row gets the sighting only; a pending / blocked /
+//      superseded row is refreshed (snapshot, preview, status, drill effect)
+//      and (re)published with this check as its last sighting, both
+//      superseded_by fields cleared - a reappearance takes effect only here;
+//   2. inserts a candidate for every observation of new content;
+//   3. supersedes, by the candidate the check saw, every older pending /
+//      blocked candidate of the same session;
+//   4. on a complete read (the binding path reads the whole list), supersedes
+//      BY THE CHECK every pending / blocked candidate of the team whose
+//      session day lies in the check's exact [from, to] window and whose last
+//      sighting IS DISTINCT FROM this check - a session the complete list no
+//      longer confirms (imported rows and rows outside the window untouched);
+//   5. projects the snapshots it superseded (owner order 2026-10-09);
+//   6. deletes the check's observations and marks the check succeeded - the
+//      publication.
+// Locks: the check row, then the candidate rows in scope (by id), then the
+// team import lock (try-lock): the approval takes its candidate before the team
+// lock and never the check row, so there is no cycle. A busy lock, a timeout or
+// any error before the COMMIT rolls everything back (nothing published, nothing
+// superseded) and fails the check with a stable code; the COMMIT is bounded and
+// never repeated - an unanswered one is verified on a new connection.
+export const CHECK_FINALIZE_COMMIT_BOUND_MS = 15_000;
+export const CHECK_FINALIZE_VERIFY_BOUND_MS = 5_000;
+export const CHECK_FINALIZE_ROLLBACK_BOUND_MS = 2_000;
+// Every statement before the COMMIT is also bounded on the client (above the
+// server's 10 s statement_timeout), and the server ends a transaction left
+// idle for 5 s: a stalled finalization never keeps the team import lock or the
+// candidate rows (owner's standard for transactions holding them, PR #149).
+export const CHECK_FINALIZE_STATEMENT_BOUND_MS = 12_000;
+export const CHECK_FINALIZE_IDLE_TIMEOUT_MS = 5_000;
+let finalizeCommitFault = null;
+let finalizeBeforeLocks = null;
+let finalizeBeforeCommit = null;
+let finalizeCommitBoundMs = CHECK_FINALIZE_COMMIT_BOUND_MS;
+let finalizeStatementBoundMs = CHECK_FINALIZE_STATEMENT_BOUND_MS;
+let finalizeIdleTimeoutMs = CHECK_FINALIZE_IDLE_TIMEOUT_MS;
+let finalizeCalls = 0;
+// Tests only: a seam before the locks (to hold a lock exactly then), before the
+// COMMIT, in place of the COMMIT, shorter or longer bounds, and a call count.
+export function setCheckFinalizeForTests({
+  commit = null, beforeLocks = null, beforeCommit = null, commitBoundMs = CHECK_FINALIZE_COMMIT_BOUND_MS,
+  statementBoundMs = CHECK_FINALIZE_STATEMENT_BOUND_MS, idleTimeoutMs = CHECK_FINALIZE_IDLE_TIMEOUT_MS,
+} = {}) {
+  finalizeCommitFault = commit;
+  finalizeBeforeLocks = beforeLocks;
+  finalizeBeforeCommit = beforeCommit;
+  finalizeCommitBoundMs = commitBoundMs;
+  finalizeStatementBoundMs = Number.isInteger(statementBoundMs) && statementBoundMs > 0 ? statementBoundMs : CHECK_FINALIZE_STATEMENT_BOUND_MS;
+  finalizeIdleTimeoutMs = Number.isInteger(idleTimeoutMs) && idleTimeoutMs > 0 ? idleTimeoutMs : CHECK_FINALIZE_IDLE_TIMEOUT_MS;
+  finalizeCalls = 0;
+}
+export const checkFinalizeCallsForTests = () => finalizeCalls;
+const finalizeError = (code) => importRefusal(code);
+const isFinalizeBusy = (error) => ["55P03", "40P01", "57014"].includes(error?.code) || isPoolCheckoutTimeout(error)
+  || /a GPEXE check, import or connection change is running/.test(String(error?.message));
+
+async function finalizeCheck(checkId, { teamId, window, withdraw, source = null, legacy = null, sessionsSeen }) {
+  finalizeCalls += 1;
+  let client;
+  try {
+    client = await pool.connect();
+  } catch (error) {
+    throw finalizeError(isFinalizeBusy(error) ? "check_finalize_busy" : "check_finalize_failed");
+  }
+  const onError = () => {};
+  client.on("error", onError);
+  let destroyed = false;
+  let commitSent = false;
+  const destroy = () => { if (!destroyed) { destroyed = true; client.release(true); } };
+  // A statement without an answer within its bound: the connection is closed
+  // (the server rolls the transaction back), never awaited again.
+  const run = async (sql, params) => {
+    try {
+      return await withinBound(client.query(sql, params), finalizeStatementBoundMs);
+    } catch (error) {
+      if (/^no answer within/.test(String(error?.message))) destroy();
+      throw error;
+    }
+  };
+  try {
+    await run("begin isolation level read committed");
+    await run("set local lock_timeout = '2s'");
+    await run("set local statement_timeout = '10s'");
+    await run("select set_config('idle_in_transaction_session_timeout', $1, true)", [`${finalizeIdleTimeoutMs}ms`]);
+    if (finalizeBeforeLocks) await finalizeBeforeLocks();
+    const check = (await run(
+      `select status from training_load.gpexe_import_checks where id = $1 and owner_team_id = $2 for update`,
+      [checkId, teamId],
+    )).rows[0];
+    if (!check || check.status !== "running") throw new CheckClosedElsewhere();
+    await run(
+      `select id from training_load.gpexe_import_candidates
+        where owner_team_id = $1
+          and (gpexe_team_session_id in (select o.gpexe_team_session_id from training_load.gpexe_import_check_observations o
+                                          where o.check_id = $2 and o.owner_team_id = $1)
+               or ($3::boolean and status in ('pending', 'blocked') and session_started_at is not null
+                   and (session_started_at at time zone 'UTC')::date between $4::date and $5::date))
+        order by id for update`,
+      [teamId, checkId, Boolean(withdraw), window.from, window.to],
+    );
+    await run(`select training_load.hold_gpexe_team_lock($1, 'check finalization')`, [teamId]);
+    // The run's own facts once more, inside this transaction and under the
+    // team lock (an Unbind, a Reconnect and a team move take the same lock, so
+    // none of them lands between this read and the COMMIT; a team or club
+    // archive does not - switch condition 5): the binding
+    // still active, its connection verified with the same credential, the
+    // team still active in its club - or, on the legacy path, still no
+    // binding. A change fails the check with its precise code; nothing is
+    // published or withdrawn.
+    const executor = { query: run };
+    if (source) await assertImportSourceStillUsable(source, executor);
+    else if (legacy) await assertLegacyPathStillOpen(legacy, executor);
+    // What the run recorded must be exactly what is staged: an observation
+    // missing here would read as "not seen" and withdraw a listed session.
+    // Fail-closed: nothing is published.
+    const staged = (await run(
+      `select count(*)::int as n from training_load.gpexe_import_check_observations where check_id = $1 and owner_team_id = $2`,
+      [checkId, teamId],
+    )).rows[0].n;
+    if (staged !== sessionsSeen) throw Object.assign(new Error("the staged observations do not match the sessions the run recorded"), { code: "observations_incomplete" });
+    // 1. Content a candidate row already has. Imported: the sighting only.
+    await run(
+      `update training_load.gpexe_import_candidates c
+          set last_seen_check_id = $2, last_seen_at = now()
+         from training_load.gpexe_import_check_observations o
+        where o.check_id = $2 and o.owner_team_id = $1
+          and c.owner_team_id = o.owner_team_id and c.gpexe_team_session_id = o.gpexe_team_session_id and c.bundle_hash = o.bundle_hash
+          and c.status = 'imported'`,
+      [teamId, checkId],
+    );
+    // Pending, blocked or superseded: refreshed and (re)published - the
+    // snapshot restarts its 30 days, the preview is the one computed against
+    // today's state, a superseded row returns with both superseded_by cleared.
+    await run(
+      `update training_load.gpexe_import_candidates c
+          set status = o.status, superseded_by_candidate_id = null, superseded_by_check_id = null,
+              raw_bundle = o.raw_bundle, raw_purged_at = null, raw_expires_at = now() + make_interval(days => $3),
+              preview = o.preview, preview_hash = o.preview_hash, preview_computed_at = now(),
+              session_started_at = o.session_started_at, session_label = o.session_label, drill_parameter_effect = o.drill_parameter_effect,
+              last_seen_check_id = $2, last_seen_at = now()
+         from training_load.gpexe_import_check_observations o
+        where o.check_id = $2 and o.owner_team_id = $1
+          and c.owner_team_id = o.owner_team_id and c.gpexe_team_session_id = o.gpexe_team_session_id and c.bundle_hash = o.bundle_hash
+          and c.status <> 'imported'`,
+      [teamId, checkId, RAW_RETENTION_UNAPPROVED_DAYS],
+    );
+    // 2. New content: a new candidate, first and last seen by this check.
+    const published = (await run(
+      `insert into training_load.gpexe_import_candidates
+         (owner_team_id, gpexe_team_session_id, session_started_at, session_label, bundle_hash, raw_bundle, raw_expires_at,
+          status, preview, preview_hash, preview_computed_at, first_seen_check_id, last_seen_check_id, drill_parameter_effect)
+       select o.owner_team_id, o.gpexe_team_session_id, o.session_started_at, o.session_label, o.bundle_hash, o.raw_bundle, now() + make_interval(days => $3),
+              o.status, o.preview, o.preview_hash, now(), $2, $2, o.drill_parameter_effect
+         from training_load.gpexe_import_check_observations o
+        where o.check_id = $2 and o.owner_team_id = $1
+          and not exists (select 1 from training_load.gpexe_import_candidates c
+                           where c.owner_team_id = o.owner_team_id and c.gpexe_team_session_id = o.gpexe_team_session_id and c.bundle_hash = o.bundle_hash)
+       returning id`,
+      [teamId, checkId, RAW_RETENTION_UNAPPROVED_DAYS],
+    )).rows;
+    // 3. Older content of a session the check saw, replaced by what it saw.
+    const byCandidate = (await run(
+      `update training_load.gpexe_import_candidates c
+          set status = 'superseded', superseded_by_candidate_id = cur.id
+         from training_load.gpexe_import_candidates cur
+        where cur.owner_team_id = $1 and cur.last_seen_check_id = $2
+          and c.owner_team_id = $1 and c.gpexe_team_session_id = cur.gpexe_team_session_id and c.id <> cur.id
+          and c.status in ('pending', 'blocked') and c.last_seen_check_id is distinct from $2
+        returning c.id`,
+      [teamId, checkId],
+    )).rows;
+    // 4. A session of the window the complete list no longer confirms.
+    const byCheck = withdraw ? (await run(
+      `update training_load.gpexe_import_candidates
+          set status = 'superseded', superseded_by_check_id = $2
+        where owner_team_id = $1 and status in ('pending', 'blocked') and last_seen_check_id is distinct from $2
+          and session_started_at is not null
+          and (session_started_at at time zone 'UTC')::date between $3::date and $4::date
+        returning id`,
+      [teamId, checkId, window.from, window.to],
+    )).rows : [];
+    // 5. What was superseded keeps only the consumed fields.
+    const supersededIds = [...byCandidate, ...byCheck].map((r) => r.id);
+    if (supersededIds.length) {
+      const rows = (await run(
+        `select id, raw_bundle from training_load.gpexe_import_candidates where id = any($1::uuid[]) and status = 'superseded' and raw_bundle is not null`,
+        [supersededIds],
+      )).rows;
+      for (const row of rows) {
+        const projected = projectStoredDetails(row.raw_bundle);
+        if (canonicalJson(projected) !== canonicalJson(row.raw_bundle)) {
+          await run(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1 and status = 'superseded'`, [row.id, projected]);
+        }
+      }
+    }
+    // 6. The publication: the observations are applied, the check succeeded.
+    await run(`delete from training_load.gpexe_import_check_observations where check_id = $1 and owner_team_id = $2`, [checkId, teamId]);
+    void published;
+    const done = await run(
+      `update training_load.gpexe_import_checks set status = 'succeeded', finished_at = now() where id = $1 and status = 'running'`,
+      [checkId],
+    );
+    if (done.rowCount !== 1) throw new CheckClosedElsewhere();
+    if (finalizeBeforeCommit) await finalizeBeforeCommit(client);
+    commitSent = true;
+    const committing = Promise.resolve().then(() => (finalizeCommitFault ? finalizeCommitFault(client) : client.query("commit")));
+    committing.catch(() => {});
+    try {
+      await withinBound(committing, finalizeCommitBoundMs);
+    } catch {
+      // Never awaited or repeated on this connection: the outcome is read on a new one.
+      destroy();
+      let status = null;
+      try {
+        status = (await withinBound(query(`select status from training_load.gpexe_import_checks where id = $1`, [checkId]), CHECK_FINALIZE_VERIFY_BOUND_MS)).rows[0]?.status ?? null;
+      } catch { /* unknown */ }
+      if (status === "succeeded") return { withdrawn: byCheck.length, supersededByCandidate: byCandidate.length, verifiedAfterCommitError: true };
+      throw finalizeError("check_finalize_outcome_unknown");
+    }
+    return { withdrawn: byCheck.length, supersededByCandidate: byCandidate.length };
+  } catch (error) {
+    if (!commitSent && !destroyed) {
+      try { await withinBound(client.query("rollback"), CHECK_FINALIZE_ROLLBACK_BOUND_MS); } catch { destroy(); }
+    }
+    if (error instanceof CheckClosedElsewhere || error instanceof SourceImportResolveError) throw error;
+    const code = isFinalizeBusy(error) ? "check_finalize_busy" : "check_finalize_failed";
+    console.error(`[gpexe] check ${checkId} finalization ended as ${code} (${error?.code ?? error?.name ?? "unknown"})`);
+    throw finalizeError(code);
+  } finally {
+    if (!destroyed) {
+      client.removeListener("error", onError);
+      client.release();
+    }
+  }
+}
+
 export async function approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges }) {
   if (typeof previewHash !== "string" || !HASH.test(previewHash)) {
     throw refusal(400, "invalid_preview_hash", "previewHash must be the hash of the preview you reviewed.");
@@ -1782,17 +2115,27 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     // Step 2.
     const row = (await client.query(
       `select id, gpexe_team_session_id, bundle_hash, raw_bundle, raw_expires_at, raw_purged_at, status,
-              superseded_by_candidate_id, preview, preview_hash
+              superseded_by_candidate_id, preview, preview_hash, last_seen_check_id, drill_parameter_effect
          from training_load.gpexe_import_candidates where id = $1 and owner_team_id = $2 for update`,
       [candidateId, teamId],
     )).rows[0];
     if (!row) throw refusal(404, "notFound", "Not found.");
     if (row.status === "imported") throw refusal(409, "already_imported", "This candidate has already been imported.");
+    if (row.status === "superseded" && !row.superseded_by_candidate_id) {
+      throw refusal(409, "candidate_not_actionable", "This session is not confirmed for import yet; find new sessions again.");
+    }
     if (row.status === "superseded") {
       throw refusal(409, "superseded_by_newer_data", "GPEXE has newer data for this session; review the newer candidate.",
         { reviewAgain: reviewAgain(teamId, row.superseded_by_candidate_id) });
     }
     if (row.status === "blocked") throw refusal(409, "blocked", "This session is blocked; the preview names the reason and the step that lifts it.");
+    // v33: only a candidate of a check that atomically succeeded, and (two or
+    // more drills) with a confirmed drill-parameter effect, is actionable. The
+    // database's approval trigger refuses the rest whoever writes it; this is
+    // the readable answer first. One generic sentence: no proof or reason.
+    if (!(await candidateActionable(client, row, teamId))) {
+      throw refusal(409, "candidate_not_actionable", "This session is not confirmed for import yet; find new sessions again.");
+    }
     if (!snapshotState(row).available) throw refusal(409, "snapshot_expired_check_again", "The GPEXE data of this candidate has expired; press \"Check now\" again.");
     if (row.preview_hash !== previewHash) {
       throw previewChanged(teamId, candidateId, "The preview was recomputed after you reviewed it; review the candidate again.");
@@ -1985,9 +2328,11 @@ function refusedResult(candidateId, code, details = {}) {
 // against the same hash.
 function batchIneligibility(teamId, candidateId, row, previewHash) {
   if (row.status === "imported") return batchResult(candidateId, "already_imported", "already_imported", { approvalId: row.approval_id ?? null });
+  if (row.status === "superseded" && !row.superseded_by_candidate_id) return refusedResult(candidateId, "candidate_not_actionable");
   if (row.status === "superseded") return refusedResult(candidateId, "superseded_by_newer_data", { reviewAgain: reviewAgain(teamId, row.superseded_by_candidate_id) });
   if (row.status === "blocked") return refusedResult(candidateId, "blocked", { blockedCode: candidateReasons(row.status, snapshotState(row).available ? row.preview : null).blockedCode });
   if (row.status !== "pending") return refusedResult(candidateId, "not_ready");
+  if (!candidateRowActionable(row)) return refusedResult(candidateId, "candidate_not_actionable");
   if (!snapshotState(row).available) return refusedResult(candidateId, "snapshot_expired_check_again");
   const preview = row.preview;
   if (!preview || typeof row.preview_hash !== "string" || !HASH.test(row.preview_hash)) return refusedResult(candidateId, "not_ready");
@@ -2022,6 +2367,8 @@ async function approveOneOfBatch(teamId, { candidateId, previewHash }, userId) {
   try {
     const row = (await query(
       `select c.status, c.preview, c.preview_hash, c.raw_expires_at, c.raw_purged_at, c.superseded_by_candidate_id,
+              c.drill_parameter_effect,
+              (select k.status from training_load.gpexe_import_checks k where k.id = c.last_seen_check_id and k.owner_team_id = c.owner_team_id) as last_seen_check_status,
               (select a.id from training_load.gpexe_import_approvals a where a.candidate_id = c.id) as approval_id
          from training_load.gpexe_import_candidates c where c.id = $1 and c.owner_team_id = $2`,
       [candidateId, teamId],

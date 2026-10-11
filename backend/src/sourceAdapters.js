@@ -9,7 +9,7 @@
 //   gpexe / api       no adapter here. The e03 importer keeps its own client
 //                     (backend/src/gpexeClient.js), unchanged.
 import { resolveApprovedSourceHost } from "./sourceHosts.js";
-import { createGpexeRestV1Adapter, SourceAdapterError, DIAGNOSTIC_MARK, projectStoredDetails, DRILL_FAILURE_REASONS } from "./gpexeRestV1Adapter.js";
+import { createGpexeRestV1Adapter, SourceAdapterError, DIAGNOSTIC_MARK, projectStoredDetails, DRILL_FAILURE_REASONS, drillParameterEffectOfFullBundle } from "./gpexeRestV1Adapter.js";
 
 const own = (object, key) => typeof key === "string" && Object.prototype.hasOwnProperty.call(object, key);
 
@@ -42,4 +42,4 @@ export function createSourceAdapter({ sourceSystem, hostKey, catalogRow, credent
 // adapter module (it reaches adapters through the resolver only).
 // projectStoredDetails: a stored bundle reduced to the details fields the
 // importer reads (a superseded candidate's snapshot, gpexeImportService).
-export { SourceAdapterError, DIAGNOSTIC_MARK, projectStoredDetails, DRILL_FAILURE_REASONS };
+export { SourceAdapterError, DIAGNOSTIC_MARK, projectStoredDetails, DRILL_FAILURE_REASONS, drillParameterEffectOfFullBundle };

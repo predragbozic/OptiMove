@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-11. Last `origin/main` commit checked: `d6fd559` (merge of PR #151,
-`fix/gpexe-drill-count-diagnostic` → `main`; frontend `c01a120` and PR #150 `ce759b6` before it).
+Last reviewed: 2026-10-11. Last `origin/main` commit checked: `c3d31d4` (merge of PR #152,
+`fix/gpexe-drill-response-count-ignored` → `main`; PR #151 `d6fd559` before it).
 
 ## Active phase
 
@@ -1428,6 +1428,59 @@ Technical details.
   the parent confirmation, the drill URL, zero-based indexes, the mapper, Link, Import and the switch are
   unchanged. Existing pending snapshots lose a drill's stored `drills_count` at the next retention run (the
   mapper never read it).
+- **PR #152 is merged and deployed.**
+  - Reviewed head `be7d212` (the owner's external review READY), merge commit `c3d31d4` on 2026-10-10 at
+    23:15:23 UTC, merged exactly from that head (`--match-head-commit`).
+  - `/api/health` first served `c3d31d4` with `ok: true` at 23:16:26 UTC, then three times in a row (23:16:36,
+    23:16:46 and 23:16:57 UTC).
+  - Read-only smoke without a login, zero UUID, GET only: nine protected GPEXE and source-connection routes
+    answered 401. No migration; the switch untouched.
+  - **Owner (2026-10-10, recorded at the merge):** the effect of the zero-based `?drill=<index>` parameter on
+    server3 is not independently confirmed; a successful answer for indexes 0 - 4 does not by itself prove
+    that the source did not return the same drill more than once. Before the import is switched on, a
+    fail-closed proof / guard against a non-distinguishing parameter is required, without relying on a drill
+    answer's `drills_count` (switch condition 7 below).
+- **The check of 05.10.2026 - 06.10.2026 after PR #152 (run once on the owner's order, about 2026-10-11 00:12
+  UTC):** the preconditions held. It **succeeded**: sessions 3, new 1, changed 0, unchanged 2; the session with
+  five drills was read in full. Nothing was linked, approved or imported; the import switch stays off.
+- **The pre-import safety package (switch conditions 6 and 7)** (owner order 2026-10-11; branch
+  `fix/gpexe-pre-import-safety` from `c3d31d4`; not merged; migration v33, backend, tests and docs; runbook
+  section "When a check's results become actionable (v33)"):
+  - **Condition 6 and the publication of a check.** While a check runs it writes no candidate row: its
+    observations are staged per check and session in `training_load.gpexe_import_check_observations`
+    (insert-only, running check of the same team only, read by no route), so the published candidates stay
+    byte for byte as the last successful check left them (owner's external review of `ab58e5e`, HIGH: a
+    running, failed or unknown check must never change the actionable state of a candidate confirmed by an
+    earlier successful check). A candidate is actionable only when its `last_seen_check_id` is a `succeeded`
+    check of its team - in `approveCandidate` (409 `candidate_not_actionable`), the list, the batch and the
+    database (the v33 approval trigger) - and `last_seen_check_id` is written only by the finalization, in
+    the COMMIT that marks that check succeeded, so it always names the last successfully finalized check.
+    One finalization transaction applies the staging (refreshes same content, restores a superseded row
+    seen again, inserts new content), supersedes older content by candidate, withdraws (binding path only)
+    every pending / blocked candidate of the team whose session day lies in the exact `[from, to]` and whose
+    last sighting `IS DISTINCT FROM` the check (`superseded_by_check_id`), projects what it superseded,
+    deletes the staging, marks the check succeeded and sends one bounded COMMIT; busy / failed / unknown
+    publishes nothing, changes nothing, supersedes nothing and never repeats a sent COMMIT (verified on a
+    new connection); the staging of a check that did not succeed is discarded by the run and by the
+    retention sweep. Exactly one `superseded_by` on a superseded row
+    (`gpexe_import_candidates_superseded_by_exactly_one`); a finished check's status and `finished_at` are
+    final in the database (`gpexe_import_checks_status_final`); the finalization re-validates the run's
+    binding facts under the team lock and is bounded (statement, idle-in-transaction and client-side
+    bounds). The rollback refuses while a row is superseded by a check or a check is running; after it
+    conditions 6 and 7 are open again.
+  - **Condition 7 (the drill-parameter guard).** The adapter fingerprints each non-empty drill answer's full
+    players map in memory (canonical SHA-256, dropped at once); two equal non-empty answers fail the check as
+    `drill_parameter_effect_not_distinguishable` (no candidate; administrator-only code); fewer than two
+    non-empty answers store `not_observed`, never actionable; only `not_required` / `confirmed` /
+    `not_observed` is stored (`drill_parameter_effect`), never a fingerprint or a value. Same rule for the
+    legacy bundle.
+  - Frontend unchanged: the new refusal `candidate_not_actionable` and the list blocker
+    `not_confirmed_for_import` read as the existing generic sentences ("It can't be approved right now.",
+    "the server refused it"); a dedicated sentence, and keeping a not-yet-published session out of *Ready to
+    import*, are a small frontend follow-up before the switch (Separate tasks).
+  - Candidates from before v33 carry no drill effect and are not actionable until a successful check sees
+    them again. No production check, GPEXE request, Render change or persistent-database migration was made;
+    v33 is applied nowhere persistent.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2115,12 +2168,19 @@ pre-existing; pass/fail counts don't belong in this file
   drill of the window) while the Imports screen showed only that it was running, and a failure ends with a
   generic sentence. A separate task: a progress display (phase, sessions done) and a clearer failed-check
   message; any change to the number of requests is its own decision.
-- **Bound the COMMIT of `recordCandidate`** (code review of PR #149, 2026-10-09; pre-existing): a check's
-  candidate transaction sends COMMIT without a bound or an outcome check, so a lost COMMIT answer marks the
-  check `failed` / `internal_error` although the candidate (and, since PR #149, a superseded snapshot's
-  projection) may be committed. No duplicate can follow (the unique key and the idempotent projection), but
-  "written" and "unknown" are not told apart. Fix in the `approveCandidate` style: on a COMMIT error look
-  the row up on another connection and continue, or fail with an `outcome_unknown`-class code.
+- **Imports screen sentences for v33** (pre-import safety package, 2026-10-11; frontend only, before the
+  switch): a dedicated sentence for the refusal `candidate_not_actionable` and the blocker
+  `not_confirmed_for_import`; a candidate with that blocker kept out of *Ready to import* and out of the batch
+  selection (`inboxBucket` / `batchSelectable` read no blockers today, so the server's refusal is the only
+  guard); and a candidate withdrawn by a check (`supersededByCheckId`, no newer candidate) told apart from
+  one replaced by newer data - today its review prints "GPEXE has newer data", which is not true for a
+  withdrawal. Needs frontend tests.
+- **Bound the staging insert of `recordCandidate`** (code review of PR #149, 2026-10-09, reshaped by the
+  pre-import safety package, v33): since v33 a check's run writes no candidate row and has no transaction
+  of its own - each session is one auto-commit insert into the staging table, and nothing of it can be
+  committed as a candidate. What is left of the original finding: that insert's answer is awaited without
+  a client-side bound, and a lost answer fails the check as `internal_error` (one staged row at most,
+  removed by the discard or the retention sweep). Fix: a bounded insert with a stable code.
 - **Security follow-up, accepted by the owner (2026-10-07, at the review of PR #146): the verification
   resend's timing channel.** `POST /api/auth/email-verifications/resend` has no timing floor and, when a
   pending application exists, answers only after its transaction and the awaited email provider call,
@@ -2154,7 +2214,7 @@ pre-existing; pass/fail counts don't belong in this file
 
 - **In-app GPEXE import — conditions before the switch is turned on** (owner, 2026-09-18).
   F1, F2, F3a and F3b are merged (see above); F4 is the first real local import. `GPEXE_IMPORT_APPLY_ENABLED` stays off in an
-  environment until conditions 1–3 and 6 hold there; condition 4 is required before regular
+  environment until conditions 1–3, 6 and 7 hold there; condition 4 is required before regular
   production imports:
   1. **A fresh, restore-verified backup of that environment.** This is an operational
      gate: `docs/runbooks/gpexe-in-app-import.md` has a record table (backup path or
@@ -2188,7 +2248,12 @@ pre-existing; pass/fail counts don't belong in this file
      candidate stays pending when a later check of the same window does not list it (for example a drill
      row recorded as a session of its own by a check whose list missed its parent), and approving it
      would import a drill's values a second time. Not built in option (c); a separate PR with its own
-     tests.
+     tests. **Built in the pre-import safety package (branch `fix/gpexe-pre-import-safety`, v33; not
+     merged).**
+  7. **Mandatory before the import switch is turned on in any environment** (owner, 2026-10-10, at the merge
+     of PR #152): a fail-closed guard against a `?drill=<index>` parameter that does not distinguish the
+     drills, without relying on a drill answer's `drills_count`. **Built in the same package (the
+     drill-parameter guard; not merged).**
   - Planned shape (as built in F1–F2):
     - "Check now" fetches from GPEXE;
     - a list of import candidates;
@@ -2354,13 +2419,11 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150) and the drill-count diagnostic (PR #151) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
-1. The owner's external review of the fix that ignores a drill answer's drills_count, branch
-   `fix/gpexe-drill-response-count-ignored`.
-2. After its merge and deploy, on a separate owner order, one check of the same window (05.10 - 06.10.2026)
-   that returns only the Code and the "Diagnostic:" line of the administrator's check detail.
-3. Condition 6 under the switch conditions (withdraw candidates a later check no longer confirms) - a
-   separate PR, before the switch is ever turned on.
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151) and the fix that ignores a drill answer's drills_count (PR #152) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
+1. The owner's external review of the pre-import safety package (conditions 6 and 7, v33), branch
+   `fix/gpexe-pre-import-safety`.
+2. After its merge and deploy, on the owner's order: linking the athletes (owner-run).
+3. Then the discovery and mapping of the variables.
 4. The owner states the state of the production-use gate and of the two gates before a link (an identity
    load and one link were run after PR #146; whether those gates were confirmed is not recorded here).
 5. The separate resend timing task (see Separate tasks), when the owner schedules it.
@@ -2368,7 +2431,7 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
 7. The second owner-run procedure for one controlled real import.
 8. **Phase 5a3c** (Complete and Needs review).
 
-Conditions 1–3 and 6 under Separate tasks come before the first real local import (and before the
+Conditions 1–3, 6 and 7 under Separate tasks come before the first real local import (and before the
 switch is turned on in any environment), and conditions 4–5 before regular production imports.
 
 The other Separate tasks wait until the owner schedules them.
