@@ -1350,7 +1350,7 @@ test("B7.8 static architecture guard: no consumer outside the adapter and the ma
   // The stored-snapshot projections never touch an imported candidate: both SQL statements of each path name only unimported statuses.
   const svc = await fsp.readFile(path.resolve(srcDir, "gpexeImportService.js"), "utf8");
   // Since v33 the supersede projection runs in the check's finalization.
-  const supersedeBlock = svc.slice(svc.indexOf("// 4. What was superseded keeps only the consumed fields."), svc.indexOf("// 5. The publication."));
+  const supersedeBlock = svc.slice(svc.indexOf("// 5. What was superseded keeps only the consumed fields."), svc.indexOf("// 6. The publication"));
   assert.ok(supersedeBlock.length > 100, "the finalization's projection step is found");
   assert.equal((supersedeBlock.match(/status = 'superseded'/g) || []).length, 2, "the supersede projection selects and writes superseded rows only");
   const retentionBlock = svc.slice(svc.indexOf("export async function projectUnimportedSnapshots"), svc.indexOf("export const RETENTION_INTERVAL_HOURS"));

@@ -285,8 +285,15 @@ async function runCheck(o, options) {
 }
 const candidates = (teamId) => q(
   `select id, gpexe_team_session_id as sid, status, superseded_by_candidate_id as by_cand, superseded_by_check_id as by_check,
-          reappeared_status as reappeared, drill_parameter_effect as effect, last_seen_check_id as seen, bundle_hash, preview_hash, raw_bundle, preview
+          drill_parameter_effect as effect, last_seen_check_id as seen, bundle_hash, preview_hash, raw_bundle, preview
      from training_load.gpexe_import_candidates where owner_team_id = $1 order by first_seen_at, id`, [teamId]);
+// The whole row, byte for byte: what a running, failed or unknown check must never change.
+const rowJson = async (id) => (await q(`select to_jsonb(c) as j from training_load.gpexe_import_candidates c where id = $1`, [id]))[0]?.j ?? null;
+// The staging of a check (v33): what a running check saw, never read by a route.
+const observations = (checkId) => q(`select id, gpexe_team_session_id as sid, bundle_hash, preview_hash from training_load.gpexe_import_check_observations where check_id = $1 order by observed_at, id`, [checkId]);
+const obsCount = async (checkId) => (await observations(checkId)).length;
+const waitingOn = async (pattern) => until(async () => (await q(
+  `select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query like $1`, [pattern]))[0].n > 0);
 const bySession = async (teamId) => {
   const out = {};
   for (const c of await candidates(teamId)) (out[c.sid] ??= []).push(c);
@@ -295,10 +302,11 @@ const bySession = async (teamId) => {
 const listed = async (o, cookie = o.coach.cookie) => (await api(`/gpexe/teams/${o.teamId}/candidates?includeSuperseded=true`, { cookie })).body.candidates ?? [];
 const summaryOf = async (o, id) => (await listed(o)).find((c) => c.id === id) ?? (await api(`/gpexe/teams/${o.teamId}/candidates/${id}`, { cookie: o.coach.cookie })).body.candidate;
 async function approve(o, candidateId, { acceptChanges } = {}) {
+  // A staged (non-candidate) id has no row: a well-formed hash, so the route itself answers.
   const row = (await q(`select preview_hash from training_load.gpexe_import_candidates where id = $1`, [candidateId]))[0];
   process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
   try {
-    return await api(`/gpexe/teams/${o.teamId}/candidates/${candidateId}/approve`, { method: "POST", cookie: o.padmin.cookie, body: { previewHash: row.preview_hash, ...(acceptChanges === undefined ? {} : { acceptChanges }) } });
+    return await api(`/gpexe/teams/${o.teamId}/candidates/${candidateId}/approve`, { method: "POST", cookie: o.padmin.cookie, body: { previewHash: row?.preview_hash ?? "0".repeat(64), ...(acceptChanges === undefined ? {} : { acceptChanges }) } });
   } finally {
     delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
   }
@@ -346,7 +354,7 @@ const legacyFake = (sourceTeamId, bundles) => {
 const actionable = (summary) => !summary.approvalBlockers.includes("not_confirmed_for_import");
 
 // ---------------------------------------------------------------------------
-test("1. migration v33 on v32: the exactly-one, reappeared and drill-effect constraints by name, the approval gate, the index; the rollback returns the identical v32 catalog, refuses while a row depends on superseded_by_check_id or reappeared_status (dropping nothing), and v33 applies again identically; a failing file applies nothing", async () => {
+test("1. migration v33 on v32: the exactly-one and drill-effect constraints by name, the staging table and its guard, the approval gate, the index; the rollback returns the identical v32 catalog, refuses while a row is superseded by a check or a check is running (dropping nothing), and v33 applies again identically; a failing file applies nothing", async () => {
   const m = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v33mig", migrations: UP_TO_V32 });
   const k = new pg.Client({ connectionString: m.url });
   await k.connect();
@@ -359,6 +367,7 @@ test("1. migration v33 on v32: the exactly-one, reappeared and drill-effect cons
       triggers: (await k.query(`select tgname, pg_get_triggerdef(oid) as def from pg_trigger where tgrelid in ('training_load.gpexe_import_candidates'::regclass, 'training_load.gpexe_import_approvals'::regclass, 'training_load.gpexe_import_checks'::regclass) and not tgisinternal order by 1`)).rows,
       functions: (await k.query(`select p.proname, md5(pg_get_functiondef(p.oid)) as digest from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'training_load' and (p.proname like '%gpexe_import%' or p.proname like 'gpexe_check%') order by 1`)).rows,
       comments: (await k.query(`select a.attname, col_description(a.attrelid, a.attnum) as c from pg_attribute a where a.attrelid = 'training_load.gpexe_import_candidates'::regclass and a.attnum > 0 and not a.attisdropped order by 1`)).rows,
+      tables: (await k.query(`select table_name from information_schema.tables where table_schema = 'training_load' and table_name like 'gpexe_import%' order by 1`)).rows.map((r) => r.table_name),
     });
     const v32 = await catalog();
     assert.ok(!v32.columns.some((c) => c.column_name === "superseded_by_check_id"));
@@ -368,7 +377,8 @@ test("1. migration v33 on v32: the exactly-one, reappeared and drill-effect cons
     const user = (await k.query(`insert into public.users (email) values ('u-v33@test.local') returning id`)).rows[0].id;
     await k.query(`insert into training_load.gpexe_team_settings (owner_team_id, gpexe_team_id, configured_by_user_id) values ($1, '1981', $2)`, [team, user]);
     const check = async (status = "succeeded") => (await k.query(
-      `insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, status, window_from, window_to, finished_at, gpexe_team_id) values ($1,$2,$3,'2026-09-14','2026-09-14', now(),'1981') returning id`,
+      `insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, status, window_from, window_to, finished_at, gpexe_team_id)
+       values ($1,$2,$3::text,'2026-09-14','2026-09-14', case when $3::text = 'running' then null else now() end,'1981') returning id`,
       [team, user, status])).rows[0].id;
     const c1 = await check();
     const cand = async (sid, status = "pending", extra = {}) => (await k.query(
@@ -380,16 +390,19 @@ test("1. migration v33 on v32: the exactly-one, reappeared and drill-effect cons
     await applyGpexeTestMigrations(m.url, [...UP_TO_V32, V33]);
     const v33 = await catalog();
     const names = v33.constraints.map((c) => c.conname);
-    for (const n of ["gpexe_import_candidates_superseded_by_exactly_one", "gpexe_import_candidates_reappeared_only_superseded", "gpexe_import_candidates_drill_parameter_effect_values", "gpexe_import_candidates_superseded_by_check_id_fkey"]) assert.ok(names.includes(n), n);
+    for (const n of ["gpexe_import_candidates_superseded_by_exactly_one", "gpexe_import_candidates_drill_parameter_effect_values", "gpexe_import_candidates_superseded_by_check_id_fkey"]) assert.ok(names.includes(n), n);
+    assert.ok(!names.some((n) => /reappeared/.test(n)));
+    assert.ok(v33.tables.includes("gpexe_import_check_observations") && !v32.tables.includes("gpexe_import_check_observations"), "the staging table is v33's");
+    assert.ok(v33.triggers.some((t) => t.tgname === "gpexe_import_check_observations_guard") || (await k.query(`select 1 from pg_trigger where tgname = 'gpexe_import_check_observations_guard'`)).rowCount === 1, "the staging guard exists");
     assert.ok(!v33.constraints.some((c) => c.def === "CHECK ((((status)::text = 'superseded'::text) = (superseded_by_candidate_id IS NOT NULL)))"), "the v22 rule is replaced");
     assert.match(v33.constraints.find((c) => c.conname === "gpexe_import_candidates_superseded_by_check_id_fkey").def, /ON DELETE RESTRICT/);
     assert.ok(v33.indexes.some((i) => i.indexname === "gpexe_import_candidates_superseded_by_check_idx"));
     assert.ok(v33.triggers.some((t) => t.tgname === "gpexe_import_checks_status_final"), "a finished check's status is final in the database");
-    for (const col of ["superseded_by_check_id", "reappeared_status", "drill_parameter_effect"]) assert.ok(v33.comments.find((c) => c.attname === col)?.c, `${col} is commented`);
+    for (const col of ["superseded_by_check_id", "drill_parameter_effect"]) assert.ok(v33.comments.find((c) => c.attname === col)?.c, `${col} is commented`);
     assert.deepEqual(v33.columns.filter((c) => ["superseded_by_check_id", "reappeared_status", "drill_parameter_effect"].includes(c.column_name)).map((c) => [c.column_name, c.is_nullable, c.column_default]),
-      [["superseded_by_check_id", "YES", null], ["reappeared_status", "YES", null], ["drill_parameter_effect", "YES", null]]);
-    assert.deepEqual((await k.query(`select status, superseded_by_check_id, reappeared_status, drill_parameter_effect from training_load.gpexe_import_candidates order by status`)).rows,
-      [{ status: "pending", superseded_by_check_id: null, reappeared_status: null, drill_parameter_effect: null }, { status: "superseded", superseded_by_check_id: null, reappeared_status: null, drill_parameter_effect: null }], "no data rewritten");
+      [["superseded_by_check_id", "YES", null], ["drill_parameter_effect", "YES", null]], "two new columns, no reappeared_status");
+    assert.deepEqual((await k.query(`select status, superseded_by_check_id, drill_parameter_effect from training_load.gpexe_import_candidates order by status`)).rows,
+      [{ status: "pending", superseded_by_check_id: null, drill_parameter_effect: null }, { status: "superseded", superseded_by_check_id: null, drill_parameter_effect: null }], "no data rewritten");
     // The rollback refuses while history depends on v33, dropping nothing.
     const rollbackSql = await fsp.readFile(V33_ROLLBACK, "utf8");
     const withdrawn = await cand("2");
@@ -398,16 +411,21 @@ test("1. migration v33 on v32: the exactly-one, reappeared and drill-effect cons
     await k.query("rollback").catch(() => {});
     assert.deepEqual(await catalog(), v33, "a refused rollback drops nothing");
     await k.query(`delete from training_load.gpexe_import_candidates where id = $1`, [withdrawn]);
-    // A waiting reappearance mark does not refuse the rollback: the row is superseded by a candidate and stays so.
-    const waiting = await cand("3");
-    await k.query(`update training_load.gpexe_import_candidates set status = 'superseded', superseded_by_candidate_id = $2, reappeared_status = 'pending' where id = $1`, [waiting, p1]);
-    // Without rows superseded by a check: the rollback returns exactly the v32 catalog and keeps every row.
+    // A running check with staged observations refuses the rollback; once it has finished, its staging is transient and goes with the table.
+    const running = await check("running");
+    await k.query(
+      `insert into training_load.gpexe_import_check_observations (check_id, owner_team_id, gpexe_team_session_id, bundle_hash, raw_bundle, status, preview, preview_hash)
+       values ($1, $2, '9', repeat('a', 64), '{}'::jsonb, 'pending', '{}'::jsonb, repeat('b', 64))`, [running, team]);
+    await assert.rejects(k.query(rollbackSql), /v33 rollback refused: 1 staged observation\(s\) belong to a running check/);
+    await k.query("rollback").catch(() => {});
+    assert.deepEqual(await catalog(), v33);
+    await k.query(`update training_load.gpexe_import_checks set status = 'failed', finished_at = now(), error_code = 'test', error_message = 'test' where id = $1`, [running]);
+    // Without rows superseded by a check and without a running check: the rollback returns exactly the v32 catalog and keeps every candidate.
     await k.query(`update training_load.gpexe_import_candidates set drill_parameter_effect = 'confirmed' where id = $1`, [p1]);
     await k.query(rollbackSql);
-    assert.deepEqual(await catalog(), v32, "the rollback leaves exactly the v32 columns, constraints, indexes, triggers, functions and comments");
+    assert.deepEqual(await catalog(), v32, "the rollback leaves exactly the v32 columns, constraints, indexes, triggers, functions, comments and tables");
     assert.equal((await k.query(`select count(*)::int as n from public.schema_migrations where migration_name like $1`, [`%${V33}`])).rows[0].n, 0);
-    assert.equal((await k.query(`select count(*)::int as n from training_load.gpexe_import_candidates`)).rows[0].n, 3, "no row lost");
-    assert.deepEqual((await k.query(`select status, superseded_by_candidate_id from training_load.gpexe_import_candidates where id = $1`, [waiting])).rows[0], { status: "superseded", superseded_by_candidate_id: p1 }, "the waiting row stays superseded by its candidate");
+    assert.equal((await k.query(`select count(*)::int as n from training_load.gpexe_import_candidates`)).rows[0].n, 2, "no candidate lost");
     // A failing copy of the file applies nothing.
     const sql = await fsp.readFile(path.resolve(ROOT, "migrations_v2", V33), "utf8");
     assert.doesNotMatch(sql.replace(/[$][$][^]*?[$][$]/g, "<body>"), /^\s*(begin|commit|rollback)\b/im, "no transaction control outside the function bodies");
@@ -427,7 +445,7 @@ test("1. migration v33 on v32: the exactly-one, reappeared and drill-effect cons
   }
 });
 
-test("2. the v33 constraints by name on real rows: a superseded row needs exactly one superseded_by, no other status may carry one, reappeared_status only on a superseded row, the drill effect only from its closed set, last_seen_check_id is never NULL, and a check referenced by superseded_by_check_id cannot be deleted (ON DELETE RESTRICT, below the v24 refusal)", async () => {
+test("2. the v33 constraints by name on real rows: a superseded row needs exactly one superseded_by, no other status may carry one, an observation only for a running check of its own team and never changed, the drill effect only from its closed set, last_seen_check_id is never NULL, and a check referenced by superseded_by_check_id cannot be deleted (ON DELETE RESTRICT, below the v24 refusal)", async () => {
   const o = await org();
   legacyFake(o.sourceTeamId, [sessionOf(o.sourceTeamId, 30001, D1), sessionOf(o.sourceTeamId, 30002, D1)]);
   const first = await runCheck(o);
@@ -449,9 +467,31 @@ test("2. the v33 constraints by name on real rows: a superseded row needs exactl
     await violates(`update training_load.gpexe_import_candidates set superseded_by_check_id = $2 where id = $1`, [a.id, first.id], EXACTLY);
     await violates(`update training_load.gpexe_import_candidates set superseded_by_candidate_id = $2 where id = $1`, [a.id, b.id], EXACTLY);
     await violates(`update training_load.gpexe_import_candidates set status = 'blocked', superseded_by_check_id = $2 where id = $1`, [a.id, first.id], EXACTLY);
-    const REAPPEARED = "gpexe_import_candidates_reappeared_only_superseded";
-    await violates(`update training_load.gpexe_import_candidates set reappeared_status = 'pending' where id = $1`, [a.id], REAPPEARED);
-    await violates(`update training_load.gpexe_import_candidates set status = 'superseded', superseded_by_check_id = $2, reappeared_status = 'imported' where id = $1`, [a.id, first.id], REAPPEARED);
+    // The staging guard: an observation only for a running check of its own team, and never changed.
+    const OBS = "is not running";
+    const obsInsert = (checkId, teamId, sid = "77") => admin.query(
+      `insert into training_load.gpexe_import_check_observations (check_id, owner_team_id, gpexe_team_session_id, bundle_hash, raw_bundle, status, preview, preview_hash)
+       values ($1, $2, $3, repeat('a', 64), '{}'::jsonb, 'pending', '{}'::jsonb, repeat('b', 64)) returning id`, [checkId, teamId, sid]);
+    await admin.query("savepoint s");
+    await assert.rejects(obsInsert(first.id, o.teamId), (e) => String(e.message).includes(OBS), "a finished check takes no observation");
+    await admin.query("rollback to savepoint s");
+    const obsCheck = (await admin.query(`insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, status, window_from, window_to, gpexe_team_id) values ($1,$2,'running','2026-08-03','2026-08-03',$3) returning id`, [o.teamId, o.userId, o.sourceTeamId])).rows[0].id;
+    const otherTeam = (await admin.query(`insert into public.teams (club_id, name) values ($1, 'Other') returning id`, [o.clubId])).rows[0].id;
+    await admin.query("savepoint s");
+    await assert.rejects(obsInsert(obsCheck, otherTeam), (e) => String(e.message).includes("belongs to another team"), "another team's observation is refused");
+    await admin.query("rollback to savepoint s");
+    await admin.query("savepoint s");
+    await assert.rejects(obsInsert(obsCheck, o.teamId, "x1"), (e) => e.code === "23514" && /gpexe_team_session_id/.test(String(e.message)), "a session id in the candidates' format only");
+    await admin.query("rollback to savepoint s");
+    const obsId = (await obsInsert(obsCheck, o.teamId)).rows[0].id;
+    await admin.query("savepoint s");
+    await assert.rejects(admin.query(`update training_load.gpexe_import_check_observations set status = 'blocked' where id = $1`, [obsId]), /never changed/);
+    await admin.query("rollback to savepoint s");
+    await admin.query("savepoint s");
+    await assert.rejects(obsInsert(obsCheck, o.teamId), (e) => e.code === "23505", "one observation per check and session");
+    await admin.query("rollback to savepoint s");
+    await admin.query(`delete from training_load.gpexe_import_check_observations where id = $1`, [obsId]);
+    await admin.query(`update training_load.gpexe_import_checks set status = 'failed', finished_at = now(), error_code = 'test', error_message = 'test' where id = $1`, [obsCheck]);
     await violates(`update training_load.gpexe_import_candidates set drill_parameter_effect = 'not_distinguishable' where id = $1`, [a.id], "gpexe_import_candidates_drill_parameter_effect_values");
     await admin.query("savepoint s");
     await assert.rejects(admin.query(`update training_load.gpexe_import_candidates set last_seen_check_id = null where id = $1`, [a.id]), (e) => e.code === "23502");
@@ -466,8 +506,8 @@ test("2. the v33 constraints by name on real rows: a superseded row needs exactl
     await admin.query(`update training_load.gpexe_import_checks set status = 'succeeded', finished_at = now() where id = $1`, [running]);
     await violates(`update training_load.gpexe_import_checks set status = 'failed', error_code = 'late', error_message = 'late' where id = $1`, [running], FINAL);
     // Both legal forms pass.
-    await admin.query(`update training_load.gpexe_import_candidates set status = 'superseded', superseded_by_check_id = $2, reappeared_status = 'pending' where id = $1`, [a.id, first.id]);
-    await admin.query(`update training_load.gpexe_import_candidates set status = 'superseded', superseded_by_check_id = null, superseded_by_candidate_id = $2, reappeared_status = null where id = $1`, [a.id, b.id]);
+    await admin.query(`update training_load.gpexe_import_candidates set status = 'superseded', superseded_by_check_id = $2 where id = $1`, [a.id, first.id]);
+    await admin.query(`update training_load.gpexe_import_candidates set status = 'superseded', superseded_by_check_id = null, superseded_by_candidate_id = $2 where id = $1`, [a.id, b.id]);
     // A check that only superseded_by_check_id references: the v24 trigger refuses a delete first; below it, the foreign key.
     const other = (await admin.query(`insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, status, window_from, window_to, finished_at, gpexe_team_id) values ($1,$2,'succeeded','2026-08-01','2026-08-01', now(), $3) returning id`, [o.teamId, o.userId, o.sourceTeamId])).rows[0].id;
     await admin.query(`update training_load.gpexe_import_candidates set superseded_by_candidate_id = null, superseded_by_check_id = $2 where id = $1`, [a.id, other]);
@@ -482,7 +522,7 @@ test("2. the v33 constraints by name on real rows: a superseded row needs exactl
   assert.equal((await q(`select tgenabled from pg_trigger where tgname = 'gpexe_import_checks_refuse_delete'`))[0].tgenabled, "O", "the v24 trigger is enabled again (rolled back)");
 });
 
-test("3. a running check's candidates are not actionable, nothing is superseded or withdrawn while it runs, and its success publishes them, supersedes what it replaced and withdraws what the complete list no longer confirms - in one transaction (binding path)", async () => {
+test("3. while a check runs nothing is published, changed or withdrawn: the published candidate stays byte for byte as it was and actionable, the new session is staged only (not in the list, the detail, the batch or the approval); the check's success publishes the new sessions, withdraws what the complete list no longer confirms and leaves no staging - in one transaction (binding path)", async () => {
   const o = await boundOrg();
   const s1 = sessionOf(o.sourceTeamId, 31001, D1);
   src.serve(o.sourceTeamId, [s1]);
@@ -491,6 +531,7 @@ test("3. a running check's candidates are not actionable, nothing is superseded 
   const [c1] = await candidates(o.teamId);
   assert.deepEqual([c1.status, c1.effect, c1.seen], ["pending", "confirmed", first.id]);
   assert.ok(actionable(await summaryOf(o, c1.id)), "a candidate of a succeeded check with a confirmed drill effect is actionable");
+  const before = await rowJson(c1.id);
 
   // The next check no longer lists s1; it sees s2 and s3, and is held at s3.
   const s2 = sessionOf(o.sourceTeamId, 31002, D1);
@@ -500,15 +541,17 @@ test("3. a running check's candidates are not actionable, nothing is superseded 
   src.state.gates.athletes["31003"] = held;
   const run = await startCheck(o);
   try {
-    await until(async () => held.reached && (await candidates(o.teamId)).some((c) => c.sid === "31002"));
-    const mid = await bySession(o.teamId);
-    const c2 = mid["31002"][0];
-    assert.deepEqual([c2.status, c2.seen, (await checkRow(run.id)).status], ["pending", run.id, "running"]);
-    assert.equal(mid["31001"][0].status, "pending", "nothing is withdrawn while the check runs");
-    assert.ok(!actionable(await summaryOf(o, c2.id)), "the running check's candidate is not actionable (list)");
-    const refused = await approve(o, c2.id);
-    assert.deepEqual([refused.status, refused.body.error], [409, "candidate_not_actionable"], JSON.stringify(refused.body));
-    assert.match(await rawApproval(c2.id, o.padmin.id), /not confirmed by a succeeded check/, "the database refuses it whoever writes it");
+    await until(async () => held.reached && (await obsCount(run.id)) === 1);
+    assert.equal((await checkRow(run.id)).status, "running");
+    const mid = await candidates(o.teamId);
+    assert.deepEqual(mid.map((c) => c.sid), ["31001"], "the new session is not a candidate while the check runs");
+    assert.deepEqual(await rowJson(c1.id), before, "the published candidate is byte for byte as it was");
+    assert.ok(actionable(await summaryOf(o, c1.id)), "and stays actionable (nothing is withdrawn while the check runs)");
+    const [staged] = await observations(run.id);
+    assert.equal(staged.sid, "31002");
+    assert.deepEqual((await listed(o)).map((c) => c.id), [c1.id], "the list (replaced versions included) shows no staged row");
+    assert.equal((await api(`/gpexe/teams/${o.teamId}/candidates/${staged.id}`, { cookie: o.coach.cookie })).status, 404, "no detail of a staged row");
+    assert.equal((await approve(o, staged.id)).status, 404, "no approval of a staged row");
     assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_approvals where owner_team_id = $1`, [o.teamId]))[0].n, 0);
   } finally {
     held.release();
@@ -516,10 +559,11 @@ test("3. a running check's candidates are not actionable, nothing is superseded 
   await run.done.p;
   const done = await checkRow(run.id);
   assert.equal(done.status, "succeeded", JSON.stringify(done));
+  assert.equal(await obsCount(run.id), 0, "the staging is applied and gone");
   const after_ = await bySession(o.teamId);
   assert.deepEqual([after_["31001"][0].status, after_["31001"][0].by_check, after_["31001"][0].by_cand], ["superseded", run.id, null], "withdrawn by the check that no longer confirmed it");
   for (const sid of ["31002", "31003"]) {
-    assert.equal(after_[sid][0].status, "pending");
+    assert.deepEqual([after_[sid][0].status, after_[sid][0].seen], ["pending", run.id]);
     assert.ok(actionable(await summaryOf(o, after_[sid][0].id)), `${sid} is published`);
   }
   const withdrawnSummary = await summaryOf(o, after_["31001"][0].id);
@@ -527,16 +571,19 @@ test("3. a running check's candidates are not actionable, nothing is superseded 
   assert.ok(withdrawnSummary.approvalBlockers.includes("not_confirmed_for_import") && !withdrawnSummary.approvalBlockers.includes("superseded_by_newer_data"), "a withdrawn row is no newer data");
   const refusedWithdrawn = await approve(o, after_["31001"][0].id);
   assert.deepEqual([refusedWithdrawn.status, refusedWithdrawn.body.error], [409, "candidate_not_actionable"]);
+  assert.match(await rawApproval(after_["31001"][0].id, o.padmin.id), /is superseded, not pending/);
   assert.equal(importer.checkFinalizeCallsForTests() >= 1, true);
 });
 
-test("4. a failed check leaves nothing actionable and supersedes nothing: the changed content it recorded stays unpublished and the older candidate stays as it was; the next successful check then supersedes it by candidate", async () => {
+test("4. a failed check publishes nothing and supersedes nothing: the changed content it staged is discarded, the older candidate stays byte for byte as it was and actionable (approvable in the database too); the next successful check publishes the new content and supersedes the older one by candidate; the gate reads only a succeeded check of the candidate's own team", async () => {
   const o = await boundOrg();
   const s1 = sessionOf(o.sourceTeamId, 32001, D1);
   src.serve(o.sourceTeamId, [s1]);
-  assert.equal((await runCheck(o)).status, "succeeded");
+  const first = await runCheck(o);
+  assert.equal(first.status, "succeeded");
   const [old] = await candidates(o.teamId);
-  // Changed content of s1, then a session whose drill 1 cannot be read: the check fails after recording s1.
+  const before = await rowJson(old.id);
+  // Changed content of s1, then a session whose drill 1 cannot be read: the check fails after staging s1.
   const s1b = sessionOf(o.sourceTeamId, 32001, D1, { updatedOn: `${D1}T23:00:00.000` });
   const s2 = sessionOf(o.sourceTeamId, 32002, D1);
   src.serve(o.sourceTeamId, [s1b, s2]);
@@ -544,15 +591,12 @@ test("4. a failed check leaves nothing actionable and supersedes nothing: the ch
   const failed = await runCheck(o);
   assert.deepEqual([failed.status, failed.error_code], ["failed", "drill_set_incomplete"], JSON.stringify(failed));
   const rows = await bySession(o.teamId);
-  assert.equal(rows["32001"].length, 2);
-  const [oldNow, changed] = rows["32001"];
-  assert.deepEqual([oldNow.id, oldNow.status, oldNow.by_cand, oldNow.by_check, oldNow.seen], [old.id, "pending", null, null, old.seen], "the older candidate is untouched");
-  assert.deepEqual([changed.status, changed.seen], ["pending", failed.id]);
-  assert.ok(actionable(await summaryOf(o, oldNow.id)), "the older candidate stays actionable");
-  assert.ok(!actionable(await summaryOf(o, changed.id)), "the failed check's candidate is not");
-  assert.deepEqual((await approve(o, changed.id)).body.error, "candidate_not_actionable");
-  assert.match(await rawApproval(changed.id, o.padmin.id), /not confirmed by a succeeded check/);
+  assert.equal(rows["32001"].length, 1, "the changed content is not a candidate");
+  assert.deepEqual(await rowJson(old.id), before, "the older candidate is byte for byte as it was: status, snapshot, preview, hashes, sighting");
+  assert.ok(actionable(await summaryOf(o, old.id)), "the older candidate stays actionable");
+  assert.equal(await rawApproval(old.id, o.padmin.id), "inserted", "the database still accepts its approval");
   assert.equal(rows["32002"], undefined, "the session that failed was not recorded");
+  assert.equal(await obsCount(failed.id), 0, "the failed check's staging is discarded");
   // A last sighting pointing at another team's succeeded check (only a raw writer can do that) never makes it actionable.
   const other = await org();
   legacyFake(other.sourceTeamId, [sessionOf(other.sourceTeamId, 32101, D1)]);
@@ -560,23 +604,24 @@ test("4. a failed check leaves nothing actionable and supersedes nothing: the ch
   assert.equal(otherCheck.status, "succeeded");
   importer.setGpexeClientFactory(null);
   legacyTrap();
-  await q(`update training_load.gpexe_import_candidates set last_seen_check_id = $2 where id = $1`, [changed.id, otherCheck.id]);
-  assert.ok(!actionable(await summaryOf(o, changed.id)));
-  assert.equal((await approve(o, changed.id)).body.error, "candidate_not_actionable");
-  assert.match(await rawApproval(changed.id, o.padmin.id), /not confirmed by a succeeded check/);
-  await q(`update training_load.gpexe_import_candidates set last_seen_check_id = $2 where id = $1`, [changed.id, failed.id]);
-  // A successful check of the same content publishes it and supersedes the older one by candidate.
+  await q(`update training_load.gpexe_import_candidates set last_seen_check_id = $2 where id = $1`, [old.id, otherCheck.id]);
+  assert.ok(!actionable(await summaryOf(o, old.id)));
+  assert.equal((await approve(o, old.id)).body.error, "candidate_not_actionable");
+  assert.match(await rawApproval(old.id, o.padmin.id), /not confirmed by a succeeded check/);
+  await q(`update training_load.gpexe_import_candidates set last_seen_check_id = $2 where id = $1`, [old.id, first.id]);
+  // A successful check of the new content publishes it and supersedes the older one by candidate.
   src.state.faults.drillMissing = {};
   src.serve(o.sourceTeamId, [s1b]);
   const ok = await runCheck(o);
   assert.equal(ok.status, "succeeded");
   const [o2, c2] = (await bySession(o.teamId))["32001"];
-  assert.deepEqual([o2.status, o2.by_cand, o2.by_check], ["superseded", c2.id, null]);
+  assert.deepEqual([o2.id, o2.status, o2.by_cand, o2.by_check], [old.id, "superseded", c2.id, null]);
   assert.deepEqual([c2.status, c2.seen], ["pending", ok.id]);
   assert.ok(actionable(await summaryOf(o, c2.id)));
+  assert.equal(await obsCount(ok.id), 0);
 });
 
-test("5. a reappearing session: while the check runs the withdrawn candidate keeps its status and superseded_by (reappeared_status waits); only the check's success restores it and clears both fields; a reappearance in a check that fails restores nothing, and the next successful check drops the stale mark", async () => {
+test("5. a reappearing session: while the check runs the withdrawn candidate stays byte for byte as it was (its sighting is staged); only the check's success restores it, clearing both superseded_by fields; a reappearance in a check that fails restores nothing and leaves no staging; the next successful check that does not list it leaves it withdrawn", async () => {
   const o = await boundOrg();
   const s1 = sessionOf(o.sourceTeamId, 33001, D1);
   const s2 = sessionOf(o.sourceTeamId, 33002, D1);
@@ -586,17 +631,17 @@ test("5. a reappearing session: while the check runs the withdrawn candidate kee
   const withdrawer = await runCheck(o);
   const [c1] = (await bySession(o.teamId))["33001"];
   assert.deepEqual([c1.status, c1.by_check], ["superseded", withdrawer.id]);
+  const withdrawnRow = await rowJson(c1.id);
   // s1 comes back with the same content; the check is held at s2.
   src.serve(o.sourceTeamId, [s1, s2]);
   const held = gate();
   src.state.gates.athletes["33002"] = held;
   const run = await startCheck(o);
   try {
-    await until(async () => held.reached && (await bySession(o.teamId))["33001"][0].reappeared === "pending");
-    const mid = (await bySession(o.teamId))["33001"][0];
-    assert.deepEqual([mid.id, mid.status, mid.by_check, mid.by_cand, mid.reappeared, mid.seen], [c1.id, "superseded", withdrawer.id, null, "pending", run.id]);
+    await until(async () => held.reached && (await observations(run.id)).some((x) => x.sid === "33001"));
+    assert.deepEqual(await rowJson(c1.id), withdrawnRow, "the withdrawn row is untouched while the check runs");
     assert.equal((await approve(o, c1.id)).body.error, "candidate_not_actionable");
-    assert.match(await rawApproval(c1.id, o.padmin.id), /is superseded, not pending|not confirmed/);
+    assert.match(await rawApproval(c1.id, o.padmin.id), /is superseded, not pending/);
   } finally {
     held.release();
   }
@@ -604,27 +649,30 @@ test("5. a reappearing session: while the check runs the withdrawn candidate kee
   assert.equal((await checkRow(run.id)).status, "succeeded");
   const back = (await bySession(o.teamId))["33001"];
   assert.equal(back.length, 1, "the same row, no new candidate");
-  assert.deepEqual([back[0].status, back[0].by_check, back[0].by_cand, back[0].reappeared], ["pending", null, null, null]);
+  assert.deepEqual([back[0].status, back[0].by_check, back[0].by_cand, back[0].seen], ["pending", null, null, run.id]);
   assert.ok(actionable(await summaryOf(o, c1.id)));
+  assert.equal(await obsCount(run.id), 0);
 
-  // Withdrawn again, then seen again by a check that fails: nothing is restored.
+  // Withdrawn again, then seen again by a check that fails: nothing is restored, nothing stays staged.
   src.serve(o.sourceTeamId, [s2]);
   const withdrawer2 = await runCheck(o);
-  assert.equal((await bySession(o.teamId))["33001"][0].by_check, withdrawer2.id);
+  const again = (await bySession(o.teamId))["33001"][0];
+  assert.equal(again.by_check, withdrawer2.id);
+  const withdrawnAgain = await rowJson(c1.id);
   const s3 = sessionOf(o.sourceTeamId, 33003, D1);
   src.serve(o.sourceTeamId, [s1, s3]);
   src.state.faults.drillMissing["33003"] = 0;
   const failing = await runCheck(o);
   assert.equal(failing.status, "failed");
-  const stale = (await bySession(o.teamId))["33001"][0];
-  assert.deepEqual([stale.status, stale.by_check, stale.reappeared, stale.seen], ["superseded", withdrawer2.id, "pending", failing.id], "superseded as before; the mark waits for a success that never came");
+  assert.deepEqual(await rowJson(c1.id), withdrawnAgain, "superseded as before, byte for byte");
+  assert.equal(await obsCount(failing.id), 0);
   assert.equal((await approve(o, c1.id)).body.error, "candidate_not_actionable");
-  // The next successful check that does not list s1 drops the stale mark; the row stays withdrawn.
+  // The next successful check that does not list s1 leaves it withdrawn.
   src.state.faults.drillMissing = {};
   src.serve(o.sourceTeamId, [s2]);
   assert.equal((await runCheck(o)).status, "succeeded");
   const final = (await bySession(o.teamId))["33001"][0];
-  assert.deepEqual([final.status, final.by_check, final.reappeared], ["superseded", withdrawer2.id, null]);
+  assert.deepEqual([final.status, final.by_check], ["superseded", withdrawer2.id]);
 });
 
 test("6. the withdrawal is exact: same team, pending / blocked only, the session day inside the check's [from, to]; overlapping sequential periods withdraw only their own days; imported rows and rows outside the period stay untouched, and another team is never touched", async () => {
@@ -696,19 +744,20 @@ test("7. the finalization's COMMIT: an answer lost after the COMMIT is verified 
   const afterB = await bySession(o.teamId);
   assert.deepEqual([afterB["35002"][0].status, afterB["35002"][0].by_check], ["pending", null], "nothing withdrawn");
   assert.ok(actionable(await summaryOf(o, afterB["35002"][0].id)), "the earlier publication stands");
-  assert.ok(!actionable(await summaryOf(o, afterB["35003"][0].id)), "nothing of the unknown check is published");
-  assert.equal((await approve(o, afterB["35003"][0].id)).body.error, "candidate_not_actionable");
+  assert.equal(afterB["35003"], undefined, "nothing of the unknown check is published");
+  assert.equal(await obsCount(b.id), 0, "its staging is discarded");
   // A coach reads the code and the sentence (a team fact, not a connection fact).
   const view = (await api(`/gpexe/teams/${o.teamId}/checks/${b.id}`, { cookie: o.coach.cookie })).body.check;
   assert.equal(view.error.code, "check_finalize_outcome_unknown");
 });
 
-test("8. a busy candidate row or team lock at the finalization: lock_timeout / the team try-lock end it in bounded time as check_finalize_busy; nothing is published, superseded or withdrawn", async () => {
+test("8. a busy candidate row or team lock at the finalization: lock_timeout / the team try-lock end it in bounded time as check_finalize_busy; nothing is published, superseded or withdrawn and the staging is discarded", async () => {
   const o = await boundOrg();
   const s1 = sessionOf(o.sourceTeamId, 36001, D1);
   src.serve(o.sourceTeamId, [s1]);
   assert.equal((await runCheck(o)).status, "succeeded");
   const [c1] = await candidates(o.teamId);
+  const before = await rowJson(c1.id);
   const holder = new pg.Client({ connectionString: db.url });
   await holder.connect();
   try {
@@ -725,8 +774,9 @@ test("8. a busy candidate row or team lock at the finalization: lock_timeout / t
       assert.ok(Date.now() - started < 20_000, `${what}: bounded`);
       assert.deepEqual([r.status, r.error_code], ["failed", "check_finalize_busy"], `${what}: ${JSON.stringify(r)}`);
       const rows = await bySession(o.teamId);
-      assert.deepEqual([rows["36001"][0].status, rows["36001"][0].by_check], ["pending", null], `${what}: nothing withdrawn`);
-      assert.ok(!actionable(await summaryOf(o, rows[String(sid)][0].id)), `${what}: nothing published`);
+      assert.deepEqual(await rowJson(c1.id), before, `${what}: nothing withdrawn, nothing changed`);
+      assert.equal(rows[String(sid)], undefined, `${what}: nothing published`);
+      assert.equal(await obsCount(r.id), 0, `${what}: the staging is discarded`);
     }
   } finally {
     await holder.query("rollback").catch(() => {});
@@ -734,9 +784,11 @@ test("8. a busy candidate row or team lock at the finalization: lock_timeout / t
   }
   importer.setCheckFinalizeForTests({});
   src.serve(o.sourceTeamId, [sessionOf(o.sourceTeamId, 36004, D1)]);
-  assert.equal((await runCheck(o)).status, "succeeded", "the team checks normally afterwards");
+  const last = await runCheck(o);
+  assert.equal(last.status, "succeeded", "the team checks normally afterwards");
   const rows = await bySession(o.teamId);
-  for (const sid of ["36001", "36002", "36003"]) assert.equal(rows[sid][0].status, "superseded", `${sid} withdrawn by the successful check`);
+  assert.deepEqual([rows["36001"][0].status, rows["36001"][0].by_check], ["superseded", last.id], "withdrawn by the successful check");
+  assert.ok(actionable(await summaryOf(o, rows["36004"][0].id)));
 });
 
 test("9. the legacy path does not withdraw: a session its list no longer shows stays pending; supersede by newer content of the same session and the publication still happen at the finalization", async () => {
@@ -796,6 +848,7 @@ test("10. the drill-parameter guard through a bound check: identical non-empty d
   assert.match(await rawApproval(c.id, o.padmin.id), /no confirmed drill-parameter effect/);
   // Nowhere: candidate rows, check rows, audit, API answers, console.
   const stored = JSON.stringify(await q(`select * from training_load.gpexe_import_candidates where owner_team_id = $1`, [o.teamId]))
+    + JSON.stringify(await q(`select * from training_load.gpexe_import_check_observations where owner_team_id = $1`, [o.teamId]))
     + JSON.stringify(await q(`select * from training_load.gpexe_import_checks where owner_team_id = $1`, [o.teamId]))
     + JSON.stringify(await q(`select * from training_load.source_connection_audit`));
   const everything = stored + responses.join("\n") + logLines.slice(logBefore).join("\n");
@@ -805,29 +858,60 @@ test("10. the drill-parameter guard through a bound check: identical non-empty d
   assert.ok(!columns.some((n) => /fingerprint/.test(n)));
 });
 
-test("11. static guard: the finalization's withdrawal and supersede statements compare last_seen_check_id with IS DISTINCT FROM, the withdrawal names only pending / blocked rows and the exact UTC day window, the check row is locked before the candidates and the team try-lock last, and the run itself changes no other row", async () => {
-  const svc = await fsp.readFile(path.resolve(ROOT, "backend/src/gpexeImportService.js"), "utf8");
+test("11. static guard: the run writes no candidate row (it stages observations only); the staging table is named in the service's four functions and in no other module or route; the finalization's withdrawal and supersede statements compare last_seen_check_id with IS DISTINCT FROM, the withdrawal names only pending / blocked rows and the exact UTC day window, the check row is locked before the candidates and the team try-lock last; the discard and the sweep never touch a running check's staging", async () => {
+  const srcDir = path.resolve(ROOT, "backend/src");
+  const svc = await fsp.readFile(path.join(srcDir, "gpexeImportService.js"), "utf8");
   const fin = svc.slice(svc.indexOf("async function finalizeCheck("), svc.indexOf("export async function approveCandidate("));
   assert.ok(fin.length > 1000);
-  const withdrawal = fin.slice(fin.indexOf("// 3. A session of the window"), fin.indexOf("// 4. What was superseded"));
+  const withdrawal = fin.slice(fin.indexOf("// 4. A session of the window"), fin.indexOf("// 5. What was superseded"));
   assert.match(withdrawal, /status in \('pending', 'blocked'\) and last_seen_check_id is distinct from \$2/);
   assert.match(withdrawal, /\(session_started_at at time zone 'UTC'\)::date between \$3::date and \$4::date/);
   assert.match(withdrawal, /superseded_by_check_id = \$2/);
   assert.doesNotMatch(withdrawal, /'imported'/);
-  const supersede = fin.slice(fin.indexOf("// 2. Older content"), fin.indexOf("// 3. A session of the window"));
+  const supersede = fin.slice(fin.indexOf("// 3. Older content"), fin.indexOf("// 4. A session of the window"));
   assert.match(supersede, /c\.last_seen_check_id is distinct from \$2/);
-  const order = ["for update`", "hold_gpexe_team_lock", "// 1. Seen again", "// 5. The publication."].map((s) => fin.indexOf(s));
+  const order = ["for update`", "hold_gpexe_team_lock", "// 1. Content a candidate row already has", "// 6. The publication"].map((s) => fin.indexOf(s));
+  assert.match(fin, /if \(staged !== sessionsSeen\) throw/, "the staging must match the sessions the run recorded");
   assert.ok(order.every((i, n) => i > 0 && (n === 0 || i > order[n - 1])), "check row and candidates locked, then the team try-lock, then the writes, then the publication");
   assert.match(fin, /where id = \$1 and owner_team_id = \$2 for update/);
-  const record = svc.slice(svc.indexOf("async function recordCandidate("), svc.indexOf("// Candidates\n") > 0 ? svc.indexOf("// Candidates\n") : svc.indexOf("function snapshotState("));
-  assert.doesNotMatch(record, /set status = 'superseded'/, "the run supersedes nothing");
-  assert.doesNotMatch(record, /superseded_by_candidate_id = null/, "the run restores nothing");
+  assert.match(fin, /delete from training_load\.gpexe_import_check_observations where check_id = \$1 and owner_team_id = \$2/, "the staging goes in the publishing transaction");
+  // The run stages only: no candidate row is inserted, updated, superseded or restored before the finalization.
+  const record = svc.slice(svc.indexOf("async function recordCandidate("), svc.indexOf("async function discardCheckObservations("));
+  assert.ok(record.length > 500);
+  assert.doesNotMatch(record, /update training_load\.gpexe_import_candidates|insert into training_load\.gpexe_import_candidates|set status = 'superseded'|superseded_by_candidate_id = null|last_seen_check_id/);
+  assert.match(record, /insert into training_load\.gpexe_import_check_observations/);
+  assert.match(record, /select bundle_hash from training_load\.gpexe_import_candidates/, "the published candidates are read for the counts only");
+  // The staging table is named only in the four functions that own it, and nowhere else in src (no route, no list, no detail).
+  const owners = new Set(["recordCandidate", "discardCheckObservations", "sweepCheckStaging", "finalizeCheck"]);
+  const lines = svc.split("\n");
+  lines.forEach((line, i) => {
+    if (!line.includes("gpexe_import_check_observations")) return;
+    let fn = null;
+    if (/^\s*\/\//.test(line)) return; // a comment names what the function below does
+    for (let j = i; j >= 0 && !fn; j -= 1) {
+      const m = lines[j].match(/^(?:export )?(?:async )?function (\w+)\(/);
+      if (m) fn = m[1];
+    }
+    assert.ok(owners.has(fn), `line ${i + 1} names the staging table inside ${fn}`);
+  });
+  const others = (await fsp.readdir(srcDir, { recursive: true })).filter((f) => f.endsWith(".js") && !/gpexeImportService\.js$/.test(f));
+  for (const f of others) assert.doesNotMatch(await fsp.readFile(path.join(srcDir, f), "utf8"), /gpexe_import_check_observations/, `${f} names the staging table`);
+  // The discard and the retention sweep delete only the staging of a check that is no longer running.
+  const deletes = svc.match(/delete from training_load\.gpexe_import_check_observations o using training_load\.gpexe_import_checks k[^`]*?k\.status <> 'running'/g) || [];
+  assert.equal(deletes.length, 2, "the failed run's discard and the retention sweep");
+  // The sweep closes stale running checks of every team first, under the same bounds as the projection step.
+  const sweep = svc.slice(svc.indexOf("async function sweepCheckStaging("), svc.indexOf("async function discardCheckObservations("));
+  assert.match(sweep, /set local statement_timeout = '2s'/);
+  assert.match(sweep, /set local lock_timeout = '1s'/);
+  assert.match(sweep, /where status = 'running' and heartbeat_at < now\(\) - make_interval\(mins => \$1\)\s+for update skip locked/);
+  assert.doesNotMatch(sweep, /owner_team_id/, "every team");
+  // The guard's refusal of a closed check is the message recordCandidate maps to CheckClosedElsewhere.
+  const mig = await fsp.readFile(path.resolve(ROOT, "migrations_v2", V33), "utf8");
+  assert.match(mig, /check % is not running; an observation belongs to a running check/);
+  assert.match(svc, /\/is not running\/\.test\(String\(error\.message\)\)\) throw new CheckClosedElsewhere\(\)/);
 });
 
-const waitingOn = async (pattern) => until(async () => (await q(
-  `select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query like $1`, [pattern]))[0].n > 0);
-
-test("12. the batch route refuses every non-actionable candidate with candidate_not_actionable and no reviewAgain: one of a running check, one withdrawn by a check, one not_observed; nothing is approved", async () => {
+test("12. the batch route reaches no staged row (notFound, nothing more) and refuses every non-actionable candidate with candidate_not_actionable and no reviewAgain: one withdrawn by a check, one not_observed; nothing is approved", async () => {
   const o = await boundOrg();
   src.serve(o.sourceTeamId, [sessionOf(o.sourceTeamId, 40001, D1)]);
   assert.equal((await runCheck(o)).status, "succeeded");
@@ -841,26 +925,32 @@ test("12. the batch route refuses every non-actionable candidate with candidate_
   src.state.gates.athletes["40004"] = held;
   const run = await startCheck(o);
   try {
-    await until(async () => held.reached && (await candidates(o.teamId)).some((c) => c.sid === "40003"));
+    await until(async () => held.reached && (await obsCount(run.id)) === 1);
     const rows = await bySession(o.teamId);
-    const ids = [rows["40003"][0].id, rows["40001"][0].id, rows["40002"][0].id];
-    assert.deepEqual([rows["40001"][0].status, rows["40001"][0].by_check !== null, rows["40002"][0].effect], ["superseded", true, "not_observed"]);
-    const hashes = await q(`select id, preview_hash from training_load.gpexe_import_candidates where id = any($1::uuid[])`, [ids]);
-    const previewHashes = Object.fromEntries(hashes.map((h) => [h.id, h.preview_hash]));
+    const [staged] = await observations(run.id);
+    assert.deepEqual([rows["40001"][0].status, rows["40001"][0].by_check !== null, rows["40002"][0].effect, rows["40003"]], ["superseded", true, "not_observed", undefined]);
+    const ids = [rows["40001"][0].id, rows["40002"][0].id];
+    const previewHashes = { [ids[0]]: rows["40001"][0].preview_hash, [ids[1]]: rows["40002"][0].preview_hash };
     process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+    let withStaged;
     let r;
     try {
+      // A batch naming a staged id is refused whole, before anything is attempted (the same 404 as any unknown id).
+      withStaged = await api(`/gpexe/teams/${o.teamId}/imports`, { method: "POST", cookie: o.padmin.cookie, body: { candidateIds: [staged.id, ...ids], previewHashes: { ...previewHashes, [staged.id]: staged.preview_hash } } });
       r = await api(`/gpexe/teams/${o.teamId}/imports`, { method: "POST", cookie: o.padmin.cookie, body: { candidateIds: ids, previewHashes } });
     } finally {
       delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
     }
+    assert.deepEqual([withStaged.status, withStaged.body.error, withStaged.body.results], [404, "notFound", undefined]);
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.deepEqual(r.body.results.map((x) => [x.candidateId, x.outcome, x.code, "reviewAgain" in x]), ids.map((id) => [id, "refused", "candidate_not_actionable", false]));
+    assert.deepEqual(r.body.results.map((x) => [x.candidateId, x.outcome, x.code, "reviewAgain" in x]),
+      [[ids[0], "refused", "candidate_not_actionable", false], [ids[1], "refused", "candidate_not_actionable", false]]);
     assert.equal((await q(`select count(*)::int as n from training_load.gpexe_import_approvals where owner_team_id = $1`, [o.teamId]))[0].n, 0);
   } finally {
     held.release();
   }
   await run.done.p;
+  assert.equal((await checkRow(run.id)).status, "succeeded");
 });
 
 test("13. a stall inside the finalization is bounded: the server ends the idle transaction (idle_in_transaction_session_timeout 5 s), the team import lock is free again within the bound, and nothing of the check is published or withdrawn", async () => {
@@ -896,7 +986,8 @@ test("13. a stall inside the finalization is bounded: the server ends the idle t
   assert.match(row.error_code, /^check_finalize_(failed|outcome_unknown)$/);
   const rows = await bySession(o.teamId);
   assert.deepEqual([rows["41001"][0].status, rows["41001"][0].by_check], ["pending", null], "nothing withdrawn");
-  assert.ok(!actionable(await summaryOf(o, rows["41002"][0].id)), "nothing published");
+  assert.equal(rows["41002"], undefined, "nothing published");
+  assert.equal(await obsCount(run.id), 0, "the staging is discarded");
 });
 
 test("14. a COMMIT still in flight when its bound runs out: the outcome is unknown, the conditional 'failed' write waits for the old transaction and matches no row, and the check ends succeeded with its withdrawal - a late COMMIT is never overwritten", async () => {
@@ -1021,9 +1112,9 @@ test("17. the finalization re-validates the run's facts under the team lock: a b
     assert.deepEqual([row.status, row.error_code], ["failed", change], JSON.stringify(row));
     const rows = await bySession(o.teamId);
     const older = rows[String(change === "binding_ended" ? 45001 : 45101)][0];
-    const newer = rows[String(change === "binding_ended" ? 45002 : 45102)][0];
     assert.deepEqual([older.status, older.by_check], ["pending", null], `${change}: nothing withdrawn`);
-    assert.ok(!actionable(await summaryOf(o, newer.id)), `${change}: nothing published`);
+    assert.equal(rows[String(change === "binding_ended" ? 45002 : 45102)], undefined, `${change}: nothing published`);
+    assert.equal(await obsCount(row.id), 0, `${change}: the staging is discarded`);
     const coach = (await api(`/gpexe/teams/${o.teamId}/checks/${row.id}`, { cookie: o.coach.cookie })).body.check;
     assert.equal(coach.error.code, "source_connection_unavailable");
   }
@@ -1049,10 +1140,289 @@ test("18. the client-side statement bound: a finalization statement without an a
     await holder.query("rollback");
     const rows = await bySession(o.teamId);
     assert.deepEqual([rows["46001"][0].status, rows["46001"][0].by_check], ["pending", null], "nothing withdrawn");
-    assert.ok(!actionable(await summaryOf(o, rows["46002"][0].id)), "nothing published");
+    assert.equal(rows["46002"], undefined, "nothing published");
+    assert.equal(await obsCount(row.id), 0, "the staging is discarded");
     void took;
   } finally {
     await holder.query("rollback").catch(() => {});
     await holder.end();
   }
+});
+
+test("19. a candidate confirmed by check A stays actionable - approvable - while check B that sees it again runs; B's success moves only its last sighting to B", async () => {
+  const o = await boundOrg();
+  const s1 = sessionOf(o.sourceTeamId, 47001, D1);
+  src.serve(o.sourceTeamId, [s1]);
+  const a = await runCheck(o);
+  assert.equal(a.status, "succeeded");
+  const [x] = await candidates(o.teamId);
+  const before = await rowJson(x.id);
+  const s2 = sessionOf(o.sourceTeamId, 47002, D1);
+  src.serve(o.sourceTeamId, [s1, s2]);
+  const held = gate();
+  src.state.gates.athletes["47002"] = held;
+  const b = await startCheck(o);
+  let approved;
+  try {
+    await until(async () => held.reached && (await observations(b.id)).some((v) => v.sid === "47001"));
+    assert.deepEqual(await rowJson(x.id), before, "seen again by the running check: byte for byte unchanged");
+    assert.ok(actionable(await summaryOf(o, x.id)));
+    approved = await approve(o, x.id);
+    assert.equal(approved.status, 200, JSON.stringify(approved.body));
+  } finally {
+    held.release();
+  }
+  await b.done.p;
+  assert.equal((await checkRow(b.id)).status, "succeeded");
+  const rows = await bySession(o.teamId);
+  assert.deepEqual([rows["47001"][0].status, rows["47001"][0].seen], ["imported", b.id], "imported, with B as its last sighting");
+  assert.ok(actionable(await summaryOf(o, rows["47002"][0].id)), "the new session is published");
+  assert.equal(await obsCount(b.id), 0);
+});
+
+test("20. check B sees the candidate of check A again and then fails on a later session: the candidate stays byte for byte unchanged and actionable (the application and the database accept its approval); B's staging is discarded", async () => {
+  const o = await boundOrg();
+  const s1 = sessionOf(o.sourceTeamId, 48001, D1);
+  src.serve(o.sourceTeamId, [s1]);
+  const a = await runCheck(o);
+  assert.equal(a.status, "succeeded");
+  const [x] = await candidates(o.teamId);
+  const before = await rowJson(x.id);
+  const s2 = sessionOf(o.sourceTeamId, 48002, D1);
+  src.serve(o.sourceTeamId, [s1, s2]);
+  src.state.faults.drillMissing["48002"] = 1;
+  const b = await runCheck(o);
+  assert.deepEqual([b.status, b.error_code], ["failed", "drill_set_incomplete"]);
+  assert.deepEqual(await rowJson(x.id), before, "byte for byte unchanged: its last sighting is still A");
+  assert.equal((await rowJson(x.id)).last_seen_check_id, a.id);
+  assert.ok(actionable(await summaryOf(o, x.id)));
+  assert.equal(await rawApproval(x.id, o.padmin.id), "inserted", "the database accepts its approval");
+  assert.equal(await obsCount(b.id), 0);
+  assert.equal((await approve(o, x.id)).status, 200, "the approval through the route imports it");
+});
+
+test("21. check B sees the candidate of check A again and its finalization ends busy (a held candidate row, then a held team lock): the candidate stays byte for byte unchanged and actionable each time", async () => {
+  const o = await boundOrg();
+  const s1 = sessionOf(o.sourceTeamId, 49001, D1);
+  src.serve(o.sourceTeamId, [s1]);
+  const a = await runCheck(o);
+  assert.equal(a.status, "succeeded");
+  const [x] = await candidates(o.teamId);
+  const before = await rowJson(x.id);
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  try {
+    for (const [what, hold] of [
+      ["candidate row", () => holder.query(`select id from training_load.gpexe_import_candidates where id = $1 for update`, [x.id])],
+      ["team lock", () => holder.query(`select training_load.hold_gpexe_team_lock($1, 'test holder')`, [o.teamId])],
+    ]) {
+      importer.setCheckFinalizeForTests({ beforeLocks: async () => { await holder.query("begin"); await hold(); } });
+      const b = await runCheck(o);
+      await holder.query("rollback");
+      assert.deepEqual([b.status, b.error_code], ["failed", "check_finalize_busy"], what);
+      assert.deepEqual(await rowJson(x.id), before, `${what}: unchanged`);
+      assert.ok(actionable(await summaryOf(o, x.id)), `${what}: actionable`);
+      assert.equal(await rawApproval(x.id, o.padmin.id), "inserted", `${what}: the database accepts its approval`);
+      assert.equal(await obsCount(b.id), 0);
+    }
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end();
+  }
+});
+
+test("22. check B sees the candidate of check A again and its COMMIT gets no answer: with no confirmed success the candidate stays byte for byte unchanged and actionable; when the COMMIT did land but its answer was lost, the whole set is published and the last sighting is B", async () => {
+  const o = await boundOrg();
+  const s1 = sessionOf(o.sourceTeamId, 50001, D1);
+  src.serve(o.sourceTeamId, [s1]);
+  const a = await runCheck(o);
+  assert.equal(a.status, "succeeded");
+  const [x] = await candidates(o.teamId);
+  const before = await rowJson(x.id);
+  importer.setCheckFinalizeForTests({ commit: () => new Promise(() => {}), commitBoundMs: 300 });
+  src.serve(o.sourceTeamId, [s1, sessionOf(o.sourceTeamId, 50002, D1)]);
+  const unknown = await runCheck(o);
+  assert.deepEqual([unknown.status, unknown.error_code], ["failed", "check_finalize_outcome_unknown"]);
+  assert.deepEqual(await rowJson(x.id), before, "unchanged: the last sighting is still A");
+  assert.ok(actionable(await summaryOf(o, x.id)));
+  assert.equal(await rawApproval(x.id, o.padmin.id), "inserted");
+  assert.equal((await bySession(o.teamId))["50002"], undefined, "nothing of the unknown check is published");
+  await until(async () => (await obsCount(unknown.id)) === 0);
+  importer.setCheckFinalizeForTests({ commit: async (client) => { await client.query("commit"); throw new Error("answer lost"); }, commitBoundMs: 2_000 });
+  const lost = await runCheck(o);
+  assert.equal(lost.status, "succeeded", JSON.stringify(lost));
+  const rows = await bySession(o.teamId);
+  assert.deepEqual([rows["50001"][0].seen, rows["50002"][0].seen], [lost.id, lost.id], "the whole set is published, the last sighting is B");
+  assert.ok(actionable(await summaryOf(o, rows["50002"][0].id)));
+});
+
+test("23. staged data is reachable nowhere: a new session and a new content version seen by a running check are not in the list (replaced versions included), the detail, the source athletes, the batch or the approval, and the published row does not change; when that check fails the staging is discarded; the retention run discards the staging of any check that is no longer running", async () => {
+  const o = await boundOrg();
+  const s1 = sessionOf(o.sourceTeamId, 51001, D1);
+  src.serve(o.sourceTeamId, [s1]);
+  assert.equal((await runCheck(o)).status, "succeeded");
+  const [x] = await candidates(o.teamId);
+  const before = await rowJson(x.id);
+  // New content of s1 and a new session with an athlete (777) no other session has; the new session's drill 1 cannot be read.
+  const s1b = sessionOf(o.sourceTeamId, 51001, D1, { updatedOn: `${D1}T23:30:00.000` });
+  const s2 = sessionOf(o.sourceTeamId, 51002, D1);
+  const extra = structuredClone(s2.athleteSessions.find((r) => r.athlete === 102));
+  extra.id = 51002 * 100 + 50; extra.athlete = 777; extra.track = 51002 * 10 + 7;
+  s2.athleteSessions.push(extra);
+  s2.more[String(extra.id)] = { ...structuredClone(s2.more[String(s2.athleteSessions[1].id)]), athletesession_id: extra.id };
+  s2.tracks[String(extra.track)] = { ...s2.tracks[String(s2.athleteSessions[1].track)], id: extra.track, athlete: 777 };
+  src.serve(o.sourceTeamId, [s1b, s2]);
+  const held = gate();
+  src.state.gates.athletes["51002"] = held;
+  const b = await startCheck(o);
+  try {
+    await until(async () => held.reached && (await obsCount(b.id)) === 1);
+    const [staged] = await observations(b.id);
+    assert.deepEqual([staged.sid, staged.bundle_hash !== x.bundle_hash], ["51001", true]);
+    assert.deepEqual((await listed(o)).map((c) => c.id), [x.id], "the list shows the published row only");
+    assert.deepEqual((await listed(o, o.padmin.cookie)).map((c) => c.id), [x.id]);
+    assert.equal((await api(`/gpexe/teams/${o.teamId}/candidates/${staged.id}`, { cookie: o.padmin.cookie })).status, 404);
+    assert.equal((await approve(o, staged.id)).status, 404);
+    process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+    let batch;
+    try {
+      batch = await api(`/gpexe/teams/${o.teamId}/imports`, { method: "POST", cookie: o.padmin.cookie, body: { candidateIds: [staged.id], previewHashes: { [staged.id]: staged.preview_hash } } });
+    } finally {
+      delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+    }
+    assert.deepEqual([batch.status, batch.body.error, batch.body.results], [404, "notFound", undefined], "a batch naming a staged id is refused whole");
+    assert.deepEqual(await rowJson(x.id), before, "the published row is untouched by the staged new content");
+    assert.ok(actionable(await summaryOf(o, x.id)));
+    src.state.faults.drillMissing["51002"] = 1;
+  } finally {
+    held.release();
+  }
+  await b.done.p;
+  const failed = await checkRow(b.id);
+  assert.deepEqual([failed.status, failed.error_code], ["failed", "drill_set_incomplete"], JSON.stringify(failed));
+  assert.equal(await obsCount(b.id), 0, "the failed check's staging is discarded");
+  assert.deepEqual(await rowJson(x.id), before);
+  const athletes = (await api(`/gpexe/teams/${o.teamId}/source-athletes`, { cookie: o.coach.cookie })).body.athletes ?? [];
+  assert.ok(!athletes.some((s) => String(s.gpexeAthleteId) === "777"), "an athlete only a staged session named is not a source athlete");
+  // The retention run discards the staging of a check that is no longer running (here: a never-bound team's check marked failed without its own discard).
+  const other = await org();
+  const orphan = (await q(`insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, status, window_from, window_to, gpexe_team_id) values ($1,$2,'running',$3,$3,$4) returning id`, [other.teamId, other.userId, D1, other.sourceTeamId]))[0].id;
+  await q(`insert into training_load.gpexe_import_check_observations (check_id, owner_team_id, gpexe_team_session_id, bundle_hash, raw_bundle, status, preview, preview_hash)
+           values ($1, $2, '99', repeat('c', 64), '{}'::jsonb, 'pending', '{}'::jsonb, repeat('d', 64))`, [orphan, other.teamId]);
+  await q(`update training_load.gpexe_import_checks set status = 'failed', finished_at = now(), error_code = 'abandoned', error_message = 'test' where id = $1`, [orphan]);
+  const retention = await importer.runRetention("cli");
+  assert.ok(retention.observationsDiscarded >= 1);
+  assert.equal(await obsCount(orphan), 0);
+});
+
+test("24. the finalization refuses a staging that does not match the sessions the run recorded: an observation removed under a running check ends it as check_finalize_failed, nothing is published or withdrawn, the published candidate is byte for byte unchanged", async () => {
+  const o = await boundOrg();
+  const s1 = sessionOf(o.sourceTeamId, 52001, D1);
+  src.serve(o.sourceTeamId, [s1]);
+  assert.equal((await runCheck(o)).status, "succeeded");
+  const [x] = await candidates(o.teamId);
+  const before = await rowJson(x.id);
+  const s2 = sessionOf(o.sourceTeamId, 52002, D1);
+  src.serve(o.sourceTeamId, [s1, s2]);
+  const held = gate();
+  src.state.gates.athletes["52002"] = held;
+  const b = await startCheck(o);
+  try {
+    await until(async () => held.reached && (await obsCount(b.id)) === 1);
+    await q(`delete from training_load.gpexe_import_check_observations where check_id = $1`, [b.id]);
+  } finally {
+    held.release();
+  }
+  await b.done.p;
+  const row = await checkRow(b.id);
+  assert.deepEqual([row.status, row.error_code], ["failed", "check_finalize_failed"], JSON.stringify(row));
+  assert.ok(logLines.some((l) => l.includes(`check ${b.id} finalization ended as check_finalize_failed (observations_incomplete)`)));
+  assert.deepEqual(await rowJson(x.id), before);
+  assert.ok(actionable(await summaryOf(o, x.id)));
+  assert.equal((await bySession(o.teamId))["52002"], undefined, "nothing published");
+  assert.equal(await obsCount(b.id), 0);
+});
+
+test("25. the retention run closes, for every team, a check that stopped reporting (abandoned) and discards its staging; a running check with a fresh heartbeat keeps its staging", async () => {
+  const stale = await org();
+  const live = await org();
+  const raw = async (team, heartbeatMinutesAgo) => (await q(
+    `insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, status, window_from, window_to, gpexe_team_id, heartbeat_at)
+     values ($1,$2,'running',$3,$3,$4, now() - make_interval(mins => $5)) returning id`, [team.teamId, team.userId, D1, team.sourceTeamId, heartbeatMinutesAgo]))[0].id;
+  const obs = (checkId, team) => q(
+    `insert into training_load.gpexe_import_check_observations (check_id, owner_team_id, gpexe_team_session_id, bundle_hash, raw_bundle, status, preview, preview_hash)
+     values ($1, $2, '5', repeat('e', 64), '{}'::jsonb, 'pending', '{}'::jsonb, repeat('f', 64))`, [checkId, team.teamId]);
+  const staleCheck = await raw(stale, importer.CHECK_STALE_AFTER_MINUTES + 1);
+  await obs(staleCheck, stale);
+  const liveCheck = await raw(live, 1);
+  await obs(liveCheck, live);
+  try {
+    const r = await importer.runRetention("cli");
+    assert.ok(r.checksAbandoned >= 1 && r.observationsDiscarded >= 1, JSON.stringify(r));
+    const closed = await checkRow(staleCheck);
+    assert.deepEqual([closed.status, closed.error_code, await obsCount(staleCheck)], ["failed", "abandoned", 0]);
+    assert.deepEqual([(await checkRow(liveCheck)).status, await obsCount(liveCheck)], ["running", 1], "a live check keeps its staging");
+  } finally {
+    await q(`delete from training_load.gpexe_import_check_observations where check_id = $1`, [liveCheck]);
+    await q(`update training_load.gpexe_import_checks set status = 'failed', finished_at = now(), error_code = 'test', error_message = 'test' where id = $1`, [liveCheck]);
+  }
+});
+
+test("26. the staging guard waits for a transaction holding the check row (FOR SHARE) and then sees the status it committed: an observation inserted while the check is being closed is refused", async () => {
+  const o = await org();
+  const checkId = (await q(
+    `insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, status, window_from, window_to, gpexe_team_id) values ($1,$2,'running',$3,$3,$4) returning id`,
+    [o.teamId, o.userId, D1, o.sourceTeamId]))[0].id;
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  const inserter = new pg.Client({ connectionString: db.url });
+  await inserter.connect();
+  try {
+    await holder.query("begin");
+    await holder.query(`select id from training_load.gpexe_import_checks where id = $1 for update`, [checkId]);
+    const inserting = inserter.query(
+      `insert into training_load.gpexe_import_check_observations (check_id, owner_team_id, gpexe_team_session_id, bundle_hash, raw_bundle, status, preview, preview_hash)
+       values ($1, $2, '6', repeat('a', 64), '{}'::jsonb, 'pending', '{}'::jsonb, repeat('b', 64))`, [checkId, o.teamId]);
+    inserting.catch(() => {});
+    await waitingOn("%gpexe_import_check_observations%");
+    await holder.query(`update training_load.gpexe_import_checks set status = 'failed', finished_at = now(), error_code = 'test', error_message = 'test' where id = $1`, [checkId]);
+    await holder.query("commit");
+    await assert.rejects(inserting, (e) => e.code === "23514" && /is not running/.test(String(e.message)));
+    assert.equal(await obsCount(checkId), 0);
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end();
+    await inserter.end();
+  }
+});
+
+test("27. the retention sweep is bounded: a held staging row ends the step with a stable code within its bounds, the run records the error, keeps the purge, and the next run discards the row", async () => {
+  const o = await org();
+  const checkId = (await q(
+    `insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, status, window_from, window_to, gpexe_team_id) values ($1,$2,'running',$3,$3,$4) returning id`,
+    [o.teamId, o.userId, D1, o.sourceTeamId]))[0].id;
+  const obsId = (await q(
+    `insert into training_load.gpexe_import_check_observations (check_id, owner_team_id, gpexe_team_session_id, bundle_hash, raw_bundle, status, preview, preview_hash)
+     values ($1, $2, '7', repeat('a', 64), '{}'::jsonb, 'pending', '{}'::jsonb, repeat('b', 64)) returning id`, [checkId, o.teamId]))[0].id;
+  await q(`update training_load.gpexe_import_checks set status = 'failed', finished_at = now(), error_code = 'test', error_message = 'test' where id = $1`, [checkId]);
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await holder.query(`select id from training_load.gpexe_import_check_observations where id = $1 for update`, [obsId]);
+    const started = Date.now();
+    const connectionsBefore = appPool.totalCount;
+    await assert.rejects(importer.runRetention("cli"), (e) => e.code === "55P03" || /lock timeout/.test(String(e.message)));
+    assert.ok(Date.now() - started < 4_000, "bounded by lock_timeout, not by the client bound");
+    assert.equal(appPool.totalCount, connectionsBefore, "a server-answered refusal is rolled back and the connection returned, not destroyed");
+    assert.equal(await obsCount(checkId), 1, "nothing discarded");
+    const runRow = (await q(`select error_message from training_load.gpexe_retention_runs order by started_at desc limit 1`))[0];
+    assert.match(String(runRow.error_message), /lock timeout/);
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end();
+  }
+  const r = await importer.runRetention("cli");
+  assert.ok(r.observationsDiscarded >= 1);
+  assert.equal(await obsCount(checkId), 0);
 });

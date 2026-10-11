@@ -14,11 +14,16 @@
 --      superseded_by_check_id is set on a superseded row, and neither on any
 --      other status (gpexe_import_candidates_superseded_by_exactly_one). The
 --      check is referenced ON DELETE RESTRICT (checks are never deleted, v24).
---   2. reappeared_status — a superseded candidate that a running check sees
---      again with the same content keeps its status and its superseded_by
---      fields until that check succeeds; the status it is to return to
---      (pending / blocked) waits here, only on a superseded row
---      (gpexe_import_candidates_reappeared_only_superseded).
+--   2. gpexe_import_check_observations — what a RUNNING check saw, staged
+--      per check and session (the snapshot, its hash, the preview, the status
+--      it would have, the drill effect), insert-only, accepted only for a
+--      running check of the same team. A candidate row is never written while
+--      a check runs: the published candidates stay byte for byte as the last
+--      successful check left them, a new session or new content is not
+--      visible or approvable, and nothing is withdrawn. The finalization
+--      applies the observations and deletes them in its one transaction; the
+--      observations of a check that did not succeed are discarded (the failed
+--      run, then the retention run).
 --   3. drill_parameter_effect — the one derived fact of the drill-parameter
 --      guard: not_required (fewer than two drills), confirmed (at least two
 --      non-empty drill answers, pairwise distinct), not_observed (fewer than
@@ -26,13 +31,16 @@
 --      from before v33.
 --   4. The approval validation (training_load.validate_gpexe_import_approval,
 --      replacing v23's) additionally refuses an approval unless the
---      candidate's last_seen check is a 'succeeded' check OF THE SAME TEAM, it
---      is not waiting to reappear, and its drill_parameter_effect is
---      not_required or confirmed. The check row is read without a lock: a
---      check that is still running is refused, and a finished check never
---      changes (5.); the finalization takes the check row before the
---      candidates, the approval takes the candidate before reading the check,
---      so no lock cycle exists.
+--      candidate's last_seen check is a 'succeeded' check OF THE SAME TEAM and
+--      its drill_parameter_effect is not_required or confirmed. Since v33
+--      last_seen_check_id is written only by the finalization, in the
+--      transaction that marks that check succeeded, so it always names the
+--      last SUCCESSFULLY FINALIZED check, never a running or failed attempt;
+--      the trigger still verifies it (rows from before v33, raw writers). The
+--      check row is read without a lock: a check that is still running is
+--      refused, and a finished check never changes (5.); the finalization
+--      takes the check row before the candidates, the approval takes the
+--      candidate before reading the check, so no lock cycle exists.
 --   5. A check's status moves only from 'running' to 'succeeded' or 'failed';
 --      once finished, its status and finished_at are final
 --      (gpexe_import_checks_status_final, whoever writes) - the unlocked read
@@ -46,7 +54,6 @@
 
 alter table training_load.gpexe_import_candidates
   add column superseded_by_check_id uuid references training_load.gpexe_import_checks(id) on delete restrict,
-  add column reappeared_status varchar(20),
   add column drill_parameter_effect varchar(20);
 
 -- The v22 rule "superseded <=> superseded_by_candidate_id" is replaced by the
@@ -83,9 +90,6 @@ alter table training_load.gpexe_import_candidates
       else superseded_by_candidate_id is null and superseded_by_check_id is null
     end
   ),
-  add constraint gpexe_import_candidates_reappeared_only_superseded check (
-    reappeared_status is null or (status = 'superseded' and reappeared_status in ('pending', 'blocked'))
-  ),
   add constraint gpexe_import_candidates_drill_parameter_effect_values check (
     drill_parameter_effect is null or drill_parameter_effect in ('not_required', 'confirmed', 'not_observed')
   );
@@ -95,8 +99,6 @@ create index gpexe_import_candidates_superseded_by_check_idx
 
 comment on column training_load.gpexe_import_candidates.superseded_by_check_id is
   'v33: the successful, complete check (binding path) of the team and window that no longer confirmed this candidate; exactly one of superseded_by_candidate_id / superseded_by_check_id on a superseded row.';
-comment on column training_load.gpexe_import_candidates.reappeared_status is
-  'v33: the status (pending / blocked) a superseded candidate returns to when the running check that saw it again with the same content succeeds; NULL otherwise.';
 comment on column training_load.gpexe_import_candidates.drill_parameter_effect is
   'v33: the drill-parameter guard''s derived word (not_required / confirmed / not_observed); never a fingerprint or a value. An approval needs not_required or confirmed.';
 
@@ -119,6 +121,55 @@ create trigger gpexe_import_checks_status_final
   before update on training_load.gpexe_import_checks
   for each row execute function training_load.gpexe_check_status_final();
 
+-- 2. The staging of a running check. One row per check and session; what the
+--    finalization publishes. Insert-only, for a running check of the same
+--    team; never changed; deleted by the finalization, by the failed run or
+--    by the retention run (a check that is no longer running). No route reads
+--    it: the list, the detail, the source athletes and the approvals read
+--    gpexe_import_candidates only.
+create table training_load.gpexe_import_check_observations (
+  id uuid primary key default gen_random_uuid(),
+  check_id uuid not null references training_load.gpexe_import_checks(id) on delete restrict,
+  owner_team_id uuid not null references public.teams(id) on delete restrict,
+  gpexe_team_session_id text not null check (gpexe_team_session_id ~ '^[0-9]{1,12}$'),
+  session_started_at timestamptz,
+  session_label text,
+  bundle_hash text not null check (bundle_hash ~ '^[0-9a-f]{64}$'),
+  raw_bundle jsonb not null,
+  status varchar(20) not null check (status in ('pending', 'blocked')),
+  preview jsonb not null,
+  preview_hash text not null check (preview_hash ~ '^[0-9a-f]{64}$'),
+  drill_parameter_effect varchar(20) check (drill_parameter_effect is null or drill_parameter_effect in ('not_required', 'confirmed', 'not_observed')),
+  observed_at timestamptz not null default now(),
+  unique (check_id, gpexe_team_session_id)
+);
+create index gpexe_import_check_observations_team_idx on training_load.gpexe_import_check_observations (owner_team_id);
+comment on table training_load.gpexe_import_check_observations is
+  'v33: what a running check saw, staged per check and session until its finalization publishes it; never read by a route.';
+
+create function training_load.gpexe_import_check_observation_guard() returns trigger as $$
+declare
+  k record;
+begin
+  if tg_op = 'UPDATE' then
+    raise exception 'gpexe_import_check_observations: an observation is never changed' using errcode = '23514';
+  end if;
+  -- FOR SHARE: an insert waits for a finalization or an abandon sweep that
+  -- holds the check row, and then sees the status it committed.
+  select status, owner_team_id into k from training_load.gpexe_import_checks where id = new.check_id for share;
+  if not found or k.status <> 'running' then
+    raise exception 'gpexe_import_check_observations: check % is not running; an observation belongs to a running check', new.check_id using errcode = '23514';
+  end if;
+  if k.owner_team_id is distinct from new.owner_team_id then
+    raise exception 'gpexe_import_check_observations: check % belongs to another team', new.check_id using errcode = '23514';
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+create trigger gpexe_import_check_observations_guard
+  before insert or update on training_load.gpexe_import_check_observations
+  for each row execute function training_load.gpexe_import_check_observation_guard();
+
 create or replace function training_load.validate_gpexe_import_approval() returns trigger as $$
 declare
   right_row record;
@@ -136,7 +187,7 @@ begin
   end if;
   select owner_team_id, gpexe_team_session_id, bundle_hash, preview_hash, status, raw_bundle is not null as has_snapshot, raw_expires_at,
          coalesce(jsonb_array_length(preview -> 'changesToImported'), 0) as changes_to_imported,
-         last_seen_check_id, reappeared_status, drill_parameter_effect
+         last_seen_check_id, drill_parameter_effect
     into cand
     from training_load.gpexe_import_candidates
    where id = new.candidate_id
@@ -160,10 +211,11 @@ begin
   if new.changes_to_imported is distinct from cand.changes_to_imported then
     raise exception 'gpexe_import_approvals: changes_to_imported does not match the candidate''s preview';
   end if;
-  -- v33: only a candidate of a check that atomically succeeded is actionable,
-  -- and a session with two or more drills only with a confirmed drill-parameter effect.
+  -- v33: only a candidate whose last sighting is a check of its team that
+  -- atomically succeeded is actionable, and a session with two or more drills
+  -- only with a confirmed drill-parameter effect.
   select status into seen_status from training_load.gpexe_import_checks where id = cand.last_seen_check_id and owner_team_id = cand.owner_team_id;
-  if seen_status is distinct from 'succeeded' or cand.reappeared_status is not null then
+  if seen_status is distinct from 'succeeded' then
     raise exception 'gpexe_import_approvals: candidate % is not confirmed by a succeeded check', new.candidate_id;
   end if;
   if cand.drill_parameter_effect is null or cand.drill_parameter_effect not in ('not_required', 'confirmed') then

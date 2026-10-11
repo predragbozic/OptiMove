@@ -1446,20 +1446,28 @@ Technical details.
 - **The pre-import safety package (switch conditions 6 and 7)** (owner order 2026-10-11; branch
   `fix/gpexe-pre-import-safety` from `c3d31d4`; not merged; migration v33, backend, tests and docs; runbook
   section "When a check's results become actionable (v33)"):
-  - **Condition 6 and the publication of a check.** A candidate is actionable only when its
-    `last_seen_check_id` is a `succeeded` check - in `approveCandidate` (409 `candidate_not_actionable`) and
-    in the database (the v33 approval trigger). The run changes no other row; one finalization transaction
-    restores what reappeared, supersedes older content by candidate, withdraws (binding path only) every
-    pending / blocked candidate of the team whose session day lies in the exact `[from, to]` and whose last
-    sighting `IS DISTINCT FROM` the check (`superseded_by_check_id`), projects what it superseded, marks the
-    check succeeded and sends one bounded COMMIT; busy / failed / unknown never publishes, never supersedes
-    partly and never repeats a sent COMMIT (verified on a new connection). Exactly one `superseded_by` on a
-    superseded row (`gpexe_import_candidates_superseded_by_exactly_one`); `reappeared_status` waits until the
-    check succeeds; a finished check's status and `finished_at` are final in the database
-    (`gpexe_import_checks_status_final`) and the gate reads only a check of the candidate's own team; the
-    finalization re-validates the run's binding facts under the team lock and is bounded (statement,
-    idle-in-transaction and client-side bounds). The rollback refuses while a row is superseded by a check;
-    after it conditions 6 and 7 are open again.
+  - **Condition 6 and the publication of a check.** While a check runs it writes no candidate row: its
+    observations are staged per check and session in `training_load.gpexe_import_check_observations`
+    (insert-only, running check of the same team only, read by no route), so the published candidates stay
+    byte for byte as the last successful check left them (owner's external review of `ab58e5e`, HIGH: a
+    running, failed or unknown check must never change the actionable state of a candidate confirmed by an
+    earlier successful check). A candidate is actionable only when its `last_seen_check_id` is a `succeeded`
+    check of its team - in `approveCandidate` (409 `candidate_not_actionable`), the list, the batch and the
+    database (the v33 approval trigger) - and `last_seen_check_id` is written only by the finalization, in
+    the COMMIT that marks that check succeeded, so it always names the last successfully finalized check.
+    One finalization transaction applies the staging (refreshes same content, restores a superseded row
+    seen again, inserts new content), supersedes older content by candidate, withdraws (binding path only)
+    every pending / blocked candidate of the team whose session day lies in the exact `[from, to]` and whose
+    last sighting `IS DISTINCT FROM` the check (`superseded_by_check_id`), projects what it superseded,
+    deletes the staging, marks the check succeeded and sends one bounded COMMIT; busy / failed / unknown
+    publishes nothing, changes nothing, supersedes nothing and never repeats a sent COMMIT (verified on a
+    new connection); the staging of a check that did not succeed is discarded by the run and by the
+    retention sweep. Exactly one `superseded_by` on a superseded row
+    (`gpexe_import_candidates_superseded_by_exactly_one`); a finished check's status and `finished_at` are
+    final in the database (`gpexe_import_checks_status_final`); the finalization re-validates the run's
+    binding facts under the team lock and is bounded (statement, idle-in-transaction and client-side
+    bounds). The rollback refuses while a row is superseded by a check or a check is running; after it
+    conditions 6 and 7 are open again.
   - **Condition 7 (the drill-parameter guard).** The adapter fingerprints each non-empty drill answer's full
     players map in memory (canonical SHA-256, dropped at once); two equal non-empty answers fail the check as
     `drill_parameter_effect_not_distinguishable` (no candidate; administrator-only code); fewer than two
@@ -2167,14 +2175,12 @@ pre-existing; pass/fail counts don't belong in this file
   guard); and a candidate withdrawn by a check (`supersededByCheckId`, no newer candidate) told apart from
   one replaced by newer data - today its review prints "GPEXE has newer data", which is not true for a
   withdrawal. Needs frontend tests.
-- **Bound the COMMIT of `recordCandidate`** (code review of PR #149, 2026-10-09; pre-existing): a check's
-  candidate transaction sends COMMIT without a bound or an outcome check, so a lost COMMIT answer marks the
-  check `failed` / `internal_error` although the candidate (and, since PR #149, a superseded snapshot's
-  projection) may be committed. No duplicate can follow (the unique key and the idempotent projection), but
-  "written" and "unknown" are not told apart. Fix in the `approveCandidate` style: on a COMMIT error look
-  the row up on another connection and continue, or fail with an `outcome_unknown`-class code. (With the
-  pre-import safety package, v33, a candidate of a failed check is never actionable and the run supersedes
-  or projects nothing, so what is left is the unbounded wait and a misleading `internal_error`.)
+- **Bound the staging insert of `recordCandidate`** (code review of PR #149, 2026-10-09, reshaped by the
+  pre-import safety package, v33): since v33 a check's run writes no candidate row and has no transaction
+  of its own - each session is one auto-commit insert into the staging table, and nothing of it can be
+  committed as a candidate. What is left of the original finding: that insert's answer is awaited without
+  a client-side bound, and a lost answer fails the check as `internal_error` (one staged row at most,
+  removed by the discard or the retention sweep). Fix: a bounded insert with a stable code.
 - **Security follow-up, accepted by the owner (2026-10-07, at the review of PR #146): the verification
   resend's timing channel.** `POST /api/auth/email-verifications/resend` has no timing floor and, when a
   pending application exists, answers only after its transaction and the awaited email provider call,

@@ -6,24 +6,27 @@
 -- check the constraints, roll back to the identical v32 catalog, apply again).
 -- Before it is run anywhere real:
 --   * the application is back on a commit WITHOUT the check finalization
---     (its check run writes superseded_by_check_id / reappeared_status /
---     drill_parameter_effect and its approval relies on the v33 gate);
+--     (its check run stages observations and writes superseded_by_check_id /
+--     drill_parameter_effect, and its approval relies on the v33 gate);
 --   * a fresh, restore-verified backup exists;
 --   * the owner approved this database specifically.
 -- It is forward-safe: it refuses, changing nothing, when
 --   * any migrations_v2 migration newer than v33 is recorded;
 --   * any candidate is superseded by a check (superseded_by_check_id) - that
---     history has no place in the v32 rule and is never dropped silently.
--- A waiting reappearance mark (reappeared_status) is discarded with its column:
--- such a row is superseded by a candidate (one superseded by a check refuses
--- the rollback above) and stays exactly that - the reappearance simply never
--- takes effect, which is what the v32 code would do anyway.
+--     history has no place in the v32 rule and is never dropped silently;
+--   * a check is still running (its staged observations would be lost).
+-- The staged observations of checks that are not running (failed, abandoned,
+-- an unknown outcome that did not commit) are transient and are dropped with
+-- their table: they were never published and the v32 code cannot read them.
 -- drill_parameter_effect is a derived fact (never a value or a fingerprint)
 -- and is dropped with the column; the v32 approval rule does not read it.
 -- AFTER THIS ROLLBACK SWITCH CONDITIONS 6 AND 7 ARE OPEN AGAIN: the v32 approval
 -- trigger accepts a candidate of a check that never succeeded and one whose
 -- drills were never confirmed, so GPEXE_IMPORT_APPLY_ENABLED must stay off.
 --
+-- The locks are taken NOWAIT (candidates, approvals, checks, the staging table
+-- and public.teams): run it at a quiet moment and simply repeat it after a
+-- 55P03 (lock not available) - a refused lock changes nothing.
 -- One transaction. Run it as
 --   psql -v ON_ERROR_STOP=1 -f docs/runbooks/gpexe-check-finalization-v33-rollback.sql
 begin;
@@ -31,6 +34,11 @@ set local lock_timeout = '5s';
 lock table training_load.gpexe_import_candidates in access exclusive mode nowait;
 lock table training_load.gpexe_import_approvals in access exclusive mode nowait;
 lock table training_load.gpexe_import_checks in access exclusive mode nowait;
+lock table training_load.gpexe_import_check_observations in access exclusive mode nowait;
+-- Dropping the staging table removes its foreign key to public.teams, which
+-- takes the same lock there: taken here first, so it fails fast instead of
+-- queueing behind a long transaction.
+lock table public.teams in access exclusive mode nowait;
 
 do $$
 declare
@@ -51,6 +59,12 @@ begin
    where superseded_by_check_id is not null;
   if dependent > 0 then
     raise exception 'v33 rollback refused: % candidate(s) are superseded by a check (superseded_by_check_id); only a forward migration may decide their fate', dependent;
+  end if;
+  select count(*) into dependent from training_load.gpexe_import_check_observations o
+    join training_load.gpexe_import_checks k on k.id = o.check_id
+   where k.status = 'running';
+  if dependent > 0 then
+    raise exception 'v33 rollback refused: % staged observation(s) belong to a running check; let it finish first', dependent;
   end if;
 end $$;
 
@@ -99,14 +113,15 @@ $$ language plpgsql;
 
 drop trigger gpexe_import_checks_status_final on training_load.gpexe_import_checks;
 drop function training_load.gpexe_check_status_final();
+drop trigger gpexe_import_check_observations_guard on training_load.gpexe_import_check_observations;
+drop function training_load.gpexe_import_check_observation_guard();
+drop table training_load.gpexe_import_check_observations;
 drop index training_load.gpexe_import_candidates_superseded_by_check_idx;
 alter table training_load.gpexe_import_candidates
   drop constraint gpexe_import_candidates_superseded_by_exactly_one,
-  drop constraint gpexe_import_candidates_reappeared_only_superseded,
   drop constraint gpexe_import_candidates_drill_parameter_effect_values;
 alter table training_load.gpexe_import_candidates
   drop column superseded_by_check_id,
-  drop column reappeared_status,
   drop column drill_parameter_effect;
 -- The v22 rule, under the name PostgreSQL gave it when v22 created it unnamed.
 alter table training_load.gpexe_import_candidates

@@ -632,11 +632,16 @@ Owner order 2026-10-11 (switch conditions 6 and 7). Migration
 `migrations_v2/202610111000_training_load_v33_gpexe_check_finalization.sql`, rollback
 `docs/runbooks/gpexe-check-finalization-v33-rollback.sql`.
 
-**The mechanism.** A check stores its candidates session by session while it runs, each in its own
-short transaction, and every candidate it writes or refreshes names that check as its
-`last_seen_check_id`. **A candidate is actionable only when that check is `succeeded`**, it does not
-wait to reappear (`reappeared_status` is null) and its `drill_parameter_effect` is `not_required` or
-`confirmed`. This is checked twice:
+**The mechanism.** While a check runs it writes **no candidate row**: what it sees - the snapshot,
+its hash, the preview, the status it would have, the drill effect - is staged per check and session in
+`training_load.gpexe_import_check_observations` (insert-only, accepted only for a running check of the
+same team, read by no route). The published candidates therefore stay byte for byte as the last
+successful check left them: an actionable candidate stays actionable, a new session or new content is
+not visible or approvable, nothing is withdrawn. The finalization applies the staging in one
+transaction and sets `last_seen_check_id` to that check in the same COMMIT that marks it `succeeded` -
+so `last_seen_check_id` always names the **last successfully finalized check**, never a running or
+failed attempt. **A candidate is actionable only when that check is `succeeded`** (of the same team)
+and its `drill_parameter_effect` is `not_required` or `confirmed`. This is checked twice:
 - by the application (`approveCandidate`, before the snapshot and preview checks; the batch entry test
   and the candidate list's `approvalBlockers` use the same rule in memory, as `not_confirmed_for_import`),
   answered as 409 `candidate_not_actionable` with one generic sentence;
@@ -649,14 +654,21 @@ wait to reappear (`reappeared_status` is null) and its `drill_parameter_effect` 
   order (rights → candidate → team lock) and the finalization's (check → candidates → team try-lock)
   never form a cycle, and a late conditional `failed` write can never overwrite a published check.
 
-So a running check's candidates are not actionable, and a check that fails, is abandoned or ends with
-an unknown outcome never makes anything of its own actionable. This does not rely on the import switch.
-The other side of the same rule: a candidate that was actionable and is seen again by a check that then
-fails (or ends busy or unknown) names that check as its last sighting and is **not actionable until a
-later check succeeds** - fail-closed; run the check again.
+So a running check publishes nothing, and a check that fails, is abandoned or ends with an unknown
+outcome never makes anything of its own actionable - and **never changes what an earlier successful
+check published**: a candidate confirmed by check A stays actionable, byte for byte unchanged, while
+check B runs, when B sees it again and then fails, when B's finalization ends busy, and when B's COMMIT
+gets no answer; only B's confirmed success moves its last sighting to B. The staging of a check that
+did not succeed is discarded by the failed run and by every retention run (each check, the server's
+6-hour schedule, the CLI): the run first closes, for every team, a check that stopped reporting for 15
+minutes (a restart mid-run) as `abandoned`, then discards the staging of every check that is no longer
+running - so a dead check's staging never outlives the next retention run, whether or not its team ever
+checks again; a running check's staging is never touched. On the legacy e03 path the staged
+`raw_bundle` keeps the full drill maps for the run's duration (as the published row did before v33,
+until the retention projects it); no route reads the staging, and F3c4 retires that path. This does
+not rely on the import switch.
 
-**The finalization (`finalizeCheck`).** While the check runs it changes no other row: no supersede, no
-restore, no withdrawal. After the last session, one transaction:
+**The finalization (`finalizeCheck`).** After the last session, one transaction:
 1. locks the check row (`FOR UPDATE`; it must still be `running`), then the team's candidate rows in
    scope by id (`FOR UPDATE`, `lock_timeout` 2 s, `statement_timeout` 10 s,
    `idle_in_transaction_session_timeout` 5 s, and a 12 s client-side bound on every statement - a
@@ -667,11 +679,15 @@ restore, no withdrawal. After the last session, one transaction:
    so one committed a moment before still lets the check publish - switch condition 5), on the legacy path
    still no binding - a change fails the check with its precise code (`binding_ended`,
    `connection_not_usable`, `connection_credential_changed`, `team_not_available`, `binding_started`,
-   ...), nothing published;
-2. restores every superseded candidate this check saw again with the same content to the status waiting
-   in `reappeared_status`, clearing both `superseded_by` fields - a reappearance takes effect only
-   through a successful check; a waiting mark of any other check is dropped (the row stays superseded);
-3. supersedes, by the candidate the check saw, every older `pending` / `blocked` candidate of the same
+   ...), nothing published; then checks that exactly as many observations are staged as sessions the
+   run recorded (a missing one would read as "not seen" and withdraw a listed session) - otherwise
+   `check_finalize_failed`, nothing published;
+2. applies every staged observation whose content a candidate row already has: an imported row gets the
+   sighting only; a pending / blocked / **superseded** row is refreshed (snapshot, preview, status, drill
+   effect) and (re)published with this check as its last sighting, both `superseded_by` fields cleared -
+   a reappearance takes effect only through a successful check;
+3. inserts a candidate for every observation of new content (first and last seen by this check), then
+   supersedes, by the candidate the check saw, every older `pending` / `blocked` candidate of the same
    session whose `last_seen_check_id IS DISTINCT FROM` this check (`superseded_by_candidate_id`);
 4. **withdraws** - on the binding path only, which reads the whole list - every `pending` / `blocked`
    candidate of the same team whose session day (`session_started_at` in UTC, the naive GPEXE day) lies
@@ -680,13 +696,17 @@ restore, no withdrawal. After the last session, one transaction:
    other teams are never touched. The legacy e03 path does not withdraw (its list is not proven
    complete); it keeps steps 2, 3, 5 and 6;
 5. projects the snapshots it superseded to the consumed fields (owner order 2026-10-09);
-6. marks the check `succeeded` - the publication - and sends one COMMIT, bounded at 15 s.
+6. deletes the check's staged observations and marks the check `succeeded` - the publication - and
+   sends one COMMIT, bounded at 15 s.
 
 A busy candidate row or team lock, a timeout or any error before the COMMIT rolls everything back
 (nothing published, superseded, restored or withdrawn) and fails the check as `check_finalize_busy` or
 `check_finalize_failed` (the server log names the database code only). The finalization's scope is
 every pending / blocked candidate of the window, so an approval running inside the window at that
-moment makes the whole check end busy after all its reads: run it again (there is no automatic retry). The COMMIT is never repeated: an answer that does not come closes the
+moment makes the whole check end busy after all its reads: run it again (there is no automatic retry).
+All of a check's publication writes run in that one transaction under the 10 s statement bound; a
+31-day window of large sessions is the case to watch - a statement timeout ends as
+`check_finalize_busy`, nothing published, and the check is run again. The COMMIT is never repeated: an answer that does not come closes the
 connection and the check's status is read on a new connection (at most 5 s) - `succeeded` means it
 committed; otherwise the check fails as `check_finalize_outcome_unknown` (the failed write is
 conditional on `running`, so it waits for the old transaction and never overwrites a commit). These
@@ -695,11 +715,11 @@ three codes are shown to a coach as they are (a team fact). Run the check again.
 **Exactly one `superseded_by`** (`gpexe_import_candidates_superseded_by_exactly_one`): a superseded row
 names either the newer candidate or the check that withdrew it, never both and never neither; no other
 status names either. A withdrawn row carries the blocker `not_confirmed_for_import` (never
-`superseded_by_newer_data`). The v33 rollback refuses while any row is superseded by a check; a waiting
-reappearance mark is discarded with its column (that row stays superseded by its candidate). `reappeared_status` only on a superseded row, only `pending` / `blocked`
-(`gpexe_import_candidates_reappeared_only_superseded`). A referenced check cannot be deleted (on top of
-the v24 refusal, `ON DELETE RESTRICT`). A withdrawn candidate answers `candidate_not_actionable`, not
-`superseded_by_newer_data`: there is no newer candidate to review.
+`superseded_by_newer_data`). The v33 rollback refuses while any row is superseded by a check or a check
+is running (its staging would be lost); the staging of checks that are not running is transient and goes
+with its table. A referenced check cannot be deleted (on top of the v24 refusal, `ON DELETE RESTRICT`). A
+withdrawn candidate answers `candidate_not_actionable`, not `superseded_by_newer_data`: there is no newer
+candidate to review.
 
 **The drill-parameter guard (switch condition 7).** Whether `?drill=<index>` really changes the answer is
 not proven on server3. For every non-empty drill answer the adapter reduces the full `players` map,
