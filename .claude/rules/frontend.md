@@ -60,6 +60,14 @@ has caused a wrong conclusion in this project before.
   period) must not let a slower, older response overwrite a newer one — use a generation
   counter or context-key check, matching the existing pattern in `training-load-*-data.js`
   files, rather than assuming requests resolve in the order they were sent.
+- A test's fake of a list route whose rows depend on a query parameter (e.g.
+  `GET …/candidates?includeSuperseded=true`) must apply the same filter the real route and
+  service apply — a fake that answers the same rows with and without the parameter proves
+  a screen the real server can never show. This happened once (a withdrawn-sessions trace
+  line on the v33 Imports branch, caught in review and removed);
+  `frontend/tests/gpexe-imports-v33.actions.test.mjs`'s `server()` is the pattern: the
+  plain read filters the superseded rows out, the parameter returns them, any other query
+  is refused.
 
 ## Browser QA
 

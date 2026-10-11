@@ -15933,6 +15933,27 @@ button.tests-assignment-card {
   background: var(--accent-soft);
   font-weight: 600;
 }
+/* v33: the note that replaces the Approve button (why a session can't be
+   approved) is the only explanation on the screen - legible, not 12px grey.
+   Scoped to the muted notes; the link-change warning box keeps its size. */
+p.muted.gpexe-approve-note {
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+/* v33: on a phone the row's badge sits under the title instead of squeezing
+   the title column beside it. 480 px, not the Imports' 760 px breakpoint: the
+   title is cramped only below about 420 px, and a stacked badge on 481-760 px
+   would make every row taller for nothing. */
+@media (max-width: 480px) {
+  .gpexe-candidate {
+    grid-template-columns: 1fr;
+  }
+  .gpexe-candidate > .gpexe-badge {
+    justify-self: start;
+  }
+}
+
 .gpexe-candidate-next {
   grid-column: 1 / -1;
   font-size: 0.9rem;

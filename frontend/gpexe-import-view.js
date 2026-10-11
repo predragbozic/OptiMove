@@ -43,6 +43,10 @@ import {
   gpexeAthleteSentence,
   gpexeAthleteOrdinal,
   maskGpexeIds,
+  notConfirmedForImport,
+  withdrawnByCheck,
+  isHiddenVersion,
+  identityViewer,
 } from "./gpexe-import-data.js";
 
 // The bucket rules live in the data module (the batch selection needs them
@@ -54,6 +58,8 @@ export { candidateGroup, inboxBucket };
 const BLOCKER_TEXT = {
   import_switch_off: "Importing is switched off in this environment, so it can't be approved here.",
   superseded_by_newer_data: "GPEXE has newer data for this session. Open the newer version.",
+  // v33: the coach's sentence; an administrator reads notConfirmedText.
+  not_confirmed_for_import: "Not confirmed for import yet. Find new sessions again, then review it.",
   already_imported: "Already imported.",
   snapshot_expired_check_again: "The GPEXE data is too old. Find new sessions, then review it again.",
   nothing_to_import: "Nothing new to import - no action needed.",
@@ -67,7 +73,35 @@ const GROUP_BADGE = {
   uptodate: ["uptodate", "Up to date"],
   imported: ["imported", "Imported"],
   replaced: ["superseded", "Replaced"],
+  withdrawn: ["superseded", "No longer found"],
 };
+
+// v33: what "not confirmed for import" means, in the viewer's words, with the
+// dates a new search needs (findAgainText). An administrator (the status's
+// identityAdmin: only the server says so) reads the two possible causes; a
+// coach reads the one step. Neither carries a code, a proof or an id. The
+// row's step names the action only (its badge already says the status); the
+// review's note is the whole sentence.
+const lower = (text) => text.replace(/^F/, "f");
+// The second cause is the server's not_observed: fewer than two of the
+// session's drills carried data, so the drill results could not be confirmed
+// (two drills with the same data fail the whole search and never become a row).
+const ADMIN_CAUSES = "no successful search has confirmed this session yet, or GPEXE returned drill data for fewer than two of its drills, so OptiMove could not confirm its drill results";
+// Two sentences: the one action now (nothing to wait for when the cause is the
+// first one), then what to look at in GPEXE if it stays like this.
+const adminStep = (c) => `${findAgainText([c])}. If it stays like this, check in GPEXE that the session's drills are set up and have data.`;
+function notConfirmedText(c, gx = state.trainingLoad.gpexe) {
+  return identityViewer(gx)
+    ? `Not confirmed for import: ${ADMIN_CAUSES}. ${adminStep(c)}`
+    : `Not confirmed for import yet. ${findAgainText([c])}, then review it.`;
+}
+// The row's step is the action alone for everyone (the badge says the
+// status; the two causes wait in the review, where there is room).
+function notConfirmedStep(c) {
+  return `${findAgainText([c])}, then review it.`;
+}
+// v33: a session the last successful search no longer found in GPEXE.
+const withdrawnText = (c) => `The last successful search no longer found this session in GPEXE, so it can't be imported. If it is back in GPEXE, ${lower(findAgainText([c]))}.`;
 
 const OUTCOME_TEXT = {
   created: "New",
@@ -144,6 +178,8 @@ const REFUSAL_TEXT = {
   changes_need_acceptance: "Not imported yet: this import changes results that were already imported. Tick the box to accept those changes, then approve.",
   preview_changed: "Not imported: the data changed since you opened this session. Review it again, then approve.",
   internal_error: "Not imported: the server failed before writing anything. Try again later.",
+  // v33: refused because the last successful search did not confirm it, or it was withdrawn.
+  candidate_not_actionable: "Not imported: this session is not confirmed for import. Find new sessions again, then review it.",
 };
 
 // After this many checks without a confirmed result the coach is sent to a
@@ -230,7 +266,8 @@ function resultLabel(result) {
 // The session's name without a raw timestamp at its end; the date and time
 // are shown next to it anyway.
 function sessionTitle(c) {
-  const label = c.label || `GPEXE session ${c.gpexeTeamSessionId}`;
+  // No id outside Technical details: a label-less session is just "GPEXE session" (its date is shown beside it).
+  const label = c.label || "GPEXE session";
   return label.replace(/\s+\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?Z?$/, "");
 }
 
@@ -359,7 +396,7 @@ function renderSourceCardHtml(source, gx, status) {
         <h3>${escapeHtml(source.name)}</h3>
         <span class="imports-state ${connected ? "is-on" : "is-off"}">${connected ? "Connected" : "Not connected"}</span>
       </div>
-      ${connected ? renderFoundHtml(check, list.length, source.name) : `<p class="gpexe-warning">This team is not connected to a data source yet. A platform admin connects it in Settings &gt; Data sources.</p>`}
+      ${connected ? renderFoundHtml(check, list.filter((c) => !isHiddenVersion(c, gx)).length, source.name) : `<p class="gpexe-warning">This team is not connected to a data source yet. A platform admin connects it in Settings &gt; Data sources.</p>`}
       ${connected ? `
         <div class="gpexe-check-row imports-find-row">
           <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-check" ${canFind ? "" : "disabled"}>${running ? "Finding..." : "Find new sessions"}</button>
@@ -390,7 +427,7 @@ function renderSourceCardHtml(source, gx, status) {
         // The import switch's state, whatever the check did: a check never
         // depends on it (it only blocks approving).
         ["Import switch", sw.message],
-      ], `<div class="gpexe-replaced-toggle"><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-superseded" aria-pressed="${gx.includeSuperseded ? "true" : "false"}">${gx.includeSuperseded ? "Hide replaced versions" : "Show replaced versions"}</button></div>`)}
+      ], `<div class="gpexe-replaced-toggle"><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-superseded" aria-pressed="${gx.includeSuperseded ? "true" : "false"}">${gx.includeSuperseded ? "Hide replaced or no longer found versions" : "Show replaced or no longer found versions"}</button></div>`)}
     </section>
   `;
 }
@@ -416,7 +453,7 @@ function sessionsNeedingDates(list, gx) {
   return list.filter((c) => {
     const bucket = inboxBucket(c, gx);
     if (bucket !== "ready" && bucket !== "attention") return false;
-    return !c.snapshot?.available || reviewMadeBeforeLinkChange(c, gx);
+    return !c.snapshot?.available || reviewMadeBeforeLinkChange(c, gx) || notConfirmedForImport(c);
   });
 }
 
@@ -566,6 +603,7 @@ function attentionText(c, status, gx = state.trainingLoad.gpexe) {
   if (isUncertain(c, gx)) return "Import result not confirmed yet - open it to check the result.";
   if (!c.snapshot?.available) return `Needs a fresh search - find new sessions${c.sessionStartedAt ? ` with dates that include ${formatDate(c.sessionStartedAt)}` : ""}.`;
   if (c.status === "blocked") return c.blockedCode ? blockedCoachText(c).step : "Open it to see what is in the way.";
+  if (notConfirmedForImport(c)) return notConfirmedStep(c);
   if (reviewMadeBeforeLinkChange(c, gx)) return `${findAgainText([c])} - athlete links changed after this review was made.`;
   // The first reason is the coach's own step (linking comes first); the
   // row's facts name every reason.
@@ -582,9 +620,13 @@ function renderBucketsHtml(gx, status) {
   const attention = of("attention");
   const out = of("out");
   const imported = of("imported");
-  const replaced = list.filter((c) => candidateGroup(c, gx) === "replaced");
+  const replaced = list.filter((c) => isHiddenVersion(c, gx));
   const readyNote = reviewOnlyText(status);
   const pickable = batchAllowed(gx);
+  // v33: a withdrawn session is listed only under "Show replaced or no longer
+  // found versions" - while the versions are folded away the server lists no
+  // superseded row at all, so the default view cannot count or name it (a trace
+  // there needs a server-side count; recorded under Separate tasks).
   const rows = (items, kind) => `<ul class="gpexe-candidate-list">${items.map((c) => renderSessionRowHtml(c, status, kind, kind === "ready" && pickable)).join("")}</ul>`;
   return `
     ${attention.length ? `
@@ -616,7 +658,7 @@ function renderBucketsHtml(gx, status) {
     ` : ""}
     ${gx.includeSuperseded && replaced.length ? `
       <details class="gpexe-panel gpexe-group imports-bucket">
-        <summary>Replaced versions (${replaced.length})</summary>
+        <summary>Replaced or no longer found versions (${replaced.length})</summary>
         ${rows(replaced, "hidden")}
       </details>
     ` : ""}
@@ -640,9 +682,14 @@ function renderSessionRowHtml(c, status, kind, pick = false) {
     if (c.importedAt) facts.push(`imported ${fmtDateTime(c.importedAt)}`);
     else facts.push("nothing new");
   }
-  const step = kind === "attention" ? attentionText(c, status) : "";
   const gx = state.trainingLoad.gpexe;
-  const badge = isUncertain(c, gx) ? `<span class="gpexe-badge is-unknown">Result not confirmed</span>` : "";
+  let step = kind === "attention" ? attentionText(c, status) : "";
+  if (kind === "hidden" && withdrawnByCheck(c)) step = withdrawnText(c);
+  // A hidden version says which kind it is (replaced, or no longer found);
+  // a session the last successful search did not confirm says so too (v33).
+  const badge = isUncertain(c, gx)
+    ? `<span class="gpexe-badge is-unknown">Result not confirmed</span>`
+    : (kind === "hidden" || (kind === "attention" && notConfirmedForImport(c))) ? badgeHtml(c, gx) : "";
   let box = "";
   if (pick && batchSelectable(c, gx)) {
     const checked = Object.hasOwn(gx.batch.selected, c.id);
@@ -711,6 +758,7 @@ function batchOutcomeText(r) {
   if (code === "preview_changed") return { cls: "is-refused", text: "Session changed - review it again.", open: r.reviewAgain?.candidateId || r.candidateId, openLabel: "Review again" };
   if (code === "changes_need_acceptance") return { cls: "is-refused", text: "Open and review the changes individually.", open: r.candidateId, openLabel: "Open" };
   if (code === "superseded_by_newer_data") return { cls: "is-refused", text: "Not imported: GPEXE has newer data for this session - open the newer version.", open: r.reviewAgain?.candidateId, openLabel: "Open the newer version" };
+  if (code === "candidate_not_actionable") return { cls: "is-refused", text: "Not imported: this session is not confirmed for import - find new sessions again, then review it.", open: r.candidateId, openLabel: "Open" };
   if (code === "not_ready") return { cls: "is-refused", text: "Not imported: it is not ready any more - see its row under Needs attention.", open: r.candidateId, openLabel: "Open" };
   if (code === "blocked") return { cls: "is-refused", text: "Not imported: this session must be fixed first - open it to see what.", open: r.candidateId, openLabel: "Open" };
   if (code === "snapshot_expired_check_again") return { cls: "is-refused", text: "Not imported: the GPEXE data is too old. Find new sessions, then import it." };
@@ -863,7 +911,7 @@ const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 // From/To dates of "Find new sessions" are a different thing and stay as
 // they are.
 function renderCalendarHtml(gx) {
-  const list = (gx.candidates || []).filter((c) => candidateGroup(c, gx) !== "replaced");
+  const list = (gx.candidates || []).filter((c) => !isHiddenVersion(c, gx));
   const counts = new Map();
   for (const c of list) {
     const key = calendarDayKey(c.sessionStartedAt);
@@ -921,7 +969,10 @@ function renderCalendarHtml(gx) {
 
 function badgeHtml(c, gx = state.trainingLoad.gpexe) {
   if (isUncertain(c, gx)) return `<span class="gpexe-badge is-unknown">Result not confirmed</span>`;
-  const [cls, text] = GROUP_BADGE[candidateGroup(c, gx)] || [c.status, c.status];
+  const group = candidateGroup(c, gx);
+  // v33: a pending or "up to date" row the last successful search did not confirm is neither.
+  if ((group === "decision" || group === "uptodate") && notConfirmedForImport(c)) return `<span class="gpexe-badge is-pending">Not confirmed for import</span>`;
+  const [cls, text] = GROUP_BADGE[group] || [c.status, c.status];
   return `<span class="gpexe-badge is-${escapeAttr(cls)}">${escapeHtml(text)}</span>`;
 }
 
@@ -1659,7 +1710,10 @@ function renderApproveHtml(c, detail, status) {
   const group = candidateGroup(c, gx);
   // A blocked or expired session already says what to do above.
   if (group === "excluded" || group === "notyet") return "";
+  if (group === "withdrawn") return `<p class="muted gpexe-approve-note">${escapeHtml(withdrawnText(c))}</p>`;
   if (group === "replaced") return `<p class="muted gpexe-approve-note">${escapeHtml(BLOCKER_TEXT.superseded_by_newer_data)}</p>`;
+  // v33: not confirmed by a successful search - no approval, whatever else the row says.
+  if (notConfirmedForImport(c)) return `<p class="muted gpexe-approve-note">${escapeHtml(notConfirmedText(c, gx))}</p>`;
   if (group === "uptodate") return `<p class="muted gpexe-approve-note">${escapeHtml(BLOCKER_TEXT.nothing_to_import)}</p>`;
   // This review was made with the athlete links as they were at the last
   // check; after a link change it must be made again before approving.

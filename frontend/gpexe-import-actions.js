@@ -32,6 +32,8 @@ import {
   openGpexeCandidate,
   openTeamMapping,
   reviewMadeBeforeLinkChange,
+  notConfirmedForImport,
+  withdrawnByCheck,
   selectGpexeTeam,
   sendTeamMapping,
   startGpexeCheck,
@@ -133,8 +135,10 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
       return true;
     }
     // A review made before a link change is never approved (the button is
-    // not offered either).
+    // not offered either); nor is a session the last successful search did
+    // not confirm or no longer found (v33) - the server would refuse it too.
     if (reviewMadeBeforeLinkChange(candidate, gx)) return true;
+    if (notConfirmedForImport(candidate) || withdrawnByCheck(candidate)) return true;
     const athletes = (candidate.preview?.athletes || []).filter((a) => !a.notImported).length;
     const question = `Import this session for ${athletes} ${athletes === 1 ? "athlete" : "athletes"} under the names shown? This writes their results and the activity.${changes ? ` It also changes ${changes} ${changes === 1 ? "result that was" : "results that were"} already imported.` : ""}`;
     if (!globalThis.window?.confirm?.(question)) return true;
