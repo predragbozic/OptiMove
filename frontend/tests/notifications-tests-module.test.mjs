@@ -23,16 +23,13 @@ globalThis.document = {
 };
 globalThis.window = { matchMedia: () => ({ matches: true }) };
 
+// The fake fetch and the action-element double come from the shared test
+// support (T1): the same responder shape this file always used, with the
+// recorded calls returned instead of kept in a module-level variable.
+import { installFetchMock } from "./support/fetch-mock.mjs";
+import { fakeAction } from "./support/dom.mjs";
+
 let fetchCalls;
-function installFetchMock(responder) {
-  fetchCalls = [];
-  globalThis.fetch = async (url, options = {}) => {
-    const call = { url, method: options.method || "GET", body: options.body ? JSON.parse(options.body) : undefined };
-    fetchCalls.push(call);
-    const result = await responder(call);
-    return { ok: result.status < 300, status: result.status, json: async () => result.body };
-  };
-}
 
 const { handleNotificationAction, renderNotifications } = await import("../notifications.js");
 const { state } = await import("../state.js");
@@ -41,10 +38,6 @@ function resetNotificationsState() {
   state.currentUser = { id: "coach-1" };
   state.notifications = { open: true, rows: [], unreadCount: 0, loading: false, error: "" };
   panelHtml = "";
-}
-
-function fakeAction(dataset) {
-  return { dataset };
 }
 
 function baseRow(overrides) {
@@ -112,7 +105,7 @@ test("clicking a test-assignment notification marks it read, closes the panel, a
   resetNotificationsState();
   state.notifications.rows = [baseRow({ type: "test_athlete_invitation", read_at: null })];
   state.notifications.unreadCount = 1;
-  installFetchMock((call) => (call.url === "/api/notifications/n1/read" ? { status: 200, body: { id: "n1", read_at: new Date().toISOString() } } : { status: 404, body: {} }));
+  fetchCalls = installFetchMock((call) => (call.url === "/api/notifications/n1/read" ? { status: 200, body: { id: "n1", read_at: new Date().toISOString() } } : { status: 404, body: {} }));
   let openedAssignmentId = null;
   const handled = await handleNotificationAction(fakeAction({ action: "notification-open-test-assignment", notificationId: "n1", assignmentId: "asg-1" }), {
     openTestAssignment: async (id) => { openedAssignmentId = id; },
@@ -127,7 +120,7 @@ test("clicking a test-assignment notification marks it read, closes the panel, a
 test("clicking a coach-digest notification marks it read, closes the panel, and calls openTestsToday", async () => {
   resetNotificationsState();
   state.notifications.rows = [baseRow({ type: "test_coach_digest", read_at: null })];
-  installFetchMock((call) => (call.url === "/api/notifications/n1/read" ? { status: 200, body: { id: "n1", read_at: new Date().toISOString() } } : { status: 404, body: {} }));
+  fetchCalls = installFetchMock((call) => (call.url === "/api/notifications/n1/read" ? { status: 200, body: { id: "n1", read_at: new Date().toISOString() } } : { status: 404, body: {} }));
   let calledToday = false;
   const handled = await handleNotificationAction(fakeAction({ action: "notification-open-tests-today", notificationId: "n1" }), {
     openTestsToday: async () => { calledToday = true; },
@@ -140,7 +133,7 @@ test("clicking a coach-digest notification marks it read, closes the panel, and 
 test("clicking a final-digest notification marks it read and calls openTestsResults with the schedule id from the row's own dataset", async () => {
   resetNotificationsState();
   state.notifications.rows = [baseRow({ type: "test_final_digest", read_at: null })];
-  installFetchMock((call) => (call.url === "/api/notifications/n1/read" ? { status: 200, body: { id: "n1", read_at: new Date().toISOString() } } : { status: 404, body: {} }));
+  fetchCalls = installFetchMock((call) => (call.url === "/api/notifications/n1/read" ? { status: 200, body: { id: "n1", read_at: new Date().toISOString() } } : { status: 404, body: {} }));
   let openedScheduleId = null;
   const handled = await handleNotificationAction(fakeAction({ action: "notification-open-tests-results", notificationId: "n1", scheduleId: "sched-9" }), {
     openTestsResults: async (id) => { openedScheduleId = id; },
@@ -152,7 +145,7 @@ test("clicking a final-digest notification marks it read and calls openTestsResu
 test("a test-assignment click with no assignment id (malformed row) still marks it read but never calls the open handler with an empty id", async () => {
   resetNotificationsState();
   state.notifications.rows = [baseRow({ type: "test_athlete_invitation", read_at: null })];
-  installFetchMock((call) => (call.url === "/api/notifications/n1/read" ? { status: 200, body: { id: "n1", read_at: new Date().toISOString() } } : { status: 404, body: {} }));
+  fetchCalls = installFetchMock((call) => (call.url === "/api/notifications/n1/read" ? { status: 200, body: { id: "n1", read_at: new Date().toISOString() } } : { status: 404, body: {} }));
   let openCalled = false;
   await handleNotificationAction(fakeAction({ action: "notification-open-test-assignment", notificationId: "n1", assignmentId: "" }), {
     openTestAssignment: async () => { openCalled = true; },

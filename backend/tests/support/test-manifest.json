@@ -1,0 +1,45 @@
+{
+  "$comment": "Read by scripts/test-runner.mjs. knownFailures: tests that fail on origin/main today, each identified by the WHOLE fingerprint - file, exact title, node's failureType and messagePattern (a regular expression over the first line of the failure message); a failure whose title is listed but whose type or message differs is reported as a new failure, a listed test that passes is reported title by title so an entry is removed in the PR that fixes it; an entry for a secret / credential scan test is refused by the runner. fileOptions.testTimeoutMs: node's per-test limit for one file. knownNoExit: files whose process stays alive after every test finished. kindOverrides: a file mapped to a kind when the static classification is wrong, with the reason in kindOverrideNotes.",
+  "kindOverrides": {
+    "production-static-serving.test.mjs": "disposable"
+  },
+  "kindOverrideNotes": {
+    "production-static-serving.test.mjs": "spawns the real src/server.js in production mode, whose /api/health runs select now(); it needs a reachable local server and nothing else, so it runs with the maintenance database as its target and creates nothing"
+  },
+  "fileOptions": {},
+  "knownFailures": [
+    {
+      "file": "activity-roster-5a2.test.mjs",
+      "test": "56. migration v26: applied by the runner on v25, the rollback returns the schema to v25 exactly and keeps every row, and v26 applies again",
+      "failureType": "testCodeFailure",
+      "messagePattern": "^the rollback leaves exactly the v25 functions, triggers and indexes",
+      "since": "2026-10-11",
+      "note": "rollback digest of training.lock_activity_decider differs; listed in docs/ai/CURRENT_STATE.md since 2026-09-29 (CRLF line endings of the checked-out SQL are the unverified candidate cause); reproduced on origin/main 241765e with plain node --test on 2026-10-11"
+    },
+    {
+      "file": "gpexe-check-finalization.test.mjs",
+      "test": "1. migration v33 on v32: the exactly-one and drill-effect constraints by name, the staging table and its guard, the approval gate, the index; the rollback returns the identical v32 catalog, refuses while a row is superseded by a check or a check is running (dropping nothing), and v33 applies again identically; a failing file applies nothing",
+      "failureType": "testCodeFailure",
+      "messagePattern": "^the rollback leaves exactly the v32 columns, constraints, indexes, triggers, functions, comments and tables",
+      "since": "2026-10-11",
+      "note": "the v33 rollback leaves a catalog that differs from v32 by digest (same class as activity-roster-5a2 test 56); reproduced on origin/main 241765e with plain node --test on 2026-10-11; cause not established"
+    },
+    {
+      "file": "tests-athlete-device-timezone.test.mjs",
+      "test": "13. the worker's occurrence-generation phase catches an ahead athlete's occurrence in its very next cycle, well before the 5-minute interval would even repeat",
+      "failureType": "testCodeFailure",
+      "messagePattern": "^once the athlete's own opens_at has already arrived, the invitation must go out in this SAME cycle, not a later one",
+      "since": "2026-10-11",
+      "note": "timing-dependent worker test; listed in docs/ai/CURRENT_STATE.md since 2026-09-17; reproduced on origin/main 241765e on 2026-10-11"
+    },
+    {
+      "file": "role-hint-decoupling-pr2a.test.mjs",
+      "test": "7. a platform_admin granted purely through user_global_roles (neutral role_hint) sees an athlete they have no relationship with",
+      "failureType": "testCodeFailure",
+      "messagePattern": "^a real platform_admin row must grant the full-visibility bypass regardless of role_hint",
+      "since": "2026-10-11",
+      "note": "fails on the local development database (shared kind) with plain node --test on origin/main 241765e, 2026-10-11; cause not established (a platform_admin visibility rule, possibly data-dependent); not part of test:pr"
+    }
+  ],
+  "knownNoExit": []
+}

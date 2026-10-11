@@ -1483,7 +1483,7 @@ Technical details.
   - The owner's external review of head `ab58e5e` found a HIGH (a running, failed or outcome-unknown check
     must never change the actionable state of a candidate confirmed by an earlier successful check); fixed in
     head `8a223fd` by the per-check staging (above). Reviewed head `8a223fd` READY; merge commit
-    `884945c4be6b2dbeaa60971de0a885d30c2626c5` (parents `c3d31d4` and `8a223fd`) on 2026-10-11 at 09:50:54 UTC,
+    `884945c` (parents `c3d31d4` and `8a223fd`) on 2026-10-11 at 09:50:54 UTC,
     merged exactly from that head (`--match-head-commit`).
   - `/api/health` first served `884945c` with `ok: true` at 09:51:46 UTC, then three times in a row (09:52:03,
     09:52:13 and 09:52:24 UTC). **v33 on the deployed database is inferred** from the server starting after the

@@ -36,16 +36,13 @@ globalThis.document = {
   body: { classList: { contains: () => false } },
 };
 
+// The fake fetch and the action-element double come from the shared test
+// support (T1): the same responder shape this file always used, with the
+// recorded calls returned instead of kept in a module-level variable.
+import { installFetchMock } from "./support/fetch-mock.mjs";
+import { fakeAction } from "./support/dom.mjs";
+
 let fetchCalls;
-function installFetchMock(responder) {
-  fetchCalls = [];
-  globalThis.fetch = async (url, options = {}) => {
-    const call = { url, method: options.method || "GET", body: options.body ? JSON.parse(options.body) : undefined };
-    fetchCalls.push(call);
-    const result = await responder(call);
-    return { ok: result.status < 300, status: result.status, json: async () => result.body };
-  };
-}
 
 const { handleTestsSliderInput, handleTestsAction, submitTestsForm } = await import("../tests-actions.js");
 const { emptyWellnessForm, state } = await import("../state.js");
@@ -60,10 +57,6 @@ function freshForm() {
 
 function fakeSlider(key, value) {
   return { dataset: { key }, value: String(value), closest: () => domNodes.get(key), setAttribute() {} };
-}
-
-function fakeAction(dataset) {
-  return { dataset };
 }
 
 test("dragging a slider marks that key answered and updates the progress count, without touching the others", () => {
@@ -96,7 +89,7 @@ test("submit sends exactly the answered values and a fresh idempotency key, and 
   state.tests.form = freshForm();
   state.tests.form.values = { fatigue: 2, sleep: 4, soreness: 0, stress: 6, mood: 8, injury: true };
   state.tests.form.answered = { fatigue: true, sleep: true, soreness: true, stress: true, mood: true, injury: true };
-  installFetchMock((call) => (call.url.includes("/submit")
+  fetchCalls = installFetchMock((call) => (call.url.includes("/submit")
     ? { status: 200, body: { assessmentId: "a-1", values: { fatigue: 2, sleep: 4, soreness: 0, stress: 6, mood: 8, injury: true }, wellnessScore: 4 } }
     : { status: 200, body: { assignments: [] } }));
   let rendered = 0;
@@ -127,7 +120,7 @@ test("a double-submit (same key already completed) never overwrites the score wi
   state.tests.form.values = { fatigue: 1, sleep: 1, soreness: 1, stress: 1, mood: 1, injury: false };
   state.tests.form.answered = { fatigue: true, sleep: true, soreness: true, stress: true, mood: true, injury: true };
   state.tests.form.idempotencyKey = "same-key";
-  installFetchMock((call) => (call.url.includes("/submit")
+  fetchCalls = installFetchMock((call) => (call.url.includes("/submit")
     ? { status: 200, body: { assessmentId: "a-1", values: state.tests.form.values, wellnessScore: 1 } }
     : { status: 200, body: { assignments: [] } }));
   await submitTestsForm({ dataset: { testsForm: "wellness-submit" } }, { renderTests: () => {} });
