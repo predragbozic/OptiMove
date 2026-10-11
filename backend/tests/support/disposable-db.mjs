@@ -8,8 +8,13 @@
 //   - the server must be a loopback host and must not name a remote or
 //     persistent service (Supabase, Render, a pooler, monitoring2); once
 //     connected, a managed server (a Supabase / RDS / Azure / Cloud SQL
-//     administration role exists) or a server listening on a public address
-//     is refused as well, so a loopback tunnel to such a server is caught;
+//     administration role exists) or a server that reports any address of
+//     its own but a loopback one is refused as well. A loopback address only
+//     proves that the server saw a loopback client: a tunnel ending on a
+//     remote machine's LAN address is caught, a tunnel ending on that
+//     machine's own loopback is not (the managed-role check and the URL
+//     markers cover the managed services; never run tests with a database
+//     tunnel open);
 //   - a disposable name always matches optimove_tests_<prefix>_<label>_<hex>;
 //     "optimove" and "monitoring2" are never accepted as a name;
 //   - administration happens on the server's maintenance database "postgres",
@@ -99,23 +104,32 @@ export function databaseUrlFor(name, baseDatabaseUrl) {
 }
 
 // The address a connected server reports for itself (inet_server_addr()):
-// loopback, the private ranges, link-local and a Unix socket (null) are a
-// local or a CI-container server; anything else is a remote server reached
-// through a tunnel. Exported for its table test only.
-export function isPrivateOrLoopbackAddress(addr) {
-  if (!addr) return true; // a Unix-socket connection reports no address
-  const a = addr.replace(/\/\d+$/, "").toLowerCase();
-  if (a === "::1" || a.startsWith("127.") || a.startsWith("10.") || a.startsWith("192.168.")) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(a)) return true;
-  if (a.startsWith("::ffff:")) return isPrivateOrLoopbackAddress(a.slice(7));
-  if (/^f[cd][0-9a-f]{2}:/.test(a) || a.startsWith("fe80:")) return true;
-  return false;
+// only a loopback address (127.0.0.0/8, ::1, the IPv4-mapped form of those)
+// or no address at all (a Unix-socket connection) proves a local server. A
+// private-range address is NOT accepted: a loopback tunnel to a server on
+// another machine of the same network reports exactly that, and a container
+// on a bridge network cannot be told apart from it. (T2: a CI service
+// container will need a verifiable marker on the server itself - a sentinel
+// the workflow creates and this module checks - not an environment flag.)
+// Exported for its table test only.
+export function isLoopbackServerAddress(addr) {
+  if (addr === null || addr === undefined || addr === "") return true;
+  // inet's text form prints a host address without its /32 or /128; only
+  // exactly those two suffixes are tolerated.
+  const a = String(addr).toLowerCase().replace(/\/(32|128)$/, "");
+  if (a === "::1") return true;
+  const v4 = /^(?:::ffff:)?127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(a);
+  return Boolean(v4) && v4.slice(1).every((octet) => Number(octet) <= 255);
 }
 
 // Every administration step goes through here: the URL is re-validated
 // (callers may pass an adminUrl of their own), the session must have landed
-// on "postgres", and the server must not be a managed or publicly reachable
-// one behind a loopback tunnel.
+// on "postgres", the server must report a loopback address of its own (or
+// none, a Unix socket), and it must not carry a managed service's
+// administration role. The address rule catches a tunnel that ends on
+// another machine's network address; a tunnel that ends on that machine's
+// own loopback (ssh -L …:localhost:5432) looks local to this check and is
+// caught only by the URL markers and the managed-role check.
 async function withAdminClient(adminUrl, fn) {
   parseServerUrl(adminUrl);
   const admin = new pg.Client({ connectionString: adminUrl });
@@ -123,7 +137,7 @@ async function withAdminClient(adminUrl, fn) {
   try {
     const current = await admin.query("select current_database() as db, inet_server_addr()::text as addr");
     if (current.rows[0].db !== "postgres") throw safetyError(`the administration connection must be on the maintenance database "postgres", not on "${current.rows[0].db}"`);
-    if (!isPrivateOrLoopbackAddress(current.rows[0].addr)) throw safetyError("the server behind this loopback address listens on a public address; it is not a local test server");
+    if (!isLoopbackServerAddress(current.rows[0].addr)) throw safetyError("the server behind this loopback address reports a non-loopback address of its own; it is not a local test server (a tunnel or a container)");
     const managed = await admin.query("select rolname from pg_roles where rolname = any($1::text[]) limit 1", [MANAGED_SERVER_ROLES]);
     if (managed.rowCount) throw safetyError(`the server carries the administration role "${managed.rows[0].rolname}" of a managed database service; it is not a local test server`);
     return await fn(admin);

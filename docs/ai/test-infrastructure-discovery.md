@@ -105,11 +105,12 @@ established and is not touched by T1. No backend file left its process alive, no
 hit its time limit, and no file in either package leaks a handle after its tests
 (the `knownNoExit` lists are empty).
 
-**Failing on `origin/main` `241765e`** — every title below is in the package's
-`test-manifest.json`, so the runner reports the file as `XFAIL` and will warn the day
-one of them passes. The four already recorded in `docs/ai/CURRENT_STATE.md` are marked
-"recorded"; the other four were found by this discovery and each was reproduced with
-the standard `node --test <file>` command (with `backend/.env`, i.e. exactly what
+**Failing on `origin/main` `241765e`** — every title below except `source-hosts-server3`
+12 (fixed here) is in the package's `test-manifest.json` with its fingerprint, so the
+runner reports the file as `XFAIL` only while the same failure recurs and will warn the
+day one of them passes. The four already recorded in `docs/ai/CURRENT_STATE.md` are
+marked "recorded"; the other four were found by this discovery and each was reproduced
+with the standard `node --test <file>` command (with `backend/.env`, i.e. exactly what
 `npm test` does) in the clean worktree on 2026-10-11:
 
 | File | Test(s) | What is known |
@@ -122,7 +123,7 @@ the standard `node --test <file>` command (with `backend/.env`, i.e. exactly wha
 | backend `activity-roster-5a2` | 56 (v26 rollback digest) | recorded; CRLF line endings of the checked-out SQL are the unverified candidate cause |
 | backend `tests-athlete-device-timezone` | 13 (the worker catches an ahead athlete's occurrence) | recorded; timing-dependent |
 | backend `gpexe-check-finalization` | 1 (v33 on v32, the rollback returns the identical v32 catalog) | new: the catalog after the rollback differs from v32 by digest — the same class as test 56 above |
-| backend `source-hosts-server3` | 12 (no credential, account address or token in any file of this change) | new: the secret scan refuses `docs/ai/CURRENT_STATE.md` because line 1486 carries one full 40-hex commit SHA (`884945c4…`), which the test treats as the shape of a REST token; the fix is to shorten that SHA in the next docs PR and remove the manifest entry. **Until then this guard is inert:** the test stops at its first failing file, so the files after `CURRENT_STATE.md` in its list (`.gitignore`, `_gpexe-disposable-db.mjs`, `source-connections-f3c1`, `source-credential-crypto`, `gpexe-f3c-auth-discovery.md`) and its final check that the legacy credential file stays git-ignored do not run, and the runner reports the file as known-fail. The next docs PR should shorten the SHA first. |
+| backend `source-hosts-server3` | 12 (no credential, account address or token in any file of this change) | found and **fixed in this PR**: the secret scan refused `docs/ai/CURRENT_STATE.md` because line 1486 carried one full 40-hex commit SHA (`884945c4…`), which the test treats as the shape of a REST token, and stopped there without checking the files after it. The SHA is shortened to `884945c` (the form every other record uses); test 12 passes again and scans every file in its list (proven by planting a 40-hex value in a later file: the test then fails naming that file). It is **not** in the manifest, and the runner refuses any manifest entry for a secret / credential scan test. |
 | backend `role-hint-decoupling-pr2a` (shared kind) | 7 (a platform_admin granted purely through `user_global_roles` sees an athlete they have no relationship with) | new: fails against the local development database; cause not established (possibly data-dependent); not part of `test:pr` |
 
 `training-load-metrics-builder-edit-draft.test.mjs` is not a failure: it refuses to
@@ -238,10 +239,17 @@ executed directly, with the runner's reporter attached), serially, with:
   message never contains the credential. Before the first database-kind file the audit
   (next point) connects through the support module, which also refuses a server that
   carries the administration role of a managed service (`supabase_admin`,
-  `rds_superuser`, `azure_pg_admin`, `cloudsqladmin`) or that listens on a public
-  address — so a loopback tunnel to such a server is caught at connection time, not
-  only by the string check (a private-range address, as a CI service container has,
-  is accepted);
+  `rds_superuser`, `azure_pg_admin`, `cloudsqladmin`) or that reports any address of
+  its own but a loopback one (`inet_server_addr()` must be `127.0.0.0/8`, `::1`, their
+  IPv4-mapped form, or null for a Unix socket) — a private-range address is refused too.
+  What this catches: a tunnel or a port mapping that ends on another machine's network
+  address (`ssh -L 5433:10.0.0.5:5432 bastion`, a container on a bridge network). What
+  it cannot catch: a tunnel that ends on the remote machine's own loopback
+  (`ssh -L 5433:localhost:5432 host`), where the remote server reports `127.0.0.1` like
+  a local one — that case rests on the URL markers and the managed-role check (which is
+  the effective rule for the deployed Supabase database). A T2 CI service container
+  will need a verifiable marker on the server itself (a sentinel the workflow creates
+  and this module checks), never a plain environment flag;
 - a kind-specific target: `unit` files get no `DATABASE_URL` at all; `disposable` files
   get the server's maintenance database `postgres` (so the configured development
   database is never opened by that step, whatever the file does); `shared` files run only
@@ -259,14 +267,16 @@ executed directly, with the runner's reporter attached), serially, with:
   already does. This is a denylist by name; a new credential variable with a name
   outside these patterns would be inherited (T2 item: an allowlist or a contract test
   over `backend/src`'s `process.env` reads);
-- a cleanup audit around every `disposable` and `schema-clone` step: every database on
-  the server (except the templates and `postgres`) and the number of user objects
-  inside `postgres` are listed before and after; a database that appeared during the
-  step and is still there fails the step (named as droppable when it matches the strict
-  disposable pattern, otherwise as a manual decision), a change inside `postgres` fails
-  it (a file wrote into its target instead of its own database), and an audit that
-  cannot run fails the step before any file (fail closed). A run in another checkout at
-  the same time shows in the diff as well — the message says so.
+- a cleanup audit around every database-kind step (`disposable`, `shared`,
+  `schema-clone`): every database on the server (except the templates and `postgres`)
+  and the number of user objects inside `postgres` are listed before and after; a
+  database that appeared during the step and is still there fails the step (named as
+  droppable when it matches the strict disposable pattern, otherwise as a manual
+  decision), a change inside `postgres` fails it (a file wrote into its target instead
+  of its own database), and an audit that cannot run fails the step before any file
+  (fail closed) — which also means the connection-time identity checks above run before
+  the first file of every database kind, the shared kind included. A run in another
+  checkout at the same time shows in the diff as well — the message says so.
 
 Known limits: files run serially (no `--concurrency`; the shared-kind files could not
 run in parallel anyway, and the frontend takes under a minute); the static
@@ -305,10 +315,27 @@ still needs `test:backend:shared` on a local development database before a PR, a
 
 ### 3.4 The manifest (`tests/support/test-manifest.json` in each package)
 
-- `knownFailures`: `{ file, test, since, note }` — the exact title of a test that fails
-  on `origin/main` today. The runner reports a file whose only failures are listed as
-  `XFAIL` (ok) and warns with `XPASS` when a listed test passes, so the list cannot rot
-  silently. A fix must remove the entry in the same PR.
+- `knownFailures`: `{ file, test, failureType, messagePattern, since, note }` — a test
+  that fails on `origin/main` today, identified by its whole fingerprint: the file, the
+  exact title, node's `failureType` (`testCodeFailure`, `testTimeoutFailure`, …) and a
+  regular expression over the first line of the failure message. All four are required;
+  the runner refuses a manifest with an incomplete entry, an unknown type or a pattern
+  that does not compile, before any file runs. A failure whose title is listed but whose
+  type or message differs is a **new failure** (`FAIL`, with the expected and the actual
+  fingerprint printed); a listed test that passes is reported title by title (`XPASS`),
+  so the list cannot rot silently; a fix removes the entry in the same PR. A pattern with
+  fewer than 8 literal characters is refused as too unspecific. An entry for a test whose
+  job is to find a credential or a secret is refused **by file name**
+  (`source-hosts-server3`, `source-credential-crypto`, whatever directory they sit in)
+  **and by title** (a secret / credential / token / password word followed by scan /
+  in any file / never / not in / leak / ignored by git) — a tripwire for the incident
+  this PR found, not a boundary: a retitled or renamed scan would pass it, and the
+  sibling secret-leak assertions whose titles fall outside the pattern
+  (`gpexe-rest-v1-adapter` 14, `source-connections-f3c2d` 14, `-f3c2e` 20, `-f3c2f` 9,
+  `gpexe-import-credential-resolver` 10, `gpexe-rest-v1-capability-probe` 3) are not
+  guarded today. T2 item: a content marker in each scan test (for example
+  `// @optimove-guard: secret-scan`) that the runner refuses to list, so neither a name
+  nor a title is the control.
 - `fileOptions`: `{ "<file>": { testTimeoutMs, note } }` — node's per-test limit for one
   file, used today only for the file with the hanging tests X5a and X5b (15 s instead of
   the 4-minute default, so the file costs about 30 s, not minutes).
@@ -341,9 +368,10 @@ All on 2026-10-11, this workstation, worktree at `241765e` plus the T1 changes.
 
 | What | Command | Result |
 |---|---|---|
-| the runner itself | `npm run test:runner` | 30 of 30 checks: one throwaway file per verdict (pass, fail, known-fail incl. a nested describe, did-not-exit, a stuck test with a grandchild, crash at import, unexpected pass — also title by title inside a file with another listed failure —, known did-not-exit ended after its idle period, a slow `after()` never cut, a hung test cancelled by the per-test limit with the file running on, a file that prints a 4 MiB burst and fails as its last act still reported with its summary), the grandchild process gone afterwards, a kept log per file, a project without a manifest, no `DATABASE_URL` / `GPEXE_API_TOKEN` / `SOURCE_CREDENTIAL_KEYS` / `GITHUB_TOKEN` / `*_API_KEY` visible to a unit file, a `.env` in the test's cwd not loaded, no canary credential in the output / report / logs, the runner's rules equal to the support module's, and the refusals (a remote host, a Supabase pooler, `monitoring2`, a libpq `host=` / `port=` / `user=` override, a shared step without `--shared-db`, naming the wrong database, naming a non-OptiMove database, an ambient variable as opt-in) — each refused with exit 2 before any file ran and without the credential in the message |
+| the runner itself | `npm run test:runner` | 35 of 35 checks: one throwaway file per verdict (pass, fail, known-fail incl. a nested describe, did-not-exit, a stuck test with a grandchild, crash at import, unexpected pass — also title by title inside a file with another listed failure —, known did-not-exit ended after its idle period, a slow `after()` never cut, a hung test cancelled by the per-test limit with the file running on, a file that prints a 4 MiB burst and fails as its last act still reported with its summary); **the fingerprint rule**: the same title with the expected failureType and message → known-fail, the same title with another failureType → fail, with another message → fail, a known timeout that turns into an assertion failure → fail, a listed test that passes → unexpected pass; a manifest entry without a fingerprint, with an unknown failureType, with a pattern that does not compile or is too unspecific (`^.*`), or for a secret / credential scan test (by file name in any directory, or by title) → refused before any file; the grandchild process gone afterwards, a kept log per file, a project without a manifest, no `DATABASE_URL` / `GPEXE_API_TOKEN` / `SOURCE_CREDENTIAL_KEYS` / `GITHUB_TOKEN` / `*_API_KEY` visible to a unit file, a `.env` in the test's cwd not loaded, no canary credential in the output / report / logs, the runner's rules equal to the support module's, and the refusals (a remote host, a Supabase pooler, `monitoring2`, a libpq `host=` / `port=` / `user=` override, a shared step without `--shared-db`, naming the wrong database, naming a non-OptiMove database, an ambient variable as opt-in) — each refused with exit 2 before any file ran and without the credential in the message |
+| the secret-scan guard | `cd backend && node --test --test-name-pattern "^12\. no credential" tests/source-hosts-server3.test.mjs`, then the whole file, then the same test with a 40-hex value planted in `.gitignore` (restored afterwards) | 1/1 and 13/13 after the SHA in `CURRENT_STATE.md` was shortened; with the planted value test 12 fails naming `.gitignore` — the files after `CURRENT_STATE.md` in its list are scanned again; `.gitignore` restored byte-for-byte and the test passes again |
 | frontend support | `support-helpers.test.mjs` through the runner | 9/0 |
-| backend support | `support-disposable-db.test.mjs` (disposable kind, and under plain `node --test`) | 5/0: name and server rules (incl. the query-parameter rule), create → landing check → the audit lists it as droppable with its open session → drop ends that session → gone, the object count in `postgres` unchanged; the server-address table (loopback, private, link-local, Unix socket local; public and CGNAT remote); `--drop` refusals |
+| backend support | `support-disposable-db.test.mjs` (disposable kind, and under plain `node --test`) | 5/0: name and server rules (incl. the query-parameter rule), create → landing check → the audit lists it as droppable with its open session → drop ends that session → gone, the object count in `postgres` unchanged; the server-address table: only `127.0.0.0/8`, `::1`, their IPv4-mapped form and a Unix socket (null) count as local, while `10.0.0.5`, `172.16.0.1`, `172.31.255.254`, `192.168.1.10`, `fd12:3456::1`, `fc00::1`, `fe80::1`, `100.64.0.1`, `169.254.1.1`, IPv4-mapped private, public and malformed values (`::ffff:`, a doubled prefix, five octets, an octet above 255, a prefix length above 128) are refused; `--drop` refusals |
 | migrated frontend files, before → after | `notifications-tests-module.test.mjs`, `tests-wellness-form.actions.test.mjs` | 10/0 → 10/0 and 5/0 → 5/0, the same tests |
 | migrated backend file, before → after | `exercises-upsert.test.mjs` | 6/0 → 6/0 |
 | every consumer of `_gpexe-disposable-db.mjs`, before → after | the 15 `disposable` files of the GPEXE / source-connections family, then `activity-roster-5a1`, `activity-roster-5a2` and `pool-checkout-timeout`, through the runner | identical per-file counts (the family: 367 passed; the two baseline failures `gpexe-check-finalization` 1 and `source-hosts-server3` 12, one test each, before and after; the three others: see the row below); cleanup audit: no database left behind |
@@ -352,7 +380,8 @@ All on 2026-10-11, this workstation, worktree at `241765e` plus the T1 changes.
 | the audit CLI | `node tests/support/disposable-db-audit.mjs` (from `backend/`) and `--drop` without `--yes` | lists 11 databases (3 kept: `OPTIMOVE`, `monitoring2`, `monitoring_app`; the 8 leftover `optimove_tests_gpexe_f3c2g_*` as droppable) and 30 user objects in `postgres`; `--drop` alone is refused. The 30 objects were attributed read-only: all are `pgagent.*` tables, indexes and sequences of the pgAgent extension (pgAdmin's job scheduler), none a test scaffold — no test file ever wrote into `postgres` |
 | the six disposable files that create databases under their own names | `builder-copy-performance`, `migration-runner-v2`, `pankov-program-migration`, `weekly-plan-empty-structures`, `weekly-plan-hierarchy-order`, `weekly-plan-submit-empty-guard` through the runner with the full-server audit | 4/0, 14/0, 8/0, 7/0, 10/0, 5/0; "no database was left behind by this step" and "nothing was written into the maintenance database" — the audit now sees their `optimove_<module>_*` names too (it would report one left behind as a manual decision, since only the strict `optimove_tests_*` pattern is droppable) |
 | representative set | frontend `gpexe-import.actions` 68/0; backend unit `gpexe-client` 19/0, `gpexe-rest-v1-adapter` 20/0; backend disposable `gpexe-undo-session` 8/0, `source-connections-f3c1` 19/0; `production-static-serving` under its override 9/0 | all pass |
-| the hanging file under its manifest entries | `training-load.actions.test.mjs` | known-fail: 115 pass, X5a and X5b cancelled after 15 s each, the process exits (about 30 s instead of forever) |
+| the hanging file under its manifest entries | `training-load.actions.test.mjs` | known-fail: 115 pass, X5a and X5b cancelled after 15 s each with the fingerprint `testTimeoutFailure` / `^test timed out after \d+ms$`, the process exits (about 30 s instead of forever); an assertion failure under the same titles would be reported as a new failure |
+| `npm run test:pr` once on the final tree | self-test, every frontend file, backend `unit`, backend `disposable` with the cleanup audit | `RESULT: OK`, exit 0: 159 files — 151 pass, 8 known-fail (`builder-create-form-fixes` 8/1, `builder-mobile-section-workflow` 44/1, `organization-panel-cache` 8/1, `tests-schedule-management.actions` 50/5, `training-load.actions` 115/2, `activity-roster-5a2` 72/1, `gpexe-check-finalization` 26/1, `tests-athlete-device-timezone` 25/1 — every one matched by its full fingerprint, no "the failure differs" line), 0 fail, 0 timeout, 0 crash, 0 did-not-exit; 3137 tests passed, 13 failed (the 13 listed), 767 s; self-test 35/35; "cleanup audit: no database was left behind by this step" and "nothing was written into the maintenance database"; no node process left behind; the server afterwards holds exactly the 11 databases it held before (the 8 old `optimove_tests_gpexe_f3c2g_*` leftovers untouched) |
 | the whole repository, once | the discovery run of section 1.4 (every file, every kind) | the measured map; the shared kind left the development database identical by snapshot |
 | static checks | `node --check` on every changed file; `git diff --check` | clean |
 
@@ -413,8 +442,14 @@ the baseline, so a new failure is visible before review.
   `npm --prefix frontend run build` (`production-static-serving` and
   `production-build.test.mjs` need `frontend/dist`), then
   `npm run test:pr` with `DATABASE_URL=postgresql://postgres:<pw>@localhost:5432/postgres`.
-  The runner's rules already fit: a loopback host, the maintenance database as the
-  disposable target, no secret in the environment.
+  The runner's string rules fit (a loopback host, the maintenance database as the
+  disposable target, no secret in the environment), but the support module's
+  connection-time rule does not yet: a service container reports its bridge address
+  (`172.x`) in `inet_server_addr()`, which T1 refuses on purpose. T2 must add a
+  **verifiable server-side sentinel** — for example a marker role or table the workflow
+  creates on the throwaway service before the tests and the support module checks for
+  together with the address — never a plain environment flag, which any shell could set
+  against a tunnelled server.
 - **What runs there**: the self-test, every frontend file, the 12 backend `unit` files
   and the 44 `disposable` files (about 13 minutes on this workstation;
   Linux CI is usually faster). The 44 `shared` files cannot run in CI until a bootstrap
@@ -468,6 +503,11 @@ the baseline, so a new failure is visible before review.
     allowlist or contract test for the environment scrub, and a static refusal of a
     `unit` or `disposable` file that reads `.env` itself
     (`multi-athlete-program-migration.test.mjs` does, as a `shared` file).
+11. Server identity beyond the address: a positive server-side sentinel (a marker role
+    or database only the developer's local server and the CI service container carry,
+    created by the setup and checked in `withAdminClient`), so a tunnel that ends on a
+    remote machine's own loopback is caught too; and the content-marker guard for
+    secret-scan tests (section 3.4) in place of the file-name / title tripwire.
 
 ### 8.2 T3 — Playwright (plan only; nothing installed in T1)
 

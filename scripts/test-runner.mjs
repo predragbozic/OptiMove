@@ -257,11 +257,45 @@ export function classifyFile({ project, file, testsDirAbs, cache, manifest }) {
   };
 }
 
+// A known failure is identified by its whole fingerprint, never by the title
+// alone: the file, the exact test title, node's failureType and a pattern
+// over the first line of the failure message. A failure whose title is
+// listed but whose type or message differs is a new failure. A test whose
+// job is to find a credential or a secret can never be a known failure: the
+// cause is fixed instead (the runner refuses such a manifest entry).
+const KNOWN_FAILURE_TYPES = new Set(["testCodeFailure", "testTimeoutFailure", "cancelledByParent", "subtestsFailed", "hookFailed", "uncaughtException", "unhandledRejection", "callbackAndPromisePresent", "multipleCallbackInvocations", "testAborted"]);
+const GUARDED_SCAN_FILES = new Set(["source-hosts-server3.test.mjs", "source-credential-crypto.test.mjs"]);
+const GUARDED_SCAN_TITLE = /\b(secret|credential|token|password)s?\b.*\b(scan|in any file|never|not in|leak|ignored by git)\b/i;
+
+function compileKnownFailure(entry, file) {
+  const where = `${file}: knownFailures entry ${JSON.stringify({ file: entry?.file, test: entry?.test })}`;
+  for (const key of ["file", "test", "failureType", "messagePattern"]) {
+    if (typeof entry?.[key] !== "string" || !entry[key]) throw new RunnerRefusal(`${where} must carry "${key}" (a known failure is identified by file, title, failureType and a message pattern together)`);
+  }
+  if (!KNOWN_FAILURE_TYPES.has(entry.failureType)) throw new RunnerRefusal(`${where}: unknown failureType "${entry.failureType}" (node:test's types: ${[...KNOWN_FAILURE_TYPES].join(", ")})`);
+  let pattern;
+  try {
+    pattern = new RegExp(entry.messagePattern);
+  } catch (error) {
+    throw new RunnerRefusal(`${where}: messagePattern is not a valid regular expression (${error.message})`);
+  }
+  // A fingerprint must say something: a pattern with fewer than 8 literal
+  // characters (after the regex syntax is taken out) would match almost any
+  // message.
+  const literal = entry.messagePattern.replace(/\\[dDwWsSbB]/g, "x").replace(/\\(.)/g, "$1").replace(/[\^$.*+?()[\]{}|]/g, "");
+  if (literal.length < 8) throw new RunnerRefusal(`${where}: messagePattern "${entry.messagePattern}" is too unspecific to be a fingerprint (fewer than 8 literal characters)`);
+  if (GUARDED_SCAN_FILES.has(path.basename(entry.file)) || GUARDED_SCAN_TITLE.test(entry.test)) {
+    throw new RunnerRefusal(`${where}: a secret / credential scan test is refused as a known failure (by file name or title); fix its cause instead`);
+  }
+  return { ...entry, pattern };
+}
+
 export function readManifest(projectDirAbs) {
   const file = path.join(projectDirAbs, "tests", "support", "test-manifest.json");
   if (!fs.existsSync(file)) return { kindOverrides: {}, fileOptions: {}, knownFailures: [], knownNoExit: [] };
   const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-  return { kindOverrides: parsed.kindOverrides || {}, fileOptions: parsed.fileOptions || {}, knownFailures: parsed.knownFailures || [], knownNoExit: parsed.knownNoExit || [] };
+  const knownFailures = (parsed.knownFailures || []).map((e) => compileKnownFailure(e, path.relative(REPO_ROOT, file).replace(/\\/g, "/")));
+  return { kindOverrides: parsed.kindOverrides || {}, fileOptions: parsed.fileOptions || {}, knownFailures, knownNoExit: parsed.knownNoExit || [] };
 }
 
 // node's own per-test limit for a file: a test that never finishes is
@@ -313,9 +347,19 @@ function auditDatabases({ backendDirAbs, env }) {
 // ----------------------------------------------------------- event parsing
 // One parser per test process. It consumes the reporter's lines (every
 // other line of output is ignored here and kept in the log only).
-export function createEventParser(knownFailureTitles) {
+// knownFailures: the compiled manifest entries for this file. A leaf failure
+// is known only when an entry matches its title, its failureType and its
+// first-line message; a parent (describe / subtests) failure is known only
+// when every failed child is known.
+export function createEventParser(knownFailures) {
   const running = []; // tests that started and did not finish yet, innermost last
   const state = { counts: { tests: 0, pass: 0, fail: 0, cancelled: 0, skipped: 0, todo: 0 }, summary: null, failures: [], passedTitles: new Set(), lastEventAt: Date.now(), resultsSeen: 0 };
+  function matchKnown(event) {
+    const sameTitle = knownFailures.filter((k) => k.test === event.name);
+    if (!sameTitle.length) return { known: false, listed: false };
+    const match = sameTitle.find((k) => k.failureType === event.failureType && k.pattern.test(event.message || ""));
+    return { known: Boolean(match), listed: true, expected: match ? null : sameTitle.map((k) => `${k.failureType} /${k.messagePattern}/`) };
+  }
   function finish(event, failed) {
     let entry = null;
     for (let i = running.length - 1; i >= 0; i--) {
@@ -326,8 +370,15 @@ export function createEventParser(knownFailureTitles) {
     }
     const failedChildren = entry ? entry.failedChildren : [];
     if (failed) {
-      const known = failedChildren.length ? failedChildren.every((c) => c.known) : knownFailureTitles.has(event.name);
-      const failure = { name: event.name, nesting: event.nesting, known, leaf: failedChildren.length === 0, failureType: event.failureType, message: event.message };
+      let known;
+      let listedButDifferent = null;
+      if (failedChildren.length) known = failedChildren.every((c) => c.known);
+      else {
+        const m = matchKnown(event);
+        known = m.known;
+        if (m.listed && !m.known) listedButDifferent = m.expected;
+      }
+      const failure = { name: event.name, nesting: event.nesting, known, leaf: failedChildren.length === 0, failureType: event.failureType, message: event.message, listedButDifferent };
       state.failures.push(failure);
       const parent = running[running.length - 1];
       if (parent) parent.failedChildren.push(failure);
@@ -408,11 +459,12 @@ export async function killProcessTree(child) {
   return waitForExit(child, 10_000);
 }
 
-async function runOneFile({ projectDirAbs, testsDirAbs, file, env, timeoutMs, testTimeoutMs, logDir, knownFailureTitles, knownNoExit }) {
+async function runOneFile({ projectDirAbs, testsDirAbs, file, env, timeoutMs, testTimeoutMs, logDir, knownFailures, knownNoExit }) {
   const abs = path.join(testsDirAbs, file);
   const logPath = path.join(logDir, `${file.replace(/[\\/]/g, "__")}.log`);
   const log = fs.createWriteStream(logPath);
-  const parser = createEventParser(knownFailureTitles);
+  const parser = createEventParser(knownFailures);
+  const knownFailureTitles = new Set(knownFailures.map((k) => k.test));
   const startedAt = Date.now();
   const child = spawn(process.execPath, [`--test-reporter=${REPORTER_URL}`, "--test-reporter-destination=stdout", `--test-timeout=${testTimeoutMs}`, abs], {
     cwd: projectDirAbs,
@@ -539,7 +591,7 @@ async function runOneFile({ projectDirAbs, testsDirAbs, file, env, timeoutMs, te
     unexpectedPasses,
     unknownFailures,
     knownFailuresSeen,
-    failureDetails: failures.filter((f) => f.leaf).map((f) => ({ name: f.name, failureType: f.failureType, message: f.message, known: f.known })),
+    failureDetails: failures.filter((f) => f.leaf).map((f) => ({ name: f.name, failureType: f.failureType, message: f.message, known: f.known, listedButDifferent: f.listedButDifferent })),
     spawnError: exit.spawnError ? String(exit.spawnError.message || exit.spawnError) : logError ? `log file: ${logError.message}` : null,
     logPath,
   };
@@ -672,7 +724,9 @@ async function runStep(step, args, io) {
     }
     const env = buildChildEnv({ kind: k, db });
     const backendDirAbs = path.join(REPO_ROOT, "backend");
-    const audited = (k === "disposable" || k === "schema-clone") && !args.projectDir;
+    // Every database kind is audited - the shared kind too, so its server
+    // passes the connection-time identity checks before the first file.
+    const audited = k !== "unit" && !args.projectDir;
     const auditBefore = audited ? auditDatabases({ backendDirAbs, env }) : null;
     if (auditBefore?.error) {
       // Fail closed: without the audit neither the server identity nor the
@@ -687,11 +741,11 @@ async function runStep(step, args, io) {
       if (leftFromEarlier) io.out(`  note: ${leftFromEarlier} disposable test database(s) from earlier runs already on the server (node backend/tests/support/disposable-db-audit.mjs lists them)`);
     }
     for (const f of filesOfKind) {
-      const knownFailureTitles = new Set(manifest.knownFailures.filter((e) => e.file === f.file).map((e) => e.test));
+      const knownFailures = manifest.knownFailures.filter((e) => e.file === f.file);
       const knownNoExit = manifest.knownNoExit.find((e) => e.file === f.file) || null;
       const fileOptions = manifest.fileOptions[f.file] || {};
       const testTimeoutMs = fileOptions.testTimeoutMs || defaultTestTimeoutMs(timeoutMs);
-      const r = await runOneFile({ projectDirAbs, testsDirAbs, file: f.file, env, timeoutMs, testTimeoutMs, logDir, knownFailureTitles, knownNoExit });
+      const r = await runOneFile({ projectDirAbs, testsDirAbs, file: f.file, env, timeoutMs, testTimeoutMs, logDir, knownFailures, knownNoExit });
       r.kind = k;
       r.testTimeoutMs = testTimeoutMs;
       results.push(r);
@@ -701,6 +755,7 @@ async function runStep(step, args, io) {
         io.out(`  ${statusLabel(r).padEnd(7)} ${formatDuration(r.durationMs).padStart(6)}  ${counts.padStart(7)}  ${r.file}`);
         for (const t of r.unknownFailures.slice(0, 10)) io.out(`           not ok: ${t}`);
         if (r.unknownFailures.length > 10) io.out(`           ... ${r.unknownFailures.length - 10} more`);
+        for (const d of r.failureDetails.filter((x) => x.listedButDifferent)) io.out(`           listed in test-manifest.json but the failure differs (got ${d.failureType}: ${JSON.stringify(d.message || "")}; expected ${d.listedButDifferent.join(" or ")}) - a new failure`);
         const hung = r.failureDetails.filter((d) => d.failureType === "testTimeoutFailure");
         if (hung.length) io.out(`           ${hung.length} test(s) never finished and were cancelled by the per-test limit of ${formatDuration(testTimeoutMs)}${hung.every((d) => d.known) ? " (known)" : ""}`);
         if (r.status === "xfail") io.out(`           known failure(s) only: ${r.knownFailuresSeen.length}`);

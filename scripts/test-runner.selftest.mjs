@@ -85,6 +85,21 @@ test("prints a large burst then fails as the last thing the process does", () =>
   assert.fail("late");
 });
 `,
+  "o-fp-match.test.mjs": `import { test } from "node:test";
+import assert from "node:assert/strict";
+test("fails with the expected cause", () => { assert.equal(1, 2); });
+`,
+  "p-fp-type.test.mjs": `import { test } from "node:test";
+import assert from "node:assert/strict";
+test("fails with another failure type than listed", () => { assert.equal(1, 2); });
+`,
+  "q-fp-message.test.mjs": `import { test } from "node:test";
+test("fails with another message than listed", () => { throw new Error("a different reason"); });
+`,
+  "r-fp-timeout-now-assert.test.mjs": `import { test } from "node:test";
+import assert from "node:assert/strict";
+test("a known timeout that now fails an assertion", () => { assert.fail("now an assertion"); });
+`,
   "j-no-env.test.mjs": `import { test } from "node:test";
 import assert from "node:assert/strict";
 test("a unit file never sees a database target or a credential", () => {
@@ -109,15 +124,21 @@ test("a .env next to the test file never reaches the process: dotenv is pointed 
 };
 const DOTENV_CANARY = `DATABASE_URL=${CANARY_DB_URL}\nGPEXE_API_TOKEN=${CANARY_TOKEN}\nPLANTED_IN_DOTENV=yes\n`;
 
+const STRICT_EQUAL = "^Expected values to be strictly equal:";
+const TIMEOUT = "^test timed out after \\d+ms$";
 const MANIFEST = {
   kindOverrides: {},
   knownFailures: [
-    { file: "b-fail.test.mjs", test: "broken two (known)", since: "2026-10-11", note: "self-test" },
-    { file: "c-known-fail.test.mjs", test: "nested known failure", since: "2026-10-11", note: "self-test" },
-    { file: "g-unexpected-pass.test.mjs", test: "listed as a known failure but passes", since: "2026-10-11", note: "self-test" },
-    { file: "k-hang-known.test.mjs", test: "hangs forever (known, cancelled by the per-test limit)", since: "2026-10-11", note: "self-test" },
-    { file: "l-partial-xpass.test.mjs", test: "listed and now passes", since: "2026-10-11", note: "self-test" },
-    { file: "l-partial-xpass.test.mjs", test: "listed and still fails", since: "2026-10-11", note: "self-test" },
+    { file: "b-fail.test.mjs", test: "broken two (known)", failureType: "testCodeFailure", messagePattern: STRICT_EQUAL, since: "2026-10-11", note: "self-test" },
+    { file: "c-known-fail.test.mjs", test: "nested known failure", failureType: "testCodeFailure", messagePattern: STRICT_EQUAL, since: "2026-10-11", note: "self-test" },
+    { file: "g-unexpected-pass.test.mjs", test: "listed as a known failure but passes", failureType: "testCodeFailure", messagePattern: STRICT_EQUAL, since: "2026-10-11", note: "self-test" },
+    { file: "k-hang-known.test.mjs", test: "hangs forever (known, cancelled by the per-test limit)", failureType: "testTimeoutFailure", messagePattern: TIMEOUT, since: "2026-10-11", note: "self-test" },
+    { file: "l-partial-xpass.test.mjs", test: "listed and now passes", failureType: "testCodeFailure", messagePattern: STRICT_EQUAL, since: "2026-10-11", note: "self-test" },
+    { file: "l-partial-xpass.test.mjs", test: "listed and still fails", failureType: "testCodeFailure", messagePattern: STRICT_EQUAL, since: "2026-10-11", note: "self-test" },
+    { file: "o-fp-match.test.mjs", test: "fails with the expected cause", failureType: "testCodeFailure", messagePattern: STRICT_EQUAL, since: "2026-10-11", note: "self-test" },
+    { file: "p-fp-type.test.mjs", test: "fails with another failure type than listed", failureType: "testTimeoutFailure", messagePattern: TIMEOUT, since: "2026-10-11", note: "self-test" },
+    { file: "q-fp-message.test.mjs", test: "fails with another message than listed", failureType: "testCodeFailure", messagePattern: STRICT_EQUAL, since: "2026-10-11", note: "self-test" },
+    { file: "r-fp-timeout-now-assert.test.mjs", test: "a known timeout that now fails an assertion", failureType: "testTimeoutFailure", messagePattern: TIMEOUT, since: "2026-10-11", note: "self-test" },
   ],
   fileOptions: { "k-hang-known.test.mjs": { testTimeoutMs: 1500, note: "self-test" } },
   knownNoExit: [{ file: "h-noexit-known.test.mjs", idleMs: 1500, note: "self-test" }],
@@ -205,6 +226,16 @@ try {
   check("a file that cannot even load is crash / not ok", () => expect("f-crash.test.mjs", { status: "crash", ok: false }));
   check("a listed failure that passes is reported as an unexpected pass (ok, with a warning)", () => expect("g-unexpected-pass.test.mjs", { status: "pass", ok: true, unexpectedPass: true, unexpectedPasses: ["listed as a known failure but passes"] }));
   check("a listed failure that passes is reported title by title even while another listed failure in the same file still fails", () => expect("l-partial-xpass.test.mjs", { status: "xfail", ok: true, unexpectedPass: true, unexpectedPasses: ["listed and now passes"], knownFailuresSeen: ["listed and still fails"] }));
+  check("fingerprint: the same title with the expected failureType and message is known-fail", () => expect("o-fp-match.test.mjs", { status: "xfail", ok: true, unknownFailures: [], knownFailuresSeen: ["fails with the expected cause"] }));
+  check("fingerprint: the same title with another failureType is a new failure", () => {
+    expect("p-fp-type.test.mjs", { status: "fail", ok: false, unknownFailures: ["fails with another failure type than listed"], knownFailuresSeen: [] });
+    assert.deepEqual(byFile["p-fp-type.test.mjs"].failureDetails[0].listedButDifferent, [`testTimeoutFailure /${TIMEOUT}/`]);
+  });
+  check("fingerprint: the same title with another message is a new failure", () => expect("q-fp-message.test.mjs", { status: "fail", ok: false, unknownFailures: ["fails with another message than listed"], knownFailuresSeen: [] }));
+  check("fingerprint: a known timeout that turns into an assertion failure is a new failure", () => {
+    expect("r-fp-timeout-now-assert.test.mjs", { status: "fail", ok: false, unknownFailures: ["a known timeout that now fails an assertion"], knownFailuresSeen: [] });
+    assert.equal(byFile["r-fp-timeout-now-assert.test.mjs"].failureDetails[0].failureType, "testCodeFailure");
+  });
   check("a file that prints a large burst and fails as its last act is still reported as fail with its summary seen", () => expect("m-burst-then-fail.test.mjs", { status: "fail", ok: false, unknownFailures: ["prints a large burst then fails as the last thing the process does"], summarySeen: true, pipeHeldOpen: false }));
   check("a known did-not-exit file is ended after its idle period and counts as ok", () => {
     expect("h-noexit-known.test.mjs", { status: "pass", ok: true, noExit: true, noExitKnown: true });
@@ -228,6 +259,32 @@ try {
   });
   check("every file has a kept log", () => {
     for (const file of Object.keys(FILES)) assert.ok(fs.existsSync(path.join(logDir, "frontend", "unit", `${file}.log`)), `${file}.log`);
+  });
+  check("a manifest entry without a fingerprint, with an unknown failureType, or for a secret / credential scan test is refused before any file runs", () => {
+    const cases = [
+      [{ file: "a-pass.test.mjs", test: "one passes" }, /must carry "failureType"/],
+      [{ file: "a-pass.test.mjs", test: "one passes", failureType: "testCodeFailure" }, /must carry "messagePattern"/],
+      [{ file: "a-pass.test.mjs", test: "one passes", failureType: "somethingElse", messagePattern: "^x" }, /unknown failureType/],
+      [{ file: "a-pass.test.mjs", test: "one passes", failureType: "testCodeFailure", messagePattern: "(" }, /not a valid regular expression/],
+      [{ file: "a-pass.test.mjs", test: "one passes", failureType: "testCodeFailure", messagePattern: "^.*" }, /too unspecific to be a fingerprint/],
+      [{ file: "source-hosts-server3.test.mjs", test: "12. anything", failureType: "testCodeFailure", messagePattern: "^a long enough literal" }, /secret \/ credential scan test is refused/],
+      [{ file: "moved/source-hosts-server3.test.mjs", test: "12. anything", failureType: "testCodeFailure", messagePattern: "^a long enough literal" }, /secret \/ credential scan test is refused/],
+      [{ file: "other.test.mjs", test: "no credential or token is in any file of this change", failureType: "testCodeFailure", messagePattern: "^a long enough literal" }, /secret \/ credential scan test is refused/],
+    ];
+    for (const [entry, expected] of cases) {
+      const bare = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-test-runner-selftest-manifest-"));
+      try {
+        fs.mkdirSync(path.join(bare, "tests", "support"), { recursive: true });
+        fs.writeFileSync(path.join(bare, "tests", "a-pass.test.mjs"), FILES["a-pass.test.mjs"]);
+        fs.writeFileSync(path.join(bare, "tests", "support", "test-manifest.json"), JSON.stringify({ knownFailures: [entry] }));
+        const r = runRunner(["--project", "frontend", "--project-dir", bare, "--timeout-ms", "5000", "--quiet", "--log-dir", path.join(bare, "logs")]);
+        assert.equal(r.status, 2, `${JSON.stringify(entry)}: exit ${r.status}\n${r.stderr}`);
+        assert.match(r.stderr, expected, JSON.stringify(entry));
+        assert.ok(!r.stdout.includes("PASS"), "no file ran");
+      } finally {
+        fs.rmSync(bare, { recursive: true, force: true });
+      }
+    }
   });
   check("a project without a test-manifest.json runs with every list empty", () => {
     const bare = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-test-runner-selftest-bare-"));

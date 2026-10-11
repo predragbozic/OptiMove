@@ -21,7 +21,7 @@ import {
   databaseUrlFor,
   disposableDatabaseName,
   dropDisposableDatabase,
-  isPrivateOrLoopbackAddress,
+  isLoopbackServerAddress,
   listDatabases,
   parseServerUrl,
 } from "./support/disposable-db.mjs";
@@ -110,12 +110,12 @@ test("3. create lands on the new database, the audit lists it, drop ends other s
   }
 });
 
-test("5. the server-address rule: loopback, private ranges, link-local and a Unix socket are local; a public address is a tunnelled remote server", () => {
-  for (const local of [null, undefined, "127.0.0.1", "127.0.0.1/32", "::1", "::ffff:127.0.0.1", "10.0.0.5", "172.16.0.1", "172.31.255.254", "192.168.1.10", "fd12:3456::1", "fe80::1", "::ffff:10.1.2.3"]) {
-    assert.equal(isPrivateOrLoopbackAddress(local), true, `${local} must count as local`);
+test("5. the server-address rule: only loopback (127/8, ::1, their IPv4-mapped form) or a Unix socket proves a local server; every private, link-local, CGNAT or public address is refused", () => {
+  for (const local of [null, undefined, "", "127.0.0.1", "127.0.0.1/32", "127.255.255.254", "::1", "::ffff:127.0.0.1"]) {
+    assert.equal(isLoopbackServerAddress(local), true, `${JSON.stringify(local)} must count as local`);
   }
-  for (const remote of ["8.8.8.8", "172.15.0.1", "172.32.0.1", "100.64.0.1", "203.0.113.7", "2001:db8::1", "::ffff:203.0.113.7"]) {
-    assert.equal(isPrivateOrLoopbackAddress(remote), false, `${remote} must count as remote`);
+  for (const notLocal of ["10.0.0.5", "172.16.0.1", "172.31.255.254", "192.168.1.10", "fd12:3456::1", "fc00::1", "fe80::1", "100.64.0.1", "169.254.1.1", "::ffff:10.1.2.3", "::ffff:192.168.1.1", "8.8.8.8", "203.0.113.7", "2001:db8::1", "::ffff:203.0.113.7", "1270.0.0.1", "127", "::ffff:", "::ffff:::1", "::ffff:::ffff:127.0.0.1", "127.0.0.1.5", "127.0.0.256", "127.0.0.1/129"]) {
+    assert.equal(isLoopbackServerAddress(notLocal), false, `${notLocal} must be refused`);
   }
 });
 
