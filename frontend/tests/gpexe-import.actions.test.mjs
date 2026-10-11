@@ -1361,7 +1361,7 @@ test("Imports: the source card shows the source name, the connection, when sessi
   assert.match(card, /<dt>GPEXE team id<\/dt><dd>980<\/dd>/);
   assert.match(card, /<dt>Import switch<\/dt><dd>Import writing is switched off in this environment/, "the switch's state is named as the switch, never as a server message");
   assert.doesNotMatch(card, /<dt>Server message<\/dt><dd>Import writing is switched off/);
-  assert.match(card, /<details class="gpexe-tech">[\s\S]*Show replaced versions/);
+  assert.match(card, /<details class="gpexe-tech">[\s\S]*Show replaced or no longer found versions/);
 });
 
 test("Imports: a failed check shows its own code and message beside its status; the import switch's sentence is never presented as the check's reason; the next step never says 'nothing found' after a failed search", async () => {

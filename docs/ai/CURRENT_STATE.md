@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-11. Last `origin/main` commit checked: `c3d31d4` (merge of PR #152,
-`fix/gpexe-drill-response-count-ignored` → `main`; PR #151 `d6fd559` before it).
+Last reviewed: 2026-10-11. Last `origin/main` commit checked: `884945c` (merge of PR #153,
+`fix/gpexe-pre-import-safety` → `main`; PR #152 `c3d31d4` before it).
 
 ## Active phase
 
@@ -1444,8 +1444,8 @@ Technical details.
   UTC):** the preconditions held. It **succeeded**: sessions 3, new 1, changed 0, unchanged 2; the session with
   five drills was read in full. Nothing was linked, approved or imported; the import switch stays off.
 - **The pre-import safety package (switch conditions 6 and 7)** (owner order 2026-10-11; branch
-  `fix/gpexe-pre-import-safety` from `c3d31d4`; not merged; migration v33, backend, tests and docs; runbook
-  section "When a check's results become actionable (v33)"):
+  `fix/gpexe-pre-import-safety` from `c3d31d4`; **merged and deployed as PR #153, see below**; migration v33,
+  backend, tests and docs; runbook section "When a check's results become actionable (v33)"):
   - **Condition 6 and the publication of a check.** While a check runs it writes no candidate row: its
     observations are staged per check and session in `training_load.gpexe_import_check_observations`
     (insert-only, running check of the same team only, read by no route), so the published candidates stay
@@ -1474,13 +1474,72 @@ Technical details.
     non-empty answers store `not_observed`, never actionable; only `not_required` / `confirmed` /
     `not_observed` is stored (`drill_parameter_effect`), never a fingerprint or a value. Same rule for the
     legacy bundle.
-  - Frontend unchanged: the new refusal `candidate_not_actionable` and the list blocker
+  - Frontend unchanged in PR #153: the new refusal `candidate_not_actionable` and the list blocker
     `not_confirmed_for_import` read as the existing generic sentences ("It can't be approved right now.",
-    "the server refused it"); a dedicated sentence, and keeping a not-yet-published session out of *Ready to
-    import*, are a small frontend follow-up before the switch (Separate tasks).
+    "the server refused it") until the frontend support below (branch `fix/gpexe-imports-v33-frontend`).
   - Candidates from before v33 carry no drill effect and are not actionable until a successful check sees
-    them again. No production check, GPEXE request, Render change or persistent-database migration was made;
-    v33 is applied nowhere persistent.
+    them again.
+- **PR #153 is merged and deployed.**
+  - The owner's external review of head `ab58e5e` found a HIGH (a running, failed or outcome-unknown check
+    must never change the actionable state of a candidate confirmed by an earlier successful check); fixed in
+    head `8a223fd` by the per-check staging (above). Reviewed head `8a223fd` READY; merge commit
+    `884945c4be6b2dbeaa60971de0a885d30c2626c5` (parents `c3d31d4` and `8a223fd`) on 2026-10-11 at 09:50:54 UTC,
+    merged exactly from that head (`--match-head-commit`).
+  - `/api/health` first served `884945c` with `ok: true` at 09:51:46 UTC, then three times in a row (09:52:03,
+    09:52:13 and 09:52:24 UTC). **v33 on the deployed database is inferred** from the server starting after the
+    migration step (`npm start` runs `node src/migrate.js &&` the server); no direct SQL post-check.
+  - Read-only smoke without a login, zero UUID, GET only: the team status, one check, the candidates, one
+    candidate, the source athletes, the athlete links, the athlete identities, the source-connection list and
+    one connection answered 401. No Check, Connect, Bind, Load identities, Link, Unlink, Approve or Import at
+    the deploy; Render and the switch untouched.
+- **The first production check on v33 (2026-10-11, run once on the owner's order, First team,
+  05.10.2026 - 06.10.2026):** the preconditions held (health `884945c` ok; the server3 connection *Verified*;
+  First team actively bound to GPEXE Team ID 980; the switch off; no running check). It **succeeded** at
+  10:05:14 UTC: `3 sessions in GPEXE: 0 not seen by OptiMove before, 0 changed, 3 unchanged`. **Recorded by
+  the owner as: the v33 staging / finalization and the drill-parameter guard confirmed on production** - the
+  check ran end to end through the v33 path on the real server and succeeded, and no session (the five-drill
+  session included) failed as `drill_parameter_effect_not_distinguishable`. What this record does not hold:
+  the deployed database was not queried, so the three candidates' stored drill effect and their actionable
+  state after the check were not read, and the Imports screen after the check was not recorded (the deployed
+  frontend of that moment showed the blocker only as a generic sentence); that the three sessions of the check
+  of 2026-10-11 ~00:12 UTC were staged, re-sighted and republished is inferred from the code, not observed.
+  Whether the five-drill session's drill effect is `confirmed` is therefore not known from this record;
+  opening the Imports screen once the frontend support below is deployed shows the stored blocker (the list
+  already carries it, no new check is needed), though the screen cannot tell `confirmed` from `not_required`
+  (a *Ready to import* row means either). **No Link, Approve or Import was run; the switch stays off.**
+- **Frontend support for v33** (owner order 2026-10-11; branch `fix/gpexe-imports-v33-frontend` from
+  `884945c`; frontend and docs only, no backend or contract change; not merged): a candidate the last
+  successful search did not confirm (`approvalBlockers` `not_confirmed_for_import` - the server's one word,
+  the same for a coach and an administrator) is never *Ready to import* and never "up to date": it is a
+  *Needs attention* row with the badge *Not confirmed for import*, no checkbox and no *Approve import*; the
+  row names the action alone for everyone ("Find new sessions again (with dates that include 06.10.2026),
+  then review it."); the review's note gives the coach the one step ("Not confirmed for import yet. Find new
+  sessions again (…), then review it.") and an administrator (the status's `identityAdmin`) the two possible
+  causes in plain words ("no successful search has confirmed this session yet, or GPEXE returned drill data
+  for fewer than two of its drills, so OptiMove could not confirm its drill results", then the action and
+  "If it stays like this, check in GPEXE that the session's drills are set up and have data.") - neither a
+  code, a proof or a fingerprint; the refusal `candidate_not_actionable` (single and batch) reads as one
+  sentence; a
+  candidate withdrawn by a check (`supersededByCheckId`, no newer candidate) is a *No longer found* version
+  under "Replaced or no longer found versions" (hidden by default, never counted by the calendar) that says
+  the last successful search no longer found it in GPEXE, with no approval and never "newer data"; a
+  replaced version stays as before (the toggle under Technical details is now "Show / Hide replaced or no
+  longer found versions"). While the versions are folded away the server lists no superseded row at all
+  (`listCandidates`, `includeSuperseded`), so a withdrawn session is seen only through that toggle; a trace of
+  it in the default view would need a server-side count or an always-on read of the superseded rows - a
+  contract decision, recorded under Separate tasks, not made here. Every "find new sessions again" sentence
+  names the dates the session needs, and a not-confirmed session pre-fills the dates like an expired one, so
+  the default 14-day search can never loop on it (the pre-filled dates pin the next search to those days until
+  the coach changes them - the hint says so; the same trade-off as for an expired session); the
+  administrator's second cause is the server's `not_observed` (data
+  for fewer than two drills), never "drills not told apart" (two equal drills fail the whole search and never
+  become a row). A search that fails changes nothing of what is shown (the server keeps the published rows;
+  the screen re-reads them, GET only, and keeps the selection of rows that are still there); a search whose
+  answer is lost re-reads nothing and shows the rows as they were. A label-less session is titled "GPEXE
+  session" (no id). The approve handler never sends an approval for a not-confirmed or withdrawn review.
+  Tests:
+  `frontend/tests/gpexe-imports-v33.actions.test.mjs`. No production check, GPEXE request, Render change or
+  switch change.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2123,6 +2182,9 @@ pre-existing; pass/fail counts don't belong in this file
 - `frontend/tests/organization-panel-cache.test.mjs` — test "6. signOut clears the entire view
   cache before/alongside its hard reload" fails; reproduced identically on a clean detached
   `origin/main` worktree (`6382d25`) on 2026-10-05. Not fixed.
+- `frontend/tests/builder-create-form-fixes.test.mjs` — test "8. handleContentInput mirrors every
+  keystroke in the create form's name input into state…" fails; reproduced identically on a clean
+  detached `origin/main` worktree (`884945c`) on 2026-10-11 during the v33 frontend work. Not fixed.
 - `backend/tests/training-load-metrics-builder-edit-draft.test.mjs` — refuses to start
   unless `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL` is set (deliberate guard, no database
   operation attempted), so a plain full backend run reports it as failed; same on
@@ -2133,6 +2195,16 @@ pre-existing; pass/fail counts don't belong in this file
 - **GPEXE identity follow-up (not scheduled):** the single-athlete link from a session's review names the
   athlete by its GPEXE name or label since PR #145, but it shows no date of birth or date-of-birth conflict
   warning (only Link athletes does).
+
+- **A trace of withdrawn sessions in the default Imports view** (code and security reviews of the v33
+  frontend branch, 2026-10-11; not scheduled): a candidate withdrawn by a complete successful search
+  (`superseded_by_check_id`) is a superseded row, and the default candidates read lists no superseded row, so
+  it vanishes from the inbox until someone opens Technical details > Show replaced or no longer found
+  versions. A one-line trace in the default view ("N sessions found earlier are no longer found in GPEXE")
+  needs either a server-side withdrawn count on the list or status answer, or an always-on
+  `includeSuperseded=true` read filtered on the client (which changes the 200-row cap's meaning) - an owner
+  contract decision. A frontend-only version was built and removed on the branch because it could never
+  render against the real server.
 
 - **Imports screen follow-ups found at the first successful check** (code review, 2026-10-06; frontend
   only, not scheduled; carried over from the open docs PR #142):
@@ -2168,13 +2240,6 @@ pre-existing; pass/fail counts don't belong in this file
   drill of the window) while the Imports screen showed only that it was running, and a failure ends with a
   generic sentence. A separate task: a progress display (phase, sessions done) and a clearer failed-check
   message; any change to the number of requests is its own decision.
-- **Imports screen sentences for v33** (pre-import safety package, 2026-10-11; frontend only, before the
-  switch): a dedicated sentence for the refusal `candidate_not_actionable` and the blocker
-  `not_confirmed_for_import`; a candidate with that blocker kept out of *Ready to import* and out of the batch
-  selection (`inboxBucket` / `batchSelectable` read no blockers today, so the server's refusal is the only
-  guard); and a candidate withdrawn by a check (`supersededByCheckId`, no newer candidate) told apart from
-  one replaced by newer data - today its review prints "GPEXE has newer data", which is not true for a
-  withdrawal. Needs frontend tests.
 - **Bound the staging insert of `recordCandidate`** (code review of PR #149, 2026-10-09, reshaped by the
   pre-import safety package, v33): since v33 a check's run writes no candidate row and has no transaction
   of its own - each session is one auto-commit insert into the staging table, and nothing of it can be
@@ -2248,12 +2313,15 @@ pre-existing; pass/fail counts don't belong in this file
      candidate stays pending when a later check of the same window does not list it (for example a drill
      row recorded as a session of its own by a check whose list missed its parent), and approving it
      would import a drill's values a second time. Not built in option (c); a separate PR with its own
-     tests. **Built in the pre-import safety package (branch `fix/gpexe-pre-import-safety`, v33; not
-     merged).**
+     tests. **Built in the pre-import safety package (PR #153, v33; merged and deployed 2026-10-11); the
+     check of 05.10 - 06.10.2026 ran through it once on production and withdrew nothing (0 changed, 3
+     unchanged), so the withdrawal itself has not been seen on production; the frontend half is the branch
+     `fix/gpexe-imports-v33-frontend`, which must be merged before the switch is turned on.**
   7. **Mandatory before the import switch is turned on in any environment** (owner, 2026-10-10, at the merge
      of PR #152): a fail-closed guard against a `?drill=<index>` parameter that does not distinguish the
      drills, without relying on a drill answer's `drills_count`. **Built in the same package (the
-     drill-parameter guard; not merged).**
+     drill-parameter guard; PR #153, merged and deployed 2026-10-11); its first production run passed (no
+     session refused); the stored drill effect of the candidates was not read.**
   - Planned shape (as built in F1–F2):
     - "Check now" fetches from GPEXE;
     - a list of import candidates;
@@ -2420,9 +2488,9 @@ pre-existing; pass/fail counts don't belong in this file
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
 window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151) and the fix that ignores a drill answer's drills_count (PR #152) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
-1. The owner's external review of the pre-import safety package (conditions 6 and 7, v33), branch
-   `fix/gpexe-pre-import-safety`.
-2. After its merge and deploy, on the owner's order: linking the athletes (owner-run).
+1. The owner's external review of the frontend support for v33, branch `fix/gpexe-imports-v33-frontend`
+   (it must be merged before the switch is ever turned on).
+2. On the owner's order: linking the athletes (owner-run).
 3. Then the discovery and mapping of the variables.
 4. The owner states the state of the production-use gate and of the two gates before a link (an identity
    load and one link were run after PR #146; whether those gates were confirmed is not recorded here).
