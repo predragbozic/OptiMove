@@ -12,7 +12,12 @@ import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
 import { importGpexePlan } from "../src/gpexeImportWriter.js";
 import { GpexeClientError } from "../src/gpexeClient.js";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
-import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
+import { makeBundle as makeFixtureBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
+
+// v33 (the drill-parameter guard): a session with two or more drills is
+// importable only when at least two drill answers are non-empty and pairwise
+// distinct, so these sessions carry both drills' details by default.
+const makeBundle = (options) => makeFixtureBundle({ detailsDrills: [0, 1], ...options });
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -206,9 +211,13 @@ test("check: candidates and a preview are saved while the import switch is off, 
 
 test("preview: per athlete and per value, participation and GPS apart, every left-out value with its reason", async () => {
   const team = await setupTeam();
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7002 })] }));
+  // Drill 1's details were not fetched: one non-empty drill answer of two.
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7002, detailsDrills: [0] })] }));
   await checkNow(team);
   const [summary] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
+  // v33: fewer than two non-empty drill answers prove nothing about the drill
+  // parameter - the session is previewed but not actionable (one generic word).
+  assert.ok(summary.approvalBlockers.includes("not_confirmed_for_import"));
   const detail = (await api(`/teams/${team.teamId}/candidates/${summary.id}`, { cookie: team.coach.cookie })).body.candidate;
   const preview = detail.preview;
   const by = Object.fromEntries(preview.athletes.map((x) => [x.gpexeAthleteId, x]));
@@ -1277,8 +1286,13 @@ test("approve: a revoke sent while an approval is running waits for it; the appr
 
 test("approve: values added to an imported result and a GPEXE resend next to a manual correction are listed and need acceptance too", async () => {
   const team = await setupTeam();
-  // First import: burst/brake details only for drill 0.
-  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7113, detailsDrills: [0] })] }));
+  // First import: burst/brake details for drill 0 only. Drill 1's answer names
+  // only an athlete without a drill-1 row (so 101's drill-1 result gets no
+  // burst/brake yet), which keeps both answers non-empty and distinct for the
+  // drill-parameter guard (v33).
+  const first = sessionBundle({ sessionId: 7113, detailsDrills: [0, 1] });
+  first.details.drills["1"].players = { 999: { tot_burst_events: { unit: "number", value: 1 }, tot_brake_events: { unit: "number", value: 1 } } };
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [first] }));
   await checkNow(team);
   await withSwitchOn(async () => {
     assert.equal((await approve(team, await pendingCandidate(team), team.padmin.cookie)).status, 200);

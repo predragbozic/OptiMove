@@ -42,11 +42,15 @@ import crypto from "node:crypto";
 import { pool } from "./db.js";
 import { decryptCredential, keyringFromEnv } from "./sourceCredentialCrypto.js";
 import { resolveApprovedSourceHost } from "./sourceHosts.js";
-import { createSourceAdapter, SourceAdapterError, DIAGNOSTIC_MARK, projectStoredDetails, DRILL_FAILURE_REASONS } from "./sourceAdapters.js";
+import { createSourceAdapter, SourceAdapterError, DIAGNOSTIC_MARK, projectStoredDetails, DRILL_FAILURE_REASONS, drillParameterEffectOfFullBundle } from "./sourceAdapters.js";
 
 // The importer sees the adapter's error class only through this module: the
 // resolver is the importer's one door to the source-connection infrastructure.
-export { SourceAdapterError, DIAGNOSTIC_MARK, projectStoredDetails };
+export { SourceAdapterError, DIAGNOSTIC_MARK, projectStoredDetails, drillParameterEffectOfFullBundle };
+// The derived drill-parameter effect of a bundle read through a binding
+// (not_required | confirmed | not_observed), carried to the check on a symbol
+// key: never serialized, so it is neither hashed nor stored with the snapshot.
+export const DRILL_PARAMETER_EFFECT = Symbol("drillParameterEffect");
 
 export const IMPORT_SOURCE_SYSTEM = "gpexe";
 // Only a connection a successful Test or Connect left `verified` is read by an
@@ -90,9 +94,17 @@ const MESSAGES = Object.freeze({
   team_club_changed: "The team moved to another club while the check was running; the check stopped.",
   binding_started: "A source binding was created for the team while the check was running through the legacy token; the check stopped. Check again.",
   drill_set_incomplete: "The source did not answer every drill of a session; that session was not recorded and the check stopped.",
+  drill_parameter_effect_not_distinguishable: "The source returned the same content for two drills of a session; that session was not recorded and the check stopped.",
+  check_finalize_busy: "The check could not finish because another change of this team was running; nothing of it was published. Run the check again.",
+  check_finalize_failed: "The check could not finish; nothing of it was published. Run the check again.",
+  check_finalize_outcome_unknown: "It could not be confirmed that the check finished; nothing of it is published unless it did. Run the check again.",
   source_team_mismatch: "The check asked for a source team other than the bound one; nothing was read.",
   context_not_issued: "The source context was not issued by the resolver; nothing was read.",
 });
+
+// The service raises the check-finalization and legacy drill-parameter
+// refusals with the same sentences (one place for every check-row code).
+export const importRefusal = (code) => fail(code);
 
 function fail(code, extra = {}) {
   return new SourceImportResolveError(code, MESSAGES[code] ?? "The source connection cannot be used; nothing was read.", extra);
@@ -110,6 +122,10 @@ const CONNECTION_CONFIGURATION_CODES = new Set([
   "connection_foreign_club", "connection_not_usable", "connection_credential_changed", "host_not_allowed",
   "adapter_not_available", "key_missing", "credential_unreadable", "context_not_issued", "source_team_mismatch",
   "source_auth_rejected", "source_access_refused",
+  // Not a connection fact, but administrator-only all the same (owner order
+  // 2026-10-11): a coach gets no proof or reason of the drill-parameter guard,
+  // only the sentence to contact an administrator.
+  "drill_parameter_effect_not_distinguishable",
 ]);
 export const isConnectionConfigurationCode = (code) => CONNECTION_CONFIGURATION_CODES.has(code);
 // For the tests only (the Set itself stays private, so no importer can change
@@ -530,7 +546,11 @@ export function importClientFor(source) {
         if (line) throw new SourceImportResolveError("drill_set_incomplete", `${MESSAGES.drill_set_incomplete}${DIAGNOSTIC_MARK}${line}`, { facts });
         throw fail("drill_set_incomplete", { facts });
       }
-      return stored;
+      // Two non-empty drill answers with the same content: the parameter did
+      // not distinguish them - fail-closed, nothing of the session is recorded.
+      if (drillsStatus.parameterEffect === "not_distinguishable") throw fail("drill_parameter_effect_not_distinguishable", { facts: { sessionId: String(sessionId) } });
+      const effect = ["not_required", "confirmed", "not_observed"].includes(drillsStatus.parameterEffect) ? drillsStatus.parameterEffect : null;
+      return Object.assign(stored, { [DRILL_PARAMETER_EFFECT]: effect });
     },
   });
 }

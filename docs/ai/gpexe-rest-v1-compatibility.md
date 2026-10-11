@@ -828,6 +828,15 @@ merged; contract `docs/ai/source-connections-f3c2-contract.md` section 2.10):
   incomplete set look complete (`getSessionDrills`: `complete: false`, the failed index and code).
 - Drill names come from an unambiguous `drillTags` mapping of the parent's brief and the bound
   team's tag catalogue, otherwise `Drill N`; never from the day's other sessions.
+- **The drill-parameter guard** (owner order 2026-10-11, switch condition 7): that `?drill=<index>`
+  selects a different drill is not proven on server3, so a complete drill set also reports
+  `parameterEffect` - each non-empty answer's full `players` map is reduced in memory to a canonical
+  SHA-256 and compared (`not_required` below two drills, `confirmed` for at least two non-empty
+  pairwise distinct answers, `not_observed` for fewer than two non-empty answers,
+  `not_distinguishable` for two equal ones, which fails the check). No fingerprint, full map or
+  unconsumed metric leaves the adapter; distinct answers never prove the semantic order of the drills;
+  `teamsession` and a drill answer's `drills_count` are not identity. Runbook: "When a check's results
+  become actionable (v33)".
 - GET only; one closure talks to the network; no generic request helper exists.
 - Stable codes, OptiMove's own sentences, never the source's text; the credential only in the
   `Authorization` header. `401` is `source_auth_rejected`, `403` is `source_access_refused` (on

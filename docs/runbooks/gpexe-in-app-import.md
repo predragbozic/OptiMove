@@ -261,7 +261,9 @@ hidden, never rewritten); before Phase 3b check the deployed table read-only:
    - **The same content seen again** refreshes the same row, so repeated
      checks never create duplicates.
    - **New content** creates a new candidate. The older candidates of that
-     session that were never imported are marked `superseded`.
+     session that were never imported are marked `superseded` - since v33 by
+     the check's finalization, only when the check succeeds (see "When a
+     check's results become actionable").
    - **A candidate that was already imported** with the same content only gets
      its "last seen" time updated.
 4. Before storing the candidate, it computes the preview. The importer runs every statement of a real import
@@ -462,6 +464,7 @@ same time: the second waits for the candidate row and is then refused with
 | 403 `not_an_approver` | The caller manages the team but may not approve. | A platform admin grants the right, or approves. |
 | 409 `already_imported` | It was imported already, perhaps by a second approval at the same time. | Nothing. |
 | 409 `superseded_by_newer_data` | GPEXE has newer data for the session. | Review the newer candidate (`reviewAgain`). |
+| 409 `candidate_not_actionable` | v33: the candidate's last check has not succeeded, it was withdrawn by a check, it waits to reappear, or its drills are not confirmed (`not_observed`). | Find new sessions again; see "When a check's results become actionable". |
 | 409 `blocked` | The preview is blocked. | Follow `blocked.resolution`, then "Check now". |
 | 409 `snapshot_expired_check_again` | The raw data expired. | "Check now" again. |
 | 409 `nothing_to_import` | The import would write nothing. | Nothing. |
@@ -622,6 +625,104 @@ lock contention a batch can still wait without limit — now up to 10 times in o
 request. Only condition 2 (a bound on the pre-COMMIT lock waits) bounds that, and it
 matters more once batch approval is the usual path. Raising the limit needs measured
 approval times on real sessions and a confirmed deployed request timeout.
+
+## When a check's results become actionable (v33)
+
+Owner order 2026-10-11 (switch conditions 6 and 7). Migration
+`migrations_v2/202610111000_training_load_v33_gpexe_check_finalization.sql`, rollback
+`docs/runbooks/gpexe-check-finalization-v33-rollback.sql`.
+
+**The mechanism.** A check stores its candidates session by session while it runs, each in its own
+short transaction, and every candidate it writes or refreshes names that check as its
+`last_seen_check_id`. **A candidate is actionable only when that check is `succeeded`**, it does not
+wait to reappear (`reappeared_status` is null) and its `drill_parameter_effect` is `not_required` or
+`confirmed`. This is checked twice:
+- by the application (`approveCandidate`, before the snapshot and preview checks; the batch entry test
+  and the candidate list's `approvalBlockers` use the same rule in memory, as `not_confirmed_for_import`),
+  answered as 409 `candidate_not_actionable` with one generic sentence;
+- by the database, whoever writes: the v33 `training_load.validate_gpexe_import_approval()` trigger
+  refuses an approval row unless the candidate's last-seen check is a `succeeded` check **of the same
+  team**, it does not wait to reappear and its drill effect is `not_required` or `confirmed`. The check
+  row is read without a lock: a running one is refused, and a finished check never changes - v33's
+  `gpexe_import_checks_status_final` lets a status move only from `running` to `succeeded` or `failed`
+  and keeps a finished check's status and `finished_at` final, whoever writes. So the approval's lock
+  order (rights → candidate → team lock) and the finalization's (check → candidates → team try-lock)
+  never form a cycle, and a late conditional `failed` write can never overwrite a published check.
+
+So a running check's candidates are not actionable, and a check that fails, is abandoned or ends with
+an unknown outcome never makes anything of its own actionable. This does not rely on the import switch.
+The other side of the same rule: a candidate that was actionable and is seen again by a check that then
+fails (or ends busy or unknown) names that check as its last sighting and is **not actionable until a
+later check succeeds** - fail-closed; run the check again.
+
+**The finalization (`finalizeCheck`).** While the check runs it changes no other row: no supersede, no
+restore, no withdrawal. After the last session, one transaction:
+1. locks the check row (`FOR UPDATE`; it must still be `running`), then the team's candidate rows in
+   scope by id (`FOR UPDATE`, `lock_timeout` 2 s, `statement_timeout` 10 s,
+   `idle_in_transaction_session_timeout` 5 s, and a 12 s client-side bound on every statement - a
+   statement without an answer closes the connection), then takes the team import try-lock
+   (`hold_gpexe_team_lock`) and, under it, re-validates the run's own facts: on the binding path the
+   binding still active and its connection `verified` with the same credential and the team still active
+   in its club (an Unbind, a Reconnect and a team move take the same lock; a team or club archive does not,
+   so one committed a moment before still lets the check publish - switch condition 5), on the legacy path
+   still no binding - a change fails the check with its precise code (`binding_ended`,
+   `connection_not_usable`, `connection_credential_changed`, `team_not_available`, `binding_started`,
+   ...), nothing published;
+2. restores every superseded candidate this check saw again with the same content to the status waiting
+   in `reappeared_status`, clearing both `superseded_by` fields - a reappearance takes effect only
+   through a successful check; a waiting mark of any other check is dropped (the row stays superseded);
+3. supersedes, by the candidate the check saw, every older `pending` / `blocked` candidate of the same
+   session whose `last_seen_check_id IS DISTINCT FROM` this check (`superseded_by_candidate_id`);
+4. **withdraws** - on the binding path only, which reads the whole list - every `pending` / `blocked`
+   candidate of the same team whose session day (`session_started_at` in UTC, the naive GPEXE day) lies
+   in the check's exact `[from, to]` and whose `last_seen_check_id IS DISTINCT FROM` this check: status
+   `superseded` with `superseded_by_check_id` = this check. Imported rows, rows outside the window and
+   other teams are never touched. The legacy e03 path does not withdraw (its list is not proven
+   complete); it keeps steps 2, 3, 5 and 6;
+5. projects the snapshots it superseded to the consumed fields (owner order 2026-10-09);
+6. marks the check `succeeded` - the publication - and sends one COMMIT, bounded at 15 s.
+
+A busy candidate row or team lock, a timeout or any error before the COMMIT rolls everything back
+(nothing published, superseded, restored or withdrawn) and fails the check as `check_finalize_busy` or
+`check_finalize_failed` (the server log names the database code only). The finalization's scope is
+every pending / blocked candidate of the window, so an approval running inside the window at that
+moment makes the whole check end busy after all its reads: run it again (there is no automatic retry). The COMMIT is never repeated: an answer that does not come closes the
+connection and the check's status is read on a new connection (at most 5 s) - `succeeded` means it
+committed; otherwise the check fails as `check_finalize_outcome_unknown` (the failed write is
+conditional on `running`, so it waits for the old transaction and never overwrites a commit). These
+three codes are shown to a coach as they are (a team fact). Run the check again.
+
+**Exactly one `superseded_by`** (`gpexe_import_candidates_superseded_by_exactly_one`): a superseded row
+names either the newer candidate or the check that withdrew it, never both and never neither; no other
+status names either. A withdrawn row carries the blocker `not_confirmed_for_import` (never
+`superseded_by_newer_data`). The v33 rollback refuses while any row is superseded by a check; a waiting
+reappearance mark is discarded with its column (that row stays superseded by its candidate). `reappeared_status` only on a superseded row, only `pending` / `blocked`
+(`gpexe_import_candidates_reappeared_only_superseded`). A referenced check cannot be deleted (on top of
+the v24 refusal, `ON DELETE RESTRICT`). A withdrawn candidate answers `candidate_not_actionable`, not
+`superseded_by_newer_data`: there is no newer candidate to review.
+
+**The drill-parameter guard (switch condition 7).** Whether `?drill=<index>` really changes the answer is
+not proven on server3. For every non-empty drill answer the adapter reduces the full `players` map,
+before the projection drops what the importer does not read, to a canonical SHA-256 in memory (object
+keys sorted recursively, array order kept, null / boolean / number / string distinguished; a
+prototype-like key at any depth, more than 12 levels or 250 000 nodes - an object's keys are counted
+before they are sorted - or a non-finite number refuses the drill as `answer_fingerprint_refused`; on
+the legacy path that ends the check as `drill_set_incomplete`, like the binding path), compares the
+fingerprints and drops them. Empty maps are not
+fingerprinted. A session with two or more drills is:
+- `confirmed` - at least two non-empty answers, pairwise distinct;
+- `not_observed` - fewer than two non-empty answers: stored, previewed, **never actionable**;
+- refused - two non-empty answers with the same fingerprint: the check fails as
+  `drill_parameter_effect_not_distinguishable` and nothing of the session is recorded (a coach sees
+  `source_connection_unavailable` and the sentence to contact an administrator; an administrator sees
+  the code).
+
+Only the word (`not_required` / `confirmed` / `not_observed`) is stored, in
+`gpexe_import_candidates.drill_parameter_effect`; no fingerprint, full map or unconsumed metric is ever
+stored, logged or returned. Distinct answers prove only that the parameter did not return the same
+content - never the semantic order of the drills; `teamsession` and a drill answer's `drills_count` are
+never identity. The legacy e03 bundle keeps its full drill maps and gets the same rule. Candidates from
+before v33 have no drill effect and are not actionable until a successful check sees them again.
 
 ## Turning the import switch on (operational gate)
 
