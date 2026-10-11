@@ -10,10 +10,20 @@
 .coach-home-today { color: var(--muted); font-size: 14px; width: 100%; min-height: 48px; border: 0; padding: 12px 0; background: transparent; text-align: left; cursor: pointer; }
 .coach-home-today strong { font-size: 20px; }
 .coach-home-today:hover { color: var(--accent); }
-.coach-home-workspaces { display: grid; gap: 0; margin-top: 20px; border-top: 1px solid var(--line); }
-.coach-home-workspace { display: flex; justify-content: space-between; align-items: center; gap: 20px; min-height: 72px; border: 0; border-bottom: 1px solid var(--line); padding: 16px; background: transparent; text-align: left; color: var(--text); }
+.coach-home-workspaces { display: grid; gap: 0; margin: 20px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.coach-home-workspaces > li { border-bottom: 1px solid var(--line); }
+.coach-home-workspace { display: flex; align-items: center; gap: 16px; width: 100%; min-height: 80px; border: 0; padding: 16px; background: transparent; text-align: left; color: var(--text); cursor: pointer; }
 .coach-home-workspace strong { overflow-wrap: anywhere; }
-.coach-home-workspace span { color: var(--muted); font-size: 13px; }
+.coach-home-workspace-label { display: grid; gap: 4px; min-width: 0; flex: 1; }
+.coach-home-workspace-label strong { font-size: 16px; }
+.coach-home-workspace-label small { color: var(--muted); font-size: 13px; }
+.coach-home-workspace svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+.coach-home-workspace-icon { width: 28px; height: 28px; color: var(--accent); }
+.coach-home-workspace[data-workspace-type="club"] .coach-home-workspace-icon { color: #934c65; }
+.coach-home-workspace-arrow { width: 16px; height: 16px; color: var(--muted); }
+.coach-home-workspace-teams { margin: 0 16px 16px 30px; padding: 0 0 0 14px; border-left: 1px solid var(--line); list-style: none; }
+.coach-home-workspace-teams .coach-home-workspace { min-height: 64px; padding: 12px; }
+.coach-home-workspace-teams .coach-home-workspace-icon { width: 22px; height: 22px; color: var(--muted); }
 .coach-home-picker { box-sizing: border-box; width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 20px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface); }
 .coach-home-picker[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 16px; overflow: hidden; }
 .coach-home-picker::backdrop { background: rgb(16 24 32 / 40%); }

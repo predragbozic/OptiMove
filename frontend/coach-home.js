@@ -5,6 +5,31 @@ import { escapeAttr, escapeHtml, programInitials } from "./utils.js";
 
 const ICON_LOAD = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="4" cy="12" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="9" cy="7" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="14" cy="10" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="19" cy="6" r="1.3" fill="currentColor" stroke="none"></circle><path d="M4 12l5-5 5 3 5-4"></path><path d="M4 21v-6"></path><path d="M9 21v-9"></path><path d="M14 21v-7"></path><path d="M19 21v-11"></path></svg>`;
 
+const WORKSPACE_ICONS = {
+  private_coach: `<circle cx="12" cy="7" r="3"></circle><path d="M5 21v-3a7 7 0 0 1 14 0v3"></path>`,
+  club: `<path d="M12 3l8 3v6c0 4-4 7-8 9-4-2-8-5-8-9V6l8-3z"></path><circle cx="12" cy="11" r="3"></circle>`,
+  team: `<circle cx="9" cy="7" r="3"></circle><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6M21 21v-3a6 6 0 0 0-4-5.7"></path>`,
+  athlete: `<circle cx="12" cy="7" r="3"></circle><path d="M5 21v-3a7 7 0 0 1 14 0v3"></path>`,
+};
+
+function renderWorkspaceButton(entry) {
+  const kind = entry.type === "club" ? "Club" : entry.type === "team" ? "Team" : entry.type === "athlete" ? "Athlete" : "Private";
+  return `<button class="coach-home-workspace" type="button" data-action="workspace-select" data-workspace-type="${escapeAttr(entry.type)}" data-workspace-scope-id="${escapeAttr(entry.scopeId || "")}">
+    <svg class="coach-home-workspace-icon" viewBox="0 0 24 24" aria-hidden="true">${WORKSPACE_ICONS[entry.type] || WORKSPACE_ICONS.private_coach}</svg>
+    <span class="coach-home-workspace-label"><strong>${escapeHtml(coachHomeWorkspaceLabel(entry))}</strong><small>${kind}</small></span>
+    <svg class="coach-home-workspace-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"></path></svg>
+  </button>`;
+}
+
+function renderWorkspaceList(workspaces) {
+  const clubIds = new Set(workspaces.filter((entry) => entry.type === "club").map((entry) => entry.scopeId));
+  const roots = workspaces.filter((entry) => entry.type !== "team" || !entry.clubId || !clubIds.has(entry.clubId));
+  return roots.map((entry) => {
+    const teams = entry.type === "club" ? workspaces.filter((team) => team.type === "team" && team.clubId === entry.scopeId) : [];
+    return `<li>${renderWorkspaceButton(entry)}${teams.length ? `<ul class="coach-home-workspace-teams" aria-label="${escapeAttr(coachHomeWorkspaceLabel(entry))} teams">${teams.map((team) => `<li>${renderWorkspaceButton(team)}</li>`).join("")}</ul>` : ""}</li>`;
+  }).join("");
+}
+
 export function coachHomeWorkspaceLabel(workspace) {
   if (workspace?.type === "private_coach") return "Private coaching";
   if (workspace?.type === "platform") return "Platform administration";
@@ -21,7 +46,7 @@ export function renderCoachHomeHtml({ rows = [], error = "", user, picker = {} }
       ${!platform ? `<button class="plain-button icon-button athlete-toolbar-add-button" type="button" data-action="home-add-athlete" aria-label="Add athlete" title="Add athlete">${ICON_ADD_ATHLETE}</button>` : ""}
     </header>
     ${error ? `<p class="builder-error" role="alert">${escapeHtml(error)}</p>` : ""}
-    ${platform ? `<div class="coach-home-workspaces">${workspaces.map((entry) => `<button class="coach-home-workspace" type="button" data-action="workspace-select" data-workspace-type="${escapeAttr(entry.type)}" data-workspace-scope-id="${escapeAttr(entry.scopeId || "")}"><strong>${escapeHtml(coachHomeWorkspaceLabel(entry))}</strong><span>${escapeHtml(entry.type === "club" ? "Club" : entry.type === "team" ? "Team" : entry.type === "athlete" ? "Athlete" : "Private")}</span></button>`).join("") || `<p class="muted">No coaching workspaces available.</p>`}</div>` : `
+    ${platform ? workspaces.length ? `<ul class="coach-home-workspaces">${renderWorkspaceList(workspaces)}</ul>` : `<p class="muted">No coaching workspaces available.</p>` : `
       <div class="coach-home-actions">
         <button type="button" data-action="coach-home-picker-open" data-mode="plan">${ICON_CALENDAR}<span>Training Plan</span></button>
         <button type="button" data-action="coach-home-picker-open" data-mode="load">${ICON_LOAD}<span>Training Load</span></button>
