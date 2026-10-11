@@ -1,0 +1,73 @@
+{
+  "$comment": "Read by scripts/test-runner.mjs. knownFailures: exact test titles that fail on origin/main today (reported as known-fail; the runner warns when one starts passing - remove the entry in the PR that fixes it). fileOptions.testTimeoutMs: node's per-test limit for one file (a test that never finishes is cancelled by node, reported as a failure, and the file still runs its remaining tests and exits). knownNoExit: files whose process stays alive after every test finished. kindOverrides: a file mapped to a kind when the static classification is wrong.",
+  "kindOverrides": {},
+  "fileOptions": {
+    "training-load.actions.test.mjs": {
+      "testTimeoutMs": 15000,
+      "note": "tests X5a and X5b start and never finish (115 tests pass); known since 2026-09-18 as 'the process never exits', found to be two hanging tests by the T1 discovery run on origin/main 241765e (2026-10-11); node cancels each after 15 s so the rest of the file runs and the process exits"
+    }
+  },
+  "knownFailures": [
+    {
+      "file": "builder-create-form-fixes.test.mjs",
+      "test": "handleContentInput mirrors every keystroke in the create form's name input into state.builder.createName, no network call",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "builder-mobile-section-workflow.test.mjs",
+      "test": "16c. regression guard: the reorder arrows stay vertical (up/down) at every width - the stale mobile override that rotated them to left/right (a leftover from the old horizontal-scroll Added-list design, long since replaced by a vertical list) must not come back",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "organization-panel-cache.test.mjs",
+      "test": "6. signOut clears the entire view cache before/alongside its hard reload",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "a plain click (mousedown, no drag) on an unselected day adds just that one date",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "a plain click on an ALREADY-selected day removes just that one date - single click toggles",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "mousedown on day 1, drag over to day 3, selects the whole inclusive range - Booking-style range select",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "dragging backward (toward the anchor) shrinks the range - days no longer covered are un-selected again, not left stranded",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "a drag that starts on an already-selected day REMOVES the whole dragged-over range, not just the anchor",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "training-load.actions.test.mjs",
+      "test": "X5a. cross-section race, A resolves BEFORE B: Today ends up showing B's real fresh post-toggle content, never A's stale one, never data:null",
+      "since": "2026-10-11",
+      "note": "never finishes (a promise that is never settled); cancelled by node's per-test limit set in fileOptions; cause not established"
+    },
+    {
+      "file": "training-load.actions.test.mjs",
+      "test": "X5b. cross-section race, B resolves BEFORE A: Today ends up showing B's real fresh post-toggle content, A's later stale response never clobbers it, never data:null",
+      "since": "2026-10-11",
+      "note": "never finishes (a promise that is never settled); cancelled by node's per-test limit set in fileOptions; cause not established"
+    }
+  ],
+  "knownNoExit": []
+}

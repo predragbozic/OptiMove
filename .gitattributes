@@ -5,3 +5,8 @@
 migrations_v2/** text eol=lf
 backend/src/migrate.js text eol=lf
 backend/tests/migration-runner-*.test.mjs text eol=lf
+# Test-infrastructure foundation (T1): the runner, its reporter and self-test,
+# and the shared test support of both packages - new files only, same reason.
+scripts/test-runner*.mjs text eol=lf
+backend/tests/support/** text eol=lf
+frontend/tests/support/** text eol=lf

@@ -6,6 +6,14 @@
     "build": "npm --prefix backend ci && npm --prefix frontend ci --include=dev && npm --prefix frontend run build",
     "start": "npm --prefix backend start",
     "dev": "npm --prefix backend run dev",
-    "verify:render-build": "node scripts/verify-render-build.mjs"
+    "verify:render-build": "node scripts/verify-render-build.mjs",
+    "test:runner": "node scripts/test-runner.selftest.mjs",
+    "test:list": "node scripts/test-runner.mjs --project backend --kind all --list && node scripts/test-runner.mjs --project frontend --list",
+    "test:backend:fast": "node scripts/test-runner.mjs --preset backend-fast",
+    "test:backend:db": "node scripts/test-runner.mjs --project backend --kind disposable",
+    "test:backend:shared": "node scripts/test-runner.mjs --project backend --kind shared",
+    "test:frontend:fast": "node scripts/test-runner.mjs --preset frontend-fast",
+    "test:gpexe": "node scripts/test-runner.mjs --preset gpexe",
+    "test:pr": "node scripts/test-runner.selftest.mjs && node scripts/test-runner.mjs --preset pr"
   }
 }
