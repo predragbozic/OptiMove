@@ -2,7 +2,8 @@
 -- mapping (M1).
 --
 -- Contract: docs/ai/gpexe-metric-variable-mapping-discovery.md, sections C
--- (owner decisions C1-C39 and the M1 SQL decisions C40-C50), D1-D12 and E.
+-- (owner decisions C1-C39, the M1 SQL decisions C40-C50 and the review
+-- decisions C51-C55), D1-D12 and E.
 -- Rule: .claude/rules/metrics-core-mapping.md. Metrics Core
 -- (training_load.metric_definitions and its versions) stays the only
 -- registry of OptiMove variables; nothing here is a second one.
@@ -36,11 +37,16 @@
 --
 -- Lock order of every writer (D, as built): unit_conversions -> T2a -> T2b
 -- -> T3 -> T4 -> metric_definitions (FOR SHARE) -> its scope-capability rows
--- (FOR SHARE, only an activation reads them under a lock) -> T5 -> the acting
--- user's user_global_roles / user_club_roles, users, clubs (FOR SHARE). The
--- triggers lock only parents they read, in that order; the v27 rows
--- (binding, connection, catalog) and T2a are plain reads (D7; T2a's state is
--- implied by the chain T5 -> active T4 -> active T2b, see the T2a guard).
+-- (FOR SHARE, only an activation reads them under a lock) -> T5 -> the
+-- team binding -> the Metrics Core connection (FOR SHARE, only a new fact
+-- reads them under a lock) -> the acting user's user_global_roles /
+-- user_club_roles, users, clubs (FOR SHARE). The triggers lock only parents
+-- they read, in that order: an activation locks its unit_conversions rows
+-- first (C52); a new fact (T6) locks T5, its binding and its Metrics Core
+-- connection (C55); an owner change of a canonical definition holds that
+-- row FOR UPDATE against a mapping insert's FOR SHARE (C51). T2a and the
+-- v27 connection / catalog rows stay plain reads (T2a's state is implied by
+-- the chain T5 -> active T4 -> active T2b, see the T2a guard).
 --
 -- Errors: an acting user who is not allowed raises SQLSTATE 42501; every
 -- other explicit refusal of a trigger raises 23514; every message is fixed
@@ -54,24 +60,27 @@
 -- 0. Shape helpers (immutable; used by CHECK constraints and triggers)
 -- ---------------------------------------------------------------------------
 
--- Bounded single-line text (C41): no leading or trailing space, 1..max
--- characters, no C0, DEL or C1 control character, no line or paragraph
--- separator. A NULL is never "ok": a nullable column checks "is null or ok".
+-- Bounded single-line text (C41, widened by C53): no leading or trailing
+-- space, 1..max characters, and none of exactly these characters: C0
+-- (U+0001-U+001F), DEL and C1 (U+007F-U+009F), U+00AD, U+061C, U+180E,
+-- U+200B-U+200F, U+2028, U+2029, U+202A-U+202E, U+2060-U+2064,
+-- U+2066-U+206F, U+FEFF. A NULL is never "ok": a nullable column checks
+-- "is null or ok".
 create function training_load.source_metric_text_ok(v text, max_len integer) returns boolean
   language sql immutable as $$
     select coalesce(v = btrim(v)
        and char_length(v) between 1 and max_len
-       and v !~ '[\x01-\x1f\x7f-\x9f\u2028\u2029]', false)
+       and v !~ '[\x01-\x1f\x7f-\x9f\u00ad\u061c\u180e\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]', false)
   $$;
 
--- A unit token (D3): 1-30 characters, no whitespace (the locale's \s and,
--- explicitly, every Unicode space and zero-width / bidi format character),
--- no control character, no "|" or "=" (the characters the fingerprint text
--- uses).
+-- A unit token (D3): 1-30 characters; none of the locale's \s, "|" or "="
+-- (the characters the fingerprint text uses), and none of exactly these:
+-- U+0001-U+001F, U+007F-U+009F, U+00A0, U+00AD, U+061C, U+1680, U+180E,
+-- U+2000-U+200F, U+2028-U+202F, U+205F-U+206F, U+3000, U+FEFF.
 create function training_load.source_metric_unit_token_ok(v text) returns boolean
   language sql immutable as $$
     select coalesce(char_length(v) between 1 and 30
-       and v !~ '[\s|=\x01-\x1f\x7f-\x9f\u00a0\u1680\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\ufeff]', false)
+       and v !~ '[\s|=\x01-\x1f\x7f-\x9f\u00a0\u00ad\u061c\u1680\u180e\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\ufeff]', false)
   $$;
 
 -- A document reference (C40): a repository-relative path under docs/, no
@@ -688,7 +697,9 @@ create table training_load.unit_conversions (
     training_load.source_metric_numeric_finite(scale) and training_load.source_metric_numeric_finite(scale_divisor)
     and training_load.source_metric_numeric_finite("offset")
   ),
-  constraint unit_conversions_scale_nonzero check (scale <> 0),
+  -- C54: a negative factor would invert the meaning of an operator; it is
+  -- not a unit conversion (a new owner decision would be needed for it).
+  constraint unit_conversions_scale_positive check (scale > 0),
   constraint unit_conversions_divisor_positive check (scale_divisor > 0),
   constraint unit_conversions_factors_normal check (scale = 1 or scale_divisor = 1),
   constraint unit_conversions_retired_facts check (
@@ -822,14 +833,14 @@ create table training_load.source_metric_mapping_versions (
     training_load.source_metric_numeric_finite(scale) and training_load.source_metric_numeric_finite(scale_divisor)
     and training_load.source_metric_numeric_finite("offset")
   ),
-  constraint source_metric_mapping_versions_scale_nonzero check (scale <> 0),
+  constraint source_metric_mapping_versions_scale_positive check (scale > 0),
   constraint source_metric_mapping_versions_divisor_positive check (scale_divisor > 0),
   constraint source_metric_mapping_versions_factors_normal check (scale = 1 or scale_divisor = 1),
   constraint source_metric_mapping_versions_parameter_factors_finite check (
     training_load.source_metric_numeric_finite(parameter_scale) and training_load.source_metric_numeric_finite(parameter_scale_divisor)
     and training_load.source_metric_numeric_finite(parameter_offset)
   ),
-  constraint source_metric_mapping_versions_parameter_scale_nonzero check (parameter_scale <> 0),
+  constraint source_metric_mapping_versions_parameter_scale_positive check (parameter_scale > 0),
   constraint source_metric_mapping_versions_parameter_divisor_positive check (parameter_scale_divisor > 0),
   constraint source_metric_mapping_versions_parameter_factors_normal check (parameter_scale = 1 or parameter_scale_divisor = 1),
   constraint source_metric_mapping_versions_no_parameters_identity check (
@@ -926,6 +937,21 @@ begin
     end if;
     raise exception 'source_metric_mapping_versions: the conversion must equal the active unit conversion of its unit pair' using errcode = '23514';
   end if;
+end;
+$$ language plpgsql;
+
+-- C52: at activation the active unit_conversions rows of the value pair and
+-- of the bound pair (when the units differ) are locked FOR SHARE, ascending
+-- by id, before any other row the activation reads - unit_conversions is the
+-- first table of the lock order. A retirement then either waits for the
+-- activation or lands first and the activation finds no active row.
+create function training_load.source_metric_lock_conversions(p_from text, p_to text, p_bound_from text, p_bound_to text) returns void as $$
+begin
+  perform 1 from training_load.unit_conversions
+   where state = 'active'
+     and ((p_from is distinct from p_to and from_unit = p_from and to_unit = p_to)
+       or (p_bound_from is distinct from p_bound_to and from_unit = p_bound_from and to_unit = p_bound_to))
+   order by id for share;
 end;
 $$ language plpgsql;
 
@@ -1127,6 +1153,10 @@ begin
       raise exception 'source metric mapping: the acting user may not submit this mapping version' using errcode = '42501';
     end if;
   elsif old.status = 'needs_review' and new.status = 'active' then
+    -- Lock order of an activation: unit_conversions -> T2b -> T3 ->
+    -- metric_definitions -> its scope capabilities -> the acting user's rows.
+    perform training_load.source_metric_lock_conversions(new.source_unit, new.target_unit,
+      new.source_parameters ->> 'unit', new.canonical_parameters ->> 'unit');
     select state, evidence_status, bound_operator, source_bound_unit into rev
       from training_load.source_metric_definition_versions where id = new.source_metric_version_id for share;
     if rev.state is distinct from 'active' or rev.evidence_status is distinct from 'verified' then
@@ -1138,9 +1168,13 @@ begin
       raise exception 'source_metric_mapping_versions: the canonical definition must be active with the pinned version current' using errcode = '23514';
     end if;
     select condition_description into mdv from training_load.metric_definition_versions where id = new.metric_definition_version_id;
+    -- C52: the value and bound conversions are checked again against the rows
+    -- locked above (a retired row fails the activation; equal units stay the
+    -- identity without a row). Active versions and history are not touched.
+    perform training_load.source_metric_check_conversion(new.source_unit, new.target_unit, new.scale, new.scale_divisor, new."offset", false);
     perform training_load.source_metric_check_parameters(new.parameter_kind, rev.bound_operator, rev.source_bound_unit,
       new.source_parameters, new.canonical_parameters, mdv.condition_description,
-      new.parameter_scale, new.parameter_scale_divisor, new.parameter_offset, false);
+      new.parameter_scale, new.parameter_scale_divisor, new.parameter_offset, true);
     perform training_load.source_metric_check_levels(new.metric_definition_id, new.applies_to_session, new.applies_to_drill, true);
     perform training_load.source_metric_require_platform_admin(new.activated_by_user_id);
   elsif new.status = 'disabled' and old.status in ('draft', 'needs_review', 'active') then
@@ -1189,6 +1223,30 @@ $$ language plpgsql;
 create trigger metric_definitions_source_metric_guard
   before update of current_version_id, state on training_load.metric_definitions
   for each row execute function training_load.source_metric_guard_canonical_definition();
+
+-- C51: once a mapping (T3) names a canonical definition, its owner never
+-- changes. The owner change holds the definition row FOR UPDATE (taken
+-- explicitly here, beside the UPDATE's own row lock) and reads T3 plain; a
+-- mapping insert holds the same row FOR SHARE (T3 guard). Whichever comes
+-- first, the other waits: a mapping created first makes the owner change
+-- fail; an owner change committed first is what the mapping's ownership
+-- check then reads.
+create function training_load.source_metric_guard_canonical_owner() returns trigger as $$
+begin
+  if (new.owner_scope, new.owner_user_id, new.owner_club_id, new.owner_team_id)
+     is distinct from (old.owner_scope, old.owner_user_id, old.owner_club_id, old.owner_team_id) then
+    perform 1 from training_load.metric_definitions where id = old.id for update;
+    if exists (select 1 from training_load.source_metric_mappings where metric_definition_id = old.id) then
+      raise exception 'metric_definitions: a canonical definition named by a mapping keeps its owner' using errcode = '23514';
+    end if;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger metric_definitions_source_metric_owner_guard
+  before update of owner_scope, owner_user_id, owner_club_id, owner_team_id on training_load.metric_definitions
+  for each row execute function training_load.source_metric_guard_canonical_owner();
 
 -- Section E: a level an active mapping version applies to is not removed.
 create function training_load.source_metric_guard_scope_capability() returns trigger as $$
@@ -1455,10 +1513,16 @@ declare
   conn_host text;
   msc record;
   occasion_connection uuid;
+  value_level text;
 begin
-  -- C49: never a new fact through an ended activation. The row is held FOR
-  -- SHARE, so an ending UPDATE either waits for this fact or lands first.
-  select ended_at into act from training_load.source_metric_mapping_activations
+  -- C49 / C55: never a new fact through an ended activation, an ended
+  -- binding or an inactive Metrics Core source instance. Lock order of a new
+  -- fact: the activation (T5) -> its team binding -> the Metrics Core
+  -- connection, each FOR SHARE, so an ending of any of them either waits for
+  -- this fact or lands first and the fact is refused. An ending never
+  -- changes an existing fact.
+  select ended_at, team_id, applies_to_session, applies_to_drill into act
+    from training_load.source_metric_mapping_activations
    where id = new.activation_id and mapping_version_id = new.mapping_version_id
      and source_team_binding_id = new.source_team_binding_id for share;
   if not found then
@@ -1466,6 +1530,16 @@ begin
   end if;
   if act.ended_at is not null then
     raise exception 'metric_value_source_provenance: a fact is never written through an ended activation' using errcode = '23514';
+  end if;
+  select state, source_system, source_team_id, connection_id into bnd
+    from training_load.source_team_bindings where id = new.source_team_binding_id for share;
+  if bnd.state is distinct from 'active' then
+    raise exception 'metric_value_source_provenance: a fact is never written through an ended binding' using errcode = '23514';
+  end if;
+  select state, source_system, source_host_key, source_instance_key into msc
+    from training_load.metric_source_connections where id = new.metric_source_connection_id for share;
+  if msc.state is distinct from 'active' then
+    raise exception 'metric_value_source_provenance: a fact is never written through an inactive source instance' using errcode = '23514';
   end if;
   select mapping_id, source_metric_version_id, metric_definition_id, metric_definition_version_id, target_unit, source_unit,
          scale, scale_divisor, "offset" into ver
@@ -1477,12 +1551,28 @@ begin
   if new.source_unit is distinct from rev_unit or new.source_unit is distinct from ver.source_unit then
     raise exception 'metric_value_source_provenance: the source unit must be the revision''s proven unit' using errcode = '23514';
   end if;
-  select v.metric_definition_id, v.metric_definition_version_id, v.unit_at_capture, v.value_numeric, o.source_identity_id into val
+  select v.metric_definition_id, v.metric_definition_version_id, v.unit_at_capture, v.value_numeric, o.source_identity_id,
+         o.segment_id, e.scope_level, e.owner_scope, e.owner_team_id into val
     from training_load.metric_values v
     join training_load.metric_measurement_occasions o on o.id = v.occasion_id
+    join training_load.metric_event_participants p on p.id = o.event_participant_id
+    join training_load.metric_events e on e.id = p.event_id
    where v.id = new.metric_value_id;
   if not found then
     raise exception 'metric_value_source_provenance: the value does not exist' using errcode = '23514';
+  end if;
+  -- C55: the value's event belongs to the binding's team (the activation's
+  -- team is the binding's, by the T5 foreign key), and the value's level is
+  -- one the activation covers (session <-> applies_to_session, a drill
+  -- segment <-> applies_to_drill; a day-level event is neither).
+  if val.owner_scope is distinct from 'team' or val.owner_team_id is distinct from act.team_id then
+    raise exception 'metric_value_source_provenance: the value must belong to the binding''s team' using errcode = '23514';
+  end if;
+  value_level := case when val.scope_level is distinct from 'session' then null
+                      when val.segment_id is null then 'session' else 'drill' end;
+  if value_level is null or (value_level = 'session' and not act.applies_to_session)
+     or (value_level = 'drill' and not act.applies_to_drill) then
+    raise exception 'metric_value_source_provenance: the value''s level is not one the activation covers' using errcode = '23514';
   end if;
   if val.metric_definition_id is distinct from ver.metric_definition_id
      or val.metric_definition_version_id is distinct from ver.metric_definition_version_id then
@@ -1495,11 +1585,7 @@ begin
      or not training_load.source_metric_value_matches(new.source_value_numeric, val.value_numeric, ver.scale, ver.scale_divisor, ver."offset") then
     raise exception 'metric_value_source_provenance: the value is not the source value converted at the storage scale' using errcode = '23514';
   end if;
-  select source_system, source_team_id, connection_id into bnd
-    from training_load.source_team_bindings where id = new.source_team_binding_id;
   select host_key into conn_host from training_load.source_credential_connections where id = bnd.connection_id;
-  select source_system, source_host_key, source_instance_key into msc
-    from training_load.metric_source_connections where id = new.metric_source_connection_id;
   if msc.source_system is distinct from bnd.source_system or msc.source_host_key is distinct from conn_host
      or msc.source_instance_key is distinct from bnd.source_team_id then
     raise exception 'metric_value_source_provenance: the Metrics Core source instance must be the binding''s' using errcode = '23514';

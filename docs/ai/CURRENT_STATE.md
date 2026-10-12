@@ -1611,7 +1611,7 @@ Technical details.
   branch `feature/metrics-mapping-m1-schema` from `0293b39`; **implemented in an open pull request —
   not merged, not deployed, applied to no persistent database**). Migration v34
   (`migrations_v2/202610121000_training_load_v34_source_metric_mapping.sql`) builds sections D1–D10
-  and the D12 seed of the discovery document with the owner's M1 SQL decisions C40–C50 (2026-10-12):
+  and the D12 seed of the discovery document with the owner's M1 SQL decisions C40–C55 (2026-10-12):
   `source_host_catalog.api_family`; the source metric identities and their revisioned contracts (T2a,
   T2b); the mapping identities with a generated, never-NULL owner key (T3); `unit_conversions`; the
   immutable mapping versions with the database-computed parameter fingerprint and the per-owner active
@@ -1629,9 +1629,13 @@ Technical details.
   T1 runner) with mutation evidence. **No route, service, frontend, importer, mapper, preview or writer
   change; the GPEXE importer still creates its team-owned `gpexe_*` definitions until M4 (temporary
   compatibility, C46); no GPEXE unit or meaning is confirmed.** The internal reviews (database,
-  security, code) found no BLOCKER or HIGH; their corrections are in the same pull request, and five
-  owner decisions they raised are listed in the discovery document, section K. Before it is deployed:
-  the owner's external review and those decisions; the PostgreSQL version of the deployed database
+  security, code) found no BLOCKER or HIGH; their corrections are in the same pull request, and the five
+  points they raised for the owner are decided (C51–C55, 2026-10-12) and built in v34: a mapped canonical
+  definition keeps its owner; an activation locks and re-checks its unit conversions; free text refuses a
+  fixed list of invisible and bidi characters; scales are positive; a new T6 fact needs an active binding
+  and Metrics Core connection of one chain, a value of the binding's team and a level the activation
+  covers (the import switch is not read). Before it is deployed:
+  the owner's external review; the PostgreSQL version of the deployed database
   confirmed as 13 or later (`scale()`, `trim_scale()`; the local disposable server is 17.5; the
   deployed one was not queried — it accepted v10's `unique nulls not distinct`, which needs 15, an
   indirect sign only); the deployed `source_host_catalog` holding only `gpexe` / `e03` and `gpexe` /

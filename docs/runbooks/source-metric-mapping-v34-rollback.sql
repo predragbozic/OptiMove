@@ -157,6 +157,7 @@ begin
 end $$;
 
 drop trigger metric_definitions_source_metric_guard on training_load.metric_definitions;
+drop trigger metric_definitions_source_metric_owner_guard on training_load.metric_definitions;
 drop trigger metric_definition_scope_capabilities_source_metric_guard on training_load.metric_definition_scope_capabilities;
 drop trigger metric_source_connections_instance_write_once on training_load.metric_source_connections;
 drop trigger source_host_catalog_api_family_immutable on training_load.source_host_catalog;
@@ -186,9 +187,11 @@ drop function training_load.source_metric_activations_update_guard();
 drop function training_load.source_metric_activations_insert_guard();
 drop function training_load.source_metric_guard_scope_capability();
 drop function training_load.source_metric_guard_canonical_definition();
+drop function training_load.source_metric_guard_canonical_owner();
 drop function training_load.source_metric_mapping_versions_update_guard();
 drop function training_load.source_metric_mapping_versions_insert_guard();
 drop function training_load.source_metric_check_parameters(text, text, text, jsonb, jsonb, jsonb, numeric, numeric, numeric, boolean);
+drop function training_load.source_metric_lock_conversions(text, text, text, text);
 drop function training_load.source_metric_check_conversion(text, text, numeric, numeric, numeric, boolean);
 drop function training_load.source_metric_check_levels(uuid, boolean, boolean, boolean);
 drop function training_load.unit_conversions_guard();

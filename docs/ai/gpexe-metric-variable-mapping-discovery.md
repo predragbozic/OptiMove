@@ -399,7 +399,8 @@ Decided by the owner for the M1 SQL (2026-10-12), where sections D and E did not
     proven by a test for every seeded reference; an anchor is a real Markdown heading slug or an
     explicit stable `<a id>` anchor.
 41. **Bounded single-line text**: `btrim(value) = value`, 1–N characters, no C0, DEL or C1 control
-    character and no U+2028 / U+2029; a nullable column applies the same rule when it is not NULL, and
+    character and no U+2028 / U+2029 (widened by C53 to the listed invisible and bidi characters); a
+    nullable column applies the same rule when it is not NULL, and
     an empty string is never a stand-in for NULL. N is 500 for T2a `retired_reason`, T2b `unit_note`
     and `retired_reason`, `unit_conversions.retired_reason` and T4 `disable_reason` (and, as before, for
     `conversion_note` and the T5 / T8 `reason`; 80 for `source_label`).
@@ -452,6 +453,49 @@ Decided by the owner for the M1 SQL (2026-10-12), where sections D and E did not
     (`migrations_v2/202610121000_training_load_v34_source_metric_mapping.sql`,
     `^migrations_v2/[0-9]{12}_[a-z0-9_]+\.sql$`). No server3 unit or meaning is confirmed by the seed.
 
+Decided by the owner after the internal reviews of M1 (2026-10-12; the five points those reviews
+raised, formerly listed as open in section K), built in v34 and tested in the same suite:
+
+51. **A canonical definition named by a mapping keeps its owner.** Once any T3 row names a
+    `metric_definitions` row, its `owner_scope`, `owner_user_id`, `owner_club_id` and `owner_team_id`
+    never change (`23514`, trigger `metric_definitions_source_metric_owner_guard`); without a mapping the
+    owner may change as before. Creating a mapping locks the definition `FOR SHARE`; an owner change
+    locks it `FOR UPDATE`, so the two serialize: the mapping first → the owner change is refused; the
+    owner change first → the mapping checks the new owner (and is refused when it no longer fits).
+    Tested in both orders.
+52. **The conversion gate is checked again at activation.** For different units the T4 transition to
+    `active` locks the active `unit_conversions` row of the value pair and of the bound pair `FOR SHARE`
+    (the first table of the lock order) and requires the version's factors to equal it again; a retired
+    row fails the activation, a new active row with the same factors passes; equal units stay the
+    identity `(1, 1, 0)` without a row. Existing `active` versions and history are not changed by a later
+    retirement. Retirement vs activation tested in both orders.
+53. **Invisible and bidi characters in free text.** Every bounded single-line text column (C41) refuses
+    exactly these characters, and no other beyond C41's rule: C0 (`U+0001–U+001F`), DEL and C1
+    (`U+007F–U+009F`), `U+00AD`, `U+061C`, `U+180E`, `U+200B–U+200F`, `U+2028`, `U+2029`,
+    `U+202A–U+202E`, `U+2060–U+2064`, `U+2066–U+206F`, `U+FEFF`. This is a fixed list, not "every Unicode
+    format character (Cf)": other Cf characters — for example `U+0600–U+0605`, the interlinear
+    annotation characters `U+FFF9–U+FFFB` and the tag characters `U+E0001`, `U+E0020–U+E007F` — are not
+    refused by the database, nor is the unassigned `U+2065`; M3 still neutralizes text on display. The unit token refuses the same three additional characters `U+00AD`,
+    `U+061C`, `U+180E` beside its whitespace and format ranges (D3, as built).
+54. **Positive factors.** `scale > 0` and `parameter_scale > 0` (T4) and `scale > 0`
+    (`unit_conversions`); the divisors stay `> 0`; an offset may be negative. A negative scale would
+    invert `>` / `<` while the operator stays equal on both sides; allowing one needs a new owner
+    decision.
+55. **The database checks a new T6 fact against its whole chain.** On every INSERT: the activation is
+    open, the binding is `active`, the Metrics Core connection the fact names is `active` (v11
+    `metric_source_connections.state`, the connection whose ending is the end of the source instance,
+    C36), the connection, binding and activation are one chain (the activation names the binding; the
+    connection's system, host and instance key are the binding's, D9), the value's event is owned by
+    the binding's team, the value's level is one the activation covers (a session-level event without a
+    segment ↔ `applies_to_session`, a drill segment of a session-level event ↔ `applies_to_drill`, a
+    day-level event never), and every existing exact-version, unit, source-instance and FK invariant
+    holds. The trigger does not read the import switch. Lock order of a new fact: T5 → the team binding
+    → the Metrics Core connection, each `FOR SHARE`; a later ending of any of them never changes an
+    existing fact, but a fact never lands after the ending (INSERT vs ending of the binding, the
+    connection and the activation tested in both orders). The v27 credential connection is read plain,
+    for the chain only; its credential state (`verified` / `needs_reconnect`) is not a condition of a fact
+    (a fact is written from a stored snapshot, not from the source).
+
 ---
 
 ## D. Accepted model — **implemented as schema in M1 (v34, open pull request); used by no code until M2 / M4**
@@ -459,11 +503,13 @@ Decided by the owner for the M1 SQL (2026-10-12), where sections D and E did not
 At `af11338` nothing of this section existed. Migration v34
 (`migrations_v2/202610121000_training_load_v34_source_metric_mapping.sql`, rollback
 `docs/runbooks/source-metric-mapping-v34-rollback.sql`) builds D1–D10 and the D12 seed as described,
-with the owner's M1 decisions C40–C50; where the build adds a detail the design left open, an
+with the owner's M1 decisions C40–C55; where the build adds a detail the design left open, an
 **As built (M1)** note says so. No route, service, importer, mapper, preview or writer reads these
 tables yet (M2, M4). **Lock order for every writer**
 (admin and importer): `unit_conversions` → T2a → T2b → T3 → T4 → `metric_definitions` (the
-canonical row, `FOR SHARE`) → T5 → the acting user's `user_global_roles`, `user_club_roles`,
+canonical row, `FOR SHARE`) → its scope-capability rows (`FOR SHARE`, activation only) → T5 → the
+team binding (`FOR SHARE`, a new T6 fact only) → the Metrics Core connection (`FOR SHARE`, a new T6
+fact only) → the acting user's `user_global_roles`, `user_club_roles`,
 `users` and `clubs` rows (`FOR SHARE`, after every registry row; no role or club writer ever waits
 on a registry row), ascending by id within a table. The replacement sequences written in D3 and D6 are the order of **state changes**,
 not of locks: an operation pre-locks every T2b, T3 and T4 row it will touch `FOR UPDATE` in this
@@ -521,9 +567,26 @@ afterwards a row with a marker has no acting user and is refused with `42501` on
 `unit_conversions` (a later seeding migration replaces `source_metric_require_seed_window` to name
 itself). Disabling a T4 version writes only its own facts (no submission or activation added on the
 way). A T8 row with the club-admin basis must name a club-owned mapping (C45). The unit token refuses,
-beside the locale's whitespace, every Unicode space and zero-width / bidi format character
-(`U+00A0`, `U+1680`, `U+2000–U+200F`, `U+2028–U+202F`, `U+205F–U+206F`, `U+3000`, `U+FEFF`) — D3's
-"no whitespace" taken literally. The rollback refuses a database on which v34 is not recorded.
+beside the locale's whitespace (`\s`), `|`, `=`, C0, DEL and C1, exactly these characters: `U+00A0`,
+`U+00AD`, `U+061C`, `U+1680`, `U+180E`, `U+2000–U+200F`, `U+2028–U+202F`, `U+205F–U+206F`, `U+3000`,
+`U+FEFF` — D3's "no whitespace" taken literally, widened by C53. The rollback refuses a database on
+which v34 is not recorded.
+
+**As built (M1), the owner's decisions C51–C55 (2026-10-12).** The owner freeze is a `BEFORE UPDATE OF
+owner_scope, owner_user_id, owner_club_id, owner_team_id` trigger on `metric_definitions` that fires only
+when one of the four changes; it takes the row `FOR UPDATE` and refuses when a T3 row names it; the T3
+INSERT already locked the definition `FOR SHARE` (D4), so the two serialize on that row. The activation
+(T4 `needs_review → active`) now starts with `source_metric_lock_conversions()` — the active
+`unit_conversions` rows of the value pair and of the bound pair, `FOR SHARE`, ascending by id — then
+locks T2b, T3, the canonical row and its scope capabilities as before, and checks the value conversion
+and the bound conversion against the locked rows (C52); the T4 INSERT still reads `unit_conversions`
+plain. The T6 INSERT locks T5 → the binding → the Metrics Core connection `FOR SHARE` and then reads
+T4, T2b, the value chain (value → occasion → participant → event) and the v27 credential connection
+plain (C55); none of those plain-read rows is locked by any M1 writer before T5, so the order stays
+cycle-free. An ending of a binding (v27 Unbind, which takes the team's import lock inside its trigger)
+or of a Metrics Core connection is a row UPDATE that waits for a fact holding the row `FOR SHARE`, or
+lands first and the fact is refused. Tests: `backend/tests/source-metric-mapping-m1.test.mjs` 4
+(C53), 8 and 9 (C54), 21 (C51), 22 (C52), 23 (C55) and 14 (the activation side of C49 / C55).
 
 ### D1. `source_host_catalog.api_family` (extension of v27)
 
@@ -647,8 +710,9 @@ the deploy that carries it); a test runs that insert shape.
 - Purpose: the only place a non-identity factor between two units may come from, checkable by the
   database. **It is not a metric catalog**: it holds no metric key, label, type, level or
   semantics, only a pair of free-text units of the existing registries and a factor.
-- Columns: `id`; `from_unit`, `to_unit` (1–30, different); `scale numeric` (`<> 0`, finite);
-  `scale_divisor numeric` (`> 0`, finite); `offset numeric` (finite) — "finite" is a CHECK that
+- Columns: `id`; `from_unit`, `to_unit` (1–30, different); `scale numeric` (`> 0`, finite; C54 —
+  `unit_conversions_scale_positive`); `scale_divisor numeric` (`> 0`, finite); `offset numeric`
+  (finite, may be negative) — "finite" is a CHECK that
   refuses `NaN`, `Infinity` and `-Infinity`, all three of which a PostgreSQL 14+ `numeric` can hold;
   `check (scale = 1 or scale_divisor = 1)`; `state` in `active|retired` with `retired_by/at/reason`;
   `evidence_ref` (required, the D3 shape CHECK); `created_by_user_id`, `created_at`;
@@ -671,8 +735,11 @@ the deploy that carries it); a test runs that insert shape.
 - Uniqueness: `unique (from_unit, to_unit) where state = 'active'`.
 - Maintained by a platform admin through M2 (T8 `unit_conversion_create` / `_retire`) or by a data
   migration. Rows are immutable; a correction is `retired` plus a new row. A T4 version keeps **its
-  own copies** of the factors, so retiring a row changes no existing version and no fact; the table
-  only gates new versions. Identity pairs need no row: the trigger accepts `1, 1, 0` when the units are
+  own copies** of the factors, so retiring a row changes no existing `active` version, no history and
+  no fact; the table gates new versions **and their activation** (C52: the transition to `active`
+  locks the active row of the value pair and of the bound pair `FOR SHARE` and checks the version's
+  factors against it again, so a draft built from a row retired before its activation cannot be
+  activated). Identity pairs need no row: the trigger accepts `1, 1, 0` when the units are
   string-equal.
 - <a id="d5-unit-conversion-seed"></a>Seed (M1), as (scale, scale_divisor, offset): `s → min (1, 60, 0)`,
   `m/s → km/h (3.6, 1, 0)`, `m → km (0.001, 1, 0)`, `km/h → m/s (1, 3.6, 0)`. These four rows are SI
@@ -695,7 +762,7 @@ the deploy that carries it); a test runs that insert shape.
   (id, source_metric_definition_id)` (**the exact revision**); `version_number > 0`;
   `metric_definition_version_id` with `fk (metric_definition_version_id, metric_definition_id) →
   metric_definition_versions (id, metric_definition_id)` (the exact canonical version);
-  `conversion_kind` in `numeric_linear` (M1); `scale` (`<> 0`, finite), `scale_divisor` (`> 0`,
+  `conversion_kind` in `numeric_linear` (M1); `scale` (`> 0`, finite, C54), `scale_divisor` (`> 0`,
   finite), `offset` (finite), `check (scale = 1 or scale_divisor = 1)`, `rounding_decimals` (null or 0–6, a presentation field unused in the pilot; the
   storage scale of an imported value is the fixed S = 9 decimals of D8, not this column); `source_unit`, `target_unit` (copies,
   checked against the revision and the canonical version); `conversion_note` (bounded single-line text, 1–500; required when the
@@ -706,8 +773,8 @@ the deploy that carries it); a test runs that insert shape.
   parameter text defined in section E, "Parameter fingerprint"; it lets one source field feed
   several canonical zone variables, one per distinct bound set, and carries no athlete, session or
   team identity);
-  `parameter_scale` (`<> 0`, finite), `parameter_scale_divisor` (`> 0`, finite),
-  `parameter_offset` (finite), `check (parameter_scale = 1 or parameter_scale_divisor = 1)`;
+  `parameter_scale` (`> 0`, finite, C54), `parameter_scale_divisor` (`> 0`, finite),
+  `parameter_offset` (finite, may be negative), `check (parameter_scale = 1 or parameter_scale_divisor = 1)`;
   `applies_to_session`,
   `applies_to_drill` (at least one); `status` in `draft|needs_review|active|disabled` with
   `submitted_by/at`, `submitted_basis` (`platform_admin|club_admin`), `activated_by/at`,
@@ -858,6 +925,13 @@ the deploy that carries it); a test runs that insert shape.
   M1 (C47)**, with the provenance removed first, in the same transaction, on disposable databases only.
 - **As built (M1), C49:** the insert trigger also holds the T5 row `FOR SHARE` and refuses an ended
   activation, so no fact is written through an activation after its end.
+- **As built (M1), C55:** the insert trigger then holds the team binding and the Metrics Core
+  connection `FOR SHARE` and refuses an ended binding (`a fact is never written through an ended
+  binding`), an inactive connection (`… through an inactive source instance`), a value whose event is
+  not owned by the binding's team (`the value must belong to the binding's team`) and a value at a level
+  the activation does not cover (`the value's level is not one the activation covers`); the import
+  switch is not read. The M4 writer checks the same before it writes, for its stable codes; the
+  trigger is the backstop.
 - The content hash of an imported occasion (`gpexeImportWriter.js` `importedOccasionContentHash`,
   :99-116) gains the mapping version id and the source value and unit, so an identical session
   re-imported under a new mapping version is `needs_review`, never a silent supersede.
@@ -1245,34 +1319,23 @@ Decisions that may safely wait, with the PR that takes them:
 
 Everything in sections C to G is decided and is not reopened by this list.
 
-**Raised by the internal reviews of M1 (2026-10-12) — open owner decisions, not built:** each would
-widen a decided contract (C41, C46, D6 or D8), so none is implemented without the owner's word:
-
-1. **Freeze a canonical definition's ownership once a mapping names it** (security F2, database L-2).
-   The T3 guard checks system / club ownership when a mapping is created; nothing in v10–v34 stops a
-   later raw `UPDATE` of `metric_definitions.owner_scope / owner_club_id` (no application path does it),
-   which would leave a club mapping pointing at another owner's variable. A guard like v11's
-   `protect_connection_ownership_once_used` would widen the M1 Metrics Core guards beyond C46.
-2. **Re-check the conversion gate at activation** (database M-1, security F5). D6 re-checks the
-   parameter equivalence and the levels at activation, not the `unit_conversions` row; a draft built from
-   a row that is later retired as wrong can still be activated. Re-checking (plain read) would change D6.
-3. **Widen C41 to the bidi and zero-width format characters** (security F6, database L-1) for every
-   free-text column, as the unit token now does; otherwise M3 neutralizes them on display.
-4. **`parameter_scale > 0` (and `scale > 0`)** (database L-5): a negative factor would invert `>` and
-   `<` while the operator stays equal on both sides; it needs a `unit_conversions` row with a negative
-   scale, none exists. D6 says `<> 0`.
-5. **Further T6 checks** (security F4, database L-4): the Metrics Core connection `active`, the binding
-   `active`, the value's event owned by the activation's team, the value's level inside the activation's
-   levels — today the M4 writer's contract, not in D8.
+**Raised by the internal reviews of M1 (2026-10-12) and decided by the owner the same day (C51–C55,
+section C), built in v34:** the ownership freeze of a mapped canonical definition (security F2,
+database L-2 → C51); the conversion gate re-checked under a lock at activation (database M-1, security
+F5 → C52); the invisible and bidi characters in every free-text column (security F6, database L-1 →
+C53); positive scales (database L-5 → C54); the further T6 checks (security F4, database L-4 → C55).
+Nothing of this list is open any more.
 
 **Carried into later PRs by the M1 reviews:** M2 / M3 map the two `metric_definitions` /
 scope-capability guard refusals (`23514`, no constraint name) to a stable `409` in
 `backend/src/routes/trainingLoadMetrics.js` (`respondToWriteError` maps only `P0001` and `23505`
 today, so from the first active mapping version an archive, a new semantic version or a level removal
 of a pinned variable would answer `500`); M2 maps every native error by constraint name and never
-forwards its DETAIL, and maps `40P01` to `try_again`; M2 pre-locks T2b → T3 → T4 (and the
-`unit_conversions` row it relies on) before a transition; indexes on the M1 foreign keys come with
-the M2 / M3 readers; the M4 writer enforces the T6 items of point 5 until the owner decides them.
+forwards its DETAIL, and maps `40P01` to `try_again`; M2 pre-locks the `unit_conversions` rows it
+relies on, then T2b → T3 → T4, before a transition; indexes on the M1 foreign keys come with the M2 /
+M3 readers; the M4 writer checks the C55 conditions before it writes (its stable codes), the T6
+trigger being the backstop; no existing route changes a definition's owner, and one that ever does
+maps the C51 refusal to a stable `409`.
 
 ### K2. Review history — points raised by the internal reviews and decided by the owner
 

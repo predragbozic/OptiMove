@@ -276,12 +276,13 @@ async function endActivation(c, actId, by, reason = "admin_ended") {
 async function metricConnection(c, teamId, { hostKey = "server3", instance } = {}) {
   return (await ins(c, "metric_source_connections", { source_system: "gpexe", owner_scope: "team", owner_team_id: teamId, source_host_key: instance === null ? null : hostKey, source_instance_key: instance ?? null })).id;
 }
-async function valueRow(c, w, { teamId, mscId, md, value, unit = md.unit }) {
+async function valueRow(c, w, { teamId, mscId, md, value, unit = md.unit, scopeLevel = "session", drill = false }) {
   const ext = uid();
-  const ev = await ins(c, "metric_events", { occurred_date: "2026-10-05", scope_level: "session", owner_scope: "team", owner_team_id: teamId, source_connection_id: mscId, source_external_id: `team_session:${ext}`, created_by_user_id: w.pa });
+  const ev = await ins(c, "metric_events", { occurred_date: "2026-10-05", scope_level: scopeLevel, owner_scope: "team", owner_team_id: teamId, source_connection_id: mscId, source_external_id: `team_session:${ext}`, created_by_user_id: w.pa });
   const part = await ins(c, "metric_event_participants", { event_id: ev.id, athlete_id: w.athlete, athlete_timezone_snapshot: "Europe/Sarajevo" });
-  const ident = await ins(c, "metric_source_identities", { source_connection_id: mscId, source_external_id: `athlete_session:${ext}:full` });
-  const occ = await ins(c, "metric_measurement_occasions", { event_participant_id: part.id, entry_method: "api_import", source_identity_id: ident.id, recorded_by_user_id: w.pa });
+  const segment = drill ? (await ins(c, "metric_event_segments", { event_id: ev.id, label: "Drill 1", segment_order: 0 })).id : null;
+  const ident = await ins(c, "metric_source_identities", { source_connection_id: mscId, source_external_id: `athlete_session:${ext}:${drill ? "drill:0" : "full"}` });
+  const occ = await ins(c, "metric_measurement_occasions", { event_participant_id: part.id, segment_id: segment, entry_method: "api_import", source_identity_id: ident.id, recorded_by_user_id: w.pa });
   const val = await ins(c, "metric_values", { occasion_id: occ.id, metric_definition_id: md.id, metric_definition_version_id: md.versionId, value_numeric: value, unit_at_capture: unit });
   return { eventId: ev.id, valueId: val.id };
 }
@@ -413,7 +414,7 @@ test("1. migration v34 on v33: the tables, columns, named constraints, indexes, 
   assert.match(after34.indexes.find((x) => x.indexname === "metric_source_connections_one_active_instance").indexdef, /WHERE \(\(state\)::text = 'active'::text\)/);
   const trg = new Set(after34.triggers.map((x) => x.tgname));
   for (const name of ["source_host_catalog_api_family_immutable", "source_metric_definitions_guard", "source_metric_revisions_guard", "source_metric_mappings_guard", "unit_conversions_guard",
-    "source_metric_mapping_versions_insert_guard", "source_metric_mapping_versions_update_guard", "metric_definitions_source_metric_guard", "metric_definition_scope_capabilities_source_metric_guard",
+    "source_metric_mapping_versions_insert_guard", "source_metric_mapping_versions_update_guard", "metric_definitions_source_metric_guard", "metric_definitions_source_metric_owner_guard", "metric_definition_scope_capabilities_source_metric_guard",
     "source_metric_activations_insert_guard", "source_metric_activations_update_guard", "metric_value_provenance_insert_guard", "metric_value_source_provenance_append_only",
     "metric_source_connections_instance_write_once", "source_metric_audit_insert_guard", "source_metric_audit_append_only"]) assert.ok(trg.has(name), `trigger ${name}`);
   for (const table of M1_TABLES) assert.ok(after34.triggers.some((x) => x.relname === table && /BEFORE TRUNCATE/.test(x.def)), `TRUNCATE guard on ${table}`);
@@ -527,10 +528,15 @@ test("4. bounded single-line text (C41) and unit tokens: trimmed, 1..N character
   for (const bad of [null, "", " leading", "trailing ", "two\nlines", "tab\there", "cr\rhere", "del\u007f", "c1\u0085", "ls\u2028x", "ps\u2029x", "x".repeat(501)]) {
     assert.equal(await text(bad), false, JSON.stringify(bad));
   }
+  // C53: exactly the listed format characters (each range's ends) are refused in free text.
+  for (const cp of [0x00ad, 0x061c, 0x180e, 0x200b, 0x200f, 0x202a, 0x202e, 0x2060, 0x2064, 0x2066, 0x206f, 0xfeff]) {
+    assert.equal(await text(`a${String.fromCodePoint(cp)}b`), false, `U+${cp.toString(16).toUpperCase()} is refused in free text`);
+  }
+  for (const cp of [0x00a0, 0x2065, 0x2070, 0x00e9]) assert.equal(await text(`a${String.fromCodePoint(cp)}b`), true, `U+${cp.toString(16).toUpperCase()} is not on the C53 list`);
   assert.equal(await text("x".repeat(81), 80), false);
   const token = async (v) => (await one(k, `select training_load.source_metric_unit_token_ok($1) as ok`, [v])).ok;
   for (const good of ["s", "m/s", "km/h", "W/kg", "m/s²", "count"]) assert.equal(await token(good), true, good);
-  for (const bad of [null, "", "m s", "m|s", "m=s", "m\ts", "a\u2028b", "m\u00a0s", "m\u200bs", "m\u202es", "m\u2066s", "m\ufeffs", "m\u3000s", "x".repeat(31)]) assert.equal(await token(bad), false, JSON.stringify(bad));
+  for (const bad of [null, "", "m s", "m|s", "m=s", "m\ts", "a\u2028b", "m\u00a0s", "m\u200bs", "m\u202es", "m\u2066s", "m\ufeffs", "m\u3000s", "m\u00ads", "m\u061cs", "m\u180es", "x".repeat(31)]) assert.equal(await token(bad), false, JSON.stringify(bad));
   const w = await world(k);
   await refused(() => ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "rest_v1", source_metric_key: `m1.test.${uid()}`, source_label: " padded", created_by_user_id: w.pa }), { code: "23514", constraint: "source_metric_definitions_label_check" });
   await refused(() => ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "rest_v1", source_metric_key: `m1.test.${uid()}`, source_label: "", created_by_user_id: w.pa }), { code: "23514", constraint: "source_metric_definitions_label_check" });
@@ -676,7 +682,9 @@ test("8. unit_conversions: normal form, finite factors, divisor > 0, different u
   const w = W;
   const row = (o) => ({ from_unit: `u${uid()}`, to_unit: "v", scale: "2", scale_divisor: "1", offset: "0", evidence_ref: D5, created_by_user_id: w.pa, ...o });
   await refused(() => ins(k, "unit_conversions", row({ scale: "2", scale_divisor: "2" })), { code: "23514", constraint: "unit_conversions_factors_normal" });
-  await refused(() => ins(k, "unit_conversions", row({ scale: "0" })), { code: "23514", constraint: "unit_conversions_scale_nonzero" });
+  await refused(() => ins(k, "unit_conversions", row({ scale: "0" })), { code: "23514", constraint: "unit_conversions_scale_positive" });
+  await refused(() => ins(k, "unit_conversions", row({ scale: "-2" })), { code: "23514", constraint: "unit_conversions_scale_positive" });
+  await ins(k, "unit_conversions", row({ scale: "1", offset: "-273.15" }));
   await refused(() => ins(k, "unit_conversions", row({ scale: "1", scale_divisor: "0" })), { code: "23514", constraint: "unit_conversions_divisor_positive" });
   await refused(() => ins(k, "unit_conversions", row({ scale: "1", scale_divisor: "-3" })), { code: "23514", constraint: "unit_conversions_divisor_positive" });
   for (const [col, bad] of [["scale", "NaN"], ["scale", "Infinity"], ["scale_divisor", "NaN"], ["scale_divisor", "Infinity"], ["offset", "-Infinity"], ["offset", "NaN"]]) {
@@ -741,12 +749,25 @@ test("9. T4 insert: only as draft, only on a proven unit, owner key copied and c
   const noRow = await mapping(k, w, f, await canonical(k, { unit: "h" }));
   await refused(() => version(k, w, noRow, { scale: "1", scale_divisor: "3600", conversion_note: "Seconds to hours" }), { code: "23514", message: /active unit conversion/ });
   // The DB boundary of the normal form and finiteness (trigger off).
-  for (const over of [{ scale: "2", scale_divisor: "2" }, { scale: "NaN" }, { scale_divisor: "Infinity" }, { offset: "NaN" }, { parameter_scale: "Infinity" }, { parameter_scale: "3", parameter_scale_divisor: "3" }]) {
+  for (const over of [{ scale: "2", scale_divisor: "2" }, { scale: "NaN" }, { scale_divisor: "Infinity" }, { offset: "NaN" }, { parameter_scale: "Infinity" }, { parameter_scale: "3", parameter_scale_divisor: "3" }, { scale: "-1" }, { parameter_scale: "-3.6" }]) {
     await inRolledBackTx(k, async () => {
       await k.query(`alter table training_load.source_metric_mapping_versions disable trigger source_metric_mapping_versions_insert_guard`);
       await refused(() => version(k, w, m, { ...minutes, owner_key: "system", parameter_fingerprint: "", ...over }), { code: "23514" });
     });
   }
+  // C54: a negative factor is never a unit conversion (the CHECK, with the trigger off).
+  await inRolledBackTx(k, async () => {
+    await k.query(`alter table training_load.source_metric_mapping_versions disable trigger source_metric_mapping_versions_insert_guard`);
+    await refused(() => version(k, w, m, { ...minutes, owner_key: "system", parameter_fingerprint: "", scale: "-1", scale_divisor: "1" }), { code: "23514", constraint: "source_metric_mapping_versions_scale_positive" });
+  });
+  await inRolledBackTx(k, async () => {
+    await k.query(`alter table training_load.source_metric_mapping_versions disable trigger source_metric_mapping_versions_insert_guard`);
+    await refused(() => version(k, w, m, {
+      ...minutes, owner_key: "system", parameter_kind: "zone_bounds", parameter_fingerprint: `v1:${"0".repeat(64)}`,
+      source_parameters: { operator: ">=", lower: 7, upper: null, unit: "m/s" }, canonical_parameters: { operator: ">=", lower: -25.2, upper: null, unit: "km/h" },
+      parameter_scale: "-3.6", parameter_scale_divisor: "1",
+    }), { code: "23514", constraint: "source_metric_mapping_versions_parameter_scale_positive" });
+  });
   // The canonical version: numeric with a unit of 1-30 characters.
   const unitless = await mapping(k, w, f, await canonical(k, { unit: null }));
   await refused(() => version(k, w, unitless, { target_unit: "min", ...minutes }), { code: "23514", message: /canonical_unit_missing/ });
@@ -1189,6 +1210,8 @@ test("19. the existing Metrics Core catalog writers work beside the v34 guards: 
     const pinned = await canonical(k, { unit: "min" });
     await activeVersion(k, w, await mapping(k, w, g, pinned), FP.minutes);
     const before = await one(k, `select current_version_id, state from training_load.metric_definitions where id = $1`, [pinned.id]);
+    const versionRows = async () => (await one(k, `select count(*)::int as n from training_load.metric_definition_versions where metric_definition_id = $1`, [pinned.id])).n;
+    const versionsBefore = await versionRows();
     for (const write of [
       () => catalog.createDefinitionVersion(req, pinned.id, { valueType: "numeric", unit: "min" }),
       () => catalog.archiveDefinition(req, pinned.id),
@@ -1201,9 +1224,11 @@ test("19. the existing Metrics Core catalog writers work beside the v34 guards: 
     }
     assert.deepEqual(await one(k, `select current_version_id, state from training_load.metric_definitions where id = $1`, [pinned.id]), before, "nothing changed");
     assert.equal((await one(k, `select count(*)::int as n from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [pinned.id])).n, 2);
+    assert.equal(await versionRows(), versionsBefore, "the refused re-version leaves no version row behind");
   } finally {
     await pool?.end().catch(() => {});
-    process.env.DATABASE_URL = originalUrl;
+    if (originalUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = originalUrl;
   }
 });
 
@@ -1262,7 +1287,153 @@ test("20. the serialization the lock order promises, both orders, with the secon
   expectRefusedOutcome(await interleave((a) => retireDef(a, d2.id), (b) => ins(b, "source_metric_definition_versions", revRow(d2.id))), /only for an active source metric/);
 });
 
-test("21. every trigger refusal seen in this file is a fixed message of the migration: no id, no value, no source answer", () => {
+test("21. C51: a canonical definition named by a mapping keeps its owner; an owner change and a mapping insert serialize on the definition row in both orders", async () => {
+  const w = W;
+  const reown = (c, md, clubId) => c.query(`update training_load.metric_definitions set owner_club_id = $2 where id = $1`, [md.id, clubId]);
+  const f = await field(k, w, { unit: "s" });
+  const md = await canonical(k, { scope: "club", clubId: w.clubA, unit: "min" });
+  await reown(k, md, w.clubB);
+  await reown(k, md, w.clubA);
+  await mapping(k, w, f, md, { scope: "club", clubId: w.clubA });
+  await refused(() => reown(k, md, w.clubB), { code: "23514", message: /keeps its owner/ });
+  await refused(() => k.query(`update training_load.metric_definitions set owner_scope = 'system', owner_club_id = null where id = $1`, [md.id]), { code: "23514", message: /keeps its owner/ });
+  await k.query(`update training_load.metric_definitions set label = 'Renamed, same owner' where id = $1`, [md.id]);
+  // The mapping first: the owner change waits for it, then is refused.
+  const fa = await field(k, w, { unit: "s" });
+  const mda = await canonical(k, { scope: "club", clubId: w.clubA, unit: "min" });
+  expectRefusedOutcome(await interleave((a) => mapping(a, w, fa, mda, { scope: "club", clubId: w.clubA }), (b) => reown(b, mda, w.clubB)), /keeps its owner/);
+  // The owner change first: the mapping waits for it, then reads the new owner and is refused.
+  const fb = await field(k, w, { unit: "s" });
+  const mdb2 = await canonical(k, { scope: "club", clubId: w.clubA, unit: "min" });
+  expectRefusedOutcome(await interleave((a) => reown(a, mdb2, w.clubB), (b) => mapping(b, w, fb, mdb2, { scope: "club", clubId: w.clubA })), /same club/);
+});
+
+test("22. C52: an activation locks and checks again the active unit conversion of its value pair and of its bound pair; a retired one fails it, a new active row with the same factors passes, equal units stay the identity, an active version is not changed by a later retirement; activation and retirement serialize in both orders", async () => {
+  const w = W;
+  const conv = (from, to, scale, div = "1") => ins(k, "unit_conversions", { from_unit: from, to_unit: to, scale, scale_divisor: div, offset: "0", evidence_ref: D5, created_by_user_id: w.pa });
+  const retireConv = (c, id) => c.query(`update training_load.unit_conversions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'Wrong factor' where id = $1`, [id, w.pa]);
+  const valueDraft = async () => {
+    const from = `ft${uid()}`;
+    const to = `yd${uid()}`;
+    const row = await conv(from, to, "1", "3");
+    const f = await field(k, w, { unit: from });
+    const md = await canonical(k, { unit: to });
+    const v = await version(k, w, await mapping(k, w, f, md), { scale: "1", scale_divisor: "3", conversion_note: "Feet to yards" });
+    await submit(k, v.id, w.pa);
+    return { from, to, row, v };
+  };
+  const status = async (id) => (await one(k, `select status from training_load.source_metric_mapping_versions where id = $1`, [id])).status;
+  // The value pair.
+  const d1 = await valueDraft();
+  await retireConv(k, d1.row.id);
+  await refused(() => activateVersion(k, d1.v.id, w.pa), { code: "23514", message: /conversion must equal the active unit conversion/ });
+  const replacement = await conv(d1.from, d1.to, "1", "3");
+  await activateVersion(k, d1.v.id, w.pa);
+  await retireConv(k, replacement.id);
+  assert.equal(await status(d1.v.id), "active", "a later retirement changes no active version");
+  // The bound pair.
+  const b1 = `bu${uid()}`;
+  const b2 = `bv${uid()}`;
+  const boundRow = await conv(b1, b2, "2");
+  const zf = await field(k, w, { kind: "zone_bounds", unit: "m", boundUnit: b1, operator: ">=" });
+  const zmd = await canonical(k, { unit: "m", cd: { operator: ">=", value: 14, unit: b2 } });
+  const zv = await version(k, w, await mapping(k, w, zf, zmd), {
+    parameter_kind: "zone_bounds", source_parameters: { operator: ">=", lower: 7, upper: null, unit: b1 }, canonical_parameters: { operator: ">=", lower: 14, upper: null, unit: b2 }, parameter_scale: "2",
+  });
+  await submit(k, zv.id, w.pa);
+  await retireConv(k, boundRow.id);
+  await refused(() => activateVersion(k, zv.id, w.pa), { code: "23514", message: /bound conversion must equal the active unit conversion/ });
+  // Equal units: the identity, no row needed.
+  const same = await field(k, w, { unit: "s" });
+  await activeVersion(k, w, await mapping(k, w, same, await canonical(k, { unit: "s" })));
+  // The activation first: the retirement waits, then lands; the version stays active.
+  const d3 = await valueDraft();
+  const retiredAfter = await interleave((a) => activateVersion(a, d3.v.id, w.pa), (b) => retireConv(b, d3.row.id));
+  assert.ok(!retiredAfter.error, String(retiredAfter.error?.message));
+  assert.equal(await status(d3.v.id), "active");
+  // The retirement first: the activation waits, then finds no active row.
+  const d4 = await valueDraft();
+  expectRefusedOutcome(await interleave((a) => retireConv(a, d4.row.id), (b) => activateVersion(b, d4.v.id, w.pa)), /conversion must equal the active unit conversion/);
+  assert.equal(await status(d4.v.id), "needs_review");
+});
+
+test("23. C55: a new fact needs an open activation, an active binding and an active Metrics Core instance of one chain, a value of the binding's team at a level the activation covers; an ending of the binding or of the instance serializes with a new fact in both orders and never changes an existing fact", async () => {
+  const w = W;
+  const { minutes } = FP;
+  const setup = async ({ session = true, drill = true, caps } = {}) => {
+    const f = await field(k, w, { unit: "s" });
+    const md = await canonical(k, { unit: "min", ...(caps ? { caps } : {}) });
+    const ver = await activeVersion(k, w, await mapping(k, w, f, md), { ...minutes, applies_to_session: session, applies_to_drill: drill });
+    const bind = await bindTeam(k, w, w.clubA);
+    const act = await activation(k, w, ver.id, bind);
+    const msc = await metricConnection(k, bind.teamId, { instance: bind.sourceTeam });
+    return { md, ver, bind, act, msc };
+  };
+  const value = (s, extra = {}) => valueRow(k, w, { teamId: s.bind.teamId, mscId: s.msc, md: s.md, value: "2", ...extra });
+  const fact = (c, s, valueId) => ins(c, "metric_value_source_provenance", provenanceRow(valueId, s.act, s.ver, { mscId: s.msc, sourceValue: "120" }));
+  const endBinding = (c, s) => c.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'Test ending' where id = $1`, [s.bind.bindingId, w.pa]);
+  const endInstance = (c, s) => c.query(`update training_load.metric_source_connections set state = 'inactive' where id = $1`, [s.msc]);
+  const factCount = async (valueId) => (await one(k, `select count(*)::int as n from training_load.metric_value_source_provenance where metric_value_id = $1`, [valueId])).n;
+  // Levels: a session value and a drill value each only where the activation
+  // covers it; a day-level value never. Metrics Core takes a drill
+  // (component) value only under a confirmed activity component link, a chain
+  // M1 does not build: a drill value is inserted in a transaction that is
+  // always rolled back, without that one Metrics Core check, every v34
+  // trigger still in force.
+  const drillTx = (fn) => inRolledBackTx(k, async () => {
+    await k.query(`alter table training_load.metric_values disable trigger metric_values_check_scope_capability`);
+    return fn();
+  });
+  const levelRefusal = { code: "23514", message: /level is not one the activation covers/ };
+  const both = await setup({ caps: ["session", "component", "day"] });
+  await fact(k, both, (await value(both)).valueId);
+  await drillTx(async () => fact(k, both, (await value(both, { drill: true })).valueId));
+  const dayValue = (await value(both, { scopeLevel: "day" })).valueId;
+  await refused(() => fact(k, both, dayValue), levelRefusal);
+  const sessionOnly = await setup({ drill: false });
+  await fact(k, sessionOnly, (await value(sessionOnly)).valueId);
+  await drillTx(async () => {
+    const drillValue = (await value(sessionOnly, { drill: true })).valueId;
+    await refused(() => fact(k, sessionOnly, drillValue), levelRefusal);
+  });
+  const drillOnly = await setup({ session: false });
+  const sessionValue = (await value(drillOnly)).valueId;
+  await refused(() => fact(k, drillOnly, sessionValue), levelRefusal);
+  await drillTx(async () => fact(k, drillOnly, (await value(drillOnly, { drill: true })).valueId));
+  // The value's event belongs to the binding's team.
+  const otherTeam = await newTeam(k, w.clubA);
+  const foreign = await valueRow(k, w, { teamId: otherTeam, mscId: await metricConnection(k, otherTeam, { instance: null }), md: both.md, value: "2" });
+  await refused(() => fact(k, both, foreign.valueId), { code: "23514", message: /binding's team/ });
+  // An ended binding and an inactive instance take no new fact.
+  const eb = await setup();
+  const ebValue = await value(eb);
+  await endBinding(k, eb);
+  await refused(() => fact(k, eb, ebValue.valueId), { code: "23514", message: /ended binding/ });
+  const ei = await setup();
+  const eiValue = await value(ei);
+  await endInstance(k, ei);
+  await refused(() => fact(k, ei, eiValue.valueId), { code: "23514", message: /inactive source instance/ });
+  // The binding's ending vs a new fact, both orders.
+  const ba = await setup();
+  const baValue = await value(ba);
+  const baEnding = await interleave((a) => fact(a, ba, baValue.valueId), (b) => endBinding(b, ba));
+  assert.ok(!baEnding.error, String(baEnding.error?.message));
+  assert.equal(await factCount(baValue.valueId), 1, "the fact written first stays after the ending");
+  const bb = await setup();
+  const bbValue = await value(bb);
+  expectRefusedOutcome(await interleave((a) => endBinding(a, bb), (b) => fact(b, bb, bbValue.valueId)), /ended binding/);
+  // The instance's ending vs a new fact, both orders.
+  const ia = await setup();
+  const iaValue = await value(ia);
+  const iaEnding = await interleave((a) => fact(a, ia, iaValue.valueId), (b) => endInstance(b, ia));
+  assert.ok(!iaEnding.error, String(iaEnding.error?.message));
+  assert.equal(await factCount(iaValue.valueId), 1, "the fact written first stays after the ending");
+  const ib = await setup();
+  const ibValue = await value(ib);
+  expectRefusedOutcome(await interleave((a) => endInstance(a, ib), (b) => fact(b, ib, ibValue.valueId)), /inactive source instance/);
+});
+
+test("24. every trigger refusal seen in this file is a fixed message of the migration: no id, no value, no source answer", () => {
   const sql = fs.readFileSync(MIGRATION_PATH, "utf8");
   const templates = [...sql.matchAll(/raise exception '((?:[^']|'')*)'/g)].map((x) => x[1].replace(/''/g, "'"));
   assert.ok(templates.length > 40, `the migration's messages are read (${templates.length})`);
