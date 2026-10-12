@@ -74,13 +74,19 @@ test result; reviewing a domain the change did not touch.
 - Before the first review: the targeted regression set of the touched module or family
   (`test:backend:fast`, `test:frontend:fast`, `test:gpexe`, or the module's files).
 - Before merge-readiness: the preset that matches the real risk.
-- The full `test:pr` only when a repo rule asks for it, the runner or a manifest changed,
-  the change is broadly cross-cutting, or the owner orders it. The `shared` kind keeps its
-  own rule (a persistent database, `database-safety.md`; §3.3 of the T1 document).
-- Do not re-run a green test on unchanged code. When only a document, a comment or a test
-  title changed after a run, re-run the doc-lint or the affected test, not unrelated
-  suites, and say in the report which result is from before and which from after the last
-  change.
+- `test:pr` (everything safe by construction; it leaves the `shared` kind out) only when a
+  repo rule asks for it, the runner or a manifest changed, the change is broadly
+  cross-cutting, or the owner orders it.
+- A change to auth, organization, builder, the Tests module or non-GPEXE Training Load
+  still needs `test:backend:shared` before a PR (§3.3 of the T1 document); running it
+  writes to the local development database, which is a per-session decision
+  (`database-safety.md`).
+- Within the same session, do not re-run a green test on unchanged code. A result from an
+  earlier session is not evidence (`testing-evidence.md`): re-run it before claiming it.
+  When only a document, a comment or a test title changed after a run, re-run the affected
+  test, or the document check if one exists for that file (none exists for `.claude/`
+  today), not unrelated suites, and say in the report which result is from before and
+  which from after the last change.
 - Mutations: for new security, transactional and fail-closed guards, not for every
   trivial sentence or CSS change; after a small change re-run only the affected
   mutations, unless a shared mechanism changed.
@@ -96,8 +102,8 @@ test result; reviewing a domain the change did not touch.
 
 ## 8. Git and PR
 
-- One worktree and one branch per task (`git-safety.md`); never a force push without an
-  explicit order.
+- One worktree and one branch per task (owner order of 2026-10-12; branching from
+  `origin/main` and the ban on a force push without an explicit order are `git-safety.md`).
 - Before a merge: the exact HEAD, the base, the diff scope and a clean tree.
 - If `main` moved, first decide whether it changed a relevant contract; an integration
   merge without a conflict and without a relevant change needs only a targeted check, not
