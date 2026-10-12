@@ -10,7 +10,7 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 |---|---|
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
-| Last verified against commit | `af11338` — a later `main` (`0098638`, PR #157) was reviewed against the re-verification list below on 2026-10-12: it changed only frontend files outside that list and their tests, so no contract here changed and this line stays |
+| Last verified against commit | `af11338` — a later `main` (`0098638`: `95f2fd1` and PR #157) was reviewed against the re-verification list below on 2026-10-12: it changed only frontend files outside that list and their tests, so no contract here changed and this line stays |
 | Status | **Accepted architecture; M1 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
@@ -354,8 +354,10 @@ them (review history in K2):
     row changes no history — still a linear numeric conversion, not a new kind of formula. Factors
     are normalized where possible: **the normal form of D5 is a mandatory contract of the
     system**, guaranteed in two layers. **The database** guarantees finite factors (no NaN, no
-    infinity), the CHECK `scale = 1 or scale_divisor = 1`, and that a mapping version's factors
-    equal the single active `unit_conversions` row of its unit pair. **The M2 API** guarantees the
+    infinity), the CHECK `scale = 1 or scale_divisor = 1`, and either (a) for different units,
+    that the mapping version's factors equal the single active `unit_conversions` row of that unit
+    pair, or (b) for string-equal units, the identity tuple `(1, 1, 0)` without a
+    `unit_conversions` row. **The M2 API** guarantees the
     canonical choice of representation and refuses any other form of the same value (for example
     `(1, 0.25)` instead of `(4, 1)`). M1 by itself does not claim to tell apart numerically equal
     written forms such as `3.60` and `3.6`: PostgreSQL `numeric` treats them as the same value. A

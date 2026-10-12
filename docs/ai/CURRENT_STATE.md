@@ -1,7 +1,8 @@
 # Current state
 
 Last reviewed: 2026-10-12. Last `origin/main` commit checked: `0098638` (merge of PR #157, Coach
-Home empty and error states, frontend only; PR #155 `af11338` and PR #154 `241765e` before it).
+Home empty and error states, frontend only; `95f2fd1`, PR #155 `af11338` and PR #154 `241765e`
+before it).
 
 ## Active phase
 
@@ -2066,11 +2067,20 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
-- PR #157 (`0098638`, merged 2026-10-12 11:52:30 UTC; Coach Home empty and error states, clearer
-  picker triggers, athlete lists sorted with visible roster filters; frontend and its tests only, no
-  backend, migration or docs change). Its deploy was not checked for this file. It touched
-  `frontend/tests/builder-create-form-fixes.test.mjs`, whose test 8 is listed under "Known
-  baseline/environment test issues"; that entry was not re-checked in this update.
+- PR #157 (merge commit `0098638`, merged 2026-10-12 11:52:30 UTC exactly from head `ce571d3`; Coach
+  Home empty and error states, frontend only) is deployed: `/api/health` first served `0098638` with
+  `ok: true` at 12:25:26 UTC, then three times in a row (12:25:47, 12:25:58 and 12:26:09 UTC); the
+  served `/assets/app-CM0hIOhv.js` carries the new empty / error states and `coach-home-retry`, and
+  `/assets/app-_Sry8COF.css` the new Coach Home rules; without a login `GET /api/auth/me` answered
+  200 with `{"user":null}` and `GET /api/athletes/today` answered 401. No sign-in, production write,
+  Render change, GPEXE action or migration.
+- `95f2fd1` (on `main` before PR #157, 2026-10-12; a merge of `af11338` into the branch
+  `codex/home-workspace-navigation`, no pull request found for it) brought commit `72567b7`
+  (athlete lists sorted alphabetically, visible roster filters; frontend and its tests only). It
+  widened the code slice of the `builder-create-form-fixes.test.mjs` test "handleContentInput
+  mirrors every keystroke…" from 700 to 1000 characters; that test, a known baseline failure since
+  2026-10-11, passes on `0098638` (T1 runner, 2026-10-12), so its entry is removed from "Known
+  baseline/environment test issues" and from `frontend/tests/support/test-manifest.json`.
 - PR #155 (`af11338`, merged 2026-10-11 19:49:17 UTC exactly from head `a61f399`) is deployed:
   `/api/health` served `af11338` with `ok: true` three times in a row (19:50:15–19:50:35 UTC); without a
   login `GET /api/auth/me` answered 200 with no user and the GPEXE team status (zero UUID) answered 401.
@@ -2256,9 +2266,6 @@ pre-existing; pass/fail counts don't belong in this file
 - `frontend/tests/organization-panel-cache.test.mjs` — test "6. signOut clears the entire view
   cache before/alongside its hard reload" fails; reproduced identically on a clean detached
   `origin/main` worktree (`6382d25`) on 2026-10-05. Not fixed.
-- `frontend/tests/builder-create-form-fixes.test.mjs` — test "8. handleContentInput mirrors every
-  keystroke in the create form's name input into state…" fails; reproduced identically on a clean
-  detached `origin/main` worktree (`884945c`) on 2026-10-11 during the v33 frontend work. Not fixed.
 - `backend/tests/training-load-metrics-builder-edit-draft.test.mjs` — refuses to start
   unless `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL` is set (deliberate guard, no database
   operation attempted), so a plain full backend run reports it as failed; same on
