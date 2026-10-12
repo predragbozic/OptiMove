@@ -34,6 +34,7 @@
 //   activity_participant_metric_participant_links -> activity_participants ->
 //   activity_metric_event_links -> activities (only when the activity has no
 //   other event) ->
+//   metric_value_source_provenance (v34) ->
 //   metric_values -> metric_source_identities.current_occasion_id (cleared) ->
 //   metric_measurement_occasions -> metric_source_identities of this session ->
 //   metric_event_participants -> metric_event_segments ->
@@ -82,6 +83,9 @@ export async function assertDisposableClient(client) {
 }
 
 const PROTECTED_TRIGGERS = [
+  // v34: the provenance of an imported value (append-only, 1:1 with the
+  // value) goes first, in the same transaction as the values it names.
+  ["training_load.metric_value_source_provenance", "metric_value_source_provenance_append_only"],
   ["training_load.metric_values", "metric_values_immutable"],
   ["training_load.metric_event_source_bindings", "metric_event_source_bindings_immutable"],
   ["training_load.metric_event_source_bindings", "metric_event_source_bindings_no_delete"],
@@ -308,6 +312,9 @@ export async function undoImportedSession(client, requested, { performedByUserId
       await run("activities", `delete from training.activities where id = any($1::uuid[])`, [activityIds]);
     }
     if (scope.occasionIds.length) {
+      // v34: a value's provenance row references it (on delete restrict), so
+      // it is removed first.
+      await run("metric_value_source_provenance", `delete from training_load.metric_value_source_provenance p using training_load.metric_values v where v.id = p.metric_value_id and v.occasion_id = any($1::uuid[])`, [scope.occasionIds]);
       await run("metric_values", `delete from training_load.metric_values where occasion_id = any($1::uuid[])`, [scope.occasionIds]);
       await client.query(`update training_load.metric_source_identities set current_occasion_id = null where current_occasion_id = any($1::uuid[])`, [scope.occasionIds]);
       // One statement for the whole chain: occasions point at each other
