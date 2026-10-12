@@ -28,8 +28,10 @@ of that time.
    each stays its own fact, and the dashboard query reports the conflict instead of summing
    or picking one.
 3. **A historical metric fact is never reinterpreted by a later change of the current
-   definition.** A new semantic version, a corrected value or a changed source threshold set
-   produces new rows; the captured value, its version and its provenance stay as written.
+   definition.** A new semantic version or a corrected value produces new rows; the captured
+   value, its version, its provenance and the per-event threshold snapshot are never rewritten,
+   and a re-import of an already imported session under a different threshold set is refused
+   (`source_reference_set_changed`), never applied as a rewrite.
 
 ## Exact contracts
 
@@ -56,7 +58,8 @@ of that time.
   supersedes the old one (`:44-45`, the supersede chain); a new semantic version never
   reinterprets a captured value (`backend/tests/training-load-metrics.test.mjs:701-731`); the
   threshold set a session was imported under is an immutable per-event snapshot
-  (`migrations_v2/202609171800_training_load_v20_gpexe_source_bindings.sql:182-204`).
+  (`migrations_v2/202609171800_training_load_v20_gpexe_source_bindings.sql:182-204`), and the
+  writer stops a re-import whose set differs (`backend/src/gpexeImportWriter.js:34-38`, `:292`).
 
 ## Consequences
 
