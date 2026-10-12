@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-12. Last `origin/main` commit checked: `af11338` (merge of PR #155,
-`feature/test-infrastructure-t1` → `main`; PR #154 `241765e` and PR #153 `884945c` before it).
+Last reviewed: 2026-10-12. Last `origin/main` commit checked: `0098638` (merge of PR #157, Coach
+Home empty and error states, frontend only; PR #155 `af11338` and PR #154 `241765e` before it).
 
 ## Active phase
 
@@ -2066,6 +2066,11 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #157 (`0098638`, merged 2026-10-12 11:52:30 UTC; Coach Home empty and error states, clearer
+  picker triggers, athlete lists sorted with visible roster filters; frontend and its tests only, no
+  backend, migration or docs change). Its deploy was not checked for this file. It touched
+  `frontend/tests/builder-create-form-fixes.test.mjs`, whose test 8 is listed under "Known
+  baseline/environment test issues"; that entry was not re-checked in this update.
 - PR #155 (`af11338`, merged 2026-10-11 19:49:17 UTC exactly from head `a61f399`) is deployed:
   `/api/health` served `af11338` with `ok: true` three times in a row (19:50:15–19:50:35 UTC); without a
   login `GET /api/auth/me` answered 200 with no user and the GPEXE team status (zero UUID) answered 401.

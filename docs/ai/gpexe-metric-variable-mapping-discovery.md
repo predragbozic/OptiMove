@@ -10,7 +10,7 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 |---|---|
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
-| Last verified against commit | `af11338` |
+| Last verified against commit | `af11338` — a later `main` (`0098638`, PR #157) was reviewed against the re-verification list below on 2026-10-12: it changed only frontend files outside that list and their tests, so no contract here changed and this line stays |
 | Status | **Accepted architecture; M1 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
@@ -349,10 +349,17 @@ them (review history in K2):
     coexist the platform admin chooses explicitly which one a binding uses. T5 still admits only
     one open activation per (field, parameters) and per (canonical, scope) on a binding.
 34. The exact rational conversion `canonical = source × scale / scale_divisor + offset`:
-    `scale_divisor > 0`, every factor finite (no NaN, no infinity), identity as `1, 1, 0`, factors normalized where possible (the normal form of D5, which the database makes mandatory; a conversion it cannot represent is refused, D5), no
-    binary floating-point arithmetic in the import writer, every historical mapping version keeps
-    its own factors, a retired `unit_conversions` row changes no history — still a linear numeric
-    conversion, not a new kind of formula.
+    `scale_divisor > 0`, identity as `1, 1, 0`, no binary floating-point arithmetic in the import
+    writer, every historical mapping version keeps its own factors, a retired `unit_conversions`
+    row changes no history — still a linear numeric conversion, not a new kind of formula. Factors
+    are normalized where possible: **the normal form of D5 is a mandatory contract of the
+    system**, guaranteed in two layers. **The database** guarantees finite factors (no NaN, no
+    infinity), the CHECK `scale = 1 or scale_divisor = 1`, and that a mapping version's factors
+    equal the single active `unit_conversions` row of its unit pair. **The M2 API** guarantees the
+    canonical choice of representation and refuses any other form of the same value (for example
+    `(1, 0.25)` instead of `(4, 1)`). M1 by itself does not claim to tell apart numerically equal
+    written forms such as `3.60` and `3.6`: PostgreSQL `numeric` treats them as the same value. A
+    conversion the normal form cannot represent is refused (D5).
 35. A team-owned connection never hosts a club mapping in M1 / M2; only contracts whose ownership
     and same team / club the database can prove are allowed; a later widening is a separate owner
     decision.
