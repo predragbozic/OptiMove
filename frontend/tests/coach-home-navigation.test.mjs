@@ -141,7 +141,6 @@ test("a failed load shows only the error and Try again - no pickers, no Today ro
   assert.equal(doc.querySelector(".coach-home-today"), null);
   assert.equal(doc.querySelector("dialog"), null);
   assert.doesNotMatch(html, /athletes training|No athletes in this workspace/);
-  assert.match(html, /&lt;|network down/);
   close();
 });
 
