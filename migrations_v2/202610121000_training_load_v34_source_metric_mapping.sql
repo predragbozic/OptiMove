@@ -61,15 +61,17 @@ create function training_load.source_metric_text_ok(v text, max_len integer) ret
   language sql immutable as $$
     select coalesce(v = btrim(v)
        and char_length(v) between 1 and max_len
-       and v !~ '[\x01-\x1f\x7f-\x9f  ]', false)
+       and v !~ '[\x01-\x1f\x7f-\x9f\u2028\u2029]', false)
   $$;
 
--- A unit token (D3): 1-30 characters, no whitespace, control character,
--- line separator, "|" or "=" (the characters the fingerprint text uses).
+-- A unit token (D3): 1-30 characters, no whitespace (the locale's \s and,
+-- explicitly, every Unicode space and zero-width / bidi format character),
+-- no control character, no "|" or "=" (the characters the fingerprint text
+-- uses).
 create function training_load.source_metric_unit_token_ok(v text) returns boolean
   language sql immutable as $$
     select coalesce(char_length(v) between 1 and 30
-       and v !~ '[\s|=\x01-\x1f\x7f-\x9f  ]', false)
+       and v !~ '[\s|=\x01-\x1f\x7f-\x9f\u00a0\u1680\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\ufeff]', false)
   $$;
 
 -- A document reference (C40): a repository-relative path under docs/, no
@@ -181,6 +183,21 @@ begin
 end;
 $$ language plpgsql;
 
+-- A seed marker is accepted only from the migration that seeds (D12): the
+-- marker names v34, and v34 is not recorded yet - true only inside v34's
+-- own transaction, because the runner records a migration after running its
+-- file, in the same transaction. Any later row with a marker has no acting
+-- user and is refused (42501). A later seeding migration replaces this
+-- function to name itself.
+create function training_load.source_metric_require_seed_window(p_marker text) returns void as $$
+begin
+  if p_marker is distinct from 'migrations_v2/202610121000_training_load_v34_source_metric_mapping.sql'
+     or exists (select 1 from public.schema_migrations where migration_name = p_marker) then
+    raise exception 'source metric mapping: a seed marker is accepted only from the seeding migration' using errcode = '42501';
+  end if;
+end;
+$$ language plpgsql;
+
 create function training_load.source_metric_no_truncate() returns trigger as $$
 begin
   raise exception '%.% keeps history; TRUNCATE refused', tg_table_schema, tg_table_name using errcode = '23514';
@@ -285,6 +302,9 @@ begin
   if tg_op = 'INSERT' then
     if new.state is distinct from 'active' then
       raise exception 'source_metric_definitions: a source metric is created active' using errcode = '23514';
+    end if;
+    if new.seed_migration is not null then
+      perform training_load.source_metric_require_seed_window(new.seed_migration);
     end if;
     return new;
   end if;
@@ -473,6 +493,9 @@ begin
        or new.meaning_verified_at is not null or new.meaning_evidence_ref is not null or new.bound_operator is not null
        or new.activated_by_user_id is not null then
       raise exception 'source_metric_definition_versions: a revision is created without proof; unit and meaning are verified afterwards' using errcode = '23514';
+    end if;
+    if new.seed_migration is not null then
+      perform training_load.source_metric_require_seed_window(new.seed_migration);
     end if;
     return new;
   end if;
@@ -692,6 +715,8 @@ begin
     end if;
     if new.created_by_user_id is not null then
       perform training_load.source_metric_require_platform_admin(new.created_by_user_id);
+    elsif new.seed_migration is not null then
+      perform training_load.source_metric_require_seed_window(new.seed_migration);
     end if;
     return new;
   end if;
@@ -1119,6 +1144,12 @@ begin
     perform training_load.source_metric_check_levels(new.metric_definition_id, new.applies_to_session, new.applies_to_drill, true);
     perform training_load.source_metric_require_platform_admin(new.activated_by_user_id);
   elsif new.status = 'disabled' and old.status in ('draft', 'needs_review', 'active') then
+    -- A transition writes only its own facts: disabling never adds a
+    -- submission or an activation that did not happen.
+    if (new.submitted_by_user_id, new.submitted_at, new.submitted_basis, new.activated_by_user_id, new.activated_at, new.activated_basis)
+       is distinct from (old.submitted_by_user_id, old.submitted_at, old.submitted_basis, old.activated_by_user_id, old.activated_at, old.activated_basis) then
+      raise exception 'source_metric_mapping_versions: the status facts are written by their transition' using errcode = '23514';
+    end if;
     if exists (select 1 from training_load.source_metric_mapping_activations
                 where mapping_version_id = old.id and ended_at is null) then
       raise exception 'source_metric_mapping_versions: a mapping version with an open activation is not disabled' using errcode = '23514';
@@ -1612,9 +1643,15 @@ create index source_metric_audit_operation_idx
 comment on table training_load.source_metric_audit is
   'v34 (D10, T8): append-only record of every source metric, mapping, activation, unit conversion and source instance operation. No metadata column; reason and evidence_ref are bounded, format-checked and never name an athlete or carry a value.';
 
--- An activation row names its own mapping version and team.
+-- An activation row names its own mapping version and team; a club-admin
+-- row names a club-owned mapping (C45: the club-admin basis only where D / G
+-- allow it). Plain reads.
 create function training_load.source_metric_audit_insert_guard() returns trigger as $$
 begin
+  if new.basis = 'club_admin' and not exists (
+       select 1 from training_load.source_metric_mappings where id = new.mapping_id and owner_scope = 'club') then
+    raise exception 'source_metric_audit: a club-admin row names a club mapping' using errcode = '23514';
+  end if;
   if new.activation_id is not null and not exists (
        select 1 from training_load.source_metric_mapping_activations
         where id = new.activation_id and mapping_version_id = new.mapping_version_id and team_id = new.team_id) then

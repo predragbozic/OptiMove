@@ -505,8 +505,25 @@ and activating a version that applies to it never both succeed; the catalog writ
 the T2b activation and the T5 insert: its state is implied by the chain (a T2a field is not retired
 while a revision is `draft` or `active`; a revision insert locks the field `FOR SHARE`; T5 needs an
 `active` T4, which needs an `active` revision), and a lock there would invert the order against a
-writer that already holds T4. The T6 insert locks its T5 row `FOR SHARE` (C49). Every refusal is
-`42501` or `23514` with a fixed message (C44).
+writer that already holds T4. The T5 insert reads the v27 rows plain in the order binding →
+connection joined with its catalog row (it needs the binding's connection id first), never locked;
+the order of plain reads has no lock effect. The T6 insert locks its T5 row `FOR SHARE` (C49). Every
+refusal is `42501` or `23514` with a fixed message (C44). A transition trigger runs after the row it
+changes is already locked, so the documented order holds only when the M2 writer pre-locks T2b → T3 →
+T4 as this section requires (an M2 acceptance item); a raw writer that does not can meet a clean
+`40P01`, never an inconsistent row. The serialization pairs are tested in both orders with the second
+operation proven to wait (`backend/tests/source-metric-mapping-m1.test.mjs` test 20, test 13 and 14).
+
+**As built (M1), review corrections (2026-10-12):** a seed marker is accepted only inside the
+seeding migration itself — it must name v34 and v34 must not be recorded yet, which is true only in
+v34's own transaction (the runner records a migration after running it, in the same transaction);
+afterwards a row with a marker has no acting user and is refused with `42501` on T2a, T2b and
+`unit_conversions` (a later seeding migration replaces `source_metric_require_seed_window` to name
+itself). Disabling a T4 version writes only its own facts (no submission or activation added on the
+way). A T8 row with the club-admin basis must name a club-owned mapping (C45). The unit token refuses,
+beside the locale's whitespace, every Unicode space and zero-width / bidi format character
+(`U+00A0`, `U+1680`, `U+2000–U+200F`, `U+2028–U+202F`, `U+205F–U+206F`, `U+3000`, `U+FEFF`) — D3's
+"no whitespace" taken literally. The rollback refuses a database on which v34 is not recorded.
 
 ### D1. `source_host_catalog.api_family` (extension of v27)
 
@@ -523,7 +540,9 @@ comparison is to be checked in M1.
 restores nothing but drops its own objects; a catalog row the backfill cannot place stays NULL and
 fails the migration (no guessed family); a test compares the column with `SOURCE_HOSTS[*].apiFamily`.
 The v28 rollback's row comparison (label, state, note) is unaffected: it refuses under any later
-migration, and after a v34 rollback the column no longer exists.
+migration, and after a v34 rollback the column no longer exists. The v27 runbook's "Adding a confirmed
+shard" insert names `api_family` (a later data-only catalog migration without it fails, and with it
+the deploy that carries it); a test runs that insert shape.
 
 ### D2. T2a `training_load.source_metric_definitions` — stable identity of a source field
 
@@ -1225,6 +1244,35 @@ Decisions that may safely wait, with the PR that takes them:
   widening the representation is then a separate owner decision (not needed by the pilot).
 
 Everything in sections C to G is decided and is not reopened by this list.
+
+**Raised by the internal reviews of M1 (2026-10-12) — open owner decisions, not built:** each would
+widen a decided contract (C41, C46, D6 or D8), so none is implemented without the owner's word:
+
+1. **Freeze a canonical definition's ownership once a mapping names it** (security F2, database L-2).
+   The T3 guard checks system / club ownership when a mapping is created; nothing in v10–v34 stops a
+   later raw `UPDATE` of `metric_definitions.owner_scope / owner_club_id` (no application path does it),
+   which would leave a club mapping pointing at another owner's variable. A guard like v11's
+   `protect_connection_ownership_once_used` would widen the M1 Metrics Core guards beyond C46.
+2. **Re-check the conversion gate at activation** (database M-1, security F5). D6 re-checks the
+   parameter equivalence and the levels at activation, not the `unit_conversions` row; a draft built from
+   a row that is later retired as wrong can still be activated. Re-checking (plain read) would change D6.
+3. **Widen C41 to the bidi and zero-width format characters** (security F6, database L-1) for every
+   free-text column, as the unit token now does; otherwise M3 neutralizes them on display.
+4. **`parameter_scale > 0` (and `scale > 0`)** (database L-5): a negative factor would invert `>` and
+   `<` while the operator stays equal on both sides; it needs a `unit_conversions` row with a negative
+   scale, none exists. D6 says `<> 0`.
+5. **Further T6 checks** (security F4, database L-4): the Metrics Core connection `active`, the binding
+   `active`, the value's event owned by the activation's team, the value's level inside the activation's
+   levels — today the M4 writer's contract, not in D8.
+
+**Carried into later PRs by the M1 reviews:** M2 / M3 map the two `metric_definitions` /
+scope-capability guard refusals (`23514`, no constraint name) to a stable `409` in
+`backend/src/routes/trainingLoadMetrics.js` (`respondToWriteError` maps only `P0001` and `23505`
+today, so from the first active mapping version an archive, a new semantic version or a level removal
+of a pinned variable would answer `500`); M2 maps every native error by constraint name and never
+forwards its DETAIL, and maps `40P01` to `try_again`; M2 pre-locks T2b → T3 → T4 (and the
+`unit_conversions` row it relies on) before a transition; indexes on the M1 foreign keys come with
+the M2 / M3 readers; the M4 writer enforces the T6 items of point 5 until the owner decides them.
 
 ### K2. Review history — points raised by the internal reviews and decided by the owner
 

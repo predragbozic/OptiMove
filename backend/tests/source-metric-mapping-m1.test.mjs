@@ -103,6 +103,47 @@ async function inRolledBackTx(c, fn) {
   try { return await fn(); } finally { await c.query("rollback"); }
 }
 
+// Deterministic interleaving: `first` runs in an open transaction of one
+// client, `second` in another client and must wait for a lock of the first
+// (seen in pg_stat_activity, bounded at 5 s); then the first transaction
+// commits and the second's outcome is returned. A second operation that does
+// not wait (a lock removed) fails the assertion.
+async function waitsForLock(pid, timeoutMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const row = await one(k, `select wait_event_type from pg_stat_activity where pid = $1`, [pid]);
+    if (row?.wait_event_type === "Lock") return true;
+    await new Promise((res) => setTimeout(res, 20));
+  }
+  return false;
+}
+async function interleave(first, second) {
+  const a = new pg.Client({ connectionString: mdb.url });
+  const b = new pg.Client({ connectionString: mdb.url });
+  await a.connect();
+  await b.connect();
+  try {
+    const bPid = (await one(b, `select pg_backend_pid() as pid`)).pid;
+    await a.query("begin");
+    await first(a);
+    let settled = false;
+    const outcome = second(b).then((value) => ({ value }), (error) => ({ error })).finally(() => { settled = true; });
+    assert.equal(await waitsForLock(bPid), true, "the second operation waits for the first one's lock");
+    assert.equal(settled, false);
+    await a.query("commit");
+    return await outcome;
+  } finally {
+    await a.end().catch(() => {});
+    await b.end().catch(() => {});
+  }
+}
+function expectRefusedOutcome(outcome, pattern) {
+  assert.ok(outcome.error, `the waiting operation is refused (${pattern})`);
+  assert.equal(outcome.error.code, "23514", outcome.error.message);
+  assert.match(outcome.error.message, pattern);
+  triggerMessages.add(outcome.error.message);
+}
+
 async function world(c) {
   const user = async (label, { admin = false, roleActive = true, active = true } = {}) => {
     const id = (await one(c, `insert into public.users (email, full_name, display_name, is_active) values ($1,$2,$2,$3) returning id`, [`${label}-${uid()}@test.local`, label, active])).id;
@@ -341,6 +382,8 @@ test("1. migration v34 on v33: the tables, columns, named constraints, indexes, 
   const before33 = await catalog(r);
   const dataBefore = await contentDigest(r, ["training_load.source_host_catalog", "training_load.metric_source_connections", "training_load.source_team_bindings", "training_load.metric_definitions"]);
   const definitionsBefore = (await one(r, `select count(*)::int as n from training_load.metric_definitions`)).n;
+  const notYet = await runRollback(r);
+  assert.match(notYet?.message ?? "", /^v34 rollback refused: v34 is not recorded/, "the rollback refuses a database without v34");
   await applyV34(rdb.url);
   const after34 = await catalog(r);
   assert.ok(after34.migrations.includes(V34_NAME));
@@ -467,7 +510,8 @@ test("3. seed evidence references name an existing document and a real anchor; t
   await k.query(`update training_load.source_metric_definitions set source_label = 'SPEEDmax (GPEXE)' where id = $1`, [row.id]);
   await k.query(`update training_load.source_metric_definitions set source_label = 'SPEEDmax' where id = $1`, [row.id]);
   await refused(() => k.query(`update training_load.source_metric_definitions set source_metric_key = 'athlete_session.max_speed' where id = $1`, [row.id]), { code: "23514", message: /identity of a source metric is immutable/ });
-  await refused(() => k.query(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, seed_migration) values ('gpexe','rest_v1','athlete_session.max_v','Other label',$1)`, [V34_NAME]), { code: "23505", constraint: "source_metric_definitions_identity_key" });
+  const someone = (await one(k, `insert into public.users (email) values ($1) returning id`, [`m1-${uid()}@test.local`])).id;
+  await refused(() => k.query(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1','athlete_session.max_v','Other label',$1)`, [someone]), { code: "23505", constraint: "source_metric_definitions_identity_key" });
   // The evidence reference shape (C40).
   const ok = async (v) => (await one(k, `select training_load.source_metric_evidence_ref_ok($1) as ok`, [v])).ok;
   for (const good of [COMPAT, D5, "docs/a#b", "docs/runbooks/x.v2.md#section_1-a"]) assert.equal(await ok(good), true, good);
@@ -475,19 +519,18 @@ test("3. seed evidence references name an existing document and a real anchor; t
     "https://example.invalid/docs/x.md#a", "docs/x y.md#a", "docs/x.md#a b", "docs/x:y.md#a", "docs/x.md#a\n", `docs/${"a".repeat(300)}.md#a`, "docs/x.md#ä"]) {
     assert.equal(await ok(bad), false, JSON.stringify(bad));
   }
-  await refused(() => ins(k, "unit_conversions", { from_unit: "x", to_unit: "y", scale: "2", scale_divisor: "1", offset: "0", evidence_ref: "https://example.invalid/a#b", seed_migration: V34_NAME }), { code: "23514", constraint: "unit_conversions_evidence_ref_check" });
 });
 
 test("4. bounded single-line text (C41) and unit tokens: trimmed, 1..N characters, no C0 / DEL / C1 control character or line separator; an empty string is never a value; a token has no whitespace, | or =", async () => {
   const text = async (v, n = 500) => (await one(k, `select training_load.source_metric_text_ok($1, $2) as ok`, [v, n])).ok;
   for (const good of ["Pilot activation", "a", "Zone ≥25 W/kg", "x".repeat(500)]) assert.equal(await text(good), true, good);
-  for (const bad of [null, "", " leading", "trailing ", "two\nlines", "tab\there", "cr\rhere", "del\u007f", "c1\u0085", "ls x", "ps x", "x".repeat(501)]) {
+  for (const bad of [null, "", " leading", "trailing ", "two\nlines", "tab\there", "cr\rhere", "del\u007f", "c1\u0085", "ls\u2028x", "ps\u2029x", "x".repeat(501)]) {
     assert.equal(await text(bad), false, JSON.stringify(bad));
   }
   assert.equal(await text("x".repeat(81), 80), false);
   const token = async (v) => (await one(k, `select training_load.source_metric_unit_token_ok($1) as ok`, [v])).ok;
   for (const good of ["s", "m/s", "km/h", "W/kg", "m/s²", "count"]) assert.equal(await token(good), true, good);
-  for (const bad of [null, "", "m s", "m|s", "m=s", "m\ts", "a b", "x".repeat(31)]) assert.equal(await token(bad), false, JSON.stringify(bad));
+  for (const bad of [null, "", "m s", "m|s", "m=s", "m\ts", "a\u2028b", "m\u00a0s", "m\u200bs", "m\u202es", "m\u2066s", "m\ufeffs", "m\u3000s", "x".repeat(31)]) assert.equal(await token(bad), false, JSON.stringify(bad));
   const w = await world(k);
   await refused(() => ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "rest_v1", source_metric_key: `m1.test.${uid()}`, source_label: " padded", created_by_user_id: w.pa }), { code: "23514", constraint: "source_metric_definitions_label_check" });
   await refused(() => ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "rest_v1", source_metric_key: `m1.test.${uid()}`, source_label: "", created_by_user_id: w.pa }), { code: "23514", constraint: "source_metric_definitions_label_check" });
@@ -495,8 +538,15 @@ test("4. bounded single-line text (C41) and unit tokens: trimmed, 1..N character
   await refused(() => ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "rest_v1", source_metric_key: "Not.A.Key", source_label: "x", created_by_user_id: w.pa }), { code: "23514", constraint: "source_metric_definitions_key_format" });
   await refused(() => ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "graphql", source_metric_key: `m1.test.${uid()}`, source_label: "x", created_by_user_id: w.pa }), { code: "23514", constraint: "source_metric_definitions_api_family_check" });
   await refused(() => ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "rest_v1", source_metric_key: `m1.test.${uid()}`, source_label: "x" }), { code: "23514", constraint: "source_metric_definitions_actor_or_seed" });
-  await refused(() => ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "rest_v1", source_metric_key: `m1.test.${uid()}`, source_label: "x", created_by_user_id: w.pa, seed_migration: V34_NAME }), { code: "23514", constraint: "source_metric_definitions_actor_or_seed" });
-  await refused(() => ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "rest_v1", source_metric_key: `m1.test.${uid()}`, source_label: "x", seed_migration: "202610121000_v34.sql" }), { code: "23514", constraint: "source_metric_definitions_seed_migration_format" });
+  // A seed marker after the migration is refused by the trigger (42501, test 18); the CHECKs behind it hold on their own.
+  await refused(() => ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "rest_v1", source_metric_key: `m1.test.${uid()}`, source_label: "x", created_by_user_id: w.pa, seed_migration: V34_NAME }), { code: "42501", message: /seed marker/ });
+  await inRolledBackTx(k, async () => {
+    await k.query(`alter table training_load.source_metric_definitions disable trigger source_metric_definitions_guard`);
+    await k.query("savepoint s");
+    await refused(() => ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "rest_v1", source_metric_key: `m1.test.${uid()}`, source_label: "x", created_by_user_id: w.pa, seed_migration: V34_NAME }), { code: "23514", constraint: "source_metric_definitions_actor_or_seed" });
+    await k.query("rollback to savepoint s");
+    await refused(() => ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "rest_v1", source_metric_key: `m1.test.${uid()}`, source_label: "x", seed_migration: "202610121000_v34.sql" }), { code: "23514", constraint: "source_metric_definitions_seed_migration_format" });
+  });
 });
 
 let W; // the main database's world
@@ -633,6 +683,7 @@ test("8. unit_conversions: normal form, finite factors, divisor > 0, different u
     await refused(() => ins(k, "unit_conversions", row({ scale: "1", scale_divisor: "1", [col]: bad })), { code: "23514", constraint: "unit_conversions_factors_finite" });
   }
   await refused(() => ins(k, "unit_conversions", row({ from_unit: "v" })), { code: "23514", constraint: "unit_conversions_units_differ" });
+  await refused(() => ins(k, "unit_conversions", row({ evidence_ref: "https://example.invalid/a#b" })), { code: "23514", constraint: "unit_conversions_evidence_ref_check" });
   for (const actor of [w.nobody, w.revoked, w.inactive, w.adminA]) await refused(() => ins(k, "unit_conversions", row({ created_by_user_id: actor })), { code: "42501" });
   await refused(() => ins(k, "unit_conversions", row({ created_by_user_id: null })), { code: "23514", constraint: "unit_conversions_actor_or_seed" });
   const c1 = await ins(k, "unit_conversions", row({ from_unit: "rpm", to_unit: "rps", scale: "1", scale_divisor: "60" }));
@@ -817,6 +868,13 @@ test("11. T4 transitions: submitted by a platform admin or the mapping club's ac
   await k.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 and scope_level = 'component'`, [levelMd.id]);
   await submit(k, lv.id, w.pa);
   await refused(() => activateVersion(k, lv.id, w.pa), { code: "23514", message: /drill level is not a scope/ });
+  // A transition writes only its own facts: disabling adds no submission or activation that never happened.
+  const forged = await version(k, w, m, minutes);
+  const disableWith = (id, extra, params) => k.query(`update training_load.source_metric_mapping_versions set status = 'disabled', disabled_by_user_id = $2, disabled_at = now(), disabled_basis = 'platform_admin', disable_reason = 'Never used', ${extra} where id = $1`, [id, w.pa, ...params]);
+  await refused(() => disableWith(forged.id, `submitted_by_user_id = $3, submitted_at = now(), submitted_basis = 'club_admin'`, [w.adminA]), { code: "23514", message: /written by their transition/ });
+  await submit(k, forged.id, w.pa);
+  await refused(() => disableWith(forged.id, `activated_by_user_id = $3, activated_at = now(), activated_basis = 'platform_admin'`, [w.pa]), { code: "23514", message: /written by their transition/ });
+  await disableVersion(k, forged.id, w.pa);
   // Only the status changes; facts are written once; nothing leaves disabled; never deleted.
   await refused(() => k.query(`update training_load.source_metric_mapping_versions set scale_divisor = 61 where id = $1`, [sysDraft.id]), { code: "23514", message: /only the status/ });
   await refused(() => k.query(`update training_load.source_metric_mapping_versions set conversion_note = 'Other' where id = $1`, [sysDraft.id]), { code: "23514", message: /only the status/ });
@@ -892,26 +950,10 @@ test("13. T5: open only, on an active version with its own levels and an active 
   await activation(k, w, sysVersion.id, bindTeamOwned);
   // Two concurrent activations of the same field on one binding: one wins, the other is the unique violation.
   const bindC = await bindTeam(k, w, w.clubA);
-  const a = new pg.Client({ connectionString: mdb.url });
-  const b = new pg.Client({ connectionString: mdb.url });
-  await a.connect();
-  await b.connect();
-  try {
-    await a.query("begin");
-    await b.query("begin");
-    await activation(a, w, sysVersion.id, bindC);
-    const second = activation(b, w, sysVersion.id, bindC).then(() => null, (e) => e);
-    await new Promise((res) => setTimeout(res, 300));
-    await a.query("commit");
-    const err = await second;
-    assert.ok(err, "the second concurrent activation is refused");
-    assert.equal(err.code, "23505");
-    assert.equal(err.constraint, "source_metric_activations_one_open_per_field");
-    await b.query("rollback");
-  } finally {
-    await a.end();
-    await b.end();
-  }
+  const race = await interleave((a) => activation(a, w, sysVersion.id, bindC), (b) => activation(b, w, sysVersion.id, bindC));
+  assert.ok(race.error, "the second concurrent activation is refused");
+  assert.equal(race.error.code, "23505");
+  assert.equal(race.error.constraint, "source_metric_activations_one_open_per_field");
   assert.equal((await one(k, `select count(*)::int as n from training_load.source_metric_mapping_activations where source_team_binding_id = $1 and ended_at is null`, [bindC.bindingId])).n, 1);
   FP.bindA = bindA;
   FP.actA = sysOnA;
@@ -965,39 +1007,21 @@ test("14. T6: a fact is accepted only through an open activation, with the value
   await refused(() => k.query(`delete from training_load.metric_value_source_provenance where metric_value_id = $1`, [p.metric_value_id]), { code: "23514", message: /append-only; DELETE refused/ });
   await refused(() => k.query(`truncate training_load.metric_value_source_provenance`), { code: "23514", message: /TRUNCATE refused/ });
   // C49: never through an ended activation, and never interleaved with the ending (both orders).
-  const a = new pg.Client({ connectionString: mdb.url });
-  const b = new pg.Client({ connectionString: mdb.url });
-  await a.connect();
-  await b.connect();
-  try {
-    // (1) the fact first: the ending waits for it, then lands.
-    const v1 = await valueRow(k, w, { teamId: bindA.teamId, mscId: msc, md: kmMd, value: "0.002" });
-    await a.query("begin");
-    await ins(a, "metric_value_source_provenance", provenanceRow(v1.valueId, kmAct, kmVer, { mscId: msc, sourceValue: "2" }));
-    let ended = false;
-    const ending = endActivation(b, kmAct.id, w.pa).then(() => { ended = true; });
-    await new Promise((res) => setTimeout(res, 300));
-    assert.equal(ended, false, "the ending waits for the fact being written");
-    await a.query("commit");
-    await ending;
-    assert.equal((await one(k, `select count(*)::int as n from training_load.metric_value_source_provenance where metric_value_id = $1`, [v1.valueId])).n, 1);
-    // (2) the ending first: the fact waits, then is refused.
-    const act2 = await activation(k, w, kmVer.id, bindA);
-    const v2 = await valueRow(k, w, { teamId: bindA.teamId, mscId: msc, md: kmMd, value: "0.003" });
-    await b.query("begin");
-    await endActivation(b, act2.id, w.pa);
-    const fact = ins(a, "metric_value_source_provenance", provenanceRow(v2.valueId, act2, kmVer, { mscId: msc, sourceValue: "3" })).then(() => null, (e) => e);
-    await new Promise((res) => setTimeout(res, 300));
-    await b.query("commit");
-    const err = await fact;
-    assert.ok(err, "a fact after the ending is refused");
-    assert.equal(err.code, "23514");
-    assert.match(err.message, /ended activation/);
-    triggerMessages.add(err.message);
-  } finally {
-    await a.end();
-    await b.end();
-  }
+  // (1) the fact first: the ending waits for it (the activation is held FOR SHARE), then lands.
+  const v1 = await valueRow(k, w, { teamId: bindA.teamId, mscId: msc, md: kmMd, value: "0.002" });
+  const ending = await interleave(
+    (a) => ins(a, "metric_value_source_provenance", provenanceRow(v1.valueId, kmAct, kmVer, { mscId: msc, sourceValue: "2" })),
+    (b) => endActivation(b, kmAct.id, w.pa),
+  );
+  assert.ok(!ending.error, String(ending.error?.message));
+  assert.equal((await one(k, `select count(*)::int as n from training_load.metric_value_source_provenance where metric_value_id = $1`, [v1.valueId])).n, 1);
+  // (2) the ending first: the fact waits, then is refused.
+  const act2 = await activation(k, w, kmVer.id, bindA);
+  const v2 = await valueRow(k, w, { teamId: bindA.teamId, mscId: msc, md: kmMd, value: "0.003" });
+  expectRefusedOutcome(await interleave(
+    (a) => endActivation(a, act2.id, w.pa),
+    (b) => ins(b, "metric_value_source_provenance", provenanceRow(v2.valueId, act2, kmVer, { mscId: msc, sourceValue: "3" })),
+  ), /ended activation/);
   const late = await one(k, `select count(*)::int as n from training_load.metric_value_source_provenance p join training_load.source_metric_mapping_activations s on s.id = p.activation_id where s.ended_at is not null and p.recorded_at > s.ended_at`);
   assert.equal(late.n, 0, "no fact was recorded after its activation ended");
   FP.msc = msc;
@@ -1051,8 +1075,16 @@ test("16. T8: one shape per action - its target columns, its from / to status, i
   for (const [action, tg, from, to, need] of shapes) {
     const full = { ...(need.reason ? { reason: "Explained by the administrator" } : {}), ...(need.evidence ? { evidence_ref: COMPAT } : {}) };
     await audit(action, tg, from, to, full);
-    if (need.club) await audit(action, tg, from, to, { ...full, performed_by_user_id: w.adminA, basis: "club_admin" });
-    else await refused(() => audit(action, tg, from, to, { ...full, performed_by_user_id: w.adminA, basis: "club_admin" }), shapeErr);
+    // The club-admin basis: only for a club mapping (C45) and only where the action allows it.
+    const asClub = { ...full, performed_by_user_id: w.adminA, basis: "club_admin" };
+    const clubTg = { ...tg, ...(tg.mapping_id ? { mapping_id: FP.mc.id } : {}), ...(tg.mapping_id && tg.mapping_version_id ? { mapping_version_id: FP.clubVersion.id } : {}) };
+    const notClubMapping = { code: "23514", message: /club-admin row names a club mapping/ };
+    if (need.club) {
+      await audit(action, clubTg, from, to, asClub);
+      await refused(() => audit(action, tg, from, to, asClub), notClubMapping);
+    } else {
+      await refused(() => audit(action, clubTg, from, to, asClub), tg.mapping_id ? shapeErr : notClubMapping);
+    }
     if (need.reason) await refused(() => audit(action, tg, from, to, { ...full, reason: null }), shapeErr);
     if (need.evidence) await refused(() => audit(action, tg, from, to, { ...full, evidence_ref: null }), shapeErr);
     // Without its first target (the activation's own consistency trigger answers first for an activation row).
@@ -1110,7 +1142,127 @@ test("17. the disposable undo removes a value's provenance first, in the same tr
   await refused(() => k.query(`delete from training_load.metric_value_source_provenance`), { code: "23514", message: /append-only/ });
 });
 
-test("18. every trigger refusal seen in this file is a fixed message of the migration: no id, no value, no source answer", () => {
+test("18. a seed marker is accepted only inside the seeding migration (42501 afterwards, on T2a, T2b and unit_conversions); a new catalog host row needs its API family, exactly as the v27 runbook now says", async () => {
+  const w = W;
+  const seedWindow = { code: "42501", message: /seed marker is accepted only from the seeding migration/ };
+  for (const marker of [V34_NAME, "migrations_v2/209912312359_training_load_future_seed.sql"]) {
+    await refused(() => ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "rest_v1", source_metric_key: `m1.test.seed${uid()}`, source_label: "Seeded later", seed_migration: marker }), seedWindow);
+    await refused(() => ins(k, "unit_conversions", { from_unit: `u${uid()}`, to_unit: "v", scale: "2", scale_divisor: "1", offset: "0", evidence_ref: D5, seed_migration: marker }), seedWindow);
+  }
+  const def = await ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "rest_v1", source_metric_key: `m1.test.seedrev${uid()}`, source_label: "Seed rev", created_by_user_id: w.pa });
+  for (const state of ["active", "draft"]) {
+    await refused(() => ins(k, "source_metric_definition_versions", {
+      source_metric_definition_id: def.id, revision_number: 1, value_shape: "number", parameter_kind: "none", supports_session: true, supports_drill: true,
+      evidence_status: "observed", evidence_ref: COMPAT, state, activated_at: state === "active" ? new Date() : null, seed_migration: V34_NAME,
+    }), seedWindow);
+  }
+  // The catalog: the v27 runbook's insert shape with api_family works; without it the database refuses.
+  const runbook = fs.readFileSync(path.resolve(ROOT, "docs/runbooks/source-connections-v27.md"), "utf8");
+  const step3 = /3\. One data-only migration: `insert into training_load\.source_host_catalog \(([^)]*)\)/.exec(runbook.replace(/\r?\n\s*/g, " "));
+  assert.ok(step3, "the runbook's step 3 names its insert");
+  assert.deepEqual(step3[1].split(",").map((x) => x.trim()), ["source_system", "host_key", "label", "note", "api_family"]);
+  await k.query(`insert into training_load.source_host_catalog (source_system, host_key, label, note, api_family) values ('gpexe', 'e97', 'GPEXE e97 (test only)', 'test-only row', 'api')`);
+  await refused(() => k.query(`insert into training_load.source_host_catalog (source_system, host_key, label, note) values ('gpexe', 'e96', 'GPEXE e96 (test only)', 'test-only row')`), { code: "23502" });
+  await refused(() => k.query(`update training_load.source_host_catalog set api_family = 'rest_v1' where host_key = 'e97'`), { code: "23514", message: /API family of a host key is immutable/ });
+});
+
+test("19. the existing Metrics Core catalog writers work beside the v34 guards: a new semantic version, an archive and a level removal succeed with no active mapping version and are refused (23514, nothing changed) while one pins the definition", async () => {
+  const w = W;
+  const originalUrl = process.env.DATABASE_URL;
+  process.env.DATABASE_URL = mdb.url;
+  let pool;
+  try {
+    const catalog = await import("../src/trainingLoadMetricsCatalog.js");
+    ({ pool } = await import("../src/db.js"));
+    assert.equal((await pool.query("select current_database() as db")).rows[0].db, mdb.name, "SAFETY: the catalog module talks to the disposable database");
+    const req = { user: { id: w.pa }, authz: { platformRoles: ["platform_admin"], clubRoles: [], teamRoles: [], managedTeamIds: [] } };
+    // (a) Nothing pins these definitions.
+    const free1 = await canonical(k, { unit: "min" });
+    const v = await catalog.createDefinitionVersion(req, free1.id, { valueType: "numeric", unit: "min", reason: "New semantics" });
+    assert.ok(v.row?.id, JSON.stringify(v));
+    assert.equal((await one(k, `select current_version_id from training_load.metric_definitions where id = $1`, [free1.id])).current_version_id, v.row.id);
+    const free2 = await canonical(k, { unit: "min" });
+    assert.equal((await catalog.setDefinitionScopeCapabilities(req, free2.id, ["session"])).row.scope_capabilities.join(","), "session");
+    assert.equal((await catalog.archiveDefinition(req, free2.id)).row.state, "archived");
+    // (b) An active mapping version pins the current version and applies to both levels.
+    const g = await field(k, w, { unit: "s" });
+    const pinned = await canonical(k, { unit: "min" });
+    await activeVersion(k, w, await mapping(k, w, g, pinned), FP.minutes);
+    const before = await one(k, `select current_version_id, state from training_load.metric_definitions where id = $1`, [pinned.id]);
+    for (const write of [
+      () => catalog.createDefinitionVersion(req, pinned.id, { valueType: "numeric", unit: "min" }),
+      () => catalog.archiveDefinition(req, pinned.id),
+      () => catalog.setDefinitionScopeCapabilities(req, pinned.id, ["session"]),
+    ]) {
+      const err = await write().then(() => null, (e) => e);
+      assert.ok(err, "the catalog write is refused");
+      assert.equal(err.code, "23514", err.message);
+      triggerMessages.add(err.message);
+    }
+    assert.deepEqual(await one(k, `select current_version_id, state from training_load.metric_definitions where id = $1`, [pinned.id]), before, "nothing changed");
+    assert.equal((await one(k, `select count(*)::int as n from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [pinned.id])).n, 2);
+  } finally {
+    await pool?.end().catch(() => {});
+    process.env.DATABASE_URL = originalUrl;
+  }
+});
+
+test("20. the serialization the lock order promises, both orders, with the second operation proven to wait: T5 insert vs version disable, version activation vs canonical repoint and vs a level removal, revision retirement vs version submission, field retirement vs revision insert", async () => {
+  const w = W;
+  const { minutes } = FP;
+  const draftOf = async () => {
+    const f = await field(k, w, { unit: "s" });
+    const md = await canonical(k, { unit: "min" });
+    return { f, md, v: await version(k, w, await mapping(k, w, f, md), minutes) };
+  };
+  // T5 insert vs disable.
+  const t1 = await draftOf();
+  await submit(k, t1.v.id, w.pa);
+  await activateVersion(k, t1.v.id, w.pa);
+  const bind1 = await bindTeam(k, w, w.clubA);
+  expectRefusedOutcome(await interleave((a) => activation(a, w, t1.v.id, bind1), (b) => disableVersion(b, t1.v.id, w.pa)), /open activation/);
+  const t2 = await draftOf();
+  await submit(k, t2.v.id, w.pa);
+  await activateVersion(k, t2.v.id, w.pa);
+  const bind2 = await bindTeam(k, w, w.clubA);
+  const row2 = await activationRow(k, w, t2.v.id, bind2);
+  expectRefusedOutcome(await interleave((a) => disableVersion(a, t2.v.id, w.pa), (b) => ins(b, "source_metric_mapping_activations", row2)), /only an active mapping version/);
+  // Activation vs canonical repoint.
+  const newVersion = async (md) => (await one(k, `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type) values ($1, 2, 'min', 'numeric') returning id`, [md.id])).id;
+  const repoint = (c, md, vid) => c.query(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [vid, md.id]);
+  const t3 = await draftOf();
+  await submit(k, t3.v.id, w.pa);
+  const v3 = await newVersion(t3.md);
+  expectRefusedOutcome(await interleave((a) => activateVersion(a, t3.v.id, w.pa), (b) => repoint(b, t3.md, v3)), /pins the current version/);
+  const t4 = await draftOf();
+  await submit(k, t4.v.id, w.pa);
+  const v4 = await newVersion(t4.md);
+  expectRefusedOutcome(await interleave((a) => repoint(a, t4.md, v4), (b) => activateVersion(b, t4.v.id, w.pa)), /pinned version current/);
+  // Activation vs a level removal.
+  const dropDrill = (c, md) => c.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 and scope_level = 'component'`, [md.id]);
+  const t5 = await draftOf();
+  await submit(k, t5.v.id, w.pa);
+  expectRefusedOutcome(await interleave((a) => activateVersion(a, t5.v.id, w.pa), (b) => dropDrill(b, t5.md)), /applies to this level/);
+  const t6 = await draftOf();
+  await submit(k, t6.v.id, w.pa);
+  expectRefusedOutcome(await interleave((a) => dropDrill(a, t6.md), (b) => activateVersion(b, t6.v.id, w.pa)), /drill level is not a scope/);
+  // Revision retirement vs version submission.
+  const retireRev = (c, revId) => c.query(`update training_load.source_metric_definition_versions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'Corrected' where id = $1`, [revId, w.pa]);
+  const t7 = await draftOf();
+  expectRefusedOutcome(await interleave((a) => submit(a, t7.v.id, w.pa), (b) => retireRev(b, t7.f.revId)), /submitted or active mapping version/);
+  const t8 = await draftOf();
+  expectRefusedOutcome(await interleave((a) => retireRev(a, t8.f.revId), (b) => submit(b, t8.v.id, w.pa)), /source revision is retired/);
+  // Field retirement vs revision insert.
+  const bareField = async () => ins(k, "source_metric_definitions", { source_system: "gpexe", api_family: "rest_v1", source_metric_key: `m1.test.bare${uid()}`, source_label: "Bare field", created_by_user_id: w.pa });
+  const revRow = (defId) => ({ source_metric_definition_id: defId, revision_number: 1, value_shape: "number", parameter_kind: "none", supports_session: true, supports_drill: true, evidence_status: "unproven", created_by_user_id: w.pa });
+  const retireDef = (c, defId) => c.query(`update training_load.source_metric_definitions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'No longer offered' where id = $1`, [defId, w.pa]);
+  const d1 = await bareField();
+  expectRefusedOutcome(await interleave((a) => ins(a, "source_metric_definition_versions", revRow(d1.id)), (b) => retireDef(b, d1.id)), /draft or active revision/);
+  const d2 = await bareField();
+  expectRefusedOutcome(await interleave((a) => retireDef(a, d2.id), (b) => ins(b, "source_metric_definition_versions", revRow(d2.id))), /only for an active source metric/);
+});
+
+test("21. every trigger refusal seen in this file is a fixed message of the migration: no id, no value, no source answer", () => {
   const sql = fs.readFileSync(MIGRATION_PATH, "utf8");
   const templates = [...sql.matchAll(/raise exception '((?:[^']|'')*)'/g)].map((x) => x[1].replace(/''/g, "'"));
   assert.ok(templates.length > 40, `the migration's messages are read (${templates.length})`);

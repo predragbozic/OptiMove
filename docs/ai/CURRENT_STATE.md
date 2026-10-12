@@ -1628,10 +1628,15 @@ Technical details.
   value's provenance first (C47). Tests: `backend/tests/source-metric-mapping-m1.test.mjs` (disposable,
   T1 runner) with mutation evidence. **No route, service, frontend, importer, mapper, preview or writer
   change; the GPEXE importer still creates its team-owned `gpexe_*` definitions until M4 (temporary
-  compatibility, C46); no GPEXE unit or meaning is confirmed.** Before it is deployed: the owner's
-  external review, and the PostgreSQL version of the deployed database confirmed as 13 or later
-  (`scale()`, `trim_scale()`; the local disposable server is 17.5; the deployed one was not queried —
-  it accepted v10's `unique nulls not distinct`, which needs 15, an indirect sign only).
+  compatibility, C46); no GPEXE unit or meaning is confirmed.** The internal reviews (database,
+  security, code) found no BLOCKER or HIGH; their corrections are in the same pull request, and five
+  owner decisions they raised are listed in the discovery document, section K. Before it is deployed:
+  the owner's external review and those decisions; the PostgreSQL version of the deployed database
+  confirmed as 13 or later (`scale()`, `trim_scale()`; the local disposable server is 17.5; the
+  deployed one was not queried — it accepted v10's `unique nulls not distinct`, which needs 15, an
+  indirect sign only); the deployed `source_host_catalog` holding only `gpexe` / `e03` and `gpexe` /
+  `server3` (the backfill refuses any other row); a quiet deploy window (v34 takes short exclusive
+  locks on `source_host_catalog`, `source_team_bindings` and `metric_source_connections`).
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that

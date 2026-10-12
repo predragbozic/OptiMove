@@ -11,6 +11,7 @@
 --
 -- It removes the M1 objects and the v34 record, and only while M1 holds
 -- nothing but its own seed. It refuses, changing nothing, when
+--   * v34 is not recorded on the database;
 --   * any mapping (T3), mapping version (T4), activation (T5), provenance
 --     row (T6) or audit row (T8) exists - those are business history;
 --   * the source metric definitions (T2a), their revisions (T2b) or the
@@ -24,8 +25,20 @@
 --
 -- One transaction: everything or nothing. Waits are bounded: a stalled
 -- transaction that holds one of the tables makes this script fail after 5 s.
+-- Run it as one script that stops at the first error
+-- (psql -v ON_ERROR_STOP=1 -f ...): after a refusal the open transaction is
+-- aborted and nothing is changed.
 begin;
 set local lock_timeout = '5s';
+
+do $$
+begin
+  if not exists (select 1 from public.schema_migrations
+                  where migration_name = 'migrations_v2/202610121000_training_load_v34_source_metric_mapping.sql') then
+    raise exception 'v34 rollback refused: v34 is not recorded on this database';
+  end if;
+end $$;
+
 lock table training_load.source_metric_audit, training_load.metric_value_source_provenance,
   training_load.source_metric_mapping_activations, training_load.source_metric_mapping_versions,
   training_load.source_metric_mappings, training_load.source_metric_definition_versions,
@@ -133,7 +146,7 @@ begin
 
   select string_agg(migration_name, ', ' order by migration_name) into newer
     from public.schema_migrations
-   where migration_name like 'migrations_v2/%' and migration_name > v34;
+   where migration_name like 'migrations_v2/%' and migration_name collate "C" > v34 collate "C";
   if newer is not null then
     reasons := reasons || format('later migrations are applied: %s', newer);
   end if;
@@ -185,6 +198,7 @@ drop function training_load.source_metric_definitions_guard();
 drop function training_load.source_host_catalog_api_family_immutable();
 drop function training_load.source_metric_append_only();
 drop function training_load.source_metric_no_truncate();
+drop function training_load.source_metric_require_seed_window(text);
 drop function training_load.source_metric_require_club_admin(uuid, uuid);
 drop function training_load.source_metric_require_platform_admin(uuid);
 drop function training_load.source_metric_value_matches(numeric, numeric, numeric, numeric, numeric);
