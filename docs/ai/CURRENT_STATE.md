@@ -1,7 +1,8 @@
 # Current state
 
-Last reviewed: 2026-10-11. Last `origin/main` commit checked: `884945c` (merge of PR #153,
-`fix/gpexe-pre-import-safety` → `main`; PR #152 `c3d31d4` before it).
+Last reviewed: 2026-10-12. Last `origin/main` commit checked: `0098638` (merge of PR #157, Coach
+Home empty and error states, frontend only; `95f2fd1`, PR #155 `af11338` and PR #154 `241765e`
+before it).
 
 ## Active phase
 
@@ -1508,7 +1509,8 @@ Technical details.
   already carries it, no new check is needed), though the screen cannot tell `confirmed` from `not_required`
   (a *Ready to import* row means either). **No Link, Approve or Import was run; the switch stays off.**
 - **Frontend support for v33** (owner order 2026-10-11; branch `fix/gpexe-imports-v33-frontend` from
-  `884945c`; frontend and docs only, no backend or contract change; not merged): a candidate the last
+  `884945c`; frontend and docs only, no backend or contract change; merged and deployed as PR #154, see
+  below): a candidate the last
   successful search did not confirm (`approvalBlockers` `not_confirmed_for_import` - the server's one word,
   the same for a coach and an administrator) is never *Ready to import* and never "up to date": it is a
   *Needs attention* row with the badge *Not confirmed for import*, no checkbox and no *Approve import*; the
@@ -1540,6 +1542,66 @@ Technical details.
   Tests:
   `frontend/tests/gpexe-imports-v33.actions.test.mjs`. No production check, GPEXE request, Render change or
   switch change.
+- **PR #154 is merged and deployed** — the frontend half of switch condition 6.
+  - Merge commit `241765e` (head `2ff4b3b`, which also merged `origin/main` `46c4f82`, the Home / workspace
+    navigation) on 2026-10-11 at 15:15 UTC, on the owner's order.
+  - `/api/health` first served `241765e` with `ok: true` at 16:19:43 UTC (the deploy took longer than the
+    earlier ones), then three times in a row after it; the served bundle carries the v33 texts (*Not
+    confirmed for import*, *No longer found*); without a login nine protected GPEXE and source-connection
+    routes answered 401. No migration; the switch untouched.
+- **The owner's check after PR #154 (2026-10-11, run once on the owner's order, First team,
+  05.10.2026 - 06.10.2026; sanitized, as reported by the owner):** it **succeeded** — sessions 3, new 0,
+  changed 0, unchanged 3; every athlete recorded in those three sessions is linked; the Imports screen
+  shows *Ready to import* 2 and *Needs attention* 1 (more than one track for one athlete — a GPEXE data
+  matter, not a link problem); no row carries `not_confirmed_for_import`. `GPEXE_IMPORT_APPLY_ENABLED`
+  stays off; nothing was approved or imported.
+- **T1 — the test-infrastructure foundation — is merged and deployed as PR #155** (owner order
+  2026-10-11; branch `feature/test-infrastructure-t1`; discovery `docs/ai/test-infrastructure-discovery.md`):
+  `scripts/test-runner.mjs` runs every test file in its own process with a time limit and a clear verdict
+  (kinds `unit`, `disposable`, `shared`, `schema-clone`; presets `backend-fast`, `frontend-fast`, `gpexe`,
+  `pr`; `--file` / `--filter` / `--list`), refuses fail-closed any database that is not a disposable
+  `optimove_tests_*` one on a loopback-only server (Unix socket, `127/8`, `::1`, an IPv4-mapped loopback),
+  audits leftover databases, and keeps known failures by whole fingerprint (file, title, failure type,
+  message pattern) in `backend/tests/support/test-manifest.json` — a secret-scan test can never be a known
+  failure; two shared support patterns (`backend/tests/support/disposable-db.mjs`,
+  `frontend/tests/support/fetch-mock.mjs`, `dom.mjs`); npm commands `test:runner`, `test:list`,
+  `test:backend:fast`, `test:backend:db`, `test:backend:shared`, `test:frontend:fast`, `test:gpexe`,
+  `test:pr`. No production behaviour change (no route, no migration). T2 (GitHub Actions, the
+  legacy-schema bootstrap, a server sentinel) and T3 (Playwright) are recorded there, not started.
+  - The owner's external review of `0a9d10f` was NOT READY (known failures identified by file and title
+    only; the secret-scan test listed as a known failure; private address ranges accepted); fixed in
+    `a61f399`, reviewed READY. Merge commit `af11338` (parents `241765e` and `a61f399`) on 2026-10-11 at
+    19:49:17 UTC, merged exactly from that head (`--match-head-commit`).
+  - `/api/health` served `af11338` with `ok: true` three times in a row (19:50:15, 19:50:25 and 19:50:35
+    UTC); read-only smoke without a login: `GET /api/auth/me` answered 200 with no user and the GPEXE team
+    status (zero UUID) answered 401. No test was run against production; no Check, Link, Approve or Import;
+    Render, credentials and the switch untouched; the eight leftover `optimove_tests_gpexe_f3c2g_*`
+    databases on the development workstation were left in place, as ordered.
+- **GPEXE metric / variable mapping discovery (2026-10-11, accepted; M1 not started).** The authoritative
+  document is `docs/ai/gpexe-metric-variable-mapping-discovery.md` (rule:
+  `.claude/rules/metrics-core-mapping.md`; ADR-007 records only the three decisions the code already
+  proves — Metrics Core as the canonical registry, no automatic merge of several sources, no
+  reinterpretation of a historical fact — while the mapping design stays accepted future design in the
+  document). Its findings, verified against
+  `af11338`: **Metrics Core (`training_load.metric_definitions`, `metric_definition_versions`, scope
+  capabilities, domains, categories, structure links, occasions, values, provenance) is the existing
+  canonical registry of OptiMove variables** — creatable and versionable through
+  `backend/src/routes/trainingLoadMetrics.js`, read by the dashboards and the Activities drawer, with no
+  write UI yet; what is missing is a source metric catalog, an explicit versioned source-to-canonical
+  mapping, an activation per team binding and a fact-provenance layer. Today the mapping is the hard-coded
+  `GPEXE_METRIC_SPECS` and the importer creates team-owned `gpexe_*` definitions under the GPEXE name; no
+  such definition and no imported GPEXE fact exists on any persistent database (inferred: the switch has
+  been off everywhere and no approval was ever run; no SQL post-check). **The owner accepted
+  direction B and the final contract** (sections C and D of the document): Metrics Core stays the only
+  registry, no parallel registry; a source never creates a canonical definition; several sources may fill
+  one canonical variable without merging; source metric identity plus revisioned proven contracts (model
+  A), mapping identity plus immutable versions, activation per team binding and exact version, a
+  separate append-only fact-provenance table, a write-once source-instance identity on the Metrics Core
+  connection, `unit_conversions` as the database-checkable gate, required / optional per activation,
+  every unit / shape / threshold mismatch and a missing required value blocking the whole candidate,
+  multiple tracks fail-closed until M5. The server3 units of time, distance and max speed and the meaning
+  of burst / brake stay unproven; the seed records them as `observed` with no unit. **Nothing of it is
+  implemented**: M1 (schema) starts only on a separate owner order; M2–M6 follow it.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2005,6 +2067,28 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #157 (merge commit `0098638`, merged 2026-10-12 11:52:30 UTC exactly from head `ce571d3`; Coach
+  Home empty and error states, frontend only) is deployed: `/api/health` first served `0098638` with
+  `ok: true` at 12:25:26 UTC, then three times in a row (12:25:47, 12:25:58 and 12:26:09 UTC); the
+  served `/assets/app-CM0hIOhv.js` carries the new empty / error states and `coach-home-retry`, and
+  `/assets/app-_Sry8COF.css` the new Coach Home rules; without a login `GET /api/auth/me` answered
+  200 with `{"user":null}` and `GET /api/athletes/today` answered 401. No sign-in, production write,
+  Render change, GPEXE action or migration.
+- `95f2fd1` (on `main` before PR #157, 2026-10-12; a merge of `af11338` into the branch
+  `codex/home-workspace-navigation`, no pull request found for it) brought commit `72567b7`
+  (athlete lists sorted alphabetically, visible roster filters; frontend and its tests only). It
+  widened the code slice of the `builder-create-form-fixes.test.mjs` test "handleContentInput
+  mirrors every keystroke…" from 700 to 1000 characters; that test, a known baseline failure since
+  2026-10-11, passes on `0098638` (T1 runner, 2026-10-12), so its entry is removed from "Known
+  baseline/environment test issues" and from `frontend/tests/support/test-manifest.json`.
+- PR #155 (`af11338`, merged 2026-10-11 19:49:17 UTC exactly from head `a61f399`) is deployed:
+  `/api/health` served `af11338` with `ok: true` three times in a row (19:50:15–19:50:35 UTC); without a
+  login `GET /api/auth/me` answered 200 with no user and the GPEXE team status (zero UUID) answered 401.
+  Test infrastructure only: no migration, no route change. No check or GPEXE request at the merge.
+- PR #154 (`241765e`, merged 2026-10-11 15:15 UTC from head `2ff4b3b`) is deployed: `/api/health` first
+  served `241765e` with `ok: true` at 16:19:43 UTC, then three times in a row; the served bundle carries the
+  v33 texts; without a login nine protected GPEXE and source-connection routes answered 401. No migration.
+  The owner's check followed on a separate order (succeeded, 3 unchanged; see the active phase).
 - PR #148 (`33d4f45`, merged 2026-10-09 07:55:17 UTC exactly from head `f34291d`) is deployed:
   `/api/health` served `33d4f45` with `ok: true` three times in a row (07:56:30–07:56:51 UTC); without a
   login nine protected routes answered 401. No migration. The owner's first whole-list check followed on a
@@ -2182,9 +2266,6 @@ pre-existing; pass/fail counts don't belong in this file
 - `frontend/tests/organization-panel-cache.test.mjs` — test "6. signOut clears the entire view
   cache before/alongside its hard reload" fails; reproduced identically on a clean detached
   `origin/main` worktree (`6382d25`) on 2026-10-05. Not fixed.
-- `frontend/tests/builder-create-form-fixes.test.mjs` — test "8. handleContentInput mirrors every
-  keystroke in the create form's name input into state…" fails; reproduced identically on a clean
-  detached `origin/main` worktree (`884945c`) on 2026-10-11 during the v33 frontend work. Not fixed.
 - `backend/tests/training-load-metrics-builder-edit-draft.test.mjs` — refuses to start
   unless `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL` is set (deliberate guard, no database
   operation attempted), so a plain full backend run reports it as failed; same on
@@ -2315,8 +2396,9 @@ pre-existing; pass/fail counts don't belong in this file
      would import a drill's values a second time. Not built in option (c); a separate PR with its own
      tests. **Built in the pre-import safety package (PR #153, v33; merged and deployed 2026-10-11); the
      check of 05.10 - 06.10.2026 ran through it once on production and withdrew nothing (0 changed, 3
-     unchanged), so the withdrawal itself has not been seen on production; the frontend half is the branch
-     `fix/gpexe-imports-v33-frontend`, which must be merged before the switch is turned on.**
+     unchanged), so the withdrawal itself has not been seen on production; the frontend half is merged and
+     deployed as PR #154 (`241765e`, 2026-10-11), and the owner's check after it succeeded with 3 unchanged
+     sessions and no `not_confirmed_for_import` row.**
   7. **Mandatory before the import switch is turned on in any environment** (owner, 2026-10-10, at the merge
      of PR #152): a fail-closed guard against a `?drill=<index>` parameter that does not distinguish the
      drills, without relying on a drill answer's `drills_count`. **Built in the same package (the
@@ -2487,17 +2569,18 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151) and the fix that ignores a drill answer's drills_count (PR #152) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
-1. The owner's external review of the frontend support for v33, branch `fix/gpexe-imports-v33-frontend`
-   (it must be merged before the switch is ever turned on).
-2. On the owner's order: linking the athletes (owner-run).
-3. Then the discovery and mapping of the variables.
-4. The owner states the state of the production-use gate and of the two gates before a link (an identity
-   load and one link were run after PR #146; whether those gates were confirmed is not recorded here).
-5. The separate resend timing task (see Separate tasks), when the owner schedules it.
-6. PR B, the F3c4 cut-over (see the active step).
-7. The second owner-run procedure for one controlled real import.
-8. **Phase 5a3c** (Complete and Needs review).
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154) and the T1 test infrastructure (PR #155) are merged and deployed; PR #142 is closed as superseded; the GPEXE metric / variable mapping discovery is accepted (`docs/ai/gpexe-metric-variable-mapping-discovery.md`). Next steps, in order:
+1. On the owner's explicit order only: **M1, the schema foundation of the mapping contract**
+   (`docs/ai/gpexe-metric-variable-mapping-discovery.md` section J), then M2–M4; the import switch stays
+   off throughout, and M6 (unit confirmation, pilot mapping, a controlled first import) comes after them.
+2. The owner states the state of the production-use gate and of the two gates before a link (an identity
+   load and one link were run after PR #146; the owner's check after PR #154 reports every athlete of the
+   three sessions of 05.10–06.10.2026 linked; when the remaining links were made and whether those gates
+   were confirmed is not recorded here — the gates stay open until the owner states it).
+3. The separate resend timing task (see Separate tasks), when the owner schedules it.
+4. PR B, the F3c4 cut-over (see the active step).
+5. The second owner-run procedure for one controlled real import (after M6).
+6. **Phase 5a3c** (Complete and Needs review).
 
 Conditions 1–3, 6 and 7 under Separate tasks come before the first real local import (and before the
 switch is turned on in any environment), and conditions 4–5 before regular production imports.

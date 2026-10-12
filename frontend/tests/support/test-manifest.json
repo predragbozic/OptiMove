@@ -9,14 +9,6 @@
   },
   "knownFailures": [
     {
-      "file": "builder-create-form-fixes.test.mjs",
-      "test": "handleContentInput mirrors every keystroke in the create form's name input into state.builder.createName, no network call",
-      "failureType": "testCodeFailure",
-      "messagePattern": "^The input did not match the regular expression \\/state\\\\\\.builder\\\\\\.createName = createNameInput\\\\\\.value;\\/",
-      "since": "2026-10-11",
-      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
-    },
-    {
       "file": "builder-mobile-section-workflow.test.mjs",
       "test": "16c. regression guard: the reorder arrows stay vertical (up/down) at every width - the stale mobile override that rotated them to left/right (a leftover from the old horizontal-scroll Added-list design, long since replaced by a vertical list) must not come back",
       "failureType": "testCodeFailure",
