@@ -9661,7 +9661,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .coach-home-today svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
 .coach-home-today:hover { background: var(--accent-soft); }
 .coach-home-state { display: grid; gap: 10px; justify-items: start; padding: 20px; border: 1px dashed var(--line-strong); border-radius: var(--radius); background: var(--surface); }
-.coach-home-state p { margin: 0; }
+.coach-home-state p { margin: 0; overflow-wrap: anywhere; }
+.coach-home-state .muted { font-size: 14px; }
 .coach-home-state-title { font-size: 16px; font-weight: 700; }
 .coach-home-state .coach-home-state-button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; }
 .coach-home-workspaces { display: grid; gap: 0; margin: 20px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
@@ -9681,7 +9682,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .coach-home-picker { box-sizing: border-box; width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 20px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface); }
 .coach-home-picker[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 16px; overflow: hidden; }
 .coach-home-picker::backdrop { background: rgb(16 24 32 / 40%); }
-.coach-home-picker input { width: 100%; box-sizing: border-box; min-height: 44px; }
+.coach-home-picker input { width: 100%; box-sizing: border-box; min-height: 44px; font-size: 16px; }
 .coach-home-picker > header .icon-button { min-width: 44px; min-height: 44px; padding: 0; }
 .coach-home-picker-list { overflow-y: auto; max-height: min(60dvh, 520px); min-height: 0; }
 .coach-home-athlete-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 68px; border: 0; border-bottom: 1px solid var(--line); padding: 10px 4px; background: transparent; color: var(--text); text-align: left; }

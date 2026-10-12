@@ -77,9 +77,11 @@ function renderEmptyStateHtml() {
 // (coach-home-retry re-runs loadCoachHome with forceRefresh - app.js). Never
 // the workflows: their "0 / 0" would read as a real, empty roster.
 function renderErrorStateHtml(error) {
-  return `<div class="coach-home-state coach-home-state-error" role="alert">
-        <p class="coach-home-state-title">Today's overview could not be loaded.</p>
-        <p class="builder-error">${escapeHtml(error)}</p>
+  return `<div class="coach-home-state coach-home-state-error">
+        <div role="alert">
+          <p class="coach-home-state-title">Today's overview could not be loaded.</p>
+          <p class="builder-error">${escapeHtml(error)}</p>
+        </div>
         <button class="plain-button coach-home-state-button" type="button" data-action="coach-home-retry">Try again</button>
       </div>`;
 }
