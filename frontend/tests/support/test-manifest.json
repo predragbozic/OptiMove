@@ -1,0 +1,93 @@
+{
+  "$comment": "Read by scripts/test-runner.mjs. knownFailures: tests that fail on origin/main today, each identified by the WHOLE fingerprint - file, exact title, node's failureType and messagePattern (a regular expression over the first line of the failure message); a failure whose title is listed but whose type or message differs is reported as a new failure, a listed test that passes is reported title by title so an entry is removed in the PR that fixes it; an entry for a secret / credential scan test is refused by the runner. fileOptions.testTimeoutMs: node's per-test limit for one file. knownNoExit: files whose process stays alive after every test finished. kindOverrides: a file mapped to a kind when the static classification is wrong, with the reason in kindOverrideNotes.",
+  "kindOverrides": {},
+  "fileOptions": {
+    "training-load.actions.test.mjs": {
+      "testTimeoutMs": 15000,
+      "note": "tests X5a and X5b start and never finish (115 tests pass); known since 2026-09-18 as 'the process never exits', found to be two hanging tests by the T1 discovery run on origin/main 241765e (2026-10-11); node cancels each after 15 s so the rest of the file runs and the process exits"
+    }
+  },
+  "knownFailures": [
+    {
+      "file": "builder-create-form-fixes.test.mjs",
+      "test": "handleContentInput mirrors every keystroke in the create form's name input into state.builder.createName, no network call",
+      "failureType": "testCodeFailure",
+      "messagePattern": "^The input did not match the regular expression \\/state\\\\\\.builder\\\\\\.createName = createNameInput\\\\\\.value;\\/",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "builder-mobile-section-workflow.test.mjs",
+      "test": "16c. regression guard: the reorder arrows stay vertical (up/down) at every width - the stale mobile override that rotated them to left/right (a leftover from the old horizontal-scroll Added-list design, long since replaced by a vertical list) must not come back",
+      "failureType": "testCodeFailure",
+      "messagePattern": "^no rule anywhere should rotate the reorder arrows onto their side",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "organization-panel-cache.test.mjs",
+      "test": "6. signOut clears the entire view cache before/alongside its hard reload",
+      "failureType": "testCodeFailure",
+      "messagePattern": "^the cache must be cleared before \\(or at latest alongside\\) the redirect, never left for \"later\"",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "a plain click (mousedown, no drag) on an unselected day adds just that one date",
+      "failureType": "testCodeFailure",
+      "messagePattern": "^Expected values to be strictly deep-equal:",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "a plain click on an ALREADY-selected day removes just that one date - single click toggles",
+      "failureType": "testCodeFailure",
+      "messagePattern": "^Expected values to be strictly deep-equal:",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "mousedown on day 1, drag over to day 3, selects the whole inclusive range - Booking-style range select",
+      "failureType": "testCodeFailure",
+      "messagePattern": "^Expected values to be strictly deep-equal:",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "dragging backward (toward the anchor) shrinks the range - days no longer covered are un-selected again, not left stranded",
+      "failureType": "testCodeFailure",
+      "messagePattern": "^Expected values to be strictly deep-equal:",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "a drag that starts on an already-selected day REMOVES the whole dragged-over range, not just the anchor",
+      "failureType": "testCodeFailure",
+      "messagePattern": "^only the dragged range was removed - an unrelated already-selected date elsewhere is untouched",
+      "since": "2026-10-11",
+      "note": "baseline failure on origin/main 241765e, reproduced in the T1 discovery run (worktree at that commit)"
+    },
+    {
+      "file": "training-load.actions.test.mjs",
+      "test": "X5a. cross-section race, A resolves BEFORE B: Today ends up showing B's real fresh post-toggle content, never A's stale one, never data:null",
+      "failureType": "testTimeoutFailure",
+      "messagePattern": "^test timed out after \\d+ms$",
+      "since": "2026-10-11",
+      "note": "never finishes (a promise that is never settled); cancelled by node's per-test limit set in fileOptions; cause not established"
+    },
+    {
+      "file": "training-load.actions.test.mjs",
+      "test": "X5b. cross-section race, B resolves BEFORE A: Today ends up showing B's real fresh post-toggle content, A's later stale response never clobbers it, never data:null",
+      "failureType": "testTimeoutFailure",
+      "messagePattern": "^test timed out after \\d+ms$",
+      "since": "2026-10-11",
+      "note": "never finishes (a promise that is never settled); cancelled by node's per-test limit set in fileOptions; cause not established"
+    }
+  ],
+  "knownNoExit": []
+}

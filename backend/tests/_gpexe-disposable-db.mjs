@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
+import { createDisposableDatabase } from "./support/disposable-db.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -230,53 +231,50 @@ function assertDisposableName(name, url) {
 // brings the database up to date through the real runner.
 export async function createGpexeDisposableDb({ baseDatabaseUrl, label, migrations = GPEXE_TEST_MIGRATIONS }) {
   if (!baseDatabaseUrl) throw new Error("baseDatabaseUrl (DATABASE_URL) is required to reach the local Postgres server.");
-  const base = new URL(baseDatabaseUrl);
-  const adminUrl = new URL(base);
-  adminUrl.pathname = "/postgres";
-  const name = `optimove_tests_gpexe_${label}_${crypto.randomBytes(6).toString("hex")}`;
-  const url = new URL(base);
-  url.pathname = `/${name}`;
-  assertDisposableName(name, url.toString());
+  // The database itself - the loopback-only server rule, the admin
+  // connection on "postgres", CREATE DATABASE, and a drop that first ends
+  // every other session - is the shared test support's (T1,
+  // tests/support/disposable-db.mjs). This helper keeps what is GPEXE's own:
+  // the optimove_tests_gpexe_* name the pilot CLI demands, the legacy
+  // scaffold, the curated migrations and the marker table.
+  const db = await createDisposableDatabase({ prefix: "gpexe", label, baseDatabaseUrl });
+  const { name, url } = db;
+  assertDisposableName(name, url);
 
-  const admin = new pg.Client({ connectionString: adminUrl.toString() });
-  await admin.connect();
+  let tempRoot = null;
+  let migrationsDir = null;
+  const client = new pg.Client({ connectionString: url });
   try {
-    const current = await admin.query("select current_database() as db");
-    assert.equal(current.rows[0].db, "postgres", "SAFETY: admin connection must be on the postgres database");
-    await admin.query(`create database "${name}"`);
-  } finally {
-    await admin.end();
-  }
-
-  const { tempRoot, migrationsDir } = await migrationsFolder();
-  const client = new pg.Client({ connectionString: url.toString() });
-  await client.connect();
-  try {
+    ({ tempRoot, migrationsDir } = await migrationsFolder());
+    await client.connect();
     const own = await client.query("select current_database() as db");
     assert.equal(own.rows[0].db, name, "SAFETY: connection landed on an unexpected database");
     await client.query(LEGACY_FIXTURE_SQL);
     for (const file of migrations) {
       await fsp.copyFile(path.resolve(__dirname, "../../migrations_v2", file), path.join(migrationsDir, file));
     }
-    await runner.runMigrations({ databaseUrl: url.toString(), migrationsRoot: migrationsDir });
+    await runner.runMigrations({ databaseUrl: url, migrationsRoot: migrationsDir });
     await client.query(`create table ${DISPOSABLE_MARKER_TABLE} (purpose text not null, created_at timestamptz not null default now())`);
     await client.query(`insert into ${DISPOSABLE_MARKER_TABLE} (purpose) values ('gpexe-pilot')`);
-  } finally {
-    await client.end();
-    await fsp.rm(tempRoot, { recursive: true, force: true });
-  }
-
-  async function drop() {
-    const dropClient = new pg.Client({ connectionString: adminUrl.toString() });
-    await dropClient.connect();
+  } catch (error) {
+    // A database whose connection, scaffold or migrations failed is dropped
+    // here rather than left on the server for the audit to find later; a
+    // failed drop is reported but never hides the original error.
+    await client.end().catch(() => {});
     try {
-      await dropClient.query("select pg_terminate_backend(pid) from pg_stat_activity where datname = $1 and pid <> pg_backend_pid()", [name]);
-      await dropClient.query(`drop database if exists "${name}"`);
-    } finally {
-      await dropClient.end();
+      await db.drop();
+    } catch (dropError) {
+      console.error(`[gpexe-disposable-db] could not drop ${name} after a failed setup: ${dropError.message}`);
     }
+    if (tempRoot) await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+    throw error;
   }
-  return { name, url: url.toString(), drop };
+  await client.end();
+  // A temp-dir removal that fails (EBUSY on Windows) must not turn a
+  // successfully built database into a leak.
+  await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+
+  return { name, url, drop: db.drop };
 }
 
 export async function applyGpexeTestMigrations(databaseUrl, migrations = GPEXE_TEST_MIGRATIONS) {

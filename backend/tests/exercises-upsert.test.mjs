@@ -25,24 +25,10 @@ import crypto from "node:crypto";
 import http from "node:http";
 import "dotenv/config";
 import pg from "pg";
+import { createDisposableDatabase } from "./support/disposable-db.mjs";
 
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 if (!ORIGINAL_DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
-const baseUrl = new URL(ORIGINAL_DATABASE_URL);
-const adminUrl = new URL(baseUrl);
-adminUrl.pathname = "/postgres";
-const ADMIN_URL = adminUrl.toString();
-
-function dbUrlFor(name) {
-  const u = new URL(baseUrl);
-  u.pathname = `/${name}`;
-  return u.toString();
-}
-function refuseForbidden(name, url) {
-  if (name.toLowerCase() === "optimove" || /monitoring2/i.test(url)) {
-    throw new Error("SAFETY: refusing to run against a forbidden database name");
-  }
-}
 
 // Minimal auth-context schema - the same shape training-load's own
 // disposable-DB tests already established, trimmed to exactly what
@@ -240,24 +226,16 @@ const LIBRARY_FIXTURE_SQL = `
   );
 `;
 
-async function makeTempDb(label) {
-  const name = `optimove_tests_exlib_${label}_${crypto.randomBytes(6).toString("hex")}`;
-  const url = dbUrlFor(name);
-  refuseForbidden(name, url);
-  const admin = new pg.Client({ connectionString: ADMIN_URL });
-  await admin.connect();
-  const cur = await admin.query("select current_database() as db");
-  assert.equal(cur.rows[0].db, "postgres", "SAFETY: admin connection must be on the postgres database");
-  await admin.query(`create database "${name}"`);
-  await admin.end();
-  return { name, url };
+// The disposable database comes from the shared test support (T1,
+// tests/support/disposable-db.mjs): the same optimove_tests_exlib_<label>_<hex>
+// name, the admin connection on "postgres", and a drop that first ends every
+// other session - exactly what this file's own makeTempDb / dropTempDb pair
+// did before, now with the loopback-only server rule as well.
+function makeTempDb(label) {
+  return createDisposableDatabase({ prefix: "exlib", label, baseDatabaseUrl: ORIGINAL_DATABASE_URL });
 }
-async function dropTempDb({ name }) {
-  const admin = new pg.Client({ connectionString: ADMIN_URL });
-  await admin.connect();
-  await admin.query(`select pg_terminate_backend(pid) from pg_stat_activity where datname=$1 and pid <> pg_backend_pid()`, [name]);
-  await admin.query(`drop database if exists "${name}"`);
-  await admin.end();
+function dropTempDb(db) {
+  return db.drop();
 }
 
 let db, adminClient;

@@ -835,9 +835,32 @@ export async function unlinkGpexeAthlete(linkId, render) {
 //   uptodate / imported / replaced.
 // A blocked session's reason comes with the list (blockedCode, phase 2b), so
 // the list is sorted without reading any session's detail.
+// v33 (PR #153): the server's one word for a candidate the last successful
+// search did not confirm - its search is still running or did not succeed,
+// or fewer than two of its drills carried data (not_observed), so its drill
+// results could not be confirmed. The word is the same for a coach and an
+// administrator; it carries no proof or reason.
+export function notConfirmedForImport(c) {
+  // Fail-closed: a summary without the server's blockers is not "confirmed".
+  if (!Array.isArray(c?.approvalBlockers)) return true;
+  return c.approvalBlockers.includes("not_confirmed_for_import");
+}
+
+// v33: a candidate withdrawn by a complete, successful search that no longer
+// found its session in GPEXE (superseded by the search, not by newer content).
+export function withdrawnByCheck(c) {
+  return c?.status === "superseded" && Boolean(c.supersededByCheckId) && !c.supersededByCandidateId;
+}
+
+// A version the list does not show: replaced by newer content, or withdrawn.
+export function isHiddenVersion(c, gx = g()) {
+  const group = candidateGroup(c, gx);
+  return group === "replaced" || group === "withdrawn";
+}
+
 export function candidateGroup(c, gx = g()) {
   if (c.status === "imported") return "imported";
-  if (c.status === "superseded") return "replaced";
+  if (c.status === "superseded") return withdrawnByCheck(c) ? "withdrawn" : "replaced";
   if (!c.snapshot?.available) return "notyet";
   if (c.status === "blocked") return c.blockedCode === "unsupported_session_type" ? "excluded" : "notyet";
   if (c.previewStatus === "no_changes" || c.preview?.status === "no_changes") return "uptodate";
@@ -872,11 +895,14 @@ export function rowReasons(c) {
 //               source's Technical details).
 export function inboxBucket(c, gx = g()) {
   const group = candidateGroup(c, gx);
-  if (group === "replaced") return "hidden";
+  if (group === "replaced" || group === "withdrawn") return "hidden";
   if (group === "imported") return "imported";
   if (group === "excluded") return "out";
   if (isUncertain(c, gx)) return "attention";
   if (group === "notyet") return "attention";
+  // v33: not confirmed by a successful search - never Ready, never "up to
+  // date"; the row says the one step (find new sessions again).
+  if (notConfirmedForImport(c)) return "attention";
   // A review made before a link change (owner decision 2026-09-25): the
   // session needs a new search, so it is an attention item on its own - also
   // when that old review said "nothing new", which the new links may change.
@@ -912,6 +938,7 @@ export function batchAllowed(gx = g()) {
 // one, or not at all.
 export function batchSelectable(c, gx = g()) {
   if (!batchAllowed(gx)) return false;
+  if (notConfirmedForImport(c)) return false;
   if (inboxBucket(c, gx) !== "ready") return false;
   if (c.status !== "pending" || reviewMadeBeforeLinkChange(c, gx)) return false;
   return typeof c.previewHash === "string" && PREVIEW_HASH.test(c.previewHash);
@@ -1158,7 +1185,7 @@ export function calendarMonthKey(value) {
 // newest session found, else this month.
 export function calendarMonthShown(gx = g(), now = new Date()) {
   if (gx.calendar?.month) return gx.calendar.month;
-  const days = (gx.candidates || []).filter((c) => candidateGroup(c, gx) !== "replaced").map((c) => calendarDayKey(c.sessionStartedAt)).filter(Boolean).sort();
+  const days = (gx.candidates || []).filter((c) => !isHiddenVersion(c, gx)).map((c) => calendarDayKey(c.sessionStartedAt)).filter(Boolean).sort();
   if (days.length) return days[days.length - 1].slice(0, 7);
   return calendarMonthKey(now);
 }
