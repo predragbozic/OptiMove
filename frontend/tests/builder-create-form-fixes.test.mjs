@@ -78,7 +78,7 @@ test("submitBuilderForm's create branch resets createName/createColor after a su
 });
 
 test("handleContentInput mirrors every keystroke in the create form's name input into state.builder.createName, no network call", () => {
-  const body = sliceFunction(appJsSource, "handleContentInput", 700);
+  const body = sliceFunction(appJsSource, "handleContentInput", 1000);
   assert.match(body, /event\.target\.closest\(".builder-create-form input\[name='name'\]"\)/);
   assert.match(body, /state\.builder\.createName = createNameInput\.value;/);
 });

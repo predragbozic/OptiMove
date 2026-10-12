@@ -1,3 +1,9 @@
+[data-athlete-filter-row][hidden], [data-athlete-filter-empty][hidden] { display: none !important; }
+.athlete-list-search { display: grid; gap: 6px; margin: 12px 0; }
+.athlete-list-search input { width: 100%; min-height: 44px; box-sizing: border-box; }
+.builder-athlete-picker[data-athlete-filter-scope], .builder-copy-plan-modal[data-athlete-filter-scope] { display: flex; flex-direction: column; overflow: hidden; }
+.builder-athlete-picker[data-athlete-filter-scope] > *, .builder-copy-plan-modal[data-athlete-filter-scope] > * { flex-shrink: 0; }
+.builder-athlete-picker[data-athlete-filter-scope] > .builder-athlete-options, .builder-copy-plan-modal[data-athlete-filter-scope] > .builder-athlete-options { flex-shrink: 1; min-height: 0; overflow-y: auto; }
 .coach-home-header, .coach-home-today, .coach-home-picker > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .coach-home-header h2, .coach-home-today h3, .coach-home-picker h3 { margin: 0; font-size: 20px; overflow-wrap: anywhere; }
 .coach-home-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-block: 1px solid var(--line); margin: 24px 0; }

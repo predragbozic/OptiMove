@@ -21,7 +21,7 @@ export function renderFilterableSelect({ name, label, options = [], value = "", 
       <input type="hidden" name="${escapeAttr(name)}" value="${escapeAttr(normalizedValue)}" ${extraSelectAttrs}>
       <datalist id="${escapeAttr(listId)}">
         ${includeEmpty ? `<option value="${escapeAttr(includeEmpty)}" data-value=""></option>` : ""}
-        ${options.map((option) => `<option value="${escapeAttr(option.label)}" data-value="${escapeAttr(option.value)}" data-club-id="${escapeAttr(option.clubId || "")}"></option>`).join("")}
+        ${[...options].sort((a, b) => a.label.localeCompare(b.label, "sr-Latn", { sensitivity: "base", numeric: true })).map((option) => `<option value="${escapeAttr(option.label)}" data-value="${escapeAttr(option.value)}" data-club-id="${escapeAttr(option.clubId || "")}"></option>`).join("")}
       </datalist>
     </label>
   `;

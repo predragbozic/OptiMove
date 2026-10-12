@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { matchingAthletes } from "./athlete-list-tools.js";
 import { acknowledgeBuilderItemEdit, clearBuilderItemEdits, pendingBuilderItemEdit, preserveBuilderItemEdits } from "./builder-item-edits.js";
 import { invalidateBuilderDraftsCache, loadBuilderNodePresets } from "./builder-data.js";
 import { findBuilderNode, findBuilderSession } from "./builder-helpers.js";
@@ -818,10 +819,14 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     return true;
   }
   if (type === "builder-toggle-select-all-athletes") {
-    const athleteIds = (state.athletes || []).map((athlete) => String(athlete.athlete_id)).filter(Boolean);
+    const athleteIds = matchingAthletes(state.athletes || [], "builder-assign").map((athlete) => String(athlete.athlete_id)).filter(Boolean);
     const selectedIds = new Set((state.builder.createAthleteIds || []).map(String));
     const allSelected = athleteIds.length > 0 && athleteIds.every((id) => selectedIds.has(id));
-    state.builder.createAthleteIds = allSelected ? [] : athleteIds;
+    for (const id of athleteIds) {
+      if (allSelected) selectedIds.delete(id);
+      else selectedIds.add(id);
+    }
+    state.builder.createAthleteIds = [...selectedIds];
     state.builder.createAthleteId = state.builder.createAthleteIds[0] || "";
     renderBuilderPreservingAthleteListScroll(handlers);
     return true;

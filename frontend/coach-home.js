@@ -1,4 +1,5 @@
 import { renderImage } from "./media.js";
+import { athleteMatches, sortAthletes } from "./athlete-list-tools.js";
 import { ICON_CALENDAR } from "./athlete-home.js";
 import { ICON_ADD_ATHLETE } from "./organization-view.js";
 import { escapeAttr, escapeHtml, programInitials } from "./utils.js";
@@ -64,7 +65,7 @@ export function renderCoachHomeHtml({ rows = [], error = "", user, picker = {} }
 export function renderCoachHomeAthleteRows(rows, picker = {}) {
   const query = (picker.query || "").trim().toLocaleLowerCase();
   const scopedRows = picker.mode === "today" ? rows.filter((row) => row.hasTrainingToday) : rows;
-  const matches = scopedRows.filter((row) => `${row.athlete} ${row.athleteId}`.toLocaleLowerCase().includes(query));
+  const matches = sortAthletes(scopedRows).filter((row) => athleteMatches(row, query));
   return matches.map((row) => `<button class="coach-home-athlete-row" type="button" data-action="coach-home-open-athlete" data-mode="${picker.mode === "load" ? "load" : picker.mode === "today" ? "today" : "plan"}" data-athlete-id="${escapeAttr(row.athleteId)}" data-athlete-uuid="${escapeAttr(row.athleteUuid || "")}">
     ${row.athleteImageUrl ? renderImage(row.athleteImageUrl, "coach-home-avatar") : `<span class="coach-home-avatar coach-home-avatar-fallback">${escapeHtml(programInitials(row.athlete || "Athlete"))}</span>`}
     <span><strong>${escapeHtml(row.athlete)}</strong><small>${row.hasTrainingToday ? `${row.sessionCount} ${row.sessionCount === 1 ? "session" : "sessions"} today` : "No session today"}</small></span>

@@ -1,4 +1,5 @@
 import { builderIconGlyph, sessionLabel } from "./builder-helpers.js";
+import { athleteFilterAttrs, matchingAthletes, renderAthleteFilter, sortAthletes } from "./athlete-list-tools.js";
 import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 import { renderImage } from "./media.js";
 import { escapeAttr, escapeHtml, initialsFor, localDateIso, weekMondayIso } from "./utils.js";
@@ -7,12 +8,12 @@ export function renderBuilderAthletePicker(state) {
   const selectedIds = new Set((state.builder.createAthleteIds || []).map(String));
   const selectedCount = selectedIds.size;
   const isWeekly = state.builder.planType === "weekly";
-  const athleteIds = (state.athletes || []).map((athlete) => String(athlete.athlete_id)).filter(Boolean);
+  const athleteIds = matchingAthletes(state.athletes || [], "builder-assign").map((athlete) => String(athlete.athlete_id)).filter(Boolean);
   const allSelected = athleteIds.length > 0 && athleteIds.every((id) => selectedIds.has(id));
   return `
     <div class="builder-athlete-overlay">
       <button class="builder-athlete-backdrop" type="button" data-action="builder-close-athlete-picker" aria-label="Close athlete picker"></button>
-      <section class="panel builder-athlete-picker" role="dialog" aria-modal="true" aria-label="Assign athletes">
+      <section class="panel builder-athlete-picker" data-athlete-filter-scope role="dialog" aria-modal="true" aria-label="Assign athletes">
         <div class="builder-section-panel-head">
           <div>
             <p class="eyebrow">Draft assignment</p>
@@ -27,17 +28,18 @@ export function renderBuilderAthletePicker(state) {
         ${isWeekly ? "" : `<button class="builder-athlete-option ${selectedCount ? "" : "is-selected"}" type="button" data-action="builder-select-athlete" data-athlete-id="">
           <span class="builder-athlete-trigger-icon">+</span><span><strong>Reusable template</strong><small>Not assigned to an athlete</small></span>
         </button>`}
+        ${renderAthleteFilter("builder-assign", state.athletes || [])}
         <div class="builder-athlete-select-all">
-          <button class="checkbox-toggle-all ${allSelected ? "is-checked" : ""}" type="button" data-action="builder-toggle-select-all-athletes" aria-label="${allSelected ? "Uncheck all athletes" : "Check all athletes"}" ${athleteIds.length ? "" : "disabled"}>
+          <button class="checkbox-toggle-all ${allSelected ? "is-checked" : ""}" type="button" data-action="builder-toggle-select-all-athletes" aria-label="${allSelected ? "Uncheck all shown athletes" : "Check all shown athletes"}" ${athleteIds.length ? "" : "disabled"}>
             <span aria-hidden="true">${allSelected ? "&#10003;" : ""}</span>
           </button>
-          <span class="muted">Select all athletes</span>
+          <span class="muted">Select all shown athletes</span>
         </div>
         <div class="builder-athlete-options" data-builder-athlete-list>
-          ${state.athletes.map((athlete) => {
+          ${sortAthletes(state.athletes).map((athlete) => {
             const isSelected = selectedIds.has(String(athlete.athlete_id));
             return `
-              <button class="builder-athlete-option ${isSelected ? "is-selected" : ""}" type="button" data-action="builder-select-athlete" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
+              <button class="builder-athlete-option ${isSelected ? "is-selected" : ""}" ${athleteFilterAttrs(athlete, "builder-assign")} type="button" data-action="builder-select-athlete" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
                 ${athlete.athlete_image_url || athlete.image_url ? renderImage(athlete.athlete_image_url || athlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${escapeHtml(initialsFor(athlete.athlete))}</span>`}
                 <span><strong>${escapeHtml(athlete.athlete)}</strong><small>ID ${escapeHtml(athlete.athlete_id)}</small></span>
                 <span class="builder-checkmark" aria-hidden="true">${isSelected ? "&#10003;" : ""}</span>
@@ -68,7 +70,7 @@ export function renderCopyPlanModal(state) {
   return `
     <div class="builder-modal-overlay">
       <button class="builder-modal-backdrop" type="button" data-action="builder-close-copy-plan" aria-label="Close ${isAssign ? "assignment" : "copy"} setup"></button>
-      <section class="panel builder-compact-modal builder-copy-plan-modal" role="dialog" aria-modal="true" aria-label="${isAssign ? "Assign to athlete" : "Create editable copy"}">
+      <section class="panel builder-compact-modal builder-copy-plan-modal" data-athlete-filter-scope role="dialog" aria-modal="true" aria-label="${isAssign ? "Assign to athlete" : "Create editable copy"}">
         <div class="builder-modal-head">
           <div>
             <p class="eyebrow">${isAssign ? "Assign to athlete" : "Editable copy"}</p>
@@ -81,11 +83,12 @@ export function renderCopyPlanModal(state) {
         </div>
         ${isWeeklyCopy ? `<label class="search-field builder-copy-week"><span>Target week</span><input data-builder-copy-week-start type="date" value="${escapeAttr(state.builder.copyWeekStart || weekMondayIso(localDateIso()))}"><small>The copied week will begin on Monday.</small></label>` : ""}
         ${!isWeeklyCopy && !isAssign ? `<button class="builder-athlete-option ${selectedCount ? "" : "is-selected"}" type="button" data-action="builder-select-copy-athlete" data-athlete-id=""><span class="builder-athlete-trigger-icon">+</span><span><strong>Reusable template</strong><small>Keep this editable copy unassigned</small></span></button>` : ""}
+        ${renderAthleteFilter("builder-copy", state.athletes || [])}
         <div class="builder-athlete-options">
-          ${state.athletes.map((athlete) => {
+          ${sortAthletes(state.athletes).map((athlete) => {
             const isSelected = selectedIds.has(String(athlete.athlete_id));
             return `
-              <button class="builder-athlete-option ${isSelected ? "is-selected" : ""}" type="button" data-action="builder-select-copy-athlete" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
+              <button class="builder-athlete-option ${isSelected ? "is-selected" : ""}" ${athleteFilterAttrs(athlete, "builder-copy")} type="button" data-action="builder-select-copy-athlete" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
                 ${athlete.athlete_image_url || athlete.image_url ? renderImage(athlete.athlete_image_url || athlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${escapeHtml(initialsFor(athlete.athlete))}</span>`}
                 <span><strong>${escapeHtml(athlete.athlete)}</strong><small>ID ${escapeHtml(athlete.athlete_id)}</small></span>
                 <span class="builder-checkmark" aria-hidden="true">${isSelected ? "&#10003;" : ""}</span>
@@ -278,13 +281,16 @@ function renderBlockPickerBody(state, picker) {
     const isWeeklySource = picker.sourceType === "weekly";
     if (!picker.athleteId) {
       return `
+        <div data-athlete-filter-scope>
+        ${renderAthleteFilter("builder-import", state.athletes || [])}
         <div class="builder-athlete-options">
-          ${(state.athletes || []).map((athlete) => `
-            <button class="builder-athlete-option" type="button" data-action="builder-block-picker-choose-athlete" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
+          ${sortAthletes(state.athletes).map((athlete) => `
+            <button class="builder-athlete-option" ${athleteFilterAttrs(athlete, "builder-import")} type="button" data-action="builder-block-picker-choose-athlete" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
               ${athlete.athlete_image_url || athlete.image_url ? renderImage(athlete.athlete_image_url || athlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${escapeHtml(initialsFor(athlete.athlete))}</span>`}
               <span><strong>${escapeHtml(athlete.athlete)}</strong><small>ID ${escapeHtml(athlete.athlete_id)}</small></span>
             </button>
           `).join("")}
+        </div>
         </div>
         <button class="text-action" type="button" data-action="builder-block-picker-back-to-source">Choose a different source</button>
       `;

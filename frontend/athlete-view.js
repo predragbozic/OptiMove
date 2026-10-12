@@ -1,5 +1,6 @@
 import { ICON_CALENDAR, ICON_SPECIFIC_PROGRAMS } from "./athlete-home.js";
 import { renderImage } from "./media.js";
+import { sortAthletes } from "./athlete-list-tools.js";
 import { escapeAttr, escapeHtml, initialsFor } from "./utils.js";
 
 function avatarMarkup(athlete) {
@@ -9,7 +10,7 @@ function avatarMarkup(athlete) {
 }
 
 export function renderAthleteListHtml(athletes, selectedAthleteId) {
-  return athletes.map((athlete) => `
+  return sortAthletes(athletes).map((athlete) => `
     <button class="athlete-button ${athlete.athlete_id === selectedAthleteId ? "is-active" : ""}" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
       ${avatarMarkup(athlete)}
       <span>
