@@ -163,4 +163,4 @@ deploy-a, i persistent DB migracije, bez obzira koliko prethodni koraci deluju g
 
 `.claude/rules/`: `git-safety.md`, `database-safety.md`, `testing-evidence.md`,
 `frontend.md`, `backend-security.md`, `migrations.md`, `memory-maintenance.md`,
-`review-feedback-loop.md`, `metrics-core-mapping.md`.
+`review-feedback-loop.md`, `metrics-core-mapping.md`, `agent-efficiency.md`.
