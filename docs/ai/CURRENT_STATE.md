@@ -1578,7 +1578,10 @@ Technical details.
     databases on the development workstation were left in place, as ordered.
 - **GPEXE metric / variable mapping discovery (2026-10-11, accepted; M1 not started).** The authoritative
   document is `docs/ai/gpexe-metric-variable-mapping-discovery.md` (rule:
-  `.claude/rules/metrics-core-mapping.md`; permanent decisions: ADR-007). Its findings, verified against
+  `.claude/rules/metrics-core-mapping.md`; ADR-007 records only the three decisions the code already
+  proves — Metrics Core as the canonical registry, no automatic merge of several sources, no
+  reinterpretation of a historical fact — while the mapping design stays accepted future design in the
+  document). Its findings, verified against
   `af11338`: **Metrics Core (`training_load.metric_definitions`, `metric_definition_versions`, scope
   capabilities, domains, categories, structure links, occasions, values, provenance) is the existing
   canonical registry of OptiMove variables** — creatable and versionable through
