@@ -2,6 +2,7 @@ import { renderDataSourcesPanelHtml } from "./data-sources-view.js";
 import { sourceConnectionsAdminContext } from "./source-connections-data.js";
 import { renderSourceConnectionsPanelHtml } from "./source-connections-view.js";
 import { renderImage } from "./media.js";
+import { athleteFilterAttrs, renderAthleteFilter, sortAthletes } from "./athlete-list-tools.js";
 import { renderSettingsNavHtml } from "./navigation.js";
 import { renderFilterableSelect } from "./organization-select.js";
 import { renderTaxonomyPanelHtml } from "./taxonomy-view.js";
@@ -217,7 +218,7 @@ export function renderOrganizationBrowser(data) {
   // never from the active-only list - otherwise an athlete whose only tie
   // to a specific team/club is archived would vanish from that team/club's
   // "Show archived" the moment it stopped being active.
-  const allReturnedAthletes = data.athletes || [];
+  const allReturnedAthletes = sortAthletes(data.athletes || []);
   // is_active alone is the PROFILE flag - it says nothing about whether this
   // viewer's own tie to the athlete is still active. has_active_access is
   // the flag computed server-side for that decision. Only THIS list may
@@ -279,15 +280,17 @@ export function renderOrganizationBrowser(data) {
 // Never merged into one ambiguous "archived" row.
 function renderArchivedAthletesList(myArchivedCoachRelationships, archivedProfiles, isPlatformAdmin) {
   return `
-    <section class="panel organization-list-card organization-archived-athletes">
+    <section class="panel organization-list-card organization-archived-athletes" data-athlete-filter-scope>
       <div class="organization-list-head"><p class="eyebrow">Archived from my athletes</p><strong>${myArchivedCoachRelationships.length}</strong></div>
+      ${renderAthleteFilter("settings-archived-private", myArchivedCoachRelationships)}
       <div class="organization-list">
         ${myArchivedCoachRelationships.length ? myArchivedCoachRelationships.map(renderArchivedCoachRelationshipRow).join("") : `<p class="muted">No archived private-coach relationships.</p>`}
       </div>
     </section>
     ${isPlatformAdmin ? `
-    <section class="panel organization-list-card organization-archived-athletes">
+    <section class="panel organization-list-card organization-archived-athletes" data-athlete-filter-scope>
       <div class="organization-list-head"><p class="eyebrow">Archived sporting profiles (platform admin)</p><strong>${archivedProfiles.length}</strong></div>
+      ${renderAthleteFilter("settings-archived-profiles", archivedProfiles)}
       <div class="organization-list">
         ${archivedProfiles.length ? archivedProfiles.map(renderArchivedProfileRow).join("") : `<p class="muted">No archived profiles.</p>`}
       </div>
@@ -298,7 +301,7 @@ function renderArchivedAthletesList(myArchivedCoachRelationships, archivedProfil
 function renderArchivedCoachRelationshipRow(row) {
   const title = row.name || row.full_name || row.display_name || row.athlete_id || "Untitled";
   return `
-    <article class="organization-row is-archived">
+    <article class="organization-row is-archived" ${athleteFilterAttrs(row, "settings-archived-private")}>
       <span class="organization-avatar">${escapeHtml((row.athlete_id || "AT").slice(0, 2).toUpperCase())}</span>
       <span><strong>${escapeHtml(title)}</strong><small>Archived from your athletes - login and history are kept</small></span>
       <span class="organization-row-actions">
@@ -311,7 +314,7 @@ function renderArchivedCoachRelationshipRow(row) {
 function renderArchivedProfileRow(row) {
   const title = row.name || row.full_name || row.display_name || row.athlete_id || "Untitled";
   return `
-    <article class="organization-row is-archived">
+    <article class="organization-row is-archived" ${athleteFilterAttrs(row, "settings-archived-profiles")}>
       <span class="organization-avatar">${escapeHtml((row.athlete_id || "AT").slice(0, 2).toUpperCase())}</span>
       <span><strong>${escapeHtml(title)}</strong><small>Whole sporting profile archived - login and relationships are untouched</small></span>
       <span class="organization-row-actions">
@@ -655,7 +658,7 @@ function renderAssignAthleteToTeamForm(team, visibleAthletes, allAthletes) {
 function renderTeamAthleteTable(team, teamAthletes, allAthletes) {
   const archivedInTeam = archivedMembershipsFor(allAthletes, { teamId: team.id });
   return `
-    <section class="panel organization-list-card organization-team-detail">
+    <section class="panel organization-list-card organization-team-detail" data-athlete-filter-scope>
       <div class="organization-list-head organization-team-head">
         <div>
           <p class="eyebrow">Team roster</p>
@@ -668,6 +671,7 @@ function renderTeamAthleteTable(team, teamAthletes, allAthletes) {
         </div>
       </div>
       ${state.organization.assignOpen ? renderAssignAthleteToTeamForm(team, teamAthletes, allAthletes) : ""}
+      ${renderAthleteFilter("settings-athletes", [...teamAthletes, ...(state.organization.showArchivedTeamMembers ? archivedInTeam : [])])}
       <div class="organization-table" role="table" aria-label="${escapeAttr(team.name)} athletes">
         <div class="organization-table-row organization-table-head" role="row">
           <span>Athlete</span><span>ID</span><span>Login</span><span></span>
@@ -715,7 +719,7 @@ function inviteTriggerHtml(athlete) {
 function renderTeamAthleteRow(athlete, team) {
   const image = athlete.image_url || "";
   return `
-    <div class="organization-table-row" role="row">
+    <div class="organization-table-row" role="row" ${athleteFilterAttrs(athlete, "settings-athletes")}>
       <span class="organization-table-athlete">${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar">AT</span>`}<strong>${escapeHtml(athlete.name || "Athlete")}</strong></span>
       <span>${escapeHtml(athlete.athlete_id || athlete.source_external_id || "-")}</span>
       <span>${renderAthleteLoginToggle(athlete)}</span>
@@ -730,7 +734,7 @@ function renderTeamAthleteRow(athlete, team) {
 
 function renderArchivedTeamAthleteRow(athlete, team) {
   return `
-    <div class="organization-table-row is-archived" role="row">
+    <div class="organization-table-row is-archived" role="row" ${athleteFilterAttrs(athlete, "settings-athletes")}>
       <span class="organization-table-athlete"><span class="organization-avatar">${escapeHtml((athlete.athlete_id || "AT").slice(0, 2).toUpperCase())}</span><strong>${escapeHtml(athlete.name || "Athlete")}</strong></span>
       <span>${escapeHtml(athlete.athlete_id || athlete.source_external_id || "-")}</span>
       <span class="muted">Removed from team</span>
@@ -749,7 +753,7 @@ function renderClubAthleteList(club, clubAthletes, allAthletes) {
     (athlete.memberships || []).some((m) => m.membershipType === "club" && String(m.clubId) === String(club.id) && m.status === "archived")
   ));
   return `
-    <section class="panel organization-list-card organization-team-detail">
+    <section class="panel organization-list-card organization-team-detail" data-athlete-filter-scope>
       <div class="organization-list-head organization-team-head">
         <div>
           <p class="eyebrow">Club roster</p>
@@ -758,6 +762,7 @@ function renderClubAthleteList(club, clubAthletes, allAthletes) {
         </div>
         <button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-club-members">${state.organization.showArchivedClubMembers ? "Hide archived" : `Show archived (${archivedInClub.length})`}</button>
       </div>
+      ${renderAthleteFilter("settings-athletes", [...clubAthletes, ...(state.organization.showArchivedClubMembers ? archivedInClub : [])])}
       <div class="organization-list">
         ${clubAthletes.length ? clubAthletes.map((athlete) => renderClubAthleteRow(athlete, club)).join("") : `<p class="muted organization-empty-row">No athletes in this club yet.</p>`}
       </div>
@@ -772,7 +777,7 @@ function renderClubAthleteList(club, clubAthletes, allAthletes) {
 
 function renderClubAthleteRow(athlete, club) {
   return `
-    <article class="organization-row">
+    <article class="organization-row" ${athleteFilterAttrs(athlete, "settings-athletes")}>
       ${renderOrganizationRowContent(athlete, "athlete")}
       <span class="organization-row-actions">
         ${renderAthleteLoginToggle(athlete)}
@@ -786,7 +791,7 @@ function renderClubAthleteRow(athlete, club) {
 
 function renderArchivedClubMemberRow(athlete, club) {
   return `
-    <article class="organization-row is-archived">
+    <article class="organization-row is-archived" ${athleteFilterAttrs(athlete, "settings-athletes")}>
       ${renderOrganizationRowContent(athlete, "athlete")}
       <span class="organization-row-actions">
         <button class="plain-button compact-button" type="button" data-action="organization-restore-club-membership" data-club-id="${escapeAttr(club.id)}" data-athlete-id="${escapeAttr(athlete.id)}">Restore</button>
@@ -1417,8 +1422,9 @@ function formatExpiryLabel(expiresAt) {
 
 function renderOrganizationList(title, rows, type, { isPlatformAdmin = false } = {}) {
   return `
-    <section class="panel organization-list-card">
+    <section class="panel organization-list-card" data-athlete-filter-scope>
       <div class="organization-list-head"><p class="eyebrow">${escapeHtml(title)}</p><strong>${rows.length}</strong></div>
+      ${type === "athlete" ? renderAthleteFilter("settings-athletes", rows) : ""}
       <div class="organization-list">
         ${rows.length ? rows.map((row) => renderOrganizationRowV2(row, type, { isPlatformAdmin })).join("") : `<p class="muted">No ${escapeHtml(title.toLowerCase())} yet.</p>`}
       </div>
@@ -1447,7 +1453,7 @@ function renderOrganizationRowV2(row, type, { isPlatformAdmin = false } = {}) {
   const canEdit = type !== "user";
   const isAthlete = type === "athlete";
   return `
-    <article class="organization-row">
+    <article class="organization-row" ${isAthlete ? athleteFilterAttrs(row, "settings-athletes") : ""}>
       ${renderOrganizationRowContent(row, type)}
       <span class="organization-row-actions">
         ${isAthlete ? renderAthleteLoginToggle(row) : ""}

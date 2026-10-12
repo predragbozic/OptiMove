@@ -40,7 +40,10 @@ test("Today opens a searchable list limited to athletes training today", () => {
 test("sidebar and Home Training Load icons have identical paths", () => {
   const shell = readFileSync(new URL("../index.html", import.meta.url), "utf8");
   const sidebar = shell.match(/data-library-tab="training-load"[^>]*>[\s\S]*?<svg[^>]*>([\s\S]*?)<\/svg>/)?.[1];
-  const home = renderCoachHomeHtml({ user: state.currentUser }).match(/data-mode="load"><svg[^>]*>(.*?)<\/svg>/)?.[1];
+  // The workflow buttons exist only once the roster holds an athlete (an
+  // empty roster renders the empty state instead), so the icon is read
+  // from a Home with rows.
+  const home = renderCoachHomeHtml({ rows, user: state.currentUser }).match(/data-mode="load"><svg[^>]*>(.*?)<\/svg>/)?.[1];
   assert.ok(sidebar);
   assert.ok(home);
   assert.equal(sidebar.trim(), home.trim());
@@ -98,4 +101,117 @@ test("picker has an accessible dialog and escapes athlete and workspace labels",
   assert.match(html, /aria-label="Search athletes"/);
   assert.match(html, /&lt;script&gt;/);
   assert.doesNotMatch(html, /<script>bad/);
+});
+
+// --- Empty, error and trigger states (coach Home) ---
+
+function parse(html) {
+  const dom = new JSDOM(html);
+  return { doc: dom.window.document, close: () => dom.window.close() };
+}
+
+test("a roster that loaded with no athletes shows the empty state with Add athlete - no Today row, no pickers", () => {
+  const html = renderCoachHomeHtml({ rows: [], user: state.currentUser });
+  const { doc, close } = parse(html);
+  assert.match(html, /No athletes in this workspace yet/);
+  const cta = doc.querySelector('.coach-home-state [data-action="home-add-athlete"]');
+  assert.ok(cta, "the empty state carries the existing home-add-athlete action");
+  assert.equal(cta.tagName, "BUTTON");
+  assert.match(cta.textContent, /Add athlete/);
+  assert.ok(doc.querySelector('.coach-home-header [data-action="home-add-athlete"]'), "the header's round Add athlete stays");
+  assert.equal(doc.querySelectorAll('[data-action="coach-home-picker-open"]').length, 0);
+  assert.equal(doc.querySelector(".coach-home-today"), null);
+  assert.equal(doc.querySelector("dialog"), null);
+  assert.doesNotMatch(html, /athletes training|Training Plan|Training Load|coach-home-retry/);
+  close();
+});
+
+test("a failed load shows only the error and Try again - no pickers, no Today row, no dialog even with a picker mode left over", () => {
+  const html = renderCoachHomeHtml({ rows: [], error: "network down", user: state.currentUser, picker: { mode: "today" } });
+  const { doc, close } = parse(html);
+  const alert = doc.querySelector('[role="alert"]');
+  assert.ok(alert);
+  assert.match(alert.textContent, /Today's overview could not be loaded/);
+  assert.match(alert.textContent, /network down/);
+  const retry = doc.querySelector('[data-action="coach-home-retry"]');
+  assert.ok(retry, "the error state offers Try again");
+  assert.equal(retry.tagName, "BUTTON");
+  assert.match(retry.textContent, /Try again/);
+  assert.equal(doc.querySelectorAll('[data-action="coach-home-picker-open"]').length, 0);
+  assert.equal(doc.querySelector(".coach-home-today"), null);
+  assert.equal(doc.querySelector("dialog"), null);
+  assert.doesNotMatch(html, /athletes training|No athletes in this workspace/);
+  close();
+});
+
+test("the error message is escaped like every other value", () => {
+  const html = renderCoachHomeHtml({ rows: [], error: "<img src=x onerror=alert(1)>", user: state.currentUser });
+  assert.doesNotMatch(html, /<img src=x/);
+  assert.match(html, /&lt;img src=x/);
+});
+
+test("Try again re-runs loadCoachHome with forceRefresh in app.js - never a page reload", () => {
+  // app.js touches document at module scope through its import chain, so the
+  // handler is checked over the source text (the same source-pattern guard
+  // every other app.js-adjacent test in this suite uses); the real click is
+  // exercised in the browser QA of the change.
+  const source = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const start = source.indexOf('type === "coach-home-retry"');
+  assert.ok(start >= 0, "app.js must handle coach-home-retry");
+  const block = source.slice(start, source.indexOf("return;", start));
+  assert.match(block, /await loadCoachHome\(\{\s*forceRefresh:\s*true\s*\}\)/);
+  assert.doesNotMatch(block, /location\.(reload|assign|replace)|fetch\(/);
+});
+
+test("platform administration Home is untouched by the empty and error states", () => {
+  const user = { activeWorkspace: { type: "platform" }, availableWorkspaces: [{ type: "private_coach" }, { type: "club", scopeId: "club-a", label: "My Club" }] };
+  const html = renderCoachHomeHtml({ rows: [], user });
+  assert.match(html, /class="coach-home-workspaces"/);
+  assert.doesNotMatch(html, /coach-home-state|No athletes in this workspace yet|coach-home-retry|home-add-athlete/);
+  const errored = renderCoachHomeHtml({ rows: [], error: "x", user });
+  assert.match(errored, /<p class="builder-error" role="alert">x<\/p>/);
+  assert.match(errored, /class="coach-home-workspaces"/);
+  assert.doesNotMatch(errored, /coach-home-state|coach-home-retry/);
+  const none = renderCoachHomeHtml({ rows: [], user: { activeWorkspace: { type: "platform" }, availableWorkspaces: [] } });
+  assert.match(none, /No coaching workspaces available/);
+  assert.doesNotMatch(none, /coach-home-state/);
+});
+
+test("all three picker triggers declare aria-haspopup=dialog and the Today row carries the chevron", () => {
+  const { doc, close } = parse(renderCoachHomeHtml({ rows, user: state.currentUser }));
+  const triggers = doc.querySelectorAll('[data-action="coach-home-picker-open"]');
+  assert.equal(triggers.length, 3);
+  for (const trigger of triggers) {
+    assert.equal(trigger.tagName, "BUTTON");
+    assert.equal(trigger.getAttribute("aria-haspopup"), "dialog");
+  }
+  const today = doc.querySelector(".coach-home-today");
+  assert.equal(today.dataset.mode, "today");
+  assert.ok(today.querySelector('svg.coach-home-workspace-arrow[aria-hidden="true"]'), "the Today row shows the same chevron as the workspace rows");
+  assert.match(today.textContent, /Today/);
+  assert.match(today.textContent, /1 \/ 2 athletes training/);
+  close();
+});
+
+test("Today still opens the same dialog, limited to athletes training today, with the trigger kept behind it", () => {
+  const { doc, close } = parse(renderCoachHomeHtml({ rows, user: state.currentUser, picker: { mode: "today" } }));
+  const dialog = doc.querySelector("dialog.coach-home-picker");
+  assert.ok(dialog);
+  assert.equal(dialog.getAttribute("aria-labelledby"), "coachHomePickerTitle");
+  assert.equal(doc.querySelector("#coachHomePickerTitle").textContent, "Today");
+  assert.ok(dialog.querySelector('[data-action="coach-home-picker-close"]'));
+  assert.ok(dialog.querySelector("input[data-coach-home-search]"));
+  const athleteRows = dialog.querySelectorAll('[data-action="coach-home-open-athlete"]');
+  assert.equal(athleteRows.length, 1);
+  assert.equal(athleteRows[0].dataset.mode, "today");
+  assert.equal(athleteRows[0].dataset.athleteId, "17");
+  assert.ok(doc.querySelector('.coach-home-today[data-action="coach-home-picker-open"]'));
+  close();
+});
+
+test("the dead card, list and summary Home selectors stay out of styles.css while the avatar rules stay in", () => {
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  assert.doesNotMatch(css, /\.coach-home-(card|cards|list|summary)\b/);
+  assert.match(css, /\.coach-home-avatar\b/);
+  assert.match(css, /\.coach-home-avatar-fallback\b/);
 });

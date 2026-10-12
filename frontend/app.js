@@ -63,6 +63,7 @@ import {
 } from "./coach-profile-actions.js";
 import { renderCoachesHtml } from "./coach-profiles.js";
 import { renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
+import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
@@ -962,6 +963,10 @@ function normalizeTouchPointerEvent(event) {
 }
 
 function handleContentInput(event) {
+  if (event.target.matches("[data-athlete-filter]")) {
+    handleAthleteFilter(event.target);
+    return;
+  }
   if (event.target.matches("[data-coach-home-search]")) {
     coachHomePicker.query = event.target.value;
     const list = els.content.querySelector(".coach-home-picker-list");
@@ -2404,6 +2409,13 @@ async function handleContentClick(event) {
     closeCoachHomePicker();
     return;
   }
+  // Home's error state (renderErrorStateHtml, coach-home.js): the same
+  // loader the tab entry uses, forced past the cache - a failed first load
+  // is never cached, a stale good entry must not be re-shown as the answer.
+  if (type === "coach-home-retry") {
+    await loadCoachHome({ forceRefresh: true });
+    return;
+  }
   if (type === "coach-home-open-athlete") {
     const row = coachHomeRows.find((entry) => entry.athleteId === action.dataset.athleteId);
     if (!row) return;
@@ -2741,6 +2753,7 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
 // workspace this account happened to already visit earlier in the session
 // is re-verified against the server rather than trusted purely from cache.
 async function onWorkspaceChanged() {
+  clearAthleteFilters();
   const generation = ++workspaceRosterGeneration;
   const contextKey = buildContextKey(currentUserWorkspaceContextParts());
   coachHomeRows = [];
@@ -2827,10 +2840,7 @@ async function renderAfterOrganizationAccessChange({ refresh = false } = {}) {
 
 function renderAthleteList() {
   const search = els.athleteSearch.value.trim().toLowerCase();
-  const filteredAthletes = state.athletes.filter((athlete) => {
-    const haystack = `${athlete.athlete_id} ${athlete.athlete}`.toLowerCase();
-    return haystack.includes(search);
-  });
+  const filteredAthletes = state.athletes.filter((athlete) => athleteMatches(athlete, search));
   const athletes = filteredAthletes;
 
   els.athleteList.innerHTML = renderAthleteListHtml(athletes, state.selectedAthleteId);
