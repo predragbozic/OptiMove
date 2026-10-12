@@ -2409,6 +2409,13 @@ async function handleContentClick(event) {
     closeCoachHomePicker();
     return;
   }
+  // Home's error state (renderErrorStateHtml, coach-home.js): the same
+  // loader the tab entry uses, forced past the cache - a failed first load
+  // is never cached, a stale good entry must not be re-shown as the answer.
+  if (type === "coach-home-retry") {
+    await loadCoachHome({ forceRefresh: true });
+    return;
+  }
   if (type === "coach-home-open-athlete") {
     const row = coachHomeRows.find((entry) => entry.athleteId === action.dataset.athleteId);
     if (!row) return;

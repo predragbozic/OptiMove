@@ -191,3 +191,29 @@ test("10. logout/login (clearAllViewCache) fully clears the Home cache", async (
   clearAllViewCache();
   assert.equal(hasCachedData(getCacheEntry("coach-home", coachHomeContextKey())), false);
 });
+
+// Home's error state offers "Try again" (coach-home.js renderErrorStateHtml),
+// which app.js answers with loadCoachHome({ forceRefresh: true }). The part
+// that matters lives here, on the data layer: after a REJECTED first fetch the
+// next call must send a new request and render its rows - it depends on the
+// cache clearing the rejected pending promise (view-cache.js setCacheError /
+// clearPendingRequest), which no earlier test exercises past the failure.
+test("11. after a failed FIRST load, loadCoachHome({ forceRefresh: true }) issues a NEW request and renders the rows", async () => {
+  resetState();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) throw new Error("network down");
+    return { ok: true, status: 200, json: async () => todayPayload([{ athleteId: "a1", athlete: "after-retry" }]) };
+  };
+  const first = handlers();
+  await loadCoachHome(first);
+  assert.equal(first.renderCalls[0].error, "network down");
+
+  const retry = handlers();
+  await loadCoachHome({ ...retry, forceRefresh: true });
+  assert.equal(calls, 2, "Try again must send a new request, never reuse the rejected one");
+  assert.equal(retry.loadingCalls.length, 1, "nothing was cached, so the loading screen shows once more");
+  assert.equal(retry.renderCalls.at(-1).error, "");
+  assert.equal(retry.renderCalls.at(-1).rows[0].athlete, "after-retry");
+});
