@@ -344,12 +344,12 @@ them (review history in K2):
     FK contracts (section E, "Parameter fingerprint").
 33. The active canonical target of a source metric with given parameters is unique **per owner**,
     not globally: the platform may hold a system mapping, each club its own mapping of the same
-    field and parameters towards its own club variable, enforced by the database through checked
-    owner copies on T4 (D6); none is activated automatically, and when a system and a club mapping
+    field and parameters towards its own club variable, enforced by the database through a checked,
+    non-null owner key on T4 (`'system'` or the club id, D6); none is activated automatically, and when a system and a club mapping
     coexist the platform admin chooses explicitly which one a binding uses. T5 still admits only
     one open activation per (field, parameters) and per (canonical, scope) on a binding.
 34. The exact rational conversion `canonical = source × scale / scale_divisor + offset`:
-    `scale_divisor > 0`, no NaN, identity as `1, 1, 0`, factors normalized where possible, no
+    `scale_divisor > 0`, every factor finite (no NaN, no infinity), identity as `1, 1, 0`, factors normalized where possible, no
     binary floating-point arithmetic in the import writer, every historical mapping version keeps
     its own factors, a retired `unit_conversions` row changes no history — still a linear numeric
     conversion, not a new kind of formula.
@@ -370,8 +370,9 @@ them (review history in K2):
     confirmed together with the meaning evidence, a closed operator set, the canonical
     `condition_description.operator` semantically equal, a changed operator a new revision, an old
     fact bound to the old contract.
-39. The storage scale S = 9 decimals: decimal arithmetic, round half away from zero, the same
-    implementation in the writer and in the database check, `rounding_decimals` a future
+39. The storage scale S = 9 decimals: decimal arithmetic, round half away from zero, the same rule
+    in the writer and in the database check (the check accepts exactly the value the rule produces
+    and no other, D8), `rounding_decimals` a future
     presentation field without effect on the pilot, a display free to show fewer decimals without
     changing the stored value, and a characterisation test proving that today's GPEXE values stay
     equivalent within the existing `1e-9` contract.
@@ -511,8 +512,12 @@ comparison is to be checked in M1.
   with `owner_club_id` (`system` ⇔ null club); `created_by_user_id`, `created_at`.
 - Uniqueness: `unique (source_metric_definition_id, metric_definition_id)` — one lineage per pair,
   changes go through versions; `unique (id, source_metric_definition_id, metric_definition_id)`,
-  `unique (id, source_system, api_family)` and `unique (id, owner_scope, owner_club_id)` (anchors;
-  the last one lets T4 carry checked owner copies for the per-owner uniques of D6).
+  `unique (id, source_system, api_family)` and `unique (id, owner_key)` (anchors; the last one lets
+  T4 carry a checked, non-null owner key for the per-owner unique of D6). `owner_key text not
+  null` is a generated stored column, `coalesce(owner_club_id::text, 'system')`: it is never NULL,
+  so a composite FK that copies it is always checked (PostgreSQL's default `MATCH SIMPLE` skips a
+  foreign key whenever a referencing column is NULL, which is why the nullable `owner_club_id` is
+  not used as a copied key).
 - Trigger: a `system` mapping targets a `system` canonical definition; a `club` mapping targets a
   `club` definition of the same club; the definition is `active` at creation. Identity immutable;
   DELETE refused.
@@ -522,17 +527,23 @@ comparison is to be checked in M1.
 - Purpose: the only place a non-identity factor between two units may come from, checkable by the
   database. **It is not a metric catalog**: it holds no metric key, label, type, level or
   semantics, only a pair of free-text units of the existing registries and a factor.
-- Columns: `id`; `from_unit`, `to_unit` (1–30, different); `scale numeric` (`<> 0`, not NaN);
-  `scale_divisor numeric` (`> 0`, not NaN; `1` when the factor is a terminating decimal);
-  `offset numeric` (not NaN); `state` in `active|retired` with `retired_by/at/reason`;
+- Columns: `id`; `from_unit`, `to_unit` (1–30, different); `scale numeric` (`<> 0`, finite);
+  `scale_divisor numeric` (`> 0`, finite); `offset numeric` (finite) — "finite" is a CHECK that
+  refuses `NaN`, `Infinity` and `-Infinity`, all three of which a PostgreSQL 14+ `numeric` can hold;
+  `check (scale = 1 or scale_divisor = 1)`; `state` in `active|retired` with `retired_by/at/reason`;
   `evidence_ref` (required, the D3 shape CHECK); `created_by_user_id`, `created_at`;
   `seed_migration text` (CHECK: exactly one of actor or seed marker, D12). The
   conversion is `canonical = source × scale / scale_divisor + offset`; the divisor exists so that
   factors such as 1/60 and 1/3.6 are exact rational constants in `numeric`, never a rounded decimal
   (a representation of the owner's linear rule, decision 12, not a new kind of conversion; accepted
-  2026-10-12, C34). A factor is stored normalized where the pair allows it (`3.6, 1` rather than
-  `36, 10`; `1, 60` rather than `2, 120`), the M2 API refuses a non-normalized pair, and the import
-  writer never computes in binary floating point (D8, J M4).
+  2026-10-12, C34). **Normal form:** a factor whose value is a terminating decimal is stored as
+  `(that decimal, 1)` — `m/s → km/h` is `(3.6, 1)`, `m → km` is `(0.001, 1)`; a factor that is not
+  (1/60, 1/3.6) is stored as `(1, d)` with `d` its reciprocal in shortest terminating decimal form —
+  `(1, 60)`, `(1, 3.6)`, never `(2, 120)`, `(36, 10)` or `(5, 18)`. The CHECK `scale = 1 or
+  scale_divisor = 1` refuses every pair with two non-unit factors; numeric equality makes `3.60` and
+  `3.6` the same value; the M2 API refuses any other non-normal pair; the database enforces the
+  exact tuple match against the single active row of the pair. The import writer never computes in
+  binary floating point (D8, J M4).
 - Uniqueness: `unique (from_unit, to_unit) where state = 'active'`.
 - Maintained by a platform admin through M2 (T8 `unit_conversion_create` / `_retire`) or by a data
   migration. Rows are immutable; a correction is `retired` plus a new row. A T4 version keeps **its
@@ -540,7 +551,7 @@ comparison is to be checked in M1.
   only gates new versions. Identity pairs need no row: the trigger accepts `1, 1, 0` when the units are
   string-equal.
 - Seed (M1), as (scale, scale_divisor, offset): `s → min (1, 60, 0)`, `m/s → km/h (3.6, 1, 0)`,
-  `m → km (1, 1000, 0)`, `km/h → m/s (1, 3.6, 0)`.
+  `m → km (0.001, 1, 0)`, `km/h → m/s (1, 3.6, 0)`.
 
 ### D6. T4 `training_load.source_metric_mapping_versions` — the immutable mapping contract
 
@@ -548,16 +559,19 @@ comparison is to be checked in M1.
   conversion and the semantic parameters snapshotted.
 - Columns: `id`; `mapping_id`, `source_metric_definition_id`, `metric_definition_id` with
   `fk (mapping_id, source_metric_definition_id, metric_definition_id) → T3 (id, …)`;
-  `owner_scope`, `owner_club_id` (checked copies of the mapping's owner through
-  `fk (mapping_id, owner_scope, owner_club_id) → T3 (id, owner_scope, owner_club_id)`, so that the
-  per-owner uniques below are enforced by the database, not by the application — status lives on
-  this table and ownership on T3, and a partial index cannot join);
+  `owner_key text not null` (the checked copy of the mapping's owner through `fk (mapping_id,
+  owner_key) → T3 (id, owner_key)`; T3's `owner_key` is never NULL — a club id, or `'system'` —
+  so this FK is checked for every row, system rows included, which a copy of the nullable
+  `owner_club_id` would not be under PostgreSQL's default `MATCH SIMPLE`; the INSERT trigger fills
+  it from T3 and refuses a supplied value that differs; immutable from INSERT. It exists because
+  status lives on this table and ownership on T3, and a partial unique index cannot join — so the
+  per-owner unique below is enforced by the database, not by the application);
   `source_metric_version_id` with `fk (source_metric_version_id, source_metric_definition_id) → T2b
   (id, source_metric_definition_id)` (**the exact revision**); `version_number > 0`;
   `metric_definition_version_id` with `fk (metric_definition_version_id, metric_definition_id) →
   metric_definition_versions (id, metric_definition_id)` (the exact canonical version);
-  `conversion_kind` in `numeric_linear` (M1); `scale` (`<> 0`, not NaN), `scale_divisor` (`> 0`,
-  not NaN), `offset` (not NaN), `rounding_decimals` (null or 0–6, a presentation field unused in the pilot; the
+  `conversion_kind` in `numeric_linear` (M1); `scale` (`<> 0`, finite), `scale_divisor` (`> 0`,
+  finite), `offset` (finite), `check (scale = 1 or scale_divisor = 1)`, `rounding_decimals` (null or 0–6, a presentation field unused in the pilot; the
   storage scale of an imported value is the fixed S = 9 decimals of D8, not this column); `source_unit`, `target_unit` (copies,
   checked against the revision and the canonical version); `conversion_note` (bounded single-line text, 1–500; required when the
   units differ); `parameter_kind` (copy of the revision); `source_parameters jsonb`,
@@ -567,18 +581,20 @@ comparison is to be checked in M1.
   parameter text defined in section E, "Parameter fingerprint"; it lets one source field feed
   several canonical zone variables, one per distinct bound set, and carries no athlete, session or
   team identity);
-  `parameter_scale`, `parameter_scale_divisor`, `parameter_offset`; `applies_to_session`,
+  `parameter_scale` (`<> 0`, finite), `parameter_scale_divisor` (`> 0`, finite),
+  `parameter_offset` (finite), `check (parameter_scale = 1 or parameter_scale_divisor = 1)`;
+  `applies_to_session`,
   `applies_to_drill` (at least one); `status` in `draft|needs_review|active|disabled` with
   `submitted_by/at`, `submitted_basis` (`platform_admin|club_admin`), `activated_by/at`,
   `activated_basis` (`platform_admin`), `disabled_by/at`, `disabled_basis` (`platform_admin`),
   `disable_reason` (bounded single-line text); `created_by_user_id`, `created_at`.
 - Uniqueness: `unique (mapping_id, version_number)`; `unique (mapping_id) where status = 'active'`
   — one active version per mapping; **the active canonical target of a source metric with given
-  parameters is unique within one owner** (owner decision of 2026-10-12, C33), enforced by two
-  partial unique indexes over the checked owner copies: `unique (source_metric_definition_id,
-  parameter_fingerprint) where status = 'active' and owner_scope = 'system'` and `unique
-  (source_metric_definition_id, parameter_fingerprint, owner_club_id) where status = 'active' and
-  owner_scope = 'club'` — so the platform may hold a system mapping of a (field, parameters) pair,
+  parameters is unique within one owner** (owner decision of 2026-10-12, C33), enforced by one
+  partial unique index over the checked owner key: `unique (source_metric_definition_id,
+  parameter_fingerprint, owner_key) where status = 'active'` — the system scope is the single key
+  `'system'` and each club its own id, which is exactly the owner's "system: (field, fingerprint);
+  club: (field, fingerprint, owner_club_id)" — so the platform may hold a system mapping of a (field, parameters) pair,
   each club its own mapping of the same pair towards its own club variable, and none of them is
   ever activated automatically; within one owner the same pair never has two active targets, and
   the three power zones of one field are three fingerprints that may all be active; `unique (id,
@@ -653,7 +669,8 @@ comparison is to be checked in M1.
   identity check as T4; the basis label is never enough), and the ending UPDATE checks
   `ended_by_user_id` the same way; the version is `active`; the binding is `active`; the binding's
   `source_system` equals the field's; the `api_family` of the binding's connection host (`source_host_catalog`,
-  through `connection.host_key`) equals the field's; a `system` mapping on any binding, a `club`
+  through `connection.host_key`) equals the field's; the mapping's owner is read from T3 (never from
+  an unchecked value of the caller; T4's `owner_key` is its checked copy); a `system` mapping on any binding, a `club`
   mapping only on a binding whose connection is club-owned by that club; a `team`-owned connection
   (allowed by v27, created by no route today) may host a `system` mapping only when
   `connection.owner_team_id = binding.team_id`, and **never a club mapping** — the v27 team-move
@@ -679,20 +696,25 @@ comparison is to be checked in M1.
   `mapping_id` with `fk (mapping_version_id, mapping_id) → T4 (id, mapping_id)`;
   `source_metric_version_id` with `fk (mapping_version_id, source_metric_version_id) → T4 (id,
   source_metric_version_id)`; `metric_source_connection_id → metric_source_connections(id)`;
-  `source_unit` (not null); `source_value_numeric` (not null, not NaN); `recorded_at`.
+  `source_unit` (not null); `source_value_numeric` (not null, finite); `recorded_at`.
 - Trigger: the value's `metric_definition_id` and `metric_definition_version_id` equal the ones
   pinned by the mapping version; `unit_at_capture = target_unit`; `source_unit` equals the pinned
-  revision's `source_unit`; the arithmetic holds at the **storage scale S = 9 decimals**: the writer
-  stores `value_numeric = round(source_value_numeric × scale / scale_divisor + offset, 9)` (half away
-  from zero) and the trigger recomputes exactly that expression in `numeric` with the same `round`
-  and compares equal — exact equality is for the constants of section E, never for a quotient such
-  as `seconds / 60`, which is not a terminating decimal; S is a storage rule of M1, while
-  `rounding_decimals` stays an unused presentation field (C25); M1 writes the comparison with
-  multiplications only, `abs(value_numeric × scale_divisor − (source_value_numeric × scale + offset
-  × scale_divisor)) ≤ scale_divisor × 5 × 10^-10`, so it never depends on PostgreSQL's numeric
-  division scale; the writer and the trigger implement the same rounding (half away from zero at
-  9 decimals), a display may show fewer decimals without changing the stored value, and
-  `rounding_decimals` has no effect on the pilot (accepted 2026-10-12, C39);
+  revision's `source_unit`; the arithmetic holds at the **storage scale S = 9 decimals** under one
+  rule, applied by both sides (C39): the writer stores `value_numeric` = the exact value
+  `(source_value_numeric × scale + offset × scale_divisor) / scale_divisor` rounded to 9 decimals,
+  half away from zero, computed in decimal arithmetic; the trigger accepts exactly that value and
+  no other, with multiplications only, so it never depends on PostgreSQL's numeric division scale:
+  with `n = source_value_numeric × scale + offset × scale_divisor`, `d = value_numeric ×
+  scale_divisor − n` and `h = scale_divisor × 5 × 10^-10` (half a unit of the 9th decimal, scaled),
+  the trigger requires `scale(value_numeric) <= 9` **and** (`abs(d) < h` **or** (`abs(d) = h` and
+  `sign(d) = sign(n)`)). The first condition puts the value on the 9-decimal grid; `abs(d) < h`
+  picks the unique nearest grid value; the tie case `abs(d) = h` admits only the neighbour away from
+  zero. All of it is exact `numeric` arithmetic (`scale()` and `trim_scale()` need PostgreSQL 13 or
+  later, which J M1 verifies on the local and the deployed server before relying on them). Exact
+  equality without rounding is for the constants of section E only, never for a quotient such as
+  `seconds / 60`, which is not a terminating decimal. S is a storage rule of M1; a display may show
+  fewer decimals without changing the stored value, and `rounding_decimals` stays an unused
+  presentation field without effect on the pilot (C25, C39);
   the binding's connection `host_key` equals the instance's `source_host_key`; the value's occasion → identity →
   the same `metric_source_connection_id`; that connection's `source_system` and
   `source_instance_key` equal the binding's `source_system` and `source_team_id`.
@@ -746,7 +768,7 @@ comparison is to be checked in M1.
   across them, the writer refuses `session_imported_under_another_instance` when the session's
   external id already exists under any v11 row with the same `(source_system, source_host_key,
   source_instance_key)`, whatever its state — one GPEXE session is never imported into two OptiMove
-  teams. Whether the unique should be unconditional instead is an owner decision recorded in K2.
+  teams. The unique stays partial (decided, C36; review history K2 item 5).
 
 ### D10. T8 `training_load.source_metric_audit` — append-only, without a value-bearing column
 
@@ -782,7 +804,7 @@ comparison is to be checked in M1.
    both append-only).
 4. One active version per mapping (T4 partial unique).
 5. Within one owner (the system, or one club) the same source metric with the same parameters
-   never has two active canonical targets (two T4 partial uniques over the checked owner copies,
+   never has two active canonical targets (one T4 partial unique over the checked owner key,
    by field identity and parameter fingerprint); different owners may each hold their own.
 6. Alternative source fields of the same API family may exist for the same canonical variable (no
    global unique on T4 by canonical and family).
@@ -846,12 +868,17 @@ actor and no seed marker.
   `|<key>=<value>` with the keys sorted bytewise ascending (so for `zone_bounds`:
   `lower`, `operator`, `unit`, `upper`; for `event_threshold`: `duration_seconds`, `operator`,
   `threshold_value`, `unit`); a numeric value is rendered through `trim_scale()` in plain decimal
-  notation (no exponent, no trailing zeros, `-0` rendered as `0`, so 25 and 25.0 agree); a JSON
-  null (an open top zone's `upper`) is rendered as the four characters `null`; a text value
-  (`unit`, `operator`) is rendered as its UTF-8 bytes without quotes; no other key is allowed by
-  the shape CHECK, so nothing else can enter. `parameter_fingerprint = 'v1:' || encode(sha256(
-  canonical_text), 'hex')` (64 lower-case hex characters after the prefix); `''` for
-  `parameter_kind = 'none'`. The prefix is the canonicalisation version: a change of the rule is
+  notation (no exponent, no trailing zeros, so 25 and 25.0 agree); a JSON null (an open top zone's
+  `upper`) is rendered as the four characters `null`; a text value (`unit`, `operator`) is rendered
+  as its UTF-8 bytes without quotes. The shape CHECK admits no other key, requires `jsonb_typeof`
+  `number` for `lower`, `upper` (or `null`), `threshold_value` and `duration_seconds` and `string`
+  for `unit` and `operator`, takes `operator` from the closed set of D3, and refuses `|`, `=` and
+  control characters in `unit`, so the canonical text is unambiguous and nothing else can enter.
+  `parameter_fingerprint = 'v1:' || encode(sha256(convert_to(canonical_text, 'UTF8')), 'hex')`
+  (`sha256` takes `bytea`; 64 lower-case hex characters after the prefix); `''` for
+  `parameter_kind = 'none'`. Two CHECKs hold it in shape: `(parameter_kind = 'none') =
+  (parameter_fingerprint = '')` and `parameter_fingerprint = '' or parameter_fingerprint ~
+  '^v[0-9]+:[0-9a-f]{64}$'`. The prefix is the canonicalisation version: a change of the rule is
   `v2:`, applied only to new versions, never to a stored row, so an old mapping version keeps the
   fingerprint it was activated with. The fingerprint contains bounds, units and the operator only —
   never an athlete, session, team, club or connection identity, and never a measured value. The
@@ -1018,10 +1045,10 @@ the rejected track, only on a new owner decision. No automation.
 
 | PR | Scope | Explicitly not changed | Review triggers | Reviewers | Acceptance criteria | Production gates |
 |---|---|---|---|---|---|---|
-| **M1 schema foundation** | Migration: D1 `api_family`, T2a, T2b, T3, `unit_conversions`, T4, T5, T6, T7, T8, `unique (id, team_id)` on `source_team_bindings`, the `metric_definitions` guard; the D12 seed; rollback script (refuses once any T3–T6 row exists, once T2a / T2b / `unit_conversions` differ from the seed, or under a later migration); tests on a disposable database (apply / rollback; every trigger, CHECK and partial unique with a mutation that the test kills; two concurrent activations; the equivalence trigger with equal and different bound units; T6 consistency); the undo script extended to delete T6 first (disposable only); every new trigger raises a fixed message without an id; the identity triggers of D6 / D7 (active platform admin, `42501`); the shape CHECK of every `evidence_ref` and the bounded single-line CHECK of every free-text column | The importer, routes, frontend, the v33 flow, `GPEXE_IMPORT_APPLY_ENABLED`, every persistent database | 1 (migration, rollback), 2 (`owner_scope` in triggers), 4 (lock order, idempotency) | `db-reviewer`, `security-reviewer`, `code-reviewer`; external review by the owner | No active mapping after the migration; `api_family` equals `sourceHosts.js`; rollback rehearsed; the identity triggers refuse a non-platform-admin actor with `42501`; the shape CHECKs refuse a space or a control character; existing Metrics Core and GPEXE suites pass under the T1 runner | The migration reaches the deployed database only through a merge and deploy the owner orders (`.claude/rules/database-safety.md`); no data beyond the seed; the local OPTIMOVE database only on a separate order |
+| **M1 schema foundation** | Migration: D1 `api_family`, T2a, T2b, T3, `unit_conversions`, T4, T5, T6, T7, T8, `unique (id, team_id)` on `source_team_bindings`, the `metric_definitions` guard; the D12 seed; rollback script (refuses once any T3–T6 row exists, once T2a / T2b / `unit_conversions` differ from the seed, or under a later migration); tests on a disposable database (apply / rollback; every trigger, CHECK and partial unique with a mutation that the test kills; two concurrent activations; the equivalence trigger with equal and different bound units; T6 consistency); the undo script extended to delete T6 first (disposable only); every new trigger raises a fixed message without an id; the identity triggers of D6 / D7 (active platform admin, `42501`); the shape CHECK of every `evidence_ref` and the bounded single-line CHECK of every free-text column | The importer, routes, frontend, the v33 flow, `GPEXE_IMPORT_APPLY_ENABLED`, every persistent database | 1 (migration, rollback), 2 (`owner_scope` in triggers), 4 (lock order, idempotency) | `db-reviewer`, `security-reviewer`, `code-reviewer`; external review by the owner | No active mapping after the migration; `api_family` equals `sourceHosts.js`; rollback rehearsed; the identity triggers refuse a non-platform-admin actor with `42501`; the shape CHECKs refuse a space or a control character; a T4 row whose `owner_key` differs from its T3 row is refused (system rows included); the T6 check accepts exactly the round-half-away-from-zero value at 9 decimals and refuses its other neighbour in a tie; the fingerprint of a fixed parameter set equals a value computed independently; the server version of the local and the deployed database is PostgreSQL 13 or later (`scale()`, `trim_scale()`) before the migration relies on it; existing Metrics Core and GPEXE suites pass under the T1 runner | The migration reaches the deployed database only through a merge and deploy the owner orders (`.claude/rules/database-safety.md`); no data beyond the seed; the local OPTIMOVE database only on a separate order |
 | **M2 admin API** | Routes under `/api/training-load/sources/metrics…` for T2a / T2b (list, create, revise, verify unit, verify meaning, activate / retire a revision), T3 / T4 (create, version, transitions, replacement), T5 (activate, end, "every active binding of this connection"), `unit_conversions`, T8 reads; `requestKey` on every write; the aggregate preview over a saved candidate (count of athletes with a value, min, max, units before and after; `snapshot_expired` when the raw snapshot is purged); the extractor registry keyed by `source_metric_key` (`source_metric_unsupported` otherwise); the lock order and the bounded transactions of D3 / D6; ownership and the active workspace resolved in the service before any trigger; stable codes only, a transition conflict `409`; the preview's authorization (H); the platform-admin operation that ends a held source instance (D9) | The importer, the UI, migrations | 2 (auth, info hiding), 4 (transactions, idempotency) | `code-reviewer`, `security-reviewer`; external review | Secret scan of every response and audit row; info-hiding tests per role and workspace; a test that no response carries a trigger's text or an SQLSTATE; a replay re-checks the caller's right; the preview never returns `raw_bundle` or a row per athlete and answers the identical 404 before `snapshot_expired` to a caller outside the candidate's club; every transition audited | None (no production data changes without an admin acting) |
 | **M3 frontend** | The three Settings views of section H over the existing Metrics Core routes and the M2 routes; rights of section G | Backend, the import | New user flow | `code-reviewer`, `mobile-qa`, `ux-design-reviewer`; browser QA at 1280 / 360 / 375 / 390 px | A canonical variable created through the UI is a row created through the existing API; activation is an explicit step whose confirmation names source, mapping version, team and binding | None |
-| **M4 GPEXE importer integration** | The mapper reads the open activations of the binding instead of `GPEXE_METRIC_SPECS`; the writer takes `metricDefinitionId` and version from the plan, creates no definition, writes T6 and sets the T7 keys at the first import; content hash and preview hash include the mapping version, source value and unit and the activation set; the preview carries the canonical name and unit plus the source value; helper values of Link athletes and `METRIC_TEXT` move to the source metric keys of the preview; the fail-closed table of section F plus `source_instance_held` (D9); the writer's arithmetic in decimal at the storage scale S = 9 of D8 (half away from zero, the same `round` the T6 trigger recomputes), never binary floating point; `session_imported_under_another_instance` (D9); the undo script's `PROTECTED_TRIGGERS` gains T6 (disposable only); the B7-style architecture test | The switch, Link, multi-track, the list and drill reads | 1 (persistent write path), 3 (canonical identity), 4; the five-point rule for transactions with an external effect | `code-reviewer`, `security-reviewer`, `db-reviewer`; external review | A characterisation test: the fixture with activated mappings yields the same numbers as today within the preview's existing `1e-9` tolerance (`gpexeImportPreview.js:137`; today's mapper divides in binary floating point, the new writer computes in decimal at the storage scale S = 9); without an activation zero values are imported and nothing is written to `metric_definitions`; the stored candidates turn *changed* exactly once | The switch stays off |
+| **M4 GPEXE importer integration** | The mapper reads the open activations of the binding instead of `GPEXE_METRIC_SPECS`; the writer takes `metricDefinitionId` and version from the plan, creates no definition, writes T6 and sets the T7 keys at the first import; content hash and preview hash include the mapping version, source value and unit and the activation set; the preview carries the canonical name and unit plus the source value; helper values of Link athletes and `METRIC_TEXT` move to the source metric keys of the preview; the fail-closed table of section F plus `source_instance_held` (D9); the writer's arithmetic in decimal at the storage scale S = 9 of D8 (half away from zero; the T6 trigger accepts exactly the value this rule produces), never binary floating point; `session_imported_under_another_instance` (D9); the undo script's `PROTECTED_TRIGGERS` gains T6 (disposable only); the B7-style architecture test | The switch, Link, multi-track, the list and drill reads | 1 (persistent write path), 3 (canonical identity), 4; the five-point rule for transactions with an external effect | `code-reviewer`, `security-reviewer`, `db-reviewer`; external review | A characterisation test: the fixture with activated mappings yields the same numbers as today within the preview's existing `1e-9` tolerance (`gpexeImportPreview.js:137`; today's mapper divides in binary floating point, the new writer computes in decimal at the storage scale S = 9); without an activation zero values are imported and nothing is written to `metric_definitions`; the stored candidates turn *changed* exactly once | The switch stays off |
 | **M5 multiple tracks** | Only on a new owner decision: a manual choice of one track with audit and observation | Everything else | 3, 4 | `code-reviewer`, `security-reviewer` | Decided with the order | Decided with the order |
 | **M6 units, pilot mapping, controlled first import** | Owner-run: gate (2) for `total_time`, `total_distance`, `max_v` on server3; the admin confirms units and meanings with references, creates the system variables, takes the mappings `draft → needs_review → active`, activates them on the First team binding with explicit requirements; one check with the switch off; then the decision on the first controlled import | No code beyond small fixes | 5 (only real evidence counts) | External review by the owner | The preview of a saved candidate shows the converted values in the canonical units | Conditions 1–3, 6 and 7 of `docs/ai/CURRENT_STATE.md` "Separate tasks", a fresh verified backup, the owner's explicit order for the switch and for every approval |
 
@@ -1066,9 +1093,11 @@ only on the owner's separate order.
    uniques are scoped by `(field, parameters)`. Without it the three power zones of
    `more.complementary_data.power.distance` could never all be active. Decided: accepted (C32).
 2. **Global or per-owner active-target unique** (D6): the review's default was the owner's literal
-   rule (global across system and every club). Decided: **per owner** (C33) — two partial unique
-   indexes over checked owner copies on T4 (system: `(field, fingerprint)`; club: `(field,
-   fingerprint, owner_club_id)`), the T5 per-binding uniques for exclusivity, and an explicit
+   rule (global across system and every club). Decided: **per owner** (C33) — one partial unique
+   index `(field, fingerprint, owner_key) where status = 'active'` over a checked, non-null owner key
+   on T4 (`'system'` for the system scope, the club id for a club; the final re-check showed that a
+   copy of the nullable `owner_club_id` would leave system rows unchecked under `MATCH SIMPLE`), the
+   T5 per-binding uniques for exclusivity, and an explicit
    platform-admin choice when a system and a club mapping coexist.
 3. **`scale_divisor`** (D5, D6, E, C12): the factor is kept as an exact rational (scale, divisor,
    offset) so that 1/60 and 1/3.6 are exact and the bound equivalence needs no division. Decided:
