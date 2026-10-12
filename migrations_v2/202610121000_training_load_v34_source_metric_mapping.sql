@@ -3,7 +3,7 @@
 --
 -- Contract: docs/ai/gpexe-metric-variable-mapping-discovery.md, sections C
 -- (owner decisions C1-C39, the M1 SQL decisions C40-C50 and the review
--- decisions C51-C55), D1-D12 and E.
+-- decisions C51-C56), D1-D12 and E.
 -- Rule: .claude/rules/metrics-core-mapping.md. Metrics Core
 -- (training_load.metric_definitions and its versions) stays the only
 -- registry of OptiMove variables; nothing here is a second one.
@@ -43,8 +43,8 @@
 -- user_club_roles, users, clubs (FOR SHARE). The triggers lock only parents
 -- they read, in that order: an activation locks its unit_conversions rows
 -- first (C52); a new fact (T6) locks T5, its binding and its Metrics Core
--- connection (C55); an owner change of a canonical definition holds that
--- row FOR UPDATE against a mapping insert's FOR SHARE (C51). T2a and the
+-- connection (C55); an owner change of a canonical definition is an UPDATE
+-- whose own row lock meets a mapping insert's FOR SHARE (C51). T2a and the
 -- v27 connection / catalog rows stay plain reads (T2a's state is implied by
 -- the chain T5 -> active T4 -> active T2b, see the T2a guard).
 --
@@ -776,9 +776,13 @@ create table training_load.source_metric_mapping_versions (
   source_unit                   text not null
                                   constraint source_metric_mapping_versions_source_unit_token
                                   check (training_load.source_metric_unit_token_ok(source_unit)),
+  -- The checked copy of the canonical unit (C56): a unit token like the
+  -- source unit, checked on every insert and every transition (an UPDATE
+  -- re-evaluates it); a canonical version whose unit is not a token is never
+  -- a mapping target (the INSERT trigger), while Metrics Core keeps it.
   target_unit                   text not null
-                                  constraint source_metric_mapping_versions_target_unit_check
-                                  check (char_length(target_unit) between 1 and 30),
+                                  constraint source_metric_mapping_versions_target_unit_token
+                                  check (training_load.source_metric_unit_token_ok(target_unit)),
   conversion_note               text
                                   constraint source_metric_mapping_versions_conversion_note_check
                                   check (conversion_note is null or training_load.source_metric_text_ok(conversion_note, 500)),
@@ -1079,6 +1083,15 @@ begin
   if mdv.unit is null or char_length(mdv.unit) not between 1 and 30 then
     raise exception 'source_metric_mapping_versions: canonical_unit_missing' using errcode = '23514';
   end if;
+  -- C56: the canonical unit must be a unit token (the D3 / C53 rule of every
+  -- source unit). Metrics Core keeps its free-text units and its rows are not
+  -- changed; such a version only is not a mapping target. The canonical
+  -- version is immutable (v10) and an activation re-checks that it is still
+  -- the definition's current one, so this check at creation holds for the
+  -- version's whole life.
+  if not training_load.source_metric_unit_token_ok(mdv.unit) then
+    raise exception 'source_metric_mapping_versions: canonical_unit_not_a_token' using errcode = '23514';
+  end if;
   if new.target_unit is distinct from mdv.unit then
     raise exception 'source_metric_mapping_versions: the target unit must be the canonical version''s unit' using errcode = '23514';
   end if;
@@ -1225,17 +1238,17 @@ create trigger metric_definitions_source_metric_guard
   for each row execute function training_load.source_metric_guard_canonical_definition();
 
 -- C51: once a mapping (T3) names a canonical definition, its owner never
--- changes. The owner change holds the definition row FOR UPDATE (taken
--- explicitly here, beside the UPDATE's own row lock) and reads T3 plain; a
--- mapping insert holds the same row FOR SHARE (T3 guard). Whichever comes
--- first, the other waits: a mapping created first makes the owner change
--- fail; an owner change committed first is what the mapping's ownership
--- check then reads.
+-- changes. The owner change is an UPDATE of the definition row, which takes
+-- that row's lock before this BEFORE trigger runs (the owner columns are in
+-- the definition's unique key, so it is the strongest row lock); it reads T3
+-- plain. A mapping insert holds the same row FOR SHARE (T3 guard), which
+-- conflicts with it. Whichever comes first, the other waits: a mapping
+-- created first makes the owner change fail; an owner change committed first
+-- is what the mapping's ownership check then reads.
 create function training_load.source_metric_guard_canonical_owner() returns trigger as $$
 begin
   if (new.owner_scope, new.owner_user_id, new.owner_club_id, new.owner_team_id)
      is distinct from (old.owner_scope, old.owner_user_id, old.owner_club_id, old.owner_team_id) then
-    perform 1 from training_load.metric_definitions where id = old.id for update;
     if exists (select 1 from training_load.source_metric_mappings where metric_definition_id = old.id) then
       raise exception 'metric_definitions: a canonical definition named by a mapping keeps its owner' using errcode = '23514';
     end if;

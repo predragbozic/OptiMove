@@ -66,7 +66,31 @@ before(async () => {
   await applyV34(mdb.url);
 });
 
+// The application modules (the db.js pool, the Metrics Core catalog writers,
+// the source-connection service) bound to the behaviour database: db.js reads
+// DATABASE_URL once, when it is first imported, so the variable points at the
+// disposable database only around that import and is then restored (an unset
+// variable stays unset, never the string "undefined"). The pool is ended in
+// after().
+let appPool = null;
+async function appModules() {
+  const originalUrl = process.env.DATABASE_URL;
+  process.env.DATABASE_URL = mdb.url;
+  try {
+    const [db, catalog, sources] = await Promise.all([
+      import("../src/db.js"), import("../src/trainingLoadMetricsCatalog.js"), import("../src/sourceConnectionService.js"),
+    ]);
+    appPool = db.pool;
+    assert.equal((await appPool.query("select current_database() as db")).rows[0].db, mdb.name, "SAFETY: the application modules talk to the disposable database");
+    return { catalog, sources };
+  } finally {
+    if (originalUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = originalUrl;
+  }
+}
+
 after(async () => {
+  await appPool?.end().catch(() => {});
   await r?.end().catch(() => {});
   await k?.end().catch(() => {});
   await rdb?.drop();
@@ -774,6 +798,19 @@ test("9. T4 insert: only as draft, only on a proven unit, owner key copied and c
   const textMd = await mapping(k, w, f, await canonical(k, { unit: "min", valueType: "text" }));
   await refused(() => version(k, w, textMd, minutes), { code: "23514", message: /not numeric/ });
   await refused(() => version(k, w, m, { ...minutes, target_unit: "h" }), { code: "23514", message: /target unit must be the canonical version's unit/ });
+  // C56: a canonical version whose unit is not a unit token is never a mapping
+  // target; Metrics Core keeps the version unchanged.
+  for (const bad of ["km h", "m\ts", "m|s", "a=b", "m\u00a0s", "m\u00ads", "m\u200bs", "m\u202es", "m\u2066s", "m\ufeffs"]) {
+    const badMd = await canonical(k, { unit: bad });
+    const badMapping = await mapping(k, w, f, badMd);
+    await refused(() => version(k, w, badMapping, { ...minutes, target_unit: bad }), { code: "23514", message: /canonical_unit_not_a_token/ });
+    assert.equal((await one(k, `select unit from training_load.metric_definition_versions where id = $1`, [badMd.versionId])).unit, bad, "the Metrics Core version is unchanged");
+  }
+  // The checked copy is a unit token by its own CHECK (trigger off).
+  await inRolledBackTx(k, async () => {
+    await k.query(`alter table training_load.source_metric_mapping_versions disable trigger source_metric_mapping_versions_insert_guard`);
+    await refused(() => version(k, w, m, { ...minutes, owner_key: "system", parameter_fingerprint: "", target_unit: "km h" }), { code: "23514", constraint: "source_metric_mapping_versions_target_unit_token" });
+  });
   // Levels.
   const sessionOnly = await field(k, w, { unit: "s", drill: false });
   const ms2 = await mapping(k, w, sessionOnly, await canonical(k, { unit: "min" }));
@@ -1189,14 +1226,9 @@ test("18. a seed marker is accepted only inside the seeding migration (42501 aft
 
 test("19. the existing Metrics Core catalog writers work beside the v34 guards: a new semantic version, an archive and a level removal succeed with no active mapping version and are refused (23514, nothing changed) while one pins the definition", async () => {
   const w = W;
-  const originalUrl = process.env.DATABASE_URL;
-  process.env.DATABASE_URL = mdb.url;
-  let pool;
-  try {
-    const catalog = await import("../src/trainingLoadMetricsCatalog.js");
-    ({ pool } = await import("../src/db.js"));
-    assert.equal((await pool.query("select current_database() as db")).rows[0].db, mdb.name, "SAFETY: the catalog module talks to the disposable database");
-    const req = { user: { id: w.pa }, authz: { platformRoles: ["platform_admin"], clubRoles: [], teamRoles: [], managedTeamIds: [] } };
+  const { catalog } = await appModules();
+  {
+    const req ={ user: { id: w.pa }, authz: { platformRoles: ["platform_admin"], clubRoles: [], teamRoles: [], managedTeamIds: [] } };
     // (a) Nothing pins these definitions.
     const free1 = await canonical(k, { unit: "min" });
     const v = await catalog.createDefinitionVersion(req, free1.id, { valueType: "numeric", unit: "min", reason: "New semantics" });
@@ -1225,10 +1257,6 @@ test("19. the existing Metrics Core catalog writers work beside the v34 guards: 
     assert.deepEqual(await one(k, `select current_version_id, state from training_load.metric_definitions where id = $1`, [pinned.id]), before, "nothing changed");
     assert.equal((await one(k, `select count(*)::int as n from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [pinned.id])).n, 2);
     assert.equal(await versionRows(), versionsBefore, "the refused re-version leaves no version row behind");
-  } finally {
-    await pool?.end().catch(() => {});
-    if (originalUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = originalUrl;
   }
 });
 
@@ -1357,7 +1385,7 @@ test("22. C52: an activation locks and checks again the active unit conversion o
   assert.equal(await status(d4.v.id), "needs_review");
 });
 
-test("23. C55: a new fact needs an open activation, an active binding and an active Metrics Core instance of one chain, a value of the binding's team at a level the activation covers; an ending of the binding or of the instance serializes with a new fact in both orders and never changes an existing fact", async () => {
+test("23. C55: a new fact needs an open activation, an active binding and an active Metrics Core instance of one chain, a value of the binding's team at a level the activation covers; an ending of the binding or of the instance serializes with a new fact in both orders and never changes an existing fact; the real Unbind waits for a fact in flight only up to its row lock_timeout and answers try_again (C58)", async () => {
   const w = W;
   const { minutes } = FP;
   const setup = async ({ session = true, drill = true, caps } = {}) => {
@@ -1431,6 +1459,40 @@ test("23. C55: a new fact needs an open activation, an active binding and an act
   const ib = await setup();
   const ibValue = await value(ib);
   expectRefusedOutcome(await interleave((a) => endInstance(a, ib), (b) => fact(b, ib, ibValue.valueId)), /inactive source instance/);
+  // C58: the real Unbind (backend/src/sourceConnectionService.js, unchanged)
+  // against a fact already in flight. Its wait on the binding row is bounded
+  // by the existing row lock_timeout and answers try_again with nothing
+  // changed; once the fact has committed, the same request ends the binding,
+  // the fact stays, and a later fact through the ended binding is refused.
+  const { sources } = await appModules();
+  const ctx = { userId: w.pa, basis: "platform_admin", workspace: { type: "platform" } };
+  const ub = await setup();
+  const ubValue = await value(ub);
+  const requestKey = crypto.randomUUID();
+  const unbind = () => sources.unbindTeam({
+    ctx, sourceSystem: "gpexe", id: ub.bind.connectionId, bindingId: ub.bind.bindingId,
+    body: { requestKey, reason: "Test ending", expected: { teamId: ub.bind.teamId, sourceTeamId: ub.bind.sourceTeam } },
+  });
+  const holder = new pg.Client({ connectionString: mdb.url });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await fact(holder, ub, ubValue.valueId);
+    const started = Date.now();
+    const busy = await unbind().then(() => null, (e) => e);
+    const waited = Date.now() - started;
+    assert.equal(busy?.code, "try_again", String(busy?.message));
+    assert.ok(waited >= sources.ROW_LOCK_TIMEOUT_MS - 250 && waited < sources.ROW_LOCK_TIMEOUT_MS + 8_000, `a bounded wait (${waited} ms)`);
+    assert.equal((await one(k, `select state from training_load.source_team_bindings where id = $1`, [ub.bind.bindingId])).state, "active", "nothing changed");
+    await holder.query("commit");
+  } finally {
+    await holder.end().catch(() => {});
+  }
+  const done = await unbind();
+  assert.equal(done.binding.state, "ended");
+  assert.equal(await factCount(ubValue.valueId), 1, "the fact written first stays");
+  const late = await value(ub);
+  await refused(() => fact(k, ub, late.valueId), { code: "23514", message: /ended binding/ });
 });
 
 test("24. every trigger refusal seen in this file is a fixed message of the migration: no id, no value, no source answer", () => {

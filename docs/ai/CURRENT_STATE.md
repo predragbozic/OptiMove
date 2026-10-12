@@ -1611,7 +1611,7 @@ Technical details.
   branch `feature/metrics-mapping-m1-schema` from `0293b39`; **implemented in an open pull request —
   not merged, not deployed, applied to no persistent database**). Migration v34
   (`migrations_v2/202610121000_training_load_v34_source_metric_mapping.sql`) builds sections D1–D10
-  and the D12 seed of the discovery document with the owner's M1 SQL decisions C40–C55 (2026-10-12):
+  and the D12 seed of the discovery document with the owner's M1 SQL decisions C40–C58 (2026-10-12):
   `source_host_catalog.api_family`; the source metric identities and their revisioned contracts (T2a,
   T2b); the mapping identities with a generated, never-NULL owner key (T3); `unit_conversions`; the
   immutable mapping versions with the database-computed parameter fingerprint and the per-owner active
@@ -1634,7 +1634,12 @@ Technical details.
   definition keeps its owner; an activation locks and re-checks its unit conversions; free text refuses a
   fixed list of invisible and bidi characters; scales are positive; a new T6 fact needs an active binding
   and Metrics Core connection of one chain, a value of the binding's team and a level the activation
-  covers (the import switch is not read). Before it is deployed:
+  covers (the import switch is not read). At the owner's external review of the next head (2026-10-12)
+  the C55 reading was confirmed (the Metrics Core connection `active`; the v27 credential connection in
+  the chain, its *Verified* / *Needs reconnect* state no condition) and three more were decided: a
+  canonical unit must be a unit token to be a mapping target (C56), the M4 writer's lock contract (C57,
+  future), and an Unbind's bounded wait on a fact in flight (C58, documented and tested, Unbind code
+  unchanged). Before it is deployed:
   the owner's external review; the PostgreSQL version of the deployed database
   confirmed as 13 or later (`scale()`, `trim_scale()`; the local disposable server is 17.5; the
   deployed one was not queried — it accepted v10's `unique nulls not distinct`, which needs 15, an
