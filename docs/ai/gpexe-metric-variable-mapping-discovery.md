@@ -659,9 +659,14 @@ context the database could check and that the application and the migrations sha
     sanitized `500 internal_error`. A COMMIT that PostgreSQL itself refuses with an ordinary ERROR
     (severity ERROR, a backend routine, not class 08, 57P or XX, not 40003) is a definite failure,
     nothing written; every other COMMIT error - FATAL, a connection pooler's own answer, a lost answer -
-    is verified by the request key (`verified_after_commit_error` or `503 outcome_unknown`). The expected
-    loss of a right stays M2's own `404`; a club admin granted the platform admin role while its write
-    runs answers `409 try_again` (the database would derive `platform_admin`). No public HTTP change.
+    is verified by the request key (`verified_after_commit_error` or `503 outcome_unknown`). The severity
+    is the localized one the driver receives, so on a server whose `lc_messages` is not English every
+    COMMIT error is verified by the request key - the safe direction. The expected loss of a right stays
+    M2's own `404`. A club admin granted the platform admin role while its write runs answers `409
+    try_again` (the database would derive `platform_admin`) when the grant is committed before the
+    request's rights check; a grant committed after that check and before the audit row is refused by
+    v35 (a sanitized `500`, nothing written; a role row that does not exist yet cannot be locked). No
+    public HTTP change.
 
 ---
 
@@ -1550,7 +1555,8 @@ and run first (trigger order is by name).
 - **M2:** `ACTOR_CONTEXT_SQL` in `runWrite` before the operation; `commitCertainlyRefused` classifies a
   COMMIT error as a definite refusal only when PostgreSQL itself raised an ordinary ERROR (C79), else it
   is verified by the request key; `rightsStillHold` answers `try_again` for a club admin who has become
-  an active platform admin. Two partial indexes serve the audit lookups
+  an active platform admin before its check (a later grant: v35's sanitized `500`, C79). Two partial
+  indexes serve the audit lookups
   (`source_metric_audit_v35_mapping_create_idx`, `source_metric_audit_v35_version_idx`).
 - **Production preflight** (read-only, for the owner, run block by block):
   `docs/runbooks/source-metric-mapping-v35-preflight.sql`.

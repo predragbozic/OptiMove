@@ -71,6 +71,9 @@ select count(*) as actor_defaults
 -- 8. A quiet moment: no lock held on the three tables, no idle-in-transaction
 --    session, no running GPEXE check, no running identity load.
 --    Expected: table_locks = 0, idle_in_transaction = 0, running_checks = 0, running_identity_loads = 0.
+--    A role without pg_read_all_stats sees only its own sessions' state in pg_stat_activity, so
+--    idle_in_transaction counts the application role's sessions (the only expected writer); pg_locks
+--    is not limited that way.
 select
   (select count(*) from pg_locks l join pg_class c on c.oid = l.relation join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'training_load' and c.relname in ('source_metric_mappings', 'source_metric_mapping_versions', 'source_metric_audit')

@@ -1716,7 +1716,8 @@ Technical details.
   - through M2 a v35 guard is a sanitized `500 internal_error`; a COMMIT is a definite failure only when
     PostgreSQL itself refused it with an ordinary ERROR, every other COMMIT error is verified by the
     request key (never taken for "nothing written"); the expected loss of a right stays M2's `404`; a club
-    admin granted the platform admin role mid-request answers `409 try_again`; no HTTP contract change.
+    admin granted the platform admin role mid-request answers `409 try_again` when the grant lands before
+    the request's rights check (after it: a sanitized `500`, nothing written); no HTTP contract change.
   - **Limit, stated by the owner:** this keeps an accidental or unintended write that bypasses M2 out;
     the guards prove that row, actor and right agree, not that the code which set the actor was entitled
     to. It is no defence against whoever controls the database credentials the application and the
@@ -2730,7 +2731,7 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158) M1, the mapping schema (PR #159, v34) and the first M2 PR, the mapping administration API (PR #160) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34) and the first M2 PR, the mapping administration API (PR #160) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
 1. **v35** (the database actor guards, section J2) is implemented in an open pull request: the
    owner's external review (triggers: migration and rollback, authorization and owner scope, lock order
    and transactions); merge and deploy only on the owner's order, after a read-only production preflight
