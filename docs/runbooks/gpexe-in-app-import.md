@@ -1101,6 +1101,65 @@ server-side filter is never used as a fallback.
   This is a mandatory blocker before the import switch is turned on - see condition 6 under
   "conditions before the switch is turned on" in `docs/ai/CURRENT_STATE.md`.
 
+## How long a check takes: the timing line (P0)
+
+Every check writes **exactly one** log line when it ends - succeeded, failed, closed by another check, or
+a start whose COMMIT was not confirmed (`backend/src/gpexeCheckTiming.js`; owner order 2026-10-13). It is
+there to tell the source's network time from the database work around it before any optimization is
+chosen. It changes nothing of the check: the same requests in the same order, the same database
+statements, the same heartbeat frequency, the same results (`backend/tests/gpexe-check-timing.test.mjs`
+runs a check with the meter on and off and compares all four).
+
+The line, grammar version 1 (fixed words and whole numbers only):
+
+```
+[gpexe] check timing v=1; outcome=<succeeded|failed|closed_elsewhere|start_unconfirmed|unknown>; code=<none|other|a stable check code>; total_ms=N; sessions_found=N; sessions_done=N; athletes=N; tracks=N; drills=N; requests=<kinds|untracked>; net_ms=<kinds|untracked>; heartbeats=N; heartbeat_ms=N; revalidations=N; revalidation_ms=N; retention_ms=N; previews=N; preview_ms=N; staging_ms=N; finalize_ms=N
+```
+
+`<kinds>` is always the same eleven pairs in this order: `list_sessions` (both complete reads of the
+whole list), `parent_session`, `athlete_list`, `athlete_detail`, `more`, `track`, `whole_details`,
+`drill`, `brief_tags` (the brief and the tag list), `thresholds`, `other` (zero on the binding path
+today). A synthetic example (the discovery fixture: three sessions, one with five drills, twenty athletes,
+a whole list of 320 rows; the milliseconds are invented):
+
+```
+[gpexe] check timing v=1; outcome=succeeded; code=none; total_ms=241500; sessions_found=3; sessions_done=3; athletes=60; tracks=60; drills=5; requests=list_sessions:8,parent_session:3,athlete_list:3,athlete_detail:60,more:60,track:60,whole_details:3,drill:5,brief_tags:1,thresholds:3,other:0; net_ms=list_sessions:6100,parent_session:2100,athlete_list:2300,athlete_detail:41000,more:43000,track:40500,whole_details:2600,drill:4100,brief_tags:700,thresholds:2000,other:0; heartbeats=217; heartbeat_ms=4300; revalidations=9; revalidation_ms=180; retention_ms=900; previews=3; preview_ms=9800; staging_ms=600; finalize_ms=400
+```
+
+What each part measures (a monotonic clock, in memory, for this one check only):
+- `total_ms`: from the start request to the line;
+- `requests` / `net_ms`: every request of the binding path by the kind the adapter labels it with (never
+  from its URL), timed from sending it to its **response headers** - the body read is not in it;
+- `heartbeats` / `heartbeat_ms`: every progress write of the check row (one after each source answer, and
+  after the list, each bundle and each recorded session);
+- `revalidations` / `revalidation_ms`: the binding facts re-read around the list and each bundle (the one
+  inside the finalization is part of `finalize_ms`);
+- `retention_ms`: the retention run every check starts with;
+- `previews` / `preview_ms`: the dry-run import of each session (its own connection included);
+- `staging_ms`: the snapshot hash, the read of the published candidates and the staging insert;
+- `finalize_ms`: the one finalization transaction;
+- `athletes` / `tracks` / `drills`: per recorded session, distinct athletes of its rows, its tracks and the
+  confirmed parent's drill count, summed. More `athlete_detail` requests than `athletes` means the source
+  lists more than one row per athlete (for example one per drill).
+
+Never in the line: an id of a check, session, team, connection, binding, candidate or athlete; a date or
+time of a period or a training; a name; a host, URL or query; a token, header or credential; a value of a
+source answer; the text of an error. `code` is the check row's stable code only when it belongs to the
+closed set the meter keeps in step with the resolver, the adapter and the legacy client (a test reads
+their sources); any other code is written `other`. A final guard replaces any other line with
+`[gpexe] check timing v=1; outcome=unknown; code=other`. A fault inside the meter or a failing logger is
+swallowed: the check ends as it would without the meter (a broken meter writes no line rather than a wrong
+one).
+
+Not measured: new TCP / TLS connections (the fetch layer gives no per-check count without private
+transport APIs), the body read time, and the legacy path's requests (its client has no label seam:
+`requests=untracked; net_ms=untracked`; F3c4 retires that path).
+
+**Reading it.** The owner reads the line in the Render logs after a check run on the owner's order. The
+GPEXE share is the sum of `net_ms`; the database share is `heartbeat_ms + revalidation_ms + preview_ms +
+staging_ms + finalize_ms + retention_ms`; the rest of `total_ms` is the body reads and the server's own
+work. That split decides the next step (fewer heartbeat writes against concurrency or fewer requests).
+
 ## Database pool checkout bound
 
 The global PostgreSQL pool (`backend/src/db.js`) never lets a checkout wait without a bound:
