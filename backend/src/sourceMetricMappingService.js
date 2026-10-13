@@ -54,6 +54,21 @@ const { DatabaseError } = pg;
 // v35: the acting user of a write transaction, bound to that transaction's id
 // (a session-level setting or one from another transaction is refused).
 const ACTOR_CONTEXT_SQL = `select set_config('optimove.source_metric_actor', $1 || ':' || pg_current_xact_id()::text, true)`;
+// A COMMIT that PostgreSQL itself refused with an ordinary ERROR before its
+// commit record (a deferred v35 audit link, a deadlock, a serialization
+// failure): a certain rollback, nothing written. Uncertain - verified by the
+// request key instead - is everything else: a FATAL or PANIC answer, an answer
+// without a backend routine (a connection pooler's own error), a connection
+// class (08), an operator intervention or shutdown (57P), an internal error
+// (XX), 40003 statement_completion_unknown, a socket or driver error and a
+// timeout. Stricter than activityRosterCommands.js commitCertainlyRefused,
+// because the deployed database is reached through a pooler.
+function commitCertainlyRefused(error) {
+  if (!(error instanceof DatabaseError)) return false;
+  if (error.severity !== "ERROR" || typeof error.routine !== "string" || error.routine === "") return false;
+  const code = String(error.code ?? "");
+  return !/^(08|57P|XX)/.test(code) && code !== "40003";
+}
 const NOT_FOUND = () => refusal(404, "notFound", "Not found.");
 
 // The list caps of the approved contract, for the catalogs M2 does not write:
@@ -211,6 +226,18 @@ const readableOwnerKeys = (ctx) => (ctx.owner.scope === "system" ? ["system"] : 
 // every registry row of the lock order).
 async function rightsStillHold(client, ctx) {
   if (rightsHold) await rightsHold(client);
+  if (ctx.basis === "club_admin") {
+    // The database derives platform_admin for an active platform admin (v35,
+    // C79): a club admin granted that role since this request began repeats
+    // it (try_again), so the basis it writes is the one the database derives.
+    // The same rows, in the same order, as the v35 basis check.
+    const promoted = await client.query(
+      `select 1 from public.user_global_roles g join public.users u on u.id = g.user_id
+        where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of g, u`,
+      [ctx.userId],
+    );
+    if (promoted.rowCount > 0) throw refusal(409, "try_again", MESSAGES.try_again);
+  }
   const right = ctx.basis === "platform_admin"
     ? await client.query(
       `select 1 from public.user_global_roles g join public.users u on u.id = g.user_id
@@ -747,7 +774,7 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
     // its id, from the authenticated session only - never from the body. Set
     // before the first protected write; a replay, which writes nothing, sets
     // none.
-    await client.query(ACTOR_CONTEXT_SQL, [ctx.userId]);
+    await client.query(ACTOR_CONTEXT_SQL, [String(ctx.userId).toLowerCase()]);
     const operationId = crypto.randomUUID();
     const written = await operation(client, operationId);
     // The bounded COMMIT (the F2 discipline).
@@ -764,10 +791,11 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
       release(true);
     }
     if (commitError) {
-      // The server answered the COMMIT with an error (a deferred v35 audit
-      // link, a deadlock): the transaction is rolled back and nothing was
-      // written - a definite refusal, never an unknown outcome.
-      if (commitError instanceof DatabaseError) throw classifyDatabaseError(commitError) ?? commitError;
+      // PostgreSQL itself refused the COMMIT with an ordinary ERROR (a
+      // deferred v35 audit link, a deadlock): the transaction is rolled back
+      // and nothing was written - a definite refusal. Every other COMMIT error
+      // is verified by the request key below.
+      if (commitCertainlyRefused(commitError)) throw classifyDatabaseError(commitError) ?? commitError;
       console.error(`[source-metric-mappings] the COMMIT of ${where} was not confirmed (${commitError?.code ?? ""}); checking the request record`);
       let found = false;
       try { found = await requestIsCommitted(ctx.userId, requestKey); } catch { found = false; }

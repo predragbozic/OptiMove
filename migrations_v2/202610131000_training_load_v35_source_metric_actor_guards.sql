@@ -16,8 +16,8 @@
 --   * the row names that user (created_by_user_id, performed_by_user_id and
 --     the transition's submitted_by / activated_by / disabled_by): 42501;
 --   * the user may write the mapping's owner scope - an active platform admin
---     for a system mapping; an active platform admin or the active admin of
---     that active club for a club mapping: 42501;
+--     for a system mapping; for a club mapping an active platform admin or
+--     the active admin of that club, the club active in both cases: 42501;
 --   * the basis is the one the database derives (an active platform admin:
 --     platform_admin; otherwise the club's active admin: club_admin): 42501;
 --   * an audit row follows its own operation in the same transaction: the
@@ -35,12 +35,16 @@
 -- user; the chain of each comes with the PR that writes it (C76).
 --
 -- Known limits (stated in the contract, C74 and C78):
---   * This keeps an accidental or unauthorised write that bypasses the M2
+--   * This keeps an accidental or unintended write that bypasses the M2
 --     service out - a raw SQL session, a script, another module, a stale
---     setting. It is NOT a defence against whoever controls the database
---     credentials the application and the migrations share: that role owns
---     these tables, can set the setting itself or disable a trigger. Separate
---     migration and runtime roles are a later infrastructure task.
+--     setting. The guards prove that the row, the acting user and the user's
+--     right agree; they do not prove that the code which set the acting user
+--     was entitled to. It is NOT a defence against whoever controls the
+--     database credentials the application and the migrations share, nor
+--     against any code that runs SQL through the application's pool (another
+--     module, an injection): that role owns these tables and can set the
+--     setting itself, disable a trigger or switch session_replication_role.
+--     Separate migration and runtime roles are a later infrastructure task.
 --   * A mapping or version written inside a savepoint (a subtransaction) has
 --     the subtransaction's id as its xmin, so its audit row is refused (fail
 --     closed). The M2 service uses no savepoint.
@@ -52,7 +56,9 @@
 -- acting user's role, user and club rows FOR SHARE - the same rows, in the
 -- same order, as M2's own right re-check (role and user, then club).
 --
--- Fixed messages: no id, name, value or SQL. No data change, no seed.
+-- Fixed messages: no id, name, value or SQL. No data change, no seed; two
+-- partial indexes serve the audit lookups. Requires PostgreSQL 13 or later
+-- (pg_current_xact_id(); an older server fails this migration at once).
 
 -- ---------------------------------------------------------------------------
 -- 1. The acting user of this transaction.
@@ -196,6 +202,12 @@ $$ language plpgsql;
 create trigger source_metric_mapping_versions_v35_actor_guard
   before insert or update on training_load.source_metric_mapping_versions
   for each row execute function training_load.source_metric_mapping_versions_actor_guard();
+
+-- The audit lookups of the guards below and of the deferred link (section 5).
+create index source_metric_audit_v35_mapping_create_idx
+  on training_load.source_metric_audit (mapping_id) where action = 'mapping_create';
+create index source_metric_audit_v35_version_idx
+  on training_load.source_metric_audit (mapping_version_id, to_status) where mapping_version_id is not null;
 
 -- ---------------------------------------------------------------------------
 -- 4. T8: an audit row by its acting user, with the derived basis, following

@@ -5,18 +5,20 @@
 -- Not a migration and never run automatically. Rehearsed on disposable
 -- databases (backend/tests/source-metric-mapping-v35.test.mjs: apply ->
 -- rollback -> the v34 catalog again -> re-apply, and every refusal below).
--- Before it is run anywhere real: a fresh restore-verified backup exists, the
--- application is back on a commit without v35 (the M2 service keeps setting
--- its actor context harmlessly), and the owner approved this database
--- specifically (.claude/rules/database-safety.md).
+-- Before it is run anywhere real: a fresh restore-verified backup exists; the
+-- deployed commit no longer contains the v35 migration file (otherwise the
+-- migrator applies v35 again at the next start); the application code may be
+-- either the M2 service with the actor setting (which v34 simply ignores) or
+-- the one before it; and the owner approved this database specifically
+-- (.claude/rules/database-safety.md).
 --
--- v35 adds functions and triggers only: no column, table, index or data. It
--- removes them and the v35 record. Rows written under v35 stay valid under
+-- v35 adds functions, triggers and two partial indexes on the audit table: no
+-- column, table or data. It removes them and the v35 record. Rows written under v35 stay valid under
 -- v34, so no data blocks it. It refuses, changing nothing, when
 --   * v35 is not recorded on the database;
 --   * any migrations_v2 migration newer than v35 is recorded;
---   * the v35 functions and triggers are not exactly the ones v35 created
---     (one is missing, or a trigger is disabled) - a changed state is a use
+--   * the v35 functions, triggers and indexes are not exactly the ones v35
+--     created (one is missing, or a trigger is disabled) - a changed state is a use
 --     of its own, and the way forward is a new migration.
 -- After the rollback the database refuses no T3 / T4 / T8 write that v34
 -- accepts: the actor guards and the audit link are gone.
@@ -37,8 +39,9 @@ begin
   end if;
 end $$;
 
-lock table training_load.source_metric_audit, training_load.source_metric_mapping_versions,
-  training_load.source_metric_mappings in access exclusive mode;
+-- The order of the M2 writes: mappings, versions, audit.
+lock table training_load.source_metric_mappings, training_load.source_metric_mapping_versions,
+  training_load.source_metric_audit in access exclusive mode;
 
 do $$
 declare
@@ -74,6 +77,12 @@ begin
   if missing is not null then
     reasons := array_append(reasons, 'the v35 triggers are not all present');
   end if;
+  select string_agg(i.name, ', ' order by i.name) into missing
+    from unnest(array['source_metric_audit_v35_mapping_create_idx', 'source_metric_audit_v35_version_idx']) as i(name)
+   where not exists (select 1 from pg_indexes where schemaname = 'training_load' and indexname = i.name);
+  if missing is not null then
+    reasons := array_append(reasons, 'the v35 indexes are not all present');
+  end if;
   select string_agg(g.tgname, ', ' order by g.tgname) into disabled
     from pg_trigger g join pg_class c on c.oid = g.tgrelid join pg_namespace n on n.oid = c.relnamespace
    where n.nspname = 'training_load' and g.tgname like '%\_v35\_%' and g.tgenabled <> 'O';
@@ -100,6 +109,9 @@ drop function training_load.source_metric_mappings_actor_guard();
 drop function training_load.source_metric_current_xmin();
 drop function training_load.source_metric_actor_basis(uuid, uuid);
 drop function training_load.source_metric_context_actor();
+
+drop index training_load.source_metric_audit_v35_version_idx;
+drop index training_load.source_metric_audit_v35_mapping_create_idx;
 
 delete from public.schema_migrations
  where migration_name = 'migrations_v2/202610131000_training_load_v35_source_metric_actor_guards.sql';

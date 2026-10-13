@@ -1700,8 +1700,8 @@ Technical details.
   branch `feature/metrics-mapping-v35-actor-guards` from `1164041`; **implemented in an open pull
   request — not merged, not deployed, applied to no persistent database**). Contract: decisions
   C74–C79 and section J2 of the discovery document. Migration v35
-  (`migrations_v2/202610131000_training_load_v35_source_metric_actor_guards.sql`) adds functions and
-  triggers only (no table, column, index or data):
+  (`migrations_v2/202610131000_training_load_v35_source_metric_actor_guards.sql`) adds functions,
+  triggers and two partial indexes for the guards' audit lookups (no table, column or data):
   - the M2 service sets, before the first protected write of each write transaction, the
     transaction-local `optimove.source_metric_actor` = `<user uuid>:<id of the transaction>` from the
     authenticated session; a replay and a GET set none; missing, empty, not canonical or of another
@@ -1713,14 +1713,18 @@ Technical details.
     (`23514`); at COMMIT, deferred constraint triggers refuse a mapping, a version or a status transition
     without its audit row and roll the whole transaction back (`23514`); a write inside a savepoint is
     refused (fail closed); fixed messages only;
-  - through M2 a refused COMMIT is a definite failure (a sanitized `500 internal_error` for a v35 guard,
-    never `outcome_unknown`); the expected loss of a right stays M2's `404`; no HTTP contract change.
-  - **Limit, stated by the owner:** this keeps an accidental or unauthorised write that bypasses M2 out;
-    it is no defence against whoever controls the database credentials the application and the
-    migrations share (that role owns the tables, can set the setting and disable a trigger) - separate
-    migration and runtime roles are a later infrastructure task (Separate tasks).
+  - through M2 a v35 guard is a sanitized `500 internal_error`; a COMMIT is a definite failure only when
+    PostgreSQL itself refused it with an ordinary ERROR, every other COMMIT error is verified by the
+    request key (never taken for "nothing written"); the expected loss of a right stays M2's `404`; a club
+    admin granted the platform admin role mid-request answers `409 try_again`; no HTTP contract change.
+  - **Limit, stated by the owner:** this keeps an accidental or unintended write that bypasses M2 out;
+    the guards prove that row, actor and right agree, not that the code which set the actor was entitled
+    to. It is no defence against whoever controls the database credentials the application and the
+    migrations share, nor against code that runs SQL through the application's pool (both can set the
+    setting or disable a trigger) - separate migration and runtime roles are a later infrastructure task
+    (Separate tasks). Read-only production preflight: `docs/runbooks/source-metric-mapping-v35-preflight.sql`.
   - Rollback `docs/runbooks/source-metric-mapping-v35-rollback.sql` (refuses without v35, under a later
-    migration, or with a v35 trigger missing or disabled), rehearsed: apply -> rollback -> identical v34
+    migration, or with a v35 trigger or index missing or a trigger disabled), rehearsed: apply -> rollback -> identical v34
     catalog -> re-apply. Tests: `backend/tests/source-metric-mapping-v35.test.mjs` (disposable, T1
     runner) with mutation evidence; the M2 suite runs unchanged under v35 (its one raw mapping fixture
     now carries the actor and the audit rows).
@@ -2726,7 +2730,7 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158) and M1, the mapping schema (PR #159, v34) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158) M1, the mapping schema (PR #159, v34) and the first M2 PR, the mapping administration API (PR #160) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
 1. **v35** (the database actor guards, section J2) is implemented in an open pull request: the
    owner's external review (triggers: migration and rollback, authorization and owner scope, lock order
    and transactions); merge and deploy only on the owner's order, after a read-only production preflight

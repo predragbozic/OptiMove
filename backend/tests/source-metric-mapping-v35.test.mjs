@@ -76,7 +76,7 @@ async function applyV35(url) {
 }
 
 before(async () => {
-  assert.ok(GPEXE_TEST_MIGRATIONS.at(-1) === V35, "v35 is the last test migration");
+  assert.ok(GPEXE_TEST_MIGRATIONS.includes(V35), "v35 is a test migration");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v35rb", migrations: UP_TO_V34 }),
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v35", migrations: UP_TO_V34 }),
@@ -110,6 +110,7 @@ before(async () => {
 });
 
 after(async () => {
+  service?.setMappingCommitForTests();
   service?.setMappingWriteHoldForTests(null);
   service?.setMappingRightsHoldForTests(null);
   service?.setMappingReadFaultForTests(null);
@@ -128,6 +129,7 @@ after(async () => {
 });
 
 afterEach(() => {
+  service.setMappingCommitForTests();
   service.setMappingWriteHoldForTests(null);
   service.setMappingRightsHoldForTests(null);
   service.setMappingReadFaultForTests(null);
@@ -367,7 +369,10 @@ test("1. migration v35 on v34: eight functions and six triggers (the BEFORE guar
   await applyV35(rdb.url);
   const after35 = await catalog(r);
   assert.ok(after35.migrations.includes(V35_NAME));
-  for (const part of ["tables", "columns", "indexes"]) assert.deepEqual(after35[part], before34[part], `v35 changes no ${part}`);
+  for (const part of ["tables", "columns"]) assert.deepEqual(after35[part], before34[part], `v35 changes no ${part}`);
+  assert.deepEqual(after35.indexes.filter((x) => !before34.indexes.some((y) => y.indexname === x.indexname)).map((x) => x.indexname).sort(),
+    ["source_metric_audit_v35_mapping_create_idx", "source_metric_audit_v35_version_idx"], "the only new indexes are the two audit lookups");
+  assert.deepEqual(before34.indexes, after35.indexes.filter((x) => !x.indexname.includes("_v35_")), "no v34 index changed");
   const added = (list, base, keyOf) => list.filter((x) => !base.some((y) => keyOf(y) === keyOf(x)));
   assert.deepEqual(added(after35.functions, before34.functions, (x) => x.proname).map((x) => x.proname).sort(), V35_FUNCTIONS);
   assert.deepEqual(before34.functions, after35.functions.filter((x) => !V35_FUNCTIONS.includes(x.proname)), "no v34 function changed");
@@ -392,6 +397,9 @@ test("1. migration v35 on v34: eight functions and six triggers (the BEFORE guar
   await r.query(`alter trigger source_metric_mappings_v35_actor_guard on training_load.source_metric_mappings rename to v35_renamed`);
   assert.match((await runRollback(r))?.message ?? "", /^v35 rollback refused: the v35 triggers are not all present/);
   await r.query(`alter trigger v35_renamed on training_load.source_metric_mappings rename to source_metric_mappings_v35_actor_guard`);
+  await r.query(`alter index training_load.source_metric_audit_v35_version_idx rename to v35_idx_renamed`);
+  assert.match((await runRollback(r))?.message ?? "", /^v35 rollback refused: the v35 indexes are not all present/);
+  await r.query(`alter index training_load.v35_idx_renamed rename to source_metric_audit_v35_version_idx`);
   assert.deepEqual(await catalog(r), after35, "every refusal changed nothing");
   // A clean rollback: the identical v34 catalog; then v35 again.
   assert.equal(await runRollback(r), null);
@@ -435,11 +443,9 @@ test("2. the actor setting: none, empty, not a lowercase canonical uuid, without
   assert.equal((await one(k, `select current_setting('optimove.source_metric_actor', true) as v`)).v, "", "nothing left after the ROLLBACK");
   refusedWith(await tx(null, writeMapping), "42501", NO_ACTOR);
   // A version and an audit row without the setting.
-  const f2 = await field();
   const legit = await mappingOf(W.pa, W.sys);
   refusedWith(await tx(null, (c) => T4(c, { m: legit.m, f: legit.f, md: W.sys, by: W.pa })), "42501", NO_ACTOR);
   refusedWith(await tx(null, (c) => T8(c, { action: "mapping_create", m: legit.m, by: W.pa, basis: "platform_admin" })), "42501", NO_ACTOR);
-  void f2;
 });
 
 test("3. the legitimate operations, each with its audit row in its own transaction: a platform admin in the system scope and in a club scope, a club's own admin in its club; versions, submissions, and a platform admin's activation and disabling; the basis is derived by the database", async () => {
@@ -472,24 +478,22 @@ test("3. the legitimate operations, each with its audit row in its own transacti
 
 test("4. who may write: another club's admin, a coach, an athlete, a revoked role, an inactive user and the admin of an archived club are 42501 on a mapping, a version and an audit row; a club admin never writes a system mapping; a platform admin never writes a mapping of an archived club; a version of another owner's mapping is 42501", async () => {
   const f = await field();
+  const a = await mappingOf(W.caA, W.clubAmd, { scope: "club", clubId: W.clubA, basis: "club_admin" });
+  // Each of them on each table: a mapping of club A, a version of club A's mapping, an audit row of it.
   for (const actor of [W.caB, W.coach, W.athleteUser, W.caRevoked, W.caInactive, W.paRevoked, W.paInactive]) {
     refusedWith(await tx(actor, (c) => T3(c, { f, md: W.clubAmd, scope: "club", clubId: W.clubA, by: actor })), "42501", MAY_NOT);
+    refusedWith(await tx(actor, (c) => T4(c, { ...a, by: actor })), "42501", MAY_NOT);
+    refusedWith(await tx(actor, (c) => T8(c, { action: "mapping_create", m: a.m, by: actor, basis: "club_admin" })), "42501", MAY_NOT);
   }
   refusedWith(await tx(W.caA, (c) => T3(c, { f, md: W.sys, by: W.caA })), "42501", MAY_NOT);
   refusedWith(await tx(W.caC, (c) => T3(c, { f, md: W.clubCmd, scope: "club", clubId: W.clubC, by: W.caC })), "42501", MAY_NOT);
   refusedWith(await tx(W.pa, (c) => T3(c, { f, md: W.clubCmd, scope: "club", clubId: W.clubC, by: W.pa })), "42501", MAY_NOT);
-  const a = await mappingOf(W.caA, W.clubAmd, { scope: "club", clubId: W.clubA, basis: "club_admin" });
-  refusedWith(await tx(W.caB, (c) => T4(c, { ...a, by: W.caB })), "42501", MAY_NOT);
-  refusedWith(await tx(W.coach, (c) => T4(c, { ...a, by: W.coach })), "42501", MAY_NOT);
   const v = await versionOf(W.caA, a, "club_admin");
   refusedWith(await tx(W.caB, async (c) => {
     await submitRow(c, v, W.caB, "club_admin");
   }), "42501", /the acting user is not an active admin of the mapping.s club/);
   const sysMap = await mappingOf(W.pa, W.sys);
   refusedWith(await tx(W.caA, (c) => T4(c, { ...sysMap, by: W.caA })), "42501", MAY_NOT);
-  for (const s of [W.coach, W.caB]) {
-    refusedWith(await tx(s, (c) => T8(c, { action: "mapping_create", m: a.m, by: s, basis: "club_admin" })), "42501", MAY_NOT);
-  }
 });
 
 test("5. forged rows: a created_by_user_id, a performed_by_user_id or a transition's user other than the acting user, or a basis other than the derived one, is 42501", async () => {
@@ -565,7 +569,7 @@ test("6. the audit chain: an audit row for a mapping or version this transaction
   refusedWith(await tx(W.pa, async (c) => {
     const v = await T4(c, { ...earlier, by: W.pa });
     await T8(c, { action: "mapping_version_create", m: other.m, v, to: "draft", by: W.pa, basis: "platform_admin" });
-  }), "23514", /source_metric_audit_version_fk|the audit row must follow/);
+  }), "23514", FOLLOW);
 });
 
 test("7. at COMMIT every protected write needs its audit row: a mapping, a version or a status transition without one, or a transition whose audit row names another status, is refused (23514) and the whole transaction is rolled back; a trivial version update is not checked", async () => {
@@ -697,7 +701,7 @@ test("10. the M2 service under v35: create, version and submit succeed with one 
   assert.deepEqual([h.status, s.status], [201, 200], `${h.text} / ${s.text}`);
 });
 
-test("11. a protected write that misses its audit row through the M2 service (an audit insert skipped by a test-only trigger) fails at COMMIT: a sanitized 500 internal_error, nothing written, no database text in the answer or the log", async () => {
+test("11. the COMMIT through the M2 service: a write missing its audit row (an audit insert skipped by a test-only trigger) is refused by PostgreSQL at COMMIT - a sanitized 500, nothing written, no database text; a deadlock answered by PostgreSQL is try_again; every other COMMIT error - FATAL, a pooler's own answer without a backend routine, a connection class, 40003 - is verified by the request key, never taken for a refusal", async () => {
   await k.query(`create function training_load.v35_test_skip_audit() returns trigger language plpgsql as $$ begin return null; end $$`);
   await k.query(`create trigger aaa_v35_test_skip_audit before insert on training_load.source_metric_audit for each row when (new.action = 'mapping_create') execute function training_load.v35_test_skip_audit()`);
   try {
@@ -711,12 +715,104 @@ test("11. a protected write that misses its audit row through the M2 service (an
     await k.query(`drop trigger aaa_v35_test_skip_audit on training_load.source_metric_audit`);
     await k.query(`drop function training_load.v35_test_skip_audit()`);
   }
+  // An error answer to a COMMIT, after the COMMIT really ran (or really rolled back).
+  const dbError = ({ severity, code, routine }) => {
+    const e = new pg.DatabaseError("injected COMMIT answer", 0, "error");
+    e.severity = severity;
+    e.code = code;
+    if (routine) e.routine = routine;
+    return e;
+  };
+  const mappingsOf = async (fieldId) => (await q(`select 1 from training_load.source_metric_mappings where source_metric_definition_id = $1`, [fieldId])).length;
+  for (const answer of [
+    { severity: "FATAL", code: "57P01", routine: "ProcessInterrupts" },
+    { severity: "ERROR", code: "XX000" },
+    { severity: "ERROR", code: "53300" },
+    { severity: "ERROR", code: "08006", routine: "pq_recvbuf" },
+    { severity: "FATAL", code: "40001", routine: "ProcessInterrupts" },
+    { severity: "ERROR", code: "40003", routine: "CommitTransaction" },
+  ]) {
+    const f = await field();
+    service.setMappingCommitForTests({ fault: (client) => client.query("commit").then(() => { throw dbError(answer); }), timeoutMs: 2_000 });
+    const r = await post("/mappings", W.paCookie, { requestKey: key(), sourceMetricId: f.id, metricDefinitionId: W.sys.id });
+    service.setMappingCommitForTests();
+    assert.deepEqual([r.status, r.body.commitConfirmation], [200, "verified_after_commit_error"], `${JSON.stringify(answer)}: ${r.text}`);
+    assert.equal(await mappingsOf(f.id), 1, "written once");
+  }
+  // Rolled back, then a FATAL answer: verified and not found - outcome_unknown; the same key then writes once.
+  const g = await field();
+  const gBody = { requestKey: key(), sourceMetricId: g.id, metricDefinitionId: W.sys.id };
+  service.setMappingCommitForTests({ fault: (client) => client.query("rollback").then(() => { throw dbError({ severity: "FATAL", code: "57P01", routine: "ProcessInterrupts" }); }), timeoutMs: 2_000 });
+  const unknown = await post("/mappings", W.paCookie, gBody);
+  service.setMappingCommitForTests();
+  assert.deepEqual([unknown.status, unknown.body.error, unknown.body.requestKey], [503, "outcome_unknown", gBody.requestKey]);
+  assert.equal((await post("/mappings", W.paCookie, gBody)).status, 201);
+  assert.equal(await mappingsOf(g.id), 1);
+  // Rolled back by a deadlock PostgreSQL itself reports: a definite refusal - try_again, nothing written.
+  const h = await field();
+  service.setMappingCommitForTests({ fault: (client) => client.query("rollback").then(() => { throw dbError({ severity: "ERROR", code: "40P01", routine: "DeadLockReport" }); }), timeoutMs: 2_000 });
+  const deadlock = await post("/mappings", W.paCookie, { requestKey: key(), sourceMetricId: h.id, metricDefinitionId: W.sys.id });
+  service.setMappingCommitForTests();
+  assert.deepEqual([deadlock.status, deadlock.body.error], [409, "try_again"]);
+  assert.equal(await mappingsOf(h.id), 0);
 });
 
-test("12. every v35 refusal carries one of the fixed messages: no id, number, name or value", async () => {
-  assert.deepEqual([...seen].sort(), [...V35_MESSAGES].sort(), "the suite met every v35 refusal, each with exactly its fixed text");
-  for (const m of seen) {
-    assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}|[0-9]{3,}/i.test(m), `no id or number: ${m}`);
-  }
+test("12. every v35 refusal carries exactly one of the fixed messages, each produced here: no id, number, name or value; no v35 text reaches an HTTP answer", async () => {
+  const own = new Set();
+  const take = (res, code) => {
+    assert.equal(res.ok, false, "a refusal");
+    assert.equal(res.error.code, code, res.error.message);
+    own.add(res.error.message);
+  };
+  const clubMapping = (f, actor) => (c) => T3(c, { f, md: W.clubAmd, scope: "club", clubId: W.clubA, by: actor });
+  const f0 = await field();
+  take(await tx(null, (c) => T3(c, { f: f0, md: W.sys, by: W.pa })), "42501");
+  const f1 = await field();
+  take(await tx(W.pa, (c) => T3(c, { f: f1, md: W.sys, by: W.pa2 })), "42501");
+  const f2 = await field();
+  take(await tx(W.coach, clubMapping(f2, W.coach)), "42501");
+  const f3 = await field();
+  take(await tx(W.caA, async (c) => {
+    const m = await clubMapping(f3, W.caA)(c);
+    await T8(c, { action: "mapping_create", m, by: W.caA, basis: "platform_admin" });
+  }), "42501");
+  const conv = (await one(k, `select id from training_load.unit_conversions limit 1`)).id;
+  take(await tx(W.caA, (c) => ins(c, "source_metric_audit", { action: "unit_conversion_retire", unit_conversion_id: conv, from_status: "active", to_status: "retired", reason: "Test", performed_by_user_id: W.caA, basis: "platform_admin", operation_id: crypto.randomUUID() })), "42501");
+  const earlier = await mappingOf(W.pa, W.sys);
+  take(await tx(W.pa, (c) => T8(c, { action: "mapping_create", m: earlier.m, by: W.pa, basis: "platform_admin" })), "23514");
+  const f4 = await field();
+  take(await tx(W.pa, async (c) => {
+    const m = await T3(c, { f: f4, md: W.sys, by: W.pa });
+    await T8(c, { action: "mapping_create", m, by: W.pa, basis: "platform_admin" });
+    await T8(c, { action: "mapping_create", m, by: W.pa, basis: "platform_admin" });
+  }), "23514");
+  const f5 = await field();
+  take(await tx(W.pa, (c) => T3(c, { f: f5, md: W.sys, by: W.pa })), "23514");
+  take(await tx(W.pa, (c) => T4(c, { ...earlier, by: W.pa })), "23514");
+  const v = await versionOf(W.pa, earlier);
+  take(await tx(W.pa, (c) => submitRow(c, v, W.pa, "platform_admin")), "23514");
+  assert.deepEqual([...own].sort(), [...V35_MESSAGES].sort(), "every v35 refusal, each with exactly its fixed text");
+  for (const m of own) assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}|[0-9]{3,}/i.test(m), `no id or number: ${m}`);
   for (const text of responses) assert.ok(!/acting user|audit row|source_metric_/.test(text), "no v35 text in an HTTP answer");
+});
+
+test("13. a club admin granted the platform admin role while its write runs repeats it (409 try_again, nothing written), because the database would derive platform_admin; the repeated request writes with that basis", async () => {
+  const caP = await clubAdmin(W.clubA);
+  await workspace(caP, "club", W.clubA);
+  const cookie = await cookieFor(caP);
+  const f = await field();
+  const body = { requestKey: key(), sourceMetricId: f.id, metricDefinitionId: W.clubAmd.id };
+  let granted = false;
+  service.setMappingRightsHoldForTests(async () => {
+    if (granted) return;
+    granted = true;
+    await q(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true)`, [caP]);
+  });
+  const first = await post("/mappings", cookie, body);
+  service.setMappingRightsHoldForTests(null);
+  assert.deepEqual([first.status, first.body.error], [409, "try_again"], first.text);
+  assert.equal((await q(`select 1 from training_load.source_metric_mappings where source_metric_definition_id = $1`, [f.id])).length, 0, "nothing written");
+  const again = await post("/mappings", cookie, body);
+  assert.equal(again.status, 201, again.text);
+  assert.equal((await one(k, `select basis from training_load.source_metric_audit where mapping_id = $1`, [again.body.mapping.id])).basis, "platform_admin");
 });

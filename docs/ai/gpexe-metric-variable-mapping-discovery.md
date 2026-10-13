@@ -11,7 +11,7 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
 | Last verified against commit | `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
-| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) implemented in an open pull request — not merged, not deployed; M3–M6 not started** |
+| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), implemented in an open pull request — not merged, not deployed, applied to no persistent database; M3–M6 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
 **Which changes require a targeted re-verification of this document** (not a repeat of the whole
@@ -628,10 +628,14 @@ context the database could check and that the application and the migrations sha
     `set_config(..., true)` from the authenticated server session, never from a request body. Its value
     is `<lowercase canonical user uuid>:<id of the top-level transaction>` - the id makes a
     session-level `SET` left from an earlier transaction invalid. Missing, empty, not canonical or of
-    another transaction: `42501`. **Limit:** it keeps an accidental or unauthorised write that bypasses
-    the M2 service out; it is no defence against whoever controls the owner credentials the application
-    and the migrations share (who can set the setting or disable a trigger). Separate migration and
-    runtime roles are a separate infrastructure task and do not block v35.
+    another transaction: `42501`. **Limit:** it keeps an accidental or unintended write that bypasses
+    the M2 service out (a script, another module, a stale setting). The guards prove that the row, the
+    acting user and the user's right agree - not that the code which set the acting user was entitled
+    to. It is no defence against whoever controls the owner credentials the application and the
+    migrations share, nor against any code that runs SQL through the application's pool (another
+    module, an injection): either can set the setting, disable a trigger or switch
+    `session_replication_role`. Separate migration and runtime roles are a separate infrastructure task
+    and do not block v35.
 75. **Where it is set:** in every M2 write transaction (create a mapping, create a version, submit),
     right before its first protected write - after the bounds, the per-user lock and the request-record
     lookup, so a replay, which writes nothing, sets none. GET routes set none. The setting is gone at
@@ -652,8 +656,12 @@ context the database could check and that the application and the migrations sha
     its audit row is refused (fail closed). The M2 service uses no savepoint; a test pins the behaviour.
 79. **Errors:** a refused actor is `42501`, a chain or audit violation `23514`, each with a fixed message
     without an id, name, value or SQL. Through M2 such a guard is a programming error and answers a
-    sanitized `500 internal_error`; a COMMIT the server refuses is a definite failure (nothing written),
-    never `outcome_unknown`. The expected loss of a right stays M2's own `404`. No public HTTP change.
+    sanitized `500 internal_error`. A COMMIT that PostgreSQL itself refuses with an ordinary ERROR
+    (severity ERROR, a backend routine, not class 08, 57P or XX, not 40003) is a definite failure,
+    nothing written; every other COMMIT error - FATAL, a connection pooler's own answer, a lost answer -
+    is verified by the request key (`verified_after_commit_error` or `503 outcome_unknown`). The expected
+    loss of a right stays M2's own `404`; a club admin granted the platform admin role while its write
+    runs answers `409 try_again` (the database would derive `platform_admin`). No public HTTP change.
 
 ---
 
@@ -1513,7 +1521,8 @@ caller — and every resource it may not see — gets the identical `404 {"error
 
 Migration `migrations_v2/202610131000_training_load_v35_source_metric_actor_guards.sql`, rollback
 `docs/runbooks/source-metric-mapping-v35-rollback.sql`, tests `backend/tests/source-metric-mapping-v35.test.mjs`.
-Functions and triggers only; v34's own functions are not changed and run first (trigger order is by name).
+Functions, triggers and two partial indexes, no table, column or data; v34's own functions are not changed
+and run first (trigger order is by name).
 
 | Table and event | v35 guard (BEFORE unless deferred) | Refusal |
 |---|---|---|
@@ -1529,15 +1538,22 @@ Functions and triggers only; v34's own functions are not changed and run first (
 - **The derived basis** (`source_metric_actor_basis`): an active platform admin (role and user active)
   is `platform_admin` - for a club mapping only while the club is active; otherwise the active admin of
   the mapping's active club is `club_admin`; otherwise none. A platform admin who also holds the club
-  admin role is `platform_admin`, as in M2.
+  admin role is `platform_admin`, as in M2. Consequence for later writers: while a club is archived no
+  one - not even a platform admin - writes a version transition or an audit row of its mappings (a
+  disable or a clean-up included); whether a disable should ignore club activity is an M3 decision (K).
 - **Lock order:** the v34 guard of each table first; then the mapping row `FOR SHARE` (M2 already holds
   it: `FOR NO KEY UPDATE` for a version, `FOR SHARE` for a submission, its own new row for a create);
   then the acting user's role and user rows and the club row `FOR SHARE` - the rows and the order of M2's
   own right re-check. A revocation waits for a write that holds them, and a write waits for a revocation
   in flight and is then refused. A version create and a submission of the same mapping serialize on the
   mapping row without a deadlock.
-- **M2:** `ACTOR_CONTEXT_SQL` in `runWrite` before the operation; a COMMIT error the server answered
-  (`pg.DatabaseError`) is classified as a definite refusal (a sanitized `500` for a v35 guard).
+- **M2:** `ACTOR_CONTEXT_SQL` in `runWrite` before the operation; `commitCertainlyRefused` classifies a
+  COMMIT error as a definite refusal only when PostgreSQL itself raised an ordinary ERROR (C79), else it
+  is verified by the request key; `rightsStillHold` answers `try_again` for a club admin who has become
+  an active platform admin. Two partial indexes serve the audit lookups
+  (`source_metric_audit_v35_mapping_create_idx`, `source_metric_audit_v35_version_idx`).
+- **Production preflight** (read-only, for the owner, run block by block):
+  `docs/runbooks/source-metric-mapping-v35-preflight.sql`.
 
 ---
 
@@ -1570,6 +1586,11 @@ Decisions that may safely wait, with the PR that takes them:
   the M2 suite);
 - separate migration and runtime database roles, so that the v35 guards also hold against the
   application's own credentials (C74; an infrastructure task, recorded in CURRENT_STATE);
+- for M3, from the v35 reviews: the audit row of a transition does not cross-check its `reason` or its
+  time with the version's `disable_reason` and `*_at` columns (the M3 route derives one from the other,
+  or the M3 guard adds the check); the one-audit-row rule per (version, target status) assumes v34's
+  forward-only status machine (a future "back to draft" needs a new rule); and whether a platform
+  admin's disable should ignore an archived club (J2);
 - the shared session and workspace reads every route runs before M2's own code (`requireAuth`,
   `resolveActiveWorkspace`) use the general pool without a statement bound (the pool checkout is
   bounded): an app-wide matter, outside the M2 routes;
@@ -1608,7 +1629,7 @@ stable code.
 The internal reviews of 2026-10-12 (code, database, security) raised the eight points below; the
 owner's external review of PR #156 decided each of them on 2026-10-12 (decisions C32–C39, written
 into sections D to G). Nothing here is open any more. M1 (ordered on 2026-10-12) builds them as
-schema in migration v34, in an open pull request; the code that uses them is M2–M4.
+schema in migration v34, merged as PR #159; the code that uses them is M2–M4.
 
 1. **Parameter fingerprint on T4 / T5** (D6, D7): one source field may feed several canonical zone
    variables, one per distinct bound set, so the "one active canonical target per source metric"
