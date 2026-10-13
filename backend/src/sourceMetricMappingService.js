@@ -25,9 +25,17 @@
 // write is read on a new, bounded connection after the right is checked
 // again (the replay rule). Every read is bounded too (boundedRead).
 //
+// The database guards these writes too (v35, decisions C73-C79): every write
+// transaction carries its acting user as the transaction-local setting
+// optimove.source_metric_actor; the database then checks the row's user,
+// owner scope and basis, and that every write has its audit row at COMMIT.
+// A guard reached through this service is a programming error: it answers a
+// sanitized 500, never the database's text.
+//
 // Responses carry no acting user's id, no SQL, no trigger text and no free
 // text beyond the M1-bounded label, evidence references and conversion note.
 import crypto from "node:crypto";
+import pg from "pg";
 import { pool } from "./db.js";
 import { isPlatformAdministrator, holdsClubAdminRole } from "./authz.js";
 import { resolveActiveWorkspace } from "./workspace.js";
@@ -42,6 +50,10 @@ export class SourceMetricMappingError extends Error {
   }
 }
 const refusal = (status, code, message, details) => new SourceMetricMappingError(status, code, message, details);
+const { DatabaseError } = pg;
+// v35: the acting user of a write transaction, bound to that transaction's id
+// (a session-level setting or one from another transaction is refused).
+const ACTOR_CONTEXT_SQL = `select set_config('optimove.source_metric_actor', $1 || ':' || pg_current_xact_id()::text, true)`;
 const NOT_FOUND = () => refusal(404, "notFound", "Not found.");
 
 // The list caps of the approved contract, for the catalogs M2 does not write:
@@ -730,6 +742,12 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
       if (!current) throw NOT_FOUND();
       return { ...current, replayed: true };
     }
+    // The acting user of this write, for the v35 database guards (C75):
+    // local to this transaction (gone at its COMMIT or ROLLBACK), bound to
+    // its id, from the authenticated session only - never from the body. Set
+    // before the first protected write; a replay, which writes nothing, sets
+    // none.
+    await client.query(ACTOR_CONTEXT_SQL, [ctx.userId]);
     const operationId = crypto.randomUUID();
     const written = await operation(client, operationId);
     // The bounded COMMIT (the F2 discipline).
@@ -746,6 +764,10 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
       release(true);
     }
     if (commitError) {
+      // The server answered the COMMIT with an error (a deferred v35 audit
+      // link, a deadlock): the transaction is rolled back and nothing was
+      // written - a definite refusal, never an unknown outcome.
+      if (commitError instanceof DatabaseError) throw classifyDatabaseError(commitError) ?? commitError;
       console.error(`[source-metric-mappings] the COMMIT of ${where} was not confirmed (${commitError?.code ?? ""}); checking the request record`);
       let found = false;
       try { found = await requestIsCommitted(ctx.userId, requestKey); } catch { found = false; }

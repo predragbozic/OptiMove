@@ -1092,8 +1092,20 @@ test("23. /mappings is read in pages: a fixed page size, the stable order (syste
   const tag = uid();
   await q(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id)
            select 'gpexe', 'rest_v1', 'm2.page.' || $1 || '.' || g, 'Page field', $2 from generate_series(1, $3::int) g`, [tag, W.pa.id, service.PAGE_SIZES.mappings + 5]);
-  await q(`insert into training_load.source_metric_mappings (source_metric_definition_id, source_system, api_family, metric_definition_id, owner_scope, owner_club_id, created_by_user_id)
-           select d.id, d.source_system, d.api_family, $1, 'system', null, $2 from training_load.source_metric_definitions d where d.source_metric_key like 'm2.page.' || $3 || '.%'`, [md.id, W.pa.id, tag]);
+  // One transaction under the platform admin's v35 actor context, each mapping with its mapping_create record.
+  await admin.query("begin");
+  try {
+    await admin.query(`select set_config('optimove.source_metric_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [W.pa.id]);
+    await admin.query(`insert into training_load.source_metric_mappings (source_metric_definition_id, source_system, api_family, metric_definition_id, owner_scope, owner_club_id, created_by_user_id)
+             select d.id, d.source_system, d.api_family, $1, 'system', null, $2 from training_load.source_metric_definitions d where d.source_metric_key like 'm2.page.' || $3 || '.%'`, [md.id, W.pa.id, tag]);
+    await admin.query(`insert into training_load.source_metric_audit (action, mapping_id, performed_by_user_id, basis, operation_id)
+             select 'mapping_create', m.id, $1, 'platform_admin', gen_random_uuid() from training_load.source_metric_mappings m
+               join training_load.source_metric_definitions d on d.id = m.source_metric_definition_id where d.source_metric_key like 'm2.page.' || $2 || '.%'`, [W.pa.id, tag]);
+    await admin.query("commit");
+  } catch (error) {
+    await admin.query("rollback").catch(() => {});
+    throw error;
+  }
   const pageThrough = async (who, first) => {
     const seen = first.body.mappings.map((m) => m.id);
     let cursor = first.body.nextCursor;

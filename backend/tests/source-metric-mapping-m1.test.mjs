@@ -51,7 +51,9 @@ async function applyV34(url) {
 }
 
 before(async () => {
-  assert.ok(GPEXE_TEST_MIGRATIONS.at(-1) === V34, "v34 is the last test migration");
+  // The M1 databases stop at v34 (applied by this suite); v35 and its actor
+  // guards are proven by source-metric-mapping-v35.test.mjs.
+  assert.ok(GPEXE_TEST_MIGRATIONS.includes(V34), "v34 is a test migration");
   [rdb, mdb] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: process.env.DATABASE_URL, label: "m1rb", migrations: UP_TO_V33 }),
     createGpexeDisposableDb({ baseDatabaseUrl: process.env.DATABASE_URL, label: "m1", migrations: UP_TO_V33 }),
