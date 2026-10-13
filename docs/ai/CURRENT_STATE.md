@@ -1,8 +1,8 @@
 # Current state
 
-Last reviewed: 2026-10-12. Last `origin/main` commit checked: `0293b39` (merge of PR #158, the
-agent-efficiency rule; PR #156 `e6bc885`, the metric-mapping discovery, and PR #157 `0098638` before
-it).
+Last reviewed: 2026-10-13. Last `origin/main` commit checked: `15efd7a` (merge of PR #159, M1, the
+schema foundation of the metric mapping, migration v34; PR #158 `0293b39`, the agent-efficiency rule,
+before it).
 
 ## Active phase
 
@@ -1577,7 +1577,7 @@ Technical details.
     status (zero UUID) answered 401. No test was run against production; no Check, Link, Approve or Import;
     Render, credentials and the switch untouched; the eight leftover `optimove_tests_gpexe_f3c2g_*`
     databases on the development workstation were left in place, as ordered.
-- **GPEXE metric / variable mapping discovery (2026-10-11, accepted; PR #156; M1 in an open pull request, see below).** The authoritative
+- **GPEXE metric / variable mapping discovery (2026-10-11, accepted; PR #156; M1 merged as PR #159 and the first M2 PR open, see below).** The authoritative
   document is `docs/ai/gpexe-metric-variable-mapping-discovery.md` (rule:
   `.claude/rules/metrics-core-mapping.md`; ADR-007 records only the three decisions the code already
   proves — Metrics Core as the canonical registry, no automatic merge of several sources, no
@@ -1608,8 +1608,8 @@ Technical details.
   round and one narrow re-review per domain, T1 test tiers, short reports. It removes no review trigger,
   external review or test, and an owner order wins.
 - **M1 — the schema foundation of the source-to-canonical metric mapping** (owner order 2026-10-12;
-  branch `feature/metrics-mapping-m1-schema` from `0293b39`; **implemented in an open pull request —
-  not merged, not deployed, applied to no persistent database**). Migration v34
+  branch `feature/metrics-mapping-m1-schema` from `0293b39`; **merged and deployed as PR #159, see
+  below; v34 directly confirmed on the production database**). Migration v34
   (`migrations_v2/202610121000_training_load_v34_source_metric_mapping.sql`) builds sections D1–D10
   and the D12 seed of the discovery document with the owner's M1 SQL decisions C40–C58 (2026-10-12):
   `source_host_catalog.api_family`; the source metric identities and their revisioned contracts (T2a,
@@ -1639,13 +1639,52 @@ Technical details.
   the chain, its *Verified* / *Needs reconnect* state no condition) and three more were decided: a
   canonical unit must be a unit token to be a mapping target (C56), the M4 writer's lock contract (C57,
   future), and an Unbind's bounded wait on a fact in flight (C58, documented and tested, Unbind code
-  unchanged). Before it is deployed:
-  the owner's external review; the PostgreSQL version of the deployed database
-  confirmed as 13 or later (`scale()`, `trim_scale()`; the local disposable server is 17.5; the
-  deployed one was not queried — it accepted v10's `unique nulls not distinct`, which needs 15, an
-  indirect sign only); the deployed `source_host_catalog` holding only `gpexe` / `e03` and `gpexe` /
-  `server3` (the backfill refuses any other row); a quiet deploy window (v34 takes short exclusive
-  locks on `source_host_catalog`, `source_team_bindings` and `metric_source_connections`).
+  unchanged).
+- **PR #159 is merged and deployed (M1, migration v34).**
+  - The owner's external review of head `5ec30a4` was READY. Before the merge the owner ran a read-only
+    production preflight in pgAdmin (2026-10-13): PostgreSQL 17.6 (`server_version_num` 170006); the
+    `source_host_catalog` held exactly `gpexe/e03` and `gpexe/server3`; the last applied migration was
+    v33 with every recorded checksum equal to the repository's; no running check, staged check row,
+    running identity load, lock on a training table, advisory lock or idle transaction.
+  - Merge commit `15efd7a` (parents `0293b39` and `5ec30a4`) on 2026-10-13 at 09:54:43 UTC, merged
+    exactly from that head (`--match-head-commit`) on the owner's order.
+  - `/api/health` first served `15efd7a` with `ok: true` at 09:55:36 UTC, then three times in a row
+    (09:55:46, 09:55:57 and 09:56:07 UTC); without a login `GET /api/auth/me` answered 200 with
+    `{"user":null}`, and the GPEXE team status, the candidates, the source-connection list and one
+    connection (zero UUID, GET only) answered 401.
+  - **The owner's read-only production post-check (pgAdmin, 2026-10-13) confirmed v34 directly:** the
+    v34 record exactly once with the repository's checksum, v34 the last migration, nothing later,
+    missing or changed; 8 tables, 25 triggers (all enabled), 32 functions, the three added columns, the
+    binding anchor `unique (id, team_id)`, `api_family` `e03 = api` and `server3 = rest_v1`; the seed
+    exactly (9 source fields, 9 revisions, 4 unit conversions) and no mapping, version, activation,
+    provenance, audit row or source instance.
+  - No Check, Link, Approve, Import or GPEXE request; Render and `GPEXE_IMPORT_APPLY_ENABLED` untouched.
+- **M2, first PR — the administrator API of the mapping** (owner order 2026-10-13; branch
+  `feature/metrics-mapping-m2-api` from `15efd7a`; **implemented in an open pull request — not merged,
+  not deployed; no production mapping exists**). The HTTP contract the owner approved on 2026-10-13 is
+  section J1 of the discovery document, with the decisions C59–C66: under
+  `/api/training-load/sources/metrics` the reads of the source fields and revisions, the canonical
+  targets of the workspace's owner scope, the active unit conversions and the mappings with their
+  versions; `POST /mappings` (a T3 identity), `POST /mappings/:id/versions` (a T4 draft with every
+  conversion, parameter and fingerprint value derived by the server) and `POST …/submit` (`draft →
+  needs_review`). The owner comes from the active workspace only (platform: system; a club workspace:
+  that club); the canonical target has the same owner scope (v34 / D4); every write takes a
+  `requestKey` whose T8 row is the request record, a replay answers the current state; bounded
+  transactions and COMMIT; only allowlisted database refusals become a 4xx. Not in it: T2b unit and
+  meaning confirmation, activation, disabling, T5, conversion maintenance, the preview, the frontend,
+  any importer change, any migration. Code: `backend/src/routes/sourceMetrics.js`,
+  `backend/src/sourceMetricMappingService.js`; tests `backend/tests/source-metric-mapping-m2.test.mjs`.
+  The internal reviews (code, database, security) answered READY WITH NON-BLOCKING NOTES; their
+  corrections are in the same pull request. **The owner's external review of head `26a0748`
+  (2026-10-13) was NOT READY** — a HIGH (the answer after an uncertain COMMIT did not check the right
+  again) and three MEDIUM (unbounded reads, read caps that a growing list makes permanent, T2b facts used
+  before their lock) and a LOW (the 42501 allowlist by prefix); all five are fixed in the same pull
+  request as decisions C67–C72 of the discovery document (the `POST /mappings` summary approved; keyset
+  pages with an opaque cursor for the mappings and a mapping's versions, no write quota; the right
+  checked again before any answer after a COMMIT; every read bounded; the facts compared again under
+  lock; the exact 42501 texts). **Decided as a gate (C73):** a database actor check on the T3 / T4
+  inserts and the T8 request records is a mandatory, separate hardening PR (v35) before any T5
+  activation and before the API's real administrative use.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2122,8 +2161,16 @@ nothing imported is visible in the app.
   row (15:52:50, 15:53:00 and 15:53:11 UTC); without a login `GET /api/auth/me` answered 200 with
   `{"user":null}` and the GPEXE team status (zero UUID) answered 401. No migration, no production write,
   no Render change, no GPEXE action.
-- M1 (migration v34) is **not merged, not deployed and applied to no persistent database**: it ran only
-  on disposable `optimove_tests_gpexe_*` databases of the development workstation.
+- PR #159 (merge commit `15efd7a`, merged 2026-10-13 09:54:43 UTC exactly from head `5ec30a4`; M1,
+  migration v34) is deployed: `/api/health` first served `15efd7a` with `ok: true` at 09:55:36 UTC, then
+  three times in a row (09:55:46–09:56:07 UTC); without a login `/api/auth/me` answered 200 with no user
+  and four protected GPEXE / source-connection GET routes 401. **v34 on the deployed database is
+  directly confirmed** by the owner's read-only post-check (the record, its checksum, every object and
+  the exact seed; see the active phase), not only inferred from the start-up. The local OPTIMOVE
+  database is not migrated.
+- The first M2 PR (the mapping administration API) is **not merged and not deployed**; it ran only on
+  disposable `optimove_tests_gpexe_*` databases. No mapping, version or activation exists in
+  production.
 - PR #157 (merge commit `0098638`, merged 2026-10-12 11:52:30 UTC exactly from head `ce571d3`; Coach
   Home empty and error states, frontend only) is deployed: `/api/health` first served `0098638` with
   `ok: true` at 12:25:26 UTC, then three times in a row (12:25:47, 12:25:58 and 12:26:09 UTC); the
@@ -2626,13 +2673,15 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156) and the agent-efficiency rule (PR #158) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
-1. **M1** (migration v34, the schema foundation of the mapping contract) is implemented in an open pull
-   request: the owner's external review (triggers: migration and rollback, owner / authorization
-   triggers, lock order and concurrency); merge and deploy only on the owner's order, after the deployed
-   database's PostgreSQL version is confirmed as 13 or later. Then M2–M4 on the owner's orders; the import
-   switch stays off throughout, and M6 (unit confirmation, pilot mapping, a controlled first import) comes
-   after them.
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158) and M1, the mapping schema (PR #159, v34) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
+1. **The first M2 PR** (the mapping administration API, section J1) is implemented in an open pull
+   request: the owner's external review of its corrections (triggers: authorization and owner scope,
+   idempotency and transactions); merge and deploy only on the owner's order. Then the mandatory v35
+   hardening PR (a database actor check on the T3 / T4 inserts and the T8 request records, C73) before
+   any T5 activation or real administrative use, and the further M2 parts (unit and meaning
+   confirmation, activation and disabling with the catalog `409`, T5, conversion maintenance, the
+   preview), M3 and M4 on the owner's orders; the import switch stays off throughout, and M6 (unit
+   confirmation, pilot mapping, a controlled first import) comes after them.
 2. The owner states the state of the production-use gate and of the two gates before a link (an identity
    load and one link were run after PR #146; the owner's check after PR #154 reports every athlete of the
    three sessions of 05.10–06.10.2026 linked; when the remaining links were made and whether those gates

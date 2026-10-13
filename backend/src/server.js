@@ -29,6 +29,7 @@ import trainingActivityRouter from "./routes/trainingActivity.js";
 import trainingLoadDashboardRouter from "./routes/trainingLoadDashboard.js";
 import gpexeImportRouter from "./routes/gpexeImport.js";
 import sourceConnectionsRouter from "./routes/sourceConnections.js";
+import sourceMetricsRouter from "./routes/sourceMetrics.js";
 import { startGpexeRetentionSchedule } from "./gpexeImportService.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT } from "./db.js";
@@ -111,6 +112,10 @@ app.use("/api/training-activity", requireAuth, trainingActivityRouter);
 // other training_load router above.
 app.use("/api/training-load/dashboards", requireAuth, trainingLoadDashboardRouter);
 app.use("/api/training-load/gpexe", requireAuth, gpexeImportRouter);
+// Source metric mapping administration (M2): a platform admin, or a club's
+// own admin in that club's workspace; everyone else the same 404. Mounted
+// before the source connections so this prefix never reaches that router.
+app.use("/api/training-load/sources/metrics", requireAuth, sourceMetricsRouter);
 // Source credential connections (F3c2d): platform admin only inside the
 // router; every other caller gets the same 404 as a missing connection.
 app.use("/api/training-load/sources", requireAuth, sourceConnectionsRouter);

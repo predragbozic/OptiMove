@@ -10,8 +10,8 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 |---|---|
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
-| Last verified against commit | `0293b39` (merge of PR #158; the base of the M1 pull request, whose head commit is named in its description) — `af11338..0293b39` changed no file of the re-verification list below (only these documents and rules, and frontend files outside the list), so sections A and B stand; sections C, D and J now also describe the M1 schema of that pull request |
-| Status | **Accepted architecture; M1 (the schema, migration v34) implemented in an open pull request — not merged, not deployed, applied to no persistent database; M2–M6 not started** |
+| Last verified against commit | `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
+| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) implemented in an open pull request — not merged, not deployed; M3–M6 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
 **Which changes require a targeted re-verification of this document** (not a repeat of the whole
@@ -536,9 +536,94 @@ Decided by the owner at the external review of `ff0ba57` (2026-10-12):
     `unbindTeam`. (An M4 import also holds the team import lock, at which an Unbind answers `try_again`
     at once.)
 
+Decided by the owner for the first M2 pull request (2026-10-13; the HTTP contract itself is section
+J1):
+
+59. **The scope of the first M2 PR.** The read API (T2a / T2b fields, canonical targets, unit
+    conversions, T3 mappings with their T4 versions), the T3 create, the T4 draft create and the one
+    transition `draft → needs_review`. Not in it: T2b unit and meaning confirmation and the revision
+    lifecycle, T4 activate / disable / replacement, every T5 operation, `unit_conversions` maintenance,
+    the aggregate preview, the extractor registry, ending a held source instance and the catalog
+    `500 → 409` mapping of `routes/trainingLoadMetrics.js` (it moves to the PR that introduces an active
+    version, because only an active version can trigger those refusals). No M2 operation writes a T5
+    or a T6 row. In production no draft version can be created until a later PR proves a unit (every
+    seeded revision is unproven).
+60. **The owner comes from the active workspace only.** The platform workspace is the system scope (a
+    platform admin; `owner_club_id` NULL, `owner_key = 'system'`); a club workspace is that club's scope
+    (its active club admin, or a platform admin there for support — a club workspace exists only for an
+    active `club_admin` role, `backend/src/workspace.js`); a team or private-coaching workspace, an
+    athlete, another club, a revoked role, an inactive user or an archived club get nothing (the 404).
+    A body never names an owner (`owner_club_id`, `owner_key`, `ownerScope` …: `400 invalid_body`);
+    the right, the user and the club are checked again under `FOR SHARE` right before every write.
+61. **The canonical target has the mapping's owner scope** (D4 and the v34 T3 trigger, confirmed; no
+    migration needed for it - the v35 of C73 is a separate actor check): a system mapping targets a system definition only, a club X mapping a club X definition
+    only; a system definition from a club workspace is `409 target_scope_mismatch`; another club's,
+    a team's or a user's definition is the 404.
+62. **Parameter values are decimal JSON strings** (`^-?(0|[1-9][0-9]{0,11})(\.[0-9]{1,9})?$`: at most
+    12 integer and 9 decimal digits, no exponent; `durationSeconds ≥ 0`), never a JavaScript `Number`;
+    parsing and arithmetic are exact decimals; before `canonical_parameters` and the fingerprint the
+    server writes one canonical record (trailing zeros removed, a negative zero `0`), so numerically
+    equal inputs give the same parameters and fingerprint; the database stays the final authority.
+63. **Free text in a response** is only the M1-bounded `label` (T2a `source_label`, ≤80), the evidence
+    references (C40 shape) and `conversionNote` (≤500), beside units; never `unitNote`, a retire or
+    disable reason, a T8 `reason`, Metrics Core `key` / `label` / description, a raw
+    `condition_description`, a trigger's or the database's text, or an acting user's id.
+64. **Lists** have a stable order and a hard cap (fields 100, revisions per field 20, targets 200,
+    conversions 100, mappings 100, versions per mapping 50); a longer result is `409 result_too_large`,
+    never a cut list; the mapping list carries a version summary, the detail every version. (For the
+    mappings and a mapping's versions superseded by C68: pages, not a cap.)
+65. **A replay is a read of the current state.** The same user, key and request hash: the right is
+    checked again, the referenced resource is read again and answered `200` with `replayed: true` —
+    never a stored historical body (T8 stores none). Another body on the key: `409 request_key_reused`.
+    A refusal is no request record. A lost COMMIT answer verified on a second connection: `200` (a
+    create too) with `commitConfirmation: "verified_after_commit_error"`; not verified: `503
+    outcome_unknown` with the key.
+66. **Errors.** Only an allowlisted database refusal becomes a 4xx (the codes of J1); any other
+    constraint, an unexpected `23514`, an SQL or program error is `500 internal_error` without the
+    database's text. A busy pool is `409 try_again` with `Retry-After: 5`, the answer of the source and
+    importer routes (`routes/sourceConnections.js`, `routes/gpexeImport.js`).
+
+**The owner's external review of the first M2 PR (head `26a0748`, 2026-10-13: NOT READY), decided and
+built in the same PR:**
+
+67. **The answer of `POST /mappings`** is the bounded mapping summary of the list (row 4 of J1), never
+    the version list.
+68. **Pages, no write quota.** `GET /mappings` and the versions of `GET /mappings/:id` are read by
+    keyset pages: a fixed page size (mappings 100, versions 50), the stable order of C64, `nextCursor`
+    (null on the last page), no gap and no duplicate in a stable snapshot. (A mapping's `created_at` is
+    its transaction's start, so one that commits after a page was read with an earlier `created_at`
+    than the cursor's position appears only in a list read again from the start.) The cursor is opaque and
+    strictly validated, bound to the workspace's owner key (and, for versions, to the mapping); an
+    invalid cursor is `400 invalid_query`. No write refuses a mapping or a version at a count.
+    `/fields`, `/targets` and `/conversions` (catalogs M2 does not write) keep their hard caps.
+69. **The answer of a committed write follows the replay rule (C65).** After a COMMIT confirmed
+    directly or verified on a second connection, the right, the user and the club are checked again,
+    `FOR SHARE` on a new bounded connection and held while the answer is read, before anything of the
+    resource is read. A right lost meanwhile answers the identical 404 and shows nothing of the resource.
+    A check or a read that fails or runs past its bound keeps the write's status with `readError`, and
+    names the ids of what was written only once the right was confirmed again (a replay with the same
+    `requestKey` answers the rest).
+70. **Every M2 read is bounded** (the F3c2d discipline): its own short transaction with a statement and
+    a lock bound on the server and a client bound on the whole read; a connection that ran past its
+    client bound is closed, never returned to the pool. A GET past its bound is `409 try_again`; the
+    read after a COMMIT is `readError`.
+71. **The facts of a version are checked again under lock.** v34 keeps every T2b fact a version create
+    uses final once it was seen as the create accepted it (C42; a unit proof and a meaning proof are
+    written once); the create still compares them again under `FOR SHARE` (field, parameter kind, both
+    levels, both units, operator), so a later migration that allows a change answers `409 try_again`.
+    The current canonical version is re-read under `FOR SHARE` of `metric_definitions`, then the levels
+    under `FOR SHARE` of its scope capability rows (the v34 order): a new current version is
+    `try_again`, a removed level `level_not_allowed`, and a level removal waits for the version.
+72. **The 42501 allowlist is exact:** the three v34 actor texts become the 404; any other `42501`,
+    whatever its beginning, is a sanitized `500 internal_error`.
+73. **A database actor check on the T3 / T4 inserts and the T8 request records is a mandatory, separate
+    hardening PR (v35)** before any T5 activation and before the API's real administrative use. It is
+    not part of the first M2 PR, which adds no migration; the M2 API stays the only application writer
+    meanwhile (test 20 of the M2 suite).
+
 ---
 
-## D. Accepted model — **implemented as schema in M1 (v34, open pull request); used by no code until M2 / M4**
+## D. Accepted model — **implemented as schema in M1 (v34, merged and deployed); read and first written by M2 (J1), used by the importer only from M4**
 
 At `af11338` nothing of this section existed. Migration v34
 (`migrations_v2/202610121000_training_load_v34_source_metric_mapping.sql`, rollback
@@ -1325,12 +1410,70 @@ the rejected track, only on a new owner decision. No automation.
 
 | PR | Scope | Explicitly not changed | Review triggers | Reviewers | Acceptance criteria | Production gates |
 |---|---|---|---|---|---|---|
-| **M1 schema foundation** — implemented in an open pull request (v34, `backend/tests/source-metric-mapping-m1.test.mjs`); not merged, not deployed | Migration: D1 `api_family`, T2a, T2b, T3, `unit_conversions`, T4, T5, T6, T7, T8, `unique (id, team_id)` on `source_team_bindings`, the `metric_definitions` guard; the D12 seed; rollback script (refuses once any T3–T6 row exists, once T2a / T2b / `unit_conversions` differ from the seed, or under a later migration); tests on a disposable database (apply / rollback; every trigger, CHECK and partial unique with a mutation that the test kills; two concurrent activations; the equivalence trigger with equal and different bound units; T6 consistency); the undo script extended to delete T6 first (disposable only); every new trigger raises a fixed message without an id; the identity triggers of D6 / D7 (active platform admin, `42501`); the shape CHECK of every `evidence_ref` and the bounded single-line CHECK of every free-text column | The importer, routes, frontend, the v33 flow, `GPEXE_IMPORT_APPLY_ENABLED`, every persistent database | 1 (migration, rollback), 2 (`owner_scope` in triggers), 4 (lock order, idempotency) | `db-reviewer`, `security-reviewer`, `code-reviewer`; external review by the owner | No active mapping after the migration; `api_family` equals `sourceHosts.js`; rollback rehearsed; the identity triggers refuse a non-platform-admin actor with `42501`; the shape CHECKs refuse a space or a control character; a T4 row whose `owner_key` differs from its T3 row is refused (system rows included), and the generated T3 `owner_key` is proven to work as an FK target and to drop cleanly in the rollback; the T6 check accepts exactly the round-half-away-from-zero value at 9 decimals and refuses its other neighbour in a tie; the fingerprint of a fixed parameter set equals a value computed independently; the server version of the local and the deployed database is PostgreSQL 13 or later (`scale()`, `trim_scale()`) before the migration relies on it; existing Metrics Core and GPEXE suites pass under the T1 runner | The migration reaches the deployed database only through a merge and deploy the owner orders (`.claude/rules/database-safety.md`); no data beyond the seed; the local OPTIMOVE database only on a separate order |
+| **M1 schema foundation** — merged and deployed (PR #159, `15efd7a`; v34, `backend/tests/source-metric-mapping-m1.test.mjs`; v34 confirmed on production by the owner's read-only post-check) | Migration: D1 `api_family`, T2a, T2b, T3, `unit_conversions`, T4, T5, T6, T7, T8, `unique (id, team_id)` on `source_team_bindings`, the `metric_definitions` guard; the D12 seed; rollback script (refuses once any T3–T6 row exists, once T2a / T2b / `unit_conversions` differ from the seed, or under a later migration); tests on a disposable database (apply / rollback; every trigger, CHECK and partial unique with a mutation that the test kills; two concurrent activations; the equivalence trigger with equal and different bound units; T6 consistency); the undo script extended to delete T6 first (disposable only); every new trigger raises a fixed message without an id; the identity triggers of D6 / D7 (active platform admin, `42501`); the shape CHECK of every `evidence_ref` and the bounded single-line CHECK of every free-text column | The importer, routes, frontend, the v33 flow, `GPEXE_IMPORT_APPLY_ENABLED`, every persistent database | 1 (migration, rollback), 2 (`owner_scope` in triggers), 4 (lock order, idempotency) | `db-reviewer`, `security-reviewer`, `code-reviewer`; external review by the owner | No active mapping after the migration; `api_family` equals `sourceHosts.js`; rollback rehearsed; the identity triggers refuse a non-platform-admin actor with `42501`; the shape CHECKs refuse a space or a control character; a T4 row whose `owner_key` differs from its T3 row is refused (system rows included), and the generated T3 `owner_key` is proven to work as an FK target and to drop cleanly in the rollback; the T6 check accepts exactly the round-half-away-from-zero value at 9 decimals and refuses its other neighbour in a tie; the fingerprint of a fixed parameter set equals a value computed independently; the server version of the local and the deployed database is PostgreSQL 13 or later (`scale()`, `trim_scale()`) before the migration relies on it; existing Metrics Core and GPEXE suites pass under the T1 runner | The migration reaches the deployed database only through a merge and deploy the owner orders (`.claude/rules/database-safety.md`); no data beyond the seed; the local OPTIMOVE database only on a separate order |
 | **M2 admin API** | Routes under `/api/training-load/sources/metrics…` for T2a / T2b (list, create, revise, verify unit, verify meaning, activate / retire a revision), T3 / T4 (create, version, transitions, replacement), T5 (activate, end, "every active binding of this connection"), `unit_conversions`, T8 reads; `requestKey` on every write; the aggregate preview over a saved candidate (count of athletes with a value, min, max, units before and after; `snapshot_expired` when the raw snapshot is purged); the extractor registry keyed by `source_metric_key` (`source_metric_unsupported` otherwise); the lock order and the bounded transactions of D3 / D6; ownership and the active workspace resolved in the service before any trigger; stable codes only, a transition conflict `409`; the preview's authorization (H); the platform-admin operation that ends a held source instance (D9) | The importer, the UI, migrations | 2 (auth, info hiding), 4 (transactions, idempotency) | `code-reviewer`, `security-reviewer`; external review | Secret scan of every response and audit row; info-hiding tests per role and workspace; a test that no response carries a trigger's text or an SQLSTATE; a replay re-checks the caller's right; the preview never returns `raw_bundle` or a row per athlete and answers the identical 404 before `snapshot_expired` to a caller outside the candidate's club; every transition audited | None (no production data changes without an admin acting) |
 | **M3 frontend** | The three Settings views of section H over the existing Metrics Core routes and the M2 routes; rights of section G | Backend, the import | New user flow | `code-reviewer`, `mobile-qa`, `ux-design-reviewer`; browser QA at 1280 / 360 / 375 / 390 px | A canonical variable created through the UI is a row created through the existing API; activation is an explicit step whose confirmation names source, mapping version, team and binding | None |
 | **M4 GPEXE importer integration** | The mapper reads the open activations of the binding instead of `GPEXE_METRIC_SPECS`; the writer takes `metricDefinitionId` and version from the plan, creates no definition, writes T6 and sets the T7 keys at the first import; content hash and preview hash include the mapping version, source value and unit and the activation set; the preview carries the canonical name and unit plus the source value; helper values of Link athletes and `METRIC_TEXT` move to the source metric keys of the preview; the fail-closed table of section F plus `source_instance_held` (D9); the writer's arithmetic in decimal at the storage scale S = 9 of D8 (half away from zero; the T6 trigger accepts exactly the value this rule produces), never binary floating point; `session_imported_under_another_instance` (D9); the undo script already removes T6 first (done in M1, C47); the B7-style architecture test | The switch, Link, multi-track, the list and drill reads | 1 (persistent write path), 3 (canonical identity), 4; the five-point rule for transactions with an external effect | `code-reviewer`, `security-reviewer`, `db-reviewer`; external review | A characterisation test: the fixture with activated mappings yields the same numbers as today within the preview's existing `1e-9` tolerance (`gpexeImportPreview.js:137`; today's mapper divides in binary floating point, the new writer computes in decimal at the storage scale S = 9); without an activation zero values are imported and nothing is written to `metric_definitions`; the stored candidates turn *changed* exactly once | The switch stays off |
 | **M5 multiple tracks** | Only on a new owner decision: a manual choice of one track with audit and observation | Everything else | 3, 4 | `code-reviewer`, `security-reviewer` | Decided with the order | Decided with the order |
 | **M6 units, pilot mapping, controlled first import** | Owner-run: gate (2) for `total_time`, `total_distance`, `max_v` on server3; the admin confirms units and meanings with references, creates the system variables, takes the mappings `draft → needs_review → active`, activates them on the First team binding with explicit requirements; one check with the switch off; then the decision on the first controlled import | No code beyond small fixes | 5 (only real evidence counts) | External review by the owner | The preview of a saved candidate shows the converted values in the canonical units | Conditions 1–3, 6 and 7 of `docs/ai/CURRENT_STATE.md` "Separate tasks", a fresh verified backup, the owner's explicit order for the switch and for every approval |
+
+M2 is delivered in parts. **The first M2 PR** (C59) builds the contract of J1; the rest of the M2 row
+(the T2b confirmations and revision lifecycle, T4 activate / disable / replacement, T5, `unit_conversions`
+maintenance, T8 reads, the aggregate preview, the extractor registry, ending a held instance, the catalog
+`500 → 409`) waits for later M2 PRs on the owner's orders.
+
+### J1. M2 HTTP contract — the first M2 PR (approved by the owner on 2026-10-13; as built)
+
+Router `backend/src/routes/sourceMetrics.js`, service `backend/src/sourceMetricMappingService.js`,
+mounted at `/api/training-load/sources/metrics` behind `requireAuth` (before the source connections).
+PA = an active platform admin, CA = an active club admin; WS = the active workspace (C60). Every other
+caller — and every resource it may not see — gets the identical `404 {"error":"notFound"}`.
+
+| # | Route | Who / WS | Input | Server-derived (never from the client) | Success | Refusals | Reads / writes |
+|---|---|---|---|---|---|---|---|
+| 1 | `GET /fields` | PA (platform or club WS), CA (own club WS) | query `sourceSystem`, `apiFamily` (optional) | — | `200 {fields:[{id, sourceSystem, apiFamily, key, label, state, revisions:[…]}]}`; order system, family, key (`collate "C"`), revisions by number descending | `400 invalid_query`, `409 result_too_large`, `409 try_again`, `404` | reads T2a, T2b |
+| 2 | `GET /targets` | PA platform WS → system; PA / CA club WS X → club X | — | the owner from the WS | `200 {targets:[{id, ownerScope, currentVersion:{id, versionNumber, unit, canonicalParameters}, scopes, versionReady, notReadyCode}]}`; order `id`; `unit` only when a unit token; `canonicalParameters` the normalized form or null | `409 result_too_large`, `409 try_again`, `404` | reads Metrics Core |
+| 3 | `GET /conversions` | as 1 | — | — | `200 {conversions:[{id, fromUnit, toUnit, scale, scaleDivisor, offset, evidenceRef}]}`; active rows; order units (`collate "C"`); exact decimal text | `409 result_too_large`, `409 try_again`, `404` | reads `unit_conversions` |
+| 4 | `GET /mappings` | platform WS → system; club WS X → system + club X | query `cursor` (optional) | visibility from the WS | `200 {mappings:[{id, ownerScope, sourceMetric:{id, key, apiFamily}, metricDefinitionId, createdAt, latestVersion, activeVersionId, versionCounts}], nextCursor}`: one page of at most 100, order system first, `createdAt`, `id`; `nextCursor` null on the last page (C68) | `400 invalid_query`, `409 try_again`, `404` | reads T3, T4 |
+| 5 | `GET /mappings/:mappingId` | as 4 | query `cursor` (optional) | — | `200 {mapping, nextCursor}`: the mapping with one page of at most 50 of its versions (all statuses), by number descending | `400 invalid_query`, `409 try_again`, `404` | reads T3, T4 |
+| 6 | `POST /mappings` | PA platform WS → system; PA / CA club WS X → club X | `requestKey`, `sourceMetricId`, `metricDefinitionId` | owner scope, club, `owner_key`, source system, API family, actor, T8 | `201 {mapping, replayed:false}`, `mapping` in the summary shape of row 4 (never the version list); replay or verified COMMIT `200` | `400 invalid_body`, `415 jsonRequired`, `404`, `409 target_scope_mismatch`, `source_metric_retired`, `target_not_active`, `mapping_exists` (+`current.mappingId`), `request_key_reused`, `try_again`, `503 outcome_unknown`, `500 internal_error` | writes T3 + T8 `mapping_create` |
+| 7 | `POST /mappings/:mappingId/versions` | the mapping's owner WS only | `requestKey`, `sourceRevisionId`, `appliesToSession`, `appliesToDrill`; `conversionNote` (required when the units differ); `sourceParameters` (`{lower, upper}` or `{thresholdValue, durationSeconds}`, decimal strings) | version number, canonical version (current), both units, factors (`1, 1, 0` or the one active row in the D5 normal form), parameter kind, operator, bound unit, canonical parameters, parameter factors, fingerprint (checked against the database), `owner_key`, status `draft`, actor, T8 | `201 {version, replayed:false}`, `version` one version in the shape of row 5; replay or verified COMMIT `200` | `400 invalid_body`, `invalid_parameters`, `conversion_note_required`; `415 jsonRequired`; `404`; `409 revision_not_usable`, `unit_not_proven`, `parameters_not_proven`, `target_not_active`, `canonical_not_numeric`, `canonical_unit_missing`, `canonical_unit_not_a_token`, `conversion_unavailable`, `conversion_not_normal`, `bound_conversion_unavailable`, `condition_description_unsupported`, `parameters_not_equivalent`, `level_not_allowed`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` | writes T4 + T8 `mapping_version_create` |
+| 8 | `POST /mappings/:mappingId/versions/:versionId/submit` | as 7 (CA only its own club's mapping) | `requestKey` | `submitted_by`, `submitted_at`, `submitted_basis` (from the role), T8 | `200 {version, replayed}` | `400 invalid_body`, `415 jsonRequired`, `404`, `409 version_not_draft` (+`current.status`), `revision_not_usable`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` | writes T4 status + T8 `mapping_status` |
+
+- **Lock order of a write** (C57 order, section D): the per-user advisory lock (bounded, 5 s) → the
+  request record lookup → active `unit_conversions` rows `FOR SHARE` (value pair, then bound pair,
+  ascending id) → T2a / T2b `FOR SHARE` → T3 (`FOR NO KEY UPDATE` for a version, serializing its
+  number; `FOR SHARE` for a submit) → T4 `FOR UPDATE` (submit) → `metric_definitions` `FOR SHARE` (its
+  current version re-checked) → its scope capability rows `FOR SHARE` (the levels re-checked; a version
+  create) → role, user and club `FOR SHARE` → the row, its T8 request record → the bounded COMMIT. A
+  version create compares the T2b facts it used again under their lock (C71). `statement_timeout` 10 s, `lock_timeout` 2 s on rows; `55P03`, `40P01`, `57014` →
+  `409 try_again` (logged by SQLSTATE only).
+- **Answers of a write** never go through a page: a mapping write answers (and replays) the bounded
+  summary of row 4, a version write and a submit one version, each re-read only when the active
+  workspace may write that mapping (its `owner_key`). After the COMMIT the right, the user and the club
+  are checked again first, on a new bounded connection (C69): a right lost is the identical 404 with
+  nothing of the resource; a check or a read that fails or runs past its bound keeps the status (`201` /
+  `200`) with `{readError: true, replayed: false}`, plus `mappingId` / `versionId` of what was written
+  only once the right was confirmed again.
+- **Pages** (C68): the cursor is the base64url of a small JSON object, opaque to a client; the server
+  accepts exactly its keys, its version, its kind, the workspace's owner key (and the mapping) it was
+  issued for and a well-formed position (a real instant, not before 2000), or answers `400 invalid_query`; a query parameter other than
+  one `cursor` is `400 invalid_query` too. Keyset on (system first, `created_at`, `id`) and on the
+  version number.
+- **Every read is bounded** (C70): REPEATABLE READ READ ONLY (READ COMMITTED when it holds the right's
+  `FOR SHARE` locks), `statement_timeout` 5 s and `lock_timeout` 2 s on the server, 8 s on the client for
+  the whole read; past the client bound the connection is closed. The access check of a club workspace,
+  every GET, the name of an existing mapping and the answer after a COMMIT all read this way.
+- **Every answer of the router** (a `404` and a refusal included) carries `Cache-Control: no-store`;
+  a POST without a JSON body is `415 jsonRequired`.
+- **The database allowlist:** `23505 source_metric_mappings_pair_key` → `mapping_exists`; `23505
+  source_metric_mapping_versions_number_key` and `source_metric_audit_one_request_per_key` → `try_again`;
+  `42501` → the 404 only when its message is exactly one of the three v34 actor refusals (C72; logged by
+  its code only), any other `42501` is a `500`; `23514` only when the message is exactly one of the fixed v34 trigger texts the
+  service lists (each to its code). Everything else is `500 internal_error`; only the code and the
+  route template are logged.
+- **Tests:** `backend/tests/source-metric-mapping-m2.test.mjs` (disposable database, the real HTTP stack);
+  mutation evidence for the authorization, scope, conversion, idempotency and transaction guards.
 
 ---
 
@@ -1347,7 +1490,7 @@ Decisions that may safely wait, with the PR that takes them:
   variables, the zones included (M3 / M6);
 - which activations are `required` in the pilot (M6);
 - the evidence that closes `unit_evidence_ref` and `meaning_evidence_ref` for server3 (M6, gate 2);
-- timeout and throttle values of the M2 routes, following the F3c2d pattern (M2);
+- the throttle of the M2 routes (M2); their read and write bounds are decided (C70, J1);
 - the test-runner kind of the M1 suites — `disposable`, through the T1 runner (as built);
 - whether a system-owned zone or threshold mapping may show one team's bounds to every club admin,
   or such mappings are club-owned (the M1 schema supports both; the bounds are not personal data)
@@ -1358,6 +1501,16 @@ Decisions that may safely wait, with the PR that takes them:
   the forwarded `P0001` text, coach-created `team` / `user` definitions, A6) or keeps it as it is
   (M3);
 - the shape of the platform-admin operation that ends a held source instance (D9) (M2);
+- **a mandatory gate, decided (C73):** v34 checks the acting user on a submit, an activation and a
+  disabling, but not on the T3 / T4 inserts or a T8 request record; a separate hardening PR (v35) adds
+  that database check before any T5 activation and before the API's real administrative use. Until
+  then the API re-checks the right under lock and is the only writer in `backend/src` (test 20 of the
+  M2 suite, a static scan of `backend/src`; scripts and raw SQL are outside it);
+- the shared session and workspace reads every route runs before M2's own code (`requireAuth`,
+  `resolveActiveWorkspace`) use the general pool without a statement bound (the pool checkout is
+  bounded): an app-wide matter, outside the M2 routes;
+- the access helpers of the M2 service (`resolveMappingAdmin`, `rightsStillHold`) move to their own
+  module before T5 reuses them (M2);
 - whether a later conversion that the M1 normal form cannot represent (a factor whose value and
   reciprocal both do not terminate, or a non-terminating offset such as °F → °C) is ever needed;
   widening the representation is then a separate owner decision (not needed by the pilot).
@@ -1371,14 +1524,16 @@ F5 → C52); the invisible and bidi characters in every free-text column (securi
 C53); positive scales (database L-5 → C54); the further T6 checks (security F4, database L-4 → C55).
 Nothing of this list is open any more.
 
-**Carried into later PRs by the M1 reviews:** M2 / M3 map the two `metric_definitions` /
-scope-capability guard refusals (`23514`, no constraint name) to a stable `409` in
-`backend/src/routes/trainingLoadMetrics.js` (`respondToWriteError` maps only `P0001` and `23505`
-today, so from the first active mapping version an archive, a new semantic version or a level removal
-of a pinned variable would answer `500`); M2 maps every native error by constraint name and never
-forwards its DETAIL, and maps `40P01` to `try_again`; M2 pre-locks the `unit_conversions` rows it
-relies on, then T2b → T3 → T4, before a transition; indexes on the M1 foreign keys come with the M2 /
-M3 readers; the M4 writer checks the C55 conditions before it writes (its stable codes), the T6
+**Carried into later PRs by the M1 reviews:** the PR that introduces an active mapping version (a
+later M2 PR, C59) maps the two `metric_definitions` / scope-capability guard refusals (`23514`, no
+constraint name) to a stable `409` in `backend/src/routes/trainingLoadMetrics.js` (`respondToWriteError`
+maps only `P0001` and `23505` today, so from the first active mapping version an archive, a new
+semantic version or a level removal of a pinned variable would answer `500`); M2 maps every native
+error by constraint name and never forwards its DETAIL, and maps `40P01` to `try_again` (done in the
+first M2 PR, J1); M2 pre-locks the `unit_conversions` rows it relies on, then T2b → T3 → T4, before a
+transition (done for the version create and the submit, J1); indexes on the M1 foreign keys come with
+the M2 / M3 readers (the first M2 PR's reads use the existing primary keys and partial indexes; no
+index was added); the M4 writer checks the C55 conditions before it writes (its stable codes), the T6
 trigger being the backstop, and follows the lock contract C57 (event and identities before the first
 T6 row, one importing transaction per team); no existing route changes a definition's owner, and one
 that ever does maps the C51 refusal to a stable `409`; M2 maps `canonical_unit_not_a_token` (C56) to a
