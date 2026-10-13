@@ -1675,9 +1675,16 @@ Technical details.
   any importer change, any migration. Code: `backend/src/routes/sourceMetrics.js`,
   `backend/src/sourceMetricMappingService.js`; tests `backend/tests/source-metric-mapping-m2.test.mjs`.
   The internal reviews (code, database, security) answered READY WITH NON-BLOCKING NOTES; their
-  corrections are in the same pull request, and the owner decisions they raised (a write-time quota
-  against the 50-version cap of the mapping detail, a database actor check on the T3 / T4 inserts) are
-  listed in the discovery document, section K.
+  corrections are in the same pull request. **The owner's external review of head `26a0748`
+  (2026-10-13) was NOT READY** — a HIGH (the answer after an uncertain COMMIT did not check the right
+  again) and three MEDIUM (unbounded reads, read caps that a growing list makes permanent, T2b facts used
+  before their lock) and a LOW (the 42501 allowlist by prefix); all five are fixed in the same pull
+  request as decisions C67–C72 of the discovery document (the `POST /mappings` summary approved; keyset
+  pages with an opaque cursor for the mappings and a mapping's versions, no write quota; the right
+  checked again before any answer after a COMMIT; every read bounded; the facts compared again under
+  lock; the exact 42501 texts). **Decided as a gate (C73):** a database actor check on the T3 / T4
+  inserts and the T8 request records is a mandatory, separate hardening PR (v35) before any T5
+  activation and before the API's real administrative use.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2668,10 +2675,12 @@ PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the ident
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
 window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158) and M1, the mapping schema (PR #159, v34) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
 1. **The first M2 PR** (the mapping administration API, section J1) is implemented in an open pull
-   request: the owner's external review (triggers: authorization and owner scope, idempotency and
-   transactions); merge and deploy only on the owner's order. Then the further M2 parts (unit and
-   meaning confirmation, activation and disabling with the catalog `409`, T5, conversion maintenance,
-   the preview), M3 and M4 on the owner's orders; the import switch stays off throughout, and M6 (unit
+   request: the owner's external review of its corrections (triggers: authorization and owner scope,
+   idempotency and transactions); merge and deploy only on the owner's order. Then the mandatory v35
+   hardening PR (a database actor check on the T3 / T4 inserts and the T8 request records, C73) before
+   any T5 activation or real administrative use, and the further M2 parts (unit and meaning
+   confirmation, activation and disabling with the catalog `409`, T5, conversion maintenance, the
+   preview), M3 and M4 on the owner's orders; the import switch stays off throughout, and M6 (unit
    confirmation, pilot mapping, a controlled first import) comes after them.
 2. The owner states the state of the production-use gate and of the two gates before a link (an identity
    load and one link were run after PR #146; the owner's check after PR #154 reports every athlete of the

@@ -16,11 +16,14 @@
 // Lock order of a write (discovery document, section D; v34 header), held
 // to the COMMIT: the per-user advisory lock (one write of this user at a
 // time, bounded) -> unit_conversions rows (FOR SHARE, ascending id) -> T2a
-// -> T2b -> T3 -> T4 -> metric_definitions (FOR SHARE) -> the acting user's
-// role, user and club rows (FOR SHARE). Every statement and lock wait is
-// bounded; 55P03 / 40P01 / 57014 answer try_again; the COMMIT's answer is
-// awaited a bounded time and, if lost, verified on a second connection by
-// the request key (verified_after_commit_error or outcome_unknown).
+// -> T2b -> T3 -> T4 -> metric_definitions (FOR SHARE) -> its scope
+// capabilities (FOR SHARE) -> the acting user's role, user and club rows
+// (FOR SHARE). Every statement and lock wait is bounded; 55P03 / 40P01 /
+// 57014 answer try_again; the COMMIT's answer is awaited a bounded time and,
+// if lost, verified on a second connection by the request key
+// (verified_after_commit_error or outcome_unknown). The answer of a committed
+// write is read on a new, bounded connection after the right is checked
+// again (the replay rule). Every read is bounded too (boundedRead).
 //
 // Responses carry no acting user's id, no SQL, no trigger text and no free
 // text beyond the M1-bounded label, evidence references and conversion note.
@@ -41,9 +44,18 @@ export class SourceMetricMappingError extends Error {
 const refusal = (status, code, message, details) => new SourceMetricMappingError(status, code, message, details);
 const NOT_FOUND = () => refusal(404, "notFound", "Not found.");
 
-// The list caps of the approved contract: a longer result is refused, never
-// cut, so a client never takes a partial list for the whole one.
-export const LIST_CAPS = Object.freeze({ fields: 100, revisionsPerField: 20, targets: 200, conversions: 100, mappings: 100, versionsPerMapping: 50 });
+// The list caps of the approved contract, for the catalogs M2 does not write:
+// a longer result is refused, never cut, so a client never takes a partial
+// list for the whole one.
+export const LIST_CAPS = Object.freeze({ fields: 100, revisionsPerField: 20, targets: 200, conversions: 100 });
+// The mappings and a mapping's versions grow by M2's own writes, so they are
+// read in pages of a fixed size, by an opaque cursor (owner decision,
+// external review 2026-10-13).
+export const PAGE_SIZES = Object.freeze({ mappings: 100, versions: 50 });
+// A read's bounds: every statement on the server, and the whole read on the
+// client (it covers a stalled network too).
+export const READ_STATEMENT_TIMEOUT_MS = 5_000;
+export const READ_ANSWER_TIMEOUT_MS = 8_000;
 export const ROW_LOCK_TIMEOUT_MS = 2_000;
 export const USER_LOCK_WAIT_MS = 5_000;
 export const STATEMENT_TIMEOUT_MS = 10_000;
@@ -71,6 +83,10 @@ let uncertainCheckFault = null;
 let writeHold = null;
 let rightsHold = null;
 let rereadFault = null;
+let readFault = null;
+let beforeLocksHold = null;
+let readStatementTimeoutMs = READ_STATEMENT_TIMEOUT_MS;
+let readAnswerTimeoutMs = READ_ANSWER_TIMEOUT_MS;
 let commitTimeoutMs = COMMIT_ANSWER_TIMEOUT_MS;
 let uncertainCheckTimeoutMs = UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS;
 let userLockWaitMs = USER_LOCK_WAIT_MS;
@@ -83,8 +99,16 @@ export function setMappingWriteHoldForTests(fn) { writeHold = fn ?? null; }
 // Runs inside a write's transaction right before the caller's right is
 // checked again under FOR SHARE (after every registry lock).
 export function setMappingRightsHoldForTests(fn) { rightsHold = fn ?? null; }
-// Runs in the read after a confirmed COMMIT (to make that read fail).
+// Runs in the read after a confirmed COMMIT, once the right is confirmed
+// again (to make that read fail or stall), with the read's client.
 export function setMappingRereadFaultForTests(fn) { rereadFault = fn ?? null; }
+// Runs first in every bounded read, with its client (to stall or break it).
+export function setMappingReadFaultForTests(fn) { readFault = fn ?? null; }
+// Runs inside a version create after its plain reads, before the first lock.
+export function setMappingBeforeLocksHoldForTests(fn) { beforeLocksHold = fn ?? null; }
+export function setMappingReadBoundsForTests({ statementTimeoutMs = READ_STATEMENT_TIMEOUT_MS, answerTimeoutMs = READ_ANSWER_TIMEOUT_MS } = {}) {
+  readStatementTimeoutMs = statementTimeoutMs; readAnswerTimeoutMs = answerTimeoutMs;
+}
 export function setMappingUserLockWaitForTests(ms) { userLockWaitMs = ms ?? USER_LOCK_WAIT_MS; }
 
 function guardClient(client) {
@@ -101,6 +125,48 @@ function withinBound(promise, ms) {
     timer = setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// A bounded read (the F3c2d discipline): its own short transaction -
+// REPEATABLE READ READ ONLY, so every statement of one answer sees one
+// snapshot; READ COMMITTED when it holds FOR SHARE locks, so a lock sees the
+// latest committed row -, a server bound on every statement and lock wait,
+// and a client bound on the whole read (a stalled network included). The
+// checkout itself is bounded by the pool (db.js). A read that ran past its
+// client bound, or whose ROLLBACK did not answer, never goes back to the
+// pool: its connection is closed. A bound reached answers try_again; a known
+// refusal thrown by `work` passes unchanged.
+async function boundedRead(work, { locks = false } = {}) {
+  const client = await pool.connect();
+  const release = guardClient(client);
+  let finished = false;
+  const run = (async () => {
+    await client.query(locks ? "begin isolation level read committed" : "begin isolation level repeatable read read only");
+    await client.query(`set local statement_timeout = '${readStatementTimeoutMs}ms'`);
+    await client.query(`set local lock_timeout = '${ROW_LOCK_TIMEOUT_MS}ms'`);
+    await client.query(`set local idle_in_transaction_session_timeout = '${readAnswerTimeoutMs * 2}ms'`);
+    if (readFault) await readFault(client);
+    const value = await work(client);
+    await client.query("commit");
+    return value;
+  })();
+  run.then(() => { finished = true; }, () => { finished = true; });
+  let failure;
+  try {
+    const value = await withinBound(run, readAnswerTimeoutMs);
+    release();
+    return value;
+  } catch (error) {
+    failure = error;
+  }
+  let dead = !finished;
+  if (!dead) await withinBound(client.query("rollback"), 2_000).catch(() => { dead = true; });
+  release(dead);
+  if (!finished) {
+    console.error("[source-metric-mappings] try_again (read bound)");
+    throw refusal(409, "try_again", MESSAGES.try_again);
+  }
+  throw classifyDatabaseError(failure) ?? failure;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +188,7 @@ export async function resolveMappingAdmin(req) {
   if (!ctx || !UUID.test(scopeId)) return null;
   // A club scope needs an active club (fail-closed, whatever the workspace
   // list admitted); writes check it again under FOR SHARE.
-  const club = await pool.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true)`, [scopeId]);
+  const club = await boundedRead((client) => client.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true)`, [scopeId]));
   return club.rowCount === 1 ? ctx : null;
 }
 const ownerKeyOf = (ctx) => (ctx.owner.scope === "system" ? "system" : ctx.owner.clubId);
@@ -261,6 +327,12 @@ const TRIGGER_REFUSALS = new Map([
   ["source_metric_mapping_versions: the source and canonical bounds are not equivalent", [409, "parameters_not_equivalent"]],
   ["source_metric_mapping_versions: the source and canonical thresholds are not equivalent", [409, "parameters_not_equivalent"]],
 ]);
+// The v34 actor refusals (migration lines 175, 190 and 1166), exactly.
+const ACTOR_REFUSALS = new Set([
+  "source metric mapping: the acting user is not an active platform admin",
+  "source metric mapping: the acting user is not an active admin of the mapping's club",
+  "source metric mapping: the acting user may not submit this mapping version",
+]);
 const MESSAGES = {
   try_again: "Another change is running. Nothing was changed; try again in a moment.",
   target_not_active: "The canonical definition is not active.",
@@ -282,12 +354,13 @@ export function classifyDatabaseError(error) {
     console.error(`[source-metric-mappings] try_again (${code})`);
     return refusal(409, "try_again", MESSAGES.try_again);
   }
-  // Only the v34 actor triggers' refusal is the 404 (the right changed under
-  // the request); any other 42501 (a missing grant) is a 500. Code-only log:
-  // a refusal here means the service's own check and the trigger disagreed.
-  // The prefix is the v34 RAISE text of the three actor checks; a migration
-  // that rewords it must update this test (a reword fails closed, as a 500).
-  if (code === "42501" && typeof error.message === "string" && error.message.startsWith("source metric mapping: the acting user")) {
+  // Only the three exact v34 actor refusals are the 404 (the right changed
+  // under the request); any other 42501 - a missing grant, the seed marker, or
+  // any other text, even with the same beginning - is a 500. Code-only log: a
+  // refusal here means the service's own check and the trigger disagreed. A
+  // migration that rewords one of them must update ACTOR_REFUSALS (a reword
+  // fails closed, as a 500).
+  if (code === "42501" && ACTOR_REFUSALS.has(error.message)) {
     console.error("[source-metric-mappings] db_actor_refusal (42501)");
     return NOT_FOUND();
   }
@@ -300,6 +373,51 @@ export function classifyDatabaseError(error) {
     return refusal(status, refusalCode, MESSAGES[refusalCode]);
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Page cursors: base64url of a small JSON object, opaque to a client and
+// strictly validated on the way in - exactly its keys, its version, its kind,
+// the workspace's owner key (and the mapping) it was issued for, and a
+// position of the right shape. Anything else is 400 invalid_query.
+// ---------------------------------------------------------------------------
+const CURSOR_TEXT = /^[A-Za-z0-9_-]{1,400}$/;
+const CURSOR_AT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}$/;
+const LOWER_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const invalidCursor = () => refusal(400, "invalid_query", "The cursor is not valid for this list.");
+function encodeCursor(payload) {
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+function decodeCursor(text, keys) {
+  if (typeof text !== "string" || !CURSOR_TEXT.test(text)) throw invalidCursor();
+  let payload;
+  try { payload = JSON.parse(Buffer.from(text, "base64url").toString("utf8")); } catch { throw invalidCursor(); }
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw invalidCursor();
+  if (Object.keys(payload).sort().join(",") !== keys) throw invalidCursor();
+  if (payload.v !== 1) throw invalidCursor();
+  return payload;
+}
+// The query of a paged list: only `cursor`, once, or nothing.
+function cursorQuery(query, position) {
+  const keys = Object.keys(query ?? {});
+  for (const key of keys) if (key !== "cursor") throw refusal(400, "invalid_query", "The query carries a parameter this route does not take.");
+  if (!keys.includes("cursor")) return null;
+  return position(query.cursor);
+}
+function mappingsCursorPosition(text, ctx) {
+  const p = decodeCursor(text, "i,k,o,s,t,v");
+  if (p.k !== "mappings" || p.o !== ownerKeyOf(ctx) || typeof p.s !== "boolean") throw invalidCursor();
+  if (typeof p.t !== "string" || !CURSOR_AT.test(p.t)) throw invalidCursor();
+  const instant = new Date(`${p.t.slice(0, 23)}Z`);
+  if (Number.isNaN(instant.getTime()) || instant.toISOString().slice(0, 23) !== p.t.slice(0, 23)) throw invalidCursor();
+  if (typeof p.i !== "string" || !LOWER_UUID.test(p.i)) throw invalidCursor();
+  return { clubPart: p.s, at: p.t, id: p.i };
+}
+function versionsCursorPosition(text, ctx, mappingId) {
+  const p = decodeCursor(text, "k,m,n,o,v");
+  if (p.k !== "versions" || p.o !== ownerKeyOf(ctx) || p.m !== mappingId) throw invalidCursor();
+  if (!Number.isSafeInteger(p.n) || p.n < 1 || p.n > 2147483647) throw invalidCursor();
+  return { number: p.n };
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +434,8 @@ export async function listFields({ ctx, query }) {
   const apiFamily = query?.apiFamily ?? null;
   if (sourceSystem !== null && (typeof sourceSystem !== "string" || !SOURCE_SYSTEM.test(sourceSystem))) throw refusal(400, "invalid_query", "sourceSystem is not a source system key.");
   if (apiFamily !== null && (typeof apiFamily !== "string" || !API_FAMILIES.has(apiFamily))) throw refusal(400, "invalid_query", "apiFamily is api or rest_v1.");
-  const fields = (await pool.query(
+  return boundedRead(async (client) => {
+  const fields = (await client.query(
     `select id, source_system, api_family, source_metric_key, source_label, state
        from training_load.source_metric_definitions
       where ($1::text is null or source_system = $1) and ($2::text is null or api_family = $2)
@@ -325,7 +444,7 @@ export async function listFields({ ctx, query }) {
     [sourceSystem, apiFamily, LIST_CAPS.fields + 1],
   )).rows;
   if (fields.length > LIST_CAPS.fields) throw tooLarge(LIST_CAPS.fields);
-  const revisions = fields.length === 0 ? [] : (await pool.query(
+  const revisions = fields.length === 0 ? [] : (await client.query(
     `select id, source_metric_definition_id, revision_number, state, value_shape, parameter_kind, supports_session, supports_drill,
             expected_source_unit, source_unit, expected_source_bound_unit, source_bound_unit, bound_operator,
             evidence_status, evidence_ref, unit_evidence_ref, meaning_evidence_ref, unit_verified_at, meaning_verified_at
@@ -349,6 +468,7 @@ export async function listFields({ ctx, query }) {
         unitVerifiedAt: r.unit_verified_at, meaningVerifiedAt: r.meaning_verified_at,
       })),
     };
+  });
   });
 }
 
@@ -397,7 +517,7 @@ function notReadyCodeOf(row) {
 }
 
 export async function listTargets({ ctx }) {
-  const rows = (await pool.query(
+  const rows = await boundedRead(async (client) => (await client.query(
     `select d.id, d.owner_scope, ${CANONICAL_VERSION_COLUMNS},
             (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes
        from training_load.metric_definitions d
@@ -407,7 +527,7 @@ export async function listTargets({ ctx }) {
       order by d.id
       limit $3`,
     [ctx.owner.scope, ctx.owner.clubId, LIST_CAPS.targets + 1],
-  )).rows;
+  )).rows);
   if (rows.length > LIST_CAPS.targets) throw tooLarge(LIST_CAPS.targets);
   return rows.map((row) => {
     const notReadyCode = notReadyCodeOf(row);
@@ -422,14 +542,14 @@ export async function listTargets({ ctx }) {
 
 export async function listConversions({ ctx }) {
   void ctx;
-  const rows = (await pool.query(
+  const rows = await boundedRead(async (client) => (await client.query(
     `select id, from_unit, to_unit, trim_scale(scale)::text as scale, trim_scale(scale_divisor)::text as scale_divisor,
             trim_scale("offset")::text as "offset", evidence_ref
        from training_load.unit_conversions where state = 'active'
       order by from_unit collate "C", to_unit collate "C"
       limit $1`,
     [LIST_CAPS.conversions + 1],
-  )).rows;
+  )).rows);
   if (rows.length > LIST_CAPS.conversions) throw tooLarge(LIST_CAPS.conversions);
   return rows.map((r) => ({ id: r.id, fromUnit: r.from_unit, toUnit: r.to_unit, scale: r.scale, scaleDivisor: r.scale_divisor, offset: r.offset, evidenceRef: r.evidence_ref }));
 }
@@ -457,18 +577,31 @@ function publicVersion(v) {
 const MAPPING_COLUMNS = `m.id, m.owner_scope, m.owner_key, m.source_metric_definition_id, d.source_metric_key, d.api_family, m.metric_definition_id, m.created_at`;
 const publicMappingBase = (m) => ({ id: m.id, ownerScope: m.owner_scope, sourceMetric: { id: m.source_metric_definition_id, key: m.source_metric_key, apiFamily: m.api_family }, metricDefinitionId: m.metric_definition_id, createdAt: m.created_at });
 
-export async function listMappings({ ctx }) {
-  const mappings = (await pool.query(
-    `select ${MAPPING_COLUMNS}
-       from training_load.source_metric_mappings m
-       join training_load.source_metric_definitions d on d.id = m.source_metric_definition_id
-      where m.owner_key = any($1::text[])
-      order by (m.owner_scope <> 'system'), m.created_at, m.id
-      limit $2`,
-    [readableOwnerKeys(ctx), LIST_CAPS.mappings + 1],
-  )).rows;
-  if (mappings.length > LIST_CAPS.mappings) throw tooLarge(LIST_CAPS.mappings);
-  return summarize(pool, mappings);
+// GET /mappings: one page in the stable order (system first, then the club's
+// own; created_at; id), the next page after the cursor's position - keyset,
+// so a stable snapshot is read without a gap or a duplicate. The cursor is
+// bound to the workspace's owner key.
+export async function listMappings({ ctx, query }) {
+  const after = cursorQuery(query, (payload) => mappingsCursorPosition(payload, ctx));
+  return boundedRead(async (client) => {
+    const rows = (await client.query(
+      `select ${MAPPING_COLUMNS}, (m.owner_scope <> 'system') as club_part,
+              to_char(m.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') as cursor_at
+         from training_load.source_metric_mappings m
+         join training_load.source_metric_definitions d on d.id = m.source_metric_definition_id
+        where m.owner_key = any($1::text[])
+          and ($2::boolean is null or ((m.owner_scope <> 'system'), m.created_at, m.id) > ($2::boolean, ($3::timestamp at time zone 'UTC'), $4::uuid))
+        order by (m.owner_scope <> 'system'), m.created_at, m.id
+        limit $5`,
+      [readableOwnerKeys(ctx), after ? after.clubPart : null, after ? after.at : null, after ? after.id : null, PAGE_SIZES.mappings + 1],
+    )).rows;
+    const page = rows.slice(0, PAGE_SIZES.mappings);
+    const last = page[page.length - 1];
+    const nextCursor = rows.length > PAGE_SIZES.mappings
+      ? encodeCursor({ v: 1, k: "mappings", o: ownerKeyOf(ctx), s: last.club_part, t: last.cursor_at, i: last.id })
+      : null;
+    return { mappings: await summarize(client, page), nextCursor };
+  });
 }
 
 // The bounded summary of mappings (the list's shape and the answer of a
@@ -527,26 +660,34 @@ async function writableVersion(executor, ctx, mappingId, versionId) {
   return v ? publicVersion(v) : null;
 }
 
-async function readMapping(executor, ctx, mappingId) {
+// GET /mappings/:id: the mapping with one page of its versions (every
+// status), by number descending; the next page after the cursor's number.
+// The cursor is bound to this mapping and the workspace's owner key.
+export async function getMapping({ ctx, mappingId, query }) {
   if (typeof mappingId !== "string" || !UUID.test(mappingId)) return null;
-  const m = (await executor.query(
-    `select ${MAPPING_COLUMNS}
-       from training_load.source_metric_mappings m
-       join training_load.source_metric_definitions d on d.id = m.source_metric_definition_id
-      where m.id = $1 and m.owner_key = any($2::text[])`,
-    [mappingId, readableOwnerKeys(ctx)],
-  )).rows[0];
-  if (!m) return null;
-  const versions = (await executor.query(
-    `select ${VERSION_COLUMNS} from training_load.source_metric_mapping_versions v
-      where v.mapping_id = $1 order by v.version_number desc limit $2`,
-    [m.id, LIST_CAPS.versionsPerMapping + 1],
-  )).rows;
-  if (versions.length > LIST_CAPS.versionsPerMapping) throw tooLarge(LIST_CAPS.versionsPerMapping);
-  return { ...publicMappingBase(m), versions: versions.map(publicVersion) };
-}
-export async function getMapping({ ctx, mappingId }) {
-  return readMapping(pool, ctx, mappingId);
+  const id = mappingId.toLowerCase();
+  const after = cursorQuery(query, (payload) => versionsCursorPosition(payload, ctx, id));
+  return boundedRead(async (client) => {
+    const m = (await client.query(
+      `select ${MAPPING_COLUMNS}
+         from training_load.source_metric_mappings m
+         join training_load.source_metric_definitions d on d.id = m.source_metric_definition_id
+        where m.id = $1 and m.owner_key = any($2::text[])`,
+      [id, readableOwnerKeys(ctx)],
+    )).rows[0];
+    if (!m) return null;
+    const rows = (await client.query(
+      `select ${VERSION_COLUMNS} from training_load.source_metric_mapping_versions v
+        where v.mapping_id = $1 and ($2::int is null or v.version_number < $2::int)
+        order by v.version_number desc limit $3`,
+      [m.id, after ? after.number : null, PAGE_SIZES.versions + 1],
+    )).rows;
+    const page = rows.slice(0, PAGE_SIZES.versions);
+    const nextCursor = rows.length > PAGE_SIZES.versions
+      ? encodeCursor({ v: 1, k: "versions", o: ownerKeyOf(ctx), m: m.id, n: page[page.length - 1].version_number })
+      : null;
+    return { mapping: { ...publicMappingBase(m), versions: page.map(publicVersion) }, nextCursor };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -606,9 +747,9 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
       let found = false;
       try { found = await requestIsCommitted(ctx.userId, requestKey); } catch { found = false; }
       if (!found) throw refusal(503, "outcome_unknown", "The database did not confirm this request, and it could not be verified yet. Repeat it with the same requestKey.", { requestKey });
-      return { ...(await rereadAfterCommit(ctx, written, reread)), replayed: false, commitConfirmation: "verified_after_commit_error" };
+      return { ...(await answerAfterCommit(ctx, written, reread)), replayed: false, commitConfirmation: "verified_after_commit_error" };
     }
-    return { ...(await rereadAfterCommit(ctx, written, reread)), replayed: false };
+    return { ...(await answerAfterCommit(ctx, written, reread)), replayed: false };
   } catch (error) {
     await finish();
     // An allowlisted refusal becomes its stable code; anything else goes up
@@ -618,14 +759,28 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
     if (!released) await finish(true);
   }
 }
-// The write is committed: a failed read only flags the answer, it never
-// turns it into a failure (the ids say what was written).
-async function rereadAfterCommit(ctx, written, reread) {
+// The answer of a committed write (the replay rule; owner's external review
+// of 2026-10-13): on a new, bounded connection the caller's right, user and
+// club are checked again FOR SHARE and held while the answer is read. A right
+// lost meanwhile answers the identical 404 and shows nothing of the resource.
+// A read that fails or runs past its bound never turns the answer into a
+// failure: it keeps its status with readError, and names the ids of what was
+// written only once the right was confirmed again (a replay with the same
+// requestKey answers the rest).
+async function answerAfterCommit(ctx, written, reread) {
+  let rightConfirmed = false;
+  let outcome = null;
   try {
-    if (rereadFault) await rereadFault();
-    const current = await reread(pool, written);
-    if (current) return current;
+    outcome = await boundedRead(async (client) => {
+      if (!(await rightsStillHold(client, ctx))) return { lost: true };
+      rightConfirmed = true;
+      if (rereadFault) await rereadFault(client);
+      return { current: await reread(client, written) };
+    }, { locks: true });
   } catch { /* the answer below */ }
+  if (outcome?.lost) throw NOT_FOUND();
+  if (outcome?.current) return outcome.current;
+  if (!rightConfirmed) return { readError: true };
   return { readError: true, mappingId: written.mapping_id ?? null, ...(written.mapping_version_id ? { versionId: written.mapping_version_id } : {}) };
 }
 async function requestIsCommitted(userId, requestKey) {
@@ -717,10 +872,10 @@ export async function createMapping({ ctx, body }) {
     // A pair created meanwhile by another request: name the existing mapping
     // (same owner, so visible), read after the rollback.
     if (error instanceof SourceMetricMappingError && error.code === "mapping_exists" && !error.details) {
-      const existing = (await pool.query(
+      const existing = (await boundedRead((client) => client.query(
         `select id from training_load.source_metric_mappings where source_metric_definition_id = $1 and metric_definition_id = $2 and owner_key = $3`,
         [sourceMetricId, metricDefinitionId, ownerKeyOf(ctx)],
-      ).catch(() => ({ rows: [] }))).rows[0];
+      )).catch(() => ({ rows: [] }))).rows[0];
       if (existing) error.details = { current: { mappingId: existing.id } };
     }
     throw error;
@@ -770,6 +925,10 @@ function canonicalParameterInput(input) {
 function NUMERIC_PARAMS(param) {
   return `(select coalesce(jsonb_object_agg(e.key, case when e.key in ('operator', 'unit') or jsonb_typeof(e.value) = 'null' then e.value else to_jsonb((e.value #>> '{}')::numeric) end), '{}'::jsonb) from jsonb_each(${param}::jsonb) e)`;
 }
+
+// The facts of a source revision a version is built from (owner's external
+// review of 2026-10-13: compared again under FOR SHARE).
+const REVISION_FACTS = Object.freeze(["source_metric_definition_id", "parameter_kind", "supports_session", "supports_drill", "source_unit", "source_bound_unit", "bound_operator"]);
 
 // A plain read (the row is locked later, in the lock order).
 async function activeConversion(client, fromUnit, toUnit) {
@@ -871,6 +1030,7 @@ export async function createVersion({ ctx, mappingId, body }) {
           : equivalent(canonical.value, source.threshold_value) && decCmp(dec(canonical.duration_seconds), dec(source.duration_seconds)) === 0;
         if (!ok) throw refusal(409, "parameters_not_equivalent", MESSAGES.parameters_not_equivalent);
       }
+      if (beforeLocksHold) await beforeLocksHold(client);
       // The locks, in the order of section D, and the facts again under them.
       const conversionIds = [...new Set([valueConversion?.id, boundConversion?.id].filter(Boolean))].sort();
       if (conversionIds.length > 0) {
@@ -882,12 +1042,31 @@ export async function createVersion({ ctx, mappingId, body }) {
       }
       const lockedRevision = (await client.query(`${revisionSql} for share`, [sourceRevisionId])).rows[0];
       if (!lockedRevision || !["draft", "active"].includes(lockedRevision.state)) throw refusal(409, "revision_not_usable", MESSAGES.revision_not_usable);
+      // v34 keeps every other fact read above final once it was seen as this
+      // read accepted it (C42; a unit proof and a meaning proof are written
+      // once, and a proven unit or operator is never NULL again). They are
+      // compared again anyway, so a later migration that allows a change can
+      // never slip a stale fact into the version: the request is repeated.
+      for (const column of REVISION_FACTS) {
+        if (lockedRevision[column] !== revision[column]) throw refusal(409, "try_again", MESSAGES.try_again);
+      }
       await client.query(`select 1 from training_load.source_metric_mappings where id = $1 for no key update`, [id]);
       const lockedTarget = (await client.query(
         `select state, current_version_id from training_load.metric_definitions where id = $1 for share`, [mapping.metric_definition_id],
       )).rows[0];
       if (!lockedTarget || lockedTarget.state !== "active" || lockedTarget.current_version_id !== target.version_id) {
         throw refusal(409, "try_again", MESSAGES.try_again);
+      }
+      // The canonical levels again, under FOR SHARE of the scope capability
+      // rows (after metric_definitions, the v34 order): a level removed since
+      // the plain read is refused, and a removal waits for this version.
+      const lockedScopes = (await client.query(
+        `select scope_level from training_load.metric_definition_scope_capabilities
+          where metric_definition_id = $1 order by scope_level for share`,
+        [mapping.metric_definition_id],
+      )).rows.map((r) => r.scope_level);
+      if ((body.appliesToSession && !lockedScopes.includes("session")) || (body.appliesToDrill && !lockedScopes.includes("component"))) {
+        throw refusal(409, "level_not_allowed", MESSAGES.level_not_allowed);
       }
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       if (writeHold) await writeHold(client, "mapping_version_create");

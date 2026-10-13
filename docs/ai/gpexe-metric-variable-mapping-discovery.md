@@ -570,7 +570,8 @@ J1):
     `condition_description`, a trigger's or the database's text, or an acting user's id.
 64. **Lists** have a stable order and a hard cap (fields 100, revisions per field 20, targets 200,
     conversions 100, mappings 100, versions per mapping 50); a longer result is `409 result_too_large`,
-    never a cut list; the mapping list carries a version summary, the detail every version.
+    never a cut list; the mapping list carries a version summary, the detail every version. (For the
+    mappings and a mapping's versions superseded by C68: pages, not a cap.)
 65. **A replay is a read of the current state.** The same user, key and request hash: the right is
     checked again, the referenced resource is read again and answered `200` with `replayed: true` —
     never a stored historical body (T8 stores none). Another body on the key: `409 request_key_reused`.
@@ -581,6 +582,42 @@ J1):
     constraint, an unexpected `23514`, an SQL or program error is `500 internal_error` without the
     database's text. A busy pool is `409 try_again` with `Retry-After: 5`, the answer of the source and
     importer routes (`routes/sourceConnections.js`, `routes/gpexeImport.js`).
+
+**The owner's external review of the first M2 PR (head `26a0748`, 2026-10-13: NOT READY), decided and
+built in the same PR:**
+
+67. **The answer of `POST /mappings`** is the bounded mapping summary of the list (row 4 of J1), never
+    the version list.
+68. **Pages, no write quota.** `GET /mappings` and the versions of `GET /mappings/:id` are read by
+    keyset pages: a fixed page size (mappings 100, versions 50), the stable order of C64, `nextCursor`
+    (null on the last page), no gap and no duplicate in a stable snapshot. The cursor is opaque and
+    strictly validated, bound to the workspace's owner key (and, for versions, to the mapping); an
+    invalid cursor is `400 invalid_query`. No write refuses a mapping or a version at a count.
+    `/fields`, `/targets` and `/conversions` (catalogs M2 does not write) keep their hard caps.
+69. **The answer of a committed write follows the replay rule (C65).** After a COMMIT confirmed
+    directly or verified on a second connection, the right, the user and the club are checked again,
+    `FOR SHARE` on a new bounded connection and held while the answer is read, before anything of the
+    resource is read. A right lost meanwhile answers the identical 404 and shows nothing of the resource.
+    A check or a read that fails or runs past its bound keeps the write's status with `readError`, and
+    names the ids of what was written only once the right was confirmed again (a replay with the same
+    `requestKey` answers the rest).
+70. **Every M2 read is bounded** (the F3c2d discipline): its own short transaction with a statement and
+    a lock bound on the server and a client bound on the whole read; a connection that ran past its
+    client bound is closed, never returned to the pool. A GET past its bound is `409 try_again`; the
+    read after a COMMIT is `readError`.
+71. **The facts of a version are checked again under lock.** v34 keeps every T2b fact a version create
+    uses final once it was seen as the create accepted it (C42; a unit proof and a meaning proof are
+    written once); the create still compares them again under `FOR SHARE` (field, parameter kind, both
+    levels, both units, operator), so a later migration that allows a change answers `409 try_again`.
+    The current canonical version is re-read under `FOR SHARE` of `metric_definitions`, then the levels
+    under `FOR SHARE` of its scope capability rows (the v34 order): a new current version is
+    `try_again`, a removed level `level_not_allowed`, and a level removal waits for the version.
+72. **The 42501 allowlist is exact:** the three v34 actor texts become the 404; any other `42501`,
+    whatever its beginning, is a sanitized `500 internal_error`.
+73. **A database actor check on the T3 / T4 inserts and the T8 request records is a mandatory, separate
+    hardening PR (v35)** before any T5 activation and before the API's real administrative use. It is
+    not part of the first M2 PR, which adds no migration; the M2 API stays the only application writer
+    meanwhile (test 20 of the M2 suite).
 
 ---
 
@@ -1395,8 +1432,8 @@ caller — and every resource it may not see — gets the identical `404 {"error
 | 1 | `GET /fields` | PA (platform or club WS), CA (own club WS) | query `sourceSystem`, `apiFamily` (optional) | — | `200 {fields:[{id, sourceSystem, apiFamily, key, label, state, revisions:[…]}]}`; order system, family, key (`collate "C"`), revisions by number descending | `400 invalid_query`, `409 result_too_large`, `404` | reads T2a, T2b |
 | 2 | `GET /targets` | PA platform WS → system; PA / CA club WS X → club X | — | the owner from the WS | `200 {targets:[{id, ownerScope, currentVersion:{id, versionNumber, unit, canonicalParameters}, scopes, versionReady, notReadyCode}]}`; order `id`; `unit` only when a unit token; `canonicalParameters` the normalized form or null | `409 result_too_large`, `404` | reads Metrics Core |
 | 3 | `GET /conversions` | as 1 | — | — | `200 {conversions:[{id, fromUnit, toUnit, scale, scaleDivisor, offset, evidenceRef}]}`; active rows; order units (`collate "C"`); exact decimal text | `409 result_too_large`, `404` | reads `unit_conversions` |
-| 4 | `GET /mappings` | platform WS → system; club WS X → system + club X | — | visibility from the WS | `200 {mappings:[{id, ownerScope, sourceMetric:{id, key, apiFamily}, metricDefinitionId, createdAt, latestVersion, activeVersionId, versionCounts}]}`; order system first, `createdAt`, `id` | `409 result_too_large`, `404` | reads T3, T4 |
-| 5 | `GET /mappings/:mappingId` | as 4 | — | — | `200 {mapping}` with every version (all statuses), by number descending | `409 result_too_large`, `404` | reads T3, T4 |
+| 4 | `GET /mappings` | platform WS → system; club WS X → system + club X | query `cursor` (optional) | visibility from the WS | `200 {mappings:[{id, ownerScope, sourceMetric:{id, key, apiFamily}, metricDefinitionId, createdAt, latestVersion, activeVersionId, versionCounts}], nextCursor}`: one page of at most 100, order system first, `createdAt`, `id`; `nextCursor` null on the last page (C68) | `400 invalid_query`, `409 try_again`, `404` | reads T3, T4 |
+| 5 | `GET /mappings/:mappingId` | as 4 | query `cursor` (optional) | — | `200 {mapping, nextCursor}`: the mapping with one page of at most 50 of its versions (all statuses), by number descending | `400 invalid_query`, `409 try_again`, `404` | reads T3, T4 |
 | 6 | `POST /mappings` | PA platform WS → system; PA / CA club WS X → club X | `requestKey`, `sourceMetricId`, `metricDefinitionId` | owner scope, club, `owner_key`, source system, API family, actor, T8 | `201 {mapping, replayed:false}`, `mapping` in the summary shape of row 4 (never the version list); replay or verified COMMIT `200` | `400 invalid_body`, `415 jsonRequired`, `404`, `409 target_scope_mismatch`, `source_metric_retired`, `target_not_active`, `mapping_exists` (+`current.mappingId`), `request_key_reused`, `try_again`, `503 outcome_unknown`, `500 internal_error` | writes T3 + T8 `mapping_create` |
 | 7 | `POST /mappings/:mappingId/versions` | the mapping's owner WS only | `requestKey`, `sourceRevisionId`, `appliesToSession`, `appliesToDrill`; `conversionNote` (required when the units differ); `sourceParameters` (`{lower, upper}` or `{thresholdValue, durationSeconds}`, decimal strings) | version number, canonical version (current), both units, factors (`1, 1, 0` or the one active row in the D5 normal form), parameter kind, operator, bound unit, canonical parameters, parameter factors, fingerprint (checked against the database), `owner_key`, status `draft`, actor, T8 | `201 {version, replayed:false}`, `version` one version in the shape of row 5; replay or verified COMMIT `200` | `400 invalid_body`, `invalid_parameters`, `conversion_note_required`; `415 jsonRequired`; `404`; `409 revision_not_usable`, `unit_not_proven`, `parameters_not_proven`, `target_not_active`, `canonical_not_numeric`, `canonical_unit_missing`, `canonical_unit_not_a_token`, `conversion_unavailable`, `conversion_not_normal`, `bound_conversion_unavailable`, `condition_description_unsupported`, `parameters_not_equivalent`, `level_not_allowed`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` | writes T4 + T8 `mapping_version_create` |
 | 8 | `POST /mappings/:mappingId/versions/:versionId/submit` | as 7 (CA only its own club's mapping) | `requestKey` | `submitted_by`, `submitted_at`, `submitted_basis` (from the role), T8 | `200 {version, replayed}` | `400 invalid_body`, `415 jsonRequired`, `404`, `409 version_not_draft` (+`current.status`), `revision_not_usable`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` | writes T4 status + T8 `mapping_status` |
@@ -1405,22 +1442,32 @@ caller — and every resource it may not see — gets the identical `404 {"error
   request record lookup → active `unit_conversions` rows `FOR SHARE` (value pair, then bound pair,
   ascending id) → T2a / T2b `FOR SHARE` → T3 (`FOR NO KEY UPDATE` for a version, serializing its
   number; `FOR SHARE` for a submit) → T4 `FOR UPDATE` (submit) → `metric_definitions` `FOR SHARE` (its
-  current version re-checked) → role, user and club `FOR SHARE` → the row, its T8 request record →
-  the bounded COMMIT. `statement_timeout` 10 s, `lock_timeout` 2 s on rows; `55P03`, `40P01`, `57014` →
+  current version re-checked) → its scope capability rows `FOR SHARE` (the levels re-checked; a version
+  create) → role, user and club `FOR SHARE` → the row, its T8 request record → the bounded COMMIT. A
+  version create compares the T2b facts it used again under their lock (C71). `statement_timeout` 10 s, `lock_timeout` 2 s on rows; `55P03`, `40P01`, `57014` →
   `409 try_again` (logged by SQLSTATE only).
-- **Answers of a write** never go through a capped list read: a mapping write answers (and replays)
-  the bounded summary of row 4, a version write and a submit one version, each re-read only when the
-  active workspace may write that mapping (its `owner_key`). A mapping with more versions than the
-  detail cap therefore still writes, replays and submits, while its detail (row 5) answers `409
-  result_too_large`. When the COMMIT is confirmed but that read fails, the answer keeps its status
-  (`201` / `200`) with `{readError: true, mappingId, versionId?, replayed: false}` - the ids of what
-  was written, nothing else.
+- **Answers of a write** never go through a page: a mapping write answers (and replays) the bounded
+  summary of row 4, a version write and a submit one version, each re-read only when the active
+  workspace may write that mapping (its `owner_key`). After the COMMIT the right, the user and the club
+  are checked again first, on a new bounded connection (C69): a right lost is the identical 404 with
+  nothing of the resource; a check or a read that fails or runs past its bound keeps the status (`201` /
+  `200`) with `{readError: true, replayed: false}`, plus `mappingId` / `versionId` of what was written
+  only once the right was confirmed again.
+- **Pages** (C68): the cursor is the base64url of a small JSON object, opaque to a client; the server
+  accepts exactly its keys, its version, its kind, the workspace's owner key (and the mapping) it was
+  issued for and a well-formed position, or answers `400 invalid_query`; a query parameter other than
+  one `cursor` is `400 invalid_query` too. Keyset on (system first, `created_at`, `id`) and on the
+  version number.
+- **Every read is bounded** (C70): REPEATABLE READ READ ONLY (READ COMMITTED when it holds the right's
+  `FOR SHARE` locks), `statement_timeout` 5 s and `lock_timeout` 2 s on the server, 8 s on the client for
+  the whole read; past the client bound the connection is closed. The access check of a club workspace,
+  every GET, the name of an existing mapping and the answer after a COMMIT all read this way.
 - **Every answer of the router** (a `404` and a refusal included) carries `Cache-Control: no-store`;
   a POST without a JSON body is `415 jsonRequired`.
 - **The database allowlist:** `23505 source_metric_mappings_pair_key` → `mapping_exists`; `23505
   source_metric_mapping_versions_number_key` and `source_metric_audit_one_request_per_key` → `try_again`;
-  `42501` → the 404 only when its message is one of the v34 actor refusals (`source metric mapping: the
-  acting user …`; logged by its code only), any other `42501` is a `500`; `23514` only when the message is exactly one of the fixed v34 trigger texts the
+  `42501` → the 404 only when its message is exactly one of the three v34 actor refusals (C72; logged by
+  its code only), any other `42501` is a `500`; `23514` only when the message is exactly one of the fixed v34 trigger texts the
   service lists (each to its code). Everything else is `500 internal_error`; only the code and the
   route template are logged.
 - **Tests:** `backend/tests/source-metric-mapping-m2.test.mjs` (disposable database, the real HTTP stack);
@@ -1452,24 +1499,14 @@ Decisions that may safely wait, with the PR that takes them:
   the forwarded `P0001` text, coach-created `team` / `user` definitions, A6) or keeps it as it is
   (M3);
 - the shape of the platform-admin operation that ends a held source instance (D9) (M2);
-- **a write-time quota against a read-time cap** (internal reviews of the first M2 PR, 2026-10-13): no
-  write refuses a new mapping or version at a count, so an owner can hold more mappings than the list
-  cap (100, counted over the system scope plus the club's own) and a mapping more versions than the
-  detail cap (50); that list or detail then answers `409 result_too_large` until either pagination or
-  a write-time quota exists (the other caps of J1 bound catalogs M2 does not write); writes and
-  replays are not affected (J1). Which of the two is an owner decision for a later M2 PR (M2 / M3);
-- bounds outside the write transaction: the statements inside it run under `statement_timeout` 10 s
-  and a row `lock_timeout` 2 s, but the GET reads and the read of a write's answer after a confirmed
-  COMMIT have neither a statement nor a client bound (`db.js` bounds only the pool checkout), so a
-  stalled database can hold such an answer (a retry with the same `requestKey` replays, never writes
-  twice); a client-side `query_timeout` or a bounded read, following the F3c2d pattern, and a test of
-  a Metrics Core catalog writer racing a held version create (the `FOR SHARE` re-check of
-  `current_version_id` is the guard today) (M2);
-- v34 checks the acting user on a submit, an activation and a disabling, but not on the T3 / T4
-  inserts or a T8 request record: the API re-checks the right under lock and is the only writer in
-  `backend/src` (test 20 of the M2 suite, a static scan of `backend/src`; scripts and raw SQL are
-  outside it); whether a later migration adds a database actor check on those inserts is an owner
-  decision (M2);
+- **a mandatory gate, decided (C73):** v34 checks the acting user on a submit, an activation and a
+  disabling, but not on the T3 / T4 inserts or a T8 request record; a separate hardening PR (v35) adds
+  that database check before any T5 activation and before the API's real administrative use. Until
+  then the API re-checks the right under lock and is the only writer in `backend/src` (test 20 of the
+  M2 suite, a static scan of `backend/src`; scripts and raw SQL are outside it);
+- the shared session and workspace reads every route runs before M2's own code (`requireAuth`,
+  `resolveActiveWorkspace`) use the general pool without a statement bound (the pool checkout is
+  bounded): an app-wide matter, outside the M2 routes;
 - the access helpers of the M2 service (`resolveMappingAdmin`, `rightsStillHold`) move to their own
   module before T5 reuses them (M2);
 - whether a later conversion that the M1 normal form cannot represent (a factor whose value and

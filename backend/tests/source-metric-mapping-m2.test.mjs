@@ -54,9 +54,12 @@ after(async () => {
   service?.setMappingWriteHoldForTests(null);
   service?.setMappingUserLockWaitForTests(null);
   service?.setMappingRereadFaultForTests(null);
+  service?.setMappingReadFaultForTests(null);
+  service?.setMappingBeforeLocksHoldForTests(null);
   dbModule?.setPoolCheckoutFaultForTests(null);
   if (server) { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
-  if (appPool) await appPool.end();
+  // Bounded: a client a failed test left checked out must not hold the file open.
+  if (appPool) await Promise.race([appPool.end(), new Promise((res) => setTimeout(res, 5_000))]);
   if (admin) await admin.end();
   if (db) await db.drop();
   for (const level of Object.keys(originalConsole)) console[level] = originalConsole[level];
@@ -68,6 +71,9 @@ afterEach(() => {
   for (const g of openGates.splice(0)) g.open();
   service.setMappingRightsHoldForTests(null);
   service.setMappingRereadFaultForTests(null);
+  service.setMappingReadFaultForTests(null);
+  service.setMappingBeforeLocksHoldForTests(null);
+  service.setMappingReadBoundsForTests();
   service.setMappingCommitForTests();
   service.setMappingWriteHoldForTests(null);
   service.setMappingUserLockWaitForTests(null);
@@ -168,6 +174,23 @@ async function someoneWaits(timeoutMs = 5000) {
     await new Promise((res) => setTimeout(res, 20));
   }
   return false;
+}
+// A change v34 refuses (a unit proof is written once), made as a later
+// migration might allow it: the revision guard is bypassed for this one
+// statement, on the disposable database only.
+async function asFutureMigration(sql, params) {
+  const superuser = (await one(`select rolsuper from pg_roles where rolname = current_user`)).rolsuper;
+  await admin.query("begin");
+  try {
+    if (superuser) await admin.query("set local session_replication_role = replica");
+    else await admin.query("alter table training_load.source_metric_definition_versions disable trigger source_metric_revisions_guard");
+    await admin.query(sql, params);
+    if (!superuser) await admin.query("alter table training_load.source_metric_definition_versions enable trigger source_metric_revisions_guard");
+    await admin.query("commit");
+  } catch (error) {
+    await admin.query("rollback").catch(() => {});
+    throw error;
+  }
 }
 // A bounded wait for a condition set inside a held write (a regression fails here, not by the file timeout).
 async function until(condition, label, timeoutMs = 10000) {
@@ -465,6 +488,8 @@ test("7. GET /mappings and /mappings/:id: the platform workspace sees system map
   const listB = await api("/mappings", { cookie: W.caB.cookie });
   const listP = await api("/mappings", { cookie: W.pa.cookie });
   const own = (l) => new Set(l.body.mappings.map((m) => m.ownerScope));
+  for (const l of [listA, listB, listP]) assert.deepEqual(Object.keys(l.body).sort(), ["mappings", "nextCursor"]);
+  assert.equal(listP.body.nextCursor, null, "one page while the system scope holds fewer mappings than a page");
   assert.deepEqual(own(listP), new Set(["system"]));
   assert.ok(own(listA).has("club") && own(listA).has("system"));
   const clubAIds = new Set((await q(`select id from training_load.source_metric_mappings where owner_club_id = $1`, [W.clubA])).map((x) => x.id));
@@ -483,6 +508,7 @@ test("7. GET /mappings and /mappings/:id: the platform workspace sees system map
   assert.equal((await api(`/mappings/not-a-uuid`, { cookie: W.caA.cookie })).status, 404);
   const detail = await api(`/mappings/${zone.id}`, { cookie: W.caA.cookie });
   assert.equal(detail.status, 200, "club admins read system mappings");
+  assert.deepEqual([Object.keys(detail.body).sort(), detail.body.nextCursor], [["mapping", "nextCursor"], null]);
   assert.equal(detail.body.mapping.versions[0].parameterFingerprint.startsWith("v1:"), true);
   for (const r of [listA, listB, listP, detail]) for (const u of [W.pa.id, W.caA.id, W.paA.id]) assert.ok(!r.text.includes(u), "no acting user's id");
 });
@@ -826,7 +852,12 @@ test("16. a database refusal outside the allowlist is a sanitized 500 internal_e
   assert.equal(service.classifyDatabaseError({ code: "40P01" }).code, "try_again");
   // 42501: only the v34 actor triggers refusal is the 404 (logged by code only); any other 42501 is not mapped.
   assert.equal(service.classifyDatabaseError({ code: "42501", message: "source metric mapping: the acting user is not an active platform admin" }).code, "notFound");
+  assert.equal(service.classifyDatabaseError({ code: "42501", message: "source metric mapping: the acting user is not an active admin of the mapping's club" }).code, "notFound");
   assert.equal(service.classifyDatabaseError({ code: "42501", message: "source metric mapping: the acting user may not submit this mapping version" }).code, "notFound");
+  // Exactly those three texts: the same beginning with any other ending is a 500.
+  assert.equal(service.classifyDatabaseError({ code: "42501", message: "source metric mapping: the acting user" }), null);
+  assert.equal(service.classifyDatabaseError({ code: "42501", message: "source metric mapping: the acting user is not an active platform admin " }), null);
+  assert.equal(service.classifyDatabaseError({ code: "42501", message: "source metric mapping: the acting user is someone else" }), null);
   assert.equal(service.classifyDatabaseError({ code: "42501" }), null);
   assert.equal(service.classifyDatabaseError({ code: "42501", message: "permission denied for table source_metric_mappings" }), null);
   assert.equal(service.classifyDatabaseError({ code: "42501", message: "source metric mapping: a seed marker is accepted only from the seeding migration" }), null);
@@ -881,20 +912,33 @@ test("18. the right is checked again under FOR SHARE right before the write: a c
   W.metricsDigest = await metricsDigest();
 });
 
-test("19. a write's answer and its replay never depend on a list cap: a mapping with more versions than the detail's cap still creates, replays and submits versions, and its mapping write replays as the bounded summary", async () => {
+test("19. a mapping's versions are read in pages (number descending, an opaque cursor, no gap or duplicate); a write's answer and its replay never depend on a page: a mapping with more versions than one page still creates, replays and submits versions, and its mapping write replays as the bounded summary", async () => {
   const f = await field({ unit: "s" });
   const createBody = { requestKey: key(), sourceMetricId: f.id, metricDefinitionId: W.sysSec.id };
   const m = (await post("/mappings", W.pa.cookie, createBody)).body.mapping;
   const firstBody = versionBody(f.revId);
   const first = await post(`/mappings/${m.id}/versions`, W.pa.cookie, firstBody);
   assert.equal(first.status, 201, first.text);
-  for (let i = 1; i <= service.LIST_CAPS.versionsPerMapping; i += 1) {
+  for (let i = 1; i <= service.PAGE_SIZES.versions; i += 1) {
     const r = await post(`/mappings/${m.id}/versions`, W.pa.cookie, versionBody(f.revId));
     assert.equal(r.status, 201, r.text);
   }
-  const count = service.LIST_CAPS.versionsPerMapping + 1;
-  const detail = await api(`/mappings/${m.id}`, { cookie: W.pa.cookie });
-  assert.deepEqual([detail.status, detail.body.error, detail.body.limit], [409, "result_too_large", service.LIST_CAPS.versionsPerMapping], "the detail is refused, never cut");
+  const count = service.PAGE_SIZES.versions + 1;
+  const page1 = await api(`/mappings/${m.id}`, { cookie: W.pa.cookie });
+  assert.equal(page1.status, 200, page1.text);
+  assert.equal(page1.body.mapping.versions.length, service.PAGE_SIZES.versions);
+  assert.equal(typeof page1.body.nextCursor, "string");
+  const page2 = await api(`/mappings/${m.id}?cursor=${encodeURIComponent(page1.body.nextCursor)}`, { cookie: W.pa.cookie });
+  assert.equal(page2.status, 200, page2.text);
+  assert.equal(page2.body.nextCursor, null, "the last page");
+  const numbers = [...page1.body.mapping.versions, ...page2.body.mapping.versions].map((v) => v.versionNumber);
+  assert.deepEqual(numbers, Array.from({ length: count }, (_, i) => count - i), "every version once, by number descending");
+  // The cursor is bound to its mapping and to the workspace's owner key; a list cursor is not a version cursor.
+  const other = await mappingFor(W.pa, (await field({ unit: "s" })).id, W.sysSec.id);
+  for (const [path, who] of [[`/mappings/${other.id}`, W.pa], [`/mappings/${m.id}`, W.caA], ["/mappings", W.pa]]) {
+    const r = await api(`${path}?cursor=${encodeURIComponent(page1.body.nextCursor)}`, { cookie: who.cookie });
+    assert.deepEqual([r.status, r.body.error], [400, "invalid_query"], path);
+  }
   const replay = await post(`/mappings/${m.id}/versions`, W.pa.cookie, firstBody);
   assert.deepEqual([replay.status, replay.body.replayed, replay.body.version.id, replay.body.version.versionNumber], [200, true, first.body.version.id, 1]);
   const next = await post(`/mappings/${m.id}/versions`, W.pa.cookie, versionBody(f.revId));
@@ -909,6 +953,8 @@ test("19. a write's answer and its replay never depend on a list cap: a mapping 
   assert.equal(mappingReplay.body.mapping.latestVersion.versionNumber, count + 1);
   const list = await api("/mappings", { cookie: W.pa.cookie });
   assert.equal(list.status, 200, "the list carries summaries, so a long version history never refuses it");
+  const detailAgain = await api(`/mappings/${m.id}`, { cookie: W.pa.cookie });
+  assert.deepEqual([detailAgain.status, detailAgain.body.mapping.versions[0].versionNumber], [200, count + 1]);
 });
 
 test("20. architecture: only the M2 service writes a mapping, a mapping version or a mapping request record, and nothing in backend/src writes a T5 activation or a T6 value provenance", async () => {
@@ -935,7 +981,270 @@ test("20. architecture: only the M2 service writes a mapping, a mapping version 
   }
 });
 
-test("21. nothing of M2 writes a T5 activation, a T6 fact, a T2a / T2b row or Metrics Core; every request record is a mapping action; no response or log line carries a trigger's or the database's text, or an acting user's id", async () => {
+test("21. the answer of a committed write follows the replay rule: the right, the user and the club are checked again on a new connection before the answer is read; a right lost meanwhile answers the identical 404 and shows nothing - after an uncertain COMMIT and after a confirmed one; a check that cannot finish answers readError without ids", async () => {
+  // An uncertain COMMIT of a mapping: committed, its answer lost, the club role revoked before the answer is read.
+  const caX = await clubAdmin(W.clubA);
+  const f = await field({ unit: "s" });
+  service.setMappingCommitForTests({ fault: (client) => client.query("commit").then(async () => {
+    await q(`update public.user_club_roles set is_active = false where user_id = $1`, [caX.id]);
+    throw new Error("answer lost");
+  }), timeoutMs: 2_000 });
+  const lost = await post("/mappings", caX.cookie, { requestKey: key(), sourceMetricId: f.id, metricDefinitionId: W.clubASec.id });
+  service.setMappingCommitForTests();
+  const written = await one(`select id from training_load.source_metric_mappings where source_metric_definition_id = $1`, [f.id]);
+  assert.ok(written, "the COMMIT went through");
+  assert.equal((await q(`select 1 from training_load.source_metric_audit where mapping_id = $1`, [written.id])).length, 1);
+  assert.deepEqual([lost.status, lost.body, lost.headers.get("cache-control")], [404, { error: "notFound" }, "no-store"]);
+  assert.ok(!lost.text.includes(written.id), "nothing of the resource");
+  // An uncertain COMMIT of a version: a platform admin's role revoked the same way.
+  const pX = await platformAdmin();
+  const g = await field({ unit: "s" });
+  const mg = await mappingFor(pX, g.id, W.sysSec.id);
+  service.setMappingCommitForTests({ fault: (client) => client.query("commit").then(async () => {
+    await q(`update public.user_global_roles set is_active = false where user_id = $1`, [pX.id]);
+    throw new Error("answer lost");
+  }), timeoutMs: 2_000 });
+  const lostVersion = await post(`/mappings/${mg.id}/versions`, pX.cookie, versionBody(g.revId));
+  service.setMappingCommitForTests();
+  const version = await one(`select id from training_load.source_metric_mapping_versions where mapping_id = $1`, [mg.id]);
+  assert.ok(version, "the version was committed");
+  assert.deepEqual([lostVersion.status, lostVersion.body], [404, { error: "notFound" }]);
+  assert.ok(!lostVersion.text.includes(version.id) && !lostVersion.text.includes(mg.id));
+  // A confirmed COMMIT, the role revoked before the answer's right check (the second check of this request).
+  const caZ = await clubAdmin(W.clubA);
+  const h = await field({ unit: "s" });
+  let calls = 0;
+  service.setMappingRightsHoldForTests(async () => {
+    calls += 1;
+    if (calls === 2) await q(`update public.user_club_roles set is_active = false where user_id = $1`, [caZ.id]);
+  });
+  const confirmed = await post("/mappings", caZ.cookie, { requestKey: key(), sourceMetricId: h.id, metricDefinitionId: W.clubASec.id });
+  service.setMappingRightsHoldForTests(null);
+  assert.equal(calls, 2, "checked under lock in the write, and again before the answer");
+  assert.deepEqual([confirmed.status, confirmed.body], [404, { error: "notFound" }]);
+  assert.equal((await q(`select 1 from training_load.source_metric_mappings where source_metric_definition_id = $1`, [h.id])).length, 1);
+  // The answer's right check cannot finish (a stalled statement): readError, no id; the replay answers.
+  service.setMappingReadBoundsForTests({ statementTimeoutMs: 300, answerTimeoutMs: 2_000 });
+  const k = await field({ unit: "s" });
+  const kBody = { requestKey: key(), sourceMetricId: k.id, metricDefinitionId: W.sysSec.id };
+  service.setMappingReadFaultForTests((client) => client.query("select pg_sleep(3)"));
+  const unconfirmed = await post("/mappings", W.pa.cookie, kBody);
+  service.setMappingReadFaultForTests(null);
+  assert.deepEqual([unconfirmed.status, unconfirmed.body], [201, { readError: true, replayed: false }]);
+  const replay = await post("/mappings", W.pa.cookie, kBody);
+  assert.deepEqual([replay.status, replay.body.replayed, replay.body.mapping.sourceMetric.id], [200, true, k.id]);
+});
+
+test("22. every read is bounded: a statement past its server bound answers try_again within the bound and leaves the connection clean; a read stalled past its client bound answers try_again and its connection is closed, never returned to the pool; a stalled read after a confirmed COMMIT answers readError with the ids", async () => {
+  service.setMappingReadBoundsForTests({ statementTimeoutMs: 300, answerTimeoutMs: 1_500 });
+  const checkedOut = () => appPool.totalCount - appPool.idleCount;
+  // The server bound, on a GET (the platform workspace) and on the access check of a club workspace.
+  service.setMappingReadFaultForTests((client) => client.query("select pg_sleep(3)"));
+  for (const who of [W.pa, W.caA]) {
+    const started = Date.now();
+    const slow = await api("/conversions", { cookie: who.cookie });
+    const took = Date.now() - started;
+    assert.deepEqual([slow.status, slow.body.error, slow.headers.get("retry-after")], [409, "try_again", "5"]);
+    assert.ok(took < 1_200, `the statement bound answered (${took} ms)`);
+  }
+  service.setMappingReadFaultForTests(null);
+  assert.equal(checkedOut(), 0, "every connection went back");
+  assert.equal((await one(`select count(*)::int as n from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid() and state = 'active' and query like 'select pg_sleep(3)%'`)).n, 0, "the statement was cancelled on the server");
+  // The client bound: a read that never answers.
+  let pid = null;
+  service.setMappingReadFaultForTests(async (client) => {
+    pid = (await client.query("select pg_backend_pid() as pid")).rows[0].pid;
+    await new Promise(() => {});
+  });
+  const started = Date.now();
+  const stalled = await Promise.race([
+    api("/mappings", { cookie: W.pa.cookie }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("no answer within 5 s")), 5_000)),
+  ]);
+  service.setMappingReadFaultForTests(null);
+  assert.deepEqual([stalled.status, stalled.body.error], [409, "try_again"]);
+  assert.ok(Date.now() - started < 3_000, "within the client bound");
+  assert.equal(checkedOut(), 0, "nothing stays checked out");
+  let gone = false;
+  for (let i = 0; i < 40 && !gone; i += 1) {
+    gone = (await one(`select count(*)::int as n from pg_stat_activity where pid = $1`, [pid])).n === 0;
+    if (!gone) await new Promise((res) => setTimeout(res, 25));
+  }
+  assert.ok(gone, "the stalled read's connection was closed, not returned to the pool");
+  assert.equal((await api("/conversions", { cookie: W.pa.cookie })).status, 200, "the pool serves again");
+  // After a confirmed COMMIT, the answer's read stalls once the right is confirmed: readError with the ids.
+  const f = await field({ unit: "s" });
+  service.setMappingRereadFaultForTests((client) => client.query("select pg_sleep(3)"));
+  const created = await post("/mappings", W.pa.cookie, { requestKey: key(), sourceMetricId: f.id, metricDefinitionId: W.sysSec.id });
+  service.setMappingRereadFaultForTests(null);
+  const id = (await one(`select id from training_load.source_metric_mappings where source_metric_definition_id = $1`, [f.id])).id;
+  assert.deepEqual([created.status, created.body], [201, { readError: true, mappingId: id, replayed: false }]);
+  assert.equal(checkedOut(), 0);
+});
+
+test("23. /mappings is read in pages: a fixed page size, the stable order (system first, created_at, id), an opaque cursor bound to the workspace's owner key; every mapping exactly once, also when one is created between two pages; a cursor of any other shape, kind, owner or position is 400 invalid_query", async () => {
+  // More system mappings than one page, all with one created_at (one statement), so the id decides.
+  const md = await canonical({ unit: "s" });
+  const tag = uid();
+  await q(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id)
+           select 'gpexe', 'rest_v1', 'm2.page.' || $1 || '.' || g, 'Page field', $2 from generate_series(1, $3::int) g`, [tag, W.pa.id, service.PAGE_SIZES.mappings + 5]);
+  await q(`insert into training_load.source_metric_mappings (source_metric_definition_id, source_system, api_family, metric_definition_id, owner_scope, owner_club_id, created_by_user_id)
+           select d.id, d.source_system, d.api_family, $1, 'system', null, $2 from training_load.source_metric_definitions d where d.source_metric_key like 'm2.page.' || $3 || '.%'`, [md.id, W.pa.id, tag]);
+  const pageThrough = async (who, first) => {
+    const seen = first.body.mappings.map((m) => m.id);
+    let cursor = first.body.nextCursor;
+    for (let pages = 1; cursor; pages += 1) {
+      assert.ok(pages < 10, "the pages end");
+      const r = await api(`/mappings?cursor=${encodeURIComponent(cursor)}`, { cookie: who.cookie });
+      assert.equal(r.status, 200, r.text);
+      assert.ok(r.body.mappings.length <= service.PAGE_SIZES.mappings);
+      seen.push(...r.body.mappings.map((m) => m.id));
+      cursor = r.body.nextCursor;
+    }
+    return seen;
+  };
+  const p1 = await api("/mappings", { cookie: W.pa.cookie });
+  assert.deepEqual([p1.status, p1.body.mappings.length, typeof p1.body.nextCursor], [200, service.PAGE_SIZES.mappings, "string"]);
+  const late = await mappingFor(W.pa, (await field({ unit: "s" })).id, md.id);
+  const seenP = await pageThrough(W.pa, p1);
+  const expectedP = (await q(`select id from training_load.source_metric_mappings where owner_key = 'system' order by created_at, id`)).map((r) => r.id);
+  assert.deepEqual(seenP, expectedP, "every system mapping exactly once, in the stable order");
+  assert.equal(seenP[seenP.length - 1], late.id, "a mapping created between two pages comes at its place");
+  const a1 = await api("/mappings", { cookie: W.caA.cookie });
+  const seenA = await pageThrough(W.caA, a1);
+  const expectedA = (await q(`select id from training_load.source_metric_mappings where owner_key in ('system', $1::text) order by (owner_scope <> 'system'), created_at, id`, [W.clubA])).map((r) => r.id);
+  assert.deepEqual(seenA, expectedA, "system first, then club A's own; never another club's");
+  // Invalid cursors.
+  const enc = (payload) => Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const valid = JSON.parse(Buffer.from(p1.body.nextCursor, "base64url").toString("utf8"));
+  const invalid = [
+    "%%%", "a".repeat(401), Buffer.from("[]").toString("base64url"), Buffer.from("not json").toString("base64url"),
+    enc({ ...valid, v: 2 }), enc({ ...valid, k: "versions" }), enc({ ...valid, o: W.clubA }), enc({ ...valid, extra: 1 }),
+    enc({ ...valid, s: "false" }), enc({ ...valid, t: "2026-02-30T00:00:00.000000" }), enc({ ...valid, t: "2026-10-13 00:00:00" }),
+    enc({ ...valid, i: valid.i.toUpperCase() }), enc({ ...valid, i: "x" }),
+  ];
+  for (const c of invalid) {
+    const r = await api(`/mappings?cursor=${encodeURIComponent(c)}`, { cookie: W.pa.cookie });
+    assert.deepEqual([r.status, r.body.error], [400, "invalid_query"], c.slice(0, 40));
+  }
+  for (const query of ["cursor=", "cursor=a&cursor=b", "limit=5"]) {
+    const r = await api(`/mappings?${query}`, { cookie: W.pa.cookie });
+    assert.deepEqual([r.status, r.body.error], [400, "invalid_query"], query);
+  }
+  const foreign = await api(`/mappings?cursor=${encodeURIComponent(p1.body.nextCursor)}`, { cookie: W.caA.cookie });
+  assert.deepEqual([foreign.status, foreign.body.error], [400, "invalid_query"], "a cursor of the system scope is not club A's");
+});
+
+test("24. a version's source revision facts are compared again under FOR SHARE: allowed T2b acts between the plain read and the lock (the meaning proof, the activation) keep the facts and the version is created; a retirement is revision_not_usable; a changed fact - a transition a later migration might allow, simulated with the v34 guard bypassed - is try_again with nothing written", async () => {
+  async function draftWithUnit() {
+    const f = await field({ unit: "s", verify: false, activate: false });
+    await q(`update training_load.source_metric_definition_versions set source_unit = 's', unit_verified_by_user_id = $2, unit_verified_at = now(), unit_evidence_ref = $3 where id = $1`, [f.revId, W.pa.id, COMPAT]);
+    return f;
+  }
+  async function heldVersion(f, during) {
+    const m = await mappingFor(W.pa, f.id, W.sysSec.id);
+    const g = gate();
+    let entered = false;
+    service.setMappingBeforeLocksHoldForTests(async () => { entered = true; await g.promise; });
+    const creating = post(`/mappings/${m.id}/versions`, W.pa.cookie, versionBody(f.revId));
+    await until(() => entered, "the version create read the revision");
+    await during();
+    g.open();
+    const r = await creating;
+    service.setMappingBeforeLocksHoldForTests(null);
+    return { r, m };
+  }
+  const a = await draftWithUnit();
+  const allowed = await heldVersion(a, async () => {
+    await q(`update training_load.source_metric_definition_versions set meaning_verified_by_user_id = $2, meaning_verified_at = now(), meaning_evidence_ref = $3, evidence_status = 'verified' where id = $1`, [a.revId, W.pa.id, COMPAT]);
+    await q(`update training_load.source_metric_definition_versions set state = 'active', activated_by_user_id = $2, activated_at = now() where id = $1`, [a.revId, W.pa.id]);
+  });
+  assert.deepEqual([allowed.r.status, allowed.r.body.version?.sourceUnit, allowed.r.body.version?.sourceRevisionId], [201, "s", a.revId], allowed.r.text);
+  const b = await draftWithUnit();
+  const retired = await heldVersion(b, () => q(`update training_load.source_metric_definition_versions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'Test retirement' where id = $1`, [b.revId, W.pa.id]));
+  assert.deepEqual([retired.r.status, retired.r.body.error], [409, "revision_not_usable"]);
+  assert.equal((await q(`select 1 from training_load.source_metric_mapping_versions where mapping_id = $1`, [retired.m.id])).length, 0);
+  const c = await draftWithUnit();
+  const changed = await heldVersion(c, () => asFutureMigration(`update training_load.source_metric_definition_versions set source_unit = 'min' where id = $1`, [c.revId]));
+  assert.deepEqual([changed.r.status, changed.r.body.error], [409, "try_again"]);
+  assert.equal((await q(`select 1 from training_load.source_metric_mapping_versions where mapping_id = $1`, [changed.m.id])).length, 0, "nothing written");
+});
+
+test("25. a version's canonical facts under lock: a new current version of the canonical definition after the plain read is try_again; a level removed after the plain read is level_not_allowed; a level removal waits for a version that holds the scope capabilities FOR SHARE; a catalog writer holding the definition makes the version wait and then answer try_again", async () => {
+  async function heldVersion(md, during) {
+    const f = await field({ unit: "s" });
+    const m = await mappingFor(W.pa, f.id, md.id);
+    const g = gate();
+    let entered = false;
+    service.setMappingBeforeLocksHoldForTests(async () => { entered = true; await g.promise; });
+    const creating = post(`/mappings/${m.id}/versions`, W.pa.cookie, versionBody(f.revId));
+    await until(() => entered, "the version create read the canonical definition");
+    await during();
+    g.open();
+    const r = await creating;
+    service.setMappingBeforeLocksHoldForTests(null);
+    return { r, m, f };
+  }
+  const newCurrentVersion = async (mdId) => {
+    const v2 = (await one(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type) values ($1, 2, 's', 'numeric') returning id`, [mdId])).id;
+    await q(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [v2, mdId]);
+    return v2;
+  };
+  const mdA = await canonical({ unit: "s" });
+  let v2 = null;
+  const moved = await heldVersion(mdA, async () => { v2 = await newCurrentVersion(mdA.id); });
+  assert.deepEqual([moved.r.status, moved.r.body.error], [409, "try_again"]);
+  assert.equal((await q(`select 1 from training_load.source_metric_mapping_versions where mapping_id = $1`, [moved.m.id])).length, 0);
+  const again = await post(`/mappings/${moved.m.id}/versions`, W.pa.cookie, versionBody(moved.f.revId));
+  assert.deepEqual([again.status, again.body.version.metricDefinitionVersionId], [201, v2], "a new request uses the new current version");
+  const mdB = await canonical({ unit: "s" });
+  const removed = await heldVersion(mdB, () => q(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 and scope_level = 'component'`, [mdB.id]));
+  assert.deepEqual([removed.r.status, removed.r.body.error], [409, "level_not_allowed"]);
+  assert.equal((await q(`select 1 from training_load.source_metric_mapping_versions where mapping_id = $1`, [removed.m.id])).length, 0);
+  // The version holds the capability rows FOR SHARE: a removal waits for it.
+  const mdC = await canonical({ unit: "s" });
+  const fC = await field({ unit: "s" });
+  const mC = await mappingFor(W.pa, fC.id, mdC.id);
+  const g = gate();
+  let entered = false;
+  service.setMappingWriteHoldForTests(async (_c, where) => { if (where === "mapping_version_create") { entered = true; await g.promise; } });
+  const holding = post(`/mappings/${mC.id}/versions`, W.pa.cookie, versionBody(fC.revId));
+  await until(() => entered, "the version holds its locks");
+  const remover = new pg.Client({ connectionString: db.url });
+  await remover.connect();
+  try {
+    const removing = remover.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 and scope_level = 'component'`, [mdC.id]);
+    assert.equal(await someoneWaits(), true, "the level removal waits for the version");
+    g.open();
+    assert.equal((await holding).status, 201);
+    await removing;
+  } finally {
+    await remover.end();
+    service.setMappingWriteHoldForTests(null);
+  }
+  // A catalog writer holds the definition: the version waits, then reads the new current version under the lock.
+  const mdD = await canonical({ unit: "s" });
+  const fD = await field({ unit: "s" });
+  const mD = await mappingFor(W.pa, fD.id, mdD.id);
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    const v2D = (await holder.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type) values ($1, 2, 's', 'numeric') returning id`, [mdD.id])).rows[0].id;
+    await holder.query(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [v2D, mdD.id]);
+    const waiting = post(`/mappings/${mD.id}/versions`, W.pa.cookie, versionBody(fD.revId));
+    assert.equal(await someoneWaits(), true, "the version waits for the catalog writer");
+    await holder.query("commit");
+    const r = await waiting;
+    assert.deepEqual([r.status, r.body.error], [409, "try_again"]);
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end();
+  }
+  W.metricsDigest = await metricsDigest(); // this test's own catalog writes
+});
+
+test("26. nothing of M2 writes a T5 activation, a T6 fact, a T2a / T2b row or Metrics Core; every request record is a mapping action; no response or log line carries a trigger's or the database's text, or an acting user's id", async () => {
   assert.equal((await one(`select count(*)::int as n from training_load.source_metric_mapping_activations`)).n, 0);
   assert.equal((await one(`select count(*)::int as n from training_load.metric_value_source_provenance`)).n, 0);
   assert.equal((await one(`select count(*)::int as n from training_load.source_metric_mapping_versions where status not in ('draft', 'needs_review')`)).n, 0, "no activation or disabling");

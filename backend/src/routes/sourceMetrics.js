@@ -95,15 +95,17 @@ router.get("/conversions", handle(async (req, res) => {
 router.get("/mappings", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
-  res.json({ mappings: await service.listMappings({ ctx }) });
+  // { mappings, nextCursor }: one page; nextCursor is null on the last.
+  res.json(await service.listMappings({ ctx, query: req.query }));
 }));
 
 router.get("/mappings/:mappingId", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
-  const mapping = await service.getMapping({ ctx, mappingId: req.params.mappingId });
-  if (!mapping) return notFound(res);
-  res.json({ mapping });
+  // { mapping (with one page of versions), nextCursor }.
+  const page = await service.getMapping({ ctx, mappingId: req.params.mappingId, query: req.query });
+  if (!page) return notFound(res);
+  res.json(page);
 }));
 
 // A write's answer: 201 for a resource created by this request; 200 for a
