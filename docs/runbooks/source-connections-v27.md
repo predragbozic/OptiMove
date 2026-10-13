@@ -64,7 +64,10 @@ must agree before anything reaches a server:
    that server. Nothing assumes an account, a token or a team id is valid on more than one server.
 2. One code entry in `SOURCE_HOSTS` (the exact host) in a reviewed PR.
 3. One data-only migration: `insert into training_load.source_host_catalog (source_system,
-   host_key, label, note) values (…)`; the table's shape does not change.
+   host_key, label, note, api_family) values (…)`; the table's shape does not change. Since v34
+   `api_family` is mandatory (no default, `api` or `rest_v1`) and immutable: it must equal the
+   key's `apiFamily` in `SOURCE_HOSTS` — a row without it fails the migration (23502) and with it
+   the deploy that carries it.
 4. The platform admin then only **chooses** the approved key in Settings (F3c3); the choice list
    is the intersection of the approved catalog rows and the keys the backend can resolve.
 5. F3c2's Connect and Test connection run against **exactly the chosen host** and succeed there

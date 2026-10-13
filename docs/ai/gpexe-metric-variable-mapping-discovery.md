@@ -10,15 +10,17 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 |---|---|
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
-| Last verified against commit | `af11338` — a later `main` (`0098638`: `95f2fd1` and PR #157) was reviewed against the re-verification list below on 2026-10-12: it changed only frontend files outside that list and their tests, so no contract here changed and this line stays |
-| Status | **Accepted architecture; M1 not started** |
+| Last verified against commit | `0293b39` (merge of PR #158; the base of the M1 pull request, whose head commit is named in its description) — `af11338..0293b39` changed no file of the re-verification list below (only these documents and rules, and frontend files outside the list), so sections A and B stand; sections C, D and J now also describe the M1 schema of that pull request |
+| Status | **Accepted architecture; M1 (the schema, migration v34) implemented in an open pull request — not merged, not deployed, applied to no persistent database; M2–M6 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
 **Which changes require a targeted re-verification of this document** (not a repeat of the whole
 discovery): any change to `migrations_v2/` files v10–v13 (`2026090414*`–`2026090417*`), the
 training_activity v3 / v4 files (`202609071200`, `202609071300`), the dashboard files v15–v18
-(`2026091009*`–`2026091012*`), v20 (`202609171800`), v22–v24 (GPEXE import), v27–v33 (source
-connections, identities, check finalization); any change to `backend/src/gpexeImportMapper.js`,
+(`2026091009*`–`2026091012*`), v20 (`202609171800`), v22–v24 (GPEXE import), v27–v34 (source
+connections, identities, check finalization, the M1 mapping schema `202610121000`); any change to
+`docs/runbooks/source-metric-mapping-v34-rollback.sql` or `backend/scripts/gpexe-undo-imported-session.mjs`;
+any change to `backend/src/gpexeImportMapper.js`,
 `gpexeImportWriter.js`, `gpexeImportPreview.js`, `gpexeImportService.js`, `gpexeRestV1Adapter.js`,
 `trainingLoadMetricsCatalog.js`, `trainingLoadMetricsMeasurements.js`, `trainingLoadMetricsAccess.js`,
 `trainingLoadDashboardQuery.js`, `trainingLoadDashboardWidgets.js`, `sourceHosts.js`,
@@ -386,13 +388,168 @@ them (review history in K2):
     changing the stored value, and a characterisation test proving that today's GPEXE values stay
     equivalent within the existing `1e-9` contract.
 
+Decided by the owner for the M1 SQL (2026-10-12), where sections D and E did not fix a detail
+(each is built in migration v34 and tested in `backend/tests/source-metric-mapping-m1.test.mjs`):
+
+40. **`evidence_ref` shape** (every `evidence_ref`, `unit_evidence_ref`, `meaning_evidence_ref` and
+    the T8 reference): a repository-relative `path#anchor` of 1–300 characters; the path starts with
+    `docs/`, never with `/`, has no empty, `.` or `..` segment (so no `//`); exactly one `#` with both
+    parts non-empty; no URL, space, colon or control character
+    (`^docs(/[A-Za-z0-9_-][A-Za-z0-9_.-]*)+#[A-Za-z0-9_-]+$`). That the file and the anchor exist is
+    proven by a test for every seeded reference; an anchor is a real Markdown heading slug or an
+    explicit stable `<a id>` anchor.
+41. **Bounded single-line text**: `btrim(value) = value`, 1–N characters, no C0, DEL or C1 control
+    character and no U+2028 / U+2029 (widened by C53 to the listed invisible and bidi characters); a
+    nullable column applies the same rule when it is not NULL, and
+    an empty string is never a stand-in for NULL. N is 500 for T2a `retired_reason`, T2b `unit_note`
+    and `retired_reason`, `unit_conversions.retired_reason` and T4 `disable_reason` (and, as before, for
+    `conversion_note` and the T5 / T8 `reason`; 80 for `source_label`).
+42. **T2b immutability and lifecycle**: the revision identity, the hypothesis (`expected_*`,
+    `unit_note`), the shape, the parameter kind and the levels never change; a proof column moves from
+    NULL to a value only through its own verification act (unit, or meaning with the operator), with its
+    actor, time and reference, once, never overwritten or cleared; any change to the real contract is a
+    new revision; the generic `evidence_ref` is written once, in the same change that raises
+    `evidence_status` from `unproven` (the database requires `evidence_ref` exactly when the status is not
+    `unproven`). A revision is created only for an `active` T2a field, activating a revision needs an
+    `active` field, a T5 row is inserted only open, and a T2a field is not retired while one of its
+    revisions is `draft` or `active` or an activation of it is open.
+43. **Parameterized revisions**: an `event_threshold` revision uses its proven bound unit exactly like a
+    zone; a parameterized revision with a proven value unit must have a proven bound unit; the operator
+    is confirmed with the meaning (C38).
+44. **Errors**: an acting user who is not allowed raises SQLSTATE `42501`; every other explicit trigger
+    refusal raises `23514`; messages are fixed text without an id, a value or a source answer. Native FK,
+    UNIQUE, NOT NULL and CHECK errors keep their own codes; `23514` is not a mask for them.
+45. **Role checks**: an active platform admin as in v21 and an active club admin as in v26 (an active
+    role, an active user and, for a club admin, an active club, the rows held `FOR SHARE`, one stable lock
+    order); the club-admin basis only where sections D / G allow it (a club mapping's submission); an
+    acting-user check only on the columns D / G name (no extra check on `created_by`, `retired_by` or
+    T8 `performed_by`, whose FKs and paired-field rules stay); the M2 service authorizes every write
+    before any trigger runs, and an audit actor is never taken as authorized because its id exists.
+46. **The Metrics Core guard in M1**: the guards M1 adds are the decision-9 guard on
+    `metric_definitions` and the scope-capability guard of section E; no M1 trigger or seed creates a
+    canonical definition (tested). The GPEXE importer still creates its team-owned `gpexe_*`
+    definitions: this is **temporary compatibility, not a departure from the contract** (decision 2) —
+    a database-wide refusal now would break the existing importer, and removing the automatic creation
+    belongs to M4, before the switch is turned on.
+47. **The undo script in M1**: T6's append-only trigger is in `PROTECTED_TRIGGERS` already in M1, and the
+    disposable undo removes a value's provenance first, in the same transaction; no production history or
+    trigger protection is bypassed.
+48. **T8 shape per action**: `request_key uuid` and `request_hash` (64 lower-case hex characters) are set
+    together or not at all; every action has one shape of target columns, from / to status, reason and
+    evidence (table in D10); no audit row may fail to identify a supported object.
+49. **No fact through an ended activation**: a T6 insert holds its activation `FOR SHARE` and refuses an
+    ended one; ending an activation never changes or removes a historical T6 row, and no fact is moved to
+    a newer activation. Either the fact is written while the activation is open and the ending waits for
+    it, or the ending lands first and the fact is refused (concurrency-tested in both orders).
+50. **The seed values of D12**: `source_label` `TIME`, `TotDist`, `SPEEDmax` (the GPEXE names of
+    section B) and the neutral `Power zone distance`, `Speed zone distance`, `Acceleration events`,
+    `Deceleration events`, `Burst events`, `Brake events`; `unit_note` "Expected unit is a hypothesis
+    from the e03 pilot; not proven on server3." (burst / brake add "The observed unit "number" is a
+    shape; the meaning is unconfirmed."); every seeded revision supports session and drill (section B,
+    S and D), `value_shape = 'number'` for time, distance and max speed, status `observed`, never
+    `verified`; `evidence_ref` `docs/ai/gpexe-rest-v1-compatibility.md#2-the-table` for the revisions and
+    `docs/ai/gpexe-metric-variable-mapping-discovery.md#d5-unit-conversion-seed` for the four unit
+    conversions; `seed_migration` the migration's own `schema_migrations` name
+    (`migrations_v2/202610121000_training_load_v34_source_metric_mapping.sql`,
+    `^migrations_v2/[0-9]{12}_[a-z0-9_]+\.sql$`). No server3 unit or meaning is confirmed by the seed.
+
+Decided by the owner after the internal reviews of M1 (2026-10-12; the five points those reviews
+raised, formerly listed as open in section K), built in v34 and tested in the same suite:
+
+51. **A canonical definition named by a mapping keeps its owner.** Once any T3 row names a
+    `metric_definitions` row, its `owner_scope`, `owner_user_id`, `owner_club_id` and `owner_team_id`
+    never change (`23514`, trigger `metric_definitions_source_metric_owner_guard`); without a mapping the
+    owner may change as before. Creating a mapping locks the definition `FOR SHARE`; an owner change is
+    an `UPDATE` of that row, which takes the row's lock itself before the trigger runs (the owner columns
+    are in the definition's unique key, so it is the strongest row lock) — the trigger takes no extra
+    lock (owner's external review of `ff0ba57`: a redundant `FOR UPDATE` is not kept). The two
+    serialize: the mapping first → the owner change is refused; the owner change first → the mapping
+    checks the new owner (and is refused when it no longer fits). Tested in both orders.
+52. **The conversion gate is checked again at activation.** For different units the T4 transition to
+    `active` locks the active `unit_conversions` row of the value pair and of the bound pair `FOR SHARE`
+    (the first table of the lock order) and requires the version's factors to equal it again; a retired
+    row fails the activation, a new active row with the same factors passes; equal units stay the
+    identity `(1, 1, 0)` without a row. Existing `active` versions and history are not changed by a later
+    retirement. Retirement vs activation tested in both orders.
+53. **Invisible and bidi characters in free text.** Every bounded single-line free-text column (C41:
+    `source_label`, each `retired_reason`, `unit_note`, `conversion_note`, `disable_reason`, the T5
+    and T8 `reason`, and the `unit_conversions` unit pair) refuses, beside C41's surrounding-space and
+    length rule, exactly these code points and no others (`source_metric_text_ok`): `U+0001–U+001F`,
+    `U+007F–U+009F`, `U+00AD`, `U+061C`, `U+180E`, `U+200B–U+200F`, `U+2028`, `U+2029`,
+    `U+202A–U+202E`, `U+2060–U+2064`, `U+2066–U+206F`, `U+FEFF`. This list is what the SQL proves; it is
+    not "every format character (Cf)": other code points of category Cf — for example `U+0600–U+0605`,
+    `U+FFF9–U+FFFB`, `U+E0001` and `U+E0020–U+E007F` — pass free text, and so does `U+2065`, an
+    unassigned code point (not Cf) between two refused ranges. M3 still neutralizes text on display.
+    The closed unit token (`source_metric_unit_token_ok`; D3, C56) is stricter: 1–30 characters, none of
+    the locale's `\s`, `|` or `=`, and none of `U+0001–U+001F`, `U+007F–U+009F`, `U+00A0`, `U+00AD`,
+    `U+061C`, `U+1680`, `U+180E`, `U+2000–U+200F`, `U+2028–U+202F`, `U+205F–U+206F` (so it refuses
+    `U+2065`), `U+3000`, `U+FEFF`.
+54. **Positive factors.** `scale > 0` and `parameter_scale > 0` (T4) and `scale > 0`
+    (`unit_conversions`); the divisors stay `> 0`; an offset may be negative. A negative scale would
+    invert `>` / `<` while the operator stays equal on both sides; allowing one needs a new owner
+    decision.
+55. **The database checks a new T6 fact against its whole chain.** On every INSERT: the activation is
+    open, the binding is `active`, the Metrics Core connection the fact names is `active` (v11
+    `metric_source_connections.state`, the connection whose ending is the end of the source instance,
+    C36), the connection, binding and activation are one chain (the activation names the binding; the
+    connection's system, host and instance key are the binding's, D9), the value's event is owned by
+    the binding's team, the value's level is one the activation covers (a session-level event without a
+    segment ↔ `applies_to_session`, a drill segment of a session-level event ↔ `applies_to_drill`, a
+    day-level event never), and every existing exact-version, unit, source-instance and FK invariant
+    holds. The trigger does not read the import switch. Lock order of a new fact: T5 → the team binding
+    → the Metrics Core connection, each `FOR SHARE`; a later ending of any of them never changes an
+    existing fact, but a fact never lands after the ending (INSERT vs ending of the binding, the
+    connection and the activation tested in both orders). The v27 credential connection is read plain,
+    for the chain only; its credential state (`verified` / `needs_reconnect`) is not a condition of a fact
+    (a fact is written from a stored snapshot, not from the source). **Confirmed by the owner's external
+    review of `ff0ba57` (2026-10-12):** a later *Needs reconnect* does not reinterpret data already
+    confirmed; a stricter policy would be a new owner decision.
+
+Decided by the owner at the external review of `ff0ba57` (2026-10-12):
+
+56. **The canonical target unit is a unit token.** Metrics Core keeps its free-text units, its
+    existing `metric_definition_versions` rows are not changed and no global Metrics Core constraint is
+    added; but a canonical version whose unit does not pass the M1 unit-token contract (1–30 characters,
+    none of the whitespace / control / zero-width / bidi / format code points the C53 unit token refuses,
+    no `|` or `=`) is never a mapping target. The T4 INSERT trigger refuses it fail-closed
+    (`canonical_unit_not_a_token`, `23514`); `target_unit` is the checked copy, a unit token by its own
+    CHECK (`source_metric_mapping_versions_target_unit_token`), re-evaluated on every update of the row, so
+    on every transition and the activation too; T6 `unit_at_capture` must equal `target_unit`, so it
+    carries the same guarantee. No separate statement re-reads the unit at activation: the canonical
+    version is immutable (v10 `metric_definition_versions_immutable`) and the activation re-checks under
+    `FOR SHARE` that it is still the definition's current version, so such a statement could never fail
+    (dead code).
+57. **The M4 writer's lock contract** (future, not implemented in M1). Metrics Core locks the Metrics
+    Core connection `FOR UPDATE` on every event and every source-identity insert (v11, v12), while a T6
+    insert holds it `FOR SHARE` (C55). So the M4 writer: locks and checks the event and every source
+    identity of the import **before its first T6 insert**; imports one team through **one importing
+    transaction** in the defined lock order (the team import lock first, as today); never inserts a T6
+    row and then asks for a stronger lock on that Metrics Core connection. The aim is that a `40P01`
+    between a T6 `FOR SHARE` and a later `FOR UPDATE` cannot arise.
+58. **Unbind and a fact already in flight.** An Unbind (the end of a binding) may briefly wait on a
+    binding row held `FOR SHARE` by a T6 insert that is already running. The wait stays under the
+    existing bound (the Unbind's row `lock_timeout`, `ROW_LOCK_TIMEOUT_MS` = 2 s in
+    `backend/src/sourceConnectionService.js`), a lock still held then answers the stable `try_again`
+    with nothing changed, nothing waits without a bound, exactly one of the two outcomes wins
+    atomically (the fact first and the Unbind after it, or the Unbind first and the fact refused), and
+    an existing fact is never deleted. The Unbind code is unchanged; test 23 proves it against the real
+    `unbindTeam`. (An M4 import also holds the team import lock, at which an Unbind answers `try_again`
+    at once.)
+
 ---
 
-## D. Accepted future model — **Accepted design, not yet implemented**
+## D. Accepted model — **implemented as schema in M1 (v34, open pull request); used by no code until M2 / M4**
 
-Nothing in this section exists in the repository at `af11338`. **Lock order for every writer**
+At `af11338` nothing of this section existed. Migration v34
+(`migrations_v2/202610121000_training_load_v34_source_metric_mapping.sql`, rollback
+`docs/runbooks/source-metric-mapping-v34-rollback.sql`) builds D1–D10 and the D12 seed as described,
+with the owner's M1 decisions C40–C58; where the build adds a detail the design left open, an
+**As built (M1)** note says so. No route, service, importer, mapper, preview or writer reads these
+tables yet (M2, M4). **Lock order for every writer**
 (admin and importer): `unit_conversions` → T2a → T2b → T3 → T4 → `metric_definitions` (the
-canonical row, `FOR SHARE`) → T5 → the acting user's `user_global_roles`, `user_club_roles`,
+canonical row, `FOR SHARE`) → its scope-capability rows (`FOR SHARE`, activation only) → T5 → the
+team binding (`FOR SHARE`, a new T6 fact only) → the Metrics Core connection (`FOR SHARE`, a new T6
+fact only) → the acting user's `user_global_roles`, `user_club_roles`,
 `users` and `clubs` rows (`FOR SHARE`, after every registry row; no role or club writer ever waits
 on a registry row), ascending by id within a table. The replacement sequences written in D3 and D6 are the order of **state changes**,
 not of locks: an operation pre-locks every T2b, T3 and T4 row it will touch `FOR UPDATE` in this
@@ -426,6 +583,56 @@ identity check covers the revision's `unit_verified_by_user_id`, `meaning_verifi
 against `submitted_basis` (an active platform admin for `platform_admin`, an active admin of the
 mapping's club for `club_admin`) — a basis label never stands in for the user.
 
+**As built (M1), lock order and reads.** The T4 transition to `active` locks, after the canonical
+`metric_definitions` row, that definition's scope-capability rows `FOR SHARE` before it re-checks the
+levels — the reads the trigger depends on are locked, as this section requires — so removing a level
+and activating a version that applies to it never both succeed; the catalog writers lock
+`metric_definitions` before touching capabilities, so the order stays cycle-free. T2a is read plain by
+the T2b activation and the T5 insert: its state is implied by the chain (a T2a field is not retired
+while a revision is `draft` or `active`; a revision insert locks the field `FOR SHARE`; T5 needs an
+`active` T4, which needs an `active` revision), and a lock there would invert the order against a
+writer that already holds T4. The T5 insert reads the v27 rows plain in the order binding →
+connection joined with its catalog row (it needs the binding's connection id first), never locked;
+the order of plain reads has no lock effect. The T6 insert locks its T5 row `FOR SHARE` (C49). Every
+refusal is `42501` or `23514` with a fixed message (C44). A transition trigger runs after the row it
+changes is already locked, so the documented order holds only when the M2 writer pre-locks T2b → T3 →
+T4 as this section requires (an M2 acceptance item); a raw writer that does not can meet a clean
+`40P01`, never an inconsistent row. The serialization pairs are tested in both orders with the second
+operation proven to wait (`backend/tests/source-metric-mapping-m1.test.mjs` test 20, test 13 and 14).
+
+**As built (M1), review corrections (2026-10-12):** a seed marker is accepted only inside the
+seeding migration itself — it must name v34 and v34 must not be recorded yet, which is true only in
+v34's own transaction (the runner records a migration after running it, in the same transaction);
+afterwards a row with a marker has no acting user and is refused with `42501` on T2a, T2b and
+`unit_conversions` (a later seeding migration replaces `source_metric_require_seed_window` to name
+itself). Disabling a T4 version writes only its own facts (no submission or activation added on the
+way). A T8 row with the club-admin basis must name a club-owned mapping (C45). The unit token refuses,
+beside the locale's whitespace (`\s`), `|`, `=`, C0, DEL and C1, exactly these characters: `U+00A0`,
+`U+00AD`, `U+061C`, `U+1680`, `U+180E`, `U+2000–U+200F`, `U+2028–U+202F`, `U+205F–U+206F`, `U+3000`,
+`U+FEFF` — D3's "no whitespace" taken literally, widened by C53. The rollback refuses a database on
+which v34 is not recorded.
+
+**As built (M1), the owner's decisions C51–C58 (2026-10-12).** The owner freeze is a `BEFORE UPDATE OF
+owner_scope, owner_user_id, owner_club_id, owner_team_id` trigger on `metric_definitions` that fires only
+when one of the four changes and refuses when a T3 row names it; it takes no lock of its own — the
+owner-change `UPDATE` already holds the row's lock (its strongest mode, the owner columns being in the
+definition's unique key) before the trigger runs, and the T3 INSERT locks the definition `FOR SHARE`
+(D4), so the two serialize on that row. The activation
+(T4 `needs_review → active`) now starts with `source_metric_lock_conversions()` — the active
+`unit_conversions` rows of the value pair and of the bound pair, `FOR SHARE`, ascending by id — then
+locks T2b, T3, the canonical row and its scope capabilities as before, and checks the value conversion
+and the bound conversion against the locked rows (C52); the T4 INSERT still reads `unit_conversions`
+plain. The T6 INSERT locks T5 → the binding → the Metrics Core connection `FOR SHARE` and then reads
+T4, T2b, the value chain (value → occasion → participant → event) and the v27 credential connection
+plain (C55); none of those plain-read rows is locked by any M1 writer before T5, so the order stays
+cycle-free. An ending of a binding (v27 Unbind, which takes the team's import lock inside its trigger)
+or of a Metrics Core connection is a row UPDATE that waits for a fact holding the row `FOR SHARE`, or
+lands first and the fact is refused; the real Unbind bounds that wait by its row `lock_timeout` and
+answers `try_again` (C58). The T4 INSERT refuses a canonical unit that is not a unit token
+(`canonical_unit_not_a_token`) and `target_unit` carries the unit-token CHECK (C56). Tests:
+`backend/tests/source-metric-mapping-m1.test.mjs` 4 (C53), 8 and 9 (C54, C56), 21 (C51), 22 (C52),
+23 (C55, C58) and 14 (the activation side of C49 / C55).
+
 ### D1. `source_host_catalog.api_family` (extension of v27)
 
 `api_family text not null check (in ('api','rest_v1'))`, backfilled `e03 → api`,
@@ -435,6 +642,15 @@ compares the column with `SOURCE_HOSTS[*].apiFamily` in `backend/src/sourceHosts
 stays the authority and the database must agree. Without it the database cannot refuse an
 activation of a contract proven on `rest_v1` for an `api` host. The v28 rollback script's row
 comparison is to be checked in M1.
+
+**As built (M1):** the immutability is a separate trigger beside the v27 guard
+(`source_host_catalog_api_family_immutable`), so the v27 function is unchanged and the v34 rollback
+restores nothing but drops its own objects; a catalog row the backfill cannot place stays NULL and
+fails the migration (no guessed family); a test compares the column with `SOURCE_HOSTS[*].apiFamily`.
+The v28 rollback's row comparison (label, state, note) is unaffected: it refuses under any later
+migration, and after a v34 rollback the column no longer exists. The v27 runbook's "Adding a confirmed
+shard" insert names `api_family` (a later data-only catalog migration without it fails, and with it
+the deploy that carries it); a test runs that insert shape.
 
 ### D2. T2a `training_load.source_metric_definitions` — stable identity of a source field
 
@@ -539,8 +755,9 @@ comparison is to be checked in M1.
 - Purpose: the only place a non-identity factor between two units may come from, checkable by the
   database. **It is not a metric catalog**: it holds no metric key, label, type, level or
   semantics, only a pair of free-text units of the existing registries and a factor.
-- Columns: `id`; `from_unit`, `to_unit` (1–30, different); `scale numeric` (`<> 0`, finite);
-  `scale_divisor numeric` (`> 0`, finite); `offset numeric` (finite) — "finite" is a CHECK that
+- Columns: `id`; `from_unit`, `to_unit` (1–30, different); `scale numeric` (`> 0`, finite; C54 —
+  `unit_conversions_scale_positive`); `scale_divisor numeric` (`> 0`, finite); `offset numeric`
+  (finite, may be negative) — "finite" is a CHECK that
   refuses `NaN`, `Infinity` and `-Infinity`, all three of which a PostgreSQL 14+ `numeric` can hold;
   `check (scale = 1 or scale_divisor = 1)`; `state` in `active|retired` with `retired_by/at/reason`;
   `evidence_ref` (required, the D3 shape CHECK); `created_by_user_id`, `created_at`;
@@ -563,11 +780,15 @@ comparison is to be checked in M1.
 - Uniqueness: `unique (from_unit, to_unit) where state = 'active'`.
 - Maintained by a platform admin through M2 (T8 `unit_conversion_create` / `_retire`) or by a data
   migration. Rows are immutable; a correction is `retired` plus a new row. A T4 version keeps **its
-  own copies** of the factors, so retiring a row changes no existing version and no fact; the table
-  only gates new versions. Identity pairs need no row: the trigger accepts `1, 1, 0` when the units are
+  own copies** of the factors, so retiring a row changes no existing `active` version, no history and
+  no fact; the table gates new versions **and their activation** (C52: the transition to `active`
+  locks the active row of the value pair and of the bound pair `FOR SHARE` and checks the version's
+  factors against it again, so a draft built from a row retired before its activation cannot be
+  activated). Identity pairs need no row: the trigger accepts `1, 1, 0` when the units are
   string-equal.
-- Seed (M1), as (scale, scale_divisor, offset): `s → min (1, 60, 0)`, `m/s → km/h (3.6, 1, 0)`,
-  `m → km (0.001, 1, 0)`, `km/h → m/s (1, 3.6, 0)`.
+- <a id="d5-unit-conversion-seed"></a>Seed (M1), as (scale, scale_divisor, offset): `s → min (1, 60, 0)`,
+  `m/s → km/h (3.6, 1, 0)`, `m → km (0.001, 1, 0)`, `km/h → m/s (1, 3.6, 0)`. These four rows are SI
+  definitions; their `evidence_ref` points here (`#d5-unit-conversion-seed`, a stable explicit anchor).
 
 ### D6. T4 `training_load.source_metric_mapping_versions` — the immutable mapping contract
 
@@ -586,10 +807,10 @@ comparison is to be checked in M1.
   (id, source_metric_definition_id)` (**the exact revision**); `version_number > 0`;
   `metric_definition_version_id` with `fk (metric_definition_version_id, metric_definition_id) →
   metric_definition_versions (id, metric_definition_id)` (the exact canonical version);
-  `conversion_kind` in `numeric_linear` (M1); `scale` (`<> 0`, finite), `scale_divisor` (`> 0`,
+  `conversion_kind` in `numeric_linear` (M1); `scale` (`> 0`, finite, C54), `scale_divisor` (`> 0`,
   finite), `offset` (finite), `check (scale = 1 or scale_divisor = 1)`, `rounding_decimals` (null or 0–6, a presentation field unused in the pilot; the
   storage scale of an imported value is the fixed S = 9 decimals of D8, not this column); `source_unit`, `target_unit` (copies,
-  checked against the revision and the canonical version); `conversion_note` (bounded single-line text, 1–500; required when the
+  checked against the revision and the canonical version; both unit tokens by their CHECKs, C56); `conversion_note` (bounded single-line text, 1–500; required when the
   units differ); `parameter_kind` (copy of the revision); `source_parameters jsonb`,
   `canonical_parameters jsonb` (flat objects, no secret-named key, see section E);
   `parameter_fingerprint text not null` (computed by the INSERT trigger, never taken from the
@@ -597,8 +818,8 @@ comparison is to be checked in M1.
   parameter text defined in section E, "Parameter fingerprint"; it lets one source field feed
   several canonical zone variables, one per distinct bound set, and carries no athlete, session or
   team identity);
-  `parameter_scale` (`<> 0`, finite), `parameter_scale_divisor` (`> 0`, finite),
-  `parameter_offset` (finite), `check (parameter_scale = 1 or parameter_scale_divisor = 1)`;
+  `parameter_scale` (`> 0`, finite, C54), `parameter_scale_divisor` (`> 0`, finite),
+  `parameter_offset` (finite, may be negative), `check (parameter_scale = 1 or parameter_scale_divisor = 1)`;
   `applies_to_session`,
   `applies_to_drill` (at least one); `status` in `draft|needs_review|active|disabled` with
   `submitted_by/at`, `submitted_basis` (`platform_admin|club_admin`), `activated_by/at`,
@@ -631,7 +852,7 @@ comparison is to be checked in M1.
   `source_unit not null`; `source_unit` equals the revision; the pinned canonical version is
   `numeric` and its `unit` is not NULL and 1–30 characters (`metric_definition_versions.unit` is
   nullable free text, v10:143 — a version without a unit is not a mapping target,
-  `canonical_unit_missing`), and `target_unit` equals it; `parameter_fingerprint` is computed by
+  `canonical_unit_missing`) and a unit token (C56, `canonical_unit_not_a_token`), and `target_unit` equals it; `parameter_fingerprint` is computed by
   the trigger from `source_parameters`, never taken from the caller; levels ⊆ the revision's and ⊆ the definition's
   scope capabilities (`session` ↔ `session`, `drill` ↔ `component`); the value conversion is `1, 1, 0`
   (scale, divisor, offset) for string-equal units, otherwise exactly one active `unit_conversions`
@@ -744,8 +965,18 @@ comparison is to be checked in M1.
   `source_history_no_truncate` style (v27:393-401); the same TRUNCATE guard protects every
   append-only or history table of this section (T2a, T2b, T3, T4, T5, T8, `unit_conversions`).
   Supporting indexes: `(activation_id)`, `(source_team_binding_id)`. All FKs `on delete restrict`.
-  The undo script's `PROTECTED_TRIGGERS` list (`backend/scripts/gpexe-undo-imported-session.mjs:84`)
-  gains T6's triggers in M4, otherwise "delete T6 first" cannot run.
+  The undo script's `PROTECTED_TRIGGERS` list (`backend/scripts/gpexe-undo-imported-session.mjs`)
+  gains T6's append-only trigger, otherwise "delete T6 first" cannot run — **as built, already in
+  M1 (C47)**, with the provenance removed first, in the same transaction, on disposable databases only.
+- **As built (M1), C49:** the insert trigger also holds the T5 row `FOR SHARE` and refuses an ended
+  activation, so no fact is written through an activation after its end.
+- **As built (M1), C55:** the insert trigger then holds the team binding and the Metrics Core
+  connection `FOR SHARE` and refuses an ended binding (`a fact is never written through an ended
+  binding`), an inactive connection (`… through an inactive source instance`), a value whose event is
+  not owned by the binding's team (`the value must belong to the binding's team`) and a value at a level
+  the activation does not cover (`the value's level is not one the activation covers`); the import
+  switch is not read. The M4 writer checks the same before it writes, for its stable codes; the
+  trigger is the backstop.
 - The content hash of an imported occasion (`gpexeImportWriter.js` `importedOccasionContentHash`,
   :99-116) gains the mapping version id and the source value and unit, so an identical session
   re-imported under a new mapping version is `needs_review`, never a silent supersede.
@@ -815,6 +1046,32 @@ comparison is to be checked in M1.
   birth or value is entered there — the row is append-only and cannot be erased — and the M6 unit
   evidence is a document reference, never a value. Append-only trigger as `source_connection_audit`
   (v27:585).
+- **As built (M1), one shape per action (C48).** The FK columns are `source_metric_definition_id`,
+  `source_metric_version_id`, `mapping_id`, `mapping_version_id`, `activation_id`,
+  `unit_conversion_id`, `metric_source_connection_id` and `team_id`; every action sets exactly its
+  targets and no other; the composite FKs `(source_metric_version_id, source_metric_definition_id)` and
+  `(mapping_version_id, mapping_id)` and a trigger (an activation row names its own version and team)
+  keep the targets consistent; `from_status` / `to_status` come from `draft | needs_review | active |
+  disabled | retired | inactive`; the basis is `platform_admin` except where a club admin may act.
+
+  | Action | Targets | From → to | Reason | Evidence | Club admin |
+  |---|---|---|---|---|---|
+  | `source_metric_create` | T2a | — → `active` | | | |
+  | `source_metric_retire` | T2a | `active` → `retired` | required | | |
+  | `source_metric_revision_create` | T2a, T2b | — → `draft` | | | |
+  | `source_metric_unit_verified` | T2a, T2b | — | | required | |
+  | `source_metric_meaning_verified` | T2a, T2b | — | | required | |
+  | `source_metric_revision_activate` | T2a, T2b | `draft` → `active` | | | |
+  | `source_metric_revision_retire` | T2a, T2b | `draft` or `active` → `retired` | required | | |
+  | `mapping_create` | T3 | — | | | yes |
+  | `mapping_version_create` | T3, T4 | — → `draft` | | | yes |
+  | `mapping_status` | T3, T4 | `draft` → `needs_review`; `needs_review` → `active`; `draft`, `needs_review` or `active` → `disabled` | required for `disabled` | | `draft` → `needs_review` only |
+  | `mapping_version_replaced` | T3, T4 (the new version) | `needs_review` → `active` | required | | |
+  | `activation_start` | T4, T5, team | — | required | | |
+  | `activation_end` | T4, T5, team | — | | | |
+  | `unit_conversion_create` | `unit_conversions` | — → `active` | | required | |
+  | `unit_conversion_retire` | `unit_conversions` | `active` → `retired` | required | | |
+  | `source_instance_end` | v11 connection (team optional) | `active` → `inactive` | required | | |
 
 ### D11. Invariants, stated once
 
@@ -856,7 +1113,8 @@ family (e03) is not seeded (F3c4 retires it). `bound_operator` is NULL on every 
 canonical definition is seeded. Seed rows have no acting user: `created_by_user_id` and
 `activated_by_user_id` are nullable only together with a non-null `seed_migration text` naming the
 migration (CHECK: exactly one of actor or seed marker); every row created through M2 carries an
-actor and no seed marker.
+actor and no seed marker. **As built (M1):** the labels, notes, references and the marker are those
+of C50; the rollback refuses unless these rows are exactly the seed.
 
 ---
 
@@ -1067,10 +1325,10 @@ the rejected track, only on a new owner decision. No automation.
 
 | PR | Scope | Explicitly not changed | Review triggers | Reviewers | Acceptance criteria | Production gates |
 |---|---|---|---|---|---|---|
-| **M1 schema foundation** | Migration: D1 `api_family`, T2a, T2b, T3, `unit_conversions`, T4, T5, T6, T7, T8, `unique (id, team_id)` on `source_team_bindings`, the `metric_definitions` guard; the D12 seed; rollback script (refuses once any T3–T6 row exists, once T2a / T2b / `unit_conversions` differ from the seed, or under a later migration); tests on a disposable database (apply / rollback; every trigger, CHECK and partial unique with a mutation that the test kills; two concurrent activations; the equivalence trigger with equal and different bound units; T6 consistency); the undo script extended to delete T6 first (disposable only); every new trigger raises a fixed message without an id; the identity triggers of D6 / D7 (active platform admin, `42501`); the shape CHECK of every `evidence_ref` and the bounded single-line CHECK of every free-text column | The importer, routes, frontend, the v33 flow, `GPEXE_IMPORT_APPLY_ENABLED`, every persistent database | 1 (migration, rollback), 2 (`owner_scope` in triggers), 4 (lock order, idempotency) | `db-reviewer`, `security-reviewer`, `code-reviewer`; external review by the owner | No active mapping after the migration; `api_family` equals `sourceHosts.js`; rollback rehearsed; the identity triggers refuse a non-platform-admin actor with `42501`; the shape CHECKs refuse a space or a control character; a T4 row whose `owner_key` differs from its T3 row is refused (system rows included), and the generated T3 `owner_key` is proven to work as an FK target and to drop cleanly in the rollback; the T6 check accepts exactly the round-half-away-from-zero value at 9 decimals and refuses its other neighbour in a tie; the fingerprint of a fixed parameter set equals a value computed independently; the server version of the local and the deployed database is PostgreSQL 13 or later (`scale()`, `trim_scale()`) before the migration relies on it; existing Metrics Core and GPEXE suites pass under the T1 runner | The migration reaches the deployed database only through a merge and deploy the owner orders (`.claude/rules/database-safety.md`); no data beyond the seed; the local OPTIMOVE database only on a separate order |
+| **M1 schema foundation** — implemented in an open pull request (v34, `backend/tests/source-metric-mapping-m1.test.mjs`); not merged, not deployed | Migration: D1 `api_family`, T2a, T2b, T3, `unit_conversions`, T4, T5, T6, T7, T8, `unique (id, team_id)` on `source_team_bindings`, the `metric_definitions` guard; the D12 seed; rollback script (refuses once any T3–T6 row exists, once T2a / T2b / `unit_conversions` differ from the seed, or under a later migration); tests on a disposable database (apply / rollback; every trigger, CHECK and partial unique with a mutation that the test kills; two concurrent activations; the equivalence trigger with equal and different bound units; T6 consistency); the undo script extended to delete T6 first (disposable only); every new trigger raises a fixed message without an id; the identity triggers of D6 / D7 (active platform admin, `42501`); the shape CHECK of every `evidence_ref` and the bounded single-line CHECK of every free-text column | The importer, routes, frontend, the v33 flow, `GPEXE_IMPORT_APPLY_ENABLED`, every persistent database | 1 (migration, rollback), 2 (`owner_scope` in triggers), 4 (lock order, idempotency) | `db-reviewer`, `security-reviewer`, `code-reviewer`; external review by the owner | No active mapping after the migration; `api_family` equals `sourceHosts.js`; rollback rehearsed; the identity triggers refuse a non-platform-admin actor with `42501`; the shape CHECKs refuse a space or a control character; a T4 row whose `owner_key` differs from its T3 row is refused (system rows included), and the generated T3 `owner_key` is proven to work as an FK target and to drop cleanly in the rollback; the T6 check accepts exactly the round-half-away-from-zero value at 9 decimals and refuses its other neighbour in a tie; the fingerprint of a fixed parameter set equals a value computed independently; the server version of the local and the deployed database is PostgreSQL 13 or later (`scale()`, `trim_scale()`) before the migration relies on it; existing Metrics Core and GPEXE suites pass under the T1 runner | The migration reaches the deployed database only through a merge and deploy the owner orders (`.claude/rules/database-safety.md`); no data beyond the seed; the local OPTIMOVE database only on a separate order |
 | **M2 admin API** | Routes under `/api/training-load/sources/metrics…` for T2a / T2b (list, create, revise, verify unit, verify meaning, activate / retire a revision), T3 / T4 (create, version, transitions, replacement), T5 (activate, end, "every active binding of this connection"), `unit_conversions`, T8 reads; `requestKey` on every write; the aggregate preview over a saved candidate (count of athletes with a value, min, max, units before and after; `snapshot_expired` when the raw snapshot is purged); the extractor registry keyed by `source_metric_key` (`source_metric_unsupported` otherwise); the lock order and the bounded transactions of D3 / D6; ownership and the active workspace resolved in the service before any trigger; stable codes only, a transition conflict `409`; the preview's authorization (H); the platform-admin operation that ends a held source instance (D9) | The importer, the UI, migrations | 2 (auth, info hiding), 4 (transactions, idempotency) | `code-reviewer`, `security-reviewer`; external review | Secret scan of every response and audit row; info-hiding tests per role and workspace; a test that no response carries a trigger's text or an SQLSTATE; a replay re-checks the caller's right; the preview never returns `raw_bundle` or a row per athlete and answers the identical 404 before `snapshot_expired` to a caller outside the candidate's club; every transition audited | None (no production data changes without an admin acting) |
 | **M3 frontend** | The three Settings views of section H over the existing Metrics Core routes and the M2 routes; rights of section G | Backend, the import | New user flow | `code-reviewer`, `mobile-qa`, `ux-design-reviewer`; browser QA at 1280 / 360 / 375 / 390 px | A canonical variable created through the UI is a row created through the existing API; activation is an explicit step whose confirmation names source, mapping version, team and binding | None |
-| **M4 GPEXE importer integration** | The mapper reads the open activations of the binding instead of `GPEXE_METRIC_SPECS`; the writer takes `metricDefinitionId` and version from the plan, creates no definition, writes T6 and sets the T7 keys at the first import; content hash and preview hash include the mapping version, source value and unit and the activation set; the preview carries the canonical name and unit plus the source value; helper values of Link athletes and `METRIC_TEXT` move to the source metric keys of the preview; the fail-closed table of section F plus `source_instance_held` (D9); the writer's arithmetic in decimal at the storage scale S = 9 of D8 (half away from zero; the T6 trigger accepts exactly the value this rule produces), never binary floating point; `session_imported_under_another_instance` (D9); the undo script's `PROTECTED_TRIGGERS` gains T6 (disposable only); the B7-style architecture test | The switch, Link, multi-track, the list and drill reads | 1 (persistent write path), 3 (canonical identity), 4; the five-point rule for transactions with an external effect | `code-reviewer`, `security-reviewer`, `db-reviewer`; external review | A characterisation test: the fixture with activated mappings yields the same numbers as today within the preview's existing `1e-9` tolerance (`gpexeImportPreview.js:137`; today's mapper divides in binary floating point, the new writer computes in decimal at the storage scale S = 9); without an activation zero values are imported and nothing is written to `metric_definitions`; the stored candidates turn *changed* exactly once | The switch stays off |
+| **M4 GPEXE importer integration** | The mapper reads the open activations of the binding instead of `GPEXE_METRIC_SPECS`; the writer takes `metricDefinitionId` and version from the plan, creates no definition, writes T6 and sets the T7 keys at the first import; content hash and preview hash include the mapping version, source value and unit and the activation set; the preview carries the canonical name and unit plus the source value; helper values of Link athletes and `METRIC_TEXT` move to the source metric keys of the preview; the fail-closed table of section F plus `source_instance_held` (D9); the writer's arithmetic in decimal at the storage scale S = 9 of D8 (half away from zero; the T6 trigger accepts exactly the value this rule produces), never binary floating point; `session_imported_under_another_instance` (D9); the undo script already removes T6 first (done in M1, C47); the B7-style architecture test | The switch, Link, multi-track, the list and drill reads | 1 (persistent write path), 3 (canonical identity), 4; the five-point rule for transactions with an external effect | `code-reviewer`, `security-reviewer`, `db-reviewer`; external review | A characterisation test: the fixture with activated mappings yields the same numbers as today within the preview's existing `1e-9` tolerance (`gpexeImportPreview.js:137`; today's mapper divides in binary floating point, the new writer computes in decimal at the storage scale S = 9); without an activation zero values are imported and nothing is written to `metric_definitions`; the stored candidates turn *changed* exactly once | The switch stays off |
 | **M5 multiple tracks** | Only on a new owner decision: a manual choice of one track with audit and observation | Everything else | 3, 4 | `code-reviewer`, `security-reviewer` | Decided with the order | Decided with the order |
 | **M6 units, pilot mapping, controlled first import** | Owner-run: gate (2) for `total_time`, `total_distance`, `max_v` on server3; the admin confirms units and meanings with references, creates the system variables, takes the mappings `draft → needs_review → active`, activates them on the First team binding with explicit requirements; one check with the switch off; then the decision on the first controlled import | No code beyond small fixes | 5 (only real evidence counts) | External review by the owner | The preview of a saved candidate shows the converted values in the canonical units | Conditions 1–3, 6 and 7 of `docs/ai/CURRENT_STATE.md` "Separate tasks", a fresh verified backup, the owner's explicit order for the switch and for every approval |
 
@@ -1081,7 +1339,7 @@ the rejected track, only on a new owner decision. No automation.
 Decisions that may safely wait, with the PR that takes them:
 
 - the exact UI sentences for the new codes (M3);
-- the format of `evidence_ref` (a document path and section; M2);
+- the format of `evidence_ref` — decided for the database in M1 (C40); M2 only adds its API checks;
 - `unit_conversions` rows beyond the four seeded (M2 API);
 - the fields of the aggregate preview (M2);
 - the UI shape of the action over every active binding of a connection (M3);
@@ -1090,7 +1348,7 @@ Decisions that may safely wait, with the PR that takes them:
 - which activations are `required` in the pilot (M6);
 - the evidence that closes `unit_evidence_ref` and `meaning_evidence_ref` for server3 (M6, gate 2);
 - timeout and throttle values of the M2 routes, following the F3c2d pattern (M2);
-- the test-runner kind of the M1 suites (`disposable`, the T1 runner);
+- the test-runner kind of the M1 suites — `disposable`, through the T1 runner (as built);
 - whether a system-owned zone or threshold mapping may show one team's bounds to every club admin,
   or such mappings are club-owned (the M1 schema supports both; the bounds are not personal data)
   (M2 / M3);
@@ -1106,12 +1364,32 @@ Decisions that may safely wait, with the PR that takes them:
 
 Everything in sections C to G is decided and is not reopened by this list.
 
+**Raised by the internal reviews of M1 (2026-10-12) and decided by the owner the same day (C51–C55,
+section C), built in v34:** the ownership freeze of a mapped canonical definition (security F2,
+database L-2 → C51); the conversion gate re-checked under a lock at activation (database M-1, security
+F5 → C52); the invisible and bidi characters in every free-text column (security F6, database L-1 →
+C53); positive scales (database L-5 → C54); the further T6 checks (security F4, database L-4 → C55).
+Nothing of this list is open any more.
+
+**Carried into later PRs by the M1 reviews:** M2 / M3 map the two `metric_definitions` /
+scope-capability guard refusals (`23514`, no constraint name) to a stable `409` in
+`backend/src/routes/trainingLoadMetrics.js` (`respondToWriteError` maps only `P0001` and `23505`
+today, so from the first active mapping version an archive, a new semantic version or a level removal
+of a pinned variable would answer `500`); M2 maps every native error by constraint name and never
+forwards its DETAIL, and maps `40P01` to `try_again`; M2 pre-locks the `unit_conversions` rows it
+relies on, then T2b → T3 → T4, before a transition; indexes on the M1 foreign keys come with the M2 /
+M3 readers; the M4 writer checks the C55 conditions before it writes (its stable codes), the T6
+trigger being the backstop, and follows the lock contract C57 (event and identities before the first
+T6 row, one importing transaction per team); no existing route changes a definition's owner, and one
+that ever does maps the C51 refusal to a stable `409`; M2 maps `canonical_unit_not_a_token` (C56) to a
+stable code.
+
 ### K2. Review history — points raised by the internal reviews and decided by the owner
 
 The internal reviews of 2026-10-12 (code, database, security) raised the eight points below; the
 owner's external review of PR #156 decided each of them on 2026-10-12 (decisions C32–C39, written
-into sections D to G). Nothing here is open any more, and nothing here is implemented: M1 starts
-only on the owner's separate order.
+into sections D to G). Nothing here is open any more. M1 (ordered on 2026-10-12) builds them as
+schema in migration v34, in an open pull request; the code that uses them is M2–M4.
 
 1. **Parameter fingerprint on T4 / T5** (D6, D7): one source field may feed several canonical zone
    variables, one per distinct bound set, so the "one active canonical target per source metric"
