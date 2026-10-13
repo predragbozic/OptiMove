@@ -285,6 +285,8 @@ export function classifyDatabaseError(error) {
   // Only the v34 actor triggers' refusal is the 404 (the right changed under
   // the request); any other 42501 (a missing grant) is a 500. Code-only log:
   // a refusal here means the service's own check and the trigger disagreed.
+  // The prefix is the v34 RAISE text of the three actor checks; a migration
+  // that rewords it must update this test (a reword fails closed, as a 500).
   if (code === "42501" && typeof error.message === "string" && error.message.startsWith("source metric mapping: the acting user")) {
     console.error("[source-metric-mappings] db_actor_refusal (42501)");
     return NOT_FOUND();

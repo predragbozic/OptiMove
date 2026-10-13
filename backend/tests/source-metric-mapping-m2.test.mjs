@@ -169,6 +169,14 @@ async function someoneWaits(timeoutMs = 5000) {
   }
   return false;
 }
+// A bounded wait for a condition set inside a held write (a regression fails here, not by the file timeout).
+async function until(condition, label, timeoutMs = 10000) {
+  const start = Date.now();
+  while (!condition()) {
+    if (Date.now() - start > timeoutMs) assert.fail(`timed out waiting: ${label}`);
+    await new Promise((res) => setTimeout(res, 20));
+  }
+}
 const openGates = [];
 function gate() {
   let open;
@@ -427,6 +435,29 @@ test("6. idempotency: the same key and body replays (200, the CURRENT state, nev
   const elsewhere = await post("/mappings", W.paA.cookie, supportKey);
   assert.equal(elsewhere.status, 404, "a system mapping is not the club workspace's to replay");
   assert.equal((await q(`select 1 from training_load.source_metric_audit where request_key = $1`, [supportKey.requestKey])).length, 1);
+  // An admin of two clubs: what was written in club A's workspace is never replayed from club B's
+  // (the exact owner key, not only the scope) - the mapping, the version and the submit alike.
+  const twoClubs = await clubAdmin(W.clubA);
+  await q(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [twoClubs.id, W.clubB]);
+  const f = await field({ unit: "s" });
+  const mBody = { requestKey: key(), sourceMetricId: f.id, metricDefinitionId: W.clubASec.id };
+  const created = await post("/mappings", twoClubs.cookie, mBody);
+  assert.equal(created.status, 201, created.text);
+  const vBody = versionBody(f.revId);
+  const drafted = await post(`/mappings/${created.body.mapping.id}/versions`, twoClubs.cookie, vBody);
+  assert.equal(drafted.status, 201, drafted.text);
+  const sBody = { requestKey: key() };
+  const sPath = `/mappings/${created.body.mapping.id}/versions/${drafted.body.version.id}/submit`;
+  assert.equal((await post(sPath, twoClubs.cookie, sBody)).status, 200);
+  await workspace(twoClubs.id, "club", W.clubB);
+  for (const [path, body] of [["/mappings", mBody], [`/mappings/${created.body.mapping.id}/versions`, vBody], [sPath, sBody]]) {
+    const r = await post(path, twoClubs.cookie, body);
+    assert.deepEqual([r.status, r.body, r.headers.get("cache-control")], [404, { error: "notFound" }, "no-store"], path);
+    assert.equal((await q(`select 1 from training_load.source_metric_audit where request_key = $1`, [body.requestKey])).length, 1, "one request record, nothing written again");
+  }
+  await workspace(twoClubs.id, "club", W.clubA);
+  const home = await post(sPath, twoClubs.cookie, sBody);
+  assert.deepEqual([home.status, home.body.replayed, home.body.version.status], [200, true, "needs_review"], "the same replay from club A's workspace still answers");
 });
 
 test("7. GET /mappings and /mappings/:id: the platform workspace sees system mappings, a club workspace system plus its own club, never another club; the list carries a version summary, the detail every version; stable order; no acting user", async () => {
@@ -635,7 +666,7 @@ test("13. concurrency: one write per user at a time (bounded, try_again with Ret
   let held = 0;
   service.setMappingWriteHoldForTests(async (_c, where) => { if (where === "mapping_create" && held++ === 0) await g1.promise; });
   const first = post("/mappings", W.pa.cookie, { requestKey: key(), sourceMetricId: f.id, metricDefinitionId: W.sysSec.id });
-  while (held === 0) await new Promise((res) => setTimeout(res, 20));
+  await until(() => held > 0, "the first write is held");
   const second = await post("/mappings", W.pa2.cookie, { requestKey: key(), sourceMetricId: f.id, metricDefinitionId: W.sysSec.id });
   assert.equal(second.status, 201, second.text);
   g1.open();
@@ -649,7 +680,7 @@ test("13. concurrency: one write per user at a time (bounded, try_again with Ret
   service.setMappingWriteHoldForTests(async (_c, where) => { if (where === "mapping_create" && held++ === 0) await g2.promise; });
   const body = { requestKey: key(), sourceMetricId: f2.id, metricDefinitionId: W.sysSec.id };
   const a = post("/mappings", W.pa.cookie, body);
-  while (held === 0) await new Promise((res) => setTimeout(res, 20)); // a holds the user lock
+  await until(() => held > 0, "a holds the user lock");
   const b = post("/mappings", W.pa.cookie, body);
   assert.equal(await someoneWaits(), true, "the same user's second write waits");
   g2.open();
@@ -662,7 +693,7 @@ test("13. concurrency: one write per user at a time (bounded, try_again with Ret
   held = 0;
   service.setMappingWriteHoldForTests(async (_c, where) => { if (where === "mapping_create") { held += 1; await g3.promise; } });
   const slow = post("/mappings", W.pa2.cookie, { requestKey: key(), sourceMetricId: f3.id, metricDefinitionId: W.sysSec.id });
-  while (held === 0) await new Promise((res) => setTimeout(res, 20)); // slow holds the user lock
+  await until(() => held > 0, "slow holds the user lock");
   const busy = await post("/mappings", W.pa2.cookie, { requestKey: key(), sourceMetricId: f3.id, metricDefinitionId: W.sysMin.id });
   assert.deepEqual([busy.status, busy.body.error, busy.headers.get("retry-after")], [409, "try_again", "5"]);
   g3.open();
@@ -676,7 +707,7 @@ test("13. concurrency: one write per user at a time (bounded, try_again with Ret
   held = 0;
   service.setMappingWriteHoldForTests(async (_c, where) => { if (where === "mapping_version_create" && held++ === 0) await g4.promise; });
   const v1p = post(`/mappings/${vm.id}/versions`, W.pa.cookie, versionBody(f2.revId, { conversionNote: "s to min" }));
-  while (held === 0) await new Promise((res) => setTimeout(res, 20));
+  await until(() => held > 0, "the first write is held");
   const v2p = post(`/mappings/${vm.id}/versions`, W.pa2.cookie, versionBody(f2.revId, { conversionNote: "s to min" }));
   assert.equal(await someoneWaits(), true, "the second version waits for the first one's mapping row");
   g4.open();
@@ -710,7 +741,7 @@ test("14. the lock order against a conversion retirement, both orders: a version
   let entered = false;
   service.setMappingWriteHoldForTests(async (_c, where) => { if (where === "mapping_version_create") { entered = true; await g.promise; } });
   const writing = post(`/mappings/${m.id}/versions`, W.pa.cookie, versionBody(f.revId, { conversionNote: "ee to ff" }));
-  while (!entered) await new Promise((res) => setTimeout(res, 20)); // the version holds the row FOR SHARE
+  await until(() => entered, "the version holds the conversion row FOR SHARE");
   const retirer = new pg.Client({ connectionString: db.url });
   await retirer.connect();
   try {

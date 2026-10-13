@@ -1453,17 +1453,23 @@ Decisions that may safely wait, with the PR that takes them:
   (M3);
 - the shape of the platform-admin operation that ends a held source instance (D9) (M2);
 - **a write-time quota against a read-time cap** (internal reviews of the first M2 PR, 2026-10-13): no
-  write refuses a new version or mapping at a count, so a mapping can hold more versions than the
-  detail cap (50) and its detail then answers `409 result_too_large` until either a paginated detail
-  or a write-time quota exists; writes and replays are not affected (J1). Which of the two is an owner
-  decision for a later M2 PR (M2 / M3);
-- a client-side `query_timeout` on the M2 write statements (the database `statement_timeout` bounds
-  them today; a lost network answer is bounded only by the connection), following the F3c2d
-  pattern (M2);
+  write refuses a new mapping or version at a count, so an owner can hold more mappings than the list
+  cap (100, counted over the system scope plus the club's own) and a mapping more versions than the
+  detail cap (50); that list or detail then answers `409 result_too_large` until either pagination or
+  a write-time quota exists (the other caps of J1 bound catalogs M2 does not write); writes and
+  replays are not affected (J1). Which of the two is an owner decision for a later M2 PR (M2 / M3);
+- bounds outside the write transaction: the statements inside it run under `statement_timeout` 10 s
+  and a row `lock_timeout` 2 s, but the GET reads and the read of a write's answer after a confirmed
+  COMMIT have neither a statement nor a client bound (`db.js` bounds only the pool checkout), so a
+  stalled database can hold such an answer (a retry with the same `requestKey` replays, never writes
+  twice); a client-side `query_timeout` or a bounded read, following the F3c2d pattern, and a test of
+  a Metrics Core catalog writer racing a held version create (the `FOR SHARE` re-check of
+  `current_version_id` is the guard today) (M2);
 - v34 checks the acting user on a submit, an activation and a disabling, but not on the T3 / T4
-  inserts or a T8 request record: the API re-checks the right under lock and is the only writer
-  (test 20 of the M2 suite pins it); whether a later migration adds a database actor check on those
-  inserts is an owner decision (M2);
+  inserts or a T8 request record: the API re-checks the right under lock and is the only writer in
+  `backend/src` (test 20 of the M2 suite, a static scan of `backend/src`; scripts and raw SQL are
+  outside it); whether a later migration adds a database actor check on those inserts is an owner
+  decision (M2);
 - the access helpers of the M2 service (`resolveMappingAdmin`, `rightsStillHold`) move to their own
   module before T5 reuses them (M2);
 - whether a later conversion that the M1 normal form cannot represent (a factor whose value and
