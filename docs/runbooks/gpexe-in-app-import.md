@@ -1116,7 +1116,9 @@ The line, grammar version 1 (fixed words and whole numbers only):
 [gpexe] check timing v=1; outcome=<succeeded|failed|closed_elsewhere|start_unconfirmed|unknown>; code=<none|other|a stable check code>; total_ms=N; sessions_found=N; sessions_done=N; athletes=N; tracks=N; drills=N; requests=<kinds|untracked>; net_ms=<kinds|untracked>; heartbeats=N; heartbeat_ms=N; revalidations=N; revalidation_ms=N; retention_ms=N; previews=N; preview_ms=N; staging_ms=N; finalize_ms=N
 ```
 
-`<kinds>` is always the same eleven pairs in this order: `list_sessions` (both complete reads of the
+`outcome=unknown` means the check's end could not be confirmed: its finalization COMMIT went unanswered
+(`code=check_finalize_outcome_unknown`; it may still have succeeded - read the check), or the run could not
+open its source and the row could not be marked failed. `<kinds>` is always the same eleven pairs in this order: `list_sessions` (both complete reads of the
 whole list), `parent_session`, `athlete_list`, `athlete_detail`, `more`, `track`, `whole_details`,
 `drill`, `brief_tags` (the brief and the tag list), `thresholds`, `other` (zero on the binding path
 today). A synthetic example (the discovery fixture: three sessions, one with five drills, twenty athletes,

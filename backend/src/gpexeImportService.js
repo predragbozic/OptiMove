@@ -1102,8 +1102,9 @@ async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpex
     const known = error instanceof GpexeClientError || error instanceof SourceAdapterError || error instanceof SourceImportResolveError;
     if (!known) console.error(`[gpexe] check ${checkId} failed: ${error?.stack || error}`);
     // The stable code the row gets, never a message (the meter writes `other`
-    // for a code outside its closed set).
-    meter.outcome("failed", known ? error.code : "internal_error");
+    // for a code outside its closed set). A finalization whose COMMIT was not
+    // confirmed may have landed: its outcome is unknown, never "failed".
+    meter.outcome(known && error.code === "check_finalize_outcome_unknown" ? "unknown" : "failed", known ? error.code : "internal_error");
     await query(
       `update training_load.gpexe_import_checks set status = 'failed', finished_at = now(), error_code = $2, error_message = $3,
               sessions_seen = $4, candidates_new = $5, candidates_changed = $6, candidates_unchanged = $7

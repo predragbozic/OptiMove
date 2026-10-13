@@ -461,3 +461,20 @@ test("6. the closed sets: every code a check row can carry is in the meter's set
   assert.equal(parseLine(out[0]).code, "other");
   assert.equal(parseLine(out[0]).requests.other, 1);
 });
+
+test("7. a finalization whose COMMIT is never answered writes outcome=unknown with its stable code, never failed", async () => {
+  const o = await org();
+  serve(o);
+  importer.setCheckFinalizeForTests({ commit: () => new Promise(() => {}), commitBoundMs: 200 });
+  try {
+    const run = await runCheck(o);
+    assert.equal(run.row.error_code, "check_finalize_outcome_unknown", JSON.stringify(run.row));
+    assert.equal(run.lines.length, 1, "exactly one timing line");
+    const line = parseLine(run.lines[0]);
+    assert.equal(line.outcome, "unknown");
+    assert.equal(line.code, "check_finalize_outcome_unknown");
+    assertNothingPrivate(run.lines[0]);
+  } finally {
+    importer.setCheckFinalizeForTests({});
+  }
+});
