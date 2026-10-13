@@ -70,6 +70,7 @@ let commitFault = null;
 let uncertainCheckFault = null;
 let writeHold = null;
 let rightsHold = null;
+let rereadFault = null;
 let commitTimeoutMs = COMMIT_ANSWER_TIMEOUT_MS;
 let uncertainCheckTimeoutMs = UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS;
 let userLockWaitMs = USER_LOCK_WAIT_MS;
@@ -82,6 +83,8 @@ export function setMappingWriteHoldForTests(fn) { writeHold = fn ?? null; }
 // Runs inside a write's transaction right before the caller's right is
 // checked again under FOR SHARE (after every registry lock).
 export function setMappingRightsHoldForTests(fn) { rightsHold = fn ?? null; }
+// Runs in the read after a confirmed COMMIT (to make that read fail).
+export function setMappingRereadFaultForTests(fn) { rereadFault = fn ?? null; }
 export function setMappingUserLockWaitForTests(ms) { userLockWaitMs = ms ?? USER_LOCK_WAIT_MS; }
 
 function guardClient(client) {
@@ -275,8 +278,17 @@ const MESSAGES = {
 export function classifyDatabaseError(error) {
   if (error instanceof SourceMetricMappingError) return error;
   const code = error?.code;
-  if (code === "55P03" || code === "40P01" || code === "57014") return refusal(409, "try_again", MESSAGES.try_again);
-  if (code === "42501") return NOT_FOUND();
+  if (code === "55P03" || code === "40P01" || code === "57014") {
+    console.error(`[source-metric-mappings] try_again (${code})`);
+    return refusal(409, "try_again", MESSAGES.try_again);
+  }
+  // Only the v34 actor triggers' refusal is the 404 (the right changed under
+  // the request); any other 42501 (a missing grant) is a 500. Code-only log:
+  // a refusal here means the service's own check and the trigger disagreed.
+  if (code === "42501" && typeof error.message === "string" && error.message.startsWith("source metric mapping: the acting user")) {
+    console.error("[source-metric-mappings] db_actor_refusal (42501)");
+    return NOT_FOUND();
+  }
   if (code === "23505") {
     if (error.constraint === "source_metric_mappings_pair_key") return refusal(409, "mapping_exists", "A mapping of this source metric to this canonical definition already exists.");
     if (error.constraint === "source_metric_mapping_versions_number_key" || error.constraint === "source_metric_audit_one_request_per_key") return refusal(409, "try_again", MESSAGES.try_again);
@@ -454,15 +466,22 @@ export async function listMappings({ ctx }) {
     [readableOwnerKeys(ctx), LIST_CAPS.mappings + 1],
   )).rows;
   if (mappings.length > LIST_CAPS.mappings) throw tooLarge(LIST_CAPS.mappings);
+  return summarize(pool, mappings);
+}
+
+// The bounded summary of mappings (the list's shape and the answer of a
+// mapping write): the latest version, the active version and the counts per
+// status - never the version list, so it does not depend on any list cap.
+async function summarize(executor, mappings) {
   if (mappings.length === 0) return [];
   const ids = mappings.map((m) => m.id);
-  const latest = new Map((await pool.query(
+  const latest = new Map((await executor.query(
     `select distinct on (mapping_id) mapping_id, id, version_number, status, created_at, submitted_at
        from training_load.source_metric_mapping_versions where mapping_id = any($1::uuid[])
       order by mapping_id, version_number desc`,
     [ids],
   )).rows.map((r) => [r.mapping_id, r]));
-  const counts = new Map((await pool.query(
+  const counts = new Map((await executor.query(
     `select mapping_id,
             count(*) filter (where status = 'draft')::int as draft, count(*) filter (where status = 'needs_review')::int as needs_review,
             count(*) filter (where status = 'active')::int as active, count(*) filter (where status = 'disabled')::int as disabled,
@@ -480,6 +499,30 @@ export async function listMappings({ ctx }) {
       versionCounts: { draft: c?.draft ?? 0, needs_review: c?.needs_review ?? 0, active: c?.active ?? 0, disabled: c?.disabled ?? 0 },
     };
   });
+}
+
+// A write's answer and a replay: the mapping only when this workspace may
+// write it (its owner key is the workspace's), in the bounded summary shape.
+async function writableMappingSummary(executor, ctx, mappingId) {
+  const m = (await executor.query(
+    `select ${MAPPING_COLUMNS}
+       from training_load.source_metric_mappings m
+       join training_load.source_metric_definitions d on d.id = m.source_metric_definition_id
+      where m.id = $1 and m.owner_key = $2`,
+    [mappingId, ownerKeyOf(ctx)],
+  )).rows[0];
+  return m ? (await summarize(executor, [m]))[0] : null;
+}
+// A version for a write's answer and a replay: only when this workspace may
+// write its mapping; one row, no list.
+async function writableVersion(executor, ctx, mappingId, versionId) {
+  const v = (await executor.query(
+    `select ${VERSION_COLUMNS} from training_load.source_metric_mapping_versions v
+       join training_load.source_metric_mappings m on m.id = v.mapping_id
+      where v.id = $1 and v.mapping_id = $2 and m.owner_key = $3`,
+    [versionId, mappingId, ownerKeyOf(ctx)],
+  )).rows[0];
+  return v ? publicVersion(v) : null;
 }
 
 async function readMapping(executor, ctx, mappingId) {
@@ -502,15 +545,6 @@ async function readMapping(executor, ctx, mappingId) {
 }
 export async function getMapping({ ctx, mappingId }) {
   return readMapping(pool, ctx, mappingId);
-}
-async function readVersion(executor, ctx, mappingId, versionId) {
-  const v = (await executor.query(
-    `select ${VERSION_COLUMNS} from training_load.source_metric_mapping_versions v
-       join training_load.source_metric_mappings m on m.id = v.mapping_id
-      where v.id = $1 and v.mapping_id = $2 and m.owner_key = any($3::text[])`,
-    [versionId, mappingId, readableOwnerKeys(ctx)],
-  )).rows[0];
-  return v ? publicVersion(v) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -582,8 +616,11 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
     if (!released) await finish(true);
   }
 }
+// The write is committed: a failed read only flags the answer, it never
+// turns it into a failure (the ids say what was written).
 async function rereadAfterCommit(ctx, written, reread) {
   try {
+    if (rereadFault) await rereadFault();
     const current = await reread(pool, written);
     if (current) return current;
   } catch { /* the answer below */ }
@@ -638,8 +675,8 @@ export async function createMapping({ ctx, body }) {
   return runWrite({
     ctx, where: "mapping_create", requestKey, requestHash, action: "mapping_create",
     reread: async (executor, record) => {
-      const mapping = await readMapping(executor, ctx, record.mapping_id);
-      return mapping && writableBy(ctx, mapping) ? { mapping } : null;
+      const mapping = await writableMappingSummary(executor, ctx, record.mapping_id);
+      return mapping ? { mapping } : null;
     },
     body: async (client, operationId) => {
       // T2a, then the canonical definition, both FOR SHARE (lock order).
@@ -687,10 +724,6 @@ export async function createMapping({ ctx, body }) {
     throw error;
   });
 }
-// Writable in this workspace: the mapping's owner is the workspace's owner.
-// readMapping already admits a club mapping only in that club's workspace, so
-// for a mapping it returned an equal owner scope means the same owner.
-const writableBy = (ctx, mapping) => mapping.ownerScope === ctx.owner.scope;
 
 // The parameters of a version, checked against the revision's kind and
 // operator; values canonical (owner decision 2026-10-13).
@@ -736,11 +769,12 @@ function NUMERIC_PARAMS(param) {
   return `(select coalesce(jsonb_object_agg(e.key, case when e.key in ('operator', 'unit') or jsonb_typeof(e.value) = 'null' then e.value else to_jsonb((e.value #>> '{}')::numeric) end), '{}'::jsonb) from jsonb_each(${param}::jsonb) e)`;
 }
 
-async function activeConversion(client, fromUnit, toUnit, lock) {
+// A plain read (the row is locked later, in the lock order).
+async function activeConversion(client, fromUnit, toUnit) {
   const rows = (await client.query(
     `select id, trim_scale(scale)::text as scale, trim_scale(scale_divisor)::text as scale_divisor, trim_scale("offset")::text as "offset"
        from training_load.unit_conversions where from_unit = $1 and to_unit = $2 and state = 'active'
-      order by id ${lock ? "for share" : ""}`,
+      order by id`,
     [fromUnit, toUnit],
   )).rows;
   return rows.length === 1 ? rows[0] : null;
@@ -762,9 +796,7 @@ export async function createVersion({ ctx, mappingId, body }) {
   return runWrite({
     ctx, where: "mapping_version_create", requestKey, requestHash, action: "mapping_version_create",
     reread: async (executor, record) => {
-      const mapping = await readMapping(executor, ctx, record.mapping_id);
-      if (!mapping || !writableBy(ctx, mapping)) return null;
-      const version = await readVersion(executor, ctx, record.mapping_id, record.mapping_version_id);
+      const version = await writableVersion(executor, ctx, record.mapping_id, record.mapping_version_id);
       return version ? { version } : null;
     },
     body: async (client, operationId) => {
@@ -807,7 +839,7 @@ export async function createVersion({ ctx, mappingId, body }) {
       let factors = { scale: "1", scale_divisor: "1", offset: "0" };
       let valueConversion = null;
       if (sourceUnit !== targetUnit) {
-        valueConversion = await activeConversion(client, sourceUnit, targetUnit, false);
+        valueConversion = await activeConversion(client, sourceUnit, targetUnit);
         if (!valueConversion) throw refusal(409, "conversion_unavailable", MESSAGES.conversion_unavailable);
         if (!isNormalFormPair(valueConversion.scale, valueConversion.scale_divisor)) throw refusal(409, "conversion_not_normal", "The active unit conversion of this unit pair is not in the normal form.");
         factors = { scale: valueConversion.scale, scale_divisor: valueConversion.scale_divisor, offset: valueConversion.offset };
@@ -823,7 +855,7 @@ export async function createVersion({ ctx, mappingId, body }) {
         canonical = derived.params;
         if (canonical.operator !== revision.bound_operator) throw refusal(409, "parameters_not_equivalent", MESSAGES.parameters_not_equivalent);
         if (revision.source_bound_unit !== canonical.unit) {
-          boundConversion = await activeConversion(client, revision.source_bound_unit, canonical.unit, false);
+          boundConversion = await activeConversion(client, revision.source_bound_unit, canonical.unit);
           if (!boundConversion) throw refusal(409, "bound_conversion_unavailable", MESSAGES.bound_conversion_unavailable);
           if (!isNormalFormPair(boundConversion.scale, boundConversion.scale_divisor)) throw refusal(409, "conversion_not_normal", "The active unit conversion of the bound unit pair is not in the normal form.");
           parameterFactors = { scale: boundConversion.scale, scale_divisor: boundConversion.scale_divisor, offset: boundConversion.offset };
@@ -893,9 +925,7 @@ export async function submitVersion({ ctx, mappingId, versionId, body }) {
   return runWrite({
     ctx, where: "mapping_status", requestKey, requestHash, action: "mapping_status",
     reread: async (executor, record) => {
-      const mapping = await readMapping(executor, ctx, record.mapping_id);
-      if (!mapping || !writableBy(ctx, mapping)) return null;
-      const version = await readVersion(executor, ctx, record.mapping_id, record.mapping_version_id);
+      const version = await writableVersion(executor, ctx, record.mapping_id, record.mapping_version_id);
       return version ? { version } : null;
     },
     body: async (client, operationId) => {

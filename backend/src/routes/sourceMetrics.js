@@ -12,6 +12,12 @@ import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 
 const router = Router();
 
+// Every answer of this router (a 404 and a refusal included) is not cached.
+router.use((req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
+
 function notFound(res) {
   return res.status(404).json({ error: "notFound" });
 }
@@ -68,40 +74,33 @@ async function adminContext(req, res) {
   return ctx;
 }
 
-const noStore = (res) => res.setHeader("Cache-Control", "no-store");
-
 router.get("/fields", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
-  noStore(res);
   res.json({ fields: await service.listFields({ ctx, query: req.query }) });
 }));
 
 router.get("/targets", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
-  noStore(res);
   res.json({ targets: await service.listTargets({ ctx }) });
 }));
 
 router.get("/conversions", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
-  noStore(res);
   res.json({ conversions: await service.listConversions({ ctx }) });
 }));
 
 router.get("/mappings", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
-  noStore(res);
   res.json({ mappings: await service.listMappings({ ctx }) });
 }));
 
 router.get("/mappings/:mappingId", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
-  noStore(res);
   const mapping = await service.getMapping({ ctx, mappingId: req.params.mappingId });
   if (!mapping) return notFound(res);
   res.json({ mapping });
@@ -111,7 +110,6 @@ router.get("/mappings/:mappingId", handle(async (req, res) => {
 // replay (the current state of the earlier request's resource), for a COMMIT
 // whose answer was lost but verified, and for every transition.
 function writeAnswer(res, result, createdStatus) {
-  noStore(res);
   const status = !result.replayed && !result.commitConfirmation ? createdStatus : 200;
   res.status(status).json(result);
 }

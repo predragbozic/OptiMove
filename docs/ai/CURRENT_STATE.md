@@ -1674,6 +1674,10 @@ Technical details.
   meaning confirmation, activation, disabling, T5, conversion maintenance, the preview, the frontend,
   any importer change, any migration. Code: `backend/src/routes/sourceMetrics.js`,
   `backend/src/sourceMetricMappingService.js`; tests `backend/tests/source-metric-mapping-m2.test.mjs`.
+  The internal reviews (code, database, security) answered READY WITH NON-BLOCKING NOTES; their
+  corrections are in the same pull request, and the owner decisions they raised (a write-time quota
+  against the 50-version cap of the mapping detail, a database actor check on the T3 / T4 inserts) are
+  listed in the discovery document, section K.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that

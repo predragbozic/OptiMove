@@ -53,6 +53,7 @@ after(async () => {
   service?.setMappingCommitForTests();
   service?.setMappingWriteHoldForTests(null);
   service?.setMappingUserLockWaitForTests(null);
+  service?.setMappingRereadFaultForTests(null);
   dbModule?.setPoolCheckoutFaultForTests(null);
   if (server) { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
   if (appPool) await appPool.end();
@@ -66,6 +67,7 @@ afterEach(() => {
   // A test that failed while a write was held must not leave it held.
   for (const g of openGates.splice(0)) g.open();
   service.setMappingRightsHoldForTests(null);
+  service.setMappingRereadFaultForTests(null);
   service.setMappingCommitForTests();
   service.setMappingWriteHoldForTests(null);
   service.setMappingUserLockWaitForTests(null);
@@ -253,10 +255,30 @@ test("1. who may call: no session is 401; a coach, a team workspace, another rol
     const w = await post("/mappings", who.cookie, { requestKey: key(), sourceMetricId: W.fSec.id, metricDefinitionId: W.sysMin.id });
     assert.equal(w.status, 404);
   }
+  // A platform admin in a team or private-coaching workspace, and a club admin in a team workspace
+  // of its own club: no owner scope, so the same 404 (fail-closed; the owner is the workspace's only).
+  const paTeam = await platformAdmin();
+  await q(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [paTeam.id, W.teamA]);
+  await workspace(paTeam.id, "team", W.teamA);
+  const paPrivate = await platformAdmin();
+  await q(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'independent_coach',true)`, [paPrivate.id]);
+  await workspace(paPrivate.id, "private_coach", null);
+  const caTeam = await clubAdmin(W.clubA, { ws: W.clubA });
+  await q(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [caTeam.id, W.teamA]);
+  await workspace(caTeam.id, "team", W.teamA);
+  for (const who of [paTeam, paPrivate, caTeam]) {
+    for (const path of routes) {
+      const r = await api(path, { cookie: who.cookie });
+      assert.deepEqual([r.status, r.body], [404, { error: "notFound" }], path);
+      assert.equal(r.headers.get("cache-control"), "no-store", "a 404 is not cached either");
+    }
+    assert.equal((await post("/mappings", who.cookie, { requestKey: key(), sourceMetricId: W.fSec.id, metricDefinitionId: W.sysMin.id })).status, 404);
+  }
   // An inactive user has no session at all.
   assert.equal((await api("/fields", { cookie: W.caInactiveUser.cookie })).status, 401);
-  // Unknown paths under the prefix: the same 404.
-  assert.equal((await api("/nothing", { cookie: W.pa.cookie })).status, 404);
+  // Unknown paths under the prefix: the same 404, not cached.
+  const unknownPath = await api("/nothing", { cookie: W.pa.cookie });
+  assert.deepEqual([unknownPath.status, unknownPath.headers.get("cache-control")], [404, "no-store"]);
   for (const who of [W.pa, W.paA, W.caA]) {
     for (const path of routes.slice(0, 4)) {
       const r = await api(path, { cookie: who.cookie });
@@ -327,7 +349,9 @@ test("5. POST /mappings: the owner comes from the workspace only (platform: syst
   const sys = await post("/mappings", W.pa.cookie, { requestKey: key(), sourceMetricId: W.fSec.id, metricDefinitionId: W.sysMin.id });
   assert.equal(sys.status, 201, sys.text);
   assert.equal(sys.body.replayed, false);
-  assert.deepEqual(Object.keys(sys.body.mapping).sort(), ["createdAt", "id", "metricDefinitionId", "ownerScope", "sourceMetric", "versions"]);
+  // The answer of a mapping write is the bounded summary of the list (never the version list).
+  assert.deepEqual(Object.keys(sys.body.mapping).sort(), ["activeVersionId", "createdAt", "id", "latestVersion", "metricDefinitionId", "ownerScope", "sourceMetric", "versionCounts"]);
+  assert.deepEqual([sys.body.mapping.latestVersion, sys.body.mapping.activeVersionId, sys.body.mapping.versionCounts], [null, null, { draft: 0, needs_review: 0, active: 0, disabled: 0 }]);
   const t3 = await one(`select owner_scope, owner_club_id, owner_key, created_by_user_id from training_load.source_metric_mappings where id = $1`, [sys.body.mapping.id]);
   assert.deepEqual(t3, { owner_scope: "system", owner_club_id: null, owner_key: "system", created_by_user_id: W.pa.id });
   const audit = await q(`select action, mapping_id, basis, performed_by_user_id, request_hash is not null as hashed, request_key is not null as keyed from training_load.source_metric_audit where mapping_id = $1`, [sys.body.mapping.id]);
@@ -382,7 +406,8 @@ test("6. idempotency: the same key and body replays (200, the CURRENT state, nev
   const v = await post(`/mappings/${first.body.mapping.id}/versions`, W.pa.cookie, versionBody(W.fZone.revId, { sourceParameters: { lower: "7", upper: null } }));
   assert.equal(v.status, 201, v.text);
   const later = await post("/mappings", W.pa.cookie, body);
-  assert.equal(later.body.mapping.versions.length, 1, "the current state, not the original answer");
+  assert.equal(later.body.mapping.versionCounts.draft, 1, "the current state, not the original answer");
+  assert.equal(later.body.mapping.latestVersion.id, v.body.version.id);
   assert.equal((await q(`select 1 from training_load.source_metric_mappings where source_metric_definition_id = $1 and metric_definition_id = $2`, [W.fZone.id, W.sysZone.id])).length, 1);
   assert.equal((await q(`select 1 from training_load.source_metric_audit where request_key = $1`, [requestKey])).length, 1);
   const reused = await post("/mappings", W.pa.cookie, { ...body, metricDefinitionId: W.sysZoneOther.id });
@@ -624,7 +649,7 @@ test("13. concurrency: one write per user at a time (bounded, try_again with Ret
   service.setMappingWriteHoldForTests(async (_c, where) => { if (where === "mapping_create" && held++ === 0) await g2.promise; });
   const body = { requestKey: key(), sourceMetricId: f2.id, metricDefinitionId: W.sysSec.id };
   const a = post("/mappings", W.pa.cookie, body);
-  await new Promise((res) => setTimeout(res, 150));
+  while (held === 0) await new Promise((res) => setTimeout(res, 20)); // a holds the user lock
   const b = post("/mappings", W.pa.cookie, body);
   assert.equal(await someoneWaits(), true, "the same user's second write waits");
   g2.open();
@@ -634,9 +659,10 @@ test("13. concurrency: one write per user at a time (bounded, try_again with Ret
   const f3 = await field({ unit: "s" });
   const g3 = gate();
   service.setMappingUserLockWaitForTests(300);
-  service.setMappingWriteHoldForTests(async (_c, where) => { if (where === "mapping_create") await g3.promise; });
+  held = 0;
+  service.setMappingWriteHoldForTests(async (_c, where) => { if (where === "mapping_create") { held += 1; await g3.promise; } });
   const slow = post("/mappings", W.pa2.cookie, { requestKey: key(), sourceMetricId: f3.id, metricDefinitionId: W.sysSec.id });
-  await new Promise((res) => setTimeout(res, 150));
+  while (held === 0) await new Promise((res) => setTimeout(res, 20)); // slow holds the user lock
   const busy = await post("/mappings", W.pa2.cookie, { requestKey: key(), sourceMetricId: f3.id, metricDefinitionId: W.sysMin.id });
   assert.deepEqual([busy.status, busy.body.error, busy.headers.get("retry-after")], [409, "try_again", "5"]);
   g3.open();
@@ -681,9 +707,10 @@ test("14. the lock order against a conversion retirement, both orders: a version
   const m = await mappingFor(W.pa, f.id, W.sysFf.id);
   // The version first.
   const g = gate();
-  service.setMappingWriteHoldForTests(async (_c, where) => { if (where === "mapping_version_create") await g.promise; });
+  let entered = false;
+  service.setMappingWriteHoldForTests(async (_c, where) => { if (where === "mapping_version_create") { entered = true; await g.promise; } });
   const writing = post(`/mappings/${m.id}/versions`, W.pa.cookie, versionBody(f.revId, { conversionNote: "ee to ff" }));
-  await new Promise((res) => setTimeout(res, 200));
+  while (!entered) await new Promise((res) => setTimeout(res, 20)); // the version holds the row FOR SHARE
   const retirer = new pg.Client({ connectionString: db.url });
   await retirer.connect();
   try {
@@ -728,6 +755,16 @@ test("15. the COMMIT: an answer lost but verified is 200 with verified_after_com
   const retry = await post("/mappings", W.pa.cookie, { requestKey, sourceMetricId: g.id, metricDefinitionId: W.sysSec.id });
   assert.equal(retry.status, 201);
   assert.equal((await q(`select 1 from training_load.source_metric_mappings where source_metric_definition_id = $1`, [g.id])).length, 1);
+  // A confirmed COMMIT whose read afterwards fails: still 201, flagged readError with the ids written.
+  const h = await field({ unit: "s" });
+  service.setMappingRereadFaultForTests(() => { throw new Error("read failed"); });
+  const created = await post("/mappings", W.pa.cookie, { requestKey: key(), sourceMetricId: h.id, metricDefinitionId: W.sysSec.id });
+  const hId = (await one(`select id from training_load.source_metric_mappings where source_metric_definition_id = $1`, [h.id])).id;
+  assert.deepEqual([created.status, created.body], [201, { readError: true, mappingId: hId, replayed: false }]);
+  const drafted = await post(`/mappings/${hId}/versions`, W.pa.cookie, versionBody(h.revId));
+  const hv = (await one(`select id from training_load.source_metric_mapping_versions where mapping_id = $1`, [hId])).id;
+  assert.deepEqual([drafted.status, drafted.body], [201, { readError: true, mappingId: hId, versionId: hv, replayed: false }]);
+  service.setMappingRereadFaultForTests(null);
 });
 
 test("16. a database refusal outside the allowlist is a sanitized 500 internal_error with nothing written (no partial state); a busy pool is 409 try_again with Retry-After 5", async () => {
@@ -756,7 +793,13 @@ test("16. a database refusal outside the allowlist is a sanitized 500 internal_e
   assert.equal(service.classifyDatabaseError({ code: "23505", constraint: "source_metric_mappings_pair_key" }).code, "mapping_exists");
   assert.equal(service.classifyDatabaseError({ code: "23505", constraint: "other_key" }), null);
   assert.equal(service.classifyDatabaseError({ code: "40P01" }).code, "try_again");
-  assert.equal(service.classifyDatabaseError({ code: "42501" }).code, "notFound");
+  // 42501: only the v34 actor triggers refusal is the 404 (logged by code only); any other 42501 is not mapped.
+  assert.equal(service.classifyDatabaseError({ code: "42501", message: "source metric mapping: the acting user is not an active platform admin" }).code, "notFound");
+  assert.equal(service.classifyDatabaseError({ code: "42501", message: "source metric mapping: the acting user may not submit this mapping version" }).code, "notFound");
+  assert.equal(service.classifyDatabaseError({ code: "42501" }), null);
+  assert.equal(service.classifyDatabaseError({ code: "42501", message: "permission denied for table source_metric_mappings" }), null);
+  assert.equal(service.classifyDatabaseError({ code: "42501", message: "source metric mapping: a seed marker is accepted only from the seeding migration" }), null);
+  assert.ok(logLines.some((l) => l === "[source-metric-mappings] db_actor_refusal (42501)"), "the actor refusal is logged by its code only");
   assert.equal(service.classifyDatabaseError({ code: "XX000", message: "boom" }), null);
 });
 
@@ -791,10 +834,77 @@ test("18. the right is checked again under FOR SHARE right before the write: a c
   const archived = await post("/mappings", caY.cookie, { requestKey: key(), sourceMetricId: f.id, metricDefinitionId: mdY.id });
   assert.deepEqual([archived.status, archived.body], [404, { error: "notFound" }]);
   assert.equal((await q(`select 1 from training_load.source_metric_mappings where metric_definition_id = $1`, [mdY.id])).length, 0);
+  // A replay checks the right again under lock: the role revoked between the request's own check
+  // and the replay's re-check answers the 404, never the earlier resource.
+  const caZ = await clubAdmin(W.clubA);
+  const g = await field({ unit: "s" });
+  const replayBody = { requestKey: key(), sourceMetricId: g.id, metricDefinitionId: W.clubASec.id };
+  assert.equal((await post("/mappings", caZ.cookie, replayBody)).status, 201);
+  service.setMappingRightsHoldForTests(async () => {
+    service.setMappingRightsHoldForTests(null);
+    await q(`update public.user_club_roles set is_active = false where user_id = $1`, [caZ.id]);
+  });
+  const replayed = await post("/mappings", caZ.cookie, replayBody);
+  assert.deepEqual([replayed.status, replayed.body], [404, { error: "notFound" }]);
+  assert.equal((await q(`select 1 from training_load.source_metric_audit where request_key = $1`, [replayBody.requestKey])).length, 1);
   W.metricsDigest = await metricsDigest();
 });
 
-test("19. nothing of M2 writes a T5 activation, a T6 fact, a T2a / T2b row or Metrics Core; every request record is a mapping action; no response or log line carries a trigger's or the database's text, or an acting user's id", async () => {
+test("19. a write's answer and its replay never depend on a list cap: a mapping with more versions than the detail's cap still creates, replays and submits versions, and its mapping write replays as the bounded summary", async () => {
+  const f = await field({ unit: "s" });
+  const createBody = { requestKey: key(), sourceMetricId: f.id, metricDefinitionId: W.sysSec.id };
+  const m = (await post("/mappings", W.pa.cookie, createBody)).body.mapping;
+  const firstBody = versionBody(f.revId);
+  const first = await post(`/mappings/${m.id}/versions`, W.pa.cookie, firstBody);
+  assert.equal(first.status, 201, first.text);
+  for (let i = 1; i <= service.LIST_CAPS.versionsPerMapping; i += 1) {
+    const r = await post(`/mappings/${m.id}/versions`, W.pa.cookie, versionBody(f.revId));
+    assert.equal(r.status, 201, r.text);
+  }
+  const count = service.LIST_CAPS.versionsPerMapping + 1;
+  const detail = await api(`/mappings/${m.id}`, { cookie: W.pa.cookie });
+  assert.deepEqual([detail.status, detail.body.error, detail.body.limit], [409, "result_too_large", service.LIST_CAPS.versionsPerMapping], "the detail is refused, never cut");
+  const replay = await post(`/mappings/${m.id}/versions`, W.pa.cookie, firstBody);
+  assert.deepEqual([replay.status, replay.body.replayed, replay.body.version.id, replay.body.version.versionNumber], [200, true, first.body.version.id, 1]);
+  const next = await post(`/mappings/${m.id}/versions`, W.pa.cookie, versionBody(f.revId));
+  assert.deepEqual([next.status, next.body.version.versionNumber], [201, count + 1]);
+  const submitKey = key();
+  const submitted = await post(`/mappings/${m.id}/versions/${first.body.version.id}/submit`, W.pa.cookie, { requestKey: submitKey });
+  assert.deepEqual([submitted.status, submitted.body.version.status], [200, "needs_review"]);
+  const submitReplay = await post(`/mappings/${m.id}/versions/${first.body.version.id}/submit`, W.pa.cookie, { requestKey: submitKey });
+  assert.deepEqual([submitReplay.status, submitReplay.body.replayed, submitReplay.body.version.status], [200, true, "needs_review"]);
+  const mappingReplay = await post("/mappings", W.pa.cookie, createBody);
+  assert.deepEqual([mappingReplay.status, mappingReplay.body.replayed, mappingReplay.body.mapping.versionCounts], [200, true, { draft: count, needs_review: 1, active: 0, disabled: 0 }]);
+  assert.equal(mappingReplay.body.mapping.latestVersion.versionNumber, count + 1);
+  const list = await api("/mappings", { cookie: W.pa.cookie });
+  assert.equal(list.status, 200, "the list carries summaries, so a long version history never refuses it");
+});
+
+test("20. architecture: only the M2 service writes a mapping, a mapping version or a mapping request record, and nothing in backend/src writes a T5 activation or a T6 value provenance", async () => {
+  const { readdirSync, readFileSync } = await import("node:fs");
+  const { join, relative } = await import("node:path");
+  const src = new URL("../src/", import.meta.url);
+  const root = decodeURIComponent(src.pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+  const files = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) walk(join(dir, e.name));
+      else if (e.name.endsWith(".js") || e.name.endsWith(".mjs")) files.push(join(dir, e.name));
+    }
+  };
+  walk(root);
+  assert.ok(files.length > 20, "the scan found the backend sources");
+  const writes = (table) => new RegExp(`(insert\\s+into|update|delete\\s+from)\\s+training_load\\.${table}\\b`, "i");
+  const writers = (table) => files.filter((f) => writes(table).test(readFileSync(f, "utf8"))).map((f) => relative(root, f).replace(/\\/g, "/")).sort();
+  for (const table of ["source_metric_mappings", "source_metric_mapping_versions", "source_metric_audit"]) {
+    assert.deepEqual(writers(table), ["sourceMetricMappingService.js"], table);
+  }
+  for (const table of ["source_metric_mapping_activations", "metric_value_source_provenance", "source_metric_definitions", "source_metric_definition_versions", "unit_conversions"]) {
+    assert.deepEqual(writers(table), [], table);
+  }
+});
+
+test("21. nothing of M2 writes a T5 activation, a T6 fact, a T2a / T2b row or Metrics Core; every request record is a mapping action; no response or log line carries a trigger's or the database's text, or an acting user's id", async () => {
   assert.equal((await one(`select count(*)::int as n from training_load.source_metric_mapping_activations`)).n, 0);
   assert.equal((await one(`select count(*)::int as n from training_load.metric_value_source_provenance`)).n, 0);
   assert.equal((await one(`select count(*)::int as n from training_load.source_metric_mapping_versions where status not in ('draft', 'needs_review')`)).n, 0, "no activation or disabling");
