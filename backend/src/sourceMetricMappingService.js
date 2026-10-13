@@ -410,6 +410,9 @@ function mappingsCursorPosition(text, ctx) {
   if (typeof p.t !== "string" || !CURSOR_AT.test(p.t)) throw invalidCursor();
   const instant = new Date(`${p.t.slice(0, 23)}Z`);
   if (Number.isNaN(instant.getTime()) || instant.toISOString().slice(0, 23) !== p.t.slice(0, 23)) throw invalidCursor();
+  // A cursor's instant is a created_at of this system, never before 2000; it
+  // also keeps year 0 (valid in JavaScript, not in PostgreSQL) from the query.
+  if (instant.getUTCFullYear() < 2000) throw invalidCursor();
   if (typeof p.i !== "string" || !LOWER_UUID.test(p.i)) throw invalidCursor();
   return { clubPart: p.s, at: p.t, id: p.i };
 }

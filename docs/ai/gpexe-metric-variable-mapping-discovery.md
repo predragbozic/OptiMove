@@ -10,7 +10,7 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 |---|---|
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
-| Last verified against commit | `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C66 and J1 the first M2 pull request |
+| Last verified against commit | `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
 | Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) implemented in an open pull request — not merged, not deployed; M3–M6 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
@@ -556,7 +556,7 @@ J1):
     A body never names an owner (`owner_club_id`, `owner_key`, `ownerScope` …: `400 invalid_body`);
     the right, the user and the club are checked again under `FOR SHARE` right before every write.
 61. **The canonical target has the mapping's owner scope** (D4 and the v34 T3 trigger, confirmed; no
-    v35): a system mapping targets a system definition only, a club X mapping a club X definition
+    migration needed for it - the v35 of C73 is a separate actor check): a system mapping targets a system definition only, a club X mapping a club X definition
     only; a system definition from a club workspace is `409 target_scope_mismatch`; another club's,
     a team's or a user's definition is the 404.
 62. **Parameter values are decimal JSON strings** (`^-?(0|[1-9][0-9]{0,11})(\.[0-9]{1,9})?$`: at most
@@ -590,7 +590,9 @@ built in the same PR:**
     the version list.
 68. **Pages, no write quota.** `GET /mappings` and the versions of `GET /mappings/:id` are read by
     keyset pages: a fixed page size (mappings 100, versions 50), the stable order of C64, `nextCursor`
-    (null on the last page), no gap and no duplicate in a stable snapshot. The cursor is opaque and
+    (null on the last page), no gap and no duplicate in a stable snapshot. (A mapping's `created_at` is
+    its transaction's start, so one that commits after a page was read with an earlier `created_at`
+    than the cursor's position appears only in a list read again from the start.) The cursor is opaque and
     strictly validated, bound to the workspace's owner key (and, for versions, to the mapping); an
     invalid cursor is `400 invalid_query`. No write refuses a mapping or a version at a count.
     `/fields`, `/targets` and `/conversions` (catalogs M2 does not write) keep their hard caps.
@@ -1429,9 +1431,9 @@ caller — and every resource it may not see — gets the identical `404 {"error
 
 | # | Route | Who / WS | Input | Server-derived (never from the client) | Success | Refusals | Reads / writes |
 |---|---|---|---|---|---|---|---|
-| 1 | `GET /fields` | PA (platform or club WS), CA (own club WS) | query `sourceSystem`, `apiFamily` (optional) | — | `200 {fields:[{id, sourceSystem, apiFamily, key, label, state, revisions:[…]}]}`; order system, family, key (`collate "C"`), revisions by number descending | `400 invalid_query`, `409 result_too_large`, `404` | reads T2a, T2b |
-| 2 | `GET /targets` | PA platform WS → system; PA / CA club WS X → club X | — | the owner from the WS | `200 {targets:[{id, ownerScope, currentVersion:{id, versionNumber, unit, canonicalParameters}, scopes, versionReady, notReadyCode}]}`; order `id`; `unit` only when a unit token; `canonicalParameters` the normalized form or null | `409 result_too_large`, `404` | reads Metrics Core |
-| 3 | `GET /conversions` | as 1 | — | — | `200 {conversions:[{id, fromUnit, toUnit, scale, scaleDivisor, offset, evidenceRef}]}`; active rows; order units (`collate "C"`); exact decimal text | `409 result_too_large`, `404` | reads `unit_conversions` |
+| 1 | `GET /fields` | PA (platform or club WS), CA (own club WS) | query `sourceSystem`, `apiFamily` (optional) | — | `200 {fields:[{id, sourceSystem, apiFamily, key, label, state, revisions:[…]}]}`; order system, family, key (`collate "C"`), revisions by number descending | `400 invalid_query`, `409 result_too_large`, `409 try_again`, `404` | reads T2a, T2b |
+| 2 | `GET /targets` | PA platform WS → system; PA / CA club WS X → club X | — | the owner from the WS | `200 {targets:[{id, ownerScope, currentVersion:{id, versionNumber, unit, canonicalParameters}, scopes, versionReady, notReadyCode}]}`; order `id`; `unit` only when a unit token; `canonicalParameters` the normalized form or null | `409 result_too_large`, `409 try_again`, `404` | reads Metrics Core |
+| 3 | `GET /conversions` | as 1 | — | — | `200 {conversions:[{id, fromUnit, toUnit, scale, scaleDivisor, offset, evidenceRef}]}`; active rows; order units (`collate "C"`); exact decimal text | `409 result_too_large`, `409 try_again`, `404` | reads `unit_conversions` |
 | 4 | `GET /mappings` | platform WS → system; club WS X → system + club X | query `cursor` (optional) | visibility from the WS | `200 {mappings:[{id, ownerScope, sourceMetric:{id, key, apiFamily}, metricDefinitionId, createdAt, latestVersion, activeVersionId, versionCounts}], nextCursor}`: one page of at most 100, order system first, `createdAt`, `id`; `nextCursor` null on the last page (C68) | `400 invalid_query`, `409 try_again`, `404` | reads T3, T4 |
 | 5 | `GET /mappings/:mappingId` | as 4 | query `cursor` (optional) | — | `200 {mapping, nextCursor}`: the mapping with one page of at most 50 of its versions (all statuses), by number descending | `400 invalid_query`, `409 try_again`, `404` | reads T3, T4 |
 | 6 | `POST /mappings` | PA platform WS → system; PA / CA club WS X → club X | `requestKey`, `sourceMetricId`, `metricDefinitionId` | owner scope, club, `owner_key`, source system, API family, actor, T8 | `201 {mapping, replayed:false}`, `mapping` in the summary shape of row 4 (never the version list); replay or verified COMMIT `200` | `400 invalid_body`, `415 jsonRequired`, `404`, `409 target_scope_mismatch`, `source_metric_retired`, `target_not_active`, `mapping_exists` (+`current.mappingId`), `request_key_reused`, `try_again`, `503 outcome_unknown`, `500 internal_error` | writes T3 + T8 `mapping_create` |
@@ -1455,7 +1457,7 @@ caller — and every resource it may not see — gets the identical `404 {"error
   only once the right was confirmed again.
 - **Pages** (C68): the cursor is the base64url of a small JSON object, opaque to a client; the server
   accepts exactly its keys, its version, its kind, the workspace's owner key (and the mapping) it was
-  issued for and a well-formed position, or answers `400 invalid_query`; a query parameter other than
+  issued for and a well-formed position (a real instant, not before 2000), or answers `400 invalid_query`; a query parameter other than
   one `cursor` is `400 invalid_query` too. Keyset on (system first, `created_at`, `id`) and on the
   version number.
 - **Every read is bounded** (C70): REPEATABLE READ READ ONLY (READ COMMITTED when it holds the right's
@@ -1488,7 +1490,7 @@ Decisions that may safely wait, with the PR that takes them:
   variables, the zones included (M3 / M6);
 - which activations are `required` in the pilot (M6);
 - the evidence that closes `unit_evidence_ref` and `meaning_evidence_ref` for server3 (M6, gate 2);
-- timeout and throttle values of the M2 routes, following the F3c2d pattern (M2);
+- the throttle of the M2 routes (M2); their read and write bounds are decided (C70, J1);
 - the test-runner kind of the M1 suites — `disposable`, through the T1 runner (as built);
 - whether a system-owned zone or threshold mapping may show one team's bounds to every club admin,
   or such mappings are club-owned (the M1 schema supports both; the bounds are not personal data)

@@ -59,7 +59,11 @@ after(async () => {
   dbModule?.setPoolCheckoutFaultForTests(null);
   if (server) { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
   // Bounded: a client a failed test left checked out must not hold the file open.
-  if (appPool) await Promise.race([appPool.end(), new Promise((res) => setTimeout(res, 5_000))]);
+  if (appPool) {
+    let timer;
+    await Promise.race([appPool.end(), new Promise((res) => { timer = setTimeout(res, 5_000); })]);
+    clearTimeout(timer);
+  }
   if (admin) await admin.end();
   if (db) await db.drop();
   for (const level of Object.keys(originalConsole)) console[level] = originalConsole[level];
@@ -1121,6 +1125,7 @@ test("23. /mappings is read in pages: a fixed page size, the stable order (syste
     "%%%", "a".repeat(401), Buffer.from("[]").toString("base64url"), Buffer.from("not json").toString("base64url"),
     enc({ ...valid, v: 2 }), enc({ ...valid, k: "versions" }), enc({ ...valid, o: W.clubA }), enc({ ...valid, extra: 1 }),
     enc({ ...valid, s: "false" }), enc({ ...valid, t: "2026-02-30T00:00:00.000000" }), enc({ ...valid, t: "2026-10-13 00:00:00" }),
+    enc({ ...valid, t: "0000-01-01T00:00:00.000000" }), enc({ ...valid, t: "1999-12-31T23:59:59.999999" }),
     enc({ ...valid, i: valid.i.toUpperCase() }), enc({ ...valid, i: "x" }),
   ];
   for (const c of invalid) {
