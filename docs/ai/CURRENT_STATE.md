@@ -2504,6 +2504,12 @@ pre-existing; pass/fail counts don't belong in this file
   carries random UUIDs, one of which contains such a three-digit run about 1.5% of the time. It failed once
   in the preset and passed 40/40 on the immediate re-run; neither the test file nor the code it exercises
   was changed. Fix: match a planted, distinctive id (or whole tokens) instead of a three-digit substring.
+- **The admin APIs' invisible-character list has gaps** (security review of M3-0, 2026-10-14, LOW; not
+  scheduled): `TEXT_FORBIDDEN` in `backend/src/sourceMetricMappingService.js` (the shared rule C53, used by M2 and
+  M3-0 for labels and reasons) misses U+3164, U+115F, U+1160, U+FFA0, U+2800, U+034F, the variation selectors
+  U+FE00-FE0F, the tag characters U+E0000-E007F and U+FFF9-FFFB, so a label made only of such a character passes.
+  Metrics Core labels have no database-side text check. Fix in its own PR: extend the list or check
+  `\p{Default_Ignorable_Code_Point}` plus at least one visible character, together with its database twin `training_load.source_metric_text_ok` (v34; a migration).
 
 - **GPEXE identity follow-up (not scheduled):** the single-athlete link from a session's review names the
   athlete by its GPEXE name or label since PR #145, but it shows no date of birth or date-of-birth conflict

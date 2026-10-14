@@ -30,8 +30,10 @@
 -- references (public.users, public.clubs, training_load.metric_definitions and
 -- metric_definition_versions), which locks them briefly against every access
 -- (expected PostgreSQL behaviour, not observed here); a request that reads
--- public.users (a sign-in, a session check) can wait behind that. Run it at a quiet moment - block 8 of
--- docs/runbooks/metric-variable-requests-v36-preflight.sql reads one. Run it as
+-- public.users (a sign-in, a session check) can wait behind that. Run it at a quiet moment. Block 8 of
+-- docs/runbooks/metric-variable-requests-v36-preflight.sql is the closest check, but it leaves plain
+-- reads out on purpose (they do not conflict with the migration's lock), while the drop also waits for
+-- them; the 5 s lock_timeout keeps that wait short. Run it as
 -- one script that stops at the first error (psql -v ON_ERROR_STOP=1 -f ...):
 -- after a refusal the open transaction is aborted and nothing is changed.
 begin;
