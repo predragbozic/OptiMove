@@ -139,6 +139,7 @@ export const emptyBuilderState = (overrides = {}) => ({
   createAthleteId: "",
   createAthleteIds: [],
   batchSync: true,
+  batchSwitchPending: null,
   drafts: [],
   draftsLoading: false,
   draftsOpen: false,
