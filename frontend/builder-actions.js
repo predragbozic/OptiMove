@@ -472,31 +472,47 @@ export async function handleBuilderPlanAction(action, handlers) {
   }
   if (type === "builder-open-batch-plan") {
     const planId = action.dataset.planId || "";
-    if (!planId || String(state.builder.draft?.plan?.id) === String(planId)) return true;
+    if (state.builder.batchSwitchPending || !planId || String(state.builder.draft?.plan?.id) === String(planId)) return true;
+    const builder = state.builder;
+    const sourcePlanId = builder.draft?.plan?.id;
+    const target = builder.draft?.batch?.plans?.find((plan) => String(plan.id) === String(planId));
+    if (!target) return true;
+    const stillCurrent = () => state.builder === builder && state.activeTab === "builder" && String(builder.draft?.plan?.id) === String(sourcePlanId);
+    builder.batchSwitchPending = { planId, name: target.athleteName || target.name || "Athlete", stage: "saving" };
     action.disabled = true;
+    let applied = false;
     try {
-      const batchPlans = state.builder.draft?.batch?.plans || [];
-      if (batchPlans.length && !batchPlans.some((plan) => String(plan.id) === String(planId))) {
-        action.disabled = false;
-        state.builder.error = "";
-        handlers.renderBuilder();
-        return true;
-      }
-      setBuilderDraft(await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(planId)}`));
+      handlers.renderBuilderBatchSwitchProgress?.();
+      // Flush while the original forms still exist; repaint only after the new plan arrives.
+      await handlers.flushBuilderAutosaves();
+      if (!stillCurrent()) return true;
+      builder.batchSwitchPending.stage = "opening";
+      handlers.renderBuilderBatchSwitchProgress?.();
+      const draft = await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(planId)}`);
+      if (!stillCurrent()) return true;
+      setBuilderDraft(draft);
+      applied = true;
       state.builder.error = "";
       state.builder.selectedSessionId = "";
       state.builder.selectedNodeId = "";
       state.builder.exerciseQuery = "";
-      await handlers.loadBuilderExercises();
+      builder.batchSwitchPending = null;
+      handlers.renderBuilder();
     } catch (error) {
-      action.disabled = false;
+      if (applied) throw error;
+      if (!stillCurrent()) return true;
       if (isNotFoundError(error)) {
         forgetBatchPlan(planId);
         state.builder.error = "That athlete copy is no longer available in this group.";
-        handlers.renderBuilder();
-        return true;
+      } else {
+        state.builder.error = error.message || "Could not open this athlete's plan.";
       }
-      throw error;
+      builder.batchSwitchPending = null;
+      handlers.renderBuilder();
+    } finally {
+      builder.batchSwitchPending = null;
+      action.disabled = false;
+      if (state.builder === builder) handlers.renderBuilderBatchSwitchProgress?.();
     }
     return true;
   }

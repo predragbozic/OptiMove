@@ -1,8 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-13. Last `origin/main` commit checked: `15efd7a` (merge of PR #159, M1, the
-schema foundation of the metric mapping, migration v34; PR #158 `0293b39`, the agent-efficiency rule,
-before it).
+Last reviewed: 2026-10-13. Last `origin/main` commit checked: `1164041` (merge of PR #160, the first
+M2 PR, the mapping administration API; PR #159 `15efd7a`, M1, migration v34, before it).
 
 ## Active phase
 
@@ -1577,7 +1576,7 @@ Technical details.
     status (zero UUID) answered 401. No test was run against production; no Check, Link, Approve or Import;
     Render, credentials and the switch untouched; the eight leftover `optimove_tests_gpexe_f3c2g_*`
     databases on the development workstation were left in place, as ordered.
-- **GPEXE metric / variable mapping discovery (2026-10-11, accepted; PR #156; M1 merged as PR #159 and the first M2 PR open, see below).** The authoritative
+- **GPEXE metric / variable mapping discovery (2026-10-11, accepted; PR #156; M1 merged as PR #159, the first M2 PR merged as PR #160, v35 open, see below).** The authoritative
   document is `docs/ai/gpexe-metric-variable-mapping-discovery.md` (rule:
   `.claude/rules/metrics-core-mapping.md`; ADR-007 records only the three decisions the code already
   proves — Metrics Core as the canonical registry, no automatic merge of several sources, no
@@ -1660,8 +1659,8 @@ Technical details.
     provenance, audit row or source instance.
   - No Check, Link, Approve, Import or GPEXE request; Render and `GPEXE_IMPORT_APPLY_ENABLED` untouched.
 - **M2, first PR — the administrator API of the mapping** (owner order 2026-10-13; branch
-  `feature/metrics-mapping-m2-api` from `15efd7a`; **implemented in an open pull request — not merged,
-  not deployed; no production mapping exists**). The HTTP contract the owner approved on 2026-10-13 is
+  `feature/metrics-mapping-m2-api` from `15efd7a`; **merged and deployed as PR #160, see below; no
+  production mapping, version or audit row exists**). The HTTP contract the owner approved on 2026-10-13 is
   section J1 of the discovery document, with the decisions C59–C66: under
   `/api/training-load/sources/metrics` the reads of the source fields and revisions, the canonical
   targets of the workspace's owner scope, the active unit conversions and the mappings with their
@@ -1685,6 +1684,51 @@ Technical details.
   lock; the exact 42501 texts). **Decided as a gate (C73):** a database actor check on the T3 / T4
   inserts and the T8 request records is a mandatory, separate hardening PR (v35) before any T5
   activation and before the API's real administrative use.
+- **PR #160 is merged and deployed (M2, first part).**
+  - The owner's external re-review of head `fd8af5e` was READY WITH NON-BLOCKING NOTES; the owner
+    accepted the summary answer of `POST /mappings`, the C68 pages, the bounded reads, the right checked
+    again after both the directly confirmed and the verified COMMIT (to be kept), the `summarize` note and
+    the app-wide note on the session and workspace reads.
+  - Merge commit `1164041` (parents `15efd7a` and `fd8af5e`) on 2026-10-13 at 13:25:07 UTC, merged
+    exactly from that head (`--match-head-commit`) on the owner's order; no migration in it.
+  - `/api/health` first served `1164041` with `ok: true` at 13:26:15 UTC, then three times in a row
+    (13:26:25, 13:26:36 and 13:26:46 UTC). Unauthenticated GET smoke: `/api/auth/me` 200 with
+    `{"user":null}`; `/fields`, `/targets`, `/conversions` and `/mappings` of the M2 API 401.
+  - No authenticated M2 request, no mapping, version or audit row, no GPEXE action; Render and
+    `GPEXE_IMPORT_APPLY_ENABLED` untouched.
+- **v35 — the database actor guards of the mapping writes** (owner order and decisions 2026-10-13;
+  branch `feature/metrics-mapping-v35-actor-guards` from `1164041`; **implemented in an open pull
+  request — not merged, not deployed, applied to no persistent database**). Contract: decisions
+  C74–C79 and section J2 of the discovery document. Migration v35
+  (`migrations_v2/202610131000_training_load_v35_source_metric_actor_guards.sql`) adds functions,
+  triggers and two partial indexes for the guards' audit lookups (no table, column or data):
+  - the M2 service sets, before the first protected write of each write transaction, the
+    transaction-local `optimove.source_metric_actor` = `<user uuid>:<id of the transaction>` from the
+    authenticated session; a replay and a GET set none; missing, empty, not canonical or of another
+    transaction (a session-level SET) is `42501`;
+  - a mapping (T3), a version (T4) and its `submitted_by` / `activated_by` / `disabled_by` transitions,
+    and an audit row (T8) must name that user, an owner scope the user may write (an active platform
+    admin; for a club mapping also the active admin of that active club) and the basis the database
+    derives (`42501`); an audit row must follow its own operation in the same transaction, once
+    (`23514`); at COMMIT, deferred constraint triggers refuse a mapping, a version or a status transition
+    without its audit row and roll the whole transaction back (`23514`); a write inside a savepoint is
+    refused (fail closed); fixed messages only;
+  - through M2 a v35 guard is a sanitized `500 internal_error`; a COMMIT is a definite failure only when
+    PostgreSQL itself refused it with an ordinary ERROR, every other COMMIT error is verified by the
+    request key (never taken for "nothing written"); the expected loss of a right stays M2's `404`; a club
+    admin granted the platform admin role mid-request answers `409 try_again` when the grant lands before
+    the request's rights check (after it: a sanitized `500`, nothing written); no HTTP contract change.
+  - **Limit, stated by the owner:** this keeps an accidental or unintended write that bypasses M2 out;
+    the guards prove that row, actor and right agree, not that the code which set the actor was entitled
+    to. It is no defence against whoever controls the database credentials the application and the
+    migrations share, nor against code that runs SQL through the application's pool (both can set the
+    setting or disable a trigger) - separate migration and runtime roles are a later infrastructure task
+    (Separate tasks). Read-only production preflight: `docs/runbooks/source-metric-mapping-v35-preflight.sql`.
+  - Rollback `docs/runbooks/source-metric-mapping-v35-rollback.sql` (refuses without v35, under a later
+    migration, or with a v35 trigger or index missing or a trigger disabled), rehearsed: apply -> rollback -> identical v34
+    catalog -> re-apply. Tests: `backend/tests/source-metric-mapping-v35.test.mjs` (disposable, T1
+    runner) with mutation evidence; the M2 suite runs unchanged under v35 (its one raw mapping fixture
+    now carries the actor and the audit rows).
 - **The GPEXE check timing line (P0)** (owner order 2026-10-13, after a read-only performance discovery
   the same day; branch `claude/upbeat-heisenberg-a3pbq9` from `1164041`; **an open pull request - not
   merged, not deployed**). The discovery (code and a local fake-source measurement only, no production or
@@ -2182,9 +2226,13 @@ nothing imported is visible in the app.
   directly confirmed** by the owner's read-only post-check (the record, its checksum, every object and
   the exact seed; see the active phase), not only inferred from the start-up. The local OPTIMOVE
   database is not migrated.
-- The first M2 PR (the mapping administration API) is **not merged and not deployed**; it ran only on
-  disposable `optimove_tests_gpexe_*` databases. No mapping, version or activation exists in
-  production.
+- PR #160 (merge commit `1164041`, merged 2026-10-13 13:25:07 UTC exactly from head `fd8af5e`; the
+  first M2 PR, the mapping administration API, no migration) is deployed: `/api/health` first served
+  `1164041` with `ok: true` at 13:26:15 UTC, then three times in a row (13:26:25–13:26:46 UTC); without a
+  login `/api/auth/me` answered 200 with no user and the four M2 GET routes 401. No authenticated M2
+  request was made: no mapping, version or audit row exists in production.
+- v35 (the database actor guards) is **not merged, not deployed and applied to no persistent
+  database**; it ran only on disposable `optimove_tests_gpexe_*` databases.
 - PR #157 (merge commit `0098638`, merged 2026-10-12 11:52:30 UTC exactly from head `ce571d3`; Coach
   Home empty and error states, frontend only) is deployed: `/api/health` first served `0098638` with
   `ok: true` at 12:25:26 UTC, then three times in a row (12:25:47, 12:25:58 and 12:26:09 UTC); the
@@ -2390,6 +2438,16 @@ pre-existing; pass/fail counts don't belong in this file
   `3ef6033`.
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
+
+- **Separate migration and runtime database roles** (owner, 2026-10-13, at the v35 decisions; an
+  infrastructure hardening task, not blocking v35): today the migrations and the server use the same
+  `DATABASE_URL` role, which owns the tables - it can set v35's actor setting and disable any trigger.
+  A runtime role without ownership or DDL (and the migrations under an owner role) would make the v35
+  guards hold against the application's own credentials too. Needs Supabase roles, the Render
+  environment and `backend/src/migrate.js` to use the owner role.
+- **Database actor guards for the other M2 writers** (owner, 2026-10-13, C76): v35 covers T3, T4 and
+  T8 only. Every future route that writes T2a, T2b, `unit_conversions` or T5 gets its own database
+  actor guard (the v35 pattern) before it is released.
 
 - **GPEXE identity follow-up (not scheduled):** the single-athlete link from a session's review names the
   athlete by its GPEXE name or label since PR #145, but it shows no date of birth or date-of-birth conflict
@@ -2688,14 +2746,14 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158) and M1, the mapping schema (PR #159, v34) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
-1. **The first M2 PR** (the mapping administration API, section J1) is implemented in an open pull
-   request: the owner's external review of its corrections (triggers: authorization and owner scope,
-   idempotency and transactions); merge and deploy only on the owner's order. Then the mandatory v35
-   hardening PR (a database actor check on the T3 / T4 inserts and the T8 request records, C73) before
-   any T5 activation or real administrative use, and the further M2 parts (unit and meaning
-   confirmation, activation and disabling with the catalog `409`, T5, conversion maintenance, the
-   preview), M3 and M4 on the owner's orders; the import switch stays off throughout, and M6 (unit
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34) and the first M2 PR, the mapping administration API (PR #160) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
+1. **v35** (the database actor guards, section J2) is implemented in an open pull request: the
+   owner's external review (triggers: migration and rollback, authorization and owner scope, lock order
+   and transactions); merge and deploy only on the owner's order, after a read-only production preflight
+   (v34 the last migration with its checksum, PostgreSQL 13 or later, no T3 / T4 / T8 row, a quiet
+   window). It comes before M3, T5 and any real administrative use of the M2 routes. Then the further M2
+   parts (unit and meaning confirmation, activation and disabling with the catalog `409`, T5, conversion
+   maintenance, the preview), M3 and M4 on the owner's orders; the import switch stays off throughout, and M6 (unit
    confirmation, pilot mapping, a controlled first import) comes after them.
 2. The owner states the state of the production-use gate and of the two gates before a link (an identity
    load and one link were run after PR #146; the owner's check after PR #154 reports every athlete of the
