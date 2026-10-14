@@ -10,8 +10,8 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 |---|---|
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
-| Last verified against commit | `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
-| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), implemented in an open pull request — not merged, not deployed, applied to no persistent database; M3–M6 not started** |
+| Last verified against commit | `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
+| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), implemented in an open pull request — not merged, not deployed, v36 applied to no persistent database; M2b (the T2b confirmations, v37), the M3 frontend and M4–M6 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
 **Which changes require a targeted re-verification of this document** (not a repeat of the whole
@@ -667,6 +667,70 @@ context the database could check and that the application and the migrations sha
     request's rights check; a grant committed after that check and before the audit row is refused by
     v35 (a sanitized `500`, nothing written; a role row that does not exist yet cannot be locked). No
     public HTTP change.
+
+**M3-0 - the canonical-variable admin API (owner's decisions of 2026-10-14, after the M3a discovery and
+the M3-0 delta discovery; as built in section J3):**
+
+80. **Where the M3 frontend lives:** Training Load, not the general Settings. The administrator item of
+    the Training Load navigation is **Data configuration**, its screen **Variables & mappings**, with the
+    tabs **Variables**, **Source fields** and **Mappings**. It is shown only to an active platform admin in
+    the platform workspace or a club workspace, and to an active club admin in that club's own workspace;
+    coaches and athletes never see it. The existing metric pickers of the analyses and dashboards stay a
+    separate function and do not change. M3-0 builds no navigation or frontend; the M3 frontend applies
+    this.
+81. **A new admin API for canonical variables** (J3), the only one the M3 frontend uses to create or
+    version an OptiMove variable - never the older `/api/training-load/metrics` write routes. The owner
+    is always derived from the active workspace (the platform workspace: the system scope; a club
+    workspace: that club); the client never sends an owner, an owner key, an actor id or a basis.
+82. **A durable request record (v36)**, `training_load.metric_variable_requests`: one row per successful
+    admin write, in the write's own transaction, before its COMMIT. The same user, key and hash replay;
+    the same key with another hash or operation is `request_key_reused`; a lost COMMIT answer is
+    verified by looking the row up on another connection. The write sets the v35 transaction-local actor
+    setting before its first protected write, and the row's BEFORE guard checks the acting user, the
+    derived basis (the v35 functions) and that the definition and the version are this transaction's
+    own. **Limit, stated:** the older `/api/training-load/metrics` API and the GPEXE team-owned writer
+    keep writing Metrics Core definitions without a request row or an acting user (compatibility,
+    unchanged). A deferred "every definition written has its request row" check cannot tell an admin-API
+    write from those writers without breaking them, so it is not built: the admin service writes the row
+    in the same transaction, and its tests prove it. `expectedCurrentVersionId` is a precondition of a new
+    version, never the idempotency of a request.
+83. **Stable codes:** `409 variable_not_active` (a new version of an archived variable);
+    `409 variable_pinned` (v34's decision 9 guard: an active mapping version pins the current version -
+    unreachable before T5, mapped and tested now); `409 version_unchanged` (the new version's whole
+    semantics - unit, value type, daily aggregation, minimum, maximum and condition - equal the current
+    version's, compared through a deterministic normalization: exact decimals and the condition in a
+    fixed field order, never a JSON text; the reason is not semantics).
+84. **The key:** the server suggests it from the name, the client may send its own before the create,
+    and it is immutable afterwards (shown only in Technical details). Rule `^[a-z][a-z0-9_]{0,62}$`
+    (1-63 characters; Metrics Core itself stores any text, v10). The suggestion is deterministic: NFKD
+    normalization; the combining marks removed; the Serbian Latin letters mapped explicitly (đ and Đ as
+    `dj`; č, ć, š and ž listed too); lower case; every run of other characters one underscore;
+    underscores merged and trimmed; cut to 63 characters (a trailing underscore removed); a result that
+    fails the rule is no key - `400 key_required`. It transliterates no Cyrillic or other script.
+85. **Fields and validation:** a canonical variable of this flow is `numeric`; its unit is a unit token
+    (the v34 rule `source_metric_unit_token_ok`; the UI suggests `s`, `min`, `m`, `km`, `m/s`, `km/h`,
+    `count` and `W/kg`, not a closed list), otherwise `400 invalid_unit`; the levels are `session` and
+    `drill` (Metrics Core's `component`; `day` is not offered), at least one; `dailyAggregationMethod`
+    is required; the condition is none, a zone (`between` with lower and upper, or one of `>=`, `>`,
+    `<=`, `<` with one value) or an event threshold (one of the four one-sided operators, a value and
+    `durationSeconds` of at least 0), each with a unit token - any other shape `400 invalid_condition`;
+    decimals are exact strings (the M2 rule), never a binary float.
+86. **B3:** the M2 reads carry the canonical target's `key` and `label` (`/targets`, every mapping
+    summary and detail) and the source field's own `label` (1-80 by its CHECK). Metrics Core's own
+    columns are unbounded text, so the bounds are the admin API's input limits (label 80, key 63, short
+    label 20, description 500, unit 30, reason 500); a longer value written through the older API is cut
+    at its limit and `truncated: true` says so.
+87. **The request hash** covers the contract version (`metric-variables/v1`), the operation, the path
+    ids and the canonically normalized body.
+88. **Scope of the first M3:** create a variable and create a new immutable semantic version - no
+    archive or reactivation, no level removal, no domains, categories or structure links. Archived
+    variables stay visible read-only (`state=active|archived|all`), for their history, data and taken
+    key. In a club workspace the system variables are a separate read-only reference (`scope=system`),
+    never a target of a club mapping.
+
+**Migration numbering (decided 2026-10-14):** v36 is the M3-0 request record; M2b - the T2b unit and
+meaning confirmations and their database actor guards - is v37, and comes before the M3 write UI of
+draft mappings (M3c).
 
 ---
 
@@ -1413,13 +1477,14 @@ candidate) under a `required` activation, a "Left out" entry under an `optional`
 
 ## H. UI goal (M3)
 
-Three administrator views in Settings:
+Three administrator views - since C80 in **Training Load → Data configuration → Variables & mappings**
+(the tabs Variables, Source fields and Mappings), not in Settings:
 
-- **Variables** — the first write UI over the **existing** Metrics Core API
-  (`backend/src/routes/trainingLoadMetrics.js`): create a canonical definition (name, short name,
-  description, domain and category through structure links, `numeric|boolean|text`, canonical unit,
-  minimum and maximum, `session|component|day` scope, aggregation method), a new semantic version,
-  archive without deleting history. Not a new registry.
+- **Variables** — the write UI over the canonical-variable admin API of M3-0 (J3, C81; never the older
+  `/api/training-load/metrics` write routes): create a canonical variable (name, short name, description,
+  numeric, a canonical unit token, minimum and maximum, the session and drill levels, the daily
+  aggregation, a zone or threshold condition) and a new semantic version; archived variables read-only;
+  in a club workspace the system variables as a read-only reference (C88). Not a new registry.
 - **Source metrics** — source system and API family, field key and label, revisions with expected
   and proven units, value shape, session / drill scope, evidence status and references, unit and
   meaning confirmation.
@@ -1459,7 +1524,7 @@ the rejected track, only on a new owner decision. No automation.
 |---|---|---|---|---|---|---|
 | **M1 schema foundation** — merged and deployed (PR #159, `15efd7a`; v34, `backend/tests/source-metric-mapping-m1.test.mjs`; v34 confirmed on production by the owner's read-only post-check) | Migration: D1 `api_family`, T2a, T2b, T3, `unit_conversions`, T4, T5, T6, T7, T8, `unique (id, team_id)` on `source_team_bindings`, the `metric_definitions` guard; the D12 seed; rollback script (refuses once any T3–T6 row exists, once T2a / T2b / `unit_conversions` differ from the seed, or under a later migration); tests on a disposable database (apply / rollback; every trigger, CHECK and partial unique with a mutation that the test kills; two concurrent activations; the equivalence trigger with equal and different bound units; T6 consistency); the undo script extended to delete T6 first (disposable only); every new trigger raises a fixed message without an id; the identity triggers of D6 / D7 (active platform admin, `42501`); the shape CHECK of every `evidence_ref` and the bounded single-line CHECK of every free-text column | The importer, routes, frontend, the v33 flow, `GPEXE_IMPORT_APPLY_ENABLED`, every persistent database | 1 (migration, rollback), 2 (`owner_scope` in triggers), 4 (lock order, idempotency) | `db-reviewer`, `security-reviewer`, `code-reviewer`; external review by the owner | No active mapping after the migration; `api_family` equals `sourceHosts.js`; rollback rehearsed; the identity triggers refuse a non-platform-admin actor with `42501`; the shape CHECKs refuse a space or a control character; a T4 row whose `owner_key` differs from its T3 row is refused (system rows included), and the generated T3 `owner_key` is proven to work as an FK target and to drop cleanly in the rollback; the T6 check accepts exactly the round-half-away-from-zero value at 9 decimals and refuses its other neighbour in a tie; the fingerprint of a fixed parameter set equals a value computed independently; the server version of the local and the deployed database is PostgreSQL 13 or later (`scale()`, `trim_scale()`) before the migration relies on it; existing Metrics Core and GPEXE suites pass under the T1 runner | The migration reaches the deployed database only through a merge and deploy the owner orders (`.claude/rules/database-safety.md`); no data beyond the seed; the local OPTIMOVE database only on a separate order |
 | **M2 admin API** | Routes under `/api/training-load/sources/metrics…` for T2a / T2b (list, create, revise, verify unit, verify meaning, activate / retire a revision), T3 / T4 (create, version, transitions, replacement), T5 (activate, end, "every active binding of this connection"), `unit_conversions`, T8 reads; `requestKey` on every write; the aggregate preview over a saved candidate (count of athletes with a value, min, max, units before and after; `snapshot_expired` when the raw snapshot is purged); the extractor registry keyed by `source_metric_key` (`source_metric_unsupported` otherwise); the lock order and the bounded transactions of D3 / D6; ownership and the active workspace resolved in the service before any trigger; stable codes only, a transition conflict `409`; the preview's authorization (H); the platform-admin operation that ends a held source instance (D9) | The importer, the UI, migrations | 2 (auth, info hiding), 4 (transactions, idempotency) | `code-reviewer`, `security-reviewer`; external review | Secret scan of every response and audit row; info-hiding tests per role and workspace; a test that no response carries a trigger's text or an SQLSTATE; a replay re-checks the caller's right; the preview never returns `raw_bundle` or a row per athlete and answers the identical 404 before `snapshot_expired` to a caller outside the candidate's club; every transition audited | None (no production data changes without an admin acting) |
-| **M3 frontend** | The three Settings views of section H over the existing Metrics Core routes and the M2 routes; rights of section G | Backend, the import | New user flow | `code-reviewer`, `mobile-qa`, `ux-design-reviewer`; browser QA at 1280 / 360 / 375 / 390 px | A canonical variable created through the UI is a row created through the existing API; activation is an explicit step whose confirmation names source, mapping version, team and binding | None |
+| **M3 frontend** | The three views of section H (Training Load → Data configuration, C80) over the M3-0 admin API (J3) and the M2 routes; rights of section G | Backend, the import | New user flow | `code-reviewer`, `mobile-qa`, `ux-design-reviewer`; browser QA at 1280 / 360 / 375 / 390 px | A canonical variable created through the UI is a Metrics Core row created through the M3-0 admin API; activation is an explicit step whose confirmation names source, mapping version, team and binding | None |
 | **M4 GPEXE importer integration** | The mapper reads the open activations of the binding instead of `GPEXE_METRIC_SPECS`; the writer takes `metricDefinitionId` and version from the plan, creates no definition, writes T6 and sets the T7 keys at the first import; content hash and preview hash include the mapping version, source value and unit and the activation set; the preview carries the canonical name and unit plus the source value; helper values of Link athletes and `METRIC_TEXT` move to the source metric keys of the preview; the fail-closed table of section F plus `source_instance_held` (D9); the writer's arithmetic in decimal at the storage scale S = 9 of D8 (half away from zero; the T6 trigger accepts exactly the value this rule produces), never binary floating point; `session_imported_under_another_instance` (D9); the undo script already removes T6 first (done in M1, C47); the B7-style architecture test | The switch, Link, multi-track, the list and drill reads | 1 (persistent write path), 3 (canonical identity), 4; the five-point rule for transactions with an external effect | `code-reviewer`, `security-reviewer`, `db-reviewer`; external review | A characterisation test: the fixture with activated mappings yields the same numbers as today within the preview's existing `1e-9` tolerance (`gpexeImportPreview.js:137`; today's mapper divides in binary floating point, the new writer computes in decimal at the storage scale S = 9); without an activation zero values are imported and nothing is written to `metric_definitions`; the stored candidates turn *changed* exactly once | The switch stays off |
 | **M5 multiple tracks** | Only on a new owner decision: a manual choice of one track with audit and observation | Everything else | 3, 4 | `code-reviewer`, `security-reviewer` | Decided with the order | Decided with the order |
 | **M6 units, pilot mapping, controlled first import** | Owner-run: gate (2) for `total_time`, `total_distance`, `max_v` on server3; the admin confirms units and meanings with references, creates the system variables, takes the mappings `draft → needs_review → active`, activates them on the First team binding with explicit requirements; one check with the switch off; then the decision on the first controlled import | No code beyond small fixes | 5 (only real evidence counts) | External review by the owner | The preview of a saved candidate shows the converted values in the canonical units | Conditions 1–3, 6 and 7 of `docs/ai/CURRENT_STATE.md` "Separate tasks", a fresh verified backup, the owner's explicit order for the switch and for every approval |
@@ -1468,6 +1533,10 @@ M2 is delivered in parts. **The first M2 PR** (C59) builds the contract of J1; t
 (the T2b confirmations and revision lifecycle, T4 activate / disable / replacement, T5, `unit_conversions`
 maintenance, T8 reads, the aggregate preview, the extractor registry, ending a held instance, the catalog
 `500 → 409`) waits for later M2 PRs on the owner's orders.
+
+**M3-0** (decisions C80–C88) adds the canonical-variable admin API and its request record, migration v36
+(J3), before the M3 frontend. **M2b** - the T2b unit and meaning confirmations and their database actor
+guards - is migration **v37** and comes before the M3 write UI of draft mappings.
 
 ### J1. M2 HTTP contract — the first M2 PR (approved by the owner on 2026-10-13; as built)
 
@@ -1479,9 +1548,9 @@ caller — and every resource it may not see — gets the identical `404 {"error
 | # | Route | Who / WS | Input | Server-derived (never from the client) | Success | Refusals | Reads / writes |
 |---|---|---|---|---|---|---|---|
 | 1 | `GET /fields` | PA (platform or club WS), CA (own club WS) | query `sourceSystem`, `apiFamily` (optional) | — | `200 {fields:[{id, sourceSystem, apiFamily, key, label, state, revisions:[…]}]}`; order system, family, key (`collate "C"`), revisions by number descending | `400 invalid_query`, `409 result_too_large`, `409 try_again`, `404` | reads T2a, T2b |
-| 2 | `GET /targets` | PA platform WS → system; PA / CA club WS X → club X | — | the owner from the WS | `200 {targets:[{id, ownerScope, currentVersion:{id, versionNumber, unit, canonicalParameters}, scopes, versionReady, notReadyCode}]}`; order `id`; `unit` only when a unit token; `canonicalParameters` the normalized form or null | `409 result_too_large`, `409 try_again`, `404` | reads Metrics Core |
+| 2 | `GET /targets` | PA platform WS → system; PA / CA club WS X → club X | — | the owner from the WS | `200 {targets:[{id, ownerScope, key, label, truncated, currentVersion:{id, versionNumber, unit, canonicalParameters}, scopes, versionReady, notReadyCode}]}` (`key`, `label`, `truncated`: B3, C86); order `id`; `unit` only when a unit token; `canonicalParameters` the normalized form or null | `409 result_too_large`, `409 try_again`, `404` | reads Metrics Core |
 | 3 | `GET /conversions` | as 1 | — | — | `200 {conversions:[{id, fromUnit, toUnit, scale, scaleDivisor, offset, evidenceRef}]}`; active rows; order units (`collate "C"`); exact decimal text | `409 result_too_large`, `409 try_again`, `404` | reads `unit_conversions` |
-| 4 | `GET /mappings` | platform WS → system; club WS X → system + club X | query `cursor` (optional) | visibility from the WS | `200 {mappings:[{id, ownerScope, sourceMetric:{id, key, apiFamily}, metricDefinitionId, createdAt, latestVersion, activeVersionId, versionCounts}], nextCursor}`: one page of at most 100, order system first, `createdAt`, `id`; `nextCursor` null on the last page (C68) | `400 invalid_query`, `409 try_again`, `404` | reads T3, T4 |
+| 4 | `GET /mappings` | platform WS → system; club WS X → system + club X | query `cursor` (optional) | visibility from the WS | `200 {mappings:[{id, ownerScope, sourceMetric:{id, key, apiFamily, label}, metricDefinitionId, target:{key, label, truncated}, createdAt, latestVersion, activeVersionId, versionCounts}], nextCursor}` (the labels: B3, C86): one page of at most 100, order system first, `createdAt`, `id`; `nextCursor` null on the last page (C68) | `400 invalid_query`, `409 try_again`, `404` | reads T3, T4 |
 | 5 | `GET /mappings/:mappingId` | as 4 | query `cursor` (optional) | — | `200 {mapping, nextCursor}`: the mapping with one page of at most 50 of its versions (all statuses), by number descending | `400 invalid_query`, `409 try_again`, `404` | reads T3, T4 |
 | 6 | `POST /mappings` | PA platform WS → system; PA / CA club WS X → club X | `requestKey`, `sourceMetricId`, `metricDefinitionId` | owner scope, club, `owner_key`, source system, API family, actor, T8 | `201 {mapping, replayed:false}`, `mapping` in the summary shape of row 4 (never the version list); replay or verified COMMIT `200` | `400 invalid_body`, `415 jsonRequired`, `404`, `409 target_scope_mismatch`, `source_metric_retired`, `target_not_active`, `mapping_exists` (+`current.mappingId`), `request_key_reused`, `try_again`, `503 outcome_unknown`, `500 internal_error` | writes T3 + T8 `mapping_create` |
 | 7 | `POST /mappings/:mappingId/versions` | the mapping's owner WS only | `requestKey`, `sourceRevisionId`, `appliesToSession`, `appliesToDrill`; `conversionNote` (required when the units differ); `sourceParameters` (`{lower, upper}` or `{thresholdValue, durationSeconds}`, decimal strings) | version number, canonical version (current), both units, factors (`1, 1, 0` or the one active row in the D5 normal form), parameter kind, operator, bound unit, canonical parameters, parameter factors, fingerprint (checked against the database), `owner_key`, status `draft`, actor, T8 | `201 {version, replayed:false}`, `version` one version in the shape of row 5; replay or verified COMMIT `200` | `400 invalid_body`, `invalid_parameters`, `conversion_note_required`; `415 jsonRequired`; `404`; `409 revision_not_usable`, `unit_not_proven`, `parameters_not_proven`, `target_not_active`, `canonical_not_numeric`, `canonical_unit_missing`, `canonical_unit_not_a_token`, `conversion_unavailable`, `conversion_not_normal`, `bound_conversion_unavailable`, `condition_description_unsupported`, `parameters_not_equivalent`, `level_not_allowed`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` | writes T4 + T8 `mapping_version_create` |
@@ -1559,7 +1628,52 @@ and run first (trigger order is by name).
   indexes serve the audit lookups
   (`source_metric_audit_v35_mapping_create_idx`, `source_metric_audit_v35_version_idx`).
 - **Production preflight** (read-only, for the owner, run block by block):
-  `docs/runbooks/source-metric-mapping-v35-preflight.sql`.
+  `docs/runbooks/source-metric-mapping-v35-preflight.sql`; **production post-check**
+  `docs/runbooks/source-metric-mapping-v35-postcheck.sql` (run by the owner on 2026-10-14 after the
+  deploy of `ed13f8a`: all eight blocks as expected).
+
+### J3. M3-0 — the canonical-variable admin API and its request record v36 (as built)
+
+Service `backend/src/canonicalVariableAdminService.js` (it shares M2's write and read machinery,
+`adminWriteKit` of `sourceMetricMappingService.js` - one runWrite with a pluggable request store, one
+bounded read, one right re-check), routes in `backend/src/routes/sourceMetrics.js`, migration
+`migrations_v2/202610141000_training_load_v36_metric_variable_requests.sql`, rollback
+`docs/runbooks/metric-variable-requests-v36-rollback.sql`, preflight
+`docs/runbooks/metric-variable-requests-v36-preflight.sql`, tests `backend/tests/metric-variables-m3-0.test.mjs`.
+Access, `401`, the identical `404 {"error":"notFound"}`, `Cache-Control: no-store`, `415 jsonRequired` and
+`Retry-After: 5` on `try_again` are J1's.
+
+| # | Route | Input | Server-derived | Success | Refusals |
+|---|---|---|---|---|---|
+| V1 | `GET /variables` | query `scope` (`own`, default, or `system`: in a club workspace the system variables as a read-only reference), `state` (`active`, default, `archived`, `all`), `cursor` | visibility from the workspace | `200 {variables:[variable], nextCursor}`: a page of at most 100 in (`created_at`, `id`) order; the cursor bound to owner key, scope and state | `400 invalid_query`, `409 try_again` |
+| V2 | `GET /variables/key-suggestion` | query `label` | the key (C84) | `200 {key, taken}` (`taken`: the workspace's owner already holds it, in any state) | `400 invalid_query`, `400 key_required` |
+| V3 | `GET /variables/:id` | query `cursor` | - | `200 {variable, nextCursor}`, the variable with `versions` (a page of 50 by number descending, `current` and `reason` per version); own, or the system reference in a club workspace | `404`, `400 invalid_query` |
+| V4 | `POST /variables` | `requestKey`*, `label`*, `shortLabel`, `description`, `key`, `unit`*, `levels`*, `dailyAggregationMethod`*, `minValue`, `maxValue`, `condition` | owner, actor, basis, `numeric`, `active`, version 1, `current_version_id`, `drill → component`, the key when none is sent, the request record | `201 {variable, replayed:false}`; replay or verified COMMIT `200` | `400 invalid_body`, `invalid_unit`, `invalid_condition`, `key_required`; `404`; `409 key_taken`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` |
+| V5 | `POST /variables/:id/versions` | `requestKey`*, `expectedCurrentVersionId`*, `unit`*, `dailyAggregationMethod`*, `minValue`, `maxValue`, `condition`, `reason` | the version number, `numeric`, the repoint, actor, basis, the request record; key, owner and levels never change | `201 {variable, version, replayed:false}`; replay or verified COMMIT `200` | `400 invalid_body`, `invalid_unit`, `invalid_condition`; `404`; `409 current_version_changed` (+`current:{versionId, versionNumber}`), `variable_not_active`, `variable_pinned`, `version_unchanged`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` |
+
+- **A variable:** `{id, key, label, shortLabel, description, ownerScope, state, editable, levels, currentVersion:{id,
+  versionNumber, unit, valueType, dailyAggregationMethod, minValue, maxValue, condition, createdAt}, mappingTarget:{ready,
+  notReadyCode}, createdAt, updatedAt, truncated}` - no acting user's id. `condition` is the API's normalized form or
+  `{kind:"unsupported"}` for any other stored shape (never the stored JSON). `mappingTarget` is M2's readiness, plus
+  `target_not_active` for an archived variable and `target_scope_mismatch` for the system reference in a club workspace.
+  A `day` level written by the older API is not shown.
+- **Lock order:** a create - the per-user advisory lock (bounded, the M2 key) → the request record → the role, user and
+  club rows `FOR SHARE` (the right again) → its own new rows → the request row → the bounded COMMIT. A new version - the
+  advisory lock → the request record → `metric_definitions` `FOR UPDATE` (the catalog writers' first lock) → the role,
+  user and club rows `FOR SHARE` → the version insert and the repoint (the v34 pin guard) → the request row → the
+  COMMIT. The same order as M2 (definition before the right); no new lock edge. A deadlock with another order is answered
+  by PostgreSQL and becomes `try_again`.
+- **The COMMIT:** M2's rule (C79): a definite refusal only when PostgreSQL itself raised an ordinary ERROR; every other
+  COMMIT error is verified by the request record on another connection (`200` with
+  `commitConfirmation:"verified_after_commit_error"` or `503 outcome_unknown`). The answer after a COMMIT checks the
+  right again on a new bounded connection (a right lost: `404`; a read that fails: `readError` with `variableId`).
+- **v36:** one table (checks; foreign keys to the user, the club, the definition and - composite - its version;
+  uniques: one per user and request key, one per version, one `variable_create` per definition), its BEFORE INSERT
+  guard (the acting user: `42501`; the derived basis: `42501`; the request following its own operation - the definition
+  of the row's owner, written by this transaction, active, its current version the row's version, created by this
+  transaction and this user, version 1 for a create, a later one for a new version: `23514`), and append-only triggers
+  (`23514`). Fixed messages. Depends on the v35 functions; the v35 rollback refuses while v36 is recorded. No data
+  change.
 
 ---
 
@@ -1583,13 +1697,16 @@ Decisions that may safely wait, with the PR that takes them:
   (M2 / M3);
 - the minimum count of athletes below which the aggregate preview returns the count only, without
   min and max (M2);
-- whether M3 hardens the existing Metrics Core catalog API (its `403` for a foreign club or team,
-  the forwarded `P0001` text, coach-created `team` / `user` definitions, A6) or keeps it as it is
-  (M3);
+- decided (C81, C82): the existing Metrics Core catalog API stays as it is for its current callers (its
+  `403` for a foreign club or team, the forwarded `P0001` text, coach-created `team` / `user` definitions,
+  A6); the M3 frontend writes canonical variables only through the M3-0 admin API (J3);
 - the shape of the platform-admin operation that ends a held source instance (D9) (M2);
-- **the mandatory gate of C73 is built in v35 (J2, C74–C79)**, in an open pull request; until it is
-  deployed the API re-checks the right under lock and is the only writer in `backend/src` (test 20 of
-  the M2 suite);
+- **the mandatory gate of C73 is built in v35 (J2, C74–C79)**, merged and deployed (PR #161) and
+  confirmed by the owner's production post-check;
+- a v35 / v36 test-hardening task (owner, 2026-10-14): a regression test that one SQL statement - a
+  multi-row `VALUES`, `INSERT … SELECT`, data-modifying CTEs, a CTE with a main `INSERT` - never writes
+  two audit rows for one operation (a one-off probe refused all four with `23514`; the version and
+  status rows were not probed);
 - separate migration and runtime database roles, so that the v35 guards also hold against the
   application's own credentials (C74; an infrastructure task, recorded in CURRENT_STATE);
 - for M3, from the v35 reviews: the audit row of a transition does not cross-check its `reason` or its

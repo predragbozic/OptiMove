@@ -1,6 +1,7 @@
-// Source metric mapping administration (M2), mounted at
-// /api/training-load/sources/metrics behind requireAuth. The contract is the
-// "M2 HTTP contract" of docs/ai/gpexe-metric-variable-mapping-discovery.md:
+// Source metric mapping administration (M2) and the canonical-variable admin
+// API (M3-0), mounted at /api/training-load/sources/metrics behind
+// requireAuth. The contracts are sections J1 and J3 of
+// docs/ai/gpexe-metric-variable-mapping-discovery.md:
 // a platform admin (platform workspace: the system scope; a club workspace:
 // that club's scope) or a club's own active admin in that club's workspace;
 // everyone and everything else answers the same 404 (ADR-006). Stable codes
@@ -8,6 +9,7 @@
 // never its text. Same-origin JSON only; no body is logged.
 import { Router } from "express";
 import * as service from "../sourceMetricMappingService.js";
+import * as variables from "../canonicalVariableAdminService.js";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 
 const router = Router();
@@ -135,6 +137,46 @@ router.post("/mappings/:mappingId/versions/:versionId/submit", handle(async (req
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await service.submitVersion({ ctx, mappingId: req.params.mappingId, versionId: req.params.versionId, body: req.body }), 200);
+}));
+
+// The canonical-variable admin API (M3-0, section J3): OptiMove's own
+// variables of the active workspace's owner, with the same access, 404, error
+// and write discipline as the mapping routes above.
+router.get("/variables", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  // { variables, nextCursor }: one page; nextCursor is null on the last.
+  res.json(await variables.listVariables({ ctx, query: req.query }));
+}));
+
+// Before /variables/:variableId, so "key-suggestion" is never taken for an id.
+router.get("/variables/key-suggestion", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  res.json(await variables.suggestKey({ ctx, query: req.query }));
+}));
+
+router.get("/variables/:variableId", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  // { variable (with one page of versions), nextCursor }.
+  const page = await variables.getVariable({ ctx, variableId: req.params.variableId, query: req.query });
+  if (!page) return notFound(res);
+  res.json(page);
+}));
+
+router.post("/variables", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await variables.createVariable({ ctx, body: req.body }), 201);
+}));
+
+router.post("/variables/:variableId/versions", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await variables.createVariableVersion({ ctx, variableId: req.params.variableId, body: req.body }), 201);
 }));
 
 // Anything else under this prefix is the same 404.
