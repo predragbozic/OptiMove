@@ -43,6 +43,7 @@ import { pool } from "./db.js";
 import { decryptCredential, keyringFromEnv } from "./sourceCredentialCrypto.js";
 import { resolveApprovedSourceHost } from "./sourceHosts.js";
 import { createSourceAdapter, SourceAdapterError, DIAGNOSTIC_MARK, projectStoredDetails, DRILL_FAILURE_REASONS, drillParameterEffectOfFullBundle } from "./sourceAdapters.js";
+import { NOOP_CHECK_METER } from "./gpexeCheckTiming.js";
 
 // The importer sees the adapter's error class only through this module: the
 // resolver is the importer's one door to the source-connection infrastructure.
@@ -307,7 +308,10 @@ export function preflightImportSource(facts) {
 // loses its encrypted parts too: a run keeps only the ids it needs. Every
 // response the adapter receives can report progress to the run (a heartbeat
 // per request, as the legacy client gives), through setRequestProgress.
-export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalThis.fetch, timeoutMs = 90_000 } = {}) {
+// `meter` (a check's timing, gpexeCheckTiming.js) counts each request by the
+// kind the adapter labels it with and times it up to its response headers;
+// it never sees the URL and never throws.
+export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalThis.fetch, timeoutMs = 90_000, meter = NOOP_CHECK_METER } = {}) {
   requireIssued(facts);
   if (facts.path !== PATH_SOURCE_CONNECTION || !facts.credential) throw fail("binding_ambiguous");
   let keyring;
@@ -318,8 +322,14 @@ export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalTh
   }
   if (typeof fetchImpl !== "function") throw fail("adapter_not_available");
   const progress = { fn: null };
-  const trackedFetch = async (url, init) => {
-    const res = await fetchImpl(url, init);
+  const trackedFetch = async (url, init, call = null) => {
+    const started = meter.start();
+    let res;
+    try {
+      res = await fetchImpl(url, init);
+    } finally {
+      meter.request(call, started);
+    }
     if (progress.fn) { try { await progress.fn(); } catch { /* the run's own throwing heartbeat decides */ } }
     return res;
   };
@@ -500,11 +510,20 @@ export function drillSetDiagnostic(drillsStatus, { sessionPosition } = {}) {
 // (2026-10-03): an incomplete drill set stops the run before the session is
 // recorded; an empty, successfully read `players` is a valid empty drill. The
 // adapter's extra fields (`drillsStatus`, `drillLabels`) are stripped so the
-// stored snapshot keeps the F1 bundle contract.
-export function importClientFor(source) {
+// stored snapshot keeps the F1 bundle contract. `meter` times every
+// re-validation (a check's timing; it never throws).
+export function importClientFor(source, { meter = NOOP_CHECK_METER } = {}) {
   requireIssued(source);
   if (source.path !== PATH_SOURCE_CONNECTION) throw fail("binding_ambiguous");
   const { adapter } = source;
+  const stillUsable = async () => {
+    const started = meter.start();
+    try {
+      await assertImportSourceStillUsable(source);
+    } finally {
+      meter.revalidation(started);
+    }
+  };
   const sameTeam = (gpexeTeamId) => {
     if (canonicalSourceTeamId(source.sourceSystem, gpexeTeamId) !== source.sourceTeamId) throw fail("source_team_mismatch");
   };
@@ -512,27 +531,27 @@ export function importClientFor(source) {
     path: PATH_SOURCE_CONNECTION,
     async listTeamSessions({ gpexeTeamId, fromDay, toDay, onProgress = null } = {}) {
       sameTeam(gpexeTeamId);
-      await assertImportSourceStillUsable(source);
+      await stillUsable();
       // The facts are re-checked between the adapter's two complete reads of
       // the list too, so the second read is never sent after an Unbind, a
       // Reconnect or a state change during the first.
-      const result = await adapter.listSessionsByDay({ fromDay, toDay, beforeSecondRead: () => assertImportSourceStillUsable(source) });
+      const result = await adapter.listSessionsByDay({ fromDay, toDay, beforeSecondRead: () => stillUsable() });
       if (onProgress) await onProgress();
       // A list — empty or not — is returned only when the facts still hold
       // after the read: a binding that ended or a credential replaced while
       // the list was in flight ends the run here, before any session.
-      await assertImportSourceStillUsable(source);
+      await stillUsable();
       return result.sessions.map((s) => ({ ...s }));
     },
     async fetchSessionBundle({ gpexeTeamId, sessionId, sessionPosition = null, onProgress = null } = {}) {
       sameTeam(gpexeTeamId);
-      await assertImportSourceStillUsable(source);
+      await stillUsable();
       const bundle = await adapter.fetchSessionBundle({ sessionId });
       if (onProgress) await onProgress();
       // The re-validation window is one bundle (the adapter's dependent reads
       // of one session); a bundle read across the end of its binding, a
       // Reconnect or a state change is dropped here, before it is recorded.
-      await assertImportSourceStillUsable(source);
+      await stillUsable();
       const { drillsStatus, drillLabels, ...stored } = bundle;
       void drillLabels;
       if (!drillsStatus || drillsStatus.complete !== true) {
@@ -584,26 +603,34 @@ export function identityReaderFor(source, athleteIds) {
 // runs only while the team still has no binding, checked before every
 // operation; the client's own behaviour (its heartbeat per request, its
 // errors) is unchanged.
-export function legacyImportClientFor(legacy, client) {
+export function legacyImportClientFor(legacy, client, { meter = NOOP_CHECK_METER } = {}) {
   requireIssued(legacy);
   if (legacy.path !== PATH_LEGACY_ENV) throw fail("binding_ambiguous");
   if (!client || typeof client.listTeamSessions !== "function" || typeof client.fetchSessionBundle !== "function") throw fail("adapter_not_available");
+  const stillOpen = async () => {
+    const started = meter.start();
+    try {
+      await assertLegacyPathStillOpen(legacy);
+    } finally {
+      meter.revalidation(started);
+    }
+  };
   return Object.freeze({
     path: PATH_LEGACY_ENV,
     async listTeamSessions(options) {
-      await assertLegacyPathStillOpen(legacy);
+      await stillOpen();
       const sessions = await client.listTeamSessions(options);
       // Empty or not, the list is returned only when the team still has no
       // binding and is still the same active team of the same club.
-      await assertLegacyPathStillOpen(legacy);
+      await stillOpen();
       return sessions;
     },
     async fetchSessionBundle(options) {
-      await assertLegacyPathStillOpen(legacy);
+      await stillOpen();
       const bundle = await client.fetchSessionBundle(options);
       // The same one-bundle window as the binding path: a bundle read across
       // the appearance of a binding is dropped before it is recorded.
-      await assertLegacyPathStillOpen(legacy);
+      await stillOpen();
       return bundle;
     },
   });

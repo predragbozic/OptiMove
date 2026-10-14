@@ -28,6 +28,7 @@ import { candidateReasons } from "./gpexeImportReasons.js";
 import { blockedByMapping, buildCandidatePreview, canonicalJson, previewLocked, sha256Hex } from "./gpexeImportPreview.js";
 import { lockTeamForImport } from "./gpexeImportWriter.js";
 import { recordImportObservations } from "./activitySourceObservations.js";
+import { createCheckMeter, NOOP_CHECK_METER } from "./gpexeCheckTiming.js";
 
 export const RAW_RETENTION_UNAPPROVED_DAYS = 30;
 export const RAW_RETENTION_IMPORTED_DAYS = 90;
@@ -787,6 +788,9 @@ export async function latestCheck(teamId, { adminViewer = false } = {}) {
 // Starts a check and returns it right away; the fetch runs in the
 // background (GPEXE can take minutes). `wait` is for tests and the CLI.
 export async function startCheck(teamId, { userId, window, wait = false, adminViewer = false }) {
+  // The check's timing (P0): in memory, one closed-grammar line when the check
+  // ends; a start refused before the check row exists writes no line.
+  const meter = createCheckMeter();
   // A first, unlocked read only to fail early (no GPEXE team, no token); the
   // value the check really uses is read again under the lock below.
   const settings = await getTeamSettings(teamId);
@@ -936,6 +940,8 @@ export async function startCheck(teamId, { userId, window, wait = false, adminVi
   // alone): after a confirmed COMMIT no read may turn the answer into a
   // failure (the F2 rule), and nothing is logged.
   if (commitUnanswered && !(await rowConfirmed(row.id))) {
+    meter.outcome("start_unconfirmed", "check_outcome_unknown");
+    meter.emit();
     throw new GpexeImportServiceError(503, "check_outcome_unknown", "The database did not confirm the start of this check. Read the team's checks before starting another one; nothing was sent to the source.");
   }
 
@@ -946,8 +952,8 @@ export async function startCheck(teamId, { userId, window, wait = false, adminVi
   let source = null;
   if (facts.path === PATH_SOURCE_CONNECTION) {
     try {
-      source = openImportSource(facts);
-      client = importClientFor(source);
+      source = openImportSource(facts, { meter });
+      client = importClientFor(source, { meter });
     } catch (error) {
       const code = error instanceof SourceImportResolveError ? error.code : "internal_error";
       if (!(error instanceof SourceImportResolveError)) console.error(`[gpexe] check ${row.id} could not open its source connection: ${error?.code ?? error?.name ?? ""}`);
@@ -956,20 +962,25 @@ export async function startCheck(teamId, { userId, window, wait = false, adminVi
           `update training_load.gpexe_import_checks set status = 'failed', finished_at = now(), error_code = $2, error_message = $3 where id = $1 and status = 'running'`,
           [row.id, code, error instanceof SourceImportResolveError ? error.message : "The check could not open its source connection."],
         );
+        meter.outcome("failed", code);
+        meter.emit();
         return checkView((await query(`select * from training_load.gpexe_import_checks where id = $1`, [row.id])).rows[0], { adminViewer });
       } catch (writeError) {
         // The row stays running until the stale sweep closes it; the answer
         // says so instead of claiming an outcome.
         console.error(`[gpexe] check ${row.id} could not be marked failed (${code}): ${writeError?.code ?? ""}`);
+        meter.outcome("unknown", code);
+        meter.emit();
         return checkView(row, { adminViewer });
       }
     }
   } else {
-    client = legacyImportClientFor(facts, client);
+    client = legacyImportClientFor(facts, client, { meter });
+    meter.untracked();
   }
   const identity = importSourceIdentity(facts);
   console.info(`[gpexe] check ${row.id} of team ${teamId} reads through ${identity.path}${identity.path === PATH_SOURCE_CONNECTION ? ` (connection ${identity.connectionId}, binding ${identity.bindingId}, source team ${identity.sourceTeamId})` : " (GPEXE_API_TOKEN, a team without a source binding)"}`);
-  const job = runCheck(row.id, { teamId, userId, gpexeTeamId, window, gpexe: client, source, legacy: facts.path === PATH_LEGACY_ENV ? facts : null });
+  const job = runCheck(row.id, { teamId, userId, gpexeTeamId, window, gpexe: client, source, legacy: facts.path === PATH_LEGACY_ENV ? facts : null, meter });
   if (wait) await job;
   else job.catch((error) => console.error(`[gpexe] check ${row.id} failed outside its own handler: ${error?.name}`));
   return checkView(wait ? (await query(`select * from training_load.gpexe_import_checks where id = $1`, [row.id])).rows[0] : row, { adminViewer });
@@ -1008,23 +1019,38 @@ async function runCheck(checkId, options) {
   try {
     return await runCheckBody(checkId, options);
   } finally {
+    // The check's one timing line, whatever the outcome (the meter never throws).
+    (options.meter ?? NOOP_CHECK_METER).emit();
     if (checkRunObserver) checkRunObserver(checkId);
   }
 }
 
-async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpexe, source = null, legacy = null }) {
+async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpexe, source = null, legacy = null, meter = NOOP_CHECK_METER }) {
   const counts = { sessions: 0, new: 0, changed: 0, unchanged: 0 };
-  const alive = () => heartbeat(checkId, counts);
+  // Every heartbeat, timed (the meter never throws; the heartbeat's own error
+  // is passed on unchanged).
+  const beat = async () => {
+    const started = meter.start();
+    try {
+      await heartbeat(checkId, counts);
+    } finally {
+      meter.heartbeat(started);
+    }
+  };
+  const alive = beat;
   // The binding path's adapter sends many requests per operation; every
   // response reports progress, as the legacy client does per request, so a
   // slow source never makes a live check look abandoned. This ping never
   // throws: the throwing alive() calls below decide whether the run goes on.
-  if (source) source.setRequestProgress(async () => { try { await heartbeat(checkId, counts); } catch { /* alive() decides */ } });
+  if (source) source.setRequestProgress(async () => { try { await beat(); } catch { /* alive() decides */ } });
   try {
     // Every check is also a retention run, so expired snapshots go even when
     // no scheduler ran; a failure here must not stop the check.
+    const retentionStarted = meter.start();
     await runRetention("check").catch((error) => console.error(`[gpexe] retention during check failed: ${error?.message}`));
+    meter.retention(retentionStarted);
     const sessions = await gpexe.listTeamSessions({ gpexeTeamId, fromDay: window.from, toDay: window.to, onProgress: alive });
+    meter.sessionsFound(sessions.length);
     await alive();
     for (const [index, session] of sessions.entries()) {
       // A heartbeat after every GPEXE request: one slow session must not look
@@ -1048,16 +1074,26 @@ async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpex
         throw importRefusal("drill_parameter_effect_not_distinguishable");
       }
       if (!["not_required", "confirmed", "not_observed"].includes(drillParameterEffect)) drillParameterEffect = null;
-      const kind = await recordCandidate(checkId, { teamId, userId, bundle, drillParameterEffect });
+      const kind = await recordCandidate(checkId, { teamId, userId, bundle, drillParameterEffect, meter });
       counts.sessions += 1;
       counts[kind] += 1;
+      meter.sessionDone(bundle);
       await alive();
     }
     // One atomic finalization publishes what this check saw, supersedes what
     // it replaced or no longer confirms, and marks it succeeded (v33).
-    await finalizeCheck(checkId, { teamId, window, withdraw: Boolean(source), source, legacy, sessionsSeen: counts.sessions });
+    const finalizeStarted = meter.start();
+    try {
+      await finalizeCheck(checkId, { teamId, window, withdraw: Boolean(source), source, legacy, sessionsSeen: counts.sessions });
+    } finally {
+      meter.finalize(finalizeStarted);
+    }
+    meter.outcome("succeeded");
   } catch (error) {
-    if (error instanceof CheckClosedElsewhere) return;
+    if (error instanceof CheckClosedElsewhere) {
+      meter.outcome("closed_elsewhere");
+      return;
+    }
     // A known refusal carries its own stable code and our own sentence (an
     // adapter never passes the source's text on); anything else is logged by
     // name only. On the binding path a refused credential also moves the
@@ -1065,6 +1101,10 @@ async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpex
     // system) — and nothing falls back to the environment token.
     const known = error instanceof GpexeClientError || error instanceof SourceAdapterError || error instanceof SourceImportResolveError;
     if (!known) console.error(`[gpexe] check ${checkId} failed: ${error?.stack || error}`);
+    // The stable code the row gets, never a message (the meter writes `other`
+    // for a code outside its closed set). A finalization whose COMMIT was not
+    // confirmed may have landed: its outcome is unknown, never "failed".
+    meter.outcome(known && error.code === "check_finalize_outcome_unknown" ? "unknown" : "failed", known ? error.code : "internal_error");
     await query(
       `update training_load.gpexe_import_checks set status = 'failed', finished_at = now(), error_code = $2, error_message = $3,
               sessions_seen = $4, candidates_new = $5, candidates_changed = $6, candidates_unchanged = $7
@@ -1103,43 +1143,57 @@ function sessionStartInstant(bundle) {
 // running check; the finalization publishes it, or it is discarded with the
 // check. So a running, failed or outcome-unknown check never changes a
 // published candidate, never shows a new one and never withdraws one.
-async function recordCandidate(checkId, { teamId, userId, bundle, drillParameterEffect = null }) {
+async function recordCandidate(checkId, { teamId, userId, bundle, drillParameterEffect = null, meter = NOOP_CHECK_METER }) {
+  // Timed as staging: the hash here and the read and insert below; as
+  // preview: the dry run with its connection (the meter never throws).
+  const hashStarted = meter.start();
   const sessionId = String(bundle.teamSession.id);
   const bundleHash = sha256Hex(canonicalJson(bundle));
+  meter.staging(hashStarted);
 
   // The dry run needs its own connection outside any transaction.
-  const previewClient = await pool.connect();
+  const previewStarted = meter.start();
   let preview;
   let previewHash;
   try {
-    ({ preview, previewHash } = await buildCandidatePreview(previewClient, { bundle, ownerTeamId: teamId, performedByUserId: userId }));
+    const previewClient = await pool.connect();
+    try {
+      ({ preview, previewHash } = await buildCandidatePreview(previewClient, { bundle, ownerTeamId: teamId, performedByUserId: userId }));
+    } finally {
+      previewClient.release();
+    }
   } finally {
-    previewClient.release();
+    meter.preview(previewStarted);
   }
   const status = preview.status === "blocked" ? "blocked" : "pending";
   const label = preview.session?.name ?? `GPEXE ${preview.session?.categoryName ?? "session"} ${preview.session?.startTimestamp ?? ""}`.trim();
 
   // What the published candidates say about this session - the kind this
   // check reports in its counts. A plain read: no lock, no change.
-  const existing = (await query(
-    `select bundle_hash from training_load.gpexe_import_candidates where owner_team_id = $1 and gpexe_team_session_id = $2`,
-    [teamId, sessionId],
-  )).rows;
-  const kind = existing.some((c) => c.bundle_hash === bundleHash) ? "unchanged" : existing.length ? "changed" : "new";
+  const stagingStarted = meter.start();
   try {
-    await query(
-      `insert into training_load.gpexe_import_check_observations
-         (check_id, owner_team_id, gpexe_team_session_id, session_started_at, session_label, bundle_hash, raw_bundle, status, preview, preview_hash, drill_parameter_effect)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [checkId, teamId, sessionId, sessionStartInstant(bundle), label, bundleHash, bundle, status, preview, previewHash, drillParameterEffect],
-    );
-  } catch (error) {
-    // The guard refuses an observation for a check that is no longer running
-    // (closed as abandoned): this run stops and writes nothing more.
-    if (error?.code === "23514" && /is not running/.test(String(error.message))) throw new CheckClosedElsewhere();
-    throw error;
+    const existing = (await query(
+      `select bundle_hash from training_load.gpexe_import_candidates where owner_team_id = $1 and gpexe_team_session_id = $2`,
+      [teamId, sessionId],
+    )).rows;
+    const kind = existing.some((c) => c.bundle_hash === bundleHash) ? "unchanged" : existing.length ? "changed" : "new";
+    try {
+      await query(
+        `insert into training_load.gpexe_import_check_observations
+           (check_id, owner_team_id, gpexe_team_session_id, session_started_at, session_label, bundle_hash, raw_bundle, status, preview, preview_hash, drill_parameter_effect)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [checkId, teamId, sessionId, sessionStartInstant(bundle), label, bundleHash, bundle, status, preview, previewHash, drillParameterEffect],
+      );
+    } catch (error) {
+      // The guard refuses an observation for a check that is no longer running
+      // (closed as abandoned): this run stops and writes nothing more.
+      if (error?.code === "23514" && /is not running/.test(String(error.message))) throw new CheckClosedElsewhere();
+      throw error;
+    }
+    return kind;
+  } finally {
+    meter.staging(stagingStarted);
   }
-  return kind;
 }
 
 // Every retention run: a check that stopped reporting for CHECK_STALE_AFTER_MINUTES
