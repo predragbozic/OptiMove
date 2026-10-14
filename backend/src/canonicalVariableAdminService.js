@@ -172,7 +172,10 @@ const CONDITION_SQL = (param) => `case when ${param}::jsonb is null then null el
 function levelsInput(raw) {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > 2) throw invalidBody("levels is a non-empty list of session and drill.");
   const set = new Set(raw);
-  if (set.size !== raw.length || [...set].some((level) => !(level in LEVELS))) throw invalidBody("levels is a non-empty list of session and drill.");
+  // Own keys only: `in` would also accept an inherited name such as toString.
+  if (set.size !== raw.length || [...set].some((level) => typeof level !== "string" || !Object.hasOwn(LEVELS, level))) {
+    throw invalidBody("levels is a non-empty list of session and drill.");
+  }
   return ["session", "drill"].filter((level) => set.has(level));
 }
 function aggregationInput(raw) {

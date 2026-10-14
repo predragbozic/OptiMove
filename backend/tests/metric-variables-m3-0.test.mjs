@@ -418,6 +418,20 @@ test("2. the request guard: no actor setting, a setting of an earlier transactio
   refusedWith(await tx(W.pa.id, async (c) => { const v = await rawVariable(c, { by: W.pa.id, state: "archived" }); await rawRequest(c, { defId: v.defId, verId: v.verIds[0], by: W.pa.id }); }), "23514", FOLLOW);
   // A version this transaction wrote in another user's name.
   refusedWith(await tx(W.pa.id, async (c) => { const v = await rawVariable(c, { by: W.pa2.id }); await rawRequest(c, { defId: v.defId, verId: v.verIds[0], by: W.pa.id }); }), "23514", FOLLOW);
+  // A create whose definition this transaction wrote in another user's name (its version in the actor's).
+  refusedWith(await tx(W.pa.id, async (c) => {
+    const defId = (await one(c, `insert into training_load.metric_definitions (key, label, owner_scope, created_by_user_id) values ($1, 'Raw variable', 'system', $2) returning id`, [`raw_${uid()}`, W.pa2.id])).id;
+    const verId = (await one(c, `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, created_by_user_id) values ($1, 1, 'm', 'numeric', $2) returning id`, [defId, W.pa.id])).id;
+    await c.query(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [verId, defId]);
+    await rawRequest(c, { defId, verId, by: W.pa.id });
+  }), "23514", FOLLOW);
+  // ... and the other way round: the definition in the actor's name, its version in another user's.
+  refusedWith(await tx(W.pa.id, async (c) => {
+    const defId = (await one(c, `insert into training_load.metric_definitions (key, label, owner_scope, created_by_user_id) values ($1, 'Raw variable', 'system', $2) returning id`, [`raw_${uid()}`, W.pa.id])).id;
+    const verId = (await one(c, `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, created_by_user_id) values ($1, 1, 'm', 'numeric', $2) returning id`, [defId, W.pa2.id])).id;
+    await c.query(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [verId, defId]);
+    await rawRequest(c, { defId, verId, by: W.pa.id });
+  }), "23514", FOLLOW);
   // Inside a savepoint (a subtransaction's rows): fail closed.
   refusedWith(await tx(W.pa.id, async (c) => {
     await c.query("savepoint s");
@@ -484,6 +498,8 @@ test("4. the body: a JSON object only; an unknown or a server-derived field (own
   await bad({ description: "x".repeat(501) });
   for (const k2 of ["Upper", "1abc", "a-b", "a".repeat(64), "", "ab c", "č"]) await bad({ key: k2 });
   for (const levels of [[], ["day"], ["session", "session"], "session", ["drill", "component"]]) await bad({ levels });
+  // An inherited property name is no level (an `in` check would accept it and write a variable without levels).
+  for (const levels of [["toString"], ["constructor"], ["__proto__"], ["hasOwnProperty"], ["session", "valueOf"], [["constructor"]], [1], [null]]) await bad({ levels });
   for (const agg of ["median", "", null]) await bad({ dailyAggregationMethod: agg });
   for (const value of [5, "1e3", "1.0000000001", "1234567890123", "+1", "1,5"]) await bad({ minValue: value });
   await bad({ minValue: "10", maxValue: "9.99" });

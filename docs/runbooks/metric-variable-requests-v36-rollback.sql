@@ -25,7 +25,13 @@
 -- Metrics Core rows (the existing catalog API reads and writes them as before).
 --
 -- One transaction: everything or nothing. Waits are bounded: a stalled
--- transaction that holds the table makes this script fail after 5 s. Run it as
+-- transaction that holds the table makes this script fail after 5 s. Dropping
+-- the table also removes its foreign keys' triggers on the four tables it
+-- references (public.users, public.clubs, training_load.metric_definitions and
+-- metric_definition_versions), which locks them briefly against every access
+-- (expected PostgreSQL behaviour, not observed here); a request that reads
+-- public.users (a sign-in, a session check) can wait behind that. Run it at a quiet moment - block 8 of
+-- docs/runbooks/metric-variable-requests-v36-preflight.sql reads one. Run it as
 -- one script that stops at the first error (psql -v ON_ERROR_STOP=1 -f ...):
 -- after a refusal the open transaction is aborted and nothing is changed.
 begin;

@@ -25,10 +25,10 @@
 --     club_admin; none: 42501; another basis: 42501);
 --   * the request follows its own operation in the same transaction: the
 --     definition is of the row's owner and was written (created, or its current
---     version repointed) by this transaction, the version belongs to it, was
---     created by this transaction and this user and is its current version; a
---     variable_create names version 1, a variable_version_create a later one
---     (23514).
+--     version repointed) by this transaction - for a variable_create, created by
+--     the acting user -, the version belongs to it, was created by this
+--     transaction and this user and is its current version; a variable_create
+--     names version 1, a variable_version_create a later one (23514).
 -- Uniques: one row per user and request key, one per version, one
 -- variable_create per definition. The table is append-only (UPDATE, DELETE and
 -- TRUNCATE refused).
@@ -37,11 +37,15 @@
 -- (/api/training-load/metrics) and the GPEXE team-owned writer keep writing
 -- metric_definitions, their versions and levels without a request row and
 -- without an acting user - nothing here guards those three tables. A deferred
--- check "every definition written in a transaction has its request row" cannot
--- tell an M3-0 write from those writers without breaking them, so it is not
--- built; the M3-0 service writes the request row in the same transaction,
--- before the COMMIT, and its tests prove it. The guarantees of the stricter
--- contract are those of the new admin API only.
+-- completeness check ("every definition this transaction wrote has its request
+-- row") is not built in M3-0: it could only be opt-in - scoped to transactions
+-- that carry the acting-user setting, the same limit as v35 (C74) - and the
+-- M3-0 service writes the request row as the last statement of its
+-- transaction, before the COMMIT, which its tests prove. The guard is
+-- point-in-time: it proves that the row agrees with its definition and version
+-- when it is inserted; a later statement of the same transaction is not
+-- checked again. The guarantees of the stricter contract are those of the new
+-- admin API only.
 --
 -- Known limits (as v35, C74): this proves that the row, the acting user and the
 -- user's right agree, not that the code which set the acting user was entitled
@@ -102,7 +106,7 @@ begin
   if new.requested_by_user_id is distinct from actor then
     raise exception 'metric variable request: the row names another user than the acting user' using errcode = '42501';
   end if;
-  select owner_scope, owner_club_id, state, current_version_id, xmin::text::bigint as written_in into def
+  select owner_scope, owner_club_id, state, current_version_id, created_by_user_id, xmin::text::bigint as written_in into def
     from training_load.metric_definitions where id = new.metric_definition_id;
   if not found or def.owner_scope is distinct from new.owner_scope or def.owner_club_id is distinct from new.owner_club_id then
     raise exception 'metric_variable_requests: the request must follow its own operation in the same transaction' using errcode = '23514';
@@ -123,7 +127,7 @@ begin
      or def.written_in is distinct from here
      or def.state is distinct from 'active'
      or def.current_version_id is distinct from new.metric_definition_version_id
-     or (new.operation = 'variable_create' and ver.version_number <> 1)
+     or (new.operation = 'variable_create' and (ver.version_number <> 1 or def.created_by_user_id is distinct from actor))
      or (new.operation = 'variable_version_create' and ver.version_number <= 1) then
     raise exception 'metric_variable_requests: the request must follow its own operation in the same transaction' using errcode = '23514';
   end if;

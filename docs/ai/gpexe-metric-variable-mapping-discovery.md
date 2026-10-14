@@ -690,10 +690,14 @@ the M3-0 delta discovery; as built in section J3):**
     derived basis (the v35 functions) and that the definition and the version are this transaction's
     own. **Limit, stated:** the older `/api/training-load/metrics` API and the GPEXE team-owned writer
     keep writing Metrics Core definitions without a request row or an acting user (compatibility,
-    unchanged). A deferred "every definition written has its request row" check cannot tell an admin-API
-    write from those writers without breaking them, so it is not built: the admin service writes the row
-    in the same transaction, and its tests prove it. `expectedCurrentVersionId` is a precondition of a new
-    version, never the idempotency of a request.
+    unchanged). A deferred "every definition this transaction wrote has its request row" check is not
+    built in M3-0: it could only be opt-in - scoped to the transactions that carry the acting-user setting,
+    the same limit as C74 - and the admin service writes the row as the last statement of its transaction,
+    before the COMMIT, which its tests prove. The guard is point-in-time: it proves that the row agrees with
+    its definition and version when it is inserted, not that a later statement of the same transaction
+    leaves them so (a deferred re-check of the row at COMMIT, proposed by the database review, is left to
+    the owner). `expectedCurrentVersionId` is a precondition of a new version, never the idempotency of a
+    request.
 83. **Stable codes:** `409 variable_not_active` (a new version of an archived variable);
     `409 variable_pinned` (v34's decision 9 guard: an active mapping version pins the current version -
     unreachable before T5, mapped and tested now); `409 version_unchanged` (the new version's whole
@@ -1657,6 +1661,10 @@ Access, `401`, the identical `404 {"error":"notFound"}`, `Cache-Control: no-stor
   `{kind:"unsupported"}` for any other stored shape (never the stored JSON). `mappingTarget` is M2's readiness, plus
   `target_not_active` for an archived variable and `target_scope_mismatch` for the system reference in a club workspace.
   A `day` level written by the older API is not shown.
+- **A new version replaces the whole semantics** (V5): unit, daily aggregation, minimum, maximum and condition are
+  taken as sent; a field left out is cleared, never carried over from the current version, so the M3 frontend sends the
+  full semantics. Each version carries its `reason`, also for the system reference read in a club workspace (a
+  platform admin's note on a global variable; accepted at the M3-0 security review).
 - **Lock order:** a create - the per-user advisory lock (bounded, the M2 key) → the request record → the role, user and
   club rows `FOR SHARE` (the right again) → its own new rows → the request row → the bounded COMMIT. A new version - the
   advisory lock → the request record → `metric_definitions` `FOR UPDATE` (the catalog writers' first lock) → the role,
@@ -1670,9 +1678,9 @@ Access, `401`, the identical `404 {"error":"notFound"}`, `Cache-Control: no-stor
 - **v36:** one table (checks; foreign keys to the user, the club, the definition and - composite - its version;
   uniques: one per user and request key, one per version, one `variable_create` per definition), its BEFORE INSERT
   guard (the acting user: `42501`; the derived basis: `42501`; the request following its own operation - the definition
-  of the row's owner, written by this transaction, active, its current version the row's version, created by this
-  transaction and this user, version 1 for a create, a later one for a new version: `23514`), and append-only triggers
-  (`23514`). Fixed messages. Depends on the v35 functions; the v35 rollback refuses while v36 is recorded. No data
+  of the row's owner, written by this transaction (for a create, created by the acting user), active, its current
+  version the row's version, created by this transaction and this user, version 1 for a create, a later one for a new
+  version: `23514`; point-in-time, C82), and append-only triggers (`23514`). Fixed messages. Depends on the v35 functions; the v35 rollback refuses while v36 is recorded. No data
   change.
 
 ---

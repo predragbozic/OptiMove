@@ -62,18 +62,23 @@ select count(*) as actor_defaults
   from pg_db_role_setting s, unnest(s.setconfig) as cfg
  where cfg like 'optimove.source_metric_actor=%';
 
--- 7. The mapping tables are still empty (no authenticated M2 write was made).
---    Expected: mappings = 0, versions = 0, audit_rows = 0.
+-- 7. Informational only - v36 does not depend on these tables: how many M2
+--    mapping rows exist (an authorized M2 write since v35 is legitimate).
+--    Expected: any value; record the three numbers.
 select
   (select count(*) from training_load.source_metric_mappings) as mappings,
   (select count(*) from training_load.source_metric_mapping_versions) as versions,
   (select count(*) from training_load.source_metric_audit) as audit_rows;
 
--- 8. A quiet moment: creating the foreign keys briefly locks the four referenced
---    tables against writes, so no other session holds a lock on them, none is
---    idle in a transaction, and no GPEXE check or identity load is running.
---    Expected: referenced_table_locks = 0, idle_in_transaction = 0, running_checks = 0,
---    running_identity_loads = 0.
+-- 8. A quiet moment: creating the foreign keys takes SHARE ROW EXCLUSIVE on the
+--    four referenced tables until the migration commits, so no other session
+--    holds or waits for a lock mode that conflicts with it (plain reads -
+--    ACCESS SHARE, ROW SHARE - do not), none is idle in a transaction, and no
+--    GPEXE check or identity load is running.
+--    Expected: conflicting_locks = 0, idle_in_transaction = 0, running_checks = 0,
+--    running_identity_loads = 0. An ordinary write to one of these tables holds
+--    ROW EXCLUSIVE for a moment: a non-zero conflicting_locks that is gone when
+--    the block is run again a few seconds later was such a write, not a blocker.
 --    A role without pg_read_all_stats sees only its own role's sessions' state in
 --    pg_stat_activity, so idle_in_transaction counts the application role's
 --    sessions (the only expected writer); pg_locks is not limited that way, and
@@ -82,8 +87,23 @@ select
   (select count(*) from pg_locks l join pg_class c on c.oid = l.relation join pg_namespace n on n.oid = c.relnamespace
     where l.pid <> pg_backend_pid()
       and l.database = (select oid from pg_database where datname = current_database())
+      and l.mode in ('RowExclusiveLock', 'ShareUpdateExclusiveLock', 'ShareLock', 'ShareRowExclusiveLock', 'ExclusiveLock', 'AccessExclusiveLock')
       and ((n.nspname = 'training_load' and c.relname in ('metric_definitions', 'metric_definition_versions'))
-        or (n.nspname = 'public' and c.relname in ('users', 'clubs')))) as referenced_table_locks,
+        or (n.nspname = 'public' and c.relname in ('users', 'clubs')))) as conflicting_locks,
   (select count(*) from pg_stat_activity where datname = current_database() and state like 'idle in transaction%' and pid <> pg_backend_pid()) as idle_in_transaction,
   (select count(*) from training_load.gpexe_import_checks where status = 'running') as running_checks,
   (select count(*) from training_load.gpexe_athlete_identity_requests where status = 'running') as running_identity_loads;
+
+-- 9. The two unique constraints whose names the admin service maps to a stable
+--    answer (key_taken; try_again for a concurrent version number) exist under
+--    exactly these names. A different name would not break anything - the
+--    write fails closed as a sanitized 500 with nothing written - but the
+--    answer would lose its code.
+--    Expected: key_constraint = true, version_number_constraint = true.
+select
+  exists (select 1 from pg_constraint
+           where conrelid = 'training_load.metric_definitions'::regclass and contype = 'u'
+             and conname = 'metric_definitions_owner_scope_owner_user_id_owner_club_id__key') as key_constraint,
+  exists (select 1 from pg_constraint
+           where conrelid = 'training_load.metric_definition_versions'::regclass and contype = 'u'
+             and conname = 'metric_definition_versions_metric_definition_id_version_num_key') as version_number_constraint;
