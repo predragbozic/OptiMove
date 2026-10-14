@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-10-14. Last `origin/main` commit checked: `ed13f8a` (merge of PR #161, v35, the
-database actor guards of the mapping writes; PR #160 `1164041`, the first M2 PR, before it).
+Last reviewed: 2026-10-14. Last `origin/main` commit checked: `9e4dfb5` (merge of PR #162, the GPEXE check
+timing line; PR #161 `ed13f8a`, v35, the database actor guards of the mapping writes, before it).
 
 ## Active phase
 
@@ -1780,6 +1780,20 @@ Technical details.
     write UI of draft mappings.
   - Tests: `backend/tests/metric-variables-m3-0.test.mjs` (disposable, T1 runner) with mutation evidence;
     the M2 suite updated for B3.
+- **The GPEXE check timing line (P0)** (owner order 2026-10-13, after a read-only performance discovery
+  the same day; branch `claude/upbeat-heisenberg-a3pbq9` from `1164041`; **merged as PR #162**, merge commit
+  `9e4dfb5` on 2026-10-14 at 13:40:12 UTC; its deploy and an owner-run check are not recorded here). The discovery (code and a local fake-source measurement only, no production or
+  GPEXE request): a check is strictly serial; for three sessions (one with five drills) and twenty
+  athletes it sends 206 GPEXE requests, about 87 % of them the three reads per athlete row (detail,
+  `/more/`, track) and 5 drill reads; every answer is followed by one heartbeat write, and each session's
+  dry-run preview runs about 15-16 statements per result. The server3 latency and the Render-Supabase
+  round trip are not known. P0 adds one closed-grammar log line per check
+  (`backend/src/gpexeCheckTiming.js`; runbook section "How long a check takes: the timing line (P0)"):
+  requests and network time per kind, heartbeat, re-validation, retention, preview, staging and
+  finalization times, session / athlete / track / drill counts - never an id, date, name, URL, credential,
+  value or error text. No change of requests, order, heartbeat frequency, results, database, route or UI.
+  Any optimization (fewer heartbeat writes, pipelining, concurrency) waits for one owner-run check and its
+  line.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2558,7 +2572,8 @@ pre-existing; pass/fail counts don't belong in this file
   of 05.10 - 06.10.2026 ran about 4 min 18 s (two complete reads of the whole list, then every session and
   drill of the window) while the Imports screen showed only that it was running, and a failure ends with a
   generic sentence. A separate task: a progress display (phase, sessions done) and a clearer failed-check
-  message; any change to the number of requests is its own decision.
+  message; any change to the number of requests is its own decision. Measurement first: the P0 timing line
+  (see the active phase).
 - **Bound the staging insert of `recordCandidate`** (code review of PR #149, 2026-10-09, reshaped by the
   pre-import safety package, v33): since v33 a check's run writes no candidate row and has no transaction
   of its own - each session is one auto-commit insert into the staging table, and nothing of it can be

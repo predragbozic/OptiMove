@@ -92,7 +92,7 @@ function builderStructureContext() {
   };
 }
 
-function renderBuilderBatchSwitcher(batchPlans, currentIndex) {
+export function renderBuilderBatchSwitcher(batchPlans, currentIndex) {
   if (!batchPlans.length || currentIndex < 0) return "";
   const current = batchPlans[currentIndex];
   const previous = batchPlans[currentIndex - 1];
@@ -104,16 +104,24 @@ function renderBuilderBatchSwitcher(batchPlans, currentIndex) {
         <p class="eyebrow">Group builder</p>
         <strong>${escapeHtml(current?.athleteName || current?.name || "Current copy")}</strong>
         <small>${currentIndex + 1} / ${batchPlans.length}</small>
+        <small data-builder-batch-status role="status" aria-live="polite" hidden></small>
       </div>
       <div class="builder-batch-controls">
         <div class="builder-batch-buttons">
           <button class="plain-button icon-button" type="button" data-action="builder-open-batch-plan" data-plan-id="${escapeAttr(previous?.id || "")}" ${previous ? "" : "disabled"} aria-label="Previous athlete"><span class="button-icon">&lt;</span></button>
           <div class="builder-batch-pills">
-            ${batchPlans.map((plan, index) => `
-              <button class="builder-batch-pill ${index === currentIndex ? "is-active" : ""}" type="button" data-action="builder-open-batch-plan" data-plan-id="${escapeAttr(plan.id)}" title="${escapeAttr(plan.athleteName || plan.name || "Program copy")}">
-                ${escapeHtml(initialsFor(plan.athleteName || plan.name || String(index + 1)))}
+            ${batchPlans.map((plan, index) => {
+              const name = plan.athleteName || plan.name || "Program copy";
+              const parts = name.trim().split(/\s+/);
+              const caption = parts.length > 1 ? `${parts[0]} ${parts.at(-1)[0]}.` : name;
+              const athlete = state.athletes.find((row) => String(row.athlete_id) === String(plan.athleteId));
+              const image = athlete?.athlete_image_url || athlete?.image_url;
+              return `
+              <button class="builder-batch-pill ${index === currentIndex ? "is-active" : ""}" type="button" data-action="builder-open-batch-plan" data-plan-id="${escapeAttr(plan.id)}" title="${escapeAttr(name)}" aria-label="${escapeAttr(name)}" aria-pressed="${index === currentIndex}">
+                <span class="builder-batch-avatar"><span>${escapeHtml(initialsFor(name))}</span>${image ? renderImage(image, "builder-batch-photo") : ""}</span>
+                <span class="builder-batch-caption">${escapeHtml(caption)}</span>
               </button>
-            `).join("")}
+            `; }).join("")}
           </div>
           <button class="plain-button icon-button" type="button" data-action="builder-open-batch-plan" data-plan-id="${escapeAttr(next?.id || "")}" ${next ? "" : "disabled"} aria-label="Next athlete"><span class="button-icon">&gt;</span></button>
         </div>
@@ -280,7 +288,32 @@ export function renderBuilder() {
   restoreBuilderScrollState(scrollState);
   disablePendingMoveButtons();
   renderBuilderDiscardProgress();
+  renderBuilderBatchSwitchProgress();
   if (state.builder.leaving) els.content.querySelector(".builder-workspace")?.setAttribute("inert", "");
+}
+
+export function renderBuilderBatchSwitchProgress() {
+  const pending = state.builder.batchSwitchPending;
+  const switcher = els.content?.querySelector(".builder-batch-switcher");
+  if (!switcher) return;
+  switcher.setAttribute("aria-busy", pending ? "true" : "false");
+  const status = switcher.querySelector("[data-builder-batch-status]");
+  if (status) {
+    status.hidden = !pending;
+    status.textContent = pending ? (pending.stage === "saving" ? "Saving changes..." : `Opening ${pending.name}...`) : "";
+  }
+  switcher.querySelectorAll('[data-action="builder-open-batch-plan"]').forEach((button) => {
+    button.disabled = Boolean(pending) || !button.dataset.planId;
+  });
+  const workspace = els.content.querySelector(".builder-workspace");
+  if (!workspace) return;
+  for (const child of workspace.children) {
+    if (child === switcher) continue;
+    if (pending && !child.hasAttribute("inert")) { child.setAttribute("inert", ""); child.dataset.batchInert = "true"; }
+    if (!pending && child.dataset.batchInert) { child.removeAttribute("inert"); delete child.dataset.batchInert; }
+  }
+  const sync = switcher.querySelector('[data-action="builder-toggle-batch-sync"]');
+  if (sync) sync.disabled = Boolean(pending);
 }
 
 export function renderBuilderDiscardProgress() {

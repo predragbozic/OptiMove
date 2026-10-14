@@ -10,7 +10,7 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 |---|---|
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
-| Last verified against commit | `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
+| Last verified against commit | `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
 | Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), implemented in an open pull request — not merged, not deployed, v36 applied to no persistent database; M2b (the T2b confirmations, v37), the M3 frontend and M4–M6 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
@@ -85,7 +85,7 @@ reinterprets an already captured value (`backend/tests/training-load-metrics.tes
 `metric_source_connections` across `migrations_v2/` v27–v33, `backend/src/sourceConnectionService.js`
 and `backend/src/sourceImportCredentialResolver.js` returns no match. The approval path passes no
 binding fact into the writer: `source_binding_id` appears in `backend/src/gpexeImportService.js`
-only in the check-row INSERT (:890). The check row carries `source_connection_id`,
+only in the check-row INSERT (:894). The check row carries `source_connection_id`,
 `source_binding_id`, `source_team_id` and `source_host_key`
 (`migrations_v2/202610041200_training_load_v31_gpexe_import_checks_source_path.sql:65-89`), and a
 candidate carries `first_seen_check_id` / `last_seen_check_id`
@@ -178,7 +178,7 @@ catalog (`frontend/training-load-calendar-view.js:529`, `:657`) and the cell uni
 
 ### A7. The current GPEXE candidate / preview / approve / import flow
 
-1. A check (`backend/src/gpexeImportService.js` `startCheck` :789) reads GPEXE through the bound
+1. A check (`backend/src/gpexeImportService.js` `startCheck` :790) reads GPEXE through the bound
    connection (`backend/src/sourceImportCredentialResolver.js`), stages observations per check (v33)
    and publishes candidates with `raw_bundle`, `bundle_hash`, `preview`, `preview_hash`
    (`migrations_v2/202609191000_training_load_v22_gpexe_in_app_import.sql:250-265`).
@@ -213,7 +213,7 @@ catalog (`frontend/training-load-calendar-view.js:529`, `:657`) and the cell uni
 - The GPEXE name is therefore already the canonical label: the Activities drawer and the dashboards
   read the catalog label and would show `TotDist (m)` after an import; only the Imports screen hides
   it behind the hard-coded `METRIC_TEXT` (`frontend/gpexe-import-view.js:130-142`). The same keys
-  are duplicated in `SOURCE_ATHLETE_VALUE_KEYS` (`gpexeImportService.js:1419`), `LINK_CONTEXT_KEYS`
+  are duplicated in `SOURCE_ATHLETE_VALUE_KEYS` (`gpexeImportService.js:1473`), `LINK_CONTEXT_KEYS`
   (`frontend/gpexe-import-view.js:1527`) and `MAP_VALUE_LABELS` (:1027, which hard-codes the units
   although `GET …/source-athletes` returns `units`, `routes/gpexeImport.js:229`).
 - The mapping is implicit, hard-coded, without status, version or audit, keyed and labelled by the

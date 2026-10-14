@@ -822,7 +822,10 @@ export function createGpexeRestV1Adapter({
   // read but one drops the importer's personal fields (redactGpexe); the
   // identity read projects its five keys into the sanitized identity at once,
   // before anything else sees the answer (gpexeAthleteIdentity.js).
-  async function fetchBuilt(url, project = redactGpexe) {
+  // `kind` is a label for the caller's request meter (the importer's check
+  // timing), passed beside the request and never sent: a fetch reads only its
+  // first two arguments.
+  async function fetchBuilt(url, project = redactGpexe, kind = "other") {
     let last = null;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       let res;
@@ -832,7 +835,7 @@ export function createGpexeRestV1Adapter({
           redirect: "manual",
           headers: { Authorization: authorization, Accept: "application/json" },
           signal: AbortSignal.timeout(timeoutMs),
-        });
+        }, { kind });
       } catch {
         last = new SourceAdapterError("source_unavailable", "The source server did not answer.", { reason: "no_answer" });
         if (attempt < attempts) await sleep(retryDelayMs * attempt);
@@ -873,9 +876,9 @@ export function createGpexeRestV1Adapter({
     }
     throw last ?? new SourceAdapterError("source_unavailable", "The source server did not answer.");
   }
-  const read = (resourcePath) => fetchBuilt(sourceApiUrl(ADAPTER_SOURCE, hostKey, catalogRow, resourcePath));
-  const readDrill = (parentId, drillIndex, drillsCount) => fetchBuilt(legacyDrillDetailsUrl({ hostKey, catalogRow, parentId, drillIndex, drillsCount }));
-  const readBrief = (parentId) => fetchBuilt(legacyBriefUrl({ hostKey, catalogRow, parentId }));
+  const read = (resourcePath, kind = "other") => fetchBuilt(sourceApiUrl(ADAPTER_SOURCE, hostKey, catalogRow, resourcePath), redactGpexe, kind);
+  const readDrill = (parentId, drillIndex, drillsCount) => fetchBuilt(legacyDrillDetailsUrl({ hostKey, catalogRow, parentId, drillIndex, drillsCount }), redactGpexe, "drill");
+  const readBrief = (parentId) => fetchBuilt(legacyBriefUrl({ hostKey, catalogRow, parentId }), redactGpexe, "brief_tags");
 
   // A next-page link of a team-scoped list, as the server gave it: it must
   // stay on this host and family, on the same resource, and name the bound
@@ -956,13 +959,13 @@ export function createGpexeRestV1Adapter({
 
   // One page of a header-paged list, whole or refused; `follow` builds the
   // next relative path from the server's link.
-  async function wholeList(firstPath, follow, what, maxPages = MAX_PAGES, maxRows = null) {
+  async function wholeList(firstPath, follow, what, maxPages = MAX_PAGES, maxRows = null, kind = "other") {
     const rows = [];
     const ids = new Set();
     let total = null;
     let path = firstPath;
     for (let page = 1; page <= maxPages; page += 1) {
-      const res = await read(path);
+      const res = await read(path, kind);
       if (!Array.isArray(res.body)) throw unexpected(`The source server did not answer ${what} as a list.`);
       const pageTotal = Number(res.totalCount);
       if (res.totalCount === null || res.totalCount === undefined || res.totalCount === "" || !Number.isInteger(pageTotal) || pageTotal < 0) {
@@ -1062,7 +1065,7 @@ export function createGpexeRestV1Adapter({
 
   async function sessionList(firstPath, maxPages) {
     const ticket = nextListTicket();
-    const { rows, total } = await wholeList(firstPath, (next) => nextPath(next, "team_session/"), "the session list", maxPages);
+    const { rows, total } = await wholeList(firstPath, (next) => nextPath(next, "team_session/"), "the session list", maxPages, null, "list_sessions");
     checkSessionRows(rows);
     const { parents, drillsLeftOut, drillReferencesNotListed } = classifyParents(rows);
     recordClassification(rows, parents, ticket);
@@ -1208,7 +1211,7 @@ export function createGpexeRestV1Adapter({
       const path = teamScopedPath("team_session/", team, [["limit", SESSION_PAGE_LIMIT_MAX]]);
       // One complete read with every check of its own; pure: no adapter state.
       const snapshot = async () => {
-        const { rows, total } = await wholeList(path, nextWholeSessionListPath, "the session list", MAX_PAGES, SESSION_LIST_MAX_ROWS);
+        const { rows, total } = await wholeList(path, nextWholeSessionListPath, "the session list", MAX_PAGES, SESSION_LIST_MAX_ROWS, "list_sessions");
         checkSessionRows(rows);
         const classified = classifyParents(rows);
         const days = new Map(rows.map((row) => [canonicalId(row.id), strictDay(row.start_timestamp)]));
@@ -1267,7 +1270,7 @@ export function createGpexeRestV1Adapter({
       // an answer that started before a later refresh is thrown away.
       revokeSession(id);
       const epoch = epochOf(id);
-      const { body } = await read(`team_session/${id}/`);
+      const { body } = await read(`team_session/${id}/`, "parent_session");
       if (epochOf(id) !== epoch) throw new SourceAdapterError("session_refreshed", "That session was refreshed while this read was in flight; the answer is discarded.");
       if (!isPlainObject(body)) throw unexpected("The source server did not answer the session as an object.");
       if (canonicalId(body.id) !== id) throw unexpected("The source server answered another session than the one asked.");
@@ -1291,7 +1294,7 @@ export function createGpexeRestV1Adapter({
       const { sessionId } = only(options, ["sessionId"]);
       const parent = confirmed(sessionId);
       const epoch = epochOf(parent.id);
-      const { body } = await read(`team_session/${parent.id}/details/`);
+      const { body } = await read(`team_session/${parent.id}/details/`, "whole_details");
       refreshedDuring(parent.id, epoch);
       // Projected to the consumed fields (drills too, since 2026-10-09).
       return projectSessionDetails(body, parent.drillsCount);
@@ -1362,7 +1365,7 @@ export function createGpexeRestV1Adapter({
       // A fresh list withdraws every row and track confirmed under the old one.
       revokeDependents(parent.id);
       const epoch = epochOf(parent.id);
-      const { rows, total } = await wholeList(`athlete_session/?teamsession=${parent.id}&limit=${SESSION_PAGE_LIMIT_MAX}`, (next) => nextAthletePath(next, parent.id), "the athlete rows");
+      const { rows, total } = await wholeList(`athlete_session/?teamsession=${parent.id}&limit=${SESSION_PAGE_LIMIT_MAX}`, (next) => nextAthletePath(next, parent.id), "the athlete rows", MAX_PAGES, null, "athlete_list");
       if (epochOf(parent.id) !== epoch) throw new SourceAdapterError("session_refreshed", "That session was refreshed while its athlete list was in flight; the answer is discarded.");
       if (rows.length > MAX_ATHLETE_ROWS) throw unexpected("The source server returned more athlete rows for one session than this adapter reads.", { reason: "athlete_rows_too_many" });
       const ids = new Set();
@@ -1389,7 +1392,7 @@ export function createGpexeRestV1Adapter({
       // answer of another team's row is never fetched and never told apart.
       if (!listedAthleteRows.get(parent.id)?.has(id)) throw new SourceAdapterError("athlete_row_not_listed", "That athlete row was not named by the confirmed session's own athlete list read by this adapter.");
       const epoch = epochOf(parent.id);
-      const { body } = await read(`athlete_session/${id}/`);
+      const { body } = await read(`athlete_session/${id}/`, "athlete_detail");
       if (epochOf(parent.id) !== epoch) throw new SourceAdapterError("session_refreshed", "That session was refreshed while the athlete row was in flight; the answer is discarded.");
       if (!isPlainObject(body) || canonicalId(body.id) !== id) throw unexpected("The source server answered another athlete row than the one asked.");
       if (canonicalId(body.teamsession) !== parent.id) throw unexpected("The source server's athlete row names another session.", { reason: "row_of_another_session" });
@@ -1409,7 +1412,7 @@ export function createGpexeRestV1Adapter({
       if (!confirmedAthleteRows.has(id)) throw new SourceAdapterError("athlete_row_not_confirmed", "That athlete row was not first read under a confirmed session by this adapter.");
       const owner = confirmedAthleteRows.get(id).sessionId;
       const epoch = epochOf(owner);
-      const { body } = await read(`athlete_session/${id}/more/`);
+      const { body } = await read(`athlete_session/${id}/more/`, "more");
       refreshedDuring(owner, epoch);
       if (!isPlainObject(body)) throw unexpected("The source server did not answer the athlete row's events as an object.");
       if (body.athletesession_id !== undefined && canonicalId(body.athletesession_id) !== id) throw unexpected("The source server's events name another athlete row.");
@@ -1423,7 +1426,7 @@ export function createGpexeRestV1Adapter({
       if (!confirmedTracks.has(id)) throw new SourceAdapterError("track_not_confirmed", "That track was not named by an athlete row this adapter read under a confirmed session.");
       const owner = trackOwner.get(id);
       const epoch = epochOf(owner);
-      const { body } = await read(`track/${id}/`);
+      const { body } = await read(`track/${id}/`, "track");
       refreshedDuring(owner, epoch);
       if (!isPlainObject(body) || canonicalId(body.id) !== id) throw unexpected("The source server answered another track than the one asked.");
       return pick(body, BUNDLE_FIELDS.track);
@@ -1458,7 +1461,7 @@ export function createGpexeRestV1Adapter({
       if (parent.day === null) throw unexpected("The confirmed session carries no day to read thresholds for.");
       let res;
       try {
-        res = await read(`team/${team}/thresholds/?valid_on=${parent.day}`);
+        res = await read(`team/${team}/thresholds/?valid_on=${parent.day}`, "thresholds");
       } catch (error) {
         if (error.code === "source_not_found") return null;
         throw error;
@@ -1480,7 +1483,7 @@ export function createGpexeRestV1Adapter({
     // is kept only when it is short plain text.
     async listSessionTags(options) {
       only(options, []);
-      const { rows, total } = await wholeList(teamScopedPath("team_session_tag/", team, [["limit", SESSION_PAGE_LIMIT_MAX]]), (next) => nextPath(next, "team_session_tag/"), "the tag list");
+      const { rows, total } = await wholeList(teamScopedPath("team_session_tag/", team, [["limit", SESSION_PAGE_LIMIT_MAX]]), (next) => nextPath(next, "team_session_tag/"), "the tag list", MAX_PAGES, null, "brief_tags");
       const tags = new Map();
       for (const row of rows) {
         const named = namesBoundTeam(row.team, team);
