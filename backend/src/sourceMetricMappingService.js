@@ -344,6 +344,22 @@ function decimalInput(value, { nonNegative = false } = {}) {
 }
 const hashOf = (value) => crypto.createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 
+// The output bounds of a canonical variable's text (C86). Metrics Core's own
+// columns are unbounded text (v10), so the bounds are the canonical-variable
+// admin API's input limits; a longer value - written through the older
+// /api/training-load/metrics API - is cut at its limit, and `truncated` says so.
+export const TEXT_LIMITS = Object.freeze({ label: 80, shortLabel: 20, description: 500, key: 63, unit: 30, reason: 500 });
+function boundedOut(text, max) {
+  if (text === null || text === undefined) return { text: null, cut: false };
+  const chars = [...String(text)];
+  return chars.length <= max ? { text: String(text), cut: false } : { text: chars.slice(0, max).join(""), cut: true };
+}
+function boundedLabels(key, label) {
+  const k = boundedOut(key, TEXT_LIMITS.key);
+  const l = boundedOut(label, TEXT_LIMITS.label);
+  return { key: k.text, label: l.text, truncated: k.cut || l.cut };
+}
+
 // ---------------------------------------------------------------------------
 // Database refusals: only the allowlisted ones become a 4xx.
 // ---------------------------------------------------------------------------
@@ -560,7 +576,7 @@ function notReadyCodeOf(row) {
 
 export async function listTargets({ ctx }) {
   const rows = await boundedRead(async (client) => (await client.query(
-    `select d.id, d.owner_scope, ${CANONICAL_VERSION_COLUMNS},
+    `select d.id, d.owner_scope, d.key, d.label, ${CANONICAL_VERSION_COLUMNS},
             (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes
        from training_load.metric_definitions d
        join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
@@ -575,7 +591,7 @@ export async function listTargets({ ctx }) {
     const notReadyCode = notReadyCodeOf(row);
     const canonical = canonicalParametersOf(row);
     return {
-      id: row.id, ownerScope: row.owner_scope,
+      id: row.id, ownerScope: row.owner_scope, ...boundedLabels(row.key, row.label),
       currentVersion: { id: row.version_id, versionNumber: row.version_number, unit: row.unit_is_token ? row.unit : null, canonicalParameters: canonical ? canonical.params : null },
       scopes: row.scopes ?? [], versionReady: notReadyCode === null, notReadyCode,
     };
@@ -616,8 +632,14 @@ function publicVersion(v) {
     conversionNote: v.conversion_note, createdAt: v.created_at, submittedAt: v.submitted_at,
   };
 }
-const MAPPING_COLUMNS = `m.id, m.owner_scope, m.owner_key, m.source_metric_definition_id, d.source_metric_key, d.api_family, m.metric_definition_id, m.created_at`;
-const publicMappingBase = (m) => ({ id: m.id, ownerScope: m.owner_scope, sourceMetric: { id: m.source_metric_definition_id, key: m.source_metric_key, apiFamily: m.api_family }, metricDefinitionId: m.metric_definition_id, createdAt: m.created_at });
+// B3 (M3-0): the source field's own label (1-80 by its CHECK, D2) and the
+// canonical target's key and label, cut to the admin API's limits (C86).
+const MAPPING_COLUMNS = `m.id, m.owner_scope, m.owner_key, m.source_metric_definition_id, d.source_metric_key, d.api_family, d.source_label,
+  m.metric_definition_id, md.key as target_key, md.label as target_label, m.created_at`;
+const publicMappingBase = (m) => ({
+  id: m.id, ownerScope: m.owner_scope, sourceMetric: { id: m.source_metric_definition_id, key: m.source_metric_key, apiFamily: m.api_family, label: m.source_label },
+  metricDefinitionId: m.metric_definition_id, target: boundedLabels(m.target_key, m.target_label), createdAt: m.created_at,
+});
 
 // GET /mappings: one page in the stable order (system first, then the club's
 // own; created_at; id), the next page after the cursor's position - keyset,
@@ -631,6 +653,7 @@ export async function listMappings({ ctx, query }) {
               to_char(m.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') as cursor_at
          from training_load.source_metric_mappings m
          join training_load.source_metric_definitions d on d.id = m.source_metric_definition_id
+         join training_load.metric_definitions md on md.id = m.metric_definition_id
         where m.owner_key = any($1::text[])
           and ($2::boolean is null or ((m.owner_scope <> 'system'), m.created_at, m.id) > ($2::boolean, ($3::timestamp at time zone 'UTC'), $4::uuid))
         order by (m.owner_scope <> 'system'), m.created_at, m.id
@@ -685,6 +708,7 @@ async function writableMappingSummary(executor, ctx, mappingId) {
     `select ${MAPPING_COLUMNS}
        from training_load.source_metric_mappings m
        join training_load.source_metric_definitions d on d.id = m.source_metric_definition_id
+         join training_load.metric_definitions md on md.id = m.metric_definition_id
       where m.id = $1 and m.owner_key = $2`,
     [mappingId, ownerKeyOf(ctx)],
   )).rows[0];
@@ -714,6 +738,7 @@ export async function getMapping({ ctx, mappingId, query }) {
       `select ${MAPPING_COLUMNS}
          from training_load.source_metric_mappings m
          join training_load.source_metric_definitions d on d.id = m.source_metric_definition_id
+         join training_load.metric_definitions md on md.id = m.metric_definition_id
         where m.id = $1 and m.owner_key = any($2::text[])`,
       [id, readableOwnerKeys(ctx)],
     )).rows[0];
@@ -736,7 +761,17 @@ export async function getMapping({ ctx, mappingId, query }) {
 // Writes: one bounded transaction each, the request key's audit row as the
 // request record (D10), the replay answered from the current state.
 // ---------------------------------------------------------------------------
-async function runWrite({ ctx, where, requestKey, requestHash, action, body: operation, reread }) {
+// Where a write's request record lives: M2's own writes use their T8 audit row;
+// the canonical-variable admin API (M3-0, v36) its metric_variable_requests row.
+// `find` answers (operation, request_hash) plus the ids the reread needs.
+const MAPPING_REQUESTS = Object.freeze({
+  find: `select action as operation, request_hash, mapping_id, mapping_version_id
+           from training_load.source_metric_audit where performed_by_user_id = $1 and request_key = $2`,
+  exists: `select 1 from training_load.source_metric_audit where performed_by_user_id = $1 and request_key = $2`,
+});
+// The ids a committed write names when its answer could not be read (readError).
+const mappingIdsOf = (written) => ({ mappingId: written.mapping_id ?? null, ...(written.mapping_version_id ? { versionId: written.mapping_version_id } : {}) });
+async function runWrite({ ctx, where, requestKey, requestHash, action, body: operation, reread, requests = MAPPING_REQUESTS, classify = classifyDatabaseError, idsOf = mappingIdsOf }) {
   const client = await pool.connect();
   const release = guardClient(client);
   let released = false;
@@ -755,13 +790,9 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
     await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 34))`, [`source-metric-mapping:${ctx.userId}`]);
     await client.query(`set local lock_timeout = '${ROW_LOCK_TIMEOUT_MS}ms'`);
     // The request record of this user and key, before any registry lock.
-    const earlier = (await client.query(
-      `select action, request_hash, mapping_id, mapping_version_id
-         from training_load.source_metric_audit where performed_by_user_id = $1 and request_key = $2`,
-      [ctx.userId, requestKey],
-    )).rows[0];
+    const earlier = (await client.query(requests.find, [ctx.userId, requestKey])).rows[0];
     if (earlier) {
-      if (earlier.action !== action || earlier.request_hash !== requestHash) throw refusal(409, "request_key_reused", "This requestKey was already used for a different request; use a new key.");
+      if (earlier.operation !== action || earlier.request_hash !== requestHash) throw refusal(409, "request_key_reused", "This requestKey was already used for a different request; use a new key.");
       // A replay is a read of the current state, after the right is checked again.
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       const current = await reread(client, earlier);
@@ -795,19 +826,19 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
       // deferred v35 audit link, a deadlock): the transaction is rolled back
       // and nothing was written - a definite refusal. Every other COMMIT error
       // is verified by the request key below.
-      if (commitCertainlyRefused(commitError)) throw classifyDatabaseError(commitError) ?? commitError;
+      if (commitCertainlyRefused(commitError)) throw classify(commitError) ?? commitError;
       console.error(`[source-metric-mappings] the COMMIT of ${where} was not confirmed (${commitError?.code ?? ""}); checking the request record`);
       let found = false;
-      try { found = await requestIsCommitted(ctx.userId, requestKey); } catch { found = false; }
+      try { found = await requestIsCommitted(ctx.userId, requestKey, requests.exists); } catch { found = false; }
       if (!found) throw refusal(503, "outcome_unknown", "The database did not confirm this request, and it could not be verified yet. Repeat it with the same requestKey.", { requestKey });
-      return { ...(await answerAfterCommit(ctx, written, reread)), replayed: false, commitConfirmation: "verified_after_commit_error" };
+      return { ...(await answerAfterCommit(ctx, written, reread, idsOf)), replayed: false, commitConfirmation: "verified_after_commit_error" };
     }
-    return { ...(await answerAfterCommit(ctx, written, reread)), replayed: false };
+    return { ...(await answerAfterCommit(ctx, written, reread, idsOf)), replayed: false };
   } catch (error) {
     await finish();
     // An allowlisted refusal becomes its stable code; anything else goes up
     // unchanged and the router answers it as a sanitized 500 internal_error.
-    throw classifyDatabaseError(error) ?? error;
+    throw classify(error) ?? error;
   } finally {
     if (!released) await finish(true);
   }
@@ -820,7 +851,7 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
 // failure: it keeps its status with readError, and names the ids of what was
 // written only once the right was confirmed again (a replay with the same
 // requestKey answers the rest).
-async function answerAfterCommit(ctx, written, reread) {
+async function answerAfterCommit(ctx, written, reread, idsOf) {
   let rightConfirmed = false;
   let outcome = null;
   try {
@@ -834,9 +865,9 @@ async function answerAfterCommit(ctx, written, reread) {
   if (outcome?.lost) throw NOT_FOUND();
   if (outcome?.current) return outcome.current;
   if (!rightConfirmed) return { readError: true };
-  return { readError: true, mappingId: written.mapping_id ?? null, ...(written.mapping_version_id ? { versionId: written.mapping_version_id } : {}) };
+  return { readError: true, ...idsOf(written) };
 }
-async function requestIsCommitted(userId, requestKey) {
+async function requestIsCommitted(userId, requestKey, existsSql) {
   const deadline = Date.now() + uncertainCheckTimeoutMs;
   const left = () => Math.max(1, deadline - Date.now());
   const connecting = pool.connect();
@@ -855,7 +886,7 @@ async function requestIsCommitted(userId, requestKey) {
       fault.catch(() => {});
       await withinBound(fault, left());
     }
-    const answer = client.query({ text: `select 1 from training_load.source_metric_audit where performed_by_user_id = $1 and request_key = $2`, values: [userId, requestKey], query_timeout: left() });
+    const answer = client.query({ text: existsSql, values: [userId, requestKey], query_timeout: left() });
     answer.catch(() => {});
     return (await withinBound(answer, left())).rowCount === 1;
   } catch (error) {
@@ -1193,3 +1224,16 @@ export async function submitVersion({ ctx, mappingId, versionId, body }) {
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// The machinery the canonical-variable admin service (M3-0,
+// canonicalVariableAdminService.js) shares with M2: one bounded write and read
+// discipline, one request-record rule, one right re-check under FOR SHARE, the
+// same input checks and page cursors - never a second copy. Not a public API
+// of the routes.
+// ---------------------------------------------------------------------------
+export const adminWriteKit = Object.freeze({
+  runWrite, boundedRead, rightsStillHold, refusal, NOT_FOUND, MESSAGES, plainObject, uuidField, boundedText, boundedOut,
+  dec, decCmp, hashOf, encodeCursor, decodeCursor, cursorQuery, invalidCursor, ownerKeyOf, CURSOR_AT, LOWER_UUID, UUID,
+  CANONICAL_VERSION_COLUMNS, canonicalParametersOf, notReadyCodeOf,
+});

@@ -135,12 +135,13 @@ const club = async (name) => (await one(`insert into public.clubs (name) values 
 const team = async (clubId) => (await one(`insert into public.teams (club_id, name) values ($1,$2) returning id`, [clubId, `Team ${uid()}`])).id;
 
 async function canonical({ scope = "system", clubId = null, teamId = null, userId = null, unit = "min", valueType = "numeric", cd = null, caps = ["session", "component"], state = "active" } = {}) {
+  const key = `m2_${uid()}`;
   const id = (await one(`insert into training_load.metric_definitions (key, label, owner_scope, owner_club_id, owner_team_id, owner_user_id, state) values ($1,'M2 test variable',$2,$3,$4,$5,$6) returning id`,
-    [`m2_${uid()}`, scope, clubId, teamId, userId, state])).id;
+    [key, scope, clubId, teamId, userId, state])).id;
   const versionId = (await one(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, condition_description) values ($1,1,$2,$3,$4) returning id`, [id, unit, valueType, cd])).id;
   await q(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [versionId, id]);
   for (const s of caps) await q(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,$2)`, [id, s]);
-  return { id, versionId };
+  return { id, versionId, key };
 }
 
 // A source field of gpexe / rest_v1 with revision 1 (M1 SQL, an active platform admin as the actor).
@@ -344,7 +345,7 @@ test("2. GET /fields: the T2a fields with their revisions, in a stable order, wi
   }
 });
 
-test("3. GET /targets: only the workspace's owner scope (platform: system; club A: club A only), ownerScope on every target, the ready state and the normalized canonical parameters; no key, label, raw condition description or non-token unit", async () => {
+test("3. GET /targets: only the workspace's owner scope (platform: system; club A: club A only), ownerScope on every target, the ready state and the normalized canonical parameters, the bounded key and label (B3, M3-0); no raw condition description or non-token unit", async () => {
   const sys = await api("/targets", { cookie: W.pa.cookie });
   assert.equal(sys.status, 200);
   const sysIds = sys.body.targets.map((t) => t.id);
@@ -352,7 +353,7 @@ test("3. GET /targets: only the workspace's owner scope (platform: system; club 
   assert.ok(sysIds.includes(W.sysMin.id) && !sysIds.includes(W.clubAMin.id) && !sysIds.includes(W.teamMd.id) && !sysIds.includes(W.userMd.id) && !sysIds.includes(W.sysArchived.id));
   assert.ok(sys.body.targets.every((t) => t.ownerScope === "system"));
   const byId = new Map(sys.body.targets.map((t) => [t.id, t]));
-  assert.deepEqual(byId.get(W.sysMin.id), { id: W.sysMin.id, ownerScope: "system", currentVersion: { id: W.sysMin.versionId, versionNumber: 1, unit: "min", canonicalParameters: null }, scopes: ["component", "session"], versionReady: true, notReadyCode: null });
+  assert.deepEqual(byId.get(W.sysMin.id), { id: W.sysMin.id, ownerScope: "system", key: W.sysMin.key, label: "M2 test variable", truncated: false, currentVersion: { id: W.sysMin.versionId, versionNumber: 1, unit: "min", canonicalParameters: null }, scopes: ["component", "session"], versionReady: true, notReadyCode: null });
   assert.equal(byId.get(W.sysText.id).notReadyCode, "canonical_not_numeric");
   assert.equal(byId.get(W.sysNoUnit.id).notReadyCode, "canonical_unit_missing");
   assert.equal(byId.get(W.sysBadUnit.id).notReadyCode, "canonical_unit_not_a_token");
@@ -361,7 +362,7 @@ test("3. GET /targets: only the workspace's owner scope (platform: system; club 
   assert.deepEqual(byId.get(W.sysBetween.id).currentVersion.canonicalParameters, { operator: "between", lower: "25", upper: "60", unit: "W/kg" });
   assert.deepEqual(byId.get(W.sysThreshold.id).currentVersion.canonicalParameters, { operator: "<=", value: "-2.5", duration_seconds: "0.5", unit: "m/s2" });
   assert.equal(byId.get(W.sysZoneBad.id).currentVersion.canonicalParameters, null);
-  assert.ok(!sys.text.includes("M2 test variable") && !sys.text.includes("m2_") && !sys.text.includes("fast"), "no Metrics Core free text");
+  assert.ok(!sys.text.includes("fast"), "no raw condition description");
   const clubA = await api("/targets", { cookie: W.caA.cookie });
   assert.deepEqual(new Set(clubA.body.targets.map((t) => t.ownerScope)), new Set(["club"]));
   const clubIds = clubA.body.targets.map((t) => t.id);
@@ -385,7 +386,10 @@ test("5. POST /mappings: the owner comes from the workspace only (platform: syst
   assert.equal(sys.status, 201, sys.text);
   assert.equal(sys.body.replayed, false);
   // The answer of a mapping write is the bounded summary of the list (never the version list).
-  assert.deepEqual(Object.keys(sys.body.mapping).sort(), ["activeVersionId", "createdAt", "id", "latestVersion", "metricDefinitionId", "ownerScope", "sourceMetric", "versionCounts"]);
+  assert.deepEqual(Object.keys(sys.body.mapping).sort(), ["activeVersionId", "createdAt", "id", "latestVersion", "metricDefinitionId", "ownerScope", "sourceMetric", "target", "versionCounts"]);
+  // B3 (M3-0): the canonical target's bounded key and label, the source field's own label.
+  assert.deepEqual(sys.body.mapping.target, { key: W.sysMin.key, label: "M2 test variable", truncated: false });
+  assert.equal(sys.body.mapping.sourceMetric.label, "Test field");
   assert.deepEqual([sys.body.mapping.latestVersion, sys.body.mapping.activeVersionId, sys.body.mapping.versionCounts], [null, null, { draft: 0, needs_review: 0, active: 0, disabled: 0 }]);
   const t3 = await one(`select owner_scope, owner_club_id, owner_key, created_by_user_id from training_load.source_metric_mappings where id = $1`, [sys.body.mapping.id]);
   assert.deepEqual(t3, { owner_scope: "system", owner_club_id: null, owner_key: "system", created_by_user_id: W.pa.id });
@@ -501,7 +505,7 @@ test("7. GET /mappings and /mappings/:id: the platform workspace sees system map
   const order = listA.body.mappings.map((m) => [m.ownerScope === "system" ? 0 : 1, m.createdAt, m.id].join("|"));
   assert.deepEqual(order, [...order].sort());
   const zone = listP.body.mappings.find((m) => m.sourceMetric.id === W.fZone.id && m.metricDefinitionId === W.sysZone.id);
-  assert.deepEqual(Object.keys(zone).sort(), ["activeVersionId", "createdAt", "id", "latestVersion", "metricDefinitionId", "ownerScope", "sourceMetric", "versionCounts"]);
+  assert.deepEqual(Object.keys(zone).sort(), ["activeVersionId", "createdAt", "id", "latestVersion", "metricDefinitionId", "ownerScope", "sourceMetric", "target", "versionCounts"]);
   assert.deepEqual(zone.versionCounts, { draft: 1, needs_review: 0, active: 0, disabled: 0 });
   assert.equal(zone.latestVersion.status, "draft");
   assert.equal(zone.activeVersionId, null);
