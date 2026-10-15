@@ -400,18 +400,30 @@ export async function handleBuilderPlanAction(action, handlers) {
   }
   if (type === "builder-open-draft") {
     const planId = action.dataset.planId || "";
-    if (!planId) return true;
+    if (!planId || state.builder.openingDraftId || action.disabled) return true;
+    const builder = state.builder;
+    const originalDraft = builder.draft;
+    const stillCurrent = () => state.builder === builder && state.activeTab === "builder" && builder.draft === originalDraft;
+    builder.openingDraftId = planId;
     action.disabled = true;
     try {
-      setBuilderDraft(await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(planId)}`));
+      handlers.renderBuilderDraftOpenProgress?.();
+      const draft = await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(planId)}`);
+      if (!stillCurrent()) return true;
+      setBuilderDraft(draft, { preserveBatch: false });
       state.builder.selectedSessionId = "";
       state.builder.selectedNodeId = "";
       state.builder.exerciseQuery = "";
-      void loadBuilderNodePresets().catch(() => {});
-      await handlers.loadBuilderExercises();
+      state.builder.error = "";
+      builder.openingDraftId = "";
+      handlers.renderBuilder();
     } catch (error) {
-      action.disabled = false;
+      if (state.builder !== builder || state.activeTab !== "builder") return true;
       throw error;
+    } finally {
+      builder.openingDraftId = "";
+      action.disabled = false;
+      if (state.builder === builder) handlers.renderBuilderDraftOpenProgress?.();
     }
     return true;
   }

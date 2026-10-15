@@ -142,6 +142,7 @@ export const emptyBuilderState = (overrides = {}) => ({
   batchSwitchPending: null,
   drafts: [],
   draftsLoading: false,
+  openingDraftId: "",
   draftsOpen: false,
   selectedDraftKeys: [],
   copyPlanId: "",

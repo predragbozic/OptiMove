@@ -149,6 +149,7 @@ function renderBuilderDraftsPanel() {
   const selectedCount = selectedKeys.size;
   return `
     <section class="panel builder-drafts-panel">
+      <p class="muted" role="status" data-builder-draft-open-status hidden></p>
       <button class="builder-drafts-toggle" type="button" data-action="builder-toggle-drafts-panel" aria-expanded="${isOpen ? "true" : "false"}">
         <span><span class="eyebrow">Continue where you left off</span><strong>${drafts.length} unfinished draft${drafts.length === 1 ? "" : "s"}</strong></span>
         <span class="button-icon">${isOpen ? "&#8963;" : "&#8964;"}</span>
@@ -289,7 +290,30 @@ export function renderBuilder() {
   disablePendingMoveButtons();
   renderBuilderDiscardProgress();
   renderBuilderBatchSwitchProgress();
+  renderBuilderDraftOpenProgress();
   if (state.builder.leaving) els.content.querySelector(".builder-workspace")?.setAttribute("inert", "");
+}
+
+export function renderBuilderDraftOpenProgress() {
+  const pending = state.builder.openingDraftId;
+  const start = els.content?.querySelector(".builder-start");
+  if (!start) return;
+  const panel = start.querySelector(".builder-drafts-panel");
+  const status = panel?.querySelector("[data-builder-draft-open-status]");
+  if (status) { status.hidden = !pending; status.textContent = pending ? "Opening draft..." : ""; }
+  panel?.setAttribute("aria-busy", pending ? "true" : "false");
+  start.querySelectorAll('[data-action="builder-open-draft"]').forEach((button) => {
+    button.disabled = Boolean(pending);
+    button.textContent = pending === button.dataset.planId ? "Opening..." : "Continue";
+  });
+  // Keep the progress announcement accessible while blocking competing actions.
+  const targets = [...start.children].filter((child) => child !== panel);
+  const body = panel?.querySelector(".builder-drafts-body");
+  if (body) targets.push(body);
+  for (const target of targets) {
+    if (pending && !target.hasAttribute("inert")) { target.setAttribute("inert", ""); target.dataset.draftOpenInert = "true"; }
+    if (!pending && target.dataset.draftOpenInert) { target.removeAttribute("inert"); delete target.dataset.draftOpenInert; }
+  }
 }
 
 export function renderBuilderBatchSwitchProgress() {
