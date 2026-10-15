@@ -485,6 +485,21 @@ function tooLarge(limit) {
   return refusal(409, "result_too_large", "The result is larger than this route returns at once.", { limit });
 }
 
+// A source field's revision as every read shows it (M2 /fields, the M2b field
+// detail and verification answers): the proof facts, never a verifier's id.
+const REVISION_COLUMNS = `id, source_metric_definition_id, revision_number, state, value_shape, parameter_kind, supports_session, supports_drill,
+            expected_source_unit, source_unit, expected_source_bound_unit, source_bound_unit, bound_operator,
+            evidence_status, evidence_ref, unit_evidence_ref, meaning_evidence_ref, unit_verified_at, meaning_verified_at`;
+function revisionOut(r) {
+  return {
+    id: r.id, revisionNumber: r.revision_number, state: r.state, valueShape: r.value_shape, parameterKind: r.parameter_kind,
+    supportsSession: r.supports_session, supportsDrill: r.supports_drill, expectedSourceUnit: r.expected_source_unit, sourceUnit: r.source_unit,
+    expectedSourceBoundUnit: r.expected_source_bound_unit, sourceBoundUnit: r.source_bound_unit, boundOperator: r.bound_operator,
+    evidenceStatus: r.evidence_status, evidenceRef: r.evidence_ref, unitEvidenceRef: r.unit_evidence_ref, meaningEvidenceRef: r.meaning_evidence_ref,
+    unitVerifiedAt: r.unit_verified_at, meaningVerifiedAt: r.meaning_verified_at,
+  };
+}
+
 export async function listFields({ ctx, query }) {
   void ctx;
   for (const key of Object.keys(query ?? {})) if (!["sourceSystem", "apiFamily"].includes(key)) throw refusal(400, "invalid_query", "The query carries a parameter this route does not take.");
@@ -503,9 +518,7 @@ export async function listFields({ ctx, query }) {
   )).rows;
   if (fields.length > LIST_CAPS.fields) throw tooLarge(LIST_CAPS.fields);
   const revisions = fields.length === 0 ? [] : (await client.query(
-    `select id, source_metric_definition_id, revision_number, state, value_shape, parameter_kind, supports_session, supports_drill,
-            expected_source_unit, source_unit, expected_source_bound_unit, source_bound_unit, bound_operator,
-            evidence_status, evidence_ref, unit_evidence_ref, meaning_evidence_ref, unit_verified_at, meaning_verified_at
+    `select ${REVISION_COLUMNS}
        from training_load.source_metric_definition_versions
       where source_metric_definition_id = any($1::uuid[])
       order by source_metric_definition_id, revision_number desc`,
@@ -518,13 +531,7 @@ export async function listFields({ ctx, query }) {
     if (list.length > LIST_CAPS.revisionsPerField) throw tooLarge(LIST_CAPS.revisionsPerField);
     return {
       id: f.id, sourceSystem: f.source_system, apiFamily: f.api_family, key: f.source_metric_key, label: f.source_label, state: f.state,
-      revisions: list.map((r) => ({
-        id: r.id, revisionNumber: r.revision_number, state: r.state, valueShape: r.value_shape, parameterKind: r.parameter_kind,
-        supportsSession: r.supports_session, supportsDrill: r.supports_drill, expectedSourceUnit: r.expected_source_unit, sourceUnit: r.source_unit,
-        expectedSourceBoundUnit: r.expected_source_bound_unit, sourceBoundUnit: r.source_bound_unit, boundOperator: r.bound_operator,
-        evidenceStatus: r.evidence_status, evidenceRef: r.evidence_ref, unitEvidenceRef: r.unit_evidence_ref, meaningEvidenceRef: r.meaning_evidence_ref,
-        unitVerifiedAt: r.unit_verified_at, meaningVerifiedAt: r.meaning_verified_at,
-      })),
+      revisions: list.map(revisionOut),
     };
   });
   });
@@ -1227,7 +1234,8 @@ export async function submitVersion({ ctx, mappingId, versionId, body }) {
 
 // ---------------------------------------------------------------------------
 // The machinery the canonical-variable admin service (M3-0,
-// canonicalVariableAdminService.js) shares with M2: one bounded write and read
+// canonicalVariableAdminService.js) and the source-field verification service
+// (M2b, sourceFieldVerificationService.js) share with M2: one bounded write and read
 // discipline, one request-record rule, one right re-check under FOR SHARE, the
 // same input checks and page cursors - never a second copy. Not a public API
 // of the routes.
@@ -1235,5 +1243,5 @@ export async function submitVersion({ ctx, mappingId, versionId, body }) {
 export const adminWriteKit = Object.freeze({
   runWrite, boundedRead, rightsStillHold, refusal, NOT_FOUND, MESSAGES, plainObject, uuidField, boundedText, boundedOut,
   dec, decCmp, hashOf, encodeCursor, decodeCursor, cursorQuery, invalidCursor, ownerKeyOf, CURSOR_AT, LOWER_UUID, UUID,
-  CANONICAL_VERSION_COLUMNS, canonicalParametersOf, notReadyCodeOf,
+  CANONICAL_VERSION_COLUMNS, canonicalParametersOf, notReadyCodeOf, REVISION_COLUMNS, revisionOut,
 });

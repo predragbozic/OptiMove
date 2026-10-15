@@ -674,10 +674,18 @@ test("8. a new version: expectedCurrentVersionId is a precondition (current_vers
 test("9. variable_pinned: a new version of a variable whose current version an active mapping version pins is refused with the stable code (the exact v34 guard), nothing written", async () => {
   const v = await created(W.pa.cookie, { unit: "m", levels: ["session"] });
   const def = await one(k, `insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,'Test field',$2) returning id`, [`m30.test.f${uid()}`, W.pa.id]);
+  // The revision lifecycle has no writer before its own pull request (C91) and
+  // v37 refuses it: written as that pull request will, with v37's two T2b
+  // triggers off for these statements only, in one transaction (v34's guard on).
+  const V37 = ["source_metric_revisions_v37_actor_guard", "source_metric_revisions_v37_audit_link"];
+  await k.query("begin");
+  for (const t of V37) await k.query(`alter table training_load.source_metric_definition_versions disable trigger ${t}`);
   const rev = await one(k, `insert into training_load.source_metric_definition_versions (source_metric_definition_id, revision_number, value_shape, parameter_kind, supports_session, supports_drill, evidence_status, evidence_ref, created_by_user_id) values ($1,1,'number','none',true,true,'observed',$2,$3) returning id`, [def.id, COMPAT, W.pa.id]);
   await k.query(`update training_load.source_metric_definition_versions set source_unit = 'm', unit_verified_by_user_id = $2, unit_verified_at = now(), unit_evidence_ref = $3 where id = $1`, [rev.id, W.pa.id, COMPAT]);
   await k.query(`update training_load.source_metric_definition_versions set meaning_verified_by_user_id = $2, meaning_verified_at = now(), meaning_evidence_ref = $3, evidence_status = 'verified' where id = $1`, [rev.id, W.pa.id, COMPAT]);
   await k.query(`update training_load.source_metric_definition_versions set state = 'active', activated_by_user_id = $2, activated_at = now() where id = $1`, [rev.id, W.pa.id]);
+  for (const t of V37) await k.query(`alter table training_load.source_metric_definition_versions enable trigger ${t}`);
+  await k.query("commit");
   const mapping = await post("/mappings", W.pa.cookie, { requestKey: key(), sourceMetricId: def.id, metricDefinitionId: v.id });
   assert.equal(mapping.status, 201, mapping.text);
   const mv = await post(`/mappings/${mapping.body.mapping.id}/versions`, W.pa.cookie, { requestKey: key(), sourceRevisionId: rev.id, appliesToSession: true, appliesToDrill: false });

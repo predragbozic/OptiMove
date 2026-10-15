@@ -1,6 +1,7 @@
-// Source metric mapping administration (M2) and the canonical-variable admin
-// API (M3-0), mounted at /api/training-load/sources/metrics behind
-// requireAuth. The contracts are sections J1 and J3 of
+// Source metric mapping administration (M2), the canonical-variable admin API
+// (M3-0) and the source-field evidence confirmation (M2b), mounted at
+// /api/training-load/sources/metrics behind requireAuth. The contracts are
+// sections J1, J3 and J4 of
 // docs/ai/gpexe-metric-variable-mapping-discovery.md:
 // a platform admin (platform workspace: the system scope; a club workspace:
 // that club's scope) or a club's own active admin in that club's workspace;
@@ -10,6 +11,7 @@
 import { Router } from "express";
 import * as service from "../sourceMetricMappingService.js";
 import * as variables from "../canonicalVariableAdminService.js";
+import * as fields from "../sourceFieldVerificationService.js";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 
 const router = Router();
@@ -177,6 +179,34 @@ router.post("/variables/:variableId/versions", handle(async (req, res) => {
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await variables.createVariableVersion({ ctx, variableId: req.params.variableId, body: req.body }), 201);
+}));
+
+// Source-field evidence confirmation (M2b, section J4): the field detail for
+// the same audience as /fields; the two acts for an active platform admin in
+// the platform workspace only - everyone else the same 404, before the body is
+// looked at.
+router.get("/fields/:fieldId", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  const detail = await fields.getField({ ctx, fieldId: req.params.fieldId, query: req.query });
+  if (!detail) return notFound(res);
+  res.json(detail);
+}));
+
+router.post("/fields/:fieldId/revisions/:revisionId/unit-verification", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!fields.mayVerify(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await fields.verifyUnit({ ctx, fieldId: req.params.fieldId, revisionId: req.params.revisionId, body: req.body }), 201);
+}));
+
+router.post("/fields/:fieldId/revisions/:revisionId/meaning-verification", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!fields.mayVerify(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await fields.verifyMeaning({ ctx, fieldId: req.params.fieldId, revisionId: req.params.revisionId, body: req.body }), 201);
 }));
 
 // Anything else under this prefix is the same 404.
