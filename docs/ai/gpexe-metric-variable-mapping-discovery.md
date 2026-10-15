@@ -10,8 +10,8 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 |---|---|
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
-| Last verified against commit | `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
-| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), implemented in an open pull request — not merged, not deployed, v36 applied to no persistent database; M2b (the T2b confirmations, v37), the M3 frontend and M4–M6 not started** |
+| Last verified against commit | `60aadb9` (merge of PR #163, M3-0; the base of the M2b pull request) — its tree is the integrated M3-0 branch's own (`a9a6d5e`), so nothing documented changed — before it `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
+| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), merged and deployed (PR #163, `60aadb9`; v36 directly confirmed on production by the owner's read-only post-check); M2b, the source-field evidence confirmation and its database guards v37 (C89–C97, J4), implemented in an open pull request — not merged, not deployed, v37 applied to no persistent database, no production field confirmed; the revision lifecycle (C91), the M3 frontend and M4–M6 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
 **Which changes require a targeted re-verification of this document** (not a repeat of the whole
@@ -736,6 +736,52 @@ the M3-0 delta discovery; as built in section J3):**
 meaning confirmations and their database actor guards - is v37, and comes before the M3 write UI of
 draft mappings (M3c).
 
+**M2b - the source-field evidence confirmation (owner's decisions of 2026-10-15, after the M2b delta
+discovery; as built in section J4):**
+
+89. **Zones (O1):** how closed and open zones share one `bound_operator` per revision is unresolved: M2's
+    version create takes an upper bound exactly for `between`, so one revision cannot carry a closed zone
+    and the open top zone (`[7, ∞)` m/s, ≥ 75 W/kg) alike. Until the owner decides, a zone revision's unit
+    may be confirmed (with its bound unit, on valid evidence), but its meaning act answers
+    `409 verification_model_unresolved` whatever `boundOperator` or `evidenceRef` the body names - after
+    the caller's right (the identical `404`, so a caller who may not verify never learns that a zone
+    exists), the path ids, the body's keys and `requestKey`, the request record and the revision's
+    existence (`404`); before the state, the operator, the reference and the right's re-check under
+    `FOR SHARE` - v37 refuses a zone's meaning act in the
+    database (`23514`, after v34's guard and v37's acting-user checks), and a zone revision never becomes
+    `verified`. An event threshold is not blocked by this model, but is never `verified` without a proven
+    threshold unit, meaning and operator (v34's CHECKs), and its operator is one-sided (`>=`, `>`, `<=`,
+    `<`): v34's parameter shape of an event threshold takes no other, so `between` would leave a write-once
+    proof no mapping version could ever use - it is `400 invalid_operator`, and `23514` in the database
+    (internal review of M2b, 2026-10-15).
+90. **Fail closed (O2):** v37 refuses every T2b write but the two acts (a new revision, a state change,
+    any other update: `23514`) and every T8 row whose chain is not built (every source metric, revision,
+    activation, unit conversion and source instance action but the two verifications; the mapping actions
+    keep v35's chain).
+91. **The revision lifecycle (O3)** - a new revision R+1, its activation, the retirement and the
+    replacement - is the next backend contract and must be finished before the first real production
+    confirmation. M2b may be merged and deployed, but no production seed field is confirmed through it
+    before then. v37 refuses every new revision and state change, so that pull request (and any later
+    seeding migration) replaces v37's T2b guard or adds its own exception with its own actor guard.
+92. **`evidence_status` is always derived by the server (O4):** an act that completes the proof raises it
+    to `verified` (v34's CHECK demands it), otherwise it stays as it was; the first `evidence_ref` of an
+    `unproven` revision is the completing act's reference (v37 checks that in the database too). The
+    client never sends a status.
+93. **The meaning is a reference (O5):** T2b keeps only the stable references (`unit_evidence_ref`,
+    `meaning_evidence_ref`); the content of the meaning stays in the evidence document.
+94. **Rights (O6):** the two acts only by an active platform admin in the platform workspace; everyone
+    else (a club admin, a platform admin in a club workspace, coaches, athletes) the identical `404`,
+    before the body is looked at; the field detail is read like `GET /fields`.
+95. **The reference is checked by format only (O7):** in the service and in the database (v34's
+    `source_metric_evidence_ref_ok`), never against a file at runtime; the evidence document and its
+    anchor are merged before a real act.
+96. **Rollback (O8):** the v37 rollback refuses once any confirmation exists.
+97. **The evidence standard for server3 (O9):** at least two sessions and two or three athletes per
+    session where the field exists, several different non-zero values, the same field, session and
+    athlete compared between the raw server3 answer and the GPEXE UI, the exact factor documented, the
+    evidence sanitized (no identity, no id); the meaning and the bound operator need official
+    documentation or the written confirmation of GPEXE support.
+
 ---
 
 ## D. Accepted model — **implemented as schema in M1 (v34, merged and deployed); read and first written by M2 (J1), used by the importer only from M4**
@@ -1323,7 +1369,7 @@ of C50; the rollback refuses unless these rows are exactly the seed.
 - **Expected versus verified.** `expected_source_unit` and `unit_note` are a hypothesis and never
   enter a mapping. `source_unit` is NULL until a platform admin confirms it in one act that writes
   the unit, `unit_verified_by/at`, `unit_evidence_ref` and the T8 row
-  `source_metric_unit_verified` with the same reference.
+  `source_metric_unit_verified` with the same reference (built by M2b, J4).
 - **Unit and meaning are confirmed separately.** `verified` is possible only when both are
   confirmed (the T2b CHECK). A seen shape proves neither (burst / brake).
 - **A mapping version exists only after the unit is proven** (T4 INSERT trigger); a mapping identity
@@ -1540,7 +1586,8 @@ maintenance, T8 reads, the aggregate preview, the extractor registry, ending a h
 
 **M3-0** (decisions C80–C88) adds the canonical-variable admin API and its request record, migration v36
 (J3), before the M3 frontend. **M2b** - the T2b unit and meaning confirmations and their database actor
-guards - is migration **v37** and comes before the M3 write UI of draft mappings.
+guards - is migration **v37** and comes before the M3 write UI of draft mappings; it is built in J4
+(decisions C89–C97), and the revision lifecycle (C91) follows it.
 
 ### J1. M2 HTTP contract — the first M2 PR (approved by the owner on 2026-10-13; as built)
 
@@ -1683,6 +1730,71 @@ Access, `401`, the identical `404 {"error":"notFound"}`, `Cache-Control: no-stor
   version: `23514`; point-in-time, C82), and append-only triggers (`23514`). Fixed messages. Depends on the v35 functions; the v35 rollback refuses while v36 is recorded. No data
   change.
 
+### J4. M2b — the source-field evidence confirmation and its database guards v37 (as built)
+
+Service `backend/src/sourceFieldVerificationService.js` (M2's machinery, `adminWriteKit`; the revision
+shape `revisionOut` shared with `GET /fields`), routes in `backend/src/routes/sourceMetrics.js`, migration
+`migrations_v2/202610151000_training_load_v37_source_metric_revision_guards.sql`, rollback
+`docs/runbooks/source-metric-revision-guards-v37-rollback.sql`, read-only production preflight and
+post-check `docs/runbooks/source-metric-revision-guards-v37-preflight.sql` / `…-postcheck.sql`, tests
+`backend/tests/source-field-verification-m2b.test.mjs`. Access, `401`, the identical `404
+{"error":"notFound"}`, `Cache-Control: no-store` and `Retry-After: 5` on `try_again` are J1's; `415
+jsonRequired` only for a caller who may verify.
+
+| # | Route | Who | Input | Success | Refusals |
+|---|---|---|---|---|---|
+| F1 | `GET /fields/:fieldId` | as `GET /fields` (C94) | — | `200 {field:{id, sourceSystem, apiFamily, key, label, state, revisions:[revision]}, verifications:[{revisionId, act, at, evidenceRef}]}` (`act` `unit` or `meaning`; never who) | `404`, `400 invalid_query`, `409 result_too_large` |
+| F2 | `POST /fields/:fieldId/revisions/:revisionId/unit-verification` | an active platform admin in the platform workspace (C94) | `requestKey`*, `sourceUnit`* (a unit token), `sourceBoundUnit` (exactly for a zone or an event threshold), `evidenceRef`* | `201 {revision, replayed:false}`; replay or verified COMMIT `200` | `400 invalid_body`, `invalid_unit`, `invalid_evidence_ref`, `bound_unit_required`, `bound_unit_not_allowed`; `404`; `409 unit_already_verified` (+`current`), `revision_retired`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` |
+| F3 | `POST /fields/:fieldId/revisions/:revisionId/meaning-verification` | the same | `requestKey`*, `boundOperator` (exactly for an event threshold, one-sided: `>=`, `>`, `<=`, `<`), `evidenceRef`* | as F2 | `400 invalid_body`, `invalid_evidence_ref`, `invalid_operator` (also `between` on an event threshold), `operator_required`, `operator_not_allowed`; `404`; `409 verification_model_unresolved` (every zone revision, C89: after the right (`404`), the path ids, the body's keys and `requestKey`, the request record and the revision's existence (`404`); before the state, the operator, the reference and the right's re-check), `meaning_already_verified` (+`current`), `revision_retired`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` |
+
+- **A revision:** `{id, fieldId (in F2 / F3), revisionNumber, state, valueShape, parameterKind, supportsSession,
+  supportsDrill, expectedSourceUnit, sourceUnit, expectedSourceBoundUnit, sourceBoundUnit, boundOperator,
+  evidenceStatus, evidenceRef, unitEvidenceRef, meaningEvidenceRef, unitVerifiedAt, meaningVerifiedAt}` -
+  never a verifier's id.
+- **An act:** one `UPDATE` of the revision (its proof columns once, from NULL; `evidence_status` derived,
+  C92) and one T8 row (`source_metric_unit_verified` / `source_metric_meaning_verified`, targets T2a and
+  T2b, the act's reference, basis `platform_admin`, the request key and hash) in one transaction; the T8 row
+  is the request record (one key space with M2's mapping writes, so a key of another operation is
+  `request_key_reused`). The request hash covers the contract version (`source-fields/v1`), the action,
+  both path ids and the normalized body. A wrong act is never overwritten: its correction is a new revision
+  (C91).
+- **Lock order:** the per-user advisory lock (the M2 key) → the request record → the T2b row `FOR UPDATE`
+  (T2a read plainly: a revision that is not retired implies an active field) → the role and user rows
+  `FOR SHARE` (the right again) → the T2b update (v34's and v37's guards) → the T8 row (v34's, v35's and
+  v37's guards) → the bounded COMMIT (v37's deferred link). No T3, T4, canonical or binding row is locked;
+  an M2 version create holds the T2b row `FOR SHARE` and serializes with an act.
+- **The COMMIT:** M2's rule (C79); the right is checked again before the answer.
+- **v37:** three functions, two T2b triggers (`source_metric_revisions_v37_actor_guard` BEFORE INSERT OR
+  UPDATE; `source_metric_revisions_v37_audit_link`, a deferred constraint trigger AFTER UPDATE of the
+  proof), one T8 trigger (`source_metric_audit_v37_revision_guard` BEFORE INSERT) and two indexes (the
+  lookup `source_metric_audit_v37_revision_idx` and the unique `source_metric_audit_v37_verification_once`,
+  one verification row per revision and act); no table, column or data. The acting user (the v35 setting)
+  is an active platform admin (`42501`) and the user the act names (`42501`); everything else is `23514`:
+  a write that is not exactly one act (C90), a zone's meaning act (C89), an event threshold's meaning act
+  without a one-sided operator (C89), a first `evidence_ref` other than the completing act's reference
+  (C92); a savepoint fails closed. Depends on the v35 functions; the v35 and v36 rollbacks refuse while v37
+  is recorded.
+- **For the M3 frontend:** a unit token may hold characters such as `<` (only whitespace, `|`, `=`,
+  control and invisible characters are refused), so every unit and evidence reference is rendered as
+  escaped text - never into `innerHTML` or as an `href` (security review of M2b, 2026-10-15).
+- **What the nine seeded `rest_v1` fields still need (C97; none is confirmed, and none may be before C91):**
+
+  | Field | The unit act needs | The meaning act needs |
+  |---|---|---|
+  | `athlete_session.total_time`, `total_distance`, `max_v` | the server3 raw value against the GPEXE UI for the same field, session and athlete (the expected factors 60 for minutes, 1, 3.6 for km/h are hypotheses) | the field's definition from GPEXE documentation or support |
+  | `more.complementary_data.power.distance`, `speed.distance` | the distance unit (the UI zone table) and the bound unit from the server3 threshold set against the team's settings in the UI (W/kg, m/s) | blocked until the zone model is decided (C89) |
+  | `more.events.acceleration_events_count`, `deceleration_events_count` | `count` and the threshold's unit (the seed carries no hypothesis for it) | the operator (`>=` or `>`, `<=` or `<`) and the meaning from documentation or support |
+  | `details.players.tot_burst_events`, `tot_brake_events` | `{unit: "number"}` is a shape, not a unit | the meaning, which GPEXE support must confirm |
+- **Tests:** the migration and the rehearsed rollback, the database guards (no actor, another user, a
+  non-platform-admin session, both acts in one update, a zone's meaning act, the COMMIT link, the audit
+  chain, a savepoint, an unbuilt action), access, body validation with the JavaScript / database parity of
+  the evidence reference, the two acts and the derived status for a plain field, an event threshold and a
+  zone, the one-sided operator of an event threshold, the first evidence reference, the physical "once",
+  the state codes, idempotency and the replay's right, concurrency (two acts, and an act against a real M2
+  version create in both orders), the COMMIT, the M2 version create after a proven unit, a right revoked
+  inside the write, no actor left and no leak, the nine seeded revisions untouched; mutation evidence. The M2 and M3-0 suites write their revision fixtures with v37's
+  T2b triggers off (the future lifecycle PR's writes, in one transaction; v34's guard stays on).
+
 ---
 
 ## K. Open, but not blocking M1
@@ -1697,7 +1809,9 @@ Decisions that may safely wait, with the PR that takes them:
 - names, descriptions, units, domains and `condition_description` values of the first system
   variables, the zones included (M3 / M6);
 - which activations are `required` in the pilot (M6);
-- the evidence that closes `unit_evidence_ref` and `meaning_evidence_ref` for server3 (M6, gate 2);
+- the evidence that closes `unit_evidence_ref` and `meaning_evidence_ref` for server3 (M6, gate 2) - its
+  standard is decided (C97), what each seeded field still needs is listed in J4, and the owner collects it;
+- the revision lifecycle (C91), before the first real production confirmation, and the zone model (C89);
 - the throttle of the M2 routes (M2); their read and write bounds are decided (C70, J1);
 - the test-runner kind of the M1 suites — `disposable`, through the T1 runner (as built);
 - whether a system-owned zone or threshold mapping may show one team's bounds to every club admin,
