@@ -59,7 +59,7 @@ select
   (case when to_regclass('training_load.source_metric_audit_v37_revision_idx') is null then 0 else 1 end
    + case when to_regclass('training_load.source_metric_audit_v37_verification_once') is null then 0 else 1 end) as v37_indexes;
 
--- 5. The migrator's role may create the functions, triggers and index: CREATE on
+-- 5. The migrator's role may create the functions, triggers and two indexes: CREATE on
 --    the schema, and it owns the two tables (a trigger and an index need it).
 --    Expected: schema_create = true, owns_revisions = true, owns_audit = true.
 select
@@ -97,7 +97,7 @@ select count(*) as actor_defaults
  where cfg like 'optimove.source_metric_actor=%';
 
 -- 9. A quiet moment: creating the two triggers takes SHARE ROW EXCLUSIVE on both
---    tables and the index SHARE on the audit table until the migration commits,
+--    tables and the two indexes SHARE on the audit table until the migration commits,
 --    so no other session holds or waits for a lock mode that conflicts with them
 --    (plain reads - ACCESS SHARE, ROW SHARE - do not), and none is idle in a
 --    transaction.

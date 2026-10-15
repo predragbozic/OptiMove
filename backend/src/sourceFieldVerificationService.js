@@ -271,8 +271,10 @@ export async function verifyMeaning({ ctx, fieldId: rawField, revisionId: rawRev
     body: async (client, operationId) => {
       const rev = await lockedRevision(client, fieldId, revisionId);
       // C89: a zone's meaning is never confirmed until its model is decided,
-      // whatever the body names - after the path ids, the body's keys and
-      // requestKey and the request record, before every other check of the act.
+      // whatever the body names - after the right (404: a caller who may not
+      // verify never learns that a zone exists), the path ids, the body's keys
+      // and requestKey, the request record and the revision's existence (404);
+      // before the state, the operator, the reference and the right's re-check.
       if (rev.parameter_kind === "zone_bounds") throw refusal(409, "verification_model_unresolved", TEXT.verification_model_unresolved);
       if (rev.state === "retired") throw refusal(409, "revision_retired", TEXT.revision_retired);
       if (rev.meaning_verified_at !== null) {

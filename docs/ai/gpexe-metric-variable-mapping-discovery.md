@@ -744,8 +744,10 @@ discovery; as built in section J4):**
     and the open top zone (`[7, ∞)` m/s, ≥ 75 W/kg) alike. Until the owner decides, a zone revision's unit
     may be confirmed (with its bound unit, on valid evidence), but its meaning act answers
     `409 verification_model_unresolved` whatever `boundOperator` or `evidenceRef` the body names - after
-    the path ids, the body's keys and `requestKey`, and the request record; before every other check of
-    the act (the operator, the reference, the state, the right) - v37 refuses a zone's meaning act in the
+    the caller's right (the identical `404`, so a caller who may not verify never learns that a zone
+    exists), the path ids, the body's keys and `requestKey`, the request record and the revision's
+    existence (`404`); before the state, the operator, the reference and the right's re-check under
+    `FOR SHARE` - v37 refuses a zone's meaning act in the
     database (`23514`, after v34's guard and v37's acting-user checks), and a zone revision never becomes
     `verified`. An event threshold is not blocked by this model, but is never `verified` without a proven
     threshold unit, meaning and operator (v34's CHECKs), and its operator is one-sided (`>=`, `>`, `<=`,
@@ -1743,7 +1745,7 @@ jsonRequired` only for a caller who may verify.
 |---|---|---|---|---|---|
 | F1 | `GET /fields/:fieldId` | as `GET /fields` (C94) | — | `200 {field:{id, sourceSystem, apiFamily, key, label, state, revisions:[revision]}, verifications:[{revisionId, act, at, evidenceRef}]}` (`act` `unit` or `meaning`; never who) | `404`, `400 invalid_query`, `409 result_too_large` |
 | F2 | `POST /fields/:fieldId/revisions/:revisionId/unit-verification` | an active platform admin in the platform workspace (C94) | `requestKey`*, `sourceUnit`* (a unit token), `sourceBoundUnit` (exactly for a zone or an event threshold), `evidenceRef`* | `201 {revision, replayed:false}`; replay or verified COMMIT `200` | `400 invalid_body`, `invalid_unit`, `invalid_evidence_ref`, `bound_unit_required`, `bound_unit_not_allowed`; `404`; `409 unit_already_verified` (+`current`), `revision_retired`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` |
-| F3 | `POST /fields/:fieldId/revisions/:revisionId/meaning-verification` | the same | `requestKey`*, `boundOperator` (exactly for an event threshold, one-sided: `>=`, `>`, `<=`, `<`), `evidenceRef`* | as F2 | `400 invalid_body`, `invalid_evidence_ref`, `invalid_operator` (also `between` on an event threshold), `operator_required`, `operator_not_allowed`; `404`; `409 verification_model_unresolved` (every zone revision, C89: after the path ids, the body's keys and `requestKey` and the request record, before every other check of the act), `meaning_already_verified` (+`current`), `revision_retired`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` |
+| F3 | `POST /fields/:fieldId/revisions/:revisionId/meaning-verification` | the same | `requestKey`*, `boundOperator` (exactly for an event threshold, one-sided: `>=`, `>`, `<=`, `<`), `evidenceRef`* | as F2 | `400 invalid_body`, `invalid_evidence_ref`, `invalid_operator` (also `between` on an event threshold), `operator_required`, `operator_not_allowed`; `404`; `409 verification_model_unresolved` (every zone revision, C89: after the right (`404`), the path ids, the body's keys and `requestKey`, the request record and the revision's existence (`404`); before the state, the operator, the reference and the right's re-check), `meaning_already_verified` (+`current`), `revision_retired`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` |
 
 - **A revision:** `{id, fieldId (in F2 / F3), revisionNumber, state, valueShape, parameterKind, supportsSession,
   supportsDrill, expectedSourceUnit, sourceUnit, expectedSourceBoundUnit, sourceBoundUnit, boundOperator,

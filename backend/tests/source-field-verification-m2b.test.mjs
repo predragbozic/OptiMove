@@ -512,7 +512,7 @@ test("2. the database guards: no T2b revision is created and no state, status or
   refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, unit_conversion_id, evidence_ref, performed_by_user_id, basis, operation_id, from_status, to_status) values ('unit_conversion_create',$1,$2,$3,'platform_admin',$4,null,'active')`, [conv, COMPAT, W.pa.id, crypto.randomUUID()])), "23514", NO_WRITER);
 });
 
-test("3. who may call: no session is 401; a coach, an athlete, a platform admin in a team workspace, a revoked club role, an archived club and a revoked platform admin get the same 404 on every field route; a club admin and a platform admin in a club workspace read the field (as /fields) but get the same 404 on both acts, before the body is looked at; an unknown field, a malformed id and a revision of another field are the same 404", async () => {
+test("3. who may call: no session is 401; a coach, an athlete, a platform admin in a team workspace, a revoked club role, an archived club and a revoked platform admin get the same 404 on every field route; a club admin and a platform admin in a club workspace read the field (as /fields) but get the same 404 on both acts, before the body is looked at; an unknown field, a malformed id and a revision of another field are the same 404; a zone's meaning act never tells such a caller that the zone exists", async () => {
   const f = await fixture();
   const other = await fixture();
   for (const p of [`/fields/${f.fieldId}`]) assert.equal((await api(p)).status, 401);
@@ -542,6 +542,13 @@ test("3. who may call: no session is 401; a coach, an athlete, a platform admin 
   const pa = await api(`/fields/${f.fieldId}`, { cookie: W.pa.cookie });
   assert.equal(pa.status, 200);
   assert.equal((await api(`/fields/${f.fieldId}?x=1`, { cookie: W.pa.cookie })).body.error, "invalid_query");
+  // A zone never tells a caller who may not verify that it exists: the identical 404, never its 409.
+  const zone = await fixture({ kind: "zone_bounds" });
+  for (const who of [W.coach, W.athlete, W.paTeam, W.caRevoked, W.caC, W.paRevoked, W.caA, W.paA]) {
+    const res = await post(meaningPath(zone), who.cookie, meaningBody({ boundOperator: "==" }));
+    assert.deepEqual([res.status, res.body], [404, { error: "notFound" }]);
+  }
+  assert.equal((await post(meaningPath(zone), W.pa.cookie, meaningBody({ boundOperator: "==" }))).body.error, "verification_model_unresolved");
 });
 
 test("4. the body: a JSON object only; an unknown or a server-derived field (actor, basis, status, time, state) is invalid_body; the requestKey is a UUID; the unit is a token (invalid_unit, the JavaScript rule agreeing with the database's); the evidence reference is a docs/ path with one anchor (invalid_evidence_ref, agreeing with the database's); the operator is one of the closed set, and one-sided for an event threshold; a bound unit exactly for a bound, an operator exactly for an event threshold; nothing is written", async () => {
