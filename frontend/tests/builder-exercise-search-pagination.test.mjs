@@ -26,6 +26,7 @@ beforeEach(() => {
   calls = [];
   globalThis.fetch = async (path) => {
     const url = new URL(path, "http://localhost");
+    if (url.pathname === "/api/exercises/visible-marked") return response({ ids: [...state.markedExercises.keys()] });
     calls.push(url);
     const offset = Number(url.searchParams.get("offset"));
     const limit = Number(url.searchParams.get("limit"));

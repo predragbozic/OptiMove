@@ -16905,3 +16905,18 @@ body:not(.athlete-mode):not(.login-mode) .sidebar > .brand {
     justify-content: start;
   }
 }
+.exercise-collections-overlay button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.exercise-collections-overlay input,
+.exercise-collections-overlay select {
+  font-size: 16px;
+  max-width: 100%;
+}
+
+.exercise-collections-overlay .exercise-editor-modal {
+  width: min(860px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+}

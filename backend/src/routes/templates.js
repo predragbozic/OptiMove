@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { query } from "../db.js";
+import { pool, query } from "../db.js";
+import { assertExerciseReuseAllowed, withExerciseReuseTransaction } from "../exerciseAccess.js";
 import { canAccessAllAthletes, canAccessAthlete } from "../access.js";
 import { isPlatformAdministrator } from "../authz.js";
 import { createNotification } from "../notifications.js";
@@ -315,7 +316,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
     const subscriptionPeriod = accessModel === "subscription"
       ? normalizeChoice(req.body?.subscriptionPeriod, ["month", "year"], "month")
       : null;
-    const result = await query(
+    const result = await withExerciseReuseTransaction(pool, req.user.id, [planId], (runQuery) => runQuery(
       `
       update plans.plans
       set library_scope = $2,
@@ -361,7 +362,13 @@ router.patch("/:planId/metadata", async (req, res, next) => {
         metadataPolicy.status,
         description,
       ],
-    );
+    ), { shouldCheck: async (runQuery) => {
+      const current = (await runQuery("select status,library_scope,visibility,athlete_can_view_directly from plans.plans where id=$1", [planId])).rows[0];
+      return metadataPolicy.status === "active" && (!current || (current.library_scope || "my") !== metadataPolicy.scope
+        || (current.visibility || "private") !== metadataPolicy.visibility
+        || (!current.athlete_can_view_directly && metadataPolicy.athleteCanViewDirectly)
+        || (current.status || "active") !== "active");
+    } });
     if (!result.rows[0]) return res.status(404).json({ error: "Template not found." });
     res.json({ ok: true, planId: result.rows[0].id });
   } catch (error) {
@@ -517,33 +524,36 @@ router.post("/:planId/assignments", async (req, res, next) => {
     const athleteIds = [...new Set(requestedIds)];
     if (!athleteIds.length) return res.status(400).json({ error: "Choose at least one athlete." });
 
-    const assigned = [];
-    const skipped = [];
-    for (const athleteId of athleteIds) {
-      const athlete = await loadAssignableAthlete(athleteId);
-      if (!athlete) {
-        skipped.push({ athleteId, reason: "Athlete not found." });
-        continue;
+    const result = await withExerciseReuseTransaction(pool, req.user.id, [plan.id], async (runQuery) => {
+      const assigned = [];
+      const skipped = [];
+      for (const athleteId of athleteIds) {
+        const athlete = await loadAssignableAthlete(athleteId);
+        if (!athlete) {
+          skipped.push({ athleteId, reason: "Athlete not found." });
+          continue;
+        }
+        if (!(await canAccessAthlete(query, req, athlete.id))) {
+          skipped.push({ athleteId, athleteName: athlete.name, reason: "No access to this athlete." });
+          continue;
+        }
+        if (!athlete.user_id) {
+          skipped.push({ athleteId, athleteName: athlete.name, reason: "Athlete login is not enabled." });
+          continue;
+        }
+        const access = await assignProgramAccess(plan, athlete.user_id, runQuery);
+        assigned.push({
+          athleteId: athlete.id,
+          athleteCode: athlete.athlete_id || athlete.source_external_id,
+          athleteName: athlete.name,
+          accessId: access.id,
+          status: access.status,
+        });
       }
-      if (!(await canAccessAthlete(query, req, athlete.id))) {
-        skipped.push({ athleteId, athleteName: athlete.name, reason: "No access to this athlete." });
-        continue;
-      }
-      if (!athlete.user_id) {
-        skipped.push({ athleteId, athleteName: athlete.name, reason: "Athlete login is not enabled." });
-        continue;
-      }
-      const access = await assignProgramAccess(plan, athlete.user_id);
-      assigned.push({
-        athleteId: athlete.id,
-        athleteCode: athlete.athlete_id || athlete.source_external_id,
-        athleteName: athlete.name,
-        accessId: access.id,
-        status: access.status,
-      });
-    }
 
-    res.status(201).json({ assigned, skipped });
+      return { assigned, skipped };
+    });
+    res.status(201).json(result);
   } catch (error) {
     next(error);
   }
@@ -798,10 +808,10 @@ async function loadAssignableAthlete(athleteId) {
   return result.rows[0] || null;
 }
 
-async function assignProgramAccess(plan, userId) {
+async function assignProgramAccess(plan, userId, runQuery) {
   const snapshot = licenseSnapshot(plan);
   const expiresAt = accessExpiresAt(plan);
-  const existing = await query(
+  const existing = await runQuery(
     `select id
      from library.program_access
      where plan_id = $1
@@ -819,7 +829,7 @@ async function assignProgramAccess(plan, userId) {
     [plan.id, userId],
   );
   if (existing.rows[0]?.id) {
-    const updated = await query(
+    const updated = await runQuery(
       `update library.program_access
        set status = case when status = 'completed' then 'completed' else 'accessed' end,
            starts_at = coalesce(starts_at, now()),
@@ -834,7 +844,7 @@ async function assignProgramAccess(plan, userId) {
     );
     return updated.rows[0];
   }
-  const inserted = await query(
+  const inserted = await runQuery(
     `insert into library.program_access (
        plan_id, user_id, access_type, status, starts_at, expires_at, source, license_snapshot
      )
@@ -854,92 +864,100 @@ async function assignProgramAccess(plan, userId) {
 }
 
 async function markProgramUsed(req, planId, note) {
-  const user = req.user;
-  const plan = await query(
-    `select id,
-            name,
-            created_by_user_id,
-            access_model,
-            access_duration_days,
-            subscription_period,
-            is_free,
-            price_cents,
-            can_copy,
-            can_edit_copy,
-            can_assign_to_athlete,
-            athlete_can_view_directly,
-            requires_approval
-     from plans.plans
-     where id = $1
-     limit 1`,
-    [planId],
-  );
-  const license = plan.rows[0] || {};
-  const athleteAccess = await loadAthleteLibraryAccess(query, req);
-  const approvalRequired = Boolean(athleteAccess) && (license.requires_approval === true || athleteAccess.require_approval === true);
-  const snapshot = licenseSnapshot(license);
-  const accessType = accessTypeForLicense(license);
-  const expiresAt = accessExpiresAt(license);
-  const existingAccess = await query(
-    `select id, status
-     from library.program_access
-     where plan_id = $1
-       and user_id = $2
-       and access_type = $3
-     order by updated_at desc
-     limit 1`,
-    [planId, user.id, accessType],
-  );
-  const hasApprovedAccess = ["accessed", "used", "completed"].includes(existingAccess.rows[0]?.status);
-  const nextStatus = approvalRequired && !hasApprovedAccess ? "requested" : "used";
-  const eventType = nextStatus === "requested" ? "requested" : "used";
-  const existing = existingAccess.rows[0];
-  const finalStatus = existing?.status === "completed"
-    ? "completed"
-    : ["accessed", "used"].includes(existing?.status) && nextStatus === "requested"
-      ? existing.status
-      : nextStatus;
-  const access = existing?.id
-    ? await query(
-      `update library.program_access
-       set status = $2::varchar,
-           used_at = case when $2::text = 'used' then coalesce(used_at, now()) else used_at end,
-           starts_at = coalesce(starts_at, now()),
-           expires_at = $3,
-           source = $4,
-           license_snapshot = $5::jsonb,
-           updated_at = now()
+  let notification;
+  const result = await withExerciseReuseTransaction(pool, req.user.id, [planId], async (runQuery, client) => {
+    const user = req.user;
+    const plan = await runQuery(
+      `select id,
+              name,
+              created_by_user_id,
+              access_model,
+              access_duration_days,
+              subscription_period,
+              is_free,
+              price_cents,
+              can_copy,
+              can_edit_copy,
+              can_assign_to_athlete,
+              athlete_can_view_directly,
+              requires_approval
+       from plans.plans
        where id = $1
-       returning id, plan_id, user_id, access_type, status, used_at, expires_at, source, license_snapshot`,
-      [existing.id, finalStatus, expiresAt, snapshot.accessModel, JSON.stringify(snapshot)],
-    )
-    : await query(
-      `insert into library.program_access (
-         plan_id, user_id, access_type, status, used_at, starts_at, expires_at, source, license_snapshot
-       )
-       values ($1, $2, $3, $7::varchar, case when $7::text = 'used' then now() else null end, now(), $4, $5, $6::jsonb)
-       returning id, plan_id, user_id, access_type, status, used_at, expires_at, source, license_snapshot`,
-      [planId, user.id, accessType, expiresAt, snapshot.accessModel, JSON.stringify(snapshot), finalStatus],
+       limit 1`,
+      [planId],
     );
-  await query(
-    `insert into library.program_usage_events (program_access_id, user_id, event_type, note)
-     values ($1, $2, $3::varchar, nullif(trim($4::text), ''))`,
-    [access.rows[0].id, user.id, eventType, note],
-  );
-  if (finalStatus === "requested" && existing?.status !== "requested" && license.created_by_user_id && String(license.created_by_user_id) !== String(user.id)) {
-    await createNotification({
-      recipientUserId: license.created_by_user_id,
-      actorUserId: user.id,
-      type: "program_access_requested",
-      title: "Program access request",
-      body: `${user.display_name || user.full_name || user.email || "Athlete"} requested ${license.name || "a program"}.`,
-      entityType: "program_access",
-      entityId: access.rows[0].id,
-      href: "/app?tab=templates&section=requests",
-      metadata: { planId },
-    });
-  }
-  return access.rows[0];
+    const license = plan.rows[0] || {};
+    const athleteAccess = await loadAthleteLibraryAccess(runQuery, req);
+    const approvalRequired = Boolean(athleteAccess) && (license.requires_approval === true || athleteAccess.require_approval === true);
+    const snapshot = licenseSnapshot(license);
+    const accessType = accessTypeForLicense(license);
+    let expiresAt = accessExpiresAt(license);
+    const existingAccess = await runQuery(
+      `select id, status, access_type, expires_at, (expires_at is null or expires_at > now()) as unexpired
+       from library.program_access
+       where plan_id = $1
+         and user_id = $2
+       order by case when access_type <> 'copied' and status in ('accessed','used','completed') and (expires_at is null or expires_at > now()) then 0 else 1 end,
+         (access_type = $3) desc, updated_at desc
+       limit 1`,
+      [planId, user.id, accessType],
+    );
+    const hasApprovedAccess = existingAccess.rows[0]?.access_type !== "copied"
+      && existingAccess.rows[0]?.unexpired === true && ["accessed", "used", "completed"].includes(existingAccess.rows[0]?.status);
+    const nextStatus = approvalRequired && !hasApprovedAccess ? "requested" : "used";
+    if (hasApprovedAccess) expiresAt = existingAccess.rows[0].expires_at;
+    else if (nextStatus !== "requested") await assertExerciseReuseAllowed(client, user.id, { planIds: [planId] });
+    const eventType = nextStatus === "requested" ? "requested" : "used";
+    const existing = existingAccess.rows[0];
+    const finalStatus = hasApprovedAccess && existing?.status === "completed"
+      ? "completed"
+      : hasApprovedAccess && ["accessed", "used"].includes(existing?.status) && nextStatus === "requested"
+        ? existing.status
+        : nextStatus;
+    const access = existing?.id
+      ? await runQuery(
+        `update library.program_access
+         set status = $2::varchar,
+             used_at = case when $2::text = 'used' then coalesce(used_at, now()) else used_at end,
+             starts_at = coalesce(starts_at, now()),
+             expires_at = $3,
+             source = $4,
+             license_snapshot = $5::jsonb,
+             updated_at = now()
+         where id = $1
+         returning id, plan_id, user_id, access_type, status, used_at, expires_at, source, license_snapshot`,
+        [existing.id, finalStatus, expiresAt, snapshot.accessModel, JSON.stringify(snapshot)],
+      )
+      : await runQuery(
+        `insert into library.program_access (
+           plan_id, user_id, access_type, status, used_at, starts_at, expires_at, source, license_snapshot
+         )
+         values ($1, $2, $3, $7::varchar, case when $7::text = 'used' then now() else null end, now(), $4, $5, $6::jsonb)
+         returning id, plan_id, user_id, access_type, status, used_at, expires_at, source, license_snapshot`,
+        [planId, user.id, accessType, expiresAt, snapshot.accessModel, JSON.stringify(snapshot), finalStatus],
+      );
+    await runQuery(
+      `insert into library.program_usage_events (program_access_id, user_id, event_type, note)
+       values ($1, $2, $3::varchar, nullif(trim($4::text), ''))`,
+      [access.rows[0].id, user.id, eventType, note],
+    );
+    if (finalStatus === "requested" && existing?.status !== "requested" && license.created_by_user_id && String(license.created_by_user_id) !== String(user.id)) {
+      notification = {
+        recipientUserId: license.created_by_user_id,
+        actorUserId: user.id,
+        type: "program_access_requested",
+        title: "Program access request",
+        body: `${user.display_name || user.full_name || user.email || "Athlete"} requested ${license.name || "a program"}.`,
+        entityType: "program_access",
+        entityId: access.rows[0].id,
+        href: "/app?tab=templates&section=requests",
+        metadata: { planId },
+      };
+    }
+    return access.rows[0];
+  }, { shouldCheck: () => false });
+  if (notification) await createNotification(notification);
+  return result;
 }
 
 async function findOrCreateProgramTag(user, name) {

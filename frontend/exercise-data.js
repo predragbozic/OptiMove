@@ -16,9 +16,19 @@ export function exerciseSearchUrl(query, limit, filters = {}) {
   return `/api/exercises?${params.toString()}`;
 }
 
-export function applyClientExerciseFilters(exercises, filters) {
+export async function loadMarkedExerciseVisibility(filters) {
+  if (!filters.marked) return [];
+  const ids = [...state.markedExercises.keys()];
+  const data = await api("/api/exercises/visible-marked", { method: "POST", body: JSON.stringify({ ids }) });
+  return data.ids || [];
+}
+
+export function applyClientExerciseFilters(exercises, filters, visibleMarkedIds = []) {
   if (!filters.marked) return exercises;
   const hasOtherFilters = EXERCISE_FILTERS.some((filter) => filters[filter.key]) || filters.favorite;
-  if (!hasOtherFilters) return [...state.markedExercises.values()];
-  return exercises.filter((exercise) => state.markedExerciseIds.has(exercise.id));
+  const visible = new Set(visibleMarkedIds);
+  if (!hasOtherFilters) {
+    return [...state.markedExercises.values()].filter((exercise) => visible.has(exercise.id));
+  }
+  return exercises.filter((exercise) => state.markedExerciseIds.has(exercise.id) && visible.has(exercise.id));
 }

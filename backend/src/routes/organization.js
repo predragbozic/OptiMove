@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { Router } from "express";
 import { pool, query } from "../db.js";
+import { withExerciseReuseTransaction } from "../exerciseAccess.js";
 import {
   canAssignClubRole as authzCanAssignClubRole,
   canAssignTeamRole as authzCanAssignTeamRole,
@@ -1961,7 +1962,7 @@ router.post("/program-access/:accessId/approve", async (req, res, next) => {
     const request = await loadProgramAccessRequest(req.params.accessId);
     if (!request) return res.status(404).json({ error: "Access request not found." });
     if (!(await canManageAthlete(req, request.athlete_id))) return res.status(403).json({ error: "Athlete is outside your access." });
-    const result = await query(
+    const result = await withExerciseReuseTransaction(pool, req.user.id, [request.plan_id], (runQuery) => runQuery(
       `update library.program_access
        set status = 'accessed',
            starts_at = coalesce(starts_at, now()),
@@ -1969,7 +1970,7 @@ router.post("/program-access/:accessId/approve", async (req, res, next) => {
        where id = $1
        returning id, status, updated_at`,
       [req.params.accessId],
-    );
+    ));
     if (result.rows[0]) await notifyProgramAccessDecision(request, req.user, "approved");
     res.json({ access: result.rows[0] });
   } catch (error) {
@@ -2003,7 +2004,7 @@ router.post("/program-access/bulk", async (req, res, next) => {
         continue;
       }
 
-      const result = await query(
+      const approve = (runQuery) => runQuery(
         action === "approve"
           ? `update library.program_access
              set status = 'accessed',
@@ -2020,6 +2021,9 @@ router.post("/program-access/bulk", async (req, res, next) => {
              returning id, status, updated_at`,
         [accessId],
       );
+      const result = action === "approve"
+        ? await withExerciseReuseTransaction(pool, req.user.id, [request.plan_id], approve)
+        : await approve(query);
       if (result.rows[0]) {
         updated.push(result.rows[0]);
         await notifyProgramAccessDecision(request, req.user, action === "approve" ? "approved" : "rejected");

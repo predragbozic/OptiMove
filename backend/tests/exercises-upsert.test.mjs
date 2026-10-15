@@ -15,10 +15,8 @@
 // Disposable-DB harness (a uniquely-named temp database, never OPTIMOVE,
 // never monitoring2), the real Express app driven over real HTTP with
 // real session cookies - same convention as the training-load test
-// files. exercises.js reads/writes only pre-existing legacy schema (never
-// anything migrations_v2 manages), so this file builds its own minimal
-// raw schema directly and never touches migrate.js/the Strategy B runner
-// at all.
+// files. Handbuilt fixtures provide the runtime schema, including source
+// linkage and collection access. They do not validate migrations.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -26,6 +24,7 @@ import http from "node:http";
 import "dotenv/config";
 import pg from "pg";
 import { createDisposableDatabase } from "./support/disposable-db.mjs";
+import { EXERCISE_COLLECTIONS_FIXTURE_SQL } from "./support/exercise-collections-fixture.mjs";
 
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 if (!ORIGINAL_DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -128,6 +127,7 @@ const LIBRARY_FIXTURE_SQL = `
     created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
     owner_scope varchar not null default 'system', owner_user_id uuid references public.users(id), owner_club_id uuid, owner_team_id uuid
   );
+  create unique index fixture_places_global_name_unique on library.places (lower(name));
   create table library.complexity_levels (
     id uuid primary key default gen_random_uuid(), name varchar not null, slug varchar, rank smallint,
     description text, is_active boolean not null default true, created_by_user_id uuid references public.users(id),
@@ -251,6 +251,7 @@ before(async () => {
 
   await adminClient.query(AUTH_FIXTURE_SQL);
   await adminClient.query(LIBRARY_FIXTURE_SQL);
+  await adminClient.query(EXERCISE_COLLECTIONS_FIXTURE_SQL);
 
   process.env.DATABASE_URL = db.url;
   const dbModule = await import("../src/db.js");
@@ -301,6 +302,418 @@ async function makeExercise(ownerUserId, overrides = {}) {
   );
   return result.rows[0].id;
 }
+
+async function makeLibraryAdmin(label) {
+  const admin = await makeCoach(label);
+  await query("insert into public.user_global_roles (user_id,role) values ($1,'platform_admin')", [admin.userId]);
+  return admin;
+}
+
+test("editing a system exercise makes a private copy and leaves the application original unchanged", async () => {
+  const coach = await makeCoach("system-copy");
+  const other = await makeCoach("system-reader");
+  const systemId = await makeExercise(null, { ownerScope: "system", name: "Application original" });
+  const spoofedSourceId = await makeExercise(other.userId, { name: "Foreign spoofed source" });
+  const before = (await query("select * from library.exercises where id = $1", [systemId])).rows[0];
+  const saved = await api(`/api/exercises/${systemId}`, {
+    method: "PATCH", cookie: coach.cookie, body: {
+      name: "Personal variation", instruction: "My instruction",
+      sourceExerciseId: spoofedSourceId, source_exercise_id: spoofedSourceId,
+    },
+  });
+  assert.equal(saved.status, 201);
+  assert.notEqual(saved.body.id, systemId);
+  assert.equal(saved.body.ownerScope, "user");
+  assert.equal(saved.body.sourceExerciseId, systemId);
+  assert.deepEqual((await query(
+    "select owner_user_id,source_exercise_id from library.exercises where id=$1", [saved.body.id],
+  )).rows[0], { owner_user_id: coach.userId, source_exercise_id: systemId });
+  assert.deepEqual((await query("select * from library.exercises where id = $1", [systemId])).rows[0], before);
+  assert.equal((await api(`/api/exercises/${saved.body.id}`, { cookie: other.cookie })).status, 404);
+  assert.equal((await api(`/api/exercises/${systemId}`, { cookie: other.cookie })).body.name, "Application original");
+  const retried = await api(`/api/exercises/${systemId}`, {
+    method: "PATCH", cookie: coach.cookie, body: { name: "Personal variation 2" },
+  });
+  assert.equal(retried.body.id, saved.body.id);
+  assert.equal((await query("select count(*)::integer as count from library.exercises where owner_user_id = $1 and source_exercise_id = $2", [coach.userId, systemId])).rows[0].count, 1);
+});
+
+test("a coach-created exercise ignores ownership and source supplied by the client", async () => {
+  const coach = await makeCoach("create-ownership");
+  const other = await makeCoach("create-ownership-other");
+  const systemId = await makeExercise(null, { ownerScope: "system", name: "Create provenance system" });
+  const foreignId = await makeExercise(other.userId, { name: "Create provenance private" });
+  for (const sourceKey of ["sourceExerciseId", "source_exercise_id"]) {
+    for (const sourceId of [systemId, foreignId]) {
+      const saved = await api("/api/exercises", { method: "POST", cookie: coach.cookie,
+        body: {
+          name: `My original ${sourceKey} ${sourceId}`,
+          ownerScope: "system", ownerUserId: other.userId, [sourceKey]: sourceId,
+        } });
+      assert.equal(saved.status, 201);
+      assert.equal(saved.body.sourceExerciseId, null);
+      assert.equal(saved.body.copiedFromSystem, false);
+      const row = (await query(
+        "select owner_scope,owner_user_id,source_exercise_id from library.exercises where id=$1",
+        [saved.body.id],
+      )).rows[0];
+      assert.deepEqual(row, { owner_scope: "user", owner_user_id: coach.userId, source_exercise_id: null });
+    }
+  }
+});
+
+test("restricted blocks hide the source and each private copy on revocation without sharing copies", async () => {
+  const admin = await makeLibraryAdmin("block-admin");
+  const coach = await makeCoach("block-coach");
+  const other = await makeCoach("block-other");
+  const outsider = await makeCoach("block-outsider");
+  const systemId = await makeExercise(null, { ownerScope: "system", name: "Restricted original" });
+  const created = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: "Selected coaches", exerciseIds: [systemId], userIds: [coach.userId, other.userId] } });
+  assert.equal(created.status, 201);
+  assert.equal((await api(`/api/exercises/${systemId}`, { cookie: outsider.cookie })).status, 404);
+  assert.equal((await api(`/api/exercises/${systemId}`, { cookie: admin.cookie })).status, 200);
+  const saved = await api(`/api/exercises/${systemId}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Private restricted variation" } });
+  assert.equal(saved.status, 201);
+  const preservedCopy = (await query("select * from library.exercises where id=$1", [saved.body.id])).rows[0];
+  assert.equal((await api(`/api/exercises/${saved.body.id}`, { cookie: other.cookie })).status, 404);
+  assert.equal((await api(`/api/exercises/${saved.body.id}`, { cookie: admin.cookie })).status, 404);
+  const changed = await api(`/api/exercise-collections/${created.body.collection.id}`, { method: "PATCH", cookie: admin.cookie,
+    body: { name: "Selected coaches", exerciseIds: [systemId], userIds: [other.userId], expectedRevision: 1 } });
+  assert.equal(changed.status, 200);
+  for (const exerciseId of [systemId, saved.body.id]) {
+    assert.equal((await api(`/api/exercises/${exerciseId}`, { cookie: coach.cookie })).status, 404);
+    assert.equal((await api(`/api/exercises/${exerciseId}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Denied" } })).status, 404);
+    assert.equal((await api(`/api/exercises/${exerciseId}/favorite`, { method: "POST", cookie: coach.cookie })).status, 404);
+    assert.equal((await api(`/api/exercises/${exerciseId}/tags`, { cookie: coach.cookie })).status, 404);
+  }
+  const listed = await api("/api/exercises?search=Restricted", { cookie: coach.cookie });
+  assert.equal(listed.status, 200);
+  assert.equal(listed.body.exercises.some((exercise) => [systemId, saved.body.id].includes(exercise.id)), false);
+  assert.equal((await api(`/api/exercises/${systemId}`, { cookie: other.cookie })).status, 200);
+  assert.equal((await query("select owner_scope,owner_user_id from library.exercises where id=$1", [saved.body.id])).rows[0].owner_user_id, coach.userId);
+  assert.equal((await api("/api/exercise-collections", { cookie: coach.cookie })).status, 404);
+  const stale = await api(`/api/exercise-collections/${created.body.collection.id}`, { method: "PATCH", cookie: admin.cookie,
+    body: { name: "Stale", exerciseIds: [systemId], userIds: [coach.userId], expectedRevision: 1 } });
+  assert.equal(stale.status, 409);
+  assert.equal((await query("select count(*)::integer as count from library.exercise_collection_audit where collection_id=$1", [created.body.collection.id])).rows[0].count, 2);
+  const restored = await api(`/api/exercise-collections/${created.body.collection.id}`, { method: "PATCH", cookie: admin.cookie,
+    body: { name: "Selected coaches", exerciseIds: [systemId], userIds: [coach.userId, other.userId], expectedRevision: 2 } });
+  assert.equal(restored.status, 200);
+  const restoredCopy = await api(`/api/exercises/${saved.body.id}`, { cookie: coach.cookie });
+  assert.equal(restoredCopy.status, 200);
+  assert.equal(restoredCopy.body.name, "Private restricted variation");
+  assert.deepEqual((await query("select * from library.exercises where id=$1", [saved.body.id])).rows[0], preservedCopy);
+  const relisted = await api("/api/exercises?search=Restricted", { cookie: coach.cookie });
+  assert.equal(relisted.body.exercises.some((exercise) => exercise.id === saved.body.id), true);
+  assert.equal((await api(`/api/exercises/${saved.body.id}`, { cookie: other.cookie })).status, 404);
+});
+
+test("deactivating the canonical source hides a private copy without deleting its edits", async () => {
+  const coach = await makeCoach("inactive-source");
+  const systemId = await makeExercise(null, { ownerScope: "system", name: "Deactivation source" });
+  const copy = await api(`/api/exercises/${systemId}`, {
+    method: "PATCH", cookie: coach.cookie, body: { name: "Preserved deactivation variation" },
+  });
+  assert.equal(copy.status, 201);
+  const saved = (await query("select * from library.exercises where id=$1", [copy.body.id])).rows[0];
+  await query("update library.exercises set is_active=false where id=$1", [systemId]);
+  for (const exerciseId of [systemId, copy.body.id]) {
+    assert.equal((await api(`/api/exercises/${exerciseId}`, { cookie: coach.cookie })).status, 404);
+    assert.equal((await api(`/api/exercises/${exerciseId}`, {
+      method: "PATCH", cookie: coach.cookie, body: { name: "Denied source edit" },
+    })).status, 404);
+  }
+  const listed = await api("/api/exercises?search=deactivation", { cookie: coach.cookie });
+  assert.equal(listed.body.exercises.some((exercise) => [systemId, copy.body.id].includes(exercise.id)), false);
+  assert.deepEqual((await query("select * from library.exercises where id=$1", [copy.body.id])).rows[0], saved);
+  await query("update library.exercises set is_active=true where id=$1", [systemId]);
+  const restored = await api(`/api/exercises/${copy.body.id}`, { cookie: coach.cookie });
+  assert.equal(restored.status, 200);
+  assert.equal(restored.body.name, saved.name);
+  assert.equal((await api(`/api/exercises/${systemId}`, {
+    method: "PATCH", cookie: coach.cookie, body: { name: saved.name },
+  })).body.id, copy.body.id);
+});
+
+test("collection rollback refuses existing restricted blocks", async () => {
+  const admin = await makeLibraryAdmin("rollback-guard-admin");
+  const systemId = await makeExercise(null, { ownerScope: "system", name: "Rollback guard source" });
+  const created = await api("/api/exercise-collections", {
+    method: "POST", cookie: admin.cookie,
+    body: { name: "Rollback guard block", exerciseIds: [systemId], userIds: [] },
+  });
+  assert.equal(created.status, 201);
+  const { readFile } = await import("node:fs/promises");
+  await assert.rejects(
+    adminClient.query(await readFile(
+      new URL("../../docs/runbooks/exercise-library-collections-rollback.sql", import.meta.url), "utf8",
+    )),
+    /Rollback refused/,
+  );
+});
+
+test("deactivated platform administrator cannot authenticate with an existing session", async () => {
+  const admin = await makeLibraryAdmin("deactivated-library-admin");
+  assert.equal((await api("/api/exercise-collections", { cookie: admin.cookie })).status, 200);
+  await query("update public.users set is_active=false where id=$1", [admin.userId]);
+  for (const path of ["/api/exercise-collections", "/api/exercises", `/api/builder/plans/${crypto.randomUUID()}`]) {
+    assert.equal((await api(path, { cookie: admin.cookie })).status, 401);
+  }
+});
+
+test("system copy under a REPEATABLE READ pool default cannot reuse the grant revoked while waiting", async () => {
+  const admin = await makeLibraryAdmin("repeatable-revoke-admin");
+  const coach = await makeCoach("repeatable-copy-coach");
+  const source = await makeExercise(null, { ownerScope: "system", name: "RR system source" });
+  const created = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: "RR block", exerciseIds: [source], userIds: [coach.userId] } });
+  assert.equal(created.status, 201);
+  const connections = await Promise.all(Array.from({ length: pool.options.max }, () => pool.connect()));
+  for (const connection of connections) await connection.query("set default_transaction_isolation='repeatable read'");
+  for (const connection of connections) connection.release();
+  const blocker = new pg.Client({ connectionString: db.url });
+  await blocker.connect();
+  async function waitFor(fragment) {
+    const deadline = Date.now() + 1500;
+    while (Date.now() < deadline) {
+      const waiting = await adminClient.query("select pid from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and position($1 in query)>0", [fragment]);
+      if (waiting.rowCount) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.fail("Expected blocked copy/revoke connection");
+  }
+  let revoke;
+  let copy;
+  try {
+    await blocker.query("begin");
+    await blocker.query("lock table library.exercise_collection_audit in share mode");
+    revoke = api(`/api/exercise-collections/${created.body.collection.id}`, { method: "PATCH", cookie: admin.cookie,
+      body: { name: "RR block", exerciseIds: [source], userIds: [], expectedRevision: 1 } });
+    await waitFor("insert into library.exercise_collection_audit");
+    copy = api(`/api/exercises/${source}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Must not be copied" } });
+    await waitFor("pg_advisory_xact_lock_shared(");
+    await blocker.query("commit");
+    assert.equal((await revoke).status, 200);
+    assert.equal((await copy).status, 404);
+    assert.equal((await adminClient.query("select count(*)::integer as count from library.exercises where source_exercise_id=$1", [source])).rows[0].count, 0);
+  } finally {
+    await blocker.query("rollback");
+    await blocker.end();
+    await Promise.allSettled([copy, revoke].filter(Boolean));
+    const reset = await Promise.all(Array.from({ length: pool.options.max }, () => pool.connect()));
+    for (const connection of reset) { await connection.query("set default_transaction_isolation='read committed'"); connection.release(); }
+  }
+});
+
+test("patching an owned private exercise ignores spoofed provenance without cloning or transferring ownership", async () => {
+  const coach = await makeCoach("private-provenance");
+  const other = await makeCoach("private-provenance-other");
+  const canonicalSourceId = await makeExercise(null, { ownerScope: "system", name: "Canonical source" });
+  const spoofedSourceId = await makeExercise(other.userId, { name: "Spoofed private source" });
+  const originalId = await makeExercise(coach.userId, { name: "Private original" });
+  const copy = await api(`/api/exercises/${canonicalSourceId}`, {
+    method: "PATCH", cookie: coach.cookie, body: { name: "Canonical private copy" },
+  });
+  assert.equal(copy.status, 201);
+  const beforeCount = (await query("select count(*)::integer as count from library.exercises")).rows[0].count;
+  for (const [exerciseId, sourceId] of [[originalId, null], [copy.body.id, canonicalSourceId]]) {
+    for (const sourceKey of ["sourceExerciseId", "source_exercise_id"]) {
+      const saved = await api(`/api/exercises/${exerciseId}`, {
+        method: "PATCH", cookie: coach.cookie,
+        body: {
+          name: `Updated private ${sourceKey}`, ownerScope: "system",
+          ownerUserId: other.userId, [sourceKey]: spoofedSourceId,
+        },
+      });
+      assert.equal(saved.status, 200);
+      assert.equal(saved.body.id, exerciseId);
+      assert.equal(saved.body.sourceExerciseId, sourceId);
+      assert.equal(saved.body.copiedFromSystem, false);
+      assert.deepEqual((await query(
+        "select owner_scope,owner_user_id,source_exercise_id from library.exercises where id=$1",
+        [exerciseId],
+      )).rows[0], { owner_scope: "user", owner_user_id: coach.userId, source_exercise_id: sourceId });
+    }
+  }
+  assert.equal((await query("select count(*)::integer as count from library.exercises")).rows[0].count, beforeCount);
+});
+
+test("patching foreign private or inaccessible system exercises with spoofed provenance returns 404 without copying", async () => {
+  const coach = await makeCoach("denied-provenance");
+  const other = await makeLibraryAdmin("denied-provenance-other");
+  const foreignId = await makeExercise(other.userId, { name: "Foreign private provenance" });
+  const restrictedId = await makeExercise(null, { ownerScope: "system", name: "Restricted provenance" });
+  const inactiveId = await makeExercise(null, {
+    ownerScope: "system", name: "Inactive system provenance", isActive: false,
+  });
+  const authorizedId = await makeExercise(null, { ownerScope: "system", name: "Authorized spoof target" });
+  const block = await api("/api/exercise-collections", {
+    method: "POST", cookie: other.cookie,
+    body: { name: "Provenance restricted block", exerciseIds: [restrictedId], userIds: [other.userId] },
+  });
+  assert.equal(block.status, 201);
+  const before = (await query("select * from library.exercises order by id")).rows;
+  for (const exerciseId of [foreignId, restrictedId, inactiveId]) {
+    for (const sourceKey of ["sourceExerciseId", "source_exercise_id"]) {
+      const saved = await api(`/api/exercises/${exerciseId}`, {
+        method: "PATCH", cookie: coach.cookie,
+        body: {
+          name: "Denied provenance edit", place: "Denied provenance place",
+          ownerScope: "user", ownerUserId: coach.userId, [sourceKey]: authorizedId,
+        },
+      });
+      assert.equal(saved.status, 404);
+      assert.deepEqual((await query("select * from library.exercises order by id")).rows, before);
+    }
+  }
+  assert.equal((await query(
+    "select count(*)::integer as count from library.places where name='Denied provenance place'",
+  )).rows[0].count, 0);
+});
+
+for (const scenario of [
+  { name: "active foreign private lookup returns 409 without side effects", scope: "user", active: true, own: false, status: 409 },
+  { name: "inactive foreign private lookup returns 409 without reactivation or side effects", scope: "user", active: false, own: false, status: 409 },
+  { name: "own inactive lookup is reactivated and reused", scope: "user", active: false, own: true, status: 200 },
+  { name: "active system lookup is reused without changing its owner", scope: "system", active: true, own: false, status: 200 },
+  { name: "inactive system lookup returns 409 and remains inactive", scope: "system", active: false, own: false, status: 409 },
+]) {
+  test(scenario.name, async () => {
+    const coach = await makeCoach(`lookup-${scenario.scope}-${scenario.active}-${scenario.own}`);
+    const other = await makeCoach("lookup-other");
+    const exerciseId = await makeExercise(coach.userId, { name: `Lookup exercise ${scenario.name}` });
+    const lookupName = `Lookup place ${scenario.name}`;
+    const ownerId = scenario.scope === "system" ? null : scenario.own ? coach.userId : other.userId;
+    const lookupId = (await query(
+      `insert into library.places (name,owner_scope,owner_user_id,is_active)
+       values ($1,$2,$3,$4) returning id`,
+      [lookupName, scenario.scope, ownerId, scenario.active],
+    )).rows[0].id;
+    const beforePlaces = (await query("select * from library.places order by id")).rows;
+    const beforeExercises = (await query("select * from library.exercises order by id")).rows;
+    const saved = await api(`/api/exercises/${exerciseId}`, {
+      method: "PATCH", cookie: coach.cookie,
+      body: { name: "Lookup edit", place: lookupName.toUpperCase() },
+    });
+    assert.equal(saved.status, scenario.status, JSON.stringify(saved.body));
+    if (scenario.status === 409) {
+      assert.deepEqual((await query("select * from library.places order by id")).rows, beforePlaces);
+      assert.deepEqual((await query("select * from library.exercises order by id")).rows, beforeExercises);
+      const created = await api("/api/exercises", {
+        method: "POST", cookie: coach.cookie,
+        body: { name: "Rejected lookup create", place: lookupName.toUpperCase() },
+      });
+      assert.equal(created.status, 409, JSON.stringify(created.body));
+      assert.deepEqual(created.body, saved.body);
+      assert.deepEqual((await query("select * from library.places order by id")).rows, beforePlaces);
+      assert.deepEqual((await query("select * from library.exercises order by id")).rows, beforeExercises);
+    } else {
+      assert.equal(saved.body.id, exerciseId);
+      assert.equal((await query(
+        "select place_id from library.exercises where id=$1", [exerciseId],
+      )).rows[0].place_id, lookupId);
+      assert.equal((await query(
+        "select count(*)::integer as count from library.places where lower(name)=lower($1)", [lookupName],
+      )).rows[0].count, 1);
+      assert.deepEqual((await query(
+        "select owner_scope,owner_user_id,is_active from library.places where id=$1", [lookupId],
+      )).rows[0], { owner_scope: scenario.scope, owner_user_id: ownerId, is_active: true });
+      if (scenario.scope === "system") {
+        assert.deepEqual((await query("select * from library.places order by id")).rows, beforePlaces);
+      }
+    }
+  });
+}
+
+test("block administration rejects non-admin writes and private exercises without changing grants", async () => {
+  const admin = await makeLibraryAdmin("invalid-block-admin");
+  const coach = await makeCoach("invalid-block-coach");
+  const privateId = await makeExercise(coach.userId);
+  const payload = { name: "Invalid block", exerciseIds: [privateId], userIds: [coach.userId] };
+  assert.equal((await api("/api/exercise-collections", { method: "POST", cookie: coach.cookie, body: payload })).status, 404);
+  assert.equal((await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: payload })).status, 400);
+  assert.equal((await query("select count(*)::integer as count from library.exercise_collections where name='Invalid block'")).rows[0].count, 0);
+});
+
+test("a failed copy save rolls back the exercise and all new lookup values", async () => {
+  const coach = await makeCoach("copy-rollback");
+  const systemId = await makeExercise(null, { ownerScope: "system", name: "Rollback source" });
+  await query("alter table library.tags add constraint reject_copy_failure_tag check (name <> 'force-copy-save-failure')");
+  try {
+    const response = await api(`/api/exercises/${systemId}`, { method: "PATCH", cookie: coach.cookie,
+      body: { name: "Must roll back", place: "Must roll back place", tags: ["force-copy-save-failure"] } });
+    assert.equal(response.status, 500);
+    assert.equal((await query("select count(*)::integer as count from library.exercises where source_exercise_id=$1", [systemId])).rows[0].count, 0);
+    assert.equal((await query("select count(*)::integer as count from library.places where name='Must roll back place'")).rows[0].count, 0);
+    assert.equal((await query("select name from library.exercises where id=$1", [systemId])).rows[0].name, "Rollback source");
+  } finally { await query("alter table library.tags drop constraint reject_copy_failure_tag"); }
+});
+
+test("tag endpoints cannot mutate the application original or remove another user's private tag", async () => {
+  const coach = await makeCoach("tag-owner");
+  const other = await makeCoach("tag-other");
+  const systemId = await makeExercise(null, { ownerScope: "system", name: "System tags original" });
+  const tagId = (await query("insert into library.tags (name,slug,owner_scope,owner_user_id) values ('Other private tag','other-private','user',$1) returning id", [other.userId])).rows[0].id;
+  await query("insert into library.exercise_tags (exercise_id,tag_id) values ($1,$2)", [systemId, tagId]);
+  assert.equal((await api(`/api/exercises/${systemId}/tags`, { method: "POST", cookie: coach.cookie, body: { name: "New tag" } })).status, 409);
+  assert.equal((await api(`/api/exercises/${systemId}/tags/${tagId}`, { method: "DELETE", cookie: coach.cookie })).status, 409);
+  assert.equal((await query("select count(*)::integer as count from library.exercise_tags where exercise_id=$1", [systemId])).rows[0].count, 1);
+  const ownId = await makeExercise(coach.userId);
+  await query("insert into library.exercise_tags (exercise_id,tag_id) values ($1,$2)", [ownId, tagId]);
+  assert.equal((await api(`/api/exercises/${ownId}/tags/${tagId}`, { method: "DELETE", cookie: coach.cookie })).status, 404);
+  assert.equal((await query("select count(*)::integer as count from library.exercise_tags where exercise_id=$1", [ownId])).rows[0].count, 1);
+});
+
+test("a copy edit and grant revocation serialize without committing behind a 500 response", async () => {
+  const admin = await makeLibraryAdmin("race-admin");
+  const coach = await makeCoach("race-coach");
+  const systemId = await makeExercise(null, { ownerScope: "system", name: "Race source" });
+  const block = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: "Race block", exerciseIds: [systemId], userIds: [coach.userId] } });
+  const copy = await api(`/api/exercises/${systemId}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Race copy" } });
+  const blocker = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  await blocker.connect();
+  await query(`create function library.pause_copy_test() returns trigger language plpgsql as $$ begin
+    if new.name = 'Concurrent copy edit' then perform pg_advisory_xact_lock(77441199); end if; return new; end $$;
+    create trigger pause_copy_test before update on library.exercises for each row execute function library.pause_copy_test()`);
+  let editing;
+  let revoking;
+  try {
+    await blocker.query("begin");
+    await blocker.query("select pg_advisory_xact_lock(77441199)");
+    editing = api(`/api/exercises/${copy.body.id}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Concurrent copy edit" } });
+    const deadline = Date.now() + 1500;
+    let paused = false;
+    while (Date.now() < deadline) {
+      paused = (await query("select 1 from pg_stat_activity where datname=current_database() and wait_event='advisory' and query ilike '%update library.exercises set%'")).rowCount > 0;
+      if (paused) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(paused, true);
+    revoking = api(`/api/exercise-collections/${block.body.collection.id}`, { method: "PATCH", cookie: admin.cookie,
+      body: { name: "Race block", exerciseIds: [systemId], userIds: [], expectedRevision: 1 } });
+    const revokeDeadline = Date.now() + 1500;
+    let revokeWaiting = false;
+    while (Date.now() < revokeDeadline) {
+      revokeWaiting = (await query("select 1 from pg_stat_activity where datname=current_database() and wait_event='advisory' and query ilike '%pg_advisory_xact_lock(hashtextextended%'")).rowCount > 0;
+      if (revokeWaiting) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(revokeWaiting, true);
+    await blocker.query("commit");
+    assert.equal((await editing).status, 200);
+    assert.equal((await revoking).status, 200);
+    assert.equal((await api(`/api/exercises/${copy.body.id}`, { cookie: coach.cookie })).status, 404);
+    const hidden = await api("/api/exercises/visible-marked", { method: "POST", cookie: coach.cookie, body: { ids: [systemId, copy.body.id] } });
+    assert.deepEqual(hidden.body.ids, []);
+  } finally {
+    await blocker.query("rollback");
+    await blocker.end();
+    await Promise.allSettled([editing, revoking].filter(Boolean));
+    await query("drop trigger pause_copy_test on library.exercises; drop function library.pause_copy_test()");
+  }
+});
 
 async function api(path, { method = "GET", body, cookie } = {}) {
   const res = await fetch(`${apiBaseUrl}${path}`, {

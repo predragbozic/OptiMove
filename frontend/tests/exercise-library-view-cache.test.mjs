@@ -59,6 +59,7 @@ function mockFetchBySearch(resultsByKey) {
   const calls = [];
   globalThis.fetch = async (url) => {
     calls.push(url);
+    if (String(url).includes("/visible-marked")) return { ok: true, json: async () => ({ ids: [...state.markedExercises.keys()] }) };
     const params = new URL(url, "http://x").searchParams;
     const key = `${params.get("search") || ""}|${params.get("purpose") || ""}|${params.get("favorite") || ""}`;
     return { ok: true, status: 200, json: async () => ({ exercises: resultsByKey[key] || [], hasMore: false }) };
@@ -103,7 +104,7 @@ test("2. a different filter never shows the previous filter's results under its 
   assert.deepEqual(h2.renderCalls[0].map((e) => e.id), ["e2"], "switching filters must never leak the previous filter's results");
 });
 
-test("3. toggling `marked` (client-only, never sent to the server) never triggers a new fetch, and the render still reflects it", async () => {
+test("3. toggling marked reuses search results but revalidates access before rendering local objects", async () => {
   resetState();
   const calls = mockFetchBySearch({ "||": [{ id: "e1", name: "Squat" }, { id: "e2", name: "Bench" }] });
   await searchExercises("", handlers());
@@ -114,8 +115,9 @@ test("3. toggling `marked` (client-only, never sent to the server) never trigger
   state.exerciseSearch.filters.marked = true;
   const h = handlers();
   await searchExercises("", h);
-  assert.equal(calls.length, 1, "toggling `marked` must be served entirely from the already-cached raw exercise list, no new fetch");
-  assert.deepEqual(h.renderCalls[0].map((e) => e.id), ["e1"], "the render must still reflect the current marked set, even though no fetch happened");
+  assert.equal(calls.length, 2);
+  assert.match(calls[1], /visible-marked/);
+  assert.deepEqual(h.renderCalls[0].map((e) => e.id), ["e1"]);
 });
 
 test("4. toggling `favorite` (a real server filter) DOES trigger a new fetch", async () => {

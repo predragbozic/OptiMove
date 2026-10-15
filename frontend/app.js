@@ -89,6 +89,7 @@ import {
 import {
   renderExerciseLibraryHtml,
 } from "./exercise-library.js";
+import { openExerciseCollections } from "./exercise-collections.js";
 import {
   handleExerciseEditorAction,
   handleExerciseEditorInput,
@@ -295,7 +296,7 @@ async function init() {
   startRealtimeInbox((connected) => {
     state.realtimeOffline = !connected;
     renderConnectionIndicator();
-  });
+  }, refreshExerciseLibraryAccess);
   startInboxPolling();
   await loadAthletes();
 }
@@ -2545,6 +2546,12 @@ async function handleContentClick(event) {
     moveNodeSibling(type === "node-next" ? 1 : -1);
     return;
   }
+  if (type === "open-exercise" && state.activeTab === "exercises") {
+    const item = getItemById(action.dataset.itemId);
+    if (!item?.id) return;
+    try { await api(`/api/exercises/${encodeURIComponent(item.id)}`); }
+    catch { await refreshExerciseLibraryAccess(); return; }
+  }
   if (handleExerciseDetailAction(action, {
     getItemById,
     moveExerciseDetail,
@@ -2553,6 +2560,10 @@ async function handleContentClick(event) {
     renderExerciseDetail,
   })) return;
   if (await handleExerciseLibraryAction(action, { renderExercises, setLoading })) return;
+  if (type === "exercise-collections-open") {
+    await openExerciseCollections(exerciseEditorHandlers.refreshAfterSave);
+    return;
+  }
   if (type === "exercise-edit-open") {
     void openExerciseEditor(state, exerciseEditorHandlers, action.dataset.exerciseId || "");
     return;
@@ -3458,7 +3469,6 @@ function renderExercises(exercises) {
   state.lastExerciseResults = exercises;
   els.context.textContent = "Exercise library";
   els.title.textContent = "Exercise Library";
-  if (!exercises.length) return renderEmpty("No exercises for this search.");
   const itemIds = registerItems(exercises);
   state.exerciseDetail = { ids: itemIds, currentId: null };
   els.content.innerHTML = renderExerciseLibraryHtml({
@@ -3495,6 +3505,34 @@ function renderExerciseEditorOverlay() {
   els.content.querySelector(".exercise-editor-overlay")?.remove();
   if (!state.exerciseEditor.open) return;
   els.content.insertAdjacentHTML("beforeend", renderExerciseEditorHtml(state.exerciseEditor, state.exerciseSearch.options));
+}
+
+async function refreshExerciseLibraryAccess() {
+  invalidateExercisesCache();
+  state.exerciseSearch.options = {};
+  if (state.activeTab !== "exercises" && state.activeTab !== "builder") return;
+  const editor = state.exerciseEditor;
+  let keepEditor = editor.open && editor.isNew;
+  if (editor.open && editor.exerciseId) {
+    try { await api(`/api/exercises/${encodeURIComponent(editor.exerciseId)}`); keepEditor = true; }
+    catch { keepEditor = false; }
+  }
+  state.exerciseEditor.open = false;
+  state.tagEditor.open = false;
+  for (const [id, item] of itemRegistry) if (item.owner_scope) itemRegistry.delete(id);
+  state.exerciseDetail = { ids: [], currentId: null };
+  if (state.activeTab === "exercises") {
+    state.navStack = [];
+    await loadExercises({ renderExercises, setLoading });
+  } else if (state.activeTab === "builder") {
+    document.querySelector(".exercise-detail-overlay")?.remove();
+    document.querySelector(".exercise-editor-overlay:not(.exercise-collections-overlay)")?.remove();
+    await loadBuilderExercises();
+  }
+  if (keepEditor && state.exerciseEditor === editor) {
+    editor.open = true;
+    renderExerciseEditorOverlay();
+  }
 }
 
 const exerciseEditorHandlers = {

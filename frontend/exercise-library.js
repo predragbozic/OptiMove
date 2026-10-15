@@ -60,6 +60,7 @@ export function renderExerciseLibraryHtml(data) {
       ${search.term ? `<span class="item-badge">${escapeHtml(search.term)}</span>` : ""}
       ${activeExerciseFilterLabels(search.filters).map((label) => `<span class="item-badge">${escapeHtml(label)}</span>`).join("")}
       <button class="plain-button compact-button" type="button" data-action="exercise-add-open">+ Add exercise</button>
+      ${search.canManageCollections ? `<button class="plain-button compact-button" type="button" data-action="exercise-collections-open">Manage application blocks</button>` : ""}
     </div>
     <div class="exercise-grid">
       ${exercises.map((exercise, index) => renderExerciseLibraryCard(exercise, itemIds[index], markedExerciseIds)).join("")}
@@ -112,6 +113,7 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds) {
       <button class="exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
         <span class="exercise-head">
           <span class="exercise-title">${escapeHtml(exercise.name || "")}</span>
+          ${exercise.owner_scope ? `<span class="item-badge">${exercise.owner_scope === "system" ? "Application" : "My exercise"}</span>` : ""}
         </span>
         <span class="muted">${escapeHtml(exercise.aim || "")}</span>
         <span class="item-description">${escapeHtml(exercise.execution_notes || exercise.instruction || "")}</span>
@@ -119,7 +121,7 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds) {
       <div class="exercise-card-actions">
         <button class="text-action" type="button" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${exercise.is_favorite ? "true" : "false"}">${exercise.is_favorite ? "Unfavorite" : "Favorite"}</button>
         <button class="text-action" type="button" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}">${marked ? "Unmark" : "Mark"}</button>
-        <button class="text-action" type="button" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(exercise.name || "Exercise")}">Tags${tags.length ? ` (${tags.length})` : ""}</button>
+        <button class="text-action" type="button" data-action="${exercise.owner_scope === "system" ? "exercise-edit-open" : "exercise-tags"}" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(exercise.name || "Exercise")}">${exercise.owner_scope === "system" ? "Customize tags in private copy" : `Tags${tags.length ? ` (${tags.length})` : ""}`}</button>
         <button class="text-action" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>
       </div>
       ${tags.length ? `<div class="exercise-tag-list">${tags.slice(0, 4).map((tag) => `<span>${escapeHtml(tag.name)}</span>`).join("")}${tags.length > 4 ? `<span>+${tags.length - 4}</span>` : ""}</div>` : ""}

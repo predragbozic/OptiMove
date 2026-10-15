@@ -12,7 +12,7 @@ let realtimeSource = null;
 // once a retry succeeds, flipping the caller's indicator back). Optional -
 // callers that don't care about connection status can omit it entirely,
 // same as before this parameter existed.
-export function startRealtimeInbox(onConnectionChange) {
+export function startRealtimeInbox(onConnectionChange, onExerciseLibraryChange) {
   if (realtimeSource || !state.currentUser || typeof EventSource === "undefined") return;
   realtimeSource = new EventSource("/api/realtime");
   realtimeSource.addEventListener("messages_changed", async (event) => {
@@ -27,7 +27,9 @@ export function startRealtimeInbox(onConnectionChange) {
   });
   realtimeSource.onopen = () => {
     onConnectionChange?.(true);
+    void onExerciseLibraryChange?.();
   };
+  realtimeSource.addEventListener("exercise_library_changed", () => { void onExerciseLibraryChange?.(); });
   realtimeSource.onerror = () => {
     // EventSource reconnects automatically. Polling remains as a fallback for notifications.
     onConnectionChange?.(false);

@@ -5,9 +5,74 @@ import { createBuilderTiming } from "../builderTiming.js";
 import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySessions, updateBuilderWeeklyDays } from "../builderTreeBatch.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
+import { exerciseReadScopeSql, lockExerciseReuse, assertExerciseReuseAllowed } from "../exerciseAccess.js";
 import { isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 
 const router = Router();
+let activeBatchGuards = 0;
+
+function withBatchReuseGuard(handler) {
+  return async (req, res, next) => {
+    let client;
+    let guard;
+    let admitted = false;
+    try {
+      if (!wantsBatchSync(req, {}) || (req.method === "DELETE" && req.params.planId)) return await handler(req, res, next);
+      let context;
+      if (req.params.planId) context = await getEditablePlan(req, req.params.planId);
+      else if (req.params.targetDayId) context = (await getEditableBlock(req, req.params.targetDayId))?.plan;
+      else if (req.route.path === "/nodes/:nodeId/copy") context = (await getEditableSession(req, req.body?.targetSessionId))?.plan;
+      else if (req.params.blockId || req.params.dayId) context = (await getEditableBlock(req, req.params.blockId || req.params.dayId))?.plan;
+      else if (req.params.sessionId) context = (await getEditableSession(req, req.params.sessionId))?.plan;
+      else if (req.params.nodeId) context = (await getEditableNode(req, req.params.nodeId))?.plan;
+      else if (req.params.itemId) context = (await getEditableItem(req, req.params.itemId))?.plan;
+      if (!context?.builder_batch_id || !wantsBatchSync(req, context)) return await handler(req, res, next);
+      const capacity = Math.floor((pool.options.max - 1) / 2);
+      if (activeBatchGuards >= capacity) {
+        const error = new Error("builderBusy");
+        error.status = 503;
+        throw error;
+      }
+      activeBatchGuards += 1;
+      admitted = true;
+      client = await pool.connect();
+      await client.query("begin isolation level read committed");
+      await lockExerciseReuse(client);
+      const siblings = await client.query(`select 1 from plans.plans sibling
+        where sibling.builder_batch_id=$1 and sibling.id<>$2 and sibling.created_by_user_id=$3
+          and sibling.status='draft' and coalesce(sibling.is_active,true) and not coalesce(sibling.is_edit_draft,false)
+          and exists (select 1 from plans.plans source where source.id=$2 and source.created_by_user_id=$3)
+        limit 1`, [context.builder_batch_id, context.id, req.user.id]);
+      if (siblings.rowCount) {
+        const scope = { planIds: [context.id] };
+        if (req.method === "DELETE") {
+          if (req.params.itemId) scope.excludeItemIds = [req.params.itemId];
+          else if (req.params.nodeId) scope.excludeNodeIds = [req.params.nodeId];
+          else if (req.params.sessionId) scope.excludeSessionIds = [req.params.sessionId];
+          else if (req.params.blockId) scope.excludeDayIds = [req.params.blockId];
+        } else if (req.params.targetDayId) {
+          scope.excludeDayIds = [req.params.targetDayId];
+          const source = req.params.dayId
+            ? await getEditableBlock(req, req.params.dayId)
+            : await getCopySourceBlock(req, req.params.blockId);
+          if (source) scope.dayIds = [source.id];
+        }
+        await assertExerciseReuseAllowed(client, req.user.id, scope);
+      }
+      guard = { active: true };
+      req.exerciseReuseGuard = guard;
+      return await handler(req, res, next);
+    } catch (error) { next(error); }
+    finally {
+      if (guard) guard.active = false;
+      if (client) {
+        try { await client.query("rollback"); } catch {}
+        client.release();
+      }
+      if (admitted) activeBatchGuards -= 1;
+    }
+  };
+}
 
 // ------------------------------------------------------------
 // training_load.plan_workspace_ownership (migrations_v2/202609040900) -
@@ -193,16 +258,16 @@ router.get("/plans/:planId", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-router.patch("/plans/:planId", async (req, res, next) => {
+router.patch("/plans/:planId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
     const name = text(req.body?.name) || (plan.plan_type === "weekly" ? `Weekly plan ${plan.week_start}` : plan.name);
     const coverImageUrl = req.body?.coverImageUrl === undefined ? plan.cover_image_url : nullableText(req.body.coverImageUrl);
     await query("update plans.plans set name = $2, cover_image_url = $3, updated_at = now() where id = $1", [plan.id, name, coverImageUrl]);
-    return respondWithDraft(req, res, req.user, plan);
+    return await respondWithDraft(req, res, req.user, plan);
   } catch (error) { next(error); }
-});
+}));
 
 // Training Activity Integration 2A: the Weekly plan's own "Training load"
 // settings - defaults applied to a BRAND-NEW session only (see POST
@@ -212,7 +277,7 @@ router.patch("/plans/:planId", async (req, res, next) => {
 // the per-session CHECK/PATCH routes already enforce, kept consistent at
 // the plan level even though nothing currently reads these two columns
 // together at write time.
-router.patch("/plans/:planId/training-load-settings", async (req, res, next) => {
+router.patch("/plans/:planId/training-load-settings", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
     const accessPlan = await requirePlan(req, req.params.planId, res);
@@ -240,12 +305,12 @@ router.patch("/plans/:planId/training-load-settings", async (req, res, next) => 
     await client.query("commit");
     client.release();
     client = null;
-    return respondWithDraft(req, res, req.user, plan);
+    return await respondWithDraft(req, res, req.user, plan);
   } catch (error) {
     if (client) { try { await client.query("rollback"); } catch {} client.release(); }
     next(error);
   }
-});
+}));
 
 // Three explicit bulk actions over the CURRENTLY OPEN draft's own
 // sessions - the only way this feature ever touches an EXISTING session's
@@ -256,7 +321,7 @@ router.patch("/plans/:planId/training-load-settings", async (req, res, next) => 
 // default/plan.request_rpe_default below - the source values these bulk
 // actions apply are always the freshest committed ones, never a pre-lock
 // snapshot that a concurrent settings PATCH could have already superseded.
-router.post("/plans/:planId/training-load-settings/apply-to-training-sessions", async (req, res, next) => {
+router.post("/plans/:planId/training-load-settings/apply-to-training-sessions", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
     const accessPlan = await requirePlan(req, req.params.planId, res);
@@ -277,14 +342,14 @@ router.post("/plans/:planId/training-load-settings/apply-to-training-sessions", 
     await client.query("commit");
     client.release();
     client = null;
-    return respondWithDraft(req, res, req.user, plan);
+    return await respondWithDraft(req, res, req.user, plan);
   } catch (error) {
     if (client) { try { await client.query("rollback"); } catch {} client.release(); }
     next(error);
   }
-});
+}));
 
-router.post("/plans/:planId/training-load-settings/turn-off-before-after", async (req, res, next) => {
+router.post("/plans/:planId/training-load-settings/turn-off-before-after", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
     const accessPlan = await requirePlan(req, req.params.planId, res);
@@ -305,14 +370,14 @@ router.post("/plans/:planId/training-load-settings/turn-off-before-after", async
     await client.query("commit");
     client.release();
     client = null;
-    return respondWithDraft(req, res, req.user, plan);
+    return await respondWithDraft(req, res, req.user, plan);
   } catch (error) {
     if (client) { try { await client.query("rollback"); } catch {} client.release(); }
     next(error);
   }
-});
+}));
 
-router.post("/plans/:planId/training-load-settings/turn-off-all-rpe", async (req, res, next) => {
+router.post("/plans/:planId/training-load-settings/turn-off-all-rpe", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
     const accessPlan = await requirePlan(req, req.params.planId, res);
@@ -335,24 +400,24 @@ router.post("/plans/:planId/training-load-settings/turn-off-all-rpe", async (req
     await client.query("commit");
     client.release();
     client = null;
-    return respondWithDraft(req, res, req.user, plan);
+    return await respondWithDraft(req, res, req.user, plan);
   } catch (error) {
     if (client) { try { await client.query("rollback"); } catch {} client.release(); }
     next(error);
   }
-});
+}));
 
-router.post("/plans/:planId/sync-batch", async (req, res, next) => {
+router.post("/plans/:planId/sync-batch", withBatchReuseGuard(async (req, res, next) => {
   try {
     const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
-    if (plan.builder_batch_id && !plan.is_edit_draft) await syncBatchFromPlan(plan, req.user);
+    if (plan.builder_batch_id && !plan.is_edit_draft) await syncBatchFromPlan(plan, req.user, req.exerciseReuseGuard);
     const freshPlan = await getEditablePlan(req, plan.id);
     res.json(await buildDraft(freshPlan || plan));
   } catch (error) { next(error); }
-});
+}));
 
-router.post("/plans", async (req, res, next) => {
+router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
     const requestedName = text(req.body?.name);
@@ -429,9 +494,9 @@ router.post("/plans", async (req, res, next) => {
     }
     next(error);
   }
-});
+}));
 
-router.post("/plans/:planId/submit", async (req, res, next) => {
+router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) => {
   let client;
   const timing = createBuilderTiming(res);
   try {
@@ -485,7 +550,7 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
     // whichever of the two reaches the row first.
     let activatedPlans;
     if (shouldSyncBatch) {
-      const result = await timing.measure("batch", () => syncAndActivateBatchWithClient(client, plan.id, req.user));
+      const result = await timing.measure("batch", () => syncAndActivateBatchWithClient(client, plan.id, req.user, req.exerciseReuseGuard));
       if (result.emptyDraftResponse) {
         await client.query("commit");
         client.release();
@@ -518,6 +583,7 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
       );
       activatedPlans = updated.rows;
     }
+    await assertExerciseReuseAllowed(client, req.user.id, { planIds: activatedPlans.map((activated) => activated.id), guard: req.exerciseReuseGuard });
     const notifiedUserIds = await timing.measure("notifications", () => notifyPlanAssignments(client, activatedPlans, req.user.id));
     await client.query("commit");
     client.release();
@@ -533,9 +599,9 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
     }
     next(error);
   }
-});
+}));
 
-router.post("/plans/:planId/duplicate", async (req, res, next) => {
+router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, next) => {
   let client;
   const timing = createBuilderTiming(res);
   try {
@@ -631,6 +697,7 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     const planOwner = source.plan_type === "weekly" ? weeklyPlanOwnerScope.ownerContext : null;
     client = await timing.measure("pool", () => pool.connect());
     await client.query("begin");
+    await lockExerciseReuse(client, req.exerciseReuseGuard);
 
     if (intent === "assign") {
       let claimed = false;
@@ -739,6 +806,7 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
                      updated_at = now()`,
       [source.id, req.user.id, createdIds[0]],
     );
+    await assertExerciseReuseAllowed(client, req.user.id, { planIds: createdIds, guard: req.exerciseReuseGuard });
     const notifiedUserIds = intent === "assign" ? await notifyPlanAssignments(client, assignedPlans, req.user.id) : [];
     // "assignments" lists every plan this call created (not just the first) -
     // required for a multi-athlete duplicate (e.g. the open-Builder "Assign
@@ -771,9 +839,9 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     }
     next(error);
   }
-});
+}));
 
-router.post("/plans/:planId/edit", async (req, res, next) => {
+router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) => {
   let client;
   const timing = createBuilderTiming(res);
   try {
@@ -851,9 +919,9 @@ router.post("/plans/:planId/edit", async (req, res, next) => {
     }
     next(error);
   }
-});
+}));
 
-router.delete("/plans/:planId", async (req, res, next) => {
+router.delete("/plans/:planId", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
     const plan = await requirePlan(req, req.params.planId, res);
@@ -869,9 +937,9 @@ router.delete("/plans/:planId", async (req, res, next) => {
     if (client) { try { await client.query("rollback"); } catch {} }
     next(error);
   } finally { client?.release(); }
-});
+}));
 
-router.post("/plans/:planId/blocks", async (req, res, next) => {
+router.post("/plans/:planId/blocks", withBatchReuseGuard(async (req, res, next) => {
   try {
     const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
@@ -882,21 +950,21 @@ router.post("/plans/:planId/blocks", async (req, res, next) => {
        values ($1, $2, $3, $4, $5, $6)`,
       [plan.id, next, next, text(req.body?.name) || `Block ${next}`, text(req.body?.type) || "session", nullableText(req.body?.note)],
     );
-    return respondWithDraft(req, res, req.user, plan, { status: 201 });
+    return await respondWithDraft(req, res, req.user, plan, { status: 201 });
   } catch (error) { next(error); }
-});
+}));
 
-router.delete("/blocks/:blockId", async (req, res, next) => {
+router.delete("/blocks/:blockId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
     if (block.plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plan days cannot be deleted." });
     await deleteBlockTree(block.id);
-    return respondWithDraft(req, res, req.user, block.plan);
+    return await respondWithDraft(req, res, req.user, block.plan);
   } catch (error) { next(error); }
-});
+}));
 
-router.post("/blocks/:blockId/copy", async (req, res, next) => {
+router.post("/blocks/:blockId/copy", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
     const block = await getEditableBlock(req, req.params.blockId);
@@ -908,6 +976,7 @@ router.post("/blocks/:blockId/copy", async (req, res, next) => {
     const nextBlockOrder = await nextOrder("plans.plan_days", "plan_id", block.plan.id, "block_order");
     client = await pool.connect();
     await client.query("begin");
+    await lockExerciseReuse(client, req.exerciseReuseGuard);
     const created = await client.query(
       `insert into plans.plan_days (plan_id, block_index, block_order, block_name, block_type, day_note)
        values ($1, $2, $3, $4, $5, $6) returning id`,
@@ -927,10 +996,11 @@ router.post("/blocks/:blockId/copy", async (req, res, next) => {
       );
       await copySessionContent(client, session.id, createdSession.rows[0].id);
     }
+    await assertExerciseReuseAllowed(client, req.user.id, { dayIds: [newBlockId], guard: req.exerciseReuseGuard });
     await client.query("commit");
     client.release();
     client = null;
-    return respondWithDraft(req, res, req.user, block.plan, { status: 201 });
+    return await respondWithDraft(req, res, req.user, block.plan, { status: 201 });
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -938,7 +1008,7 @@ router.post("/blocks/:blockId/copy", async (req, res, next) => {
     }
     next(error);
   }
-});
+}));
 
 // Content-only paste into a weekly day - replaces the target day's
 // sessions/nodes/items with the source's, but never touches either day's
@@ -973,12 +1043,14 @@ async function respondCopyIntoDay(req, res, next, source, target, { allowCrossPl
     }
 
     await client.query("begin");
+    await lockExerciseReuse(client, req.exerciseReuseGuard);
     await deleteDayContentWithClient(client, target.id);
     await copyDaySessions(client, source.id, target.id);
+    await assertExerciseReuseAllowed(client, req.user.id, { dayIds: [target.id], guard: req.exerciseReuseGuard });
     await client.query("commit");
     client.release();
     client = null;
-    return respondWithDraft(req, res, req.user, target.plan);
+    return await respondWithDraft(req, res, req.user, target.plan);
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -988,22 +1060,22 @@ async function respondCopyIntoDay(req, res, next, source, target, { allowCrossPl
   }
 }
 
-router.post("/days/:dayId/copy-into/:targetDayId", async (req, res, next) => {
+router.post("/days/:dayId/copy-into/:targetDayId", withBatchReuseGuard(async (req, res, next) => {
   const source = await getEditableBlock(req, req.params.dayId);
   const target = await getEditableBlock(req, req.params.targetDayId);
   return respondCopyIntoDay(req, res, next, source, target);
-});
+}));
 
 // Phase 2 (+ later, "Weekly plan" as a source): copy a block/day from a
 // Template, Specific Program, or another Weekly plan (any plan the coach
 // has read/copy access to, via getCopySourceBlock below - not necessarily
 // one they can edit, e.g. a marketplace template) into a day of the weekly
 // plan currently open in the Builder.
-router.post("/blocks/:blockId/copy-into/:targetDayId", async (req, res, next) => {
+router.post("/blocks/:blockId/copy-into/:targetDayId", withBatchReuseGuard(async (req, res, next) => {
   const source = await getCopySourceBlock(req, req.params.blockId);
   const target = await getEditableBlock(req, req.params.targetDayId);
   return respondCopyIntoDay(req, res, next, source, target, { allowCrossPlan: true });
-});
+}));
 
 // Lightweight per-block summary (id, label, session/item counts) for a
 // plan the coach has read/copy access to - powers the "pick a block to
@@ -1123,7 +1195,7 @@ router.get("/sessions/:sessionId/nodes", async (req, res, next) => {
 // READ/copy access (getCopySourceSession) - the coach doesn't need edit
 // rights on the plan they're copying FROM, only on the plan they're
 // pasting INTO (getEditableBlock, unchanged).
-router.post("/sessions/:sessionId/copy-into/:targetDayId", async (req, res, next) => {
+router.post("/sessions/:sessionId/copy-into/:targetDayId", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
     const source = await getCopySourceSession(req, req.params.sessionId);
@@ -1138,6 +1210,7 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", async (req, res, next
       [target.id],
     );
     await client.query("begin");
+    await lockExerciseReuse(client, req.exerciseReuseGuard);
     const created = await client.query(
       // session_time/rpe_enabled/training_load_enabled: content
       // properties, always copied unconditionally (session_time was
@@ -1148,10 +1221,11 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", async (req, res, next
       [target.id, source.am_pm, source.bta, source.session_time, nextOrderResult.rows[0].next_order, source.name, source.rpe_enabled, source.training_load_enabled],
     );
     await copySessionContent(client, source.id, created.rows[0].id);
+    await assertExerciseReuseAllowed(client, req.user.id, { sessionIds: [created.rows[0].id], guard: req.exerciseReuseGuard });
     await client.query("commit");
     client.release();
     client = null;
-    return respondWithDraft(req, res, req.user, target.plan);
+    return await respondWithDraft(req, res, req.user, target.plan);
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -1159,9 +1233,9 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", async (req, res, next
     }
     next(error);
   }
-});
+}));
 
-router.patch("/blocks/:blockId", async (req, res, next) => {
+router.patch("/blocks/:blockId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
@@ -1169,11 +1243,11 @@ router.patch("/blocks/:blockId", async (req, res, next) => {
       "update plans.plan_days set block_name = $2, day_note = $3, updated_at = now() where id = $1",
       [block.id, nullableText(req.body?.name), nullableText(req.body?.note)],
     );
-    return respondWithDraft(req, res, req.user, block.plan);
+    return await respondWithDraft(req, res, req.user, block.plan);
   } catch (error) { next(error); }
-});
+}));
 
-router.post("/blocks/:blockId/sessions", async (req, res, next) => {
+router.post("/blocks/:blockId/sessions", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
     const block = await getEditableBlock(req, req.params.blockId);
@@ -1245,14 +1319,14 @@ router.post("/blocks/:blockId/sessions", async (req, res, next) => {
     await client.query("commit");
     client.release();
     client = null;
-    return respondWithDraft(req, res, req.user, block.plan, { status: 201 });
+    return await respondWithDraft(req, res, req.user, block.plan, { status: 201 });
   } catch (error) {
     if (client) { try { await client.query("rollback"); } catch {} client.release(); }
     next(error);
   }
-});
+}));
 
-router.patch("/sessions/:sessionId", async (req, res, next) => {
+router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
     const session = await getEditableSession(req, req.params.sessionId);
@@ -1294,7 +1368,7 @@ router.patch("/sessions/:sessionId", async (req, res, next) => {
         "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, updated_at = now() where id = $1",
         [session.id, sessionTime, name, amPm, bta],
       );
-      return respondWithDraft(req, res, req.user, session.plan);
+      return await respondWithDraft(req, res, req.user, session.plan);
     }
 
     client = await pool.connect();
@@ -1346,23 +1420,23 @@ router.patch("/sessions/:sessionId", async (req, res, next) => {
     await client.query("commit");
     client.release();
     client = null;
-    return respondWithDraft(req, res, req.user, plan);
+    return await respondWithDraft(req, res, req.user, plan);
   } catch (error) {
     if (client) { try { await client.query("rollback"); } catch {} client.release(); }
     next(error);
   }
-});
+}));
 
-router.delete("/sessions/:sessionId", async (req, res, next) => {
+router.delete("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const session = await getEditableSession(req, req.params.sessionId);
     if (!session) return res.status(404).json({ error: "Program session not found" });
     await deleteSessionTree(session.id);
-    return respondWithDraft(req, res, req.user, session.plan);
+    return await respondWithDraft(req, res, req.user, session.plan);
   } catch (error) { next(error); }
-});
+}));
 
-router.post("/sessions/:sessionId/nodes", async (req, res, next) => {
+router.post("/sessions/:sessionId/nodes", withBatchReuseGuard(async (req, res, next) => {
   try {
     const session = await getEditableSession(req, req.params.sessionId);
     if (!session) return res.status(404).json({ error: "Program session not found" });
@@ -1380,20 +1454,20 @@ router.post("/sessions/:sessionId/nodes", async (req, res, next) => {
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [session.id, parentId, nodeType, name, nullableText(req.body?.color), nullableText(req.body?.iconUrl), nullableText(req.body?.shortNote), nullableText(req.body?.note), order],
     );
-    return respondWithDraft(req, res, req.user, session.plan, { status: 201 });
+    return await respondWithDraft(req, res, req.user, session.plan, { status: 201 });
   } catch (error) { next(error); }
-});
+}));
 
-router.delete("/nodes/:nodeId", async (req, res, next) => {
+router.delete("/nodes/:nodeId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
     await deleteNodeTree(node.id);
-    return respondWithDraft(req, res, req.user, node.plan);
+    return await respondWithDraft(req, res, req.user, node.plan);
   } catch (error) { next(error); }
-});
+}));
 
-router.patch("/nodes/:nodeId", async (req, res, next) => {
+router.patch("/nodes/:nodeId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
@@ -1405,9 +1479,9 @@ router.patch("/nodes/:nodeId", async (req, res, next) => {
       [node.id, name, nullableText(req.body?.color), nullableText(req.body?.iconUrl), shortNote, note],
     );
     await syncSessionItemSnapshots(node.plan_session_id);
-    return respondWithDraft(req, res, req.user, node.plan);
+    return await respondWithDraft(req, res, req.user, node.plan);
   } catch (error) { next(error); }
-});
+}));
 
 // Refreshes the denormalized domain_/category_/section_ name+color+icon snapshot
 // columns on every plan_item in a session from the current plan_nodes tree, so a
@@ -1457,7 +1531,7 @@ async function syncSessionItemSnapshots(sessionId) {
   );
 }
 
-router.post("/nodes/:nodeId/move", async (req, res, next) => {
+router.post("/nodes/:nodeId/move", withBatchReuseGuard(async (req, res, next) => {
   try {
     const node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
@@ -1476,7 +1550,7 @@ router.post("/nodes/:nodeId/move", async (req, res, next) => {
       [node.plan_session_id, node.parent_id, node.node_order],
     );
     const neighbor = neighborResult.rows[0];
-    if (!neighbor) return respondWithDraft(req, res, req.user, node.plan);
+    if (!neighbor) return await respondWithDraft(req, res, req.user, node.plan);
     await query(
       `update plans.plan_nodes
    set node_order = case when id = $1 then $2::numeric when id = $3 then $4::numeric end,
@@ -1484,24 +1558,34 @@ router.post("/nodes/:nodeId/move", async (req, res, next) => {
        where id in ($1, $3)`,
       [node.id, neighbor.node_order, neighbor.id, node.node_order],
     );
-    return respondWithDraft(req, res, req.user, node.plan);
+    return await respondWithDraft(req, res, req.user, node.plan);
   } catch (error) { next(error); }
-});
+}));
 
-router.post("/nodes/:nodeId/exercises", async (req, res, next) => {
+router.post("/nodes/:nodeId/exercises", withBatchReuseGuard(async (req, res, next) => {
+  let client;
   try {
     const node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
     if (node.node_type !== "section") return res.status(400).json({ error: "Exercises can only be added to a section." });
-    const exerciseResult = await query(
-      `select id, name, aim, execution_notes, instruction, image_url, video_url
-       from library.exercises where id = $1 and is_active = true`, [text(req.body?.exerciseId)],
+    client = await pool.connect();
+    const runQuery = (sql, params) => client.query(sql, params);
+    await runQuery("begin isolation level read committed");
+    await runQuery("set local lock_timeout = '2s'");
+    await runQuery("set local statement_timeout = '10s'");
+    await lockExerciseReuse(client, req.exerciseReuseGuard);
+    const exerciseResult = await runQuery(
+      `select e.id, e.name, e.aim, e.execution_notes, e.instruction, e.image_url, e.video_url
+       from library.exercises e where e.id = $2 and ${exerciseReadScopeSql}`, [req.user.id, text(req.body?.exerciseId)],
     );
     const exercise = exerciseResult.rows[0];
-    if (!exercise) return res.status(404).json({ error: "Exercise not found." });
-    const order = await nextOrder("plans.plan_items", "plan_session_id", node.plan_session_id, "item_order");
-    const ancestry = await getNodeAncestryMeta(node);
-    await query(
+    if (!exercise) {
+      await runQuery("rollback");
+      return res.status(404).json({ error: "Exercise not found." });
+    }
+    const order = await nextOrder("plans.plan_items", "plan_session_id", node.plan_session_id, "item_order", runQuery);
+    const ancestry = await getNodeAncestryMeta(node, runQuery);
+    await runQuery(
       `insert into plans.plan_items (
         plan_session_id, plan_node_id, item_type, exercise_id, title, description, image_url, video_url,
         sets, reps, load, item_order, exercise_order,
@@ -1519,11 +1603,17 @@ router.post("/nodes/:nodeId/exercises", async (req, res, next) => {
         ancestry.category?.name || null, ancestry.category?.color || null, ancestry.category?.icon_url || null, ancestry.category?.short_note || null, ancestry.category?.note || null, ancestry.category?.node_order ?? null,
         ancestry.section?.name || null, ancestry.section?.color || null, ancestry.section?.icon_url || null, ancestry.section?.short_note || null, ancestry.section?.note || null, ancestry.section?.node_order ?? null],
     );
-    return respondWithDraft(req, res, req.user, node.plan, { status: 201 });
-  } catch (error) { next(error); }
-});
+    await runQuery("commit");
+    client.release();
+    client = null;
+    return await respondWithDraft(req, res, req.user, node.plan, { status: 201 });
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} }
+    next(error);
+  } finally { client?.release(); }
+}));
 
-router.post("/nodes/:nodeId/custom-exercise", async (req, res, next) => {
+router.post("/nodes/:nodeId/custom-exercise", withBatchReuseGuard(async (req, res, next) => {
   try {
     const node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
@@ -1556,9 +1646,9 @@ router.post("/nodes/:nodeId/custom-exercise", async (req, res, next) => {
         ancestry.category?.name || null, ancestry.category?.color || null, ancestry.category?.icon_url || null, ancestry.category?.short_note || null, ancestry.category?.note || null, ancestry.category?.node_order ?? null,
         ancestry.section?.name || null, ancestry.section?.color || null, ancestry.section?.icon_url || null, ancestry.section?.short_note || null, ancestry.section?.note || null, ancestry.section?.node_order ?? null],
     );
-    return respondWithDraft(req, res, req.user, node.plan, { status: 201 });
+    return await respondWithDraft(req, res, req.user, node.plan, { status: 201 });
   } catch (error) { next(error); }
-});
+}));
 
 // Source resolved with READ/copy access (getCopySourceNode), not edit
 // access - a coach doesn't need to be able to EDIT the plan they're
@@ -1569,7 +1659,8 @@ router.post("/nodes/:nodeId/custom-exercise", async (req, res, next) => {
 // renderNodePasteButton) work for a node picked from another plan too,
 // with no new clipboard type or paste UI needed - the picker just sets the
 // exact same clipboard shape same-plan copy already uses.
-router.post("/nodes/:nodeId/copy", async (req, res, next) => {
+router.post("/nodes/:nodeId/copy", withBatchReuseGuard(async (req, res, next) => {
+  let client;
   try {
     const source = await getCopySourceNode(req, req.params.nodeId);
     const targetSession = await getEditableSession(req, req.body?.targetSessionId);
@@ -1579,12 +1670,22 @@ router.post("/nodes/:nodeId/copy", async (req, res, next) => {
     if (!(await isAllowedNodePlacement(targetSession.id, targetParentId, source.node_type))) {
       return res.status(400).json({ error: "Choose a compatible target for this copied structure." });
     }
-    await copyNodeTree(source.id, targetSession.id, targetParentId);
-    return respondWithDraft(req, res, req.user, targetSession.plan, { status: 201 });
-  } catch (error) { next(error); }
-});
+    client = await pool.connect();
+    await client.query("begin");
+    await lockExerciseReuse(client, req.exerciseReuseGuard);
+    const newNodeId = await copyNodeTree(source.id, targetSession.id, targetParentId, client.query.bind(client));
+    await assertExerciseReuseAllowed(client, req.user.id, { nodeIds: [newNodeId], guard: req.exerciseReuseGuard });
+    await client.query("commit");
+    client.release();
+    client = null;
+    return await respondWithDraft(req, res, req.user, targetSession.plan, { status: 201 });
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} }
+    next(error);
+  } finally { client?.release(); }
+}));
 
-router.patch("/items/:itemId", async (req, res, next) => {
+router.patch("/items/:itemId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const item = await getEditableItem(req, req.params.itemId);
     if (!item) return res.status(404).json({ error: "Program item not found" });
@@ -1598,11 +1699,11 @@ router.patch("/items/:itemId", async (req, res, next) => {
       if (!row) return res.status(404).json({ error: "Program item not found" });
       return res.json({ planId: item.plan.id, item: { id: row.id, sets: row.sets || "", reps: row.reps || "", load: row.load || "", description: row.description || "" } });
     }
-    return respondWithDraft(req, res, req.user, item.plan);
+    return await respondWithDraft(req, res, req.user, item.plan);
   } catch (error) { next(error); }
-});
+}));
 
-router.post("/items/:itemId/move", async (req, res, next) => {
+router.post("/items/:itemId/move", withBatchReuseGuard(async (req, res, next) => {
   try {
     const item = await getEditableItem(req, req.params.itemId);
     if (!item) return res.status(404).json({ error: "Program item not found" });
@@ -1615,23 +1716,23 @@ router.post("/items/:itemId/move", async (req, res, next) => {
       [item.plan_node_id, item.item_order],
     );
     const neighbor = neighborResult.rows[0];
-    if (!neighbor) return respondWithDraft(req, res, req.user, item.plan);
+    if (!neighbor) return await respondWithDraft(req, res, req.user, item.plan);
     await query(
       `update plans.plan_items set item_order = case when id = $1 then $2::numeric when id = $3 then $4::numeric end, updated_at = now() where id in ($1, $3)`,
       [item.id, neighbor.item_order, neighbor.id, item.item_order],
     );
-    return respondWithDraft(req, res, req.user, item.plan);
+    return await respondWithDraft(req, res, req.user, item.plan);
   } catch (error) { next(error); }
-});
+}));
 
-router.delete("/items/:itemId", async (req, res, next) => {
+router.delete("/items/:itemId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const item = await getEditableItem(req, req.params.itemId);
     if (!item) return res.status(404).json({ error: "Program item not found" });
     await query("delete from plans.plan_items where id = $1", [item.id]);
-    return respondWithDraft(req, res, req.user, item.plan);
+    return await respondWithDraft(req, res, req.user, item.plan);
   } catch (error) { next(error); }
-});
+}));
 
 async function buildSubmitResponse(req, plan) {
   // Save exits Builder; Assign and older clients still need the complete tree.
@@ -1727,7 +1828,7 @@ async function respondWithDraft(req, res, user, plan, options = {}) {
   // redundant round-trip on every single Builder edit.
   let freshPlan = targetPlan;
   if (wantsBatchSync(req, targetPlan)) {
-    await syncBatchFromPlan(targetPlan, user);
+    await syncBatchFromPlan(targetPlan, user, req.exerciseReuseGuard);
     freshPlan = await getEditablePlan(req, targetPlan.id);
   }
   const draft = await buildDraft(freshPlan || targetPlan);
@@ -1871,7 +1972,8 @@ async function lockBatchPlansForUpdate(client, sourcePlanId, user) {
 // /sync-batch route, its own transaction) and syncAndActivateBatchWithClient
 // (Submit, the caller's already-open transaction) - the ONE place this
 // copy logic is ever written, never duplicated between them.
-async function syncBatchContentWithClient(client, sourceRow, siblingRows) {
+async function syncBatchContentWithClient(client, sourceRow, siblingRows, guard = null) {
+  await lockExerciseReuse(client, guard);
   for (const sibling of siblingRows) {
     if (sourceRow.plan_type === "weekly") {
       await copyWeeklyPlanTree(client, sourceRow.id, sibling.id, sibling.week_start || sourceRow.week_start);
@@ -1879,6 +1981,7 @@ async function syncBatchContentWithClient(client, sourceRow, siblingRows) {
       await deleteBuilderPlanContent(client, sibling.id);
       await copyProgramTree(client, sourceRow.id, sibling.id);
     }
+    await assertExerciseReuseAllowed(client, sourceRow.created_by_user_id, { planIds: [sibling.id], guard });
     await client.query(
       `update plans.plans
        set name = $2,
@@ -1902,7 +2005,7 @@ async function syncBatchContentWithClient(client, sourceRow, siblingRows) {
 // instead, via syncAndActivateBatchWithClient) and delegates every bit of
 // actual locking/copying logic to lockBatchPlansForUpdate/
 // syncBatchContentWithClient above - never its own separate copy of it.
-async function syncBatchFromPlan(sourcePlan, user) {
+async function syncBatchFromPlan(sourcePlan, user, guard = null) {
   if (!sourcePlan?.id || sourcePlan.is_edit_draft) return;
   const client = await pool.connect();
   try {
@@ -1912,7 +2015,7 @@ async function syncBatchFromPlan(sourcePlan, user) {
       await client.query("rollback");
       return;
     }
-    await syncBatchContentWithClient(client, sourceRow, siblingRows);
+    await syncBatchContentWithClient(client, sourceRow, siblingRows, guard);
     await client.query("commit");
   } catch (error) {
     try { await client.query("rollback"); } catch {}
@@ -1936,7 +2039,7 @@ async function syncBatchFromPlan(sourcePlan, user) {
 // return this directly, exactly like the existing single-plan
 // removeEmptyDraftOnSubmit path already does) or `{ activatedPlans }`
 // (ready for notifyPlanAssignments, in this SAME transaction).
-async function syncAndActivateBatchWithClient(client, sourcePlanId, user) {
+async function syncAndActivateBatchWithClient(client, sourcePlanId, user, guard = null) {
   const { sourceRow, siblingRows } = await lockBatchPlansForUpdate(client, sourcePlanId, user);
   if (!sourceRow) return { activatedPlans: [] };
   if (!sourceRow.builder_batch_id) {
@@ -1945,7 +2048,7 @@ async function syncAndActivateBatchWithClient(client, sourcePlanId, user) {
     // this SAME locked source row, never a second independent lock.
     return { sourceRow, activatedPlans: null };
   }
-  await syncBatchContentWithClient(client, sourceRow, siblingRows);
+  await syncBatchContentWithClient(client, sourceRow, siblingRows, guard);
 
   const emptinessTargets = sourceRow.status === "draft" ? [sourceRow, ...siblingRows] : siblingRows;
   const deletedIds = [];
@@ -1984,6 +2087,7 @@ async function applyEditDraft(req, draftPlan, timing) {
   try {
     client = await pool.connect();
     await client.query("begin");
+    await lockExerciseReuse(client);
     // Lock and re-read the draft's OWN plans.plans row fresh, inside this
     // transaction - the caller's draftPlan parameter was read before this
     // transaction (often before the whole request started - POST /plans/
@@ -2013,6 +2117,11 @@ async function applyEditDraft(req, draftPlan, timing) {
     }
     const source = await getEditablePlan(req, freshDraft.edit_source_plan_id);
     if (!source) throw new Error("Original program not found or not editable.");
+    await client.query("select id from plans.plans where id=$1 for update", [source.id]);
+    const retained = await client.query(`select item.exercise_id, count(*)::integer as uses
+      from plans.plan_items item join plans.plan_sessions session on session.id = item.plan_session_id
+      join plans.plan_days day on day.id = session.plan_day_id
+      where day.plan_id = $1 and item.exercise_id is not null group by item.exercise_id`, [source.id]);
     if (freshDraft.plan_type !== "weekly") {
       await timing.measure("apply_delete", () => deleteBuilderPlanContent(client, source.id));
     }
@@ -2041,6 +2150,7 @@ async function applyEditDraft(req, draftPlan, timing) {
       if (freshDraft.plan_type === "weekly") await copyWeeklyPlanTree(client, freshDraft.id, source.id, freshDraft.week_start, { preserveLogicalId: true });
       else await copyProgramTree(client, freshDraft.id, source.id);
     });
+    await assertExerciseReuseAllowed(client, req.user.id, { planIds: [source.id], retainedItems: retained.rows });
     await timing.measure("apply_delete", () => deleteBuilderPlanContent(client, freshDraft.id));
     await client.query("delete from plans.plans where id = $1", [freshDraft.id]);
     await client.query("commit");
@@ -2461,12 +2571,12 @@ export async function copySessionContent(client, sourceSessionId, targetSessionI
   );
 }
 
-async function copyNodeTree(sourceId, targetSessionId, targetParentId) {
-  const nodeResult = await query("select * from plans.plan_nodes where id = $1", [sourceId]);
+async function copyNodeTree(sourceId, targetSessionId, targetParentId, runQuery = query) {
+  const nodeResult = await runQuery("select * from plans.plan_nodes where id = $1", [sourceId]);
   const source = nodeResult.rows[0];
   if (!source) return;
-  const order = await nextNodeOrder(targetSessionId, targetParentId);
-  const created = await query(
+  const order = await nextNodeOrder(targetSessionId, targetParentId, runQuery);
+  const created = await runQuery(
     `insert into plans.plan_nodes (plan_session_id, parent_id, node_type, name, color, icon_url, short_note, note, node_order)
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,
     [targetSessionId, targetParentId, source.node_type, source.name, source.color, source.icon_url, source.short_note, source.note, order],
@@ -2475,11 +2585,11 @@ async function copyNodeTree(sourceId, targetSessionId, targetParentId) {
   const ancestry = await getNodeAncestryMeta({
     node_type: source.node_type, parent_id: targetParentId, name: source.name,
     color: source.color, icon_url: source.icon_url, short_note: source.short_note, note: source.note, node_order: order,
-  });
-  const sourceItems = await query("select * from plans.plan_items where plan_node_id = $1 order by item_order", [sourceId]);
+  }, runQuery);
+  const sourceItems = await runQuery("select * from plans.plan_items where plan_node_id = $1 order by item_order", [sourceId]);
   for (const item of sourceItems.rows) {
-    const itemOrder = await nextOrder("plans.plan_items", "plan_session_id", targetSessionId, "item_order");
-    await query(
+    const itemOrder = await nextOrder("plans.plan_items", "plan_session_id", targetSessionId, "item_order", runQuery);
+    await runQuery(
       `insert into plans.plan_items (
         plan_session_id, plan_node_id, item_type, exercise_id, title, description, short_note, note, image_url, video_url,
         sets, reps, load, item_order, exercise_order,
@@ -2496,8 +2606,9 @@ async function copyNodeTree(sourceId, targetSessionId, targetParentId) {
         ancestry.section?.name || null, ancestry.section?.color || null, ancestry.section?.icon_url || null, ancestry.section?.short_note || null, ancestry.section?.note || null, ancestry.section?.node_order ?? null],
     );
   }
-  const children = await query("select id from plans.plan_nodes where parent_id = $1 order by node_order", [sourceId]);
-  for (const child of children.rows) await copyNodeTree(child.id, targetSessionId, newNodeId);
+  const children = await runQuery("select id from plans.plan_nodes where parent_id = $1 order by node_order", [sourceId]);
+  for (const child of children.rows) await copyNodeTree(child.id, targetSessionId, newNodeId, runQuery);
+  return newNodeId;
 }
 
 async function deleteBlockTree(blockId) {
@@ -2833,7 +2944,7 @@ async function getEditableNode(req, nodeId) {
   const plan = await getEditablePlan(req, row.plan_id); return plan ? { ...row, plan } : null;
 }
 
-async function getNodeAncestryMeta(node) {
+async function getNodeAncestryMeta(node, runQuery = query) {
   const chain = { section: null, category: null, domain: null };
   let current = node;
   while (current) {
@@ -2841,7 +2952,7 @@ async function getNodeAncestryMeta(node) {
       chain[current.node_type] = current;
     }
     if (!current.parent_id) break;
-    const parentResult = await query(
+    const parentResult = await runQuery(
       "select id, parent_id, node_type, name, color, icon_url, short_note, note, node_order from plans.plan_nodes where id = $1",
       [current.parent_id],
     );
@@ -2953,13 +3064,13 @@ async function isAllowedNodePlacement(sessionId, parentId, nodeType) {
   return false;
 }
 
-async function nextOrder(table, field, value, orderColumn) {
-  const result = await query(`select coalesce(max(${orderColumn}), 0) + 1 as next_value from ${table} where ${field} = $1`, [value]);
+async function nextOrder(table, field, value, orderColumn, runQuery = query) {
+  const result = await runQuery(`select coalesce(max(${orderColumn}), 0) + 1 as next_value from ${table} where ${field} = $1`, [value]);
   return Number(result.rows[0].next_value);
 }
 
-async function nextNodeOrder(sessionId, parentId) {
-  const result = await query("select coalesce(max(node_order), 0) + 1 as next_value from plans.plan_nodes where plan_session_id = $1 and parent_id is not distinct from $2", [sessionId, parentId]);
+async function nextNodeOrder(sessionId, parentId, runQuery = query) {
+  const result = await runQuery("select coalesce(max(node_order), 0) + 1 as next_value from plans.plan_nodes where plan_session_id = $1 and parent_id is not distinct from $2", [sessionId, parentId]);
   return Number(result.rows[0].next_value);
 }
 
