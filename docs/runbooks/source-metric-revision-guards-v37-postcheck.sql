@@ -16,7 +16,7 @@
 --    v36_rows = 1, v36_checksum_ok = true.
 select
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202610151000_training_load_v37_source_metric_revision_guards.sql') as v37_rows,
-  (select bool_and(checksum = 'f8e7488bd37ecfdbea02a20a3f51912b4d296a99b6a8ce085df94be80986882a') from public.schema_migrations
+  (select bool_and(checksum = 'e9be4c20c4cd996836a4a83fbdf900427be2cd015ad6b8667c597054be2944ca') from public.schema_migrations
     where migration_name = 'migrations_v2/202610151000_training_load_v37_source_metric_revision_guards.sql') as v37_checksum_ok,
   (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%'
     and migration_name > 'migrations_v2/202610151000_training_load_v37_source_metric_revision_guards.sql') as later_rows,
@@ -56,14 +56,16 @@ select
   (select count(*) from found where deferred and tgdeferrable and tginitdeferred) as v37_deferred_links,
   array(select e.name from expected e where e.name not in (select name from found) order by 1) as missing_triggers;
 
--- 4. The v37 index exists and is valid.
---    Expected: v37_index = 1, v37_index_valid = 1.
-select count(*) as v37_index,
-       count(*) filter (where i.indisvalid and i.indisready) as v37_index_valid
+-- 4. The two v37 indexes exist and are valid; the one that keeps a verification
+--    once per revision and act is unique.
+--    Expected: v37_indexes = 2, v37_indexes_valid = 2, v37_unique_once = 1.
+select count(*) as v37_indexes,
+       count(*) filter (where i.indisvalid and i.indisready) as v37_indexes_valid,
+       count(*) filter (where ic.relname = 'source_metric_audit_v37_verification_once' and i.indisunique) as v37_unique_once
   from pg_class ic
   join pg_namespace n on n.oid = ic.relnamespace and n.nspname = 'training_load'
   join pg_index i on i.indexrelid = ic.oid
- where ic.relname = 'source_metric_audit_v37_revision_idx';
+ where ic.relname in ('source_metric_audit_v37_revision_idx', 'source_metric_audit_v37_verification_once');
 
 -- 5. Every trigger of the two guarded tables is enabled (v34's and v35's
 --    beside v37's).
@@ -100,7 +102,10 @@ select
 
 -- 8. No write in flight on the two tables: no lock on them held by another
 --    session of this database, no session idle in a transaction.
---    Expected: table_locks = 0, idle_in_transaction = 0.
+--    Expected: table_locks = 0, idle_in_transaction = 0. table_locks counts
+--    every lock, an ordinary read's included: a non-zero value that is gone
+--    when the block is run again a few seconds later was a short read or
+--    write, not a finding.
 --    A role without pg_read_all_stats sees only its own role's sessions' state in
 --    pg_stat_activity, so idle_in_transaction counts the application role's
 --    sessions (the only expected writer); pg_locks is not limited that way, and

@@ -41,6 +41,8 @@ const ONE_ACT = /^source_metric_definition_versions: a revision is changed only 
 const OTHER_USER = /^source metric verification: the row names another user than the acting user$/;
 const MAY_NOT = /^source metric verification: the acting user may not verify a source metric$/;
 const ZONE = /^source_metric_definition_versions: the verification model of a zone is unresolved$/;
+const EVENT_OP = /^source_metric_definition_versions: an event threshold takes a one-sided operator$/;
+const FIRST_REF = /^source_metric_definition_versions: the first evidence reference is the completing act's own$/;
 const FOLLOW = /^source_metric_audit: the audit row must follow its own verification in the same transaction$/;
 const ONCE = /^source_metric_audit: the verification already has its audit row$/;
 const NO_WRITER = /^source_metric_audit: no writer of this action exists yet$/;
@@ -126,6 +128,7 @@ afterEach(() => {
   service.setMappingCommitForTests();
   service.setMappingRightsHoldForTests(null);
   service.setMappingRereadFaultForTests(null);
+  service.setMappingWriteHoldForTests(null);
   fieldsService.setFieldWriteHoldForTests(null);
 });
 
@@ -315,7 +318,7 @@ async function world() {
 }
 
 // ---------------------------------------------------------------------------
-test("1. migration v37 on v36: three functions, two T2b triggers (one deferred), one T8 trigger and one index, nothing else changed; the rollback refuses without v37, under a later migration, with a trigger missing or disabled, without its index and once a verification exists; it returns the identical v36 catalog and v37 applies again identically; the v36 and v35 rollbacks refuse while v37 is recorded", async () => {
+test("1. migration v37 on v36: three functions, two T2b triggers (one deferred), one T8 trigger and two indexes (one unique), nothing else changed; the rollback refuses without v37, under a later migration, with a trigger missing or disabled, without an index and once a verification exists; it returns the identical v36 catalog and v37 applies again identically; the v36 and v35 rollbacks refuse while v37 is recorded", async () => {
   assert.match((await runScript(r, ROLLBACK_PATH))?.message ?? "", /^v37 rollback refused: v37 is not recorded/);
   const before36 = await catalog(r);
   await applyV37(rdb.url);
@@ -327,8 +330,10 @@ test("1. migration v37 on v36: three functions, two T2b triggers (one deferred),
   // The deferred constraint trigger is a constraint row of its own (contype t).
   assert.deepEqual(added(after37.constraints, before36.constraints, (x) => `${x.rel}.${x.conname}`).map((x) => [x.conname, x.contype]), [["source_metric_revisions_v37_audit_link", "t"]]);
   assert.deepEqual(before36.constraints, after37.constraints.filter((x) => x.conname !== "source_metric_revisions_v37_audit_link"), "no existing constraint changed");
-  assert.deepEqual(added(after37.indexes, before36.indexes, (x) => x.indexname).map((x) => x.indexname), ["source_metric_audit_v37_revision_idx"]);
-  assert.deepEqual(before36.indexes, after37.indexes.filter((x) => x.indexname !== "source_metric_audit_v37_revision_idx"));
+  const V37_INDEXES = ["source_metric_audit_v37_revision_idx", "source_metric_audit_v37_verification_once"];
+  assert.deepEqual(added(after37.indexes, before36.indexes, (x) => x.indexname).map((x) => x.indexname).sort(), V37_INDEXES);
+  assert.match(after37.indexes.find((x) => x.indexname === "source_metric_audit_v37_verification_once").indexdef, /^CREATE UNIQUE INDEX/);
+  assert.deepEqual(before36.indexes, after37.indexes.filter((x) => !V37_INDEXES.includes(x.indexname)));
   assert.deepEqual(added(after37.functions, before36.functions, (x) => x.proname).map((x) => x.proname).sort(),
     ["source_metric_audit_revision_guard", "source_metric_revisions_actor_guard", "source_metric_revisions_audit_link"]);
   assert.deepEqual(before36.functions, after37.functions.filter((x) => !["source_metric_audit_revision_guard", "source_metric_revisions_actor_guard", "source_metric_revisions_audit_link"].includes(x.proname)), "no existing function changed (v34, v35 and v36 included)");
@@ -354,9 +359,11 @@ test("1. migration v37 on v36: three functions, two T2b triggers (one deferred),
   await r.query(`alter trigger source_metric_revisions_v37_actor_guard on training_load.source_metric_definition_versions rename to v37_renamed`);
   assert.match((await runScript(r, ROLLBACK_PATH))?.message ?? "", /^v37 rollback refused: the v37 triggers are not all present/);
   await r.query(`alter trigger v37_renamed on training_load.source_metric_definition_versions rename to source_metric_revisions_v37_actor_guard`);
-  await r.query(`alter index training_load.source_metric_audit_v37_revision_idx rename to v37_renamed_idx`);
-  assert.match((await runScript(r, ROLLBACK_PATH))?.message ?? "", /^v37 rollback refused: the v37 index is not present/);
-  await r.query(`alter index training_load.v37_renamed_idx rename to source_metric_audit_v37_revision_idx`);
+  for (const index of V37_INDEXES) {
+    await r.query(`alter index training_load.${index} rename to v37_renamed_idx`);
+    assert.match((await runScript(r, ROLLBACK_PATH))?.message ?? "", /^v37 rollback refused: the v37 indexes are not all present/);
+    await r.query(`alter index training_load.v37_renamed_idx rename to ${index}`);
+  }
   assert.deepEqual(await catalog(r), after37, "every refusal changed nothing");
   // A clean rollback, then v37 again.
   assert.equal(await runScript(r, ROLLBACK_PATH), null);
@@ -380,7 +387,7 @@ test("1. migration v37 on v36: three functions, two T2b triggers (one deferred),
   assert.deepEqual(await catalog(r), withAct, "the refusal changed nothing");
 });
 
-test("2. the database guards: no T2b revision is created and no state, status or other column changes outside the two acts or together with one (23514); an act without the acting user, in another user's name, by a non-platform-admin or a revoked one is 42501; both acts in one update and a zone's meaning act are 23514; at COMMIT an act needs its audit row; an audit row must follow its own act (this transaction, its verifier, its reference), once; an action without a built chain is refused; a savepoint and an earlier transaction's setting fail closed", async () => {
+test("2. the database guards: no T2b revision is created and no state, status or other column changes outside the two acts or together with one (23514); an act without the acting user, in another user's name, by a non-platform-admin or a revoked one is 42501; both acts in one update and a zone's meaning act are 23514; at COMMIT an act needs its audit row; an audit row must follow its own act (this transaction, its verifier, its reference), once; an action without a built chain is refused; a savepoint and an earlier transaction's setting fail closed; an event threshold's meaning is one-sided; the first evidence_ref is the completing act's own; one verification row per act, physically", async () => {
   const f = await fixture();
   const draft = await fixture({ state: "draft" });
   // No new revision, whoever writes it.
@@ -419,6 +426,9 @@ test("2. the database guards: no T2b revision is created and no state, status or
   // A zone's meaning act, whatever the operator.
   const zone = await fixture({ kind: "zone_bounds" });
   for (const operator of ["between", ">="]) refusedWith(await tx(W.pa.id, (c) => meaningAct(c, { revId: zone.revId, by: W.pa.id, operator })), "23514", ZONE);
+  // An event threshold's meaning takes a one-sided operator only.
+  const ev = await fixture({ kind: "event_threshold" });
+  refusedWith(await tx(W.pa.id, (c) => meaningAct(c, { revId: ev.revId, by: W.pa.id, operator: "between" })), "23514", EVENT_OP);
   // At COMMIT: an act without its audit row rolls the whole transaction back.
   refusedWith(await tx(W.pa.id, (c) => unitAct(c, { revId: f.revId, by: W.pa.id })), "23514", LINK_UNIT);
   refusedWith(await tx(W.pa.id, (c) => meaningAct(c, { revId: f.revId, by: W.pa.id })), "23514", LINK_MEANING);
@@ -475,6 +485,26 @@ test("2. the database guards: no T2b revision is created and no state, status or
     await auditRow(c, { action: "source_metric_meaning_verified", f, by: W.pa.id, ref: MEANING_REF });
   }));
   assert.equal((await revisionRow(f)).evidence_status, "verified");
+  // "Once" is physical too: with the guard off, the unique index refuses a second verification row.
+  refusedWith(await tx(W.pa.id, async (c) => {
+    await c.query(`alter table training_load.source_metric_audit disable trigger source_metric_audit_v37_revision_guard`);
+    await auditRow(c, { action: "source_metric_unit_verified", f, by: W.pa.id, ref: UNIT_REF });
+  }), "23505", /source_metric_audit_v37_verification_once/);
+  // The first evidence_ref of an unproven revision is the completing act's own reference (C92).
+  const late = await fixture({ status: "unproven" });
+  okTx(await tx(W.pa.id, async (c) => {
+    await meaningAct(c, { revId: late.revId, by: W.pa.id });
+    await auditRow(c, { action: "source_metric_meaning_verified", f: late, by: W.pa.id, ref: MEANING_REF });
+  }));
+  const completing = (ref) => tx(W.pa.id, async (c) => {
+    await c.query(
+      `update training_load.source_metric_definition_versions set source_unit = 's', unit_verified_by_user_id = $2, unit_verified_at = now(), unit_evidence_ref = $3,
+              evidence_status = 'verified', evidence_ref = $4 where id = $1`, [late.revId, W.pa.id, UNIT_REF, ref]);
+    await auditRow(c, { action: "source_metric_unit_verified", f: late, by: W.pa.id, ref: UNIT_REF });
+  });
+  refusedWith(await completing(COMPAT), "23514", FIRST_REF);
+  okTx(await completing(UNIT_REF));
+  assert.deepEqual([(await revisionRow(late)).evidence_status, (await revisionRow(late)).evidence_ref], ["verified", UNIT_REF]);
   // An action whose chain is not built is refused, even by a platform admin.
   const conv = (await one(k, `select id from training_load.unit_conversions limit 1`)).id;
   refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, performed_by_user_id, basis, operation_id, from_status, to_status) values ('source_metric_create',$1,$2,'platform_admin',$3,null,'active')`, [f.fieldId, W.pa.id, crypto.randomUUID()])), "23514", NO_WRITER);
@@ -482,12 +512,12 @@ test("2. the database guards: no T2b revision is created and no state, status or
   refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, unit_conversion_id, evidence_ref, performed_by_user_id, basis, operation_id, from_status, to_status) values ('unit_conversion_create',$1,$2,$3,'platform_admin',$4,null,'active')`, [conv, COMPAT, W.pa.id, crypto.randomUUID()])), "23514", NO_WRITER);
 });
 
-test("3. who may call: no session is 401; a coach, an athlete, a platform admin in a team workspace, a revoked club role and an archived club get the same 404 on every field route; a club admin and a platform admin in a club workspace read the field (as /fields) but get the same 404 on both acts, before the body is looked at; an unknown field, a malformed id and a revision of another field are the same 404", async () => {
+test("3. who may call: no session is 401; a coach, an athlete, a platform admin in a team workspace, a revoked club role, an archived club and a revoked platform admin get the same 404 on every field route; a club admin and a platform admin in a club workspace read the field (as /fields) but get the same 404 on both acts, before the body is looked at; an unknown field, a malformed id and a revision of another field are the same 404", async () => {
   const f = await fixture();
   const other = await fixture();
   for (const p of [`/fields/${f.fieldId}`]) assert.equal((await api(p)).status, 401);
   for (const p of [unitPath(f), meaningPath(f)]) assert.equal((await post(p, null, unitBody())).status, 401);
-  for (const who of [W.coach, W.athlete, W.paTeam, W.caRevoked, W.caC]) {
+  for (const who of [W.coach, W.athlete, W.paTeam, W.caRevoked, W.caC, W.paRevoked]) {
     const read = await api(`/fields/${f.fieldId}`, { cookie: who.cookie });
     assert.deepEqual([read.status, read.body], [404, { error: "notFound" }]);
     assert.equal(read.headers.get("cache-control"), "no-store");
@@ -514,7 +544,7 @@ test("3. who may call: no session is 401; a coach, an athlete, a platform admin 
   assert.equal((await api(`/fields/${f.fieldId}?x=1`, { cookie: W.pa.cookie })).body.error, "invalid_query");
 });
 
-test("4. the body: a JSON object only; an unknown or a server-derived field (actor, basis, status, time, state) is invalid_body; the requestKey is a UUID; the unit is a token (invalid_unit, the JavaScript rule agreeing with the database's); the evidence reference is a docs/ path with one anchor (invalid_evidence_ref, agreeing with the database's); the operator is one of the closed set; a bound unit exactly for a bound, an operator exactly for an event threshold; nothing is written", async () => {
+test("4. the body: a JSON object only; an unknown or a server-derived field (actor, basis, status, time, state) is invalid_body; the requestKey is a UUID; the unit is a token (invalid_unit, the JavaScript rule agreeing with the database's); the evidence reference is a docs/ path with one anchor (invalid_evidence_ref, agreeing with the database's); the operator is one of the closed set, and one-sided for an event threshold; a bound unit exactly for a bound, an operator exactly for an event threshold; nothing is written", async () => {
   const f = await fixture();
   const ev = await fixture({ kind: "event_threshold" });
   const bad = async (p, body, code) => {
@@ -534,7 +564,9 @@ test("4. the body: a JSON object only; an unknown or a server-derived field (act
   const badRefs = ["https://example.com/a#b", "docs/a.md", "docs/a.md#", "/docs/a.md#x", "docs/../a.md#x", "docs//a.md#x", "src/a.md#x", "docs/a b.md#x", "docs/a.md#x#y", `docs/${"a".repeat(296)}#x`, 7];
   for (const ref of badRefs) await bad(unitPath(f), unitBody({ evidenceRef: ref }), "invalid_evidence_ref");
   for (const ref of badRefs) await bad(meaningPath(f), meaningBody({ evidenceRef: ref }), "invalid_evidence_ref");
-  for (const op of ["==", "BETWEEN", "", 3]) await bad(meaningPath(ev), meaningBody({ boundOperator: op }), "invalid_operator");
+  for (const op of ["==", "BETWEEN", "", 3, "between"]) await bad(meaningPath(ev), meaningBody({ boundOperator: op }), "invalid_operator");
+  // A malformed operator is invalid_operator before whether the revision takes one at all.
+  for (const op of ["==", 3]) await bad(meaningPath(f), meaningBody({ boundOperator: op }), "invalid_operator");
   await bad(unitPath(ev), unitBody({ sourceUnit: "count" }), "bound_unit_required");
   await bad(unitPath(f), unitBody({ sourceBoundUnit: "m/s" }), "bound_unit_not_allowed");
   await bad(meaningPath(ev), meaningBody(), "operator_required");
@@ -598,13 +630,14 @@ test("6. an event threshold: the unit act needs the bound unit with it; the mean
   assert.equal((await post(unitPath(dec), W.pa.cookie, unitBody({ sourceUnit: "count", sourceBoundUnit: "m/s2" }))).body.revision.evidenceStatus, "verified");
 });
 
-test("7. a zone (C89): the unit act with its bound unit passes with a valid reference; the meaning act is 409 verification_model_unresolved whatever the operator (or none) - no boundOperator gets past it, nothing is written, and the zone never becomes verified", async () => {
+test("7. a zone (C89): the unit act with its bound unit passes with a valid reference; the meaning act is 409 verification_model_unresolved whatever the operator (or none) or reference the body names - no boundOperator gets past it, nothing is written, and the zone never becomes verified", async () => {
   const zone = await fixture({ kind: "zone_bounds" });
   assert.equal((await post(unitPath(zone), W.pa.cookie, unitBody({ sourceUnit: "m", evidenceRef: "not a ref" }))).body.error, "invalid_evidence_ref");
   const u = await post(unitPath(zone), W.pa.cookie, unitBody({ sourceUnit: "m", sourceBoundUnit: "W/kg" }));
   assert.equal(u.status, 201, u.text);
   assert.deepEqual([u.body.revision.sourceUnit, u.body.revision.sourceBoundUnit, u.body.revision.evidenceStatus], ["m", "W/kg", "observed"]);
-  for (const body of [meaningBody(), meaningBody({ boundOperator: "between" }), meaningBody({ boundOperator: ">=" }), meaningBody({ boundOperator: "<" })]) {
+  for (const body of [meaningBody(), meaningBody({ boundOperator: "between" }), meaningBody({ boundOperator: ">=" }), meaningBody({ boundOperator: "<" }),
+    meaningBody({ boundOperator: "==" }), meaningBody({ boundOperator: 3 }), meaningBody({ evidenceRef: "not a ref" })]) {
     const res = await post(meaningPath(zone), W.pa.cookie, body);
     assert.deepEqual([res.status, res.body.error], [409, "verification_model_unresolved"], res.text);
   }
@@ -774,7 +807,45 @@ test("13. the right is checked again under FOR SHARE inside the write: a platfor
   assert.deepEqual([row.unit_verified_at, row.meaning_verified_at, await auditCount(f)], [null, null, 0], "nothing written");
 });
 
-test("14. the acting user is set from the session and left on no pool client; no answer or log line carries SQL, a trigger's text or an acting user's id; the nine seeded rest_v1 revisions are untouched by this whole file", async () => {
+test("14. an act and an M2 version create on the same revision serialize without a deadlock, in both orders: a version create holding the revision FOR SHARE makes the meaning act wait, then both succeed; a meaning act holding the revision FOR UPDATE makes the version create wait, then both succeed (the facts it compares under its lock are unchanged by a meaning act on a field without a bound)", async () => {
+  const variable = await post("/variables", W.pa.cookie, { requestKey: key(), label: `Race ${uid()}`, unit: "s", levels: ["session"], dailyAggregationMethod: "sum" });
+  assert.equal(variable.status, 201, variable.text);
+  const ready = async () => {
+    const f = await fixture();
+    assert.equal((await post(unitPath(f), W.pa.cookie, unitBody({ sourceUnit: "s" }))).status, 201);
+    const mapping = await post("/mappings", W.pa.cookie, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: variable.body.variable.id });
+    assert.equal(mapping.status, 201, mapping.text);
+    return { f, versionsPath: `/mappings/${mapping.body.mapping.id}/versions`, versionBody: { requestKey: key(), sourceRevisionId: f.revId, appliesToSession: true, appliesToDrill: false } };
+  };
+  // The version create first: it holds the revision FOR SHARE; the act (another user) waits on FOR UPDATE.
+  const a = await ready();
+  const g1 = gate();
+  let held1 = false;
+  service.setMappingWriteHoldForTests(async (_client, op) => { if (op !== "mapping_version_create" || held1) return; held1 = true; await g1.promise; });
+  const versionP = post(a.versionsPath, W.pa.cookie, a.versionBody);
+  await until(() => held1, "the version create holds the revision");
+  const actP = post(meaningPath(a.f), W.pa2.cookie, meaningBody());
+  assert.ok(await someoneWaits(), "the act waits on the revision's lock");
+  g1.open();
+  const [version, act] = await Promise.all([versionP, actP]);
+  assert.deepEqual([version.status, act.status, act.body.revision?.evidenceStatus], [201, 201, "verified"], `${version.text} ${act.text}`);
+  service.setMappingWriteHoldForTests(null);
+  // The act first: it holds the revision FOR UPDATE; the version create (another user) waits on FOR SHARE.
+  const b = await ready();
+  const g2 = gate();
+  let held2 = false;
+  fieldsService.setFieldWriteHoldForTests(async () => { if (held2) return; held2 = true; await g2.promise; });
+  const act2P = post(meaningPath(b.f), W.pa2.cookie, meaningBody());
+  await until(() => held2, "the act holds the revision");
+  const version2P = post(b.versionsPath, W.pa.cookie, b.versionBody);
+  assert.ok(await someoneWaits(), "the version create waits on the revision's lock");
+  g2.open();
+  const [act2, version2] = await Promise.all([act2P, version2P]);
+  assert.deepEqual([act2.status, version2.status], [201, 201], `${act2.text} ${version2.text}`);
+  assert.equal((await one(k, `select count(*)::int as n from training_load.source_metric_audit where source_metric_version_id = $1 and action in ('source_metric_unit_verified', 'source_metric_meaning_verified')`, [b.f.revId])).n, 2, "the unit act and the meaning act, once each");
+});
+
+test("15. the acting user is set from the session and left on no pool client; no answer or log line carries SQL, a trigger's text or an acting user's id; the nine seeded rest_v1 revisions are untouched by this whole file", async () => {
   const f = await fixture();
   await post(unitPath(f), W.pa.cookie, unitBody());
   assert.equal((await revisionRow(f)).unit_verified_by_user_id, W.pa.id);

@@ -743,10 +743,15 @@ discovery; as built in section J4):**
     version create takes an upper bound exactly for `between`, so one revision cannot carry a closed zone
     and the open top zone (`[7, ∞)` m/s, ≥ 75 W/kg) alike. Until the owner decides, a zone revision's unit
     may be confirmed (with its bound unit, on valid evidence), but its meaning act answers
-    `409 verification_model_unresolved` whatever `boundOperator` the body names, v37 refuses a zone's
-    meaning act in the database (`23514`), and a zone revision never becomes `verified`. An event threshold
-    is not blocked by this model, but is never `verified` without a proven threshold unit, meaning and
-    operator (v34's CHECKs).
+    `409 verification_model_unresolved` whatever `boundOperator` or `evidenceRef` the body names - after
+    the path ids, the body's keys and `requestKey`, and the request record; before every other check of
+    the act (the operator, the reference, the state, the right) - v37 refuses a zone's meaning act in the
+    database (`23514`, after v34's guard and v37's acting-user checks), and a zone revision never becomes
+    `verified`. An event threshold is not blocked by this model, but is never `verified` without a proven
+    threshold unit, meaning and operator (v34's CHECKs), and its operator is one-sided (`>=`, `>`, `<=`,
+    `<`): v34's parameter shape of an event threshold takes no other, so `between` would leave a write-once
+    proof no mapping version could ever use - it is `400 invalid_operator`, and `23514` in the database
+    (internal review of M2b, 2026-10-15).
 90. **Fail closed (O2):** v37 refuses every T2b write but the two acts (a new revision, a state change,
     any other update: `23514`) and every T8 row whose chain is not built (every source metric, revision,
     activation, unit conversion and source instance action but the two verifications; the mapping actions
@@ -754,10 +759,12 @@ discovery; as built in section J4):**
 91. **The revision lifecycle (O3)** - a new revision R+1, its activation, the retirement and the
     replacement - is the next backend contract and must be finished before the first real production
     confirmation. M2b may be merged and deployed, but no production seed field is confirmed through it
-    before then.
+    before then. v37 refuses every new revision and state change, so that pull request (and any later
+    seeding migration) replaces v37's T2b guard or adds its own exception with its own actor guard.
 92. **`evidence_status` is always derived by the server (O4):** an act that completes the proof raises it
     to `verified` (v34's CHECK demands it), otherwise it stays as it was; the first `evidence_ref` of an
-    `unproven` revision is the completing act's reference. The client never sends a status.
+    `unproven` revision is the completing act's reference (v37 checks that in the database too). The
+    client never sends a status.
 93. **The meaning is a reference (O5):** T2b keeps only the stable references (`unit_evidence_ref`,
     `meaning_evidence_ref`); the content of the meaning stays in the evidence document.
 94. **Rights (O6):** the two acts only by an active platform admin in the platform workspace; everyone
@@ -1736,7 +1743,7 @@ jsonRequired` only for a caller who may verify.
 |---|---|---|---|---|---|
 | F1 | `GET /fields/:fieldId` | as `GET /fields` (C94) | — | `200 {field:{id, sourceSystem, apiFamily, key, label, state, revisions:[revision]}, verifications:[{revisionId, act, at, evidenceRef}]}` (`act` `unit` or `meaning`; never who) | `404`, `400 invalid_query`, `409 result_too_large` |
 | F2 | `POST /fields/:fieldId/revisions/:revisionId/unit-verification` | an active platform admin in the platform workspace (C94) | `requestKey`*, `sourceUnit`* (a unit token), `sourceBoundUnit` (exactly for a zone or an event threshold), `evidenceRef`* | `201 {revision, replayed:false}`; replay or verified COMMIT `200` | `400 invalid_body`, `invalid_unit`, `invalid_evidence_ref`, `bound_unit_required`, `bound_unit_not_allowed`; `404`; `409 unit_already_verified` (+`current`), `revision_retired`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` |
-| F3 | `POST /fields/:fieldId/revisions/:revisionId/meaning-verification` | the same | `requestKey`*, `boundOperator` (exactly for an event threshold: `between`, `>=`, `>`, `<=`, `<`), `evidenceRef`* | as F2 | `400 invalid_body`, `invalid_evidence_ref`, `invalid_operator`, `operator_required`, `operator_not_allowed`; `404`; `409 verification_model_unresolved` (every zone revision, C89, before every other check of the act), `meaning_already_verified` (+`current`), `revision_retired`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` |
+| F3 | `POST /fields/:fieldId/revisions/:revisionId/meaning-verification` | the same | `requestKey`*, `boundOperator` (exactly for an event threshold, one-sided: `>=`, `>`, `<=`, `<`), `evidenceRef`* | as F2 | `400 invalid_body`, `invalid_evidence_ref`, `invalid_operator` (also `between` on an event threshold), `operator_required`, `operator_not_allowed`; `404`; `409 verification_model_unresolved` (every zone revision, C89: after the path ids, the body's keys and `requestKey` and the request record, before every other check of the act), `meaning_already_verified` (+`current`), `revision_retired`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` |
 
 - **A revision:** `{id, fieldId (in F2 / F3), revisionNumber, state, valueShape, parameterKind, supportsSession,
   supportsDrill, expectedSourceUnit, sourceUnit, expectedSourceBoundUnit, sourceBoundUnit, boundOperator,
@@ -1757,11 +1764,17 @@ jsonRequired` only for a caller who may verify.
 - **The COMMIT:** M2's rule (C79); the right is checked again before the answer.
 - **v37:** three functions, two T2b triggers (`source_metric_revisions_v37_actor_guard` BEFORE INSERT OR
   UPDATE; `source_metric_revisions_v37_audit_link`, a deferred constraint trigger AFTER UPDATE of the
-  proof), one T8 trigger (`source_metric_audit_v37_revision_guard` BEFORE INSERT) and one index
-  (`source_metric_audit_v37_revision_idx`); no table, column or data. The acting user (the v35 setting) is
-  an active platform admin (`42501`) and the user the act names (`42501`); everything else is `23514`
-  (C89, C90); a savepoint fails closed. Depends on the v35 functions; the v35 and v36 rollbacks refuse
-  while v37 is recorded.
+  proof), one T8 trigger (`source_metric_audit_v37_revision_guard` BEFORE INSERT) and two indexes (the
+  lookup `source_metric_audit_v37_revision_idx` and the unique `source_metric_audit_v37_verification_once`,
+  one verification row per revision and act); no table, column or data. The acting user (the v35 setting)
+  is an active platform admin (`42501`) and the user the act names (`42501`); everything else is `23514`:
+  a write that is not exactly one act (C90), a zone's meaning act (C89), an event threshold's meaning act
+  without a one-sided operator (C89), a first `evidence_ref` other than the completing act's reference
+  (C92); a savepoint fails closed. Depends on the v35 functions; the v35 and v36 rollbacks refuse while v37
+  is recorded.
+- **For the M3 frontend:** a unit token may hold characters such as `<` (only whitespace, `|`, `=`,
+  control and invisible characters are refused), so every unit and evidence reference is rendered as
+  escaped text - never into `innerHTML` or as an `href` (security review of M2b, 2026-10-15).
 - **What the nine seeded `rest_v1` fields still need (C97; none is confirmed, and none may be before C91):**
 
   | Field | The unit act needs | The meaning act needs |
@@ -1774,9 +1787,10 @@ jsonRequired` only for a caller who may verify.
   non-platform-admin session, both acts in one update, a zone's meaning act, the COMMIT link, the audit
   chain, a savepoint, an unbuilt action), access, body validation with the JavaScript / database parity of
   the evidence reference, the two acts and the derived status for a plain field, an event threshold and a
-  zone, the state codes, idempotency and the replay's right, concurrency, the COMMIT, the M2 version create
-  after a proven unit, a right revoked inside the write, no actor left and no leak, the nine seeded
-  revisions untouched; mutation evidence. The M2 and M3-0 suites write their revision fixtures with v37's
+  zone, the one-sided operator of an event threshold, the first evidence reference, the physical "once",
+  the state codes, idempotency and the replay's right, concurrency (two acts, and an act against a real M2
+  version create in both orders), the COMMIT, the M2 version create after a proven unit, a right revoked
+  inside the write, no actor left and no leak, the nine seeded revisions untouched; mutation evidence. The M2 and M3-0 suites write their revision fixtures with v37's
   T2b triggers off (the future lifecycle PR's writes, in one transaction; v34's guard stays on).
 
 ---

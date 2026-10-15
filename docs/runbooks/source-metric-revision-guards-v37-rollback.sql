@@ -12,7 +12,7 @@
 -- (.claude/rules/database-safety.md).
 --
 -- v37 adds three functions, three triggers (one of them a deferred constraint
--- trigger) and one index; no table, column or data. It removes them and the
+-- trigger) and two indexes; no table, column or data. It removes them and the
 -- v37 record. It refuses, changing nothing, when
 --   * v37 is not recorded on the database;
 --   * any migrations_v2 migration newer than v37 is recorded;
@@ -20,12 +20,13 @@
 --     source_metric_unit_verified / source_metric_meaning_verified audit row
 --     (C96: once a confirmation exists the way forward is a new migration,
 --     never this script);
---   * the v37 functions, triggers or index are not exactly the ones v37
+--   * the v37 functions, triggers or indexes are not exactly the ones v37
 --     created (one is missing, or a trigger is disabled).
 --
 -- One transaction: everything or nothing. Waits are bounded: a transaction
 -- that holds one of the two tables makes this script fail after 5 s. Dropping
--- a trigger locks its table against writes for a moment; run it at a quiet
+-- a trigger or an index takes ACCESS EXCLUSIVE on its table until the COMMIT,
+-- so reads of the two tables wait for that moment too; run it at a quiet
 -- moment. Run it as one script that stops at the first error
 -- (psql -v ON_ERROR_STOP=1 -f ...): after a refusal the open transaction is
 -- aborted and nothing is changed.
@@ -86,8 +87,9 @@ begin
   if disabled is not null then
     reasons := array_append(reasons, 'a v37 trigger is disabled');
   end if;
-  if to_regclass('training_load.source_metric_audit_v37_revision_idx') is null then
-    reasons := array_append(reasons, 'the v37 index is not present');
+  if to_regclass('training_load.source_metric_audit_v37_revision_idx') is null
+     or to_regclass('training_load.source_metric_audit_v37_verification_once') is null then
+    reasons := array_append(reasons, 'the v37 indexes are not all present');
   end if;
   if array_length(reasons, 1) > 0 then
     raise exception 'v37 rollback refused: %', array_to_string(reasons, '; ');
@@ -100,6 +102,7 @@ drop trigger source_metric_audit_v37_revision_guard on training_load.source_metr
 drop function training_load.source_metric_revisions_audit_link();
 drop function training_load.source_metric_revisions_actor_guard();
 drop function training_load.source_metric_audit_revision_guard();
+drop index training_load.source_metric_audit_v37_verification_once;
 drop index training_load.source_metric_audit_v37_revision_idx;
 
 delete from public.schema_migrations

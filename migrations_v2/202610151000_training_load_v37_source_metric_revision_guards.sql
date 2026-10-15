@@ -19,15 +19,20 @@
 --     optimove.source_metric_actor) as unit_verified_by_user_id, a meaning act
 --     as meaning_verified_by_user_id, and that user must be an active platform
 --     admin (42501). The two acts are never one update, and an act changes
---     evidence_status only to verified (which v34's CHECK then demands; C92).
---     A meaning act on a zone revision (parameter_kind zone_bounds) is refused:
---     the model of closed against open zones under one bound operator is
---     unresolved (C89).
+--     evidence_status only to verified (which v34's CHECK then demands; C92);
+--     the first evidence_ref of an unproven revision is the completing act's
+--     own reference (C92). A meaning act on a zone revision (parameter_kind
+--     zone_bounds) is refused: the model of closed against open zones under
+--     one bound operator is unresolved (C89). A meaning act on an event
+--     threshold takes a one-sided operator (>=, >, <=, <): v34's parameter
+--     shape of an event threshold takes no other, so `between` would leave a
+--     write-once proof no mapping version can ever use (C89).
 --   * T8 (BEFORE INSERT, after v34's and v35's guards by name): a
 --     source_metric_unit_verified / source_metric_meaning_verified row follows
 --     its own act in the same transaction - the revision written by this
 --     transaction, its verifier the acting user, the row's evidence_ref the
---     act's own reference - once per revision and act (23514). Every other
+--     act's own reference - once per revision and act (23514; a unique
+--     partial index makes "once" physical as well). Every other
 --     action whose chain is not built yet (the source metric, revision,
 --     activation, unit conversion and source instance actions but these two)
 --     is refused (23514, C90); the four mapping actions keep v35's chain.
@@ -85,6 +90,14 @@ begin
   if meaning_act and new.parameter_kind = 'zone_bounds' then
     raise exception 'source_metric_definition_versions: the verification model of a zone is unresolved' using errcode = '23514';
   end if;
+  if meaning_act and new.parameter_kind = 'event_threshold'
+     and (new.bound_operator is null or new.bound_operator not in ('>=', '>', '<=', '<')) then
+    raise exception 'source_metric_definition_versions: an event threshold takes a one-sided operator' using errcode = '23514';
+  end if;
+  if old.evidence_ref is null and new.evidence_ref is not null
+     and new.evidence_ref is distinct from (case when unit_act then new.unit_evidence_ref else new.meaning_evidence_ref end) then
+    raise exception 'source_metric_definition_versions: the first evidence reference is the completing act''s own' using errcode = '23514';
+  end if;
   return new;
 end;
 $$ language plpgsql;
@@ -97,8 +110,14 @@ create trigger source_metric_revisions_v37_actor_guard
 -- 2. T8: a verification's audit row follows its own act, once; an action
 -- without a built chain is refused.
 -- ---------------------------------------------------------------------------
+-- The guard's and the audit link's lookups (an action given as a parameter).
 create index source_metric_audit_v37_revision_idx
   on training_load.source_metric_audit (source_metric_version_id, action) where source_metric_version_id is not null;
+-- One verification row per revision and act, physically (the guard below
+-- refuses a second one first, with its own message).
+create unique index source_metric_audit_v37_verification_once
+  on training_load.source_metric_audit (source_metric_version_id, action)
+  where action in ('source_metric_unit_verified', 'source_metric_meaning_verified');
 
 create function training_load.source_metric_audit_revision_guard() returns trigger as $$
 declare

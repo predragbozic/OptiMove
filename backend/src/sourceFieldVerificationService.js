@@ -9,7 +9,8 @@
 //   threshold, the proven bound unit (v34 demands both together) - with the
 //   acting user, the time and the unit evidence reference.
 // - The meaning act writes the acting user, the time and the meaning evidence
-//   reference - and, for an event threshold, the bound operator. For a zone
+//   reference - and, for an event threshold, the bound operator, one-sided
+//   (>=, >, <=, <: an event threshold's parameters take no other). For a zone
 //   (parameter_kind zone_bounds) it is refused with 409
 //   verification_model_unresolved until the owner decides how closed and open
 //   zones share one bound operator (C89); no boundOperator gets past it.
@@ -45,8 +46,12 @@ const {
 
 // The version of this request contract inside every request hash.
 const CONTRACT = "source-fields/v1";
-// The closed operator set of a bound (v34 bound_operator).
+// The closed operator set of a bound (v34 bound_operator), and the one-sided
+// operators an event threshold takes (v34's parameter shape of an event
+// threshold takes no other, so `between` would leave a proof no mapping version
+// can ever use; v37 refuses it too).
 const OPERATORS = new Set(["between", ">=", ">", "<=", "<"]);
+const ONE_SIDED = new Set([">=", ">", "<=", "<"]);
 // The JavaScript twin of training_load.source_metric_evidence_ref_ok() (v34,
 // C40): a repository-relative docs/ path and one heading anchor, 1-300
 // characters. The database function decides again inside the write.
@@ -60,6 +65,7 @@ const TEXT = {
   invalid_unit: "The unit is not a unit token (1-30 characters, no space, '|' or '=').",
   invalid_evidence_ref: "evidenceRef is a repository path under docs/ with one heading anchor (docs/...#anchor), at most 300 characters.",
   invalid_operator: "boundOperator is one of between, >=, >, <=, <.",
+  invalid_threshold_operator: "An event threshold takes a one-sided boundOperator: >=, >, <=, <.",
   bound_unit_required: "This revision has a bound: sourceBoundUnit is confirmed together with the unit.",
   bound_unit_not_allowed: "This revision has no bound: sourceBoundUnit is not taken.",
   operator_required: "This revision is an event threshold: boundOperator is confirmed together with the meaning.",
@@ -96,11 +102,12 @@ export async function getField({ ctx, fieldId, query }) {
       [field.id, LIST_CAPS.revisionsPerField + 1],
     )).rows;
     if (revisions.length > LIST_CAPS.revisionsPerField) throw tooLarge(LIST_CAPS.revisionsPerField);
-    const history = (await client.query(
+    // By the revisions just read (v37's index on the revision and the action).
+    const history = revisions.length === 0 ? [] : (await client.query(
       `select source_metric_version_id, action, performed_at, evidence_ref from training_load.source_metric_audit
-        where source_metric_definition_id = $1 and action in ('source_metric_unit_verified', 'source_metric_meaning_verified')
+        where source_metric_version_id = any($1::uuid[]) and action in ('source_metric_unit_verified', 'source_metric_meaning_verified')
         order by performed_at, id limit $2`,
-      [field.id, 2 * LIST_CAPS.revisionsPerField + 1],
+      [revisions.map((r) => r.id), 2 * LIST_CAPS.revisionsPerField + 1],
     )).rows;
     if (history.length > 2 * LIST_CAPS.revisionsPerField) throw tooLarge(2 * LIST_CAPS.revisionsPerField);
     return {
@@ -252,9 +259,9 @@ export async function verifyMeaning({ ctx, fieldId: rawField, revisionId: rawRev
   const { fieldId, revisionId } = pathIds(rawField, rawRevision);
   plainObject(body, ["requestKey", "boundOperator", "evidenceRef"], ["requestKey", "evidenceRef"]);
   const requestKey = uuidField(body.requestKey);
+  // The operator and the reference are checked inside the write, after the
+  // zone refusal (C89): whatever they name, a zone's meaning act is the 409.
   const boundOperator = body.boundOperator ?? null;
-  if (boundOperator !== null && (typeof boundOperator !== "string" || !OPERATORS.has(boundOperator))) throw refusal(400, "invalid_operator", TEXT.invalid_operator);
-  if (!evidenceRefOk(body.evidenceRef)) throw refusal(400, "invalid_evidence_ref", TEXT.invalid_evidence_ref);
   const evidenceRef = body.evidenceRef;
   const action = "source_metric_meaning_verified";
   const requestHash = hashOf({ contract: CONTRACT, operation: action, fieldId, revisionId, body: { boundOperator, evidenceRef } });
@@ -264,7 +271,8 @@ export async function verifyMeaning({ ctx, fieldId: rawField, revisionId: rawRev
     body: async (client, operationId) => {
       const rev = await lockedRevision(client, fieldId, revisionId);
       // C89: a zone's meaning is never confirmed until its model is decided,
-      // whatever the body names - before every other check of the act.
+      // whatever the body names - after the path ids, the body's keys and
+      // requestKey and the request record, before every other check of the act.
       if (rev.parameter_kind === "zone_bounds") throw refusal(409, "verification_model_unresolved", TEXT.verification_model_unresolved);
       if (rev.state === "retired") throw refusal(409, "revision_retired", TEXT.revision_retired);
       if (rev.meaning_verified_at !== null) {
@@ -272,8 +280,11 @@ export async function verifyMeaning({ ctx, fieldId: rawField, revisionId: rawRev
           current: { boundOperator: rev.bound_operator, meaningEvidenceRef: rev.meaning_evidence_ref, meaningVerifiedAt: rev.meaning_verified_at },
         });
       }
+      if (boundOperator !== null && (typeof boundOperator !== "string" || !OPERATORS.has(boundOperator))) throw refusal(400, "invalid_operator", TEXT.invalid_operator);
       if (rev.parameter_kind === "event_threshold" && boundOperator === null) throw refusal(400, "operator_required", TEXT.operator_required);
       if (rev.parameter_kind === "none" && boundOperator !== null) throw refusal(400, "operator_not_allowed", TEXT.operator_not_allowed);
+      if (rev.parameter_kind === "event_threshold" && !ONE_SIDED.has(boundOperator)) throw refusal(400, "invalid_operator", TEXT.invalid_threshold_operator);
+      if (!evidenceRefOk(evidenceRef)) throw refusal(400, "invalid_evidence_ref", TEXT.invalid_evidence_ref);
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       await databaseAgrees(client, [], evidenceRef);
       if (writeHold) await writeHold(client, action);

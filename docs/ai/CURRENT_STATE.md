@@ -1828,6 +1828,8 @@ Technical details.
       `evidence_status` is derived by the server. A correction is a new revision, which is not in M2b.
   - **Zones (C89):** a zone's unit may be confirmed. Its meaning answers `409 verification_model_unresolved`,
     and the database refuses it, until the owner decides how closed and open zones share one bound operator.
+    An event threshold's operator is one-sided (`>=`, `>`, `<=`, `<`; `between` is refused, since no mapping
+    version could ever use it).
   - **Migration v37** (`migrations_v2/202610151000_training_load_v37_source_metric_revision_guards.sql`):
     - the acting user on every act (the v35 setting, an active platform admin, the user the act names);
     - every other T2b write and every T8 action without a built chain refused (C90);
@@ -2598,7 +2600,8 @@ pre-existing; pass/fail counts don't belong in this file
 - **The revision lifecycle of a source field** (owner, 2026-10-15, C91; the next backend contract after
   M2b): a new revision R+1, its activation, the retirement of R and the replacement of the mapping versions
   pinned to it, each with its own database actor guard (C76). It must be finished before the first real
-  production confirmation through M2b.
+  production confirmation through M2b. v37 refuses every new revision and state change, so that pull
+  request (and any later seeding migration) replaces v37's T2b guard or adds its own exception.
 - **The owner-run evidence for the nine seeded `rest_v1` fields** (C97; M6, gate 2): what each field still
   needs is listed in section J4 of the discovery document. The main session prepares the procedure only and
   never sends a GPEXE request.
@@ -2924,7 +2927,8 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
    After M2b, on the owner's orders:
    - the revision lifecycle;
    - the zone model decision (C89);
-   - the M3 frontend (Training Load → Data configuration, C80) over the M3-0, M2 and M2b APIs;
+   - the M3 frontend (Training Load → Data configuration, C80) over the M3-0, M2 and M2b APIs, rendering
+     every unit and evidence reference as escaped text (J4);
    - the further M2 parts (activation and disabling, T5, conversion maintenance, the preview), M4 and M6.
 
    The import switch stays off throughout.

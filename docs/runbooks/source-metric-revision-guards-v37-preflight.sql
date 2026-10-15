@@ -50,13 +50,14 @@ select
       and not t.tgisinternal and t.tgenabled <> 'O') as disabled_triggers;
 
 -- 4. No v37 object exists yet (no name collision).
---    Expected: v37_functions = 0, v37_triggers = 0, v37_index = false.
+--    Expected: v37_functions = 0, v37_triggers = 0, v37_indexes = 0.
 select
   (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'training_load'
       and p.proname in ('source_metric_revisions_actor_guard', 'source_metric_audit_revision_guard', 'source_metric_revisions_audit_link')) as v37_functions,
   (select count(*) from pg_trigger t where t.tgname like '%\_v37\_%') as v37_triggers,
-  to_regclass('training_load.source_metric_audit_v37_revision_idx') is not null as v37_index;
+  (case when to_regclass('training_load.source_metric_audit_v37_revision_idx') is null then 0 else 1 end
+   + case when to_regclass('training_load.source_metric_audit_v37_verification_once') is null then 0 else 1 end) as v37_indexes;
 
 -- 5. The migrator's role may create the functions, triggers and index: CREATE on
 --    the schema, and it owns the two tables (a trigger and an index need it).
