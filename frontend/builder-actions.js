@@ -581,6 +581,10 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     await handlers.loadBuilderExercises({ append: true });
     return true;
   }
+  if (type === "builder-retry-exercises") {
+    await handlers.loadBuilderExercises();
+    return true;
+  }
   if (type === "builder-exercise-view") {
     state.builder.exerciseView = normalizeExerciseView("builder", action.dataset.view);
     saveExerciseViewPreference("builder", state.builder.exerciseView);

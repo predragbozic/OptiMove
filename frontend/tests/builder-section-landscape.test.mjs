@@ -98,3 +98,30 @@ test("5. landscape phones: about four lines of Instruction, and short two-column
   assert.match(landscape, /\.builder-exercise-view\.is-tile \.builder-exercise-preview \{[^}]*min-height: 44px;/);
   assert.doesNotMatch(mediaBlock("(max-width: 560px), (max-height: 520px)"), /max-height: calc\(5\.8em/, "a phone held upright keeps the taller Instruction");
 });
+
+test("6. phones held upright: in every view Add shares the row of Favorite, Mark and Tags", () => {
+  const upright = mediaBlock("(max-width: 560px)");
+  assert.match(upright, /\.builder-exercise-view \.builder-exercise-result-text \{ display: contents; \}/);
+  assert.match(upright, /\.builder-exercise-view \.builder-exercise-add \{ grid-area: add;/);
+  assert.match(upright, /\.builder-exercise-view \.builder-exercise-mini-actions \{ grid-area: actions; flex-wrap: nowrap;/);
+  assert.match(upright, /\.builder-exercise-view\.is-tile \.builder-exercise-result \{ grid-template-columns: 96px minmax\(0, 1fr\) auto;[^}]*grid-template-areas: "media title title" "media meta meta" "actions actions add";/);
+  assert.match(upright, /\.builder-exercise-view\.is-list \.builder-exercise-result \{ grid-template-columns: 46px minmax\(0, 1fr\) auto;[^}]*grid-template-areas: "media title title" "media meta meta" "actions actions add";/);
+  assert.match(upright, /\.builder-exercise-view\.is-big \.builder-exercise-result \{[^}]*grid-template-areas: "media media" "title title" "meta meta" "actions add";/);
+});
+
+test("7. landscape phones: the Added column scrolls on its own beside the library", () => {
+  const landscape = mediaBlock("(min-width: 561px) and (max-height: 520px)");
+  // Room for the editor's header, so the column is whole on screen before the library scrolls.
+  assert.match(landscape, /\.builder-section-added \{ position: sticky; top: -10px; align-self: start; max-height: calc\(100vh - 98px\); max-height: calc\(100dvh - 98px\); overflow-y: auto; overscroll-behavior: contain; \}/);
+});
+
+test("8. a dialog's scroll never runs on into the page, and on a touch screen an open dialog locks the page - a hidden one does not", () => {
+  assert.match(css, /^\[aria-modal="true"\], \.exercise-detail, \.exercise-detail-layout \{ overscroll-behavior: contain; \}/m);
+  const touch = mediaBlock("(pointer: coarse)");
+  // The roster's phone sheet has its own lock and stays in the page, hidden
+  // by CSS, after a turn to landscape - it must never lock the page.
+  assert.match(touch, /html:has\(\[aria-modal="true"\]:not\(\[hidden\], \[hidden\] \*, \.tl-roster-sheet\), \.exercise-detail-overlay\) \{ overflow: hidden; overscroll-behavior: none; \}/);
+  // Locking body too would make it the scroller and throw sticky bars out of view.
+  assert.doesNotMatch(css, /\.exercise-detail-overlay\) body \{ overflow: hidden/);
+  assert.doesNotMatch(css, /html:has\(\[aria-modal="true"\]\)/, "the always-present, hidden media dialog would lock the page for good");
+});

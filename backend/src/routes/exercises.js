@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
-import { pool, query } from "../db.js";
+import { pool, query, queryWithoutJit } from "../db.js";
 import { exerciseReadScopeSql as exerciseScope, exerciseLibraryScopeSql, exerciseAdministratorSql, hasExerciseAdministration } from "../exerciseAccess.js";
 import { classificationFields, classificationJoinSql, validateClassification, exerciseMediaJoinSql } from "../exercisePersonalization.js";
 import { deleteUnreferencedExercise } from "../exerciseDeletion.js";
@@ -319,7 +319,7 @@ router.get("/", async (req, res, next) => {
 
     params.push(queryLimit);
     params.push(offset);
-    const result = await query(
+    const result = await queryWithoutJit(
       `
       select
         e.id,

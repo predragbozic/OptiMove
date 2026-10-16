@@ -40,6 +40,11 @@ export async function loadBuilderExercises(options = {}) {
   state.builder.exerciseLoading = true;
   const moreButton = document.querySelector('[data-action="builder-load-more-exercises"]');
   if (moreButton) moreButton.disabled = true;
+  // A new search clears an earlier failure (also for a section editor that
+  // opens while it runs), and with nothing shown yet it says it is loading.
+  if (!options.append) state.builder.exerciseLoadFailed = false;
+  const pendingContainer = !options.append && !state.builder.exercises.length ? document.querySelector(".builder-exercise-results") : null;
+  if (pendingContainer) pendingContainer.innerHTML = renderBuilderExerciseResults([], state.markedExerciseIds, null, { loading: true, view: state.builder.exerciseView });
   try {
     const url = `${exerciseSearchUrl(query, 18, filters)}&offset=${offset}`;
     const [data, , visibleMarkedIds] = await Promise.all([
@@ -55,8 +60,16 @@ export async function loadBuilderExercises(options = {}) {
     const localMarkedOnly = filters.marked && !filters.favorite && !EXERCISE_FILTERS.some((filter) => filters[filter.key]);
     state.builder.exerciseHasMore = Boolean(data.hasMore) && !localMarkedOnly;
     state.builder.exerciseSearchKey = searchKey;
+    state.builder.exerciseLoadFailed = false;
   } catch (error) {
     if (error.name === "AbortError" || requestId !== builderExerciseRequestId) return;
+    // Said in place, with Try again, where the exercises would be. The
+    // results of another, earlier search never stay under the new one.
+    state.builder.exerciseLoadFailed = true;
+    state.builder.exerciseLoading = false;
+    if (!options.append && state.builder.exerciseSearchKey !== searchKey) state.builder.exercises = [];
+    const failedContainer = !options.append && !state.builder.exercises.length ? document.querySelector(".builder-exercise-results") : null;
+    if (failedContainer) failedContainer.innerHTML = renderBuilderExerciseResults([], state.markedExerciseIds, null, { failed: true, view: state.builder.exerciseView });
     throw error;
   } finally {
     if (requestId === builderExerciseRequestId) {

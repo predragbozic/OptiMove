@@ -9,7 +9,7 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 globalThis.window = { confirm: () => true };
 const { state, emptyBuilderState } = await import("../state.js");
 const { moveBuilderItemTo, handleBuilderItemAction } = await import("../builder-actions.js");
-const { dropIndexFor, edgeScrollStep, startBuilderItemDrag } = await import("../builder-item-drag.js");
+const { dropIndexFor, edgeScrollStep, startBuilderItemDrag, visibleBand } = await import("../builder-item-drag.js");
 globalThis.getComputedStyle = () => ({ overflowY: "visible" });
 const { renderBuilderItems, renderBuilderAddedList } = await import("../builder-exercises.js");
 
@@ -279,4 +279,31 @@ test("12. edge scrolling: none in the middle, faster the deeper the pointer is i
   assert.ok(edgeScrollStep(470, band) > 0 && edgeScrollStep(499, band) > edgeScrollStep(470, band));
   const { items } = dragFixture();
   assert.equal(startBuilderItemDrag(press(items[0], 50, { isPrimary: false }), { onDrop: () => assert.fail("no drop") }), false);
+});
+
+test("13. a scroller inside another one counts only where the outer one and the screen show it, so its edge zone can be reached", () => {
+  // Landscape: the section editor (outer, 9-381 px on a 390 px screen) holds
+  // the Added column, whose own box reaches 81-453 px until the editor scrolls.
+  const style = new Map();
+  const node = (rect, parentElement, overflowY, scrollable = true) => {
+    const element = { parentElement, getBoundingClientRect: () => rect, querySelector: () => null, scrollHeight: scrollable ? 2000 : 10, clientHeight: 300 };
+    style.set(element, { overflowY, position: "static", display: "block" });
+    return element;
+  };
+  const originalStyle = globalThis.getComputedStyle;
+  const originalHeight = globalThis.innerHeight;
+  globalThis.getComputedStyle = (element) => style.get(element) || { overflowY: "visible", position: "static", display: "block" };
+  globalThis.innerHeight = 390;
+  try {
+    const modal = node({ top: 9, bottom: 381 }, null, "auto");
+    const added = node({ top: 81, bottom: 453 }, modal, "auto");
+    assert.deepEqual(visibleBand(added), { top: 81, bottom: 381 });
+    assert.ok(edgeScrollStep(370, visibleBand(added)) > 0, "a finger near the editor's bottom scrolls the Added column");
+    assert.equal(edgeScrollStep(370, { top: 81, bottom: 453 }), 0, "its own box alone would put the edge zone below the screen");
+    const tall = node({ top: 0, bottom: 900 }, null, "auto");
+    assert.equal(visibleBand(tall).bottom, 390, "never past the screen");
+  } finally {
+    globalThis.getComputedStyle = originalStyle;
+    globalThis.innerHeight = originalHeight;
+  }
 });

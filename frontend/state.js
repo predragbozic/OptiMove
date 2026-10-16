@@ -138,6 +138,8 @@ export const emptyBuilderState = (overrides = {}) => ({
   exerciseOffset: 0,
   exerciseSearchKey: "",
   exerciseLoading: false,
+  // The last library search failed (the section editor offers Try again).
+  exerciseLoadFailed: false,
   itemMovePending: null,
   discardingDraftId: "",
   leaving: false,

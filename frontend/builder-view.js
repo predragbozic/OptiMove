@@ -198,7 +198,7 @@ function renderBuilderDraftsPanel() {
   `;
 }
 
-const BUILDER_SCROLL_SELECTORS = [".builder-section-modal", ".builder-exercise-results"];
+const BUILDER_SCROLL_SELECTORS = [".builder-section-modal", ".builder-exercise-results", ".builder-section-added"];
 const BUILDER_BLOCK_GRID_SELECTOR = ".builder-block-grid";
 
 // renderBuilder() replaces els.content's entire innerHTML on every call
@@ -437,7 +437,7 @@ export function renderBuilderExerciseViewChange() {
   if (!resultsEl || !selectedNode || selectedNode.type !== "section") return false;
   const switcher = panel.querySelector(".builder-library-toolbar .exercise-view-switcher");
   if (switcher) switcher.outerHTML = renderExerciseViewSwitcher("builder", state.builder.exerciseView, "builder-exercise-view");
-  resultsEl.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode, { hasMore: state.builder.exerciseHasMore, loading: state.builder.exerciseLoading, view: state.builder.exerciseView });
+  resultsEl.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode, { hasMore: state.builder.exerciseHasMore, loading: state.builder.exerciseLoading, failed: state.builder.exerciseLoadFailed, view: state.builder.exerciseView });
   return true;
 }
 
@@ -485,7 +485,7 @@ export function renderBuilderAddFeedback() {
   panel.dataset.mobileMode = state.builder.mobileMode;
 
   const resultsEl = panel.querySelector(".builder-exercise-results");
-  if (resultsEl) resultsEl.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode, { hasMore: state.builder.exerciseHasMore, loading: state.builder.exerciseLoading, view: state.builder.exerciseView });
+  if (resultsEl) resultsEl.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode, { hasMore: state.builder.exerciseHasMore, loading: state.builder.exerciseLoading, failed: state.builder.exerciseLoadFailed, view: state.builder.exerciseView });
 
   const confirmationSlot = panel.querySelector(".builder-add-confirmation");
   const confirmationHtml = renderBuilderAddConfirmation(state.builder.addConfirmation);

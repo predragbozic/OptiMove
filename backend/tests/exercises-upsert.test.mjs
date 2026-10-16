@@ -1308,3 +1308,39 @@ test("a subsequent edit of the SAME exercise after creation also succeeds (the e
   const refetch = await api(`/api/exercises/${exerciseId}`, { cookie: coach.cookie });
   assert.equal(refetch.body.name, "Round trip exercise v3");
 });
+
+// Library search speed (2026-10-16): the search's plan holds dozens of
+// correlated sub-plans, so Postgres estimated a cost in the hundreds of
+// thousands and JIT-compiled it first - 5.3 s of JIT for 40 ms of work on
+// 3000 exercises; the Builder showed "No matching exercises." while it ran.
+// The search runs through queryWithoutJit: JIT off for its own short read
+// transaction only.
+test("the library search runs with JIT off in its own read-only transaction, and the connection keeps its own setting", async () => {
+  const dbModule = await import("../src/db.js");
+  const inside = await dbModule.queryWithoutJit("select current_setting('jit') as jit, current_setting('transaction_read_only') as read_only");
+  assert.deepEqual(inside.rows[0], { jit: "off", read_only: "on" });
+  const outside = await query("select current_setting('jit') as jit");
+  assert.equal(outside.rows[0].jit, (await adminClient.query("select current_setting('jit') as jit")).rows[0].jit, "nothing leaks out of the transaction");
+  await assert.rejects(dbModule.queryWithoutJit("select 1/0"), /division by zero/);
+  assert.equal((await dbModule.queryWithoutJit("select 1 as one")).rows[0].one, 1, "the pool is usable after a failed read");
+  const { readFile } = await import("node:fs/promises");
+  const route = await readFile(new URL("../src/routes/exercises.js", import.meta.url), "utf8");
+  assert.match(route, /const result = await queryWithoutJit\(\s*`\s*select\s*e\.id,/, "the search query itself");
+});
+
+test("the library search answers a coach with an empty search: the first page, in order, with more to come", async () => {
+  const coach = await makeCoach("search-empty");
+  await query(`insert into library.exercises (owner_scope, name, slug, is_active, exercise_code)
+    select 'system', 'Speed fixture ' || g, 'speed-fixture-' || g || '-' || md5(random()::text), true, 'SF' || g from generate_series(1, 40) g`);
+  const res = await api("/api/exercises?search=&limit=18&offset=0", { cookie: coach.cookie });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.exercises.length, 18);
+  assert.equal(res.body.hasMore, true);
+  // First to last: by the code's number (codes without one last), then name, then id.
+  const key = (exercise) => [Number((exercise.exercise_code || "").replace(/\D/g, "")) || Infinity, exercise.name, exercise.id];
+  const compare = (a, b) => (a[0] - b[0]) || a[1].localeCompare(b[1]) || a[2].localeCompare(b[2]);
+  const keys = res.body.exercises.map(key);
+  assert.deepEqual(keys, [...keys].sort(compare));
+  const second = await api("/api/exercises?search=&limit=18&offset=18", { cookie: coach.cookie });
+  assert.equal(new Set([...res.body.exercises, ...second.body.exercises].map((exercise) => exercise.id)).size, 36, "the next page continues without repeats");
+});

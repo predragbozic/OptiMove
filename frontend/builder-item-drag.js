@@ -44,15 +44,26 @@ function scrollParentOf(element) {
 
 // The part of the scroller the list is really visible in: on phones the
 // section editor's header is sticky at the top and the Added bar at the
-// bottom, and an edge zone under them could never be reached.
-function visibleBand(scroller) {
+// bottom, and an edge zone under them could never be reached. A scroller
+// inside another one (the landscape Added column inside the editor) shows
+// only where every scrolling ancestor and the screen show it - its own box
+// can reach below the screen while the editor is not scrolled yet.
+export function visibleBand(scroller) {
   const box = scroller.getBoundingClientRect();
   let { top, bottom } = box;
   const head = scroller.querySelector?.(".builder-section-panel-head");
   if (head && getComputedStyle(head).position === "sticky") top = Math.max(top, head.getBoundingClientRect().bottom);
   const bar = scroller.querySelector?.(".builder-mobile-sticky-bar");
   if (bar && getComputedStyle(bar).display !== "none") bottom = Math.min(bottom, bar.getBoundingClientRect().top);
-  return { top, bottom };
+  const outer = scrollParentOf(scroller);
+  if (outer) {
+    const band = visibleBand(outer);
+    top = Math.max(top, band.top);
+    bottom = Math.min(bottom, band.bottom);
+  }
+  const screenHeight = globalThis.visualViewport?.height || globalThis.innerHeight;
+  if (screenHeight) bottom = Math.min(bottom, screenHeight);
+  return { top: Math.max(top, 0), bottom };
 }
 
 function clearDropMarks(items) {
