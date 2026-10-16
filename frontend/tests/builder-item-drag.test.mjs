@@ -9,7 +9,8 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 globalThis.window = { confirm: () => true };
 const { state, emptyBuilderState } = await import("../state.js");
 const { moveBuilderItemTo, handleBuilderItemAction } = await import("../builder-actions.js");
-const { dropIndexFor } = await import("../builder-item-drag.js");
+const { dropIndexFor, startBuilderItemDrag } = await import("../builder-item-drag.js");
+globalThis.getComputedStyle = () => ({ overflowY: "visible" });
 const { renderBuilderItems, renderBuilderAddedList } = await import("../builder-exercises.js");
 
 const ids = ["a", "b", "c", "d", "e"];
@@ -131,6 +132,107 @@ test("7. every added exercise has a grip to drag, desktop and phone, and the up/
     assert.equal([...html.matchAll(/data-drag-item/g)].length, 5);
     assert.equal([...html.matchAll(/data-builder-item-drag data-item-id="([a-e])"/g)].length, 5);
     assert.match(html, /aria-label="Drag Exercise c to reorder \(position 3 of 5\)"/);
+    assert.equal([...html.matchAll(/type="button" tabindex="-1" data-builder-item-drag/g)].length, 5, "the grip is not a Tab stop; the arrows are the keyboard path");
     assert.equal([...html.matchAll(/data-action="builder-move-item"/g)].length, 10);
   }
+});
+
+test("8. a delete during a multi-step move is refused, and the screen ends on the server's own order", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, method: options.method });
+    if (options.method === "DELETE") {
+      serverOrder = serverOrder.filter((id) => id !== decodeURIComponent(url.match(/items\/([^/?]+)/)[1]));
+      return response(draft(serverOrder));
+    }
+    if (calls.length === 1) await gate;
+    const id = decodeURIComponent(url.match(/items\/([^/]+)\/move/)[1]);
+    const index = serverOrder.indexOf(id);
+    const other = index + (JSON.parse(options.body).direction === "up" ? -1 : 1);
+    [serverOrder[index], serverOrder[other]] = [serverOrder[other], serverOrder[index]];
+    return response(draft(serverOrder));
+  };
+  const move = moveBuilderItemTo("a", 3, handlers());
+  await handleBuilderItemAction({ dataset: { action: "builder-delete-item", itemId: "c" } }, handlers());
+  release();
+  await move;
+  assert.ok(calls.every((call) => call.method === "POST"), "no DELETE between the swaps");
+  assert.deepEqual(order(), serverOrder);
+  assert.deepEqual(order(), ["b", "c", "d", "a", "e"]);
+});
+
+test("9. the server's order wins at the end even if it differs from the planned one", async () => {
+  // The server places the item one step short (another change landed in between).
+  globalThis.fetch = async () => response(draft(["b", "c", "a", "d", "e"]));
+  await moveBuilderItemTo("a", 3, handlers());
+  assert.deepEqual(order(), ["b", "c", "a", "d", "e"]);
+});
+
+// A minimal DOM for the drag controller: a list of items with a grip each.
+function dragFixture(count = 3) {
+  const classes = () => { const set = new Set(); return { add: (...c) => c.forEach((x) => set.add(x)), remove: (...c) => c.forEach((x) => set.delete(x)), contains: (c) => set.has(c), set }; };
+  const list = { classList: classes(), parentElement: null, children: [] };
+  const items = Array.from({ length: count }, (_, index) => {
+    const listeners = {};
+    const item = { index, isConnected: true, style: {}, classList: classes(), parentElement: list, matches: (sel) => sel === "[data-drag-item]", getBoundingClientRect: () => ({ top: index * 100, height: 100, bottom: index * 100 + 100 }) };
+    item.handle = {
+      dataset: { itemId: `item-${index}` }, listeners,
+      closest: (sel) => (sel === "[data-builder-item-drag]" ? item.handle : sel === "[data-drag-item]" ? item : null),
+      setPointerCapture() {},
+      addEventListener: (type, fn) => { listeners[type] = fn; },
+      removeEventListener: (type) => { delete listeners[type]; },
+    };
+    return item;
+  });
+  list.children = items;
+  return { list, items };
+}
+const press = (item, y, extra = {}) => ({ target: item.handle, pointerId: 1, button: 0, clientY: y, preventDefault() {}, ...extra });
+const moveTo = (item, y) => item.handle.listeners.pointermove?.({ clientY: y, preventDefault() {} });
+
+test("10. the drag controller: a small wobble, a blocked state, a cancel or a re-render never drops; a real drag does", () => {
+  const drops = [];
+  const onDrop = (id, index) => drops.push([id, index]);
+
+  let { items } = dragFixture();
+  assert.equal(startBuilderItemDrag(press(items[0], 148), { onDrop }), true);
+  moveTo(items[0], 151);
+  items[0].handle.listeners.pointerup();
+  assert.deepEqual(drops, [], "3 px is a press, not a drag - even across a neighbour's middle (150)");
+  assert.deepEqual(Object.keys(items[0].handle.listeners), [], "listeners removed");
+
+  ({ items } = dragFixture());
+  assert.equal(startBuilderItemDrag(press(items[0], 50), { onDrop, isBlocked: () => true }), false);
+  assert.deepEqual(Object.keys(items[0].handle.listeners), []);
+
+  ({ items } = dragFixture());
+  startBuilderItemDrag(press(items[0], 50), { onDrop });
+  moveTo(items[0], 190);
+  assert.ok(items[1].classList.contains("is-drop-after") || items[2].classList.contains("is-drop-before"));
+  items[0].isConnected = false;
+  items[0].handle.listeners.pointerup?.();
+  assert.deepEqual(drops, [], "the list was re-rendered during the drag");
+
+  ({ items } = dragFixture());
+  startBuilderItemDrag(press(items[0], 50), { onDrop });
+  moveTo(items[0], 190);
+  items[0].handle.listeners.pointercancel();
+  assert.deepEqual(drops, []);
+
+  ({ items } = dragFixture());
+  startBuilderItemDrag(press(items[0], 50), { onDrop });
+  moveTo(items[0], 190);
+  assert.equal(items[0].classList.contains("is-dragging"), true);
+  items[0].handle.listeners.pointerup();
+  assert.deepEqual(drops, [["item-0", 1]]);
+  assert.equal(items[0].classList.contains("is-dragging"), false);
+  assert.equal(items[0].style.transform, "");
+  assert.ok(items.every((item) => !item.classList.contains("is-drop-before") && !item.classList.contains("is-drop-after")));
+});
+
+test("11. the Tests calendar's normalized touchstart object (no pointerId) never starts a builder drag", () => {
+  const { items } = dragFixture();
+  assert.equal(startBuilderItemDrag({ target: items[0].handle, clientY: 10, preventDefault() {} }, { onDrop: () => assert.fail("no drop") }), false);
+  assert.deepEqual(Object.keys(items[0].handle.listeners), []);
 });

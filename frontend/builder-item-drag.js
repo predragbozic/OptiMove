@@ -32,7 +32,9 @@ function clearDropMarks(items) {
 // Returns true when the event started one (the caller then stops handling it).
 export function startBuilderItemDrag(event, { isBlocked = () => false, onDrop }) {
   const handle = event.target?.closest?.("[data-builder-item-drag]");
-  if (!handle || event.button > 0 || isBlocked()) return false;
+  // A real pointer event only (the Tests calendar's normalized touchstart
+  // object carries no pointerId and must not start a second drag).
+  if (!handle || event.pointerId === undefined || event.button > 0 || isBlocked()) return false;
   const itemEl = handle.closest("[data-drag-item]");
   const listEl = itemEl?.parentElement;
   if (!itemEl || !listEl) return false;

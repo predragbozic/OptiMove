@@ -100,10 +100,11 @@ function renderAddedThumb(item, { containerClass, imageClass, fallbackClass }) {
   return `<span class="${fallbackClass}">${escapeHtml((item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`;
 }
 
-// The grip that starts a drag-to-reorder (builder-item-drag.js). The
-// up/down buttons stay next to it for keyboard and screen-reader users.
+// The grip that starts a drag-to-reorder (builder-item-drag.js). It is not a
+// Tab stop: the up/down buttons next to it are the keyboard and
+// screen-reader path.
 function renderDragHandle(item, index, total, className, content = "") {
-  return `<button class="${className} builder-item-drag-handle" type="button" data-builder-item-drag data-item-id="${escapeAttr(item.id)}" aria-label="Drag ${escapeAttr(item.title || "exercise")} to reorder (position ${index + 1} of ${total})" title="Drag to reorder">${ICON_GRIP}${content}</button>`;
+  return `<button class="${className} builder-item-drag-handle" type="button" tabindex="-1" data-builder-item-drag data-item-id="${escapeAttr(item.id)}" aria-label="Drag ${escapeAttr(item.title || "exercise")} to reorder (position ${index + 1} of ${total})" title="Drag to reorder">${ICON_GRIP}${content}</button>`;
 }
 
 // Desktop-only "Added to section" list: the original full-form-per-item

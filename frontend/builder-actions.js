@@ -551,13 +551,21 @@ export async function moveBuilderItemTo(itemId, targetIndex, handlers) {
   if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
   const direction = targetIndex < fromIndex ? "up" : "down";
   try {
+    let lastAnswer = null;
     for (let step = 0; step < Math.abs(targetIndex - fromIndex); step += 1) {
-      setBuilderDraft(await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(itemId)}/move`, {
+      const answer = await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(itemId)}/move`, {
         method: "POST",
         body: JSON.stringify(withBatchSyncPayload({ direction })),
-      }));
+      });
+      // setBuilderDraft sorts the answer by the pending order in place;
+      // keep the server's own order for the final paint.
+      lastAnswer = structuredClone(answer);
+      setBuilderDraft(answer);
     }
     state.builder.itemMovePending = null;
+    // The last answer as the server sent it: the screen ends on the order
+    // the server really has, whatever else landed between the swaps.
+    setBuilderDraft(lastAnswer);
     if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
   } catch (error) {
     state.builder.itemMovePending = null;
@@ -1505,6 +1513,8 @@ export async function handleBuilderItemAction(action, handlers) {
     return true;
   }
   if (type === "builder-delete-item") {
+    // Never between the swaps of a move (moveBuilderItemTo).
+    if (state.builder.itemMovePending) return true;
     if (!window.confirm("Remove this exercise from the program?")) return true;
     await handlers.cancelBuilderItemAutosave?.(action.dataset.itemId);
     const result = await queuedBuilderApi(withBatchSyncUrl(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}`), { method: "DELETE" });

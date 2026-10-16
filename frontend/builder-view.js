@@ -277,7 +277,7 @@ function restoreBuilderScrollState(captured) {
 
 function disablePendingMoveButtons() {
   if (!state.builder.itemMovePending) return;
-  document.querySelectorAll('[data-action="builder-move-item"], [data-builder-item-drag]').forEach((button) => {
+  document.querySelectorAll('[data-action="builder-move-item"], [data-action="builder-delete-item"], [data-builder-item-drag]').forEach((button) => {
     button.disabled = true;
     button.title = "Moving...";
   });
