@@ -5,6 +5,7 @@ import {
   renderImage,
   toDrivePreviewUrl,
   toImageUrl,
+  toYouTubeEmbedUrl,
   withAutoplayParam,
 } from "./media.js";
 import { escapeAttr } from "./utils.js";
@@ -37,6 +38,8 @@ function videoEmbedMarkup(videoUrl, imageUrl = "") {
   if (!raw) return "";
   const driveId = getDriveId(raw);
   const poster = toImageUrl(imageUrl);
+  const youTubeEmbed = toYouTubeEmbedUrl(raw, { autoplay: true });
+  if (youTubeEmbed) return renderVideoFrame(youTubeEmbed);
   if (driveId) {
     return renderVideoFrame(toDrivePreviewUrl(raw, { autoplay: true }));
   }

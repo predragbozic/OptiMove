@@ -1,4 +1,5 @@
 import { emptyExerciseEditor } from "./exercise-editor.js";
+import { readExerciseViewPreference } from "./exercise-view-modes.js";
 
 export const EXERCISE_FILTERS = [
   { key: "purpose", label: "Purpose", optionsKey: "purposes" },
@@ -126,6 +127,9 @@ export const emptyBuilderState = (overrides = {}) => ({
   selectedNodeId: "",
   exerciseQuery: "",
   exerciseFilters: emptyExerciseFilters(),
+  // Tile / Big / List of the section editor's library results - the coach's
+  // last choice in this browser (exercise-view-modes.js).
+  exerciseView: readExerciseViewPreference("builder"),
   exercises: [],
   exerciseHasMore: false,
   exerciseOffset: 0,
@@ -969,7 +973,7 @@ export const createInitialState = () => ({
   templateOptions: { categories: [], tags: [], creators: [], clubs: [] },
   lastExerciseResults: [],
   builder: emptyBuilderState(),
-  exerciseSearch: { term: "", limit: 30, hasMore: false, filters: emptyExerciseFilters(), options: emptyExerciseOptions() },
+  exerciseSearch: { term: "", limit: 30, hasMore: false, filters: emptyExerciseFilters(), options: emptyExerciseOptions(), view: readExerciseViewPreference("library") },
   markedExerciseIds: new Set(),
   markedExercises: new Map(),
   tagEditor: { open: false, exerciseId: "", exerciseName: "", tags: [], options: [], error: "" },

@@ -8069,13 +8069,13 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-outline, .builder-workbench { min-height: 540px; }
 .builder-workbench { padding: 18px; }
 .builder-section-panel { width: auto; max-height: none; overflow: visible; box-shadow: none; }
-.builder-section-modal { position: relative; z-index: 1; width: min(1060px, 96vw); max-height: min(820px, 90dvh); overflow: auto; box-shadow: 0 22px 70px rgba(14, 28, 37, .28); }
+.builder-section-modal { position: relative; z-index: 1; width: min(1280px, 96vw); max-height: min(900px, 92dvh); overflow: auto; box-shadow: 0 22px 70px rgba(14, 28, 37, .28); }
 .builder-section-modal .builder-section-panel { padding: 2px; }
 .builder-section-panel-head { position: relative; padding-bottom: 14px; border-bottom: 1px solid var(--line, #dfe4e8); }
 .builder-section-editor-actions { display: flex; align-items: center; gap: 12px; }
 .builder-section-cancel-button, .builder-section-finish-button { display: flex; align-items: center; gap: 6px; }
 .builder-section-finish-button .builder-icon-svg { color: #2e9e4f; }
-.builder-section-grid { display: grid; grid-template-columns: minmax(240px, .82fr) minmax(290px, 1.18fr); gap: 16px; }
+.builder-section-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr); gap: 16px; }
 .builder-section-library, .builder-section-added { min-width: 0; }
 .builder-section-added { padding-left: 16px; border-left: 1px solid var(--line, #dfe4e8); }
 .builder-panel-label { display: flex; justify-content: space-between; align-items: center; margin: 0 0 12px; color: var(--muted, #667085); font-size: 12px; font-weight: 800; text-transform: uppercase; }
@@ -8084,7 +8084,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-exercise-filters summary { cursor: pointer; color: #287e77; font-size: 13px; font-weight: 800; }
 .builder-filter-strip { margin-top: 8px; grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); }
 .builder-quick-dose { margin-bottom: 12px; }
-.builder-exercise-results { max-height: 420px; }
+.builder-exercise-results { max-height: min(60dvh, 620px); }
 .builder-exercise-result { min-height: 62px; }
 .builder-items { margin-top: 0; }
 .builder-item { gap: 8px; background: #fbfcfd; }
@@ -16919,4 +16919,144 @@ body:not(.athlete-mode):not(.login-mode) .sidebar > .brand {
 .exercise-collections-overlay .exercise-editor-modal {
   width: min(860px, calc(100vw - 24px));
   max-height: calc(100dvh - 24px);
+}
+
+/* Exercise views: Tile / Big / List in the Exercise Library and in the
+   Builder's section editor (exercise-view-modes.js). Details is the
+   original library card (.exercise-grid / .exercise-card above). Every
+   auto-fill track minimum is min(Npx, 100%) so a grid never outgrows a
+   narrow container. */
+.exercise-results-head { flex-wrap: wrap; }
+.exercise-results-head .exercise-view-switcher { margin-left: auto; }
+.exercise-view-switcher { display: inline-flex; flex: 0 0 auto; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
+.exercise-view-button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 4px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.exercise-view-button.is-active { background: var(--surface); color: var(--accent); box-shadow: 0 1px 2px rgba(16, 24, 40, .14); }
+.exercise-view-icon-svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+.exercise-thumb-fallback { display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-weight: 800; letter-spacing: .02em; }
+
+.exercise-view-grid { display: grid; gap: 12px; }
+.exercise-view-grid.is-tile { grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); }
+.exercise-view-grid.is-big { grid-template-columns: repeat(auto-fill, minmax(min(230px, 100%), 1fr)); }
+.exercise-view-grid.is-list { grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); gap: 0 20px; }
+.exercise-view-grid > .empty, .builder-exercise-view > .empty { grid-column: 1 / -1; }
+.exercise-view-card { position: relative; display: grid; align-items: center; gap: 10px; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text); }
+.exercise-view-media { display: block; min-width: 0; padding: 0; border: 0; border-radius: 6px; background: var(--surface-soft); overflow: hidden; cursor: pointer; }
+span.exercise-view-media { cursor: default; }
+.exercise-view-thumb { display: block; width: 100%; height: 100%; object-fit: cover; }
+.exercise-view-thumb.exercise-thumb-fallback { display: grid; font-size: 16px; }
+.exercise-view-open { display: grid; gap: 2px; min-width: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.exercise-view-title { display: -webkit-box; overflow: hidden; font-size: 14px; font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.exercise-view-meta { overflow: hidden; color: var(--muted); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
+.exercise-view-actions { display: flex; align-items: center; gap: 2px; }
+.exercise-view-icon { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #7b8794; list-style: none; cursor: pointer; }
+.exercise-view-icon::-webkit-details-marker { display: none; }
+.exercise-view-icon::marker { content: ""; }
+.exercise-view-icon .exercise-toggle-icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.exercise-view-icon.is-favorite { color: #f5b400; }
+.exercise-view-icon.is-favorite .exercise-toggle-icon { fill: #f5b400; }
+.exercise-view-icon.is-marked { color: var(--accent); }
+.exercise-view-icon.is-marked .exercise-toggle-icon { fill: var(--accent); }
+.exercise-view-menu summary .exercise-toggle-icon { fill: currentColor; stroke: none; }
+.exercise-view-menu { position: relative; }
+.exercise-view-menu-list { position: absolute; top: calc(100% + 4px); right: 0; z-index: 5; display: grid; min-width: 150px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow); }
+.exercise-view-menu-item { min-height: 36px; padding: 6px 10px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+@media (hover: hover) {
+  .exercise-view-button:hover { color: var(--text); }
+  .exercise-view-icon:hover { background: var(--surface-soft); color: var(--text); }
+  .exercise-view-menu-item:hover { background: var(--surface-soft); }
+}
+
+/* Tile: picture left, name and aim beside it, icons under the name. */
+.exercise-view-grid.is-tile .exercise-view-card { grid-template-columns: 112px minmax(0, 1fr); grid-template-areas: "media open" "media actions"; align-items: start; row-gap: 2px; }
+.exercise-view-grid.is-tile .exercise-view-media { grid-area: media; width: 112px; aspect-ratio: 16 / 9; }
+.exercise-view-grid.is-tile .exercise-view-open { grid-area: open; }
+.exercise-view-grid.is-tile .exercise-view-actions { grid-area: actions; margin-left: -6px; }
+/* Big: the picture across the card, the name under it. */
+.exercise-view-grid.is-big .exercise-view-card { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "media media" "open actions"; align-items: start; padding: 0 4px 6px 0; }
+.exercise-view-grid.is-big .exercise-view-media { grid-area: media; aspect-ratio: 16 / 9; border-radius: var(--radius) var(--radius) 0 0; }
+.exercise-view-grid.is-big .exercise-view-thumb.exercise-thumb-fallback { font-size: 30px; }
+.exercise-view-grid.is-big .exercise-view-open { grid-area: open; padding: 4px 0 0 10px; }
+.exercise-view-grid.is-big .exercise-view-actions { grid-area: actions; }
+.exercise-view-grid.is-big .exercise-view-meta { display: none; }
+/* List: one compact row each, rows divided by a line. */
+.exercise-view-grid.is-list .exercise-view-card { grid-template-columns: 56px minmax(0, 1fr) auto; padding: 6px 2px; border-width: 0 0 1px; border-radius: 0; }
+.exercise-view-grid.is-list .exercise-view-media { width: 56px; height: 36px; border-radius: 4px; }
+.exercise-view-grid.is-list .exercise-view-thumb.exercise-thumb-fallback { font-size: 11px; }
+.exercise-view-grid.is-list .exercise-view-title { font-size: 13px; -webkit-line-clamp: 1; }
+
+/* Builder section editor: the same three views of the result cards. Tile
+   is two columns wherever the library column has room for them (from
+   744 px up), Big one column, List as many as fit. */
+.builder-library-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 10px; margin: 0 0 12px; }
+.builder-library-head .builder-panel-label { margin: 0; }
+.builder-exercise-results { grid-template-columns: minmax(0, 1fr); }
+.builder-exercise-view { display: grid; gap: 7px; }
+.builder-exercise-view.is-list { grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); }
+.builder-exercise-view.is-tile { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.builder-exercise-view.is-big { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.builder-exercise-thumb.exercise-thumb-fallback { font-size: 12px; }
+.builder-exercise-view.is-tile .builder-exercise-result { grid-template-columns: 112px minmax(0, 1fr); grid-template-rows: auto auto; align-items: start; row-gap: 6px; }
+.builder-exercise-view.is-tile .builder-exercise-preview { grid-row: 1 / span 2; width: 112px; min-width: 112px; height: auto; aspect-ratio: 16 / 9; }
+.builder-exercise-view.is-tile .builder-exercise-thumb { width: 100%; height: 100%; }
+.builder-exercise-view.is-tile .builder-exercise-thumb.exercise-thumb-fallback { font-size: 16px; }
+.builder-exercise-view.is-tile .builder-exercise-add { justify-self: start; }
+.builder-exercise-view.is-big .builder-exercise-result { grid-template-columns: minmax(0, min(360px, 50%)) minmax(0, 1fr); grid-template-rows: auto auto; align-items: center; column-gap: 14px; row-gap: 8px; padding: 10px; }
+.builder-exercise-view.is-big .builder-exercise-preview { grid-row: 1 / span 2; width: 100%; min-width: 0; height: auto; aspect-ratio: 16 / 9; border-radius: 6px; }
+.builder-exercise-view.is-big .builder-exercise-thumb { width: 100%; height: 100%; border-radius: 6px; }
+.builder-exercise-view.is-big .builder-exercise-thumb.exercise-thumb-fallback { font-size: 30px; }
+.builder-exercise-view.is-big .builder-exercise-result-text { align-self: end; }
+.builder-exercise-view.is-big .builder-exercise-result-text strong { font-size: 15px; }
+.builder-exercise-view.is-big .builder-exercise-add { justify-self: start; align-self: start; }
+
+@media (min-width: 901px) and (max-width: 1100px) {
+  .builder-exercise-view.is-tile .builder-exercise-result { grid-template-columns: 96px minmax(0, 1fr); }
+  .builder-exercise-view.is-tile .builder-exercise-preview { width: 96px; min-width: 96px; }
+}
+
+/* Tablet: the section editor keeps the library and the added list side by
+   side, gives the added list a little less, uses a smaller Tile picture,
+   and puts Big's name under its picture. */
+@media (min-width: 561px) and (max-width: 900px) {
+  .builder-section-grid { grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr); }
+  .builder-exercise-view.is-tile .builder-exercise-result { grid-template-columns: 72px minmax(0, 1fr); }
+  .builder-exercise-view.is-tile .builder-exercise-preview { width: 72px; min-width: 72px; }
+  .builder-exercise-view.is-big .builder-exercise-result { grid-template-columns: minmax(0, 1fr); }
+  .builder-exercise-view.is-big .builder-exercise-preview { grid-row: auto; }
+  .builder-exercise-view.is-big .builder-exercise-result-text { align-self: auto; }
+}
+@media (min-width: 561px) and (max-width: 743px) {
+  .builder-exercise-view.is-tile { grid-template-columns: minmax(0, 1fr); }
+  .builder-exercise-view.is-tile .builder-exercise-result { grid-template-columns: 96px minmax(0, 1fr); }
+  .builder-exercise-view.is-tile .builder-exercise-preview { width: 96px; min-width: 96px; }
+}
+
+/* Touch-sized controls on phones and landscape phones / small tablets
+   (the app's 760 px phone breakpoint): icon-only switcher, 44 px targets,
+   also for the builder result's existing toggles, Tags and Add. */
+@media (max-width: 760px) {
+  .exercise-view-button { justify-content: center; min-width: 44px; min-height: 44px; padding: 0; }
+  .exercise-view-button span { display: none; }
+  .exercise-view-icon { width: 44px; height: 44px; }
+  .exercise-view-menu-item { min-height: 44px; }
+  .builder-exercise-view .builder-mini-toggle { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
+  .builder-exercise-view .builder-exercise-mini-actions { gap: 2px; margin-top: 2px; }
+  .builder-exercise-view .builder-exercise-mini-actions .text-action { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0 8px; }
+  .builder-exercise-view .builder-exercise-add { min-width: 44px; min-height: 44px; }
+  .exercise-view-open { align-self: stretch; align-content: center; min-height: 44px; }
+  .exercise-view-grid.is-list .exercise-view-media { height: 44px; }
+}
+
+@media (max-width: 560px) {
+  .exercise-view-grid.is-tile, .exercise-view-grid.is-big, .exercise-view-grid.is-list { grid-template-columns: minmax(0, 1fr); }
+  .exercise-view-grid.is-tile .exercise-view-card { grid-template-columns: 96px minmax(0, 1fr); }
+  .exercise-view-grid.is-tile .exercise-view-media { width: 96px; }
+  .exercise-view-grid.is-list .exercise-view-title { -webkit-line-clamp: 2; }
+  .builder-exercise-view.is-list, .builder-exercise-view.is-tile { grid-template-columns: minmax(0, 1fr); }
+  .builder-exercise-view.is-list .builder-exercise-result { grid-template-columns: 46px minmax(0, 1fr) auto; }
+  .builder-exercise-view.is-tile .builder-exercise-result { grid-template-columns: 96px minmax(0, 1fr); }
+  .builder-exercise-view.is-tile .builder-exercise-preview { width: 96px; min-width: 96px; height: auto; }
+  .builder-exercise-view.is-big .builder-exercise-result { grid-template-columns: minmax(0, 1fr); }
+  .builder-exercise-view.is-big .builder-exercise-preview { grid-row: auto; max-height: min(28dvh, 200px); }
+  .builder-exercise-view.is-big .builder-exercise-result-text { align-self: auto; }
 }

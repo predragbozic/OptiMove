@@ -10,6 +10,7 @@ import {
   sessionLabel,
 } from "./builder-helpers.js";
 import { renderBuilderAddConfirmation, renderBuilderExerciseResults, renderBuilderStickyBar } from "./builder-exercises.js";
+import { renderExerciseViewSwitcher } from "./exercise-view-modes.js";
 import { preserveBuilderItemEdits } from "./builder-item-edits.js";
 import { renderBlockPickerModal, renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal, renderOverwriteDayConfirmHtml } from "./builder-modals.js";
 import { renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
@@ -420,6 +421,23 @@ export function renderBuilderSectionItems() {
 // Add-exercises mode) so its data is current whenever the coach does switch
 // over. Returns false (caller falls back to renderBuilder()) if the section
 // editor isn't open.
+// Tile / Big / List switch in the section editor: repaints only the
+// switcher and the results, so the quick Sets / Reps / Load fields, the
+// search and the filters keep what the coach typed (they are read from the
+// DOM when an exercise is added - a full renderBuilder() would clear them).
+// Returns false (caller falls back to renderBuilder()) if the section editor
+// isn't open.
+export function renderBuilderExerciseViewChange() {
+  const selectedNode = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
+  const panel = els.content?.querySelector(".builder-section-panel");
+  const resultsEl = panel?.querySelector(".builder-exercise-results");
+  if (!resultsEl || !selectedNode || selectedNode.type !== "section") return false;
+  const switcher = panel.querySelector(".builder-library-head .exercise-view-switcher");
+  if (switcher) switcher.outerHTML = renderExerciseViewSwitcher("builder", state.builder.exerciseView, "builder-exercise-view");
+  resultsEl.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode, { hasMore: state.builder.exerciseHasMore, loading: state.builder.exerciseLoading, view: state.builder.exerciseView });
+  return true;
+}
+
 export function renderBuilderAddFeedback() {
   const selectedNode = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
   const panel = els.content.querySelector(".builder-section-panel");
@@ -428,7 +446,7 @@ export function renderBuilderAddFeedback() {
   panel.dataset.mobileMode = state.builder.mobileMode;
 
   const resultsEl = panel.querySelector(".builder-exercise-results");
-  if (resultsEl) resultsEl.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode, { hasMore: state.builder.exerciseHasMore, loading: state.builder.exerciseLoading });
+  if (resultsEl) resultsEl.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode, { hasMore: state.builder.exerciseHasMore, loading: state.builder.exerciseLoading, view: state.builder.exerciseView });
 
   const confirmationSlot = panel.querySelector(".builder-add-confirmation");
   const confirmationHtml = renderBuilderAddConfirmation(state.builder.addConfirmation);

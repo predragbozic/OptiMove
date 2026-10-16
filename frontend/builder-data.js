@@ -77,7 +77,7 @@ export async function loadBuilderExercises(options = {}) {
     // currently open, same as renderBuilderSectionPanel's own initial render.
     const selectedSection = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
     const scrollTop = resultsContainer.scrollTop;
-    resultsContainer.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedSection, { hasMore: state.builder.exerciseHasMore });
+    resultsContainer.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedSection, { hasMore: state.builder.exerciseHasMore, view: state.builder.exerciseView });
     resultsContainer.scrollTop = options.append ? scrollTop : 0;
   } else if (options.forceFullRender) {
     renderBuilder();
