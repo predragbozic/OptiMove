@@ -9,6 +9,23 @@ import { applyNewMigration, MIGRATIONS_V2_ROOT } from "../src/migrate.js";
 const ownership = "202610151200_exercise_library_ownership_and_collections.sql";
 const integrity = "202610151300_exercise_copy_source_integrity.sql";
 
+test("personal tag migration is additive, idempotent and keeps per-user names private", async () => {
+  await withFixture("personal_tags", async (client, apply) => {
+    const name = "202610161100_exercise_personal_tags.sql";
+    const owner = (await client.query("insert into public.users default values returning id")).rows[0].id;
+    const other = (await client.query("insert into public.users default values returning id")).rows[0].id;
+    const source = (await client.query("insert into library.exercises (owner_scope) values ('system') returning id")).rows[0].id;
+    const before = (await client.query("select * from library.exercises")).rows;
+    await apply(name);
+    await client.query("insert into library.exercise_personal_tags (user_id,exercise_id,name) values ($1,$3,'skip'),($2,$3,'skip')", [owner, other, source]);
+    await assert.rejects(client.query("insert into library.exercise_personal_tags (user_id,exercise_id,name) values ($1,$2,'SKIP')", [owner, source]), /duplicate key/);
+    await client.query(await readFile(new URL(`../../migrations_v2/${name}`, import.meta.url), "utf8"));
+    assert.equal((await client.query("select count(*)::int as count from library.exercise_personal_tags")).rows[0].count, 2);
+    assert.equal((await client.query("select relrowsecurity from pg_class where oid='library.exercise_personal_tags'::regclass")).rows[0].relrowsecurity, true);
+    assert.deepEqual((await client.query("select * from library.exercises")).rows, before);
+  });
+});
+
 async function withFixture(label, work) {
   const database = await createDisposableDatabase({ prefix: "exercise_rehearsal", label });
   const client = new pg.Client({ connectionString: database.url });

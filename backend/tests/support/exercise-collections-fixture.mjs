@@ -1,6 +1,10 @@
 // Handbuilt runtime contract for tests that already provide users and exercises.
 // This fixture does not validate or execute migrations or rollback scripts.
+import { readFileSync } from "node:fs";
+
 export const EXERCISE_COLLECTIONS_FIXTURE_SQL = `
+  ${readFileSync(new URL("../../../migrations_v2/202610161100_exercise_personal_tags.sql", import.meta.url), "utf8")}
+
   alter table library.exercises
     add column source_exercise_id uuid references library.exercises(id),
     add constraint fixture_exercise_source_check check (

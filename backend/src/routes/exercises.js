@@ -14,6 +14,16 @@ const libraryScope = `(
   or (owner_scope = 'team' and owner_team_id in (select team_id from public.user_team_roles where user_id = $1 and is_active = true))
 )`;
 
+const visibleTagsSql = `
+  select t.id, t.name, (t.owner_scope <> 'user' or t.owner_user_id is distinct from $1::uuid) as readonly
+  from library.exercise_tags et join library.tags t on t.id = et.tag_id
+  where et.exercise_id = e.id and t.is_active = true
+    and (t.owner_scope = 'system' or t.owner_user_id = $1)
+  union all
+  select personal.id, personal.name, false as readonly
+  from library.exercise_personal_tags personal
+  where personal.exercise_id = e.id and personal.user_id = $1`;
+
 function slugify(value) {
   return String(value || "")
     .trim()
@@ -28,17 +38,17 @@ function slugify(value) {
 function text(value) { return String(value ?? "").trim(); }
 function nullableText(value) { return text(value) || null; }
 
-async function getOrCreateLookup(table, name, userId, extra = {}, runQuery = query) {
+async function getOrCreateLookup(table, name, userId, extra = {}, runQuery = query, systemOwned = false) {
   const clean = text(name);
   if (!clean) return null;
   const existing = await runQuery(
-    `select id, is_active, (${libraryScope}) as can_read,
+    `select id, owner_scope, is_active, (${libraryScope}) as can_read,
        (owner_scope = 'user' and owner_user_id = $1) as can_reactivate
      from library.${table} where lower(name) = lower($2) limit 1 for update`,
     [userId, clean],
   );
   if (existing.rows[0]) {
-    if (!existing.rows[0].can_read || (!existing.rows[0].is_active && !existing.rows[0].can_reactivate)) {
+    if (!existing.rows[0].can_read || (systemOwned && existing.rows[0].owner_scope !== "system") || (!existing.rows[0].is_active && !existing.rows[0].can_reactivate)) {
       const error = new Error("Lookup value is unavailable.");
       error.status = 409;
       throw error;
@@ -53,7 +63,7 @@ async function getOrCreateLookup(table, name, userId, extra = {}, runQuery = que
   const extraParams = extraKeys.map((key, index) => `, $${index + 4}`).join("");
   const inserted = await runQuery(
     `insert into library.${table} (name, slug, owner_scope, owner_user_id, created_by_user_id${extraCols})
-     values ($2, $3, 'user', $1, $1${extraParams})
+     values ($2, $3, '${systemOwned ? "system" : "user"}', ${systemOwned ? "null" : "$1"}, $1${extraParams})
      returning id`,
     [userId, clean, slugify(clean), ...extraKeys.map((key) => extra[key])],
   );
@@ -160,9 +170,14 @@ const optionQueries = {
     where is_active = true and ${libraryScopeWithHidden("attractors", "attractor")}
     order by name`,
   tags: `
-    select distinct name
-    from library.tags
-    where is_active = true and ${libraryScopeWithHidden("tags", "tag")}
+    select distinct name from (
+      select name from library.tags
+      where is_active = true and ${libraryScopeWithHidden("tags", "tag")}
+      union all
+      select personal.name from library.exercise_personal_tags personal
+      join library.exercises e on e.id = personal.exercise_id
+      where personal.user_id = $1 and ${exerciseScope}
+    ) visible_tags
     order by name`,
 };
 
@@ -207,7 +222,8 @@ router.get("/", async (req, res, next) => {
 
     if (search) {
       params.push(`%${search}%`);
-      where += ` and (e.name ilike $${params.length} or e.exercise_code ilike $${params.length})`;
+      where += ` and (e.name ilike $${params.length} or e.exercise_code ilike $${params.length}
+        or exists (select 1 from (${visibleTagsSql}) search_tags where search_tags.name ilike $${params.length}))`;
       params.push(search);
       const searchParam = `$${params.length}`;
       searchOrder = `case
@@ -220,7 +236,7 @@ router.get("/", async (req, res, next) => {
     const addExistsFilter = (value, sql) => {
       if (!value) return;
       params.push(value);
-      where += ` and exists (${sql.replace("?", `$${params.length}`)})`;
+      where += ` and exists (${sql.replaceAll("?", `$${params.length}`)})`;
     };
 
     addExistsFilter(filters.purpose, `
@@ -246,7 +262,11 @@ router.get("/", async (req, res, next) => {
     addExistsFilter(filters.tag, `
       select 1 from library.exercise_tags et
       join library.tags t on t.id = et.tag_id
-      where et.exercise_id = e.id and t.name = ?`);
+      where et.exercise_id = e.id and t.name = ?
+        and (t.owner_scope = 'system' or t.owner_user_id = $1)
+      union all
+      select 1 from library.exercise_personal_tags personal
+      where personal.exercise_id = e.id and personal.user_id = $1 and personal.name = ?`);
 
     if (filters.startingPosition) {
       params.push(filters.startingPosition);
@@ -294,12 +314,8 @@ router.get("/", async (req, res, next) => {
         (fav.user_id is not null) as is_favorite,
         coalesce(
           (
-            select json_agg(json_build_object('id', t.id, 'name', t.name) order by t.name)
-            from library.exercise_tags et
-            join library.tags t on t.id = et.tag_id
-            where et.exercise_id = e.id
-              and t.is_active = true
-              and (t.owner_scope = 'system' or t.owner_user_id = $1)
+            select json_agg(json_build_object('id', t.id, 'name', t.name, 'readonly', t.readonly) order by t.name)
+            from (${visibleTagsSql}) t
           ),
           '[]'::json
         ) as tags
@@ -336,7 +352,7 @@ async function loadExerciseDetail(userId, exerciseId, runQuery = query) {
       coalesce((select json_agg(s.name order by s.name) from library.exercise_sections es join library.sections s on s.id = es.section_id where es.exercise_id = e.id and (s.owner_scope = 'system' or s.owner_user_id = $1)), '[]'::json) as groups,
       coalesce((select json_agg(bp.name order by bp.name) from library.exercise_body_parts ebp join library.body_parts bp on bp.id = ebp.body_part_id where ebp.exercise_id = e.id and (bp.owner_scope = 'system' or bp.owner_user_id = $1)), '[]'::json) as body_parts,
       coalesce((select json_agg(mp.name order by mp.name) from library.exercise_movement_patterns emp join library.movement_patterns mp on mp.id = emp.movement_pattern_id where emp.exercise_id = e.id and (mp.owner_scope = 'system' or mp.owner_user_id = $1)), '[]'::json) as movement_patterns,
-      coalesce((select json_agg(t.name order by t.name) from library.exercise_tags et join library.tags t on t.id = et.tag_id where et.exercise_id = e.id and (t.owner_scope = 'system' or t.owner_user_id = $1)), '[]'::json) as tags
+      coalesce((select json_agg(t.name order by t.name) from (${visibleTagsSql}) t), '[]'::json) as tags
     from library.exercises e
     left join library.places p on p.id = e.place_id
     left join library.complexity_levels c on c.id = e.complexity_level_id
@@ -389,7 +405,7 @@ router.get("/:exerciseId", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-async function upsertExercise(req, res, exerciseId) {
+async function upsertExercise(req, res, exerciseId, copying = false) {
   const userId = req.user.id;
   const body = req.body || {};
   const name = text(body.name);
@@ -398,7 +414,10 @@ async function upsertExercise(req, res, exerciseId) {
   const client = await pool.connect();
   const runQuery = (sql, params) => client.query(sql, params);
   let copySourceId = null;
+  let editingSystem = false;
   let exerciseCode = nullableText(body.exerciseCode);
+  const videoUrl = nullableText(body.videoUrl);
+  const imageUrl = nullableText(body.imageUrl);
   try {
     await runQuery("begin isolation level read committed");
     await runQuery("set local lock_timeout = '2s'");
@@ -406,27 +425,45 @@ async function upsertExercise(req, res, exerciseId) {
     await runQuery("select pg_advisory_xact_lock_shared(hashtextextended('exercise_collections', 0))");
     if (exerciseId) {
       const existing = await runQuery(
-        `select e.id, e.owner_scope from library.exercises e where e.id = $2 and ${exerciseScope} for update of e`,
+        `select e.id, e.owner_scope, e.video_url, e.image_url from library.exercises e where e.id = $2 and ${exerciseScope} for update of e`,
         [userId, exerciseId],
       );
       if (!existing.rows[0]) {
         await runQuery("rollback");
         return res.status(404).json({ error: "Exercise not found." });
       }
-      if (existing.rows[0].owner_scope === "system") {
+      if (copying && existing.rows[0].owner_scope !== "system") {
+        await runQuery("rollback");
+        return res.status(403).json({ error: "Only application exercises can be copied." });
+      }
+      if (!copying && existing.rows[0].owner_scope === "system" && !isPlatformAdministrator(req.authz)) {
+        await runQuery("rollback");
+        return res.status(403).json({ error: "Only platform administrators can edit application exercises." });
+      }
+      editingSystem = !copying && existing.rows[0].owner_scope === "system";
+      if (copying) {
         copySourceId = exerciseId;
         const personal = await runQuery(
           "select id, exercise_code from library.exercises where owner_scope = 'user' and owner_user_id = $1 and source_exercise_id = $2 for update",
           [userId, copySourceId],
         );
-        exerciseId = personal.rows[0]?.id || null;
-        exerciseCode = personal.rows[0]?.exercise_code ?? null;
+        if (personal.rows[0]) {
+          await runQuery("rollback");
+          return res.status(409).json({ error: "You already have a private copy. Edit that copy instead.", exerciseId: personal.rows[0].id });
+        }
+        const sourceMedia = [existing.rows[0].video_url, existing.rows[0].image_url].map(nullableText).filter(Boolean);
+        if ([videoUrl, imageUrl].some((value) => value && sourceMedia.includes(value))) {
+          await runQuery("rollback");
+          return res.status(400).json({ error: "A private copy must use your own media, not the application's media URLs." });
+        }
+        exerciseId = null;
+        exerciseCode = null;
       }
     }
-    const placeId = await getOrCreateLookup("places", body.place, userId, {}, runQuery);
-    const complexityId = await getOrCreateLookup("complexity_levels", body.complexity, userId, {}, runQuery);
-    const startingPositionId = await getOrCreateLookup("starting_positions", body.startingPosition, userId, {}, runQuery);
-    const attractorId = await getOrCreateLookup("attractors", body.attractor, userId, { kind: "local" }, runQuery);
+    const placeId = await getOrCreateLookup("places", body.place, userId, {}, runQuery, editingSystem);
+    const complexityId = await getOrCreateLookup("complexity_levels", body.complexity, userId, {}, runQuery, editingSystem);
+    const startingPositionId = await getOrCreateLookup("starting_positions", body.startingPosition, userId, {}, runQuery, editingSystem);
+    const attractorId = await getOrCreateLookup("attractors", body.attractor, userId, { kind: "local" }, runQuery, editingSystem);
 
     let finalId = exerciseId;
     if (exerciseId) {
@@ -437,7 +474,7 @@ async function upsertExercise(req, res, exerciseId) {
            starting_position_id = $11, attractor_id = $12, updated_at = now()
          where id = $1`,
         [exerciseId, exerciseCode, name, nullableText(body.aim), nullableText(body.executionNotes),
-          nullableText(body.instruction), nullableText(body.videoUrl), nullableText(body.imageUrl), placeId, complexityId,
+          nullableText(body.instruction), videoUrl, imageUrl, placeId, complexityId,
           startingPositionId, attractorId],
       );
     } else {
@@ -447,26 +484,42 @@ async function upsertExercise(req, res, exerciseId) {
             instruction, video_url, image_url, place_id, complexity_level_id, starting_position_id, attractor_id, source_exercise_id)
          values ('user', $1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          returning id`,
-        [userId, exerciseCode, copySourceId ? `private-${randomUUID()}` : slugify(name), name, nullableText(body.aim), nullableText(body.executionNotes),
-          nullableText(body.instruction), nullableText(body.videoUrl), nullableText(body.imageUrl), placeId, complexityId,
+        [userId, exerciseCode, `private-${randomUUID()}`, name, nullableText(body.aim), nullableText(body.executionNotes),
+          nullableText(body.instruction), videoUrl, imageUrl, placeId, complexityId,
           startingPositionId, attractorId, copySourceId],
       );
       finalId = inserted.rows[0].id;
     }
 
-    const domainIds = await Promise.all(splitNames(body.purposes).map((value) => getOrCreateLookup("domains", value, userId, {}, runQuery)));
-    const categoryIds = await Promise.all(splitNames(body.qualities).map((value) => getOrCreateLookup("categories", value, userId, {}, runQuery)));
-    const sectionIds = await Promise.all(splitNames(body.groups).map((value) => getOrCreateLookup("sections", value, userId, {}, runQuery)));
-    const bodyPartIds = await Promise.all(splitNames(body.bodyParts).map((value) => getOrCreateLookup("body_parts", value, userId, {}, runQuery)));
-    const movementPatternIds = await Promise.all(splitNames(body.movementPatterns).map((value) => getOrCreateLookup("movement_patterns", value, userId, {}, runQuery)));
-    const tagIds = await Promise.all(splitNames(body.tags).map((value) => getOrCreateLookup("tags", value, userId, {}, runQuery)));
+    const domainIds = await Promise.all(splitNames(body.purposes).map((value) => getOrCreateLookup("domains", value, userId, {}, runQuery, editingSystem)));
+    const categoryIds = await Promise.all(splitNames(body.qualities).map((value) => getOrCreateLookup("categories", value, userId, {}, runQuery, editingSystem)));
+    const sectionIds = await Promise.all(splitNames(body.groups).map((value) => getOrCreateLookup("sections", value, userId, {}, runQuery, editingSystem)));
+    const bodyPartIds = await Promise.all(splitNames(body.bodyParts).map((value) => getOrCreateLookup("body_parts", value, userId, {}, runQuery, editingSystem)));
+    const movementPatternIds = await Promise.all(splitNames(body.movementPatterns).map((value) => getOrCreateLookup("movement_patterns", value, userId, {}, runQuery, editingSystem)));
 
     await syncJunction("exercise_domains", "domain_id", "domains", finalId, domainIds.filter(Boolean), userId, { runQuery });
     await syncJunction("exercise_categories", "category_id", "categories", finalId, categoryIds.filter(Boolean), userId, { runQuery });
     await syncJunction("exercise_sections", "section_id", "sections", finalId, sectionIds.filter(Boolean), userId, { runQuery });
     await syncJunction("exercise_body_parts", "body_part_id", "body_parts", finalId, bodyPartIds.filter(Boolean), userId, { runQuery });
     await syncJunction("exercise_movement_patterns", "movement_pattern_id", "movement_patterns", finalId, movementPatternIds.filter(Boolean), userId, { runQuery });
-    await syncJunction("exercise_tags", "tag_id", "tags", finalId, tagIds.filter(Boolean), userId, { withOrder: false, runQuery });
+    if (Array.isArray(body.tags)) {
+      const names = splitNames(body.tags);
+      if (names.some((value) => value.length > 200)) {
+        await runQuery("rollback");
+        return res.status(400).json({ error: "Tag names must contain 1 to 200 characters." });
+      }
+      await runQuery(`delete from library.exercise_personal_tags
+        where user_id=$1 and exercise_id=$2 and not (lower(name)=any($3::text[]))`,
+      [userId, finalId, names.map((value) => value.toLowerCase())]);
+      for (const name of names) {
+        await runQuery(`insert into library.exercise_personal_tags (user_id,exercise_id,name)
+          select $1,$2,$3 where not exists (
+            select 1 from library.exercise_tags et join library.tags t on t.id=et.tag_id
+            where et.exercise_id=$2 and lower(t.name)=lower($3) and t.is_active=true
+              and (t.owner_scope='system' or t.owner_user_id=$1))
+          on conflict (user_id,exercise_id,lower(name)) do nothing`, [userId, finalId, name]);
+      }
+    }
 
     const detail = await loadExerciseDetail(userId, finalId, runQuery);
     if (!detail) {
@@ -517,6 +570,12 @@ router.patch("/:exerciseId", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.post("/:exerciseId/copy", async (req, res, next) => {
+  try {
+    await upsertExercise(req, res, req.params.exerciseId, true);
+  } catch (error) { next(error); }
+});
+
 router.post("/:exerciseId/favorite", async (req, res, next) => {
   try {
     if (!(await exerciseExistsForUser(req.user.id, req.params.exerciseId))) return res.status(404).json({ error: "Exercise not found." });
@@ -553,7 +612,7 @@ router.get("/:exerciseId/tags", async (req, res, next) => {
     if (!(await exerciseExistsForUser(req.user.id, req.params.exerciseId))) {
       return res.status(404).json({ error: "Exercise not found." });
     }
-    const [allTags, exerciseTags] = await Promise.all([
+    const [allTags, exerciseTags, personalTags, personalOptions] = await Promise.all([
       query(
         `select id, name
          from library.tags
@@ -562,17 +621,21 @@ router.get("/:exerciseId/tags", async (req, res, next) => {
         [req.user.id],
       ),
       query(
-        `select t.id, t.name
+        `select t.id, t.name, (t.owner_scope <> 'user' or t.owner_user_id is distinct from $1::uuid) as readonly
          from library.exercise_tags et
          join library.tags t on t.id = et.tag_id
          where et.exercise_id = $2
            and t.is_active = true
-           and ${libraryScope}
+           and (t.owner_scope = 'system' or t.owner_user_id = $1)
          order by t.name`,
         [req.user.id, req.params.exerciseId],
       ),
+      query("select id, name from library.exercise_personal_tags where user_id=$1 and exercise_id=$2 order by name", [req.user.id, req.params.exerciseId]),
+      query(`select distinct on (personal.name) personal.id, personal.name
+        from library.exercise_personal_tags personal join library.exercises e on e.id=personal.exercise_id
+        where personal.user_id=$1 and ${exerciseScope} order by personal.name, personal.id`, [req.user.id]),
     ]);
-    res.json({ tags: exerciseTags.rows, options: allTags.rows });
+    res.json({ tags: [...exerciseTags.rows, ...personalTags.rows], options: [...allTags.rows, ...personalOptions.rows] });
   } catch (error) {
     next(error);
   }
@@ -583,50 +646,23 @@ router.post("/:exerciseId/tags", async (req, res, next) => {
     if (!(await exerciseExistsForUser(req.user.id, req.params.exerciseId))) {
       return res.status(404).json({ error: "Exercise not found." });
     }
-    const editable = await query("select id from library.exercises where id=$1 and owner_scope='user' and owner_user_id=$2", [req.params.exerciseId, req.user.id]);
-    if (!editable.rowCount) return res.status(409).json({ error: "Create a private copy before editing tags." });
-    const name = String(req.body?.name || "").trim();
+    let name = String(req.body?.name || "").trim();
     const tagId = String(req.body?.tagId || "").trim();
-    let finalTagId = tagId;
-
-    if (!finalTagId) {
-      if (!name) return res.status(400).json({ error: "Tag name is required." });
-      const slug = slugify(name);
-      const created = await query(
-        `insert into library.tags (name, slug, owner_scope, owner_user_id, created_by_user_id, is_active)
-         values ($1, concat($2, '-', substring(gen_random_uuid()::text from 1 for 8)), 'user', $3, $3, true)
-         on conflict (name) do nothing
-         returning id`,
-        [name, slug, req.user.id],
-      );
-      if (created.rows[0]?.id) {
-        finalTagId = created.rows[0].id;
-      } else {
-        const existing = await query(
-          `select id
-           from library.tags
-           where lower(name) = lower($2) and is_active = true and ${libraryScope}`,
-          [req.user.id, name],
-        );
-        if (!existing.rows[0]) return res.status(409).json({ error: "Tag name already exists outside your library." });
-        finalTagId = existing.rows[0].id;
-      }
+    if (tagId) {
+      const selected = await query(`select name from library.tags where id=$2 and is_active=true
+        and (owner_scope='system' or owner_user_id=$1)
+        union all select personal.name from library.exercise_personal_tags personal
+        join library.exercises e on e.id=personal.exercise_id
+        where personal.id=$2 and personal.user_id=$1 and ${exerciseScope}`, [req.user.id, tagId]);
+      if (!selected.rows[0]) return res.status(404).json({ error: "Tag not found." });
+      name = selected.rows[0].name;
     }
-
-    const tag = await query(
-      `select id, name
-       from library.tags
-       where id = $2 and is_active = true and ${libraryScope}`,
-      [req.user.id, finalTagId],
-    );
-    if (!tag.rows[0]) return res.status(404).json({ error: "Tag not found." });
-
-    await query(
-      `insert into library.exercise_tags (exercise_id, tag_id)
-       values ($1, $2)
-       on conflict (exercise_id, tag_id) do nothing`,
-      [req.params.exerciseId, finalTagId],
-    );
+    if (!name || name.length > 200) return res.status(400).json({ error: "Tag name must contain 1 to 200 characters." });
+    const tag = await query(`insert into library.exercise_personal_tags (user_id,exercise_id,name)
+      select $1,e.id,$3 from library.exercises e where e.id=$2 and ${exerciseScope}
+      on conflict (user_id,exercise_id,lower(name)) do update set name=library.exercise_personal_tags.name
+      returning id,name`, [req.user.id, req.params.exerciseId, name]);
+    if (!tag.rows[0]) return res.status(404).json({ error: "Exercise not found." });
     res.status(201).json({ tag: tag.rows[0] });
   } catch (error) {
     next(error);
@@ -638,15 +674,14 @@ router.delete("/:exerciseId/tags/:tagId", async (req, res, next) => {
     if (!(await exerciseExistsForUser(req.user.id, req.params.exerciseId))) {
       return res.status(404).json({ error: "Exercise not found." });
     }
-    const editable = await query("select id from library.exercises where id=$1 and owner_scope='user' and owner_user_id=$2", [req.params.exerciseId, req.user.id]);
-    if (!editable.rowCount) return res.status(409).json({ error: "Create a private copy before editing tags." });
-    const tag = await query(`select id from library.tags where id=$2 and ${libraryScope}`, [req.user.id, req.params.tagId]);
-    if (!tag.rowCount) return res.status(404).json({ error: "Tag not found." });
-    await query(
-      `delete from library.exercise_tags
-       where exercise_id = $1 and tag_id = $2`,
-      [req.params.exerciseId, req.params.tagId],
-    );
+    const removed = await query(`delete from library.exercise_personal_tags
+      where user_id=$1 and exercise_id=$2 and id=$3 returning id`, [req.user.id, req.params.exerciseId, req.params.tagId]);
+    if (!removed.rowCount) {
+      const legacy = await query(`delete from library.exercise_tags et using library.tags t
+        where et.exercise_id=$2 and et.tag_id=$3 and t.id=et.tag_id
+          and t.owner_scope='user' and t.owner_user_id=$1 returning et.tag_id`, [req.user.id, req.params.exerciseId, req.params.tagId]);
+      if (!legacy.rowCount) return res.status(404).json({ error: "Tag not found." });
+    }
     res.json({ ok: true });
   } catch (error) {
     next(error);

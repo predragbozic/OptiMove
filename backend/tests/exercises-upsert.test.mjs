@@ -221,7 +221,7 @@ const LIBRARY_FIXTURE_SQL = `
   );
   create table library.exercise_favorites (
     user_id uuid not null references public.users(id), exercise_id uuid not null references library.exercises(id) on delete cascade,
-    created_at timestamptz not null default now()
+    created_at timestamptz not null default now(), primary key (user_id, exercise_id)
   );
   create table library.filter_hidden (
     id uuid primary key default gen_random_uuid(), kind varchar not null, item_id uuid not null, user_id uuid not null references public.users(id),
@@ -312,14 +312,96 @@ async function makeLibraryAdmin(label) {
   return admin;
 }
 
-test("editing a system exercise makes a private copy and leaves the application original unchanged", async () => {
+test("personal tags and favorites never copy or mutate originals and remain user scoped", async () => {
+  const first = await makeCoach("personal-tags-first");
+  const second = await makeCoach("personal-tags-second");
+  const source = await makeExercise(null, { ownerScope: "system", name: "Personal tagging source" });
+  const original = (await query("select * from library.exercises where id=$1", [source])).rows[0];
+  const count = (await query("select count(*)::int as count from library.exercises")).rows[0].count;
+  const added = [];
+  for (const coach of [first, second]) {
+    const tag = await api(`/api/exercises/${source}/tags`, { method: "POST", cookie: coach.cookie, body: { name: "skip" } });
+    assert.equal(tag.status, 201);
+    added.push(tag.body.tag);
+    assert.equal((await api(`/api/exercises/${source}/tags`, { method: "POST", cookie: coach.cookie, body: { name: "SKIP" } })).body.tag.id, tag.body.tag.id);
+  }
+  assert.notEqual(added[0].id, added[1].id);
+  assert.equal((await api(`/api/exercises/${source}/tags/${added[1].id}`, { method: "DELETE", cookie: first.cookie })).status, 404);
+  assert.equal((await api(`/api/exercises/${source}/tags`, { method: "POST", cookie: first.cookie, body: { tagId: added[1].id } })).status, 404);
+  const firstTags = await api(`/api/exercises/${source}/tags`, { cookie: first.cookie });
+  assert.deepEqual(firstTags.body.tags.map((tag) => tag.id), [added[0].id]);
+  for (const suffix of ["?tag=skip", "?search=skip"]) {
+    const result = await api(`/api/exercises${suffix}`, { cookie: first.cookie });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.exercises.filter((exercise) => exercise.id === source).length, 1);
+  }
+  assert.equal((await api(`/api/exercises/${source}/favorite`, { method: "POST", cookie: first.cookie })).status, 200);
+  assert.equal((await api("/api/exercises?favorite=true", { cookie: first.cookie })).body.exercises.some((exercise) => exercise.id === source), true);
+  assert.equal((await api("/api/exercises?favorite=true", { cookie: second.cookie })).body.exercises.some((exercise) => exercise.id === source), false);
+  assert.equal((await api(`/api/exercises/${source}/tags/${added[0].id}`, { method: "DELETE", cookie: first.cookie })).status, 200);
+  assert.equal((await api("/api/exercises?tag=skip", { cookie: first.cookie })).body.exercises.some((exercise) => exercise.id === source), false);
+  assert.equal((await api("/api/exercises?tag=skip", { cookie: second.cookie })).body.exercises.some((exercise) => exercise.id === source), true);
+  assert.equal((await query("select count(*)::int as count from library.exercises")).rows[0].count, count);
+  assert.deepEqual((await query("select * from library.exercises where id=$1", [source])).rows[0], original);
+});
+
+test("only platform admins edit originals; private owners edit but cannot expose another owner's copy", async () => {
+  const coach = await makeCoach("explicit-edit-coach");
+  const admin = await makeLibraryAdmin("explicit-edit-admin");
+  const source = await makeExercise(null, { ownerScope: "system", name: "Admin editable" });
+  assert.equal((await api(`/api/exercises/${source}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Denied" } })).status, 403);
+  const edited = await api(`/api/exercises/${source}`, { method: "PATCH", cookie: admin.cookie,
+    body: { name: "Admin updated original", videoUrl: "https://original.test/video", imageUrl: "https://original.test/image", purposes: ["New application purpose"] } });
+  assert.equal(edited.status, 200);
+  assert.equal(edited.body.id, source);
+  assert.equal(edited.body.ownerScope, "system");
+  assert.deepEqual((await api(`/api/exercises/${source}`, { cookie: coach.cookie })).body.purposes, ["New application purpose"]);
+  const privateId = await makeExercise(coach.userId, { name: "Owned private" });
+  assert.equal((await api(`/api/exercises/${privateId}/copy`, { method: "POST", cookie: coach.cookie, body: { name: "Denied copy" } })).status, 403);
+  for (const method of ["GET", "PATCH"]) {
+    assert.equal((await api(`/api/exercises/${privateId}`, { method, cookie: admin.cookie, ...(method === "PATCH" ? { body: { name: "Denied" } } : {}) })).status, 404);
+  }
+  assert.equal((await api(`/api/exercises/${privateId}/copy`, { method: "POST", cookie: admin.cookie, body: { name: "Denied" } })).status, 404);
+});
+
+test("new system copies never inherit media and direct source media submissions fail before writes", async () => {
+  const coach = await makeCoach("media-copy-owner");
+  const source = await makeExercise(null, { ownerScope: "system", name: "Source with media" });
+  await query("update library.exercises set video_url=$2,image_url=$3 where id=$1", [source, "https://source.test/video", "https://source.test/image"]);
+  const before = (await query("select * from library.exercises where id=$1", [source])).rows[0];
+  for (const media of [{ videoUrl: before.video_url }, { imageUrl: before.image_url }, { imageUrl: before.video_url }, { videoUrl: ` ${before.video_url} ` }]) {
+    const denied = await api(`/api/exercises/${source}/copy`, { method: "POST", cookie: coach.cookie, body: { name: "Denied media", ...media } });
+    assert.equal(denied.status, 400);
+    assert.equal((await query("select count(*)::int as count from library.exercises where source_exercise_id=$1", [source])).rows[0].count, 0);
+  }
+  const empty = await api(`/api/exercises/${source}/copy`, { method: "POST", cookie: coach.cookie, body: { name: "No inherited media" } });
+  assert.equal(empty.status, 201);
+  assert.equal(empty.body.videoUrl, "");
+  assert.equal(empty.body.imageUrl, "");
+  const other = await makeCoach("media-copy-custom");
+  const custom = await api(`/api/exercises/${source}/copy`, { method: "POST", cookie: other.cookie,
+    body: { name: "Custom media", videoUrl: "https://mine.test/video", imageUrl: "https://mine.test/image" } });
+  assert.equal(custom.status, 201);
+  assert.equal(custom.body.videoUrl, "https://mine.test/video");
+  assert.equal(custom.body.imageUrl, "https://mine.test/image");
+  const edited = await api(`/api/exercises/${custom.body.id}`, { method: "PATCH", cookie: other.cookie, body: { ...custom.body, name: "Edited custom" } });
+  assert.equal(edited.body.id, custom.body.id);
+  assert.equal(edited.body.videoUrl, custom.body.videoUrl);
+  const legacy = await makeExercise(coach.userId, { name: "Preexisting private media" });
+  await query("update library.exercises set video_url=$2,image_url=$3 where id=$1", [legacy, before.video_url, before.image_url]);
+  const legacyDetail = await api(`/api/exercises/${legacy}`, { cookie: coach.cookie });
+  assert.equal((await api(`/api/exercises/${legacy}`, { method: "PATCH", cookie: coach.cookie, body: legacyDetail.body })).body.videoUrl, before.video_url);
+  assert.deepEqual((await query("select * from library.exercises where id=$1", [source])).rows[0], before);
+});
+
+test("explicitly copying a system exercise makes a private copy and leaves the application original unchanged", async () => {
   const coach = await makeCoach("system-copy");
   const other = await makeCoach("system-reader");
   const systemId = await makeExercise(null, { ownerScope: "system", name: "Application original" });
   const spoofedSourceId = await makeExercise(other.userId, { name: "Foreign spoofed source" });
   const before = (await query("select * from library.exercises where id = $1", [systemId])).rows[0];
-  const saved = await api(`/api/exercises/${systemId}`, {
-    method: "PATCH", cookie: coach.cookie, body: {
+  const saved = await api(`/api/exercises/${systemId}/copy`, {
+    method: "POST", cookie: coach.cookie, body: {
       name: "Personal variation", instruction: "My instruction",
       sourceExerciseId: spoofedSourceId, source_exercise_id: spoofedSourceId,
     },
@@ -334,7 +416,7 @@ test("editing a system exercise makes a private copy and leaves the application 
   assert.deepEqual((await query("select * from library.exercises where id = $1", [systemId])).rows[0], before);
   assert.equal((await api(`/api/exercises/${saved.body.id}`, { cookie: other.cookie })).status, 404);
   assert.equal((await api(`/api/exercises/${systemId}`, { cookie: other.cookie })).body.name, "Application original");
-  const retried = await api(`/api/exercises/${systemId}`, {
+  const retried = await api(`/api/exercises/${saved.body.id}`, {
     method: "PATCH", cookie: coach.cookie, body: { name: "Personal variation 2" },
   });
   assert.equal(retried.body.id, saved.body.id);
@@ -348,7 +430,7 @@ test("editor round trips preserve a private copy identity with production unique
   const original = (await query("select * from library.exercises where id=$1", [systemId])).rows[0];
   const detail = await api(`/api/exercises/${systemId}`, { cookie: coach.cookie });
   const requestBody = { ...detail.body, instruction: "Private instruction" };
-  const saved = await api(`/api/exercises/${systemId}`, { method: "PATCH", cookie: coach.cookie, body: requestBody });
+  const saved = await api(`/api/exercises/${systemId}/copy`, { method: "POST", cookie: coach.cookie, body: requestBody });
   assert.equal(saved.status, 201);
   assert.equal(saved.body.exerciseCode, "");
   const copy = (await query("select * from library.exercises where id=$1", [saved.body.id])).rows[0];
@@ -357,7 +439,7 @@ test("editor round trips preserve a private copy identity with production unique
   assert.equal(copy.owner_scope, "user");
   assert.equal(copy.owner_user_id, coach.userId);
   assert.equal(copy.source_exercise_id, systemId);
-  for (const targetId of [systemId, copy.id, systemId]) {
+  for (const targetId of [copy.id, copy.id, copy.id]) {
     const body = targetId === copy.id ? { ...saved.body, instruction: "Saved directly" } : requestBody;
     const updated = await api(`/api/exercises/${targetId}`, { method: "PATCH", cookie: coach.cookie, body });
     assert.equal(updated.status, 200);
@@ -371,10 +453,10 @@ test("editor round trips preserve a private copy identity with production unique
   assert.equal(customized.status, 200);
   assert.equal(customized.body.id, copy.id);
   assert.equal(customized.body.exerciseCode, "MY-PRIVATE-CODE");
-  const repeated = await api(`/api/exercises/${systemId}`, { method: "PATCH", cookie: coach.cookie, body: requestBody });
-  assert.equal(repeated.status, 200);
-  assert.equal(repeated.body.id, copy.id);
-  assert.equal(repeated.body.exerciseCode, "MY-PRIVATE-CODE");
+  const repeated = await api(`/api/exercises/${systemId}/copy`, { method: "POST", cookie: coach.cookie, body: requestBody });
+  assert.equal(repeated.status, 409);
+  assert.equal(repeated.body.exerciseId, copy.id);
+  assert.equal((await query("select exercise_code from library.exercises where id=$1", [copy.id])).rows[0].exercise_code, "MY-PRIVATE-CODE");
   assert.equal((await query("select count(*)::integer as count from library.exercises where owner_user_id=$1 and source_exercise_id=$2", [coach.userId, systemId])).rows[0].count, 1);
   assert.equal((await api(`/api/exercises/${copy.id}`, { cookie: other.cookie })).status, 404);
   assert.equal((await api(`/api/exercises/${copy.id}`, { method: "PATCH", cookie: other.cookie, body: requestBody })).status, 404);
@@ -387,7 +469,7 @@ test("two coaches can concurrently save same-name copies of a coded system exerc
   const original = (await query("select * from library.exercises where id=$1", [systemId])).rows[0];
   const saved = await Promise.all(coaches.map(async (coach) => {
     const detail = await api(`/api/exercises/${systemId}`, { cookie: coach.cookie });
-    return api(`/api/exercises/${systemId}`, { method: "PATCH", cookie: coach.cookie, body: detail.body });
+    return api(`/api/exercises/${systemId}/copy`, { method: "POST", cookie: coach.cookie, body: detail.body });
   }));
   assert.deepEqual(saved.map((result) => result.status), [201, 201]);
   const copies = (await query("select * from library.exercises where source_exercise_id=$1 order by id", [systemId])).rows;
@@ -438,7 +520,7 @@ test("restricted blocks hide the source and each private copy on revocation with
   assert.equal(created.status, 201);
   assert.equal((await api(`/api/exercises/${systemId}`, { cookie: outsider.cookie })).status, 404);
   assert.equal((await api(`/api/exercises/${systemId}`, { cookie: admin.cookie })).status, 200);
-  const saved = await api(`/api/exercises/${systemId}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Private restricted variation" } });
+  const saved = await api(`/api/exercises/${systemId}/copy`, { method: "POST", cookie: coach.cookie, body: { name: "Private restricted variation" } });
   assert.equal(saved.status, 201);
   const preservedCopy = (await query("select * from library.exercises where id=$1", [saved.body.id])).rows[0];
   assert.equal((await api(`/api/exercises/${saved.body.id}`, { cookie: other.cookie })).status, 404);
@@ -477,8 +559,8 @@ test("restricted blocks hide the source and each private copy on revocation with
 test("deactivating the canonical source hides a private copy without deleting its edits", async () => {
   const coach = await makeCoach("inactive-source");
   const systemId = await makeExercise(null, { ownerScope: "system", name: "Deactivation source" });
-  const copy = await api(`/api/exercises/${systemId}`, {
-    method: "PATCH", cookie: coach.cookie, body: { name: "Preserved deactivation variation" },
+  const copy = await api(`/api/exercises/${systemId}/copy`, {
+    method: "POST", cookie: coach.cookie, body: { name: "Preserved deactivation variation" },
   });
   assert.equal(copy.status, 201);
   const saved = (await query("select * from library.exercises where id=$1", [copy.body.id])).rows[0];
@@ -496,7 +578,7 @@ test("deactivating the canonical source hides a private copy without deleting it
   const restored = await api(`/api/exercises/${copy.body.id}`, { cookie: coach.cookie });
   assert.equal(restored.status, 200);
   assert.equal(restored.body.name, saved.name);
-  assert.equal((await api(`/api/exercises/${systemId}`, {
+  assert.equal((await api(`/api/exercises/${copy.body.id}`, {
     method: "PATCH", cookie: coach.cookie, body: { name: saved.name },
   })).body.id, copy.body.id);
 });
@@ -556,7 +638,7 @@ test("system copy under a REPEATABLE READ pool default cannot reuse the grant re
     revoke = api(`/api/exercise-collections/${created.body.collection.id}`, { method: "PATCH", cookie: admin.cookie,
       body: { name: "RR block", exerciseIds: [source], userIds: [], expectedRevision: 1 } });
     await waitFor("insert into library.exercise_collection_audit");
-    copy = api(`/api/exercises/${source}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Must not be copied" } });
+    copy = api(`/api/exercises/${source}/copy`, { method: "POST", cookie: coach.cookie, body: { name: "Must not be copied" } });
     await waitFor("pg_advisory_xact_lock_shared(");
     await blocker.query("commit");
     assert.equal((await revoke).status, 200);
@@ -577,8 +659,8 @@ test("patching an owned private exercise ignores spoofed provenance without clon
   const canonicalSourceId = await makeExercise(null, { ownerScope: "system", name: "Canonical source" });
   const spoofedSourceId = await makeExercise(other.userId, { name: "Spoofed private source" });
   const originalId = await makeExercise(coach.userId, { name: "Private original" });
-  const copy = await api(`/api/exercises/${canonicalSourceId}`, {
-    method: "PATCH", cookie: coach.cookie, body: { name: "Canonical private copy" },
+  const copy = await api(`/api/exercises/${canonicalSourceId}/copy`, {
+    method: "POST", cookie: coach.cookie, body: { name: "Canonical private copy" },
   });
   assert.equal(copy.status, 201);
   const beforeCount = (await query("select count(*)::integer as count from library.exercises")).rows[0].count;
@@ -704,15 +786,15 @@ test("block administration rejects non-admin writes and private exercises withou
 test("a failed copy save rolls back the exercise and all new lookup values", async () => {
   const coach = await makeCoach("copy-rollback");
   const systemId = await makeExercise(null, { ownerScope: "system", name: "Rollback source" });
-  await query("alter table library.tags add constraint reject_copy_failure_tag check (name <> 'force-copy-save-failure')");
+  await query("alter table library.exercise_personal_tags add constraint reject_copy_failure_tag check (name <> 'force-copy-save-failure')");
   try {
-    const response = await api(`/api/exercises/${systemId}`, { method: "PATCH", cookie: coach.cookie,
+    const response = await api(`/api/exercises/${systemId}/copy`, { method: "POST", cookie: coach.cookie,
       body: { name: "Must roll back", place: "Must roll back place", tags: ["force-copy-save-failure"] } });
     assert.equal(response.status, 500);
     assert.equal((await query("select count(*)::integer as count from library.exercises where source_exercise_id=$1", [systemId])).rows[0].count, 0);
     assert.equal((await query("select count(*)::integer as count from library.places where name='Must roll back place'")).rows[0].count, 0);
     assert.equal((await query("select name from library.exercises where id=$1", [systemId])).rows[0].name, "Rollback source");
-  } finally { await query("alter table library.tags drop constraint reject_copy_failure_tag"); }
+  } finally { await query("alter table library.exercise_personal_tags drop constraint reject_copy_failure_tag"); }
 });
 
 test("tag endpoints cannot mutate the application original or remove another user's private tag", async () => {
@@ -721,8 +803,8 @@ test("tag endpoints cannot mutate the application original or remove another use
   const systemId = await makeExercise(null, { ownerScope: "system", name: "System tags original" });
   const tagId = (await query("insert into library.tags (name,slug,owner_scope,owner_user_id) values ('Other private tag','other-private','user',$1) returning id", [other.userId])).rows[0].id;
   await query("insert into library.exercise_tags (exercise_id,tag_id) values ($1,$2)", [systemId, tagId]);
-  assert.equal((await api(`/api/exercises/${systemId}/tags`, { method: "POST", cookie: coach.cookie, body: { name: "New tag" } })).status, 409);
-  assert.equal((await api(`/api/exercises/${systemId}/tags/${tagId}`, { method: "DELETE", cookie: coach.cookie })).status, 409);
+  assert.equal((await api(`/api/exercises/${systemId}/tags`, { method: "POST", cookie: coach.cookie, body: { name: "New tag" } })).status, 201);
+  assert.equal((await api(`/api/exercises/${systemId}/tags/${tagId}`, { method: "DELETE", cookie: coach.cookie })).status, 404);
   assert.equal((await query("select count(*)::integer as count from library.exercise_tags where exercise_id=$1", [systemId])).rows[0].count, 1);
   const ownId = await makeExercise(coach.userId);
   await query("insert into library.exercise_tags (exercise_id,tag_id) values ($1,$2)", [ownId, tagId]);
@@ -736,7 +818,7 @@ test("a copy edit and grant revocation serialize without committing behind a 500
   const systemId = await makeExercise(null, { ownerScope: "system", name: "Race source" });
   const block = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
     body: { name: "Race block", exerciseIds: [systemId], userIds: [coach.userId] } });
-  const copy = await api(`/api/exercises/${systemId}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Race copy" } });
+  const copy = await api(`/api/exercises/${systemId}/copy`, { method: "POST", cookie: coach.cookie, body: { name: "Race copy" } });
   const blocker = new pg.Client({ connectionString: process.env.DATABASE_URL });
   await blocker.connect();
   await query(`create function library.pause_copy_test() returns trigger language plpgsql as $$ begin

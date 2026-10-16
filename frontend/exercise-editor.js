@@ -8,7 +8,7 @@ export const emptyExerciseEditorData = () => ({
 });
 
 export const emptyExerciseEditor = () => ({
-  open: false, isNew: false, exerciseId: "", ownerScope: "user", loading: false, error: "", data: emptyExerciseEditorData(),
+  open: false, isNew: false, isCopy: false, exerciseId: "", ownerScope: "user", loading: false, error: "", data: emptyExerciseEditorData(),
 });
 
 const SINGLE_FIELDS = [
@@ -24,7 +24,6 @@ const MULTI_FIELDS = [
   { key: "groups", label: "Group", optionsKey: "groups" },
   { key: "bodyParts", label: "Body part", optionsKey: "bodyParts" },
   { key: "movementPatterns", label: "Movement pattern", optionsKey: "movementPatterns" },
-  { key: "tags", label: "Tag", optionsKey: "tags" },
 ];
 
 export function renderExerciseEditorHtml(editor, filterOptions = {}) {
@@ -32,13 +31,13 @@ export function renderExerciseEditorHtml(editor, filterOptions = {}) {
   return `
     <div class="exercise-editor-overlay">
       <button class="exercise-editor-backdrop" type="button" data-action="exercise-editor-close" aria-label="Close"></button>
-      <section class="panel exercise-editor-modal" role="dialog" aria-modal="true" aria-label="${editor.isNew ? "Add exercise" : "Edit exercise"}">
+      <section class="panel exercise-editor-modal" role="dialog" aria-modal="true" aria-label="${editor.isCopy ? "Copy exercise" : editor.isNew ? "Add exercise" : "Edit exercise"}">
         <div class="builder-modal-head">
-          <div><p class="eyebrow">${editor.isNew ? "New exercise" : "Editing exercise"}</p><h3>${escapeHtml(d.name || "Untitled")}</h3></div>
+          <div><p class="eyebrow">${editor.isCopy ? "New private copy" : editor.isNew ? "New exercise" : "Editing exercise"}</p><h3>${escapeHtml(d.name || "Untitled")}</h3></div>
           <button class="plain-button icon-button" type="button" data-action="exercise-editor-close" aria-label="Close"><span class="button-icon">x</span></button>
         </div>
         <div class="exercise-editor-body">
-          ${editor.ownerScope === "system" ? `<p class="muted">Saving creates or updates your private copy. The application original stays unchanged. If access to its block is removed, your copy is hidden too.</p>` : ""}
+          ${editor.isCopy ? `<p class="muted">Saving creates your private copy without the original video or image. The application original stays unchanged. If access to its block is removed, your copy is hidden too.</p>` : editor.ownerScope === "system" ? `<p class="muted">You are editing the application original for all users.</p>` : ""}
           <label class="search-field"><span>Name</span><input class="builder-text-input" data-exercise-editor-field="name" value="${escapeAttr(d.name)}" required></label>
           <div class="exercise-editor-grid">
             <label class="search-field"><span>Exercise code</span><input class="builder-text-input" data-exercise-editor-field="exerciseCode" value="${escapeAttr(d.exerciseCode)}"></label>
@@ -57,7 +56,7 @@ export function renderExerciseEditorHtml(editor, filterOptions = {}) {
           ${editor.error ? `<p class="builder-error" role="alert">${escapeHtml(editor.error)}</p>` : ""}
         </div>
         <div class="builder-modal-actions">
-          <button class="plain-button" type="button" data-action="exercise-editor-save" ${editor.loading ? "disabled" : ""}>${editor.loading ? "Saving..." : editor.ownerScope === "system" ? "Save private copy" : "Save"}</button>
+          <button class="plain-button" type="button" data-action="exercise-editor-save" ${editor.loading ? "disabled" : ""}>${editor.loading ? "Saving..." : editor.isCopy ? "Save private copy" : "Save"}</button>
           <button class="text-action" type="button" data-action="exercise-editor-close">Cancel</button>
         </div>
       </section>
@@ -98,8 +97,8 @@ function renderMultiField(field, values, options) {
   `;
 }
 
-export async function openExerciseEditor(state, handlers, exerciseId) {
-  state.exerciseEditor = { ...emptyExerciseEditor(), open: true, isNew: !exerciseId, exerciseId: exerciseId || "" };
+export async function openExerciseEditor(state, handlers, exerciseId, { copy = false } = {}) {
+  state.exerciseEditor = { ...emptyExerciseEditor(), open: true, isNew: !exerciseId, isCopy: copy, exerciseId: exerciseId || "" };
   if (exerciseId) {
     state.exerciseEditor.loading = true;
     handlers.rerender();
@@ -107,9 +106,9 @@ export async function openExerciseEditor(state, handlers, exerciseId) {
       const detail = await api(`/api/exercises/${encodeURIComponent(exerciseId)}`);
       state.exerciseEditor.ownerScope = detail.ownerScope || "user";
       state.exerciseEditor.data = {
-        name: detail.name || "", exerciseCode: detail.exerciseCode || "", aim: detail.aim || "",
+        name: detail.name || "", exerciseCode: copy ? "" : detail.exerciseCode || "", aim: detail.aim || "",
         executionNotes: detail.executionNotes || "", instruction: detail.instruction || "",
-        videoUrl: detail.videoUrl || "", imageUrl: detail.imageUrl || "",
+        videoUrl: copy ? "" : detail.videoUrl || "", imageUrl: copy ? "" : detail.imageUrl || "",
         place: detail.place || "", complexity: detail.complexity || "", startingPosition: detail.startingPosition || "",
         attractor: detail.attractor || "", purposes: detail.purposes || [], qualities: detail.qualities || [],
         groups: detail.groups || [], bodyParts: detail.bodyParts || [], movementPatterns: detail.movementPatterns || [],
@@ -173,10 +172,14 @@ export async function handleExerciseEditorAction(state, handlers, action) {
     editor.error = "";
     handlers.rerender();
     try {
-      if (editor.isNew) {
-        await api("/api/exercises", { method: "POST", body: JSON.stringify(editor.data) });
+      const payload = { ...editor.data };
+      delete payload.tags;
+      if (editor.isCopy) {
+        await api(`/api/exercises/${encodeURIComponent(editor.exerciseId)}/copy`, { method: "POST", body: JSON.stringify(payload) });
+      } else if (editor.isNew) {
+        await api("/api/exercises", { method: "POST", body: JSON.stringify(payload) });
       } else {
-        await api(`/api/exercises/${encodeURIComponent(editor.exerciseId)}`, { method: "PATCH", body: JSON.stringify(editor.data) });
+        await api(`/api/exercises/${encodeURIComponent(editor.exerciseId)}`, { method: "PATCH", body: JSON.stringify(payload) });
       }
       closeExerciseEditor(state, handlers);
       await handlers.refreshAfterSave();

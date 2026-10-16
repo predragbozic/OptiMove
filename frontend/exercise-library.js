@@ -63,7 +63,7 @@ export function renderExerciseLibraryHtml(data) {
       ${search.canManageCollections ? `<button class="plain-button compact-button" type="button" data-action="exercise-collections-open">Manage application blocks</button>` : ""}
     </div>
     <div class="exercise-grid">
-      ${exercises.map((exercise, index) => renderExerciseLibraryCard(exercise, itemIds[index], markedExerciseIds)).join("")}
+      ${exercises.map((exercise, index) => renderExerciseLibraryCard(exercise, itemIds[index], markedExerciseIds, search.canManageCollections)).join("")}
     </div>
     ${search.hasMore ? `
       <div class="load-more-row">
@@ -100,7 +100,7 @@ function renderExerciseFilterToggle(key, label, checked, attr) {
   `;
 }
 
-function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds) {
+function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platformAdmin = false) {
   const marked = markedExerciseIds.has(exercise.id);
   const tags = exercise.tags || [];
   return `
@@ -121,8 +121,9 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds) {
       <div class="exercise-card-actions">
         <button class="text-action" type="button" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${exercise.is_favorite ? "true" : "false"}">${exercise.is_favorite ? "Unfavorite" : "Favorite"}</button>
         <button class="text-action" type="button" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}">${marked ? "Unmark" : "Mark"}</button>
-        <button class="text-action" type="button" data-action="${exercise.owner_scope === "system" ? "exercise-edit-open" : "exercise-tags"}" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(exercise.name || "Exercise")}">${exercise.owner_scope === "system" ? "Customize tags in private copy" : `Tags${tags.length ? ` (${tags.length})` : ""}`}</button>
-        <button class="text-action" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>
+        <button class="text-action" type="button" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(exercise.name || "Exercise")}">Tags${tags.length ? ` (${tags.length})` : ""}</button>
+        ${exercise.owner_scope === "system" ? `<button class="text-action" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exercise.id)}">Copy</button>` : ""}
+        ${exercise.owner_scope !== "system" || platformAdmin ? `<button class="text-action" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>` : ""}
       </div>
       ${tags.length ? `<div class="exercise-tag-list">${tags.slice(0, 4).map((tag) => `<span>${escapeHtml(tag.name)}</span>`).join("")}${tags.length > 4 ? `<span>+${tags.length - 4}</span>` : ""}</div>` : ""}
     </article>
@@ -142,7 +143,7 @@ export function renderExerciseTagModal(editor) {
         </div>
         <div class="exercise-tag-current">
           ${(editor.tags || []).length
-            ? editor.tags.map((tag) => `<span class="exercise-tag-pill">${escapeHtml(tag.name)} <button type="button" data-action="exercise-tag-remove" data-exercise-id="${escapeAttr(editor.exerciseId)}" data-tag-id="${escapeAttr(tag.id)}" aria-label="Remove ${escapeAttr(tag.name)}">x</button></span>`).join("")
+            ? editor.tags.map((tag) => `<span class="exercise-tag-pill">${escapeHtml(tag.name)} ${tag.readonly ? `<span class="muted">Application</span>` : `<button type="button" data-action="exercise-tag-remove" data-exercise-id="${escapeAttr(editor.exerciseId)}" data-tag-id="${escapeAttr(tag.id)}" aria-label="Remove ${escapeAttr(tag.name)}">x</button>`}</span>`).join("")
             : `<p class="muted">No tags yet.</p>`}
         </div>
         <form class="exercise-tag-form" data-exercise-tag-form>

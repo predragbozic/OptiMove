@@ -9,7 +9,7 @@ import { state } from "../state.js";
 test("system exercise editor names the private copy and retained block restriction", async () => {
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ name: "Application squat", ownerScope: "system" }) });
   const state = {};
-  await openExerciseEditor(state, { rerender() {} }, "source-id");
+  await openExerciseEditor(state, { rerender() {} }, "source-id", { copy: true });
   const html = renderExerciseEditorHtml(state.exerciseEditor);
   assert.match(html, /Save private copy/);
   assert.match(html, /original stays unchanged/);
@@ -17,26 +17,65 @@ test("system exercise editor names the private copy and retained block restricti
   assert.doesNotMatch(renderExerciseEditorHtml(emptyExerciseEditor()), /Save private copy/);
 });
 
-test("saving a system variation sends the original code and refreshes the library", async () => {
+test("explicit copying clears source media and code and saves only on confirmation", async () => {
   const requests = [];
   globalThis.fetch = async (url, options = {}) => {
     requests.push({ url, ...options });
-    return { ok: true, json: async () => options.method === "PATCH"
+    return { ok: true, json: async () => options.method === "POST"
       ? { id: "private-copy", exerciseCode: "", sourceExerciseId: "system-source" }
-      : { name: "Application squat", exerciseCode: "SYSTEM-001", ownerScope: "system" } };
+      : { name: "Application squat", exerciseCode: "SYSTEM-001", ownerScope: "system", videoUrl: "https://source.test/video", imageUrl: "https://source.test/image" } };
   };
   const editorState = {};
   let refreshes = 0;
   const handlers = { rerender() {}, async refreshAfterSave() { refreshes++; } };
-  await openExerciseEditor(editorState, handlers, "system-source");
+  await openExerciseEditor(editorState, handlers, "system-source", { copy: true });
+  assert.equal(requests.length, 1);
+  assert.equal(editorState.exerciseEditor.data.videoUrl, "");
+  assert.equal(editorState.exerciseEditor.data.imageUrl, "");
+  assert.doesNotMatch(renderExerciseEditorHtml(editorState.exerciseEditor), /https:\/\/source.test/);
   editorState.exerciseEditor.data.instruction = "My instruction";
   await handleExerciseEditorAction(editorState, handlers, { dataset: { action: "exercise-editor-save" } });
-  const saved = requests.find((request) => request.method === "PATCH");
-  assert.equal(saved.url, "/api/exercises/system-source");
-  assert.equal(JSON.parse(saved.body).exerciseCode, "SYSTEM-001");
+  const saved = requests.find((request) => request.method === "POST");
+  assert.equal(saved.url, "/api/exercises/system-source/copy");
+  assert.equal(JSON.parse(saved.body).exerciseCode, "");
   assert.equal(JSON.parse(saved.body).instruction, "My instruction");
   assert.equal(refreshes, 1);
   assert.equal(editorState.exerciseEditor.open, false);
+});
+
+test("Copy Cancel makes no write and a private edit preserves media and its existing identity", async () => {
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url, ...options });
+    return { ok: true, json: async () => ({ id: "owned", ownerScope: "user", name: "Owned",
+      videoUrl: "https://mine.test/video", imageUrl: "https://mine.test/image", tags: ["skip"] }) };
+  };
+  const editorState = {};
+  const handlers = { rerender() {}, async refreshAfterSave() {} };
+  await openExerciseEditor(editorState, handlers, "system", { copy: true });
+  await handleExerciseEditorAction(editorState, handlers, { dataset: { action: "exercise-editor-close" } });
+  assert.equal(requests.filter((request) => request.method).length, 0);
+  assert.equal(editorState.exerciseEditor.open, false);
+  await openExerciseEditor(editorState, handlers, "owned");
+  assert.equal(editorState.exerciseEditor.data.videoUrl, "https://mine.test/video");
+  await handleExerciseEditorAction(editorState, handlers, { dataset: { action: "exercise-editor-save" } });
+  const write = requests.find((request) => request.method === "PATCH");
+  assert.equal(write.url, "/api/exercises/owned");
+  assert.equal(JSON.parse(write.body).imageUrl, "https://mine.test/image");
+  assert.equal(Object.hasOwn(JSON.parse(write.body), "tags"), false);
+});
+
+test("library exposes Tags and Copy to coaches, Edit original only to administrators", async () => {
+  const { renderExerciseLibraryHtml } = await import("../exercise-library.js");
+  const props = { exercises: [{ id: "system", owner_scope: "system", name: "Original" }], itemIds: ["item"],
+    markedExerciseIds: new Set(), search: { filters: {}, canManageCollections: false }, tagEditor: {} };
+  const coach = renderExerciseLibraryHtml(props);
+  assert.match(coach, /data-action="exercise-tags"/);
+  assert.match(coach, /data-action="exercise-copy-open"/);
+  assert.doesNotMatch(coach, /data-action="exercise-edit-open"/);
+  assert.doesNotMatch(coach, /Customize/);
+  assert.match(renderExerciseLibraryHtml({ ...props, search: { ...props.search, canManageCollections: true } }), /data-action="exercise-edit-open"/);
+  assert.match(renderExerciseLibraryHtml({ ...props, exercises: [{ id: "owned", owner_scope: "user" }] }), /data-action="exercise-edit-open"/);
 });
 
 test("admin block picker saves selected users and exercises and keeps selections across search", async () => {
@@ -93,11 +132,11 @@ test("revoked marked originals and private copies never reappear from local obje
   }
 });
 
-test("Builder system tag customization opens the personal-copy editor", async () => {
+test("Builder system tagging uses the personal tag editor without copying", async () => {
   const { renderBuilderExerciseResults } = await import("../builder-exercises.js");
   const html = renderBuilderExerciseResults([{ id: "system", name: "System squat", owner_scope: "system" }], new Set(), null);
-  assert.match(html, /data-action="exercise-edit-open"/);
-  assert.doesNotMatch(html, /data-action="exercise-tags"/);
+  assert.doesNotMatch(html, /data-action="exercise-edit-open"/);
+  assert.match(html, /data-action="exercise-tags"/);
 });
 
 test("block choices distinguish accounts with identical display names", async () => {
