@@ -5,7 +5,16 @@ import assert from "node:assert/strict";
 // the Builder's section editor: video cover images, the initials fallback,
 // the remembered choice, the markup of each view and the two actions.
 
-globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+// #content is a fake whose section editor exists only while a test opens it.
+const editor = { open: false, results: { innerHTML: "" }, switcher: { outerHTML: "" }, dose: { value: "3" } };
+const fakePanel = {
+  querySelector: (selector) => ({
+    ".builder-exercise-results": editor.results,
+    ".builder-library-head .exercise-view-switcher": editor.switcher,
+  })[selector] || null,
+};
+const fakeContent = { querySelector: (selector) => (selector === ".builder-section-panel" && editor.open ? fakePanel : null) };
+globalThis.document = { querySelector: (selector) => (selector === "#content" ? fakeContent : null), querySelectorAll: () => [] };
 const stored = new Map();
 const memoryStorage = {
   getItem: (key) => (stored.has(key) ? stored.get(key) : null),
@@ -20,6 +29,7 @@ const { renderBuilderExerciseResults } = await import("../builder-exercises.js")
 const { state, emptyExerciseFilters } = await import("../state.js");
 const { handleExerciseLibraryAction } = await import("../exercise-actions.js");
 const { handleBuilderWorkspaceAction } = await import("../builder-actions.js");
+const { renderBuilderExerciseViewChange } = await import("../builder-view.js");
 
 const exercises = [
   { id: "a", name: "Hip Stretch", aim: "Hip mobility", image_url: "https://img.example/hip.jpg", video_url: "https://youtu.be/AAAAAAAAAA1", owner_scope: "system", is_favorite: true, tags: [{ id: 1, name: "warm-up" }] },
@@ -204,8 +214,28 @@ test("10. switching the view saves the choice and repaints the library or the bu
   assert.equal(state.exerciseSearch.view, "details");
 
   let builderPaints = 0;
-  assert.equal(await handleBuilderWorkspaceAction({ dataset: { action: "builder-exercise-view", view: "tile" } }, { renderBuilder: () => { builderPaints += 1; } }), true);
+  assert.equal(await handleBuilderWorkspaceAction({ dataset: { action: "builder-exercise-view", view: "tile" } }, { renderBuilder: () => { builderPaints += 1; }, renderBuilderExerciseViewChange: () => false }), true);
   assert.equal(state.builder.exerciseView, "tile");
   assert.equal(stored.get("optimove.exerciseView.builder"), "tile");
-  assert.equal(builderPaints, 1);
+  assert.equal(builderPaints, 1, "no section editor on screen: the whole builder is painted");
+  await handleBuilderWorkspaceAction({ dataset: { action: "builder-exercise-view", view: "big" } }, { renderBuilder: () => { builderPaints += 1; }, renderBuilderExerciseViewChange: () => true });
+  assert.equal(builderPaints, 1, "with the section editor open only the switcher and the results are repainted");
+});
+
+test("11. in the open section editor a view switch repaints only the switcher and the results, so a typed dose survives", () => {
+  const section = { id: "s1", type: "section", items: [{ exerciseId: "a" }] };
+  state.builder.draft = { blocks: [{ sessions: [{ nodes: [section] }] }] };
+  state.builder.selectedNodeId = "s1";
+  state.builder.exercises = exercises;
+  state.builder.exerciseView = "big";
+  editor.open = false;
+  assert.equal(renderBuilderExerciseViewChange(), false, "editor closed: the caller paints the whole builder");
+  editor.open = true;
+  editor.results.innerHTML = "old";
+  assert.equal(renderBuilderExerciseViewChange(), true);
+  assert.match(editor.results.innerHTML, /^<div class="builder-exercise-view is-big">/);
+  assert.match(editor.switcher.outerHTML, /data-view="big" aria-pressed="true"/);
+  assert.equal(editor.dose.value, "3", "nothing else of the editor is touched");
+  state.builder.selectedNodeId = "missing";
+  assert.equal(renderBuilderExerciseViewChange(), false);
 });

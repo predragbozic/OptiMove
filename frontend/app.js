@@ -52,7 +52,7 @@ import {
 } from "./builder-actions.js";
 import { loadBuilderDrafts, loadBuilderExercises, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
-import { renderBuilder, renderBuilderAddFeedback, renderBuilderSectionItems, renderBuilderDiscardProgress, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress } from "./builder-view.js";
+import { renderBuilder, renderBuilderAddFeedback, renderBuilderExerciseViewChange, renderBuilderSectionItems, renderBuilderDiscardProgress, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress } from "./builder-view.js";
 import { clearBuilderItemEdits, rememberBuilderItemEdit } from "./builder-item-edits.js";
 import {
   handleCoachProfileAction,
@@ -404,8 +404,15 @@ function bindEvents() {
   });
 
   els.content.addEventListener("click", handleContentClick);
-  // A click anywhere on the page folds an open exercise card "⋯" menu.
+  // A click anywhere on the page folds an open exercise card "⋯" menu. iOS
+  // Safari sends no click to the document for a tap on a non-interactive
+  // area, so a press outside every menu folds them too (never one inside a
+  // menu: folding it on press would hide the item before its click lands);
+  // Escape folds them all (the Escape handler below).
   document.addEventListener("click", (event) => closeExerciseViewMenus(event.target, els.content));
+  document.addEventListener("pointerdown", (event) => {
+    if (!event.target?.closest?.(".exercise-view-menu")) closeExerciseViewMenus(event.target, els.content);
+  });
   els.toolbar.addEventListener("click", (event) => {
     const action = event.target.closest("[data-action]");
     if (!action?.dataset.action?.startsWith("builder-")) return;
@@ -482,6 +489,7 @@ function bindEvents() {
     if (state.athleteExitConfirmOpen) closeAthleteExitConfirm();
     if (state.mobileNavOpen) closeMobileNav();
     closeMedia();
+    closeExerciseViewMenus(null, els.content);
     if (state.organizationUserManage.open) closeManageAccountModal(renderOrganizationPanel);
     if (state.organizationInvite.open) closeAthleteInviteModal(renderOrganizationPanel);
     if (state.athleteAccountManage.open) closeAthleteAccountModal(renderOrganizationPanel);
@@ -3456,7 +3464,7 @@ async function handleBuilderAction(action) {
   }
   try {
     if (await handleBuilderPlanAction(action, { renderBuilder, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress, flushBuilderAutosaves, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
-    if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises })) return;
+    if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderExerciseViewChange, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises })) return;
     if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderDiscardProgress, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft, flushBuilderAutosaves, cancelBuilderAutosaves })) return;
     if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback, renderBuilderError, refreshBuilderDraft, cancelBuilderItemAutosave })) return;
   } finally {

@@ -541,7 +541,7 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
   if (type === "builder-exercise-view") {
     state.builder.exerciseView = normalizeExerciseView("builder", action.dataset.view);
     saveExerciseViewPreference("builder", state.builder.exerciseView);
-    handlers.renderBuilder();
+    if (!handlers.renderBuilderExerciseViewChange?.()) handlers.renderBuilder();
     return true;
   }
   if (type === "builder-toggle-batch-sync") {
