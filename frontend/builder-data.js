@@ -96,6 +96,8 @@ export async function loadBuilderExercises(options = {}) {
     const scrollTop = resultsContainer.scrollTop;
     resultsContainer.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedSection, { hasMore: state.builder.exerciseHasMore, view: state.builder.exerciseView });
     if (options.append) resultsContainer.scrollTop = scrollTop;
+    // An editor that just opened is where the coach left it.
+    else if (options.keepEditorScroll) resultsContainer.scrollTop = 0;
     else scrollBuilderResultsToTop(resultsContainer);
   } else if (options.forceFullRender) {
     renderBuilder();
@@ -115,7 +117,7 @@ export function ensureBuilderExercises() {
   const searchKey = builderExerciseSearchKey();
   if (state.builder.exerciseSearchKey === searchKey && !state.builder.exerciseLoadFailed) return null;
   if (state.builder.exerciseLoading && builderExercisePendingKey === searchKey) return null;
-  return loadBuilderExercises();
+  return loadBuilderExercises({ keepEditorScroll: true });
 }
 
 // A new search or filter shows its first results. On landscape phones the

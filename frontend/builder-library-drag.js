@@ -4,7 +4,7 @@
 // exercise lands where it is dropped - one past every added exercise whose
 // middle is above the pointer (dropIndexFor, the same rule as the reorder
 // drag). Nothing is sent while dragging; on the drop the caller gets the
-// exercise id and the zero-based position. On a touch-only screen a card
+// exercise id and the zero-based position. On a phone or tablet a card
 // does not drag (a long press would otherwise start the browser's drag and
 // stop the page from scrolling); Add stays the way to add there.
 
@@ -15,16 +15,20 @@ const CARD_SELECTOR = "[data-builder-library-drag]";
 const ZONE_SELECTOR = ".builder-section-added";
 const PANEL_SELECTOR = ".builder-section-panel";
 
+// The id of the card being dragged, kept only to clean up after the drag:
+// whether a drag is a library card's is read from the drag itself
+// (isLibraryDrag), since the card can be re-rendered while it is dragged
+// (the add confirmation repaints the results), and its dragend then never
+// reaches the content.
 let draggedExerciseId = "";
 
-function touchOnly() {
-  const media = (query) => Boolean(globalThis.matchMedia?.(query).matches);
-  return media("(pointer: coarse)") && !media("(any-pointer: fine)");
-}
-
-// Whether library cards are rendered draggable on this screen.
+// Whether library cards are rendered draggable on this screen: only where
+// the main pointer is a mouse or trackpad. A phone or tablet - also one
+// with a pen or an extra trackpad - keeps Add, so a long press never
+// starts the browser's drag there.
 export function libraryDragAvailable() {
-  return !touchOnly();
+  if (!globalThis.matchMedia) return true;
+  return globalThis.matchMedia("(pointer: fine)").matches && globalThis.matchMedia("(hover: hover)").matches;
 }
 
 // The added exercises the coach sees: the computer's form list or the
@@ -33,12 +37,20 @@ function visibleItems(zone) {
   return [...zone.querySelectorAll("[data-drag-item]")].filter((item) => item.getClientRects().length > 0);
 }
 
-// Where an exercise dropped at `clientY` lands among the visible added ones.
+// Where an exercise dropped at `clientY` lands among the visible added ones;
+// with none in view (an empty section, or one exercise open for editing)
+// at the end.
 export function libraryDropIndex(zone, clientY) {
-  return dropIndexFor(clientY, visibleItems(zone).map((item) => {
+  const items = visibleItems(zone);
+  if (!items.length) return Number.MAX_SAFE_INTEGER;
+  return dropIndexFor(clientY, items.map((item) => {
     const rect = item.getBoundingClientRect();
     return rect.top + rect.height / 2;
   }));
+}
+
+function isLibraryDrag(event) {
+  return [...(event.dataTransfer?.types || [])].includes(LIBRARY_DRAG_TYPE);
 }
 
 function clearMarks(root) {
@@ -55,10 +67,15 @@ function markDrop(zone, index) {
   else items[items.length - 1].classList.add("is-drop-after");
 }
 
-function endDrag(root) {
+function endDrag(root = globalThis.document) {
   draggedExerciseId = "";
   root?.querySelectorAll?.(`${PANEL_SELECTOR}.is-library-dragging`).forEach((panel) => panel.classList.remove("is-library-dragging"));
   clearMarks(root);
+}
+
+// Left over from a library drag whose end was not seen (see above).
+function leftOver(root) {
+  return Boolean(draggedExerciseId || root?.querySelector?.(`${PANEL_SELECTOR}.is-library-dragging, .is-library-drop-target`));
 }
 
 // dragstart on a library card. Returns true when the event was a card's.
@@ -66,7 +83,10 @@ export function startBuilderLibraryDrag(event, { isBlocked = () => false } = {})
   const card = event.target?.closest?.(CARD_SELECTOR);
   if (!card) return false;
   const exerciseId = card.dataset.exerciseId || "";
-  if (!exerciseId || !event.dataTransfer || touchOnly() || isBlocked()) {
+  // Nothing to drop on while the Added column is not on screen (a narrow
+  // window shows the library and the Added list one at a time).
+  const zone = card.closest(PANEL_SELECTOR)?.querySelector(ZONE_SELECTOR);
+  if (!exerciseId || !event.dataTransfer || !libraryDragAvailable() || !zone?.getClientRects().length || isBlocked()) {
     event.preventDefault();
     return true;
   }
@@ -83,13 +103,18 @@ export function startBuilderLibraryDrag(event, { isBlocked = () => false } = {})
 // dragover anywhere in the content: over the Added column a library card
 // may drop, and the place it would land is marked.
 export function overBuilderLibraryDrag(event) {
-  if (!draggedExerciseId) return false;
+  if (!isLibraryDrag(event)) {
+    // Another drag (a file, a selected text) is the browser's own.
+    if (leftOver(event.currentTarget)) endDrag(event.currentTarget);
+    return false;
+  }
   const zone = event.target?.closest?.(ZONE_SELECTOR);
   if (!zone) {
     clearMarks(event.currentTarget);
     return true;
   }
   event.preventDefault();
+  zone.closest(PANEL_SELECTOR)?.classList.add("is-library-dragging");
   event.dataTransfer.dropEffect = "copy";
   markDrop(zone, libraryDropIndex(zone, event.clientY));
   return true;
@@ -100,7 +125,7 @@ export function overBuilderLibraryDrag(event) {
 // and the browser does not always say where the pointer went, so the
 // column's own box decides.
 export function leaveBuilderLibraryDrag(event) {
-  if (!draggedExerciseId) return false;
+  if (!isLibraryDrag(event)) return false;
   const zone = event.target?.closest?.(ZONE_SELECTOR);
   if (!zone) return true;
   const box = zone.getBoundingClientRect();
@@ -111,10 +136,13 @@ export function leaveBuilderLibraryDrag(event) {
 
 // drop: the exercise and its position go to `onDrop`.
 export function dropBuilderLibraryDrag(event, { onDrop }) {
-  if (!draggedExerciseId) return false;
+  if (!isLibraryDrag(event)) {
+    if (leftOver(event.currentTarget)) endDrag(event.currentTarget);
+    return false;
+  }
   const zone = event.target?.closest?.(ZONE_SELECTOR);
-  const exerciseId = draggedExerciseId;
-  if (!zone) {
+  const exerciseId = event.dataTransfer.getData(LIBRARY_DRAG_TYPE);
+  if (!zone || !exerciseId) {
     endDrag(event.currentTarget);
     return true;
   }
@@ -127,7 +155,16 @@ export function dropBuilderLibraryDrag(event, { onDrop }) {
 
 // dragend: the drag is over, dropped or not.
 export function endBuilderLibraryDrag(event) {
-  if (!draggedExerciseId && !event.currentTarget?.querySelector?.(`${PANEL_SELECTOR}.is-library-dragging`)) return false;
+  if (!leftOver(event.currentTarget)) return false;
   endDrag(event.currentTarget);
+  return true;
+}
+
+// A pointer that moves again means the drag is over: the browser sends no
+// pointer events while it drags. Cleans up after a drag whose card was
+// re-rendered and whose dragend therefore never came.
+export function endStaleBuilderLibraryDrag() {
+  if (!draggedExerciseId) return false;
+  endDrag();
   return true;
 }

@@ -96,7 +96,7 @@ import {
 } from "./exercise-library.js";
 import { closeExerciseViewMenus, replaceExerciseThumbWithInitials } from "./exercise-view-modes.js";
 import { startBuilderItemDrag } from "./builder-item-drag.js";
-import { dropBuilderLibraryDrag, endBuilderLibraryDrag, leaveBuilderLibraryDrag, overBuilderLibraryDrag, startBuilderLibraryDrag } from "./builder-library-drag.js";
+import { dropBuilderLibraryDrag, endBuilderLibraryDrag, endStaleBuilderLibraryDrag, leaveBuilderLibraryDrag, overBuilderLibraryDrag, startBuilderLibraryDrag } from "./builder-library-drag.js";
 import { AUTOGROW_SELECTOR, autosizeTextarea } from "./textarea-autosize.js";
 import { toggleClampedTitle } from "./title-clamp.js";
 import { openExerciseCollections } from "./exercise-collections.js";
@@ -486,6 +486,7 @@ function bindEvents() {
     });
   });
   els.content.addEventListener("dragend", endBuilderLibraryDrag);
+  document.addEventListener("pointermove", endStaleBuilderLibraryDrag, { passive: true });
   document.addEventListener("pointermove", handleContentPointerMove);
   document.addEventListener("touchstart", (event) => {
     const normalized = normalizeTouchPointerEvent(event);
@@ -961,7 +962,9 @@ function handleContentFocusIn(event) {
 function handleContentPointerDown(event) {
   // Builder section: drag an added exercise by its grip to a new position.
   if (startBuilderItemDrag(event, {
-    isBlocked: () => Boolean(state.builder.itemMovePending),
+    // Also while a library exercise dropped on the list is being added
+    // and placed (dropBuilderLibraryExercise).
+    isBlocked: builderLibraryDropBlocked,
     onDrop: (itemId, index) => {
       void moveBuilderItemTo(itemId, index, { renderBuilder, renderBuilderSectionItems, refreshBuilderDraft }).catch(renderBuilderError);
     },

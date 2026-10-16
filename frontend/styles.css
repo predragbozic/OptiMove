@@ -17168,6 +17168,10 @@ span.exercise-view-media { cursor: default; }
 .builder-exercise-result[draggable="true"] { cursor: grab; }
 .builder-section-panel.is-library-dragging .builder-section-added { outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: 8px; }
 .builder-section-added.is-library-drop-target { background: var(--accent-soft); }
+/* "Try again" after a failed library load: a whole touch target. */
+@media (max-width: 760px), (pointer: coarse) {
+  .builder-exercise-load-failed .text-action { display: inline-flex; align-items: center; min-width: 44px; min-height: 44px; }
+}
 @media (hover: hover) {
   .builder-item-drag-handle:hover:not(:disabled) { background: var(--surface-soft); color: var(--text); }
 }
