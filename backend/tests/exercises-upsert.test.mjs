@@ -121,6 +121,9 @@ const LIBRARY_FIXTURE_SQL = `
     attractor_id uuid
   );
 
+  create unique index exercises_exercise_code_unique on library.exercises (exercise_code) where exercise_code is not null;
+  create unique index exercises_slug_unique on library.exercises (slug) where slug is not null;
+
   create table library.places (
     id uuid primary key default gen_random_uuid(), name varchar not null, slug varchar,
     description text, is_active boolean not null default true, created_by_user_id uuid references public.users(id),
@@ -294,11 +297,11 @@ async function makeCoach(label) {
 }
 
 async function makeExercise(ownerUserId, overrides = {}) {
-  const { name = "Fixture exercise", isActive = true, ownerScope = "user" } = overrides;
+  const { name = "Fixture exercise", isActive = true, ownerScope = "user", exerciseCode = null } = overrides;
   const result = await query(
-    `insert into library.exercises (owner_scope, owner_user_id, created_by_user_id, name, slug, is_active)
-     values ($1,$2,$2,$3,$3,$4) returning id`,
-    [ownerScope, ownerUserId, name, isActive],
+    `insert into library.exercises (owner_scope, owner_user_id, created_by_user_id, name, slug, is_active, exercise_code)
+     values ($1,$2,$2,$3,$4,$5,$6) returning id`,
+    [ownerScope, ownerUserId, name, `fixture-${crypto.randomUUID()}`, isActive, exerciseCode],
   );
   return result.rows[0].id;
 }
@@ -336,6 +339,68 @@ test("editing a system exercise makes a private copy and leaves the application 
   });
   assert.equal(retried.body.id, saved.body.id);
   assert.equal((await query("select count(*)::integer as count from library.exercises where owner_user_id = $1 and source_exercise_id = $2", [coach.userId, systemId])).rows[0].count, 1);
+});
+
+test("editor round trips preserve a private copy identity with production unique indexes", async () => {
+  const coach = await makeCoach("unique-copy-owner");
+  const other = await makeCoach("unique-copy-other");
+  const systemId = await makeExercise(null, { ownerScope: "system", name: "Unique application original", exerciseCode: "SYSTEM-UNIQUE-CODE" });
+  const original = (await query("select * from library.exercises where id=$1", [systemId])).rows[0];
+  const detail = await api(`/api/exercises/${systemId}`, { cookie: coach.cookie });
+  const requestBody = { ...detail.body, instruction: "Private instruction" };
+  const saved = await api(`/api/exercises/${systemId}`, { method: "PATCH", cookie: coach.cookie, body: requestBody });
+  assert.equal(saved.status, 201);
+  assert.equal(saved.body.exerciseCode, "");
+  const copy = (await query("select * from library.exercises where id=$1", [saved.body.id])).rows[0];
+  assert.equal(copy.exercise_code, null);
+  assert.notEqual(copy.slug, original.slug);
+  assert.equal(copy.owner_scope, "user");
+  assert.equal(copy.owner_user_id, coach.userId);
+  assert.equal(copy.source_exercise_id, systemId);
+  for (const targetId of [systemId, copy.id, systemId]) {
+    const body = targetId === copy.id ? { ...saved.body, instruction: "Saved directly" } : requestBody;
+    const updated = await api(`/api/exercises/${targetId}`, { method: "PATCH", cookie: coach.cookie, body });
+    assert.equal(updated.status, 200);
+    assert.equal(updated.body.id, copy.id);
+    assert.equal(updated.body.sourceExerciseId, systemId);
+    assert.equal(updated.body.exerciseCode, "");
+  }
+  assert.equal((await query("select slug from library.exercises where id=$1", [copy.id])).rows[0].slug, copy.slug);
+  const customized = await api(`/api/exercises/${copy.id}`, { method: "PATCH", cookie: coach.cookie,
+    body: { ...saved.body, exerciseCode: "MY-PRIVATE-CODE" } });
+  assert.equal(customized.status, 200);
+  assert.equal(customized.body.id, copy.id);
+  assert.equal(customized.body.exerciseCode, "MY-PRIVATE-CODE");
+  const repeated = await api(`/api/exercises/${systemId}`, { method: "PATCH", cookie: coach.cookie, body: requestBody });
+  assert.equal(repeated.status, 200);
+  assert.equal(repeated.body.id, copy.id);
+  assert.equal(repeated.body.exerciseCode, "MY-PRIVATE-CODE");
+  assert.equal((await query("select count(*)::integer as count from library.exercises where owner_user_id=$1 and source_exercise_id=$2", [coach.userId, systemId])).rows[0].count, 1);
+  assert.equal((await api(`/api/exercises/${copy.id}`, { cookie: other.cookie })).status, 404);
+  assert.equal((await api(`/api/exercises/${copy.id}`, { method: "PATCH", cookie: other.cookie, body: requestBody })).status, 404);
+  assert.deepEqual((await query("select * from library.exercises where id=$1", [systemId])).rows[0], original);
+});
+
+test("two coaches can concurrently save same-name copies of a coded system exercise", async () => {
+  const coaches = await Promise.all([makeCoach("same-name-first"), makeCoach("same-name-second")]);
+  const systemId = await makeExercise(null, { ownerScope: "system", name: "Shared copy name", exerciseCode: "SHARED-SYSTEM-CODE" });
+  const original = (await query("select * from library.exercises where id=$1", [systemId])).rows[0];
+  const saved = await Promise.all(coaches.map(async (coach) => {
+    const detail = await api(`/api/exercises/${systemId}`, { cookie: coach.cookie });
+    return api(`/api/exercises/${systemId}`, { method: "PATCH", cookie: coach.cookie, body: detail.body });
+  }));
+  assert.deepEqual(saved.map((result) => result.status), [201, 201]);
+  const copies = (await query("select * from library.exercises where source_exercise_id=$1 order by id", [systemId])).rows;
+  assert.equal(copies.length, 2);
+  assert.equal(new Set(copies.map((copy) => copy.slug)).size, 2);
+  assert.deepEqual(new Set(copies.map((copy) => copy.owner_user_id)), new Set(coaches.map((coach) => coach.userId)));
+  for (const copy of copies) {
+    assert.equal(copy.name, original.name);
+    assert.equal(copy.exercise_code, null);
+    assert.equal(copy.owner_scope, "user");
+    assert.equal(copy.source_exercise_id, systemId);
+  }
+  assert.deepEqual((await query("select * from library.exercises where id=$1", [systemId])).rows[0], original);
 });
 
 test("a coach-created exercise ignores ownership and source supplied by the client", async () => {

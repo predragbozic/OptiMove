@@ -10,6 +10,7 @@ validation boundary, see `exercise-library-final-access-semantics.md`.
 - A system exercise belongs to the application, managed by its platform administrator. A legacy display label such as “general admin” grants no rights by itself; real `platform_admin` authorization is required.
 - A coach-created exercise is `owner_scope='user'`, owned and created by the authenticated coach. Client ownership and provenance fields are ignored.
 - Editing a system exercise through the ordinary editor saves a personal variation, never updates the application original. A repeated edit of the same source reuses that coach's existing variation. The variation records `source_exercise_id` and is unique per owner/source.
+- A new personal variation starts with a NULL exercise code and a UUID-based private slug. The system code belongs to the original and is not copied from the editor payload. Saving through the system original again preserves the variation's existing code, ID and slug, including a code later assigned directly to that variation. Different coaches may use the same variation name without conflicting with the global code/slug unique indexes; those indexes remain unchanged.
 - Personal exercises and variations are visible only to their owner; a block grant does not share a variation with other grantees or the administrator.
 
 ## Restricted blocks

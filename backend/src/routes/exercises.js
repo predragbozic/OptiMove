@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { pool, query } from "../db.js";
 import { exerciseReadScopeSql as exerciseScope } from "../exerciseAccess.js";
@@ -397,6 +398,7 @@ async function upsertExercise(req, res, exerciseId) {
   const client = await pool.connect();
   const runQuery = (sql, params) => client.query(sql, params);
   let copySourceId = null;
+  let exerciseCode = nullableText(body.exerciseCode);
   try {
     await runQuery("begin isolation level read committed");
     await runQuery("set local lock_timeout = '2s'");
@@ -414,10 +416,11 @@ async function upsertExercise(req, res, exerciseId) {
       if (existing.rows[0].owner_scope === "system") {
         copySourceId = exerciseId;
         const personal = await runQuery(
-          "select id from library.exercises where owner_scope = 'user' and owner_user_id = $1 and source_exercise_id = $2",
+          "select id, exercise_code from library.exercises where owner_scope = 'user' and owner_user_id = $1 and source_exercise_id = $2 for update",
           [userId, copySourceId],
         );
         exerciseId = personal.rows[0]?.id || null;
+        exerciseCode = personal.rows[0]?.exercise_code ?? null;
       }
     }
     const placeId = await getOrCreateLookup("places", body.place, userId, {}, runQuery);
@@ -433,7 +436,7 @@ async function upsertExercise(req, res, exerciseId) {
            video_url = $7, image_url = $8, place_id = $9, complexity_level_id = $10,
            starting_position_id = $11, attractor_id = $12, updated_at = now()
          where id = $1`,
-        [exerciseId, nullableText(body.exerciseCode), name, nullableText(body.aim), nullableText(body.executionNotes),
+        [exerciseId, exerciseCode, name, nullableText(body.aim), nullableText(body.executionNotes),
           nullableText(body.instruction), nullableText(body.videoUrl), nullableText(body.imageUrl), placeId, complexityId,
           startingPositionId, attractorId],
       );
@@ -444,7 +447,7 @@ async function upsertExercise(req, res, exerciseId) {
             instruction, video_url, image_url, place_id, complexity_level_id, starting_position_id, attractor_id, source_exercise_id)
          values ('user', $1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          returning id`,
-        [userId, nullableText(body.exerciseCode), slugify(name), name, nullableText(body.aim), nullableText(body.executionNotes),
+        [userId, exerciseCode, copySourceId ? `private-${randomUUID()}` : slugify(name), name, nullableText(body.aim), nullableText(body.executionNotes),
           nullableText(body.instruction), nullableText(body.videoUrl), nullableText(body.imageUrl), placeId, complexityId,
           startingPositionId, attractorId, copySourceId],
       );

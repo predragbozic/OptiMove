@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { renderExerciseEditorHtml, emptyExerciseEditor, openExerciseEditor } from "../exercise-editor.js";
+import { renderExerciseEditorHtml, emptyExerciseEditor, openExerciseEditor, handleExerciseEditorAction } from "../exercise-editor.js";
 import { openExerciseCollections } from "../exercise-collections.js";
 import { applyClientExerciseFilters } from "../exercise-data.js";
 import { state } from "../state.js";
@@ -15,6 +15,28 @@ test("system exercise editor names the private copy and retained block restricti
   assert.match(html, /original stays unchanged/);
   assert.match(html, /copy is hidden too/);
   assert.doesNotMatch(renderExerciseEditorHtml(emptyExerciseEditor()), /Save private copy/);
+});
+
+test("saving a system variation sends the original code and refreshes the library", async () => {
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url, ...options });
+    return { ok: true, json: async () => options.method === "PATCH"
+      ? { id: "private-copy", exerciseCode: "", sourceExerciseId: "system-source" }
+      : { name: "Application squat", exerciseCode: "SYSTEM-001", ownerScope: "system" } };
+  };
+  const editorState = {};
+  let refreshes = 0;
+  const handlers = { rerender() {}, async refreshAfterSave() { refreshes++; } };
+  await openExerciseEditor(editorState, handlers, "system-source");
+  editorState.exerciseEditor.data.instruction = "My instruction";
+  await handleExerciseEditorAction(editorState, handlers, { dataset: { action: "exercise-editor-save" } });
+  const saved = requests.find((request) => request.method === "PATCH");
+  assert.equal(saved.url, "/api/exercises/system-source");
+  assert.equal(JSON.parse(saved.body).exerciseCode, "SYSTEM-001");
+  assert.equal(JSON.parse(saved.body).instruction, "My instruction");
+  assert.equal(refreshes, 1);
+  assert.equal(editorState.exerciseEditor.open, false);
 });
 
 test("admin block picker saves selected users and exercises and keeps selections across search", async () => {
