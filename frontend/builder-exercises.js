@@ -10,6 +10,7 @@ const ICON_BOOKMARK = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hi
 const ICON_CHEVRON_LEFT = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M15 5l-7 7 7 7"></path></svg>`;
 const ICON_CHEVRON_RIGHT = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M9 5l7 7-7 7"></path></svg>`;
 const ICON_GRIP = `<svg viewBox="0 0 24 24" class="builder-icon-svg builder-grip-icon" aria-hidden="true"><circle cx="9" cy="6" r="1.5"></circle><circle cx="15" cy="6" r="1.5"></circle><circle cx="9" cy="12" r="1.5"></circle><circle cx="15" cy="12" r="1.5"></circle><circle cx="9" cy="18" r="1.5"></circle><circle cx="15" cy="18" r="1.5"></circle></svg>`;
+const ICON_PENCIL = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 20l1-4.5L15.5 5 19 8.5 8.5 19 4 20z"></path><path d="M13 7l4 4"></path></svg>`;
 const ICON_BACK = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"></path></svg>`;
 
 export function renderCustomExerciseModal(section, dose = {}) {
@@ -58,11 +59,11 @@ export function renderBuilderExerciseResult(exercise, markedExerciseIds, addedCo
         ? `<button type="button" class="builder-exercise-preview" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}" aria-label="Preview ${escapeAttr(title)}">${thumb}</button>`
         : `<span class="builder-exercise-preview builder-exercise-preview-empty">${thumb}</span>`}
       <span class="builder-exercise-result-text">
-        <strong>${escapeHtml(title)}</strong>
+        <strong data-clamp-title>${escapeHtml(title)}</strong>
         <small>${addedCount ? `Added ${addedCount}×` : (video ? "Preview or add" : "Add to section")}</small>
         <span class="builder-exercise-mini-actions"><button type="button" class="plain-button builder-icon-action builder-mini-toggle ${exercise.is_favorite ? "is-favorite" : ""}" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${exercise.is_favorite ? "true" : "false"}" aria-label="${exercise.is_favorite ? "Remove favorite" : "Mark as favorite"}" title="Favorite">${ICON_STAR}</button><button type="button" class="plain-button builder-icon-action builder-mini-toggle ${marked ? "is-marked" : ""}" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}" aria-label="${marked ? "Unmark" : "Mark"}" title="Marked">${ICON_BOOKMARK}</button><button type="button" class="text-action" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(title)}">Tags${tags.length ? ` (${tags.length})` : ""}</button></span>
       </span>
-      <button type="button" class="plain-button builder-exercise-add" data-action="builder-pick-exercise" data-exercise-id="${escapeAttr(exercise.id)}">${addedCount ? "Add again" : "Add"}</button>
+      <button type="button" class="plain-button builder-exercise-add" data-action="builder-pick-exercise" data-exercise-id="${escapeAttr(exercise.id)}"><span class="builder-exercise-add-plus" aria-hidden="true">+</span><span class="builder-exercise-add-label">${addedCount ? "Add again" : "Add"}</span></button>
     </article>
   `;
 }
@@ -111,8 +112,9 @@ function renderDragHandle(item, index, total, className, content = "") {
 
 // Desktop-only "Added to section" list: the original full-form-per-item
 // layout is left completely unchanged so desktop behavior/appearance never
-// moves (see the ≤560px CSS gate on .builder-added-list-compact/
-// .builder-added-list-desktop in styles.css).
+// moves (see the CSS gate - phones ≤560px wide and short landscape screens
+// ≤520px tall - on .builder-added-list-compact/.builder-added-list-desktop
+// in styles.css).
 export function renderBuilderItems(node) {
   if (!node.items.length) return "";
   return `<div class="builder-items builder-added-list-desktop">${node.items.map((item, index) => `
@@ -153,7 +155,7 @@ function renderBuilderAddedCard(item, index, total) {
       <div class="builder-added-card-top">
         ${total > 1 ? renderDragHandle(item, index, total, "builder-added-card-index", `<span>${index + 1}</span>`) : `<span class="builder-added-card-index">${index + 1}</span>`}
         ${renderAddedThumb(item, { containerClass: "builder-added-card-media", imageClass: "builder-added-card-media-image", fallbackClass: "builder-added-card-media-fallback" })}
-        <strong class="builder-added-card-title">${escapeHtml(item.title || "Exercise")}</strong>
+        <strong class="builder-added-card-title" data-clamp-title>${escapeHtml(item.title || "Exercise")}</strong>
         <div class="builder-added-card-move">
           <button class="plain-button builder-icon-action builder-item-move-up" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="up" aria-label="Move up" title="Move up" ${index === 0 ? "disabled" : ""}>${ICON_ARROW_UP}</button>
           <button class="plain-button builder-icon-action builder-item-move-down" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="down" aria-label="Move down" title="Move down" ${index === total - 1 ? "disabled" : ""}>${ICON_ARROW_UP}</button>
@@ -166,7 +168,7 @@ function renderBuilderAddedCard(item, index, total) {
         <label><span>Load</span><input name="load" value="${escapeAttr(item.load || "")}" placeholder="e.g. 40 kg"></label>
       </div>
       <input type="hidden" name="description" value="${escapeAttr(item.description || "")}">
-      <button class="text-action builder-added-card-edit" type="button" data-action="builder-open-edit-item" data-item-id="${escapeAttr(item.id)}">Edit details</button>
+      <button class="text-action builder-added-card-edit" type="button" data-action="builder-open-edit-item" data-item-id="${escapeAttr(item.id)}">${ICON_PENCIL}<span>Edit details</span></button>
     </form>
   `;
 }

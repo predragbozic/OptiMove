@@ -180,7 +180,9 @@ function dragFixture(count = 3) {
   const list = { classList: classes(), parentElement: null, children: [] };
   const items = Array.from({ length: count }, (_, index) => {
     const listeners = {};
-    const item = { index, isConnected: true, style: {}, classList: classes(), parentElement: list, matches: (sel) => sel === "[data-drag-item]", getBoundingClientRect: () => ({ top: index * 100, height: 100, bottom: index * 100 + 100 }) };
+    // Like a browser, the box follows the drag's translateY.
+    const shift = () => Number(/translateY\((-?[\d.]+)px\)/.exec(item.style.transform || "")?.[1] || 0);
+    const item = { index, isConnected: true, style: {}, classList: classes(), parentElement: list, matches: (sel) => sel === "[data-drag-item]", getBoundingClientRect: () => ({ top: index * 100 + shift(), height: 100, bottom: index * 100 + 100 + shift() }) };
     item.handle = {
       dataset: { itemId: `item-${index}` }, listeners,
       closest: (sel) => (sel === "[data-builder-item-drag]" ? item.handle : sel === "[data-drag-item]" ? item : null),
@@ -234,6 +236,32 @@ test("10. the drag controller: a small wobble, a blocked state, a cancel or a re
   assert.equal(items[0].classList.contains("is-dragging"), false);
   assert.equal(items[0].style.transform, "");
   assert.ok(items.every((item) => !item.classList.contains("is-drop-before") && !item.classList.contains("is-drop-after")));
+});
+
+test("10b. down and up need the same travel: a neighbour gives way once the dragged item covers half of it, wherever the grip is held", () => {
+  const drops = [];
+  const onDrop = (id, index) => drops.push([id, index]);
+  // Items are 100 px tall; the grip is held 20 px below an item's top.
+  let { items } = dragFixture();
+  startBuilderItemDrag(press(items[0], 20), { onDrop });
+  moveTo(items[0], 20 + 40);
+  items[0].handle.listeners.pointerup();
+  assert.deepEqual(drops, [], "down 40 px: under half of the next item");
+  ({ items } = dragFixture());
+  startBuilderItemDrag(press(items[0], 20), { onDrop });
+  moveTo(items[0], 20 + 60);
+  items[0].handle.listeners.pointerup();
+  assert.deepEqual(drops, [["item-0", 1]], "down 60 px: the bottom edge passed the next item's middle (the pointer alone would need 130 px)");
+  ({ items } = dragFixture());
+  startBuilderItemDrag(press(items[2], 220), { onDrop });
+  moveTo(items[2], 220 - 40);
+  items[2].handle.listeners.pointerup();
+  assert.deepEqual(drops, [["item-0", 1]], "up 40 px: no move");
+  ({ items } = dragFixture());
+  startBuilderItemDrag(press(items[2], 220), { onDrop });
+  moveTo(items[2], 220 - 60);
+  items[2].handle.listeners.pointerup();
+  assert.deepEqual(drops, [["item-0", 1], ["item-2", 1]], "up 60 px: the top edge passed the previous item's middle");
 });
 
 test("11. the Tests calendar's normalized touchstart object (no pointerId) never starts a builder drag", () => {

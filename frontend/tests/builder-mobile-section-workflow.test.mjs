@@ -619,6 +619,32 @@ test("17l. desktop's full-form image and inline Instruction textarea are complet
   assert.match(html, /<textarea name="description"[^>]*>Land soft\.<\/textarea>/, "desktop must still show Instruction inline and unconditionally, with no toggle at all");
 });
 
+test("15a-bis. the Add button with its '+' and word: only the word says 'Adding…', and a failed add puts back the same word with the '+' untouched", async () => {
+  // The real button: <span class="builder-exercise-add-plus">+</span><span class="builder-exercise-add-label">Add again</span>.
+  const plus = { textContent: "+" };
+  const label = { textContent: "Add again" };
+  const attributes = {};
+  const action = {
+    ...fakeAction({ action: "builder-pick-exercise", exerciseId: "ex-1" }, { closestResult: fakeDosePanel({}) }),
+    get textContent() { return plus.textContent + label.textContent; },
+    set textContent(value) { throw new Error(`the whole button was rewritten to "${value}" - its spans would be lost`); },
+    querySelector: (selector) => (selector === ".builder-exercise-add-label" ? label : null),
+    setAttribute: (name, value) => { attributes[name] = value; },
+    removeAttribute: (name) => { delete attributes[name]; },
+  };
+  let inFlight = null;
+  globalThis.fetch = async () => {
+    inFlight = { label: label.textContent, plus: plus.textContent, busy: attributes["aria-busy"], disabled: action.disabled };
+    return { ok: false, status: 500, statusText: "", json: async () => ({ error: "Server error" }) };
+  };
+  await handleBuilderItemAction(action, noopHandlers({ renderBuilderError: () => {} }));
+  assert.deepEqual(inFlight, { label: "Adding…", plus: "+", busy: "true", disabled: true });
+  assert.equal(label.textContent, "Add again");
+  assert.equal(plus.textContent, "+");
+  assert.equal(attributes["aria-busy"], undefined);
+  assert.equal(action.disabled, false);
+});
+
 test("15a. an add error resets the button, leaves query/filters untouched, and a retry can still succeed", async () => {
   state.builder.exerciseQuery = "hamstring";
   installFetchMock([{ status: 500, body: { error: "Server error" } }]);

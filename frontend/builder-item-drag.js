@@ -11,9 +11,19 @@ const EDGE_ZONE_PX = 56;
 const EDGE_SCROLL_MAX_PX = 18;
 
 // The position the dragged item takes among the OTHER items: one past every
-// item whose vertical middle is above the pointer.
-export function dropIndexFor(pointerY, otherMidpoints) {
-  return otherMidpoints.filter((middle) => middle < pointerY).length;
+// item whose vertical middle is above `probeY`.
+export function dropIndexFor(probeY, otherMidpoints) {
+  return otherMidpoints.filter((middle) => middle < probeY).length;
+}
+
+// The point of the dragged item that decides where it lands: its bottom
+// edge while it moves down, its top edge while it moves up. A neighbour
+// then gives way once the dragged item covers half of it - the same
+// distance in both directions. (The pointer itself would not do: the grip
+// sits near the item's top, so going down it would need almost a whole
+// item more travel than going up.)
+export function dragProbeY(box, offset) {
+  return offset > 0 ? box.bottom : box.top;
 }
 
 // Pixels to scroll per frame for a pointer at `y` in a visible band: zero
@@ -80,9 +90,10 @@ export function startBuilderItemDrag(event, { isBlocked = () => false, onDrop })
   // Places the dragged item under the pointer and marks where it would land.
   const follow = () => {
     const scrolled = (scroller?.scrollTop || 0) - startScroll;
-    itemEl.style.transform = `translateY(${pointerY - startY + scrolled}px)`;
+    const offset = pointerY - startY + scrolled;
+    itemEl.style.transform = `translateY(${offset}px)`;
     const rest = others();
-    targetIndex = dropIndexFor(pointerY, rest.map((child) => {
+    targetIndex = dropIndexFor(dragProbeY(itemEl.getBoundingClientRect(), offset), rest.map((child) => {
       const rect = child.getBoundingClientRect();
       return rect.top + rect.height / 2;
     }));
