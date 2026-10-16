@@ -102,6 +102,34 @@ test("4. the repaint patches the same Filters button (focus stays on it) and the
   assert.equal(toggle.innerHTML, expected.inner);
 });
 
+test("4b. opening the panel while a landscape editor is scrolled down scrolls back to it; a filter change or an already visible panel moves nothing", () => {
+  const modal = { scrollTop: 700, getBoundingClientRect: () => ({ top: 8 }) };
+  // The controls start 150 px down the editor's scroll content.
+  const controls = { getBoundingClientRect: () => ({ top: 8 + 150 - modal.scrollTop }) };
+  const toggle = fakeToggle();
+  editor.panel = {
+    dataset: { filtersOpen: "false" },
+    closest: (selector) => (selector === ".builder-section-modal" ? modal : null),
+    querySelector: (selector) => ({ ".builder-filters-toggle": toggle, ".builder-library-controls": controls })[selector] || null,
+  };
+  editor.open = true;
+  state.builder.exerciseFiltersOpen = true;
+  renderBuilderFiltersChange();
+  assert.equal(modal.scrollTop, 150, "the panel and the Filters button are back in view");
+  modal.scrollTop = 700;
+  state.builder.exerciseFilters = { ...emptyExerciseFilters(), favorite: true };
+  renderBuilderFiltersChange();
+  assert.equal(modal.scrollTop, 700, "a filter changed in the open panel: no jump");
+  editor.panel.dataset.filtersOpen = "false";
+  modal.scrollTop = 40;
+  renderBuilderFiltersChange();
+  assert.equal(modal.scrollTop, 40, "already in view: nothing moves");
+  state.builder.exerciseFiltersOpen = false;
+  modal.scrollTop = 700;
+  renderBuilderFiltersChange();
+  assert.equal(modal.scrollTop, 700, "closing never scrolls");
+});
+
 test("5. a changed filter updates the Filters badge at once (app.js), before the results reload", async () => {
   const app = await readFile(new URL("../app.js", import.meta.url), "utf8");
   assert.match(app, /builderFilter\.type === "checkbox" \? builderFilter\.checked : builderFilter\.value;\s*renderBuilderFiltersChange\(\);\s*debounceBuilderSearch\(\);/);
@@ -127,6 +155,9 @@ test("6. phones and landscape phones: the folded panel, the link, and a search t
   assert.match(css, /\.builder-filters-toggle, \.builder-custom-exercise-link \{ display: none; \}/, "hidden on a large screen");
   const landscape = mediaBlock("(min-width: 561px) and (max-height: 520px)");
   assert.match(landscape, /\.builder-library-controls \{ position: sticky;/);
+  // Favorites / Marked lose their visible word only on phones held upright.
+  assert.match(mediaBlock("(max-width: 560px)"), /\.builder-filters-panel \.exercise-quick-filters-row-main \.exercise-filter-toggle span \{ display: inline; position: absolute;/);
+  assert.doesNotMatch(compact, /\.builder-filters-panel \.exercise-quick-filters-row-main \.exercise-filter-toggle span/);
   // An open filter panel would make the pinned block taller than the editor.
   assert.match(landscape, /\.builder-section-panel\[data-filters-open="true"\] \.builder-library-controls \{ position: static; \}/);
 });
@@ -143,7 +174,7 @@ test("6b. the header rules reach only the section editor - other dialogs share .
 test("6c. Enter in the search (the keyboard's Search key) only puts the field away", async () => {
   const app = await readFile(new URL("../app.js", import.meta.url), "utf8");
   assert.match(app, /els\.content\.addEventListener\("keydown", handleBuilderSearchKeydown\);/);
-  assert.match(app, /function handleBuilderSearchKeydown\(event\) \{\s*if \(event\.key !== "Enter" \|\| !event\.target\.matches\?\.\("\[data-builder-exercise-search\]"\)\) return;\s*event\.preventDefault\(\);\s*event\.target\.blur\(\);\s*\}/);
+  assert.match(app, /function handleBuilderSearchKeydown\(event\) \{\s*if \(event\.key !== "Enter" \|\| event\.isComposing \|\| !event\.target\.matches\?\.\("\[data-builder-exercise-search\]"\)\) return;\s*event\.preventDefault\(\);\s*event\.target\.blur\(\);\s*\}/);
   assert.match(renderBuilderSectionOverlay(state, node), /data-builder-exercise-search type="search" enterkeyhint="search"/);
 });
 

@@ -451,13 +451,30 @@ export function renderBuilderFiltersChange() {
   const toggle = panel?.querySelector(".builder-filters-toggle");
   if (!toggle) return false;
   const next = builderFiltersToggleState(state.builder.exerciseFilters, state.builder.exerciseFiltersOpen);
+  const opened = panel.dataset.filtersOpen !== "true" && next.expanded === "true";
   panel.dataset.filtersOpen = next.expanded;
   // Patched in place (never replaced), so a keyboard user keeps focus on it.
   toggle.className = next.className;
   toggle.setAttribute("aria-expanded", next.expanded);
   toggle.setAttribute("aria-label", next.label);
   toggle.innerHTML = next.inner;
+  if (opened) revealBuilderLibraryControls(panel);
   return true;
+}
+
+// Landscape phones pin the search row only while the filter panel is closed
+// (styles.css); opening it while the editor is scrolled down would put the
+// panel - and the Filters button just tapped - back above the visible part.
+// The editor is scrolled up to it then (below a pinned header, if any);
+// nothing moves when it is already in view.
+function revealBuilderLibraryControls(panel) {
+  const modal = panel.closest?.(".builder-section-modal");
+  const controls = panel.querySelector(".builder-library-controls");
+  if (!modal || !controls) return;
+  const head = panel.querySelector(".builder-section-panel-head");
+  const headHeight = head && globalThis.getComputedStyle?.(head).position === "sticky" ? head.getBoundingClientRect().height : 0;
+  const top = controls.getBoundingClientRect().top - modal.getBoundingClientRect().top + modal.scrollTop - headHeight;
+  if (modal.scrollTop > top) modal.scrollTop = Math.max(0, top);
 }
 
 export function renderBuilderAddFeedback() {

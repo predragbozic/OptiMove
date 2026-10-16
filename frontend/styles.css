@@ -17184,9 +17184,6 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
   .builder-filters-panel .exercise-filter-toggle-icon { width: 44px; min-height: 44px; }
   .builder-filters-panel .exercise-filter-field input,
   .builder-filters-panel .exercise-filter-field select { height: 44px; min-height: 44px; }
-  /* Favorites / Marked show only their icon here; the word stays for
-     screen readers (the shared rule hides it with display: none). */
-  .builder-filters-panel .exercise-quick-filters-row-main .exercise-filter-toggle span { display: inline; position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .builder-quick-dose { margin-bottom: 10px; }
   .builder-quick-dose label { gap: 2px; }
 }
@@ -17196,6 +17193,9 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
    get the room the folded controls left. */
 @media (max-width: 560px) {
   .builder-section-modal .builder-section-panel-head > div:first-child { padding-right: 52px; }
+  /* Favorites / Marked show only their icon here; the word stays for
+     screen readers (the shared phone rule hides it with display: none). */
+  .builder-filters-panel .exercise-quick-filters-row-main .exercise-filter-toggle span { display: inline; position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .builder-exercise-results { max-height: max(220px, calc(92dvh - 330px)); }
 }
 
@@ -17217,7 +17217,8 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
   .builder-section-panel[data-filters-open="true"] .builder-library-controls { position: static; }
   .builder-exercise-results { max-height: none; overflow: visible; }
   /* A smaller picture in the narrow Added column, so an exercise's three
-     44 px buttons stay on one line. */
+     44 px buttons stay on one line from about 844 px (at 667 px they wrap
+     two and one). */
   .builder-added-list-desktop .builder-added-exercise-media { flex: 0 0 auto; width: 52px; height: 44px; }
   .builder-added-list-desktop .builder-added-exercise-media .builder-added-exercise-image { width: 100%; height: 100%; }
 }

@@ -994,7 +994,7 @@ function normalizeTouchPointerEvent(event) {
 // Enter (the keyboard's Search key) only puts the field away - on a phone the
 // keyboard closes and the search row shows Tile / Big / List again.
 function handleBuilderSearchKeydown(event) {
-  if (event.key !== "Enter" || !event.target.matches?.("[data-builder-exercise-search]")) return;
+  if (event.key !== "Enter" || event.isComposing || !event.target.matches?.("[data-builder-exercise-search]")) return;
   event.preventDefault();
   event.target.blur();
 }
