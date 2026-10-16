@@ -9,7 +9,7 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 globalThis.window = { confirm: () => true };
 const { state, emptyBuilderState } = await import("../state.js");
 const { moveBuilderItemTo, handleBuilderItemAction } = await import("../builder-actions.js");
-const { dropIndexFor, startBuilderItemDrag } = await import("../builder-item-drag.js");
+const { dropIndexFor, edgeScrollStep, startBuilderItemDrag } = await import("../builder-item-drag.js");
 globalThis.getComputedStyle = () => ({ overflowY: "visible" });
 const { renderBuilderItems, renderBuilderAddedList } = await import("../builder-exercises.js");
 
@@ -132,9 +132,14 @@ test("7. every added exercise has a grip to drag, desktop and phone, and the up/
     assert.equal([...html.matchAll(/data-drag-item/g)].length, 5);
     assert.equal([...html.matchAll(/data-builder-item-drag data-item-id="([a-e])"/g)].length, 5);
     assert.match(html, /aria-label="Drag Exercise c to reorder \(position 3 of 5\)"/);
-    assert.equal([...html.matchAll(/type="button" tabindex="-1" data-builder-item-drag/g)].length, 5, "the grip is not a Tab stop; the arrows are the keyboard path");
+    assert.equal([...html.matchAll(/type="button" tabindex="-1" aria-hidden="true" data-builder-item-drag/g)].length, 5, "the grip is neither a Tab stop nor announced; the arrows are the keyboard path");
     assert.equal([...html.matchAll(/data-action="builder-move-item"/g)].length, 10);
   }
+  const single = { items: [{ id: "only", title: "Only one" }] };
+  for (const html of [renderBuilderItems(single), renderBuilderAddedList(single)]) {
+    assert.doesNotMatch(html, /data-builder-item-drag/, "nothing to reorder: no grip");
+  }
+  assert.match(renderBuilderAddedList(single), /<span class="builder-added-card-index">1<\/span>/);
 });
 
 test("8. a delete during a multi-step move is refused, and the screen ends on the server's own order", async () => {
@@ -235,4 +240,15 @@ test("11. the Tests calendar's normalized touchstart object (no pointerId) never
   const { items } = dragFixture();
   assert.equal(startBuilderItemDrag({ target: items[0].handle, clientY: 10, preventDefault() {} }, { onDrop: () => assert.fail("no drop") }), false);
   assert.deepEqual(Object.keys(items[0].handle.listeners), []);
+});
+
+test("12. edge scrolling: none in the middle, faster the deeper the pointer is in a zone, and a second finger never starts a drag", () => {
+  const band = { top: 100, bottom: 500 };
+  assert.equal(edgeScrollStep(300, band), 0);
+  assert.equal(edgeScrollStep(156, band), 0);
+  assert.ok(edgeScrollStep(150, band) < 0 && edgeScrollStep(150, band) > edgeScrollStep(101, band), "deeper in the top zone scrolls up faster");
+  assert.equal(edgeScrollStep(60, band), -18, "beyond the edge: the maximum");
+  assert.ok(edgeScrollStep(470, band) > 0 && edgeScrollStep(499, band) > edgeScrollStep(470, band));
+  const { items } = dragFixture();
+  assert.equal(startBuilderItemDrag(press(items[0], 50, { isPrimary: false }), { onDrop: () => assert.fail("no drop") }), false);
 });

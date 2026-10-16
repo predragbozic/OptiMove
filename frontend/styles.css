@@ -17066,9 +17066,13 @@ span.exercise-view-media { cursor: default; }
 .builder-item-drag-handle { display: inline-flex; align-items: center; justify-content: center; gap: 2px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #7b8794; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
 .builder-item-drag-handle:disabled { cursor: default; opacity: .4; }
 .builder-grip-icon { width: 18px; height: 18px; fill: currentColor; stroke: none; }
-.builder-item-head.has-drag-handle { grid-template-columns: 28px 68px minmax(0, 1fr); }
-.builder-item-drag { width: 28px; height: 44px; }
-.builder-added-card-index.builder-item-drag-handle { flex-direction: column; min-width: 28px; min-height: 44px; font-size: 12px; font-weight: 800; }
+/* The head is a flex row (.builder-item > div:first-child): grip and
+   picture stay at the left, the name and buttons on the right. */
+.builder-item > .builder-item-head.has-drag-handle { justify-content: flex-start; }
+.builder-item > .builder-item-head.has-drag-handle > div:last-child { margin-left: auto; min-width: 0; }
+.builder-item-drag { flex: 0 0 auto; width: 28px; height: 44px; }
+.builder-added-card-index.builder-item-drag-handle { flex: 0 0 auto; flex-direction: column; min-width: 28px; min-height: 44px; font-size: 12px; font-weight: 800; }
+.builder-added-card-index.builder-item-drag-handle span { color: var(--muted, #667085); }
 .builder-added-card-index.builder-item-drag-handle .builder-grip-icon { width: 14px; height: 14px; }
 .is-reordering [data-drag-item] { transition: box-shadow .12s ease; }
 [data-drag-item].is-dragging { position: relative; z-index: 3; box-shadow: 0 12px 30px rgba(14, 28, 37, .22); opacity: .96; }
@@ -17078,10 +17082,10 @@ span.exercise-view-media { cursor: default; }
 @media (hover: hover) {
   .builder-item-drag-handle:hover:not(:disabled) { background: var(--surface-soft); color: var(--text); }
 }
-@media (max-width: 560px) {
-  .builder-item-head.has-drag-handle { grid-template-columns: 28px 60px minmax(0, 1fr); }
-}
 @media (max-width: 760px) {
   .builder-item-drag, .builder-added-card-index.builder-item-drag-handle { min-width: 44px; width: 44px; }
-  .builder-item-head.has-drag-handle { grid-template-columns: 44px 60px minmax(0, 1fr); }
+}
+/* Touch tablets and landscape phones wider than 760 px. */
+@media (pointer: coarse) {
+  .builder-item-drag { min-width: 44px; width: 44px; }
 }

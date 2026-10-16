@@ -100,11 +100,12 @@ function renderAddedThumb(item, { containerClass, imageClass, fallbackClass }) {
   return `<span class="${fallbackClass}">${escapeHtml((item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`;
 }
 
-// The grip that starts a drag-to-reorder (builder-item-drag.js). It is not a
-// Tab stop: the up/down buttons next to it are the keyboard and
-// screen-reader path.
+// The grip that starts a drag-to-reorder (builder-item-drag.js), shown only
+// when there is something to reorder (two or more exercises). It is neither
+// a Tab stop nor announced: the up/down buttons next to it are the keyboard
+// and screen-reader path.
 function renderDragHandle(item, index, total, className, content = "") {
-  return `<button class="${className} builder-item-drag-handle" type="button" tabindex="-1" data-builder-item-drag data-item-id="${escapeAttr(item.id)}" aria-label="Drag ${escapeAttr(item.title || "exercise")} to reorder (position ${index + 1} of ${total})" title="Drag to reorder">${ICON_GRIP}${content}</button>`;
+  return `<button class="${className} builder-item-drag-handle" type="button" tabindex="-1" aria-hidden="true" data-builder-item-drag data-item-id="${escapeAttr(item.id)}" aria-label="Drag ${escapeAttr(item.title || "exercise")} to reorder (position ${index + 1} of ${total})" title="Drag to reorder">${ICON_GRIP}${content}</button>`;
 }
 
 // Desktop-only "Added to section" list: the original full-form-per-item
@@ -115,8 +116,8 @@ export function renderBuilderItems(node) {
   if (!node.items.length) return "";
   return `<div class="builder-items builder-added-list-desktop">${node.items.map((item, index) => `
     <form class="builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}" data-drag-item>
-      <div class="builder-item-head has-drag-handle">
-        ${renderDragHandle(item, index, node.items.length, "builder-item-drag")}
+      <div class="builder-item-head${node.items.length > 1 ? " has-drag-handle" : ""}">
+        ${node.items.length > 1 ? renderDragHandle(item, index, node.items.length, "builder-item-drag") : ""}
         ${item.imageUrl || item.videoUrl ? `<button type="button" class="builder-added-exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(item.imageUrl || "")}" data-video="${escapeAttr(item.videoUrl || "")}">${item.imageUrl ? renderImage(item.imageUrl, "builder-added-exercise-image") : `<span class="builder-added-exercise-fallback">Video</span>`}</button>` : `<span class="builder-added-exercise-fallback">Exercise</span>`}
         <div><strong>${escapeHtml(item.title || "Exercise")}</strong><div class="builder-item-actions"><button class="plain-button builder-icon-action builder-item-move-up" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="up" aria-label="Move up" title="Move up" ${index === 0 ? "disabled" : ""}>${ICON_ARROW_UP}</button><button class="plain-button builder-icon-action builder-item-move-down" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="down" aria-label="Move down" title="Move down" ${index === node.items.length - 1 ? "disabled" : ""}>${ICON_ARROW_UP}</button><button class="plain-button builder-icon-action builder-delete-icon" type="button" data-action="builder-delete-item" data-item-id="${escapeAttr(item.id)}" aria-label="Remove" title="Remove">${ICON_TRASH}</button></div></div>
       </div>
@@ -149,7 +150,7 @@ function renderBuilderAddedCard(item, index, total) {
   return `
     <form class="builder-added-card builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}" data-drag-item>
       <div class="builder-added-card-top">
-        ${renderDragHandle(item, index, total, "builder-added-card-index", `<span>${index + 1}</span>`)}
+        ${total > 1 ? renderDragHandle(item, index, total, "builder-added-card-index", `<span>${index + 1}</span>`) : `<span class="builder-added-card-index">${index + 1}</span>`}
         ${renderAddedThumb(item, { containerClass: "builder-added-card-media", imageClass: "builder-added-card-media-image", fallbackClass: "builder-added-card-media-fallback" })}
         <strong class="builder-added-card-title">${escapeHtml(item.title || "Exercise")}</strong>
         <div class="builder-added-card-move">
