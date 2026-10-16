@@ -1,5 +1,6 @@
 import { normalizeExerciseView, renderExerciseThumb } from "./exercise-view-modes.js";
 import { renderImage } from "./media.js";
+import { autogrowRows } from "./textarea-autosize.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
 const ICON_ARROW_UP = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg>`;
@@ -19,7 +20,7 @@ export function renderCustomExerciseModal(section, dose = {}) {
         <div class="builder-modal-head"><div><p class="eyebrow">${escapeHtml(section.name)}</p><h3>Add custom exercise</h3><p class="muted">This creates a private exercise in your library and adds it to this Exercise section.</p></div><button class="plain-button icon-button" type="button" data-action="builder-close-custom-exercise" aria-label="Close"><span class="button-icon">x</span></button></div>
         <form class="builder-custom-exercise-form" data-builder-form="add-custom-exercise" data-node-id="${escapeAttr(section.id)}">
           <label class="search-field"><span>Exercise name</span><input name="name" required placeholder="e.g. Tempo running - custom"></label>
-          <label class="search-field"><span>Instruction</span><textarea name="instruction" rows="3" placeholder="Coaching instruction"></textarea></label>
+          <label class="search-field"><span>Instruction</span><textarea name="instruction" rows="3" data-autogrow placeholder="Coaching instruction"></textarea></label>
           <div class="builder-dose-inputs"><label><span>Sets</span><input name="sets" placeholder="3" value="${escapeAttr(dose.sets || "")}"></label><label><span>Reps</span><input name="reps" placeholder="8" value="${escapeAttr(dose.reps || "")}"></label><label><span>Load</span><input name="load" placeholder="Optional" value="${escapeAttr(dose.load || "")}"></label></div>
           <label class="search-field"><span>Image URL</span><input name="imageUrl" type="url" placeholder="https://..."></label>
           <label class="search-field"><span>Video URL</span><input name="videoUrl" type="url" placeholder="https://..."></label>
@@ -126,7 +127,7 @@ export function renderBuilderItems(node) {
         <label><span>Reps</span><input name="reps" value="${escapeAttr(item.reps || "")}"></label>
         <label><span>Load</span><input name="load" value="${escapeAttr(item.load || "")}"></label>
       </div>
-      <label class="search-field"><span>Instruction</span><textarea name="description" rows="2">${escapeHtml(item.description || "")}</textarea></label>
+      <label class="search-field"><span>Instruction</span><textarea name="description" rows="${autogrowRows(item.description)}" data-autogrow placeholder="Coaching instruction for this exercise">${escapeHtml(item.description || "")}</textarea></label>
       <small class="builder-autosave-hint">Changes save automatically.</small>
     </form>
   `).join("")}</div>`;
@@ -208,7 +209,7 @@ export function renderBuilderItemEdit(node, itemId, instructionOpen) {
         <div class="builder-item-instruction">
           <button class="builder-item-instruction-toggle" type="button" data-action="builder-toggle-item-instruction" aria-expanded="${instructionOpen ? "true" : "false"}"><span>Instruction</span><span aria-hidden="true">${instructionOpen ? "&#9652;" : "&#9662;"}</span></button>
           ${instructionOpen
-            ? `<label class="search-field"><span class="visually-hidden">Instruction</span><textarea name="description" rows="3">${escapeHtml(item.description || "")}</textarea></label>`
+            ? `<label class="search-field"><span class="visually-hidden">Instruction</span><textarea name="description" rows="${autogrowRows(item.description)}" data-autogrow placeholder="Coaching instruction for this exercise">${escapeHtml(item.description || "")}</textarea></label>`
             // Instruction is collapsed - no textarea in the DOM, so the
             // autosave FormData would otherwise omit "description" entirely.
             // PATCH /items/:itemId writes all four dose/description columns

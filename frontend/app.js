@@ -92,6 +92,7 @@ import {
 } from "./exercise-library.js";
 import { closeExerciseViewMenus, replaceExerciseThumbWithInitials } from "./exercise-view-modes.js";
 import { startBuilderItemDrag } from "./builder-item-drag.js";
+import { AUTOGROW_SELECTOR, autosizeTextarea } from "./textarea-autosize.js";
 import { openExerciseCollections } from "./exercise-collections.js";
 import {
   handleExerciseEditorAction,
@@ -422,6 +423,11 @@ function bindEvents() {
   });
   els.content.addEventListener("submit", handleContentSubmit);
   els.content.addEventListener("input", handleContentInput);
+  // Text fields that grow with their text (textarea-autosize.js), wherever
+  // they are rendered (the content area and the Builder's modals).
+  document.addEventListener("input", (event) => {
+    if (event.target.matches?.(AUTOGROW_SELECTOR)) autosizeTextarea(event.target);
+  });
   els.content.addEventListener("change", handleContentChange);
   // Imports (phase 4b): the sessions calendar is a <details>; the browser
   // opens and folds it itself, and its own "toggle" event (it does not

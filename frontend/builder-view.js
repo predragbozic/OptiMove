@@ -11,6 +11,7 @@ import {
 } from "./builder-helpers.js";
 import { renderBuilderAddConfirmation, renderBuilderExerciseResults, renderBuilderStickyBar } from "./builder-exercises.js";
 import { renderExerciseViewSwitcher } from "./exercise-view-modes.js";
+import { autosizeTextareas } from "./textarea-autosize.js";
 import { preserveBuilderItemEdits } from "./builder-item-edits.js";
 import { renderBlockPickerModal, renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal, renderOverwriteDayConfirmHtml } from "./builder-modals.js";
 import { renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
@@ -287,6 +288,7 @@ export function renderBuilder() {
   preserveBuilderItemEdits(state.builder.draft);
   const scrollState = captureBuilderScrollState();
   renderBuilderInner();
+  autosizeTextareas(els.content);
   restoreBuilderScrollState(scrollState);
   disablePendingMoveButtons();
   renderBuilderDiscardProgress();
@@ -395,6 +397,7 @@ export function renderBuilderSectionItems() {
     : null;
 
   container.innerHTML = renderBuilderAddedPanelContent(state, selectedNode);
+  autosizeTextareas(container);
   disablePendingMoveButtons();
 
   if (scrollEl && scrollTop !== null) scrollEl.scrollTop = scrollTop;
