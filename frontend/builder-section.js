@@ -24,6 +24,29 @@ function activeExerciseSelectFilterCount(filters) {
   return EXERCISE_FILTERS.filter((filter) => !QUICK_FILTER_KEYS.has(filter.key) && filters[filter.key]).length;
 }
 
+function activeExerciseFilterCount(filters) {
+  return EXERCISE_FILTERS.filter((filter) => filters[filter.key]).length + (filters.favorite ? 1 : 0) + (filters.marked ? 1 : 0);
+}
+
+// Phones and landscape phones: Purpose, Tag, Favorites, Marked and the more
+// filters fold behind this one button (styles.css hides it on a large
+// screen, where they stay in view). The badge counts every active filter,
+// so a folded panel never hides that the list is filtered.
+export function builderFiltersToggleState(filters, open) {
+  const count = activeExerciseFilterCount(filters);
+  return {
+    className: `plain-button builder-filters-toggle${count ? " has-active-filters" : ""}`,
+    expanded: open ? "true" : "false",
+    label: `Filters${count ? ` (${count} active)` : ""}`,
+    inner: `${filterIconSvg()}${count ? `<span class="filter-count-badge">${count}</span>` : ""}`,
+  };
+}
+
+export function renderBuilderFiltersToggle(filters, open) {
+  const toggle = builderFiltersToggleState(filters, open);
+  return `<button class="${toggle.className}" type="button" data-action="builder-toggle-exercise-filters" aria-expanded="${toggle.expanded}" aria-controls="builder-exercise-filters-panel" aria-label="${toggle.label}" title="Filters">${toggle.inner}</button>`;
+}
+
 // Mobile "Added exercises" mode content: either the compact card list, or
 // (when an item is open for editing) the single-item Sets/Reps/Load/
 // Instruction view with Previous/Next. Desktop always gets the unchanged
@@ -44,7 +67,7 @@ function renderBuilderSectionPanel(state, selectedNode) {
   const query = state.builder.exerciseQuery;
   const selectFilterCount = activeExerciseSelectFilterCount(state.builder.exerciseFilters);
   return `
-    <div class="builder-section-panel" data-mobile-mode="${escapeAttr(state.builder.mobileMode)}" aria-label="Section exercise editor">
+    <div class="builder-section-panel" data-mobile-mode="${escapeAttr(state.builder.mobileMode)}" data-filters-open="${state.builder.exerciseFiltersOpen ? "true" : "false"}" aria-label="Section exercise editor">
       <div class="builder-section-panel-head">
         <div><p class="eyebrow">Exercise section editor</p>${renderNodeEditForm(selectedNode, exerciseNodeLabel("section"), state.builder.editNodeOpen === selectedNode.id, state.builder.nodePresets || [])}${state.builder.editNodeOpen !== selectedNode.id && selectedNode.note ? `<p class="builder-node-note">${escapeHtml(selectedNode.note)}</p>` : ""}<p class="muted">Search the library and add exercises to this section.</p></div>
         <div class="builder-section-editor-actions builder-section-editor-actions-desktop">${renderCopyNodeIconButton(selectedNode.id, "Copy section")}<button class="plain-button builder-section-cancel-button" type="button" data-action="builder-finish-section">${ICON_X}<span>Cancel</span></button><button class="plain-button builder-section-finish-button" type="button" data-action="builder-finish-section">${ICON_CHECK}<span>Finish</span></button>${renderDeleteIconButton("builder-delete-node", `data-node-id="${escapeAttr(selectedNode.id)}"`, "Delete section")}</div>
@@ -52,23 +75,31 @@ function renderBuilderSectionPanel(state, selectedNode) {
       </div>
       <div class="builder-section-grid">
         <section class="builder-section-library">
-          <div class="builder-library-head"><div class="builder-panel-label">Exercise library</div>${renderExerciseViewSwitcher("builder", state.builder.exerciseView, "builder-exercise-view")}</div>
-          <label class="search-field builder-exercise-search"><span>Search exercises</span><input data-builder-exercise-search type="search" value="${escapeAttr(query)}" placeholder="Name or code"></label>
-          ${renderExerciseQuickFilters(state.builder.exerciseFilters, state.exerciseSearch.options, "data-builder-exercise-filter", `
-            <details class="builder-exercise-filters" ${selectFilterCount ? "open" : ""}>
-              <summary class="exercise-filter-toggle-icon" aria-label="More filters${selectFilterCount ? ` (${selectFilterCount} active)` : ""}" title="More filters">
-                ${filterIconSvg()}${selectFilterCount ? `<span class="filter-count-badge">${selectFilterCount}</span>` : ""}
-              </summary>
-              <div class="exercise-filter-strip builder-filter-strip">
-                ${renderExerciseFilterControls(state.builder.exerciseFilters, state.exerciseSearch.options, "builder-selects")}
-              </div>
-            </details>
-            <button class="text-action builder-custom-exercise-button" type="button" data-action="builder-open-custom-exercise">Add custom exercise</button>
-          `)}
-          <div class="builder-dose-inputs builder-quick-dose">
-            <label><span>Sets</span><input data-builder-new-dose name="sets" placeholder="e.g. 3"></label>
-            <label><span>Reps</span><input data-builder-new-dose name="reps" placeholder="e.g. 8"></label>
-            <label><span>Load</span><input data-builder-new-dose name="load" placeholder="e.g. 40 kg"></label>
+          <div class="builder-library-head"><div class="builder-panel-label">Exercise library</div><button class="text-action builder-custom-exercise-link" type="button" data-action="builder-open-custom-exercise">+ Add custom exercise</button></div>
+          <div class="builder-library-controls">
+            <div class="builder-library-toolbar">
+              <label class="search-field builder-exercise-search"><span>Search exercises</span><input data-builder-exercise-search type="search" enterkeyhint="search" value="${escapeAttr(query)}" placeholder="Name or code"></label>
+              ${renderExerciseViewSwitcher("builder", state.builder.exerciseView, "builder-exercise-view")}
+              ${renderBuilderFiltersToggle(state.builder.exerciseFilters, state.builder.exerciseFiltersOpen)}
+            </div>
+            <div class="builder-filters-panel" id="builder-exercise-filters-panel">
+            ${renderExerciseQuickFilters(state.builder.exerciseFilters, state.exerciseSearch.options, "data-builder-exercise-filter", `
+              <details class="builder-exercise-filters" ${selectFilterCount ? "open" : ""}>
+                <summary class="exercise-filter-toggle-icon" aria-label="More filters${selectFilterCount ? ` (${selectFilterCount} active)` : ""}" title="More filters">
+                  ${filterIconSvg()}${selectFilterCount ? `<span class="filter-count-badge">${selectFilterCount}</span>` : ""}
+                </summary>
+                <div class="exercise-filter-strip builder-filter-strip">
+                  ${renderExerciseFilterControls(state.builder.exerciseFilters, state.exerciseSearch.options, "builder-selects")}
+                </div>
+              </details>
+              <button class="text-action builder-custom-exercise-button" type="button" data-action="builder-open-custom-exercise">Add custom exercise</button>
+            `)}
+            </div>
+            <div class="builder-dose-inputs builder-quick-dose">
+              <label><span>Sets</span><input data-builder-new-dose name="sets" placeholder="e.g. 3"></label>
+              <label><span>Reps</span><input data-builder-new-dose name="reps" placeholder="e.g. 8"></label>
+              <label><span>Load</span><input data-builder-new-dose name="load" placeholder="e.g. 40 kg"></label>
+            </div>
           </div>
           ${renderBuilderAddConfirmation(state.builder.addConfirmation)}
           <div class="builder-exercise-results">

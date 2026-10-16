@@ -1,6 +1,7 @@
 import { builderIconGlyph } from "./builder-helpers.js";
 import { renderImage } from "./media.js";
 import { renderPastelSwatches } from "./taxonomy-view.js";
+import { autogrowRows } from "./textarea-autosize.js";
 import { formatDate, weekDayName, escapeAttr, escapeHtml } from "./utils.js";
 
 export const ICON_CHECK = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 12l5 5L20 6"></path></svg>`;
@@ -491,7 +492,7 @@ export function renderNodeEditForm(node, label, isOpen = false, presets = []) {
       ${renderPastelSwatches("color", node.color || "", { allowCustom: true, collapsed: true })}
       <input class="builder-text-input" name="iconUrl" type="url" value="${escapeAttr(node.iconUrl || "")}" placeholder="Icon URL (optional)" aria-label="${escapeAttr(label)} icon URL">
       <input class="builder-text-input" name="shortNote" maxlength="60" value="${escapeAttr(node.shortNote || "")}" placeholder="Short note (optional, shown on the calendar)" aria-label="${escapeAttr(label)} short note">
-      <textarea class="builder-text-input" name="note" rows="2" placeholder="Note (optional, shown when you open this ${escapeAttr(label.toLowerCase())})" aria-label="${escapeAttr(label)} note">${escapeHtml(node.note || "")}</textarea>
+      <textarea class="builder-text-input" name="note" rows="${autogrowRows(node.note)}" data-autogrow placeholder="Note (optional, shown when you open this ${escapeAttr(label.toLowerCase())})" aria-label="${escapeAttr(label)} note">${escapeHtml(node.note || "")}</textarea>
     </form>
   `;
 }

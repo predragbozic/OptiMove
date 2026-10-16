@@ -78,11 +78,26 @@ export async function loadBuilderExercises(options = {}) {
     const selectedSection = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
     const scrollTop = resultsContainer.scrollTop;
     resultsContainer.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedSection, { hasMore: state.builder.exerciseHasMore, view: state.builder.exerciseView });
-    resultsContainer.scrollTop = options.append ? scrollTop : 0;
+    if (options.append) resultsContainer.scrollTop = scrollTop;
+    else scrollBuilderResultsToTop(resultsContainer);
   } else if (options.forceFullRender) {
     renderBuilder();
   }
   options.afterRender?.();
+}
+
+// A new search or filter shows its first results. On landscape phones the
+// results have no scroll of their own (styles.css) - the section editor
+// scrolls under its pinned search row instead - so the editor is brought
+// back to the library's top when it was scrolled past it.
+function scrollBuilderResultsToTop(resultsContainer) {
+  resultsContainer.scrollTop = 0;
+  if (globalThis.getComputedStyle?.(resultsContainer).overflowY !== "visible") return;
+  const modal = resultsContainer.closest?.(".builder-section-modal");
+  const library = resultsContainer.closest?.(".builder-section-library");
+  if (!modal || !library) return;
+  const libraryTop = library.getBoundingClientRect().top - modal.getBoundingClientRect().top + modal.scrollTop;
+  if (modal.scrollTop > libraryTop) modal.scrollTop = libraryTop;
 }
 
 export async function refreshBuilderDraft(options = {}) {

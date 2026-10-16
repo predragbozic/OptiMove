@@ -11,9 +11,10 @@ import {
 } from "./builder-helpers.js";
 import { renderBuilderAddConfirmation, renderBuilderExerciseResults, renderBuilderStickyBar } from "./builder-exercises.js";
 import { renderExerciseViewSwitcher } from "./exercise-view-modes.js";
+import { autosizeTextareas } from "./textarea-autosize.js";
 import { preserveBuilderItemEdits } from "./builder-item-edits.js";
 import { renderBlockPickerModal, renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal, renderOverwriteDayConfirmHtml } from "./builder-modals.js";
-import { renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
+import { builderFiltersToggleState, renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
 import { renderPastelSwatches } from "./taxonomy-view.js";
 import {
   ICON_CHECK,
@@ -277,7 +278,7 @@ function restoreBuilderScrollState(captured) {
 
 function disablePendingMoveButtons() {
   if (!state.builder.itemMovePending) return;
-  document.querySelectorAll('[data-action="builder-move-item"]').forEach((button) => {
+  document.querySelectorAll('[data-action="builder-move-item"], [data-action="builder-delete-item"], [data-builder-item-drag]').forEach((button) => {
     button.disabled = true;
     button.title = "Moving...";
   });
@@ -287,6 +288,7 @@ export function renderBuilder() {
   preserveBuilderItemEdits(state.builder.draft);
   const scrollState = captureBuilderScrollState();
   renderBuilderInner();
+  autosizeTextareas(els.content);
   restoreBuilderScrollState(scrollState);
   disablePendingMoveButtons();
   renderBuilderDiscardProgress();
@@ -395,6 +397,7 @@ export function renderBuilderSectionItems() {
     : null;
 
   container.innerHTML = renderBuilderAddedPanelContent(state, selectedNode);
+  autosizeTextareas(container);
   disablePendingMoveButtons();
 
   if (scrollEl && scrollTop !== null) scrollEl.scrollTop = scrollTop;
@@ -432,10 +435,46 @@ export function renderBuilderExerciseViewChange() {
   const panel = els.content?.querySelector(".builder-section-panel");
   const resultsEl = panel?.querySelector(".builder-exercise-results");
   if (!resultsEl || !selectedNode || selectedNode.type !== "section") return false;
-  const switcher = panel.querySelector(".builder-library-head .exercise-view-switcher");
+  const switcher = panel.querySelector(".builder-library-toolbar .exercise-view-switcher");
   if (switcher) switcher.outerHTML = renderExerciseViewSwitcher("builder", state.builder.exerciseView, "builder-exercise-view");
   resultsEl.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode, { hasMore: state.builder.exerciseHasMore, loading: state.builder.exerciseLoading, view: state.builder.exerciseView });
   return true;
+}
+
+// Filter panel folded / unfolded (phones) or a filter changed: repaints only
+// the Filters button (its badge) and the panel's open mark, so the search,
+// the quick Sets / Reps / Load and the filters keep what the coach typed.
+// Returns false (caller falls back to renderBuilder()) if the section editor
+// isn't open.
+export function renderBuilderFiltersChange() {
+  const panel = els.content?.querySelector(".builder-section-panel");
+  const toggle = panel?.querySelector(".builder-filters-toggle");
+  if (!toggle) return false;
+  const next = builderFiltersToggleState(state.builder.exerciseFilters, state.builder.exerciseFiltersOpen);
+  const opened = panel.dataset.filtersOpen !== "true" && next.expanded === "true";
+  panel.dataset.filtersOpen = next.expanded;
+  // Patched in place (never replaced), so a keyboard user keeps focus on it.
+  toggle.className = next.className;
+  toggle.setAttribute("aria-expanded", next.expanded);
+  toggle.setAttribute("aria-label", next.label);
+  toggle.innerHTML = next.inner;
+  if (opened) revealBuilderLibraryControls(panel);
+  return true;
+}
+
+// Landscape phones pin the search row only while the filter panel is closed
+// (styles.css); opening it while the editor is scrolled down would put the
+// panel - and the Filters button just tapped - back above the visible part.
+// The editor is scrolled up to it then (below a pinned header, if any);
+// nothing moves when it is already in view.
+function revealBuilderLibraryControls(panel) {
+  const modal = panel.closest?.(".builder-section-modal");
+  const controls = panel.querySelector(".builder-library-controls");
+  if (!modal || !controls) return;
+  const head = panel.querySelector(".builder-section-panel-head");
+  const headHeight = head && globalThis.getComputedStyle?.(head).position === "sticky" ? head.getBoundingClientRect().height : 0;
+  const top = controls.getBoundingClientRect().top - modal.getBoundingClientRect().top + modal.scrollTop - headHeight;
+  if (modal.scrollTop > top) modal.scrollTop = Math.max(0, top);
 }
 
 export function renderBuilderAddFeedback() {

@@ -532,6 +532,49 @@ export async function handleBuilderPlanAction(action, handlers) {
   return false;
 }
 
+// Moves one added exercise of the open section to a new zero-based position
+// (the up/down buttons: one step; a drag: any distance). The new order shows
+// at once and stays on screen while the server catches up; the server only
+// knows a one-step swap with the neighbour (POST /items/:id/move), so a move
+// of N positions is N of those swaps in a row through the builder's request
+// queue - batch sync and ownership checks exactly as for a button press.
+// One move at a time; if any swap fails, the draft is read again from the
+// server so the screen never keeps an order that was not saved.
+export async function moveBuilderItemTo(itemId, targetIndex, handlers) {
+  if (state.builder.itemMovePending) return false;
+  const node = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
+  const fromIndex = node?.items.findIndex((item) => item.id === itemId) ?? -1;
+  if (!node || fromIndex < 0 || !Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex >= node.items.length || targetIndex === fromIndex) return false;
+  const [moved] = node.items.splice(fromIndex, 1);
+  node.items.splice(targetIndex, 0, moved);
+  state.builder.itemMovePending = { planId: state.builder.draft.plan.id, nodeId: node.id, itemIds: node.items.map((item) => item.id) };
+  if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
+  const direction = targetIndex < fromIndex ? "up" : "down";
+  try {
+    let lastAnswer = null;
+    for (let step = 0; step < Math.abs(targetIndex - fromIndex); step += 1) {
+      const answer = await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(itemId)}/move`, {
+        method: "POST",
+        body: JSON.stringify(withBatchSyncPayload({ direction })),
+      });
+      // setBuilderDraft sorts the answer by the pending order in place;
+      // keep the server's own order for the final paint.
+      lastAnswer = structuredClone(answer);
+      setBuilderDraft(answer);
+    }
+    state.builder.itemMovePending = null;
+    // The last answer as the server sent it: the screen ends on the order
+    // the server really has, whatever else landed between the swaps.
+    setBuilderDraft(lastAnswer);
+    if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
+  } catch (error) {
+    state.builder.itemMovePending = null;
+    await handlers.refreshBuilderDraft();
+    throw error;
+  }
+  return true;
+}
+
 export async function handleBuilderWorkspaceAction(action, handlers) {
   const type = action.dataset.action;
   if (type === "builder-load-more-exercises") {
@@ -542,6 +585,11 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     state.builder.exerciseView = normalizeExerciseView("builder", action.dataset.view);
     saveExerciseViewPreference("builder", state.builder.exerciseView);
     if (!handlers.renderBuilderExerciseViewChange?.()) handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-toggle-exercise-filters") {
+    state.builder.exerciseFiltersOpen = !state.builder.exerciseFiltersOpen;
+    if (!handlers.renderBuilderFiltersChange?.()) handlers.renderBuilder();
     return true;
   }
   if (type === "builder-toggle-batch-sync") {
@@ -1466,26 +1514,12 @@ export async function handleBuilderItemAction(action, handlers) {
     if (state.builder.itemMovePending) return true;
     const node = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
     const currentIndex = node?.items.findIndex((item) => item.id === action.dataset.itemId) ?? -1;
-    const targetIndex = currentIndex + (action.dataset.direction === "up" ? -1 : 1);
-    if (!node || currentIndex < 0 || targetIndex < 0 || targetIndex >= node.items.length) return true;
-    [node.items[currentIndex], node.items[targetIndex]] = [node.items[targetIndex], node.items[currentIndex]];
-    state.builder.itemMovePending = { planId: state.builder.draft.plan.id, nodeId: node.id, itemIds: node.items.map((item) => item.id) };
-    if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
-    try {
-      setBuilderDraft(await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}/move`, {
-        method: "POST",
-        body: JSON.stringify(withBatchSyncPayload({ direction: action.dataset.direction })),
-      }));
-      state.builder.itemMovePending = null;
-      if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
-    } catch (error) {
-      state.builder.itemMovePending = null;
-      await handlers.refreshBuilderDraft();
-      throw error;
-    }
+    await moveBuilderItemTo(action.dataset.itemId, currentIndex + (action.dataset.direction === "up" ? -1 : 1), handlers);
     return true;
   }
   if (type === "builder-delete-item") {
+    // Never between the swaps of a move (moveBuilderItemTo).
+    if (state.builder.itemMovePending) return true;
     if (!window.confirm("Remove this exercise from the program?")) return true;
     await handlers.cancelBuilderItemAutosave?.(action.dataset.itemId);
     const result = await queuedBuilderApi(withBatchSyncUrl(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}`), { method: "DELETE" });

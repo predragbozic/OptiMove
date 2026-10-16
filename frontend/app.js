@@ -49,11 +49,12 @@ import {
   handleBuilderItemAction,
   handleBuilderPlanAction,
   handleBuilderWorkspaceAction,
+  moveBuilderItemTo,
   submitBuilderForm as submitBuilderFormAction,
 } from "./builder-actions.js";
 import { loadBuilderDrafts, loadBuilderExercises, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
-import { renderBuilder, renderBuilderAddFeedback, renderBuilderExerciseViewChange, renderBuilderSectionItems, renderBuilderDiscardProgress, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress } from "./builder-view.js";
+import { renderBuilder, renderBuilderAddFeedback, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderDiscardProgress, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress } from "./builder-view.js";
 import { clearBuilderItemEdits, rememberBuilderItemEdit } from "./builder-item-edits.js";
 import {
   handleCoachProfileAction,
@@ -91,6 +92,8 @@ import {
   renderExerciseLibraryHtml,
 } from "./exercise-library.js";
 import { closeExerciseViewMenus, replaceExerciseThumbWithInitials } from "./exercise-view-modes.js";
+import { startBuilderItemDrag } from "./builder-item-drag.js";
+import { AUTOGROW_SELECTOR, autosizeTextarea } from "./textarea-autosize.js";
 import { openExerciseCollections } from "./exercise-collections.js";
 import {
   handleExerciseEditorAction,
@@ -421,6 +424,12 @@ function bindEvents() {
   });
   els.content.addEventListener("submit", handleContentSubmit);
   els.content.addEventListener("input", handleContentInput);
+  els.content.addEventListener("keydown", handleBuilderSearchKeydown);
+  // Text fields that grow with their text (textarea-autosize.js), wherever
+  // they are rendered (the content area and the Builder's modals).
+  document.addEventListener("input", (event) => {
+    if (event.target.matches?.(AUTOGROW_SELECTOR)) autosizeTextarea(event.target);
+  });
   els.content.addEventListener("change", handleContentChange);
   // Imports (phase 4b): the sessions calendar is a <details>; the browser
   // opens and folds it itself, and its own "toggle" event (it does not
@@ -931,6 +940,13 @@ function handleContentFocusIn(event) {
 }
 
 function handleContentPointerDown(event) {
+  // Builder section: drag an added exercise by its grip to a new position.
+  if (startBuilderItemDrag(event, {
+    isBlocked: () => Boolean(state.builder.itemMovePending),
+    onDrop: (itemId, index) => {
+      void moveBuilderItemTo(itemId, index, { renderBuilder, renderBuilderSectionItems, refreshBuilderDraft }).catch(renderBuilderError);
+    },
+  })) return true;
   const dayEl = event.target.closest('[data-action="tests-calendar-day-mousedown"]');
   if (!dayEl) return false;
   if (startTestsCalendarDrag(dayEl)) {
@@ -973,6 +989,15 @@ function normalizeTouchPointerEvent(event) {
       if (event.cancelable) event.preventDefault();
     },
   };
+}
+
+// Builder section editor: the search already runs while the coach types, so
+// Enter (the keyboard's Search key) only puts the field away - on a phone the
+// keyboard closes and the search row shows Tile / Big / List again.
+function handleBuilderSearchKeydown(event) {
+  if (event.key !== "Enter" || event.isComposing || !event.target.matches?.("[data-builder-exercise-search]")) return;
+  event.preventDefault();
+  event.target.blur();
 }
 
 function handleContentInput(event) {
@@ -1170,6 +1195,7 @@ async function handleContentChange(event) {
   if (builderFilter) {
     state.builder.exerciseFilters[builderFilter.dataset.builderExerciseFilter] =
       builderFilter.type === "checkbox" ? builderFilter.checked : builderFilter.value;
+    renderBuilderFiltersChange();
     debounceBuilderSearch();
     return;
   }
@@ -3473,7 +3499,7 @@ async function handleBuilderAction(action) {
   }
   try {
     if (await handleBuilderPlanAction(action, { renderBuilder, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress, flushBuilderAutosaves, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
-    if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderExerciseViewChange, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises })) return;
+    if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises })) return;
     if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderDiscardProgress, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft, flushBuilderAutosaves, cancelBuilderAutosaves })) return;
     if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback, renderBuilderError, refreshBuilderDraft, cancelBuilderItemAutosave })) return;
   } finally {
