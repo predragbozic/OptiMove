@@ -51,7 +51,8 @@ export function renderBuilderFiltersToggle(filters, open) {
 // (when an item is open for editing) the single-item Sets/Reps/Load/
 // Instruction view with Previous/Next. Desktop always gets the unchanged
 // full-form list (renderBuilderItems) regardless of this state - see the
-// ≤560px CSS gate that shows exactly one of the two lists.
+// CSS gate (≤560px wide or ≤520px tall) that shows exactly one of the two
+// lists.
 export function renderBuilderAddedPanelContent(state, selectedNode) {
   const mobileList = state.builder.editItemId
     ? renderBuilderItemEdit(selectedNode, state.builder.editItemId, state.builder.editItemInstructionOpen)

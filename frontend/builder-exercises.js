@@ -112,8 +112,9 @@ function renderDragHandle(item, index, total, className, content = "") {
 
 // Desktop-only "Added to section" list: the original full-form-per-item
 // layout is left completely unchanged so desktop behavior/appearance never
-// moves (see the ≤560px CSS gate on .builder-added-list-compact/
-// .builder-added-list-desktop in styles.css).
+// moves (see the CSS gate - phones ≤560px wide and short landscape screens
+// ≤520px tall - on .builder-added-list-compact/.builder-added-list-desktop
+// in styles.css).
 export function renderBuilderItems(node) {
   if (!node.items.length) return "";
   return `<div class="builder-items builder-added-list-desktop">${node.items.map((item, index) => `

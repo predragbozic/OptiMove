@@ -9168,6 +9168,12 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     gap: 4px;
   }
 
+  .builder-item-edit-head .icon-button {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+  }
+
   /* Full-width row, not a bare inline text link - the old .text-action
      styling (padding:0, sized to its 13px text) gave this a tap target well
      under the ~44px minimum a thumb can reliably hit, which is a plausible
@@ -9192,9 +9198,15 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     cursor: pointer;
   }
 
+  /* A folded Instruction shows its first three lines only; the toggle
+     above opens the whole text. */
   .builder-item-instruction-preview {
+    display: -webkit-box;
     margin-top: 4px;
+    overflow: hidden;
     font-size: 12px;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
   }
 }
 
@@ -17252,18 +17264,17 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
      stays for screen readers) - so two columns show twice the exercises. */
   .builder-exercise-view.is-tile { gap: 8px; }
   .builder-exercise-view.is-tile .builder-exercise-result { grid-template-columns: 64px minmax(0, 1fr) auto; grid-template-rows: auto auto auto; grid-template-areas: "media title title" "media meta meta" "actions actions add"; align-items: start; column-gap: 8px; row-gap: 2px; min-height: 0; padding: 6px; }
-  .builder-exercise-view.is-tile .builder-exercise-preview { grid-area: media; width: 64px; min-width: 64px; }
+  .builder-exercise-view.is-tile .builder-exercise-preview { grid-area: media; width: 64px; min-width: 64px; min-height: 44px; }
   .builder-exercise-view.is-tile .builder-exercise-result-text { display: contents; }
   .builder-exercise-view.is-tile .builder-exercise-result-text > strong { grid-area: title; font-size: 14px; line-height: 1.3; }
   .builder-exercise-view.is-tile .builder-exercise-result-text > small { grid-area: meta; }
   .builder-exercise-view.is-tile .builder-exercise-mini-actions { grid-area: actions; flex-wrap: nowrap; align-self: center; gap: 2px; margin: 4px 0 0; }
   .builder-exercise-view.is-tile .builder-exercise-add { grid-area: add; align-self: center; justify-self: end; min-width: 44px; margin-top: 4px; padding: 0; font-size: 22px; line-height: 1; }
   .builder-exercise-view.is-tile .builder-exercise-add-label { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  /* A smaller picture in the narrow Added column, so an exercise's three
-     44 px buttons stay on one line from about 844 px (at 667 px they wrap
-     two and one). */
-  .builder-added-list-desktop .builder-added-exercise-media { flex: 0 0 auto; width: 52px; height: 44px; }
-  .builder-added-list-desktop .builder-added-exercise-media .builder-added-exercise-image { width: 100%; height: 100%; }
+  /* The Added column is about 260 px here: tighter gaps keep a card's
+     number, picture, Edit details and Remove inside it from 568 px up. */
+  .builder-added-card { column-gap: 4px; }
+  .builder-added-card-edit { padding: 0 4px; }
 }
 
 /* Touch screens of every size: 44 px targets and 16 px fields (iOS zooms

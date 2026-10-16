@@ -75,6 +75,8 @@ test("4. phones and landscape phones: two-line names, compact Added cards and th
   assert.match(compact, /\.builder-added-list-compact \{\s*display: flex;/);
   assert.match(compact, /\.builder-item-edit \{\s*display: block;\s*\}/);
   assert.match(compact, /\.builder-item-edit \.builder-item-dose \{\s*margin-left: 0;\s*\}/);
+  assert.match(compact, /\.builder-item-edit-head \.icon-button \{\s*min-width: 44px;\s*min-height: 44px;/, "Back, Previous and Next are 44 px");
+  assert.match(compact, /\.builder-item-instruction-preview \{[^}]*-webkit-line-clamp: 3;/, "a folded Instruction shows three lines");
   // The sticky Added bar and Add / Added mode switching stay phone-upright only.
   assert.doesNotMatch(compact, /\.builder-mobile-sticky-bar \{\s*display: flex;/);
   assert.match(mediaBlock("(max-width: 560px)"), /\.builder-mobile-sticky-bar \{\s*display: flex;/);
@@ -89,5 +91,10 @@ test("5. landscape phones: about four lines of Instruction, and short two-column
   assert.match(landscape, /\.builder-exercise-view\.is-tile \.builder-exercise-add-label \{ position: absolute;[^}]*clip: rect\(0 0 0 0\);/);
   assert.match(landscape, /\.builder-exercise-view\.is-tile \.builder-exercise-add-plus \{ display: inline; \}/);
   assert.match(css, /^\.builder-exercise-add-plus \{ display: none; \}/m, "elsewhere Add says its word");
+  // The Added column is about 260 px wide there: the card's number, picture,
+  // Edit details and Remove fit from 568 px up (measured: no overflow).
+  assert.match(landscape, /\.builder-added-card \{ column-gap: 4px; \}/);
+  assert.match(landscape, /\.builder-added-card-edit \{ padding: 0 4px; \}/);
+  assert.match(landscape, /\.builder-exercise-view\.is-tile \.builder-exercise-preview \{[^}]*min-height: 44px;/);
   assert.doesNotMatch(mediaBlock("(max-width: 560px), (max-height: 520px)"), /max-height: calc\(5\.8em/, "a phone held upright keeps the taller Instruction");
 });
