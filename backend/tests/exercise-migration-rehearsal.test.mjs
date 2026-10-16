@@ -9,6 +9,34 @@ import { applyNewMigration, MIGRATIONS_V2_ROOT } from "../src/migrate.js";
 const ownership = "202610151200_exercise_library_ownership_and_collections.sql";
 const integrity = "202610151300_exercise_copy_source_integrity.sql";
 
+test("personal classification migration preserves existing rows and enables scoped metadata and private provenance", async () => {
+  await withFixture("classification", async (client, apply) => {
+    await apply(integrity);
+    await client.query(`create table library.filter_hidden (
+      user_id uuid not null references public.users(id),kind text not null,
+      item_id uuid not null,unique(user_id,kind,item_id),
+      constraint filter_hidden_kind_check check(kind in ('domain','category','section','tag','attractor'))
+    )`);
+    const owner = (await client.query("insert into public.users default values returning id")).rows[0].id;
+    const source = (await client.query("insert into library.exercises (owner_scope) values ('system') returning id")).rows[0].id;
+    const copy = (await client.query("insert into library.exercises (owner_scope,owner_user_id,source_exercise_id) values ('user',$1,$2) returning id", [owner, source])).rows[0].id;
+    await client.query("insert into library.filter_hidden (user_id,kind,item_id) values ($1,'domain',$2)", [owner, source]);
+    const before = (await client.query("select id,owner_scope,owner_user_id,source_exercise_id from library.exercises order by id")).rows;
+    await apply("202610161400_exercise_personal_classification.sql");
+    assert.deepEqual((await client.query("select id,owner_scope,owner_user_id,source_exercise_id from library.exercises order by id")).rows, before);
+    assert.equal((await client.query("select count(*)::int as count from library.exercises where copy_parent_id is not null")).rows[0].count, 0);
+    assert.equal((await client.query("select relrowsecurity from pg_class where oid='library.exercise_classifications'::regclass")).rows[0].relrowsecurity, true);
+    await client.query("insert into library.exercise_classifications (user_id,exercise_id,overrides) values ($1,$2,'{\"purposes\":[]}')", [owner, source]);
+    await client.query("insert into library.filter_hidden (user_id,kind,item_id) values ($1,'exercise',$2)", [owner, source]);
+    await assert.rejects(client.query("insert into library.filter_hidden (user_id,kind,item_id) values ($1,'invalid',$2)", [owner, source]), /filter_hidden_kind_check/);
+    const descendant = (await client.query("insert into library.exercises (owner_scope,owner_user_id,copy_parent_id) values ('user',$1,$2) returning id", [owner, copy])).rows[0].id;
+    await assert.rejects(client.query("update library.exercises set copy_parent_id=$1 where id=$2", [source, descendant]), /provenance/);
+    await assert.rejects(client.query("insert into library.exercises (owner_scope,owner_user_id,source_exercise_id) values ('user',$1,$2)", [owner, source]), /duplicate key/);
+    await assert.rejects(client.query("delete from library.exercises where id=$1", [copy]), /foreign key/);
+    assert.equal((await client.query("select count(*)::int as count from public.schema_migrations")).rows[0].count, 3);
+  });
+});
+
 test("personal tag migration is additive, idempotent and keeps per-user names private", async () => {
   await withFixture("personal_tags", async (client, apply) => {
     const name = "202610161100_exercise_personal_tags.sql";

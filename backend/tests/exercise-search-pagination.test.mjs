@@ -50,7 +50,7 @@ test("name/code exact matches and name prefixes precede substring matches", asyn
   await search({ search: "knee", limit: "18", purpose: "Strength" });
   assert.deepEqual(captured.params, ["coach", "%knee%", "knee", "Strength", 19, 0]);
   assert.match(captured.sql, /order by case\s+when lower\(e\.name\) = lower\(\$3\) or lower\(e\.exercise_code\) = lower\(\$3\) then 0\s+when left\(lower\(e\.name\), length\(\$3\)\) = lower\(\$3\) then 1\s+else 2\s+end,/);
-  assert.match(captured.sql, /d\.name = \$4/);
+  assert.match(captured.sql, /effective_classification\."purposes" \? \$4/);
   assert.match(captured.sql, /limit \$5 offset \$6/);
 });
 

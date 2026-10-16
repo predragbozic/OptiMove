@@ -169,7 +169,7 @@ test("7. the library keeps the original card under Details, and Tile, Big and Li
   assert.match(cards[0], /Tags \(1\)/);
   assert.match(cards[0], /exercise-copy-open/);
   assert.doesNotMatch(cards[0], /exercise-edit-open/, "an application exercise is edited only by a platform admin");
-  assert.doesNotMatch(cards[1], /exercise-copy-open/);
+  assert.match(cards[1], /exercise-copy-open/, "the coach can explicitly copy their own private exercise");
   assert.match(cards[1], /exercise-edit-open/, "the coach's own exercise");
   assert.match(libraryHtml("tile", { platformAdmin: true }).split(`<article class="exercise-view-card">`)[1], /exercise-edit-open/);
   assert.match(libraryHtml("unknown"), /class="exercise-grid"/, "an unknown view is Details");

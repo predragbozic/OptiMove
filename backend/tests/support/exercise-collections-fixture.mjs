@@ -12,6 +12,13 @@ export const EXERCISE_COLLECTIONS_FIXTURE_SQL = `
       (owner_scope = 'user' and owner_user_id is not null and source_exercise_id <> id)
     );
 
+  create table if not exists library.filter_hidden (
+    id uuid primary key default gen_random_uuid(),kind varchar(20) not null,item_id uuid not null,
+    user_id uuid not null references public.users(id),created_at timestamptz not null default now(),
+    unique(kind,item_id,user_id)
+  );
+  ${readFileSync(new URL("../../../migrations_v2/202610161400_exercise_personal_classification.sql", import.meta.url), "utf8")}
+
   create unique index fixture_exercise_private_source_unique
     on library.exercises (owner_user_id, source_exercise_id)
     where owner_scope = 'user' and source_exercise_id is not null;

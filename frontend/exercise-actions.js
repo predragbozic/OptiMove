@@ -5,7 +5,7 @@ import { renderBuilder } from "./builder-view.js";
 import { els } from "./dom.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions, loadMarkedExerciseVisibility } from "./exercise-data.js";
 import { normalizeExerciseView, saveExerciseViewPreference } from "./exercise-view-modes.js";
-import { filterIconSvg, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters } from "./exercise-library.js";
+import { filterIconSvg, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters, renderExerciseVisibilityFilters } from "./exercise-library.js";
 import { emptyExerciseOptions, EXERCISE_FILTERS, state } from "./state.js";
 import { debounce, escapeHtml } from "./utils.js";
 import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
@@ -28,6 +28,7 @@ function exercisesContextKey(term, limit, filters) {
     limit,
     ...EXERCISE_FILTERS.map((filter) => filters[filter.key]),
     filters.favorite,
+    ...["kind", "visibility", "hidden", "owner"].filter((key) => filters[key]).map((key) => `${key}:${filters[key]}`),
   ]);
 }
 
@@ -55,6 +56,7 @@ export async function loadExercises(handlers) {
   await optionsPromise;
   const selectFilterCount = activeExerciseSelectFilterCount(state.exerciseSearch.filters);
   els.toolbar.innerHTML = `
+    ${renderExerciseVisibilityFilters(state.exerciseSearch.filters, state.exerciseSearch.options)}
     <label class="search-field exercise-search-field">
       <span>Exercise search</span>
       <input id="exerciseSearch" type="search" placeholder="Name or code" value="">
@@ -148,6 +150,21 @@ export async function submitExerciseTagForm(form, handlers) {
 
 export async function handleExerciseLibraryAction(action, handlers) {
   const type = action.dataset.action;
+  if (["exercise-hide", "exercise-archive", "exercise-restore"].includes(type)) {
+    try {
+      const id = encodeURIComponent(action.dataset.exerciseId);
+      if (type === "exercise-hide") {
+        await api(`/api/exercises/${id}/hidden`, { method: "POST", body: JSON.stringify({ hidden: action.dataset.hidden !== "true" }) });
+      } else {
+        const restore = type === "exercise-restore";
+        if (!window.confirm(restore ? "Restore this exercise to the active library?" : "Archive this exercise? Existing programs and references are kept. This does not permanently delete it.")) return true;
+        await api(`/api/exercises/${id}/${restore ? "restore" : "archive"}`, { method: "POST" });
+      }
+      invalidateExercisesCache();
+      await refreshCurrentExerciseSearch(handlers);
+    } catch (error) { window.alert(error.message || "Could not update this exercise."); }
+    return true;
+  }
   if (type === "exercise-load-more") {
     state.exerciseSearch.limit += 30;
     searchExercises(state.exerciseSearch.term, handlers);

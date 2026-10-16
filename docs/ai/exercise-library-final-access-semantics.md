@@ -1,5 +1,8 @@
 # Exercise Library — final access and reuse semantics
 
+For the subsequent administrator/private-copy policy and archive/media behavior,
+see [classification, visibility and media](exercise-classification-visibility-media.md).
+
 This is the current contract for the unmerged Exercise Library patch. It supersedes
 the open product questions and unexecuted-test status in
 `exercise-library-hardening-review.md`. It does not authorize a release.

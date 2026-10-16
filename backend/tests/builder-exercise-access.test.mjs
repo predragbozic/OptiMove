@@ -71,7 +71,7 @@ before(async () => {
     create table library.exercises (
       id uuid primary key default gen_random_uuid(), name text, owner_scope text, owner_user_id uuid,
       is_active boolean default true, aim text, execution_notes text, instruction text, image_url text, video_url text,
-      exercise_code text,slug text,created_by_user_id uuid
+      exercise_code text,slug text,created_by_user_id uuid,updated_at timestamptz default now()
     );
     create table plans.plan_items (
       id uuid primary key default gen_random_uuid(), plan_session_id uuid references plans.plan_sessions(id),
@@ -140,6 +140,7 @@ before(async () => {
   ({ pool } = await import("../src/db.js"));
   const { default: builderRouter } = await import("../src/routes/builder.js");
   const { default: collectionsRouter } = await import("../src/routes/exerciseCollections.js");
+  const { default: exercisesRouter } = await import("../src/routes/exercises.js");
   const { default: templatesRouter } = await import("../src/routes/templates.js");
   const { default: plansRouter } = await import("../src/routes/plans.js");
   const { default: organizationRouter } = await import("../src/routes/organization.js");
@@ -162,6 +163,7 @@ before(async () => {
     next();
   });
   app.use("/api/templates", templatesRouter);
+  app.use("/api/exercises", (req, res, next) => { req.user = { id: coachId }; req.authz = { platformRoles: [] }; next(); }, exercisesRouter);
   app.use("/api/plans", plansRouter);
   app.use("/api/organization", organizationRouter);
   app.use((error, req, res, next) => res.status(error.status || 500).json({ error: error.message }));
@@ -203,6 +205,24 @@ async function addExercise(exerciseId, extra = {}, targetSectionId = sectionId) 
 async function itemCount() {
   return (await client.query("select count(*)::integer as count from plans.plan_items")).rows[0].count;
 }
+
+test("archiving a referenced exercise preserves existing program API rows, snapshots and references", async () => {
+  const section = await makeSection(coachId);
+  const source = (await client.query("insert into library.exercises (name,owner_scope,owner_user_id,is_active,image_url) values ('Archive referenced','user',$1,true,'https://saved.test/image') returning id", [coachId])).rows[0].id;
+  assert.equal((await addExercise(source, {}, section)).status, 201);
+  const plan = (await client.query(`select day.plan_id from plans.plan_nodes node join plans.plan_sessions session on session.id=node.plan_session_id
+    join plans.plan_days day on day.id=session.plan_day_id where node.id=$1`, [section])).rows[0].plan_id;
+  const before = await request(`/api/plans/${plan}/program`, null, { method: "GET" });
+  assert.equal(before.status, 200);
+  const snapshots = (await client.query("select * from plans.plan_items where exercise_id=$1", [source])).rows;
+  const archived = await request(`/api/exercises/${source}/archive`, {});
+  assert.equal(archived.status, 200, JSON.stringify(archived.body));
+  assert.deepEqual((await request(`/api/plans/${plan}/program`, null, { method: "GET" })).body, before.body);
+  assert.deepEqual((await client.query("select * from plans.plan_items where exercise_id=$1", [source])).rows, snapshots);
+  assert.equal((await addExercise(source, {}, section)).status, 404);
+  assert.equal((await request(`/api/exercises/${source}/restore`, {})).status, 200);
+  assert.equal((await addExercise(source, {}, section)).status, 201);
+});
 
 test("foreign private and nonexistent exercises return the identical 404 and create no item", async () => {
   const missing = await addExercise(crypto.randomUUID());

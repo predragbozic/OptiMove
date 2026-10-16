@@ -37,7 +37,7 @@ export function renderExerciseEditorHtml(editor, filterOptions = {}) {
           <button class="plain-button icon-button" type="button" data-action="exercise-editor-close" aria-label="Close"><span class="button-icon">x</span></button>
         </div>
         <div class="exercise-editor-body">
-          ${editor.isCopy ? `<p class="muted">Saving creates your private copy without the original video or image. The application original stays unchanged. If access to its block is removed, your copy is hidden too.</p>` : editor.ownerScope === "system" ? `<p class="muted">You are editing the application original for all users.</p>` : ""}
+          ${editor.isCopy ? `<p class="muted">Saving creates your private copy without storing the original video or image. Available source media are used as fallback. The original stays unchanged. If access to its block is removed, your copy is hidden too.</p>` : editor.ownerScope === "system" ? `<p class="muted">You are editing the application original for all users.</p>` : ""}
           <label class="search-field"><span>Name</span><input class="builder-text-input" data-exercise-editor-field="name" value="${escapeAttr(d.name)}" required></label>
           <div class="exercise-editor-grid">
             <label class="search-field"><span>Exercise code</span><input class="builder-text-input" data-exercise-editor-field="exerciseCode" value="${escapeAttr(d.exerciseCode)}"></label>
@@ -64,7 +64,7 @@ export function renderExerciseEditorHtml(editor, filterOptions = {}) {
   `;
 }
 
-function renderSingleField(field, value, options) {
+export function renderSingleField(field, value, options) {
   const listId = `exercise-editor-${field.key}-options`;
   return `
     <label class="search-field">
@@ -75,7 +75,7 @@ function renderSingleField(field, value, options) {
   `;
 }
 
-function renderMultiField(field, values, options) {
+export function renderMultiField(field, values, options) {
   const listId = `exercise-editor-${field.key}-options`;
   return `
     <div class="exercise-editor-multi-field">
@@ -104,6 +104,7 @@ export async function openExerciseEditor(state, handlers, exerciseId, { copy = f
     handlers.rerender();
     try {
       const detail = await api(`/api/exercises/${encodeURIComponent(exerciseId)}`);
+      if (!copy && detail.canEdit === false) throw new Error("You cannot edit this exercise. Use Copy to create your own version.");
       state.exerciseEditor.ownerScope = detail.ownerScope || "user";
       state.exerciseEditor.data = {
         name: detail.name || "", exerciseCode: copy ? "" : detail.exerciseCode || "", aim: detail.aim || "",
