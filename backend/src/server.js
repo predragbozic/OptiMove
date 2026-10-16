@@ -147,6 +147,14 @@ app.use(express.static(staticRoot, {
     }
   },
 }));
+// Dev/test only: the production build copies frontend/public/ (the web app
+// manifest and its icons, Vite's publicDir) to the root of frontend/dist, so
+// serve that folder at the root here too and keep the URLs identical.
+if (!isProduction) {
+  app.use(express.static(path.join(frontendDir, "public"), {
+    setHeaders: (res) => res.setHeader("Cache-Control", "no-cache"),
+  }));
+}
 // res.sendFile() applies its own default Cache-Control (from the `send`
 // package) and does NOT run through express.static's setHeaders above, so
 // these routes must set the header themselves - otherwise these five paths
