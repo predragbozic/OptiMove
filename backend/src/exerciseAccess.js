@@ -8,16 +8,34 @@ export const exerciseCollectionAccessSql = `(
       where granted_item.exercise_id = coalesce(e.source_exercise_id, e.id) and exercise_grant.user_id = $1)
   )`;
 
+export const exerciseAdministratorSql = `exists (select 1 from public.user_global_roles exercise_admin
+  where exercise_admin.user_id=$1 and exercise_admin.role='platform_admin' and exercise_admin.is_active=true)`;
+
+const privateCopyAccessSql = `(e.copy_parent_id is null or not exists (
+  with recursive ancestry as (
+    select ancestor.*,array[e.id,ancestor.id] as path from library.exercises ancestor where ancestor.id=e.copy_parent_id
+    union all
+    select ancestor.*,ancestry.path||ancestor.id from library.exercises ancestor
+    join ancestry on ancestor.id=coalesce(ancestry.source_exercise_id,ancestry.copy_parent_id)
+    where not ancestor.id=any(ancestry.path)
+  ) select 1 from ancestry e where e.is_active=false
+    or not (e.owner_scope='system' or e.owner_user_id=$1 or ${exerciseAdministratorSql})
+    or not ${exerciseCollectionAccessSql}
+))`;
+
 export const exerciseReuseScopeSql = `e.is_active = true
   and (e.source_exercise_id is null or exists (
     select 1 from library.exercises exercise_source
     where exercise_source.id = e.source_exercise_id and exercise_source.owner_scope = 'system'
       and exercise_source.source_exercise_id is null and exercise_source.is_active = true
   ))
-  and ${exerciseCollectionAccessSql}`;
+  and ${exerciseCollectionAccessSql}
+  and ${privateCopyAccessSql}`;
 
 export const exerciseReadScopeSql = `(${exerciseReuseScopeSql})
-  and (e.owner_scope = 'system' or (e.owner_scope = 'user' and e.owner_user_id = $1))`;
+  and (e.owner_scope = 'system' or (e.owner_scope = 'user' and e.owner_user_id = $1) or ${exerciseAdministratorSql})`;
+
+export const exerciseLibraryScopeSql = `(${exerciseAdministratorSql} or (${exerciseReadScopeSql.replace("e.is_active = true", "true")}))`;
 
 export async function lockExerciseReuse(client, guard = null) {
   if (guard?.active === true) return;

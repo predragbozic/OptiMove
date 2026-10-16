@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { openExerciseClassification } from "./exercise-classification.js";
 import { accessScopeLabel, currentUserWorkspaceContextParts, isAthleteMode, roleLabel } from "./access.js";
 import {
   renderInviteAccept as renderInviteAcceptAction,
@@ -2545,6 +2546,7 @@ async function handleContentClick(event) {
     return;
   }
   if (type === "exercise-back") {
+    state.exerciseDetail.currentId = null;
     if (state.appHistoryDepth > 0) window.history.back();
     else handleAppBack();
     return;
@@ -2577,6 +2579,13 @@ async function handleContentClick(event) {
   if (await handleExerciseLibraryAction(action, { renderExercises, setLoading })) return;
   if (type === "exercise-collections-open") {
     await openExerciseCollections(exerciseEditorHandlers.refreshAfterSave);
+    return;
+  }
+  if (type === "exercise-classification") {
+    await openExerciseClassification(action.dataset.exerciseId, state.exerciseSearch.options, async () => {
+      state.exerciseSearch.options = {};
+      await exerciseEditorHandlers.refreshAfterSave();
+    });
     return;
   }
   if (type === "exercise-edit-open" || type === "exercise-copy-open") {
@@ -3507,8 +3516,21 @@ function renderOrganizationSummary(node) {
   return renderOrganizationSummaryHtml(node);
 }
 
-function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
+async function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
   if (itemId) state.exerciseDetail.currentId = itemId;
+  const exerciseId = item.exercise_id || item.id;
+  if (exerciseId) {
+    try {
+      const detail = await api(`/api/exercises/${encodeURIComponent(exerciseId)}?archived=true`);
+      item = { ...item, id: exerciseId, can_edit: detail.canEdit, can_copy: detail.canCopy,
+        image_url: item.owner_scope ? detail.effectiveImageUrl || "" : item.image_url || detail.effectiveImageUrl || "",
+        video_url: item.owner_scope ? detail.effectiveVideoUrl || "" : item.video_url || detail.effectiveVideoUrl || "" };
+    } catch {
+      if (item.owner_scope) return;
+      item = { ...item, can_edit: false, can_copy: false };
+    }
+  }
+  if (state.exerciseDetail.currentId !== itemId) return;
   const ids = state.exerciseDetail.ids || [];
   const markup = renderExerciseDetailHtml({ item, itemId: state.exerciseDetail.currentId, ids, getItemById });
   els.content.querySelector(".exercise-detail-overlay")?.remove();
@@ -3523,6 +3545,7 @@ function renderExerciseEditorOverlay() {
 }
 
 async function refreshExerciseLibraryAccess() {
+  document.querySelector(".exercise-classification-overlay")?.remove();
   invalidateExercisesCache();
   state.exerciseSearch.options = {};
   if (state.activeTab !== "exercises" && state.activeTab !== "builder") return;

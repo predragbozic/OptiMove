@@ -1,5 +1,9 @@
 # Exercise Library: personal organization, Copy/Edit and media
 
+Historical PR #166 contract. The subsequent
+[classification, visibility and media contract](exercise-classification-visibility-media.md)
+supersedes administrator access, private Copy and display media fallback below.
+
 ## Contract
 
 Tags on accessible system or owned exercises are per-user metadata, never an implicit exercise copy. Search and tag filters read only the request user's personal labels plus visible legacy/system tags. EXISTS predicates preserve one card per exercise. Favorites and local marks retain their existing per-user behavior and access checks.

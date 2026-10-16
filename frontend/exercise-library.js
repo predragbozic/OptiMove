@@ -115,15 +115,15 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platform
   const tags = exercise.tags || [];
   return `
     <article class="exercise-card">
-      ${exercise.image_url ? `
+      ${exercise.image_url || exercise.video_url ? `
         <button class="exercise-media library-media" data-action="open-media" data-title="${escapeAttr(exercise.name || "Exercise media")}" data-image="${escapeAttr(exercise.image_url)}" data-video="${escapeAttr(exercise.video_url || "")}">
-          ${renderMediaThumb(exercise.image_url)}
+          ${exercise.image_url ? renderMediaThumb(exercise.image_url) : `<span class="media-fallback">Video</span>`}
         </button>
       ` : ""}
       <button class="exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
         <span class="exercise-head">
           <span class="exercise-title">${escapeHtml(exercise.name || "")}</span>
-          ${exercise.owner_scope ? `<span class="item-badge">${exercise.owner_scope === "system" ? "Application" : "My exercise"}</span>` : ""}
+          ${exercise.owner_scope ? `<span class="item-badge">${exercise.owner_scope === "system" ? "Application" : platformAdmin ? "Private exercise" : "My exercise"}</span>` : ""}
         </span>
         <span class="muted">${escapeHtml(exercise.aim || "")}</span>
         <span class="item-description">${escapeHtml(exercise.execution_notes || exercise.instruction || "")}</span>
@@ -132,8 +132,12 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platform
         <button class="text-action" type="button" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${exercise.is_favorite ? "true" : "false"}">${exercise.is_favorite ? "Unfavorite" : "Favorite"}</button>
         <button class="text-action" type="button" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}">${marked ? "Unmark" : "Mark"}</button>
         <button class="text-action" type="button" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(exercise.name || "Exercise")}">Tags${tags.length ? ` (${tags.length})` : ""}</button>
-        ${exercise.owner_scope === "system" ? `<button class="text-action" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exercise.id)}">Copy</button>` : ""}
-        ${exercise.owner_scope !== "system" || platformAdmin ? `<button class="text-action" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>` : ""}
+        <button class="text-action" type="button" data-action="exercise-classification" data-exercise-id="${escapeAttr(exercise.id)}">My classification</button>
+        <button class="text-action" type="button" data-action="exercise-hide" data-exercise-id="${escapeAttr(exercise.id)}" data-hidden="${exercise.is_hidden ? "true" : "false"}">${exercise.is_hidden ? "Unhide" : "Hide"}</button>
+        ${exercise.is_active !== false ? `<button class="text-action" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exercise.id)}">Copy</button>` : ""}
+        ${(exercise.can_edit ?? (exercise.owner_scope !== "system" || platformAdmin)) ? `
+          ${exercise.is_active !== false ? `<button class="text-action" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>` : ""}
+          <button class="text-action" type="button" data-action="${exercise.is_active === false ? "exercise-restore" : "exercise-archive"}" data-exercise-id="${escapeAttr(exercise.id)}">${exercise.is_active === false ? "Restore" : "Archive"}</button>` : ""}
       </div>
       ${tags.length ? `<div class="exercise-tag-list">${tags.slice(0, 4).map((tag) => `<span>${escapeHtml(tag.name)}</span>`).join("")}${tags.length > 4 ? `<span>+${tags.length - 4}</span>` : ""}</div>` : ""}
     </article>
@@ -167,13 +171,28 @@ function renderExerciseViewCard(exercise, itemId, markedExerciseIds, platformAdm
           <summary class="exercise-view-icon" aria-label="More actions for ${escapeAttr(name)}" title="More actions">${ICON_MORE}</summary>
           <div class="exercise-view-menu-list">
             <button class="exercise-view-menu-item" type="button" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(name)}">Tags${tags.length ? ` (${tags.length})` : ""}</button>
-            ${exercise.owner_scope === "system" ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exercise.id)}">Copy</button>` : ""}
-            ${exercise.owner_scope !== "system" || platformAdmin ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>` : ""}
+            <button class="exercise-view-menu-item" type="button" data-action="exercise-classification" data-exercise-id="${escapeAttr(exercise.id)}">My classification</button>
+            <button class="exercise-view-menu-item" type="button" data-action="exercise-hide" data-exercise-id="${escapeAttr(exercise.id)}" data-hidden="${exercise.is_hidden ? "true" : "false"}">${exercise.is_hidden ? "Unhide" : "Hide"}</button>
+            ${exercise.is_active !== false ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exercise.id)}">Copy</button>` : ""}
+            ${(exercise.can_edit ?? (exercise.owner_scope !== "system" || platformAdmin)) ? `
+              ${exercise.is_active !== false ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>` : ""}
+              <button class="exercise-view-menu-item" type="button" data-action="${exercise.is_active === false ? "exercise-restore" : "exercise-archive"}" data-exercise-id="${escapeAttr(exercise.id)}">${exercise.is_active === false ? "Restore" : "Archive"}</button>` : ""}
           </div>
         </details>
       </div>
     </article>
   `;
+}
+
+export function renderExerciseVisibilityFilters(filters, options = {}) {
+  const select = (key, label, values) => `<label class="search-field"><span>${label}</span><select data-exercise-filter="${key}">
+    ${values.map(([value, title]) => `<option value="${escapeAttr(value)}" ${String(filters[key] || "") === value ? "selected" : ""}>${escapeHtml(title)}</option>`).join("")}</select></label>`;
+  return `<div class="exercise-filter-strip">
+    ${select("kind", "Exercise type", [["", options.owners ? "All exercises" : "All accessible exercises"], ["system", "System exercises"], ["private", options.owners ? "Private exercises" : "My private exercises"]])}
+    ${select("visibility", "Archive status", [["", "Active"], ["archived", "Archived"], ["all", "Active and archived"]])}
+    ${select("hidden", "Personal visibility", [["", "Not hidden"], ["hidden", "Hidden"], ["all", "All personal visibility states"]])}
+    ${options.owners ? select("owner", "Owner", [["", "All owners"], ...options.owners.map((owner) => [owner.id, owner.name])]) : ""}
+  </div>`;
 }
 
 export function renderExerciseTagModal(editor) {

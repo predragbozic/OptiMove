@@ -225,7 +225,7 @@ const LIBRARY_FIXTURE_SQL = `
   );
   create table library.filter_hidden (
     id uuid primary key default gen_random_uuid(), kind varchar not null, item_id uuid not null, user_id uuid not null references public.users(id),
-    created_at timestamptz not null default now()
+    created_at timestamptz not null default now(), unique(kind,item_id,user_id)
   );
 `;
 
@@ -312,6 +312,156 @@ async function makeLibraryAdmin(label) {
   return admin;
 }
 
+test("personal classification overrides all existing fields, isolates users and resets without copying", async () => {
+  const first = await makeCoach("classify-first");
+  const second = await makeCoach("classify-second");
+  const admin = await makeLibraryAdmin("classify-admin");
+  const source = await makeExercise(null, { ownerScope: "system", name: "Classification source" });
+  const initial = await api(`/api/exercises/${source}`, { method: "PATCH", cookie: admin.cookie,
+    body: { name: "Classification source", place: "Classification original gym", purposes: ["Classification original purpose"], bodyParts: ["Classification original body"] } });
+  assert.equal(initial.status, 200);
+  const original = (await query("select * from library.exercises where id=$1", [source])).rows[0];
+  const count = (await query("select count(*)::int as count from library.exercises")).rows[0].count;
+  const values = { place: "Classification personal gym", complexity: "Classification level", startingPosition: "Classification stance", attractor: "Classification attractor",
+    purposes: ["Classification personal purpose"], qualities: ["Classification quality"], groups: ["Classification group"], bodyParts: [], movementPatterns: ["Classification pattern"] };
+  assert.equal((await api(`/api/exercises/${source}/classification`, { method: "PUT", cookie: first.cookie, body: { overrides: values } })).status, 200);
+  assert.equal((await api(`/api/exercises/${source}/classification`, { method: "PUT", cookie: second.cookie, body: { overrides: { place: "Different gym" } } })).status, 200);
+  for (const [filter, value] of Object.entries({ place: values.place, complexity: values.complexity, startingPosition: values.startingPosition, attractor: values.attractor,
+    purpose: values.purposes[0], quality: values.qualities[0], group: values.groups[0], movementPattern: values.movementPatterns[0] })) {
+    const listed = await api(`/api/exercises?${filter}=${encodeURIComponent(value)}`, { cookie: first.cookie });
+    assert.equal(listed.status, 200, JSON.stringify(listed.body));
+    assert.equal(listed.body.exercises.filter((exercise) => exercise.id === source).length, 1);
+    assert.equal((await api(`/api/exercises?${filter}=${encodeURIComponent(value)}`, { cookie: second.cookie })).body.exercises.some((exercise) => exercise.id === source), false);
+  }
+  assert.equal((await api("/api/exercises?bodyPart=Classification%20original%20body", { cookie: first.cookie })).body.exercises.some((exercise) => exercise.id === source), false);
+  const loaded = await api(`/api/exercises/${source}/classification`, { cookie: first.cookie });
+  assert.deepEqual(loaded.body.effective.bodyParts, []);
+  assert.equal(loaded.body.system.place, "Classification original gym");
+  assert.equal((await api("/api/exercises?search=Classification%20personal%20purpose", { cookie: first.cookie })).body.exercises.filter((exercise) => exercise.id === source).length, 1);
+  assert.equal((await api("/api/exercises?search=Classification%20personal%20purpose", { cookie: second.cookie })).body.exercises.some((exercise) => exercise.id === source), false);
+  const partialReset = { ...values };
+  delete partialReset.place;
+  assert.equal((await api(`/api/exercises/${source}/classification`, { method: "PUT", cookie: first.cookie, body: { overrides: partialReset } })).status, 200);
+  assert.equal((await api(`/api/exercises/${source}/classification`, { cookie: first.cookie })).body.effective.place, "Classification original gym");
+  await api(`/api/exercises/${source}/classification`, { method: "PUT", cookie: first.cookie, body: { overrides: {} } });
+  assert.deepEqual((await api(`/api/exercises/${source}/classification`, { cookie: first.cookie })).body.effective.bodyParts, ["Classification original body"]);
+  assert.equal((await query("select count(*)::int as count from library.exercises")).rows[0].count, count);
+  assert.deepEqual((await query("select * from library.exercises where id=$1", [source])).rows[0], original);
+});
+
+test("classification rejects unknown/media fields and foreign private writes", async () => {
+  const coach = await makeCoach("classification-validation");
+  const other = await makeCoach("classification-private");
+  const source = await makeExercise(null, { ownerScope: "system" });
+  for (const overrides of [{ videoUrl: "https://bad.test" }, { purposes: null }, { place: ["Bad"] }, { place: " bad " }, JSON.parse('{"__proto__":"bad"}')]) {
+    assert.equal((await api(`/api/exercises/${source}/classification`, { method: "PUT", cookie: coach.cookie, body: { overrides } })).status, 400);
+  }
+  const privateId = await makeExercise(other.userId);
+  assert.equal((await api(`/api/exercises/${privateId}/classification`, { method: "PUT", cookie: coach.cookie, body: { overrides: { place: "No" } } })).status, 404);
+});
+
+test("media fallback follows source updates, prioritizes own media and disappears when grants are revoked", async () => {
+  const coach = await makeCoach("fallback-owner");
+  const admin = await makeLibraryAdmin("fallback-admin");
+  const source = await makeExercise(null, { ownerScope: "system", name: "Fallback source" });
+  await query("update library.exercises set video_url='https://source.test/one',image_url='https://source.test/image-one' where id=$1", [source]);
+  const saved = await api(`/api/exercises/${source}/copy`, { method: "POST", cookie: coach.cookie, body: { name: "Fallback copy" } });
+  assert.equal(saved.status, 201);
+  const id = saved.body.id;
+  let detail = await api(`/api/exercises/${id}`, { cookie: coach.cookie });
+  assert.equal(detail.body.videoUrl, "");
+  assert.equal(detail.body.imageUrl, "");
+  assert.equal(detail.body.effectiveVideoUrl, "https://source.test/one");
+  await query("update library.exercises set video_url='https://source.test/two',image_url='https://source.test/image-two' where id=$1", [source]);
+  detail = await api(`/api/exercises/${id}`, { cookie: coach.cookie });
+  assert.equal(detail.body.effectiveVideoUrl, "https://source.test/two");
+  const own = await api(`/api/exercises/${id}`, { method: "PATCH", cookie: coach.cookie, body: { ...detail.body, videoUrl: "https://own.test/video" } });
+  assert.equal(own.status, 200);
+  assert.equal((await api(`/api/exercises/${id}`, { cookie: coach.cookie })).body.effectiveVideoUrl, "https://own.test/video");
+  await api(`/api/exercises/${id}`, { method: "PATCH", cookie: coach.cookie, body: { ...detail.body, videoUrl: "", imageUrl: "" } });
+  assert.equal((await api(`/api/exercises/${id}`, { cookie: coach.cookie })).body.effectiveVideoUrl, "https://source.test/two");
+  assert.equal((await query("select video_url from library.exercises where id=$1", [id])).rows[0].video_url, null);
+  const block = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: "Fallback restricted", exerciseIds: [source], userIds: [] } });
+  assert.equal(block.status, 201);
+  assert.equal((await api(`/api/exercises/${id}`, { cookie: coach.cookie })).status, 404);
+  assert.equal((await api(`/api/exercises?search=Fallback`, { cookie: coach.cookie })).body.exercises.length, 0);
+});
+
+test("private Copy uses immutable parent provenance with inherited ACL and never changes canonical source uniqueness", async () => {
+  const owner = await makeCoach("private-copy-owner");
+  const other = await makeCoach("private-copy-outsider");
+  const admin = await makeLibraryAdmin("private-copy-admin");
+  const source = await makeExercise(owner.userId, { name: "Private parent" });
+  await query("update library.exercises set video_url='https://private.test/video' where id=$1", [source]);
+  assert.equal((await api(`/api/exercises/${source}/copy`, { method: "POST", cookie: other.cookie, body: { name: "Denied" } })).status, 404);
+  const copy = await api(`/api/exercises/${source}/copy`, { method: "POST", cookie: owner.cookie, body: { name: "Private child" } });
+  assert.equal(copy.status, 201);
+  assert.equal(copy.body.copyParentId, source);
+  assert.equal(copy.body.sourceExerciseId, null);
+  assert.equal((await api(`/api/exercises/${copy.body.id}`, { cookie: owner.cookie })).body.effectiveVideoUrl, "https://private.test/video");
+  const copiedByAdmin = await api(`/api/exercises/${source}/copy`, { method: "POST", cookie: admin.cookie, body: { name: "Admin private child" } });
+  assert.equal(copiedByAdmin.status, 201);
+  await query("update public.user_global_roles set is_active=false where user_id=$1", [admin.userId]);
+  assert.equal((await api(`/api/exercises/${copiedByAdmin.body.id}`, { cookie: admin.cookie })).status, 404);
+  const otherParent = await makeExercise(other.userId);
+  await assert.rejects(query("update library.exercises set copy_parent_id=$2 where id=$1", [copy.body.id, otherParent]), /provenance/i);
+  await assert.rejects(query("update library.exercises set copy_parent_id=$2 where id=$1", [source, copy.body.id]), /cycle/i);
+});
+
+test("Hide is personal, reversible and does not deny direct exercise access", async () => {
+  const first = await makeCoach("hide-first");
+  const second = await makeCoach("hide-second");
+  const source = await makeExercise(null, { ownerScope: "system", name: "Hide fixture" });
+  const before = (await query("select * from library.exercises where id=$1", [source])).rows[0];
+  assert.equal((await api(`/api/exercises/${source}/hidden`, { method: "POST", cookie: first.cookie, body: { hidden: true } })).status, 200);
+  assert.equal((await api("/api/exercises?search=Hide%20fixture", { cookie: first.cookie })).body.exercises.length, 0);
+  assert.equal((await api("/api/exercises?hidden=hidden&search=Hide%20fixture", { cookie: first.cookie })).body.exercises.length, 1);
+  const markedHidden = await api("/api/exercises/visible-marked", { method: "POST", cookie: first.cookie, body: { ids: [source], hidden: "hidden" } });
+  assert.deepEqual(markedHidden.body.ids, [source]);
+  assert.deepEqual((await api("/api/exercises/visible-marked", { method: "POST", cookie: first.cookie, body: { ids: [source] } })).body.ids, []);
+  assert.equal((await api("/api/exercises?search=Hide%20fixture", { cookie: second.cookie })).body.exercises.length, 1);
+  assert.equal((await api(`/api/exercises/${source}`, { cookie: first.cookie })).status, 200);
+  assert.equal((await api(`/api/exercises/${source}/hidden`, { method: "POST", cookie: first.cookie, body: { hidden: false } })).status, 200);
+  assert.equal((await api("/api/exercises?search=Hide%20fixture", { cookie: first.cookie })).body.exercises.length, 1);
+  assert.deepEqual((await query("select * from library.exercises where id=$1", [source])).rows[0], before);
+});
+
+test("Archive/Delete are authorized soft operations; Restore keeps references and media", async () => {
+  const owner = await makeCoach("archive-owner");
+  const other = await makeCoach("archive-other");
+  const admin = await makeLibraryAdmin("archive-admin");
+  const source = await makeExercise(null, { ownerScope: "system", name: "Archive system" });
+  const privateId = await makeExercise(owner.userId, { name: "Archive private" });
+  await query("create schema if not exists archive_reference_fixture; create table archive_reference_fixture.items (exercise_id uuid references library.exercises(id) on delete restrict)");
+  await query("insert into archive_reference_fixture.items values ($1)", [privateId]);
+  for (const path of [`/api/exercises/${source}/archive`, `/api/exercises/${source}`]) {
+    assert.equal((await api(path, { method: path.endsWith('archive') ? "POST" : "DELETE", cookie: owner.cookie })).status, 403);
+  }
+  assert.equal((await api(`/api/exercises/${privateId}/archive`, { method: "POST", cookie: other.cookie })).status, 404);
+  assert.equal((await api(`/api/exercises/${privateId}`, { method: "DELETE", cookie: owner.cookie })).status, 200);
+  assert.equal((await api(`/api/exercises?visibility=archived&kind=private`, { cookie: owner.cookie })).body.exercises.some((exercise) => exercise.id === privateId), true);
+  assert.equal((await query("select count(*)::int as count from archive_reference_fixture.items")).rows[0].count, 1);
+  assert.equal((await api(`/api/exercises/${privateId}/restore`, { method: "POST", cookie: owner.cookie })).status, 200);
+  assert.equal((await api(`/api/exercises/${privateId}`, { cookie: owner.cookie })).status, 200);
+  assert.equal((await api(`/api/exercises/${privateId}/archive`, { method: "POST", cookie: admin.cookie })).status, 200);
+  assert.equal((await api(`/api/exercises/${privateId}/restore`, { method: "POST", cookie: admin.cookie })).status, 200);
+  assert.equal((await api(`/api/exercises/${source}/archive`, { method: "POST", cookie: admin.cookie })).status, 200);
+  assert.equal((await api(`/api/exercises/${source}/restore`, { method: "POST", cookie: admin.cookie })).status, 200);
+});
+
+test("administrator type/owner/archive filters do not expose foreign private exercises to coaches", async () => {
+  const owner = await makeCoach("owner-filter-coach");
+  const other = await makeCoach("owner-filter-other");
+  const admin = await makeLibraryAdmin("owner-filter-admin");
+  const id = await makeExercise(other.userId, { name: "Owner filter private" });
+  const listed = await api(`/api/exercises?kind=private&owner=${other.userId}&visibility=all&hidden=all`, { cookie: admin.cookie });
+  assert.equal(listed.status, 200);
+  assert.ok(listed.body.exercises.some((exercise) => exercise.id === id));
+  assert.equal((await api(`/api/exercises?owner=${other.userId}`, { cookie: owner.cookie })).status, 403);
+  assert.equal((await api(`/api/exercises?kind=private`, { cookie: owner.cookie })).body.exercises.some((exercise) => exercise.id === id), false);
+});
+
 test("personal tags and favorites never copy or mutate originals and remain user scoped", async () => {
   const first = await makeCoach("personal-tags-first");
   const second = await makeCoach("personal-tags-second");
@@ -357,11 +507,11 @@ test("only platform admins edit originals; private owners edit but cannot expose
   assert.equal(edited.body.ownerScope, "system");
   assert.deepEqual((await api(`/api/exercises/${source}`, { cookie: coach.cookie })).body.purposes, ["New application purpose"]);
   const privateId = await makeExercise(coach.userId, { name: "Owned private" });
-  assert.equal((await api(`/api/exercises/${privateId}/copy`, { method: "POST", cookie: coach.cookie, body: { name: "Denied copy" } })).status, 403);
+  assert.equal((await api(`/api/exercises/${privateId}/copy`, { method: "POST", cookie: coach.cookie, body: { name: "Owned copy" } })).status, 201);
   for (const method of ["GET", "PATCH"]) {
-    assert.equal((await api(`/api/exercises/${privateId}`, { method, cookie: admin.cookie, ...(method === "PATCH" ? { body: { name: "Denied" } } : {}) })).status, 404);
+    assert.equal((await api(`/api/exercises/${privateId}`, { method, cookie: admin.cookie, ...(method === "PATCH" ? { body: { name: "Admin edit" } } : {}) })).status, 200);
   }
-  assert.equal((await api(`/api/exercises/${privateId}/copy`, { method: "POST", cookie: admin.cookie, body: { name: "Denied" } })).status, 404);
+  assert.equal((await api(`/api/exercises/${privateId}/copy`, { method: "POST", cookie: admin.cookie, body: { name: "Admin copy" } })).status, 201);
 });
 
 test("new system copies never inherit media and direct source media submissions fail before writes", async () => {
@@ -524,7 +674,7 @@ test("restricted blocks hide the source and each private copy on revocation with
   assert.equal(saved.status, 201);
   const preservedCopy = (await query("select * from library.exercises where id=$1", [saved.body.id])).rows[0];
   assert.equal((await api(`/api/exercises/${saved.body.id}`, { cookie: other.cookie })).status, 404);
-  assert.equal((await api(`/api/exercises/${saved.body.id}`, { cookie: admin.cookie })).status, 404);
+  assert.equal((await api(`/api/exercises/${saved.body.id}`, { cookie: admin.cookie })).status, 200);
   const changed = await api(`/api/exercise-collections/${created.body.collection.id}`, { method: "PATCH", cookie: admin.cookie,
     body: { name: "Selected coaches", exerciseIds: [systemId], userIds: [other.userId], expectedRevision: 1 } });
   assert.equal(changed.status, 200);
