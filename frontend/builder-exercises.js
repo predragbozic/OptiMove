@@ -1,4 +1,5 @@
 import { normalizeExerciseView, renderExerciseThumb } from "./exercise-view-modes.js";
+import { libraryDragAvailable } from "./builder-library-drag.js";
 import { renderImage } from "./media.js";
 import { autogrowRows } from "./textarea-autosize.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -46,7 +47,9 @@ export function builderAddedCounts(node) {
   return counts;
 }
 
-export function renderBuilderExerciseResult(exercise, markedExerciseIds, addedCount = 0) {
+// `draggable`: on a computer the card can be dragged onto the Added list
+// (builder-library-drag.js).
+export function renderBuilderExerciseResult(exercise, markedExerciseIds, addedCount = 0, { draggable = false } = {}) {
   const image = exercise.image_url || "";
   const video = exercise.video_url || "";
   const title = exercise.name || "Exercise";
@@ -54,7 +57,7 @@ export function renderBuilderExerciseResult(exercise, markedExerciseIds, addedCo
   const tags = exercise.tags || [];
   const thumb = renderExerciseThumb(exercise, "builder-exercise-thumb");
   return `
-    <article class="builder-exercise-result ${addedCount ? "is-already-added" : ""}">
+    <article class="builder-exercise-result ${addedCount ? "is-already-added" : ""}"${draggable ? ` draggable="true" data-builder-library-drag data-exercise-id="${escapeAttr(exercise.id)}"` : ""}>
       ${image || video
         ? `<button type="button" class="builder-exercise-preview" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}" aria-label="Preview ${escapeAttr(title)}">${thumb}</button>`
         : `<span class="builder-exercise-preview builder-exercise-preview-empty">${thumb}</span>`}
@@ -87,7 +90,8 @@ export function renderBuilderExerciseResults(exercises, markedExerciseIds, node,
     : loading
       ? `<div class="empty" role="status">Loading exercises…</div>`
       : `<div class="empty">No matching exercises.</div>`;
-  const results = exercises.map((exercise) => renderBuilderExerciseResult(exercise, markedExerciseIds, addedCounts.get(exercise.id) || 0)).join("") || empty;
+  const draggable = libraryDragAvailable();
+  const results = exercises.map((exercise) => renderBuilderExerciseResult(exercise, markedExerciseIds, addedCounts.get(exercise.id) || 0, { draggable })).join("") || empty;
   return `<div class="builder-exercise-view is-${escapeAttr(normalizeExerciseView("builder", view))}">${results}</div>`
     + (hasMore ? `<button type="button" class="plain-button" data-action="builder-load-more-exercises" ${loading ? "disabled" : ""}>${loading ? "Loading..." : "Load more"}</button>` : "");
 }

@@ -575,6 +575,62 @@ export async function moveBuilderItemTo(itemId, targetIndex, handlers) {
   return true;
 }
 
+// Adds one library exercise to the end of the open section with the dose
+// typed above the library (Sets / Reps / Load), and shows it.
+async function addExerciseToSection(section, exerciseId, panel, handlers) {
+  const doseInput = (name) => panel?.querySelector(`[data-builder-new-dose][name="${name}"]`);
+  setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(section.id)}/exercises`, {
+    method: "POST",
+    body: JSON.stringify(withBatchSyncPayload({
+      exerciseId,
+      sets: doseInput("sets")?.value || "",
+      reps: doseInput("reps")?.value || "",
+      load: doseInput("load")?.value || "",
+    })),
+  }));
+  handlersForConfirmationTimeout = handlers;
+  markExerciseJustAdded(section.id);
+  // Deliberately NOT renderBuilder() (full re-render) here - that would
+  // recreate the search input's DOM node and silently drop keyboard
+  // focus. renderBuilderAddFeedback only ever touches the results list,
+  // sticky bar, and confirmation banner - all outside the library's
+  // search/filters/quick-dose subtree - so the coach can add several
+  // exercises in a row without the keyboard closing or losing their
+  // place. Falls back to a full render only if the section editor
+  // somehow isn't open (shouldn't normally happen).
+  if (!handlers.renderBuilderAddFeedback?.()) handlers.renderBuilder();
+}
+
+let libraryDropPending = false;
+
+// While an exercise dropped from the library is being added and placed, or
+// an added one is being moved, no new drag starts (builder-library-drag.js).
+export function builderLibraryDropBlocked() {
+  return libraryDropPending || Boolean(state.builder.itemMovePending);
+}
+
+// An exercise dragged from the library and dropped on the Added list at a
+// zero-based position (computers; builder-library-drag.js): added like Add -
+// with the typed dose, at the end - and then moved to where it was dropped
+// through the same one-step moves as a reorder drag. One drop at a time.
+export async function dropBuilderLibraryExercise(exerciseId, targetIndex, handlers) {
+  const section = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
+  if (!exerciseId || !section || section.type !== "section" || builderLibraryDropBlocked()) return false;
+  libraryDropPending = true;
+  try {
+    const before = new Set(section.items.map((item) => item.id));
+    await addExerciseToSection(section, exerciseId, document.querySelector(".builder-section-panel"), handlers);
+    const updated = findBuilderNode(state.builder.draft, section.id);
+    const added = updated?.items.filter((item) => !before.has(item.id)) || [];
+    if (added.length !== 1 || state.builder.selectedNodeId !== section.id) return true;
+    const index = Math.min(Math.max(0, Number(targetIndex) || 0), updated.items.length - 1);
+    await moveBuilderItemTo(added[0].id, index, handlers);
+    return true;
+  } finally {
+    libraryDropPending = false;
+  }
+}
+
 export async function handleBuilderWorkspaceAction(action, handlers) {
   const type = action.dataset.action;
   if (type === "builder-load-more-exercises") {
@@ -1254,6 +1310,9 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     state.builder.lastAddedItemId = "";
     clearTimeout(addConfirmationTimer);
     handlers.renderBuilder();
+    // The section editor's library, when it is not loaded yet for this
+    // search (a draft opened with Continue does not load it).
+    handlers.ensureBuilderExercises?.();
     return true;
   }
   if (type === "builder-set-mobile-mode") {
@@ -1481,7 +1540,6 @@ export async function handleBuilderItemAction(action, handlers) {
     if (action.disabled) return true;
     const section = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
     const panel = action.closest(".builder-section-panel");
-    const doseInput = (name) => panel?.querySelector(`[data-builder-new-dose][name="${name}"]`);
     if (!section || section.type !== "section") return true;
     action.disabled = true;
     // Only the button's word changes: its "+" (shown in the landscape Tile)
@@ -1492,26 +1550,7 @@ export async function handleBuilderItemAction(action, handlers) {
     labelEl.textContent = "Adding…";
     action.setAttribute?.("aria-busy", "true");
     try {
-      setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(section.id)}/exercises`, {
-        method: "POST",
-        body: JSON.stringify(withBatchSyncPayload({
-          exerciseId: action.dataset.exerciseId || "",
-          sets: doseInput("sets")?.value || "",
-          reps: doseInput("reps")?.value || "",
-          load: doseInput("load")?.value || "",
-        })),
-      }));
-      handlersForConfirmationTimeout = handlers;
-      markExerciseJustAdded(section.id);
-      // Deliberately NOT renderBuilder() (full re-render) here - that would
-      // recreate the search input's DOM node and silently drop keyboard
-      // focus. renderBuilderAddFeedback only ever touches the results list,
-      // sticky bar, and confirmation banner - all outside the library's
-      // search/filters/quick-dose subtree - so the coach can add several
-      // exercises in a row without the keyboard closing or losing their
-      // place. Falls back to a full render only if the section editor
-      // somehow isn't open (shouldn't normally happen).
-      if (!handlers.renderBuilderAddFeedback?.()) handlers.renderBuilder();
+      await addExerciseToSection(section, action.dataset.exerciseId || "", panel, handlers);
     } catch (error) {
       action.disabled = false;
       labelEl.textContent = originalLabel;
@@ -1645,4 +1684,6 @@ export async function submitBuilderForm(form, handlers) {
     if (handlers.renderBuilderSectionItems?.()) return;
   }
   handlers.renderBuilder();
+  // A new section opens its editor at once: its library as well.
+  if (mode === "add-node") handlers.ensureBuilderExercises?.();
 }

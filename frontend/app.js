@@ -49,10 +49,12 @@ import {
   handleBuilderItemAction,
   handleBuilderPlanAction,
   handleBuilderWorkspaceAction,
+  builderLibraryDropBlocked,
+  dropBuilderLibraryExercise,
   moveBuilderItemTo,
   submitBuilderForm as submitBuilderFormAction,
 } from "./builder-actions.js";
-import { loadBuilderDrafts, loadBuilderExercises, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
+import { ensureBuilderExercises, loadBuilderDrafts, loadBuilderExercises, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
 import { renderBuilder, renderBuilderAddFeedback, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderDiscardProgress, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress } from "./builder-view.js";
 import { clearBuilderItemEdits, rememberBuilderItemEdit } from "./builder-item-edits.js";
@@ -94,6 +96,7 @@ import {
 } from "./exercise-library.js";
 import { closeExerciseViewMenus, replaceExerciseThumbWithInitials } from "./exercise-view-modes.js";
 import { startBuilderItemDrag } from "./builder-item-drag.js";
+import { dropBuilderLibraryDrag, endBuilderLibraryDrag, leaveBuilderLibraryDrag, overBuilderLibraryDrag, startBuilderLibraryDrag } from "./builder-library-drag.js";
 import { AUTOGROW_SELECTOR, autosizeTextarea } from "./textarea-autosize.js";
 import { toggleClampedTitle } from "./title-clamp.js";
 import { openExerciseCollections } from "./exercise-collections.js";
@@ -471,6 +474,18 @@ function bindEvents() {
   // not #content, since the pointer can be released/cancelled anywhere -
   // always end it. See tests-actions.js's start/extend/endTestsCalendarDrag.
   els.content.addEventListener("pointerdown", handleContentPointerDown);
+  // Builder section on a computer: drag a library exercise onto the Added list.
+  els.content.addEventListener("dragstart", (event) => { startBuilderLibraryDrag(event, { isBlocked: builderLibraryDropBlocked }); });
+  els.content.addEventListener("dragover", overBuilderLibraryDrag);
+  els.content.addEventListener("dragleave", leaveBuilderLibraryDrag);
+  els.content.addEventListener("drop", (event) => {
+    dropBuilderLibraryDrag(event, {
+      onDrop: (exerciseId, index) => {
+        void dropBuilderLibraryExercise(exerciseId, index, { renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback, refreshBuilderDraft }).catch(renderBuilderError);
+      },
+    });
+  });
+  els.content.addEventListener("dragend", endBuilderLibraryDrag);
   document.addEventListener("pointermove", handleContentPointerMove);
   document.addEventListener("touchstart", (event) => {
     const normalized = normalizeTouchPointerEvent(event);
@@ -886,7 +901,7 @@ async function handleContentSubmit(event) {
   if (error) error.textContent = "";
   if (submitButton) submitButton.disabled = true;
   try {
-    await submitBuilderFormAction(builderForm, { loadBuilderExercises, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback });
+    await submitBuilderFormAction(builderForm, { loadBuilderExercises, ensureBuilderExercises: ensureBuilderExercisesQuietly, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback });
   } catch (builderError) {
     if (error) error.textContent = builderError.message || "Could not save this change.";
     else renderBuilderError(builderError);
@@ -1282,7 +1297,7 @@ async function handleContentChange(event) {
     return;
   }
   try {
-    await submitBuilderFormAction(form, { loadBuilderExercises, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback });
+    await submitBuilderFormAction(form, { loadBuilderExercises, ensureBuilderExercises: ensureBuilderExercisesQuietly, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback });
   } catch (error) {
     renderBuilderError(error);
   }
@@ -1393,6 +1408,12 @@ async function cancelBuilderItemAutosave(key) {
   builderItemAutosaveTasks.delete(key);
   builderItemAutosaveGeneration.set(key, (builderItemAutosaveGeneration.get(key) || 0) + 1);
   await Promise.allSettled([...builderItemAutosaveInFlight]);
+}
+
+// A failed library load says so in place, with Try again
+// (loadBuilderExercises), so the caller has nothing more to do with it.
+function ensureBuilderExercisesQuietly() {
+  void ensureBuilderExercises()?.catch(() => {});
 }
 
 let builderSearchTimer = null;
@@ -3504,7 +3525,7 @@ async function handleBuilderAction(action) {
   }
   try {
     if (await handleBuilderPlanAction(action, { renderBuilder, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress, flushBuilderAutosaves, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
-    if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises })) return;
+    if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises, ensureBuilderExercises: ensureBuilderExercisesQuietly })) return;
     if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderDiscardProgress, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft, flushBuilderAutosaves, cancelBuilderAutosaves })) return;
     if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback, renderBuilderError, refreshBuilderDraft, cancelBuilderItemAutosave })) return;
   } finally {

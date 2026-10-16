@@ -17162,6 +17162,12 @@ span.exercise-view-media { cursor: default; }
 [data-drag-item].is-dragging .builder-item-drag-handle { cursor: grabbing; }
 [data-drag-item].is-drop-before { box-shadow: 0 -3px 0 var(--accent); }
 [data-drag-item].is-drop-after { box-shadow: 0 3px 0 var(--accent); }
+/* On a computer a library card drags onto the Added list
+   (builder-library-drag.js): while it is dragged the Added column is
+   outlined as the place to drop, and filled while the card is over it. */
+.builder-exercise-result[draggable="true"] { cursor: grab; }
+.builder-section-panel.is-library-dragging .builder-section-added { outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: 8px; }
+.builder-section-added.is-library-drop-target { background: var(--accent-soft); }
 @media (hover: hover) {
   .builder-item-drag-handle:hover:not(:disabled) { background: var(--surface-soft); color: var(--text); }
 }
