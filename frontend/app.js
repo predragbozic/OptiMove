@@ -48,6 +48,7 @@ import {
   handleBuilderItemAction,
   handleBuilderPlanAction,
   handleBuilderWorkspaceAction,
+  moveBuilderItemTo,
   submitBuilderForm as submitBuilderFormAction,
 } from "./builder-actions.js";
 import { loadBuilderDrafts, loadBuilderExercises, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
@@ -90,6 +91,7 @@ import {
   renderExerciseLibraryHtml,
 } from "./exercise-library.js";
 import { closeExerciseViewMenus, replaceExerciseThumbWithInitials } from "./exercise-view-modes.js";
+import { startBuilderItemDrag } from "./builder-item-drag.js";
 import { openExerciseCollections } from "./exercise-collections.js";
 import {
   handleExerciseEditorAction,
@@ -930,6 +932,13 @@ function handleContentFocusIn(event) {
 }
 
 function handleContentPointerDown(event) {
+  // Builder section: drag an added exercise by its grip to a new position.
+  if (startBuilderItemDrag(event, {
+    isBlocked: () => Boolean(state.builder.itemMovePending),
+    onDrop: (itemId, index) => {
+      void moveBuilderItemTo(itemId, index, { renderBuilder, renderBuilderSectionItems, refreshBuilderDraft }).catch(renderBuilderError);
+    },
+  })) return true;
   const dayEl = event.target.closest('[data-action="tests-calendar-day-mousedown"]');
   if (!dayEl) return false;
   if (startTestsCalendarDrag(dayEl)) {

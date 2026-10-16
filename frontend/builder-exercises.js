@@ -8,6 +8,7 @@ const ICON_STAR = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden
 const ICON_BOOKMARK = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M6 3.5h12a1 1 0 0 1 1 1V21l-7-4-7 4V4.5a1 1 0 0 1 1-1z"></path></svg>`;
 const ICON_CHEVRON_LEFT = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M15 5l-7 7 7 7"></path></svg>`;
 const ICON_CHEVRON_RIGHT = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M9 5l7 7-7 7"></path></svg>`;
+const ICON_GRIP = `<svg viewBox="0 0 24 24" class="builder-icon-svg builder-grip-icon" aria-hidden="true"><circle cx="9" cy="6" r="1.5"></circle><circle cx="15" cy="6" r="1.5"></circle><circle cx="9" cy="12" r="1.5"></circle><circle cx="15" cy="12" r="1.5"></circle><circle cx="9" cy="18" r="1.5"></circle><circle cx="15" cy="18" r="1.5"></circle></svg>`;
 const ICON_BACK = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"></path></svg>`;
 
 export function renderCustomExerciseModal(section, dose = {}) {
@@ -99,6 +100,12 @@ function renderAddedThumb(item, { containerClass, imageClass, fallbackClass }) {
   return `<span class="${fallbackClass}">${escapeHtml((item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`;
 }
 
+// The grip that starts a drag-to-reorder (builder-item-drag.js). The
+// up/down buttons stay next to it for keyboard and screen-reader users.
+function renderDragHandle(item, index, total, className, content = "") {
+  return `<button class="${className} builder-item-drag-handle" type="button" data-builder-item-drag data-item-id="${escapeAttr(item.id)}" aria-label="Drag ${escapeAttr(item.title || "exercise")} to reorder (position ${index + 1} of ${total})" title="Drag to reorder">${ICON_GRIP}${content}</button>`;
+}
+
 // Desktop-only "Added to section" list: the original full-form-per-item
 // layout is left completely unchanged so desktop behavior/appearance never
 // moves (see the ≤560px CSS gate on .builder-added-list-compact/
@@ -106,8 +113,9 @@ function renderAddedThumb(item, { containerClass, imageClass, fallbackClass }) {
 export function renderBuilderItems(node) {
   if (!node.items.length) return "";
   return `<div class="builder-items builder-added-list-desktop">${node.items.map((item, index) => `
-    <form class="builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}">
-      <div class="builder-item-head">
+    <form class="builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}" data-drag-item>
+      <div class="builder-item-head has-drag-handle">
+        ${renderDragHandle(item, index, node.items.length, "builder-item-drag")}
         ${item.imageUrl || item.videoUrl ? `<button type="button" class="builder-added-exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(item.imageUrl || "")}" data-video="${escapeAttr(item.videoUrl || "")}">${item.imageUrl ? renderImage(item.imageUrl, "builder-added-exercise-image") : `<span class="builder-added-exercise-fallback">Video</span>`}</button>` : `<span class="builder-added-exercise-fallback">Exercise</span>`}
         <div><strong>${escapeHtml(item.title || "Exercise")}</strong><div class="builder-item-actions"><button class="plain-button builder-icon-action builder-item-move-up" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="up" aria-label="Move up" title="Move up" ${index === 0 ? "disabled" : ""}>${ICON_ARROW_UP}</button><button class="plain-button builder-icon-action builder-item-move-down" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="down" aria-label="Move down" title="Move down" ${index === node.items.length - 1 ? "disabled" : ""}>${ICON_ARROW_UP}</button><button class="plain-button builder-icon-action builder-delete-icon" type="button" data-action="builder-delete-item" data-item-id="${escapeAttr(item.id)}" aria-label="Remove" title="Remove">${ICON_TRASH}</button></div></div>
       </div>
@@ -138,9 +146,9 @@ export function renderBuilderItems(node) {
 // dose is never behind it.
 function renderBuilderAddedCard(item, index, total) {
   return `
-    <form class="builder-added-card builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}">
+    <form class="builder-added-card builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}" data-drag-item>
       <div class="builder-added-card-top">
-        <span class="builder-added-card-index">${index + 1}</span>
+        ${renderDragHandle(item, index, total, "builder-added-card-index", `<span>${index + 1}</span>`)}
         ${renderAddedThumb(item, { containerClass: "builder-added-card-media", imageClass: "builder-added-card-media-image", fallbackClass: "builder-added-card-media-fallback" })}
         <strong class="builder-added-card-title">${escapeHtml(item.title || "Exercise")}</strong>
         <div class="builder-added-card-move">

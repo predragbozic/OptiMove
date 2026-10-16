@@ -162,7 +162,7 @@ test("2a. renderBuilderAddedList renders one compact card per item, each with li
 test("2a-bis. each compact card is itself the autosave form, and always carries a hidden 'description' field with the item's current instruction - Instruction only ever renders inline in the single-item edit view, so without this hidden field an inline Sets/Reps/Load save would submit no description at all and wipe it (PATCH /items/:itemId writes all four columns unconditionally)", () => {
   const items = [makeItem({ id: "item-1", description: "Keep the knee soft on landing." })];
   const html = renderBuilderAddedList({ items });
-  assert.match(html, /<form class="builder-added-card builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="item-1">/, "the card must be a form wired to the same update-item autosave path as the desktop form and the single-item edit view");
+  assert.match(html, /<form class="builder-added-card builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="item-1"[^>]*>/, "the card must be a form wired to the same update-item autosave path as the desktop form and the single-item edit view");
   assert.match(html, /<input type="hidden" name="description" value="Keep the knee soft on landing\.">/);
   assert.doesNotMatch(html, /<textarea/, "the compact card must never render the Instruction textarea inline - only Sets/Reps/Load are inline, Instruction stays behind Edit details");
 });
