@@ -587,6 +587,11 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     if (!handlers.renderBuilderExerciseViewChange?.()) handlers.renderBuilder();
     return true;
   }
+  if (type === "builder-toggle-exercise-filters") {
+    state.builder.exerciseFiltersOpen = !state.builder.exerciseFiltersOpen;
+    if (!handlers.renderBuilderFiltersChange?.()) handlers.renderBuilder();
+    return true;
+  }
   if (type === "builder-toggle-batch-sync") {
     state.builder.batchSync = Boolean(action.checked);
     handlers.renderBuilder();

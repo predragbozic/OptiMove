@@ -130,6 +130,9 @@ export const emptyBuilderState = (overrides = {}) => ({
   // Tile / Big / List of the section editor's library results - the coach's
   // last choice in this browser (exercise-view-modes.js).
   exerciseView: readExerciseViewPreference("builder"),
+  // Phones: whether the section editor's filter panel is unfolded
+  // (builder-section.js renderBuilderFiltersToggle).
+  exerciseFiltersOpen: false,
   exercises: [],
   exerciseHasMore: false,
   exerciseOffset: 0,

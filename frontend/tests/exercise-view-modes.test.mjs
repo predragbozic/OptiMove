@@ -10,7 +10,7 @@ const editor = { open: false, results: { innerHTML: "" }, switcher: { outerHTML:
 const fakePanel = {
   querySelector: (selector) => ({
     ".builder-exercise-results": editor.results,
-    ".builder-library-head .exercise-view-switcher": editor.switcher,
+    ".builder-library-toolbar .exercise-view-switcher": editor.switcher,
   })[selector] || null,
 };
 const fakeContent = { querySelector: (selector) => (selector === ".builder-section-panel" && editor.open ? fakePanel : null) };

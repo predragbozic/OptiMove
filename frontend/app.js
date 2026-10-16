@@ -53,7 +53,7 @@ import {
 } from "./builder-actions.js";
 import { loadBuilderDrafts, loadBuilderExercises, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
-import { renderBuilder, renderBuilderAddFeedback, renderBuilderExerciseViewChange, renderBuilderSectionItems, renderBuilderDiscardProgress, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress } from "./builder-view.js";
+import { renderBuilder, renderBuilderAddFeedback, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderDiscardProgress, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress } from "./builder-view.js";
 import { clearBuilderItemEdits, rememberBuilderItemEdit } from "./builder-item-edits.js";
 import {
   handleCoachProfileAction,
@@ -1184,6 +1184,7 @@ async function handleContentChange(event) {
   if (builderFilter) {
     state.builder.exerciseFilters[builderFilter.dataset.builderExerciseFilter] =
       builderFilter.type === "checkbox" ? builderFilter.checked : builderFilter.value;
+    renderBuilderFiltersChange();
     debounceBuilderSearch();
     return;
   }
@@ -3479,7 +3480,7 @@ async function handleBuilderAction(action) {
   }
   try {
     if (await handleBuilderPlanAction(action, { renderBuilder, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress, flushBuilderAutosaves, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
-    if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderExerciseViewChange, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises })) return;
+    if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises })) return;
     if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderDiscardProgress, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft, flushBuilderAutosaves, cancelBuilderAutosaves })) return;
     if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback, renderBuilderError, refreshBuilderDraft, cancelBuilderItemAutosave })) return;
   } finally {
