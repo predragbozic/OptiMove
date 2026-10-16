@@ -94,6 +94,7 @@ import {
 import { closeExerciseViewMenus, replaceExerciseThumbWithInitials } from "./exercise-view-modes.js";
 import { startBuilderItemDrag } from "./builder-item-drag.js";
 import { AUTOGROW_SELECTOR, autosizeTextarea } from "./textarea-autosize.js";
+import { toggleClampedTitle } from "./title-clamp.js";
 import { openExerciseCollections } from "./exercise-collections.js";
 import {
   handleExerciseEditorAction,
@@ -408,6 +409,8 @@ function bindEvents() {
   });
 
   els.content.addEventListener("click", handleContentClick);
+  // Builder section editor on phones: a name cut to two lines unfolds on tap.
+  els.content.addEventListener("click", (event) => { toggleClampedTitle(event.target); });
   // A click anywhere on the page folds an open exercise card "⋯" menu. iOS
   // Safari sends no click to the document for a tap on a non-interactive
   // area, so a press outside every menu folds them too (never one inside a
