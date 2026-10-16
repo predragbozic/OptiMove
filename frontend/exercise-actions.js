@@ -3,7 +3,7 @@ import { currentUserWorkspaceContextParts } from "./access.js";
 import { loadBuilderExercises } from "./builder-data.js";
 import { renderBuilder } from "./builder-view.js";
 import { els } from "./dom.js";
-import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions } from "./exercise-data.js";
+import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions, loadMarkedExerciseVisibility } from "./exercise-data.js";
 import { filterIconSvg, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters } from "./exercise-library.js";
 import { emptyExerciseOptions, EXERCISE_FILTERS, state } from "./state.js";
 import { debounce, escapeHtml } from "./utils.js";
@@ -90,6 +90,9 @@ export async function searchExercises(term, handlers, { forceRefresh = false } =
   state.exerciseSearch.term = query;
   const { limit, filters } = state.exerciseSearch;
   const contextKey = exercisesContextKey(query, limit, filters);
+  let visibleMarkedIds = [];
+  try { visibleMarkedIds = await loadMarkedExerciseVisibility(filters); }
+  catch { handlers.renderExercises([]); return; }
   await loadCachedView({
     namespace: EXERCISES_CACHE_NAMESPACE,
     contextKey,
@@ -98,12 +101,13 @@ export async function searchExercises(term, handlers, { forceRefresh = false } =
     showLoading: () => handlers.setLoading(query ? "Searching exercises..." : "Loading exercises..."),
     applyData: (data) => {
       state.exerciseSearch.hasMore = Boolean(data.hasMore);
+      state.exerciseSearch.canManageCollections = data.canManageCollections === true;
       // Reads the LIVE filters, not the snapshot this fetch was keyed by -
       // `marked` isn't part of the cache key (see exercisesContextKey), so
       // it may have changed since this fetch was dispatched even though the
       // rest of the context hasn't; the render must reflect its current
       // value, not a stale one from dispatch time.
-      handlers.renderExercises(applyClientExerciseFilters(data.exercises || [], state.exerciseSearch.filters));
+      handlers.renderExercises(applyClientExerciseFilters(data.exercises || [], state.exerciseSearch.filters, visibleMarkedIds));
     },
     applyError: (error) => {
       // Without this, a failed fetch leaves the "Loading/Searching

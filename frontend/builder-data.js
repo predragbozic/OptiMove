@@ -2,7 +2,7 @@ import { api } from "./api.js";
 import { renderBuilderExerciseResults } from "./builder-exercises.js";
 import { findBuilderNode } from "./builder-helpers.js";
 import { renderBuilder, renderBuilderSectionItems } from "./builder-view.js";
-import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions } from "./exercise-data.js";
+import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions, loadMarkedExerciseVisibility } from "./exercise-data.js";
 import { EXERCISE_FILTERS, state } from "./state.js";
 import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
 
@@ -42,13 +42,14 @@ export async function loadBuilderExercises(options = {}) {
   if (moreButton) moreButton.disabled = true;
   try {
     const url = `${exerciseSearchUrl(query, 18, filters)}&offset=${offset}`;
-    const [data] = await Promise.all([
+    const [data, , visibleMarkedIds] = await Promise.all([
       api(url, { signal: controller.signal }),
       loadExerciseFilterOptions(),
+      loadMarkedExerciseVisibility(filters),
     ]);
     if (requestId !== builderExerciseRequestId || searchKey !== builderExerciseSearchKey() || state.activeTab !== "builder") return;
     const exercises = data.exercises || [];
-    const filtered = applyClientExerciseFilters(exercises, filters);
+    const filtered = applyClientExerciseFilters(exercises, filters, visibleMarkedIds);
     state.builder.exercises = options.append ? [...state.builder.exercises, ...filtered] : filtered;
     state.builder.exerciseOffset = offset + exercises.length;
     const localMarkedOnly = filters.marked && !filters.favorite && !EXERCISE_FILTERS.some((filter) => filters[filter.key]);

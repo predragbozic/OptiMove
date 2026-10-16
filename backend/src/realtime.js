@@ -45,3 +45,7 @@ export function emitRealtimeEventForUsers(userIds, event, payload = {}) {
     emitRealtimeEvent(userId, event, payload);
   }
 }
+
+export function emitRealtimeEventForAll(event, payload = {}) {
+  for (const userId of clientsByUser.keys()) emitRealtimeEvent(userId, event, payload);
+}

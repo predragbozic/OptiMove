@@ -8,7 +8,7 @@ export const emptyExerciseEditorData = () => ({
 });
 
 export const emptyExerciseEditor = () => ({
-  open: false, isNew: false, exerciseId: "", loading: false, error: "", data: emptyExerciseEditorData(),
+  open: false, isNew: false, exerciseId: "", ownerScope: "user", loading: false, error: "", data: emptyExerciseEditorData(),
 });
 
 const SINGLE_FIELDS = [
@@ -38,6 +38,7 @@ export function renderExerciseEditorHtml(editor, filterOptions = {}) {
           <button class="plain-button icon-button" type="button" data-action="exercise-editor-close" aria-label="Close"><span class="button-icon">x</span></button>
         </div>
         <div class="exercise-editor-body">
+          ${editor.ownerScope === "system" ? `<p class="muted">Saving creates or updates your private copy. The application original stays unchanged. If access to its block is removed, your copy is hidden too.</p>` : ""}
           <label class="search-field"><span>Name</span><input class="builder-text-input" data-exercise-editor-field="name" value="${escapeAttr(d.name)}" required></label>
           <div class="exercise-editor-grid">
             <label class="search-field"><span>Exercise code</span><input class="builder-text-input" data-exercise-editor-field="exerciseCode" value="${escapeAttr(d.exerciseCode)}"></label>
@@ -56,7 +57,7 @@ export function renderExerciseEditorHtml(editor, filterOptions = {}) {
           ${editor.error ? `<p class="builder-error" role="alert">${escapeHtml(editor.error)}</p>` : ""}
         </div>
         <div class="builder-modal-actions">
-          <button class="plain-button" type="button" data-action="exercise-editor-save" ${editor.loading ? "disabled" : ""}>${editor.loading ? "Saving..." : "Save"}</button>
+          <button class="plain-button" type="button" data-action="exercise-editor-save" ${editor.loading ? "disabled" : ""}>${editor.loading ? "Saving..." : editor.ownerScope === "system" ? "Save private copy" : "Save"}</button>
           <button class="text-action" type="button" data-action="exercise-editor-close">Cancel</button>
         </div>
       </section>
@@ -104,6 +105,7 @@ export async function openExerciseEditor(state, handlers, exerciseId) {
     handlers.rerender();
     try {
       const detail = await api(`/api/exercises/${encodeURIComponent(exerciseId)}`);
+      state.exerciseEditor.ownerScope = detail.ownerScope || "user";
       state.exerciseEditor.data = {
         name: detail.name || "", exerciseCode: detail.exerciseCode || "", aim: detail.aim || "",
         executionNotes: detail.executionNotes || "", instruction: detail.instruction || "",
