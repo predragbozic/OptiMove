@@ -17176,10 +17176,12 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
    so a hidden one does not count. The roster's phone sheet has its own
    lock and can stay in the page hidden by CSS after a turn to landscape,
    so it is left out.) */
-[aria-modal="true"], .exercise-detail { overscroll-behavior: contain; }
+[aria-modal="true"], .exercise-detail, .exercise-detail-layout { overscroll-behavior: contain; }
+/* Only the root is locked: with body locked too, body would become the
+   scroller and sticky bars (the athlete's top bar, the coach's rail) would
+   jump out of view while a dialog is open. */
 @media (pointer: coarse) {
-  html:has([aria-modal="true"]:not([hidden], [hidden] *, .tl-roster-sheet), .exercise-detail-overlay),
-  html:has([aria-modal="true"]:not([hidden], [hidden] *, .tl-roster-sheet), .exercise-detail-overlay) body { overflow: hidden; }
+  html:has([aria-modal="true"]:not([hidden], [hidden] *, .tl-roster-sheet), .exercise-detail-overlay) { overflow: hidden; overscroll-behavior: none; }
 }
 
 /* Hidden from sight, still read by screen readers. */
@@ -17241,25 +17243,20 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
   .builder-added-card-edit .builder-icon-svg { width: 16px; height: 16px; margin-right: 6px; }
 }
 
-/* Phones held upright: in Tile and Big the Add button shares the row of
-   Favorite, Mark and Tags instead of taking a row of its own. */
+/* Phones held upright: in every view the Add button shares the row of
+   Favorite, Mark and Tags instead of taking a row (or a column) of its own;
+   that row spans the card, so "Add again" and "Tags (12)" fit at 320 px. */
 @media (max-width: 560px) {
-  .builder-exercise-view.is-tile .builder-exercise-result-text,
-  .builder-exercise-view.is-big .builder-exercise-result-text { display: contents; }
-  .builder-exercise-view.is-tile .builder-exercise-result-text > strong,
-  .builder-exercise-view.is-big .builder-exercise-result-text > strong { grid-area: title; }
-  .builder-exercise-view.is-tile .builder-exercise-result-text > small,
-  .builder-exercise-view.is-big .builder-exercise-result-text > small { grid-area: meta; }
-  .builder-exercise-view.is-tile .builder-exercise-mini-actions,
-  .builder-exercise-view.is-big .builder-exercise-mini-actions { grid-area: actions; flex-wrap: nowrap; align-self: center; margin: 4px 0 0; }
-  .builder-exercise-view.is-tile .builder-exercise-add,
-  .builder-exercise-view.is-big .builder-exercise-add { grid-area: add; align-self: center; justify-self: end; margin-top: 4px; }
+  .builder-exercise-view .builder-exercise-result-text { display: contents; }
+  .builder-exercise-view .builder-exercise-result-text > strong { grid-area: title; }
+  .builder-exercise-view .builder-exercise-result-text > small { grid-area: meta; }
+  .builder-exercise-view .builder-exercise-mini-actions { grid-area: actions; flex-wrap: nowrap; align-self: center; margin: 4px 0 0; }
+  .builder-exercise-view .builder-exercise-add { grid-area: add; align-self: center; justify-self: end; margin-top: 4px; }
+  .builder-exercise-view .builder-exercise-preview { grid-area: media; }
   .builder-exercise-view.is-tile .builder-exercise-result { grid-template-columns: 96px minmax(0, 1fr) auto; grid-template-rows: auto auto auto; grid-template-areas: "media title title" "media meta meta" "actions actions add"; align-items: start; row-gap: 2px; }
-  .builder-exercise-view.is-tile .builder-exercise-preview { grid-area: media; }
+  .builder-exercise-view.is-list .builder-exercise-result { grid-template-columns: 46px minmax(0, 1fr) auto; grid-template-rows: auto auto auto; grid-template-areas: "media title title" "media meta meta" "actions actions add"; align-items: start; row-gap: 2px; }
   .builder-exercise-view.is-big .builder-exercise-result { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto auto auto; grid-template-areas: "media media" "title title" "meta meta" "actions add"; row-gap: 2px; }
-  .builder-exercise-view.is-big .builder-exercise-preview { grid-area: media; margin-bottom: 6px; }
-  /* List keeps Add at the right, level with that row. */
-  .builder-exercise-view.is-list .builder-exercise-add { align-self: end; }
+  .builder-exercise-view.is-big .builder-exercise-preview { margin-bottom: 6px; }
 }
 
 /* Phones held upright: the section name and its pencil keep clear of the
@@ -17307,7 +17304,9 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
   .builder-exercise-view.is-tile .builder-exercise-add-label { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   /* The Added column scrolls on its own and stays beside the library while
      the library (and the header above it) scrolls. */
-  .builder-section-added { position: sticky; top: -10px; align-self: start; max-height: calc(100dvh - 18px); overflow-y: auto; overscroll-behavior: contain; }
+  /* Its height leaves room for the editor's header (about 80 px), so the
+     whole column is on screen before the library has been scrolled too. */
+  .builder-section-added { position: sticky; top: -10px; align-self: start; max-height: calc(100vh - 98px); max-height: calc(100dvh - 98px); overflow-y: auto; overscroll-behavior: contain; }
   /* The Added column is about 260 px here: tighter gaps keep a card's
      number, picture, Edit details and Remove inside it from 568 px up. */
   .builder-added-card { column-gap: 4px; }

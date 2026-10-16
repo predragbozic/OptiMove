@@ -198,7 +198,7 @@ function renderBuilderDraftsPanel() {
   `;
 }
 
-const BUILDER_SCROLL_SELECTORS = [".builder-section-modal", ".builder-exercise-results"];
+const BUILDER_SCROLL_SELECTORS = [".builder-section-modal", ".builder-exercise-results", ".builder-section-added"];
 const BUILDER_BLOCK_GRID_SELECTOR = ".builder-block-grid";
 
 // renderBuilder() replaces els.content's entire innerHTML on every call
