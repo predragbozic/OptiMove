@@ -21,7 +21,7 @@ export function filterIconSvg() {
 
 export function renderExerciseFilterControls(values, options, mode = "library") {
   const attr = mode.startsWith("builder") ? "data-builder-exercise-filter" : "data-exercise-filter";
-  const includeToggles = mode !== "builder-selects";
+  const includeToggles = !mode.endsWith("-selects");
   return `
     ${EXERCISE_FILTERS.filter((filter) => !QUICK_FILTER_KEYS.has(filter.key)).map((filter) => renderExerciseFilterSelect(filter, values[filter.key], options[filter.optionsKey], attr)).join("")}
     ${includeToggles ? renderExerciseFilterToggle("favorite", "Favorites", values.favorite, attr) : ""}
@@ -45,12 +45,20 @@ export function renderExerciseQuickFilters(values, options, attr, moreFiltersHtm
   `;
 }
 
-export function activeExerciseFilterLabels(filters) {
+export function activeExerciseFilterLabels(filters, options = {}) {
   const labels = EXERCISE_FILTERS
     .filter((filter) => filters[filter.key])
     .map((filter) => `${filter.label}: ${filters[filter.key]}`);
   if (filters.favorite) labels.push("Favorites");
   if (filters.marked) labels.push("Marked");
+  const kinds = { system: "System exercises", mine: "My private exercises", private: "Private exercises", all: "All exercises" };
+  if (kinds[filters.kind]) labels.push(kinds[filters.kind]);
+  if (filters.visibility === "archived") labels.push("Archived");
+  if (filters.visibility === "all") labels.push("Active and archived");
+  if (filters.hidden === "hidden") labels.push("Hidden");
+  if (filters.hidden === "all") labels.push("Including hidden");
+  if (filters.searchIn === "all") labels.push("Search: all fields");
+  if (filters.owner) labels.push(`Owner: ${options.owners?.find((owner) => owner.id === filters.owner)?.name || "selected account"}`);
   return labels;
 }
 
@@ -61,7 +69,7 @@ export function renderExerciseLibraryHtml(data) {
     <div class="library-results-head exercise-results-head">
       <span class="muted">${exercises.length} exercises shown</span>
       ${search.term ? `<span class="item-badge">${escapeHtml(search.term)}</span>` : ""}
-      ${activeExerciseFilterLabels(search.filters).map((label) => `<span class="item-badge">${escapeHtml(label)}</span>`).join("")}
+      ${activeExerciseFilterLabels(search.filters, search.options).map((label) => `<span class="item-badge">${escapeHtml(label)}</span>`).join("")}
       <button class="plain-button compact-button" type="button" data-action="exercise-add-open">+ Add exercise</button>
       ${search.canManageCollections ? `<button class="plain-button compact-button" type="button" data-action="exercise-collections-open">Manage application blocks</button>` : ""}
       ${renderExerciseViewSwitcher("library", view, "exercise-library-view")}
@@ -110,6 +118,10 @@ function renderExerciseFilterToggle(key, label, checked, attr) {
   `;
 }
 
+function canManageExercise(exercise, platformAdmin) {
+  return exercise.owner_scope === "system" ? platformAdmin && exercise.can_edit !== false : exercise.can_edit !== false;
+}
+
 function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platformAdmin = false) {
   const marked = markedExerciseIds.has(exercise.id);
   const tags = exercise.tags || [];
@@ -135,9 +147,10 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platform
         <button class="text-action" type="button" data-action="exercise-classification" data-exercise-id="${escapeAttr(exercise.id)}">My classification</button>
         <button class="text-action" type="button" data-action="exercise-hide" data-exercise-id="${escapeAttr(exercise.id)}" data-hidden="${exercise.is_hidden ? "true" : "false"}">${exercise.is_hidden ? "Unhide" : "Hide"}</button>
         ${exercise.is_active !== false ? `<button class="text-action" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exercise.id)}">Copy</button>` : ""}
-        ${(exercise.can_edit ?? (exercise.owner_scope !== "system" || platformAdmin)) ? `
+        ${canManageExercise(exercise, platformAdmin) ? `
           ${exercise.is_active !== false ? `<button class="text-action" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>` : ""}
           <button class="text-action" type="button" data-action="${exercise.is_active === false ? "exercise-restore" : "exercise-archive"}" data-exercise-id="${escapeAttr(exercise.id)}">${exercise.is_active === false ? "Restore" : "Archive"}</button>` : ""}
+        ${exercise.owner_scope === "user" && exercise.can_edit === true ? `<button class="text-action" type="button" data-action="exercise-delete" data-exercise-id="${escapeAttr(exercise.id)}">Delete permanently</button>` : ""}
       </div>
       ${tags.length ? `<div class="exercise-tag-list">${tags.slice(0, 4).map((tag) => `<span>${escapeHtml(tag.name)}</span>`).join("")}${tags.length > 4 ? `<span>+${tags.length - 4}</span>` : ""}</div>` : ""}
     </article>
@@ -174,9 +187,10 @@ function renderExerciseViewCard(exercise, itemId, markedExerciseIds, platformAdm
             <button class="exercise-view-menu-item" type="button" data-action="exercise-classification" data-exercise-id="${escapeAttr(exercise.id)}">My classification</button>
             <button class="exercise-view-menu-item" type="button" data-action="exercise-hide" data-exercise-id="${escapeAttr(exercise.id)}" data-hidden="${exercise.is_hidden ? "true" : "false"}">${exercise.is_hidden ? "Unhide" : "Hide"}</button>
             ${exercise.is_active !== false ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exercise.id)}">Copy</button>` : ""}
-            ${(exercise.can_edit ?? (exercise.owner_scope !== "system" || platformAdmin)) ? `
+            ${canManageExercise(exercise, platformAdmin) ? `
               ${exercise.is_active !== false ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>` : ""}
               <button class="exercise-view-menu-item" type="button" data-action="${exercise.is_active === false ? "exercise-restore" : "exercise-archive"}" data-exercise-id="${escapeAttr(exercise.id)}">${exercise.is_active === false ? "Restore" : "Archive"}</button>` : ""}
+            ${exercise.owner_scope === "user" && exercise.can_edit === true ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-delete" data-exercise-id="${escapeAttr(exercise.id)}">Delete permanently</button>` : ""}
           </div>
         </details>
       </div>
@@ -185,14 +199,23 @@ function renderExerciseViewCard(exercise, itemId, markedExerciseIds, platformAdm
 }
 
 export function renderExerciseVisibilityFilters(filters, options = {}) {
-  const select = (key, label, values) => `<label class="search-field"><span>${label}</span><select data-exercise-filter="${key}">
+  const select = (key, label, values) => `<label class="search-field exercise-filter-field"><span>${label}</span><select class="builder-text-input" data-exercise-filter="${key}">
     ${values.map(([value, title]) => `<option value="${escapeAttr(value)}" ${String(filters[key] || "") === value ? "selected" : ""}>${escapeHtml(title)}</option>`).join("")}</select></label>`;
-  return `<div class="exercise-filter-strip">
-    ${select("kind", "Exercise type", [["", options.owners ? "All exercises" : "All accessible exercises"], ["system", "System exercises"], ["private", options.owners ? "Private exercises" : "My private exercises"]])}
+  return `<div class="exercise-visibility-fields">
+    ${select("kind", "Exercise type", [["", "System + my exercises"], ["system", "System exercises"], ["mine", "My private exercises"], ...(options.owners ? [["all", "All exercises"], ["private", "All private exercises"]] : [])])}
     ${select("visibility", "Archive status", [["", "Active"], ["archived", "Archived"], ["all", "Active and archived"]])}
     ${select("hidden", "Personal visibility", [["", "Not hidden"], ["hidden", "Hidden"], ["all", "All personal visibility states"]])}
-    ${options.owners ? select("owner", "Owner", [["", "All owners"], ...options.owners.map((owner) => [owner.id, owner.name])]) : ""}
+    ${select("searchIn", "Search in", [["", "Name or code"], ["all", "Name, tags and classification"]])}
+    ${options.owners ? `<div class="exercise-owner-filter">
+      <label class="search-field exercise-filter-field"><span>Find owner</span><input class="builder-text-input" type="search" data-exercise-owner-search placeholder="Search other owners by name or email" autocomplete="off"></label>
+      <label class="search-field exercise-filter-field"><span>Owner</span><select class="builder-text-input" data-exercise-filter="owner">${renderExerciseOwnerOptions(options.owners, filters.owner)}</select></label>
+      <span class="muted" data-exercise-owner-hint>My account is first. Type at least 2 characters to find other owners.</span></div>` : ""}
   </div>`;
+}
+
+export function renderExerciseOwnerOptions(owners, selected = "") {
+  return `<option value="" ${!selected ? "selected" : ""}>Any owner in selected type</option>` + owners.map((owner, index) =>
+    `<option value="${escapeAttr(owner.id)}" ${owner.id === selected ? "selected" : ""}>${escapeHtml(`${index === 0 ? "My account · " : ""}${owner.name}${owner.email ? ` · ${owner.email}` : ""}`)}</option>`).join("");
 }
 
 export function renderExerciseTagModal(editor) {
