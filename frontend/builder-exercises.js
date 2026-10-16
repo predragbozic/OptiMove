@@ -77,9 +77,17 @@ export function renderBuilderExerciseResult(exercise, markedExerciseIds, addedCo
 // `view` (Tile / Big / List, state.builder.exerciseView) only changes the
 // grid's class - every view renders the same result card, laid out by
 // styles.css (.builder-exercise-view.is-*).
-export function renderBuilderExerciseResults(exercises, markedExerciseIds, node, { hasMore = false, loading = false, view = "list" } = {}) {
+// With no result yet, a search still on its way says so, and a failed one
+// says it failed and offers Try again - never "No matching exercises.",
+// which reads as an empty library.
+export function renderBuilderExerciseResults(exercises, markedExerciseIds, node, { hasMore = false, loading = false, failed = false, view = "list" } = {}) {
   const addedCounts = builderAddedCounts(node);
-  const results = exercises.map((exercise) => renderBuilderExerciseResult(exercise, markedExerciseIds, addedCounts.get(exercise.id) || 0)).join("") || `<div class="empty">No matching exercises.</div>`;
+  const empty = failed
+    ? `<div class="empty builder-exercise-load-failed" role="alert">The exercises could not be loaded. <button type="button" class="text-action" data-action="builder-retry-exercises">Try again</button></div>`
+    : loading
+      ? `<div class="empty" role="status">Loading exercises…</div>`
+      : `<div class="empty">No matching exercises.</div>`;
+  const results = exercises.map((exercise) => renderBuilderExerciseResult(exercise, markedExerciseIds, addedCounts.get(exercise.id) || 0)).join("") || empty;
   return `<div class="builder-exercise-view is-${escapeAttr(normalizeExerciseView("builder", view))}">${results}</div>`
     + (hasMore ? `<button type="button" class="plain-button" data-action="builder-load-more-exercises" ${loading ? "disabled" : ""}>${loading ? "Loading..." : "Load more"}</button>` : "");
 }

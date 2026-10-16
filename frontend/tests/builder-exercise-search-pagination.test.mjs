@@ -189,3 +189,30 @@ test("landscape phones: a new search brings the scrolled section editor back to 
     delete globalThis.getComputedStyle;
   }
 });
+
+test("with nothing shown yet a search says it is loading, a failed one says so with Try again (never 'No matching exercises.'), and Try again loads again", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (path) => { await gate; return realFetch(path); };
+  const pending = loadBuilderExercises();
+  assert.match(results.innerHTML, /Loading exercises…/);
+  assert.doesNotMatch(results.innerHTML, /No matching exercises/);
+  release();
+  await pending;
+  assert.equal(state.builder.exercises.length, 18);
+
+  state.builder = emptyBuilderState({ exerciseQuery: "Squat" });
+  results.innerHTML = "";
+  globalThis.fetch = async () => ({ ok: false, status: 500, json: async () => ({ error: "Server error" }) });
+  await assert.rejects(loadBuilderExercises());
+  assert.equal(state.builder.exerciseLoadFailed, true);
+  assert.match(results.innerHTML, /The exercises could not be loaded\. <button type="button" class="text-action" data-action="builder-retry-exercises">Try again<\/button>/);
+  assert.doesNotMatch(results.innerHTML, /No matching exercises/);
+
+  globalThis.fetch = realFetch;
+  await handleBuilderWorkspaceAction({ dataset: { action: "builder-retry-exercises" } }, { loadBuilderExercises });
+  assert.equal(state.builder.exercises.length, 18);
+  assert.equal(state.builder.exerciseLoadFailed, false);
+  assert.doesNotMatch(results.innerHTML, /could not be loaded/);
+});

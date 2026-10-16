@@ -40,6 +40,12 @@ export async function loadBuilderExercises(options = {}) {
   state.builder.exerciseLoading = true;
   const moreButton = document.querySelector('[data-action="builder-load-more-exercises"]');
   if (moreButton) moreButton.disabled = true;
+  // A new search with nothing shown yet (or after a failure) says it is loading.
+  const pendingContainer = !options.append && !state.builder.exercises.length ? document.querySelector(".builder-exercise-results") : null;
+  if (pendingContainer) {
+    state.builder.exerciseLoadFailed = false;
+    pendingContainer.innerHTML = renderBuilderExerciseResults([], state.markedExerciseIds, null, { loading: true, view: state.builder.exerciseView });
+  }
   try {
     const url = `${exerciseSearchUrl(query, 18, filters)}&offset=${offset}`;
     const [data, , visibleMarkedIds] = await Promise.all([
@@ -55,8 +61,14 @@ export async function loadBuilderExercises(options = {}) {
     const localMarkedOnly = filters.marked && !filters.favorite && !EXERCISE_FILTERS.some((filter) => filters[filter.key]);
     state.builder.exerciseHasMore = Boolean(data.hasMore) && !localMarkedOnly;
     state.builder.exerciseSearchKey = searchKey;
+    state.builder.exerciseLoadFailed = false;
   } catch (error) {
     if (error.name === "AbortError" || requestId !== builderExerciseRequestId) return;
+    // Said in place, with Try again, where the exercises would be.
+    state.builder.exerciseLoadFailed = true;
+    state.builder.exerciseLoading = false;
+    const failedContainer = !options.append && !state.builder.exercises.length ? document.querySelector(".builder-exercise-results") : null;
+    if (failedContainer) failedContainer.innerHTML = renderBuilderExerciseResults([], state.markedExerciseIds, null, { failed: true, view: state.builder.exerciseView });
     throw error;
   } finally {
     if (requestId === builderExerciseRequestId) {

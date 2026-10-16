@@ -101,3 +101,27 @@ export async function query(text, params = []) {
   const result = await pool.query(text, params);
   return result;
 }
+
+// A read whose plan holds dozens of correlated sub-plans (the exercise
+// library search: access scope, personal classification and media fallback
+// for every exercise) gets a cost estimate in the hundreds of thousands, so
+// Postgres JIT-compiles it first - measured on 3000 exercises: 5.3 s of JIT
+// for 40 ms of work. Such a read runs in its own short transaction with JIT
+// switched off for that transaction only; nothing else on the connection
+// changes, and it works through a transaction-mode pooler.
+export async function queryWithoutJit(text, params = []) {
+  const client = await pool.connect();
+  let broken = false;
+  try {
+    await client.query("begin read only");
+    await client.query("set local jit = off");
+    const result = await client.query(text, params);
+    await client.query("commit");
+    return result;
+  } catch (error) {
+    await client.query("rollback").catch(() => { broken = true; });
+    throw error;
+  } finally {
+    client.release(broken);
+  }
+}
