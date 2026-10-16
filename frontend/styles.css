@@ -17162,6 +17162,21 @@ span.exercise-view-media { cursor: default; }
 [data-drag-item].is-dragging .builder-item-drag-handle { cursor: grabbing; }
 [data-drag-item].is-drop-before { box-shadow: 0 -3px 0 var(--accent); }
 [data-drag-item].is-drop-after { box-shadow: 0 3px 0 var(--accent); }
+/* On a computer a library card drags onto the Added list
+   (builder-library-drag.js): while it is dragged the Added column is
+   outlined as the place to drop, and filled while the card is over it. */
+.builder-exercise-result[draggable="true"] { cursor: grab; }
+/* A narrow window shows the library and the Added list one at a time:
+   nothing to drop on, so no grab hand. */
+@media (max-width: 560px) {
+  .builder-exercise-result[draggable="true"] { cursor: default; }
+}
+.builder-section-panel.is-library-dragging .builder-section-added { outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: 8px; }
+.builder-section-added.is-library-drop-target { background: var(--accent-soft); }
+/* "Try again" after a failed library load: a whole touch target. */
+@media (max-width: 760px), (pointer: coarse) {
+  .builder-exercise-load-failed .text-action { display: inline-flex; align-items: center; min-width: 44px; min-height: 44px; }
+}
 @media (hover: hover) {
   .builder-item-drag-handle:hover:not(:disabled) { background: var(--surface-soft); color: var(--text); }
 }
@@ -17178,6 +17193,9 @@ span.exercise-view-media { cursor: default; }
    at least about three lines, up to about twelve, then they scroll. 16 px
    on phones so iOS does not zoom in on focus. */
 textarea[data-autogrow] { display: block; box-sizing: border-box; width: 100%; min-height: 4.8em; max-height: 18em; overflow-y: auto; padding: 8px 10px; border: 1px solid var(--line, #dfe4e8); border-radius: 6px; background: var(--surface, #fff); color: var(--text); font: inherit; font-size: 14px; line-height: 1.45; resize: vertical; }
+/* An exercise's Instruction (added ones and a custom exercise): about four
+   lines, then it scrolls - on every screen (owner, 2026-10-16). */
+textarea[data-autogrow][name="description"], textarea[data-autogrow][name="instruction"] { max-height: calc(5.8em + 18px); }
 @media (max-width: 760px), (pointer: coarse) {
   textarea[data-autogrow] { font-size: 16px; }
 }
@@ -17308,9 +17326,6 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
      pinned and everything scrolls, closing it pins the row again. */
   .builder-section-panel[data-filters-open="true"] .builder-library-controls { position: static; }
   .builder-exercise-results { max-height: none; overflow: visible; }
-  /* About four lines of Instruction, then it scrolls - a short screen has
-     no room for a taller field. */
-  .builder-item-edit textarea[data-autogrow] { max-height: calc(5.8em + 18px); }
   /* Tile: short cards - picture beside the name and what was added, and
      one row under them with Favorite, Mark, Tags and a "+" Add (its word
      stays for screen readers) - so two columns show twice the exercises. */

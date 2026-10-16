@@ -1,4 +1,5 @@
 import { exerciseNodeLabel } from "./builder-helpers.js";
+import { libraryDragAvailable } from "./builder-library-drag.js";
 import {
   renderBuilderAddConfirmation,
   renderBuilderAddedList,
@@ -60,7 +61,7 @@ export function renderBuilderAddedPanelContent(state, selectedNode) {
   return `
     <div class="builder-panel-label">Added to section <span>${selectedNode.items.length}</span></div>
     ${mobileList}
-    ${renderBuilderItems(selectedNode) || `<div class="empty builder-added-list-desktop">Choose exercises from the library to build this section.</div>`}
+    ${renderBuilderItems(selectedNode) || `<div class="empty builder-added-list-desktop">${libraryDragAvailable() ? "Drag exercises here from the library, or press Add." : "Choose exercises from the library to build this section."}</div>`}
   `;
 }
 

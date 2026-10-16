@@ -21,6 +21,8 @@ export function invalidateBuilderDraftsCache() {
 
 let builderExerciseRequestId = 0;
 let builderExerciseController;
+// The search key of the library load in flight (ensureBuilderExercises).
+let builderExercisePendingKey = "";
 
 function builderExerciseSearchKey() {
   return JSON.stringify([state.currentUser?.id, state.builder.exerciseQuery.trim(), state.builder.exerciseFilters]);
@@ -38,6 +40,7 @@ export async function loadBuilderExercises(options = {}) {
   const filters = { ...state.builder.exerciseFilters };
   const offset = options.append ? state.builder.exerciseOffset : 0;
   state.builder.exerciseLoading = true;
+  if (!options.append) builderExercisePendingKey = searchKey;
   const moreButton = document.querySelector('[data-action="builder-load-more-exercises"]');
   if (moreButton) moreButton.disabled = true;
   // A new search clears an earlier failure (also for a section editor that
@@ -75,6 +78,7 @@ export async function loadBuilderExercises(options = {}) {
     if (requestId === builderExerciseRequestId) {
       state.builder.exerciseLoading = false;
       builderExerciseController = null;
+      builderExercisePendingKey = "";
       if (moreButton) moreButton.disabled = false;
     }
   }
@@ -92,11 +96,28 @@ export async function loadBuilderExercises(options = {}) {
     const scrollTop = resultsContainer.scrollTop;
     resultsContainer.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedSection, { hasMore: state.builder.exerciseHasMore, view: state.builder.exerciseView });
     if (options.append) resultsContainer.scrollTop = scrollTop;
+    // An editor that just opened is where the coach left it.
+    else if (options.keepEditorScroll) resultsContainer.scrollTop = 0;
     else scrollBuilderResultsToTop(resultsContainer);
   } else if (options.forceFullRender) {
     renderBuilder();
   }
   options.afterRender?.();
+}
+
+// An open section editor shows the library of the current search. Opening
+// a draft (Continue) does not wait for the library, so the editor loads it
+// when it opens and the list on hand is of another search, of an earlier
+// failed load, or of none yet - an empty search then lists every exercise.
+// Returns the load's promise, or null when the list is current or already
+// on its way.
+export function ensureBuilderExercises() {
+  if (state.activeTab !== "builder") return null;
+  if (findBuilderNode(state.builder.draft, state.builder.selectedNodeId)?.type !== "section") return null;
+  const searchKey = builderExerciseSearchKey();
+  if (state.builder.exerciseSearchKey === searchKey && !state.builder.exerciseLoadFailed) return null;
+  if (state.builder.exerciseLoading && builderExercisePendingKey === searchKey) return null;
+  return loadBuilderExercises({ keepEditorScroll: true });
 }
 
 // A new search or filter shows its first results. On landscape phones the
