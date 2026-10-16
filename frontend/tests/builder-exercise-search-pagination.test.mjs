@@ -216,3 +216,23 @@ test("with nothing shown yet a search says it is loading, a failed one says so w
   assert.equal(state.builder.exerciseLoadFailed, false);
   assert.doesNotMatch(results.innerHTML, /could not be loaded/);
 });
+
+test("a search started after a failure is never shown as failed while it runs, and a failed new search never leaves the old query's results", async () => {
+  state.builder = emptyBuilderState({ exerciseQuery: "Squat", exerciseLoadFailed: true });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (path) => { await gate; return realFetch(path); };
+  const pending = loadBuilderExercises();
+  assert.equal(state.builder.exerciseLoadFailed, false, "a section editor opening now draws Loading, not the old failure");
+  release();
+  await pending;
+  assert.equal(state.builder.exercises.length, 18);
+
+  state.builder.exerciseQuery = "Lunge";
+  globalThis.fetch = async () => ({ ok: false, status: 500, json: async () => ({ error: "Server error" }) });
+  await assert.rejects(loadBuilderExercises());
+  assert.deepEqual(state.builder.exercises, [], "the Squat results do not stay under the Lunge search");
+  assert.match(results.innerHTML, /could not be loaded/);
+  globalThis.fetch = realFetch;
+});

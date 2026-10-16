@@ -1187,4 +1187,11 @@ test("the library search answers a coach with an empty search: the first page, i
   assert.equal(res.status, 200);
   assert.equal(res.body.exercises.length, 18);
   assert.equal(res.body.hasMore, true);
+  // First to last: by the code's number (codes without one last), then name, then id.
+  const key = (exercise) => [Number((exercise.exercise_code || "").replace(/\D/g, "")) || Infinity, exercise.name, exercise.id];
+  const compare = (a, b) => (a[0] - b[0]) || a[1].localeCompare(b[1]) || a[2].localeCompare(b[2]);
+  const keys = res.body.exercises.map(key);
+  assert.deepEqual(keys, [...keys].sort(compare));
+  const second = await api("/api/exercises?search=&limit=18&offset=18", { cookie: coach.cookie });
+  assert.equal(new Set([...res.body.exercises, ...second.body.exercises].map((exercise) => exercise.id)).size, 36, "the next page continues without repeats");
 });

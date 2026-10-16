@@ -113,8 +113,7 @@ export async function queryWithoutJit(text, params = []) {
   const client = await pool.connect();
   let broken = false;
   try {
-    await client.query("begin read only");
-    await client.query("set local jit = off");
+    await client.query("begin read only; set local jit = off");
     const result = await client.query(text, params);
     await client.query("commit");
     return result;
