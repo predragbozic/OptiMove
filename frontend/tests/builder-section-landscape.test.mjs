@@ -82,9 +82,12 @@ test("4. phones and landscape phones: two-line names, compact Added cards and th
   assert.match(mediaBlock("(max-width: 560px)"), /\.builder-mobile-sticky-bar \{\s*display: flex;/);
 });
 
-test("5. landscape phones: about four lines of Instruction, and short two-column Tile cards", () => {
+test("5. about four lines of Instruction on every screen, and short two-column Tile cards on landscape phones", () => {
   const landscape = mediaBlock("(min-width: 561px) and (max-height: 520px)");
-  assert.match(landscape, /\.builder-item-edit textarea\[data-autogrow\] \{ max-height: calc\(5\.8em \+ 18px\); \}/);
+  // Owner, 2026-10-16: the Instruction of every added exercise (and of a
+  // custom one) shows about four lines, then scrolls - computers included.
+  assert.match(css, /^textarea\[data-autogrow\]\[name="description"\], textarea\[data-autogrow\]\[name="instruction"\] \{ max-height: calc\(5\.8em \+ 18px\); \}/m);
+  assert.doesNotMatch(css, /max-height: calc\(5\.8em \+ 18px\)[^]*max-height: calc\(5\.8em \+ 18px\)/, "one rule, not one per screen");
   assert.match(landscape, /\.builder-exercise-view\.is-tile \.builder-exercise-result \{[^}]*grid-template-areas: "media title title" "media meta meta" "actions actions add";/);
   assert.match(landscape, /\.builder-exercise-view\.is-tile \.builder-exercise-result-text \{ display: contents; \}/);
   assert.match(landscape, /\.builder-exercise-view\.is-tile \.builder-exercise-mini-actions \{[^}]*flex-wrap: nowrap;/);
@@ -96,7 +99,6 @@ test("5. landscape phones: about four lines of Instruction, and short two-column
   assert.match(landscape, /\.builder-added-card \{ column-gap: 4px; \}/);
   assert.match(landscape, /\.builder-added-card-edit \{ padding: 0 4px; \}/);
   assert.match(landscape, /\.builder-exercise-view\.is-tile \.builder-exercise-preview \{[^}]*min-height: 44px;/);
-  assert.doesNotMatch(mediaBlock("(max-width: 560px), (max-height: 520px)"), /max-height: calc\(5\.8em/, "a phone held upright keeps the taller Instruction");
 });
 
 test("6. phones held upright: in every view Add shares the row of Favorite, Mark and Tags", () => {

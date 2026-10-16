@@ -17184,6 +17184,9 @@ span.exercise-view-media { cursor: default; }
    at least about three lines, up to about twelve, then they scroll. 16 px
    on phones so iOS does not zoom in on focus. */
 textarea[data-autogrow] { display: block; box-sizing: border-box; width: 100%; min-height: 4.8em; max-height: 18em; overflow-y: auto; padding: 8px 10px; border: 1px solid var(--line, #dfe4e8); border-radius: 6px; background: var(--surface, #fff); color: var(--text); font: inherit; font-size: 14px; line-height: 1.45; resize: vertical; }
+/* An exercise's Instruction (added ones and a custom exercise): about four
+   lines, then it scrolls - on every screen (owner, 2026-10-16). */
+textarea[data-autogrow][name="description"], textarea[data-autogrow][name="instruction"] { max-height: calc(5.8em + 18px); }
 @media (max-width: 760px), (pointer: coarse) {
   textarea[data-autogrow] { font-size: 16px; }
 }
@@ -17314,9 +17317,6 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
      pinned and everything scrolls, closing it pins the row again. */
   .builder-section-panel[data-filters-open="true"] .builder-library-controls { position: static; }
   .builder-exercise-results { max-height: none; overflow: visible; }
-  /* About four lines of Instruction, then it scrolls - a short screen has
-     no room for a taller field. */
-  .builder-item-edit textarea[data-autogrow] { max-height: calc(5.8em + 18px); }
   /* Tile: short cards - picture beside the name and what was added, and
      one row under them with Favorite, Mark, Tags and a "+" Add (its word
      stays for screen readers) - so two columns show twice the exercises. */
