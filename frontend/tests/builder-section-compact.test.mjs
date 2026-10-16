@@ -118,6 +118,10 @@ test("6. phones and landscape phones: the folded panel, the link, and a search t
   assert.match(compact, /\.builder-library-toolbar \.builder-exercise-search:focus-within \{ position: absolute; inset: 0; z-index: 3; \}/);
   assert.match(compact, /\.builder-library-toolbar \{ position: relative;/);
   assert.match(compact, /\.builder-filters-toggle \{[^}]*width: 48px; height: 48px;/);
+  // The panel is the only way to filter on a phone: its moved controls get 44 px too.
+  assert.match(compact, /\.builder-filters-panel \.exercise-filter-toggle \{ min-height: 44px; \}/);
+  assert.match(compact, /\.builder-filters-panel \.exercise-filter-toggle-icon \{ width: 44px; min-height: 44px; \}/);
+  assert.match(compact, /\.builder-filters-panel \.exercise-filter-field input,\s*\.builder-filters-panel \.exercise-filter-field select \{ height: 44px; min-height: 44px; \}/);
   assert.match(css, /\.builder-filters-toggle, \.builder-custom-exercise-link \{ display: none; \}/, "hidden on a large screen");
   const landscape = mediaBlock("(min-width: 561px) and (max-height: 520px)");
   assert.match(landscape, /\.builder-library-controls \{ position: sticky;/);

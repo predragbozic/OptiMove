@@ -162,3 +162,30 @@ test("loading exercises without an open section does not rebuild the Builder", a
     assert.equal(state.builder.exercises.length, 18);
   } finally { document.querySelector = originalQuerySelector; }
 });
+
+test("landscape phones: a new search brings the scrolled section editor back to the library's top; a page added with Load more does not", async () => {
+  // The library starts 120 px down the editor's scroll content.
+  const modal = { scrollTop: 900, getBoundingClientRect: () => ({ top: 10 }) };
+  const library = { getBoundingClientRect: () => ({ top: 10 + 120 - modal.scrollTop }) };
+  results.closest = (selector) => ({ ".builder-section-modal": modal, ".builder-section-library": library })[selector] || null;
+  let overflowY = "visible";
+  globalThis.getComputedStyle = () => ({ overflowY });
+  try {
+    await loadBuilderExercises();
+    assert.equal(modal.scrollTop, 120, "back to the library's top, the first results under the pinned search row");
+    modal.scrollTop = 900;
+    await loadBuilderExercises({ append: true });
+    assert.equal(modal.scrollTop, 900, "Load more keeps the place");
+    modal.scrollTop = 60;
+    await loadBuilderExercises();
+    assert.equal(modal.scrollTop, 60, "not scrolled past the library: left alone");
+    overflowY = "auto";
+    modal.scrollTop = 900;
+    await loadBuilderExercises();
+    assert.equal(modal.scrollTop, 900, "phones upright and desktop: the results list scrolls itself, the editor is left alone");
+    assert.equal(results.scrollTop, 0);
+  } finally {
+    delete results.closest;
+    delete globalThis.getComputedStyle;
+  }
+});
