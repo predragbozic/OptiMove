@@ -89,6 +89,7 @@ import {
 import {
   renderExerciseLibraryHtml,
 } from "./exercise-library.js";
+import { closeExerciseViewMenus, replaceExerciseThumbWithInitials } from "./exercise-view-modes.js";
 import { openExerciseCollections } from "./exercise-collections.js";
 import {
   handleExerciseEditorAction,
@@ -403,6 +404,8 @@ function bindEvents() {
   });
 
   els.content.addEventListener("click", handleContentClick);
+  // A click anywhere on the page folds an open exercise card "⋯" menu.
+  document.addEventListener("click", (event) => closeExerciseViewMenus(event.target, els.content));
   els.toolbar.addEventListener("click", (event) => {
     const action = event.target.closest("[data-action]");
     if (!action?.dataset.action?.startsWith("builder-")) return;
@@ -1533,6 +1536,10 @@ function handleImageError(event) {
     image.remove();
     return;
   }
+
+  // An exercise picture (exercise-view-modes.js renderExerciseThumb) whose
+  // image and video covers all failed: show the exercise's initials.
+  if (replaceExerciseThumbWithInitials(image)) return;
 
   if (image.classList.contains("avatar")) {
     const fallback = document.createElement("span");

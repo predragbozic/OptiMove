@@ -1,3 +1,4 @@
+import { normalizeExerciseView, renderExerciseThumb } from "./exercise-view-modes.js";
 import { renderImage } from "./media.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -48,11 +49,12 @@ export function renderBuilderExerciseResult(exercise, markedExerciseIds, addedCo
   const title = exercise.name || "Exercise";
   const marked = markedExerciseIds.has(exercise.id);
   const tags = exercise.tags || [];
+  const thumb = renderExerciseThumb(exercise, "builder-exercise-thumb");
   return `
     <article class="builder-exercise-result ${addedCount ? "is-already-added" : ""}">
       ${image || video
-        ? `<button type="button" class="builder-exercise-preview" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}" aria-label="Preview ${escapeAttr(title)}">${image ? renderImage(image, "builder-exercise-thumb") : `<span class="builder-exercise-thumb builder-exercise-thumb-fallback">Video</span>`}</button>`
-        : `<span class="builder-exercise-preview builder-exercise-preview-empty"><span class="node-dot"></span></span>`}
+        ? `<button type="button" class="builder-exercise-preview" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}" aria-label="Preview ${escapeAttr(title)}">${thumb}</button>`
+        : `<span class="builder-exercise-preview builder-exercise-preview-empty">${thumb}</span>`}
       <span class="builder-exercise-result-text">
         <strong>${escapeHtml(title)}</strong>
         <small>${addedCount ? `Added ${addedCount}×` : (video ? "Preview or add" : "Add to section")}</small>
@@ -69,10 +71,14 @@ export function renderBuilderExerciseResult(exercise, markedExerciseIds, addedCo
 // builder-pick-exercise handler and builder-view.js's
 // renderBuilderAddFeedback, which call this alongside the sticky-bar and
 // confirmation-banner patches.
-export function renderBuilderExerciseResults(exercises, markedExerciseIds, node, { hasMore = false, loading = false } = {}) {
+// `view` (Tile / Big / List, state.builder.exerciseView) only changes the
+// grid's class - every view renders the same result card, laid out by
+// styles.css (.builder-exercise-view.is-*).
+export function renderBuilderExerciseResults(exercises, markedExerciseIds, node, { hasMore = false, loading = false, view = "list" } = {}) {
   const addedCounts = builderAddedCounts(node);
   const results = exercises.map((exercise) => renderBuilderExerciseResult(exercise, markedExerciseIds, addedCounts.get(exercise.id) || 0)).join("") || `<div class="empty">No matching exercises.</div>`;
-  return results + (hasMore ? `<button type="button" class="plain-button" data-action="builder-load-more-exercises" ${loading ? "disabled" : ""}>${loading ? "Loading..." : "Load more"}</button>` : "");
+  return `<div class="builder-exercise-view is-${escapeAttr(normalizeExerciseView("builder", view))}">${results}</div>`
+    + (hasMore ? `<button type="button" class="plain-button" data-action="builder-load-more-exercises" ${loading ? "disabled" : ""}>${loading ? "Loading..." : "Load more"}</button>` : "");
 }
 
 // Container/image/fallback classes are passed explicitly rather than

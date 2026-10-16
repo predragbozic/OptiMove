@@ -1,3 +1,4 @@
+import { normalizeExerciseView, renderExerciseThumb, renderExerciseViewSwitcher } from "./exercise-view-modes.js";
 import { renderMediaThumb } from "./media.js";
 import { EXERCISE_FILTERS } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -6,6 +7,7 @@ export const QUICK_FILTER_KEYS = new Set(["purpose", "tag"]);
 
 const ICON_STAR = `<svg viewBox="0 0 24 24" class="exercise-toggle-icon" aria-hidden="true"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.9z"></path></svg>`;
 const ICON_BOOKMARK = `<svg viewBox="0 0 24 24" class="exercise-toggle-icon" aria-hidden="true"><path d="M6 3.5h12a1 1 0 0 1 1 1V21l-7-4-7 4V4.5a1 1 0 0 1 1-1z"></path></svg>`;
+const ICON_MORE = `<svg viewBox="0 0 24 24" class="exercise-toggle-icon" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg>`;
 
 export function filterIconSvg() {
   return `
@@ -54,17 +56,25 @@ export function activeExerciseFilterLabels(filters) {
 
 export function renderExerciseLibraryHtml(data) {
   const { exercises, itemIds, markedExerciseIds, search, tagEditor } = data;
+  const view = normalizeExerciseView("library", search.view);
   return `
-    <div class="library-results-head">
+    <div class="library-results-head exercise-results-head">
       <span class="muted">${exercises.length} exercises shown</span>
       ${search.term ? `<span class="item-badge">${escapeHtml(search.term)}</span>` : ""}
       ${activeExerciseFilterLabels(search.filters).map((label) => `<span class="item-badge">${escapeHtml(label)}</span>`).join("")}
       <button class="plain-button compact-button" type="button" data-action="exercise-add-open">+ Add exercise</button>
       ${search.canManageCollections ? `<button class="plain-button compact-button" type="button" data-action="exercise-collections-open">Manage application blocks</button>` : ""}
+      ${renderExerciseViewSwitcher("library", view, "exercise-library-view")}
     </div>
-    <div class="exercise-grid">
-      ${exercises.map((exercise, index) => renderExerciseLibraryCard(exercise, itemIds[index], markedExerciseIds, search.canManageCollections)).join("")}
-    </div>
+    ${view === "details" ? `
+      <div class="exercise-grid">
+        ${exercises.map((exercise, index) => renderExerciseLibraryCard(exercise, itemIds[index], markedExerciseIds, search.canManageCollections)).join("")}
+      </div>
+    ` : `
+      <div class="exercise-view-grid is-${view}">
+        ${exercises.map((exercise, index) => renderExerciseViewCard(exercise, itemIds[index], markedExerciseIds, search.canManageCollections)).join("")}
+      </div>
+    `}
     ${search.hasMore ? `
       <div class="load-more-row">
         <button class="plain-button" data-action="exercise-load-more">Load more</button>
@@ -126,6 +136,42 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platform
         ${exercise.owner_scope !== "system" || platformAdmin ? `<button class="text-action" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>` : ""}
       </div>
       ${tags.length ? `<div class="exercise-tag-list">${tags.slice(0, 4).map((tag) => `<span>${escapeHtml(tag.name)}</span>`).join("")}${tags.length > 4 ? `<span>+${tags.length - 4}</span>` : ""}</div>` : ""}
+    </article>
+  `;
+}
+
+// The Tile, Big and List card: one markup, laid out by the grid's view class
+// (styles.css, .exercise-view-grid.is-*). The picture opens the media, the
+// name opens the exercise, favorite and mark stay one tap away, and Tags /
+// Copy / Edit sit behind "⋯" with the same rules as the Details card.
+function renderExerciseViewCard(exercise, itemId, markedExerciseIds, platformAdmin = false) {
+  const name = exercise.name || "Exercise";
+  const marked = markedExerciseIds.has(exercise.id);
+  const favorite = Boolean(exercise.is_favorite);
+  const tags = exercise.tags || [];
+  const thumb = renderExerciseThumb(exercise, "exercise-view-thumb");
+  const media = exercise.image_url || exercise.video_url
+    ? `<button class="exercise-view-media" type="button" data-action="open-media" data-title="${escapeAttr(name)}" data-image="${escapeAttr(exercise.image_url || "")}" data-video="${escapeAttr(exercise.video_url || "")}" aria-label="Preview ${escapeAttr(name)}">${thumb}</button>`
+    : `<span class="exercise-view-media">${thumb}</span>`;
+  return `
+    <article class="exercise-view-card">
+      ${media}
+      <button class="exercise-view-open" type="button" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
+        <span class="exercise-view-title">${escapeHtml(name)}</span>
+        ${exercise.aim ? `<span class="exercise-view-meta">${escapeHtml(exercise.aim)}</span>` : ""}
+      </button>
+      <div class="exercise-view-actions">
+        <button class="exercise-view-icon ${favorite ? "is-favorite" : ""}" type="button" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${favorite ? "true" : "false"}" aria-pressed="${favorite ? "true" : "false"}" aria-label="${favorite ? "Remove favorite" : "Mark as favorite"}" title="Favorite">${ICON_STAR}</button>
+        <button class="exercise-view-icon ${marked ? "is-marked" : ""}" type="button" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}" aria-pressed="${marked ? "true" : "false"}" aria-label="${marked ? "Unmark" : "Mark"}" title="Marked">${ICON_BOOKMARK}</button>
+        <details class="exercise-view-menu">
+          <summary class="exercise-view-icon" aria-label="More actions for ${escapeAttr(name)}" title="More actions">${ICON_MORE}</summary>
+          <div class="exercise-view-menu-list">
+            <button class="exercise-view-menu-item" type="button" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(name)}">Tags${tags.length ? ` (${tags.length})` : ""}</button>
+            ${exercise.owner_scope === "system" ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exercise.id)}">Copy</button>` : ""}
+            ${exercise.owner_scope !== "system" || platformAdmin ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>` : ""}
+          </div>
+        </details>
+      </div>
     </article>
   `;
 }

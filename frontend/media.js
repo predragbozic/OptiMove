@@ -42,6 +42,44 @@ export function imageSources(url) {
   ];
 }
 
+// A YouTube video's 11-character id from the usual link forms (watch?v=,
+// youtu.be/, /shorts/, /embed/, /live/), or "" for anything else - only
+// YouTube's own hosts are accepted, never an id-looking path on another site.
+const YOUTUBE_HOSTS = new Set(["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtube-nocookie.com", "www.youtube-nocookie.com", "youtu.be"]);
+
+export function getYouTubeId(url) {
+  let parsed;
+  try {
+    parsed = new URL(String(url || "").trim());
+  } catch {
+    return "";
+  }
+  if (!["https:", "http:"].includes(parsed.protocol) || !YOUTUBE_HOSTS.has(parsed.hostname.toLowerCase())) return "";
+  const candidate = parsed.hostname.toLowerCase() === "youtu.be"
+    ? parsed.pathname.split("/")[1]
+    : parsed.searchParams.get("v") || (parsed.pathname.match(/^\/(?:shorts|embed|live)\/([^/]+)/) || [])[1];
+  return /^[A-Za-z0-9_-]{11}$/.test(candidate || "") ? candidate : "";
+}
+
+export function toYouTubeEmbedUrl(url, options = {}) {
+  const id = getYouTubeId(url);
+  if (!id) return "";
+  const embed = `https://www.youtube-nocookie.com/embed/${id}`;
+  return options.autoplay ? withAutoplayParam(embed) : embed;
+}
+
+// Thumbnail images a video link offers without any API call: YouTube's
+// public cover images and Google Drive's thumbnail (Drive answers only for a
+// file shared with "anyone with the link"). The caller falls back to the
+// exercise's initials when none loads.
+export function videoThumbnailSources(url) {
+  const youTubeId = getYouTubeId(url);
+  if (youTubeId) return [`https://i.ytimg.com/vi/${youTubeId}/mqdefault.jpg`, `https://i.ytimg.com/vi/${youTubeId}/hqdefault.jpg`];
+  const driveId = getDriveId(url);
+  if (driveId) return [`https://drive.google.com/thumbnail?id=${driveId}&sz=w640`, `https://lh3.googleusercontent.com/d/${driveId}=w640`];
+  return [];
+}
+
 export function parseImageFallbacks(value) {
   try {
     const parsed = JSON.parse(value || "[]");

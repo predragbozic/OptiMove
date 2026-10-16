@@ -9,6 +9,7 @@ import {
   renderCustomExerciseModal,
 } from "./builder-exercises.js";
 import { ICON_CHECK, ICON_X, renderCopyNodeIconButton, renderDeleteIconButton, renderNodeEditForm } from "./builder-structure.js";
+import { renderExerciseViewSwitcher } from "./exercise-view-modes.js";
 import {
   filterIconSvg,
   QUICK_FILTER_KEYS,
@@ -51,7 +52,7 @@ function renderBuilderSectionPanel(state, selectedNode) {
       </div>
       <div class="builder-section-grid">
         <section class="builder-section-library">
-          <div class="builder-panel-label">Exercise library</div>
+          <div class="builder-library-head"><div class="builder-panel-label">Exercise library</div>${renderExerciseViewSwitcher("builder", state.builder.exerciseView, "builder-exercise-view")}</div>
           <label class="search-field builder-exercise-search"><span>Search exercises</span><input data-builder-exercise-search type="search" value="${escapeAttr(query)}" placeholder="Name or code"></label>
           ${renderExerciseQuickFilters(state.builder.exerciseFilters, state.exerciseSearch.options, "data-builder-exercise-filter", `
             <details class="builder-exercise-filters" ${selectFilterCount ? "open" : ""}>
@@ -71,7 +72,7 @@ function renderBuilderSectionPanel(state, selectedNode) {
           </div>
           ${renderBuilderAddConfirmation(state.builder.addConfirmation)}
           <div class="builder-exercise-results">
-            ${renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode, { hasMore: state.builder.exerciseHasMore, loading: state.builder.exerciseLoading })}
+            ${renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode, { hasMore: state.builder.exerciseHasMore, loading: state.builder.exerciseLoading, view: state.builder.exerciseView })}
           </div>
         </section>
         <section class="builder-section-added">

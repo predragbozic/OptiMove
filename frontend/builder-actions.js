@@ -5,6 +5,7 @@ import { invalidateBuilderDraftsCache, loadBuilderNodePresets } from "./builder-
 import { findBuilderNode, findBuilderSession } from "./builder-helpers.js";
 import { invalidateCoachHomeCache } from "./coach-home-data.js";
 import { invalidateAthleteHomeCache } from "./athlete-home-data.js";
+import { normalizeExerciseView, saveExerciseViewPreference } from "./exercise-view-modes.js";
 import { emptyBlockPicker, emptyBuilderState, state } from "./state.js";
 import { localDateIso, weekMondayIso } from "./utils.js";
 
@@ -535,6 +536,12 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
   const type = action.dataset.action;
   if (type === "builder-load-more-exercises") {
     await handlers.loadBuilderExercises({ append: true });
+    return true;
+  }
+  if (type === "builder-exercise-view") {
+    state.builder.exerciseView = normalizeExerciseView("builder", action.dataset.view);
+    saveExerciseViewPreference("builder", state.builder.exerciseView);
+    handlers.renderBuilder();
     return true;
   }
   if (type === "builder-toggle-batch-sync") {

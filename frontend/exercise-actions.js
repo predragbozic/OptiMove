@@ -4,6 +4,7 @@ import { loadBuilderExercises } from "./builder-data.js";
 import { renderBuilder } from "./builder-view.js";
 import { els } from "./dom.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions, loadMarkedExerciseVisibility } from "./exercise-data.js";
+import { normalizeExerciseView, saveExerciseViewPreference } from "./exercise-view-modes.js";
 import { filterIconSvg, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters } from "./exercise-library.js";
 import { emptyExerciseOptions, EXERCISE_FILTERS, state } from "./state.js";
 import { debounce, escapeHtml } from "./utils.js";
@@ -150,6 +151,12 @@ export async function handleExerciseLibraryAction(action, handlers) {
   if (type === "exercise-load-more") {
     state.exerciseSearch.limit += 30;
     searchExercises(state.exerciseSearch.term, handlers);
+    return true;
+  }
+  if (type === "exercise-library-view") {
+    state.exerciseSearch.view = normalizeExerciseView("library", action.dataset.view);
+    saveExerciseViewPreference("library", state.exerciseSearch.view);
+    handlers.renderExercises(state.lastExerciseResults);
     return true;
   }
   if (type === "exercise-toggle-favorite") {
