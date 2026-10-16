@@ -355,5 +355,6 @@ test("10. the app wires the drag to the drop action, and every section opening t
   const css = await readFile(new URL("../styles.css", import.meta.url), "utf8");
   assert.match(css, /\.builder-section-panel\.is-library-dragging \.builder-section-added \{ outline: 2px dashed var\(--accent\);/);
   assert.match(css, /\.builder-section-added\.is-library-drop-target \{ background: var\(--accent-soft\); \}/);
+  assert.match(css, /@media \(max-width: 560px\) \{\s*\.builder-exercise-result\[draggable="true"\] \{ cursor: default; \}/, "no grab hand where nothing can be dropped");
   assert.match(css, /@media \(max-width: 760px\), \(pointer: coarse\) \{\s*\.builder-exercise-load-failed \.text-action \{ display: inline-flex; align-items: center; min-width: 44px; min-height: 44px; \}/, "Try again is a whole touch target");
 });
