@@ -17169,6 +17169,17 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
   .builder-exercise-view.is-tile .builder-exercise-add-plus { display: inline; }
 }
 
+/* A dialog's own scroll never runs on into the page behind it, and on a
+   touch screen the page behind an open dialog does not scroll at all - a
+   finger dragged over a dialog or its backdrop used to move the page
+   underneath. (The media dialog is always in the page, hidden until used,
+   so a hidden one does not count.) */
+[aria-modal="true"], .exercise-detail { overscroll-behavior: contain; }
+@media (pointer: coarse) {
+  html:has([aria-modal="true"]:not([hidden], [hidden] *), .exercise-detail-overlay),
+  html:has([aria-modal="true"]:not([hidden], [hidden] *), .exercise-detail-overlay) body { overflow: hidden; }
+}
+
 /* Hidden from sight, still read by screen readers. */
 .visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
@@ -17228,6 +17239,27 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
   .builder-added-card-edit .builder-icon-svg { width: 16px; height: 16px; margin-right: 6px; }
 }
 
+/* Phones held upright: in Tile and Big the Add button shares the row of
+   Favorite, Mark and Tags instead of taking a row of its own. */
+@media (max-width: 560px) {
+  .builder-exercise-view.is-tile .builder-exercise-result-text,
+  .builder-exercise-view.is-big .builder-exercise-result-text { display: contents; }
+  .builder-exercise-view.is-tile .builder-exercise-result-text > strong,
+  .builder-exercise-view.is-big .builder-exercise-result-text > strong { grid-area: title; }
+  .builder-exercise-view.is-tile .builder-exercise-result-text > small,
+  .builder-exercise-view.is-big .builder-exercise-result-text > small { grid-area: meta; }
+  .builder-exercise-view.is-tile .builder-exercise-mini-actions,
+  .builder-exercise-view.is-big .builder-exercise-mini-actions { grid-area: actions; flex-wrap: nowrap; align-self: center; margin: 4px 0 0; }
+  .builder-exercise-view.is-tile .builder-exercise-add,
+  .builder-exercise-view.is-big .builder-exercise-add { grid-area: add; align-self: center; justify-self: end; margin-top: 4px; }
+  .builder-exercise-view.is-tile .builder-exercise-result { grid-template-columns: 96px minmax(0, 1fr) auto; grid-template-rows: auto auto auto; grid-template-areas: "media title title" "media meta meta" "actions actions add"; align-items: start; row-gap: 2px; }
+  .builder-exercise-view.is-tile .builder-exercise-preview { grid-area: media; }
+  .builder-exercise-view.is-big .builder-exercise-result { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto auto auto; grid-template-areas: "media media" "title title" "meta meta" "actions add"; row-gap: 2px; }
+  .builder-exercise-view.is-big .builder-exercise-preview { grid-area: media; margin-bottom: 6px; }
+  /* List keeps Add at the right, level with that row. */
+  .builder-exercise-view.is-list .builder-exercise-add { align-self: end; }
+}
+
 /* Phones held upright: the section name and its pencil keep clear of the
    Close button now that the caption above them is gone, and the results
    get the room the folded controls left. */
@@ -17271,6 +17303,9 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
   .builder-exercise-view.is-tile .builder-exercise-mini-actions { grid-area: actions; flex-wrap: nowrap; align-self: center; gap: 2px; margin: 4px 0 0; }
   .builder-exercise-view.is-tile .builder-exercise-add { grid-area: add; align-self: center; justify-self: end; min-width: 44px; margin-top: 4px; padding: 0; font-size: 22px; line-height: 1; }
   .builder-exercise-view.is-tile .builder-exercise-add-label { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  /* The Added column scrolls on its own and stays beside the library while
+     the library (and the header above it) scrolls. */
+  .builder-section-added { position: sticky; top: -10px; align-self: start; max-height: calc(100dvh - 18px); overflow-y: auto; overscroll-behavior: contain; }
   /* The Added column is about 260 px here: tighter gaps keep a card's
      number, picture, Edit details and Remove inside it from 568 px up. */
   .builder-added-card { column-gap: 4px; }

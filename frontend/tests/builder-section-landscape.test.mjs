@@ -98,3 +98,24 @@ test("5. landscape phones: about four lines of Instruction, and short two-column
   assert.match(landscape, /\.builder-exercise-view\.is-tile \.builder-exercise-preview \{[^}]*min-height: 44px;/);
   assert.doesNotMatch(mediaBlock("(max-width: 560px), (max-height: 520px)"), /max-height: calc\(5\.8em/, "a phone held upright keeps the taller Instruction");
 });
+
+test("6. phones held upright: in Tile and Big, Add shares the row of Favorite, Mark and Tags; in List it is level with that row", () => {
+  const upright = mediaBlock("(max-width: 560px)");
+  assert.match(upright, /\.builder-exercise-view\.is-tile \.builder-exercise-result \{ grid-template-columns: 96px minmax\(0, 1fr\) auto;[^}]*grid-template-areas: "media title title" "media meta meta" "actions actions add";/);
+  assert.match(upright, /\.builder-exercise-view\.is-big \.builder-exercise-result \{[^}]*grid-template-areas: "media media" "title title" "meta meta" "actions add";/);
+  assert.match(upright, /\.builder-exercise-view\.is-tile \.builder-exercise-result-text,\s*\.builder-exercise-view\.is-big \.builder-exercise-result-text \{ display: contents; \}/);
+  assert.match(upright, /\.builder-exercise-view\.is-tile \.builder-exercise-add,\s*\.builder-exercise-view\.is-big \.builder-exercise-add \{ grid-area: add;/);
+  assert.match(upright, /\.builder-exercise-view\.is-list \.builder-exercise-add \{ align-self: end; \}/);
+});
+
+test("7. landscape phones: the Added column scrolls on its own beside the library", () => {
+  const landscape = mediaBlock("(min-width: 561px) and (max-height: 520px)");
+  assert.match(landscape, /\.builder-section-added \{ position: sticky; top: -10px; align-self: start; max-height: calc\(100dvh - 18px\); overflow-y: auto; overscroll-behavior: contain; \}/);
+});
+
+test("8. a dialog's scroll never runs on into the page, and on a touch screen an open dialog locks the page - a hidden one does not", () => {
+  assert.match(css, /^\[aria-modal="true"\], \.exercise-detail \{ overscroll-behavior: contain; \}/m);
+  const touch = mediaBlock("(pointer: coarse)");
+  assert.match(touch, /html:has\(\[aria-modal="true"\]:not\(\[hidden\], \[hidden\] \*\), \.exercise-detail-overlay\),\s*html:has\(\[aria-modal="true"\]:not\(\[hidden\], \[hidden\] \*\), \.exercise-detail-overlay\) body \{ overflow: hidden; \}/);
+  assert.doesNotMatch(css, /html:has\(\[aria-modal="true"\]\)/, "the always-present, hidden media dialog would lock the page for good");
+});
