@@ -13,7 +13,7 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
 } else {
 let captured;
 const exercises = Array.from({ length: 40 }, (_, index) => ({ id: `ex-${index}`, name: `Squat ${index}` }));
-mock.module("../src/db.js", { namedExports: { query: async (sql, params) => {
+mock.module("../src/db.js", { namedExports: { pool: {}, query: async (sql, params) => {
   captured = { sql, params };
   const limit = params.at(-2);
   const offset = params.at(-1);
@@ -23,7 +23,7 @@ const { default: router } = await import("../src/routes/exercises.js");
 const handler = router.stack.find((layer) => layer.route?.path === "/" && layer.route.methods.get).route.stack[0].handle;
 async function search(query) {
   let body;
-  await handler({ query, user: { id: "coach" } }, { json: (data) => { body = data; } }, (error) => { throw error; });
+  await handler({ query, user: { id: "coach" }, authz: { platformRoles: [] } }, { json: (data) => { body = data; } }, (error) => { throw error; });
   return body;
 }
 

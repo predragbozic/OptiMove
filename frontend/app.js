@@ -2564,8 +2564,8 @@ async function handleContentClick(event) {
     await openExerciseCollections(exerciseEditorHandlers.refreshAfterSave);
     return;
   }
-  if (type === "exercise-edit-open") {
-    void openExerciseEditor(state, exerciseEditorHandlers, action.dataset.exerciseId || "");
+  if (type === "exercise-edit-open" || type === "exercise-copy-open") {
+    void openExerciseEditor(state, exerciseEditorHandlers, action.dataset.exerciseId || "", { copy: type === "exercise-copy-open" });
     return;
   }
   if (type === "exercise-add-open") {
