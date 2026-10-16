@@ -116,6 +116,8 @@ test("7. landscape phones: the Added column scrolls on its own beside the librar
 test("8. a dialog's scroll never runs on into the page, and on a touch screen an open dialog locks the page - a hidden one does not", () => {
   assert.match(css, /^\[aria-modal="true"\], \.exercise-detail \{ overscroll-behavior: contain; \}/m);
   const touch = mediaBlock("(pointer: coarse)");
-  assert.match(touch, /html:has\(\[aria-modal="true"\]:not\(\[hidden\], \[hidden\] \*\), \.exercise-detail-overlay\),\s*html:has\(\[aria-modal="true"\]:not\(\[hidden\], \[hidden\] \*\), \.exercise-detail-overlay\) body \{ overflow: hidden; \}/);
+  // The roster's phone sheet has its own lock and stays in the page, hidden
+  // by CSS, after a turn to landscape - it must never lock the page.
+  assert.match(touch, /html:has\(\[aria-modal="true"\]:not\(\[hidden\], \[hidden\] \*, \.tl-roster-sheet\), \.exercise-detail-overlay\),\s*html:has\(\[aria-modal="true"\]:not\(\[hidden\], \[hidden\] \*, \.tl-roster-sheet\), \.exercise-detail-overlay\) body \{ overflow: hidden; \}/);
   assert.doesNotMatch(css, /html:has\(\[aria-modal="true"\]\)/, "the always-present, hidden media dialog would lock the page for good");
 });

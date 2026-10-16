@@ -17173,11 +17173,13 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
    touch screen the page behind an open dialog does not scroll at all - a
    finger dragged over a dialog or its backdrop used to move the page
    underneath. (The media dialog is always in the page, hidden until used,
-   so a hidden one does not count.) */
+   so a hidden one does not count. The roster's phone sheet has its own
+   lock and can stay in the page hidden by CSS after a turn to landscape,
+   so it is left out.) */
 [aria-modal="true"], .exercise-detail { overscroll-behavior: contain; }
 @media (pointer: coarse) {
-  html:has([aria-modal="true"]:not([hidden], [hidden] *), .exercise-detail-overlay),
-  html:has([aria-modal="true"]:not([hidden], [hidden] *), .exercise-detail-overlay) body { overflow: hidden; }
+  html:has([aria-modal="true"]:not([hidden], [hidden] *, .tl-roster-sheet), .exercise-detail-overlay),
+  html:has([aria-modal="true"]:not([hidden], [hidden] *, .tl-roster-sheet), .exercise-detail-overlay) body { overflow: hidden; }
 }
 
 /* Hidden from sight, still read by screen readers. */
