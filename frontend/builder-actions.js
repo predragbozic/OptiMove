@@ -1480,8 +1480,13 @@ export async function handleBuilderItemAction(action, handlers) {
     const doseInput = (name) => panel?.querySelector(`[data-builder-new-dose][name="${name}"]`);
     if (!section || section.type !== "section") return true;
     action.disabled = true;
-    const originalLabel = action.textContent;
-    action.textContent = "Adding…";
+    // Only the button's word changes: its "+" (shown in the landscape Tile)
+    // and the word's own element stay, so a failed add restores them as
+    // they were.
+    const labelEl = action.querySelector?.(".builder-exercise-add-label") || action;
+    const originalLabel = labelEl.textContent;
+    labelEl.textContent = "Adding…";
+    action.setAttribute?.("aria-busy", "true");
     try {
       setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(section.id)}/exercises`, {
         method: "POST",
@@ -1505,7 +1510,8 @@ export async function handleBuilderItemAction(action, handlers) {
       if (!handlers.renderBuilderAddFeedback?.()) handlers.renderBuilder();
     } catch (error) {
       action.disabled = false;
-      action.textContent = originalLabel;
+      labelEl.textContent = originalLabel;
+      action.removeAttribute?.("aria-busy");
       handlers.renderBuilderError(error);
     }
     return true;
