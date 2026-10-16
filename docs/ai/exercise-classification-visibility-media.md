@@ -1,5 +1,9 @@
 # Exercise Library: personal classification, source media and lifecycle
 
+Historical #169 contract. The subsequent
+[workspace/filter/delete update](exercise-library-workspace-ux-delete.md)
+supersedes its workspace-independent admin scope and hard-delete limitation.
+
 This contract supersedes the private-administrator and copy/media rules in the
 PR #165/#166 documents. It does not authorize merge or production deployment.
 

@@ -1,15 +1,17 @@
 import { Router } from "express";
 import { pool, query } from "../db.js";
-import { isPlatformAdministrator } from "../authz.js";
+import { exerciseAdministratorSql, hasExerciseAdministration } from "../exerciseAccess.js";
 import { emitRealtimeEventForAll } from "../realtime.js";
 
 const router = Router();
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-router.use((req, res, next) => {
+router.use(async (req, res, next) => {
   res.set("Cache-Control", "no-store");
-  if (!isPlatformAdministrator(req.authz)) return res.status(404).json({ error: "notFound" });
-  next();
+  try {
+    if (!(await hasExerciseAdministration(req.user.id, req.authz, query))) return res.status(404).json({ error: "notFound" });
+    next();
+  } catch (error) { next(error); }
 });
 
 function respondError(res, error) {
@@ -81,7 +83,8 @@ async function saveCollection(req, res) {
     await runQuery("set local statement_timeout = '10s'");
     await runQuery("select pg_advisory_xact_lock(hashtextextended('exercise_collections', 0))");
     const actor = await runQuery(`select r.id from public.user_global_roles r join public.users u on u.id = r.user_id
-      where r.user_id = $1 and r.role = 'platform_admin' and r.is_active = true and u.is_active = true for share of r,u`, [req.user.id]);
+      where r.user_id = $1 and r.role = 'platform_admin' and r.is_active = true and u.is_active = true
+        and ${exerciseAdministratorSql} for share of r,u`, [req.user.id]);
     if (!actor.rowCount) {
       await runQuery("rollback");
       return res.status(404).json({ error: "notFound" });

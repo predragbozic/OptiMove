@@ -3,6 +3,9 @@
 import { readFileSync } from "node:fs";
 
 export const EXERCISE_COLLECTIONS_FIXTURE_SQL = `
+  create table if not exists public.user_workspace_preferences (
+    user_id uuid primary key references public.users(id),workspace_type varchar(20) not null,scope_id uuid,updated_at timestamptz not null default now()
+  );
   ${readFileSync(new URL("../../../migrations_v2/202610161100_exercise_personal_tags.sql", import.meta.url), "utf8")}
 
   alter table library.exercises

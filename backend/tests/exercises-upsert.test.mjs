@@ -312,6 +312,155 @@ async function makeLibraryAdmin(label) {
   return admin;
 }
 
+test("admin capabilities require the selected platform workspace, not just a global role", async () => {
+  const admin = await makeLibraryAdmin("workspace-admin");
+  const other = await makeCoach("workspace-other");
+  const system = await makeExercise(null, { ownerScope: "system" });
+  const privateId = await makeExercise(other.userId);
+  await query("insert into public.user_global_roles (user_id,role) values ($1,'independent_coach')", [admin.userId]);
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: admin.cookie })).body.canEdit, true);
+  assert.equal((await api("/api/auth/workspace", { method: "PUT", cookie: admin.cookie, body: { type: "private_coach" } })).status, 200);
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: admin.cookie })).body.canEdit, false);
+  assert.equal((await api(`/api/exercises/${system}`, { method: "PATCH", cookie: admin.cookie, body: { name: "Denied" } })).status, 403);
+  assert.equal((await api(`/api/exercises/${privateId}`, { cookie: admin.cookie })).status, 404);
+  assert.equal((await api(`/api/exercises/${privateId}/copy`, { method: "POST", cookie: admin.cookie, body: { name: "Denied" } })).status, 404);
+  assert.equal((await api(`/api/exercises/${privateId}/archive`, { method: "POST", cookie: admin.cookie })).status, 404);
+  assert.equal((await api("/api/exercise-collections", { cookie: admin.cookie })).status, 404);
+  assert.equal((await api("/api/exercises/owners?search=workspace", { cookie: admin.cookie })).status, 403);
+  assert.equal((await api("/api/exercises/options", { cookie: admin.cookie })).body.owners, undefined);
+  const ownCopy = await api(`/api/exercises/${system}/copy`, { method: "POST", cookie: admin.cookie, body: { name: "Private coaching copy" } });
+  assert.equal(ownCopy.status, 201);
+  assert.equal((await api(`/api/exercises/${ownCopy.body.id}`, { method: "PATCH", cookie: admin.cookie, body: { name: "Own edit remains allowed" } })).status, 200);
+  assert.equal((await api(`/api/exercises/${ownCopy.body.id}/permanent`, { method: "DELETE", cookie: admin.cookie })).status, 200);
+  assert.equal((await api("/api/auth/workspace", { method: "PUT", cookie: admin.cookie, body: { type: "club", scopeId: admin.clubId } })).status, 200);
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: admin.cookie })).body.canEdit, false);
+  const team = (await query("insert into public.teams (name,club_id) values ('Workspace test team',$1) returning id", [admin.clubId])).rows[0].id;
+  await query("insert into public.user_team_roles (user_id,team_id,role,is_active) values ($1,$2,'team_coach',true)", [admin.userId, team]);
+  await query("insert into public.athletes (id,user_id) values (gen_random_uuid(),$1)", [admin.userId]);
+  for (const workspace of [{ type: "team", scopeId: team }, { type: "athlete" }]) {
+    assert.equal((await api("/api/auth/workspace", { method: "PUT", cookie: admin.cookie, body: workspace })).status, 200);
+    assert.equal((await api(`/api/exercises/${system}`, { method: "PATCH", cookie: admin.cookie, body: { name: "Denied outside platform" } })).status, 403);
+  }
+  assert.equal((await api("/api/auth/workspace", { method: "PUT", cookie: admin.cookie, body: { type: "platform" } })).status, 200);
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: admin.cookie })).body.canEdit, true);
+  assert.equal((await api(`/api/exercises/${privateId}`, { cookie: admin.cookie })).status, 200);
+  assert.equal((await query("select count(*)::int as count from public.user_global_roles where user_id=$1 and role='platform_admin' and is_active", [admin.userId])).rows[0].count, 1);
+  assert.equal((await api("/api/auth/workspace", { method: "PUT", cookie: other.cookie, body: { type: "platform" } })).status, 403);
+});
+
+test("owner lookup pins my account, searches on demand and bounds results", async () => {
+  const admin = await makeLibraryAdmin("owner-search-admin");
+  const coach = await makeCoach("owner-search-coach");
+  const owners = await query(`insert into public.users (email,display_name) select 'owner-search-'||position||'@test.local','Owner search fixture '||position
+    from generate_series(1,25) position returning id`);
+  for (const owner of owners.rows) await makeExercise(owner.id);
+  const options = await api("/api/exercises/options", { cookie: admin.cookie });
+  assert.deepEqual(options.body.owners.map((owner) => owner.id), [admin.userId]);
+  const empty = await api("/api/exercises/owners", { cookie: admin.cookie });
+  assert.deepEqual(empty.body.owners.map((owner) => owner.id), [admin.userId]);
+  const found = await api("/api/exercises/owners?search=Owner%20search%20fixture", { cookie: admin.cookie });
+  assert.equal(found.status, 200);
+  assert.equal(found.body.owners[0].id, admin.userId);
+  assert.equal(found.body.owners.length, 21);
+  assert.equal(found.body.hasMore, true);
+  assert.ok(found.body.owners.every((owner) => owner.email));
+  assert.equal((await api("/api/exercises/owners?search=Owner", { cookie: coach.cookie })).status, 403);
+  const privateId = await makeExercise(admin.userId);
+  const mine = await api("/api/exercises?kind=mine", { cookie: admin.cookie });
+  assert.ok(mine.body.exercises.some((exercise) => exercise.id === privateId));
+  assert.ok(mine.body.exercises.every((exercise) => exercise.owner_user_id === admin.userId));
+  const normal = await api("/api/exercises?kind=accessible", { cookie: admin.cookie });
+  assert.ok(normal.body.exercises.every((exercise) => exercise.owner_scope === "system" || exercise.owner_user_id === admin.userId));
+});
+
+test("renamed copy matches name search alone; the original's personal tag remains searchable explicitly", async () => {
+  const owner = await makeCoach("copy-name-search");
+  const original = await makeExercise(null, { ownerScope: "system", name: "Original jump fixture" });
+  const name = `Proba-${crypto.randomUUID()}`;
+  await api(`/api/exercises/${original}/tags`, { method: "POST", cookie: owner.cookie, body: { name } });
+  const copy = await api(`/api/exercises/${original}/copy`, { method: "POST", cookie: owner.cookie, body: { name } });
+  assert.equal(copy.status, 201);
+  const names = await api(`/api/exercises?search=${name}&searchIn=name`, { cookie: owner.cookie });
+  assert.deepEqual(names.body.exercises.map((exercise) => exercise.id), [copy.body.id]);
+  const all = await api(`/api/exercises?search=${name}&searchIn=all`, { cookie: owner.cookie });
+  assert.deepEqual(new Set(all.body.exercises.map((exercise) => exercise.id)), new Set([original, copy.body.id]));
+  assert.equal((await query("select name from library.exercises where id=$1", [original])).rows[0].name, "Original jump fixture");
+  assert.equal((await api(`/api/exercises?tag=${name}`, { cookie: owner.cookie })).body.exercises[0].id, original);
+});
+
+test("permanent deletion removes only an unreferenced owned private copy and its metadata", async () => {
+  const owner = await makeCoach("delete-owner");
+  const other = await makeCoach("delete-other");
+  const admin = await makeLibraryAdmin("delete-admin");
+  assert.equal((await api("/api/exercises/not-a-uuid/permanent", { method: "DELETE", cookie: owner.cookie })).status, 400);
+  const original = await makeExercise(null, { ownerScope: "system", name: "Delete retained original" });
+  const before = (await query("select * from library.exercises where id=$1", [original])).rows[0];
+  const copy = await api(`/api/exercises/${original}/copy`, { method: "POST", cookie: owner.cookie, body: { name: "Disposable private" } });
+  const id = copy.body.id;
+  await api(`/api/exercises/${id}/tags`, { method: "POST", cookie: owner.cookie, body: { name: "Delete metadata" } });
+  await api(`/api/exercises/${id}/favorite`, { method: "POST", cookie: owner.cookie });
+  await api(`/api/exercises/${id}/classification`, { method: "PUT", cookie: owner.cookie, body: { overrides: { place: "Delete place" } } });
+  await api(`/api/exercises/${id}/hidden`, { method: "POST", cookie: owner.cookie, body: { hidden: true } });
+  assert.equal((await api(`/api/exercises/${id}/permanent`, { method: "DELETE", cookie: other.cookie })).status, 404);
+  assert.equal((await api(`/api/exercises/${original}/permanent`, { method: "DELETE", cookie: owner.cookie })).status, 403);
+  assert.equal((await api(`/api/exercises/${original}/permanent`, { method: "DELETE", cookie: admin.cookie })).status, 403);
+  const deleted = await api(`/api/exercises/${id}/permanent`, { method: "DELETE", cookie: owner.cookie });
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  assert.equal((await query("select count(*)::int as count from library.exercises where id=$1", [id])).rows[0].count, 0);
+  assert.equal((await query("select count(*)::int as count from library.exercise_personal_tags where exercise_id=$1", [id])).rows[0].count, 0);
+  assert.equal((await query("select count(*)::int as count from library.filter_hidden where item_id=$1 and kind='exercise'", [id])).rows[0].count, 0);
+  assert.deepEqual((await query("select * from library.exercises where id=$1", [original])).rows[0], before);
+});
+
+test("permanent deletion refuses SET NULL, CASCADE, program/activity references and dependent copies", async () => {
+  const owner = await makeCoach("delete-in-use");
+  await query(`create schema if not exists deletion_reference_fixture;
+    create table deletion_reference_fixture.program_items (exercise_id uuid references library.exercises(id) on delete set null);
+    create table deletion_reference_fixture.activities (exercise_id uuid references library.exercises(id) on delete cascade)`);
+  for (const table of ["program_items", "activities"]) {
+    const id = await makeExercise(owner.userId);
+    await query(`insert into deletion_reference_fixture.${table} values ($1)`, [id]);
+    const deleted = await api(`/api/exercises/${id}/permanent`, { method: "DELETE", cookie: owner.cookie });
+    assert.equal(deleted.status, 409, JSON.stringify(deleted.body));
+    assert.equal((await query(`select exercise_id from deletion_reference_fixture.${table} where exercise_id=$1`, [id])).rows[0].exercise_id, id);
+    assert.equal((await api(`/api/exercises/${id}/archive`, { method: "POST", cookie: owner.cookie })).status, 200);
+    assert.equal((await api(`/api/exercises/${id}/restore`, { method: "POST", cookie: owner.cookie })).status, 200);
+  }
+  const parent = await makeExercise(owner.userId);
+  const child = await api(`/api/exercises/${parent}/copy`, { method: "POST", cookie: owner.cookie, body: { name: "Dependent child" } });
+  assert.equal(child.status, 201);
+  assert.equal((await api(`/api/exercises/${parent}/permanent`, { method: "DELETE", cookie: owner.cookie })).status, 409);
+  assert.equal((await api(`/api/exercises/${child.body.id}`, { cookie: owner.cookie })).status, 200);
+});
+
+test("a concurrently inserted dependency is retained and blocks permanent deletion", async () => {
+  const owner = await makeCoach("delete-race");
+  const id = await makeExercise(owner.userId);
+  const writer = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  await writer.connect();
+  let deleting;
+  try {
+    await writer.query("begin");
+    await writer.query("insert into deletion_reference_fixture.program_items values ($1)", [id]);
+    deleting = api(`/api/exercises/${id}/permanent`, { method: "DELETE", cookie: owner.cookie });
+    const deadline = Date.now() + 1200;
+    let waiting = false;
+    while (Date.now() < deadline) {
+      waiting = (await query("select 1 from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and query ilike 'select e.id,e.owner_scope,e.owner_user_id from library.exercises e%'")).rowCount > 0;
+      if (waiting) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(waiting, true);
+    await writer.query("commit");
+    assert.equal((await deleting).status, 409);
+    assert.equal((await query("select exercise_id from deletion_reference_fixture.program_items where exercise_id=$1", [id])).rows[0].exercise_id, id);
+  } finally {
+    await writer.query("rollback");
+    await writer.end();
+    await Promise.allSettled([deleting].filter(Boolean));
+  }
+});
+
 test("personal classification overrides all existing fields, isolates users and resets without copying", async () => {
   const first = await makeCoach("classify-first");
   const second = await makeCoach("classify-second");

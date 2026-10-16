@@ -94,6 +94,8 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 
 .workspace-toggle {
   display: inline-flex;
+  min-width: 0;
+  max-width: 360px;
   align-items: center;
   gap: 6px;
   min-height: 34px;
@@ -119,7 +121,26 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 
 .workspace-toggle-caret {
   font-size: 10px;
+  flex-shrink: 0;
 }
+
+.workspace-toggle-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exercise-owner-filter {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-column: 1 / -1;
+  gap: 8px;
+  min-width: 0;
+}
+
+.exercise-owner-filter > .muted { grid-column: 1 / -1; }
+.exercise-visibility-fields { display: contents; }
 
 .workspace-panel {
   position: absolute;
@@ -17295,4 +17316,40 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
   .builder-exercise-view .builder-mini-toggle { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
   .builder-exercise-view .builder-exercise-mini-actions .text-action { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0 8px; }
   .builder-exercise-view .builder-exercise-add { min-width: 44px; min-height: 44px; }
+}
+
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) repeat(3, 40px);
+    width: 100%;
+    min-width: 0;
+    gap: 6px;
+  }
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions > .workspace-menu {
+    min-width: 0;
+  }
+  body:not(.athlete-mode):not(.login-mode) .workspace-toggle {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    padding-inline: 8px;
+  }
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions > .plain-button,
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions .notification-toggle,
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions .message-toggle {
+    width: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    padding: 6px;
+  }
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions .status-pill {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions > .workspace-menu .workspace-panel {
+    right: auto;
+    left: 0;
+    max-width: calc(100vw - 80px);
+  }
 }

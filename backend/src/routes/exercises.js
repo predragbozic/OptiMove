@@ -1,12 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { pool, query } from "../db.js";
-import { exerciseReadScopeSql as exerciseScope, exerciseLibraryScopeSql, exerciseAdministratorSql } from "../exerciseAccess.js";
+import { exerciseReadScopeSql as exerciseScope, exerciseLibraryScopeSql, exerciseAdministratorSql, hasExerciseAdministration } from "../exerciseAccess.js";
 import { classificationFields, classificationJoinSql, validateClassification, exerciseMediaJoinSql } from "../exercisePersonalization.js";
-import { isPlatformAdministrator } from "../authz.js";
+import { deleteUnreferencedExercise } from "../exerciseDeletion.js";
 
 const router = Router();
-router.use((req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
+router.use(async (req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  try {
+    req.exerciseAdmin = await hasExerciseAdministration(req.user.id, req.authz, query);
+    next();
+  } catch (error) { next(error); }
+});
 
 const libraryScope = `(
   owner_scope = 'system'
@@ -204,14 +210,27 @@ router.get("/options", async (req, res, next) => {
         options[field.options] = [...new Set([...(options[field.options] || []), ...(values || []).filter(Boolean)])].sort();
       }
     }
-    if (isPlatformAdministrator(req.authz)) {
-      options.owners = (await query(`select distinct owner.id,coalesce(owner.display_name,owner.full_name,'User') as name
-        from library.exercises e join public.users owner on owner.id=e.owner_user_id order by name,owner.id`)).rows;
+    if (req.exerciseAdmin) {
+      options.owners = (await query(`select id,coalesce(display_name,full_name,'User') as name,email
+        from public.users where id=$1`, params)).rows;
     }
     res.json(options);
   } catch (error) {
     next(error);
   }
+});
+
+router.get("/owners", async (req, res, next) => {
+  try {
+    if (!req.exerciseAdmin) return res.status(403).json({ error: "Platform administration workspace required." });
+    const search = String(req.query.search || "").trim().slice(0, 120);
+    const result = await query(`select owner.id,coalesce(owner.display_name,owner.full_name,'User') as name,owner.email
+      from public.users owner where owner.id=$1 or (length($2)>=2
+        and (coalesce(owner.display_name,owner.full_name,'') ilike $3 or owner.email ilike $3)
+        and exists (select 1 from library.exercises exercise where exercise.owner_user_id=owner.id))
+      order by (owner.id=$1) desc,name,owner.id limit 22`, [req.user.id, search, `%${search}%`]);
+    res.json({ owners: result.rows.slice(0, 21), hasMore: result.rows.length > 21 });
+  } catch (error) { next(error); }
 });
 
 router.get("/", async (req, res, next) => {
@@ -235,12 +254,13 @@ router.get("/", async (req, res, next) => {
     const requestedOffset = Number(req.query.offset || 0);
     const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
     const params = [req.user.id];
-    const admin = isPlatformAdministrator(req.authz);
+    const admin = req.exerciseAdmin;
     const visibility = String(req.query.visibility || "active");
     const hidden = String(req.query.hidden || "visible");
     const kind = String(req.query.kind || "all");
-    const owner = String(req.query.owner || "");
-    if (!["active", "archived", "all"].includes(visibility) || !["visible", "hidden", "all"].includes(hidden) || !["all", "system", "private"].includes(kind)) {
+    const owner = req.query.owner === "me" ? req.user.id : String(req.query.owner || "");
+    const searchIn = String(req.query.searchIn || "all");
+    if (!["active", "archived", "all"].includes(visibility) || !["visible", "hidden", "all"].includes(hidden) || !["all", "system", "private", "accessible", "mine"].includes(kind) || !["name", "all"].includes(searchIn)) {
       return res.status(400).json({ error: "Invalid exercise filters." });
     }
     if (owner && (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(owner) || (!admin && owner !== req.user.id))) {
@@ -249,16 +269,18 @@ router.get("/", async (req, res, next) => {
     let where = `where ${exerciseLibraryScopeSql}`;
     if (visibility !== "all") where += ` and e.is_active=${visibility === "active" ? "true" : "false"}`;
     if (hidden !== "all") where += ` and ${hidden === "visible" ? "not " : ""}exists (select 1 from library.filter_hidden personal_hidden where personal_hidden.kind='exercise' and personal_hidden.item_id=e.id and personal_hidden.user_id=$1)`;
-    if (kind !== "all") where += ` and e.owner_scope='${kind === "system" ? "system" : "user"}'`;
+    if (kind === "accessible") where += " and (e.owner_scope='system' or e.owner_user_id=$1)";
+    else if (kind === "mine") where += " and e.owner_scope='user' and e.owner_user_id=$1";
+    else if (kind !== "all") where += ` and e.owner_scope='${kind === "system" ? "system" : "user"}'`;
     if (owner) { params.push(owner); where += ` and e.owner_user_id=$${params.length}`; }
     let searchOrder = "";
 
     if (search) {
       params.push(`%${search}%`);
-      where += ` and (e.name ilike $${params.length} or e.exercise_code ilike $${params.length}
+      where += ` and (e.name ilike $${params.length} or e.exercise_code ilike $${params.length}${searchIn === "all" ? `
         or exists (select 1 from (${visibleTagsSql}) search_tags where search_tags.name ilike $${params.length})
         or exists (select 1 from jsonb_each(to_jsonb(effective_classification)) classification_value
-          where classification_value.value::text ilike $${params.length}))`;
+          where classification_value.value::text ilike $${params.length})` : ""})`;
       params.push(search);
       const searchParam = `$${params.length}`;
       searchOrder = `case
@@ -343,7 +365,7 @@ router.get("/", async (req, res, next) => {
     res.json({
       exercises: result.rows.slice(0, limit),
       hasMore: result.rows.length > limit,
-      canManageCollections: isPlatformAdministrator(req.authz),
+      canManageCollections: req.exerciseAdmin,
     });
   } catch (error) {
     next(error);
@@ -405,7 +427,7 @@ router.get("/:exerciseId", async (req, res, next) => {
       ownerUserId: row.owner_user_id,
       isActive: row.is_active,
       copyParentId: row.copy_parent_id || null,
-      canEdit: row.is_active && (isPlatformAdministrator(req.authz) || row.owner_scope === "user" && row.owner_user_id === req.user.id),
+      canEdit: row.is_active && (req.exerciseAdmin || row.owner_scope === "user" && row.owner_user_id === req.user.id),
       canCopy: row.is_active,
       sourceExerciseId: row.source_exercise_id || null,
       exerciseCode: row.exercise_code || "",
@@ -451,6 +473,7 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
     await runQuery("set local lock_timeout = '2s'");
     await runQuery("set local statement_timeout = '10s'");
     await runQuery("select pg_advisory_xact_lock_shared(hashtextextended('exercise_collections', 0))");
+    req.exerciseAdmin = await hasExerciseAdministration(userId, req.authz, runQuery);
     if (exerciseId) {
       const existing = await runQuery(
         `select e.id, e.owner_scope, e.owner_user_id, coalesce(e.video_url,fallback_media.video_url) as video_url, coalesce(e.image_url,fallback_media.image_url) as image_url from library.exercises e ${exerciseMediaJoinSql} where e.id = $2 and (${exerciseLibraryScopeSql}) and e.is_active=true for update of e`,
@@ -460,7 +483,7 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
         await runQuery("rollback");
         return res.status(404).json({ error: "Exercise not found." });
       }
-      if (!copying && existing.rows[0].owner_scope === "system" && !isPlatformAdministrator(req.authz)) {
+      if (!copying && existing.rows[0].owner_scope === "system" && !req.exerciseAdmin) {
         await runQuery("rollback");
         return res.status(403).json({ error: "Only platform administrators can edit application exercises." });
       }
@@ -553,7 +576,7 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
       return res.status(404).json({ error: "Exercise not found." });
     }
     await runQuery("commit");
-    if (isPlatformAdministrator(req.authz)) console.info(JSON.stringify({ event: "exercise.save", actor: userId, exercise: finalId, operation: copying ? "copy" : exerciseId ? "edit" : "create" }));
+    if (req.exerciseAdmin) console.info(JSON.stringify({ event: "exercise.save", actor: userId, exercise: finalId, operation: copying ? "copy" : exerciseId ? "edit" : "create" }));
     res.status(exerciseId ? 200 : 201).json({
       id: detail.id,
       ownerScope: detail.owner_scope,
@@ -647,21 +670,54 @@ async function setExerciseActive(req, res, next, active) {
     await client.query("set local lock_timeout='2s'");
     await client.query("set local statement_timeout='10s'");
     await client.query("select pg_advisory_xact_lock(hashtextextended('exercise_collections',0))");
+    req.exerciseAdmin = await hasExerciseAdministration(req.user.id, req.authz, client.query.bind(client));
     const existing = await client.query(`select e.id,e.owner_scope,e.owner_user_id,e.is_active from library.exercises e
       where e.id=$2 and ${exerciseLibraryScopeSql} for update of e`, [req.user.id, req.params.exerciseId]);
     const exercise = existing.rows[0];
     if (!exercise) { await client.query("rollback"); return res.status(404).json({ error: "Exercise not found." }); }
-    if (!isPlatformAdministrator(req.authz) && !(exercise.owner_scope === "user" && exercise.owner_user_id === req.user.id)) {
+    if (!req.exerciseAdmin && !(exercise.owner_scope === "user" && exercise.owner_user_id === req.user.id)) {
       await client.query("rollback");
       return res.status(403).json({ error: "Only an owner or platform administrator can archive this exercise." });
     }
     await client.query("update library.exercises set is_active=$2,updated_at=now() where id=$1", [exercise.id, active]);
     await client.query("commit");
-    console.info(JSON.stringify({ event: "exercise.lifecycle", actor: req.user.id, exercise: exercise.id, active, administrator: isPlatformAdministrator(req.authz) }));
+    console.info(JSON.stringify({ event: "exercise.lifecycle", actor: req.user.id, exercise: exercise.id, active, administrator: req.exerciseAdmin }));
     res.json({ id: exercise.id, isActive: active, archived: !active });
   } catch (error) { try { await client?.query("rollback"); } catch {} next(error); }
   finally { client?.release(); }
 }
+
+router.delete("/:exerciseId/permanent", async (req, res, next) => {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.exerciseId)) {
+    return res.status(400).json({ error: "Invalid exercise ID." });
+  }
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query("begin isolation level read committed");
+    await client.query("set local lock_timeout='2s'");
+    await client.query("set local statement_timeout='10s'");
+    await client.query("select pg_advisory_xact_lock(hashtextextended('exercise_collections',0))");
+    req.exerciseAdmin = await hasExerciseAdministration(req.user.id, req.authz, client.query.bind(client));
+    const existing = await client.query(`select e.id,e.owner_scope,e.owner_user_id from library.exercises e
+      where e.id=$2 and ${exerciseLibraryScopeSql} for update of e`, [req.user.id, req.params.exerciseId]);
+    const exercise = existing.rows[0];
+    if (!exercise) { await client.query("rollback"); return res.status(404).json({ error: "Exercise not found." }); }
+    if (exercise.owner_scope !== "user" || !(req.exerciseAdmin || exercise.owner_user_id === req.user.id)) {
+      await client.query("rollback");
+      return res.status(403).json({ error: "Only an owned private exercise can be permanently deleted. Archive system exercises instead." });
+    }
+    const result = await deleteUnreferencedExercise(client, exercise.id);
+    if (!result.deleted) { await client.query("rollback"); return res.status(409).json({ error: result.reason }); }
+    await client.query("commit");
+    console.info(JSON.stringify({ event: "exercise.delete", actor: req.user.id, exercise: exercise.id, administrator: req.exerciseAdmin }));
+    res.json({ id: exercise.id, deleted: true });
+  } catch (error) {
+    try { await client?.query("rollback"); } catch {}
+    if (["23503", "55P03", "40P01", "57014"].includes(error.code)) return res.status(409).json({ error: "Exercise is in use or busy. Archive it instead, or retry later." });
+    next(error);
+  } finally { client?.release(); }
+});
 
 router.post("/:exerciseId/archive", (req, res, next) => setExerciseActive(req, res, next, false));
 router.post("/:exerciseId/restore", (req, res, next) => setExerciseActive(req, res, next, true));
