@@ -58,6 +58,17 @@ const ORG = {
 };
 
 // One source athlete as GET /source-athletes returns it (phase 3a).
+// The screens show a session's start in the viewer's local time
+// (gpexe-import-view.js fmtDateTime); the expected text is built from the
+// same instant the same way, so the tests pass in any time zone - a UTC
+// cloud machine as well as a workstation in Belgrade.
+function localStampPattern(iso) {
+  const d = new Date(iso);
+  const two = (n) => String(n).padStart(2, "0");
+  return `${two(d.getDate())}\\.${two(d.getMonth() + 1)}\\.${d.getFullYear()} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+const LAST_SEEN_STAMP = localStampPattern("2026-09-14T16:08:12Z");
+
 function sourceAthlete(overrides = {}) {
   return {
     gpexeAthleteId: "104", status: "unlinked", link: null,
@@ -1702,7 +1713,7 @@ test("Link athletes: the way in shows how many are not linked; the screen lists 
   // The unlinked row: number, last session, values, no name anywhere.
   const row104 = html.slice(html.indexOf('data-gpexe-athlete-id="104"') - 900, html.indexOf('data-gpexe-athlete-id="104"'));
   assert.match(row104, /<strong>GPEXE athlete 104<\/strong>/);
-  assert.match(row104, /Last seen 14\.09\.2026 18:08 · FULL TRAINING/, "the same title and time as the inbox row");
+  assert.match(row104, new RegExp(`Last seen ${LAST_SEEN_STAMP} · FULL TRAINING`), "the same title and time as the inbox row");
   assert.match(row104, /Time 74 min · Distance 5,230 m · Top speed 29\.5 km\/h · Drills 2/);
   // The raw-only row: the values GPEXE did not give are "—", never 0, and the row says where it was seen.
   const row105 = html.slice(html.indexOf('data-gpexe-athlete-id="105"') - 900, html.indexOf('data-gpexe-athlete-id="105"'));
@@ -1711,7 +1722,7 @@ test("Link athletes: the way in shows how many are not linked; the screen lists 
   assert.match(row105, /Time — · Distance — · Top speed — · Drills —/);
   assert.ok(!/Time 0|Distance 0|Drills 0/.test(row105));
   // The linked row: the name from the link and Unlink; the inactive one says so.
-  assert.match(html, /<strong>Ana Example<\/strong>[\s\S]{0,200}GPEXE athlete 101 · Last seen 14\.09\.2026 18:08 · FULL TRAINING/);
+  assert.match(html, new RegExp(`<strong>Ana Example</strong>[\\s\\S]{0,200}GPEXE athlete 101 · Last seen ${LAST_SEEN_STAMP} · FULL TRAINING`));
   assert.match(html, /<strong>Former Member<\/strong>[\s\S]{0,200}GPEXE athlete 102 · no longer in the team · Not seen in any session that is still available\./);
   assert.match(html, /data-action="training-load-gpexe-unlink" data-link-id="link-1"/);
   assert.match(html, /data-action="training-load-gpexe-unlink" data-link-id="link-6"/);
