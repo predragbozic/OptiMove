@@ -16935,9 +16935,9 @@ body:not(.athlete-mode):not(.login-mode) .sidebar > .brand {
 .exercise-thumb-fallback { display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-weight: 800; letter-spacing: .02em; }
 
 .exercise-view-grid { display: grid; gap: 12px; }
-.exercise-view-grid.is-tile { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
-.exercise-view-grid.is-big { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
-.exercise-view-grid.is-list { grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 0 20px; }
+.exercise-view-grid.is-tile { grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); }
+.exercise-view-grid.is-big { grid-template-columns: repeat(auto-fill, minmax(min(230px, 100%), 1fr)); }
+.exercise-view-grid.is-list { grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); gap: 0 20px; }
 .exercise-view-card { position: relative; display: grid; align-items: center; gap: 10px; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text); }
 .exercise-view-media { display: block; min-width: 0; padding: 0; border: 0; border-radius: 6px; background: var(--surface-soft); overflow: hidden; cursor: pointer; }
 span.exercise-view-media { cursor: default; }
@@ -16984,8 +16984,8 @@ span.exercise-view-media { cursor: default; }
 .builder-library-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 12px; }
 .builder-library-head .builder-panel-label { margin: 0; }
 .builder-exercise-view { display: grid; gap: 7px; }
-.builder-exercise-view.is-list { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
-.builder-exercise-view.is-tile { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.builder-exercise-view.is-list { grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); }
+.builder-exercise-view.is-tile { grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 10px; }
 .builder-exercise-view.is-big { grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .builder-exercise-thumb.exercise-thumb-fallback { font-size: 12px; }
 .builder-exercise-view.is-tile .builder-exercise-result { grid-template-columns: 112px minmax(0, 1fr); grid-template-rows: auto auto; align-items: start; row-gap: 6px; }
@@ -17018,9 +17018,14 @@ span.exercise-view-media { cursor: default; }
 }
 
 /* Tablet portrait: the section editor keeps the library and the added list
-   side by side, so Tile uses a smaller picture to keep two columns. */
+   side by side, so Tile uses a smaller picture to keep two columns and Big
+   puts the name under the picture. */
 @media (min-width: 561px) and (max-width: 900px) {
-  .builder-exercise-view.is-tile { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  .builder-exercise-view.is-tile { grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr)); }
+  /* Big: too narrow for the picture beside the name - stack them. */
+  .builder-exercise-view.is-big .builder-exercise-result { grid-template-columns: minmax(0, 1fr); }
+  .builder-exercise-view.is-big .builder-exercise-preview { grid-row: auto; }
+  .builder-exercise-view.is-big .builder-exercise-result-text { align-self: auto; }
   .builder-exercise-view.is-tile .builder-exercise-result { grid-template-columns: 72px minmax(0, 1fr); }
   .builder-exercise-view.is-tile .builder-exercise-preview { width: 72px; min-width: 72px; }
 }
