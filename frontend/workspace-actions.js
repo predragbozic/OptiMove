@@ -44,6 +44,7 @@ export function renderWorkspaceSwitcher() {
   const canSwitch = available.length > 1;
   const caret = canSwitch ? `<span class="workspace-toggle-caret" aria-hidden="true">&#9662;</span>` : "";
   els.workspaceToggle.innerHTML = `<span class="workspace-toggle-label">${escapeHtml(workspaceLabel(active))}</span>${caret}`;
+  els.workspaceToggle.setAttribute("title", workspaceLabel(active));
   els.workspaceToggle.disabled = Boolean(state.workspaceSwitcher.pending);
 
   if (canSwitch) {

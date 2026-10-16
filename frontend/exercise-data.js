@@ -9,11 +9,13 @@ export async function loadExerciseFilterOptions() {
 
 export function exerciseSearchUrl(query, limit, filters = {}) {
   const params = new URLSearchParams({ search: query || "", limit: String(limit || 30) });
+  params.set("searchIn", filters.searchIn || "name");
+  params.set("kind", filters.owner && !filters.kind ? "private" : filters.kind || "accessible");
   EXERCISE_FILTERS.forEach((filter) => {
     if (filters[filter.key]) params.set(filter.key, filters[filter.key]);
   });
   if (filters.favorite) params.set("favorite", "true");
-  for (const key of ["kind", "visibility", "hidden", "owner"]) {
+  for (const key of ["visibility", "hidden", "owner"]) {
     if (filters[key]) params.set(key, filters[key]);
   }
   return `/api/exercises?${params.toString()}`;

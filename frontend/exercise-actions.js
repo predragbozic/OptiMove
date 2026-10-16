@@ -5,8 +5,8 @@ import { renderBuilder } from "./builder-view.js";
 import { els } from "./dom.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions, loadMarkedExerciseVisibility } from "./exercise-data.js";
 import { normalizeExerciseView, saveExerciseViewPreference } from "./exercise-view-modes.js";
-import { filterIconSvg, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters, renderExerciseVisibilityFilters } from "./exercise-library.js";
-import { emptyExerciseOptions, EXERCISE_FILTERS, state } from "./state.js";
+import { filterIconSvg, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters, renderExerciseVisibilityFilters, renderExerciseOwnerOptions } from "./exercise-library.js";
+import { emptyExerciseFilters, emptyExerciseOptions, EXERCISE_FILTERS, state } from "./state.js";
 import { debounce, escapeHtml } from "./utils.js";
 import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
 
@@ -28,7 +28,7 @@ function exercisesContextKey(term, limit, filters) {
     limit,
     ...EXERCISE_FILTERS.map((filter) => filters[filter.key]),
     filters.favorite,
-    ...["kind", "visibility", "hidden", "owner"].filter((key) => filters[key]).map((key) => `${key}:${filters[key]}`),
+    ...["kind", "visibility", "hidden", "owner", "searchIn"].filter((key) => filters[key]).map((key) => `${key}:${filters[key]}`),
   ]);
 }
 
@@ -36,8 +36,45 @@ export function invalidateExercisesCache() {
   invalidateCacheNamespace(EXERCISES_CACHE_NAMESPACE);
 }
 
+export function resetExercisesForWorkspaceChange() {
+  invalidateExercisesCache();
+  state.exerciseSearch.options = emptyExerciseOptions();
+  state.exerciseSearch.filters = emptyExerciseFilters();
+  state.exerciseSearch.canManageCollections = false;
+  state.exerciseSearch.hasMore = false;
+  state.lastExerciseResults = [];
+  state.exerciseEditor.open = false;
+  state.tagEditor.open = false;
+  state.exerciseDetail = { ids: [], currentId: null };
+  state.builder.exercises = [];
+  document.querySelectorAll(".exercise-editor-overlay, .exercise-classification-overlay, .exercise-detail-overlay").forEach((element) => element.remove());
+}
+
 function activeExerciseSelectFilterCount(filters) {
-  return EXERCISE_FILTERS.filter((filter) => !QUICK_FILTER_KEYS.has(filter.key) && filters[filter.key]).length;
+  return EXERCISE_FILTERS.filter((filter) => !QUICK_FILTER_KEYS.has(filter.key) && filters[filter.key]).length
+    + ["kind", "visibility", "hidden", "owner", "searchIn"].filter((key) => filters[key]).length;
+}
+
+export function bindExerciseOwnerSearch() {
+  const input = document.querySelector("[data-exercise-owner-search]");
+  if (!input) return;
+  const select = document.querySelector('[data-exercise-filter="owner"]');
+  const hint = document.querySelector("[data-exercise-owner-hint]");
+  input.addEventListener("input", debounce(async () => {
+    const search = input.value.trim();
+    try {
+      const data = await api(`/api/exercises/owners?search=${encodeURIComponent(search)}`);
+      if (!input.isConnected || input.value.trim() !== search) return;
+      const previous = state.exerciseSearch.options.owners || [];
+      const selected = previous.find((owner) => owner.id === select.value);
+      const owners = [...data.owners];
+      if (selected && !owners.some((owner) => owner.id === selected.id)) owners.push(selected);
+      state.exerciseSearch.options.owners = owners;
+      select.innerHTML = renderExerciseOwnerOptions(owners, state.exerciseSearch.filters.owner);
+      hint.textContent = data.hasMore ? "More owners match. Refine the name or email." : search.length < 2
+        ? "My account is first. Type at least 2 characters to find other owners." : "Matching owners; my account stays first.";
+    } catch { hint.textContent = "Could not load owners. Try again."; }
+  }, 250));
 }
 
 export async function loadExercises(handlers) {
@@ -56,7 +93,6 @@ export async function loadExercises(handlers) {
   await optionsPromise;
   const selectFilterCount = activeExerciseSelectFilterCount(state.exerciseSearch.filters);
   els.toolbar.innerHTML = `
-    ${renderExerciseVisibilityFilters(state.exerciseSearch.filters, state.exerciseSearch.options)}
     <label class="search-field exercise-search-field">
       <span>Exercise search</span>
       <input id="exerciseSearch" type="search" placeholder="Name or code" value="">
@@ -67,12 +103,14 @@ export async function loadExercises(handlers) {
           ${filterIconSvg()}${selectFilterCount ? `<span class="filter-count-badge">${selectFilterCount}</span>` : ""}
         </summary>
         <div class="exercise-filter-strip">
-          ${renderExerciseFilterControls(state.exerciseSearch.filters, state.exerciseSearch.options)}
+          ${renderExerciseVisibilityFilters(state.exerciseSearch.filters, state.exerciseSearch.options)}
+          ${renderExerciseFilterControls(state.exerciseSearch.filters, state.exerciseSearch.options, "library-selects")}
         </div>
       </details>
     `)}
   `;
   const input = document.querySelector("#exerciseSearch");
+  bindExerciseOwnerSearch();
   input.addEventListener("input", debounce(() => {
     state.exerciseSearch.limit = 30;
     searchExercises(input.value, handlers);
@@ -81,6 +119,16 @@ export async function loadExercises(handlers) {
     control.addEventListener("change", () => {
       state.exerciseSearch.filters[control.dataset.exerciseFilter] =
         control.type === "checkbox" ? control.checked : control.value;
+      if (control.dataset.exerciseFilter === "owner" && control.value) {
+        state.exerciseSearch.filters.kind = control.value === state.currentUser?.id ? "mine" : "private";
+        const kind = document.querySelector('[data-exercise-filter="kind"]');
+        if (kind) kind.value = state.exerciseSearch.filters.kind;
+      }
+      if (control.dataset.exerciseFilter === "kind" && !["all", "private"].includes(control.value)) {
+        state.exerciseSearch.filters.owner = "";
+        const owner = document.querySelector('[data-exercise-filter="owner"]');
+        if (owner) owner.value = "";
+      }
       state.exerciseSearch.limit = 30;
       searchExercises(input.value, handlers);
     });
@@ -150,6 +198,18 @@ export async function submitExerciseTagForm(form, handlers) {
 
 export async function handleExerciseLibraryAction(action, handlers) {
   const type = action.dataset.action;
+  if (type === "exercise-delete") {
+    if (!window.confirm("Permanently delete this private exercise? This cannot be undone. Programs, activities or dependent copies prevent deletion; use Archive to keep references.")) return true;
+    try {
+      const id = action.dataset.exerciseId;
+      await api(`/api/exercises/${encodeURIComponent(id)}/permanent`, { method: "DELETE" });
+      state.markedExercises.delete(id);
+      state.markedExerciseIds.delete(id);
+      invalidateExercisesCache();
+      await refreshCurrentExerciseSearch(handlers);
+    } catch (error) { window.alert(error.message || "Could not delete exercise. Use Archive instead."); }
+    return true;
+  }
   if (["exercise-hide", "exercise-archive", "exercise-restore"].includes(type)) {
     try {
       const id = encodeURIComponent(action.dataset.exerciseId);

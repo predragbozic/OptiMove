@@ -1,15 +1,21 @@
+export const exerciseAdministratorSql = `(exists (select 1 from public.user_global_roles exercise_admin
+  where exercise_admin.user_id=$1 and exercise_admin.role='platform_admin' and exercise_admin.is_active=true)
+  and coalesce((select workspace_type from public.user_workspace_preferences where user_id=$1),'platform')='platform')`;
+
+export async function hasExerciseAdministration(userId, authz, runQuery) {
+  if (!authz?.platformRoles?.includes("platform_admin")) return false;
+  const result = await runQuery(`select ${exerciseAdministratorSql} as allowed`, [userId]);
+  return result.rows[0]?.allowed === true;
+}
+
 export const exerciseCollectionAccessSql = `(
-    exists (select 1 from public.user_global_roles exercise_admin
-      where exercise_admin.user_id = $1 and exercise_admin.role = 'platform_admin' and exercise_admin.is_active = true)
+    ${exerciseAdministratorSql}
     or not exists (select 1 from library.exercise_collection_items restricted_item
       where restricted_item.exercise_id = coalesce(e.source_exercise_id, e.id))
     or exists (select 1 from library.exercise_collection_items granted_item
       join library.exercise_collection_users exercise_grant on exercise_grant.collection_id = granted_item.collection_id
       where granted_item.exercise_id = coalesce(e.source_exercise_id, e.id) and exercise_grant.user_id = $1)
   )`;
-
-export const exerciseAdministratorSql = `exists (select 1 from public.user_global_roles exercise_admin
-  where exercise_admin.user_id=$1 and exercise_admin.role='platform_admin' and exercise_admin.is_active=true)`;
 
 const privateCopyAccessSql = `(e.copy_parent_id is null or not exists (
   with recursive ancestry as (

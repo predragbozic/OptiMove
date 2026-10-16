@@ -79,6 +79,7 @@ import {
   handleExerciseDetailAction,
   handleExerciseLibraryAction,
   invalidateExercisesCache,
+  resetExercisesForWorkspaceChange,
   loadExercises,
   submitExerciseTagForm as submitExerciseTagFormAction,
 } from "./exercise-actions.js";
@@ -2822,6 +2823,7 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
 // workspace this account happened to already visit earlier in the session
 // is re-verified against the server rather than trusted purely from cache.
 async function onWorkspaceChanged() {
+  resetExercisesForWorkspaceChange();
   clearAthleteFilters();
   const generation = ++workspaceRosterGeneration;
   const contextKey = buildContextKey(currentUserWorkspaceContextParts());
