@@ -115,7 +115,9 @@ test("6. phones and landscape phones: the folded panel, the link, and a search t
   assert.match(compact, /\.builder-section-library \.builder-custom-exercise-button \{ display: none; \}/);
   // Laid over the row (absolute), never a change of the row's height: the
   // earlier focus-driven reflow made the first tap on Add miss.
-  assert.match(compact, /\.builder-library-toolbar \.builder-exercise-search:focus-within \{ position: absolute; inset: 0; z-index: 3; \}/);
+  // Filters (48 px + the 6 px gap) stays visible, pinned to the row's end.
+  assert.match(compact, /\.builder-library-toolbar \.builder-exercise-search:focus-within \{ position: absolute; inset: 0 54px 0 0; z-index: 3; \}/);
+  assert.match(compact, /\.builder-filters-toggle \{[^}]*margin-left: auto;/);
   assert.match(compact, /\.builder-library-toolbar \{ position: relative;/);
   assert.match(compact, /\.builder-filters-toggle \{[^}]*width: 48px; height: 48px;/);
   // The panel is the only way to filter on a phone: its moved controls get 44 px too.
@@ -125,12 +127,33 @@ test("6. phones and landscape phones: the folded panel, the link, and a search t
   assert.match(css, /\.builder-filters-toggle, \.builder-custom-exercise-link \{ display: none; \}/, "hidden on a large screen");
   const landscape = mediaBlock("(min-width: 561px) and (max-height: 520px)");
   assert.match(landscape, /\.builder-library-controls \{ position: sticky;/);
+  // An open filter panel would make the pinned block taller than the editor.
+  assert.match(landscape, /\.builder-section-panel\[data-filters-open="true"\] \.builder-library-controls \{ position: static; \}/);
+});
+
+test("6b. the header rules reach only the section editor - other dialogs share .builder-section-panel-head", () => {
+  assert.match(css, /\.builder-section-modal \.builder-section-panel-head > div:first-child > \.eyebrow \{ display: none; \}/);
+  assert.match(css, /\.builder-section-modal \.builder-section-panel-head > div:first-child \{ padding-right: 52px; \}/);
+  assert.match(css, /\.builder-section-modal \.builder-section-panel-head \.muted \{ display: none; \}/);
+  assert.doesNotMatch(css, /^\s*\.builder-section-panel-head > div:first-child > \.eyebrow/m);
+  assert.doesNotMatch(css, /^\s*\.builder-section-panel-head > div:first-child \{ padding-right/m);
+  assert.doesNotMatch(css, /^\s*\.builder-section-panel-head \.muted \{ display: none; \}/m);
+});
+
+test("6c. Enter in the search (the keyboard's Search key) only puts the field away", async () => {
+  const app = await readFile(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(app, /els\.content\.addEventListener\("keydown", handleBuilderSearchKeydown\);/);
+  assert.match(app, /function handleBuilderSearchKeydown\(event\) \{\s*if \(event\.key !== "Enter" \|\| !event\.target\.matches\?\.\("\[data-builder-exercise-search\]"\)\) return;\s*event\.preventDefault\(\);\s*event\.target\.blur\(\);\s*\}/);
+  assert.match(renderBuilderSectionOverlay(state, node), /data-builder-exercise-search type="search" enterkeyhint="search"/);
 });
 
 test("7. touch screens: 44 px buttons on the phone card and the section header, 16 px Sets / Reps / Load and Instruction", () => {
   const touch = mediaBlock("(max-width: 760px), (pointer: coarse)");
-  assert.match(touch, /\.builder-section-panel \.builder-dose-inputs input \{ font-size: 16px; \}/);
-  assert.match(touch, /\.builder-section-panel-head \.builder-icon-action, \.builder-section-close-button \{ width: 44px; height: 44px; min-width: 44px; \}/);
+  assert.match(touch, /\.builder-section-panel \.builder-dose-inputs input \{ font-size: 16px; min-height: 44px; \}/);
+  assert.match(touch, /\.builder-section-modal \.builder-section-panel-head \.builder-icon-action, \.builder-section-close-button \{ width: 44px; height: 44px; min-width: 44px; \}/);
+  assert.match(touch, /\.builder-section-panel input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\), \.builder-section-panel select, \.builder-section-panel textarea \{ font-size: 16px; \}/, "every field of the editor, not only some");
+  assert.match(touch, /\.builder-section-cancel-button, \.builder-section-finish-button \{ min-height: 44px; \}/);
+  assert.match(touch, /\.builder-mobile-sticky-bar \.text-action, \.builder-add-confirmation \.text-action \{[^}]*min-width: 44px; min-height: 44px;/);
   assert.match(css, /@media \(max-width: 760px\), \(pointer: coarse\) \{\s*textarea\[data-autogrow\] \{ font-size: 16px; \}/);
   assert.match(css, /\.builder-added-card \.builder-icon-action \{\s*width: 44px;\s*height: 44px;/);
   assert.match(css, /\.builder-added-card-dose-inputs input \{\s*padding: 6px 7px;\s*font-size: 16px;/);

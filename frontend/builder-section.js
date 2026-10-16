@@ -78,7 +78,7 @@ function renderBuilderSectionPanel(state, selectedNode) {
           <div class="builder-library-head"><div class="builder-panel-label">Exercise library</div><button class="text-action builder-custom-exercise-link" type="button" data-action="builder-open-custom-exercise">+ Add custom exercise</button></div>
           <div class="builder-library-controls">
             <div class="builder-library-toolbar">
-              <label class="search-field builder-exercise-search"><span>Search exercises</span><input data-builder-exercise-search type="search" value="${escapeAttr(query)}" placeholder="Name or code"></label>
+              <label class="search-field builder-exercise-search"><span>Search exercises</span><input data-builder-exercise-search type="search" enterkeyhint="search" value="${escapeAttr(query)}" placeholder="Name or code"></label>
               ${renderExerciseViewSwitcher("builder", state.builder.exerciseView, "builder-exercise-view")}
               ${renderBuilderFiltersToggle(state.builder.exerciseFilters, state.builder.exerciseFiltersOpen)}
             </div>

@@ -17153,23 +17153,27 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
    replaces the big Add custom exercise button; the section's header loses
    its small caption. Sets / Reps / Load stay in view. */
 @media (max-width: 560px), (max-height: 520px) {
-  .builder-section-panel-head > div:first-child > .eyebrow { display: none; }
+  .builder-section-modal .builder-section-panel-head > div:first-child > .eyebrow { display: none; }
   .builder-library-head { flex-wrap: nowrap; min-height: 44px; margin: 0 0 4px; }
   .builder-custom-exercise-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0 2px; color: #287e77; font-size: 14px; font-weight: 700; white-space: nowrap; }
   .builder-section-library .builder-custom-exercise-button { display: none; }
   .builder-library-toolbar { position: relative; align-items: center; gap: 6px; margin-bottom: 10px; }
   .builder-library-toolbar .builder-exercise-search > span { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .builder-library-toolbar .builder-exercise-search input { height: 48px; font-size: 16px; }
-  /* While the coach types, the search takes the whole row and covers the
-     view and Filters buttons; it is laid over them (absolute), so the row
-     keeps its height and nothing below it moves - a tap on a result's Add
-     lands where the finger is, the same as before the field was focused. */
-  .builder-library-toolbar .builder-exercise-search:focus-within { position: absolute; inset: 0; z-index: 3; }
+  /* While the coach types, the search widens over the view buttons; it is
+     laid over them (absolute), so the row keeps its height and nothing below
+     it moves - a tap on a result's Add lands where the finger is, the same
+     as before the field was focused. Filters (48 px + the 6 px gap) and its
+     badge stay visible and tappable. */
+  .builder-library-toolbar .builder-exercise-search:focus-within { position: absolute; inset: 0 54px 0 0; z-index: 3; }
   .builder-library-toolbar .exercise-view-switcher { padding: 1px; }
   .builder-library-toolbar .exercise-view-button { min-width: 44px; min-height: 44px; padding: 0; justify-content: center; }
   .builder-library-toolbar .exercise-view-button span { display: none; }
-  .builder-filters-toggle { position: relative; display: inline-grid; place-items: center; flex: 0 0 auto; width: 48px; height: 48px; padding: 0; border: 1px solid var(--line, #dfe4e8); border-radius: 8px; background: var(--surface, #fff); color: var(--text, #20242a); }
+  /* margin-left: auto keeps it at the row's right end while the widened
+     search is out of the row's flow. */
+  .builder-filters-toggle { position: relative; display: inline-grid; place-items: center; flex: 0 0 auto; margin-left: auto; width: 48px; height: 48px; padding: 0; border: 1px solid var(--line, #dfe4e8); border-radius: 8px; background: var(--surface, #fff); color: var(--text, #20242a); }
   .builder-filters-toggle[aria-expanded="true"], .builder-filters-toggle.has-active-filters { border-color: rgba(31, 111, 104, .45); background: #eef8f6; color: #1f6f68; }
+  .builder-filters-toggle .filter-count-badge { top: 2px; right: 2px; }
   .builder-section-panel[data-filters-open="false"] .builder-filters-panel { display: none; }
   .builder-filters-panel { margin: 0 0 10px; padding: 10px 10px 0; border: 1px solid var(--line, #dfe4e8); border-radius: 8px; background: var(--surface-soft, #f6f8f9); }
   .builder-filters-panel .exercise-quick-filters { margin: 0; padding-bottom: 10px; }
@@ -17180,6 +17184,9 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
   .builder-filters-panel .exercise-filter-toggle-icon { width: 44px; min-height: 44px; }
   .builder-filters-panel .exercise-filter-field input,
   .builder-filters-panel .exercise-filter-field select { height: 44px; min-height: 44px; }
+  /* Favorites / Marked show only their icon here; the word stays for
+     screen readers (the shared rule hides it with display: none). */
+  .builder-filters-panel .exercise-quick-filters-row-main .exercise-filter-toggle span { display: inline; position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .builder-quick-dose { margin-bottom: 10px; }
   .builder-quick-dose label { gap: 2px; }
 }
@@ -17188,7 +17195,7 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
    Close button now that the caption above them is gone, and the results
    get the room the folded controls left. */
 @media (max-width: 560px) {
-  .builder-section-panel-head > div:first-child { padding-right: 52px; }
+  .builder-section-modal .builder-section-panel-head > div:first-child { padding-right: 52px; }
   .builder-exercise-results { max-height: max(220px, calc(92dvh - 330px)); }
 }
 
@@ -17200,24 +17207,33 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
 @media (min-width: 561px) and (max-height: 520px) {
   .builder-section-overlay { padding: 8px; }
   .builder-section-modal { max-height: calc(100dvh - 16px); padding: 10px 14px; }
-  .builder-section-panel-head { align-items: center; margin-bottom: 10px; padding-bottom: 8px; }
-  .builder-section-panel-head .muted { display: none; }
-  .builder-section-panel-head h3 { margin: 0; }
+  .builder-section-modal .builder-section-panel-head { align-items: center; margin-bottom: 10px; padding-bottom: 8px; }
+  .builder-section-modal .builder-section-panel-head .muted { display: none; }
+  .builder-section-modal .builder-section-panel-head h3 { margin: 0; }
   .builder-library-controls { position: sticky; top: -10px; z-index: 2; margin: 0 -2px; padding: 10px 2px 0; background: var(--surface, #fff); border-bottom: 1px solid var(--line, #dfe4e8); }
+  /* An open filter panel would make the pinned block taller than the
+     editor (about 290-350 px of 360-375); while it is open nothing is
+     pinned and everything scrolls, closing it pins the row again. */
+  .builder-section-panel[data-filters-open="true"] .builder-library-controls { position: static; }
   .builder-exercise-results { max-height: none; overflow: visible; }
   /* A smaller picture in the narrow Added column, so an exercise's three
      44 px buttons stay on one line. */
-  .builder-added-list-desktop .builder-added-exercise-media { width: 52px; height: 44px; }
+  .builder-added-list-desktop .builder-added-exercise-media { flex: 0 0 auto; width: 52px; height: 44px; }
+  .builder-added-list-desktop .builder-added-exercise-media .builder-added-exercise-image { width: 100%; height: 100%; }
 }
 
 /* Touch screens of every size: 44 px targets and 16 px fields (iOS zooms
    into a smaller field on focus) in the section editor. */
 @media (max-width: 760px), (pointer: coarse) {
-  .builder-section-panel .builder-dose-inputs input { font-size: 16px; }
-  .builder-section-panel-head .builder-icon-action, .builder-section-close-button { width: 44px; height: 44px; min-width: 44px; }
+  .builder-section-panel input:not([type="checkbox"]):not([type="radio"]), .builder-section-panel select, .builder-section-panel textarea { font-size: 16px; }
+  .builder-section-panel .builder-dose-inputs input { font-size: 16px; min-height: 44px; }
+  .builder-section-modal .builder-section-panel-head .builder-icon-action, .builder-section-close-button { width: 44px; height: 44px; min-width: 44px; }
+  .builder-section-cancel-button, .builder-section-finish-button { min-height: 44px; }
   .builder-item-actions { gap: 2px; }
   .builder-item-actions .builder-icon-action { width: 44px; height: 44px; min-width: 44px; }
   .builder-mobile-sticky-bar .text-action, .builder-sticky-bar-done { min-height: 44px; }
+  .builder-mobile-sticky-bar .text-action, .builder-add-confirmation .text-action { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0 8px; }
+  .builder-sticky-bar-summary, .builder-section-panel [data-action="builder-load-more-exercises"] { min-height: 44px; }
 }
 @media (pointer: coarse) {
   .builder-library-toolbar .exercise-view-button { min-width: 44px; min-height: 44px; }

@@ -423,6 +423,7 @@ function bindEvents() {
   });
   els.content.addEventListener("submit", handleContentSubmit);
   els.content.addEventListener("input", handleContentInput);
+  els.content.addEventListener("keydown", handleBuilderSearchKeydown);
   // Text fields that grow with their text (textarea-autosize.js), wherever
   // they are rendered (the content area and the Builder's modals).
   document.addEventListener("input", (event) => {
@@ -987,6 +988,15 @@ function normalizeTouchPointerEvent(event) {
       if (event.cancelable) event.preventDefault();
     },
   };
+}
+
+// Builder section editor: the search already runs while the coach types, so
+// Enter (the keyboard's Search key) only puts the field away - on a phone the
+// keyboard closes and the search row shows Tile / Big / List again.
+function handleBuilderSearchKeydown(event) {
+  if (event.key !== "Enter" || !event.target.matches?.("[data-builder-exercise-search]")) return;
+  event.preventDefault();
+  event.target.blur();
 }
 
 function handleContentInput(event) {
