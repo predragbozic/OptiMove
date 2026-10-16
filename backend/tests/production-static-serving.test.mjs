@@ -162,4 +162,19 @@ test("2. production server serves hashed assets, HTML entries, and never SPA-fal
     const body = await res.json();
     assert.equal(body.user, null);
   });
+
+  await t.test("2h. the web app manifest and its icons are served from the dist root (Vite's publicDir), no-cache, never immutable", async () => {
+    const res = await fetch(`http://localhost:${port}/manifest.webmanifest`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") || "", /application\/manifest\+json/);
+    assert.equal(res.headers.get("cache-control"), "no-cache");
+    const manifest = await res.json();
+    assert.ok(manifest.icons.length > 0);
+    for (const iconPath of [...manifest.icons.map((icon) => icon.src), "/icons/apple-touch-icon.png", "/icons/favicon-32.png"]) {
+      const icon = await fetch(`http://localhost:${port}${iconPath}`);
+      assert.equal(icon.status, 200, `${iconPath} must return 200`);
+      assert.equal(icon.headers.get("content-type"), "image/png", `${iconPath} must be a PNG`);
+      assert.equal(icon.headers.get("cache-control"), "no-cache", `${iconPath} must be no-cache, never immutable`);
+    }
+  });
 });
