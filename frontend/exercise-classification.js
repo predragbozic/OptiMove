@@ -14,8 +14,34 @@ export const classificationFields = [
   { key: "movementPatterns", label: "Movement pattern", optionsKey: "movementPatterns", multiple: true },
 ];
 
+// The application block of the exercise, for the block administrator only:
+// unlike every field below it changes the exercise for every coach, so it
+// has its own button and confirmation and is never part of Save.
+function renderBlockHtml(block) {
+  if (!block) return "";
+  const data = block.data;
+  const currentName = data?.current?.name || "Other (no block)";
+  const body = block.loadError
+    ? `<p role="alert">${escapeHtml(block.loadError)}</p>`
+    : !data
+      ? '<p role="status">Loading blocks...</p>'
+      : !data.movable
+        ? `<p>Block: <strong>${escapeHtml(currentName)}</strong>. A private or archived exercise follows its original's block and cannot be moved here.</p>`
+        : `<label class="search-field"><span>Block</span><select class="builder-text-input" data-classification-block ${block.busy ? "disabled" : ""}>
+            <option value="" ${block.chosen ? "" : "selected"}>Other (no block)</option>
+            ${data.blocks.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === block.chosen ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
+          </select></label>
+          <button class="plain-button" type="button" data-classification-block-save ${block.busy || block.chosen === (data.current?.id || "") ? "disabled" : ""}>${block.busy ? "Moving..." : "Move to this block"}</button>`;
+  return `<section class="panel exercise-classification-block"><h4>Application block</h4>
+    <p class="muted">For every coach, not only you: an exercise in a block is available only to that block's users; Other is available to all coaches.</p>
+    ${body}
+    ${block.error ? `<p role="alert">${escapeHtml(block.error)}</p>` : ""}
+    ${block.saved ? `<p role="status">${escapeHtml(block.saved)}</p>` : ""}</section>`;
+}
+
 export function renderClassificationHtml(model, options = {}) {
   return `<div class="builder-modal-head"><h3>My classification</h3><button class="plain-button" data-classification-close>Cancel</button></div>
+    ${renderBlockHtml(model.block)}
     <p class="muted">Only your library and filters change. Unchecked fields use the original. A personal empty list intentionally clears a field.</p>
     ${classificationFields.map((field) => {
       const overridden = Object.hasOwn(model.overrides, field.key);
@@ -30,16 +56,32 @@ export function renderClassificationHtml(model, options = {}) {
     <button class="plain-button" data-classification-save ${model.saving ? "disabled" : ""}>${model.saving ? "Saving..." : "Save"}</button></div>`;
 }
 
-export async function openExerciseClassification(exerciseId, options, refresh) {
+const blockMessages = {
+  staleRevision: "This exercise's block changed elsewhere. Close and reopen to see it.",
+  blockNotAvailable: "That block is no longer available. Close and reopen to choose again.",
+  invalidSelection: "This exercise cannot be placed in a block.",
+  tryAgain: "The blocks are busy. Please try again.",
+  notFound: "You no longer have permission to manage application blocks.",
+};
+const BLOCK_NOT_CONFIRMED = "The move was not confirmed. Close and reopen to check the exercise's block before retrying.";
+// A move whose answer never comes is "not confirmed" after this long.
+export const BLOCK_MOVE_CLIENT_BOUND_MS = 45000;
+
+// `canManageBlocks`: the viewer administers application blocks, so the panel
+// also shows the exercise's block.
+export async function openExerciseClassification(exerciseId, options, refresh, { canManageBlocks = false } = {}) {
+  const blockPath = `/api/exercise-collections/exercise-block/${encodeURIComponent(exerciseId)}`;
+  const blockRead = canManageBlocks ? api(blockPath).catch(() => null) : null;
   const data = await api(`/api/exercises/${encodeURIComponent(exerciseId)}/classification`);
-  const model = { ...data, error: "", saving: false };
+  const model = { ...data, error: "", saving: false, block: canManageBlocks ? { data: null, chosen: "", busy: false, error: "", saved: "", loadError: "" } : null };
+  const busy = () => model.saving || model.block?.busy;
   const overlay = document.createElement("div");
   overlay.className = "exercise-editor-overlay exercise-classification-overlay";
   const dialog = document.createElement("section");
   const backdrop = document.createElement("button");
   backdrop.className = "exercise-editor-backdrop";
   backdrop.setAttribute("aria-label", "Cancel classification");
-  backdrop.addEventListener("click", () => { if (!model.saving) overlay.remove(); });
+  backdrop.addEventListener("click", () => { if (!busy()) overlay.remove(); });
   dialog.className = "panel exercise-editor-modal";
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
@@ -48,7 +90,7 @@ export async function openExerciseClassification(exerciseId, options, refresh) {
   document.body.append(overlay);
   const render = () => { dialog.innerHTML = renderClassificationHtml(model, options); };
   dialog.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !model.saving) { event.stopPropagation(); overlay.remove(); }
+    if (event.key === "Escape" && !busy()) { event.stopPropagation(); overlay.remove(); }
   });
   dialog.addEventListener("input", (event) => {
     event.stopPropagation();
@@ -57,6 +99,13 @@ export async function openExerciseClassification(exerciseId, options, refresh) {
   });
   dialog.addEventListener("change", (event) => {
     event.stopPropagation();
+    if (event.target.hasAttribute("data-classification-block")) {
+      model.block.chosen = event.target.value;
+      model.block.error = "";
+      model.block.saved = "";
+      render();
+      return;
+    }
     const field = event.target.dataset.classificationOverride;
     if (!field) return;
     if (event.target.checked) model.overrides[field] = structuredClone(model.system[field]);
@@ -66,8 +115,9 @@ export async function openExerciseClassification(exerciseId, options, refresh) {
   dialog.addEventListener("click", async (event) => {
     event.stopPropagation();
     const button = event.target.closest("button");
-    if (!button || model.saving) return;
+    if (!button || busy()) return;
     if (button.hasAttribute("data-classification-close")) { overlay.remove(); return; }
+    if (button.hasAttribute("data-classification-block-save")) { await moveBlock(); return; }
     if (button.dataset.classificationReset) delete model.overrides[button.dataset.classificationReset];
     if (button.hasAttribute("data-classification-reset-all")) model.overrides = {};
     const field = button.dataset.field;
@@ -89,6 +139,49 @@ export async function openExerciseClassification(exerciseId, options, refresh) {
     }
     render();
   });
+  async function moveBlock() {
+    const block = model.block;
+    const current = block.data.current;
+    const target = block.data.blocks.find((item) => item.id === block.chosen) || null;
+    if ((current?.id || "") === (target?.id || "")) return;
+    const name = block.data.exerciseName || "this exercise";
+    const confirmation = (target
+      ? [`Move “${name}” into the block “${target.name}”?`,
+        target.accessAll ? "Every coach can use it: this block is open to all users." : "Only this block's selected users and the administrator can use it. Other coaches lose it, including their personal copies.",
+        current ? `It leaves “${current.name}”.` : ""]
+      : [`Move “${name}” to Other?`, `It leaves “${current.name}” and becomes available to all coaches.`]).filter(Boolean).join("\n\n");
+    if (!window.confirm(confirmation)) return;
+    block.busy = true;
+    block.error = "";
+    block.saved = "";
+    render();
+    const controller = new AbortController();
+    const bound = setTimeout(() => controller.abort(), BLOCK_MOVE_CLIENT_BOUND_MS);
+    try {
+      await api(blockPath, { method: "PUT", signal: controller.signal,
+        body: JSON.stringify({ collectionId: target?.id || null, expectedCollectionId: current?.id || null }) });
+      clearTimeout(bound);
+      block.data.current = target ? { id: target.id, name: target.name } : null;
+      block.saved = target ? `Moved to “${target.name}”.` : "Moved to Other.";
+      try { await refresh(); } catch {}
+    } catch (error) {
+      block.error = (!controller.signal.aborted && blockMessages[error.message]) || BLOCK_NOT_CONFIRMED;
+    } finally {
+      clearTimeout(bound);
+      block.busy = false;
+      if (overlay.isConnected) render();
+    }
+  }
+
   render();
   dialog.querySelector("button")?.focus();
+  if (blockRead) {
+    const answer = await blockRead;
+    if (!overlay.isConnected) return;
+    if (answer) {
+      model.block.data = answer;
+      model.block.chosen = answer.current?.id || "";
+    } else model.block.loadError = "The blocks could not be loaded. Close and reopen to try again.";
+    render();
+  }
 }

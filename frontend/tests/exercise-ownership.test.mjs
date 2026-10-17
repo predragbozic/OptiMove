@@ -104,7 +104,7 @@ test("admin block picker saves selected users and exercises and keeps selections
   const selectExercise=document.querySelector("[data-pick-kind='exercises']");
   selectExercise.checked=true;
   selectExercise.dispatchEvent(new window.Event("change"));
-  document.querySelector("[data-find-kind='exercises']").click();
+  document.querySelector("[data-search-kind='exercises']").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
   await new Promise((resolve)=>setTimeout(resolve,0));
   assert.ok(document.querySelector("[data-pick-kind='exercises']").checked);
   document.querySelector("[data-add-selected='exercises']").click();
@@ -113,7 +113,7 @@ test("admin block picker saves selected users and exercises and keeps selections
   selectUser.dispatchEvent(new window.Event("change"));
   document.querySelector("[data-add-selected='users']").click();
   assert.notEqual(document.activeElement, document.body);
-  document.querySelector("[data-find-kind='exercises']").click();
+  document.querySelector("[data-search-kind='exercises']").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(document.querySelectorAll("[data-remove-kind]").length, 2);
   document.querySelector("[data-save-block]").click();

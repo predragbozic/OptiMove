@@ -17013,6 +17013,13 @@ body:not(.athlete-mode):not(.login-mode) .sidebar > .brand {
   .exercise-collections-overlay .builder-modal-actions { flex-direction: column-reverse; align-items: stretch; }
   .exercise-collections-overlay [data-delete-block] { margin-right: 0; }
 }
+/* An exercise's application block in My classification (administrator):
+   its own small panel above the personal fields, touch-sized. */
+.exercise-classification-block { display: grid; gap: 8px; margin-bottom: 12px; }
+.exercise-classification-block h4 { margin: 0; }
+.exercise-classification-block p { margin: 0; }
+.exercise-classification-block select, .exercise-classification-block button { min-height: 44px; font-size: 16px; }
+.exercise-classification-block button { justify-self: start; }
 
 /* Exercise views: Tile / Big / List in the Exercise Library and in the
    Builder's section editor (exercise-view-modes.js). Details is the

@@ -571,6 +571,89 @@ test("a block save and a block delete sent together end in one consistent state"
   }
 });
 
+test("the administrator moves one exercise between blocks and Other; access follows, both blocks are revised and audited", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("move-admin");
+  const granted = await makeCoach("move-granted");
+  const outsider = await makeCoach("move-outsider");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Move exercise ${tag}` });
+  const restricted = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Move restricted ${tag}`, exerciseIds: [], userIds: [granted.userId] } });
+  const open = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Move open ${tag}`, exerciseIds: [], userIds: [], accessAll: true } });
+  assert.equal(restricted.status, 201);
+  assert.equal(open.status, 201);
+  const A = restricted.body.collection;
+  const B = open.body.collection;
+  const path = `/api/exercise-collections/exercise-block/${system}`;
+  const move = (collectionId, expectedCollectionId, cookie = admin.cookie) => api(path, { method: "PUT", cookie, body: { collectionId, expectedCollectionId } });
+  const revision = async (id) => (await query("select revision from library.exercise_collections where id=$1", [id])).rows[0].revision;
+  // Only the administrator reads or moves; everyone else gets the same 404.
+  assert.equal((await api(path, { cookie: outsider.cookie })).status, 404);
+  assert.equal((await move(A.id, null, outsider.cookie)).status, 404);
+  assert.equal((await api("/api/exercise-collections/exercise-block/not-an-id", { cookie: admin.cookie })).status, 400);
+  assert.equal((await api(path, { method: "PUT", cookie: admin.cookie, body: { collectionId: "x", expectedCollectionId: null } })).status, 400);
+  const shown = await api(path, { cookie: admin.cookie });
+  assert.equal(shown.status, 200, JSON.stringify(shown.body));
+  assert.equal(shown.body.exerciseName, `Move exercise ${tag}`);
+  assert.equal(shown.body.movable, true);
+  assert.equal(shown.body.current, null);
+  assert.ok(shown.body.blocks.some((block) => block.id === A.id) && shown.body.blocks.some((block) => block.id === B.id && block.accessAll === true));
+  // Other -> a restricted block: the outsider loses it, the granted coach keeps it.
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: outsider.cookie })).status, 200);
+  const intoA = await move(A.id, null);
+  assert.equal(intoA.status, 200, JSON.stringify(intoA.body));
+  assert.deepEqual(intoA.body, { exerciseId: system, collectionId: A.id, changed: true });
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: outsider.cookie })).status, 404);
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: granted.cookie })).status, 200);
+  assert.equal(await revision(A.id), A.revision + 1);
+  assert.deepEqual((await api(path, { cookie: admin.cookie })).body.current, { id: A.id, name: A.name });
+  // A repeat of a move already made is the same answer, with nothing written.
+  const repeat = await move(A.id, null);
+  assert.equal(repeat.status, 200);
+  assert.equal(repeat.body.changed, false);
+  assert.equal(await revision(A.id), A.revision + 1);
+  // A block that changed elsewhere: the exercise is not where the screen showed it.
+  const stale = await move(B.id, null);
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.error, "staleRevision");
+  // The editor that loaded A before the move now sees A changed.
+  const editor = await api(`/api/exercise-collections/${A.id}`, { method: "PATCH", cookie: admin.cookie,
+    body: { name: A.name, exerciseIds: [], userIds: [granted.userId], expectedRevision: A.revision } });
+  assert.equal(editor.status, 409);
+  assert.equal(editor.body.error, "staleRevision");
+  // Block -> block, then -> Other: both blocks revised, every move audited per block.
+  const auditCount = async (id) => (await query("select count(*)::integer as count from library.exercise_collection_audit where collection_id=$1", [id])).rows[0].count;
+  const auditsA = await auditCount(A.id);
+  const auditsB = await auditCount(B.id);
+  const intoB = await move(B.id, A.id);
+  assert.equal(intoB.status, 200, JSON.stringify(intoB.body));
+  assert.equal(await revision(A.id), A.revision + 2);
+  assert.equal(await revision(B.id), B.revision + 1);
+  assert.equal(await auditCount(A.id), auditsA + 1);
+  assert.equal(await auditCount(B.id), auditsB + 1);
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: outsider.cookie })).status, 200, "an open block is open to everyone");
+  const last = (await query("select actor_user_id,before_state,after_state from library.exercise_collection_audit where collection_id=$1 order by created_at desc,id limit 1", [A.id])).rows[0];
+  assert.equal(last.actor_user_id, admin.userId);
+  assert.deepEqual(last.before_state.exercises.map((item) => item.id), [system]);
+  assert.deepEqual(last.after_state.exercises, []);
+  const toOther = await move(null, B.id);
+  assert.equal(toOther.status, 200);
+  assert.equal((await query("select count(*)::integer as count from library.exercise_collection_items where exercise_id=$1", [system])).rows[0].count, 0);
+  // A deleted block is not a destination; a private exercise is not movable.
+  const deleted = await api(`/api/exercise-collections/${A.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: await revision(A.id) } });
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  const gone = await move(A.id, null);
+  assert.equal(gone.status, 409);
+  assert.equal(gone.body.error, "blockNotAvailable");
+  assert.equal((await api(path, { cookie: admin.cookie })).body.blocks.some((block) => block.id === A.id), false);
+  const own = await makeExercise(granted.userId, { name: `Move private ${tag}` });
+  const privateMove = await api(`/api/exercise-collections/exercise-block/${own}`, { method: "PUT", cookie: admin.cookie, body: { collectionId: B.id, expectedCollectionId: null } });
+  assert.equal(privateMove.status, 400);
+  assert.equal(privateMove.body.error, "invalidSelection");
+  assert.equal((await api(`/api/exercise-collections/exercise-block/${own}`, { cookie: admin.cookie })).body.movable, false);
+});
+
 test("locked previews expose no exercise media, instructions, grants or usable exercise; all-users remains explicit", async () => {
   const admin = await makeLibraryAdmin("locked-admin");
   const outsider = await makeCoach("locked-denied");

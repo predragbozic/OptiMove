@@ -3,6 +3,10 @@ import { escapeAttr, escapeHtml } from "./utils.js";
 import { renderImage } from "./media.js";
 
 let activePanel = null;
+// The choices are searched again this long after the last keystroke (Enter
+// searches at once); a slower older answer never replaces a newer one
+// (findOptions' generation).
+export const OPTION_SEARCH_DELAY_MS = 250;
 function userLabel(user) { return user.email ? `${user.name} (${user.email})` : user.name; }
 const messages = {
   staleRevision: "This block changed elsewhere. Close and reopen it before saving.",
@@ -17,8 +21,7 @@ export function renderExerciseCollectionsHtml(panel) {
     <section>
       <h4>${label} (${selected.length})</h4>
       <div>${selected.map((item) => `<button type="button" class="plain-button compact-button" data-remove-kind="${kind}" data-id="${escapeAttr(item.id)}">${escapeHtml(kind === "users" ? userLabel(item) : item.name)} ×</button>`).join(" ") || '<p class="muted">None selected.</p>'}</div>
-      <label class="search-field"><span>Find ${label.toLowerCase()}</span><input class="builder-text-input" type="search" data-search-kind="${kind}" value="${escapeAttr(panel.search[kind] || "")}"></label>
-      <button type="button" class="plain-button" data-find-kind="${kind}" ${panel.busy ? "disabled" : ""}>Search</button>
+      <label class="search-field"><span>Find ${label.toLowerCase()}</span><input class="builder-text-input" type="search" data-search-kind="${kind}" value="${escapeAttr(panel.search[kind] || "")}" placeholder="Type to filter"></label>
       ${more ? '<p class="muted">First 100 matches shown. Refine the search to find more.</p>' : ""}
       <div class="exercise-block-picker">${options.filter((item) => !selected.some((chosen) => chosen.id === item.id)).map((item) => `<label class="exercise-block-pick"><input type="checkbox" data-pick-kind="${kind}" data-id="${escapeAttr(item.id)}" ${panel.pending?.[kind]?.some((chosen) => chosen.id === item.id) ? "checked" : ""} ${panel.busy || (kind === "exercises" && item.collectionId && item.collectionId !== panel.draft.id) ? "disabled" : ""}>${kind === "exercises" && item.imageUrl ? renderImage(item.imageUrl, "exercise-block-pick-image") : ""}<span>${escapeHtml(kind === "users" ? userLabel(item) : item.name)}${item.collectionId && item.collectionId !== panel.draft.id ? " (another block)" : ""}</span></label>`).join("")}</div>
       <button class="plain-button compact-button" type="button" data-add-selected="${kind}" ${panel.busy || !panel.pending?.[kind]?.length ? "disabled" : ""}>Add selected (${panel.pending?.[kind]?.length || 0})</button>
@@ -59,10 +62,13 @@ function render(panel) {
   if (activePanel !== panel) return;
   const focused = panel.element.contains(document.activeElement) ? document.activeElement : null;
   const focusAttributes = focused ? Array.from(focused.attributes).filter((attribute) => attribute.name.startsWith("data-")).map((attribute) => [attribute.name, attribute.value]) : [];
+  // Where the caret was in a text field, so typing goes on where it was.
+  const caret = typeof focused?.selectionStart === "number" ? [focused.selectionStart, focused.selectionEnd] : null;
   panel.element.innerHTML = renderExerciseCollectionsHtml(panel);
   panel.element.querySelectorAll("[data-close-collections]").forEach((button) => button.addEventListener("click", () => {
     if (panel.busy) return;
     if (!panel.saved && panel.dirty && !window.confirm("Discard unsaved block changes?")) return;
+    clearTimeout(panel.searchTimer);
     panel.element.remove();
     document.removeEventListener("keydown", panel.keydown);
     for (const [element, inert] of panel.background) element.inert = inert;
@@ -88,8 +94,18 @@ function render(panel) {
     render(panel);
   });
   for (const kind of ["exercises", "users"]) {
-    panel.element.querySelector(`[data-search-kind="${kind}"]`).addEventListener("input", (event) => { panel.search[kind] = event.target.value; });
-    panel.element.querySelector(`[data-find-kind="${kind}"]`).addEventListener("click", () => findOptions(panel));
+    const search = panel.element.querySelector(`[data-search-kind="${kind}"]`);
+    search.addEventListener("input", (event) => {
+      panel.search[kind] = event.target.value;
+      clearTimeout(panel.searchTimer);
+      panel.searchTimer = setTimeout(() => findOptions(panel), OPTION_SEARCH_DELAY_MS);
+    });
+    search.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      clearTimeout(panel.searchTimer);
+      findOptions(panel);
+    });
   }
   for (const [selector, field] of [["[data-block-description]", "description"], ["[data-block-cover]", "coverImageUrl"], ["[data-block-all]", "accessAll"], ["[data-block-preview]", "blockPreview"], ["[data-exercise-preview]", "exercisePreview"]]) {
     panel.element.querySelector(selector).addEventListener(field === "accessAll" || field.endsWith("Preview") ? "change" : "input", (event) => {
@@ -142,6 +158,7 @@ function render(panel) {
   const replacement = Array.from(panel.element.querySelectorAll("button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled)"))
     .find((control) => focusAttributes.length && focusAttributes.every(([name, value]) => control.getAttribute(name) === value));
   (replacement || panel.element.querySelector("[data-block-select]:not(:disabled)") || panel.element.querySelector("[data-close-collections]")).focus();
+  if (replacement && caret) { try { replacement.setSelectionRange(...caret); } catch {} }
 }
 
 async function findOptions(panel) {
