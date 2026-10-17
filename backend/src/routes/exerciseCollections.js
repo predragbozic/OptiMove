@@ -7,6 +7,24 @@ import { emitRealtimeEventForAll } from "../realtime.js";
 const router = Router();
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// The pictures a card without a cover of its own steps through: at most ten
+// exercises with a picture, in the alphabetical name/ID order of the
+// first-picture cover. A picture is an image, or a video link the page takes
+// a cover from - the link forms media.js reads a YouTube or Google Drive id
+// from; it is decided before the limit, so other video links never crowd
+// out a real picture. `from` is the caller's own FROM ... WHERE with its
+// access predicates on `e`, so a slide is never an exercise the coach could
+// not open from there.
+const COVER_SLIDE_LIMIT = 10;
+const coverPictureSql = `(nullif(btrim(e.image_url),'') is not null
+  or btrim(e.video_url) ~* '^https?://((www\\.|m\\.|music\\.)?youtube\\.com|(www\\.)?youtube-nocookie\\.com)/([^?#]*\\?([^#]*&)?v=[a-z0-9_-]{11}([&#]|$)|(shorts|embed|live)/[a-z0-9_-]{11}([/?#]|$))'
+  or btrim(e.video_url) ~* '^https?://youtu\\.be/[a-z0-9_-]{11}([/?#]|$)'
+  or e.video_url ~* 'drive\\.google\\.com/(file/d/[^/?]|.*[?&]id=[^&])|lh3\\.googleusercontent\\.com/d/[^/?]')`;
+const coverSlideSql = `jsonb_build_object('imageUrl',coalesce(e.image_url,''),'videoUrl',coalesce(e.video_url,''))`;
+const coverSlidesSql = (from) => `(select coalesce(jsonb_agg(slide.picture order by slide.name,slide.id),'[]'::jsonb)
+  from (select e.id,e.name,${coverSlideSql} as picture ${from} and ${coverPictureSql}
+    order by e.name,e.id limit ${COVER_SLIDE_LIMIT}) slide)`;
+
 router.get("/catalog", async (req, res, next) => {
   res.set("Cache-Control", "no-store");
   try {
@@ -21,6 +39,9 @@ router.get("/catalog", async (req, res, next) => {
         coalesce(nullif(c.cover_image_url,''),case when ${granted} then (select nullif(e.image_url,'') from library.exercise_collection_items ci
           join library.exercises e on e.id=ci.exercise_id where ci.collection_id=c.id and ${visible}
           order by e.name,e.id limit 1) end,'') as "coverImageUrl",
+        case when nullif(c.cover_image_url,'') is null and ${granted} then ${coverSlidesSql(`from library.exercise_collection_items ci
+          join library.exercises e on e.id=ci.exercise_id where ci.collection_id=c.id and e.owner_scope='system' and ${visible}`)}
+          else '[]'::jsonb end as "coverSlides",
         (select count(*)::integer from library.exercise_collection_items ci join library.exercises e on e.id=ci.exercise_id
           where ci.collection_id=c.id and e.owner_scope='system' and e.is_active=true
           and (${granted} and ${visible} or not ${granted})) as "exerciseCount"
@@ -29,12 +50,14 @@ router.get("/catalog", async (req, res, next) => {
         and (c.name ilike $2 or c.description ilike $2)
       order by c.name,c.id limit 501`, params);
     if (blocks.rows.length > 500) return res.status(409).json({ error: "tooManyBlocks" });
+    // Other's pictures come from the same pass as its count.
     const other = await queryWithoutJit(`select count(*)::integer as count,
-        (array_agg(nullif(e.image_url,'') order by e.name,e.id))[1] as image
+        (array_agg(nullif(e.image_url,'') order by e.name,e.id))[1] as image,
+        coalesce(to_jsonb((array_agg(${coverSlideSql} order by e.name,e.id) filter (where ${coverPictureSql}))[1:${COVER_SLIDE_LIMIT}]),'[]'::jsonb) as slides
       from library.exercises e where ${visible} and (e.owner_scope='system' or e.owner_user_id=$1) and not exists (select 1 from library.exercise_collection_items ci
         where ci.exercise_id=coalesce(e.source_exercise_id,e.id))`, [req.user.id]);
     res.json({ blocks: blocks.rows, other: { id: "other", name: "Other", description: "Available exercises outside application blocks.",
-      exerciseCount: other.rows[0].count, coverImageUrl: other.rows[0].image || "" }, canManageCollections: admin });
+      exerciseCount: other.rows[0].count, coverImageUrl: other.rows[0].image || "", coverSlides: other.rows[0].slides }, canManageCollections: admin });
   } catch (error) { next(error); }
 });
 

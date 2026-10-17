@@ -350,6 +350,106 @@ test("block catalog preserves grants, hides denied blocks and excludes restricte
   assert.equal((await query("select cover_image_url from library.exercise_collections where id=$1",[block.id])).rows[0].cover_image_url,"");
 });
 
+test("a card without its own cover gets up to ten of its exercises' pictures, only what the coach could open from it", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("slides-admin");
+  const coach = await makeCoach("slides-coach");
+  const outsider = await makeCoach("slides-outsider");
+  const named = async (suffix, media = {}) => {
+    const id = await makeExercise(null, { ownerScope: "system", name: `Slides ${tag} ${suffix}` });
+    await query("update library.exercises set image_url=$2,video_url=$3 where id=$1", [id, media.image ?? null, media.video ?? null]);
+    return id;
+  };
+  const picture = (suffix) => `https://example.test/slide-${tag}-${suffix}.jpg`;
+  const ids = [];
+  for (const suffix of ["00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11"]) ids.push(await named(suffix, { image: picture(suffix) }));
+  const bare = await named("00 bare");
+  const blank = await named("00 blank", { image: "", video: "" });
+  const video = await named("01 video", { video: "https://www.youtube.com/watch?v=abcdefghijk" });
+  // A link the page takes no picture from never takes a picture's place: a
+  // video elsewhere, a YouTube playlist, a Drive folder, an image of spaces.
+  const noPicture = [
+    await named("00 vimeo", { video: "https://vimeo.com/123456" }),
+    await named("00 playlist", { video: "https://www.youtube.com/playlist?list=PLx" }),
+    await named("00 folder", { video: "https://drive.google.com/drive/folders/abc" }),
+    await named("00 spaces", { image: "   " }),
+  ];
+  const drive = await named("01 drive", { video: "https://drive.google.com/file/d/DriveFile123/view" });
+  const created = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Slides block ${tag}`, exerciseIds: [...ids, bare, blank, video, drive, ...noPicture], userIds: [coach.userId], blockPreview: "locked" } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  // Hidden by this coach, or archived: not on the coach's card.
+  await query("insert into library.filter_hidden (kind,item_id,user_id) values ('exercise',$1,$2)", [ids[2], coach.userId]);
+  await query("update library.exercises set is_active=false where id=$1", [ids[3]]);
+  // Named to sort first among every exercise outside a block in this database.
+  const unassigned = await makeExercise(null, { ownerScope: "system", name: `000 slides other ${tag}` });
+  await query("update library.exercises set image_url=$2 where id=$1", [unassigned, picture("other")]);
+  // Another coach's private exercise: never on anyone else's Other, an
+  // administrator's included.
+  const foreign = await makeCoach("slides-foreign");
+  const foreignPrivate = await makeExercise(foreign.userId, { name: `000 slides foreign ${tag}` });
+  await query("update library.exercises set image_url=$2,video_url=$3 where id=$1", [foreignPrivate, picture("foreign"), "https://youtu.be/zyxwvutsrqp"]);
+  const catalog = async (cookie) => (await api(`/api/exercise-collections/catalog?search=Slides block ${tag}`, { cookie })).body;
+  try {
+    const granted = await catalog(coach.cookie);
+    assert.deepEqual(granted.blocks[0].coverSlides, [
+      { imageUrl: picture("00"), videoUrl: "" },
+      { imageUrl: picture("01"), videoUrl: "" },
+      { imageUrl: "", videoUrl: "https://drive.google.com/file/d/DriveFile123/view" },
+      { imageUrl: "", videoUrl: "https://www.youtube.com/watch?v=abcdefghijk" },
+      ...["04", "05", "06", "07", "08", "09"].map((suffix) => ({ imageUrl: picture(suffix), videoUrl: "" })),
+    ]);
+    // The single cover stays what it was: the first exercise's own image.
+    assert.equal(granted.blocks[0].coverImageUrl, picture("00"));
+    // Other holds the exercise outside every block, never one of this block's.
+    assert.ok(granted.other.coverSlides.some((slide) => slide.imageUrl === picture("other")));
+    assert.equal(granted.other.coverSlides.some((slide) => slide.imageUrl.includes(`slide-${tag}-`) && slide.imageUrl !== picture("other")), false);
+    assert.ok(granted.other.coverSlides.length <= 10);
+    const adminView = await catalog(admin.cookie);
+    assert.equal(adminView.blocks[0].coverSlides.length, 10);
+    assert.ok(adminView.blocks[0].coverSlides.some((slide) => slide.imageUrl === picture("02")));
+
+    // A locked card shows no exercise's media at all.
+    const locked = await catalog(outsider.cookie);
+    assert.equal(locked.blocks[0].locked, true);
+    assert.deepEqual(locked.blocks[0].coverSlides, []);
+    // Nowhere in the outsider's catalog, Other included.
+    const blockPicture = new RegExp(`slide-${tag}-\\d`);
+    assert.equal(blockPicture.test(JSON.stringify(locked)), false);
+    assert.equal(JSON.stringify(locked).includes("abcdefghijk"), false);
+
+    // The block's own cover replaces the exercises' pictures.
+    const block = created.body.collection;
+    const covered = await api(`/api/exercise-collections/${block.id}`, { method: "PATCH", cookie: admin.cookie,
+      body: { name: block.name, exerciseIds: [...ids.filter((id) => id !== ids[3]), bare, blank, video, drive, ...noPicture], userIds: [coach.userId], expectedRevision: block.revision, coverImageUrl: "https://example.test/own-cover.jpg" } });
+    assert.equal(covered.status, 200, JSON.stringify(covered.body));
+    const afterCover = await catalog(coach.cookie);
+    assert.deepEqual(afterCover.blocks[0].coverSlides, []);
+    assert.equal(afterCover.blocks[0].coverImageUrl, "https://example.test/own-cover.jpg");
+
+    for (const [who, cookie] of [["coach", coach.cookie], ["outsider", outsider.cookie], ["admin", admin.cookie]]) {
+      const body = JSON.stringify(await catalog(cookie));
+      assert.equal(body.includes(picture("foreign")) || body.includes("zyxwvutsrqp"), false, who);
+    }
+    assert.ok((await catalog(foreign.cookie)).other.coverSlides.some((slide) => slide.imageUrl === picture("foreign")));
+    // An administrator outside the platform workspace is a coach here: the
+    // block's pictures are not theirs to see. Back on its own cover-less
+    // state the locked block still carries no exercise media for them.
+    const uncovered = await api(`/api/exercise-collections/${block.id}`, { method: "PATCH", cookie: admin.cookie,
+      body: { name: block.name, exerciseIds: [...ids.filter((id) => id !== ids[3]), bare, blank, video, drive, ...noPicture], userIds: [coach.userId], expectedRevision: covered.body.collection.revision, coverImageUrl: "" } });
+    assert.equal(uncovered.status, 200, JSON.stringify(uncovered.body));
+    assert.equal((await catalog(coach.cookie)).blocks[0].coverSlides.length, 10);
+    await query("insert into public.user_global_roles (user_id,role) values ($1,'independent_coach')", [admin.userId]);
+    assert.equal((await api("/api/auth/workspace", { method: "PUT", cookie: admin.cookie, body: { type: "private_coach" } })).status, 200);
+    const adminAsCoach = await catalog(admin.cookie);
+    assert.equal(adminAsCoach.blocks[0].locked, true);
+    assert.deepEqual(adminAsCoach.blocks[0].coverSlides, []);
+    assert.equal(blockPicture.test(JSON.stringify(adminAsCoach)) || JSON.stringify(adminAsCoach).includes("abcdefghijk"), false);
+  } finally {
+    await query("update library.exercises set is_active=false where id = any($1::uuid[])", [[unassigned, foreignPrivate]]);
+  }
+});
+
 test("an open block lists exactly its exercises with the coach's own copies, and Other exactly what no block holds", async () => {
   const tag = crypto.randomUUID().slice(0, 8);
   const admin = await makeLibraryAdmin("block-list-admin");
