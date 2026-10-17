@@ -9,6 +9,25 @@ import { applyNewMigration, MIGRATIONS_V2_ROOT } from "../src/migrate.js";
 const ownership = "202610151200_exercise_library_ownership_and_collections.sql";
 const integrity = "202610151300_exercise_copy_source_integrity.sql";
 
+test("block catalog migration preserves grants, membership and exercises with private-by-default previews", async () => {
+  await withFixture("block_catalog",async(client,apply)=>{
+    const owner=(await client.query("insert into public.users default values returning id")).rows[0].id;
+    const exercise=(await client.query("insert into library.exercises (owner_scope) values ('system') returning id")).rows[0].id;
+    const block=(await client.query("insert into library.exercise_collections (name,created_by_user_id) values ('Existing',$1) returning id",[owner])).rows[0].id;
+    await client.query("insert into library.exercise_collection_items (collection_id,exercise_id) values ($1,$2)",[block,exercise]);
+    await client.query("insert into library.exercise_collection_users (collection_id,user_id) values ($1,$2)",[block,owner]);
+    const before=(await client.query("select * from library.exercises")).rows;
+    await apply("202610162230_exercise_block_catalog.sql");
+    assert.deepEqual((await client.query("select * from library.exercises")).rows,before);
+    assert.deepEqual((await client.query("select access_all,block_preview,exercise_preview,description,cover_image_url from library.exercise_collections where id=$1",[block])).rows[0],
+      {access_all:false,block_preview:"hidden",exercise_preview:"hidden",description:"",cover_image_url:""});
+    assert.equal((await client.query("select count(*)::integer as count from library.exercise_collection_users where collection_id=$1",[block])).rows[0].count,1);
+    await assert.rejects(client.query("insert into library.exercise_collection_items (collection_id,exercise_id) values ($1,$2)",[block,exercise]),/duplicate key/);
+    await assert.rejects(client.query("update library.exercise_collections set exercise_preview='public' where id=$1",[block]),/check constraint/);
+    assert.equal((await client.query("select count(*)::integer as count from public.schema_migrations")).rows[0].count,2);
+  });
+});
+
 test("personal classification migration preserves existing rows and enables scoped metadata and private provenance", async () => {
   await withFixture("classification", async (client, apply) => {
     await apply(integrity);

@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
+import { renderImage } from "./media.js";
 
 let activePanel = null;
 function userLabel(user) { return user.email ? `${user.name} (${user.email})` : user.name; }
@@ -19,17 +20,25 @@ export function renderExerciseCollectionsHtml(panel) {
       <label class="search-field"><span>Find ${label.toLowerCase()}</span><input class="builder-text-input" type="search" data-search-kind="${kind}" value="${escapeAttr(panel.search[kind] || "")}"></label>
       <button type="button" class="plain-button" data-find-kind="${kind}" ${panel.busy ? "disabled" : ""}>Search</button>
       ${more ? '<p class="muted">First 100 matches shown. Refine the search to find more.</p>' : ""}
-      <div>${options.filter((item) => !selected.some((chosen) => chosen.id === item.id)).map((item) => `<button type="button" class="plain-button compact-button" data-add-kind="${kind}" data-id="${escapeAttr(item.id)}" ${kind === "exercises" && item.collectionId && item.collectionId !== panel.draft.id ? "disabled" : ""}>+ ${escapeHtml(kind === "users" ? userLabel(item) : item.name)}${item.collectionId && item.collectionId !== panel.draft.id ? " (another block)" : ""}</button>`).join(" ")}</div>
+      <div class="exercise-block-picker">${options.filter((item) => !selected.some((chosen) => chosen.id === item.id)).map((item) => `<label class="exercise-block-pick"><input type="checkbox" data-pick-kind="${kind}" data-id="${escapeAttr(item.id)}" ${panel.pending?.[kind]?.some((chosen) => chosen.id === item.id) ? "checked" : ""} ${panel.busy || (kind === "exercises" && item.collectionId && item.collectionId !== panel.draft.id) ? "disabled" : ""}>${kind === "exercises" && item.imageUrl ? renderImage(item.imageUrl, "exercise-block-pick-image") : ""}<span>${escapeHtml(kind === "users" ? userLabel(item) : item.name)}${item.collectionId && item.collectionId !== panel.draft.id ? " (another block)" : ""}</span></label>`).join("")}</div>
+      <button class="plain-button compact-button" type="button" data-add-selected="${kind}" ${panel.busy || !panel.pending?.[kind]?.length ? "disabled" : ""}>Add selected (${panel.pending?.[kind]?.length || 0})</button>
     </section>`;
   return `
     <button class="exercise-editor-backdrop" type="button" data-close-collections aria-label="Close"></button>
     <section class="panel exercise-editor-modal" role="dialog" aria-modal="true" aria-label="Application exercise blocks">
       <div class="builder-modal-head"><h3>Application exercise blocks</h3><button class="plain-button" type="button" data-close-collections>Close</button></div>
       <div class="exercise-editor-body">
-        <p>Exercises in a block are visible only to the application administrator and selected users. Personal copies remain private and are hidden when that user's access is removed.</p>
+        <p>Blocks control access to their system exercises. Locked previews do not grant access. Personal copies remain private and are hidden when that user's access is removed.</p>
         <label class="search-field"><span>Block</span><select class="builder-text-input" data-block-select ${panel.busy ? "disabled" : ""}><option value="">New block</option>${panel.collections.map((block) => `<option value="${escapeAttr(block.id)}" ${block.id === panel.draft.id ? "selected" : ""}>${escapeHtml(block.name)}</option>`).join("")}</select></label>
         <label class="search-field"><span>Block name</span><input class="builder-text-input" maxlength="120" data-block-name value="${escapeAttr(panel.draft.name)}" ${panel.busy ? "disabled" : ""}></label>
+        <label class="search-field"><span>Description</span><textarea class="builder-text-input" maxlength="2000" data-block-description ${panel.busy ? "disabled" : ""}>${escapeHtml(panel.draft.description || "")}</textarea></label>
+        <label class="search-field"><span>Cover image URL (optional)</span><input class="builder-text-input" type="url" data-block-cover value="${escapeAttr(panel.draft.coverImageUrl || "")}" ${panel.busy ? "disabled" : ""}></label>
+        <p class="muted">Without a cover URL, the first exercise in alphabetical order supplies the image. Only system exercises can belong to an application block.</p>
         ${picker("exercises", "Application exercises", panel.options.exercises || [], panel.draft.exercises, panel.options.moreExercises)}
+        <label class="exercise-block-pick"><input type="checkbox" data-block-all ${panel.draft.accessAll ? "checked" : ""} ${panel.busy ? "disabled" : ""}><span>Available to all users, including future users</span></label>
+        <p class="muted">When off, only selected users and the system administrator have access. Existing selected users are kept when everyone is enabled.</p>
+        <label class="search-field"><span>Block for users without access</span><select class="builder-text-input" data-block-preview ${panel.busy ? "disabled" : ""}><option value="hidden" ${panel.draft.blockPreview !== "locked" ? "selected" : ""}>Completely hidden</option><option value="locked" ${panel.draft.blockPreview === "locked" ? "selected" : ""}>Visible with a lock</option></select></label>
+        <label class="search-field"><span>Exercises for users without access</span><select class="builder-text-input" data-exercise-preview ${panel.busy ? "disabled" : ""}><option value="hidden" ${panel.draft.exercisePreview !== "locked" ? "selected" : ""}>Completely hidden</option><option value="locked" ${panel.draft.exercisePreview === "locked" ? "selected" : ""}>Names visible with a lock (no media or instructions)</option></select></label>
         ${picker("users", "Users", panel.options.users || [], panel.draft.users, panel.options.moreUsers)}
         ${panel.error ? `<p role="alert" class="builder-error">${escapeHtml(panel.error)}</p>` : ""}
         ${panel.saved ? '<p role="status">Block saved.</p>' : ""}
@@ -38,7 +47,7 @@ export function renderExerciseCollectionsHtml(panel) {
     </section>`;
 }
 
-function emptyDraft() { return { id: "", name: "", exercises: [], users: [] }; }
+function emptyDraft() { return { id: "", name: "", description: "", coverImageUrl: "", accessAll: false, blockPreview: "hidden", exercisePreview: "hidden", exercises: [], users: [] }; }
 
 function render(panel) {
   if (activePanel !== panel) return;
@@ -65,6 +74,7 @@ function render(panel) {
     const selected = panel.collections.find((block) => block.id === event.target.value);
     panel.draft = selected ? structuredClone(selected) : emptyDraft();
     panel.original = structuredClone(panel.draft);
+    panel.pending = { exercises: [], users: [] };
     panel.dirty = false;
     panel.saved = false;
     panel.error = "";
@@ -74,6 +84,30 @@ function render(panel) {
     panel.element.querySelector(`[data-search-kind="${kind}"]`).addEventListener("input", (event) => { panel.search[kind] = event.target.value; });
     panel.element.querySelector(`[data-find-kind="${kind}"]`).addEventListener("click", () => findOptions(panel));
   }
+  for (const [selector, field] of [["[data-block-description]", "description"], ["[data-block-cover]", "coverImageUrl"], ["[data-block-all]", "accessAll"], ["[data-block-preview]", "blockPreview"], ["[data-exercise-preview]", "exercisePreview"]]) {
+    panel.element.querySelector(selector).addEventListener(field === "accessAll" || field.endsWith("Preview") ? "change" : "input", (event) => {
+      panel.draft[field] = field === "accessAll" ? event.target.checked : event.target.value;
+      panel.dirty = true;
+      panel.saved = false;
+    });
+  }
+  panel.element.querySelectorAll("[data-pick-kind]").forEach((control) => control.addEventListener("change", () => {
+    const kind = control.dataset.pickKind;
+    const item = panel.options[kind].find((option) => option.id === control.dataset.id);
+    panel.pending[kind] = panel.pending[kind].filter((chosen) => chosen.id !== control.dataset.id);
+    if (control.checked && item) panel.pending[kind].push(item);
+    const button = panel.element.querySelector(`[data-add-selected="${kind}"]`);
+    button.disabled = !panel.pending[kind].length;
+    button.textContent = `Add selected (${panel.pending[kind].length})`;
+  }));
+  panel.element.querySelectorAll("[data-add-selected]").forEach((button) => button.addEventListener("click", () => {
+    const kind = button.dataset.addSelected;
+    for (const item of panel.pending[kind]) if (!panel.draft[kind].some((chosen) => chosen.id === item.id)) panel.draft[kind].push(item);
+    panel.pending[kind] = [];
+    panel.dirty = true;
+    panel.saved = false;
+    render(panel);
+  }));
   for (const mode of ["add", "remove"]) {
     panel.element.querySelectorAll(`[data-${mode}-kind]`).forEach((button) => button.addEventListener("click", () => {
       if (panel.busy) return;
@@ -87,7 +121,7 @@ function render(panel) {
     }));
   }
   panel.element.querySelector("[data-save-block]").addEventListener("click", () => saveBlock(panel));
-  const replacement = Array.from(panel.element.querySelectorAll("button:not(:disabled),input:not(:disabled),select:not(:disabled)"))
+  const replacement = Array.from(panel.element.querySelectorAll("button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled)"))
     .find((control) => focusAttributes.length && focusAttributes.every(([name, value]) => control.getAttribute(name) === value));
   (replacement || panel.element.querySelector("[data-block-select]:not(:disabled)") || panel.element.querySelector("[data-close-collections]")).focus();
 }
@@ -114,8 +148,9 @@ async function saveBlock(panel) {
   const removedUsers = panel.original.users.filter((old) => !panel.draft.users.some((item) => item.id === old.id));
   const confirmation = [
     `Save “${panel.draft.name}” with ${panel.draft.exercises.length} exercises and ${panel.draft.users.length} selected users?`,
-    "Only the application administrator and selected users will see these system exercises.",
-    removedUsers.length ? `Remove access, including personal copies, for: ${removedUsers.map(userLabel).join(", ")}.` : "",
+    panel.draft.accessAll ? "All users, including future users, can access these system exercises." : "Only the application administrator and selected users can access these system exercises.",
+    `Without access: block ${panel.draft.blockPreview || "hidden"}; exercise names ${panel.draft.exercisePreview || "hidden"}. Locked previews never include original exercise media or instructions.`,
+    removedUsers.length && !panel.draft.accessAll ? `Remove access, including personal copies, for: ${removedUsers.map(userLabel).join(", ")}.` : "",
     panel.draft.users.length ? `Selected users: ${panel.draft.users.map(userLabel).join(", ")}.` : "",
     removedExercises.length ? `Removing these exercises from the block makes their originals available to all coaches: ${removedExercises.map((exercise) => exercise.name).join(", ")}. Personal copies stay private.` : "",
   ].filter(Boolean).join("\n\n");
@@ -128,6 +163,8 @@ async function saveBlock(panel) {
     const result = await api(`/api/exercise-collections${panel.draft.id ? `/${encodeURIComponent(panel.draft.id)}` : ""}`, {
       method: panel.draft.id ? "PATCH" : "POST",
       body: JSON.stringify({ name: panel.draft.name, expectedRevision: panel.draft.revision,
+        description: panel.draft.description, coverImageUrl: panel.draft.coverImageUrl, accessAll: panel.draft.accessAll,
+        blockPreview: panel.draft.blockPreview, exercisePreview: panel.draft.exercisePreview,
         exerciseIds: panel.draft.exercises.map((item) => item.id), userIds: panel.draft.users.map((item) => item.id) }),
     });
     if (activePanel !== panel) return;
@@ -148,12 +185,12 @@ async function saveBlock(panel) {
   }
 }
 
-export async function openExerciseCollections(onSave) {
+export async function openExerciseCollections(onSave, collectionId = "") {
   if (activePanel) return;
   const element = document.createElement("div");
   element.className = "exercise-editor-overlay exercise-collections-overlay";
   const panel = { element, previousFocus: document.activeElement, onSave, collections: [], draft: emptyDraft(), original: emptyDraft(),
-    options: {}, search: { exercises: "", users: "" }, generation: 0, busy: false, error: "", saved: false, dirty: false };
+    options: {}, pending: { exercises: [], users: [] }, search: { exercises: "", users: "" }, generation: 0, busy: false, error: "", saved: false, dirty: false };
   activePanel = panel;
   panel.previousOverflow = document.body.style.overflow;
   panel.background = Array.from(document.body.children).map((child) => [child, child.inert]);
@@ -162,7 +199,7 @@ export async function openExerciseCollections(onSave) {
   panel.keydown = (event) => {
     if (event.key === "Escape") { element.querySelector("[data-close-collections]").click(); return; }
     if (event.key !== "Tab") return;
-    const controls = Array.from(element.querySelectorAll("button:not(:disabled),input:not(:disabled),select:not(:disabled)"));
+    const controls = Array.from(element.querySelectorAll("button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled)"));
     const first = controls[0];
     const last = controls.at(-1);
     if (event.shiftKey && (document.activeElement === first || !element.contains(document.activeElement))) {
@@ -179,6 +216,11 @@ export async function openExerciseCollections(onSave) {
     const result = await api("/api/exercise-collections");
     if (activePanel !== panel) return;
     panel.collections = result.collections;
+    if (collectionId) {
+      const selected = panel.collections.find((block) => block.id === collectionId);
+      if (selected) panel.draft = structuredClone(selected);
+      panel.original = structuredClone(panel.draft);
+    }
     await findOptions(panel);
   } catch (error) {
     panel.error = messages[error.message] || "Could not load application blocks.";

@@ -24,11 +24,12 @@ const EXERCISES_CACHE_NAMESPACE = "exercises";
 function exercisesContextKey(term, limit, filters) {
   return buildContextKey([
     ...currentUserWorkspaceContextParts(),
+    ...(state.exerciseSearch.surface === "blocks" ? ["surface:blocks"] : []),
     term,
     limit,
     ...EXERCISE_FILTERS.map((filter) => filters[filter.key]),
     filters.favorite,
-    ...["kind", "visibility", "hidden", "owner", "searchIn"].filter((key) => filters[key]).map((key) => `${key}:${filters[key]}`),
+    ...["kind", "visibility", "hidden", "owner", "searchIn", "collection"].filter((key) => filters[key]).map((key) => `${key}:${filters[key]}`),
   ]);
 }
 
@@ -42,6 +43,9 @@ export function resetExercisesForWorkspaceChange() {
   state.exerciseSearch.filters = emptyExerciseFilters();
   state.exerciseSearch.canManageCollections = false;
   state.exerciseSearch.hasMore = false;
+  state.exerciseSearch.surface = "exercises";
+  state.exerciseSearch.lockedPreviews = [];
+  state.exerciseSearch.moreLockedPreviews = false;
   state.lastExerciseResults = [];
   state.exerciseEditor.open = false;
   state.tagEditor.open = false;
@@ -78,6 +82,7 @@ export function bindExerciseOwnerSearch() {
 }
 
 export async function loadExercises(handlers) {
+  state.exerciseSearch.surface = "exercises";
   state.navStack = [];
   // /api/exercises/options (filter dropdown data) and the initial
   // /api/exercises search never depend on each other - the search query is
@@ -137,10 +142,16 @@ export async function loadExercises(handlers) {
 }
 
 export async function searchExercises(term, handlers, { forceRefresh = false } = {}) {
+  if (state.exerciseSearch.surface === "blocks") {
+    const { refreshExerciseBlocks } = await import("./exercise-blocks.js");
+    await refreshExerciseBlocks();
+    return;
+  }
   const query = term.trim();
   state.exerciseSearch.term = query;
   const { limit, filters } = state.exerciseSearch;
   const contextKey = exercisesContextKey(query, limit, filters);
+  state.exerciseSearch.lockedPreviews = [];
   let visibleMarkedIds = [];
   try { visibleMarkedIds = await loadMarkedExerciseVisibility(filters); }
   catch { handlers.renderExercises([]); return; }
@@ -152,6 +163,8 @@ export async function searchExercises(term, handlers, { forceRefresh = false } =
     showLoading: () => handlers.setLoading(query ? "Searching exercises..." : "Loading exercises..."),
     applyData: (data) => {
       state.exerciseSearch.hasMore = Boolean(data.hasMore);
+      state.exerciseSearch.lockedPreviews = state.exerciseSearch.filters.marked ? [] : data.lockedPreviews || [];
+      state.exerciseSearch.moreLockedPreviews = Boolean(data.moreLockedPreviews);
       state.exerciseSearch.canManageCollections = data.canManageCollections === true;
       // Reads the LIVE filters, not the snapshot this fetch was keyed by -
       // `marked` isn't part of the cache key (see exercisesContextKey), so
@@ -198,6 +211,12 @@ export async function submitExerciseTagForm(form, handlers) {
 
 export async function handleExerciseLibraryAction(action, handlers) {
   const type = action.dataset.action;
+  if (type === "exercise-blocks-clear") {
+    delete state.exerciseSearch.filters.collection;
+    state.exerciseSearch.limit = 30;
+    await searchExercises(state.exerciseSearch.term, handlers);
+    return true;
+  }
   if (type === "exercise-delete") {
     if (!window.confirm("Permanently delete this private exercise? This cannot be undone. Programs, activities or dependent copies prevent deletion; use Archive to keep references.")) return true;
     try {

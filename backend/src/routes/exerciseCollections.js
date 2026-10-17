@@ -1,10 +1,55 @@
 import { Router } from "express";
-import { pool, query } from "../db.js";
-import { exerciseAdministratorSql, hasExerciseAdministration } from "../exerciseAccess.js";
+import { pool, query, queryWithoutJit } from "../db.js";
+import { exerciseAdministratorSql, exerciseReadScopeSql, hasExerciseAdministration } from "../exerciseAccess.js";
+import { loadLockedExercisePreviews } from "../exerciseBlocks.js";
 import { emitRealtimeEventForAll } from "../realtime.js";
 
 const router = Router();
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+router.get("/catalog", async (req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  try {
+    const admin = await hasExerciseAdministration(req.user.id, req.authz, query);
+    const search = String(req.query.search || "").trim().slice(0, 120);
+    const params = [req.user.id, `%${search}%`];
+    const visible = `${exerciseReadScopeSql} and not exists (select 1 from library.filter_hidden hidden
+      where hidden.kind='exercise' and hidden.item_id=e.id and hidden.user_id=$1)`;
+    const granted = `(${exerciseAdministratorSql} or c.access_all=true or exists (
+      select 1 from library.exercise_collection_users granted where granted.collection_id=c.id and granted.user_id=$1))`;
+    const blocks = await queryWithoutJit(`select c.id,c.name,c.description,c.access_all as "accessAll",not ${granted} as locked,
+        coalesce(nullif(c.cover_image_url,''),case when ${granted} then (select nullif(e.image_url,'') from library.exercise_collection_items ci
+          join library.exercises e on e.id=ci.exercise_id where ci.collection_id=c.id and ${visible}
+          order by e.name,e.id limit 1) end,'') as "coverImageUrl",
+        (select count(*)::integer from library.exercise_collection_items ci join library.exercises e on e.id=ci.exercise_id
+          where ci.collection_id=c.id and e.owner_scope='system' and e.is_active=true
+          and (${granted} and ${visible} or not ${granted})) as "exerciseCount"
+      from library.exercise_collections c
+      where (${granted} or c.block_preview='locked')
+        and (c.name ilike $2 or c.description ilike $2)
+      order by c.name,c.id limit 501`, params);
+    if (blocks.rows.length > 500) return res.status(409).json({ error: "tooManyBlocks" });
+    const other = await queryWithoutJit(`select count(*)::integer as count,
+        (array_agg(nullif(e.image_url,'') order by e.name,e.id))[1] as image
+      from library.exercises e where ${visible} and (e.owner_scope='system' or e.owner_user_id=$1) and not exists (select 1 from library.exercise_collection_items ci
+        where ci.exercise_id=coalesce(e.source_exercise_id,e.id))`, [req.user.id]);
+    res.json({ blocks: blocks.rows, other: { id: "other", name: "Other", description: "Available exercises outside application blocks.",
+      exerciseCount: other.rows[0].count, coverImageUrl: other.rows[0].image || "" }, canManageCollections: admin });
+  } catch (error) { next(error); }
+});
+
+router.get("/locked-exercises", async (req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  try {
+    const collection = String(req.query.collection || "");
+    if (collection && collection !== "other" && !uuidPattern.test(collection)) return res.status(400).json({ error: "invalidBlock" });
+    if (collection === "other") return res.json({ exercises: [], hasMore: false });
+    const search = String(req.query.search || "").trim().slice(0, 120);
+    const requestedLimit = Number(req.query.limit || 30);
+    const limit = Number.isFinite(requestedLimit) ? Math.max(1,Math.min(500,Math.floor(requestedLimit))) : 30;
+    res.json(await loadLockedExercisePreviews(req.user.id, search, collection, limit));
+  } catch (error) { next(error); }
+});
 
 router.use(async (req, res, next) => {
   res.set("Cache-Control", "no-store");
@@ -22,8 +67,9 @@ function respondError(res, error) {
 
 async function loadCollections(runQuery = query, collectionId = null) {
   return (await runQuery(
-    `select c.id, c.name, c.revision,
-       coalesce((select jsonb_agg(jsonb_build_object('id', e.id, 'name', e.name) order by e.name)
+    `select c.id, c.name, c.revision,c.description,c.cover_image_url as "coverImageUrl",c.access_all as "accessAll",
+       c.block_preview as "blockPreview",c.exercise_preview as "exercisePreview",
+       coalesce((select jsonb_agg(jsonb_build_object('id', e.id, 'name', e.name, 'imageUrl', e.image_url) order by e.name,e.id)
          from library.exercise_collection_items ci join library.exercises e on e.id = ci.exercise_id
          where ci.collection_id = c.id), '[]'::jsonb) as exercises,
        coalesce((select jsonb_agg(jsonb_build_object('id', u.id, 'name', coalesce(u.display_name,u.full_name,u.email), 'email', u.email) order by u.email)
@@ -47,7 +93,7 @@ router.get("/options", async (req, res) => {
     const exerciseSearch = String(req.query.exerciseSearch || "").trim().slice(0, 120);
     const userSearch = String(req.query.userSearch || "").trim().slice(0, 120);
     const [exercises, users] = await Promise.all([
-      query(`select e.id, e.name, ci.collection_id as "collectionId" from library.exercises e
+      query(`select e.id, e.name, e.image_url as "imageUrl", ci.collection_id as "collectionId" from library.exercises e
         left join library.exercise_collection_items ci on ci.exercise_id = e.id
         where e.is_active = true and e.owner_scope = 'system' and e.name ilike $1
         order by e.name, e.id limit 101`, [`%${exerciseSearch}%`]),
@@ -65,7 +111,16 @@ function parseBody(body) {
   for (const key of ["exerciseIds", "userIds"]) {
     if (!Array.isArray(body[key]) || body[key].length > 1000 || body[key].some((id) => typeof id !== "string" || !uuidPattern.test(id))) return null;
   }
-  return { name: body.name.trim(), exerciseIds: [...new Set(body.exerciseIds)].sort(), userIds: [...new Set(body.userIds)].sort() };
+  const description = body.description === undefined ? undefined : typeof body.description === "string" ? body.description.trim() : null;
+  const coverImageUrl = body.coverImageUrl === undefined ? undefined : typeof body.coverImageUrl === "string" ? body.coverImageUrl.trim() : null;
+  if (description === null || description?.length > 2000 || coverImageUrl === null || coverImageUrl?.length > 2048) return null;
+  if (coverImageUrl) {
+    try { if (!["https:", "http:"].includes(new URL(coverImageUrl).protocol)) return null; } catch { return null; }
+  }
+  if (body.accessAll !== undefined && typeof body.accessAll !== "boolean") return null;
+  for (const field of ["blockPreview","exercisePreview"]) if (body[field] !== undefined && !["hidden","locked"].includes(body[field])) return null;
+  return { name: body.name.trim(), description, coverImageUrl, accessAll: body.accessAll, blockPreview: body.blockPreview, exercisePreview: body.exercisePreview,
+    exerciseIds: [...new Set(body.exerciseIds)].sort(), userIds: [...new Set(body.userIds)].sort() };
 }
 
 async function saveCollection(req, res) {
@@ -117,11 +172,15 @@ async function saveCollection(req, res) {
     }
     let savedId = collectionId;
     if (savedId) {
-      await runQuery("update library.exercise_collections set name = $2, revision = revision + 1, updated_at = now() where id = $1", [savedId, data.name]);
+      await runQuery(`update library.exercise_collections set name=$2,description=coalesce($3,description),
+        cover_image_url=coalesce($4,cover_image_url),access_all=coalesce($5,access_all),
+        block_preview=coalesce($6,block_preview),exercise_preview=coalesce($7,exercise_preview),
+        revision=revision+1,updated_at=now() where id=$1`, [savedId,data.name,data.description,data.coverImageUrl,data.accessAll,data.blockPreview,data.exercisePreview]);
       await runQuery("delete from library.exercise_collection_items where collection_id = $1", [savedId]);
       await runQuery("delete from library.exercise_collection_users where collection_id = $1", [savedId]);
     } else {
-      savedId = (await runQuery("insert into library.exercise_collections (name,created_by_user_id) values ($1,$2) returning id", [data.name, req.user.id])).rows[0].id;
+      savedId = (await runQuery(`insert into library.exercise_collections (name,created_by_user_id,description,cover_image_url,access_all,block_preview,exercise_preview)
+        values ($1,$2,$3,$4,$5,$6,$7) returning id`, [data.name,req.user.id,data.description || "",data.coverImageUrl || "",data.accessAll ?? false,data.blockPreview || "hidden",data.exercisePreview || "hidden"])).rows[0].id;
     }
     await runQuery("insert into library.exercise_collection_items (collection_id,exercise_id) select $1, unnest($2::uuid[])", [savedId, data.exerciseIds]);
     await runQuery("insert into library.exercise_collection_users (collection_id,user_id) select $1, unnest($2::uuid[])", [savedId, data.userIds]);

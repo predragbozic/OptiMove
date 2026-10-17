@@ -2631,8 +2631,17 @@ async function handleContentClick(event) {
     renderExerciseDetail,
   })) return;
   if (await handleExerciseLibraryAction(action, { renderExercises, setLoading })) return;
+  if (type === "exercise-blocks-open") {
+    const { openExerciseBlocks } = await import("./exercise-blocks.js");
+    await openExerciseBlocks({ renderExercises, setLoading });
+    return;
+  }
   if (type === "exercise-collections-open") {
-    await openExerciseCollections(exerciseEditorHandlers.refreshAfterSave);
+    await openExerciseCollections(async () => {
+      await exerciseEditorHandlers.refreshAfterSave();
+      const { openExerciseBlocks } = await import("./exercise-blocks.js");
+      await openExerciseBlocks({ renderExercises, setLoading });
+    }, action.dataset.collectionId || "");
     return;
   }
   if (type === "exercise-classification") {

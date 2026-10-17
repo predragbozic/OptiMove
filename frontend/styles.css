@@ -17404,3 +17404,23 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
     max-width: calc(100vw - 80px);
   }
 }
+ .exercise-block-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  gap: 16px;
+}
+.exercise-block-card { overflow: hidden; padding: 0; min-width: 0; }
+.exercise-block-cover { display: block; width: 100%; height: 180px; padding: 0; border: 0; background: #dfeae8; cursor: pointer; }
+.exercise-block-cover-image { width: 100%; height: 100%; object-fit: cover; }
+.exercise-block-placeholder { font-size: 64px; color: #276d66; }
+.exercise-block-card.is-locked { background: #eceeef; color: #535b60; border: 1px solid #b6bfc3; }
+.exercise-block-card.is-locked .exercise-block-cover { filter: grayscale(1); opacity: .55; cursor: default; }
+.exercise-block-lock { display: inline-block; font-weight: 600; }
+.exercise-locked-results { margin-top: 24px; }
+.exercise-block-card-body { padding: 16px; overflow-wrap: anywhere; }
+.exercise-block-card-body h3 { margin: 10px 0; }
+.exercise-block-card-body p { min-height: 2em; white-space: pre-wrap; }
+.exercise-block-picker { display: grid; gap: 8px; max-height: 300px; overflow: auto; margin: 10px 0; }
+.exercise-block-pick { display: flex; gap: 10px; align-items: center; padding: 8px; overflow-wrap: anywhere; }
+.exercise-block-pick input { flex: 0 0 auto; }
+.exercise-block-pick-image { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; }
