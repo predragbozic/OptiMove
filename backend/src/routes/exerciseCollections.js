@@ -131,6 +131,23 @@ function parseBody(body) {
     exerciseIds: [...new Set(body.exerciseIds)].sort(), userIds: [...new Set(body.userIds)].sort() };
 }
 
+// A checked-out client has no 'error' listener of its own (pg-pool removes
+// its idle listener at checkout), and pg emits 'error' when the server ends
+// the session while no query runs - exactly what the idle bound below or a
+// pooler reset does. Without a listener that event would crash the process
+// (the guardClient pattern of sourceConnectionService.js). The listener is
+// removed again right before the client goes back to the pool; a release
+// with an error destroys the client.
+async function checkoutBlockClient() {
+  const client = await pool.connect();
+  const onClientError = () => {};
+  client.on("error", onClientError);
+  return { client, release: (error) => {
+    client.removeListener("error", onClientError);
+    client.release(error);
+  } };
+}
+
 // Every block write: one READ COMMITTED transaction (the block deletion
 // guard requires it), bounded lock waits and idle time - it holds the
 // exclusive block lock that every exercise reuse takes shared -, and the
@@ -166,8 +183,9 @@ async function saveCollection(req, res) {
     return res.status(400).json({ error: "invalidBody" });
   }
   let client;
+  let release;
   try {
-    client = await pool.connect();
+    ({ client, release } = await checkoutBlockClient());
     const runQuery = (sql, params) => client.query(sql, params);
     const refusal = await beginBlockWrite(runQuery, req.user.id);
     if (refusal) return res.status(refusal.status).json({ error: refusal.error });
@@ -213,7 +231,7 @@ async function saveCollection(req, res) {
   } catch (error) {
     if (client) { try { await client.query("rollback"); } catch {} }
     respondError(res, error);
-  } finally { client?.release(); }
+  } finally { if (client) release(); }
 }
 
 // Whether a delete whose COMMIT answer was an error is in the database,
@@ -238,11 +256,12 @@ async function deleteCollection(req, res) {
     return res.status(400).json({ error: "invalidBody" });
   }
   let client;
+  let release;
   let commitSent = false;
   let verifiedAfterCommitError = false;
   let deleted;
   try {
-    client = await pool.connect();
+    ({ client, release } = await checkoutBlockClient());
     const runQuery = (sql, params) => client.query(sql, params);
     const refusal = await beginBlockWrite(runQuery, req.user.id);
     if (refusal) return res.status(refusal.status).json({ error: refusal.error });
@@ -265,11 +284,11 @@ async function deleteCollection(req, res) {
       return respondError(res, error);
     }
     // The connection's state after a failed COMMIT is unknown: never reuse it.
-    client.release(error);
+    release(error);
     client = null;
     if (!(await deletionCommitted(collectionId, req.user.id))) return res.status(503).json({ error: "outcomeUnknown" });
     verifiedAfterCommitError = true;
-  } finally { client?.release(); }
+  } finally { if (client) release(); }
   try { emitRealtimeEventForAll("exercise_library_changed"); } catch {}
   res.json(verifiedAfterCommitError ? { deleted, verifiedAfterCommitError } : { deleted });
 }

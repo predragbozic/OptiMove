@@ -503,6 +503,46 @@ test("a block delete whose COMMIT fails is never 'not deleted': 503 outcomeUnkno
   assert.equal((await query("select count(*)::integer as count from library.exercise_collection_audit where collection_id=$1 and after_state->>'deleted'='true'", [block.id])).rows[0].count, 1);
 });
 
+test("a block write whose session the server ends mid-transaction answers, and the server keeps running", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("block-session-admin");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Session block exercise ${tag}` });
+  const created = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Session block ${tag}`, exerciseIds: [system], userIds: [] } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const block = created.body.collection;
+  // The server ends the session while the transaction is idle (what the 15 s
+  // idle bound or a pooler reset does): pg emits 'error' with no query in flight.
+  const original = pool.connect;
+  pool.connect = function (callback) {
+    if (callback) return original.call(this, callback);
+    pool.connect = original;
+    return original.call(this).then((client) => {
+      const send = client.query.bind(client);
+      client.query = async (...args) => {
+        const result = await send(...args);
+        if (String(args[0]).startsWith("set local idle_in_transaction_session_timeout")) {
+          client.query = send;
+          await adminClient.query("select pg_terminate_backend($1)", [client.processID]);
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        return result;
+      };
+      return client;
+    });
+  };
+  let ended;
+  try {
+    ended = await api(`/api/exercise-collections/${block.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: block.revision } });
+  } finally { pool.connect = original; }
+  assert.ok(ended.status >= 500, JSON.stringify(ended.body));
+  assert.equal(ended.body.error, "internalError");
+  assert.equal((await query("select deleted_at from library.exercise_collections where id=$1", [block.id])).rows[0].deleted_at, null);
+  // Still serving: the same delete now succeeds.
+  const again = await api(`/api/exercise-collections/${block.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: block.revision } });
+  assert.equal(again.status, 200, JSON.stringify(again.body));
+});
+
 test("a block save and a block delete sent together end in one consistent state", async () => {
   const tag = crypto.randomUUID().slice(0, 8);
   const admin = await makeLibraryAdmin("block-race-admin");
