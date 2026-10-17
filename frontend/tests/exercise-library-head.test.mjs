@@ -72,3 +72,55 @@ test("4. one look and touch size: the group's buttons match the switcher, phones
   assert.match(css, /@media \(max-width: 760px\) \{\s*\.exercise-results-head \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto; grid-template-areas: "count add" "filters filters" "browse browse";[^}]*\}[^]*?\.exercise-block-chip \{ min-height: 44px; \}\s*\.exercise-browse-button \{ min-height: 50px; padding: 0 14px; \}\s*\.exercise-browse-button\.is-icon \{ width: 50px; padding: 0; \}/);
   assert.match(css, /@media \(max-width: 400px\) \{\s*\.exercise-browse-controls\.has-block-edit \.exercise-browse-button \{ width: 50px; padding: 0; \}/);
 });
+
+test("5. a realtime access change or a block save reads the Blocks view again and never swaps it for the library", async () => {
+  const dom = new JSDOM('<h2 id="screenTitle"></h2><div id="viewToolbar"></div><main id="content"></main>');
+  globalThis.document = dom.window.document;
+  globalThis.window = dom.window;
+  const { els } = await import("../dom.js");
+  const { state, emptyExerciseOptions } = await import("../state.js");
+  const { openExerciseBlocks } = await import("../exercise-blocks.js");
+  const { reloadExerciseLibrarySurface } = await import("../exercise-actions.js");
+  els.title = document.querySelector("#screenTitle");
+  els.toolbar = document.querySelector("#viewToolbar");
+  els.content = document.querySelector("#content");
+  state.currentUser = { id: "coach-id", activeWorkspace: { type: "private_coach" } };
+  state.exerciseSearch = { filters: {}, options: emptyExerciseOptions(), limit: 30 };
+  state.markedExerciseIds = new Set();
+  state.markedExercises = new Map();
+  const requests = [];
+  globalThis.fetch = async (url) => {
+    requests.push(String(url));
+    return { ok: true, json: async () => String(url).includes("/catalog") ? { blocks: [], other: { id: "other", name: "Other", exerciseCount: 1 }, canManageCollections: false } : String(url).includes("/options") ? emptyExerciseOptions() : { exercises: [], lockedPreviews: [] } };
+  };
+  const handlers = { renderExercises() { assert.fail("the library must not replace the Blocks view"); }, setLoading() {} };
+  await openExerciseBlocks(handlers);
+  await reloadExerciseLibrarySurface(handlers);
+  assert.ok(document.querySelector(".exercise-block-catalog"));
+  assert.equal(document.querySelector("#exerciseSearch"), null);
+  assert.equal(requests.filter((url) => url.includes("/catalog")).length, 2);
+  assert.equal(requests.filter((url) => url.startsWith("/api/exercises?")).length, 0);
+  dom.window.close();
+
+  const app = await readFile(new URL("../app.js", import.meta.url), "utf8");
+  assert.equal(app.match(/reloadExerciseLibrarySurface\(\{ renderExercises, setLoading \}\)/g)?.length, 2, "the realtime refresh and the block save");
+  assert.doesNotMatch(app, /exercise-collections-open[^]*?openExerciseBlocks\(\{ renderExercises, setLoading \}\);\s*\}, action\.dataset\.collectionId/);
+});
+
+test("6. only the Exercise Library asks for locked previews; the Builder's search does not", async () => {
+  const { exerciseSearchUrl } = await import("../exercise-data.js");
+  assert.equal(new URL(exerciseSearchUrl("", 18, {}), "https://x.test").searchParams.has("lockedPreviews"), false);
+  assert.equal(new URL(exerciseSearchUrl("", 30, {}, { lockedPreviews: true }), "https://x.test").searchParams.get("lockedPreviews"), "1");
+  const actions = await readFile(new URL("../exercise-actions.js", import.meta.url), "utf8");
+  assert.match(actions, /fetcher: \(\) => api\(exerciseSearchUrl\(query, limit, filters, \{ lockedPreviews: true \}\)\)/);
+  assert.match(actions, /moreLockedPreviews = state\.exerciseSearch\.filters\.marked \? false : Boolean\(data\.moreLockedPreviews\)/);
+  const builder = await readFile(new URL("../builder-data.js", import.meta.url), "utf8");
+  assert.match(builder, /exerciseSearchUrl\(query, 18, filters\)\}&offset=/);
+});
+
+test("7. a block cover sends no referrer; switching all-users access off says who loses it", async () => {
+  const html = renderExerciseBlocksHtml({ blocks: [{ id: BLOCK, name: "Ankle", exerciseCount: 1, coverImageUrl: "https://example.test/cover.jpg", locked: false }], other: { id: "other", exerciseCount: 0 }, canManageCollections: false });
+  assert.match(html, /<img referrerpolicy="no-referrer" class="exercise-block-cover-image" src="https:\/\/example\.test\/cover\.jpg"/);
+  const collections = await readFile(new URL("../exercise-collections.js", import.meta.url), "utf8");
+  assert.match(collections, /panel\.original\.accessAll && !panel\.draft\.accessAll \? "Everyone who is not a selected user loses access to these exercises, including their personal copies/);
+});

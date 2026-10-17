@@ -83,6 +83,7 @@ import {
   invalidateExercisesCache,
   resetExercisesForWorkspaceChange,
   loadExercises,
+  reloadExerciseLibrarySurface,
   submitExerciseTagForm as submitExerciseTagFormAction,
 } from "./exercise-actions.js";
 import {
@@ -2637,10 +2638,11 @@ async function handleContentClick(event) {
     return;
   }
   if (type === "exercise-collections-open") {
+    // After a save the screen it was opened from is read again: the Blocks
+    // view, or the library (inside the block an administrator edited).
     await openExerciseCollections(async () => {
-      await exerciseEditorHandlers.refreshAfterSave();
-      const { openExerciseBlocks } = await import("./exercise-blocks.js");
-      await openExerciseBlocks({ renderExercises, setLoading });
+      invalidateExercisesCache();
+      if (state.activeTab === "exercises") await reloadExerciseLibrarySurface({ renderExercises, setLoading });
     }, action.dataset.collectionId || "");
     return;
   }
@@ -3625,7 +3627,7 @@ async function refreshExerciseLibraryAccess() {
   state.exerciseDetail = { ids: [], currentId: null };
   if (state.activeTab === "exercises") {
     state.navStack = [];
-    await loadExercises({ renderExercises, setLoading });
+    await reloadExerciseLibrarySurface({ renderExercises, setLoading });
   } else if (state.activeTab === "builder") {
     document.querySelector(".exercise-detail-overlay")?.remove();
     document.querySelector(".exercise-editor-overlay:not(.exercise-collections-overlay)")?.remove();

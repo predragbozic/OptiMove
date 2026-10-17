@@ -374,9 +374,14 @@ router.get("/", async (req, res, next) => {
       `,
       params,
     );
-    const previewEligible = !admin && !owner && !["private","mine"].includes(kind) && visibility === "active" && hidden === "visible"
+    // Locked previews are a separate list for the Exercise Library only: it
+    // asks for them (lockedPreviews=1) and pages by a growing limit, never
+    // an offset. The Builder pages by offset and never shows them, so it
+    // neither asks nor pays for the second query.
+    const previewEligible = req.query.lockedPreviews === "1" && offset === 0
+      && !admin && !owner && !["private","mine"].includes(kind) && visibility === "active" && hidden === "visible"
       && !Object.values(filters).some(Boolean);
-    const previews = previewEligible ? await loadLockedExercisePreviews(req.user.id,search,collection,limit,offset) : { exercises: [], hasMore: false };
+    const previews = previewEligible ? await loadLockedExercisePreviews(req.user.id,search,collection,limit) : { exercises: [], hasMore: false };
     res.json({
       exercises: result.rows.slice(0, limit),
       lockedPreviews: previews.exercises,

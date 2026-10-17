@@ -161,6 +161,8 @@ async function saveBlock(panel) {
     `Save “${panel.draft.name}” with ${panel.draft.exercises.length} exercises and ${panel.draft.users.length} selected users?`,
     panel.draft.accessAll ? "All users, including future users, can access these system exercises." : "Only the application administrator and selected users can access these system exercises.",
     `Without access: block ${panel.draft.blockPreview || "hidden"}; exercise names ${panel.draft.exercisePreview || "hidden"}. Locked previews never include original exercise media or instructions.`,
+    // Switching all-users access off revokes everyone without an individual grant.
+    panel.original.accessAll && !panel.draft.accessAll ? "Everyone who is not a selected user loses access to these exercises, including their personal copies, and plans that use them can no longer be edited until access is given back." : "",
     removedUsers.length && !panel.draft.accessAll ? `Remove access, including personal copies, for: ${removedUsers.map(userLabel).join(", ")}.` : "",
     panel.draft.users.length ? `Selected users: ${panel.draft.users.map(userLabel).join(", ")}.` : "",
     removedExercises.length ? `Removing these exercises from the block makes their originals available to all coaches: ${removedExercises.map((exercise) => exercise.name).join(", ")}. Personal copies stay private.` : "",

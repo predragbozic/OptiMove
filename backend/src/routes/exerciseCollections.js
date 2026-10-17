@@ -17,7 +17,7 @@ router.get("/catalog", async (req, res, next) => {
       where hidden.kind='exercise' and hidden.item_id=e.id and hidden.user_id=$1)`;
     const granted = `(${exerciseAdministratorSql} or c.access_all=true or exists (
       select 1 from library.exercise_collection_users granted where granted.collection_id=c.id and granted.user_id=$1))`;
-    const blocks = await queryWithoutJit(`select c.id,c.name,c.description,c.access_all as "accessAll",not ${granted} as locked,
+    const blocks = await queryWithoutJit(`select c.id,c.name,c.description,not ${granted} as locked,
         coalesce(nullif(c.cover_image_url,''),case when ${granted} then (select nullif(e.image_url,'') from library.exercise_collection_items ci
           join library.exercises e on e.id=ci.exercise_id where ci.collection_id=c.id and ${visible}
           order by e.name,e.id limit 1) end,'') as "coverImageUrl",
@@ -115,7 +115,14 @@ function parseBody(body) {
   const coverImageUrl = body.coverImageUrl === undefined ? undefined : typeof body.coverImageUrl === "string" ? body.coverImageUrl.trim() : null;
   if (description === null || description?.length > 2000 || coverImageUrl === null || coverImageUrl?.length > 2048) return null;
   if (coverImageUrl) {
-    try { if (!["https:", "http:"].includes(new URL(coverImageUrl).protocol)) return null; } catch { return null; }
+    // The same rule as the database's CHECK (^https?://), so a typing slip
+    // such as "http:example.com" is a 400, never an unknown save outcome.
+    if (!/^https?:\/\//i.test(coverImageUrl)) return null;
+    // Every coach's browser loads the cover: never a user name or password in it.
+    try {
+      const url = new URL(coverImageUrl);
+      if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) return null;
+    } catch { return null; }
   }
   if (body.accessAll !== undefined && typeof body.accessAll !== "boolean") return null;
   for (const field of ["blockPreview","exercisePreview"]) if (body[field] !== undefined && !["hidden","locked"].includes(body[field])) return null;
