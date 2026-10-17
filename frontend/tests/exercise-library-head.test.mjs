@@ -122,5 +122,43 @@ test("7. a block cover sends no referrer; switching all-users access off says wh
   const html = renderExerciseBlocksHtml({ blocks: [{ id: BLOCK, name: "Ankle", exerciseCount: 1, coverImageUrl: "https://example.test/cover.jpg", locked: false }], other: { id: "other", exerciseCount: 0 }, canManageCollections: false });
   assert.match(html, /<img referrerpolicy="no-referrer" class="exercise-block-cover-image" src="https:\/\/example\.test\/cover\.jpg"/);
   const collections = await readFile(new URL("../exercise-collections.js", import.meta.url), "utf8");
-  assert.match(collections, /panel\.original\.accessAll && !panel\.draft\.accessAll \? "Everyone who is not a selected user loses access to these exercises, including their personal copies/);
+  assert.match(collections, /panel\.original\.accessAll && !panel\.draft\.accessAll \? "Everyone who is not a selected user loses access to these exercises, including their personal copies\."/);
+});
+
+test("8. renaming the open block in its editor renames its chip; another block's save leaves it alone", async () => {
+  const { state } = await import("../state.js");
+  const { applySavedBlockName } = await import("../exercise-actions.js");
+  state.exerciseSearch = { filters: { collection: BLOCK }, collectionName: "Ankle", options: {} };
+  applySavedBlockName({ id: "22222222-2222-2222-2222-222222222222", name: "Other block" });
+  assert.equal(state.exerciseSearch.collectionName, "Ankle");
+  applySavedBlockName({ id: BLOCK, name: "Ankle strength" });
+  const html = renderExerciseLibraryHtml({ exercises: [], itemIds: [], markedExerciseIds: new Set(), search: { ...state.exerciseSearch, view: "list", term: "" }, tagEditor: { open: false } });
+  assert.equal(new JSDOM(html).window.document.querySelector(".exercise-block-chip").textContent, "Block: Ankle strength×");
+  const app = await readFile(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(app, /openExerciseCollections\(async \(saved\) => \{\s*applySavedBlockName\(saved\);/);
+  const collections = await readFile(new URL("../exercise-collections.js", import.meta.url), "utf8");
+  assert.match(collections, /await panel\.onSave\(result\.collection\);/);
+});
+
+test("9. under Marked no Load more is offered for locked previews (through the real search)", async () => {
+  const dom = new JSDOM('<h2 id="screenTitle"></h2><div id="viewToolbar"></div><main id="content"></main>');
+  globalThis.document = dom.window.document;
+  globalThis.window = dom.window;
+  const { state, emptyExerciseOptions } = await import("../state.js");
+  const { searchExercises } = await import("../exercise-actions.js");
+  const { clearAllViewCache } = await import("../view-cache.js");
+  clearAllViewCache();
+  state.currentUser = { id: "marked-coach", activeWorkspace: { type: "private_coach" } };
+  state.markedExerciseIds = new Set();
+  state.markedExercises = new Map();
+  let html = "";
+  const handlers = { setLoading() {}, renderExercises(exercises) { html = renderExerciseLibraryHtml({ exercises, itemIds: [], markedExerciseIds: new Set(), search: state.exerciseSearch, tagEditor: { open: false } }); } };
+  globalThis.fetch = async (url) => ({ ok: true, json: async () => String(url).includes("visible-marked") ? { ids: [] } : { exercises: [], hasMore: false, lockedPreviews: [{ id: "x", name: "Locked", blockName: null }], moreLockedPreviews: true } });
+  for (const marked of [false, true]) {
+    clearAllViewCache();
+    state.exerciseSearch = { surface: "exercises", term: "", filters: { marked }, options: emptyExerciseOptions(), limit: 30, view: "list" };
+    await searchExercises("", handlers);
+    assert.equal(Boolean(new JSDOM(html).window.document.querySelector('[data-action="exercise-load-more"]')), !marked, `marked=${marked}`);
+  }
+  dom.window.close();
 });

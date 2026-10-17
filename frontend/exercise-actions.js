@@ -141,6 +141,11 @@ export async function loadExercises(handlers) {
   await searchPromise;
 }
 
+// A block saved in the editor: the chip of the open block shows its new name.
+export function applySavedBlockName(saved) {
+  if (saved?.id && saved.id === state.exerciseSearch.filters?.collection) state.exerciseSearch.collectionName = saved.name || "";
+}
+
 // Reads the Exercise Library again where the coach is: the Blocks view
 // stays the Blocks view (after a block save or a realtime access change),
 // the library list - inside a block too - is loaded again.
