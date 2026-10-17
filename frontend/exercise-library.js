@@ -86,8 +86,54 @@ function renderExerciseBlockChip(search) {
   return `<button class="item-badge exercise-block-chip" type="button" data-action="exercise-blocks-clear" aria-label="Leave block ${escapeAttr(name)} and show all exercises" title="Show all exercises">Block: ${escapeHtml(name)}<span aria-hidden="true">×</span></button>`;
 }
 
+// The administrator's selection of exercises (state.exerciseSelection), for
+// moving several into a block at once: only active application exercises
+// can be selected - a personal copy follows its original's block.
+export function isSelectableExercise(exercise) {
+  return exercise.owner_scope === "system" && exercise.is_active !== false;
+}
+
+function renderExerciseSelectCheck(exercise, selection) {
+  if (!selection?.active || !isSelectableExercise(exercise)) return "";
+  const name = exercise.name || "Exercise";
+  return `<label class="exercise-select-check" title="Select"><input type="checkbox" data-action="exercise-select-toggle" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(name)}" ${selection.ids.has(exercise.id) ? "checked" : ""}><span class="visually-hidden">Select ${escapeHtml(name)}</span></label>`;
+}
+
+// A card's selection classes; none at all when it carries no mark, so the
+// card's markup is the same as before selecting.
+function selectableClasses(check, selection, exercise) {
+  return check ? ` is-selectable${selection.ids.has(exercise.id) ? " is-selected" : ""}` : "";
+}
+
+// What the selection bar says: how many are selected, and how many of them
+// this list does not show (selected earlier, under another search or block).
+export function exerciseSelectionSummary(selection, exercises) {
+  const shown = new Set(exercises.map((exercise) => exercise.id));
+  const count = selection.ids.size;
+  const elsewhere = [...selection.ids.keys()].filter((id) => !shown.has(id)).length;
+  return `${count} selected${elsewhere ? ` · ${elsewhere} not shown here` : ""}`;
+}
+
+export function renderExerciseSelectionBar(selection, exercises) {
+  const count = selection.ids.size;
+  const shownSelectable = exercises.filter(isSelectableExercise);
+  const allShown = shownSelectable.length > 0 && shownSelectable.every((exercise) => selection.ids.has(exercise.id));
+  return `<div class="exercise-selection-bar" role="region" aria-label="Selected exercises">
+      <span class="exercise-selection-count" data-exercise-selection-count tabindex="-1" aria-live="polite">${escapeHtml(exerciseSelectionSummary(selection, exercises))}</span>
+      <p class="exercise-selection-note" data-exercise-selection-note aria-live="polite">${escapeHtml(selection.note || (count ? "" : "Tick application exercises to move them into a block. Personal copies and archived exercises can't be moved."))}</p>
+      <div class="exercise-selection-actions">
+        <button class="plain-button compact-button" type="button" data-action="exercise-select-all-shown" ${!shownSelectable.length || allShown ? "disabled" : ""}>Select all shown</button>
+        <button class="plain-button compact-button" type="button" data-action="exercise-select-clear" ${count ? "" : "disabled"}>Clear</button>
+        <button class="plain-button compact-button" type="button" data-action="exercise-bulk-move-open" ${count ? "" : "disabled"}>Move to block…</button>
+        <button class="plain-button compact-button" type="button" data-action="exercise-select-mode">Done</button>
+      </div>
+    </div>`;
+}
+
 export function renderExerciseLibraryHtml(data) {
   const { exercises, itemIds, markedExerciseIds, search, tagEditor } = data;
+  // Selecting is for the block administrator only, and only while selecting.
+  const selection = search.canManageCollections && data.selection?.active ? data.selection : null;
   const view = normalizeExerciseView("library", search.view);
   const { collection, ...otherFilters } = search.filters || {};
   const filterBadges = [
@@ -100,17 +146,18 @@ export function renderExerciseLibraryHtml(data) {
       <span class="muted exercise-results-count">${exercises.length} exercises shown</span>
       ${filterBadges ? `<div class="exercise-results-filters">${filterBadges}</div>` : ""}
       <div class="exercise-results-actions">
+        ${search.canManageCollections ? `<button class="plain-button compact-button exercise-select-button" type="button" data-action="exercise-select-mode" title="${selection ? "Stop selecting" : "Select exercises to move them into a block"}">${selection ? "Done" : "Select"}</button>` : ""}
         <button class="plain-button compact-button exercise-add-button" type="button" data-action="exercise-add-open">+ Add exercise</button>
         ${renderExerciseBrowseControls(search, view)}
       </div>
     </div>
     ${view === "details" ? `
       <div class="exercise-grid">
-        ${exercises.map((exercise, index) => renderExerciseLibraryCard(exercise, itemIds[index], markedExerciseIds, search.canManageCollections)).join("")}
+        ${exercises.map((exercise, index) => renderExerciseLibraryCard(exercise, itemIds[index], markedExerciseIds, search.canManageCollections, selection)).join("")}
       </div>
     ` : `
       <div class="exercise-view-grid is-${view}">
-        ${exercises.map((exercise, index) => renderExerciseViewCard(exercise, itemIds[index], markedExerciseIds, search.canManageCollections, view)).join("")}
+        ${exercises.map((exercise, index) => renderExerciseViewCard(exercise, itemIds[index], markedExerciseIds, search.canManageCollections, view, selection)).join("")}
       </div>
     `}
     ${search.lockedPreviews?.length ? `<section class="exercise-locked-results"><h3>Locked exercises — name matches</h3><p class="muted">Contact your administrator to request access. Previews cannot be added, copied or played.</p><div class="exercise-block-grid">${search.lockedPreviews.map((exercise) => `<article class="panel exercise-block-card is-locked"><div class="exercise-block-card-body"><span class="exercise-block-lock">🔒 Access required</span><h4>${escapeHtml(exercise.name)}</h4><p>${escapeHtml(exercise.blockName)}</p></div></article>`).join("")}</div></section>` : ""}
@@ -119,6 +166,7 @@ export function renderExerciseLibraryHtml(data) {
         <button class="plain-button" data-action="exercise-load-more">Load more</button>
       </div>
     ` : ""}
+    ${selection ? renderExerciseSelectionBar(selection, exercises) : ""}
     ${tagEditor.open ? renderExerciseTagModal(tagEditor) : ""}
   `;
 }
@@ -153,11 +201,13 @@ function canManageExercise(exercise, platformAdmin) {
   return exercise.owner_scope === "system" ? platformAdmin && exercise.can_edit !== false : exercise.can_edit !== false;
 }
 
-function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platformAdmin = false) {
+function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platformAdmin = false, selection = null) {
   const marked = markedExerciseIds.has(exercise.id);
   const tags = exercise.tags || [];
+  const check = renderExerciseSelectCheck(exercise, selection);
   return `
-    <article class="exercise-card">
+    <article class="exercise-card${selectableClasses(check, selection, exercise)}"${check ? ` data-exercise-card="${escapeAttr(exercise.id)}"` : ""}>
+      ${check}
       ${exercise.image_url || exercise.video_url ? `
         <button class="exercise-media library-media" data-action="open-media" data-title="${escapeAttr(exercise.name || "Exercise media")}" data-image="${escapeAttr(exercise.image_url)}" data-video="${escapeAttr(exercise.video_url || "")}">
           ${exercise.image_url
@@ -196,8 +246,9 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platform
 // (styles.css, .exercise-view-grid.is-*). The picture opens the media, the
 // name opens the exercise, favorite and mark stay one tap away, and Tags /
 // Copy / Edit sit behind "⋯" with the same rules as the Details card.
-function renderExerciseViewCard(exercise, itemId, markedExerciseIds, platformAdmin = false, view = "tile") {
+function renderExerciseViewCard(exercise, itemId, markedExerciseIds, platformAdmin = false, view = "tile", selection = null) {
   const name = exercise.name || "Exercise";
+  const check = renderExerciseSelectCheck(exercise, selection);
   const marked = markedExerciseIds.has(exercise.id);
   const favorite = Boolean(exercise.is_favorite);
   const tags = exercise.tags || [];
@@ -207,7 +258,8 @@ function renderExerciseViewCard(exercise, itemId, markedExerciseIds, platformAdm
     ? `<button class="exercise-view-media" type="button" data-action="open-media" data-title="${escapeAttr(name)}" data-image="${escapeAttr(exercise.image_url || "")}" data-video="${escapeAttr(exercise.video_url || "")}" aria-label="Preview ${escapeAttr(name)}">${thumb}</button>`
     : `<span class="exercise-view-media">${thumb}</span>`;
   return `
-    <article class="exercise-view-card">
+    <article class="exercise-view-card${selectableClasses(check, selection, exercise)}"${check ? ` data-exercise-card="${escapeAttr(exercise.id)}"` : ""}>
+      ${check}
       ${media}
       <button class="exercise-view-open" type="button" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
         <span class="exercise-view-title">${escapeHtml(name)}</span>

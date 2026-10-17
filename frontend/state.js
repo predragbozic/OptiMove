@@ -979,6 +979,10 @@ export const createInitialState = () => ({
   lastExerciseResults: [],
   builder: emptyBuilderState(),
   exerciseSearch: { term: "", limit: 30, hasMore: false, filters: emptyExerciseFilters(), options: emptyExerciseOptions(), view: readExerciseViewPreference("library") },
+  // The block administrator's selection of exercises in the library (id ->
+  // name), kept across searches, filters and blocks while selecting; never
+  // stored.
+  exerciseSelection: { active: false, ids: new Map(), note: "" },
   markedExerciseIds: new Set(),
   markedExercises: new Map(),
   tagEditor: { open: false, exerciseId: "", exerciseName: "", tags: [], options: [], error: "" },

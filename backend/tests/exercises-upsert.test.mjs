@@ -854,6 +854,232 @@ test("the administrator moves one exercise between blocks and Other; access foll
   assert.equal((await api(`/api/exercise-collections/exercise-block/${own}`, { cookie: admin.cookie })).body.movable, false);
 });
 
+test("the administrator moves several exercises at once: all or none, from where the screen showed them, each block revised and audited once", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("bulk-admin");
+  const granted = await makeCoach("bulk-granted");
+  const outsider = await makeCoach("bulk-outsider");
+
+  const ids = [];
+  for (const suffix of ["1", "2", "3", "4"]) ids.push(await makeExercise(null, { ownerScope: "system", name: `Bulk ${tag} ${suffix}` }));
+  const [one, two, three, four] = ids;
+  const create = async (body) => {
+    const created = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { exerciseIds: [], userIds: [], ...body } });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    return created.body.collection;
+  };
+  const A = await create({ name: `Bulk A ${tag}`, exerciseIds: [one, two], userIds: [granted.userId] });
+  const B = await create({ name: `Bulk B ${tag}`, exerciseIds: [four] });
+  const copy = await api(`/api/exercises/${one}/copy`, { method: "POST", cookie: granted.cookie, body: { name: `Bulk copy ${tag}` } });
+  assert.equal(copy.status, 201, JSON.stringify(copy.body));
+  const personal = copy.body.id;
+  const revision = async (id) => (await query("select revision from library.exercise_collections where id=$1", [id])).rows[0].revision;
+  const audits = async (id) => (await query("select count(*)::int as count from library.exercise_collection_audit where collection_id=$1", [id])).rows[0].count;
+  const homes = async () => Object.fromEntries((await query("select exercise_id,collection_id from library.exercise_collection_items where exercise_id = any($1::uuid[])", [ids])).rows.map((row) => [row.exercise_id, row.collection_id]));
+  const lookup = (list, cookie = admin.cookie) => api(`/api/exercise-collections/exercise-blocks?ids=${list.join(",")}`, { cookie });
+  const move = (body, cookie = admin.cookie) => api("/api/exercise-collections/exercise-blocks", { method: "PUT", cookie, body });
+
+  // Only the administrator reads or moves; everyone else gets the same 404.
+  for (const answer of [await lookup([one], granted.cookie), await move({ collectionId: null, moves: [{ exerciseId: one, expectedCollectionId: A.id }] }, granted.cookie)]) {
+    assert.equal(answer.status, 404);
+    assert.deepEqual(answer.body, { error: "notFound" });
+  }
+  // Where they are now: a personal copy shows its original's block and is not movable; an unknown id is left out.
+  const shown = await lookup([one, two, three, four, personal, crypto.randomUUID()]);
+  assert.equal(shown.status, 200, JSON.stringify(shown.body));
+  const byId = Object.fromEntries(shown.body.exercises.map((exercise) => [exercise.id, exercise]));
+  assert.deepEqual(Object.keys(byId).sort(), [one, two, three, four, personal].sort());
+  assert.deepEqual(byId[one].current, { id: A.id, name: A.name });
+  assert.equal(byId[three].current, null);
+  assert.deepEqual(byId[four].current, { id: B.id, name: B.name });
+  assert.equal(byId[one].movable, true);
+  assert.equal(byId[personal].movable, false);
+  assert.deepEqual(byId[personal].current, { id: A.id, name: A.name });
+  assert.ok(shown.body.blocks.some((block) => block.id === A.id) && shown.body.blocks.some((block) => block.id === B.id));
+  for (const bad of ["", "not-an-id", Array.from({ length: 101 }, () => crypto.randomUUID()).join(",")]) {
+    assert.equal((await api(`/api/exercise-collections/exercise-blocks?ids=${bad}`, { cookie: admin.cookie })).status, 400, bad.slice(0, 20));
+  }
+  // Refused shapes: a missing key never means "Other", each exercise once, at most a hundred.
+  for (const body of [
+    { moves: [{ exerciseId: one, expectedCollectionId: A.id }] },
+    { collectionId: B.id, moves: [{ exerciseId: one }] },
+    { collectionId: B.id, moves: [] },
+    { collectionId: B.id, moves: [{ exerciseId: one, expectedCollectionId: A.id }, { exerciseId: one.toUpperCase(), expectedCollectionId: A.id }] },
+    { collectionId: B.id, moves: Array.from({ length: 101 }, () => ({ exerciseId: crypto.randomUUID(), expectedCollectionId: null })) },
+    { collectionId: "x", moves: [{ exerciseId: one, expectedCollectionId: A.id }] },
+  ]) assert.equal((await move(body)).status, 400, JSON.stringify(body).slice(0, 80));
+
+  // Into B: from A, from Other, and one already there (left as it is).
+  const [aRevision, bRevision, aAudits, bAudits] = [await revision(A.id), await revision(B.id), await audits(A.id), await audits(B.id)];
+  const intoB = await move({ collectionId: B.id.toUpperCase(), moves: [
+    { exerciseId: one, expectedCollectionId: A.id }, { exerciseId: two, expectedCollectionId: A.id },
+    { exerciseId: three, expectedCollectionId: null }, { exerciseId: four, expectedCollectionId: B.id }] });
+  assert.equal(intoB.status, 200, JSON.stringify(intoB.body));
+  assert.deepEqual(intoB.body, { collectionId: B.id, moved: [one, two, three], unchanged: [four], changed: true });
+  assert.deepEqual(await homes(), { [one]: B.id, [two]: B.id, [three]: B.id, [four]: B.id });
+  assert.equal(await revision(A.id), aRevision + 1);
+  assert.equal(await revision(B.id), bRevision + 1);
+  assert.equal(await audits(A.id), aAudits + 1);
+  assert.equal(await audits(B.id), bAudits + 1);
+  // Access follows: B has no users, so the coach granted on A and every other coach lose them.
+  for (const cookie of [granted.cookie, outsider.cookie]) assert.equal((await api(`/api/exercises/${three}`, { cookie })).status, 404);
+  assert.equal((await api(`/api/exercises/${one}`, { cookie: granted.cookie })).status, 404);
+  // The coach's personal copy follows its original out of A: hidden, not deleted.
+  assert.equal((await api(`/api/exercises/${personal}`, { cookie: granted.cookie })).status, 404);
+  assert.equal((await query("select count(*)::int as count from library.exercises where id=$1", [personal])).rows[0].count, 1);
+  // The same request again writes nothing.
+  const repeat = await move({ collectionId: B.id, moves: [{ exerciseId: one, expectedCollectionId: A.id }, { exerciseId: three, expectedCollectionId: null }] });
+  assert.equal(repeat.status, 200);
+  assert.deepEqual(repeat.body, { collectionId: B.id, moved: [], unchanged: [one, three], changed: false });
+  assert.equal(await revision(B.id), bRevision + 1);
+  assert.equal(await audits(B.id), bAudits + 1);
+
+  // All or none: one exercise not where the screen showed it refuses the whole move, naming it.
+  const stale = await move({ collectionId: A.id, moves: [{ exerciseId: one, expectedCollectionId: B.id }, { exerciseId: two, expectedCollectionId: null }] });
+  assert.equal(stale.status, 409);
+  assert.deepEqual(stale.body, { error: "staleRevision", stale: [two] });
+  // A personal copy, an archived or an unknown exercise: nothing moves.
+  const archived = await makeExercise(null, { ownerScope: "system", name: `Bulk ${tag} archived`, isActive: false });
+  for (const bad of [personal, archived, crypto.randomUUID()]) {
+    const refused = await move({ collectionId: A.id, moves: [{ exerciseId: one, expectedCollectionId: B.id }, { exerciseId: bad, expectedCollectionId: null }] });
+    assert.equal(refused.status, 400);
+    assert.equal(refused.body.error, "invalidSelection");
+  }
+  assert.deepEqual(await homes(), { [one]: B.id, [two]: B.id, [three]: B.id, [four]: B.id });
+
+  // Back to Other: every coach can use them again.
+  const toOther = await move({ collectionId: null, moves: [{ exerciseId: one, expectedCollectionId: B.id }, { exerciseId: three, expectedCollectionId: B.id }] });
+  assert.equal(toOther.status, 200, JSON.stringify(toOther.body));
+  assert.deepEqual(toOther.body.moved, [one, three]);
+  assert.deepEqual(await homes(), { [two]: B.id, [four]: B.id });
+  assert.equal((await api(`/api/exercises/${three}`, { cookie: outsider.cookie })).status, 200);
+  // A deleted block is not a destination.
+  const deleted = await api(`/api/exercise-collections/${A.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: await revision(A.id) } });
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  const gone = await move({ collectionId: A.id, moves: [{ exerciseId: one, expectedCollectionId: null }] });
+  assert.equal(gone.status, 409);
+  assert.equal(gone.body.error, "blockNotAvailable");
+  // A platform administrator outside the platform workspace is a coach here.
+  const placed = await homes();
+  await query("insert into public.user_global_roles (user_id,role) values ($1,'independent_coach')", [admin.userId]);
+  assert.equal((await api("/api/auth/workspace", { method: "PUT", cookie: admin.cookie, body: { type: "private_coach" } })).status, 200);
+  for (const answer of [await lookup([two]), await move({ collectionId: null, moves: [{ exerciseId: two, expectedCollectionId: B.id }] })]) {
+    assert.equal(answer.status, 404);
+    assert.deepEqual(answer.body, { error: "notFound" });
+  }
+  assert.deepEqual(await homes(), placed);
+});
+
+test("a move of several exercises whose COMMIT is refused is never 'moved', into a block or to Other", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("bulk-refused-admin");
+  const ids = [];
+  for (const suffix of ["1", "2", "3"]) ids.push(await makeExercise(null, { ownerScope: "system", name: `Bulk refused ${tag} ${suffix}` }));
+  const create = async (name, exerciseIds) => (await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name, exerciseIds, userIds: [] } })).body.collection;
+  const A = await create(`Bulk refused A ${tag}`, [ids[2]]);
+  const B = await create(`Bulk refused B ${tag}`, []);
+  const homes = async () => (await query("select exercise_id,collection_id from library.exercise_collection_items where exercise_id = any($1::uuid[]) order by exercise_id", [ids])).rows;
+  const move = (body) => api("/api/exercise-collections/exercise-blocks", { method: "PUT", cookie: admin.cookie, body });
+  const refuseAuditOf = async (blockId, body) => {
+    await query(`create function library.test_refuse_bulk() returns trigger language plpgsql as $$
+      begin if new.collection_id = '${blockId}'::uuid then raise exception 'test: commit refused'; end if; return new; end $$`);
+    await query(`create constraint trigger test_refuse_bulk after insert on library.exercise_collection_audit
+      deferrable initially deferred for each row execute function library.test_refuse_bulk()`);
+    try { return await move(body); } finally {
+      await query("drop trigger test_refuse_bulk on library.exercise_collection_audit");
+      await query("drop function library.test_refuse_bulk()");
+    }
+  };
+  const before = await homes();
+  // Two from Other and one from A into B: none of them was in B before.
+  const intoB = await refuseAuditOf(B.id, { collectionId: B.id, moves: [
+    { exerciseId: ids[0], expectedCollectionId: null }, { exerciseId: ids[1], expectedCollectionId: null }, { exerciseId: ids[2], expectedCollectionId: A.id }] });
+  assert.equal(intoB.status, 503, JSON.stringify(intoB.body));
+  assert.deepEqual(intoB.body, { error: "outcomeUnknown" });
+  assert.deepEqual(await homes(), before);
+  // Only exercises from Other: nothing of them is in any block before or
+  // after, so "all of them arrived" must count, not just look at no rows.
+  const fromOther = await refuseAuditOf(B.id, { collectionId: B.id, moves: [
+    { exerciseId: ids[0], expectedCollectionId: null }, { exerciseId: ids[1], expectedCollectionId: null }] });
+  assert.equal(fromOther.status, 503, JSON.stringify(fromOther.body));
+  assert.deepEqual(fromOther.body, { error: "outcomeUnknown" });
+  assert.deepEqual(await homes(), before);
+  // Back to Other from A: refused, still in A.
+  const toOther = await refuseAuditOf(A.id, { collectionId: null, moves: [{ exerciseId: ids[2], expectedCollectionId: A.id }] });
+  assert.equal(toOther.status, 503, JSON.stringify(toOther.body));
+  assert.deepEqual(await homes(), before);
+});
+
+test("a move's statements are the same in number however many blocks it touches", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("bulk-count-admin");
+  const target = (await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name: `Bulk count target ${tag}`, exerciseIds: [], userIds: [] } })).body.collection;
+  // `blocks` exercises, each in a block of its own, all moved into the target.
+  const counted = async (blocks) => {
+    const moves = [];
+    for (let index = 0; index < blocks; index += 1) {
+      const id = await makeExercise(null, { ownerScope: "system", name: `Bulk count ${tag} ${blocks} ${index}` });
+      const block = (await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name: `Bulk count ${tag} ${blocks} ${index}`, exerciseIds: [id], userIds: [] } })).body.collection;
+      moves.push({ exerciseId: id, expectedCollectionId: block.id });
+    }
+    let statements = 0;
+    const original = pool.connect;
+    pool.connect = function (callback) {
+      if (callback) return original.call(this, callback);
+      pool.connect = original;
+      return original.call(this).then((client) => {
+        const send = client.query.bind(client);
+        client.query = (...args) => { statements += 1; return send(...args); };
+        const release = client.release.bind(client);
+        client.release = (...args) => { client.query = send; client.release = release; return release(...args); };
+        return client;
+      });
+    };
+    let answer;
+    try { answer = await api("/api/exercise-collections/exercise-blocks", { method: "PUT", cookie: admin.cookie, body: { collectionId: target.id, moves } }); } finally { pool.connect = original; }
+    assert.equal(answer.status, 200, JSON.stringify(answer.body));
+    assert.equal(answer.body.moved.length, blocks);
+    return statements;
+  };
+  const two = await counted(2);
+  const eight = await counted(8);
+  assert.ok(two > 0);
+  assert.equal(eight, two);
+  // One audit row per block that lost or gained, written by that one statement.
+  assert.equal((await query("select count(*)::int as count from library.exercise_collection_audit where collection_id=$1", [target.id])).rows[0].count, 3);
+});
+
+test("a move of several exercises whose COMMIT answer is lost is found by the check, and its retry writes nothing", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("bulk-commit-admin");
+  const one = await makeExercise(null, { ownerScope: "system", name: `Bulk commit ${tag} 1` });
+  const two = await makeExercise(null, { ownerScope: "system", name: `Bulk commit ${tag} 2` });
+  const target = (await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name: `Bulk commit ${tag}`, exerciseIds: [], userIds: [] } })).body.collection;
+  const body = { collectionId: target.id, moves: [{ exerciseId: one, expectedCollectionId: null }, { exerciseId: two, expectedCollectionId: null }] };
+  const move = () => api("/api/exercise-collections/exercise-blocks", { method: "PUT", cookie: admin.cookie, body });
+  const original = pool.connect;
+  pool.connect = function (callback) {
+    if (callback) return original.call(this, callback);
+    pool.connect = original;
+    return original.call(this).then((client) => {
+      const send = client.query.bind(client);
+      client.query = async (...args) => {
+        const result = await send(...args);
+        if (args[0] === "commit") { client.query = send; throw new Error("test: COMMIT answer lost"); }
+        return result;
+      };
+      return client;
+    });
+  };
+  let lost;
+  try { lost = await move(); } finally { pool.connect = original; }
+  assert.equal(lost.status, 200, JSON.stringify(lost.body));
+  assert.deepEqual(lost.body, { collectionId: target.id, moved: [one, two], unchanged: [], changed: true, verifiedAfterCommitError: true });
+  const retry = await move();
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.changed, false);
+});
+
 test("locked previews expose no exercise media, instructions, grants or usable exercise; all-users remains explicit", async () => {
   const admin = await makeLibraryAdmin("locked-admin");
   const outsider = await makeCoach("locked-denied");

@@ -17497,6 +17497,48 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
    Previous / Next over the picture (44 px everywhere, for touch) and a dot
    per picture. The arrows sit beside the open button, never inside it. */
 .exercise-block-cover-image:not(.image-missing) + .exercise-block-placeholder { display: none; }
+/* The block administrator's selection (exercise-library.js): a mark in each
+   selectable card's top-left corner (a 44 px target around a 22 px box) and
+   a bar that stays at the bottom of the screen while selecting. */
+.exercise-card.is-selectable { position: relative; }
+/* A Details card without a picture: the mark gets a row of its own above
+   the title instead of covering it. */
+.exercise-card.is-selectable:not(:has(> .exercise-media)) { padding-top: 54px; }
+.exercise-card.is-selectable > .exercise-select-check { top: 8px; left: 8px; }
+.exercise-select-check { position: absolute; top: 2px; left: 2px; z-index: 2; display: grid; place-items: center; width: 44px; height: 44px; cursor: pointer; isolation: isolate; }
+.exercise-select-check::before { content: ""; position: absolute; inset: 7px; z-index: -1; border-radius: 8px; background: rgb(255 255 255 / 0.94); box-shadow: 0 1px 4px rgb(22 27 34 / 0.3); }
+.exercise-select-check input { width: 22px; height: 22px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.exercise-view-grid.is-list .exercise-select-check::before { inset: 10px; }
+.exercise-card.is-selected,
+.exercise-view-card.is-selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
+.exercise-selection-bar { position: sticky; bottom: 12px; z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: 0 8px 24px rgb(22 27 34 / 0.18); }
+.exercise-selection-count { font-weight: 700; }
+.exercise-selection-note { flex-basis: 100%; order: 3; margin: 0; color: var(--muted); }
+.exercise-selection-note:empty { display: none; }
+.exercise-selection-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+/* Move to block: a narrow dialog that never leaves a phone's screen,
+   touch-sized controls, long block and exercise names wrapped. */
+.exercise-bulk-move-overlay { padding: 12px; }
+.exercise-bulk-move-overlay .exercise-bulk-move-modal { width: min(560px, 100%); max-height: calc(100dvh - 24px); }
+.exercise-bulk-move-modal p { overflow-wrap: anywhere; }
+.exercise-bulk-move-modal button,
+.exercise-bulk-move-modal select { min-height: 44px; font-size: 16px; }
+.exercise-bulk-move-modal select { width: 100%; }
+.exercise-bulk-move-modal .builder-modal-actions { flex-wrap: wrap; justify-content: flex-end; }
+@media (max-width: 760px), (pointer: coarse) {
+  .exercise-selection-actions .compact-button,
+  .exercise-results-actions .exercise-select-button { min-height: 44px; }
+}
+@media (max-width: 560px) {
+  .exercise-selection-actions { display: grid; grid-template-columns: 1fr 1fr; width: 100%; margin-left: 0; }
+}
+@media (max-width: 760px) {
+  .exercise-selection-bar { bottom: 8px; }
+  /* Select / Done sits in the head's first row, beside + Add exercise. */
+  .exercise-results-head:has(.exercise-select-button) { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "count select add" "filters filters filters" "browse browse browse"; column-gap: 8px; }
+  .exercise-results-head .exercise-select-button { grid-area: select; }
+}
 .exercise-block-cover-frame { position: relative; isolation: isolate; }
 .exercise-block-cover-step { position: absolute; top: 50%; z-index: 1; display: grid; place-items: center; width: 44px; height: 44px; margin-top: -22px; padding: 0; border: 0; border-radius: 50%; background: rgb(22 27 34 / 0.55); color: #fff; cursor: pointer; touch-action: manipulation; }
 .exercise-block-cover-step.is-previous { left: 8px; }
