@@ -84,7 +84,6 @@ import {
   resetExercisesForWorkspaceChange,
   loadExercises,
   reloadExerciseLibrarySurface,
-  applySavedBlockName,
   submitExerciseTagForm as submitExerciseTagFormAction,
 } from "./exercise-actions.js";
 import {
@@ -2639,10 +2638,8 @@ async function handleContentClick(event) {
     return;
   }
   if (type === "exercise-collections-open") {
-    // After a save the screen it was opened from is read again: the Blocks
-    // view, or the library (inside the block an administrator edited).
-    await openExerciseCollections(async (saved) => {
-      applySavedBlockName(saved);
+    // After a save the Blocks view it was opened from is read again.
+    await openExerciseCollections(async () => {
       invalidateExercisesCache();
       if (state.activeTab === "exercises") await reloadExerciseLibrarySurface({ renderExercises, setLoading });
     }, action.dataset.collectionId || "");

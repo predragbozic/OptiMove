@@ -6,9 +6,9 @@ import { renderExerciseLibraryHtml } from "../exercise-library.js";
 import { renderExerciseBlocksHtml } from "../exercise-blocks.js";
 
 // The owner's phone round (2026-10-17): Blocks sits beside the view icons in
-// one consistent group, and managing application blocks leaves the plain
-// library - a gear in the Blocks view, and inside a block a gear that edits
-// that block.
+// one consistent group, and managing application blocks leaves the library
+// list: a gear only in the Blocks view (after a tap on Blocks), not even
+// inside a block.
 
 const BLOCK = "11111111-1111-1111-1111-111111111111";
 function library({ admin = false, collection = "", name = "" } = {}) {
@@ -32,7 +32,7 @@ test("1. the plain library: Blocks right before the views in one group, Add apar
   }
 });
 
-test("2. inside a block: its name is a chip that leaves it, and only an administrator gets the gear that edits that block", () => {
+test("2. inside a block: its name is a chip that leaves it, and nobody gets a gear there - an administrator neither", () => {
   const coach = library({ collection: BLOCK, name: "Ankle <stiffness>" });
   const chip = coach.querySelector('.exercise-results-filters > .exercise-block-chip[data-action="exercise-blocks-clear"]');
   assert.equal(chip.textContent, "Block: Ankle <stiffness>×");
@@ -41,14 +41,12 @@ test("2. inside a block: its name is a chip that leaves it, and only an administ
   assert.doesNotMatch(coach.body.innerHTML, /Selected block/);
 
   const admin = library({ admin: true, collection: BLOCK, name: "Ankle" });
-  const gear = admin.querySelector('.exercise-browse-controls.has-block-edit > [data-action="exercise-collections-open"]');
-  assert.equal(gear.dataset.collectionId, BLOCK);
-  assert.equal(gear.getAttribute("aria-label"), "Edit this block");
-  assert.equal(gear.nextElementSibling.dataset.action, "exercise-blocks-open");
+  assert.equal(admin.querySelectorAll('[data-action="exercise-collections-open"]').length, 0);
+  assert.equal(admin.querySelector(".exercise-browse-controls").firstElementChild.dataset.action, "exercise-blocks-open");
 
   const other = library({ admin: true, collection: "other" });
   assert.equal(other.querySelector(".exercise-block-chip").textContent, "Block: Other×");
-  assert.equal(other.querySelectorAll('[data-action="exercise-collections-open"]').length, 0, "Other is no block to edit");
+  assert.equal(other.querySelectorAll('[data-action="exercise-collections-open"]').length, 0);
   assert.equal(library({ collection: BLOCK }).querySelector(".exercise-block-chip").textContent, "Block: Selected block×");
 });
 
@@ -74,7 +72,7 @@ test("4. one look and touch size: the group's buttons match the switcher, phones
   assert.match(css, /@media \(max-width: 760px\), \(pointer: coarse\) \{\s*\.exercise-add-button \{ min-height: 44px; \}\s*\.exercise-block-chip \{ min-height: 44px; \}\s*\.exercise-browse-button \{ min-height: 50px; padding: 0 14px; \}\s*\.exercise-browse-button\.is-icon \{ width: 50px; padding: 0; \}\s*\.exercise-results-head \.exercise-view-button \{ min-width: 44px; min-height: 44px; \}/);
   // Add and the group stay together at the right when they wrap.
   assert.match(css, /\.exercise-results-actions \{ display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; margin-left: auto; \}/);
-  assert.match(css, /@media \(max-width: 400px\) \{\s*\.exercise-browse-controls\.has-block-edit \.exercise-browse-button \{ width: 50px; padding: 0; \}/);
+  assert.doesNotMatch(css, /has-block-edit/);
 });
 
 test("5. a realtime access change or a block save reads the Blocks view again and never swaps it for the library", async () => {
@@ -129,22 +127,7 @@ test("7. a block cover sends no referrer; switching all-users access off says wh
   assert.match(collections, /panel\.original\.accessAll && !panel\.draft\.accessAll \? "Everyone who is not a selected user loses access to these exercises, including their personal copies\."/);
 });
 
-test("8. renaming the open block in its editor renames its chip; another block's save leaves it alone", async () => {
-  const { state } = await import("../state.js");
-  const { applySavedBlockName } = await import("../exercise-actions.js");
-  state.exerciseSearch = { filters: { collection: BLOCK }, collectionName: "Ankle", options: {} };
-  applySavedBlockName({ id: "22222222-2222-2222-2222-222222222222", name: "Other block" });
-  assert.equal(state.exerciseSearch.collectionName, "Ankle");
-  applySavedBlockName({ id: BLOCK, name: "Ankle strength" });
-  const html = renderExerciseLibraryHtml({ exercises: [], itemIds: [], markedExerciseIds: new Set(), search: { ...state.exerciseSearch, view: "list", term: "" }, tagEditor: { open: false } });
-  assert.equal(new JSDOM(html).window.document.querySelector(".exercise-block-chip").textContent, "Block: Ankle strength×");
-  const app = await readFile(new URL("../app.js", import.meta.url), "utf8");
-  assert.match(app, /openExerciseCollections\(async \(saved\) => \{\s*applySavedBlockName\(saved\);/);
-  const collections = await readFile(new URL("../exercise-collections.js", import.meta.url), "utf8");
-  assert.match(collections, /await panel\.onSave\(result\.collection\);/);
-});
-
-test("9. under Marked no Load more is offered for locked previews (through the real search)", async () => {
+test("8. under Marked no Load more is offered for locked previews (through the real search)", async () => {
   const dom = new JSDOM('<h2 id="screenTitle"></h2><div id="viewToolbar"></div><main id="content"></main>');
   globalThis.document = dom.window.document;
   globalThis.window = dom.window;

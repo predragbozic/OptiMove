@@ -11,7 +11,6 @@ const ICON_MORE = `<svg viewBox="0 0 24 24" class="exercise-toggle-icon" aria-hi
 // Blocks: a package. Manage: a gear (application block administration).
 export const ICON_BLOCKS = `<svg viewBox="0 0 24 24" class="exercise-view-icon-svg" aria-hidden="true"><path d="M3.5 7.5 12 3l8.5 4.5L12 12z"></path><path d="M3.5 7.5v9L12 21l8.5-4.5v-9"></path><path d="M12 12v9"></path></svg>`;
 export const ICON_SETTINGS = `<svg viewBox="0 0 24 24" class="exercise-view-icon-svg" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>`;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function filterIconSvg() {
   return `
@@ -67,15 +66,12 @@ export function activeExerciseFilterLabels(filters, options = {}) {
   return labels;
 }
 
-// Blocks and the views share one group and one look. An administrator
-// manages blocks from the Blocks view (its gear) or, inside a block, edits
-// that block - never from the plain library.
+// Blocks and the views share one group and one look. Block administration
+// (the gear) is only in the Blocks view, never in the library list - also
+// not inside a block (owner, 2026-10-17).
 function renderExerciseBrowseControls(search, view) {
-  const collection = search.filters?.collection || "";
-  const editBlock = search.canManageCollections && UUID_PATTERN.test(collection);
   return `
-    <div class="exercise-browse-controls${editBlock ? " has-block-edit" : ""}">
-      ${editBlock ? `<button class="exercise-browse-button is-icon" type="button" data-action="exercise-collections-open" data-collection-id="${escapeAttr(collection)}" aria-label="Edit this block" title="Edit this block">${ICON_SETTINGS}</button>` : ""}
+    <div class="exercise-browse-controls">
       <button class="exercise-browse-button" type="button" data-action="exercise-blocks-open" aria-label="Exercise blocks" title="Exercise blocks">${ICON_BLOCKS}<span aria-hidden="true">Blocks</span></button>
       ${renderExerciseViewSwitcher("library", view, "exercise-library-view")}
     </div>

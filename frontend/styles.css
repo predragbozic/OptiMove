@@ -17012,7 +17012,7 @@ body:not(.athlete-mode):not(.login-mode) .sidebar > .brand {
 .exercise-results-head { flex-wrap: wrap; }
 /* The library head: the count, the filter badges (the open block as a chip
    whose x shows all exercises), + Add exercise, then one group - Blocks
-   (inside a block an administrator's gear before it) beside the views, all
+   beside the views, all
    of the switcher's height. Phones: count and Add, the badges, the group. */
 .exercise-results-filters { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .exercise-block-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 12px; border: 1px solid var(--line); border-radius: 16px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; overflow-wrap: anywhere; text-align: left; }
@@ -17154,11 +17154,6 @@ span.exercise-view-media { cursor: default; }
   .exercise-browse-button { min-height: 50px; padding: 0 14px; }
   .exercise-browse-button.is-icon { width: 50px; padding: 0; }
   .exercise-results-head .exercise-view-button { min-width: 44px; min-height: 44px; }
-}
-/* With the gear beside it, Blocks keeps only its icon on a narrow phone. */
-@media (max-width: 400px) {
-  .exercise-browse-controls.has-block-edit .exercise-browse-button { width: 50px; padding: 0; }
-  .exercise-browse-controls.has-block-edit .exercise-browse-button > span { display: none; }
 }
 @media (max-width: 760px) {
   .exercise-view-button { justify-content: center; min-width: 44px; min-height: 44px; padding: 0; }

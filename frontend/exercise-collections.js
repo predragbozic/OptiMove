@@ -187,7 +187,7 @@ async function saveBlock(panel) {
     panel.saved = true;
     panel.dirty = false;
     await findOptions(panel);
-    try { await panel.onSave(result.collection); }
+    try { await panel.onSave(); }
     catch { panel.error = "The block was saved. Reopen Exercise Library to refresh the list."; }
   } catch (error) {
     if (activePanel !== panel) return;
