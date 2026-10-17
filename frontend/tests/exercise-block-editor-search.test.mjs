@@ -94,3 +94,18 @@ test("a choice ticked in a filtered list is kept and counted", async () => {
   document.querySelector("[data-close-collections]").click();
   dom.window.close();
 });
+
+test("a search after a shown message still replaces only the lists, and the message goes", async () => {
+  const { dom } = await openEditor();
+  document.querySelector("[data-save-block]").click();
+  assert.match(document.querySelector("[data-block-error]").textContent, /Enter a block name/);
+  const field = document.querySelector("[data-search-kind='exercises']");
+  field.value = "ski";
+  field.dispatchEvent(new window.Event("input"));
+  field.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  await microtasks();
+  assert.equal(document.querySelector("[data-search-kind='exercises']"), field, "the field is never replaced");
+  assert.equal(document.querySelector("[data-block-error]"), null);
+  document.querySelector("[data-close-collections]").click();
+  dom.window.close();
+});

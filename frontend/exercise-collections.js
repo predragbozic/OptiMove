@@ -54,7 +54,7 @@ export function renderExerciseCollectionsHtml(panel) {
         <label class="search-field"><span>Block for users without access</span><select class="builder-text-input" data-block-preview ${panel.busy ? "disabled" : ""}><option value="hidden" ${panel.draft.blockPreview !== "locked" ? "selected" : ""}>Completely hidden</option><option value="locked" ${panel.draft.blockPreview === "locked" ? "selected" : ""}>Visible with a lock</option></select></label>
         <label class="search-field"><span>Exercises for users without access</span><select class="builder-text-input" data-exercise-preview ${panel.busy ? "disabled" : ""}><option value="hidden" ${panel.draft.exercisePreview !== "locked" ? "selected" : ""}>Completely hidden</option><option value="locked" ${panel.draft.exercisePreview === "locked" ? "selected" : ""}>Names visible with a lock (no media or instructions)</option></select></label>
         ${picker("users", "Users", panel.draft.users)}
-        ${panel.error ? `<p role="alert" class="builder-error">${escapeHtml(panel.error)}</p>` : ""}
+        ${panel.error ? `<p role="alert" class="builder-error" data-block-error>${escapeHtml(panel.error)}</p>` : ""}
         ${panel.saved ? '<p role="status">Block saved.</p>' : ""}
       </div>
       <div class="builder-modal-actions">
@@ -170,11 +170,14 @@ async function findOptions(panel, { inPlace = false } = {}) {
     const options = await api(`/api/exercise-collections/options?${params}`);
     if (activePanel !== panel || generation !== panel.generation) return;
     panel.options = options;
-    if (inPlace && !panel.error) {
+    if (inPlace) {
       for (const kind of ["exercises", "users"]) {
         const list = panel.element.querySelector(`[data-picker-options="${kind}"]`);
         if (list) list.innerHTML = pickerOptionsHtml(panel, kind);
       }
+      // An earlier message goes too, in place as well.
+      panel.error = "";
+      panel.element.querySelector("[data-block-error]")?.remove();
       return;
     }
     panel.error = "";

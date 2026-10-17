@@ -44,7 +44,7 @@ function renderBlockHtml(block) {
             ${data.blocks.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === block.chosen ? "selected" : ""}>${escapeHtml(blockLabel(item))}</option>`).join("")}
           </select></label>
           <button class="plain-button" type="button" data-classification-block-save ${locked || !unappliedBlock(block) ? "disabled" : ""}>${block.busy ? "Moving..." : "Move to this block"}</button>
-          <p class="exercise-classification-pending" data-block-pending>${escapeHtml(pendingNote(block))}</p>`;
+          <p class="exercise-classification-pending" data-block-pending aria-live="polite">${escapeHtml(pendingNote(block))}</p>`;
   return `<section class="panel exercise-classification-block"><h4>Application block · all coaches</h4>
     ${body}
     ${block.error ? `<p role="alert">${escapeHtml(block.error)}</p>` : ""}

@@ -152,6 +152,7 @@ test("a block chosen but not moved is never dropped silently: a note says so, Sa
   const declined = await openPanel({ confirm: () => false });
   choose("block-c");
   assert.match(document.querySelector("[data-block-pending]").textContent, /Not moved yet\. It stays in “Speed” until you press Move to this block\./);
+  assert.equal(document.querySelector("[data-block-pending]").getAttribute("aria-live"), "polite", "a screen reader hears the note");
   // Save does not close and does not save while the choice is unapplied.
   document.querySelector("[data-classification-save]").click();
   await settle();
