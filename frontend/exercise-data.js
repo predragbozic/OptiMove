@@ -7,7 +7,9 @@ export async function loadExerciseFilterOptions() {
   state.exerciseSearch.options = { ...emptyExerciseOptions(), ...data };
 }
 
-export function exerciseSearchUrl(query, limit, filters = {}) {
+// lockedPreviews: the Exercise Library also lists locked name matches
+// (never the Builder).
+export function exerciseSearchUrl(query, limit, filters = {}, { lockedPreviews = false } = {}) {
   const params = new URLSearchParams({ search: query || "", limit: String(limit || 30) });
   params.set("searchIn", filters.searchIn || "name");
   params.set("kind", filters.owner && !filters.kind ? "private" : filters.kind || "accessible");
@@ -18,6 +20,7 @@ export function exerciseSearchUrl(query, limit, filters = {}) {
   for (const key of ["visibility", "hidden", "owner", "collection"]) {
     if (filters[key]) params.set(key, filters[key]);
   }
+  if (lockedPreviews) params.set("lockedPreviews", "1");
   return `/api/exercises?${params.toString()}`;
 }
 

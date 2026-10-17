@@ -141,6 +141,18 @@ export async function loadExercises(handlers) {
   await searchPromise;
 }
 
+// Reads the Exercise Library again where the coach is: the Blocks view
+// stays the Blocks view (after a block save or a realtime access change),
+// the library list - inside a block too - is loaded again.
+export async function reloadExerciseLibrarySurface(handlers) {
+  if (state.exerciseSearch.surface === "blocks") {
+    const { refreshExerciseBlocks } = await import("./exercise-blocks.js");
+    await refreshExerciseBlocks();
+    return;
+  }
+  await loadExercises(handlers);
+}
+
 export async function searchExercises(term, handlers, { forceRefresh = false } = {}) {
   if (state.exerciseSearch.surface === "blocks") {
     const { refreshExerciseBlocks } = await import("./exercise-blocks.js");
@@ -159,12 +171,14 @@ export async function searchExercises(term, handlers, { forceRefresh = false } =
     namespace: EXERCISES_CACHE_NAMESPACE,
     contextKey,
     forceRefresh,
-    fetcher: () => api(exerciseSearchUrl(query, limit, filters)),
+    fetcher: () => api(exerciseSearchUrl(query, limit, filters, { lockedPreviews: true })),
     showLoading: () => handlers.setLoading(query ? "Searching exercises..." : "Loading exercises..."),
     applyData: (data) => {
       state.exerciseSearch.hasMore = Boolean(data.hasMore);
       state.exerciseSearch.lockedPreviews = state.exerciseSearch.filters.marked ? [] : data.lockedPreviews || [];
-      state.exerciseSearch.moreLockedPreviews = Boolean(data.moreLockedPreviews);
+      // Marked is a client-side filter: no previews under it, and so no
+      // Load more for them.
+      state.exerciseSearch.moreLockedPreviews = state.exerciseSearch.filters.marked ? false : Boolean(data.moreLockedPreviews);
       state.exerciseSearch.canManageCollections = data.canManageCollections === true;
       // Reads the LIVE filters, not the snapshot this fetch was keyed by -
       // `marked` isn't part of the cache key (see exercisesContextKey), so

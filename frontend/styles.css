@@ -17010,7 +17010,26 @@ body:not(.athlete-mode):not(.login-mode) .sidebar > .brand {
    auto-fill track minimum is min(Npx, 100%) so a grid never outgrows a
    narrow container. */
 .exercise-results-head { flex-wrap: wrap; }
-.exercise-results-head .exercise-view-switcher { margin-left: auto; }
+/* The library head: the count, the filter badges (the open block as a chip
+   whose x shows all exercises), + Add exercise, then one group - Blocks
+   beside the views, all
+   of the switcher's height. Phones: count and Add, the badges, the group. */
+.exercise-results-filters { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.exercise-block-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 12px; border: 1px solid var(--line); border-radius: 16px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; overflow-wrap: anywhere; text-align: left; }
+.exercise-results-filters .item-badge { max-width: 100%; overflow-wrap: anywhere; }
+/* Add and the group stay together at the right, also when they wrap
+   below the count and badges (a tablet's width). */
+.exercise-results-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; margin-left: auto; }
+.exercise-block-chip > span { font-size: 16px; line-height: 1; }
+.exercise-browse-controls { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; margin-left: auto; }
+.exercise-browse-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); color: var(--text); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.exercise-browse-button.is-icon { width: 38px; padding: 0; }
+.exercise-browse-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.exercise-blocks-head h3 { margin: 0; }
+.exercise-blocks-head { flex-wrap: wrap; }
+.exercise-blocks-head .exercise-browse-controls { flex-wrap: nowrap; }
+.exercise-browse-button { flex: 0 0 auto; }
+.exercise-results-head .exercise-browse-controls { margin-left: 0; }
 .exercise-view-switcher { display: inline-flex; flex: 0 0 auto; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
 .exercise-view-button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 4px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
 .exercise-view-button.is-active { background: var(--surface); color: var(--accent); box-shadow: 0 1px 2px rgba(16, 24, 40, .14); }
@@ -17046,6 +17065,7 @@ span.exercise-view-media { cursor: default; }
 .exercise-view-menu-item { min-height: 36px; padding: 6px 10px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 @media (hover: hover) {
   .exercise-view-button:hover { color: var(--text); }
+  .exercise-browse-button:hover { background: var(--surface); color: var(--accent); }
   .exercise-view-icon:hover { background: var(--surface-soft); color: var(--text); }
   .exercise-view-menu-item:hover { background: var(--surface-soft); }
 }
@@ -17117,6 +17137,24 @@ span.exercise-view-media { cursor: default; }
 /* Touch-sized controls on phones and landscape phones / small tablets
    (the app's 760 px phone breakpoint): icon-only switcher, 44 px targets,
    also for the builder result's existing toggles, Tags and Add. */
+@media (max-width: 760px) {
+  .exercise-results-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "count add" "filters filters" "browse browse"; align-items: center; row-gap: 0; }
+  .exercise-results-actions { display: contents; }
+  .exercise-results-count { grid-area: count; }
+  .exercise-results-filters { grid-area: filters; margin-top: 8px; }
+  .exercise-add-button { grid-area: add; min-height: 44px; }
+  .exercise-results-head .exercise-browse-controls { grid-area: browse; margin-top: 8px; }
+}
+/* Touch sizes for the head's controls on every touch screen, a tablet
+   wider than 760 px included; the switcher grows with them so the group
+   keeps one height. */
+@media (max-width: 760px), (pointer: coarse) {
+  .exercise-add-button { min-height: 44px; }
+  .exercise-block-chip { min-height: 44px; }
+  .exercise-browse-button { min-height: 50px; padding: 0 14px; }
+  .exercise-browse-button.is-icon { width: 50px; padding: 0; }
+  .exercise-results-head .exercise-view-button { min-width: 44px; min-height: 44px; }
+}
 @media (max-width: 760px) {
   .exercise-view-button { justify-content: center; min-width: 44px; min-height: 44px; padding: 0; }
   .exercise-view-button span { display: none; }

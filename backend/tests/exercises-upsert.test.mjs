@@ -338,6 +338,42 @@ test("block catalog preserves grants, hides denied blocks and excludes restricte
   assert.equal((await api(`/api/exercises/${system}/copy`,{method:"POST",cookie:outsider.cookie,body:{name:"Denied"}})).status,404);
   assert.equal((await api("/api/exercise-collections",{method:"POST",cookie:outsider.cookie,body:{name:"Denied",exerciseIds:[],userIds:[]}})).status,404);
   assert.equal((await api("/api/exercises?collection=bad",{cookie:coach.cookie})).status,400);
+  // The catalog does not tell a coach whether a block is open to everyone.
+  assert.equal(Object.hasOwn(allowed.body.blocks[0],"accessAll"),false);
+  // A cover the database's check would refuse, or one carrying a user name
+  // or password, is a 400 and nothing is saved - never an unknown outcome.
+  for (const coverImageUrl of ["http:example.com","https:/example.com","https://user:secret@example.com/a.jpg","javascript:alert(1)"]) {
+    const refused = await api(`/api/exercise-collections/${block.id}`,{method:"PATCH",cookie:admin.cookie,body:{name:block.name,exerciseIds:[system],userIds:[coach.userId],expectedRevision:block.revision,coverImageUrl}});
+    assert.equal(refused.status,400,coverImageUrl);
+    assert.equal(refused.body.error,"invalidBody");
+  }
+  assert.equal((await query("select cover_image_url from library.exercise_collections where id=$1",[block.id])).rows[0].cover_image_url,"");
+});
+
+test("an open block lists exactly its exercises with the coach's own copies, and Other exactly what no block holds", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("block-list-admin");
+  const coach = await makeCoach("block-list-coach");
+  const a1 = await makeExercise(null, { ownerScope: "system", name: `Block A one ${tag}` });
+  const b1 = await makeExercise(null, { ownerScope: "system", name: `Block B one ${tag}` });
+  const u1 = await makeExercise(null, { ownerScope: "system", name: `Unassigned one ${tag}` });
+  const blockA = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name: `A ${tag}`, exerciseIds: [a1], userIds: [coach.userId] } });
+  const blockB = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name: `B ${tag}`, exerciseIds: [b1], userIds: [coach.userId] } });
+  assert.equal(blockA.status, 201, JSON.stringify(blockA.body));
+  assert.equal(blockB.status, 201, JSON.stringify(blockB.body));
+  const copy = await api(`/api/exercises/${a1}/copy`, { method: "POST", cookie: coach.cookie, body: { name: `Block A copy ${tag}` } });
+  assert.equal(copy.status, 201, JSON.stringify(copy.body));
+  const own = await api("/api/exercises", { method: "POST", cookie: coach.cookie, body: { name: `Own private ${tag}` } });
+  assert.equal(own.status, 201, JSON.stringify(own.body));
+  const ids = async (query) => {
+    const res = await api(`/api/exercises?search=${tag}&limit=100&${query}`, { cookie: coach.cookie });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    return new Set(res.body.exercises.map((exercise) => exercise.id));
+  };
+  assert.deepEqual(await ids(`collection=${blockA.body.collection.id}`), new Set([a1, copy.body.id]));
+  assert.deepEqual(await ids(`collection=${blockB.body.collection.id}`), new Set([b1]));
+  assert.deepEqual(await ids("collection=other"), new Set([u1, own.body.id]));
+  assert.deepEqual(await ids(""), new Set([a1, b1, u1, copy.body.id, own.body.id]));
 });
 
 test("locked previews expose no exercise media, instructions, grants or usable exercise; all-users remains explicit", async () => {
@@ -355,9 +391,14 @@ test("locked previews expose no exercise media, instructions, grants or usable e
   const previews=await api("/api/exercise-collections/locked-exercises?search=Locked visible title",{cookie:outsider.cookie});
   assert.deepEqual(Object.keys(previews.body.exercises[0]).sort(),["blockName","id","name"]);
   assert.equal(JSON.stringify([catalog.body,previews.body]).includes("secret-"),false);
-  const mainList=await api("/api/exercises?search=Locked visible title",{cookie:outsider.cookie});
+  const mainList=await api("/api/exercises?search=Locked visible title&lockedPreviews=1",{cookie:outsider.cookie});
   assert.equal(mainList.body.exercises.length,0);
   assert.equal(mainList.body.lockedPreviews.length,1);
+  // Only the Exercise Library asks for previews, and only for its first page
+  // (it pages by limit): the Builder's search (no opt-in, offset paging)
+  // runs no second query and gets none.
+  assert.deepEqual((await api("/api/exercises?search=Locked visible title",{cookie:outsider.cookie})).body.lockedPreviews,[]);
+  assert.deepEqual((await api("/api/exercises?search=Locked visible title&lockedPreviews=1&offset=18",{cookie:outsider.cookie})).body.lockedPreviews,[]);
   assert.equal((await api("/api/exercises?search=Locked visible title&offset=invalid",{cookie:outsider.cookie})).status,200);
   assert.equal((await api(`/api/exercises/${system}`,{cookie:outsider.cookie})).status,404);
   const update=async (body)=>api(`/api/exercise-collections/${block.id}`,{method:"PATCH",cookie:admin.cookie,body:{name:block.name,exerciseIds:[system],userIds:[],expectedRevision:block.revision,...body}});

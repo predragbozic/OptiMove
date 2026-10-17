@@ -8,6 +8,9 @@ export const QUICK_FILTER_KEYS = new Set(["purpose", "tag"]);
 const ICON_STAR = `<svg viewBox="0 0 24 24" class="exercise-toggle-icon" aria-hidden="true"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.9z"></path></svg>`;
 const ICON_BOOKMARK = `<svg viewBox="0 0 24 24" class="exercise-toggle-icon" aria-hidden="true"><path d="M6 3.5h12a1 1 0 0 1 1 1V21l-7-4-7 4V4.5a1 1 0 0 1 1-1z"></path></svg>`;
 const ICON_MORE = `<svg viewBox="0 0 24 24" class="exercise-toggle-icon" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg>`;
+// Blocks: a package. Manage: a gear (application block administration).
+export const ICON_BLOCKS = `<svg viewBox="0 0 24 24" class="exercise-view-icon-svg" aria-hidden="true"><path d="M3.5 7.5 12 3l8.5 4.5L12 12z"></path><path d="M3.5 7.5v9L12 21l8.5-4.5v-9"></path><path d="M12 12v9"></path></svg>`;
+export const ICON_SETTINGS = `<svg viewBox="0 0 24 24" class="exercise-view-icon-svg" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>`;
 
 export function filterIconSvg() {
   return `
@@ -63,19 +66,43 @@ export function activeExerciseFilterLabels(filters, options = {}) {
   return labels;
 }
 
+// Blocks and the views share one group and one look. Block administration
+// (the gear) is only in the Blocks view, never in the library list - also
+// not inside a block (owner, 2026-10-17).
+function renderExerciseBrowseControls(search, view) {
+  return `
+    <div class="exercise-browse-controls">
+      <button class="exercise-browse-button" type="button" data-action="exercise-blocks-open" aria-label="Exercise blocks" title="Exercise blocks">${ICON_BLOCKS}<span aria-hidden="true">Blocks</span></button>
+      ${renderExerciseViewSwitcher("library", view, "exercise-library-view")}
+    </div>
+  `;
+}
+
+// The open block as a filter chip: its x returns to all exercises.
+function renderExerciseBlockChip(search) {
+  const collection = search.filters?.collection;
+  if (!collection) return "";
+  const name = collection === "other" ? "Other" : search.collectionName || "Selected block";
+  return `<button class="item-badge exercise-block-chip" type="button" data-action="exercise-blocks-clear" aria-label="Leave block ${escapeAttr(name)} and show all exercises" title="Show all exercises">Block: ${escapeHtml(name)}<span aria-hidden="true">×</span></button>`;
+}
+
 export function renderExerciseLibraryHtml(data) {
   const { exercises, itemIds, markedExerciseIds, search, tagEditor } = data;
   const view = normalizeExerciseView("library", search.view);
+  const { collection, ...otherFilters } = search.filters || {};
+  const filterBadges = [
+    search.term ? `<span class="item-badge">${escapeHtml(search.term)}</span>` : "",
+    renderExerciseBlockChip(search),
+    ...activeExerciseFilterLabels(otherFilters, search.options).map((label) => `<span class="item-badge">${escapeHtml(label)}</span>`),
+  ].join("");
   return `
     <div class="library-results-head exercise-results-head">
-      <span class="muted">${exercises.length} exercises shown</span>
-      ${search.term ? `<span class="item-badge">${escapeHtml(search.term)}</span>` : ""}
-      ${activeExerciseFilterLabels(search.filters, search.options).map((label) => `<span class="item-badge">${escapeHtml(label)}</span>`).join("")}
-      <button class="plain-button compact-button" type="button" data-action="exercise-add-open">+ Add exercise</button>
-      <button class="plain-button compact-button" type="button" data-action="exercise-blocks-open" aria-label="Blocks"><span aria-hidden="true">▦</span> Blocks</button>
-      ${search.filters.collection ? '<button class="plain-button compact-button" type="button" data-action="exercise-blocks-clear">All exercises</button>' : ""}
-      ${search.canManageCollections ? `<button class="plain-button compact-button" type="button" data-action="exercise-collections-open">Manage application blocks</button>` : ""}
-      ${renderExerciseViewSwitcher("library", view, "exercise-library-view")}
+      <span class="muted exercise-results-count">${exercises.length} exercises shown</span>
+      ${filterBadges ? `<div class="exercise-results-filters">${filterBadges}</div>` : ""}
+      <div class="exercise-results-actions">
+        <button class="plain-button compact-button exercise-add-button" type="button" data-action="exercise-add-open">+ Add exercise</button>
+        ${renderExerciseBrowseControls(search, view)}
+      </div>
     </div>
     ${view === "details" ? `
       <div class="exercise-grid">
