@@ -3565,6 +3565,7 @@ function renderExercises(exercises) {
     itemIds,
     markedExerciseIds: state.markedExerciseIds,
     search: state.exerciseSearch,
+    selection: state.exerciseSelection,
     tagEditor: state.tagEditor,
   });
 }

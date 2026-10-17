@@ -5,7 +5,8 @@ import { renderBuilder } from "./builder-view.js";
 import { els } from "./dom.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions, loadMarkedExerciseVisibility } from "./exercise-data.js";
 import { normalizeExerciseView, saveExerciseViewPreference } from "./exercise-view-modes.js";
-import { filterIconSvg, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters, renderExerciseVisibilityFilters, renderExerciseOwnerOptions } from "./exercise-library.js";
+import { EXERCISE_SELECTION_LIMIT, openExerciseBulkMove } from "./exercise-bulk-move.js";
+import { filterIconSvg, isSelectableExercise, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters, renderExerciseSelectionBar, renderExerciseVisibilityFilters, renderExerciseOwnerOptions } from "./exercise-library.js";
 import { emptyExerciseFilters, emptyExerciseOptions, EXERCISE_FILTERS, state } from "./state.js";
 import { debounce, escapeHtml } from "./utils.js";
 import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
@@ -46,12 +47,97 @@ export function resetExercisesForWorkspaceChange() {
   state.exerciseSearch.surface = "exercises";
   state.exerciseSearch.lockedPreviews = [];
   state.exerciseSearch.moreLockedPreviews = false;
+  state.exerciseSelection = { active: false, ids: new Map(), note: "" };
   state.lastExerciseResults = [];
   state.exerciseEditor.open = false;
   state.tagEditor.open = false;
   state.exerciseDetail = { ids: [], currentId: null };
   state.builder.exercises = [];
   document.querySelectorAll(".exercise-editor-overlay, .exercise-classification-overlay, .exercise-detail-overlay").forEach((element) => element.remove());
+}
+
+// The selection's marks and bar, brought up to date in place - no new list,
+// so the scroll position stays and focus stays on the control just used.
+function refreshExerciseSelectionView() {
+  const selection = state.exerciseSelection;
+  els.content.querySelectorAll('[data-action="exercise-select-toggle"]').forEach((box) => {
+    box.checked = selection.ids.has(box.dataset.exerciseId);
+    box.closest("[data-exercise-card]")?.classList.toggle("is-selected", box.checked);
+  });
+  const bar = els.content.querySelector(".exercise-selection-bar");
+  if (!bar) return;
+  // The bar's own nodes are kept (its live regions announce the new text);
+  // only their text and the buttons' state come from a fresh render.
+  const fresh = document.createElement("div");
+  fresh.innerHTML = renderExerciseSelectionBar(selection, state.lastExerciseResults || []);
+  for (const selector of ["[data-exercise-selection-count]", "[data-exercise-selection-note]"]) {
+    bar.querySelector(selector).textContent = fresh.querySelector(selector).textContent;
+  }
+  const focusWasInBar = bar.contains(document.activeElement);
+  bar.querySelectorAll("button[data-action]").forEach((button) => {
+    button.disabled = fresh.querySelector(`button[data-action="${button.dataset.action}"]`)?.disabled ?? button.disabled;
+  });
+  // A button that just turned itself off hands the focus to the count.
+  if (focusWasInBar && (!bar.contains(document.activeElement) || document.activeElement.disabled)) bar.querySelector("[data-exercise-selection-count]").focus();
+}
+
+function selectionLimitNote() {
+  return `At most ${EXERCISE_SELECTION_LIMIT} exercises can be moved at once.`;
+}
+
+// The block administrator's selection: Select / Done, a mark per exercise,
+// Select all shown, Clear and Move to block…. Returns true when handled.
+async function handleExerciseSelectionAction(action, handlers) {
+  const type = action.dataset.action;
+  const selection = state.exerciseSelection;
+  if (type === "exercise-select-mode") {
+    // Done leaves the selection behind; Select starts an empty one.
+    state.exerciseSelection = { active: !selection.active, ids: new Map(), note: "" };
+    handlers.renderExercises(state.lastExerciseResults || []);
+    els.content.querySelector(".exercise-select-button")?.focus({ preventScroll: true });
+    return true;
+  }
+  if (type === "exercise-select-toggle") {
+    const id = action.dataset.exerciseId;
+    selection.note = "";
+    if (!action.checked) selection.ids.delete(id);
+    else if (selection.ids.size >= EXERCISE_SELECTION_LIMIT) selection.note = selectionLimitNote();
+    else selection.ids.set(id, action.dataset.exerciseName || "");
+    refreshExerciseSelectionView();
+    return true;
+  }
+  if (type === "exercise-select-all-shown") {
+    selection.note = "";
+    for (const exercise of (state.lastExerciseResults || []).filter(isSelectableExercise)) {
+      if (selection.ids.has(exercise.id)) continue;
+      if (selection.ids.size >= EXERCISE_SELECTION_LIMIT) { selection.note = selectionLimitNote(); break; }
+      selection.ids.set(exercise.id, exercise.name || "");
+    }
+    refreshExerciseSelectionView();
+    return true;
+  }
+  if (type === "exercise-select-clear") {
+    selection.ids.clear();
+    selection.note = "";
+    refreshExerciseSelectionView();
+    return true;
+  }
+  if (type === "exercise-bulk-move-open") {
+    if (!selection.ids.size) return true;
+    openExerciseBulkMove([...selection.ids.keys()], {
+      // Saved: the selection is done with, and the list is read again (an
+      // exercise moved out of the open block leaves it).
+      onMoved: async () => {
+        state.exerciseSelection = { active: true, ids: new Map(), note: "" };
+        invalidateExercisesCache();
+        if (state.activeTab === "exercises" && state.exerciseSearch.surface !== "blocks") {
+          await searchExercises(state.exerciseSearch.term, handlers, { forceRefresh: true });
+        }
+      },
+    });
+    return true;
+  }
+  return false;
 }
 
 function activeExerciseSelectFilterCount(filters) {
@@ -225,6 +311,7 @@ export async function submitExerciseTagForm(form, handlers) {
 
 export async function handleExerciseLibraryAction(action, handlers) {
   const type = action.dataset.action;
+  if (await handleExerciseSelectionAction(action, handlers)) return true;
   if (type === "exercise-blocks-clear") {
     delete state.exerciseSearch.filters.collection;
     state.exerciseSearch.limit = 30;

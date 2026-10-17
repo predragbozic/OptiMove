@@ -88,9 +88,9 @@ function respondError(res, error) {
   return res.status(500).json({ error: "internalError" });
 }
 
-async function loadCollections(runQuery = query, collectionId = null) {
-  return (await runQuery(
-    `select c.id, c.name, c.revision,c.description,c.cover_image_url as "coverImageUrl",c.access_all as "accessAll",
+// A live block's full state (the editor's answer and the audit's before /
+// after), for the blocks the `where` clause names.
+const collectionStateSql = (where) => `select c.id, c.name, c.revision,c.description,c.cover_image_url as "coverImageUrl",c.access_all as "accessAll",
        c.block_preview as "blockPreview",c.exercise_preview as "exercisePreview",
        coalesce((select jsonb_agg(jsonb_build_object('id', e.id, 'name', e.name, 'imageUrl', e.image_url) order by e.name,e.id)
          from library.exercise_collection_items ci join library.exercises e on e.id = ci.exercise_id
@@ -98,10 +98,16 @@ async function loadCollections(runQuery = query, collectionId = null) {
        coalesce((select jsonb_agg(jsonb_build_object('id', u.id, 'name', coalesce(u.display_name,u.full_name,u.email), 'email', u.email) order by u.email)
          from library.exercise_collection_users cu join public.users u on u.id = cu.user_id
          where cu.collection_id = c.id), '[]'::jsonb) as users
-     from library.exercise_collections c where c.deleted_at is null and ($1::uuid is null or c.id = $1)
-     order by c.name, c.id limit 501`,
-    [collectionId],
-  )).rows;
+     from library.exercise_collections c where c.deleted_at is null and ${where}
+     order by c.name, c.id limit 501`;
+
+async function loadCollections(runQuery = query, collectionId = null) {
+  return (await runQuery(collectionStateSql("($1::uuid is null or c.id = $1)"), [collectionId])).rows;
+}
+
+// Several blocks' states in one statement, by id.
+async function loadCollectionsById(runQuery, ids) {
+  return new Map((await runQuery(collectionStateSql("c.id = any($1::uuid[])"), [ids])).rows.map((row) => [row.id, row]));
 }
 
 router.get("/", async (req, res) => {
@@ -337,98 +343,151 @@ router.get("/exercise-block/:exerciseId", async (req, res) => {
   } catch (error) { respondError(res, error); }
 });
 
-// Moves one application exercise into a block, or out of every block (back
-// to Other, available to every coach), from the block it was shown in
-// (`expectedCollectionId`, null for Other). A repeat of a move already made
-// is the same answer. Both blocks get a new revision (an editor open on
-// either sees it changed) and an audit row each, in one transaction with the
-// lock order of a block save: the block lock, the administrator, the blocks
-// (by id), then the exercise. Once the COMMIT is sent the answer never says
-// "not moved": an error then is checked on another connection.
-async function moveExerciseBlock(req, res) {
-  // Both ids are named, null for Other: a missing key (undefined) is refused,
-  // never read as "Other", the direction that opens an exercise to every
-  // coach. Ids compare in the database's lower case.
-  const body = req.body && typeof req.body === "object" ? req.body : {};
-  if (!uuidPattern.test(req.params.exerciseId)
-    || [body.collectionId, body.expectedCollectionId].some((id) => id !== null && (typeof id !== "string" || !uuidPattern.test(id)))) {
-    return res.status(400).json({ error: "invalidBody" });
-  }
-  const exerciseId = req.params.exerciseId.toLowerCase();
-  const target = body.collectionId?.toLowerCase() ?? null;
-  const expected = body.expectedCollectionId?.toLowerCase() ?? null;
+// The most exercises one move takes, and one lookup reads.
+const BLOCK_MOVE_LIMIT = 100;
+
+// Where each of the given exercises is, for the administrator's move of
+// several at once: its current block (a personal copy's is its original's),
+// whether it can be moved (an active application exercise), and every live
+// block to choose from. An id that names no exercise is left out.
+router.get("/exercise-blocks", async (req, res) => {
+  const ids = [...new Set(String(req.query.ids || "").split(",").filter(Boolean).map((id) => id.toLowerCase()))];
+  if (!ids.length || ids.length > BLOCK_MOVE_LIMIT || ids.some((id) => !uuidPattern.test(id))) return res.status(400).json({ error: "invalidBody" });
+  try {
+    const exercises = (await query(`select e.id,e.name,e.owner_scope='system' and e.is_active=true as movable,
+        c.id as "currentId",c.name as "currentName"
+      from library.exercises e
+      left join library.exercise_collection_items ci on ci.exercise_id=coalesce(e.source_exercise_id,e.id)
+      left join library.exercise_collections c on c.id=ci.collection_id and c.deleted_at is null
+      where e.id = any($1::uuid[]) order by e.name,e.id`, [ids])).rows;
+    const blocks = (await query(`select id,name,access_all as "accessAll" from library.exercise_collections
+      where deleted_at is null order by name,id limit 501`)).rows;
+    if (blocks.length > 500) return res.status(409).json({ error: "tooManyBlocks" });
+    res.json({ exercises: exercises.map((exercise) => ({ id: exercise.id, name: exercise.name, movable: exercise.movable,
+      current: exercise.currentId ? { id: exercise.currentId, name: exercise.currentName } : null })), blocks });
+  } catch (error) { respondError(res, error); }
+});
+
+// Moves application exercises into one block, or out of every block (back to
+// Other, available to every coach), each from the block the screen showed it
+// in (`expectedCollectionId`, null for Other). All of them or none, in one
+// transaction with the lock order of a block save: the block lock, the
+// administrator, the blocks (by id), then the exercises (by id). An exercise
+// already in the target is left as it is, so a repeat of a move already made
+// writes nothing. Every block that loses or gains an exercise gets a new
+// revision (an editor open on it sees it changed) and one audit row. The
+// statements are the same in number however many blocks the move touches:
+// the transaction holds the block lock every exercise reuse waits for (2 s).
+// Once the COMMIT is sent the answer never says "not moved": an error then
+// is checked on another connection. Returns { status, body }, or { error }
+// for the caller's error mapping.
+async function moveExercisesToBlock(userId, target, moves) {
+  const ids = moves.map((move) => move.exerciseId);
   let client;
   let release;
   let commitSent = false;
-  let verifiedAfterCommitError = false;
   let answer;
+  let movingIds = [];
   try {
     ({ client, release } = await checkoutBlockClient());
     const runQuery = (sql, params) => client.query(sql, params);
-    const refusal = await beginBlockWrite(runQuery, req.user.id);
-    if (refusal) return res.status(refusal.status).json({ error: refusal.error });
-    const current = (await runQuery("select collection_id from library.exercise_collection_items where exercise_id = $1", [exerciseId])).rows[0]?.collection_id ?? null;
-    const affected = [...new Set([current, target].filter(Boolean))].sort();
+    const refusal = await beginBlockWrite(runQuery, userId);
+    if (refusal) return { status: refusal.status, body: { error: refusal.error } };
+    const refuse = async (status, body) => { await runQuery("rollback"); return { status, body }; };
+    const placement = async () => new Map((await runQuery(`select exercise_id,collection_id from library.exercise_collection_items
+      where exercise_id = any($1::uuid[])`, [ids])).rows.map((row) => [row.exercise_id, row.collection_id]));
+    const blockOf = (placed, id) => placed.get(id) ?? null;
+    const current = await placement();
+    const affected = [...new Set([...current.values(), target].filter(Boolean))].sort();
     const live = await runQuery(`select id from library.exercise_collections where id = any($1::uuid[]) and deleted_at is null
       order by id for update`, [affected]);
-    if (target && !live.rows.some((row) => row.id === target)) {
-      await runQuery("rollback");
-      return res.status(409).json({ error: "blockNotAvailable" });
-    }
-    const exercise = await runQuery(`select id from library.exercises where id = $1
-      and owner_scope = 'system' and is_active = true for update`, [exerciseId]);
-    if (!exercise.rowCount) {
-      await runQuery("rollback");
-      return res.status(400).json({ error: "invalidSelection" });
-    }
-    // Read before its blocks were locked: still the same under every lock?
-    const locked = (await runQuery("select collection_id from library.exercise_collection_items where exercise_id = $1", [exerciseId])).rows[0]?.collection_id ?? null;
-    if (locked !== current) {
-      await runQuery("rollback");
-      return res.status(409).json({ error: "tryAgain" });
-    }
-    if (current === target) {
-      await runQuery("rollback");
-      return res.json({ exerciseId, collectionId: target, changed: false });
-    }
-    if (current !== expected) {
-      await runQuery("rollback");
-      return res.status(409).json({ error: "staleRevision" });
-    }
-    const before = new Map();
-    for (const id of affected) before.set(id, (await loadCollections(runQuery, id))[0]);
-    await runQuery("delete from library.exercise_collection_items where exercise_id = $1", [exerciseId]);
-    if (target) await runQuery("insert into library.exercise_collection_items (collection_id,exercise_id) values ($1,$2)", [target, exerciseId]);
-    await runQuery("update library.exercise_collections set revision=revision+1,updated_at=now() where id = any($1::uuid[])", [affected]);
-    for (const id of affected) {
-      const [after] = await loadCollections(runQuery, id);
-      await runQuery(`insert into library.exercise_collection_audit (collection_id,actor_user_id,before_state,after_state)
-        values ($1,$2,$3::jsonb,$4::jsonb)`, [id, req.user.id, JSON.stringify(before.get(id)), JSON.stringify(after)]);
-    }
-    answer = { exerciseId, collectionId: target, changed: true };
+    if (target && !live.rows.some((row) => row.id === target)) return await refuse(409, { error: "blockNotAvailable" });
+    const exercises = await runQuery(`select id from library.exercises where id = any($1::uuid[])
+      and owner_scope = 'system' and is_active = true order by id for update`, [ids]);
+    if (exercises.rowCount !== ids.length) return await refuse(400, { error: "invalidSelection" });
+    // Read before their blocks were locked: still the same under every lock?
+    const locked = await placement();
+    if (ids.some((id) => blockOf(locked, id) !== blockOf(current, id))) return await refuse(409, { error: "tryAgain" });
+    const moving = moves.filter((move) => blockOf(current, move.exerciseId) !== target);
+    if (!moving.length) return await refuse(200, { collectionId: target, moved: [], unchanged: ids, changed: false });
+    const stale = moving.filter((move) => blockOf(current, move.exerciseId) !== move.expectedCollectionId).map((move) => move.exerciseId);
+    if (stale.length) return await refuse(409, { error: "staleRevision", stale });
+    movingIds = moving.map((move) => move.exerciseId);
+    const changedBlocks = [...new Set([...movingIds.map((id) => blockOf(current, id)), target].filter(Boolean))].sort();
+    const before = await loadCollectionsById(runQuery, changedBlocks);
+    await runQuery("delete from library.exercise_collection_items where exercise_id = any($1::uuid[])", [movingIds]);
+    if (target) await runQuery("insert into library.exercise_collection_items (collection_id,exercise_id) select $1, unnest($2::uuid[])", [target, movingIds]);
+    await runQuery("update library.exercise_collections set revision=revision+1,updated_at=now() where id = any($1::uuid[])", [changedBlocks]);
+    const after = await loadCollectionsById(runQuery, changedBlocks);
+    await runQuery(`insert into library.exercise_collection_audit (collection_id,actor_user_id,before_state,after_state)
+      select entry.id, $1, entry.before, entry.after from jsonb_to_recordset($2::jsonb) as entry(id uuid, before jsonb, after jsonb)`,
+    [userId, JSON.stringify(changedBlocks.map((id) => ({ id, before: before.get(id), after: after.get(id) })))]);
+    answer = { collectionId: target, moved: movingIds, unchanged: ids.filter((id) => !movingIds.includes(id)), changed: true };
     commitSent = true;
     await runQuery("commit");
   } catch (error) {
     if (!commitSent) {
       if (client) { try { await client.query("rollback"); } catch {} }
-      return respondError(res, error);
+      return { error };
     }
     // The connection's state after a failed COMMIT is unknown: never reuse it.
     release(error);
     client = null;
-    let landed = null;
+    let landed;
     try {
-      landed = (await query("select collection_id from library.exercise_collection_items where exercise_id = $1", [exerciseId])).rows[0]?.collection_id ?? null;
-    } catch { return res.status(503).json({ error: "outcomeUnknown" }); }
-    if (landed !== target) return res.status(503).json({ error: "outcomeUnknown" });
-    verifiedAfterCommitError = true;
+      landed = (await query("select collection_id from library.exercise_collection_items where exercise_id = any($1::uuid[])", [movingIds])).rows;
+    } catch { return { status: 503, body: { error: "outcomeUnknown" } }; }
+    const arrived = target
+      ? landed.length === movingIds.length && landed.every((row) => row.collection_id === target)
+      : landed.length === 0;
+    if (!arrived) return { status: 503, body: { error: "outcomeUnknown" } };
+    answer.verifiedAfterCommitError = true;
   } finally { if (client) release(); }
   try { emitRealtimeEventForAll("exercise_library_changed"); } catch {}
-  res.json(verifiedAfterCommitError ? { ...answer, verifiedAfterCommitError } : answer);
+  return { status: 200, body: answer };
+}
+
+// A block id or null for Other: a missing key (undefined) is refused, never
+// read as "Other", the direction that opens an exercise to every coach.
+const blockIdOrNull = (id) => id === null || (typeof id === "string" && uuidPattern.test(id));
+
+// One exercise (the classification panel): { collectionId, expectedCollectionId }.
+// Ids compare in the database's lower case.
+async function moveExerciseBlock(req, res) {
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  if (!uuidPattern.test(req.params.exerciseId) || !blockIdOrNull(body.collectionId) || !blockIdOrNull(body.expectedCollectionId)) {
+    return res.status(400).json({ error: "invalidBody" });
+  }
+  const exerciseId = req.params.exerciseId.toLowerCase();
+  const result = await moveExercisesToBlock(req.user.id, body.collectionId?.toLowerCase() ?? null,
+    [{ exerciseId, expectedCollectionId: body.expectedCollectionId?.toLowerCase() ?? null }]);
+  if (result.error) return respondError(res, result.error);
+  if (result.status !== 200) return res.status(result.status).json({ error: result.body.error });
+  const { collectionId, changed, verifiedAfterCommitError } = result.body;
+  res.json(verifiedAfterCommitError ? { exerciseId, collectionId, changed, verifiedAfterCommitError } : { exerciseId, collectionId, changed });
+}
+
+// Several exercises at once (the library's selection):
+// { collectionId | null, moves: [{ exerciseId, expectedCollectionId | null }] },
+// at most BLOCK_MOVE_LIMIT, each exercise once.
+async function moveExerciseBlocks(req, res) {
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const moves = Array.isArray(body.moves) ? body.moves : null;
+  if (!blockIdOrNull(body.collectionId) || !moves?.length || moves.length > BLOCK_MOVE_LIMIT
+    || moves.some((move) => !move || typeof move !== "object" || typeof move.exerciseId !== "string"
+      || !uuidPattern.test(move.exerciseId) || !blockIdOrNull(move.expectedCollectionId))) {
+    return res.status(400).json({ error: "invalidBody" });
+  }
+  const normalized = moves.map((move) => ({ exerciseId: move.exerciseId.toLowerCase(), expectedCollectionId: move.expectedCollectionId?.toLowerCase() ?? null }));
+  if (new Set(normalized.map((move) => move.exerciseId)).size !== normalized.length) return res.status(400).json({ error: "invalidBody" });
+  const result = await moveExercisesToBlock(req.user.id, body.collectionId?.toLowerCase() ?? null, normalized);
+  if (result.error) return respondError(res, result.error);
+  res.status(result.status).json(result.body);
 }
 
 router.post("/", saveCollection);
 router.patch("/:collectionId", saveCollection);
 router.delete("/:collectionId", deleteCollection);
 router.put("/exercise-block/:exerciseId", moveExerciseBlock);
+router.put("/exercise-blocks", moveExerciseBlocks);
 export default router;
