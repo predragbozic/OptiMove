@@ -4,6 +4,8 @@
 -- trail (library.exercise_collection_audit) references it and is kept.
 -- A deleted block is final: it is never renamed, restored, or given
 -- exercises or users again, whoever writes.
+-- No index on deleted_by_user_id: blocks are a short, administrator-managed
+-- list (created_by_user_id has none either).
 alter table library.exercise_collections
   add column deleted_at timestamptz,
   add column deleted_by_user_id uuid references public.users(id);
@@ -37,8 +39,11 @@ create trigger exercise_block_users_not_deleted
   for each row execute function library.guard_exercise_block_membership();
 
 -- A block is deleted only once it holds no exercises and no users, and a
--- deleted block is never changed again. The checks run after the row lock,
--- each with its own snapshot, so they see an item committed meanwhile.
+-- deleted block is never changed again (an UPDATE of the table should filter
+-- deleted_at is null). The checks run after the row lock, each with its own
+-- snapshot, so they see an item committed meanwhile - under READ COMMITTED
+-- only: an older REPEATABLE READ snapshot could miss it, so a deletion in any
+-- other isolation level is refused.
 create function library.guard_exercise_block_deletion() returns trigger
 language plpgsql as $$
 begin
@@ -50,6 +55,9 @@ begin
   end if;
   if old.deleted_at is not null then
     raise exception 'a deleted exercise block is final' using errcode = '23514';
+  end if;
+  if new.deleted_at is not null and current_setting('transaction_isolation') <> 'read committed' then
+    raise exception 'an exercise block is deleted only under READ COMMITTED' using errcode = '23514';
   end if;
   if new.deleted_at is not null and (
        exists (select 1 from library.exercise_collection_items where collection_id = old.id)

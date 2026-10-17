@@ -1,7 +1,7 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { openExerciseCollections } from "../exercise-collections.js";
+import { DELETE_CLIENT_BOUND_MS, openExerciseCollections } from "../exercise-collections.js";
 import { renderExerciseBlocksHtml } from "../exercise-blocks.js";
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -51,7 +51,9 @@ test("Delete block names the consequence, sends the loaded revision once and lea
   const deletes = requests.filter((request) => request.method === "DELETE");
   assert.deepEqual(deletes, [{ url: "/api/exercise-collections/block-one", method: "DELETE", body: { expectedRevision: 4 } }]);
   assert.equal(refreshed(), 1);
-  assert.match(document.body.textContent, /“Speed” was deleted\. Its exercises are now in Other\./);
+  const status = document.querySelector(".exercise-block-deleted");
+  assert.match(status.textContent, /“Speed” was deleted\. Its exercises are now in Other\./);
+  assert.ok(status.compareDocumentPosition(document.querySelector("[data-block-select]")) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, "the notice sits above the form, in view");
   assert.equal(document.querySelector("[data-block-select]").value, "");
   assert.equal([...document.querySelectorAll("[data-block-select] option")].some((option) => option.value === "block-one"), false);
   assert.equal(document.querySelector("[data-delete-block]"), null);
@@ -90,6 +92,57 @@ test("a refused or lost delete keeps the block and says why", async () => {
     document.querySelector("[data-close-collections]").click();
     dom.window.close();
   }
+});
+
+// A DELETE that is never answered, until the request is aborted (or the
+// test lets it go with `release`).
+const hanging = (requests) => (url, options) => new Promise((_, reject) => {
+  const fail = () => reject(new DOMException("The operation was aborted.", "AbortError"));
+  requests.push({ url: String(url), release: fail });
+  options.signal?.addEventListener("abort", fail);
+});
+const microtasks = async () => { for (let index = 0; index < 20; index += 1) await Promise.resolve(); };
+
+test("a delete whose answer never comes is not confirmed after the client bound, and the editor can close", async () => {
+  const pending = [];
+  const { dom, refreshed } = await openEditor({ answer: () => null });
+  const plain = globalThis.fetch;
+  globalThis.fetch = (url, options = {}) => (options.method === "DELETE" ? hanging(pending)(url, options) : plain(url, options));
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    document.querySelector("[data-delete-block]").click();
+    await microtasks();
+    assert.equal(document.querySelector("[data-delete-block]").textContent, "Deleting...");
+    assert.equal(document.querySelector("[data-delete-block]").disabled, true);
+    mock.timers.tick(DELETE_CLIENT_BOUND_MS);
+    await microtasks();
+  } finally { mock.timers.reset(); }
+  assert.equal(pending.length, 1);
+  assert.match(document.querySelector("[role='alert']").textContent, /Delete was not confirmed/);
+  assert.equal(document.querySelector("[data-block-select]").value, "block-one");
+  assert.equal(document.querySelector("[data-delete-block]").disabled, false);
+  assert.equal(refreshed(), 0);
+  document.querySelector("[data-close-collections]").click();
+  assert.equal(document.querySelector(".exercise-collections-overlay"), null, "Close works again");
+  dom.window.close();
+});
+
+test("a second click while a delete is in flight sends nothing more", async () => {
+  const pending = [];
+  const { dom } = await openEditor();
+  const plain = globalThis.fetch;
+  globalThis.fetch = (url, options = {}) => (options.method === "DELETE" ? hanging(pending)(url, options) : plain(url, options));
+  const first = document.querySelector("[data-delete-block]");
+  first.click();
+  await microtasks();
+  first.click();
+  document.querySelector("[data-delete-block]").click();
+  await microtasks();
+  assert.equal(pending.length, 1);
+  pending[0].release();
+  await settle();
+  document.querySelector("[data-close-collections]").click();
+  dom.window.close();
 });
 
 test("renaming is the name field plus Save, which keeps the block's exercises and users", async () => {

@@ -131,13 +131,16 @@ function parseBody(body) {
     exerciseIds: [...new Set(body.exerciseIds)].sort(), userIds: [...new Set(body.userIds)].sort() };
 }
 
-// Every block write: one transaction, bounded lock waits, the exclusive
-// block lock (exercise reuse takes it shared), and the caller still an
-// active platform admin in the platform workspace. A refusal is rolled back.
+// Every block write: one READ COMMITTED transaction (the block deletion
+// guard requires it), bounded lock waits and idle time - it holds the
+// exclusive block lock that every exercise reuse takes shared -, and the
+// caller still an active platform admin in the platform workspace. A
+// refusal is rolled back.
 async function beginBlockWrite(runQuery, userId) {
-  await runQuery("begin");
+  await runQuery("begin isolation level read committed");
   await runQuery("set local lock_timeout = '2s'");
   await runQuery("set local statement_timeout = '10s'");
+  await runQuery("set local idle_in_transaction_session_timeout = '15s'");
   await runQuery("select pg_advisory_xact_lock(hashtextextended('exercise_collections', 0))");
   const actor = await runQuery(`select r.id from public.user_global_roles r join public.users u on u.id = r.user_id
     where r.user_id = $1 and r.role = 'platform_admin' and r.is_active = true and u.is_active = true
@@ -213,15 +216,31 @@ async function saveCollection(req, res) {
   } finally { client?.release(); }
 }
 
+// Whether a delete whose COMMIT answer was an error is in the database,
+// read on another connection: the block marked deleted by this user.
+async function deletionCommitted(collectionId, userId) {
+  try {
+    const found = await query(`select 1 from library.exercise_collections
+      where id = $1 and deleted_at is not null and deleted_by_user_id = $2`, [collectionId, userId]);
+    return found.rowCount === 1;
+  } catch { return null; }
+}
+
 // Deleting a block: its exercises are back in Other (available to every
 // coach), its user grants are removed, and the row stays, marked deleted,
 // for the audit trail. A deleted block is gone from every list for good.
+// Once the COMMIT is sent the answer never says "not deleted": an error then
+// is checked on another connection - deleted (200, verifiedAfterCommitError)
+// or unknown (503 outcomeUnknown); a retry of a deleted block is a 404.
 async function deleteCollection(req, res) {
   const collectionId = req.params.collectionId;
   if (!uuidPattern.test(collectionId) || !Number.isInteger(req.body?.expectedRevision)) {
     return res.status(400).json({ error: "invalidBody" });
   }
   let client;
+  let commitSent = false;
+  let verifiedAfterCommitError = false;
+  let deleted;
   try {
     client = await pool.connect();
     const runQuery = (sql, params) => client.query(sql, params);
@@ -234,17 +253,25 @@ async function deleteCollection(req, res) {
     await runQuery("delete from library.exercise_collection_users where collection_id = $1", [collectionId]);
     await runQuery(`update library.exercise_collections set deleted_at=now(),deleted_by_user_id=$2,
       revision=revision+1,updated_at=now() where id=$1`, [collectionId, req.user.id]);
-    const deleted = { id: before.id, name: before.name, deleted: true,
+    deleted = { id: before.id, name: before.name, deleted: true,
       exerciseCount: before.exercises.length, userCount: before.users.length };
     await runQuery(`insert into library.exercise_collection_audit (collection_id,actor_user_id,before_state,after_state)
       values ($1,$2,$3::jsonb,$4::jsonb)`, [collectionId, req.user.id, JSON.stringify(before), JSON.stringify(deleted)]);
+    commitSent = true;
     await runQuery("commit");
-    emitRealtimeEventForAll("exercise_library_changed");
-    res.json({ deleted });
   } catch (error) {
-    if (client) { try { await client.query("rollback"); } catch {} }
-    respondError(res, error);
+    if (!commitSent) {
+      if (client) { try { await client.query("rollback"); } catch {} }
+      return respondError(res, error);
+    }
+    // The connection's state after a failed COMMIT is unknown: never reuse it.
+    client.release(error);
+    client = null;
+    if (!(await deletionCommitted(collectionId, req.user.id))) return res.status(503).json({ error: "outcomeUnknown" });
+    verifiedAfterCommitError = true;
   } finally { client?.release(); }
+  try { emitRealtimeEventForAll("exercise_library_changed"); } catch {}
+  res.json(verifiedAfterCommitError ? { deleted, verifiedAfterCommitError } : { deleted });
 }
 
 router.post("/", saveCollection);

@@ -29,6 +29,7 @@ export function renderExerciseCollectionsHtml(panel) {
       <div class="builder-modal-head"><h3>Application exercise blocks</h3><button class="plain-button" type="button" data-close-collections>Close</button></div>
       <div class="exercise-editor-body">
         <p>Blocks control access to their system exercises. Locked previews do not grant access. Personal copies remain private and are hidden when that user's access is removed.</p>
+        ${panel.deleted ? `<p role="status" class="exercise-block-deleted">“${escapeHtml(panel.deleted)}” was deleted. Its exercises are now in Other.</p>` : ""}
         <label class="search-field"><span>Block</span><select class="builder-text-input" data-block-select ${panel.busy ? "disabled" : ""}><option value="">New block</option>${panel.collections.map((block) => `<option value="${escapeAttr(block.id)}" ${block.id === panel.draft.id ? "selected" : ""}>${escapeHtml(block.name)}</option>`).join("")}</select></label>
         <label class="search-field"><span>Block name</span><input class="builder-text-input" maxlength="120" data-block-name value="${escapeAttr(panel.draft.name)}" ${panel.busy ? "disabled" : ""}></label>
         ${panel.draft.id ? '<p class="muted">To rename this block, change its name and save. Delete block, below, moves its exercises to Other.</p>' : ""}
@@ -44,7 +45,6 @@ export function renderExerciseCollectionsHtml(panel) {
         ${picker("users", "Users", panel.options.users || [], panel.draft.users, panel.options.moreUsers)}
         ${panel.error ? `<p role="alert" class="builder-error">${escapeHtml(panel.error)}</p>` : ""}
         ${panel.saved ? '<p role="status">Block saved.</p>' : ""}
-        ${panel.deleted ? `<p role="status">“${escapeHtml(panel.deleted)}” was deleted. Its exercises are now in Other.</p>` : ""}
       </div>
       <div class="builder-modal-actions">
         ${panel.draft.id ? `<button class="plain-button danger-button" type="button" data-delete-block ${panel.busy ? "disabled" : ""}>${panel.busy === "delete" ? "Deleting..." : "Delete block"}</button>` : ""}
@@ -215,6 +215,10 @@ const deleteMessages = {
   notFound: "This block was already deleted, or you no longer have permission to manage application blocks.",
 };
 
+// A delete whose answer never comes (a phone that lost its network) is
+// "not confirmed" after this long, and the editor can be closed again.
+export const DELETE_CLIENT_BOUND_MS = 45000;
+
 async function deleteBlock(panel) {
   if (panel.busy || !panel.original.id) return;
   const block = panel.original;
@@ -232,10 +236,13 @@ async function deleteBlock(panel) {
   panel.deleted = "";
   panel.error = "";
   render(panel);
+  const controller = new AbortController();
+  const bound = setTimeout(() => controller.abort(), DELETE_CLIENT_BOUND_MS);
   try {
     await api(`/api/exercise-collections/${encodeURIComponent(block.id)}`, {
-      method: "DELETE", body: JSON.stringify({ expectedRevision: block.revision }),
+      method: "DELETE", body: JSON.stringify({ expectedRevision: block.revision }), signal: controller.signal,
     });
+    clearTimeout(bound);
     if (activePanel !== panel) return;
     panel.collections = panel.collections.filter((item) => item.id !== block.id);
     panel.draft = emptyDraft();
@@ -248,8 +255,9 @@ async function deleteBlock(panel) {
     catch { panel.error = "The block was deleted. Reopen Exercise Library to refresh the list."; }
   } catch (error) {
     if (activePanel !== panel) return;
-    panel.error = deleteMessages[error.message] || "Delete was not confirmed. Close and reopen to check the block before retrying.";
+    panel.error = (!controller.signal.aborted && deleteMessages[error.message]) || "Delete was not confirmed. Close and reopen to check the block before retrying.";
   } finally {
+    clearTimeout(bound);
     panel.busy = false;
     render(panel);
   }

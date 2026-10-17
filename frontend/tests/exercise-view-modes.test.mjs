@@ -240,10 +240,11 @@ test("11. in the open section editor a view switch repaints only the switcher an
   assert.equal(renderBuilderExerciseViewChange(), false);
 });
 
-test("12. Big and Details show the whole picture over its blurred copy, with the larger video covers; Tile and List keep one cropped picture", async () => {
+test("12. Big and Details show the whole picture over its blurred copy, with Drive's larger cover; Tile and List keep one cropped picture", async () => {
+  // YouTube's larger covers carry black bars around the video, so its 16:9 cover stays first.
   assert.deepEqual(media.videoThumbnailSources("https://youtu.be/dQw4w9WgXcQ", { large: true }), [
-    "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
     "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg",
+    "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
   ]);
   assert.deepEqual(media.videoThumbnailSources("https://drive.google.com/file/d/FILE_1/view", { large: true }), [
     "https://drive.google.com/thumbnail?id=FILE_1&sz=w1000",
@@ -252,10 +253,10 @@ test("12. Big and Details show the whole picture over its blurred copy, with the
   // The copy walks the same sources as the picture and is decorative.
   const thumb = modes.renderExerciseThumb(exercises[1], "thumb", { backdrop: true });
   const [copy, picture] = thumb.split("><").map((part, index) => (index ? `<${part}` : `${part}>`));
-  assert.match(copy, /^<img class="exercise-thumb-backdrop" src="https:\/\/i\.ytimg\.com\/vi\/BBBBBBBBBB2\/hqdefault\.jpg" alt=""/);
+  assert.match(copy, /^<img class="exercise-thumb-backdrop" src="https:\/\/i\.ytimg\.com\/vi\/BBBBBBBBBB2\/mqdefault\.jpg" alt=""/);
   assert.match(copy, /aria-hidden="true">$/);
   assert.doesNotMatch(copy, /data-fallback-initials/, "the copy never turns into initials");
-  assert.match(picture, /^<img class="thumb" src="https:\/\/i\.ytimg\.com\/vi\/BBBBBBBBBB2\/hqdefault\.jpg"/);
+  assert.match(picture, /^<img class="thumb" src="https:\/\/i\.ytimg\.com\/vi\/BBBBBBBBBB2\/mqdefault\.jpg"/);
   assert.equal(copy.match(/data-fallbacks="([^"]+)"/)[1], picture.match(/data-fallbacks="([^"]+)"/)[1]);
   assert.equal(modes.renderExerciseThumb(exercises[2], "thumb", { backdrop: true }), `<span class="thumb exercise-thumb-fallback" aria-hidden="true">P</span>`, "no picture, no copy");
 
@@ -266,7 +267,7 @@ test("12. Big and Details show the whole picture over its blurred copy, with the
   const details = libraryHtml("details");
   assert.equal(copies(details), 2);
   assert.match(details, /class="exercise-thumb-backdrop" src="https:\/\/img\.example\/hip\.jpg"[^>]*><img class="media-thumb" src="https:\/\/img\.example\/hip\.jpg"/, "an image keeps the Details picture with its Drive preview fallback");
-  assert.match(details, /<img class="media-thumb" src="https:\/\/i\.ytimg\.com\/vi\/BBBBBBBBBB2\/hqdefault\.jpg"[^>]*data-fallback-initials="[A-Z]+"/, "a video-only exercise shows its cover in Details, never the word Video");
+  assert.match(details, /<img class="media-thumb" src="https:\/\/i\.ytimg\.com\/vi\/BBBBBBBBBB2\/mqdefault\.jpg"[^>]*data-fallback-initials="[A-Z]+"/, "a video-only exercise shows its cover in Details, never the word Video");
   const node = { items: [] };
   assert.equal(copies(renderBuilderExerciseResults(exercises, new Set(), node, { view: "big" })), 2);
   assert.equal(copies(renderBuilderExerciseResults(exercises, new Set(), node, { view: "tile" })), 0);
@@ -276,6 +277,9 @@ test("12. Big and Details show the whole picture over its blurred copy, with the
   assert.match(css, /\.exercise-view-thumb, \.builder-exercise-thumb \{ object-position: center 25%; \}/);
   assert.match(css, /\.exercise-view-grid\.is-big \.exercise-view-media, \.exercise-media\.library-media \{ aspect-ratio: 4 \/ 3; \}/);
   assert.match(css, /\.exercise-media img\.exercise-thumb-backdrop \{[^}]*object-fit: cover; filter: blur\(16px\)/);
+  assert.doesNotMatch(css, /hqdefault/, "no frame crops a YouTube cover by its address");
+  // The initials keep their tint: the transparent picture rule skips them.
+  assert.match(css, /\.exercise-view-grid\.is-big \.exercise-view-thumb:not\(\.exercise-thumb-fallback\)/);
 });
 
 test("13. when a picture becomes initials its blurred copy goes too", () => {

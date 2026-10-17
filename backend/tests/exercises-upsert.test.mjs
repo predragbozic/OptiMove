@@ -439,6 +439,96 @@ test("deleting a block returns its exercises to Other for every coach, removes i
   const reused = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
     body: { name: `Next block ${tag}`, exerciseIds: [system], userIds: [] } });
   assert.equal(reused.status, 201, JSON.stringify(reused.body));
+  // A deleted block answers exactly like one that never existed.
+  const missing = await api(`/api/exercise-collections/${crypto.randomUUID()}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: 1 } });
+  assert.equal(missing.status, again.status);
+  assert.deepEqual(missing.body, again.body);
+  // A platform admin outside the platform workspace gets the same 404, and nothing changes.
+  await query("insert into public.user_global_roles (user_id,role) values ($1,'independent_coach')", [admin.userId]);
+  assert.equal((await api("/api/auth/workspace", { method: "PUT", cookie: admin.cookie, body: { type: "private_coach" } })).status, 200);
+  const outside = await api(`/api/exercise-collections/${reused.body.collection.id}`, { method: "DELETE", cookie: admin.cookie,
+    body: { expectedRevision: reused.body.collection.revision } });
+  assert.equal(outside.status, 404);
+  assert.deepEqual(outside.body, again.body);
+  assert.equal((await query("select deleted_at from library.exercise_collections where id=$1", [reused.body.collection.id])).rows[0].deleted_at, null);
+});
+
+test("a block delete whose COMMIT fails is never 'not deleted': 503 outcomeUnknown when nothing was written, 200 when the check finds it", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("block-commit-admin");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Commit block exercise ${tag}` });
+  const created = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Commit block ${tag}`, exerciseIds: [system], userIds: [] } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const block = created.body.collection;
+  // 1. The COMMIT itself is refused (a deferred check): nothing is written, and the answer says unknown.
+  await query(`create function library.test_refuse_block_delete() returns trigger language plpgsql as $$
+    begin if new.after_state->>'name' = '${`Commit block ${tag}`}' and new.after_state->>'deleted' = 'true' then
+      raise exception 'test: commit refused'; end if; return new; end $$`);
+  await query(`create constraint trigger test_refuse_block_delete after insert on library.exercise_collection_audit
+    deferrable initially deferred for each row execute function library.test_refuse_block_delete()`);
+  try {
+    const refused = await api(`/api/exercise-collections/${block.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: block.revision } });
+    assert.equal(refused.status, 503, JSON.stringify(refused.body));
+    assert.deepEqual(refused.body, { error: "outcomeUnknown" });
+  } finally {
+    await query("drop trigger test_refuse_block_delete on library.exercise_collection_audit");
+    await query("drop function library.test_refuse_block_delete()");
+  }
+  assert.equal((await query("select deleted_at from library.exercise_collections where id=$1", [block.id])).rows[0].deleted_at, null);
+  assert.equal((await query("select count(*)::integer as count from library.exercise_collection_items where collection_id=$1", [block.id])).rows[0].count, 1);
+  // 2. The COMMIT lands but its answer is lost: the check on another connection finds the delete.
+  const original = pool.connect;
+  pool.connect = function (callback) {
+    if (callback) return original.call(this, callback);
+    pool.connect = original;
+    return original.call(this).then((client) => {
+      const send = client.query.bind(client);
+      client.query = async (...args) => {
+        const result = await send(...args);
+        if (args[0] === "commit") { client.query = send; throw new Error("test: COMMIT answer lost"); }
+        return result;
+      };
+      return client;
+    });
+  };
+  let lost;
+  try {
+    lost = await api(`/api/exercise-collections/${block.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: block.revision } });
+  } finally { pool.connect = original; }
+  assert.equal(lost.status, 200, JSON.stringify(lost.body));
+  assert.equal(lost.body.verifiedAfterCommitError, true);
+  assert.equal(lost.body.deleted.id, block.id);
+  assert.ok((await query("select deleted_at from library.exercise_collections where id=$1", [block.id])).rows[0].deleted_at);
+  assert.equal((await query("select count(*)::integer as count from library.exercise_collection_audit where collection_id=$1 and after_state->>'deleted'='true'", [block.id])).rows[0].count, 1);
+});
+
+test("a block save and a block delete sent together end in one consistent state", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("block-race-admin");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Race block exercise ${tag}` });
+  const created = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Race block ${tag}`, exerciseIds: [system], userIds: [] } });
+  const block = created.body.collection;
+  const [saved, deleted] = await Promise.all([
+    api(`/api/exercise-collections/${block.id}`, { method: "PATCH", cookie: admin.cookie,
+      body: { name: `Race renamed ${tag}`, exerciseIds: [system], userIds: [], expectedRevision: block.revision } }),
+    api(`/api/exercise-collections/${block.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: block.revision } }),
+  ]);
+  const row = (await query("select name,deleted_at from library.exercise_collections where id=$1", [block.id])).rows[0];
+  const items = (await query("select count(*)::integer as count from library.exercise_collection_items where collection_id=$1", [block.id])).rows[0].count;
+  if (deleted.status === 200) {
+    assert.ok([404, 409].includes(saved.status), JSON.stringify(saved.body));
+    assert.ok(row.deleted_at);
+    assert.equal(items, 0);
+  } else {
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    assert.equal(deleted.status, 409);
+    assert.equal(deleted.body.error, "staleRevision");
+    assert.equal(row.deleted_at, null);
+    assert.equal(row.name, `Race renamed ${tag}`);
+    assert.equal(items, 1);
+  }
 });
 
 test("locked previews expose no exercise media, instructions, grants or usable exercise; all-users remains explicit", async () => {

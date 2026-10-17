@@ -74,6 +74,17 @@ test("personal tag migration is additive, idempotent and keeps per-user names pr
 });
 
 const softDelete = "202610171200_exercise_block_soft_delete.sql";
+// A runbook script as psql -v ON_ERROR_STOP=1 runs it: the error, if any,
+// with its open transaction rolled back.
+async function runScript(client, file) {
+  try {
+    await client.query(await readFile(file, "utf8"));
+    return null;
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    return error;
+  }
+}
 const softDeleteRollback = new URL("../../docs/runbooks/exercise-block-soft-delete-rollback.sql", import.meta.url);
 
 test("block soft-delete migration keeps blocks live, deletes only an empty block, keeps it final and rolls back only while none is deleted", async () => {
@@ -95,22 +106,31 @@ test("block soft-delete migration keeps blocks live, deletes only an empty block
     await client.query("delete from library.exercise_collection_users where collection_id=$1", [block]);
     await assert.rejects(client.query("update library.exercise_collections set deleted_at=now() where id=$1", [block]), /exercise_block_deleted_facts/);
     await assert.rejects(client.query("insert into library.exercise_collections (name,created_by_user_id,deleted_at,deleted_by_user_id) values ('Born deleted',$1,now(),$1)", [owner]), /not created deleted/);
-    // While no block is deleted the rollback runs, and is itself undone here.
-    await client.query("begin");
+    // Only under READ COMMITTED: an older REPEATABLE READ snapshot could miss a member.
+    await client.query("begin isolation level repeatable read");
     try {
-      await client.query(await readFile(softDeleteRollback, "utf8"));
-      assert.equal((await client.query("select count(*)::integer as count from information_schema.columns where table_schema='library' and table_name='exercise_collections' and column_name in ('deleted_at','deleted_by_user_id')")).rows[0].count, 0);
-      assert.equal((await client.query("select count(*)::integer as count from public.schema_migrations")).rows[0].count, 2);
+      await assert.rejects(markDeleted(), /only under READ COMMITTED/);
     } finally { await client.query("rollback"); }
+    // A later migration refuses the rollback, which changes nothing.
+    await client.query("insert into public.schema_migrations (migration_name) values ('migrations_v2/202610171201_later_test_only.sql')");
+    assert.match((await runScript(client, softDeleteRollback))?.message ?? "", /later migration is recorded/);
+    await client.query("delete from public.schema_migrations where migration_name='migrations_v2/202610171201_later_test_only.sql'");
+    // While no block is deleted the rollback runs as written (its own transaction);
+    // a second run is refused, and the migration applies again.
+    const columns = async () => (await client.query("select count(*)::integer as count from information_schema.columns where table_schema='library' and table_name='exercise_collections' and column_name in ('deleted_at','deleted_by_user_id')")).rows[0].count;
+    assert.equal(await runScript(client, softDeleteRollback), null);
+    assert.equal(await columns(), 0);
+    assert.equal((await client.query("select count(*)::integer as count from public.schema_migrations")).rows[0].count, 2);
+    assert.match((await runScript(client, softDeleteRollback))?.message ?? "", /not recorded/);
+    await apply(softDelete);
+    assert.equal(await columns(), 2);
     await markDeleted();
     await assert.rejects(client.query("insert into library.exercise_collection_items (collection_id,exercise_id) values ($1,$2)", [block, exercise]), /exercise block is deleted/);
     await assert.rejects(client.query("insert into library.exercise_collection_users (collection_id,user_id) values ($1,$2)", [block, owner]), /exercise block is deleted/);
     await assert.rejects(client.query("update library.exercise_collections set name='Revived' where id=$1", [block]), /final/);
     await assert.rejects(client.query("update library.exercise_collections set deleted_at=null,deleted_by_user_id=null where id=$1", [block]), /final/);
-    await client.query("begin");
-    try {
-      await assert.rejects(client.query(await readFile(softDeleteRollback, "utf8")), /Rollback refused/);
-    } finally { await client.query("rollback"); }
+    assert.match((await runScript(client, softDeleteRollback))?.message ?? "", /deleted exercise blocks exist/);
+    assert.equal(await columns(), 2);
     assert.equal((await client.query("select count(*)::integer as count from public.schema_migrations")).rows[0].count, 3);
   });
 });
