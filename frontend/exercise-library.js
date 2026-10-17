@@ -103,8 +103,10 @@ export function renderExerciseLibraryHtml(data) {
     <div class="library-results-head exercise-results-head">
       <span class="muted exercise-results-count">${exercises.length} exercises shown</span>
       ${filterBadges ? `<div class="exercise-results-filters">${filterBadges}</div>` : ""}
-      <button class="plain-button compact-button exercise-add-button" type="button" data-action="exercise-add-open">+ Add exercise</button>
-      ${renderExerciseBrowseControls(search, view)}
+      <div class="exercise-results-actions">
+        <button class="plain-button compact-button exercise-add-button" type="button" data-action="exercise-add-open">+ Add exercise</button>
+        ${renderExerciseBrowseControls(search, view)}
+      </div>
     </div>
     ${view === "details" ? `
       <div class="exercise-grid">

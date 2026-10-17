@@ -20,14 +20,14 @@ function library({ admin = false, collection = "", name = "" } = {}) {
 test("1. the plain library: Blocks right before the views in one group, Add apart, and no block management - also for an administrator", () => {
   for (const admin of [false, true]) {
     const doc = library({ admin });
-    const group = doc.querySelector(".exercise-results-head > .exercise-browse-controls");
+    const group = doc.querySelector(".exercise-results-head .exercise-browse-controls");
     const blocks = group.querySelector('[data-action="exercise-blocks-open"]');
     assert.ok(blocks.classList.contains("exercise-browse-button"));
     assert.equal(blocks.getAttribute("aria-label"), "Exercise blocks");
     assert.equal(blocks.nextElementSibling, group.querySelector(".exercise-view-switcher"), "Blocks is beside the views");
     assert.equal(doc.querySelectorAll('[data-action="exercise-collections-open"]').length, 0);
     assert.doesNotMatch(doc.body.textContent, /Manage application blocks/);
-    assert.ok(doc.querySelector('.exercise-results-head > [data-action="exercise-add-open"]'));
+    assert.ok(doc.querySelector('.exercise-results-head > .exercise-results-actions > [data-action="exercise-add-open"] + .exercise-browse-controls'));
     assert.equal(doc.querySelector(".exercise-block-chip"), null);
   }
 });
@@ -69,7 +69,11 @@ test("3. the Blocks view: All exercises and, for an administrator, the gear that
 test("4. one look and touch size: the group's buttons match the switcher, phones stack count and Add, the badges, then the group", async () => {
   const css = await readFile(new URL("../styles.css", import.meta.url), "utf8");
   assert.match(css, /\.exercise-browse-button \{ display: inline-flex;[^}]*min-height: 38px;[^}]*border-radius: 8px; background: var\(--surface-soft\);/);
-  assert.match(css, /@media \(max-width: 760px\) \{\s*\.exercise-results-head \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto; grid-template-areas: "count add" "filters filters" "browse browse";[^}]*\}[^]*?\.exercise-block-chip \{ min-height: 44px; \}\s*\.exercise-browse-button \{ min-height: 50px; padding: 0 14px; \}\s*\.exercise-browse-button\.is-icon \{ width: 50px; padding: 0; \}/);
+  assert.match(css, /@media \(max-width: 760px\) \{\s*\.exercise-results-head \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto; grid-template-areas: "count add" "filters filters" "browse browse";[^}]*row-gap: 0; \}\s*\.exercise-results-actions \{ display: contents; \}/);
+  // Touch sizes on every touch screen, a tablet wider than 760 px included.
+  assert.match(css, /@media \(max-width: 760px\), \(pointer: coarse\) \{\s*\.exercise-add-button \{ min-height: 44px; \}\s*\.exercise-block-chip \{ min-height: 44px; \}\s*\.exercise-browse-button \{ min-height: 50px; padding: 0 14px; \}\s*\.exercise-browse-button\.is-icon \{ width: 50px; padding: 0; \}\s*\.exercise-results-head \.exercise-view-button \{ min-width: 44px; min-height: 44px; \}/);
+  // Add and the group stay together at the right when they wrap.
+  assert.match(css, /\.exercise-results-actions \{ display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; margin-left: auto; \}/);
   assert.match(css, /@media \(max-width: 400px\) \{\s*\.exercise-browse-controls\.has-block-edit \.exercise-browse-button \{ width: 50px; padding: 0; \}/);
 });
 
