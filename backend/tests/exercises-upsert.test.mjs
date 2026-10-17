@@ -376,6 +376,71 @@ test("an open block lists exactly its exercises with the coach's own copies, and
   assert.deepEqual(await ids(""), new Set([a1, b1, u1, copy.body.id, own.body.id]));
 });
 
+test("deleting a block returns its exercises to Other for every coach, removes its grants, keeps its audit and is final", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("block-delete-admin");
+  const coach = await makeCoach("block-delete-granted");
+  const outsider = await makeCoach("block-delete-outsider");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Deleted block exercise ${tag}` });
+  const created = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Deleted block ${tag}`, exerciseIds: [system], userIds: [coach.userId] } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const block = created.body.collection;
+  const copy = await api(`/api/exercises/${system}/copy`, { method: "POST", cookie: coach.cookie, body: { name: `Deleted block copy ${tag}` } });
+  assert.equal(copy.status, 201, JSON.stringify(copy.body));
+  const otherIds = async (user) => {
+    const res = await api(`/api/exercises?search=${tag}&limit=100&collection=other`, { cookie: user.cookie });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    return new Set(res.body.exercises.map((exercise) => exercise.id));
+  };
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: outsider.cookie })).status, 404);
+  assert.deepEqual(await otherIds(outsider), new Set());
+  const remove = (body, cookie = admin.cookie) => api(`/api/exercise-collections/${block.id}`, { method: "DELETE", cookie, body });
+  // Only a block administrator, with the revision the editor showed.
+  assert.equal((await remove({ expectedRevision: block.revision }, coach.cookie)).status, 404);
+  assert.equal((await remove({})).status, 400);
+  assert.equal((await api("/api/exercise-collections/not-a-block", { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: 1 } })).status, 400);
+  const stale = await remove({ expectedRevision: block.revision + 1 });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.error, "staleRevision");
+  assert.equal((await query("select count(*)::integer as count from library.exercise_collection_items where collection_id=$1", [block.id])).rows[0].count, 1);
+  const deleted = await remove({ expectedRevision: block.revision });
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  assert.deepEqual(deleted.body.deleted, { id: block.id, name: `Deleted block ${tag}`, deleted: true, exerciseCount: 1, userCount: 1 });
+  // The exercise is in Other, for a coach who never had the block too.
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: outsider.cookie })).status, 200);
+  assert.deepEqual(await otherIds(outsider), new Set([system]));
+  assert.deepEqual(await otherIds(coach), new Set([system, copy.body.id]));
+  // Gone from every list, for good; a repeat or an edit is the same 404.
+  assert.equal((await api(`/api/exercise-collections/catalog?search=${tag}`, { cookie: admin.cookie })).body.blocks.length, 0);
+  assert.equal((await api("/api/exercise-collections", { cookie: admin.cookie })).body.collections.some((item) => item.id === block.id), false);
+  const again = await remove({ expectedRevision: block.revision + 1 });
+  assert.equal(again.status, 404);
+  assert.equal(again.body.error, "notFound");
+  const patched = await api(`/api/exercise-collections/${block.id}`, { method: "PATCH", cookie: admin.cookie,
+    body: { name: "Revived", exerciseIds: [], userIds: [], expectedRevision: block.revision + 1 } });
+  assert.equal(patched.status, 404);
+  const row = (await query("select deleted_at,deleted_by_user_id,name,revision from library.exercise_collections where id=$1", [block.id])).rows[0];
+  assert.ok(row.deleted_at);
+  assert.equal(row.deleted_by_user_id, admin.userId);
+  assert.equal(row.name, `Deleted block ${tag}`);
+  assert.equal(row.revision, block.revision + 1);
+  assert.equal((await query("select count(*)::integer as count from library.exercise_collection_users where collection_id=$1", [block.id])).rows[0].count, 0);
+  const audit = (await query("select actor_user_id,before_state,after_state from library.exercise_collection_audit where collection_id=$1 order by created_at desc, id limit 1", [block.id])).rows[0];
+  assert.equal(audit.actor_user_id, admin.userId);
+  assert.equal(audit.after_state.deleted, true);
+  assert.deepEqual(audit.before_state.exercises.map((item) => item.id), [system]);
+  assert.deepEqual(audit.before_state.users.map((item) => item.id), [coach.userId]);
+  // The database keeps a deleted block final, whoever writes.
+  await assert.rejects(query("insert into library.exercise_collection_items (collection_id,exercise_id) values ($1,$2)", [block.id, system]), /exercise block is deleted/);
+  await assert.rejects(query("insert into library.exercise_collection_users (collection_id,user_id) values ($1,$2)", [block.id, coach.userId]), /exercise block is deleted/);
+  await assert.rejects(query("update library.exercise_collections set name='Revived' where id=$1", [block.id]), /final/);
+  // The exercise is free for another block.
+  const reused = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Next block ${tag}`, exerciseIds: [system], userIds: [] } });
+  assert.equal(reused.status, 201, JSON.stringify(reused.body));
+});
+
 test("locked previews expose no exercise media, instructions, grants or usable exercise; all-users remains explicit", async () => {
   const admin = await makeLibraryAdmin("locked-admin");
   const outsider = await makeCoach("locked-denied");

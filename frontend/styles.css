@@ -17004,6 +17004,10 @@ body:not(.athlete-mode):not(.login-mode) .sidebar > .brand {
   max-height: calc(100dvh - 24px);
 }
 
+/* Delete block on the left, Save on the right. */
+.exercise-collections-overlay .builder-modal-actions { flex-wrap: wrap; }
+.exercise-collections-overlay [data-delete-block] { margin-right: auto; }
+
 /* Exercise views: Tile / Big / List in the Exercise Library and in the
    Builder's section editor (exercise-view-modes.js). Details is the
    original library card (.exercise-grid / .exercise-card above). Every
@@ -17111,6 +17115,32 @@ span.exercise-view-media { cursor: default; }
 .builder-exercise-view.is-big .builder-exercise-result-text { align-self: end; }
 .builder-exercise-view.is-big .builder-exercise-result-text strong { font-size: 15px; }
 .builder-exercise-view.is-big .builder-exercise-add { justify-self: start; align-self: start; }
+
+/* Exercise pictures. Tile, List and the Builder's small pictures crop to
+   their frame, aimed at the head and upper body (most exercise photos are
+   portrait). Big (library and Builder) and Details show the whole picture,
+   never cropped, over a blurred copy of itself that fills the frame
+   (renderExerciseThumbBackdrop); the library's Big and Details frames are
+   4:3, closer to a photo than 16:9. */
+.exercise-view-thumb, .builder-exercise-thumb { object-position: center 25%; }
+.exercise-view-grid.is-big .exercise-view-media, .exercise-media.library-media { aspect-ratio: 4 / 3; }
+.exercise-view-grid.is-big .exercise-view-media,
+.builder-exercise-view.is-big .builder-exercise-preview,
+.exercise-media.library-media { position: relative; isolation: isolate; }
+.exercise-view-grid.is-big .exercise-view-thumb,
+.builder-exercise-view.is-big .builder-exercise-thumb,
+.exercise-media.library-media .media-thumb { position: relative; z-index: 1; object-fit: contain; object-position: center; background: transparent; }
+.exercise-thumb-backdrop,
+.exercise-media img.exercise-thumb-backdrop { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; object-fit: cover; filter: blur(16px) brightness(.9); transform: scale(1.15); pointer-events: none; }
+/* A YouTube 480 px cover is 4:3 with black bars above and below a 16:9
+   video (media.js, videoThumbnailSources): the picture shows its 16:9
+   middle, a few rows short of it (16 / 8.8) so no dark edge of a bar
+   shows, and its blurred copy is zoomed past the bars. */
+.exercise-view-grid.is-big .exercise-view-thumb[src^="https://i.ytimg.com/vi/"][src$="/hqdefault.jpg"],
+.builder-exercise-view.is-big .builder-exercise-thumb[src^="https://i.ytimg.com/vi/"][src$="/hqdefault.jpg"],
+.exercise-media.library-media .media-thumb[src^="https://i.ytimg.com/vi/"][src$="/hqdefault.jpg"] { position: absolute; top: 50%; left: 0; width: 100%; height: auto; aspect-ratio: 16 / 8.8; transform: translateY(-50%); object-fit: cover; }
+.exercise-thumb-backdrop[src^="https://i.ytimg.com/vi/"][src$="/hqdefault.jpg"] { transform: scale(1.5); }
+.exercise-media.library-media .exercise-thumb-fallback { width: 100%; height: 100%; font-size: 30px; }
 
 @media (min-width: 901px) and (max-width: 1100px) {
   .builder-exercise-view.is-tile .builder-exercise-result { grid-template-columns: 96px minmax(0, 1fr); }

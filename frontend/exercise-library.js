@@ -1,5 +1,5 @@
-import { normalizeExerciseView, renderExerciseThumb, renderExerciseViewSwitcher } from "./exercise-view-modes.js";
-import { renderMediaThumb } from "./media.js";
+import { normalizeExerciseView, renderExerciseThumb, renderExerciseThumbBackdrop, renderExerciseViewSwitcher } from "./exercise-view-modes.js";
+import { imageSources, renderMediaThumb, videoThumbnailSources } from "./media.js";
 import { EXERCISE_FILTERS } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -110,7 +110,7 @@ export function renderExerciseLibraryHtml(data) {
       </div>
     ` : `
       <div class="exercise-view-grid is-${view}">
-        ${exercises.map((exercise, index) => renderExerciseViewCard(exercise, itemIds[index], markedExerciseIds, search.canManageCollections)).join("")}
+        ${exercises.map((exercise, index) => renderExerciseViewCard(exercise, itemIds[index], markedExerciseIds, search.canManageCollections, view)).join("")}
       </div>
     `}
     ${search.lockedPreviews?.length ? `<section class="exercise-locked-results"><h3>Locked exercises — name matches</h3><p class="muted">Contact your administrator to request access. Previews cannot be added, copied or played.</p><div class="exercise-block-grid">${search.lockedPreviews.map((exercise) => `<article class="panel exercise-block-card is-locked"><div class="exercise-block-card-body"><span class="exercise-block-lock">🔒 Access required</span><h4>${escapeHtml(exercise.name)}</h4><p>${escapeHtml(exercise.blockName)}</p></div></article>`).join("")}</div></section>` : ""}
@@ -160,7 +160,11 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platform
     <article class="exercise-card">
       ${exercise.image_url || exercise.video_url ? `
         <button class="exercise-media library-media" data-action="open-media" data-title="${escapeAttr(exercise.name || "Exercise media")}" data-image="${escapeAttr(exercise.image_url)}" data-video="${escapeAttr(exercise.video_url || "")}">
-          ${exercise.image_url ? renderMediaThumb(exercise.image_url) : `<span class="media-fallback">Video</span>`}
+          ${exercise.image_url
+            ? `${renderExerciseThumbBackdrop(imageSources(exercise.image_url))}${renderMediaThumb(exercise.image_url)}`
+            : videoThumbnailSources(exercise.video_url).length
+              ? renderExerciseThumb({ name: exercise.name, video_url: exercise.video_url }, "media-thumb", { backdrop: true })
+              : `<span class="media-fallback">Video</span>`}
         </button>
       ` : ""}
       <button class="exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
@@ -192,12 +196,13 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platform
 // (styles.css, .exercise-view-grid.is-*). The picture opens the media, the
 // name opens the exercise, favorite and mark stay one tap away, and Tags /
 // Copy / Edit sit behind "⋯" with the same rules as the Details card.
-function renderExerciseViewCard(exercise, itemId, markedExerciseIds, platformAdmin = false) {
+function renderExerciseViewCard(exercise, itemId, markedExerciseIds, platformAdmin = false, view = "tile") {
   const name = exercise.name || "Exercise";
   const marked = markedExerciseIds.has(exercise.id);
   const favorite = Boolean(exercise.is_favorite);
   const tags = exercise.tags || [];
-  const thumb = renderExerciseThumb(exercise, "exercise-view-thumb");
+  // Big shows the whole picture over its blurred copy; Tile and List crop it.
+  const thumb = renderExerciseThumb(exercise, "exercise-view-thumb", { backdrop: view === "big" });
   const media = exercise.image_url || exercise.video_url
     ? `<button class="exercise-view-media" type="button" data-action="open-media" data-title="${escapeAttr(name)}" data-image="${escapeAttr(exercise.image_url || "")}" data-video="${escapeAttr(exercise.video_url || "")}" aria-label="Preview ${escapeAttr(name)}">${thumb}</button>`
     : `<span class="exercise-view-media">${thumb}</span>`;

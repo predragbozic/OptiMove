@@ -31,6 +31,7 @@ export function renderExerciseCollectionsHtml(panel) {
         <p>Blocks control access to their system exercises. Locked previews do not grant access. Personal copies remain private and are hidden when that user's access is removed.</p>
         <label class="search-field"><span>Block</span><select class="builder-text-input" data-block-select ${panel.busy ? "disabled" : ""}><option value="">New block</option>${panel.collections.map((block) => `<option value="${escapeAttr(block.id)}" ${block.id === panel.draft.id ? "selected" : ""}>${escapeHtml(block.name)}</option>`).join("")}</select></label>
         <label class="search-field"><span>Block name</span><input class="builder-text-input" maxlength="120" data-block-name value="${escapeAttr(panel.draft.name)}" ${panel.busy ? "disabled" : ""}></label>
+        ${panel.draft.id ? '<p class="muted">To rename this block, change its name and save. Delete block, below, moves its exercises to Other.</p>' : ""}
         <label class="search-field"><span>Description</span><textarea class="builder-text-input" maxlength="2000" data-block-description ${panel.busy ? "disabled" : ""}>${escapeHtml(panel.draft.description || "")}</textarea></label>
         <label class="search-field"><span>Cover image URL (optional)</span><input class="builder-text-input" type="url" data-block-cover value="${escapeAttr(panel.draft.coverImageUrl || "")}" ${panel.busy ? "disabled" : ""}></label>
         <div class="exercise-block-cover-tools"><button class="plain-button compact-button" type="button" data-clear-block-cover ${panel.busy || !panel.draft.coverImageUrl?.trim() ? "disabled" : ""}>Remove cover</button><span class="muted">Replace the URL to change this block's cover, or remove it to use the exercise image.</span></div>
@@ -43,8 +44,12 @@ export function renderExerciseCollectionsHtml(panel) {
         ${picker("users", "Users", panel.options.users || [], panel.draft.users, panel.options.moreUsers)}
         ${panel.error ? `<p role="alert" class="builder-error">${escapeHtml(panel.error)}</p>` : ""}
         ${panel.saved ? '<p role="status">Block saved.</p>' : ""}
+        ${panel.deleted ? `<p role="status">“${escapeHtml(panel.deleted)}” was deleted. Its exercises are now in Other.</p>` : ""}
       </div>
-      <div class="builder-modal-actions"><button class="plain-button" type="button" data-save-block ${panel.busy ? "disabled" : ""}>${panel.busy ? "Saving..." : "Save block and access"}</button></div>
+      <div class="builder-modal-actions">
+        ${panel.draft.id ? `<button class="plain-button danger-button" type="button" data-delete-block ${panel.busy ? "disabled" : ""}>${panel.busy === "delete" ? "Deleting..." : "Delete block"}</button>` : ""}
+        <button class="plain-button" type="button" data-save-block ${panel.busy ? "disabled" : ""}>${panel.busy === "save" ? "Saving..." : "Save block and access"}</button>
+      </div>
     </section>`;
 }
 
@@ -78,6 +83,7 @@ function render(panel) {
     panel.pending = { exercises: [], users: [] };
     panel.dirty = false;
     panel.saved = false;
+    panel.deleted = "";
     panel.error = "";
     render(panel);
   });
@@ -132,6 +138,7 @@ function render(panel) {
     }));
   }
   panel.element.querySelector("[data-save-block]").addEventListener("click", () => saveBlock(panel));
+  panel.element.querySelector("[data-delete-block]")?.addEventListener("click", () => deleteBlock(panel));
   const replacement = Array.from(panel.element.querySelectorAll("button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled)"))
     .find((control) => focusAttributes.length && focusAttributes.every(([name, value]) => control.getAttribute(name) === value));
   (replacement || panel.element.querySelector("[data-block-select]:not(:disabled)") || panel.element.querySelector("[data-close-collections]")).focus();
@@ -168,8 +175,9 @@ async function saveBlock(panel) {
     removedExercises.length ? `Removing these exercises from the block makes their originals available to all coaches: ${removedExercises.map((exercise) => exercise.name).join(", ")}. Personal copies stay private.` : "",
   ].filter(Boolean).join("\n\n");
   if (!window.confirm(confirmation)) return;
-  panel.busy = true;
+  panel.busy = "save";
   panel.saved = false;
+  panel.deleted = "";
   panel.error = "";
   render(panel);
   try {
@@ -192,6 +200,55 @@ async function saveBlock(panel) {
   } catch (error) {
     if (activePanel !== panel) return;
     panel.error = messages[error.message] || "Save was not confirmed. Close and reopen to check the block before retrying.";
+  } finally {
+    panel.busy = false;
+    render(panel);
+  }
+}
+
+// Deleting a block: its exercises go back to Other, where every coach can
+// use them, and its selected users lose nothing they still need it for.
+// Always the block as it was loaded (its saved revision), never a draft.
+const deleteMessages = {
+  ...messages,
+  staleRevision: "This block changed elsewhere. Close and reopen it before deleting.",
+  notFound: "This block was already deleted, or you no longer have permission to manage application blocks.",
+};
+
+async function deleteBlock(panel) {
+  if (panel.busy || !panel.original.id) return;
+  const block = panel.original;
+  const confirmation = [
+    `Delete the block “${block.name}”?`,
+    block.exercises.length
+      ? `Its ${block.exercises.length} exercises move to Other and become available to all coaches. The exercises themselves are not deleted, and personal copies stay private.`
+      : "It holds no exercises.",
+    panel.dirty ? "Your unsaved changes to this block are discarded." : "",
+    "A deleted block cannot be restored.",
+  ].filter(Boolean).join("\n\n");
+  if (!window.confirm(confirmation)) return;
+  panel.busy = "delete";
+  panel.saved = false;
+  panel.deleted = "";
+  panel.error = "";
+  render(panel);
+  try {
+    await api(`/api/exercise-collections/${encodeURIComponent(block.id)}`, {
+      method: "DELETE", body: JSON.stringify({ expectedRevision: block.revision }),
+    });
+    if (activePanel !== panel) return;
+    panel.collections = panel.collections.filter((item) => item.id !== block.id);
+    panel.draft = emptyDraft();
+    panel.original = emptyDraft();
+    panel.pending = { exercises: [], users: [] };
+    panel.dirty = false;
+    panel.deleted = block.name;
+    await findOptions(panel);
+    try { await panel.onSave(); }
+    catch { panel.error = "The block was deleted. Reopen Exercise Library to refresh the list."; }
+  } catch (error) {
+    if (activePanel !== panel) return;
+    panel.error = deleteMessages[error.message] || "Delete was not confirmed. Close and reopen to check the block before retrying.";
   } finally {
     panel.busy = false;
     render(panel);
