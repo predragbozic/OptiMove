@@ -17493,6 +17493,25 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
 .exercise-block-cover { display: grid; place-items: center; width: 100%; aspect-ratio: 16 / 10; padding: 0; border: 0; background: var(--surface-soft); overflow: hidden; cursor: pointer; }
 .exercise-block-cover-image { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; }
 .exercise-block-placeholder { font-size: 64px; color: var(--accent); }
+/* A card without a cover of its own steps through its exercises' pictures:
+   Previous / Next over the picture (44 px everywhere, for touch) and a dot
+   per picture. The arrows sit beside the open button, never inside it. */
+.exercise-block-cover-image:not(.image-missing) + .exercise-block-placeholder { display: none; }
+.exercise-block-cover-frame { position: relative; isolation: isolate; }
+.exercise-block-cover-step { position: absolute; top: 50%; z-index: 1; display: grid; place-items: center; width: 44px; height: 44px; margin-top: -22px; padding: 0; border: 0; border-radius: 50%; background: rgb(22 27 34 / 0.55); color: #fff; cursor: pointer; touch-action: manipulation; }
+.exercise-block-cover-step.is-previous { left: 8px; }
+.exercise-block-cover-step.is-next { right: 8px; }
+@media (hover: hover) {
+  .exercise-block-cover-step:hover { background: rgb(22 27 34 / 0.8); }
+}
+.exercise-block-cover-step:focus-visible { outline: 2px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 4px rgb(22 27 34 / 0.8); }
+.exercise-block-cover-step svg { width: 22px; height: 22px; }
+.exercise-block-cover-dots { position: absolute; left: 50%; bottom: 8px; display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 999px; background: rgb(22 27 34 / 0.6); transform: translateX(-50%); pointer-events: none; }
+.exercise-block-cover-dots > span { width: 6px; height: 6px; border-radius: 3px; background: rgb(255 255 255 / 0.5); }
+.exercise-block-cover-dots > span.is-active { width: 16px; background: #fff; }
+.exercise-block-cover-dots > span.is-broken,
+.exercise-block-cover-frame.is-single .exercise-block-cover-step,
+.exercise-block-cover-frame.is-single .exercise-block-cover-dots { display: none; }
 .exercise-block-card.is-locked { background: #eef0f2; color: var(--text); border: 1px solid #9ca8b2; }
 .exercise-block-card.is-locked .exercise-block-cover { filter: grayscale(1); cursor: default; }
 .exercise-block-card.is-locked .exercise-block-card-body p { color: #46505e; }
