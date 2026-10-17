@@ -20,7 +20,7 @@ export function renderExerciseBlocksHtml(data, search = "") {
         ${block.coverImageUrl ? renderImage(block.coverImageUrl, "exercise-block-cover-image", block.name) : '<span class="exercise-block-placeholder" aria-hidden="true">▦</span>'}</${block.locked ? 'div' : 'button'}>
       <div class="exercise-block-card-body"><span class="item-badge">${Number(block.exerciseCount)} exercises</span>
         <h3>${escapeHtml(block.name)}</h3><p>${escapeHtml(block.description || "")}</p>
-        <div class="chip-row">${block.locked ? '<span class="exercise-block-lock">🔒 Access required — contact your administrator</span>' : `<button class="plain-button compact-button" type="button" data-open-block="${escapeAttr(block.id)}">View exercises</button>`}
+        <div class="chip-row">${block.locked ? '<span class="exercise-block-lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path><path d="M12 14v3"></path></svg><span>Access required — contact your administrator</span></span>' : `<button class="plain-button compact-button" type="button" data-open-block="${escapeAttr(block.id)}">View exercises</button>`}
         ${data.canManageCollections && !block.locked && block.id !== "other" ? `<button class="plain-button compact-button" type="button" data-action="exercise-collections-open" data-collection-id="${escapeAttr(block.id)}">Edit / Assign</button>` : ""}</div></div></article>`).join("")}</div>
     ${blocks.length ? "" : '<p class="muted">No available blocks match this search.</p>'}`;
 }

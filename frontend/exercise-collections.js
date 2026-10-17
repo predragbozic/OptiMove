@@ -33,6 +33,7 @@ export function renderExerciseCollectionsHtml(panel) {
         <label class="search-field"><span>Block name</span><input class="builder-text-input" maxlength="120" data-block-name value="${escapeAttr(panel.draft.name)}" ${panel.busy ? "disabled" : ""}></label>
         <label class="search-field"><span>Description</span><textarea class="builder-text-input" maxlength="2000" data-block-description ${panel.busy ? "disabled" : ""}>${escapeHtml(panel.draft.description || "")}</textarea></label>
         <label class="search-field"><span>Cover image URL (optional)</span><input class="builder-text-input" type="url" data-block-cover value="${escapeAttr(panel.draft.coverImageUrl || "")}" ${panel.busy ? "disabled" : ""}></label>
+        <div class="exercise-block-cover-tools"><button class="plain-button compact-button" type="button" data-clear-block-cover ${panel.busy || !panel.draft.coverImageUrl?.trim() ? "disabled" : ""}>Remove cover</button><span class="muted">Replace the URL to change this block's cover, or remove it to use the exercise image.</span></div>
         <p class="muted">Without a cover URL, the first exercise in alphabetical order supplies the image. Only system exercises can belong to an application block.</p>
         ${picker("exercises", "Application exercises", panel.options.exercises || [], panel.draft.exercises, panel.options.moreExercises)}
         <label class="exercise-block-pick"><input type="checkbox" data-block-all ${panel.draft.accessAll ? "checked" : ""} ${panel.busy ? "disabled" : ""}><span>Available to all users, including future users</span></label>
@@ -87,10 +88,20 @@ function render(panel) {
   for (const [selector, field] of [["[data-block-description]", "description"], ["[data-block-cover]", "coverImageUrl"], ["[data-block-all]", "accessAll"], ["[data-block-preview]", "blockPreview"], ["[data-exercise-preview]", "exercisePreview"]]) {
     panel.element.querySelector(selector).addEventListener(field === "accessAll" || field.endsWith("Preview") ? "change" : "input", (event) => {
       panel.draft[field] = field === "accessAll" ? event.target.checked : event.target.value;
+      if (field === "coverImageUrl") panel.element.querySelector("[data-clear-block-cover]").disabled = !event.target.value.trim();
       panel.dirty = true;
       panel.saved = false;
     });
   }
+  panel.element.querySelector("[data-clear-block-cover]").addEventListener("click", () => {
+    if (panel.busy) return;
+    panel.draft.coverImageUrl = "";
+    panel.element.querySelector("[data-block-cover]").value = "";
+    panel.element.querySelector("[data-clear-block-cover]").disabled = true;
+    panel.dirty = true;
+    panel.saved = false;
+    panel.element.querySelector("[data-block-cover]").focus();
+  });
   panel.element.querySelectorAll("[data-pick-kind]").forEach((control) => control.addEventListener("change", () => {
     const kind = control.dataset.pickKind;
     const item = panel.options[kind].find((option) => option.id === control.dataset.id);
