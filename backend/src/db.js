@@ -1,4 +1,5 @@
 import pg from "pg";
+import { poolMaxFromEnv } from "./dbPoolConfig.js";
 
 const { Pool } = pg;
 
@@ -46,12 +47,16 @@ export function isPoolCheckoutTimeout(error) {
   return Boolean(error) && error.code === POOL_CHECKOUT_TIMEOUT;
 }
 
+// The most connections this process holds (dbPoolConfig.js, PG_POOL_MAX).
+export const POOL_MAX = poolMaxFromEnv();
+
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL.includes("supabase.com")
     ? { rejectUnauthorized: false }
     : undefined,
   connectionTimeoutMillis: POOL_CHECKOUT_TIMEOUT_MS,
+  max: POOL_MAX,
 });
 
 // Every checkout (pool.connect() in both forms, and pool.query(), which uses
