@@ -17020,6 +17020,11 @@ body:not(.athlete-mode):not(.login-mode) .sidebar > .brand {
 .exercise-classification-block p { margin: 0; }
 .exercise-classification-block select, .exercise-classification-block button { min-height: 44px; font-size: 16px; }
 .exercise-classification-block button { justify-self: start; }
+.exercise-classification-block p, .exercise-classification-block strong { overflow-wrap: anywhere; }
+.exercise-classification-pending:empty { display: none; }
+.exercise-classification-pending { color: var(--warning-text, #8a5300); font-weight: 700; }
+/* The block editor's search fields are the pickers' only control now. */
+.exercise-collections-overlay input[type="search"] { min-height: 44px; }
 
 /* Exercise views: Tile / Big / List in the Exercise Library and in the
    Builder's section editor (exercise-view-modes.js). Details is the

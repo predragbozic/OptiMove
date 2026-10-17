@@ -323,12 +323,17 @@ router.get("/exercise-block/:exerciseId", async (req, res) => {
 // (by id), then the exercise. Once the COMMIT is sent the answer never says
 // "not moved": an error then is checked on another connection.
 async function moveExerciseBlock(req, res) {
-  const exerciseId = req.params.exerciseId;
-  const target = req.body?.collectionId ?? null;
-  const expected = req.body?.expectedCollectionId ?? null;
-  if (!uuidPattern.test(exerciseId) || [target, expected].some((id) => id !== null && (typeof id !== "string" || !uuidPattern.test(id)))) {
+  // Both ids are named, null for Other: a missing key (undefined) is refused,
+  // never read as "Other", the direction that opens an exercise to every
+  // coach. Ids compare in the database's lower case.
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  if (!uuidPattern.test(req.params.exerciseId)
+    || [body.collectionId, body.expectedCollectionId].some((id) => id !== null && (typeof id !== "string" || !uuidPattern.test(id)))) {
     return res.status(400).json({ error: "invalidBody" });
   }
+  const exerciseId = req.params.exerciseId.toLowerCase();
+  const target = body.collectionId?.toLowerCase() ?? null;
+  const expected = body.expectedCollectionId?.toLowerCase() ?? null;
   let client;
   let release;
   let commitSent = false;

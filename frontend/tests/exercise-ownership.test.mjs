@@ -103,14 +103,14 @@ test("admin block picker saves selected users and exercises and keeps selections
   name.dispatchEvent(new window.Event("input"));
   const selectExercise=document.querySelector("[data-pick-kind='exercises']");
   selectExercise.checked=true;
-  selectExercise.dispatchEvent(new window.Event("change"));
+  selectExercise.dispatchEvent(new window.Event("change", { bubbles: true }));
   document.querySelector("[data-search-kind='exercises']").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
   await new Promise((resolve)=>setTimeout(resolve,0));
   assert.ok(document.querySelector("[data-pick-kind='exercises']").checked);
   document.querySelector("[data-add-selected='exercises']").click();
   const selectUser=document.querySelector("[data-pick-kind='users']");
   selectUser.checked=true;
-  selectUser.dispatchEvent(new window.Event("change"));
+  selectUser.dispatchEvent(new window.Event("change", { bubbles: true }));
   document.querySelector("[data-add-selected='users']").click();
   assert.notEqual(document.activeElement, document.body);
   document.querySelector("[data-search-kind='exercises']").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));

@@ -30,6 +30,7 @@ test("typing filters the block's exercise choices without a Search button: one r
   const { dom, searches } = await openEditor();
   assert.equal(document.querySelector("[data-find-kind]"), null, "no Search button");
   assert.equal(searches.length, 1, "the editor's first read");
+  const before = { field: document.querySelector("[data-search-kind='exercises']"), modal: document.querySelector(".exercise-editor-modal") };
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
     const field = document.querySelector("[data-search-kind='exercises']");
@@ -49,6 +50,10 @@ test("typing filters the block's exercise choices without a Search button: one r
   assert.equal(searches.length, 2, "one read for the whole word");
   assert.match(document.querySelector("[data-pick-kind='exercises']").closest("label").textContent, /Match ski/);
   const field = document.querySelector("[data-search-kind='exercises']");
+  // Only the choice lists change: the field and the scrolling form are the
+  // same elements, so a phone keeps its keyboard and its scroll position.
+  assert.equal(field, before.field);
+  assert.equal(document.querySelector(".exercise-editor-modal"), before.modal);
   assert.equal(document.activeElement, field, "typing goes on in the same field");
   assert.equal(field.value, "ski");
   assert.equal(field.selectionStart, 3);
@@ -68,6 +73,24 @@ test("Enter searches at once, and the user picker filters the same way", async (
   // The pending pause was cancelled by Enter: no second read for the same word.
   await new Promise((resolve) => setTimeout(resolve, OPTION_SEARCH_DELAY_MS + 50));
   assert.equal(searches.length, 2);
+  document.querySelector("[data-close-collections]").click();
+  dom.window.close();
+});
+
+test("a choice ticked in a filtered list is kept and counted", async () => {
+  const { dom } = await openEditor();
+  const field = document.querySelector("[data-search-kind='exercises']");
+  field.value = "ski";
+  field.dispatchEvent(new window.Event("input"));
+  field.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  await microtasks();
+  const pick = document.querySelector("[data-pick-kind='exercises'][data-id='match-ski']");
+  pick.checked = true;
+  pick.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal(document.querySelector("[data-add-selected='exercises']").textContent, "Add selected (1)");
+  assert.equal(document.querySelector("[data-add-selected='exercises']").disabled, false);
+  document.querySelector("[data-add-selected='exercises']").click();
+  assert.match(document.querySelector("[data-remove-kind='exercises']").textContent, /Match ski/);
   document.querySelector("[data-close-collections]").click();
   dom.window.close();
 });

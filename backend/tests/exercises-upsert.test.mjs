@@ -543,6 +543,103 @@ test("a block write whose session the server ends mid-transaction answers, and t
   assert.equal(again.status, 200, JSON.stringify(again.body));
 });
 
+test("a move whose COMMIT fails is never 'not moved': 503 outcomeUnknown when nothing landed, 200 when the check finds it", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("move-commit-admin");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Move commit exercise ${tag}` });
+  const from = (await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name: `Move from ${tag}`, exerciseIds: [system], userIds: [] } })).body.collection;
+  const to = (await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name: `Move to ${tag}`, exerciseIds: [], userIds: [] } })).body.collection;
+  const move = () => api(`/api/exercise-collections/exercise-block/${system}`, { method: "PUT", cookie: admin.cookie, body: { collectionId: to.id, expectedCollectionId: from.id } });
+  const home = async () => (await query("select collection_id from library.exercise_collection_items where exercise_id=$1", [system])).rows.map((row) => row.collection_id);
+  // 1. The COMMIT itself is refused (a deferred check on the target's audit row): nothing moved, the answer says unknown.
+  await query(`create function library.test_refuse_move() returns trigger language plpgsql as $$
+    begin if new.collection_id = '${to.id}'::uuid then raise exception 'test: commit refused'; end if; return new; end $$`);
+  await query(`create constraint trigger test_refuse_move after insert on library.exercise_collection_audit
+    deferrable initially deferred for each row execute function library.test_refuse_move()`);
+  try {
+    const refused = await move();
+    assert.equal(refused.status, 503, JSON.stringify(refused.body));
+    assert.deepEqual(refused.body, { error: "outcomeUnknown" });
+  } finally {
+    await query("drop trigger test_refuse_move on library.exercise_collection_audit");
+    await query("drop function library.test_refuse_move()");
+  }
+  assert.deepEqual(await home(), [from.id]);
+  // 2. The COMMIT lands but its answer is lost: the check on another connection finds the move.
+  const original = pool.connect;
+  pool.connect = function (callback) {
+    if (callback) return original.call(this, callback);
+    pool.connect = original;
+    return original.call(this).then((client) => {
+      const send = client.query.bind(client);
+      client.query = async (...args) => {
+        const result = await send(...args);
+        if (args[0] === "commit") { client.query = send; throw new Error("test: COMMIT answer lost"); }
+        return result;
+      };
+      return client;
+    });
+  };
+  let lost;
+  try { lost = await move(); } finally { pool.connect = original; }
+  assert.equal(lost.status, 200, JSON.stringify(lost.body));
+  assert.deepEqual(lost.body, { exerciseId: system, collectionId: to.id, changed: true, verifiedAfterCommitError: true });
+  assert.deepEqual(await home(), [to.id]);
+  // The retry after the lost answer writes nothing more.
+  const retry = await move();
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.changed, false);
+});
+
+test("a move to Other whose COMMIT answer is lost is found by the check; a move and a delete of its block sent together stay consistent", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("move-other-admin");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Move other exercise ${tag}` });
+  const from = (await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name: `Move other from ${tag}`, exerciseIds: [system], userIds: [] } })).body.collection;
+  const home = async () => (await query("select collection_id from library.exercise_collection_items where exercise_id=$1", [system])).rows.map((row) => row.collection_id);
+  const original = pool.connect;
+  pool.connect = function (callback) {
+    if (callback) return original.call(this, callback);
+    pool.connect = original;
+    return original.call(this).then((client) => {
+      const send = client.query.bind(client);
+      client.query = async (...args) => {
+        const result = await send(...args);
+        if (args[0] === "commit") { client.query = send; throw new Error("test: COMMIT answer lost"); }
+        return result;
+      };
+      return client;
+    });
+  };
+  let lost;
+  try {
+    lost = await api(`/api/exercise-collections/exercise-block/${system}`, { method: "PUT", cookie: admin.cookie, body: { collectionId: null, expectedCollectionId: from.id } });
+  } finally { pool.connect = original; }
+  assert.equal(lost.status, 200, JSON.stringify(lost.body));
+  assert.deepEqual(lost.body, { exerciseId: system, collectionId: null, changed: true, verifiedAfterCommitError: true });
+  assert.deepEqual(await home(), []);
+  // Into a block while that block is deleted: one of them wins, never both.
+  const target = (await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name: `Move race ${tag}`, exerciseIds: [], userIds: [] } })).body.collection;
+  const [moved, deleted] = await Promise.all([
+    api(`/api/exercise-collections/exercise-block/${system}`, { method: "PUT", cookie: admin.cookie, body: { collectionId: target.id, expectedCollectionId: null } }),
+    api(`/api/exercise-collections/${target.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: target.revision } }),
+  ]);
+  const row = (await query("select deleted_at from library.exercise_collections where id=$1", [target.id])).rows[0];
+  if (moved.status === 200) {
+    // The move went first: the delete saw a changed block and refused, the exercise stays in it.
+    assert.equal(deleted.status, 409, JSON.stringify(deleted.body));
+    assert.equal(row.deleted_at, null);
+    assert.deepEqual(await home(), [target.id]);
+  } else {
+    // The delete went first: the block is gone and the move found no live block.
+    assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+    assert.equal(moved.status, 409);
+    assert.equal(moved.body.error, "blockNotAvailable");
+    assert.ok(row.deleted_at);
+    assert.deepEqual(await home(), []);
+  }
+});
+
 test("a block save and a block delete sent together end in one consistent state", async () => {
   const tag = crypto.randomUUID().slice(0, 8);
   const admin = await makeLibraryAdmin("block-race-admin");
@@ -593,6 +690,9 @@ test("the administrator moves one exercise between blocks and Other; access foll
   assert.equal((await move(A.id, null, outsider.cookie)).status, 404);
   assert.equal((await api("/api/exercise-collections/exercise-block/not-an-id", { cookie: admin.cookie })).status, 400);
   assert.equal((await api(path, { method: "PUT", cookie: admin.cookie, body: { collectionId: "x", expectedCollectionId: null } })).status, 400);
+  // A missing key never means "Other".
+  assert.equal((await api(path, { method: "PUT", cookie: admin.cookie, body: { expectedCollectionId: null } })).status, 400);
+  assert.equal((await api(path, { method: "PUT", cookie: admin.cookie, body: { collectionId: A.id } })).status, 400);
   const shown = await api(path, { cookie: admin.cookie });
   assert.equal(shown.status, 200, JSON.stringify(shown.body));
   assert.equal(shown.body.exerciseName, `Move exercise ${tag}`);
@@ -601,7 +701,7 @@ test("the administrator moves one exercise between blocks and Other; access foll
   assert.ok(shown.body.blocks.some((block) => block.id === A.id) && shown.body.blocks.some((block) => block.id === B.id && block.accessAll === true));
   // Other -> a restricted block: the outsider loses it, the granted coach keeps it.
   assert.equal((await api(`/api/exercises/${system}`, { cookie: outsider.cookie })).status, 200);
-  const intoA = await move(A.id, null);
+  const intoA = await move(A.id.toUpperCase(), null);
   assert.equal(intoA.status, 200, JSON.stringify(intoA.body));
   assert.deepEqual(intoA.body, { exerciseId: system, collectionId: A.id, changed: true });
   assert.equal((await api(`/api/exercises/${system}`, { cookie: outsider.cookie })).status, 404);
@@ -626,7 +726,7 @@ test("the administrator moves one exercise between blocks and Other; access foll
   const auditCount = async (id) => (await query("select count(*)::integer as count from library.exercise_collection_audit where collection_id=$1", [id])).rows[0].count;
   const auditsA = await auditCount(A.id);
   const auditsB = await auditCount(B.id);
-  const intoB = await move(B.id, A.id);
+  const intoB = await move(B.id, A.id.toUpperCase());
   assert.equal(intoB.status, 200, JSON.stringify(intoB.body));
   assert.equal(await revision(A.id), A.revision + 2);
   assert.equal(await revision(B.id), B.revision + 1);
