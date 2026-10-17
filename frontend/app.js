@@ -2649,7 +2649,7 @@ async function handleContentClick(event) {
     await openExerciseClassification(action.dataset.exerciseId, state.exerciseSearch.options, async () => {
       state.exerciseSearch.options = {};
       await exerciseEditorHandlers.refreshAfterSave();
-    });
+    }, { canManageBlocks: state.exerciseSearch.canManageCollections === true });
     return;
   }
   if (type === "exercise-edit-open" || type === "exercise-copy-open") {

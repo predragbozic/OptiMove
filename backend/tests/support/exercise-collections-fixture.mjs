@@ -56,4 +56,5 @@ export const EXERCISE_COLLECTIONS_FIXTURE_SQL = `
     created_at timestamptz not null default now()
   );
   ${readFileSync(new URL("../../../migrations_v2/202610162230_exercise_block_catalog.sql", import.meta.url), "utf8")}
+  ${readFileSync(new URL("../../../migrations_v2/202610171200_exercise_block_soft_delete.sql", import.meta.url), "utf8")}
 `;

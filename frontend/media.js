@@ -71,12 +71,17 @@ export function toYouTubeEmbedUrl(url, options = {}) {
 // Thumbnail images a video link offers without any API call: YouTube's
 // public cover images and Google Drive's thumbnail (Drive answers only for a
 // file shared with "anyone with the link"). The caller falls back to the
-// exercise's initials when none loads.
-export function videoThumbnailSources(url) {
+// exercise's initials when none loads. `large` is for a picture across a
+// card (Big, Details): Drive's 1000 px thumbnail. YouTube keeps its 16:9
+// cover first either way - its larger covers are 4:3 with black bars around
+// the video (above and below a 16:9 one, beside a vertical one), which no
+// frame could crop away without knowing the video's shape.
+export function videoThumbnailSources(url, { large = false } = {}) {
   const youTubeId = getYouTubeId(url);
   if (youTubeId) return [`https://i.ytimg.com/vi/${youTubeId}/mqdefault.jpg`, `https://i.ytimg.com/vi/${youTubeId}/hqdefault.jpg`];
   const driveId = getDriveId(url);
-  if (driveId) return [`https://drive.google.com/thumbnail?id=${driveId}&sz=w640`, `https://lh3.googleusercontent.com/d/${driveId}=w640`];
+  const width = large ? "w1000" : "w640";
+  if (driveId) return [`https://drive.google.com/thumbnail?id=${driveId}&sz=${width}`, `https://lh3.googleusercontent.com/d/${driveId}=${width}`];
   return [];
 }
 

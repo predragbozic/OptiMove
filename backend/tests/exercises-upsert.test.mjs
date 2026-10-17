@@ -376,6 +376,384 @@ test("an open block lists exactly its exercises with the coach's own copies, and
   assert.deepEqual(await ids(""), new Set([a1, b1, u1, copy.body.id, own.body.id]));
 });
 
+test("deleting a block returns its exercises to Other for every coach, removes its grants, keeps its audit and is final", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("block-delete-admin");
+  const coach = await makeCoach("block-delete-granted");
+  const outsider = await makeCoach("block-delete-outsider");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Deleted block exercise ${tag}` });
+  const created = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Deleted block ${tag}`, exerciseIds: [system], userIds: [coach.userId] } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const block = created.body.collection;
+  const copy = await api(`/api/exercises/${system}/copy`, { method: "POST", cookie: coach.cookie, body: { name: `Deleted block copy ${tag}` } });
+  assert.equal(copy.status, 201, JSON.stringify(copy.body));
+  const otherIds = async (user) => {
+    const res = await api(`/api/exercises?search=${tag}&limit=100&collection=other`, { cookie: user.cookie });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    return new Set(res.body.exercises.map((exercise) => exercise.id));
+  };
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: outsider.cookie })).status, 404);
+  assert.deepEqual(await otherIds(outsider), new Set());
+  const remove = (body, cookie = admin.cookie) => api(`/api/exercise-collections/${block.id}`, { method: "DELETE", cookie, body });
+  // Only a block administrator, with the revision the editor showed.
+  assert.equal((await remove({ expectedRevision: block.revision }, coach.cookie)).status, 404);
+  assert.equal((await remove({})).status, 400);
+  assert.equal((await api("/api/exercise-collections/not-a-block", { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: 1 } })).status, 400);
+  const stale = await remove({ expectedRevision: block.revision + 1 });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.error, "staleRevision");
+  assert.equal((await query("select count(*)::integer as count from library.exercise_collection_items where collection_id=$1", [block.id])).rows[0].count, 1);
+  const deleted = await remove({ expectedRevision: block.revision });
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  assert.deepEqual(deleted.body.deleted, { id: block.id, name: `Deleted block ${tag}`, deleted: true, exerciseCount: 1, userCount: 1 });
+  // The exercise is in Other, for a coach who never had the block too.
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: outsider.cookie })).status, 200);
+  assert.deepEqual(await otherIds(outsider), new Set([system]));
+  assert.deepEqual(await otherIds(coach), new Set([system, copy.body.id]));
+  // Gone from every list, for good; a repeat or an edit is the same 404.
+  assert.equal((await api(`/api/exercise-collections/catalog?search=${tag}`, { cookie: admin.cookie })).body.blocks.length, 0);
+  assert.equal((await api("/api/exercise-collections", { cookie: admin.cookie })).body.collections.some((item) => item.id === block.id), false);
+  const again = await remove({ expectedRevision: block.revision + 1 });
+  assert.equal(again.status, 404);
+  assert.equal(again.body.error, "notFound");
+  const patched = await api(`/api/exercise-collections/${block.id}`, { method: "PATCH", cookie: admin.cookie,
+    body: { name: "Revived", exerciseIds: [], userIds: [], expectedRevision: block.revision + 1 } });
+  assert.equal(patched.status, 404);
+  const row = (await query("select deleted_at,deleted_by_user_id,name,revision from library.exercise_collections where id=$1", [block.id])).rows[0];
+  assert.ok(row.deleted_at);
+  assert.equal(row.deleted_by_user_id, admin.userId);
+  assert.equal(row.name, `Deleted block ${tag}`);
+  assert.equal(row.revision, block.revision + 1);
+  assert.equal((await query("select count(*)::integer as count from library.exercise_collection_users where collection_id=$1", [block.id])).rows[0].count, 0);
+  const audit = (await query("select actor_user_id,before_state,after_state from library.exercise_collection_audit where collection_id=$1 order by created_at desc, id limit 1", [block.id])).rows[0];
+  assert.equal(audit.actor_user_id, admin.userId);
+  assert.equal(audit.after_state.deleted, true);
+  assert.deepEqual(audit.before_state.exercises.map((item) => item.id), [system]);
+  assert.deepEqual(audit.before_state.users.map((item) => item.id), [coach.userId]);
+  // The database keeps a deleted block final, whoever writes.
+  await assert.rejects(query("insert into library.exercise_collection_items (collection_id,exercise_id) values ($1,$2)", [block.id, system]), /exercise block is deleted/);
+  await assert.rejects(query("insert into library.exercise_collection_users (collection_id,user_id) values ($1,$2)", [block.id, coach.userId]), /exercise block is deleted/);
+  await assert.rejects(query("update library.exercise_collections set name='Revived' where id=$1", [block.id]), /final/);
+  // The exercise is free for another block.
+  const reused = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Next block ${tag}`, exerciseIds: [system], userIds: [] } });
+  assert.equal(reused.status, 201, JSON.stringify(reused.body));
+  // A deleted block answers exactly like one that never existed.
+  const missing = await api(`/api/exercise-collections/${crypto.randomUUID()}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: 1 } });
+  assert.equal(missing.status, again.status);
+  assert.deepEqual(missing.body, again.body);
+  // A platform admin outside the platform workspace gets the same 404, and nothing changes.
+  await query("insert into public.user_global_roles (user_id,role) values ($1,'independent_coach')", [admin.userId]);
+  assert.equal((await api("/api/auth/workspace", { method: "PUT", cookie: admin.cookie, body: { type: "private_coach" } })).status, 200);
+  const outside = await api(`/api/exercise-collections/${reused.body.collection.id}`, { method: "DELETE", cookie: admin.cookie,
+    body: { expectedRevision: reused.body.collection.revision } });
+  assert.equal(outside.status, 404);
+  assert.deepEqual(outside.body, again.body);
+  assert.equal((await query("select deleted_at from library.exercise_collections where id=$1", [reused.body.collection.id])).rows[0].deleted_at, null);
+});
+
+test("a block delete whose COMMIT fails is never 'not deleted': 503 outcomeUnknown when nothing was written, 200 when the check finds it", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("block-commit-admin");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Commit block exercise ${tag}` });
+  const created = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Commit block ${tag}`, exerciseIds: [system], userIds: [] } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const block = created.body.collection;
+  // 1. The COMMIT itself is refused (a deferred check): nothing is written, and the answer says unknown.
+  await query(`create function library.test_refuse_block_delete() returns trigger language plpgsql as $$
+    begin if new.after_state->>'name' = '${`Commit block ${tag}`}' and new.after_state->>'deleted' = 'true' then
+      raise exception 'test: commit refused'; end if; return new; end $$`);
+  await query(`create constraint trigger test_refuse_block_delete after insert on library.exercise_collection_audit
+    deferrable initially deferred for each row execute function library.test_refuse_block_delete()`);
+  try {
+    const refused = await api(`/api/exercise-collections/${block.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: block.revision } });
+    assert.equal(refused.status, 503, JSON.stringify(refused.body));
+    assert.deepEqual(refused.body, { error: "outcomeUnknown" });
+  } finally {
+    await query("drop trigger test_refuse_block_delete on library.exercise_collection_audit");
+    await query("drop function library.test_refuse_block_delete()");
+  }
+  assert.equal((await query("select deleted_at from library.exercise_collections where id=$1", [block.id])).rows[0].deleted_at, null);
+  assert.equal((await query("select count(*)::integer as count from library.exercise_collection_items where collection_id=$1", [block.id])).rows[0].count, 1);
+  // 2. The COMMIT lands but its answer is lost: the check on another connection finds the delete.
+  const original = pool.connect;
+  pool.connect = function (callback) {
+    if (callback) return original.call(this, callback);
+    pool.connect = original;
+    return original.call(this).then((client) => {
+      const send = client.query.bind(client);
+      client.query = async (...args) => {
+        const result = await send(...args);
+        if (args[0] === "commit") { client.query = send; throw new Error("test: COMMIT answer lost"); }
+        return result;
+      };
+      return client;
+    });
+  };
+  let lost;
+  try {
+    lost = await api(`/api/exercise-collections/${block.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: block.revision } });
+  } finally { pool.connect = original; }
+  assert.equal(lost.status, 200, JSON.stringify(lost.body));
+  assert.equal(lost.body.verifiedAfterCommitError, true);
+  assert.equal(lost.body.deleted.id, block.id);
+  assert.ok((await query("select deleted_at from library.exercise_collections where id=$1", [block.id])).rows[0].deleted_at);
+  assert.equal((await query("select count(*)::integer as count from library.exercise_collection_audit where collection_id=$1 and after_state->>'deleted'='true'", [block.id])).rows[0].count, 1);
+});
+
+test("a block write whose session the server ends mid-transaction answers, and the server keeps running", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("block-session-admin");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Session block exercise ${tag}` });
+  const created = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Session block ${tag}`, exerciseIds: [system], userIds: [] } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const block = created.body.collection;
+  // The server ends the session while the transaction is idle (what the 15 s
+  // idle bound or a pooler reset does): pg emits 'error' with no query in flight.
+  const original = pool.connect;
+  pool.connect = function (callback) {
+    if (callback) return original.call(this, callback);
+    pool.connect = original;
+    return original.call(this).then((client) => {
+      const send = client.query.bind(client);
+      client.query = async (...args) => {
+        const result = await send(...args);
+        if (String(args[0]).startsWith("set local idle_in_transaction_session_timeout")) {
+          client.query = send;
+          await adminClient.query("select pg_terminate_backend($1)", [client.processID]);
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        return result;
+      };
+      return client;
+    });
+  };
+  let ended;
+  try {
+    ended = await api(`/api/exercise-collections/${block.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: block.revision } });
+  } finally { pool.connect = original; }
+  assert.ok(ended.status >= 500, JSON.stringify(ended.body));
+  assert.equal(ended.body.error, "internalError");
+  assert.equal((await query("select deleted_at from library.exercise_collections where id=$1", [block.id])).rows[0].deleted_at, null);
+  // Still serving: the same delete now succeeds.
+  const again = await api(`/api/exercise-collections/${block.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: block.revision } });
+  assert.equal(again.status, 200, JSON.stringify(again.body));
+});
+
+test("a move whose COMMIT fails is never 'not moved': 503 outcomeUnknown when nothing landed, 200 when the check finds it", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("move-commit-admin");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Move commit exercise ${tag}` });
+  const from = (await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name: `Move from ${tag}`, exerciseIds: [system], userIds: [] } })).body.collection;
+  const to = (await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name: `Move to ${tag}`, exerciseIds: [], userIds: [] } })).body.collection;
+  const move = () => api(`/api/exercise-collections/exercise-block/${system}`, { method: "PUT", cookie: admin.cookie, body: { collectionId: to.id, expectedCollectionId: from.id } });
+  const home = async () => (await query("select collection_id from library.exercise_collection_items where exercise_id=$1", [system])).rows.map((row) => row.collection_id);
+  // 1. The COMMIT itself is refused (a deferred check on the target's audit row): nothing moved, the answer says unknown.
+  await query(`create function library.test_refuse_move() returns trigger language plpgsql as $$
+    begin if new.collection_id = '${to.id}'::uuid then raise exception 'test: commit refused'; end if; return new; end $$`);
+  await query(`create constraint trigger test_refuse_move after insert on library.exercise_collection_audit
+    deferrable initially deferred for each row execute function library.test_refuse_move()`);
+  try {
+    const refused = await move();
+    assert.equal(refused.status, 503, JSON.stringify(refused.body));
+    assert.deepEqual(refused.body, { error: "outcomeUnknown" });
+  } finally {
+    await query("drop trigger test_refuse_move on library.exercise_collection_audit");
+    await query("drop function library.test_refuse_move()");
+  }
+  assert.deepEqual(await home(), [from.id]);
+  // 2. The COMMIT lands but its answer is lost: the check on another connection finds the move.
+  const original = pool.connect;
+  pool.connect = function (callback) {
+    if (callback) return original.call(this, callback);
+    pool.connect = original;
+    return original.call(this).then((client) => {
+      const send = client.query.bind(client);
+      client.query = async (...args) => {
+        const result = await send(...args);
+        if (args[0] === "commit") { client.query = send; throw new Error("test: COMMIT answer lost"); }
+        return result;
+      };
+      return client;
+    });
+  };
+  let lost;
+  try { lost = await move(); } finally { pool.connect = original; }
+  assert.equal(lost.status, 200, JSON.stringify(lost.body));
+  assert.deepEqual(lost.body, { exerciseId: system, collectionId: to.id, changed: true, verifiedAfterCommitError: true });
+  assert.deepEqual(await home(), [to.id]);
+  // The retry after the lost answer writes nothing more.
+  const retry = await move();
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.changed, false);
+});
+
+test("a move to Other whose COMMIT answer is lost is found by the check; a move and a delete of its block sent together stay consistent", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("move-other-admin");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Move other exercise ${tag}` });
+  const from = (await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name: `Move other from ${tag}`, exerciseIds: [system], userIds: [] } })).body.collection;
+  const home = async () => (await query("select collection_id from library.exercise_collection_items where exercise_id=$1", [system])).rows.map((row) => row.collection_id);
+  const original = pool.connect;
+  pool.connect = function (callback) {
+    if (callback) return original.call(this, callback);
+    pool.connect = original;
+    return original.call(this).then((client) => {
+      const send = client.query.bind(client);
+      client.query = async (...args) => {
+        const result = await send(...args);
+        if (args[0] === "commit") { client.query = send; throw new Error("test: COMMIT answer lost"); }
+        return result;
+      };
+      return client;
+    });
+  };
+  let lost;
+  try {
+    lost = await api(`/api/exercise-collections/exercise-block/${system}`, { method: "PUT", cookie: admin.cookie, body: { collectionId: null, expectedCollectionId: from.id } });
+  } finally { pool.connect = original; }
+  assert.equal(lost.status, 200, JSON.stringify(lost.body));
+  assert.deepEqual(lost.body, { exerciseId: system, collectionId: null, changed: true, verifiedAfterCommitError: true });
+  assert.deepEqual(await home(), []);
+  // Into a block while that block is deleted: one of them wins, never both.
+  const target = (await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name: `Move race ${tag}`, exerciseIds: [], userIds: [] } })).body.collection;
+  const [moved, deleted] = await Promise.all([
+    api(`/api/exercise-collections/exercise-block/${system}`, { method: "PUT", cookie: admin.cookie, body: { collectionId: target.id, expectedCollectionId: null } }),
+    api(`/api/exercise-collections/${target.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: target.revision } }),
+  ]);
+  const row = (await query("select deleted_at from library.exercise_collections where id=$1", [target.id])).rows[0];
+  if (moved.status === 200) {
+    // The move went first: the delete saw a changed block and refused, the exercise stays in it.
+    assert.equal(deleted.status, 409, JSON.stringify(deleted.body));
+    assert.equal(row.deleted_at, null);
+    assert.deepEqual(await home(), [target.id]);
+  } else {
+    // The delete went first: the block is gone and the move found no live block.
+    assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+    assert.equal(moved.status, 409);
+    assert.equal(moved.body.error, "blockNotAvailable");
+    assert.ok(row.deleted_at);
+    assert.deepEqual(await home(), []);
+  }
+});
+
+test("a block save and a block delete sent together end in one consistent state", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("block-race-admin");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Race block exercise ${tag}` });
+  const created = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Race block ${tag}`, exerciseIds: [system], userIds: [] } });
+  const block = created.body.collection;
+  const [saved, deleted] = await Promise.all([
+    api(`/api/exercise-collections/${block.id}`, { method: "PATCH", cookie: admin.cookie,
+      body: { name: `Race renamed ${tag}`, exerciseIds: [system], userIds: [], expectedRevision: block.revision } }),
+    api(`/api/exercise-collections/${block.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: block.revision } }),
+  ]);
+  const row = (await query("select name,deleted_at from library.exercise_collections where id=$1", [block.id])).rows[0];
+  const items = (await query("select count(*)::integer as count from library.exercise_collection_items where collection_id=$1", [block.id])).rows[0].count;
+  if (deleted.status === 200) {
+    assert.ok([404, 409].includes(saved.status), JSON.stringify(saved.body));
+    assert.ok(row.deleted_at);
+    assert.equal(items, 0);
+  } else {
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    assert.equal(deleted.status, 409);
+    assert.equal(deleted.body.error, "staleRevision");
+    assert.equal(row.deleted_at, null);
+    assert.equal(row.name, `Race renamed ${tag}`);
+    assert.equal(items, 1);
+  }
+});
+
+test("the administrator moves one exercise between blocks and Other; access follows, both blocks are revised and audited", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("move-admin");
+  const granted = await makeCoach("move-granted");
+  const outsider = await makeCoach("move-outsider");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Move exercise ${tag}` });
+  const restricted = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Move restricted ${tag}`, exerciseIds: [], userIds: [granted.userId] } });
+  const open = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie,
+    body: { name: `Move open ${tag}`, exerciseIds: [], userIds: [], accessAll: true } });
+  assert.equal(restricted.status, 201);
+  assert.equal(open.status, 201);
+  const A = restricted.body.collection;
+  const B = open.body.collection;
+  const path = `/api/exercise-collections/exercise-block/${system}`;
+  const move = (collectionId, expectedCollectionId, cookie = admin.cookie) => api(path, { method: "PUT", cookie, body: { collectionId, expectedCollectionId } });
+  const revision = async (id) => (await query("select revision from library.exercise_collections where id=$1", [id])).rows[0].revision;
+  // Only the administrator reads or moves; everyone else gets the same 404.
+  assert.equal((await api(path, { cookie: outsider.cookie })).status, 404);
+  assert.equal((await move(A.id, null, outsider.cookie)).status, 404);
+  assert.equal((await api("/api/exercise-collections/exercise-block/not-an-id", { cookie: admin.cookie })).status, 400);
+  assert.equal((await api(path, { method: "PUT", cookie: admin.cookie, body: { collectionId: "x", expectedCollectionId: null } })).status, 400);
+  // A missing key never means "Other".
+  assert.equal((await api(path, { method: "PUT", cookie: admin.cookie, body: { expectedCollectionId: null } })).status, 400);
+  assert.equal((await api(path, { method: "PUT", cookie: admin.cookie, body: { collectionId: A.id } })).status, 400);
+  const shown = await api(path, { cookie: admin.cookie });
+  assert.equal(shown.status, 200, JSON.stringify(shown.body));
+  assert.equal(shown.body.exerciseName, `Move exercise ${tag}`);
+  assert.equal(shown.body.movable, true);
+  assert.equal(shown.body.current, null);
+  assert.ok(shown.body.blocks.some((block) => block.id === A.id) && shown.body.blocks.some((block) => block.id === B.id && block.accessAll === true));
+  // Other -> a restricted block: the outsider loses it, the granted coach keeps it.
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: outsider.cookie })).status, 200);
+  const intoA = await move(A.id.toUpperCase(), null);
+  assert.equal(intoA.status, 200, JSON.stringify(intoA.body));
+  assert.deepEqual(intoA.body, { exerciseId: system, collectionId: A.id, changed: true });
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: outsider.cookie })).status, 404);
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: granted.cookie })).status, 200);
+  assert.equal(await revision(A.id), A.revision + 1);
+  assert.deepEqual((await api(path, { cookie: admin.cookie })).body.current, { id: A.id, name: A.name });
+  // A repeat of a move already made is the same answer, with nothing written.
+  const repeat = await move(A.id, null);
+  assert.equal(repeat.status, 200);
+  assert.equal(repeat.body.changed, false);
+  assert.equal(await revision(A.id), A.revision + 1);
+  // A block that changed elsewhere: the exercise is not where the screen showed it.
+  const stale = await move(B.id, null);
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.error, "staleRevision");
+  // The editor that loaded A before the move now sees A changed.
+  const editor = await api(`/api/exercise-collections/${A.id}`, { method: "PATCH", cookie: admin.cookie,
+    body: { name: A.name, exerciseIds: [], userIds: [granted.userId], expectedRevision: A.revision } });
+  assert.equal(editor.status, 409);
+  assert.equal(editor.body.error, "staleRevision");
+  // Block -> block, then -> Other: both blocks revised, every move audited per block.
+  const auditCount = async (id) => (await query("select count(*)::integer as count from library.exercise_collection_audit where collection_id=$1", [id])).rows[0].count;
+  const auditsA = await auditCount(A.id);
+  const auditsB = await auditCount(B.id);
+  const intoB = await move(B.id, A.id.toUpperCase());
+  assert.equal(intoB.status, 200, JSON.stringify(intoB.body));
+  assert.equal(await revision(A.id), A.revision + 2);
+  assert.equal(await revision(B.id), B.revision + 1);
+  assert.equal(await auditCount(A.id), auditsA + 1);
+  assert.equal(await auditCount(B.id), auditsB + 1);
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: outsider.cookie })).status, 200, "an open block is open to everyone");
+  const last = (await query("select actor_user_id,before_state,after_state from library.exercise_collection_audit where collection_id=$1 order by created_at desc,id limit 1", [A.id])).rows[0];
+  assert.equal(last.actor_user_id, admin.userId);
+  assert.deepEqual(last.before_state.exercises.map((item) => item.id), [system]);
+  assert.deepEqual(last.after_state.exercises, []);
+  const toOther = await move(null, B.id);
+  assert.equal(toOther.status, 200);
+  assert.equal((await query("select count(*)::integer as count from library.exercise_collection_items where exercise_id=$1", [system])).rows[0].count, 0);
+  // A deleted block is not a destination; a private exercise is not movable.
+  const deleted = await api(`/api/exercise-collections/${A.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: await revision(A.id) } });
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  const gone = await move(A.id, null);
+  assert.equal(gone.status, 409);
+  assert.equal(gone.body.error, "blockNotAvailable");
+  assert.equal((await api(path, { cookie: admin.cookie })).body.blocks.some((block) => block.id === A.id), false);
+  const own = await makeExercise(granted.userId, { name: `Move private ${tag}` });
+  const privateMove = await api(`/api/exercise-collections/exercise-block/${own}`, { method: "PUT", cookie: admin.cookie, body: { collectionId: B.id, expectedCollectionId: null } });
+  assert.equal(privateMove.status, 400);
+  assert.equal(privateMove.body.error, "invalidSelection");
+  assert.equal((await api(`/api/exercise-collections/exercise-block/${own}`, { cookie: admin.cookie })).body.movable, false);
+});
+
 test("locked previews expose no exercise media, instructions, grants or usable exercise; all-users remains explicit", async () => {
   const admin = await makeLibraryAdmin("locked-admin");
   const outsider = await makeCoach("locked-denied");

@@ -25,7 +25,7 @@ router.get("/catalog", async (req, res, next) => {
           where ci.collection_id=c.id and e.owner_scope='system' and e.is_active=true
           and (${granted} and ${visible} or not ${granted})) as "exerciseCount"
       from library.exercise_collections c
-      where (${granted} or c.block_preview='locked')
+      where c.deleted_at is null and (${granted} or c.block_preview='locked')
         and (c.name ilike $2 or c.description ilike $2)
       order by c.name,c.id limit 501`, params);
     if (blocks.rows.length > 500) return res.status(409).json({ error: "tooManyBlocks" });
@@ -75,7 +75,8 @@ async function loadCollections(runQuery = query, collectionId = null) {
        coalesce((select jsonb_agg(jsonb_build_object('id', u.id, 'name', coalesce(u.display_name,u.full_name,u.email), 'email', u.email) order by u.email)
          from library.exercise_collection_users cu join public.users u on u.id = cu.user_id
          where cu.collection_id = c.id), '[]'::jsonb) as users
-     from library.exercise_collections c where ($1::uuid is null or c.id = $1) order by c.name, c.id limit 501`,
+     from library.exercise_collections c where c.deleted_at is null and ($1::uuid is null or c.id = $1)
+     order by c.name, c.id limit 501`,
     [collectionId],
   )).rows;
 }
@@ -130,6 +131,51 @@ function parseBody(body) {
     exerciseIds: [...new Set(body.exerciseIds)].sort(), userIds: [...new Set(body.userIds)].sort() };
 }
 
+// A checked-out client has no 'error' listener of its own (pg-pool removes
+// its idle listener at checkout), and pg emits 'error' when the server ends
+// the session while no query runs - exactly what the idle bound below or a
+// pooler reset does. Without a listener that event would crash the process
+// (the guardClient pattern of sourceConnectionService.js). The listener is
+// removed again right before the client goes back to the pool; a release
+// with an error destroys the client.
+async function checkoutBlockClient() {
+  const client = await pool.connect();
+  const onClientError = () => {};
+  client.on("error", onClientError);
+  return { client, release: (error) => {
+    client.removeListener("error", onClientError);
+    client.release(error);
+  } };
+}
+
+// Every block write: one READ COMMITTED transaction (the block deletion
+// guard requires it), bounded lock waits and idle time - it holds the
+// exclusive block lock that every exercise reuse takes shared -, and the
+// caller still an active platform admin in the platform workspace. A
+// refusal is rolled back.
+async function beginBlockWrite(runQuery, userId) {
+  await runQuery("begin isolation level read committed");
+  await runQuery("set local lock_timeout = '2s'");
+  await runQuery("set local statement_timeout = '10s'");
+  await runQuery("set local idle_in_transaction_session_timeout = '15s'");
+  await runQuery("select pg_advisory_xact_lock(hashtextextended('exercise_collections', 0))");
+  const actor = await runQuery(`select r.id from public.user_global_roles r join public.users u on u.id = r.user_id
+    where r.user_id = $1 and r.role = 'platform_admin' and r.is_active = true and u.is_active = true
+      and ${exerciseAdministratorSql} for share of r,u`, [userId]);
+  if (actor.rowCount) return null;
+  await runQuery("rollback");
+  return { status: 404, error: "notFound" };
+}
+
+// The block, locked, unless it is missing or deleted (the same 404) or the
+// caller edited an older revision. A refusal is rolled back.
+async function lockLiveBlock(runQuery, collectionId, expectedRevision) {
+  const current = await runQuery("select revision from library.exercise_collections where id = $1 and deleted_at is null for update", [collectionId]);
+  if (current.rowCount && current.rows[0].revision === expectedRevision) return null;
+  await runQuery("rollback");
+  return current.rowCount ? { status: 409, error: "staleRevision" } : { status: 404, error: "notFound" };
+}
+
 async function saveCollection(req, res) {
   const data = parseBody(req.body);
   const collectionId = req.params.collectionId || null;
@@ -137,31 +183,16 @@ async function saveCollection(req, res) {
     return res.status(400).json({ error: "invalidBody" });
   }
   let client;
+  let release;
   try {
-    client = await pool.connect();
+    ({ client, release } = await checkoutBlockClient());
     const runQuery = (sql, params) => client.query(sql, params);
-    await runQuery("begin");
-    await runQuery("set local lock_timeout = '2s'");
-    await runQuery("set local statement_timeout = '10s'");
-    await runQuery("select pg_advisory_xact_lock(hashtextextended('exercise_collections', 0))");
-    const actor = await runQuery(`select r.id from public.user_global_roles r join public.users u on u.id = r.user_id
-      where r.user_id = $1 and r.role = 'platform_admin' and r.is_active = true and u.is_active = true
-        and ${exerciseAdministratorSql} for share of r,u`, [req.user.id]);
-    if (!actor.rowCount) {
-      await runQuery("rollback");
-      return res.status(404).json({ error: "notFound" });
-    }
+    const refusal = await beginBlockWrite(runQuery, req.user.id);
+    if (refusal) return res.status(refusal.status).json({ error: refusal.error });
     let before = null;
     if (collectionId) {
-      const current = await runQuery("select revision from library.exercise_collections where id = $1 for update", [collectionId]);
-      if (!current.rowCount) {
-        await runQuery("rollback");
-        return res.status(404).json({ error: "notFound" });
-      }
-      if (current.rows[0].revision !== req.body.expectedRevision) {
-        await runQuery("rollback");
-        return res.status(409).json({ error: "staleRevision" });
-      }
+      const stale = await lockLiveBlock(runQuery, collectionId, req.body.expectedRevision);
+      if (stale) return res.status(stale.status).json({ error: stale.error });
       [before] = await loadCollections(runQuery, collectionId);
     }
     const selected = await runQuery(`select id from library.exercises where id = any($1::uuid[])
@@ -200,9 +231,181 @@ async function saveCollection(req, res) {
   } catch (error) {
     if (client) { try { await client.query("rollback"); } catch {} }
     respondError(res, error);
-  } finally { client?.release(); }
+  } finally { if (client) release(); }
+}
+
+// Whether a delete whose COMMIT answer was an error is in the database,
+// read on another connection: the block marked deleted by this user.
+async function deletionCommitted(collectionId, userId) {
+  try {
+    const found = await query(`select 1 from library.exercise_collections
+      where id = $1 and deleted_at is not null and deleted_by_user_id = $2`, [collectionId, userId]);
+    return found.rowCount === 1;
+  } catch { return null; }
+}
+
+// Deleting a block: its exercises are back in Other (available to every
+// coach), its user grants are removed, and the row stays, marked deleted,
+// for the audit trail. A deleted block is gone from every list for good.
+// Once the COMMIT is sent the answer never says "not deleted": an error then
+// is checked on another connection - deleted (200, verifiedAfterCommitError)
+// or unknown (503 outcomeUnknown); a retry of a deleted block is a 404.
+async function deleteCollection(req, res) {
+  const collectionId = req.params.collectionId;
+  if (!uuidPattern.test(collectionId) || !Number.isInteger(req.body?.expectedRevision)) {
+    return res.status(400).json({ error: "invalidBody" });
+  }
+  let client;
+  let release;
+  let commitSent = false;
+  let verifiedAfterCommitError = false;
+  let deleted;
+  try {
+    ({ client, release } = await checkoutBlockClient());
+    const runQuery = (sql, params) => client.query(sql, params);
+    const refusal = await beginBlockWrite(runQuery, req.user.id);
+    if (refusal) return res.status(refusal.status).json({ error: refusal.error });
+    const stale = await lockLiveBlock(runQuery, collectionId, req.body.expectedRevision);
+    if (stale) return res.status(stale.status).json({ error: stale.error });
+    const [before] = await loadCollections(runQuery, collectionId);
+    await runQuery("delete from library.exercise_collection_items where collection_id = $1", [collectionId]);
+    await runQuery("delete from library.exercise_collection_users where collection_id = $1", [collectionId]);
+    await runQuery(`update library.exercise_collections set deleted_at=now(),deleted_by_user_id=$2,
+      revision=revision+1,updated_at=now() where id=$1`, [collectionId, req.user.id]);
+    deleted = { id: before.id, name: before.name, deleted: true,
+      exerciseCount: before.exercises.length, userCount: before.users.length };
+    await runQuery(`insert into library.exercise_collection_audit (collection_id,actor_user_id,before_state,after_state)
+      values ($1,$2,$3::jsonb,$4::jsonb)`, [collectionId, req.user.id, JSON.stringify(before), JSON.stringify(deleted)]);
+    commitSent = true;
+    await runQuery("commit");
+  } catch (error) {
+    if (!commitSent) {
+      if (client) { try { await client.query("rollback"); } catch {} }
+      return respondError(res, error);
+    }
+    // The connection's state after a failed COMMIT is unknown: never reuse it.
+    release(error);
+    client = null;
+    if (!(await deletionCommitted(collectionId, req.user.id))) return res.status(503).json({ error: "outcomeUnknown" });
+    verifiedAfterCommitError = true;
+  } finally { if (client) release(); }
+  try { emitRealtimeEventForAll("exercise_library_changed"); } catch {}
+  res.json(verifiedAfterCommitError ? { deleted, verifiedAfterCommitError } : { deleted });
+}
+
+// One exercise's application block, for the administrator's block choice in
+// the exercise's classification panel: its current block (a personal copy's
+// is its original's, read-only here) and every live block to choose from.
+router.get("/exercise-block/:exerciseId", async (req, res) => {
+  if (!uuidPattern.test(req.params.exerciseId)) return res.status(400).json({ error: "invalidBody" });
+  try {
+    const exercise = (await query(`select e.id,e.name,e.owner_scope='system' and e.is_active=true as movable,
+        c.id as "currentId",c.name as "currentName"
+      from library.exercises e
+      left join library.exercise_collection_items ci on ci.exercise_id=coalesce(e.source_exercise_id,e.id)
+      left join library.exercise_collections c on c.id=ci.collection_id and c.deleted_at is null
+      where e.id=$1`, [req.params.exerciseId])).rows[0];
+    if (!exercise) return res.status(404).json({ error: "notFound" });
+    const blocks = (await query(`select id,name,access_all as "accessAll" from library.exercise_collections
+      where deleted_at is null order by name,id limit 501`)).rows;
+    if (blocks.length > 500) return res.status(409).json({ error: "tooManyBlocks" });
+    res.json({ exerciseId: exercise.id, exerciseName: exercise.name, movable: exercise.movable,
+      current: exercise.currentId ? { id: exercise.currentId, name: exercise.currentName } : null, blocks });
+  } catch (error) { respondError(res, error); }
+});
+
+// Moves one application exercise into a block, or out of every block (back
+// to Other, available to every coach), from the block it was shown in
+// (`expectedCollectionId`, null for Other). A repeat of a move already made
+// is the same answer. Both blocks get a new revision (an editor open on
+// either sees it changed) and an audit row each, in one transaction with the
+// lock order of a block save: the block lock, the administrator, the blocks
+// (by id), then the exercise. Once the COMMIT is sent the answer never says
+// "not moved": an error then is checked on another connection.
+async function moveExerciseBlock(req, res) {
+  // Both ids are named, null for Other: a missing key (undefined) is refused,
+  // never read as "Other", the direction that opens an exercise to every
+  // coach. Ids compare in the database's lower case.
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  if (!uuidPattern.test(req.params.exerciseId)
+    || [body.collectionId, body.expectedCollectionId].some((id) => id !== null && (typeof id !== "string" || !uuidPattern.test(id)))) {
+    return res.status(400).json({ error: "invalidBody" });
+  }
+  const exerciseId = req.params.exerciseId.toLowerCase();
+  const target = body.collectionId?.toLowerCase() ?? null;
+  const expected = body.expectedCollectionId?.toLowerCase() ?? null;
+  let client;
+  let release;
+  let commitSent = false;
+  let verifiedAfterCommitError = false;
+  let answer;
+  try {
+    ({ client, release } = await checkoutBlockClient());
+    const runQuery = (sql, params) => client.query(sql, params);
+    const refusal = await beginBlockWrite(runQuery, req.user.id);
+    if (refusal) return res.status(refusal.status).json({ error: refusal.error });
+    const current = (await runQuery("select collection_id from library.exercise_collection_items where exercise_id = $1", [exerciseId])).rows[0]?.collection_id ?? null;
+    const affected = [...new Set([current, target].filter(Boolean))].sort();
+    const live = await runQuery(`select id from library.exercise_collections where id = any($1::uuid[]) and deleted_at is null
+      order by id for update`, [affected]);
+    if (target && !live.rows.some((row) => row.id === target)) {
+      await runQuery("rollback");
+      return res.status(409).json({ error: "blockNotAvailable" });
+    }
+    const exercise = await runQuery(`select id from library.exercises where id = $1
+      and owner_scope = 'system' and is_active = true for update`, [exerciseId]);
+    if (!exercise.rowCount) {
+      await runQuery("rollback");
+      return res.status(400).json({ error: "invalidSelection" });
+    }
+    // Read before its blocks were locked: still the same under every lock?
+    const locked = (await runQuery("select collection_id from library.exercise_collection_items where exercise_id = $1", [exerciseId])).rows[0]?.collection_id ?? null;
+    if (locked !== current) {
+      await runQuery("rollback");
+      return res.status(409).json({ error: "tryAgain" });
+    }
+    if (current === target) {
+      await runQuery("rollback");
+      return res.json({ exerciseId, collectionId: target, changed: false });
+    }
+    if (current !== expected) {
+      await runQuery("rollback");
+      return res.status(409).json({ error: "staleRevision" });
+    }
+    const before = new Map();
+    for (const id of affected) before.set(id, (await loadCollections(runQuery, id))[0]);
+    await runQuery("delete from library.exercise_collection_items where exercise_id = $1", [exerciseId]);
+    if (target) await runQuery("insert into library.exercise_collection_items (collection_id,exercise_id) values ($1,$2)", [target, exerciseId]);
+    await runQuery("update library.exercise_collections set revision=revision+1,updated_at=now() where id = any($1::uuid[])", [affected]);
+    for (const id of affected) {
+      const [after] = await loadCollections(runQuery, id);
+      await runQuery(`insert into library.exercise_collection_audit (collection_id,actor_user_id,before_state,after_state)
+        values ($1,$2,$3::jsonb,$4::jsonb)`, [id, req.user.id, JSON.stringify(before.get(id)), JSON.stringify(after)]);
+    }
+    answer = { exerciseId, collectionId: target, changed: true };
+    commitSent = true;
+    await runQuery("commit");
+  } catch (error) {
+    if (!commitSent) {
+      if (client) { try { await client.query("rollback"); } catch {} }
+      return respondError(res, error);
+    }
+    // The connection's state after a failed COMMIT is unknown: never reuse it.
+    release(error);
+    client = null;
+    let landed = null;
+    try {
+      landed = (await query("select collection_id from library.exercise_collection_items where exercise_id = $1", [exerciseId])).rows[0]?.collection_id ?? null;
+    } catch { return res.status(503).json({ error: "outcomeUnknown" }); }
+    if (landed !== target) return res.status(503).json({ error: "outcomeUnknown" });
+    verifiedAfterCommitError = true;
+  } finally { if (client) release(); }
+  try { emitRealtimeEventForAll("exercise_library_changed"); } catch {}
+  res.json(verifiedAfterCommitError ? { ...answer, verifiedAfterCommitError } : answer);
 }
 
 router.post("/", saveCollection);
 router.patch("/:collectionId", saveCollection);
+router.delete("/:collectionId", deleteCollection);
+router.put("/exercise-block/:exerciseId", moveExerciseBlock);
 export default router;

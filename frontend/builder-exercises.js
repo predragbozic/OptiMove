@@ -48,14 +48,15 @@ export function builderAddedCounts(node) {
 }
 
 // `draggable`: on a computer the card can be dragged onto the Added list
-// (builder-library-drag.js).
-export function renderBuilderExerciseResult(exercise, markedExerciseIds, addedCount = 0, { draggable = false } = {}) {
+// (builder-library-drag.js). `backdrop`: the Big view shows the whole
+// picture over its blurred copy.
+export function renderBuilderExerciseResult(exercise, markedExerciseIds, addedCount = 0, { draggable = false, backdrop = false } = {}) {
   const image = exercise.image_url || "";
   const video = exercise.video_url || "";
   const title = exercise.name || "Exercise";
   const marked = markedExerciseIds.has(exercise.id);
   const tags = exercise.tags || [];
-  const thumb = renderExerciseThumb(exercise, "builder-exercise-thumb");
+  const thumb = renderExerciseThumb(exercise, "builder-exercise-thumb", { backdrop });
   return `
     <article class="builder-exercise-result ${addedCount ? "is-already-added" : ""}"${draggable ? ` draggable="true" data-builder-library-drag data-exercise-id="${escapeAttr(exercise.id)}"` : ""}>
       ${image || video
@@ -91,8 +92,9 @@ export function renderBuilderExerciseResults(exercises, markedExerciseIds, node,
       ? `<div class="empty" role="status">Loading exercises…</div>`
       : `<div class="empty">No matching exercises.</div>`;
   const draggable = libraryDragAvailable();
-  const results = exercises.map((exercise) => renderBuilderExerciseResult(exercise, markedExerciseIds, addedCounts.get(exercise.id) || 0, { draggable })).join("") || empty;
-  return `<div class="builder-exercise-view is-${escapeAttr(normalizeExerciseView("builder", view))}">${results}</div>`
+  const shown = normalizeExerciseView("builder", view);
+  const results = exercises.map((exercise) => renderBuilderExerciseResult(exercise, markedExerciseIds, addedCounts.get(exercise.id) || 0, { draggable, backdrop: shown === "big" })).join("") || empty;
+  return `<div class="builder-exercise-view is-${escapeAttr(shown)}">${results}</div>`
     + (hasMore ? `<button type="button" class="plain-button" data-action="builder-load-more-exercises" ${loading ? "disabled" : ""}>${loading ? "Loading..." : "Load more"}</button>` : "");
 }
 

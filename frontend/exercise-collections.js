@@ -3,6 +3,10 @@ import { escapeAttr, escapeHtml } from "./utils.js";
 import { renderImage } from "./media.js";
 
 let activePanel = null;
+// The choices are searched again this long after the last keystroke (Enter
+// searches at once); a slower older answer never replaces a newer one
+// (findOptions' generation).
+export const OPTION_SEARCH_DELAY_MS = 250;
 function userLabel(user) { return user.email ? `${user.name} (${user.email})` : user.name; }
 const messages = {
   staleRevision: "This block changed elsewhere. Close and reopen it before saving.",
@@ -12,15 +16,22 @@ const messages = {
   notFound: "You no longer have permission to manage application blocks.",
 };
 
+// The choices of one picker - the part a search replaces in place.
+function pickerOptionsHtml(panel, kind) {
+  const options = panel.options[kind] || [];
+  const selected = panel.draft[kind];
+  const more = kind === "users" ? panel.options.moreUsers : panel.options.moreExercises;
+  return `${more ? '<p class="muted">First 100 matches shown. Refine the search to find more.</p>' : ""}
+      <div class="exercise-block-picker">${options.filter((item) => !selected.some((chosen) => chosen.id === item.id)).map((item) => `<label class="exercise-block-pick"><input type="checkbox" data-pick-kind="${kind}" data-id="${escapeAttr(item.id)}" ${panel.pending?.[kind]?.some((chosen) => chosen.id === item.id) ? "checked" : ""} ${panel.busy || (kind === "exercises" && item.collectionId && item.collectionId !== panel.draft.id) ? "disabled" : ""}>${kind === "exercises" && item.imageUrl ? renderImage(item.imageUrl, "exercise-block-pick-image") : ""}<span>${escapeHtml(kind === "users" ? userLabel(item) : item.name)}${item.collectionId && item.collectionId !== panel.draft.id ? " (another block)" : ""}</span></label>`).join("")}</div>`;
+}
+
 export function renderExerciseCollectionsHtml(panel) {
-  const picker = (kind, label, options, selected, more) => `
+  const picker = (kind, label, selected) => `
     <section>
       <h4>${label} (${selected.length})</h4>
       <div>${selected.map((item) => `<button type="button" class="plain-button compact-button" data-remove-kind="${kind}" data-id="${escapeAttr(item.id)}">${escapeHtml(kind === "users" ? userLabel(item) : item.name)} ×</button>`).join(" ") || '<p class="muted">None selected.</p>'}</div>
-      <label class="search-field"><span>Find ${label.toLowerCase()}</span><input class="builder-text-input" type="search" data-search-kind="${kind}" value="${escapeAttr(panel.search[kind] || "")}"></label>
-      <button type="button" class="plain-button" data-find-kind="${kind}" ${panel.busy ? "disabled" : ""}>Search</button>
-      ${more ? '<p class="muted">First 100 matches shown. Refine the search to find more.</p>' : ""}
-      <div class="exercise-block-picker">${options.filter((item) => !selected.some((chosen) => chosen.id === item.id)).map((item) => `<label class="exercise-block-pick"><input type="checkbox" data-pick-kind="${kind}" data-id="${escapeAttr(item.id)}" ${panel.pending?.[kind]?.some((chosen) => chosen.id === item.id) ? "checked" : ""} ${panel.busy || (kind === "exercises" && item.collectionId && item.collectionId !== panel.draft.id) ? "disabled" : ""}>${kind === "exercises" && item.imageUrl ? renderImage(item.imageUrl, "exercise-block-pick-image") : ""}<span>${escapeHtml(kind === "users" ? userLabel(item) : item.name)}${item.collectionId && item.collectionId !== panel.draft.id ? " (another block)" : ""}</span></label>`).join("")}</div>
+      <label class="search-field"><span>Find ${label.toLowerCase()}</span><input class="builder-text-input" type="search" data-search-kind="${kind}" value="${escapeAttr(panel.search[kind] || "")}" placeholder="Type to filter"></label>
+      <div data-picker-options="${kind}">${pickerOptionsHtml(panel, kind)}</div>
       <button class="plain-button compact-button" type="button" data-add-selected="${kind}" ${panel.busy || !panel.pending?.[kind]?.length ? "disabled" : ""}>Add selected (${panel.pending?.[kind]?.length || 0})</button>
     </section>`;
   return `
@@ -29,22 +40,27 @@ export function renderExerciseCollectionsHtml(panel) {
       <div class="builder-modal-head"><h3>Application exercise blocks</h3><button class="plain-button" type="button" data-close-collections>Close</button></div>
       <div class="exercise-editor-body">
         <p>Blocks control access to their system exercises. Locked previews do not grant access. Personal copies remain private and are hidden when that user's access is removed.</p>
+        ${panel.deleted ? `<p role="status" class="exercise-block-deleted">“${escapeHtml(panel.deleted)}” was deleted. Its exercises are now in Other.</p>` : ""}
         <label class="search-field"><span>Block</span><select class="builder-text-input" data-block-select ${panel.busy ? "disabled" : ""}><option value="">New block</option>${panel.collections.map((block) => `<option value="${escapeAttr(block.id)}" ${block.id === panel.draft.id ? "selected" : ""}>${escapeHtml(block.name)}</option>`).join("")}</select></label>
         <label class="search-field"><span>Block name</span><input class="builder-text-input" maxlength="120" data-block-name value="${escapeAttr(panel.draft.name)}" ${panel.busy ? "disabled" : ""}></label>
+        ${panel.draft.id ? '<p class="muted">To rename this block, change its name and save. Delete block, below, moves its exercises to Other.</p>' : ""}
         <label class="search-field"><span>Description</span><textarea class="builder-text-input" maxlength="2000" data-block-description ${panel.busy ? "disabled" : ""}>${escapeHtml(panel.draft.description || "")}</textarea></label>
         <label class="search-field"><span>Cover image URL (optional)</span><input class="builder-text-input" type="url" data-block-cover value="${escapeAttr(panel.draft.coverImageUrl || "")}" ${panel.busy ? "disabled" : ""}></label>
         <div class="exercise-block-cover-tools"><button class="plain-button compact-button" type="button" data-clear-block-cover ${panel.busy || !panel.draft.coverImageUrl?.trim() ? "disabled" : ""}>Remove cover</button><span class="muted">Replace the URL to change this block's cover, or remove it to use the exercise image.</span></div>
         <p class="muted">Without a cover URL, the first exercise in alphabetical order supplies the image. Only system exercises can belong to an application block.</p>
-        ${picker("exercises", "Application exercises", panel.options.exercises || [], panel.draft.exercises, panel.options.moreExercises)}
+        ${picker("exercises", "Application exercises", panel.draft.exercises)}
         <label class="exercise-block-pick"><input type="checkbox" data-block-all ${panel.draft.accessAll ? "checked" : ""} ${panel.busy ? "disabled" : ""}><span>Available to all users, including future users</span></label>
         <p class="muted">When off, only selected users and the system administrator have access. Existing selected users are kept when everyone is enabled.</p>
         <label class="search-field"><span>Block for users without access</span><select class="builder-text-input" data-block-preview ${panel.busy ? "disabled" : ""}><option value="hidden" ${panel.draft.blockPreview !== "locked" ? "selected" : ""}>Completely hidden</option><option value="locked" ${panel.draft.blockPreview === "locked" ? "selected" : ""}>Visible with a lock</option></select></label>
         <label class="search-field"><span>Exercises for users without access</span><select class="builder-text-input" data-exercise-preview ${panel.busy ? "disabled" : ""}><option value="hidden" ${panel.draft.exercisePreview !== "locked" ? "selected" : ""}>Completely hidden</option><option value="locked" ${panel.draft.exercisePreview === "locked" ? "selected" : ""}>Names visible with a lock (no media or instructions)</option></select></label>
-        ${picker("users", "Users", panel.options.users || [], panel.draft.users, panel.options.moreUsers)}
-        ${panel.error ? `<p role="alert" class="builder-error">${escapeHtml(panel.error)}</p>` : ""}
+        ${picker("users", "Users", panel.draft.users)}
+        ${panel.error ? `<p role="alert" class="builder-error" data-block-error>${escapeHtml(panel.error)}</p>` : ""}
         ${panel.saved ? '<p role="status">Block saved.</p>' : ""}
       </div>
-      <div class="builder-modal-actions"><button class="plain-button" type="button" data-save-block ${panel.busy ? "disabled" : ""}>${panel.busy ? "Saving..." : "Save block and access"}</button></div>
+      <div class="builder-modal-actions">
+        ${panel.draft.id ? `<button class="plain-button danger-button" type="button" data-delete-block ${panel.busy ? "disabled" : ""}>${panel.busy === "delete" ? "Deleting..." : "Delete block"}</button>` : ""}
+        <button class="plain-button" type="button" data-save-block ${panel.busy ? "disabled" : ""}>${panel.busy === "save" ? "Saving..." : "Save block and access"}</button>
+      </div>
     </section>`;
 }
 
@@ -54,10 +70,13 @@ function render(panel) {
   if (activePanel !== panel) return;
   const focused = panel.element.contains(document.activeElement) ? document.activeElement : null;
   const focusAttributes = focused ? Array.from(focused.attributes).filter((attribute) => attribute.name.startsWith("data-")).map((attribute) => [attribute.name, attribute.value]) : [];
+  // Where the caret was in a text field, so typing goes on where it was.
+  const caret = typeof focused?.selectionStart === "number" ? [focused.selectionStart, focused.selectionEnd] : null;
   panel.element.innerHTML = renderExerciseCollectionsHtml(panel);
   panel.element.querySelectorAll("[data-close-collections]").forEach((button) => button.addEventListener("click", () => {
     if (panel.busy) return;
     if (!panel.saved && panel.dirty && !window.confirm("Discard unsaved block changes?")) return;
+    clearTimeout(panel.searchTimer);
     panel.element.remove();
     document.removeEventListener("keydown", panel.keydown);
     for (const [element, inert] of panel.background) element.inert = inert;
@@ -78,12 +97,23 @@ function render(panel) {
     panel.pending = { exercises: [], users: [] };
     panel.dirty = false;
     panel.saved = false;
+    panel.deleted = "";
     panel.error = "";
     render(panel);
   });
   for (const kind of ["exercises", "users"]) {
-    panel.element.querySelector(`[data-search-kind="${kind}"]`).addEventListener("input", (event) => { panel.search[kind] = event.target.value; });
-    panel.element.querySelector(`[data-find-kind="${kind}"]`).addEventListener("click", () => findOptions(panel));
+    const search = panel.element.querySelector(`[data-search-kind="${kind}"]`);
+    search.addEventListener("input", (event) => {
+      panel.search[kind] = event.target.value;
+      clearTimeout(panel.searchTimer);
+      panel.searchTimer = setTimeout(() => findOptions(panel, { inPlace: true }), OPTION_SEARCH_DELAY_MS);
+    });
+    search.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      clearTimeout(panel.searchTimer);
+      findOptions(panel, { inPlace: true });
+    });
   }
   for (const [selector, field] of [["[data-block-description]", "description"], ["[data-block-cover]", "coverImageUrl"], ["[data-block-all]", "accessAll"], ["[data-block-preview]", "blockPreview"], ["[data-exercise-preview]", "exercisePreview"]]) {
     panel.element.querySelector(selector).addEventListener(field === "accessAll" || field.endsWith("Preview") ? "change" : "input", (event) => {
@@ -102,15 +132,6 @@ function render(panel) {
     panel.saved = false;
     panel.element.querySelector("[data-block-cover]").focus();
   });
-  panel.element.querySelectorAll("[data-pick-kind]").forEach((control) => control.addEventListener("change", () => {
-    const kind = control.dataset.pickKind;
-    const item = panel.options[kind].find((option) => option.id === control.dataset.id);
-    panel.pending[kind] = panel.pending[kind].filter((chosen) => chosen.id !== control.dataset.id);
-    if (control.checked && item) panel.pending[kind].push(item);
-    const button = panel.element.querySelector(`[data-add-selected="${kind}"]`);
-    button.disabled = !panel.pending[kind].length;
-    button.textContent = `Add selected (${panel.pending[kind].length})`;
-  }));
   panel.element.querySelectorAll("[data-add-selected]").forEach((button) => button.addEventListener("click", () => {
     const kind = button.dataset.addSelected;
     for (const item of panel.pending[kind]) if (!panel.draft[kind].some((chosen) => chosen.id === item.id)) panel.draft[kind].push(item);
@@ -132,18 +153,33 @@ function render(panel) {
     }));
   }
   panel.element.querySelector("[data-save-block]").addEventListener("click", () => saveBlock(panel));
+  panel.element.querySelector("[data-delete-block]")?.addEventListener("click", () => deleteBlock(panel));
   const replacement = Array.from(panel.element.querySelectorAll("button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled)"))
     .find((control) => focusAttributes.length && focusAttributes.every(([name, value]) => control.getAttribute(name) === value));
   (replacement || panel.element.querySelector("[data-block-select]:not(:disabled)") || panel.element.querySelector("[data-close-collections]")).focus();
+  if (replacement && caret) { try { replacement.setSelectionRange(...caret); } catch {} }
 }
 
-async function findOptions(panel) {
+// `inPlace` (a search while typing): only the two choice lists are replaced,
+// never the field being typed in or the scrolling form - on a phone that
+// would close the keyboard and move the list under the finger.
+async function findOptions(panel, { inPlace = false } = {}) {
   const generation = ++panel.generation;
   try {
     const params = new URLSearchParams({ exerciseSearch: panel.search.exercises, userSearch: panel.search.users });
     const options = await api(`/api/exercise-collections/options?${params}`);
     if (activePanel !== panel || generation !== panel.generation) return;
     panel.options = options;
+    if (inPlace) {
+      for (const kind of ["exercises", "users"]) {
+        const list = panel.element.querySelector(`[data-picker-options="${kind}"]`);
+        if (list) list.innerHTML = pickerOptionsHtml(panel, kind);
+      }
+      // An earlier message goes too, in place as well.
+      panel.error = "";
+      panel.element.querySelector("[data-block-error]")?.remove();
+      return;
+    }
     panel.error = "";
   } catch (error) {
     if (activePanel !== panel || generation !== panel.generation) return;
@@ -168,8 +204,9 @@ async function saveBlock(panel) {
     removedExercises.length ? `Removing these exercises from the block makes their originals available to all coaches: ${removedExercises.map((exercise) => exercise.name).join(", ")}. Personal copies stay private.` : "",
   ].filter(Boolean).join("\n\n");
   if (!window.confirm(confirmation)) return;
-  panel.busy = true;
+  panel.busy = "save";
   panel.saved = false;
+  panel.deleted = "";
   panel.error = "";
   render(panel);
   try {
@@ -193,6 +230,63 @@ async function saveBlock(panel) {
     if (activePanel !== panel) return;
     panel.error = messages[error.message] || "Save was not confirmed. Close and reopen to check the block before retrying.";
   } finally {
+    panel.busy = false;
+    render(panel);
+  }
+}
+
+// Deleting a block: its exercises go back to Other, where every coach can
+// use them, and its selected users lose nothing they still need it for.
+// Always the block as it was loaded (its saved revision), never a draft.
+const deleteMessages = {
+  ...messages,
+  staleRevision: "This block changed elsewhere. Close and reopen it before deleting.",
+  notFound: "This block was already deleted, or you no longer have permission to manage application blocks.",
+};
+
+// A delete whose answer never comes (a phone that lost its network) is
+// "not confirmed" after this long, and the editor can be closed again.
+export const DELETE_CLIENT_BOUND_MS = 45000;
+
+async function deleteBlock(panel) {
+  if (panel.busy || !panel.original.id) return;
+  const block = panel.original;
+  const confirmation = [
+    `Delete the block “${block.name}”?`,
+    block.exercises.length
+      ? `Its ${block.exercises.length} exercises move to Other and become available to all coaches. The exercises themselves are not deleted, and personal copies stay private.`
+      : "It holds no exercises.",
+    panel.dirty ? "Your unsaved changes to this block are discarded." : "",
+    "A deleted block cannot be restored.",
+  ].filter(Boolean).join("\n\n");
+  if (!window.confirm(confirmation)) return;
+  panel.busy = "delete";
+  panel.saved = false;
+  panel.deleted = "";
+  panel.error = "";
+  render(panel);
+  const controller = new AbortController();
+  const bound = setTimeout(() => controller.abort(), DELETE_CLIENT_BOUND_MS);
+  try {
+    await api(`/api/exercise-collections/${encodeURIComponent(block.id)}`, {
+      method: "DELETE", body: JSON.stringify({ expectedRevision: block.revision }), signal: controller.signal,
+    });
+    clearTimeout(bound);
+    if (activePanel !== panel) return;
+    panel.collections = panel.collections.filter((item) => item.id !== block.id);
+    panel.draft = emptyDraft();
+    panel.original = emptyDraft();
+    panel.pending = { exercises: [], users: [] };
+    panel.dirty = false;
+    panel.deleted = block.name;
+    await findOptions(panel);
+    try { await panel.onSave(); }
+    catch { panel.error = "The block was deleted. Reopen Exercise Library to refresh the list."; }
+  } catch (error) {
+    if (activePanel !== panel) return;
+    panel.error = (!controller.signal.aborted && deleteMessages[error.message]) || "Delete was not confirmed. Close and reopen to check the block before retrying.";
+  } finally {
+    clearTimeout(bound);
     panel.busy = false;
     render(panel);
   }
@@ -222,6 +316,18 @@ export async function openExerciseCollections(onSave, collectionId = "") {
     }
   };
   document.addEventListener("keydown", panel.keydown);
+  // One listener for every choice checkbox, also those a search puts in place.
+  element.addEventListener("change", (event) => {
+    const control = event.target.closest?.("[data-pick-kind]");
+    if (!control || activePanel !== panel) return;
+    const kind = control.dataset.pickKind;
+    const item = panel.options[kind]?.find((option) => option.id === control.dataset.id);
+    panel.pending[kind] = panel.pending[kind].filter((chosen) => chosen.id !== control.dataset.id);
+    if (control.checked && item) panel.pending[kind].push(item);
+    const button = panel.element.querySelector(`[data-add-selected="${kind}"]`);
+    button.disabled = !panel.pending[kind].length;
+    button.textContent = `Add selected (${panel.pending[kind].length})`;
+  });
   document.body.append(element);
   render(panel);
   element.querySelector("[data-block-select]").focus();

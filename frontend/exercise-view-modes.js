@@ -56,32 +56,48 @@ export function renderExerciseViewSwitcher(surface, current, action) {
   `;
 }
 
+function imageAttributes(sources) {
+  const fallbacks = sources.slice(1);
+  return `src="${escapeAttr(sources[0])}" alt="" loading="lazy" decoding="async"${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}`;
+}
+
+// A blurred copy of a picture that fills its frame behind it, so a picture
+// shown whole (Big, Details) never sits in empty bars. Decorative: it walks
+// the same sources as the picture and, when none loads, is hidden by the
+// app's image error handler (image-missing).
+export function renderExerciseThumbBackdrop(sources) {
+  return sources.length ? `<img class="exercise-thumb-backdrop" ${imageAttributes(sources)} aria-hidden="true">` : "";
+}
+
 // The picture of an exercise: its own image first, then the cover image of
 // its video (YouTube, Google Drive), and when none of them loads (no media,
 // a private Drive file, a broken link) its initials - never an empty frame.
 // The browser walks data-fallbacks on each load error (handleImageError in
 // app.js) and finally swaps in the initials from data-fallback-initials.
-export function renderExerciseThumb(exercise, className) {
+// `backdrop`: a picture across a card - larger video covers, shown whole
+// over its blurred copy.
+export function renderExerciseThumb(exercise, className, { backdrop = false } = {}) {
   const name = exercise.name || exercise.title || "Exercise";
   const initials = initialsFor(name).toUpperCase() || "?";
   const sources = [
     ...imageSources(exercise.image_url || exercise.imageUrl || exercise.image || ""),
-    ...videoThumbnailSources(exercise.video_url || exercise.videoUrl || exercise.video || ""),
+    ...videoThumbnailSources(exercise.video_url || exercise.videoUrl || exercise.video || "", { large: backdrop }),
   ];
   if (!sources.length) return `<span class="${escapeAttr(className)} exercise-thumb-fallback" aria-hidden="true">${escapeHtml(initials)}</span>`;
-  const fallbacks = sources.slice(1);
-  return `<img class="${escapeAttr(className)}" src="${escapeAttr(sources[0])}" alt="" loading="lazy" decoding="async"${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""} data-fallback-initials="${escapeAttr(initials)}">`;
+  return `${backdrop ? renderExerciseThumbBackdrop(sources) : ""}<img class="${escapeAttr(className)}" ${imageAttributes(sources)} data-fallback-initials="${escapeAttr(initials)}">`;
 }
 
 // Called by the app's image error handler once an exercise picture has no
 // source left: swaps the <img> for the exercise's initials, in the same
-// size (same class). Returns false for any other image.
+// size (same class), and drops its blurred copy. Returns false for any
+// other image.
 export function replaceExerciseThumbWithInitials(image) {
   if (image?.dataset?.fallbackInitials === undefined) return false;
   const fallback = image.ownerDocument.createElement("span");
   fallback.className = `${image.className} exercise-thumb-fallback`;
   fallback.setAttribute("aria-hidden", "true");
   fallback.textContent = image.dataset.fallbackInitials || "?";
+  if (image.previousElementSibling?.classList.contains("exercise-thumb-backdrop")) image.previousElementSibling.remove();
   image.replaceWith(fallback);
   return true;
 }

@@ -18,7 +18,7 @@ test("catalog uses cover cards, counts, Other and administrator-only Assign",()=
   assert.match(dom.window.document.body.textContent,/Ankle <strength>/);
   assert.equal(dom.window.document.querySelectorAll('[data-action="exercise-collections-open"]').length,2);
   const normal=renderExerciseBlocksHtml({blocks:[block],other,canManageCollections:false});
-  assert.equal(normal.includes("Edit / Assign"),false);
+  assert.equal(normal.includes("Edit block"),false);
   dom.window.close();
 });
 
