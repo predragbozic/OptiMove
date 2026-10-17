@@ -4,6 +4,7 @@ import { pool, query, queryWithoutJit } from "../db.js";
 import { exerciseReadScopeSql as exerciseScope, exerciseLibraryScopeSql, exerciseAdministratorSql, hasExerciseAdministration } from "../exerciseAccess.js";
 import { classificationFields, classificationJoinSql, validateClassification, exerciseMediaJoinSql } from "../exercisePersonalization.js";
 import { deleteUnreferencedExercise } from "../exerciseDeletion.js";
+import { loadLockedExercisePreviews } from "../exerciseBlocks.js";
 
 const router = Router();
 router.use(async (req, res, next) => {
@@ -267,6 +268,17 @@ router.get("/", async (req, res, next) => {
       return res.status(403).json({ error: "Owner filter is unavailable." });
     }
     let where = `where ${exerciseLibraryScopeSql}`;
+    const collection = String(req.query.collection || "");
+    if (collection && collection !== "other" && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(collection)) {
+      return res.status(400).json({ error: "Invalid block." });
+    }
+    if (collection === "other") where += ` and not exists (select 1 from library.exercise_collection_items block_item
+      where block_item.exercise_id=coalesce(e.source_exercise_id,e.id))`;
+    else if (collection) {
+      params.push(collection);
+      where += ` and exists (select 1 from library.exercise_collection_items block_item
+        where block_item.exercise_id=coalesce(e.source_exercise_id,e.id) and block_item.collection_id=$${params.length})`;
+    }
     if (visibility !== "all") where += ` and e.is_active=${visibility === "active" ? "true" : "false"}`;
     if (hidden !== "all") where += ` and ${hidden === "visible" ? "not " : ""}exists (select 1 from library.filter_hidden personal_hidden where personal_hidden.kind='exercise' and personal_hidden.item_id=e.id and personal_hidden.user_id=$1)`;
     if (kind === "accessible") where += " and (e.owner_scope='system' or e.owner_user_id=$1)";
@@ -362,8 +374,13 @@ router.get("/", async (req, res, next) => {
       `,
       params,
     );
+    const previewEligible = !admin && !owner && !["private","mine"].includes(kind) && visibility === "active" && hidden === "visible"
+      && !Object.values(filters).some(Boolean);
+    const previews = previewEligible ? await loadLockedExercisePreviews(req.user.id,search,collection,limit,offset) : { exercises: [], hasMore: false };
     res.json({
       exercises: result.rows.slice(0, limit),
+      lockedPreviews: previews.exercises,
+      moreLockedPreviews: previews.hasMore,
       hasMore: result.rows.length > limit,
       canManageCollections: req.exerciseAdmin,
     });

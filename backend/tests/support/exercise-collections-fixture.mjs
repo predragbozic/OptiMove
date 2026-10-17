@@ -55,4 +55,5 @@ export const EXERCISE_COLLECTIONS_FIXTURE_SQL = `
     after_state jsonb not null,
     created_at timestamptz not null default now()
   );
+  ${readFileSync(new URL("../../../migrations_v2/202610162230_exercise_block_catalog.sql", import.meta.url), "utf8")}
 `;

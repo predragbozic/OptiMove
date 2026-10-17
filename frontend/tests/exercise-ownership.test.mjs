@@ -101,8 +101,17 @@ test("admin block picker saves selected users and exercises and keeps selections
   const name = document.querySelector("[data-block-name]");
   name.value = "Private block";
   name.dispatchEvent(new window.Event("input"));
-  document.querySelector("[data-add-kind='exercises']").click();
-  document.querySelector("[data-add-kind='users']").click();
+  const selectExercise=document.querySelector("[data-pick-kind='exercises']");
+  selectExercise.checked=true;
+  selectExercise.dispatchEvent(new window.Event("change"));
+  document.querySelector("[data-find-kind='exercises']").click();
+  await new Promise((resolve)=>setTimeout(resolve,0));
+  assert.ok(document.querySelector("[data-pick-kind='exercises']").checked);
+  document.querySelector("[data-add-selected='exercises']").click();
+  const selectUser=document.querySelector("[data-pick-kind='users']");
+  selectUser.checked=true;
+  selectUser.dispatchEvent(new window.Event("change"));
+  document.querySelector("[data-add-selected='users']").click();
   assert.notEqual(document.activeElement, document.body);
   document.querySelector("[data-find-kind='exercises']").click();
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -110,7 +119,7 @@ test("admin block picker saves selected users and exercises and keeps selections
   document.querySelector("[data-save-block]").click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   const write = requests.find((request) => request.method === "POST");
-  assert.deepEqual(JSON.parse(write.body), { name: "Private block", exerciseIds: [exercise.id], userIds: [user.id] });
+  assert.deepEqual(JSON.parse(write.body), { name: "Private block", description:"",coverImageUrl:"",accessAll:false,blockPreview:"hidden",exercisePreview:"hidden",exerciseIds: [exercise.id], userIds: [user.id] });
   assert.equal(refreshes, 1);
   assert.match(document.body.textContent, /Block saved/);
   document.querySelector("[data-close-collections]").click();

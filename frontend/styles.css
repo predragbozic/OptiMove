@@ -17404,3 +17404,28 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
     max-width: calc(100vw - 80px);
   }
 }
+ .exercise-block-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  gap: 16px;
+}
+.exercise-block-card { overflow: hidden; padding: 0; min-width: 0; }
+.exercise-block-cover { display: grid; place-items: center; width: 100%; aspect-ratio: 16 / 10; padding: 0; border: 0; background: var(--surface-soft); overflow: hidden; cursor: pointer; }
+.exercise-block-cover-image { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; }
+.exercise-block-placeholder { font-size: 64px; color: var(--accent); }
+.exercise-block-card.is-locked { background: #eef0f2; color: var(--text); border: 1px solid #9ca8b2; }
+.exercise-block-card.is-locked .exercise-block-cover { filter: grayscale(1); cursor: default; }
+.exercise-block-card.is-locked .exercise-block-card-body p { color: #46505e; }
+.exercise-block-lock { display: inline-flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid #9ca8b2; border-radius: var(--radius); background: var(--surface); color: #26343d; font-weight: 600; line-height: 1.45; }
+.exercise-block-lock svg { flex: 0 0 20px; width: 20px; height: 20px; margin-top: 1px; }
+.exercise-locked-results { margin-top: 24px; }
+.exercise-block-card-body { padding: 16px; overflow-wrap: anywhere; }
+.exercise-block-card-body h3 { margin: 10px 0; }
+.exercise-block-card-body p { min-height: 2em; white-space: pre-wrap; }
+.exercise-block-picker { display: grid; gap: 8px; max-height: 300px; overflow: auto; margin: 10px 0; }
+.exercise-block-pick { display: flex; gap: 10px; align-items: center; padding: 8px; overflow-wrap: anywhere; }
+.exercise-block-pick input[type="checkbox"] { flex: 0 0 18px; width: 18px; min-width: 18px; height: 18px; margin: 0; }
+.exercise-block-pick > span { min-width: 0; }
+.exercise-block-pick-image { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; }
+.exercise-block-cover-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.exercise-collections-overlay .compact-button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }

@@ -312,6 +312,85 @@ async function makeLibraryAdmin(label) {
   return admin;
 }
 
+test("block catalog preserves grants, hides denied blocks and excludes restricted originals from Other", async () => {
+  const admin = await makeLibraryAdmin("catalog-admin");
+  const coach = await makeCoach("catalog-granted");
+  const outsider = await makeCoach("catalog-denied");
+  const system = await makeExercise(null, { ownerScope: "system", name: "Catalog restricted" });
+  await query("update library.exercises set image_url=$2 where id=$1", [system,"https://example.test/original.jpg"]);
+  const created = await api("/api/exercise-collections", { method: "POST",cookie: admin.cookie,
+    body: { name: "Catalog hidden",description: "Description",exerciseIds: [system],userIds: [coach.userId] } });
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const block = created.body.collection;
+  assert.equal(block.blockPreview,"hidden");
+  assert.equal(block.accessAll,false);
+  const allowed = await api("/api/exercise-collections/catalog?search=Catalog hidden",{cookie:coach.cookie});
+  assert.equal(allowed.status,200);
+  assert.equal(allowed.body.blocks.length,1);
+  assert.equal(allowed.body.blocks[0].coverImageUrl,"https://example.test/original.jpg");
+  assert.equal(allowed.body.blocks[0].exerciseCount,1);
+  assert.equal(allowed.body.blocks[0].locked,false);
+  assert.equal((await api("/api/exercise-collections/catalog?search=Catalog hidden",{cookie:outsider.cookie})).body.blocks.length,0);
+  assert.equal((await api("/api/exercise-collections/locked-exercises?search=Catalog restricted",{cookie:outsider.cookie})).body.exercises.length,0);
+  assert.equal((await api(`/api/exercises?collection=${block.id}`,{cookie:outsider.cookie})).body.exercises.length,0);
+  assert.equal((await api("/api/exercises?collection=other&search=Catalog restricted",{cookie:coach.cookie})).body.exercises.length,0);
+  assert.equal((await api(`/api/exercises/${system}`,{cookie:outsider.cookie})).status,404);
+  assert.equal((await api(`/api/exercises/${system}/copy`,{method:"POST",cookie:outsider.cookie,body:{name:"Denied"}})).status,404);
+  assert.equal((await api("/api/exercise-collections",{method:"POST",cookie:outsider.cookie,body:{name:"Denied",exerciseIds:[],userIds:[]}})).status,404);
+  assert.equal((await api("/api/exercises?collection=bad",{cookie:coach.cookie})).status,400);
+});
+
+test("locked previews expose no exercise media, instructions, grants or usable exercise; all-users remains explicit", async () => {
+  const admin = await makeLibraryAdmin("locked-admin");
+  const outsider = await makeCoach("locked-denied");
+  const system = await makeExercise(null, {ownerScope:"system",name:"Locked visible title"});
+  await query("update library.exercises set image_url=$2,video_url=$3,instruction='Secret instruction' where id=$1",
+    [system,"https://example.test/secret-image.jpg","https://example.test/secret-video"]);
+  const created = await api("/api/exercise-collections",{method:"POST",cookie:admin.cookie,body:{name:"Locked package",exerciseIds:[system],userIds:[],blockPreview:"locked",exercisePreview:"locked"}});
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  let block=created.body.collection;
+  const catalog=await api("/api/exercise-collections/catalog?search=Locked package",{cookie:outsider.cookie});
+  assert.equal(catalog.body.blocks[0].locked,true);
+  assert.equal(catalog.body.blocks[0].coverImageUrl,"");
+  const previews=await api("/api/exercise-collections/locked-exercises?search=Locked visible title",{cookie:outsider.cookie});
+  assert.deepEqual(Object.keys(previews.body.exercises[0]).sort(),["blockName","id","name"]);
+  assert.equal(JSON.stringify([catalog.body,previews.body]).includes("secret-"),false);
+  const mainList=await api("/api/exercises?search=Locked visible title",{cookie:outsider.cookie});
+  assert.equal(mainList.body.exercises.length,0);
+  assert.equal(mainList.body.lockedPreviews.length,1);
+  assert.equal((await api("/api/exercises?search=Locked visible title&offset=invalid",{cookie:outsider.cookie})).status,200);
+  assert.equal((await api(`/api/exercises/${system}`,{cookie:outsider.cookie})).status,404);
+  const update=async (body)=>api(`/api/exercise-collections/${block.id}`,{method:"PATCH",cookie:admin.cookie,body:{name:block.name,exerciseIds:[system],userIds:[],expectedRevision:block.revision,...body}});
+  const hideBlock=await update({blockPreview:"hidden"});
+  block=hideBlock.body.collection;
+  assert.equal((await api("/api/exercise-collections/catalog?search=Locked package",{cookie:outsider.cookie})).body.blocks.length,0);
+  assert.equal((await api("/api/exercise-collections/locked-exercises?search=Locked visible title",{cookie:outsider.cookie})).body.exercises.length,1);
+  assert.equal((await api("/api/exercise-collections/locked-exercises?search=Locked visible title",{cookie:outsider.cookie})).body.exercises[0].blockName,null);
+  const hideExercises=await update({blockPreview:"locked",exercisePreview:"hidden"});
+  block=hideExercises.body.collection;
+  assert.equal((await api("/api/exercise-collections/catalog?search=Locked package",{cookie:outsider.cookie})).body.blocks.length,1);
+  assert.equal((await api("/api/exercise-collections/locked-exercises?search=Locked visible title",{cookie:outsider.cookie})).body.exercises.length,0);
+  const publicResult=await update({accessAll:true,coverImageUrl:"https://example.test/public-cover.jpg",description:"Public presentation"});
+  assert.equal(publicResult.status,200,JSON.stringify(publicResult.body));
+  block=publicResult.body.collection;
+  const future=await makeCoach("locked-future");
+  assert.equal((await api(`/api/exercises/${system}`,{cookie:future.cookie})).status,200);
+  const copied=await api(`/api/exercises/${system}/copy`,{method:"POST",cookie:future.cookie,body:{name:"Catalog personal copy"}});
+  assert.equal(copied.status,201);
+  const legacyUpdate=await update({});
+  assert.equal(legacyUpdate.body.collection.accessAll,true);
+  assert.equal(legacyUpdate.body.collection.description,"Public presentation");
+  assert.equal(legacyUpdate.body.collection.coverImageUrl,"https://example.test/public-cover.jpg");
+  block=legacyUpdate.body.collection;
+  assert.equal((await update({coverImageUrl:"javascript:alert(1)"})).status,400);
+  assert.equal((await update({blockPreview:"public"})).status,400);
+  const revoked=await update({accessAll:false,blockPreview:"hidden",exercisePreview:"hidden"});
+  assert.equal(revoked.status,200);
+  assert.equal((await api(`/api/exercises/${copied.body.id}`,{cookie:future.cookie})).status,404);
+  assert.equal((await api(`/api/exercises/${system}`,{cookie:future.cookie})).status,404);
+  assert.equal((await query("select image_url,video_url from library.exercises where id=$1",[system])).rows[0].image_url,"https://example.test/secret-image.jpg");
+});
+
 test("admin capabilities require the selected platform workspace, not just a global role", async () => {
   const admin = await makeLibraryAdmin("workspace-admin");
   const other = await makeCoach("workspace-other");

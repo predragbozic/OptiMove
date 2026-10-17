@@ -58,6 +58,7 @@ export function activeExerciseFilterLabels(filters, options = {}) {
   if (filters.hidden === "hidden") labels.push("Hidden");
   if (filters.hidden === "all") labels.push("Including hidden");
   if (filters.searchIn === "all") labels.push("Search: all fields");
+  if (filters.collection) labels.push(filters.collection === "other" ? "Block: Other" : "Selected block");
   if (filters.owner) labels.push(`Owner: ${options.owners?.find((owner) => owner.id === filters.owner)?.name || "selected account"}`);
   return labels;
 }
@@ -71,6 +72,8 @@ export function renderExerciseLibraryHtml(data) {
       ${search.term ? `<span class="item-badge">${escapeHtml(search.term)}</span>` : ""}
       ${activeExerciseFilterLabels(search.filters, search.options).map((label) => `<span class="item-badge">${escapeHtml(label)}</span>`).join("")}
       <button class="plain-button compact-button" type="button" data-action="exercise-add-open">+ Add exercise</button>
+      <button class="plain-button compact-button" type="button" data-action="exercise-blocks-open" aria-label="Blocks"><span aria-hidden="true">▦</span> Blocks</button>
+      ${search.filters.collection ? '<button class="plain-button compact-button" type="button" data-action="exercise-blocks-clear">All exercises</button>' : ""}
       ${search.canManageCollections ? `<button class="plain-button compact-button" type="button" data-action="exercise-collections-open">Manage application blocks</button>` : ""}
       ${renderExerciseViewSwitcher("library", view, "exercise-library-view")}
     </div>
@@ -83,7 +86,8 @@ export function renderExerciseLibraryHtml(data) {
         ${exercises.map((exercise, index) => renderExerciseViewCard(exercise, itemIds[index], markedExerciseIds, search.canManageCollections)).join("")}
       </div>
     `}
-    ${search.hasMore ? `
+    ${search.lockedPreviews?.length ? `<section class="exercise-locked-results"><h3>Locked exercises — name matches</h3><p class="muted">Contact your administrator to request access. Previews cannot be added, copied or played.</p><div class="exercise-block-grid">${search.lockedPreviews.map((exercise) => `<article class="panel exercise-block-card is-locked"><div class="exercise-block-card-body"><span class="exercise-block-lock">🔒 Access required</span><h4>${escapeHtml(exercise.name)}</h4><p>${escapeHtml(exercise.blockName)}</p></div></article>`).join("")}</div></section>` : ""}
+    ${search.hasMore || search.moreLockedPreviews ? `
       <div class="load-more-row">
         <button class="plain-button" data-action="exercise-load-more">Load more</button>
       </div>

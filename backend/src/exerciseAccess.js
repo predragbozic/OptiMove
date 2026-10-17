@@ -15,6 +15,9 @@ export const exerciseCollectionAccessSql = `(
     or exists (select 1 from library.exercise_collection_items granted_item
       join library.exercise_collection_users exercise_grant on exercise_grant.collection_id = granted_item.collection_id
       where granted_item.exercise_id = coalesce(e.source_exercise_id, e.id) and exercise_grant.user_id = $1)
+    or exists (select 1 from library.exercise_collection_items public_item
+      join library.exercise_collections public_block on public_block.id=public_item.collection_id
+      where public_item.exercise_id=coalesce(e.source_exercise_id,e.id) and public_block.access_all=true)
   )`;
 
 const privateCopyAccessSql = `(e.copy_parent_id is null or not exists (
