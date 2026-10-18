@@ -137,6 +137,7 @@ import {
   handleOrganizationAction,
   handleOrganizationFilterInput,
   handleOrganizationSelectChange,
+  syncGrantBlockButton,
   syncOrganizationAccessGroupMaster,
   submitAthleteAccountEmailChangeForm,
   submitOrganizationAccessForm,
@@ -1207,6 +1208,10 @@ async function handleContentChange(event) {
     handleOrganizationSelectChange(organizationClubSelect.closest("form"));
     return;
   }
+
+  // Manage account -> Application blocks: Grant block waits for a chosen block.
+  const grantSelect = event.target.closest('[data-manage-account-add="block"] select');
+  if (grantSelect) { syncGrantBlockButton(grantSelect); return; }
 
   const athleteAccessInput = event.target.closest("[data-athlete-access-key]");
   if (athleteAccessInput) {
@@ -2858,6 +2863,7 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
 // is re-verified against the server rather than trusted purely from cache.
 async function onWorkspaceChanged() {
   resetExercisesForWorkspaceChange();
+  state.organizationUserSelection = { active: false, ids: new Map(), note: "" };
   clearAthleteFilters();
   const generation = ++workspaceRosterGeneration;
   const contextKey = buildContextKey(currentUserWorkspaceContextParts());

@@ -1131,10 +1131,62 @@ function renderOrganizationUserBadges(row) {
   `;
 }
 
-function renderOrganizationUserRow(row) {
+// Whether an account can be granted application blocks: an active login
+// with coach access (a platform or independent-coach role, or a club or
+// team role). The server decides again on every request.
+export function userCanReceiveBlocks(row) {
+  if (row.loginActive === false) return false;
+  return (row.globalRoles || []).some((r) => r.isActive && ["platform_admin", "independent_coach"].includes(r.role))
+    || (row.clubRoles || []).some((r) => r.isActive) || (row.teamRoles || []).some((r) => r.isActive);
+}
+
+// Application blocks are managed by a platform administrator in the
+// platform workspace (the Exercise Library's rule); anywhere else the
+// server answers 404, so nothing of them is offered.
+export function viewerManagesBlocks(data) {
+  return Boolean(data?.isPlatformAdmin) && state.currentUser?.activeWorkspace?.type === "platform";
+}
+
+// The accounts the Users list shows, and of them the ones a block can be
+// granted to - what Select all shown ticks.
+export function visibleOrganizationUsers(data) {
+  const allUsers = data?.users || [];
+  return state.organization.showDisabledUsers ? allUsers : allUsers.filter((row) => row.loginActive !== false);
+}
+
+// While selecting, every row keeps the mark's column so the avatars line
+// up; an account that cannot be granted a block has an empty one.
+function renderOrganizationUserSelectCheck(row, selection) {
+  if (!selection) return "";
+  if (!userCanReceiveBlocks(row)) return `<span class="organization-user-select is-empty" aria-hidden="true"></span>`;
+  const name = row.name || row.email || "User";
+  return `<label class="organization-user-select" title="Select"><input type="checkbox" data-action="organization-user-select-toggle" data-user-id="${escapeAttr(row.id)}" data-user-name="${escapeAttr(name)}" ${selection.ids.has(row.id) ? "checked" : ""}><span class="visually-hidden">Select ${escapeHtml(name)}</span></label>`;
+}
+
+export function renderOrganizationUserSelectionBar(selection, visibleUsers) {
+  const count = selection.ids.size;
+  const shown = new Set(visibleUsers.map((row) => row.id));
+  const elsewhere = [...selection.ids.keys()].filter((id) => !shown.has(id)).length;
+  const selectable = visibleUsers.filter(userCanReceiveBlocks);
+  const allShown = selectable.length > 0 && selectable.every((row) => selection.ids.has(row.id));
+  return `<div class="exercise-selection-bar organization-user-selection-bar" role="region" aria-label="Selected accounts">
+      <span class="exercise-selection-count" data-user-selection-count tabindex="-1" aria-live="polite">${count} selected${elsewhere ? ` · ${elsewhere} not shown here` : ""}</span>
+      <p class="exercise-selection-note" aria-live="polite">${escapeHtml(selection.note || (count ? "" : "Tick accounts to grant or remove application blocks. Only accounts with coach access can be ticked."))}</p>
+      <div class="exercise-selection-actions">
+        <button class="plain-button compact-button" type="button" data-action="organization-user-select-all-shown" ${!selectable.length || allShown ? "disabled" : ""}>Select all shown</button>
+        <button class="plain-button compact-button" type="button" data-action="organization-user-select-clear" ${count ? "" : "disabled"}>Clear</button>
+        <button class="plain-button compact-button" type="button" data-action="organization-user-grant-blocks-open" ${count ? "" : "disabled"}>Block access…</button>
+        <button class="plain-button compact-button" type="button" data-action="organization-user-select-mode">Done</button>
+      </div>
+    </div>`;
+}
+
+function renderOrganizationUserRow(row, selection = null) {
   const loginActive = row.loginActive !== false;
+  const check = renderOrganizationUserSelectCheck(row, selection);
   return `
-    <article class="organization-row organization-user-row ${loginActive ? "" : "is-disabled-account"}">
+    <article class="organization-row organization-user-row ${loginActive ? "" : "is-disabled-account"}${check ? ` is-selectable${selection.ids.has(row.id) ? " is-selected" : ""}` : ""}"${check ? ` data-user-row="${escapeAttr(row.id)}"` : ""}>
+      ${check}
       <span class="organization-avatar">${escapeHtml((row.name || row.email || "US").slice(0, 2).toUpperCase())}</span>
       <span class="organization-user-summary">
         <strong>${escapeHtml(row.name || row.email || "User")}</strong>
@@ -1153,17 +1205,69 @@ function renderOrganizationUsersSection(data) {
   const disabledUsers = allUsers.filter((row) => row.loginActive === false);
   const activeUsers = allUsers.filter((row) => row.loginActive !== false);
   const showDisabled = state.organization.showDisabledUsers;
-  const visibleUsers = showDisabled ? allUsers : activeUsers;
+  const visibleUsers = visibleOrganizationUsers(data);
+  // Selecting accounts, to grant them blocks at once: the block administrator only.
+  const manages = viewerManagesBlocks(data);
+  const selection = manages && state.organizationUserSelection?.active ? state.organizationUserSelection : null;
   return `
     <section class="panel organization-list-card">
       <div class="organization-list-head">
         <p class="eyebrow">Users</p>
         <strong>${activeUsers.length}</strong>
         ${disabledUsers.length ? `<button class="text-action" type="button" data-action="organization-toggle-disabled-users">${showDisabled ? "Hide disabled" : `Show disabled (${disabledUsers.length})`}</button>` : ""}
+        ${manages ? `<button class="plain-button compact-button organization-user-select-button" type="button" data-action="organization-user-select-mode" title="${selection ? "Stop selecting" : "Select accounts to grant them application blocks"}">${selection ? "Done" : "Select"}</button>` : ""}
       </div>
       <div class="organization-list">
-        ${visibleUsers.length ? visibleUsers.map((row) => renderOrganizationUserRow(row)).join("") : `<p class="muted">No users yet.</p>`}
+        ${visibleUsers.length ? visibleUsers.map((row) => renderOrganizationUserRow(row, selection)).join("") : `<p class="muted">No users yet.</p>`}
       </div>
+    </section>
+    ${selection ? renderOrganizationUserSelectionBar(selection, visibleUsers) : ""}
+  `;
+}
+
+// The application blocks granted to this account (its own grants; a block
+// open to all users needs none), with Grant block / Remove: the block
+// administrator only. Read when the modal opens and again after every change.
+function renderManageAccountBlocksSection(row, data) {
+  if (!viewerManagesBlocks(data)) return "";
+  const blocks = state.organizationUserManage.blocks || {};
+  const pending = Boolean(state.organizationUserManage.pending || blocks.pending);
+  let body = "";
+  if (blocks.loading) body = `<p class="muted" role="status">Reading application blocks...</p>`;
+  else if (blocks.unavailable) body = `<p class="muted">Application blocks can't be managed from this workspace.</p>`;
+  else if (blocks.error) {
+    body = `<p class="builder-error" role="alert">${escapeHtml(blocks.error)}</p>
+      <button class="plain-button compact-button" type="button" data-action="organization-block-grants-reload" data-user-id="${escapeAttr(row.id)}" ${pending ? "disabled" : ""}>Read again</button>`;
+  } else if (blocks.data) {
+    const user = (blocks.data.users || []).find((item) => String(item.id) === String(row.id));
+    if (!user) body = `<p class="muted">This account could not be read. Close and reopen.</p>`;
+    else {
+      const name = row.name || row.email || "this user";
+      const granted = user.grants || [];
+      const grantedIds = new Set(granted.map((grant) => grant.id));
+      const addable = (blocks.data.blocks || []).filter((block) => !grantedIds.has(block.id));
+      body = `
+        ${granted.length ? `<div class="manage-account-list">${granted.map((grant) => `
+          <div class="manage-account-row">
+            <span>${escapeHtml(grant.name)}${grant.accessAll ? ` <small>open to all users</small>` : ""}</span>
+            <button class="plain-button compact-button danger-button" type="button" data-action="organization-block-grant-remove" data-user-id="${escapeAttr(row.id)}" data-user-name="${escapeAttr(name)}" data-collection-id="${escapeAttr(grant.id)}" data-block-name="${escapeAttr(grant.name)}" aria-label="Remove block ${escapeAttr(grant.name)}" ${pending ? "disabled" : ""}>Remove block</button>
+          </div>`).join("")}</div>` : `<p class="muted">No blocks granted to this account.</p>`}
+        <p class="muted">A block open to all users and every exercise outside the blocks are available to every coach without a grant.</p>
+        ${user.eligible
+          ? addable.length
+            ? `<div class="manage-account-add-row" data-manage-account-add="block">
+                <select name="collectionId" aria-label="Block to grant"><option value="" selected disabled>Choose a block</option>${addable.map((block) => `<option value="${escapeAttr(block.id)}">${escapeHtml(block.name)} — ${block.accessAll ? "open to all, no grant needed" : "selected users"}</option>`).join("")}</select>
+                <button class="plain-button compact-button" type="button" data-action="organization-block-grant-add" data-user-id="${escapeAttr(row.id)}" data-user-name="${escapeAttr(name)}" disabled>Grant block</button>
+              </div>`
+            : `<p class="muted">Every block is already granted to this account.</p>`
+          : `<p class="muted">This account has no coach access, so blocks can't be granted to it.</p>`}
+        ${blocks.note ? `<p role="status">${escapeHtml(blocks.note)}</p>` : ""}`;
+    }
+  }
+  return `
+    <section class="manage-account-section" data-manage-account-blocks>
+      <p class="eyebrow">Application blocks</p>
+      ${body}
     </section>
   `;
 }
@@ -1321,6 +1425,7 @@ export function renderManageAccountModal(data) {
         })}
         ${renderManageAccountClubRolesSection(row, data)}
         ${renderManageAccountTeamRolesSection(row, data)}
+        ${renderManageAccountBlocksSection(row, data)}
         <section class="manage-account-section">
           <p class="eyebrow">Athlete profile</p>
           <p>${row.isAthlete === true ? "Athlete profile linked" : "No athlete profile linked"}</p>

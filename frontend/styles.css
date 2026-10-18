@@ -17526,6 +17526,50 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 .exercise-bulk-move-modal select { min-height: 44px; font-size: 16px; }
 .exercise-bulk-move-modal select { width: 100%; }
 .exercise-bulk-move-modal .builder-modal-actions { flex-wrap: wrap; justify-content: flex-end; }
+/* Settings -> Users: the block administrator's selection of accounts (a
+   44 px mark before the avatar; the bar sits under the list, not stuck to
+   the screen) and the Grant blocks dialog's choice lists. */
+.organization-user-row.is-selectable { grid-template-columns: 44px 42px minmax(0, 1fr) auto; }
+.organization-user-select { display: grid; place-items: center; width: 44px; height: 44px; margin: -8px 0; cursor: pointer; }
+.organization-user-select.is-empty { cursor: default; }
+.organization-user-row.is-selectable .organization-user-summary small { overflow-wrap: anywhere; }
+.organization-list-head:has(.organization-user-select-button) { flex-wrap: wrap; row-gap: 6px; }
+.organization-list-head:has(.organization-user-select-button) .text-action { white-space: nowrap; }
+.organization-user-select input { width: 22px; height: 22px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.organization-user-selection-bar { margin-top: 10px; }
+/* On a desktop the Users list is its own scroll box, so the bar sits under
+   its card; on a phone the list is the page, so the bar (outside the card,
+   which clips its overflow) stays stuck to the screen like the library's. */
+@media (min-width: 761px) {
+  .organization-user-selection-bar { position: static; box-shadow: none; }
+}
+@media (max-width: 760px) {
+  /* The phone row keeps its actions under the text (the base phone rule
+     sends them to column 2, which is the avatar's here). */
+  .organization-user-row.is-selectable { grid-template-columns: 44px 42px minmax(0, 1fr); }
+  .organization-user-row.is-selectable .organization-row-actions { grid-column: 3; }
+}
+@media (max-width: 760px), (pointer: coarse) {
+  .organization-user-select-button { min-height: 44px; }
+}
+@media (max-width: 340px) {
+  .exercise-block-grants-mode { grid-auto-flow: row; }
+}
+.exercise-block-grants-fieldset { margin: 0 0 10px; padding: 0; border: 0; min-width: 0; }
+.exercise-block-grants-fieldset legend { padding: 0; margin-bottom: 4px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.exercise-block-grants-mode,
+.exercise-block-grants-list { display: grid; gap: 4px; min-width: 0; }
+.exercise-block-grants-mode { grid-auto-flow: column; justify-content: start; column-gap: 18px; }
+.exercise-block-grants-mode label,
+.exercise-block-grants-list label { display: flex; align-items: center; gap: 10px; min-height: 44px; overflow-wrap: anywhere; }
+.exercise-block-grants-mode input,
+.exercise-block-grants-list input { flex: 0 0 22px; width: 22px; height: 22px; margin: 0; accent-color: var(--accent); }
+.exercise-block-grants-list { max-height: 40vh; overflow: auto; }
+.exercise-block-grants-list small { display: block; color: var(--muted); }
+@media (max-width: 760px), (pointer: coarse) {
+  [data-manage-account-blocks] select,
+  [data-manage-account-blocks] button { min-height: 44px; font-size: 16px; }
+}
 @media (max-width: 760px), (pointer: coarse) {
   .exercise-selection-actions .compact-button,
   .exercise-results-actions .exercise-select-button { min-height: 44px; }

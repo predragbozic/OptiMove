@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { openModalShell } from "./modal-shell.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
 // The administrator's move of several selected exercises into one
@@ -107,61 +108,15 @@ export function renderBulkMoveHtml(model) {
 export function openExerciseBulkMove(ids, { onMoved = async () => {} } = {}) {
   const model = { requested: ids.length, data: null, loading: true, loadError: "", target: "", busy: false, error: "", result: "",
     uncertain: false, checkable: false, checked: false, denied: false };
-  const overlay = document.createElement("div");
-  overlay.className = "exercise-editor-overlay exercise-bulk-move-overlay";
-  const backdrop = document.createElement("button");
-  backdrop.className = "exercise-editor-backdrop";
-  backdrop.type = "button";
-  backdrop.setAttribute("aria-label", "Close move to block");
-  const dialog = document.createElement("section");
-  dialog.className = "panel exercise-editor-modal exercise-bulk-move-modal";
-  dialog.setAttribute("role", "dialog");
-  dialog.setAttribute("aria-modal", "true");
-  dialog.setAttribute("aria-label", "Move to block");
-  overlay.append(backdrop, dialog);
-  // The page behind is out of reach while the dialog is open, as in the
-  // block editor; it comes back however the dialog leaves the page.
-  const background = Array.from(document.body.children).map((child) => [child, child.inert]);
-  const previousOverflow = document.body.style.overflow;
-  for (const [child] of background) child.inert = true;
-  document.body.style.overflow = "hidden";
-  document.body.append(overlay);
-  let restored = false;
-  const restore = () => {
-    if (restored) return;
-    restored = true;
-    for (const [child, inert] of background) child.inert = inert;
-    document.body.style.overflow = previousOverflow;
-    document.removeEventListener("keydown", keydown);
-    watcher?.disconnect();
-  };
-  const Observer = document.defaultView?.MutationObserver;
-  const watcher = Observer ? new Observer(() => { if (!overlay.isConnected) restore(); }) : null;
-  watcher?.observe(document.body, { childList: true });
-  const render = () => { if (overlay.isConnected) dialog.innerHTML = renderBulkMoveHtml(model); };
   // A move in flight is never left behind by a close. Focus goes back to the
   // selection bar: Move to block… while something is selected, else its count.
-  const requestClose = () => {
-    if (model.busy) return;
-    overlay.remove();
-    restore();
-    (document.querySelector('[data-action="exercise-bulk-move-open"]:not(:disabled)') || document.querySelector("[data-exercise-selection-count]"))?.focus();
-  };
-  function keydown(event) {
-    if (event.key === "Escape") { event.stopPropagation(); requestClose(); return; }
-    if (event.key !== "Tab") return;
-    const controls = Array.from(dialog.querySelectorAll("button:not(:disabled),select:not(:disabled)"));
-    if (!controls.length) { event.preventDefault(); return; }
-    if (event.shiftKey && (document.activeElement === controls[0] || !dialog.contains(document.activeElement))) {
-      event.preventDefault();
-      controls.at(-1).focus();
-    } else if (!event.shiftKey && (document.activeElement === controls.at(-1) || !dialog.contains(document.activeElement))) {
-      event.preventDefault();
-      controls[0].focus();
-    }
-  }
-  document.addEventListener("keydown", keydown);
-  backdrop.addEventListener("click", requestClose);
+  const { overlay, dialog, close: requestClose } = openModalShell({
+    overlayClass: "exercise-bulk-move-overlay", dialogClass: "exercise-bulk-move-modal",
+    label: "Move to block", closeLabel: "Close move to block",
+    canClose: () => !model.busy,
+    onClosed: () => (document.querySelector('[data-action="exercise-bulk-move-open"]:not(:disabled)') || document.querySelector("[data-exercise-selection-count]"))?.focus(),
+  });
+  const render = () => { if (overlay.isConnected) dialog.innerHTML = renderBulkMoveHtml(model); };
 
   let saved = false;
   async function markSaved(message) {

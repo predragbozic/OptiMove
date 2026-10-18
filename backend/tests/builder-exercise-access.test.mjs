@@ -361,6 +361,61 @@ test("revoke before Builder add makes the waiting add recheck access after revok
   }
 });
 
+// The account-side routes (PUT /api/exercise-collections/user-grants) change
+// the same grant rows under the same block lock as the editor's PATCH, so
+// the Builder gets the same guarantees from them.
+async function changeGrants(body) {
+  const response = await fetch(`${baseUrl}/api/exercise-collections/user-grants`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  return { status: response.status, body: await response.json() };
+}
+
+test("a grant and its removal from the account's side rule the Builder: no new use after the removal, the existing item stays", async () => {
+  const exerciseId = (await client.query("insert into library.exercises (name,owner_scope) values ('Account-side source','system') returning id")).rows[0].id;
+  const collectionId = (await client.query("insert into library.exercise_collections (name,created_by_user_id) values ('Account-side block',$1) returning id", [otherCoachId])).rows[0].id;
+  await client.query("insert into library.exercise_collection_items (collection_id,exercise_id) values ($1,$2)", [collectionId, exerciseId]);
+  await client.query("insert into public.user_club_roles (user_id,club_id,is_active) values ($1,$2,true)", [coachId, crypto.randomUUID()]);
+  const before = await itemCount();
+  assert.equal((await addExercise(exerciseId)).status, 404);
+  const granted = await changeGrants({ userIds: [coachId], add: [collectionId] });
+  assert.equal(granted.status, 200, JSON.stringify(granted.body));
+  assert.equal((await addExercise(exerciseId)).status, 201);
+  assert.equal(await itemCount(), before + 1);
+  const removed = await changeGrants({ userIds: [coachId], remove: [collectionId] });
+  assert.equal(removed.status, 200, JSON.stringify(removed.body));
+  assert.equal(removed.body.removed.length, 1);
+  // No new use: the add is the same 404 as for a foreign exercise; the item added before stays.
+  assert.equal((await addExercise(exerciseId)).status, 404);
+  assert.equal(await itemCount(), before + 1);
+  assert.equal((await client.query("select count(*)::int as count from plans.plan_items where exercise_id=$1", [exerciseId])).rows[0].count, 1);
+});
+
+test("a removal from the account's side before a Builder add makes the waiting add recheck access after the removal commits", async () => {
+  const fixture = await makeGrantedExercise();
+  const blocker = new pg.Client({ connectionString: database.url });
+  await blocker.connect();
+  let add;
+  let revoke;
+  try {
+    await blocker.query("begin");
+    await blocker.query("lock table library.exercise_collection_audit in share mode");
+    revoke = changeGrants({ userIds: [coachId], remove: [fixture.collectionId] });
+    const revokePid = await waitForBlockedQuery("insert into library.exercise_collection_audit");
+    add = addExercise(fixture.exerciseId);
+    const addPid = await waitForBlockedQuery("pg_advisory_xact_lock_shared(");
+    assert.notEqual(addPid, revokePid);
+    await blocker.query("commit");
+    assert.equal((await revoke).status, 200);
+    assert.equal((await add).status, 404);
+    assert.equal(await itemCount(), 0);
+  } finally {
+    await blocker.query("rollback");
+    await blocker.end();
+    await Promise.allSettled([add, revoke].filter(Boolean));
+  }
+});
+
 async function request(path, body = {}, { athlete = false, method = "POST" } = {}) {
   const response = await fetch(baseUrl + path, {
     method,
