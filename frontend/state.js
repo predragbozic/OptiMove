@@ -1015,6 +1015,9 @@ export const createInitialState = () => ({
   },
   organizationEditor: { open: false, type: "", row: null },
   organizationUserManage: { open: false, userId: "", pending: false, error: "" },
+  // The block administrator's selection of accounts in Settings -> Users
+  // (id -> name), to grant them application blocks at once; never stored.
+  organizationUserSelection: { active: false, ids: new Map(), note: "" },
   organizationInvite: { open: false, athleteId: "", pending: false, error: "", inviteUrl: "", mailtoUrl: "", copied: false },
   // security/verified-email-change: platform-admin-only Account view for an
   // athlete-only account (one with no staff role, so it never appears in

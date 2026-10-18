@@ -350,9 +350,16 @@ const BLOCK_MOVE_LIMIT = 100;
 // several at once: its current block (a personal copy's is its original's),
 // whether it can be moved (an active application exercise), and every live
 // block to choose from. An id that names no exercise is left out.
+// A comma-separated id list of a GET: 1..BLOCK_MOVE_LIMIT unique uuids, in
+// the database's lower case, or null.
+function idListFromQuery(raw) {
+  const ids = [...new Set(String(raw || "").split(",").filter(Boolean).map((id) => id.toLowerCase()))];
+  return ids.length && ids.length <= BLOCK_MOVE_LIMIT && ids.every((id) => uuidPattern.test(id)) ? ids : null;
+}
+
 router.get("/exercise-blocks", async (req, res) => {
-  const ids = [...new Set(String(req.query.ids || "").split(",").filter(Boolean).map((id) => id.toLowerCase()))];
-  if (!ids.length || ids.length > BLOCK_MOVE_LIMIT || ids.some((id) => !uuidPattern.test(id))) return res.status(400).json({ error: "invalidBody" });
+  const ids = idListFromQuery(req.query.ids);
+  if (!ids) return res.status(400).json({ error: "invalidBody" });
   try {
     const exercises = (await query(`select e.id,e.name,e.owner_scope='system' and e.is_active=true as movable,
         c.id as "currentId",c.name as "currentName"
@@ -485,9 +492,142 @@ async function moveExerciseBlocks(req, res) {
   res.status(result.status).json(result.body);
 }
 
+// An account a block can be granted to: active, and able to open the
+// Exercise Library (requireCoach) - an active platform or independent-coach
+// role, or an active club or team role. An athlete-only account is not.
+const grantEligibleSql = `u.is_active = true and (
+  exists (select 1 from public.user_global_roles r where r.user_id = u.id and r.is_active = true and r.role in ('platform_admin','independent_coach'))
+  or exists (select 1 from public.user_club_roles r where r.user_id = u.id and r.is_active = true)
+  or exists (select 1 from public.user_team_roles r where r.user_id = u.id and r.is_active = true))`;
+
+// Which application blocks each of the given accounts is granted (their
+// own grants, not what an open block gives everyone), whether each can be
+// granted more, and every live block to choose from. For the administrator's
+// Manage account screen and the grant of blocks to several accounts at once.
+// An id that names no account is left out.
+router.get("/user-grants", async (req, res) => {
+  const ids = idListFromQuery(req.query.userIds);
+  if (!ids) return res.status(400).json({ error: "invalidBody" });
+  try {
+    const users = (await query(`select u.id, coalesce(u.display_name,u.full_name,u.email) as name, u.is_active as active,
+        (${grantEligibleSql}) as eligible,
+        coalesce((select jsonb_agg(jsonb_build_object('id',c.id,'name',c.name,'accessAll',c.access_all) order by c.name,c.id)
+          from library.exercise_collection_users cu join library.exercise_collections c on c.id = cu.collection_id and c.deleted_at is null
+          where cu.user_id = u.id),'[]'::jsonb) as grants
+      from public.users u where u.id = any($1::uuid[]) order by name, u.id`, [ids])).rows;
+    const blocks = (await query(`select c.id, c.name, c.access_all as "accessAll",
+        (select count(*)::integer from library.exercise_collection_items ci where ci.collection_id = c.id) as "exerciseCount"
+      from library.exercise_collections c where c.deleted_at is null order by c.name, c.id limit 501`)).rows;
+    if (blocks.length > 500) return res.status(409).json({ error: "tooManyBlocks" });
+    res.json({ users, blocks });
+  } catch (error) { respondError(res, error); }
+});
+
+// Grants blocks to accounts and takes them away, for every pair at once:
+// `add` and `remove` are block ids, applied to every account in `userIds`.
+// A pair already as asked is left alone, so a repeat writes nothing. All of
+// it or none, in one transaction with a block save's lock order (the block
+// lock, the administrator, the blocks by id, then the accounts); every
+// block whose grants change gets one new revision and one audit row, in one
+// statement each. Once the COMMIT is sent the answer never says "not
+// changed": an error then is checked on another connection. Returns
+// { status, body }, or { error } for the caller's error mapping.
+async function changeUserGrants(actorUserId, userIds, add, remove) {
+  const blockIds = [...new Set([...add, ...remove])].sort();
+  let client;
+  let release;
+  let commitSent = false;
+  let answer;
+  let toAdd = [];
+  let toRemove = [];
+  try {
+    ({ client, release } = await checkoutBlockClient());
+    const runQuery = (sql, params) => client.query(sql, params);
+    const refusal = await beginBlockWrite(runQuery, actorUserId);
+    if (refusal) return { status: refusal.status, body: { error: refusal.error } };
+    const finish = async (status, body) => { await runQuery("rollback"); return { status, body }; };
+    const live = await runQuery(`select id from library.exercise_collections where id = any($1::uuid[]) and deleted_at is null
+      order by id for update`, [blockIds]);
+    if (live.rowCount !== blockIds.length) return await finish(409, { error: "blockNotAvailable" });
+    // Taking a block away needs only the account; granting one needs an
+    // account the block can be granted to.
+    const users = await runQuery(`select u.id from public.users u where u.id = any($1::uuid[])
+      and ($2::boolean = false or ${grantEligibleSql}) order by u.id for share of u`, [userIds, add.length > 0]);
+    if (users.rowCount !== userIds.length) return await finish(400, { error: "invalidSelection" });
+    const pairKey = (collectionId, userId) => `${collectionId}:${userId}`;
+    const current = new Set((await runQuery(`select collection_id, user_id from library.exercise_collection_users
+      where user_id = any($1::uuid[]) and collection_id = any($2::uuid[])`, [userIds, blockIds])).rows.map((row) => pairKey(row.collection_id, row.user_id)));
+    const pairs = (ids) => ids.flatMap((collectionId) => userIds.map((userId) => ({ collectionId, userId })));
+    toAdd = pairs(add).filter((pair) => !current.has(pairKey(pair.collectionId, pair.userId)));
+    toRemove = pairs(remove).filter((pair) => current.has(pairKey(pair.collectionId, pair.userId)));
+    const unchanged = add.length * userIds.length + remove.length * userIds.length - toAdd.length - toRemove.length;
+    if (!toAdd.length && !toRemove.length) return await finish(200, { changed: false, added: [], removed: [], unchanged });
+    const changedBlocks = [...new Set([...toAdd, ...toRemove].map((pair) => pair.collectionId))].sort();
+    const before = await loadCollectionsById(runQuery, changedBlocks);
+    const pairRows = (list) => JSON.stringify(list.map((pair) => ({ collection_id: pair.collectionId, user_id: pair.userId })));
+    if (toRemove.length) {
+      await runQuery(`delete from library.exercise_collection_users cu using jsonb_to_recordset($1::jsonb) as pair(collection_id uuid, user_id uuid)
+        where cu.collection_id = pair.collection_id and cu.user_id = pair.user_id`, [pairRows(toRemove)]);
+    }
+    if (toAdd.length) {
+      await runQuery(`insert into library.exercise_collection_users (collection_id, user_id)
+        select collection_id, user_id from jsonb_to_recordset($1::jsonb) as pair(collection_id uuid, user_id uuid)`, [pairRows(toAdd)]);
+    }
+    await runQuery("update library.exercise_collections set revision=revision+1,updated_at=now() where id = any($1::uuid[])", [changedBlocks]);
+    const after = await loadCollectionsById(runQuery, changedBlocks);
+    await runQuery(`insert into library.exercise_collection_audit (collection_id,actor_user_id,before_state,after_state)
+      select entry.id, $1, entry.before, entry.after from jsonb_to_recordset($2::jsonb) as entry(id uuid, before jsonb, after jsonb)`,
+    [actorUserId, JSON.stringify(changedBlocks.map((id) => ({ id, before: before.get(id), after: after.get(id) })))]);
+    answer = { changed: true, added: toAdd, removed: toRemove, unchanged };
+    commitSent = true;
+    await runQuery("commit");
+  } catch (error) {
+    if (!commitSent) {
+      if (client) { try { await client.query("rollback"); } catch {} }
+      return { error };
+    }
+    // The connection's state after a failed COMMIT is unknown: never reuse it.
+    release(error);
+    client = null;
+    let landed;
+    try {
+      landed = new Set((await query(`select collection_id, user_id from library.exercise_collection_users
+        where user_id = any($1::uuid[]) and collection_id = any($2::uuid[])`, [userIds, blockIds])).rows.map((row) => `${row.collection_id}:${row.user_id}`));
+    } catch { return { status: 503, body: { error: "outcomeUnknown" } }; }
+    const arrived = toAdd.every((pair) => landed.has(`${pair.collectionId}:${pair.userId}`))
+      && toRemove.every((pair) => !landed.has(`${pair.collectionId}:${pair.userId}`));
+    if (!arrived) return { status: 503, body: { error: "outcomeUnknown" } };
+    answer.verifiedAfterCommitError = true;
+  } finally { if (client) release(); }
+  try { emitRealtimeEventForAll("exercise_library_changed"); } catch {}
+  return { status: 200, body: answer };
+}
+
+// { userIds: [1..100 accounts], add: [block ids], remove: [block ids] } -
+// each list unique, no block in both, at least one block in all.
+async function putUserGrants(req, res) {
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const idList = (value) => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.length > BLOCK_MOVE_LIMIT || value.some((id) => typeof id !== "string" || !uuidPattern.test(id))) return null;
+    const ids = value.map((id) => id.toLowerCase());
+    return new Set(ids).size === ids.length ? ids : null;
+  };
+  const userIds = idList(body.userIds);
+  const add = idList(body.add);
+  const remove = idList(body.remove);
+  if (!userIds?.length || !add || !remove || !(add.length + remove.length) || add.some((id) => remove.includes(id))) {
+    return res.status(400).json({ error: "invalidBody" });
+  }
+  const result = await changeUserGrants(req.user.id, userIds, add, remove);
+  if (result.error) return respondError(res, result.error);
+  res.status(result.status).json(result.body);
+}
+
 router.post("/", saveCollection);
 router.patch("/:collectionId", saveCollection);
 router.delete("/:collectionId", deleteCollection);
 router.put("/exercise-block/:exerciseId", moveExerciseBlock);
 router.put("/exercise-blocks", moveExerciseBlocks);
+router.put("/user-grants", putUserGrants);
 export default router;

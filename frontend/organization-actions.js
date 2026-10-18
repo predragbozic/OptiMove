@@ -1,5 +1,7 @@
 import { api } from "./api.js";
 import { enterDataSourcesSection } from "./data-sources-data.js";
+import { openExerciseBlockGrants, USER_SELECTION_LIMIT } from "./exercise-block-grants.js";
+import { userCanReceiveBlocks, viewerManagesBlocks, visibleOrganizationUsers } from "./organization-view.js";
 import { confirmLeaveSourceConnections } from "./source-connections-actions.js";
 import { enterSourceConnectionsSection } from "./source-connections-data.js";
 import { filterOrganizationSelect, syncOrganizationTeamSelect, validateFilterableSelects } from "./organization-select.js";
@@ -178,6 +180,12 @@ export function handleOrganizationSelectChange(select) {
   syncOrganizationTeamSelect(select);
 }
 
+// Manage account -> Application blocks: Grant block waits for a chosen block.
+export function syncGrantBlockButton(select) {
+  const button = select.closest('[data-manage-account-add="block"]')?.querySelector('[data-action="organization-block-grant-add"]');
+  if (button) button.disabled = !select.value || Boolean(state.organizationUserManage.blocks?.pending);
+}
+
 export function syncOrganizationAccessGroupMaster(input) {
   const form = input?.closest?.("[data-organization-access-form]");
   const group = input?.dataset?.athleteAccessGroup || "";
@@ -326,10 +334,39 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
   if (type === "organization-manage-account-open") {
     const userId = action.dataset.userId;
     if (!userId) return true;
-    state.organizationUserManage = { open: true, userId, pending: false, error: "" };
+    const blocks = viewerManagesBlocks(state.organization.data) ? { loading: true, data: null, error: "", unavailable: false, pending: false, note: "" } : null;
+    state.organizationUserManage = { open: true, userId, pending: false, error: "", blocks };
     void renderOrganizationPanel({ refresh: false });
+    if (blocks) void loadManageAccountBlocks(userId, renderOrganizationPanel);
     return true;
   }
+  if (type === "organization-block-grants-reload") {
+    await loadManageAccountBlocks(action.dataset.userId || "", renderOrganizationPanel);
+    return true;
+  }
+  if (type === "organization-block-grant-add") {
+    const userId = action.dataset.userId || "";
+    const container = action.closest('[data-manage-account-add="block"]');
+    const collectionId = container?.querySelector('select[name="collectionId"]')?.value || "";
+    const blockName = (state.organizationUserManage.blocks?.data?.blocks || []).find((block) => block.id === collectionId)?.name || "this block";
+    if (!userId || !collectionId) return true;
+    // Granting adds, as the modal's other Add / Grant actions, without a
+    // confirmation; the chosen block is named in the note.
+    await changeManageAccountBlocks(action, { userId, body: { userIds: [userId], add: [collectionId] }, renderOrganizationPanel,
+      saved: `“${blockName}” granted. The account can use its exercises now.`, unchanged: `Nothing changed: this account already had “${blockName}”.` });
+    return true;
+  }
+  if (type === "organization-block-grant-remove") {
+    const userId = action.dataset.userId || "";
+    const collectionId = action.dataset.collectionId || "";
+    if (!userId || !collectionId) return true;
+    const blockName = action.dataset.blockName || "this block";
+    await changeManageAccountBlocks(action, { userId, body: { userIds: [userId], remove: [collectionId] }, renderOrganizationPanel,
+      confirmMessage: `Remove the block “${blockName}” from ${action.dataset.userName || "this user"}? They can no longer use its exercises, unless the block is open to all users.`,
+      saved: `“${blockName}” removed. The account can no longer use its exercises, unless the block is open to all users.`, unchanged: `Nothing changed: this account did not have “${blockName}”.` });
+    return true;
+  }
+  if (await handleOrganizationUserSelectionAction(action, { renderOrganizationPanel })) return true;
   if (type === "organization-manage-account-close") {
     closeManageAccountModal(renderOrganizationPanel);
     return true;
@@ -920,6 +957,130 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
 // handleOrganizationAction above) and the global Escape handler in app.js,
 // so both paths reset exactly the same state - never an API request, just
 // closing the view.
+// Reads which blocks the account of the open Manage account modal is
+// granted; a late answer for another account, or after the modal closed,
+// is dropped. `note` is what the last change said, shown with the fresh list.
+async function loadManageAccountBlocks(userId, renderOrganizationPanel, note = "") {
+  const manage = state.organizationUserManage;
+  const current = () => state.organizationUserManage === manage && manage.open && manage.userId === userId && manage.blocks;
+  if (!current()) return;
+  manage.blocks = { ...manage.blocks, loading: !manage.blocks.data, error: "" };
+  void renderOrganizationPanel({ refresh: false });
+  try {
+    const data = await api(`/api/exercise-collections/user-grants?userIds=${encodeURIComponent(userId)}`);
+    if (!current()) return;
+    manage.blocks = { ...manage.blocks, loading: false, data, error: "", unavailable: false, note };
+  } catch (error) {
+    if (!current()) return;
+    const unavailable = error?.message === "notFound";
+    // A change's note is kept: an unconfirmed change must not be forgotten
+    // because the read after it failed too.
+    manage.blocks = { ...manage.blocks, loading: false, unavailable, error: unavailable ? "" : "The blocks could not be read.",
+      note: note && !unavailable ? `${note} The blocks could not be read; read again before you repeat it.` : "" };
+  }
+  void renderOrganizationPanel({ refresh: false });
+}
+
+// What a refused or unconfirmed grant change says. The server changes all
+// or nothing, so a coded refusal is a whole refusal; a lost answer is not.
+function describeGrantChangeError(error) {
+  const messages = {
+    blockNotAvailable: "Nothing changed: that block no longer exists.",
+    invalidSelection: "Nothing changed: this account can't be granted blocks any more.",
+    tryAgain: "Nothing changed: the blocks are being changed right now. Try again in a moment.",
+    notFound: "Nothing changed: you no longer have permission to manage application blocks.",
+    invalidBody: "Nothing changed: the request could not be sent. Close and reopen.",
+  };
+  return messages[error?.message] || "The change was not confirmed. The list shows what is saved.";
+}
+
+// Grants or removes one block for the account of the open Manage account
+// modal, then reads its blocks again - the list always shows what is saved,
+// a lost answer included (the change is the same whether repeated or not).
+async function changeManageAccountBlocks(action, { userId, body, confirmMessage, saved, unchanged, renderOrganizationPanel }) {
+  const manage = state.organizationUserManage;
+  if (!manage.blocks || manage.blocks.pending || manage.pending) return;
+  if (confirmMessage && !window.confirm(confirmMessage)) return;
+  action.disabled = true;
+  manage.blocks = { ...manage.blocks, pending: true, note: "", error: "" };
+  void renderOrganizationPanel({ refresh: false });
+  let note;
+  try {
+    const answer = await api("/api/exercise-collections/user-grants", { method: "PUT", body: JSON.stringify(body) });
+    note = answer.changed ? saved : unchanged;
+  } catch (error) {
+    note = describeGrantChangeError(error);
+  }
+  if (state.organizationUserManage !== manage) return;
+  manage.blocks = { ...manage.blocks, pending: false };
+  await loadManageAccountBlocks(userId, renderOrganizationPanel, note);
+}
+
+// The block administrator's selection of accounts in the Users list:
+// Select / Done, a mark per account, Select all shown, Clear and Grant
+// blocks…. Returns true when handled.
+async function handleOrganizationUserSelectionAction(action, { renderOrganizationPanel }) {
+  const type = action.dataset.action;
+  if (!type?.startsWith("organization-user-")) return false;
+  const selection = state.organizationUserSelection;
+  const limitNote = `At most ${USER_SELECTION_LIMIT} accounts can be granted blocks at once.`;
+  // The panel is drawn again whole: the Users list's own scroll position
+  // (a scroll box on a desktop) comes back with it.
+  const redraw = async () => {
+    const scrolled = document.querySelector?.(".organization-list")?.scrollTop || 0;
+    await renderOrganizationPanel({ refresh: false });
+    const list = document.querySelector?.(".organization-list");
+    if (list && scrolled) list.scrollTop = scrolled;
+  };
+  if (type === "organization-user-select-mode") {
+    // Done leaves the selection behind; Select starts an empty one.
+    state.organizationUserSelection = { active: !selection.active, ids: new Map(), note: "" };
+    await redraw();
+    document.querySelector?.(".organization-user-select-button")?.focus?.({ preventScroll: true });
+    return true;
+  }
+  if (type === "organization-user-select-toggle") {
+    const id = action.dataset.userId;
+    selection.note = "";
+    if (!action.checked) selection.ids.delete(id);
+    else if (selection.ids.size >= USER_SELECTION_LIMIT) selection.note = limitNote;
+    else selection.ids.set(id, action.dataset.userName || "");
+    await redraw();
+    document.querySelector?.(`[data-action="organization-user-select-toggle"][data-user-id="${id}"]`)?.focus?.({ preventScroll: true });
+    return true;
+  }
+  if (type === "organization-user-select-all-shown") {
+    selection.note = "";
+    for (const row of visibleOrganizationUsers(state.organization.data).filter(userCanReceiveBlocks)) {
+      if (selection.ids.has(row.id)) continue;
+      if (selection.ids.size >= USER_SELECTION_LIMIT) { selection.note = limitNote; break; }
+      selection.ids.set(row.id, row.name || row.email || "");
+    }
+    await redraw();
+    document.querySelector?.("[data-user-selection-count]")?.focus?.({ preventScroll: true });
+    return true;
+  }
+  if (type === "organization-user-select-clear") {
+    selection.ids.clear();
+    selection.note = "";
+    await redraw();
+    document.querySelector?.("[data-user-selection-count]")?.focus?.({ preventScroll: true });
+    return true;
+  }
+  if (type === "organization-user-grant-blocks-open") {
+    if (!selection.ids.size) return true;
+    openExerciseBlockGrants([...selection.ids.keys()], {
+      // Saved: the selection is done with; the list is drawn again.
+      onSaved: async () => {
+        state.organizationUserSelection = { active: true, ids: new Map(), note: "" };
+        await renderOrganizationPanel({ refresh: false });
+      },
+    });
+    return true;
+  }
+  return false;
+}
+
 export function closeManageAccountModal(renderOrganizationPanel) {
   state.organizationUserManage = { open: false, userId: "", pending: false, error: "" };
   void renderOrganizationPanel({ refresh: false });

@@ -1080,6 +1080,286 @@ test("a move of several exercises whose COMMIT answer is lost is found by the ch
   assert.equal(retry.body.changed, false);
 });
 
+test("the administrator grants blocks to accounts and takes them away, from the account's side: all or none, revised and audited once per block", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("grants-admin");
+  const coachA = await makeCoach("grants-coach-a");
+  const coachB = await makeCoach("grants-coach-b");
+  const outsider = await makeCoach("grants-outsider");
+  // An athlete-only account and a disabled coach: neither can be granted a block.
+  const athleteUser = (await query(`insert into public.users (email,password_hash,full_name,display_name,role_hint,is_active)
+    values ($1,$2,'Grants athlete','Grants athlete','athlete',true) returning id`, [`grants-athlete-${tag}@test.local`, hashPassword("irrelevant-password-123")])).rows[0].id;
+  await query("insert into public.athletes (user_id) values ($1)", [athleteUser]);
+  const disabled = await makeCoach("grants-disabled");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Grants exercise ${tag}` });
+  const create = async (name, extra = {}) => {
+    const created = await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name, exerciseIds: [], userIds: [], ...extra } });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    return created.body.collection;
+  };
+  const A = await create(`Grants A ${tag}`, { exerciseIds: [system], userIds: [disabled.userId] });
+  const B = await create(`Grants B ${tag}`, { accessAll: true });
+  // Disabled after its grant: the grant stays, and only its removal is still possible.
+  await query("update public.users set is_active=false where id=$1", [disabled.userId]);
+  const lookup = (ids, cookie = admin.cookie) => api(`/api/exercise-collections/user-grants?userIds=${ids.join(",")}`, { cookie });
+  const put = (body, cookie = admin.cookie) => api("/api/exercise-collections/user-grants", { method: "PUT", cookie, body });
+  const revision = async (id) => (await query("select revision from library.exercise_collections where id=$1", [id])).rows[0].revision;
+  const audits = async (id) => (await query("select count(*)::int as count from library.exercise_collection_audit where collection_id=$1", [id])).rows[0].count;
+  const grants = async () => (await query("select collection_id, user_id from library.exercise_collection_users where collection_id = any($1::uuid[]) order by collection_id, user_id", [[A.id, B.id]])).rows.map((row) => `${row.collection_id}:${row.user_id}`);
+
+  // Only the administrator; everyone else gets the same 404.
+  for (const answer of [await lookup([coachA.userId], outsider.cookie), await put({ userIds: [coachA.userId], add: [A.id] }, outsider.cookie)]) {
+    assert.equal(answer.status, 404);
+    assert.deepEqual(answer.body, { error: "notFound" });
+  }
+  // Where every account stands: its own grants, whether it can be granted more.
+  const shown = await lookup([coachA.userId, athleteUser, disabled.userId, crypto.randomUUID()]);
+  assert.equal(shown.status, 200, JSON.stringify(shown.body));
+  const byId = Object.fromEntries(shown.body.users.map((user) => [user.id, user]));
+  assert.deepEqual(Object.keys(byId).sort(), [coachA.userId, athleteUser, disabled.userId].sort());
+  assert.equal(byId[coachA.userId].eligible, true);
+  assert.deepEqual(byId[coachA.userId].grants, []);
+  assert.equal(byId[athleteUser].eligible, false);
+  assert.equal(byId[disabled.userId].eligible, false);
+  assert.equal(byId[disabled.userId].active, false);
+  assert.deepEqual(byId[disabled.userId].grants, [{ id: A.id, name: A.name, accessAll: false }]);
+  const blockA = shown.body.blocks.find((block) => block.id === A.id);
+  assert.deepEqual(blockA, { id: A.id, name: A.name, accessAll: false, exerciseCount: 1 });
+  assert.equal(shown.body.blocks.find((block) => block.id === B.id).accessAll, true);
+  for (const bad of ["", "x", Array.from({ length: 101 }, () => crypto.randomUUID()).join(",")]) {
+    assert.equal((await api(`/api/exercise-collections/user-grants?userIds=${bad}`, { cookie: admin.cookie })).status, 400);
+  }
+  for (const body of [
+    { userIds: [], add: [A.id] },
+    { userIds: [coachA.userId] },
+    { userIds: [coachA.userId], add: [], remove: [] },
+    { userIds: [coachA.userId], add: [A.id], remove: [A.id] },
+    { userIds: [coachA.userId], add: [A.id, A.id.toUpperCase()] },
+    { userIds: [coachA.userId, coachA.userId], add: [A.id] },
+    { userIds: ["x"], add: [A.id] },
+    { userIds: Array.from({ length: 101 }, () => crypto.randomUUID()), add: [A.id] },
+  ]) assert.equal((await put(body)).status, 400, JSON.stringify(body).slice(0, 60));
+
+  // Two blocks to two coaches: four new grants, each block revised and audited once; access follows.
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: coachA.cookie })).status, 404);
+  const [aRevision, bRevision, aAudits, bAudits] = [await revision(A.id), await revision(B.id), await audits(A.id), await audits(B.id)];
+  const granted = await put({ userIds: [coachA.userId, coachB.userId.toUpperCase()], add: [A.id.toUpperCase(), B.id] });
+  assert.equal(granted.status, 200, JSON.stringify(granted.body));
+  assert.equal(granted.body.changed, true);
+  assert.equal(granted.body.added.length, 4);
+  assert.deepEqual(granted.body.removed, []);
+  assert.equal(granted.body.unchanged, 0);
+  assert.equal(await revision(A.id), aRevision + 1);
+  assert.equal(await revision(B.id), bRevision + 1);
+  assert.equal(await audits(A.id), aAudits + 1);
+  assert.equal(await audits(B.id), bAudits + 1);
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: coachA.cookie })).status, 200);
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: outsider.cookie })).status, 404);
+  // The same again writes nothing.
+  const repeat = await put({ userIds: [coachA.userId, coachB.userId], add: [A.id, B.id] });
+  assert.equal(repeat.status, 200);
+  assert.deepEqual(repeat.body, { changed: false, added: [], removed: [], unchanged: 4 });
+  assert.equal(await revision(A.id), aRevision + 1);
+  // Take A away from coach A only; B stays; coach A loses the exercise.
+  const removed = await put({ userIds: [coachA.userId], remove: [A.id] });
+  assert.equal(removed.status, 200, JSON.stringify(removed.body));
+  assert.deepEqual(removed.body, { changed: true, added: [], removed: [{ collectionId: A.id, userId: coachA.userId }], unchanged: 0 });
+  assert.equal(await revision(A.id), aRevision + 2);
+  assert.equal(await revision(B.id), bRevision + 1);
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: coachA.cookie })).status, 404);
+  assert.deepEqual((await lookup([coachA.userId])).body.users[0].grants.map((grant) => grant.id), [B.id]);
+  // Add and remove in one request: all or none.
+  const both = await put({ userIds: [coachA.userId, coachB.userId], add: [A.id], remove: [B.id] });
+  assert.equal(both.status, 200, JSON.stringify(both.body));
+  assert.equal(both.body.added.length, 1);
+  assert.equal(both.body.removed.length, 2);
+  assert.equal(both.body.unchanged, 1);
+  assert.deepEqual(await grants(), [`${A.id}:${coachA.userId}`, `${A.id}:${coachB.userId}`, `${A.id}:${disabled.userId}`].sort());
+
+  // An account that cannot be granted a block refuses the whole request; taking a block away from it still works.
+  const stateBefore = await grants();
+  for (const userId of [athleteUser, disabled.userId, crypto.randomUUID()]) {
+    const refused = await put({ userIds: [coachA.userId, userId], add: [B.id] });
+    assert.equal(refused.status, 400, userId);
+    assert.equal(refused.body.error, "invalidSelection");
+  }
+  assert.deepEqual(await grants(), stateBefore);
+  const cleanup = await put({ userIds: [disabled.userId], remove: [A.id] });
+  assert.equal(cleanup.status, 200, JSON.stringify(cleanup.body));
+  assert.equal(cleanup.body.removed.length, 1);
+  assert.equal((await put({ userIds: [crypto.randomUUID()], remove: [A.id] })).status, 400);
+  // A deleted block is neither granted nor taken away.
+  const deleted = await api(`/api/exercise-collections/${B.id}`, { method: "DELETE", cookie: admin.cookie, body: { expectedRevision: await revision(B.id) } });
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  for (const body of [{ userIds: [coachA.userId], add: [B.id] }, { userIds: [coachA.userId], remove: [B.id] }, { userIds: [coachA.userId], add: [A.id], remove: [B.id] }]) {
+    const gone = await put(body);
+    assert.equal(gone.status, 409);
+    assert.equal(gone.body.error, "blockNotAvailable");
+  }
+  assert.equal((await lookup([coachA.userId])).body.blocks.some((block) => block.id === B.id), false);
+  // A platform administrator outside the platform workspace is a coach here.
+  const placed = await grants();
+  await query("insert into public.user_global_roles (user_id,role) values ($1,'independent_coach')", [admin.userId]);
+  assert.equal((await api("/api/auth/workspace", { method: "PUT", cookie: admin.cookie, body: { type: "private_coach" } })).status, 200);
+  for (const answer of [await lookup([coachA.userId]), await put({ userIds: [coachA.userId], remove: [A.id] })]) {
+    assert.equal(answer.status, 404);
+    assert.deepEqual(answer.body, { error: "notFound" });
+  }
+  assert.deepEqual(await grants(), placed);
+});
+
+test("`eligible` agrees with the Exercise Library's own gate for every shape of role", async () => {
+  const admin = await makeLibraryAdmin("eligible-admin");
+  const club = (await query("insert into public.clubs (name) values ('Eligible club') returning id")).rows[0].id;
+  const deletedClub = (await query("insert into public.clubs (name,is_active) values ('Eligible gone club',false) returning id")).rows[0].id;
+  const team = (await query("insert into public.teams (club_id,name) values ($1,'Eligible team') returning id", [club])).rows[0].id;
+  const account = async (label, setup) => {
+    const userId = (await query(`insert into public.users (email,password_hash,full_name,display_name,role_hint,is_active)
+      values ($1,$2,$3,$3,'user',true) returning id`, [`${label}-${crypto.randomUUID().slice(0, 8)}@test.local`, hashPassword("irrelevant-password-123"), label])).rows[0].id;
+    await setup(userId);
+    return { userId, cookie: cookieFor(await createSession(userId)) };
+  };
+  const shapes = [
+    ["platform admin only", (id) => query("insert into public.user_global_roles (user_id,role) values ($1,'platform_admin')", [id])],
+    ["independent coach only", (id) => query("insert into public.user_global_roles (user_id,role) values ($1,'independent_coach')", [id])],
+    ["team coach only", (id) => query("insert into public.user_team_roles (user_id,team_id,role,is_active) values ($1,$2,'team_coach',true)", [id, team])],
+    ["club role on a deleted club", (id) => query("insert into public.user_club_roles (user_id,club_id,role,is_active) values ($1,$2,'club_admin',true)", [id, deletedClub])],
+    ["inactive club role only", (id) => query("insert into public.user_club_roles (user_id,club_id,role,is_active) values ($1,$2,'club_admin',false)", [id, club])],
+    ["inactive global role only", (id) => query("insert into public.user_global_roles (user_id,role,is_active) values ($1,'independent_coach',false)", [id])],
+    ["no role at all", async () => {}],
+  ];
+  for (const [label, setup] of shapes) {
+    const { userId, cookie } = await account(label.replace(/\s+/g, "-"), setup);
+    const library = await api("/api/exercises?limit=1", { cookie });
+    const opens = library.status !== 403;
+    const shown = (await api(`/api/exercise-collections/user-grants?userIds=${userId}`, { cookie: admin.cookie })).body.users[0];
+    assert.equal(shown.eligible, opens, `${label}: eligible ${shown.eligible}, library ${library.status}`);
+  }
+});
+
+test("a coach role revoked between the dialog's read and the grant refuses the grant; revoked inside the write it leaves a grant with no effect", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("race-admin");
+  const coach = await makeCoach("race-coach");
+  const system = await makeExercise(null, { ownerScope: "system", name: `Race exercise ${tag}` });
+  const block = (await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name: `Race block ${tag}`, exerciseIds: [system], userIds: [] } })).body.collection;
+  const lookup = () => api(`/api/exercise-collections/user-grants?userIds=${coach.userId}`, { cookie: admin.cookie });
+  const grant = () => api("/api/exercise-collections/user-grants", { method: "PUT", cookie: admin.cookie, body: { userIds: [coach.userId], add: [block.id] } });
+  const grants = async () => (await query("select count(*)::int as count from library.exercise_collection_users where user_id=$1", [coach.userId])).rows[0].count;
+  const revokeRole = () => query("update public.user_club_roles set is_active=false where user_id=$1", [coach.userId]);
+  // 1. The dialog read the account as eligible; the role is revoked before the grant is sent.
+  assert.equal((await lookup()).body.users[0].eligible, true);
+  await revokeRole();
+  const refused = await grant();
+  assert.equal(refused.status, 400, JSON.stringify(refused.body));
+  assert.equal(refused.body.error, "invalidSelection");
+  assert.equal(await grants(), 0);
+  assert.equal((await api("/api/exercises?limit=1", { cookie: coach.cookie })).status, 403, "no coach access, no library");
+  // 2. The role is revoked after the grant's own eligibility read, inside its transaction: the grant
+  //    row is written (the role rows are not locked - the recorded limit), but it has no effect.
+  await query("update public.user_club_roles set is_active=true where user_id=$1", [coach.userId]);
+  const original = pool.connect;
+  pool.connect = function (callback) {
+    if (callback) return original.call(this, callback);
+    pool.connect = original;
+    return original.call(this).then((client) => {
+      const send = client.query.bind(client);
+      client.query = async (...args) => {
+        const result = await send(...args);
+        if (typeof args[0] === "string" && args[0].includes("for share of u")) { client.query = send; await revokeRole(); }
+        return result;
+      };
+      return client;
+    });
+  };
+  let written;
+  try { written = await grant(); } finally { pool.connect = original; }
+  assert.equal(written.status, 200, JSON.stringify(written.body));
+  assert.equal(written.body.changed, true);
+  assert.equal(await grants(), 1);
+  assert.equal((await query("select is_active from public.user_club_roles where user_id=$1", [coach.userId])).rows[0].is_active, false);
+  // No effective access: the library's own gate refuses the account whatever its grants.
+  assert.equal((await api("/api/exercises?limit=1", { cookie: coach.cookie })).status, 403);
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: coach.cookie })).status, 403);
+  // The administrator sees the leftover grant on an account that can be granted nothing more, and can take it away.
+  const shown = (await lookup()).body.users[0];
+  assert.equal(shown.eligible, false);
+  assert.deepEqual(shown.grants.map((item) => item.id), [block.id]);
+  assert.equal((await grant()).status, 400);
+  const cleaned = await api("/api/exercise-collections/user-grants", { method: "PUT", cookie: admin.cookie, body: { userIds: [coach.userId], remove: [block.id] } });
+  assert.equal(cleaned.status, 200, JSON.stringify(cleaned.body));
+  assert.equal(await grants(), 0);
+  // The role back: the library opens, but the exercise stays out of reach until granted again.
+  await query("update public.user_club_roles set is_active=true where user_id=$1", [coach.userId]);
+  assert.equal((await api("/api/exercises?limit=1", { cookie: coach.cookie })).status, 200);
+  assert.equal((await api(`/api/exercises/${system}`, { cookie: coach.cookie })).status, 404);
+});
+
+test("a grant change whose COMMIT answer is lost is found by the check; one whose COMMIT is refused is never 'changed'", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const admin = await makeLibraryAdmin("grants-commit-admin");
+  const coach = await makeCoach("grants-commit-coach");
+  const create = async (name) => (await api("/api/exercise-collections", { method: "POST", cookie: admin.cookie, body: { name, exerciseIds: [], userIds: [] } })).body.collection;
+  const A = await create(`Grants commit A ${tag}`);
+  const B = await create(`Grants commit B ${tag}`);
+  const put = (body) => api("/api/exercise-collections/user-grants", { method: "PUT", cookie: admin.cookie, body });
+  const grants = async () => (await query("select collection_id from library.exercise_collection_users where user_id=$1 order by collection_id", [coach.userId])).rows.map((row) => row.collection_id);
+  // The COMMIT itself is refused (a deferred check on B's audit row): nothing changed, the answer says unknown.
+  await query(`create function library.test_refuse_grant() returns trigger language plpgsql as $$
+    begin if new.collection_id = '${B.id}'::uuid then raise exception 'test: commit refused'; end if; return new; end $$`);
+  await query(`create constraint trigger test_refuse_grant after insert on library.exercise_collection_audit
+    deferrable initially deferred for each row execute function library.test_refuse_grant()`);
+  try {
+    const refused = await put({ userIds: [coach.userId], add: [A.id, B.id] });
+    assert.equal(refused.status, 503, JSON.stringify(refused.body));
+    assert.deepEqual(refused.body, { error: "outcomeUnknown" });
+  } finally {
+    await query("drop trigger test_refuse_grant on library.exercise_collection_audit");
+    await query("drop function library.test_refuse_grant()");
+  }
+  assert.deepEqual(await grants(), []);
+  // A refused COMMIT of a removal: the grants are still there, so the answer is unknown, never "changed".
+  await query("insert into library.exercise_collection_users (collection_id,user_id) values ($1,$3),($2,$3)", [A.id, B.id, coach.userId]);
+  await query(`create function library.test_refuse_grant() returns trigger language plpgsql as $$
+    begin if new.collection_id = '${B.id}'::uuid then raise exception 'test: commit refused'; end if; return new; end $$`);
+  await query(`create constraint trigger test_refuse_grant after insert on library.exercise_collection_audit
+    deferrable initially deferred for each row execute function library.test_refuse_grant()`);
+  try {
+    const refusedRemoval = await put({ userIds: [coach.userId], remove: [A.id, B.id] });
+    assert.equal(refusedRemoval.status, 503, JSON.stringify(refusedRemoval.body));
+    assert.deepEqual(refusedRemoval.body, { error: "outcomeUnknown" });
+  } finally {
+    await query("drop trigger test_refuse_grant on library.exercise_collection_audit");
+    await query("drop function library.test_refuse_grant()");
+  }
+  assert.deepEqual(await grants(), [A.id, B.id].sort());
+  await query("delete from library.exercise_collection_users where user_id=$1", [coach.userId]);
+  // The COMMIT lands but its answer is lost: the check on another connection finds every pair.
+  const original = pool.connect;
+  pool.connect = function (callback) {
+    if (callback) return original.call(this, callback);
+    pool.connect = original;
+    return original.call(this).then((client) => {
+      const send = client.query.bind(client);
+      client.query = async (...args) => {
+        const result = await send(...args);
+        if (args[0] === "commit") { client.query = send; throw new Error("test: COMMIT answer lost"); }
+        return result;
+      };
+      return client;
+    });
+  };
+  let lost;
+  try { lost = await put({ userIds: [coach.userId], add: [A.id, B.id] }); } finally { pool.connect = original; }
+  assert.equal(lost.status, 200, JSON.stringify(lost.body));
+  assert.equal(lost.body.verifiedAfterCommitError, true);
+  assert.equal(lost.body.added.length, 2);
+  assert.deepEqual(await grants(), [A.id, B.id].sort());
+  const retry = await put({ userIds: [coach.userId], add: [A.id, B.id] });
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.changed, false);
+});
+
 test("locked previews expose no exercise media, instructions, grants or usable exercise; all-users remains explicit", async () => {
   const admin = await makeLibraryAdmin("locked-admin");
   const outsider = await makeCoach("locked-denied");
