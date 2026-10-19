@@ -3,7 +3,7 @@ import { MediaStorageError, uuid } from '../mediaStorage.js';
 import { isPlatformAdministrator } from '../authz.js';
 
 // Service injection keeps HTTP authorization tests independent of R2 credentials.
-export function createMediaStorageRouter({ service, uploads, enabled = () => process.env.MEDIA_STORAGE_ENABLED === 'true', admin = false }) {
+export function createMediaStorageRouter({ service, uploads, access, enabled = () => process.env.MEDIA_STORAGE_ENABLED === 'true', admin = false }) {
   const router = Router();
   router.use((req, res, next) => {
     res.set('Cache-Control', 'no-store');
@@ -28,6 +28,10 @@ export function createMediaStorageRouter({ service, uploads, enabled = () => pro
     router.patch('/storage-accounts/:id/limit',handle(async (req,res) => res.json(await service.updateLimit(req.user.id,uuid(req.params.id),req.body))));
     router.get('/storage-limit-audit',handle(async (req,res) => res.json(await service.listAudit(req.query))));
   } else {
+    if (access) {
+      router.post('/access',handle(async(req,res)=>res.json(await access.access(req,req.body))));
+      router.post('/access/batch',handle(async(req,res)=>res.json(await access.batch(req,req.body))));
+    }
     if (uploads) {
       router.post('/uploads',handle(async(req,res)=>res.status(201).json(await uploads.initiate(req,req.body,req.get('Idempotency-Key')))));
       router.get('/uploads/:id',handle(async(req,res)=>res.json(await uploads.status(req,req.params.id))));

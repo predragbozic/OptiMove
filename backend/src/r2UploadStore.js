@@ -33,6 +33,15 @@ export function createR2UploadStore(env = process.env) {
         return {method:'PUT',url,headers:{'Content-Type':upload.expected_mime_type,'If-None-Match':'*'},expiresAt:upload.expires_at};
       } catch { throw unavailable(); }
     },
+    async signGet(asset) {
+      const {bucket}=config();
+      try {
+        const expiresAt=new Date(Date.now()+600000).toISOString();
+        const url=await getSignedUrl(sdk(),new GetObjectCommand({Bucket:bucket,Key:asset.object_key,
+          ResponseContentType:asset.mime_type,ResponseContentDisposition:'inline',ResponseCacheControl:'private, no-store'}),{expiresIn:600});
+        return {url,expiresAt};
+      } catch {throw unavailable();}
+    },
     async head(key) {
       const r=await send(new HeadObjectCommand({Bucket:config().bucket,Key:key}));
       return r && {sizeBytes:String(r.ContentLength),mimeType:r.ContentType,etag:r.ETag,tombstone:r.Metadata?.['optimove-tombstone']==='true'};

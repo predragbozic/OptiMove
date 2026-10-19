@@ -5,7 +5,7 @@ import http from "node:http";
 import express from "express";
 import pg from "pg";
 import { createDisposableDatabase } from "./support/disposable-db.mjs";
-import { EXERCISE_COLLECTIONS_FIXTURE_SQL } from "./support/exercise-collections-fixture.mjs";
+import { EXERCISE_COLLECTIONS_FIXTURE_SQL, addMediaSelectionFixture } from "./support/exercise-collections-fixture.mjs";
 
 const coachId = crypto.randomUUID();
 const otherCoachId = crypto.randomUUID();
@@ -119,6 +119,7 @@ before(async () => {
   `);
   await client.query("insert into public.users (id) values ($1),($2),($3)", [coachId, otherCoachId, athleteUserId]);
   await client.query(EXERCISE_COLLECTIONS_FIXTURE_SQL);
+  await addMediaSelectionFixture(client.query.bind(client));
   await client.query("insert into public.user_global_roles (user_id,role,is_active) values ($1,'platform_admin',true)", [otherCoachId]);
   for (const [key, ownerScope, ownerId, active] of [
     ["own", "user", coachId, true],

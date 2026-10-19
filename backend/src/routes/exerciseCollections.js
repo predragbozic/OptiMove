@@ -16,11 +16,11 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 // access predicates on `e`, so a slide is never an exercise the coach could
 // not open from there.
 const COVER_SLIDE_LIMIT = 10;
-const coverPictureSql = `(nullif(btrim(e.image_url),'') is not null
-  or btrim(e.video_url) ~* '^https?://((www\\.|m\\.|music\\.)?youtube\\.com|(www\\.)?youtube-nocookie\\.com)/([^?#]*\\?([^#]*&)?v=[a-z0-9_-]{11}([&#]|$)|(shorts|embed|live)/[a-z0-9_-]{11}([/?#]|$))'
-  or btrim(e.video_url) ~* '^https?://youtu\\.be/[a-z0-9_-]{11}([/?#]|$)'
-  or e.video_url ~* 'drive\\.google\\.com/(file/d/[^/?]|.*[?&]id=[^&])|lh3\\.googleusercontent\\.com/d/[^/?]')`;
-const coverSlideSql = `jsonb_build_object('imageUrl',coalesce(e.image_url,''),'videoUrl',coalesce(e.video_url,''))`;
+const coverPictureSql = `(e.image_source='asset' or (e.image_source='legacy' and nullif(btrim(e.image_url),'') is not null)
+  or e.video_source='legacy' and btrim(e.video_url) ~* '^https?://((www\\.|m\\.|music\\.)?youtube\\.com|(www\\.)?youtube-nocookie\\.com)/([^?#]*\\?([^#]*&)?v=[a-z0-9_-]{11}([&#]|$)|(shorts|embed|live)/[a-z0-9_-]{11}([/?#]|$))'
+  or e.video_source='legacy' and btrim(e.video_url) ~* '^https?://youtu\\.be/[a-z0-9_-]{11}([/?#]|$)'
+  or e.video_source='legacy' and e.video_url ~* 'drive\\.google\\.com/(file/d/[^/?]|.*[?&]id=[^&])|lh3\\.googleusercontent\\.com/d/[^/?]')`;
+const coverSlideSql = `jsonb_build_object('imageUrl',case when e.image_source='legacy' then coalesce(e.image_url,'') else '' end,'videoUrl',case when e.video_source='legacy' then coalesce(e.video_url,'') else '' end) || case when e.video_source<>'legacy' or e.image_source<>'legacy' then jsonb_build_object('media',jsonb_build_object('video',case when e.video_source='asset' then jsonb_build_object('source','asset','mediaId',e.video_asset_id,'kind','video') when e.video_source='legacy' and nullif(e.video_url,'') is not null then jsonb_build_object('source','legacy','url',e.video_url) else jsonb_build_object('source','none') end,'image',case when e.image_source='asset' then jsonb_build_object('source','asset','mediaId',e.image_asset_id,'kind','image') when e.image_source='legacy' and nullif(e.image_url,'') is not null then jsonb_build_object('source','legacy','url',e.image_url) else jsonb_build_object('source','none') end,'accessContext',jsonb_build_object('type','exercise','id',e.id))) else '{}'::jsonb end`;
 const coverSlidesSql = (from) => `(select coalesce(jsonb_agg(slide.picture order by slide.name,slide.id),'[]'::jsonb)
   from (select e.id,e.name,${coverSlideSql} as picture ${from} and ${coverPictureSql}
     order by e.name,e.id limit ${COVER_SLIDE_LIMIT}) slide)`;
@@ -36,7 +36,7 @@ router.get("/catalog", async (req, res, next) => {
     const granted = `(${exerciseAdministratorSql} or c.access_all=true or exists (
       select 1 from library.exercise_collection_users granted where granted.collection_id=c.id and granted.user_id=$1))`;
     const blocks = await queryWithoutJit(`select c.id,c.name,c.description,not ${granted} as locked,
-        coalesce(nullif(c.cover_image_url,''),case when ${granted} then (select nullif(e.image_url,'') from library.exercise_collection_items ci
+        coalesce(nullif(c.cover_image_url,''),case when ${granted} then (select case when e.image_source='legacy' then nullif(e.image_url,'') end from library.exercise_collection_items ci
           join library.exercises e on e.id=ci.exercise_id where ci.collection_id=c.id and ${visible}
           order by e.name,e.id limit 1) end,'') as "coverImageUrl",
         case when nullif(c.cover_image_url,'') is null and ${granted} then ${coverSlidesSql(`from library.exercise_collection_items ci
@@ -52,7 +52,7 @@ router.get("/catalog", async (req, res, next) => {
     if (blocks.rows.length > 500) return res.status(409).json({ error: "tooManyBlocks" });
     // Other's pictures come from the same pass as its count.
     const other = await queryWithoutJit(`select count(*)::integer as count,
-        (array_agg(nullif(e.image_url,'') order by e.name,e.id))[1] as image,
+        (array_agg(case when e.image_source='legacy' then nullif(e.image_url,'') end order by e.name,e.id))[1] as image,
         coalesce(to_jsonb((array_agg(${coverSlideSql} order by e.name,e.id) filter (where ${coverPictureSql}))[1:${COVER_SLIDE_LIMIT}]),'[]'::jsonb) as slides
       from library.exercises e where ${visible} and (e.owner_scope='system' or e.owner_user_id=$1) and not exists (select 1 from library.exercise_collection_items ci
         where ci.exercise_id=coalesce(e.source_exercise_id,e.id))`, [req.user.id]);

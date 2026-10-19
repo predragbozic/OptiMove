@@ -5,6 +5,8 @@ Backend branch: `codex/r2-be2-upload` (PR #187).
 Frontend questions: `docs/ai/exercise-media-r2-fe2-upload-contract.md` on
 `feat/exercise-media-r2-fe2` (PR #186), questions 1–11 answered below.
 
+BE-3 implementation/dependency and rollout notes: `r2-be3-binding.md`.
+
 This document defines the agreed interface, not a claim that every phase is
 implemented. Availability is explicit:
 
@@ -12,8 +14,8 @@ implemented. Availability is explicit:
 |---|---|
 | Upload initiation/status/renew/complete/cancel, quota settlement | Implemented in BE-2 |
 | Target-aware storage usage, verification-expiry race fix | Implemented in BE-2 |
-| Attach/replace/remove on exercise/copy/Builder save, read descriptors | Reserved contract for BE-3, NOT implemented by BE-2 |
-| `/api/media/access` and `/access/batch` | FE-1 contract; backend BE-3, NOT implemented by BE-2 |
+| Attach/replace/remove on exercise/copy/Builder save, read descriptors | Implemented on BE-3 branch `codex/r2-be3-binding`; requires BE-2 |
+| `/api/media/access` and `/access/batch` | Implemented on BE-3 branch `codex/r2-be3-binding`; FE-1 format unchanged |
 | Deleting unused ready assets / reference-aware GC | Separate lifecycle work; NOT an upload cancellation |
 
 Do not enable end-user R2 save/replace merely because upload endpoints exist.
