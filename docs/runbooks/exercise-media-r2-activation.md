@@ -32,17 +32,20 @@ editor of today whatever the guards say). The deployed bundle still has both fro
 PR (#192) is E-2:** both guards on together, so the complete flow opens for the quota accounts only —
 see "E-2 — the pilot activation" below. The transport-only phase D was not taken (owner, 2026-10-19).
 
-## The owner's decision (2026-10-19): gradual activation, pilot first
+## The owner's decisions (2026-10-19): gradual activation, then both guards together for the quota accounts
 
-First the pilot with the transport on and the save off; only after the real R2 upload, the quota, the
-verification, the cancellation and the cleanup are checked does the integration pilot with both guards
-follow. During the transport pilot, by design:
+In the morning: the backend first, the frontend later — phases A, B and C ran with
+`MEDIA_STORAGE_ENABLED` on and both frontend guards off, proving R2 from the browser console (phase C). In
+the evening, after phase C: a transport-only flip (the former "phase D") would have shown Upload buttons
+to every coach while most accounts hold 0 B and nothing could be saved, so **#192 waited for phase E**;
+E-1 (#193, merged) made the storage quota the gate of the upload controls; and **E-2 — this PR — flips both
+guards together**. During the pilot, by design:
 
-- a file uploaded by the pilot account is charged to the quota but **not** saved with the exercise (the
-  editor says "Saving it with the exercise is not available yet." and blocks Save until the file is
-  removed);
-- no thumbnail and no frame is offered (#191 needs the save guard);
-- only the owner uploads, on a test exercise; nothing is announced to coaches before phase E.
+- only accounts with a storage limit above zero (the pilot) can upload, and their uploads are saved with
+  the exercise on Save, played through the FE-1 player, replaced, removed and used for thumbnails;
+- every account at the default 0 B keeps the editor of today, byte for byte;
+- nothing is announced to coaches before the wider activation (the default limit raised by the
+  administrator).
 
 ## How the guards are switched — build time against runtime
 
@@ -104,14 +107,17 @@ nothing wildcarded):
 ]
 ```
 
-Phase E adds `GET` and `HEAD` to `AllowedMethods` and `Range` to `AllowedHeaders` (playback through the
-player needs no CORS; a frame of a stored video read by the canvas does).
+Checked from the app origin on 2026-10-19 (see E-2): `GET` and the `Range` header are already allowed
+(GET 200, Range 206 — a frame of a stored video read by the canvas works; playback through the player
+needs no CORS at all); `HEAD` is not allowed and `Content-Range` / `Accept-Ranges` are not exposed — an
+optional addition, the frontend sends no HEAD and reads neither header.
 
 Rollback of phase A: nothing runs yet; unset the variables or leave them.
 
 ### Phase B — controlled backend enablement for the pilot test (owner approval 1)
 
-Precondition: the deployed bundle still has both frontend guards off (#192 **not** merged).
+Precondition (as it was on 2026-10-19, when phase B ran): the deployed bundle had both frontend guards
+off (#192 not yet merged).
 
 | # | Step | Where | Expected result |
 |---|---|---|---|
@@ -325,7 +331,7 @@ outcome in this runbook):**
 | # | Step | Expected |
 |---|---|---|
 | E1 | `/api/health` three times with the merge commit; signed out a media route 401; **a 0 B coach's editor unchanged** (open an existing legacy exercise as a coach without a limit: the link fields, no line, no Upload) | as stated |
-| E2 | Pilot: open the test exercise → *Upload video…* → the H.264 + AAC-LC MP4 → "Uploaded and verified. It is saved with the exercise when you press Save." → **Save** | the exercise closes; `GET /api/exercises/:id` carries `media.video.source: "asset"`; Settings → Storage shows the bytes |
+| E2 | Pilot: open the test exercise → *Upload video…* → the H.264 + AAC-LC MP4 → "Uploaded and verified. It is saved with the exercise when you press Save." → **Save** | the exercise closes; `GET /api/exercises/:id` carries `media.video.source: "asset"`; Settings → Storage shows the bytes. If Save shows an error, see the STOP rule below before saving again |
 | E3 | Reopen the exercise → **Preview** (the FE-1 player) → play and seek | the signed address plays; seeking works; the player's address refresh after 10 min (optional wait) |
 | E4 | The library card of the exercise; **Builder**: add the exercise to a section → the card's Preview → open the program as the **athlete** of that plan (the athlete page) and play from the session view | the thumbnail / player through the `plan_item` context (BE-3 decorates athlete rows; the athlete page loads the same `app.js` and FE-1 renderer) — **this is the first real athlete-side playback**: if it does not play, record it as a blocker for the wider activation, not for the pilot |
 | E5 | Pilot: *Choose a frame of the video…* → a moment → *Use this frame* → Save; reopen | the picture is the frame; the card shows it |
@@ -333,6 +339,17 @@ outcome in this runbook):**
 | E7 | Cancel during the PUT; Cancel during verification (the wait of up to 4 s) | "Upload cancelled." both times |
 | E8 | A rename of a legacy exercise by the pilot; the Builder custom-exercise modal | the links unchanged; the modal's link fields only |
 | E9 | The hourly cron's next run; Settings → Storage | `{"cleaned":N,"failed":0}` where N = the cancelled sessions; the used bytes = the bound assets plus the earlier pilot files |
+
+**STOP rule for the pilot.** Any outcome other than the expected one at E1, E2, E3, E5, E6, E7, E8 or E9 is
+a **stop**: no further step is taken; lever (1) below for the pilot account (its limit back to 0) at once;
+lever (2) as well when a stored file misbehaves (Preview, Replace or Remove of a bound asset, or a legacy
+exercise changed); the step, the HTTP status, the error code and the exercise id are recorded here before
+anything is retried; the fix is a separate change, and the pilot starts again from E1. E4 is the stated
+exception: its failure stops the wider activation, not the pilot, and is recorded the same way. A
+**Save that shows an error** (E2, E5, E6): close the editor and look at the exercise in the library before
+saving again — for an existing exercise a second Save is harmless, but for a **new exercise or a copy** a
+second Save cannot bind the same file (the first Save, if it landed, already bound it) and will show an
+error although nothing is lost.
 
 **Rollback of E-2, from the finest lever:** (1) per account — the limit back to 0 through Settings →
 Storage: uploads stop at once, Preview of stored files continues; (2) runtime — `MEDIA_STORAGE_ENABLED=false`
@@ -426,21 +443,20 @@ Rollback of phase D, two levers:
 - **the guard itself** — a PR that sets `DEFAULT_UPLOAD_TRANSPORT_ENABLED` back to `false`, a build and
   a deploy (minutes, a deploy): the editor returns to the link fields with the backend still on.
 
-### Phase E — the integration pilot: `MEDIA_SAVE_ENABLED` (owner approval 4, later)
+### Phase E as first planned — a separate save flip (superseded 2026-10-19 by E-2 above)
 
-A separate PR flips `DEFAULT_MEDIA_SAVE_ENABLED` to `true` after: CORS `GET` / `HEAD` / `Range` added
-(A5); the BE-3 routes checked signed out (401). Then, as the pilot account on the test exercise: an
-upload saved with the exercise (`media.video = { source: "asset", mediaId }`), the FE-1 player plays it,
-a frame chosen and an automatic thumbnail (#191), Replace and Remove of a stored file, the Builder's
-cards. Only after that the announcement to coaches. Rollback: the same two levers as phase D (the save
-guard back to `false` by a PR, or the backend flag off).
+Originally a second PR was to flip `DEFAULT_MEDIA_SAVE_ENABLED` after the transport pilot. The owner chose
+instead to flip both guards together behind the quota gate (#193) — that is E-2, this PR. Kept for the
+record; the checks it listed (an upload saved with the exercise, the player, a frame and an automatic
+thumbnail, Replace and Remove, the Builder's cards) are the E-2 pilot steps E2–E6.
 
 ## Never, at any phase
 
 Drop the media tables, delete objects, add a lifecycle rule on `pending/`, rewrite legacy URLs, put an
-R2 secret in a `VITE_*` variable or a log, or flip both frontend guards in one step.
+R2 secret in a `VITE_*` variable or a log, or flip a frontend guard without the quota gate (#193) in
+place.
 
-## What to watch after phases B–D
+## What to watch after phases B, C and E-2
 
 - The cleanup job's runs (Render cron log): expired / cancelled sessions settled, no repeated failures.
 - Rate caps: 20 initiation / renew requests per minute and 200 per day per uploader (429
@@ -451,11 +467,16 @@ R2 secret in a `VITE_*` variable or a log, or flip both frontend guards in one s
 
 ## What the tests pin for the pilot
 
-- `frontend/tests/exercise-media-pilot-mode.test.mjs`: the shipped defaults (transport on, save off)
-  and no runtime source; a legacy exercise's save body byte-identical with the transport on and off,
-  without a `media` key; the Builder's Edit uses the same editor and its custom-exercise modal keeps the
-  link fields; a stored R2 file is Preview only with its legacy key omitted (BE-3 keeps it); an upload
-  during the pilot is never saved; Cancel during verification honoured at the end of the current poll
-  sleep (1, 2, 4 s) and the server told.
+- `frontend/tests/exercise-media-pilot-mode.test.mjs`: the shipped defaults (**both guards on**) and no
+  runtime source; a 0 B account's legacy editor byte-identical to the editor with both guards off, and a
+  rename sending the links as loaded without a `media` key; the Builder's Edit uses the same editor and
+  its custom-exercise modal keeps the link fields; a stored R2 file on a 0 B account shows Preview and
+  Remove and a rename keeps it (legacy key omitted, no `media` key); a pilot account's upload **saves as
+  `{ source: "asset", mediaId }`** with the legacy key omitted and reopens as stored with Preview /
+  Replace / Remove; Cancel during verification honoured at the end of the current poll sleep (1, 2, 4 s)
+  and the server told.
+- `frontend/tests/exercise-media-quota-gate.test.mjs` (#193): the quota gate — 0 B, the pilot account, a
+  full account, Remove's independence, the club exercise's account, every unusable storage answer, the
+  legacy links.
 - `frontend/tests/exercise-media-upload.test.mjs` and `frontend/tests/exercise-editor-media.test.mjs`
   (FE-2): the transport, the codes, the faces, cancel during the PUT, the H1 rule.
