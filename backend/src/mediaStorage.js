@@ -185,7 +185,7 @@ export function createMediaStorageService(pool) {
         return upload;
       });
     },
-    // Internal BE-2 hook, only AFTER content verification and immutable R2 copy.
+    // Internal BE-2 hook, only AFTER verification of the immutable create-only object.
     // This does not itself verify an R2 object and is deliberately not routable.
     async commitVerifiedUpload(uploadId, verified) {
       uuid(uploadId); object(verified); bytes(verified.sizeBytes,{positive:true}); object(verified.metadata);
@@ -197,11 +197,14 @@ export function createMediaStorageService(pool) {
         const u = (await c.query('select * from media.uploads where id=$1 for update',[uploadId])).rows[0];
         if (verified.sizeBytes!==u.expected_size_bytes || verified.mimeType!==u.expected_mime_type) fail(422,'media_verification_failed');
         if (u.status==='completed') return u;
+        if (Object.hasOwn(u,'verification_token') && (u.status!=='verifying' || !u.verification_token || u.verification_token!==verified.verificationToken || verified.objectKey!==u.temporary_object_key)) fail(409,'state_conflict');
+        if (verified.objectKey!==undefined && verified.objectKey!==u.temporary_object_key) fail(409,'state_conflict');
         if (!['reserved','verifying'].includes(u.status)) fail(409,'state_conflict');
-        await c.query("update media.assets set status='ready',size_bytes=$2,mime_type=$3,metadata=$4,updated_at=now() where id=$1",
-          [u.asset_id,verified.sizeBytes,verified.mimeType,JSON.stringify(verified.metadata)]);
+        await c.query("update media.assets set status='ready',size_bytes=$2,mime_type=$3,metadata=$4,object_key=coalesce($5,object_key),source_video_asset_id=$6,updated_at=now() where id=$1",
+          [u.asset_id,verified.sizeBytes,verified.mimeType,JSON.stringify(verified.metadata),verified.objectKey || null,verified.metadata.sourceVideoMediaId || null]);
         await c.query('update media.storage_accounts set reserved_bytes=reserved_bytes-$2,used_bytes=used_bytes+$3,updated_at=now() where id=$1',
           [u.storage_account_id,u.reserved_bytes,verified.sizeBytes]);
+        if (u.verification_token) await c.query("insert into media.upload_events(upload_id,performed_by_user_id,event) values($1,$2,'completed')",[uploadId,u.uploaded_by_user_id]);
         return (await c.query("update media.uploads set status='completed',updated_at=now() where id=$1 returning *",[uploadId])).rows[0];
       });
     },
@@ -216,8 +219,10 @@ export function createMediaStorageService(pool) {
         const u = (await c.query('select * from media.uploads where id=$1 for update',[uploadId])).rows[0];
         if (['cancelled','failed'].includes(u.status)) return u;
         if (u.status==='completed') fail(409,'upload_already_completed');
+        if (Object.hasOwn(u,'verification_token') && u.status!=='cancelling') fail(409,'cleanup_required');
         await c.query("update media.assets set status='failed',updated_at=now() where id=$1",[u.asset_id]);
         await c.query('update media.storage_accounts set reserved_bytes=reserved_bytes-$2,updated_at=now() where id=$1',[u.storage_account_id,u.reserved_bytes]);
+        if (u.verification_token!==undefined) await c.query('insert into media.upload_events(upload_id,performed_by_user_id,event,error_code) values($1,$2,$3,$4)',[uploadId,u.uploaded_by_user_id,outcome,u.error_code || null]);
         return (await c.query('update media.uploads set status=$2,updated_at=now() where id=$1 returning *',[uploadId,outcome])).rows[0];
       });
     },

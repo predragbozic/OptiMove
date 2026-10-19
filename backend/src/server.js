@@ -38,6 +38,8 @@ import { realtimeRouter } from "./realtime.js";
 import { assertEmailConfigValid } from "./email.js";
 
 import { createMediaStorageService } from './mediaStorage.js';
+import { createMediaUploadService } from './mediaUploads.js';
+import { createR2UploadStore } from './r2UploadStore.js';
 import { createMediaStorageRouter } from './routes/mediaStorage.js';
 
 const app = express();
@@ -78,7 +80,8 @@ app.get("/api/health", async (_req, res, next) => {
 });
 
 const mediaStorage = createMediaStorageService(pool);
-app.use('/api/media', createMediaStorageRouter({ service: mediaStorage }));
+const mediaUploads = createMediaUploadService({pool,storage:mediaStorage,store:createR2UploadStore()});
+app.use('/api/media', createMediaStorageRouter({ service: mediaStorage, uploads: mediaUploads }));
 app.use('/api/admin/media', createMediaStorageRouter({ service: mediaStorage, admin: true }));
 
 app.use("/api/auth", authRouter);
