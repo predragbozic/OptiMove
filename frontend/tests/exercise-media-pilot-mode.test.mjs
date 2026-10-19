@@ -130,3 +130,44 @@ test("5. an upload during the pilot is never saved: 'not available yet', Save re
   assert.equal("media" in patch.body, false);
   assert.equal(patch.body.videoUrl, "", "the link the upload replaced is gone, as FE-2 always did; nothing of R2 travels");
 });
+
+test("6. Cancel during verification is honoured at the end of the current poll sleep (1, 2, 4 s), never lost: the server is told and the outcome is 'cancelled'", async () => {
+  const minutesFromNow = (minutes) => new Date(Date.now() + minutes * 60_000).toISOString();
+  const envelope = (status, extra = {}) => ({ uploadId: "up-1", mediaId: "media-1", status, expiresAt: minutesFromNow(10), errorCode: null, ...extra });
+  const reply = (body, status = 200) => ({ ok: status < 400, status, statusText: "", json: async () => body });
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const method = options.method || "GET";
+    calls.push(`${method} ${String(url)}`);
+    if (String(url) === guards.UPLOADS_ROUTE && method === "POST") {
+      return reply(envelope("pending", { upload: { method: "PUT", url: "https://r2.example/pending/up-1?sig=1", headers: { "Content-Type": "video/mp4", "If-None-Match": "*" }, expiresAt: minutesFromNow(10) }, reservation: { bytes: "100", expiresAt: minutesFromNow(10) } }), 201);
+    }
+    if (String(url).endsWith("/complete")) return reply(envelope("verifying"), 202);
+    if (method === "DELETE") return reply(envelope("cancelled"));
+    return reply(envelope("verifying"));
+  };
+  class FakeXHR {
+    constructor() { this.headers = {}; this.upload = {}; }
+    open() {}
+    setRequestHeader(name, value) { this.headers[name] = value; }
+    send() { setTimeout(() => { this.status = 200; this.onload?.(); }, 0); }
+    abort() { this.onabort?.(); }
+  }
+  globalThis.XMLHttpRequest = FakeXHR;
+  const controller = new AbortController();
+  const sleeps = [];
+  let releaseSleep = null;
+  const sleep = (ms) => new Promise((resolve) => { sleeps.push(ms); releaseSleep = resolve; });
+  const pending = guards.startUpload({ file: { name: "a.mp4", size: 100, type: "video/mp4" }, slot: "video", context: { type: "exercise_edit", exerciseId: "e1" } }, { signal: controller.signal, sleep });
+  for (let i = 0; i < 50 && !sleeps.length; i += 1) await settle();
+  assert.deepEqual(sleeps, [1000], "the first poll sleep of the verification");
+  assert.deepEqual(calls, ["POST /api/media/uploads", "POST /api/media/uploads/up-1/complete", "GET /api/media/uploads/up-1"]);
+  controller.abort();
+  await settle();
+  assert.equal(calls.includes("DELETE /api/media/uploads/up-1"), false, "the cancel waits for the current sleep to end: the 'Cancelling...' of up to 4 s");
+  releaseSleep();
+  await assert.rejects(pending, (error) => error.code === "cancelled" && error.cancelOutcome === "cancelled" && error.uploadId === "up-1");
+  assert.equal(calls.at(-1), "DELETE /api/media/uploads/up-1", "then the server is told, nothing is lost");
+  assert.deepEqual([...guards.VERIFICATION_POLL_DELAYS_MS], [1000, 2000, 4000], "the sleeps: 1, 2, then 4 s each");
+  delete globalThis.XMLHttpRequest;
+});
