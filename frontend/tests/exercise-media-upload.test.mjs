@@ -160,10 +160,19 @@ test("5. the guards: the transport refuses and sends nothing while off; the save
   upload.setMediaSaveEnabled(false);
   assert.deepEqual(upload.applyMediaToSavePayload({ name: "x", videoUrl: "", imageUrl: "" }, media), { name: "x", videoUrl: "", imageUrl: "" }, "BE-3 absent: exactly today's body");
   assert.deepEqual(upload.mediaSavePayload(media), {});
+  // H1: a slot that holds a stored R2 file sends no legacy field, whatever the guard says -
+  // BE-3 would read a present (even empty) videoUrl as a legacy selection and detach the file.
+  const stored = { video: { state: "stored", mediaId: "keep" }, image: { state: "none" } };
+  assert.deepEqual(upload.applyMediaToSavePayload({ name: "x", videoUrl: "", imageUrl: "https://x/y.jpg" }, stored), { name: "x", imageUrl: "https://x/y.jpg" }, "the stored slot's key is omitted, the legacy slot's kept");
+  assert.deepEqual(upload.applyMediaToSavePayload({ videoUrl: "https://old.example/retained.mp4", imageUrl: "" }, stored), { imageUrl: "" }, "a retained old link under a stored file is not resent either");
+  const failedReplace = { video: { state: "failed", previous: { state: "stored", mediaId: "keep" } }, image: { state: "none" } };
+  assert.deepEqual(upload.applyMediaToSavePayload({ videoUrl: "", imageUrl: "" }, failedReplace), { imageUrl: "" }, "a Replace that failed still holds the stored file");
+  upload.setMediaSaveEnabled(true);
+  assert.deepEqual(upload.applyMediaToSavePayload({ videoUrl: "", imageUrl: "" }, stored), { imageUrl: "" }, "BE-3 on: an untouched stored slot is omitted from both formats");
   upload.setMediaSaveEnabled(true);
   assert.deepEqual(upload.applyMediaToSavePayload({ name: "x", videoUrl: "", imageUrl: "" }, media), { name: "x", media: { video: { source: "asset", mediaId: "m1" }, image: { source: "none" } } }, "Q5: asset / none, never both formats for one slot");
   assert.deepEqual(upload.applyMediaToSavePayload({ videoUrl: "https://youtu.be/dQw4w9WgXcQ", imageUrl: "https://x/y.jpg" }, { video: { state: "none", removedMediaId: "old" }, image: { state: "stored", mediaId: "keep" } }),
-    { imageUrl: "https://x/y.jpg", media: { video: { source: "legacy", url: "https://youtu.be/dQw4w9WgXcQ" } } }, "a link that replaced a stored file; an untouched stored slot is omitted");
+    { media: { video: { source: "legacy", url: "https://youtu.be/dQw4w9WgXcQ" } } }, "a link that replaced a stored file; an untouched stored slot is omitted from both formats (H1)");
   assert.deepEqual(upload.applyMediaToSavePayload({ videoUrl: "https://youtu.be/x", imageUrl: "" }, { video: { state: "none" }, image: { state: "none" } }), { videoUrl: "https://youtu.be/x", imageUrl: "" }, "no R2 change: the legacy body as before");
   upload.setMediaSaveEnabled(false);
   assert.deepEqual(upload.uploadContextFor({ exerciseId: "e1" }), { type: "exercise_edit", exerciseId: "e1" });

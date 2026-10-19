@@ -26,7 +26,7 @@ this document. The questions are kept at the end for the record.
   session), progress from `xhr.upload`; 2xx → completion, 412 → completion (the object exists,
   never overwritten), a 403 / network / CORS failure → the server's status decides, then one whole
   PUT of the same File, never byte ranges; a permission within 60 s of its expiry is renewed first
-  (`/renew`); `POST /complete` with a 60 s bound, 202 → the status polled at 1, 2, 4, 4 … s inside
+  (`/renew`); `POST /complete` with a 90 s bound (the server's HEAD, 30 s inspection and commit), 202 → the status polled at 1, 2, 4, 4 … s inside
   a 120 s budget; a timed-out completion is an unknown state → the status before anything is
   repeated (a session still pending gets one more completion); Cancel = stop the request **and**
   `DELETE /api/media/uploads/:id` (quota is the server's; `cancel_unconfirmed` when it did not
@@ -60,6 +60,15 @@ availability, not proof of R2 credentials, CORS, binding or playback.
 
 Production behaviour stays unchanged while both are off: with the flag off the server answers 503
 `media_storage_disabled` anyway, and with the guard off the editor never asks.
+
+**One rule holds whatever the guards say (review finding H1 of BE-2 #187 / BE-3 #189):** a slot
+that holds the exercise's stored R2 file — untouched, or a Replace that failed or was cancelled —
+sends **no** `videoUrl` / `imageUrl` in the save body (`applyMediaToSavePayload()`). BE-3 reads a
+present legacy field, even an empty one, as a legacy selection that would switch the slot's source
+and detach the stored file; "omitted slot: unchanged" (Q5) is the only safe shape. On a backend
+without BE-3 no exercise has a stored file, so nothing changes there. The matching BE-3 hardening
+(treat an implicit legacy equal to the stored URL, or empty while the source is `asset`, as
+unchanged) is recommended in the review.
 
 ## Integration dependencies before each guard is flipped
 

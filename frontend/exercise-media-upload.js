@@ -43,9 +43,10 @@ export const uploadRoute = (uploadId, suffix = "") => `${UPLOADS_ROUTE}/${encode
 
 export const UPLOAD_CONTRACT = "r2-upload-api-v1.0.0";
 // The client bounds (ms): storage and the small JSON calls (initiation,
-// renew, status, cancel) short; completion waits for the server's inspection
-// (30 s) plus overhead. One mutable object so tests can shorten them.
-export const CLIENT_BOUNDS = { storage: 15_000, request: 15_000, completion: 60_000 };
+// renew, status, cancel) short; completion waits for the server's HEAD
+// (15 s), its inspection (30 s) and the commit, so 90 s. One mutable object
+// so tests can shorten them.
+export const CLIENT_BOUNDS = { storage: 15_000, request: 15_000, completion: 90_000 };
 export const STORAGE_CLIENT_BOUND_MS = CLIENT_BOUNDS.storage;
 export const REQUEST_CLIENT_BOUND_MS = CLIENT_BOUNDS.request;
 export const COMPLETION_CLIENT_BOUND_MS = CLIENT_BOUNDS.completion;
@@ -506,16 +507,30 @@ export async function startUpload({ file, slot, context, purpose } = {}, { onPro
 
 // ---- The exercise save (Q5, behind MEDIA_SAVE_ENABLED) ----------------------
 
-// Adds the contract's additive `media` selection to a save body and drops the
-// legacy field of every slot it selects (never both formats for one slot):
-// an uploaded, ready file -> { source: "asset", mediaId }; a stored file
-// removed in the editor -> { source: "none" }, or { source: "legacy", url }
-// when a link replaced it; an untouched slot is omitted. While the guard is
-// off the body is returned as it was.
+// A slot that still holds the exercise's stored R2 file: untouched, or a
+// Replace that failed or was cancelled and kept what the exercise had.
+const holdsStoredAsset = (field) => Boolean(field) && (field.state === "stored" || field.previous?.state === "stored");
+
+// Shapes a save body's media fields. Whatever the guards say, a slot that
+// holds a stored R2 file sends NO legacy field: BE-3 reads a present
+// videoUrl / imageUrl - even an empty one - as a legacy selection that would
+// detach the stored file ("omitted slot: unchanged", contract Q5), and on a
+// backend without BE-3 no exercise has a stored file, so nothing changes
+// there. Behind the BE-3 guard the contract's additive `media` selection is
+// added and the legacy field of every slot it selects dropped (never both
+// formats for one slot): an uploaded, ready file -> { source: "asset",
+// mediaId }; a stored file removed in the editor -> { source: "none" }, or
+// { source: "legacy", url } when a link replaced it; an untouched slot is
+// omitted. While the guard is off the rest of the body is as it was.
 export function applyMediaToSavePayload(payload, media) {
-  if (!mediaSaveEnabled || !media) return payload;
+  if (!media) return payload;
+  const slots = [["video", "videoUrl"], ["image", "imageUrl"]];
+  for (const [slot, urlKey] of slots) {
+    if (holdsStoredAsset(media[slot]) && !media[slot].removedMediaId) delete payload[urlKey];
+  }
+  if (!mediaSaveEnabled) return payload;
   const selection = {};
-  for (const [slot, urlKey] of [["video", "videoUrl"], ["image", "imageUrl"]]) {
+  for (const [slot, urlKey] of slots) {
     const field = media[slot];
     if (!field) continue;
     if (field.state === "uploaded" && field.mediaId) {

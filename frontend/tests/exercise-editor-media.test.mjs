@@ -115,7 +115,15 @@ test("2. the transport guard on: the owner-resolved storage line, Upload and Use
   await editor.handleExerciseEditorAction(state, handlers(), action("exercise-media-remove", "image"));
   assert.equal(state.exerciseEditor.data.imageUrl, "");
   assert.deepEqual(controlsOf("image"), ["Upload picture...", "Use a link", "<input file>"]);
-  editor.closeExerciseEditor(state, handlers());
+  // H1: saving with a stored video sends no videoUrl at all (BE-3 would read one as a legacy
+  // selection and detach the file); the image's legacy field travels as before.
+  await editor.handleExerciseEditorAction(state, handlers(), { dataset: { action: "exercise-editor-save" } });
+  const patch = calls.find((call) => call.method === "PATCH");
+  assert.ok(patch);
+  assert.equal("videoUrl" in patch.body, false, "the stored slot's legacy key is omitted");
+  assert.equal(patch.body.imageUrl, "");
+  assert.equal("media" in patch.body, false, "BE-3 guard off: no media object");
+  assert.equal(state.exerciseEditor.open, false);
   withGuards();
 });
 
@@ -337,6 +345,121 @@ test("8. a new exercise or a copy: links only until BE-3; with BE-3 on, an uploa
   transport.release();
   await uploading;
   editor.closeExerciseEditor(state, h);
+  withGuards();
+});
+
+// BE-3's rule for a save body (docs/backend/r2-upload-api-v1.md Q5, exerciseMedia.js
+// mediaSelections): a present legacy field - even empty - is a legacy selection; an
+// explicit media.<slot> and the legacy field of the same slot together are a 400.
+function assertSafeForBe3(body, { stored = [] } = {}) {
+  for (const [slot, key] of [["video", "videoUrl"], ["image", "imageUrl"]]) {
+    const explicit = Boolean(body.media && Object.hasOwn(body.media, slot));
+    assert.equal(explicit && Object.hasOwn(body, key), false, `${slot}: never both formats for one slot`);
+    if (stored.includes(slot)) assert.equal(Object.hasOwn(body, key) || explicit, false, `${slot}: a stored, untouched slot is omitted from both formats`);
+  }
+}
+
+test("10. regression against BE-3: a name or description change never touches the media; Replace and Remove are explicit selections; legacy links travel exactly as before", async () => {
+  // (a) Guard off (today): a stored video and a legacy image link; only the name and the aim change.
+  withGuards({ transport: true });
+  let calls = fakeApi({ exercise: detail(storedVideo) });
+  await editor.openExerciseEditor(state, handlers(), "e1");
+  await settle();
+  state.exerciseEditor.data.name = "Dead Bug (progression)";
+  state.exerciseEditor.data.aim = "Trunk control";
+  await editor.handleExerciseEditorAction(state, handlers(), { dataset: { action: "exercise-editor-save" } });
+  let patch = calls.find((call) => call.method === "PATCH");
+  assert.equal(patch.body.name, "Dead Bug (progression)");
+  assert.equal(patch.body.aim, "Trunk control");
+  assert.equal("videoUrl" in patch.body, false);
+  assert.equal(patch.body.imageUrl, "https://drive.google.com/file/d/IMG_1/view", "the legacy image link exactly as before");
+  assert.equal("media" in patch.body, false);
+  assertSafeForBe3(patch.body, { stored: ["video"] });
+  // The same with the guard on: an untouched stored slot is omitted from both formats.
+  withGuards({ transport: true, save: true });
+  calls = fakeApi({ exercise: detail(storedVideo) });
+  await editor.openExerciseEditor(state, handlers(), "e1");
+  await settle();
+  state.exerciseEditor.data.executionNotes = "Slow";
+  await editor.handleExerciseEditorAction(state, handlers(), { dataset: { action: "exercise-editor-save" } });
+  patch = calls.find((call) => call.method === "PATCH");
+  assert.equal(patch.body.executionNotes, "Slow");
+  assert.equal("videoUrl" in patch.body, false);
+  assert.equal("media" in patch.body, false, "nothing selected: no media object at all");
+  assertSafeForBe3(patch.body, { stored: ["video"] });
+  // (b) Explicit Replace and Remove (guard on): a stored video replaced by an upload, a stored image removed, then a link typed for the video instead.
+  const both = { media: { video: { source: "asset", mediaId: "vid-1" }, image: { source: "asset", mediaId: "img-1" }, accessContext: { type: "exercise", id: "e1" } } };
+  calls = fakeApi({ exercise: detail({ ...both, imageUrl: "" }) });
+  let transport = fakeTransport();
+  const h = handlers({ upload: transport.upload });
+  await editor.openExerciseEditor(state, h, "e1");
+  await settle();
+  const replacing = editor.chooseExerciseMediaFile(state, h, "video", file("new.mp4", 100, "video/mp4"));
+  await settle();
+  transport.release();
+  await replacing;
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-remove", "image"));
+  await editor.handleExerciseEditorAction(state, h, { dataset: { action: "exercise-editor-save" } });
+  patch = calls.find((call) => call.method === "PATCH");
+  assert.deepEqual(patch.body.media, { video: { source: "asset", mediaId: "new-1" }, image: { source: "none" } });
+  assert.equal("videoUrl" in patch.body, false);
+  assert.equal("imageUrl" in patch.body, false);
+  assertSafeForBe3(patch.body);
+  calls = fakeApi({ exercise: detail({ ...both, imageUrl: "" }) });
+  await editor.openExerciseEditor(state, handlers(), "e1");
+  await settle();
+  await editor.handleExerciseEditorAction(state, handlers(), action("exercise-media-remove", "video"));
+  await editor.handleExerciseEditorAction(state, handlers(), action("exercise-media-link", "video"));
+  state.exerciseEditor.data.videoUrl = "https://youtu.be/dQw4w9WgXcQ";
+  await editor.handleExerciseEditorAction(state, handlers(), { dataset: { action: "exercise-editor-save" } });
+  patch = calls.find((call) => call.method === "PATCH");
+  assert.deepEqual(patch.body.media, { video: { source: "legacy", url: "https://youtu.be/dQw4w9WgXcQ" } }, "a link in place of a removed stored file is an explicit legacy selection");
+  assert.equal("videoUrl" in patch.body, false);
+  assert.equal("imageUrl" in patch.body, false, "the untouched stored image is omitted");
+  assertSafeForBe3(patch.body, { stored: ["image"] });
+  // A Replace that failed keeps the stored file and still sends no legacy field.
+  transport = fakeTransport({ fail: "media_verification_failed" });
+  const h2 = handlers({ upload: transport.upload });
+  calls = fakeApi({ exercise: detail(both) });
+  await editor.openExerciseEditor(state, h2, "e1");
+  await settle();
+  const failing = editor.chooseExerciseMediaFile(state, h2, "video", file("bad.mp4", 100, "video/mp4"));
+  await settle();
+  transport.release();
+  await failing;
+  assert.equal(state.exerciseEditor.media.video.previous?.state, "stored");
+  await editor.handleExerciseEditorAction(state, h2, action("exercise-media-remove", "image"));
+  await editor.handleExerciseEditorAction(state, h2, { dataset: { action: "exercise-editor-save" } });
+  patch = calls.find((call) => call.method === "PATCH");
+  assert.equal("videoUrl" in patch.body, false);
+  assert.deepEqual(patch.body.media, { image: { source: "none" } });
+  assertSafeForBe3(patch.body, { stored: ["video"] });
+  // (c) Legacy links only (no stored file): the body is exactly today's, with either guard.
+  for (const save of [false, true]) {
+    withGuards({ transport: true, save });
+    calls = fakeApi({ exercise: detail({ videoUrl: "https://youtu.be/dQw4w9WgXcQ" }) });
+    await editor.openExerciseEditor(state, handlers(), "e1");
+    await settle();
+    await editor.handleExerciseEditorAction(state, handlers(), action("exercise-media-link", "video"));
+    state.exerciseEditor.data.videoUrl = "https://youtu.be/AAAAAAAAAA1";
+    await editor.handleExerciseEditorAction(state, handlers(), action("exercise-media-remove", "image"));
+    await editor.handleExerciseEditorAction(state, handlers(), { dataset: { action: "exercise-editor-save" } });
+    patch = calls.find((call) => call.method === "PATCH");
+    assert.equal(patch.body.videoUrl, "https://youtu.be/AAAAAAAAAA1", `guard ${save}: the edited link as before`);
+    assert.equal(patch.body.imageUrl, "", `guard ${save}: the removed link as before`);
+    assert.equal("media" in patch.body, false, `guard ${save}: no media object for legacy-only changes`);
+    assertSafeForBe3(patch.body);
+  }
+  // And the guard-off editor of a legacy-only exercise, where the plain fields are drawn: unchanged.
+  withGuards();
+  calls = fakeApi({ exercise: detail({ videoUrl: "https://youtu.be/dQw4w9WgXcQ" }) });
+  await editor.openExerciseEditor(state, handlers(), "e1");
+  await settle();
+  await editor.handleExerciseEditorAction(state, handlers(), { dataset: { action: "exercise-editor-save" } });
+  patch = calls.find((call) => call.method === "PATCH");
+  assert.equal(patch.body.videoUrl, "https://youtu.be/dQw4w9WgXcQ");
+  assert.equal(patch.body.imageUrl, "https://drive.google.com/file/d/IMG_1/view");
+  assert.equal("media" in patch.body, false);
   withGuards();
 });
 
