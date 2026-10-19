@@ -3,7 +3,7 @@ import { MediaStorageError, uuid } from '../mediaStorage.js';
 import { isPlatformAdministrator } from '../authz.js';
 
 // Service injection keeps HTTP authorization tests independent of R2 credentials.
-export function createMediaStorageRouter({ service, enabled = () => process.env.MEDIA_STORAGE_ENABLED === 'true', admin = false }) {
+export function createMediaStorageRouter({ service, uploads, access, enabled = () => process.env.MEDIA_STORAGE_ENABLED === 'true', admin = false }) {
   const router = Router();
   router.use((req, res, next) => {
     res.set('Cache-Control', 'no-store');
@@ -28,8 +28,23 @@ export function createMediaStorageRouter({ service, enabled = () => process.env.
     router.patch('/storage-accounts/:id/limit',handle(async (req,res) => res.json(await service.updateLimit(req.user.id,uuid(req.params.id),req.body))));
     router.get('/storage-limit-audit',handle(async (req,res) => res.json(await service.listAudit(req.query))));
   } else {
+    if (access) {
+      router.post('/access',handle(async(req,res)=>res.json(await access.access(req,req.body))));
+      router.post('/access/batch',handle(async(req,res)=>res.json(await access.batch(req,req.body))));
+    }
+    if (uploads) {
+      router.post('/uploads',handle(async(req,res)=>res.status(201).json(await uploads.initiate(req,req.body,req.get('Idempotency-Key')))));
+      router.get('/uploads/:id',handle(async(req,res)=>res.json(await uploads.status(req,req.params.id))));
+      router.post('/uploads/:id/renew',handle(async(req,res)=>res.json(await uploads.renew(req,req.params.id))));
+      router.post('/uploads/:id/complete',handle(async(req,res)=>{const r=await uploads.complete(req,req.params.id);res.status(r.httpStatus).json(r.body);}));
+      router.delete('/uploads/:id',handle(async(req,res)=>{const r=await uploads.cancel(req,req.params.id);res.status(r.httpStatus).json(r.body);}));
+    }
     router.get('/storage',handle(async (req,res) => {
       if (!req.authz?.capabilities?.coachWorkspace) throw new MediaStorageError(403,'operation_not_allowed');
+      if (req.query.exerciseId !== undefined) {
+        if (!uploads) throw new MediaStorageError(503,'media_storage_unavailable');
+        return res.json(await uploads.usageForExercise(req,req.query.exerciseId));
+      }
       // A workspace preference/role_hint never grants rights. Own private quota
       // and clubs actually administered by this actor are the only usage scopes.
       const owners = [{type:'user',id:req.user.id}];
@@ -38,10 +53,11 @@ export function createMediaStorageRouter({ service, enabled = () => process.env.
     }));
   }
   router.use((error,_req,res,next) => {
-    if (error instanceof MediaStorageError) return res.status(error.status).json({error:error.code,code:error.code,retryable:false,details:error.details});
+    if (error instanceof MediaStorageError) return res.status(error.status).json({error:error.code,code:error.code,retryable:Boolean(error.retryable),details:error.details});
     if (['55P03','57014','40001','40P01'].includes(error.code)) return res.status(503).json({error:'Storage is busy.',code:'media_storage_busy',retryable:true,details:{}});
     if (error.code==='23503') return res.status(404).json({error:'Resource not found.',code:'resource_not_found',retryable:false,details:{}});
-    next(error);
+    console.error('[media] operation failed', {code: typeof error.code==='string' ? error.code : 'unexpected_error'});
+    return res.status(503).json({error:'Media storage is unavailable.',code:'media_storage_unavailable',retryable:true,details:{}});
   });
   return router;
 }

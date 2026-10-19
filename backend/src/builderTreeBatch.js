@@ -1,5 +1,8 @@
+import { completeCopiedExerciseImages } from "./exerciseSnapshotMedia.js";
+
 const NODE_COLUMNS = "plan_session_id, parent_id, node_type, name, color, icon_url, short_note, note, node_order";
 const ITEM_FIELDS = [
+  "video_source", "video_asset_id", "image_source", "image_asset_id",
   "item_type", "exercise_id", "title", "description", "short_note", "note", "image_url", "video_url",
   "sets", "reps", "load", "item_order", "exercise_order", "source_row_ref",
   "domain_name", "category_name", "section_name", "domain_color", "category_color", "section_color",
@@ -36,6 +39,8 @@ export async function copyBuilderSessionContents(client, sessionMap, copyLegacyS
     "select * from plans.plan_items where plan_session_id = any($1::uuid[]) order by item_order",
     [sessionIds],
   );
+  items.rows = await completeCopiedExerciseImages(client.query.bind(client), items.rows,
+    (item) => sessionMap.get(item.plan_session_id));
   const sessionsWithNodes = new Set(nodes.rows.map((node) => node.plan_session_id));
   const children = new Map();
   for (const node of nodes.rows) {
@@ -69,7 +74,7 @@ export async function copyBuilderSessionContents(client, sessionMap, copyLegacyS
     }
     const targetNode = nodeMap.get(item.plan_node_id);
     if (!targetNode || sourceNodes.get(item.plan_node_id)?.plan_session_id !== item.plan_session_id) continue;
-    copiedItems.push([sessionMap.get(item.plan_session_id), targetNode, ...ITEM_FIELDS.map((field) => item[field])]);
+    copiedItems.push([sessionMap.get(item.plan_session_id), targetNode, ...ITEM_FIELDS.map((field) => item[field] ?? (field.endsWith('_source')?'legacy':null))]);
   }
   await insertRows(client, "plan_items", `plan_session_id, plan_node_id, ${ITEM_FIELDS.join(", ")}`, copiedItems);
   for (const [sourceId, rows] of legacyItems) {

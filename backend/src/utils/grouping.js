@@ -12,6 +12,7 @@ export function normalizeSlot(amPm, bta) {
 
 export function toPlanItem(row) {
   return {
+    ...(row.media?{media:row.media}:{}),
     planId: row.plan_id || "",
     rowIndex: row.source_row_ref ? Number(row.source_row_ref) || row.source_row_ref : null,
     plan_item_id: row.plan_item_id,
