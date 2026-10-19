@@ -1,5 +1,5 @@
 import { builderIconGlyph } from "./builder-helpers.js";
-import { exerciseMediaOf, renderMediaImage } from "./media.js";
+import { renderExerciseThumb } from "./exercise-view-modes.js";
 import { renderPastelSwatches } from "./taxonomy-view.js";
 import { autogrowRows } from "./textarea-autosize.js";
 import { formatDate, weekDayName, escapeAttr, escapeHtml } from "./utils.js";
@@ -445,7 +445,7 @@ function renderSectionPreviewPopover(node, context) {
     <div class="builder-section-preview-popover ${isOpen ? "is-open" : ""}">
       ${items.length ? items.slice(0, 8).map((item) => `
         <span class="builder-section-preview-thumb" title="${escapeAttr(item.title || "Exercise")}">
-          ${renderMediaImage(exerciseMediaOf(item), "builder-section-preview-image") || `<span class="builder-section-preview-fallback">${escapeHtml((item.title || "?").slice(0, 1).toUpperCase())}</span>`}
+          ${renderExerciseThumb(item, "builder-section-preview-image")}
         </span>
       `).join("") : `<span class="muted builder-section-preview-empty">No exercises yet</span>`}
     </div>

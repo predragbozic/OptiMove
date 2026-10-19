@@ -5,7 +5,8 @@ import { createBuilderTiming } from "../builderTiming.js";
 import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySessions, updateBuilderWeeklyDays } from "../builderTreeBatch.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
-import { exerciseReadScopeSql, lockExerciseReuse, assertExerciseReuseAllowed } from "../exerciseAccess.js";
+import { lockExerciseReuse, assertExerciseReuseAllowed } from "../exerciseAccess.js";
+import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 
 const router = Router();
@@ -1575,8 +1576,7 @@ router.post("/nodes/:nodeId/exercises", withBatchReuseGuard(async (req, res, nex
     await runQuery("set local statement_timeout = '10s'");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const exerciseResult = await runQuery(
-      `select e.id, e.name, e.aim, e.execution_notes, e.instruction, e.image_url, e.video_url
-       from library.exercises e where e.id = $2 and ${exerciseReadScopeSql}`, [req.user.id, text(req.body?.exerciseId)],
+      effectiveExerciseMediaSql, [req.user.id, text(req.body?.exerciseId)],
     );
     const exercise = exerciseResult.rows[0];
     if (!exercise) {
@@ -2348,6 +2348,7 @@ async function copyLegacySession(client, sourceSessionId, targetSessionId, loade
     ? { rows: loadedItems }
     : await client.query("select * from plans.plan_items where plan_session_id = $1 order by item_order", [sourceSessionId]);
   if (!items.rows.length) return;
+  items.rows = await completeCopiedExerciseImages(client.query.bind(client), items.rows, () => targetSessionId);
   const { nodesToInsert, itemSectionTempId } = planLegacyNodeTree(items.rows);
   const tempIdToRealId = await insertLegacyNodesBatch(client, targetSessionId, nodesToInsert);
   const values = [];
@@ -2542,6 +2543,7 @@ export async function copySessionContent(client, sourceSessionId, targetSessionI
     [sourceSessionId],
   );
   if (!itemsResult.rowCount) return;
+  itemsResult.rows = await completeCopiedExerciseImages(client.query.bind(client), itemsResult.rows, () => targetSessionId);
   const values = [];
   const params = [];
   let column = 0;
@@ -2587,6 +2589,7 @@ async function copyNodeTree(sourceId, targetSessionId, targetParentId, runQuery 
     color: source.color, icon_url: source.icon_url, short_note: source.short_note, note: source.note, node_order: order,
   }, runQuery);
   const sourceItems = await runQuery("select * from plans.plan_items where plan_node_id = $1 order by item_order", [sourceId]);
+  sourceItems.rows = await completeCopiedExerciseImages(runQuery, sourceItems.rows, () => targetSessionId);
   for (const item of sourceItems.rows) {
     const itemOrder = await nextOrder("plans.plan_items", "plan_session_id", targetSessionId, "item_order", runQuery);
     await runQuery(

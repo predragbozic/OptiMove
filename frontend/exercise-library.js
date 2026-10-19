@@ -1,5 +1,5 @@
-import { normalizeExerciseView, renderExerciseThumb, renderExerciseThumbBackdrop, renderExerciseViewSwitcher } from "./exercise-view-modes.js";
-import { exerciseMediaOf, hasAnyMedia, imageSources, mediaAccessAttributes, renderMediaThumb, videoThumbnailSources } from "./media.js";
+import { normalizeExerciseView, renderExerciseThumb, renderExerciseViewSwitcher } from "./exercise-view-modes.js";
+import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes } from "./media.js";
 import { EXERCISE_FILTERS } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -211,11 +211,7 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platform
       ${check}
       ${hasAnyMedia(media) ? `
         <button class="exercise-media library-media" data-action="open-media" data-title="${escapeAttr(exercise.name || "Exercise media")}" ${mediaAccessAttributes(media)}>
-          ${media.image.source === "legacy"
-            ? `${renderExerciseThumbBackdrop(imageSources(media.image.url))}${renderMediaThumb(media.image.url)}`
-            : media.image.source === "asset" || (media.video.source === "legacy" && videoThumbnailSources(media.video.url).length)
-              ? renderExerciseThumb({ name: exercise.name, media: exercise.media, video_url: media.video.url }, "media-thumb", { backdrop: true })
-              : `<span class="media-fallback">Video</span>`}
+          ${renderExerciseThumb(exercise, "media-thumb", { backdrop: true })}
         </button>
       ` : ""}
       <button class="exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
