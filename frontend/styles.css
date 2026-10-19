@@ -17429,6 +17429,40 @@ textarea[data-autogrow]:focus { outline: none; border-color: #287e77; box-shadow
   .builder-added-card-edit { padding: 0 4px; }
 }
 
+/* Library beside Added (every screen taller than a landscape phone): the
+   editor itself no longer scrolls. Its header stays put, and the library
+   results and the Added column each scroll in a box of their own, so moving
+   through one never moves the other. The flex chain hands the modal's
+   bounded height down to the two boxes (min-height: 0 at every step lets
+   them shrink); each box keeps a floor, and the modal keeps overflow: auto,
+   so on a screen too short for both the editor scrolls as before and never
+   clips a list to nothing. The Added scroller is the column itself, never a
+   child: renderBuilderSectionItems() replaces the column's innerHTML on
+   every autosave, move and remove (and renderBuilder() restores the
+   column's scrollTop, BUILDER_SCROLL_SELECTORS), and the reorder drag looks
+   for the list's scrolling parent (builder-item-drag.js scrollParentOf). */
+@media (min-width: 561px) and (min-height: 521px) {
+  .builder-section-modal { display: flex; flex-direction: column; }
+  .builder-section-modal .builder-section-panel { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+  .builder-section-modal .builder-section-panel-head { flex: 0 0 auto; }
+  .builder-section-grid { flex: 1 1 auto; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  .builder-section-library { display: flex; flex-direction: column; min-height: 0; }
+  .builder-library-head, .builder-library-controls { flex: 0 0 auto; }
+  /* The results box is as tall as its content and scrolls only once it
+     would grow past the column (shrink, never grow), down to its floor. */
+  .builder-exercise-results { flex: 0 1 auto; min-height: 160px; max-height: none; overscroll-behavior: contain; }
+  .builder-section-added { min-height: 160px; overflow-y: auto; overscroll-behavior: contain; scroll-padding-top: 34px; }
+  /* The column's heading and count stay in view while its items scroll (it
+     takes the column's own background during a library drag). The 8 px under
+     the heading stay uncovered, so a drop line above the first item (a 3 px
+     box shadow, see .is-drop-before) shows there; the 4 px under the last
+     item keep its line inside the box; the scroll padding keeps a field
+     reached backwards (Shift+Tab) below the heading. */
+  .builder-section-added > .builder-panel-label { position: sticky; top: 0; z-index: 1; margin: 0 0 8px; padding: 4px 0; background: var(--surface, #fff); }
+  .builder-section-added.is-library-drop-target > .builder-panel-label { background: var(--accent-soft); }
+  .builder-section-added > .builder-items { padding-bottom: 4px; }
+}
+
 /* Touch screens of every size: 44 px targets and 16 px fields (iOS zooms
    into a smaller field on focus) in the section editor. */
 @media (max-width: 760px), (pointer: coarse) {
