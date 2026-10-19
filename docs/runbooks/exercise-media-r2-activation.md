@@ -417,6 +417,51 @@ blocker for the wider activation), the product decision on the Builder snapshot,
 the wider activation. The wider activation itself is a separate owner order; its lever is the quota, not
 the code.
 
+### On-device preparation of phone videos (built 2026-10-20, not yet merged)
+
+**Why.** The pilot's S24 FE recording (HEVC, 1080×1920, 51 s, 88 MB) was refused by the inspection after
+a full upload; most phones record HEVC by default, and the only way to play one video everywhere is MP4 /
+H.264 / AAC-LC. The PoC (`docs` of 2026-10-19, the owner's Samsung run: 51 s HEVC → 720p H.264 in 13.8 s,
+audio kept) showed the device can do it without a server or a paid service.
+
+**What it is.** `frontend/exercise-media-prepare.js`, called by the editor before an upload of the video
+slot: the chosen file is read (Mediabunny 1.61.1, vendored under `frontend/vendor/mediabunny/`, MPL-2.0,
+loaded only when a video is chosen); a file the inspection would accept as it is — MP4, one H.264 track in
+Baseline / Main / High, AAC-LC or no audio, nothing else, at most 4096 px a side — is **never re-encoded**
+(passthrough first; its type is made `video/mp4` when the browser reported none, its rotation metadata is
+untouched); anything else is converted on the device with WebCodecs: the picture is copied when it is
+already H.264 (a MOV is remuxed in milliseconds) and re-encoded only for another codec or profile, then at
+most 720p on the long side (`VIDEO_PREPARE_RULES`), the audio copied when it is AAC-LC and encoded to AAC
+otherwise; the output is MP4 with faststart, read again before it is accepted. The upload then takes the
+prepared file: the reservation, the quota, the inspection, the binding and the playback are unchanged.
+**Limits (the owner's rules):** an input of at most 100 MB and a video of at most 30 seconds — checked on
+the device before anything is read or converted, and the 30 seconds again by the server's inspection
+(`video_too_long`, 415). No trimming: a longer video is refused with its length.
+
+**What the coach sees.** "Checking the video..." → "Preparing the video... N %" with Cancel → the upload's
+"Uploading the video... N %" → "Uploaded and verified..."; the file line names the prepared size and the
+size it came from. Save waits, the editor asks before closing, a reload asks first, like an upload. A
+refused video says why in one sentence (over 100 MB, longer than 30 seconds, not readable, cannot be
+prepared on this device, preparation failed) and offers another file. No codec, size or setting is ever
+asked.
+
+**Devices.** Android Chrome / Samsung Browser: WebCodecs with the platform's HEVC decoder and H.264 encoder.
+iPhone Safari 16.4+: the video part of WebCodecs exists (HEVC decode, H.264 encode); the audio part arrives
+only with Safari 26, which does not matter while the audio is copied (AAC-LC) — a MOV with H.264 / AAC is
+remuxed without any codec. **Not verified on a physical iPhone**: the HEVC decode, the MOV read, the
+rotation and the AAC copy were exercised on a desktop Chromium and the Samsung run; a device that cannot
+convert gets the sentence and may use a link. ffmpeg.wasm is not used (0.48× real time on a desktop).
+
+**Tests.** `frontend/tests/exercise-editor-video-prepare.test.mjs` through the real editor with a fake
+adapter (Node has no WebCodecs): the rules, passthrough of a compliant and of a rotated file, HEVC,
+MOV (remux), Cancel, the limits, a device that cannot convert, a failed conversion, Save held and the
+guards, the server's `video_too_long`. The real conversion: the browser harness `_qa-media-harness.html`
+(untracked) with clips made in the page — compliant H.264 (passthrough, same bytes), H.264 with rotation
+90 (passthrough, plays 360×640), HEVC (re-encoded), H.264 MOV (remuxed, picture copied), HEVC without
+audio, WebM VP8, HEVC 1080×1920 25 s (720×1280 in 2.8 s), a 31 s clip (refused), Cancel at 20 %, the
+server's 415. Backend: `media-upload-be2.test.mjs` gained the 30-second rule and the ignored metadata
+tracks (`Other` / `Text` / `Menu` / `Image`; a second video or audio track still refuses).
+
 ### Phase D readiness — the transport-only variant (reviewed 2026-10-19; superseded by E-2 above)
 
 **The exact change.** Against `main` (`2798faa`) the PR carries one line of code —

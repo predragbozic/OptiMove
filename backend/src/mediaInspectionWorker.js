@@ -26,5 +26,5 @@ try {
     metadata=validateVideoTracks(await info.analyzeData(workerData.size,read),mime);
   }
   parentPort.postMessage({result:metadata});
-} catch(e) {parentPort.postMessage({error:e.code==='unsupported_media'?'unsupported_media':'media_verification_failed',status:e.status===415?415:422});}
+} catch(e) {parentPort.postMessage({error:['unsupported_media','video_too_long'].includes(e.code)?e.code:'media_verification_failed',status:e.status===415?415:422});}
 finally {info?.close();parentPort.close();}

@@ -3,18 +3,28 @@ import { Worker } from 'node:worker_threads';
 import { MediaStorageError } from './mediaStorage.js';
 const invalid = () => new MediaStorageError(422,'media_verification_failed');
 const unsupported = () => new MediaStorageError(415,'unsupported_media');
+const tooLong = () => new MediaStorageError(415,'video_too_long');
 const MAX_PROBE_BYTES=8*1024*1024;
 const MAX_PIXELS=16777216;
+// The owner's rule of 2026-10-19: an exercise video is at most 30 seconds. The
+// client refuses a longer one before converting or sending it; this is the
+// authoritative check on the bytes that arrived. Overridable for tests only.
+const envSeconds=Number(process.env.MEDIA_MAX_VIDEO_SECONDS);
+export const MAX_VIDEO_SECONDS=Number.isFinite(envSeconds) && envSeconds>0 ? envSeconds : 30;
+// Track kinds phones add beside the picture and the sound (timed metadata,
+// timecode, chapters): never served, never decoded, so they do not count.
+const IGNORED_TRACK_TYPES=new Set(['Other','Text','Menu','Image']);
 
 export function validateVideoTracks(result,mimeType) {
   const tracks=result?.media?.track || [];
   const general=tracks.find(t=>t['@type']==='General');
   const videos=tracks.filter(t=>t['@type']==='Video');
   const audio=tracks.filter(t=>t['@type']==='Audio');
-  if (videos.length!==1 || audio.length>1 || tracks.some(t=>!['General','Video','Audio'].includes(t['@type']))) throw unsupported();
+  if (videos.length!==1 || audio.length>1 || tracks.some(t=>!['General','Video','Audio'].includes(t['@type']) && !IGNORED_TRACK_TYPES.has(t['@type']))) throw unsupported();
   const v=videos[0];
   const duration=Number(v.Duration || general?.Duration), width=Number(v.Width),height=Number(v.Height);
   if (!(duration>0 && duration<=14400 && width>0 && height>0 && width<=4096 && height<=4096 && width*height<=MAX_PIXELS)) throw unsupported();
+  if (duration>MAX_VIDEO_SECONDS+0.05) throw tooLong();
   if (mimeType==='video/mp4') {
     if (general?.Format!=='MPEG-4' || v.Format!=='AVC' || !/^(Baseline|Constrained Baseline|Main|High)(@|$)/.test(v.Format_Profile || '') || Number(v.BitDepth)!==8 || v.ChromaSubsampling!=='4:2:0') throw unsupported();
     if (audio.some(a=>a.Format!=='AAC' || !/LC/.test(String(a.Format_AdditionalFeatures || a.Format_Profile || a.CommercialName || '')))) throw unsupported();
