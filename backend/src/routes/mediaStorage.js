@@ -37,6 +37,10 @@ export function createMediaStorageRouter({ service, uploads, enabled = () => pro
     }
     router.get('/storage',handle(async (req,res) => {
       if (!req.authz?.capabilities?.coachWorkspace) throw new MediaStorageError(403,'operation_not_allowed');
+      if (req.query.exerciseId !== undefined) {
+        if (!uploads) throw new MediaStorageError(503,'media_storage_unavailable');
+        return res.json(await uploads.usageForExercise(req,req.query.exerciseId));
+      }
       // A workspace preference/role_hint never grants rights. Own private quota
       // and clubs actually administered by this actor are the only usage scopes.
       const owners = [{type:'user',id:req.user.id}];

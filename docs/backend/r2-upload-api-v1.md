@@ -11,7 +11,7 @@ implemented. Availability is explicit:
 | Area | Phase / availability |
 |---|---|
 | Upload initiation/status/renew/complete/cancel, quota settlement | Implemented in BE-2 |
-| Target-aware storage usage, verification-expiry race fix | BE-2 follow-up implementing this contract |
+| Target-aware storage usage, verification-expiry race fix | Implemented in BE-2 |
 | Attach/replace/remove on exercise/copy/Builder save, read descriptors | Reserved contract for BE-3, NOT implemented by BE-2 |
 | `/api/media/access` and `/access/batch` | FE-1 contract; backend BE-3, NOT implemented by BE-2 |
 | Deleting unused ready assets / reference-aware GC | Separate lifecycle work; NOT an upload cancellation |

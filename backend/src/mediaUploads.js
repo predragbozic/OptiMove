@@ -91,6 +91,11 @@ export function createMediaUploadService({pool,storage,store,inspect=inspectMedi
     return {source:'asset',mediaId:a.id,kind:a.kind,status:a.status,mimeType:a.mime_type,sizeBytes:a.size_bytes,metadata:a.metadata};
   }
   const api={
+    async usageForExercise(req,id) {
+      const resolved=await owner(req,{type:"exercise_edit",exerciseId:uuid(id)});
+      const usage=await storage.getUsage([resolved]);
+      return {...usage,selectedStorageAccountId:usage.accounts[0].storageAccountId};
+    },
     async initiate(req,body,key) {
       uuid(key);
       const resolved=await owner(req,body?.context);store.assertConfigured();
@@ -126,18 +131,22 @@ export function createMediaUploadService({pool,storage,store,inspect=inspectMedi
       const initial=await owned(req,id);await authorize(req,initial);store.assertConfigured();
       if(initial.status==='completed')return {httpStatus:200,body:{...dto(initial),media:await media(initial)}};
       if(terminal.has(initial.status) || initial.status==='cancelling')fail(409,'state_conflict');
-      if(new Date(initial.expires_at)<=new Date()) {await cleanup(await beginCancel(initial.id,'upload_expired'));fail(409,'upload_expired');}
       const token=randomUUID();
       const u=await tx(async c=>{
         const current=await locked(c,initial.id);
         if(current.status==='completed')return current;
         if(current.status==='verifying')return null;
-        if(current.status!=='reserved' || new Date(current.expires_at)<=new Date())fail(409,'state_conflict');
+        if(current.status!=='reserved')fail(409,'state_conflict');
+        if(new Date(current.expires_at)<=new Date()) {
+          const expired=(await c.query("update media.uploads set status='cancelling',verification_token=null,verification_until=null,error_code='upload_expired',updated_at=now() where id=$1 returning *",[current.id])).rows[0];
+          await audit(c,expired,'cancelling','upload_expired');return expired;
+        }
         const r=(await c.query("update media.uploads set status='verifying',verification_token=$2,verification_until=now()+interval '2 minutes',updated_at=now() where id=$1 returning *",[current.id,token])).rows[0];
         await audit(c,r,'verifying');return r;
       });
       if(!u)return {httpStatus:202,body:{...dto(initial),status:'verifying'}};
       if(u.status==='completed')return {httpStatus:200,body:{...dto(u),media:await media(u)}};
+      if(u.status==='cancelling') {await cleanup(u);fail(409,'upload_expired');}
       try {
         const head=await store.head(u.temporary_object_key);
         if(!head)fail(409,'upload_not_present',true);

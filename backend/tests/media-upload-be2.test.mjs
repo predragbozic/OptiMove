@@ -103,3 +103,27 @@ test('initiation retry of completed media returns original identity without anot
   const key=randomUUID(),u=await start(body(),req,key);await put(u);await uploads.complete(req,u.uploadId);
   const repeated=await start(body(),req,key);assert.equal(repeated.uploadId,u.uploadId);assert.equal(repeated.mediaId,u.mediaId);assert.equal(repeated.status,'completed');assert.equal(repeated.upload,undefined);assert.equal((await storage.getAccount(accountId)).usedBytes,'60');
 });
+
+
+test('target-aware usage resolves private/system/club owners with existing edit rights',async()=>{
+ const own=await http('/api/media/storage?exerciseId='+exerciseId);assert.equal(own.status,200);const usage=await own.json();assert.equal(usage.selectedStorageAccountId,accountId);assert.equal(usage.accounts.length,1);
+ assert.equal((await http('/api/media/storage?exerciseId='+exerciseId,{actor:'other'})).status,404);
+ const sys=randomUUID(),club=randomUUID();await pool.query("insert into library.exercises(id,owner_scope,owner_club_id) values($1,'system',null),($2,'club',$3)",[sys,club,clubId]);
+ for(const [id,type,ownerId] of [[sys,'user',adminId],[club,'club',clubId]]){const r=await http('/api/media/storage?exerciseId='+id,{actor:'admin'});assert.equal(r.status,200);const v=await r.json();assert.equal(v.accounts[0].owner.type,type);assert.equal(v.accounts[0].owner.id,ownerId);assert.equal(v.selectedStorageAccountId,v.accounts[0].storageAccountId);}
+ assert.equal((await http('/api/media/storage?exerciseId=bad')).status,400);
+ const legacy=await(await http('/api/media/storage')).json();assert.equal(legacy.selectedStorageAccountId,undefined);assert.equal(legacy.accounts[0].owner.id,req.user.id);
+});
+
+test('duplicate completion after PUT expiry preserves an active verification claim',async()=>{
+ const u=await start();await put(u);let release,entered;const waiting=new Promise(resolve=>entered=resolve);
+ inspectImpl=async()=>{entered();await new Promise(resolve=>release=resolve);return {...fakeMetadata};};
+ const completion=uploads.complete(req,u.uploadId);await waiting;
+ try {await pool.query("update media.uploads set expires_at=now()-interval '1 second' where id=$1",[u.uploadId]);const duplicate=await uploads.complete(req,u.uploadId);assert.equal(duplicate.httpStatus,202);assert.equal((await row(u.uploadId)).status,'verifying');}
+ finally {release();}
+ assert.equal((await completion).httpStatus,200);assert.equal((await storage.getAccount(accountId)).usedBytes,'60');
+});
+
+test('completion of an expired pending upload fences its object before releasing quota',async()=>{
+ const u=await start(),r=await put(u);await pool.query("update media.uploads set expires_at=now()-interval '1 second' where id=$1",[u.uploadId]);
+ await assert.rejects(uploads.complete(req,u.uploadId),e=>e.code==='upload_expired');assert.equal((await row(u.uploadId)).status,'failed');assert.equal((await store.head(r.temporary_object_key)).tombstone,true);assert.equal((await storage.getAccount(accountId)).reservedBytes,'0');
+});
