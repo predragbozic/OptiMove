@@ -8,7 +8,7 @@ import {
   readVideoMetadata, renderFramePickerHtml, roundFrameTime,
 } from "./exercise-media-thumbnail.js";
 import { exerciseMediaOf, legacyMediaKind, mediaAccessAttributes } from "./media.js";
-import { loadPlayback } from "./media-playback.js";
+import { forgetMediaAccess, loadPlayback } from "./media-playback.js";
 import { escapeAttr, escapeHtml, formatBytes } from "./utils.js";
 
 export const emptyExerciseEditorData = () => ({
@@ -901,6 +901,14 @@ export async function handleExerciseEditorAction(state, handlers, action) {
         await api("/api/exercises", { method: "POST", body: JSON.stringify(payload) });
       } else {
         await api(`/api/exercises/${encodeURIComponent(editor.exerciseId)}`, { method: "PATCH", body: JSON.stringify(payload) });
+        // The signed addresses are cached per (context, slot) and the
+        // resolver writes the cached object back onto a card, so a saved
+        // Replace / Remove / frame would keep showing the previous object
+        // until the address expires (pilot E5, 2026-10-19). Only this
+        // exercise's context is forgotten, after the server confirmed the
+        // save and before the library or the Builder draws the row again;
+        // a new exercise and a private copy have no cached context yet.
+        forgetMediaAccess({ type: "exercise", id: editor.exerciseId });
       }
       closeExerciseEditor(state, handlers);
       await handlers.refreshAfterSave();
