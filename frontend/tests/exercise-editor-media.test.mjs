@@ -463,7 +463,7 @@ test("10. regression against BE-3: a name or description change never touches th
   withGuards();
 });
 
-test("9. a storage read that fails says so and offers Read again; the upload is still offered (the server checks)", async () => {
+test("9. a storage read that fails never offers an upload (E-1): the editor stays as today, with no storage line and no Read again; a later successful read (the reload action, or a reopen) brings the controls", async () => {
   withGuards({ transport: true });
   let fail = true;
   let storageReads = 0;
@@ -475,12 +475,14 @@ test("9. a storage read that fails says so and offers Read again; the upload is 
   };
   await editor.openExerciseEditor(state, handlers(), "e1");
   await settle();
-  assert.match(content.querySelector(".exercise-media-storage").textContent, /could not be read/);
-  assert.ok(content.querySelector('[data-exercise-media-file="video"]'));
+  assert.equal(content.querySelector(".exercise-media-storage"), null, "no storage line and no Read again on a failed read");
+  assert.equal(content.querySelector('[data-exercise-media-file="video"]'), null, "a failed read enables nothing");
+  assert.ok(content.querySelector('[data-exercise-editor-field="videoUrl"]'), "the link field of today");
   fail = false;
   await editor.handleExerciseEditorAction(state, handlers(), { dataset: { action: "exercise-media-storage-reload" } });
   await settle();
   assert.match(content.querySelector("[data-exercise-media-storage]").textContent, /3\.8 GB free/);
+  assert.ok(content.querySelector('[data-exercise-media-file="video"]'));
   assert.equal(storageReads, 2);
   editor.closeExerciseEditor(state, handlers());
   withGuards();

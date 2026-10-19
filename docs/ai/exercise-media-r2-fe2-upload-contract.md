@@ -70,6 +70,32 @@ without BE-3 no exercise has a stored file, so nothing changes there. The matchi
 (treat an implicit legacy equal to the stored URL, or empty while the source is `asset`, as
 unchanged) is recommended in the review.
 
+## The quota is the gate (E-1, owner's decision 2026-10-19)
+
+Besides the two guards, the editor offers an upload only for an account the storage answer named
+**and** whose quota allows it: `chargedStorageAccount()` returns the account the server selected for the
+exercise (`GET /api/media/storage?exerciseId=` — a club exercise charges the club, an application
+exercise the uploading administrator; a new exercise or a copy the coach's own row), and
+`quotaAllowsUploads()` requires a limit above zero, not over the limit, and room under it. So:
+
+- an account at the default **0 B** sees the media fields of today, byte for byte, whatever the guards
+  say (no storage line, no Upload, no Replace with a file, no frame picker) — the platform
+  administrator's limits through Settings → Storage are the pilot list, and raising the default limit is
+  the switch that opens the feature to everyone, without a deploy;
+- a **full** account (nothing free, or over its limit) keeps Preview of its stored file and Remove (by
+  the save guard alone — Remove never depends on free space: a stored file leaves on Save as
+  `{ source: "none" }`, a link is cleared at once), loses Upload and Replace, and its storage line ends
+  with "Storage is full: remove media you no longer use or ask an administrator for more storage.";
+- a storage answer that **failed, is still loading, says the storage is off (503) or refuses (403)**
+  enables nothing — an unknown account is never a permission; the "Read again" button is gone with it
+  (reopening the editor reads again; the `exercise-media-storage-reload` action still works);
+- the storage line appears only for an account with a limit above zero.
+
+Tests: `frontend/tests/exercise-media-quota-gate.test.mjs` (the byte-identical editor at 0 B, the pilot
+account with each guard, the full account, Remove's independence and semantics, the club exercise's
+account against the coach's own row, every unusable storage answer with a programmatic choose that sends
+nothing, legacy links under the gate); FE-2's test 9 now pins the failed-read rule.
+
 ## Integration dependencies before each guard is flipped
 
 Transport (`UPLOAD_TRANSPORT_ENABLED`), from `docs/backend/r2-be2-upload.md` "Configuration /

@@ -128,16 +128,43 @@ function percentOf(progress) {
   return total ? Math.min(100, Math.floor((Number(progress.sent) || 0) / total * 100)) : 0;
 }
 
+// The storage account an upload from this editor would be charged to: the
+// one the server selected for the exercise (a club exercise charges the club,
+// an application exercise the uploading administrator), else the signed-in
+// coach's own row for a new exercise or a copy. Null until the storage answer
+// is in, and null when it failed, said the storage is off (503) or refused
+// (403): an unknown account never enables anything.
+export function chargedStorageAccount(editor) {
+  const storage = editor?.media?.storage;
+  if (!storage || storage.loading || storage.error || storage.disabled || storage.unavailable || !storage.data) return null;
+  return chargedAccount(storage.data, { userId: editor.viewerId });
+}
+
+// The quota is the gate (owner's decision, phase E-1): an account may upload
+// only with a limit above zero and room under it. The platform administrator
+// hands out limits through Settings -> Storage, so the accounts with a limit
+// are the pilot; the default of 0 B keeps every other coach on the editor of
+// today, whatever the guards say.
+export function quotaAllowsUploads(account) {
+  if (!account) return false;
+  const limit = Number(account.limitBytes);
+  const available = Number(account.availableBytes);
+  if (!Number.isFinite(limit) || limit <= 0) return false;
+  if (account.overLimit === true) return false;
+  return Number.isFinite(available) && available > 0;
+}
+
 // Uploading is offered only behind the transport guard (a code change after
-// the activation gates), and then only while the server offers storage (a 503
-// media_storage_disabled or a 403 leaves the editor as it is today) and, for
-// a new exercise or a copy, only once BE-3 can bind the upload on save.
+// the activation gates), only for an account the storage answer named and the
+// quota allows (above), and, for a new exercise or a copy, only once BE-3 can
+// bind the upload on save. Everything else - 0 B, a full account, a storage
+// read still loading or failed, 503, 403 - leaves the editor exactly as it is
+// today: the two link fields, Preview of a stored file, Remove by the save
+// guard alone.
 function uploadsOffered(editor) {
   if (!isUploadTransportEnabled()) return false;
-  const storage = editor.media?.storage;
-  if (!storage || storage.disabled || storage.unavailable) return false;
   if ((editor.isNew || editor.isCopy) && !isMediaSaveEnabled()) return false;
-  return true;
+  return quotaAllowsUploads(chargedStorageAccount(editor));
 }
 
 function storageWanted(editor) {
@@ -166,26 +193,24 @@ function frameOffered(editor) {
 
 function renderExerciseMediaFields(editor) {
   const offered = uploadsOffered(editor);
+  // The storage line belongs to an account with a limit: a full one sees its
+  // numbers and why nothing can be added; a 0 B account sees no line at all.
+  const account = isUploadTransportEnabled() ? chargedStorageAccount(editor) : null;
+  const quotaAccount = account && Number(account.limitBytes) > 0 ? account : null;
   return `
     <div class="exercise-media-fields" data-exercise-media-fields>
       ${MEDIA_SLOTS.map((spec) => renderMediaField(editor, spec, offered)).join("")}
-      ${offered ? renderStorageLine(editor) : ""}
+      ${quotaAccount ? renderStorageLine(editor, quotaAccount, offered) : ""}
     </div>
   `;
 }
 
-function renderStorageLine(editor) {
-  const storage = editor.media.storage;
-  if (storage.loading) return `<p class="muted exercise-media-storage" role="status">Reading storage...</p>`;
-  if (storage.error) {
-    return `<p class="muted exercise-media-storage">Storage usage could not be read; the server still checks every upload. <button class="text-action" type="button" data-action="exercise-media-storage-reload">Read again</button></p>`;
-  }
-  const account = chargedAccount(storage.data, { userId: editor.viewerId });
-  if (!account) return "";
+function renderStorageLine(editor, account, offered) {
   const used = formatBytes(account.usedBytes);
   const limit = formatBytes(account.limitBytes);
   const free = formatBytes(account.availableBytes);
-  return `<p class="muted exercise-media-storage" data-exercise-media-storage>Storage (${escapeHtml(describeStorageAccount(account, { ownerScope: editor.ownerScope }))}): ${escapeHtml(used)} used of ${escapeHtml(limit)} · ${escapeHtml(free)} free · one video up to ${escapeHtml(formatBytes(account.maxVideoBytes))}, one picture up to ${escapeHtml(formatBytes(account.maxImageBytes))}</p>`;
+  const full = offered ? "" : " · Storage is full: remove media you no longer use or ask an administrator for more storage.";
+  return `<p class="muted exercise-media-storage" data-exercise-media-storage>Storage (${escapeHtml(describeStorageAccount(account, { ownerScope: editor.ownerScope }))}): ${escapeHtml(used)} used of ${escapeHtml(limit)} · ${escapeHtml(free)} free · one video up to ${escapeHtml(formatBytes(account.maxVideoBytes))}, one picture up to ${escapeHtml(formatBytes(account.maxImageBytes))}${escapeHtml(full)}</p>`;
 }
 
 function renderMediaField(editor, spec, offered) {
