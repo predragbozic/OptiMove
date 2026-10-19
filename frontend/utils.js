@@ -170,6 +170,23 @@ export function debounce(fn, delay) {
   };
 }
 
+// A size in bytes as the coach reads it: "184 MB", "1.2 GB", never raw bytes.
+// Decimal units (the storage API counts in decimal bytes), one decimal from
+// 10 units up only when it changes something.
+export function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let amount = bytes;
+  let unit = 0;
+  while (amount >= 1000 && unit < units.length - 1) {
+    amount /= 1000;
+    unit += 1;
+  }
+  const rounded = unit === 0 ? Math.round(amount) : Math.round(amount * 10) / 10;
+  return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)} ${units[unit]}`;
+}
+
 export function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")

@@ -103,7 +103,9 @@ import { toggleClampedTitle } from "./title-clamp.js";
 import { openExerciseCollections } from "./exercise-collections.js";
 import {
   handleExerciseEditorAction,
+  handleExerciseEditorChange,
   handleExerciseEditorInput,
+  handleExerciseMediaBeforeUnload,
   openExerciseEditor,
   renderExerciseEditorHtml,
 } from "./exercise-editor.js";
@@ -553,6 +555,8 @@ function bindEvents() {
   // Settings -> Source connections (F3c3): a Connect / Test / bind / Unbind
   // in flight, or an unconfirmed outcome, asks the same way.
   window.addEventListener("beforeunload", handleSourceConnectionsBeforeUnload);
+  // Exercise media (FE-2): an upload in flight asks the same way.
+  window.addEventListener("beforeunload", (event) => handleExerciseMediaBeforeUnload(event, state));
 }
 
 async function loadSession() {
@@ -1185,6 +1189,8 @@ function handleContentInput(event) {
 }
 
 async function handleContentChange(event) {
+  // Exercise media (FE-2): the editor's hidden file input chose a file.
+  if (handleExerciseEditorChange(state, exerciseEditorHandlers, event)) return;
   if (await handleTestsContentChange(event)) return;
   const trainingLoadControl = event.target.closest("[data-action^='training-load-']");
   if (trainingLoadControl && trainingLoadControl.matches("select, input")) {
