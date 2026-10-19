@@ -103,28 +103,28 @@ test("3. an exercise picture tries its own image, then its video cover, then sho
   assert.doesNotMatch(hostile, /<b>|"onerror=/);
 });
 
-test("3b. an R2 image (the media descriptor) renders without an address, with its asset id, the access context and the public covers as fallbacks; the descriptor wins over the legacy fields", () => {
+test("3b. an R2 image (the media descriptor) renders without an address, with its media id, the access context and the public covers as fallbacks; the descriptor wins over the legacy fields", () => {
   const asset = {
     id: "d", name: "Dead Bug", image_url: "https://legacy.example/ignored.jpg", video_url: "https://youtu.be/CCCCCCCCCC3", owner_scope: "system", tags: [],
-    media: { video: { source: "legacy", url: "https://youtu.be/CCCCCCCCCC3" }, image: { source: "asset", assetId: "img-1" }, accessContext: { exerciseId: "d" } },
+    media: { video: { source: "legacy", url: "https://youtu.be/CCCCCCCCCC3" }, image: { source: "asset", mediaId: "img-1" }, accessContext: { type: "exercise", id: "d" } },
   };
   const picture = modes.renderExerciseThumb(asset, "thumb");
-  assert.match(picture, /^<img class="thumb" alt="" data-media-asset-id="img-1" data-media-access-context="[^"]+" data-fallbacks="/);
+  assert.match(picture, /^<img class="thumb" alt="" data-media-id="img-1" data-media-slot="image" data-media-access-context="[^"]+" data-fallbacks="/);
   assert.doesNotMatch(picture, / src=/);
   assert.doesNotMatch(picture, /legacy\.example/, "a legacy column under an asset slot is never shown");
   assert.deepEqual(JSON.parse(picture.match(/data-fallbacks="([^"]+)"/)[1].replaceAll("&quot;", "\"")), ["https://i.ytimg.com/vi/CCCCCCCCCC3/mqdefault.jpg", "https://i.ytimg.com/vi/CCCCCCCCCC3/hqdefault.jpg"]);
   assert.match(picture, /data-fallback-initials="DB"/);
   // Big: the blurred copy is the same asset, resolved with the picture.
   const big = modes.renderExerciseThumb(asset, "thumb", { backdrop: true });
-  assert.match(big, /^<img class="exercise-thumb-backdrop" alt="" data-media-asset-id="img-1" [^>]*aria-hidden="true"><img class="thumb" alt="" data-media-asset-id="img-1"/);
+  assert.match(big, /^<img class="exercise-thumb-backdrop" alt="" data-media-id="img-1" data-media-slot="image" [^>]*aria-hidden="true"><img class="thumb" alt="" data-media-id="img-1"/);
   // "none" in the descriptor: the initials, whatever the legacy columns hold.
   const none = modes.renderExerciseThumb({ ...asset, media: { video: { source: "none" }, image: { source: "none" } } }, "thumb");
   assert.equal(none, `<span class="thumb exercise-thumb-fallback" aria-hidden="true">DB</span>`);
   // The library's open-media control carries the id and the context, never an address.
   const html = renderExerciseLibraryHtml({ exercises: [asset], itemIds: ["item-d"], markedExerciseIds: new Set(), search: { view: "tile", term: "", filters: emptyExerciseFilters() }, tagEditor: { open: false } });
-  assert.match(html, /<button class="exercise-view-media" type="button" data-action="open-media" data-title="Dead Bug" data-image="" data-video="https:\/\/youtu\.be\/CCCCCCCCCC3" data-image-asset-id="img-1" data-media-access-context="[^"]+" aria-label="Preview Dead Bug">/);
+  assert.match(html, /<button class="exercise-view-media" type="button" data-action="open-media" data-title="Dead Bug" data-image="" data-video="https:\/\/youtu\.be\/CCCCCCCCCC3" data-image-media-id="img-1" data-media-access-context="[^"]+" aria-label="Preview Dead Bug">/);
   const details = renderExerciseLibraryHtml({ exercises: [asset], itemIds: ["item-d"], markedExerciseIds: new Set(), search: { view: "details", term: "", filters: emptyExerciseFilters() }, tagEditor: { open: false } });
-  assert.match(details, /<button class="exercise-media library-media" data-action="open-media" data-title="Dead Bug" data-image="" data-video="[^"]+" data-image-asset-id="img-1" data-media-access-context="[^"]+">\s*<img class="exercise-thumb-backdrop" alt="" data-media-asset-id="img-1"/);
+  assert.match(details, /<button class="exercise-media library-media" data-action="open-media" data-title="Dead Bug" data-image="" data-video="[^"]+" data-image-media-id="img-1" data-media-access-context="[^"]+">\s*<img class="exercise-thumb-backdrop" alt="" data-media-id="img-1"/);
   assert.doesNotMatch(html + details, /r2\.example|legacy\.example/);
 });
 

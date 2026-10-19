@@ -3,6 +3,7 @@ import {
   decodeAccessContext,
   getDriveId,
   imageSources,
+  normalizeAccessContext,
   renderAssetImage,
   renderImage,
   toDrivePreviewUrl,
@@ -10,7 +11,7 @@ import {
   toYouTubeEmbedUrl,
   withAutoplayParam,
 } from "./media.js";
-import { forgetMediaAccess, loadPlayback, resolveMediaAccess, resolvePendingThumbnails } from "./media-playback.js";
+import { forgetMediaAccess, loadPlayback, resolvePendingThumbnails } from "./media-playback.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
 // Every opening gets its own number, so an answer that lands after the
@@ -19,41 +20,42 @@ let opening = 0;
 let playbackAbort = null;
 let retryPlayback = null;
 
-// `access` is the R2 part of the media (FE-1): `videoAssetId` /
-// `imageAssetId` name the objects and `accessContext` is the row's opaque
-// context; their addresses are fetched here, now, and never stored. Google
-// Drive, YouTube and direct links keep the two URL arguments as before.
+// `access` is the R2 part of the media (FE-1): `videoMediaId` /
+// `imageMediaId` name the objects and `accessContext` ({ type, id }) is what
+// the server authorizes the row by; the addresses are fetched here, now, for
+// that context, and never stored. Google Drive, YouTube and direct links
+// keep the two URL arguments as before.
 export function openMedia(title, imageUrl, videoUrl, access = {}) {
   if (!els.mediaModal || !els.mediaBody || !els.mediaTitle) return;
   const session = ++opening;
   stopPlayback();
-  const videoAssetId = String(access.videoAssetId || "").trim();
-  const imageAssetId = String(access.imageAssetId || "").trim();
-  const accessContext = access.accessContext ?? null;
+  const videoMediaId = String(access.videoMediaId || "").trim();
+  const imageMediaId = String(access.imageMediaId || "").trim();
+  const accessContext = normalizeAccessContext(access.accessContext);
   const imagePreviewUrl = toDrivePreviewUrl(imageUrl);
   const hasImage = imageSources(imageUrl).length > 0;
   const cleanVideoUrl = String(videoUrl || "").trim();
-  const videoEmbed = videoAssetId ? renderAssetVideo(imageUrl) : videoEmbedMarkup(cleanVideoUrl, imageUrl);
+  const videoEmbed = videoMediaId ? renderAssetVideo(imageUrl) : videoEmbedMarkup(cleanVideoUrl, imageUrl);
   els.mediaTitle.textContent = title || "Exercise media";
   els.mediaModal.classList.toggle("is-video", Boolean(videoEmbed));
   els.mediaBody.innerHTML = `
     ${videoEmbed
       ? videoEmbed
-      : imageAssetId
-        ? renderAssetImage(imageAssetId, accessContext, "media-image-full")
+      : imageMediaId
+        ? renderAssetImage(imageMediaId, accessContext, "media-image-full")
         : hasImage
           ? renderImage(imageUrl, "media-image-full", "", imagePreviewUrl)
           : imagePreviewUrl
             ? `<iframe class="media-frame" src="${escapeAttr(imagePreviewUrl)}" allowfullscreen></iframe>`
             : ""}
-    ${!videoEmbed && !imageAssetId && !hasImage && !imagePreviewUrl ? `<div class="empty">No media available.</div>` : ""}
+    ${!videoEmbed && !imageMediaId && !hasImage && !imagePreviewUrl ? `<div class="empty">No media available.</div>` : ""}
   `;
   els.mediaModal.hidden = false;
-  if (videoAssetId) {
-    wireAssetPlayback(session, { assetId: videoAssetId, posterAssetId: imageAssetId, accessContext });
+  if (videoMediaId) {
+    wireAssetPlayback(session, { context: accessContext, withPoster: Boolean(imageMediaId) });
     return;
   }
-  if (imageAssetId) void resolvePendingThumbnails(els.mediaBody);
+  if (imageMediaId) void resolvePendingThumbnails(els.mediaBody);
   wireVideoFallback(cleanVideoUrl);
   if (videoEmbed && isMobileViewport()) enterMediaFullscreen(true);
 }
@@ -124,11 +126,11 @@ function setAssetState(state, message = "", code = "") {
   `);
 }
 
-// Fetches the video's short-lived address, assigns it, and asks for a new
-// one once when the address fails to load (expired, revoked); a second
-// failure is the error state with Try again. Every step checks that this
-// opening is still the one on screen.
-function wireAssetPlayback(session, { assetId, posterAssetId, accessContext }) {
+// Fetches the context's video address (and its image as the poster, in the
+// same request), assigns it, and asks for a new one once when the address
+// fails to load (expired, revoked); a second failure is the error state with
+// Try again. Every step checks that this opening is still the one on screen.
+function wireAssetPlayback(session, { context, withPoster }) {
   const video = els.mediaBody?.querySelector(".media-asset .media-video");
   if (!video) return;
   const live = () => session === opening && !els.mediaModal.hidden && video.isConnected;
@@ -138,16 +140,10 @@ function wireAssetPlayback(session, { assetId, posterAssetId, accessContext }) {
   video.addEventListener("loadedmetadata", () => {
     if (live() && isMobileViewport()) enterMediaFullscreen(true);
   }, { once: true });
-  if (posterAssetId) {
-    void resolveMediaAccess([{ assetId: posterAssetId, accessContext }]).then((urls) => {
-      const url = urls.get(posterAssetId);
-      if (url && live()) video.poster = url;
-    });
-  }
   let attempts = 0;
   const onError = () => {
     if (!live()) return;
-    forgetMediaAccess(assetId);
+    forgetMediaAccess(context, "video");
     if (attempts < 2) {
       void load();
       return;
@@ -163,8 +159,9 @@ function wireAssetPlayback(session, { assetId, posterAssetId, accessContext }) {
     playbackAbort = controller;
     const resume = Number(video.currentTime) || 0;
     try {
-      const { url } = await loadPlayback(assetId, accessContext, { signal: controller.signal });
+      const { url, poster } = await loadPlayback(context, { withPoster, signal: controller.signal });
       if (!live() || controller.signal.aborted) return;
+      if (poster) video.poster = poster;
       video.addEventListener("error", onError, { once: true });
       if (resume) {
         video.addEventListener("loadedmetadata", () => {
@@ -180,7 +177,7 @@ function wireAssetPlayback(session, { assetId, posterAssetId, accessContext }) {
   };
   retryPlayback = () => {
     attempts = 0;
-    forgetMediaAccess(assetId);
+    forgetMediaAccess(context, "video");
     void load();
   };
   void load();
@@ -237,8 +234,8 @@ export function handleMediaAction(action) {
   const type = action.dataset.action;
   if (type === "open-media") {
     openMedia(action.dataset.title || "Exercise media", action.dataset.image || "", action.dataset.video || "", {
-      videoAssetId: action.dataset.videoAssetId || "",
-      imageAssetId: action.dataset.imageAssetId || "",
+      videoMediaId: action.dataset.videoMediaId || "",
+      imageMediaId: action.dataset.imageMediaId || "",
       accessContext: decodeAccessContext(action.dataset.mediaAccessContext || ""),
     });
     return true;

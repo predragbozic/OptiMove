@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 
 // FE-1: the media modal with an R2 video or image - the short-lived address
-// fetched when the modal opens, assigned to the element and nowhere else,
-// asked for once more when it fails, the error state with Try again - and
-// the Google Drive, YouTube and direct-link markup exactly as before. Fake
-// answers only; the backend is not implemented yet.
+// fetched for the row's context when the modal opens, assigned to the
+// element and nowhere else, asked for once more when it fails, the error
+// state with Try again - and the Google Drive, YouTube and direct-link
+// markup exactly as before. Fake answers in the shape of the final Codex
+// contract only; the backend is not implemented yet.
 
 const dom = new JSDOM(`<!doctype html><html><body>
   <div class="media-modal" id="mediaModal" hidden>
@@ -32,6 +33,8 @@ const stage = document.querySelector("#stage");
 const body = () => els.mediaBody;
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 const minutesFromNow = (minutes) => new Date(Date.now() + minutes * 60_000).toISOString();
+const asset = (mediaId, url) => ({ source: "asset", mediaId, url, expiresAt: minutesFromNow(10), mimeType: "video/mp4" });
+const context = { type: "exercise", id: "e1" };
 
 function fakeFetch(answer) {
   const calls = [];
@@ -46,17 +49,25 @@ function fakeFetch(answer) {
   return calls;
 }
 
+// The single route answered slot by slot; the batch route by request index.
+const slotAnswer = (pick) => (url, requestBody) => {
+  if (url === playback.ACCESS_BATCH_ROUTE) {
+    return { results: requestBody.requests.map((request, index) => ({ index, media: Object.fromEntries(request.slots.map((slot) => [slot, pick(slot, request.context)]).filter(([, entry]) => entry)) })) };
+  }
+  return Object.fromEntries(requestBody.slots.map((slot) => [slot, pick(slot, requestBody.context)]).filter(([, entry]) => entry));
+};
+
 // An "open-media" control as the render sites draw it, from a row.
 function control(row) {
   stage.innerHTML = `<button type="button" data-action="open-media" data-title="${row.name}" ${media.mediaAccessAttributes(media.exerciseMediaOf(row))}></button>`;
   return stage.firstElementChild;
 }
 
-const assetVideoRow = { name: "Dead Bug", media: { video: { source: "asset", assetId: "vid-1" }, image: { source: "none" }, accessContext: { exerciseId: "e1" } } };
+const assetVideoRow = { name: "Dead Bug", media: { video: { source: "asset", mediaId: "vid-1" }, image: { source: "none" }, accessContext: context } };
 
-test("1. an R2 video: the HTML5 player without an address, one request, the address assigned to the element and kept nowhere else, gone with Close", async () => {
+test("1. an R2 video: the HTML5 player without an address, one request for the row's context, the address assigned to the element and kept nowhere else, gone with Close", async () => {
   playback.forgetMediaAccess();
-  const calls = fakeFetch(() => ({ url: "https://r2.example/vid-1?sig=1", expiresAt: minutesFromNow(10) }));
+  const calls = fakeFetch(slotAnswer((slot) => (slot === "video" ? asset("vid-1", "https://r2.example/vid-1?sig=1") : null)));
   modal.handleMediaAction(control(assetVideoRow));
   assert.equal(els.mediaModal.hidden, false);
   assert.ok(els.mediaModal.classList.contains("is-video"));
@@ -69,10 +80,11 @@ test("1. an R2 video: the HTML5 player without an address, one request, the addr
   assert.match(body().querySelector(".media-status").textContent, /Preparing the video/);
   assert.ok(body().querySelector('[data-action="enter-fullscreen"]'), "the full-screen button is the phone's gesture");
   await settle();
-  assert.deepEqual(calls, [{ url: playback.ACCESS_ROUTE, body: { assetId: "vid-1", accessContext: { exerciseId: "e1" } } }]);
+  assert.deepEqual(calls, [{ url: playback.ACCESS_ROUTE, body: { context, slots: ["video"] } }]);
   assert.equal(video.src, "https://r2.example/vid-1?sig=1");
   assert.equal(body().querySelector(".media-asset").dataset.mediaState, "ready");
-  assert.equal(stage.innerHTML.includes("r2.example"), false, "the control carries the id, never the address");
+  assert.equal(stage.innerHTML.includes("r2.example"), false, "the control carries the media id and the context, never the address");
+  assert.match(stage.innerHTML, /data-video-media-id="vid-1"/);
   assert.equal(JSON.stringify(state).includes("r2.example"), false, "state never holds the address");
   modal.closeMedia();
   assert.equal(els.mediaModal.hidden, true);
@@ -84,7 +96,7 @@ test("1. an R2 video: the HTML5 player without an address, one request, the addr
 test("2. an address that fails to load is asked for once more, where the video was; a second failure is the error state, and Try again starts over", async () => {
   playback.forgetMediaAccess();
   let issued = 0;
-  const calls = fakeFetch(() => ({ url: `https://r2.example/vid-1?sig=${++issued}`, expiresAt: minutesFromNow(10) }));
+  const calls = fakeFetch(slotAnswer((slot) => (slot === "video" ? asset("vid-1", `https://r2.example/vid-1?sig=${++issued}`) : null)));
   modal.handleMediaAction(control(assetVideoRow));
   await settle();
   const video = body().querySelector("video.media-video");
@@ -114,7 +126,7 @@ test("2. an address that fails to load is asked for once more, where the video w
   playback.forgetMediaAccess();
 });
 
-test("3. a refused access is the sentence and the code; a server that does not answer is the generic sentence", async () => {
+test("3. a refused access is the sentence and the code; a server that does not answer, or a row without a context, is the generic sentence", async () => {
   playback.forgetMediaAccess();
   fakeFetch(() => ({ status: 404, json: { error: "notFound" } }));
   modal.handleMediaAction(control(assetVideoRow));
@@ -130,29 +142,43 @@ test("3. a refused access is the sentence and the code; a server that does not a
   assert.match(body().querySelector(".media-error p").textContent, /can't be played right now/);
   assert.equal(body().querySelector(".media-technical code").textContent, "unavailable");
   modal.closeMedia();
+  const calls = fakeFetch(() => ({}));
+  modal.handleMediaAction(control({ ...assetVideoRow, media: { ...assetVideoRow.media, accessContext: null } }));
+  await settle();
+  assert.equal(calls.length, 0, "without a context nothing is asked");
+  assert.equal(body().querySelector(".media-technical code").textContent, "context_invalid");
+  modal.closeMedia();
   playback.forgetMediaAccess();
 });
 
-test("4. an R2 image alone is shown through the resolver; the poster of an R2 video is its R2 image", async () => {
+test("4. an R2 image alone is shown through the resolver; the poster of an R2 video is its R2 image, from the same request or the cache", async () => {
   playback.forgetMediaAccess();
-  const calls = fakeFetch((url, requestBody) => url === playback.ACCESS_ROUTE
-    ? { url: "https://r2.example/vid-1", expiresAt: minutesFromNow(10) }
-    : { items: requestBody.items.map((item) => ({ assetId: item.assetId, url: `https://r2.example/${item.assetId}`, expiresAt: minutesFromNow(10) })) });
-  modal.handleMediaAction(control({ name: "Plank", media: { video: { source: "none" }, image: { source: "asset", assetId: "img-1" }, accessContext: "ctx" } }));
+  const calls = fakeFetch(slotAnswer((slot) => asset(slot === "video" ? "vid-1" : "img-1", `https://r2.example/${slot === "video" ? "vid-1" : "img-1"}`)));
+  modal.handleMediaAction(control({ name: "Plank", media: { video: { source: "none" }, image: { source: "asset", mediaId: "img-1" }, accessContext: context } }));
   assert.equal(els.mediaModal.classList.contains("is-video"), false);
   const image = body().querySelector("img.media-image-full");
-  assert.equal(image.dataset.mediaAssetId, "img-1");
+  assert.equal(image.dataset.mediaId, "img-1");
+  assert.equal(image.dataset.mediaSlot, "image");
   assert.equal(image.hasAttribute("src"), false);
   await settle();
   assert.equal(image.src, "https://r2.example/img-1");
   assert.deepEqual(calls.map((call) => call.url), [playback.ACCESS_BATCH_ROUTE]);
+  assert.deepEqual(calls[0].body, { requests: [{ context, slots: ["image"] }] });
   modal.closeMedia();
-  modal.handleMediaAction(control({ name: "Plank", media: { video: { source: "asset", assetId: "vid-1" }, image: { source: "asset", assetId: "img-1" }, accessContext: "ctx" } }));
+  modal.handleMediaAction(control({ name: "Plank", media: { video: { source: "asset", mediaId: "vid-1" }, image: { source: "asset", mediaId: "img-1" }, accessContext: context } }));
   await settle();
   const video = body().querySelector("video.media-video");
   assert.equal(video.src, "https://r2.example/vid-1");
-  assert.equal(video.poster, "https://r2.example/img-1", "the cached image address, no new request for it");
+  assert.equal(video.poster, "https://r2.example/img-1", "the cached image address");
   assert.deepEqual(calls.map((call) => call.url), [playback.ACCESS_BATCH_ROUTE, playback.ACCESS_ROUTE]);
+  assert.deepEqual(calls[1].body, { context, slots: ["video"] }, "the image was already cached, only the video is asked for");
+  modal.closeMedia();
+  playback.forgetMediaAccess();
+  // Both missing: one request for both slots.
+  modal.handleMediaAction(control({ name: "Plank", media: { video: { source: "asset", mediaId: "vid-1" }, image: { source: "asset", mediaId: "img-1" }, accessContext: context } }));
+  await settle();
+  assert.deepEqual(calls[2].body, { context, slots: ["video", "image"] });
+  assert.equal(body().querySelector("video.media-video").poster, "https://r2.example/img-1");
   modal.closeMedia();
   playback.forgetMediaAccess();
 });
@@ -160,7 +186,7 @@ test("4. an R2 image alone is shown through the resolver; the poster of an R2 vi
 test("5. Google Drive, YouTube and a direct link are drawn exactly as before, with no request; a late answer never touches the next opening", async () => {
   playback.forgetMediaAccess();
   let release;
-  const calls = fakeFetch(() => new Promise((resolve) => { release = () => resolve({ url: "https://r2.example/late", expiresAt: minutesFromNow(10) }); }));
+  const calls = fakeFetch(() => new Promise((resolve) => { release = () => resolve({ video: asset("vid-1", "https://r2.example/late") }); }));
   modal.handleMediaAction(control(assetVideoRow));
   modal.closeMedia();
   modal.openMedia("Clip", "", "https://cdn.example/clip.mp4");

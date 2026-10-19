@@ -112,16 +112,25 @@ export function getDriveId(url) {
 // The API contract delivers, on exercise list and detail rows, Builder and
 // program items and a block's coverSlides, a `media` descriptor:
 // `media.video` and `media.image`, each with `source` "asset" (an object in
-// R2, named by its asset id and reachable only through a short-lived URL the
-// server issues - media-playback.js), "legacy" (a Google Drive, YouTube or
-// direct link, shown exactly as before) or "none"; and `media.accessContext`,
-// an opaque value the server wants back with every access request. A row
-// without a descriptor (an older payload) is read from its legacy URL fields.
-// Every render site reads media through exerciseMediaOf() and nothing else,
-// so a change of the descriptor's field names is one function here.
+// R2, named by its `mediaId` and reachable only through a short-lived URL the
+// server issues for the row's context - media-playback.js), "legacy" (a
+// Google Drive, YouTube or direct link, shown exactly as before) or "none";
+// and `media.accessContext`, the `{ type, id }` the server authorizes an
+// access request by. A row without a descriptor (an older payload) is read
+// from its legacy URL fields. Every render site reads media through
+// exerciseMediaOf() and nothing else, so a change of the descriptor's field
+// names is one function here.
 // ---------------------------------------------------------------------------
 
-const NO_MEDIA = Object.freeze({ source: "none", assetId: "", url: "", kind: "" });
+const NO_MEDIA = Object.freeze({ source: "none", mediaId: "", url: "", kind: "" });
+
+// The access context of a row: `{ type, id }`, both non-empty, or null.
+export function normalizeAccessContext(value) {
+  if (!value || typeof value !== "object") return null;
+  const type = typeof value.type === "string" ? value.type.trim() : "";
+  const id = typeof value.id === "string" ? value.id.trim() : Number.isFinite(value.id) ? String(value.id) : "";
+  return type && id ? { type, id } : null;
+}
 
 // The kind of a legacy link: the player and the covers tell them apart.
 export function legacyMediaKind(url) {
@@ -144,12 +153,12 @@ function normalizeMediaSlot(slot, rowUrl) {
   const described = Boolean(slot) && typeof slot === "object";
   const source = described ? String(slot.source || "").trim() : "";
   if (source === "asset") {
-    const assetId = typeof slot.assetId === "string" ? slot.assetId.trim() : "";
-    return assetId ? { source: "asset", assetId, url: "", kind: "asset" } : NO_MEDIA;
+    const mediaId = typeof slot.mediaId === "string" ? slot.mediaId.trim() : "";
+    return mediaId ? { source: "asset", mediaId, url: "", kind: "asset" } : NO_MEDIA;
   }
   if (source === "none") return NO_MEDIA;
   const url = source === "legacy" && typeof slot.url === "string" && slot.url.trim() ? slot.url.trim() : rowUrl;
-  return url ? { source: "legacy", assetId: "", url, kind: legacyMediaKind(url) } : NO_MEDIA;
+  return url ? { source: "legacy", mediaId: "", url, kind: legacyMediaKind(url) } : NO_MEDIA;
 }
 
 export function exerciseMediaOf(row) {
@@ -157,7 +166,7 @@ export function exerciseMediaOf(row) {
   return {
     video: normalizeMediaSlot(descriptor?.video, legacyUrlOf(row, ["video", "video_url", "videoUrl"])),
     image: normalizeMediaSlot(descriptor?.image, legacyUrlOf(row, ["image", "image_url", "imageUrl"])),
-    accessContext: descriptor && descriptor.accessContext !== undefined ? descriptor.accessContext : null,
+    accessContext: normalizeAccessContext(descriptor?.accessContext),
   };
 }
 
@@ -165,16 +174,17 @@ export function hasAnyMedia(media) {
   return media.video.source !== "none" || media.image.source !== "none";
 }
 
-// The access context travels through a data attribute as JSON, so a string
-// and an object survive the round trip alike.
+// The access context travels through a data attribute as JSON and comes back
+// normalized ({ type, id }) or null.
 export function encodeAccessContext(context) {
-  return context === null || context === undefined ? "" : JSON.stringify(context);
+  const normalized = normalizeAccessContext(context);
+  return normalized ? JSON.stringify(normalized) : "";
 }
 
 export function decodeAccessContext(value) {
   if (!value) return null;
   try {
-    return JSON.parse(value);
+    return normalizeAccessContext(JSON.parse(value));
   } catch {
     return null;
   }
@@ -182,11 +192,11 @@ export function decodeAccessContext(value) {
 
 // The data attributes of an "open-media" control: the legacy links as before
 // (data-image / data-video, the modal's own inputs) and, for an R2 asset,
-// its id and the row's access context - never a URL to the object.
+// its media id and the row's access context - never a URL to the object.
 export function mediaAccessAttributes(media) {
   const parts = [`data-image="${escapeAttr(media.image.url)}"`, `data-video="${escapeAttr(media.video.url)}"`];
-  if (media.video.source === "asset") parts.push(`data-video-asset-id="${escapeAttr(media.video.assetId)}"`);
-  if (media.image.source === "asset") parts.push(`data-image-asset-id="${escapeAttr(media.image.assetId)}"`);
+  if (media.video.source === "asset") parts.push(`data-video-media-id="${escapeAttr(media.video.mediaId)}"`);
+  if (media.image.source === "asset") parts.push(`data-image-media-id="${escapeAttr(media.image.mediaId)}"`);
   if (media.video.source === "asset" || media.image.source === "asset") {
     parts.push(`data-media-access-context="${escapeAttr(encodeAccessContext(media.accessContext))}"`);
   }
@@ -194,17 +204,17 @@ export function mediaAccessAttributes(media) {
 }
 
 // An <img> for an R2 asset: no address until the resolver (media-playback.js)
-// has asked the server for one in a batch; data-fallbacks are the public
-// addresses to try should it get none.
-export function renderAssetImage(assetId, accessContext, className, { alt = "", fallbacks = [], attributes = "" } = {}) {
-  return `<img class="${escapeAttr(className)}" alt="${escapeAttr(alt)}" data-media-asset-id="${escapeAttr(assetId)}" data-media-access-context="${escapeAttr(encodeAccessContext(accessContext))}"${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}${attributes ? ` ${attributes}` : ""}>`;
+// has asked the server for the row's `slot` in a batch; data-fallbacks are
+// the public addresses to try should it get none.
+export function renderAssetImage(mediaId, accessContext, className, { alt = "", fallbacks = [], attributes = "", slot = "image" } = {}) {
+  return `<img class="${escapeAttr(className)}" alt="${escapeAttr(alt)}" data-media-id="${escapeAttr(mediaId)}" data-media-slot="${escapeAttr(slot)}" data-media-access-context="${escapeAttr(encodeAccessContext(accessContext))}"${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}${attributes ? ` ${attributes}` : ""}>`;
 }
 
 // A row's picture by its image slot: an asset through the resolver, a legacy
 // link exactly as renderImage() always drew it, nothing for "none".
 export function renderMediaImage(media, className, { alt = "", previewUrl = "" } = {}) {
   const slot = media.image;
-  if (slot.source === "asset") return renderAssetImage(slot.assetId, media.accessContext, className, { alt });
+  if (slot.source === "asset") return renderAssetImage(slot.mediaId, media.accessContext, className, { alt });
   if (slot.source === "legacy") return renderImage(slot.url, className, alt, previewUrl);
   return "";
 }
@@ -213,7 +223,7 @@ export function renderMediaImage(media, className, { alt = "", previewUrl = "" }
 // asset picture plus the same fallback label for an asset.
 export function renderMediaThumbOf(media, fallbackLabel = "Image") {
   if (media.image.source === "asset") {
-    return `${renderAssetImage(media.image.assetId, media.accessContext, "media-thumb")}${fallbackLabel ? `<span class="media-fallback">${escapeHtml(fallbackLabel)}</span>` : ""}`;
+    return `${renderAssetImage(media.image.mediaId, media.accessContext, "media-thumb")}${fallbackLabel ? `<span class="media-fallback">${escapeHtml(fallbackLabel)}</span>` : ""}`;
   }
   return renderMediaThumb(media.image.url, fallbackLabel);
 }

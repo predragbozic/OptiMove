@@ -65,11 +65,11 @@ function imageAttributes(sources) {
 // shown whole (Big, Details) never sits in empty bars. Decorative: it walks
 // the same sources as the picture and, when none loads, is hidden by the
 // app's image error handler (image-missing).
-// `asset`: an R2 image ({ assetId, accessContext }) resolved by
+// `asset`: an R2 image ({ mediaId, accessContext }) resolved by
 // media-playback.js, with `sources` as its public fallbacks.
 export function renderExerciseThumbBackdrop(sources, asset = null) {
   if (asset) {
-    return renderAssetImage(asset.assetId, asset.accessContext, "exercise-thumb-backdrop", { fallbacks: sources, attributes: 'loading="lazy" decoding="async" aria-hidden="true"' });
+    return renderAssetImage(asset.mediaId, asset.accessContext, "exercise-thumb-backdrop", { fallbacks: sources, attributes: 'loading="lazy" decoding="async" aria-hidden="true"' });
   }
   return sources.length ? `<img class="exercise-thumb-backdrop" ${imageAttributes(sources)} aria-hidden="true">` : "";
 }
@@ -80,9 +80,9 @@ export function renderExerciseThumbBackdrop(sources, asset = null) {
 // The browser walks data-fallbacks on each load error (handleImageError in
 // app.js) and finally swaps in the initials from data-fallback-initials.
 // An R2 image (the media descriptor, FE-1) has no public address: the <img>
-// carries the asset id and media-playback.js fills in its short-lived
-// address in a batch with the other pictures on screen; should it get none,
-// the same fallbacks and initials apply.
+// carries the media id and the row's access context, and media-playback.js
+// fills in its short-lived address in a batch with the other pictures on
+// screen; should it get none, the same fallbacks and initials apply.
 // `backdrop`: a picture across a card - larger video covers, shown whole
 // over its blurred copy.
 export function renderExerciseThumb(exercise, className, { backdrop = false } = {}) {
@@ -94,8 +94,8 @@ export function renderExerciseThumb(exercise, className, { backdrop = false } = 
     ...(media.video.source === "legacy" ? videoThumbnailSources(media.video.url, { large: backdrop }) : []),
   ];
   if (media.image.source === "asset") {
-    const asset = { assetId: media.image.assetId, accessContext: media.accessContext };
-    const picture = renderAssetImage(asset.assetId, asset.accessContext, className, {
+    const asset = { mediaId: media.image.mediaId, accessContext: media.accessContext };
+    const picture = renderAssetImage(asset.mediaId, asset.accessContext, className, {
       fallbacks: sources,
       attributes: `loading="lazy" decoding="async" data-fallback-initials="${escapeAttr(initials)}"`,
     });

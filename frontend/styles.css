@@ -6677,7 +6677,7 @@ body.specific-program-open {
 
 /* An R2 picture before its address arrived: a quiet frame, never a broken
    image icon. */
-img[data-media-asset-id]:not([src]) {
+img[data-media-id]:not([src]) {
   background: rgba(15, 23, 42, 0.08);
 }
 
