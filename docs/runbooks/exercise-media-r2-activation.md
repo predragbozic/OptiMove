@@ -176,8 +176,9 @@ Identifiers (not secrets): C4 upload `e4db8e48-3352-42ae-a1e3-c170d8bfaf28`, med
 
 **Limits of this test:**
 
-- the MP4 had **no audio track** and was a fragmented MediaRecorder file; a standard phone or exported MP4
-  with AAC audio was not sent, so the AAC-LC rule of the inspection is untested on production;
+- the MP4 had **no audio track** and was a fragmented MediaRecorder file; the AAC-LC rule of the inspection
+  was proven later the same day with a second clip (see "The H.264 + AAC-LC test — result" below); a
+  standard phone or exported MP4 was still not sent;
 - the cleanup run was a **no-op**: C6 was cleaned inside its own `DELETE`, so the sweep of an expired or
   crashed session was not exercised (that is negative test N4);
 - the tombstone was proven by the server's `200 cancelled` (the server writes it and reads it back with HEAD
@@ -233,12 +234,46 @@ Objects in the bucket after phases C and the negatives: `pending/e4db8e48-…` (
 189 793 B) and three zero-byte tombstones, `pending/a529c990-…` (C6), `pending/c5e02071-…` (N5),
 `pending/ba6358b0-…` (N4). Nothing else was written.
 
-**Before phase D (the owner's approval 3), the remaining checks:** one C1–C4 pass with a real MP4 **with
-an AAC audio track** (any exercise video coaches use, under 50 MB); a look at the bucket for the four
-objects above (the three tombstones at 0 B with the `optimove-tombstone` metadata); the Render log of the
-15:00 UTC run. Phase D's own criteria are in its table: D1 health and 401, D2 a coach's editor unchanged
-until a file is chosen, D3 the pilot upload through the editor, D4 / D5 the two cancels, D6 / D7 the
-legacy exercise and the Builder unchanged, D8 the cleanup run.
+### The H.264 + AAC-LC test — result (2026-10-19, 15:17 UTC, `OptiMove-eu`, the same pilot account)
+
+The missing codec case of phase C: a video **with an audio track**. The file was made in the page
+(`MediaRecorder`, `video/mp4;codecs="avc1.42E01E,mp4a.40.2"`, a canvas scene plus a 440 Hz tone) and
+**verified before sending** by parsing its MP4 boxes in the browser and loading it into a `<video>`:
+`optimove-r2-pilot-av.mp4`, **255 417 B**, 6.93 s, exactly two tracks (`vide`, `soun`); video `avc1` H.264
+**Baseline** (profile 66, constrained, level 3.1), 640 × 360; audio `mp4a` **AAC-LC** (`esds` object type
+indication 0x40, audio object type 2), 48 kHz, stereo; a fragmented container (`ftyp moov mvex moof mdat`).
+Quota before: used 189 793 B, reserved 0, active 0.
+
+| Step | Request | Answer |
+|---|---|---|
+| C1 | `POST /api/media/uploads`, `exercise_create`, 255 417 B | **201** pending in 0.9 s, upload `b3fecad3-1adc-4083-9303-514dc24ad0ba`, media `f2b66030-bddc-4737-a53c-c2e515d1dcc2`, reservation 255 417 B, expiry 15:27:19 |
+| C2 | the signed `PUT`, raw File | **200** in 0.5 s, `ETag "efdfefa53352c309cd2a26e0644a6f19"` |
+| C3 | the same `PUT` again | **412** |
+| C4 | `POST …/complete {}` | **200** in 1.9 s, `status: "completed"`, `media.status: "ready"`, metadata **`videoCodec: "h264"`, `audioCodec: "aac"`**, 6.859 s, 640 × 360, 255 417 B; no 202 |
+
+After C4: used **445 210 B** (189 793 + 255 417), reserved **0**, active sessions **0**, free 999 554 790 B.
+No exercise was touched: the context carried no exercise id, no exercise route was called, and a
+read-only look at the library (the first 50 rows and the user's own 50) showed no exercise with an
+`asset` source. The ready object `pending/b3fecad3-1adc-4083-9303-514dc24ad0ba` (255 417 B) stays in the
+bucket, bound to nothing, like the C4 video.
+
+With this the inspection is proven on production for both accepted shapes of an MP4 — video only and
+video with AAC-LC audio — and the AAC-LC rule is no longer an untested limit of phase C.
+
+**Still to confirm by the owner (not reachable from the session — no Cloudflare or Render access):**
+
+- **Cloudflare R2, read-only:** the two ready videos `pending/e4db8e48-3352-42ae-a1e3-c170d8bfaf28`
+  (189 793 B) and `pending/b3fecad3-1adc-4083-9303-514dc24ad0ba` (255 417 B), and the three zero-byte
+  tombstones `pending/a529c990-…`, `pending/c5e02071-…`, `pending/ba6358b0-…` with the
+  `optimove-tombstone` metadata — **NOT CONFIRMED** until the owner reports what the panel shows; nothing
+  is deleted or changed there.
+- **The Render log of the automatic cleanup run of 15:00 UTC:** expected `{"cleaned":1,"failed":0}` — **NOT
+  CONFIRMED** until the owner reports it.
+
+**Before phase D (the owner's approval 3), the remaining checks:** the two confirmations above. Phase D's own
+criteria are in its table: D1 health and 401, D2 a coach's editor unchanged until a file is chosen, D3 the
+pilot upload through the editor, D4 / D5 the two cancels, D6 / D7 the legacy exercise and the Builder
+unchanged, D8 the cleanup run.
 
 ### Phase D — frontend transport activation, the editor pilot (owner approval 3)
 
