@@ -7,24 +7,33 @@ const tooLong = () => new MediaStorageError(415,'video_too_long');
 const MAX_PROBE_BYTES=8*1024*1024;
 const MAX_PIXELS=16777216;
 // The owner's rule of 2026-10-19: an exercise video is at most 30 seconds. The
-// client refuses a longer one before converting or sending it; this is the
-// authoritative check on the bytes that arrived. Overridable for tests only.
+// client refuses a longer one before converting or sending it; the server
+// checks the container's declared durations (it never reads the sample tables,
+// so a file whose headers understate its length is bounded by the size cap,
+// not by this rule). MEDIA_MAX_VIDEO_SECONDS can only lower the limit (tests).
+const PRODUCT_MAX_VIDEO_SECONDS=30;
 const envSeconds=Number(process.env.MEDIA_MAX_VIDEO_SECONDS);
-export const MAX_VIDEO_SECONDS=Number.isFinite(envSeconds) && envSeconds>0 ? envSeconds : 30;
-// Track kinds phones add beside the picture and the sound (timed metadata,
-// timecode, chapters): never served, never decoded, so they do not count.
-const IGNORED_TRACK_TYPES=new Set(['Other','Text','Menu','Image']);
+export const MAX_VIDEO_SECONDS=Number.isFinite(envSeconds) && envSeconds>0 ? Math.min(PRODUCT_MAX_VIDEO_SECONDS,envSeconds) : PRODUCT_MAX_VIDEO_SECONDS;
+// Track kinds phones write beside the picture and the sound (timed metadata,
+// timecode, chapters, captions): the player never parses them, so they do not
+// count as media - but at most a few, and their length still counts.
+const IGNORED_TRACK_TYPES=new Set(['Other','Text','Menu']);
+const MAX_IGNORED_TRACKS=8;
 
 export function validateVideoTracks(result,mimeType) {
   const tracks=result?.media?.track || [];
   const general=tracks.find(t=>t['@type']==='General');
   const videos=tracks.filter(t=>t['@type']==='Video');
   const audio=tracks.filter(t=>t['@type']==='Audio');
-  if (videos.length!==1 || audio.length>1 || tracks.some(t=>!['General','Video','Audio'].includes(t['@type']) && !IGNORED_TRACK_TYPES.has(t['@type']))) throw unsupported();
+  const ignored=tracks.filter(t=>IGNORED_TRACK_TYPES.has(t['@type']));
+  if (videos.length!==1 || audio.length>1 || ignored.length>MAX_IGNORED_TRACKS || tracks.some(t=>!['General','Video','Audio'].includes(t['@type']) && !IGNORED_TRACK_TYPES.has(t['@type']))) throw unsupported();
   const v=videos[0];
   const duration=Number(v.Duration || general?.Duration), width=Number(v.Width),height=Number(v.Height);
   if (!(duration>0 && duration<=14400 && width>0 && height>0 && width<=4096 && height<=4096 && width*height<=MAX_PIXELS)) throw unsupported();
-  if (duration>MAX_VIDEO_SECONDS+0.05) throw tooLong();
+  // A file plays until its longest track ends: the video, the audio, an
+  // ignored track or the container's own duration, whichever is longest.
+  const playing=Math.max(duration,Number(general?.Duration)||0,...audio.map(a=>Number(a.Duration)||0),...ignored.map(t=>Number(t.Duration)||0));
+  if (playing>MAX_VIDEO_SECONDS+0.05) throw tooLong();
   if (mimeType==='video/mp4') {
     if (general?.Format!=='MPEG-4' || v.Format!=='AVC' || !/^(Baseline|Constrained Baseline|Main|High)(@|$)/.test(v.Format_Profile || '') || Number(v.BitDepth)!==8 || v.ChromaSubsampling!=='4:2:0') throw unsupported();
     if (audio.some(a=>a.Format!=='AAC' || !/LC/.test(String(a.Format_AdditionalFeatures || a.Format_Profile || a.CommercialName || '')))) throw unsupported();

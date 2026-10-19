@@ -156,16 +156,23 @@ the original PUT permission expires while verification is already running.
 Formats: MP4/H.264 Baseline/Constrained Baseline/Main/High, 8-bit 4:2:0,
 optional AAC-LC; WebM/VP8, optional Opus/Vorbis; JPEG/PNG/WebP single image.
 HEVC, VP9, unsupported tracks/profiles and unverifiable input are rejected.
-Tracks of type Other / Text / Menu / Image beside the one video and the at most
-one audio track (the timed metadata, timecode or chapter tracks phones write)
-are ignored, not refused. A video longer than 30 seconds (`MAX_VIDEO_SECONDS`,
-`backend/src/mediaInspection.js`) is refused as 415 `video_too_long`; the
-client refuses a longer one before preparing or sending it, this is the
-authoritative check on the bytes that arrived. Phone recordings that the
-inspection would refuse (HEVC, MOV, other audio codecs) are converted on the
-coach's device before the upload (`frontend/exercise-media-prepare.js`,
-WebCodecs through Mediabunny) into exactly this shape; the inspection is
-unchanged and stays the gate.
+At most eight tracks of type Other / Text / Menu beside the one video and the
+at most one audio track (the timed metadata, timecode, chapter or caption
+tracks phones and editors write; the player never parses them) are ignored, not
+refused; any other track type (a second video or audio track, Image, Subtitle,
+an unknown type) still refuses. A video that plays longer than 30 seconds
+(`MAX_VIDEO_SECONDS`, `backend/src/mediaInspection.js`) is refused as 415
+`video_too_long`: the server takes the longest of the container's declared
+durations (the video, the audio, an ignored track, the file itself). It reads
+headers, not the sample tables, so a file whose headers understate its length
+is bounded by the size cap, not by this rule; the 30 seconds is a product rule,
+and the client refuses a longer video before preparing or sending it.
+`MEDIA_MAX_VIDEO_SECONDS` can only lower the limit (tests). Phone recordings
+that the inspection would refuse (HEVC, MOV, other audio codecs) are converted
+on the coach's device before the upload (`frontend/exercise-media-prepare.js`,
+WebCodecs through Mediabunny) into exactly this shape; a converted file carries
+no descriptive metadata. The real parser accepts the client's real output
+(`backend/tests/fixtures/media/`, tested in `media-upload-be2.test.mjs`).
 There is no transcoding. Video inspection is bounded metadata/container parsing,
 not full frame-by-frame decode. Detailed resource bounds: r2-be2-upload.md.
 

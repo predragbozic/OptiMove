@@ -42,14 +42,22 @@ export function setVideoPrepareAdapter(value) {
   adapter = value || null;
 }
 
+// A failed load (a flaky connection, a tab left open across a deploy) is its
+// own code: the device may well be able to prepare the video once it loads.
 async function library() {
   if (!libraryPromise) {
     libraryPromise = Promise.resolve().then(() => loadLibrary()).catch((error) => {
       libraryPromise = null;
-      throw prepareError("conversion_unavailable", error, { reason: "library" });
+      throw prepareError("preparation_unavailable", error, { reason: "library" });
     });
   }
   return libraryPromise;
+}
+
+// Frees what an Input holds (cached slices, an open reader of the file) as
+// soon as it is no longer needed, instead of waiting for the garbage collector.
+function disposeInput(input) {
+  try { input?.dispose?.(); } catch { /* already gone */ }
 }
 
 export function prepareError(code, cause = null, detail = null) {
@@ -117,6 +125,8 @@ export async function inspectVideo(file, { signal } = {}) {
   } catch (error) {
     if (error?.code) throw error;
     throw prepareError("video_unreadable", error);
+  } finally {
+    disposeInput(input);
   }
 }
 
@@ -222,24 +232,30 @@ export async function convertVideo(file, info, { onProgress, signal, rules = VID
     ? { codec: "avc", quality: new MB.Quality({ bitrate: targetBitrate(info, rules) }), width: size.width, height: size.height, fit: "fill", hardwareAcceleration: "no-preference" }
     : {};
   const audio = audioNeedsEncoding(info) ? { codec: "aac", quality: new MB.Quality({ bitrate: rules.audioBitrate }) } : {};
-  let conversion;
   try {
-    conversion = await MB.Conversion.init({ input, output, video, audio });
-  } catch (error) {
-    throw prepareError("conversion_failed", error, { stage: "init" });
-  }
-  if (!conversion.isValid) throw prepareError("conversion_unavailable", null, { reasons: conversion.discardedTracks.map((entry) => entry.reason) });
-  const cancel = () => { void conversion.cancel(); };
-  if (isAborted(signal)) { cancel(); throw prepareError("preparation_cancelled"); }
-  signal?.addEventListener?.("abort", cancel, { once: true });
-  conversion.onProgress = (fraction) => onProgress?.(Math.max(0, Math.min(1, Number(fraction) || 0)));
-  try {
-    await conversion.execute();
-  } catch (error) {
-    if (isAborted(signal) || error?.name === "ConversionCanceledError") throw prepareError("preparation_cancelled", error);
-    throw prepareError("conversion_failed", error, { stage: "execute" });
+    let conversion;
+    try {
+      // `tags: {}`: the prepared file carries no descriptive metadata of the
+      // recording (location, device, dates); only the picture and the sound.
+      conversion = await MB.Conversion.init({ input, output, video, audio, tags: {}, showWarnings: false });
+    } catch (error) {
+      throw prepareError("conversion_failed", error, { stage: "init" });
+    }
+    if (!conversion.isValid) throw prepareError("conversion_unavailable", null, { reasons: conversion.discardedTracks.map((entry) => entry.reason) });
+    const cancel = () => { void conversion.cancel(); };
+    if (isAborted(signal)) { cancel(); throw prepareError("preparation_cancelled"); }
+    signal?.addEventListener?.("abort", cancel, { once: true });
+    conversion.onProgress = (fraction) => onProgress?.(Math.max(0, Math.min(1, Number(fraction) || 0)));
+    try {
+      await conversion.execute();
+    } catch (error) {
+      if (isAborted(signal) || error?.name === "ConversionCanceledError") throw prepareError("preparation_cancelled", error);
+      throw prepareError("conversion_failed", error, { stage: "execute" });
+    } finally {
+      signal?.removeEventListener?.("abort", cancel);
+    }
   } finally {
-    signal?.removeEventListener?.("abort", cancel);
+    disposeInput(input);
   }
   const buffer = output.target.buffer;
   if (!buffer || !buffer.byteLength) throw prepareError("conversion_failed", null, { stage: "output" });
@@ -273,6 +289,8 @@ export async function prepareVideo(file, { onProgress, onPhase, signal, rules = 
   if (isAborted(signal)) throw prepareError("preparation_cancelled");
   onPhase?.("verifying");
   const check = await inspectVideo(converted, { signal });
+  // A Cancel that landed while the result was read: nothing goes up.
+  if (isAborted(signal)) throw prepareError("preparation_cancelled");
   // A copied picture keeps its size; a re-encoded one is at most 720p on the long side.
   const maxLongSide = videoNeedsTranscode(info) ? rules.maxLongSide + 2 : 4096;
   const verified = videoCompliance(check).ok
@@ -297,6 +315,8 @@ export function describePrepareError(code, { detail = null, file = null } = {}) 
       return "This file could not be read as a video. Choose an MP4 or MOV video, for example one recorded on your phone.";
     case "conversion_unavailable":
       return "This video can't be prepared on this device. Choose an MP4 (H.264) video, or add it from another device.";
+    case "preparation_unavailable":
+      return "The video tool could not be loaded. Check the connection and choose the video again.";
     case "conversion_failed":
       return "The video could not be prepared. Choose another video, or try again.";
     case "preparation_cancelled":
@@ -306,4 +326,4 @@ export function describePrepareError(code, { detail = null, file = null } = {}) 
   }
 }
 
-export const PREPARE_ERROR_CODES = Object.freeze(["input_too_large", "video_too_long", "video_unreadable", "conversion_unavailable", "conversion_failed", "preparation_cancelled"]);
+export const PREPARE_ERROR_CODES = Object.freeze(["input_too_large", "video_too_long", "video_unreadable", "conversion_unavailable", "preparation_unavailable", "conversion_failed", "preparation_cancelled"]);

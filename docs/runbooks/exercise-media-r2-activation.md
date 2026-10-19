@@ -434,16 +434,32 @@ already H.264 (a MOV is remuxed in milliseconds) and re-encoded only for another
 most 720p on the long side (`VIDEO_PREPARE_RULES`), the audio copied when it is AAC-LC and encoded to AAC
 otherwise; the output is MP4 with faststart, read again before it is accepted. The upload then takes the
 prepared file: the reservation, the quota, the inspection, the binding and the playback are unchanged.
-**Limits (the owner's rules):** an input of at most 100 MB and a video of at most 30 seconds — checked on
-the device before anything is read or converted, and the 30 seconds again by the server's inspection
-(`video_too_long`, 415). No trimming: a longer video is refused with its length.
+**Limits (the owner's rules):** an input of at most 100 MB — checked before the file is read — and a video
+of at most 30 seconds — checked once the container's header is read, before any conversion or request — and
+the 30 seconds again by the server's inspection (`video_too_long`, 415; the longest of the container's
+declared durations). No trimming: a longer video is refused with its length. A converted file carries no
+descriptive metadata (Mediabunny `tags: {}`). Known gap (narrow re-review, LOW): the device measures the
+picture and the sound, the server the longest declared duration including a metadata track or the file's
+own header, so a rare file whose metadata track or header declares more than 30 s while its picture and
+sound do not is sent whole and then refused (`video_too_long`, nothing charged, the coach chooses another
+file).
+
+**Embedded metadata of a file sent as it is (open owner decision, security review of 2026-10-20, F2).** A
+compliant file goes up byte for byte (passthrough first, the owner's decision), so whatever the phone wrote
+into it reaches every viewer of the exercise: the location and device atoms of the container (they reached
+viewers before this change too) and, new with this change, timed-metadata / timecode / caption tracks, which
+the server now ignores instead of refusing. The player never parses them. The alternative is a remux of
+every file (the picture and the sound copied bit for bit, no re-encode, milliseconds, no metadata) at the
+cost of holding the whole file in memory once on the phone; it is the owner's call, not built.
 
 **What the coach sees.** "Checking the video..." → "Preparing the video... N %" with Cancel → the upload's
 "Uploading the video... N %" → "Uploaded and verified..."; the file line names the prepared size and the
 size it came from. Save waits, the editor asks before closing, a reload asks first, like an upload. A
 refused video says why in one sentence (over 100 MB, longer than 30 seconds, not readable, cannot be
-prepared on this device, preparation failed) and offers another file. No codec, size or setting is ever
-asked.
+prepared on this device, the video tool could not be loaded, preparation failed) and offers another file.
+While a video is prepared or uploaded every other media control is shown disabled and only its Cancel is
+live; a Cancel that lands while the converted file is read back drops it (nothing is uploaded, a Replace
+keeps the stored file). No codec, size or setting is ever asked.
 
 **Devices.** Android Chrome / Samsung Browser: WebCodecs with the platform's HEVC decoder and H.264 encoder.
 iPhone Safari 16.4+: the video part of WebCodecs exists (HEVC decode, H.264 encode); the audio part arrives
@@ -459,8 +475,25 @@ guards, the server's `video_too_long`. The real conversion: the browser harness 
 (untracked) with clips made in the page — compliant H.264 (passthrough, same bytes), H.264 with rotation
 90 (passthrough, plays 360×640), HEVC (re-encoded), H.264 MOV (remuxed, picture copied), HEVC without
 audio, WebM VP8, HEVC 1080×1920 25 s (720×1280 in 2.8 s), a 31 s clip (refused), Cancel at 20 %, the
-server's 415. Backend: `media-upload-be2.test.mjs` gained the 30-second rule and the ignored metadata
-tracks (`Other` / `Text` / `Menu` / `Image`; a second video or audio track still refuses).
+server's 415. `frontend/tests/exercise-media-prepare-glue.test.mjs` runs the Mediabunny glue through a
+fake of the library module (what is passed to `Conversion.init`: copy vs re-encode, size, bitrate, AAC,
+`tags: {}`; Cancel → `conversion.cancel()`; `isValid`; every `Input` disposed; a failed library load).
+Backend: `media-upload-be2.test.mjs` gained the 30-second rule (the longest declared duration), the
+ignored metadata tracks (`Other` / `Text` / `Menu`, at most eight; a second video or audio track, `Image`
+and any other type still refuse), the override that can only lower the limit, the real worker refusing a
+31 s WebM as `video_too_long` with nothing charged, and **two real outputs of the client** made in Chrome
+with the vendored Mediabunny (`backend/tests/fixtures/media/`): an HEVC recording with rotation 90 prepared
+into H.264 High + AAC-LC, and a compliant H.264 / AAC MP4 with a WebVTT text track sent as it is — both
+accepted by the real parser.
+
+**Review (2026-10-20, before the PR).** `code-reviewer` NOT READY (HIGH: a Cancel while the converted file
+was read back did not stop the upload; MEDIUM: no real output through the real parser; MEDIUM: the
+Mediabunny glue untested) → all fixed with the tests above. `security-reviewer` READY WITH NOTES (MEDIUM
+F1: the 30 s measured on the video track only → fixed; MEDIUM F2: embedded metadata of a file sent as it is
+→ the owner's decision above; LOW: `Image` dropped, ignored tracks capped, the override clamped, the
+vendored file recorded in `frontend/vendor/mediabunny/VENDOR.md`). `mobile-qa` READY WITH NOTES (MEDIUM:
+the other slot's controls dead during a preparation → disabled; MEDIUM: the editor's exits under 44 px and
+a long link widening the field → fixed in CSS).
 
 ### Phase D readiness — the transport-only variant (reviewed 2026-10-19; superseded by E-2 above)
 

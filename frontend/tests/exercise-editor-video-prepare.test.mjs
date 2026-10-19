@@ -227,7 +227,7 @@ test("4. a MOV from an iPhone with H.264 inside: the container alone sends it th
   assert.equal(state.exerciseEditor.media.video.state, "uploaded");
 });
 
-test("5. Cancel during the preparation: the conversion stops on the device, nothing is sent, 'Preparation cancelled.' with Upload again; a cancelled Replace keeps the stored file", async () => {
+test("5. Cancel during the preparation: the conversion stops on the device, nothing is sent, 'Preparation cancelled.' with Choose a video; a cancelled Replace keeps the stored file", async () => {
   installVideoPrepareFake({ convert: (f, info, options) => new Promise((resolve, reject) => { options.signal.addEventListener("abort", () => reject(Object.assign(new Error("preparation_cancelled"), { code: "preparation_cancelled" })), { once: true }); }) });
   const transport = fakeTransport();
   const h = handlers({ upload: transport.upload });
@@ -241,7 +241,7 @@ test("5. Cancel during the preparation: the conversion stops on the device, noth
   await chosen; await settle();
   assert.equal(state.exerciseEditor.media.video.state, "cancelled");
   assert.equal(status()[0], "Preparation cancelled.");
-  assert.ok(buttons().includes("Upload again"));
+  assert.ok(buttons().includes("Choose a video"), "nothing was uploaded and no file is kept: the coach chooses again");
   assert.equal(transport.calls.length, 0);
   assert.equal(state.exerciseEditor.media.video.file, null);
   assert.equal(saveButton().disabled, false);
@@ -311,6 +311,12 @@ test("8. while a video is being prepared: Save is held, the editor asks before c
   assert.equal(event.prevented, true);
   await editor.chooseExerciseMediaFile(state, h, "video", file("second.mp4", 10, "video/mp4"));
   assert.equal(state.exerciseEditor.media.video.fileName, "20261015_161141.mp4", "the second file is ignored while busy");
+  // The picture's controls are shown disabled while the video is prepared (they would do nothing); only Cancel is live.
+  h.rerender();
+  const imageButtons = [...content.querySelectorAll('[data-exercise-media-slot="image"] button')];
+  assert.ok(imageButtons.length > 0);
+  assert.ok(imageButtons.every((b) => b.disabled), "Upload picture / Use a link are disabled");
+  assert.deepEqual([...content.querySelectorAll('[data-exercise-media-slot="video"] button')].map((b) => [b.textContent.trim(), b.disabled]), [["Cancel", false]]);
   globalThis.confirm = () => false;
   assert.equal(editor.closeExerciseEditor(state, h), false, "declined: the editor stays");
   assert.equal(abortedSignal.aborted, false);
@@ -319,6 +325,55 @@ test("8. while a video is being prepared: Save is held, the editor asks before c
   assert.equal(abortedSignal.aborted, true, "the close cancels the preparation");
   await chosen;
   delete globalThis.confirm;
+});
+
+test("10. Cancel while the prepared file is read back: the result is dropped, nothing is uploaded, a Replace keeps the stored file", async () => {
+  // The real prepareVideo with an adapter whose second read (the check of the converted file) waits at a gate.
+  let releaseCheck = null;
+  const reads = [];
+  prepare.setVideoPrepareAdapter({
+    async inspect(f) {
+      reads.push(f);
+      if (reads.length === 2) await new Promise((resolve) => { releaseCheck = resolve; });
+      return inspectionOf(f);
+    },
+    async canConvert() { return true; },
+    async convert(f, info, options) { options.onProgress(1); return { name: "out.mp4", size: 1_000, type: "video/mp4", video: { width: 720, height: 1280, durationSeconds: info.durationSeconds } }; },
+  });
+  // A transport that answers at once, so a wrongful upload shows as a call (and a finished field), never as a hang.
+  const transport = { calls: [], upload: async (request) => { transport.calls.push(request); return { uploadId: "up-1", mediaId: "new-1", status: "completed", media: { source: "asset", mediaId: "new-1", kind: "video", status: "ready" } }; } };
+  const h = handlers({ upload: transport.upload });
+  await openEditor(h, { exercise: detail(storedVideo) });
+  const chosen = editor.chooseExerciseMediaFile(state, h, "video", phoneHevc());
+  for (let i = 0; i < 20 && !releaseCheck; i++) await settle();
+  assert.ok(releaseCheck, "the converted file is being read back");
+  assert.equal(state.exerciseEditor.media.video.state, "preparing");
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-cancel", "video"));
+  assert.equal(state.exerciseEditor.media.video.state, "cancelling");
+  releaseCheck();
+  await chosen; await settle();
+  assert.equal(transport.calls.length, 0, "no upload after a Cancel");
+  assert.equal(state.exerciseEditor.media.video.state, "stored");
+  assert.equal(state.exerciseEditor.media.video.mediaId, "vid-1");
+  assert.equal(state.exerciseEditor.media.video.file, null);
+});
+
+test("11. the preparation tool that fails to load says so (not 'this device'), and a compliant MP4 is not blamed on the device", async () => {
+  prepare.setVideoPrepareAdapter(null);
+  prepare.setMediabunnyLoader(() => Promise.reject(new Error("chunk failed")));
+  const transport = fakeTransport();
+  const h = handlers({ upload: transport.upload });
+  await openEditor(h);
+  await editor.chooseExerciseMediaFile(state, h, "video", file("clip.mp4", 10, "video/mp4"));
+  assert.equal(state.exerciseEditor.media.video.state, "failed");
+  assert.equal(status()[0], "The video tool could not be loaded. Check the connection and choose the video again.");
+  assert.equal(transport.calls.length, 0);
+  // The next choice loads it again (the failed load is not cached).
+  let loads = 0;
+  prepare.setMediabunnyLoader(() => { loads += 1; return Promise.reject(new Error("still offline")); });
+  await editor.chooseExerciseMediaFile(state, h, "video", file("clip.mp4", 10, "video/mp4"));
+  assert.equal(loads, 1);
+  prepare.setMediabunnyLoader(() => import("../vendor/mediabunny/mediabunny-1.61.1.min.mjs"));
 });
 
 test("9. the server's own 30-second rule after an upload (video_too_long): the sentence, no Retry of the same bytes", async () => {

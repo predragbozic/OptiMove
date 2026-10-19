@@ -16,3 +16,6 @@ __pycache__/
 gpexe-code-check.js
 # Browser-QA harness of the F3c3 Source connections screen (session-local, never shipped)
 frontend/_qa-source-connections.html
+# Browser-QA harness of the exercise media upload and the on-device video preparation (session-local, never shipped)
+frontend/_qa-media-harness.html
+frontend/_qa-media-harness.js

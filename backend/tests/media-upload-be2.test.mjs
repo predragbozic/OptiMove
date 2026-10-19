@@ -70,14 +70,72 @@ test('real isolated image parser decodes PNG and rejects malformed content',asyn
 test('codec allowlist rejects HEVC, unsupported profiles and wrong containers',()=>{const track={media:{track:[{'@type':'General',Format:'MPEG-4'},{'@type':'Video',Format:'AVC',Format_Profile:'High@L4',BitDepth:8,ChromaSubsampling:'4:2:0',Duration:2,Width:320,Height:240}]}};assert.equal(validateVideoTracks(track,'video/mp4').videoCodec,'h264');for(const patch of [{Format:'HEVC'},{BitDepth:10},{Format_Profile:'High 10@L4'}]){const changed=structuredClone(track);Object.assign(changed.media.track[1],patch);assert.throws(()=>validateVideoTracks(changed,'video/mp4'),e=>e.code==='unsupported_media');}assert.throws(()=>validateVideoTracks(track,'video/webm'),e=>e.code==='unsupported_media');});
 
 // The owner's rule of 2026-10-19: at most 30 seconds (the client refuses a longer
-// one before converting it; this is the authoritative check on the bytes).
-test('a video longer than 30 seconds is refused as video_too_long (415); exactly 30 passes',()=>{const base={media:{track:[{'@type':'General',Format:'MPEG-4'},{'@type':'Video',Format:'AVC',Format_Profile:'High@L4',BitDepth:8,ChromaSubsampling:'4:2:0',Duration:30,Width:720,Height:1280},{'@type':'Audio',Format:'AAC',Format_AdditionalFeatures:'LC'}]}};assert.equal(MAX_VIDEO_SECONDS,30);assert.equal(validateVideoTracks(base,'video/mp4').durationSeconds,30);const long=structuredClone(base);long.media.track[1].Duration=30.5;assert.throws(()=>validateVideoTracks(long,'video/mp4'),e=>e.code==='video_too_long' && e.status===415);const fromGeneral=structuredClone(base);delete fromGeneral.media.track[1].Duration;fromGeneral.media.track[0].Duration=51.2;assert.throws(()=>validateVideoTracks(fromGeneral,'video/mp4'),e=>e.code==='video_too_long');});
+// one before converting it; the server checks the longest of the container's declared durations).
+test('a video longer than 30 seconds is refused as video_too_long (415); exactly 30 passes',()=>{const base={media:{track:[{'@type':'General',Format:'MPEG-4'},{'@type':'Video',Format:'AVC',Format_Profile:'High@L4',BitDepth:8,ChromaSubsampling:'4:2:0',Duration:30,Width:720,Height:1280},{'@type':'Audio',Format:'AAC',Format_AdditionalFeatures:'LC'}]}};assert.equal(MAX_VIDEO_SECONDS,30);assert.equal(validateVideoTracks(base,'video/mp4').durationSeconds,30);const long=structuredClone(base);long.media.track[1].Duration=30.5;assert.throws(()=>validateVideoTracks(long,'video/mp4'),e=>e.code==='video_too_long' && e.status===415);const fromGeneral=structuredClone(base);delete fromGeneral.media.track[1].Duration;fromGeneral.media.track[0].Duration=51.2;assert.throws(()=>validateVideoTracks(fromGeneral,'video/mp4'),e=>e.code==='video_too_long');
+// The file plays until its longest track ends: a short picture with a long sound, a long ignored track or a long container is too long too.
+const longAudio=structuredClone(base);longAudio.media.track[1].Duration=5;longAudio.media.track[2].Duration=600;assert.throws(()=>validateVideoTracks(longAudio,'video/mp4'),e=>e.code==='video_too_long');
+const longContainer=structuredClone(base);longContainer.media.track[1].Duration=5;longContainer.media.track[0].Duration=45;assert.throws(()=>validateVideoTracks(longContainer,'video/mp4'),e=>e.code==='video_too_long');
+const longMeta=structuredClone(base);longMeta.media.track[1].Duration=5;longMeta.media.track.push({'@type':'Other',Type:'meta',Duration:120});assert.throws(()=>validateVideoTracks(longMeta,'video/mp4'),e=>e.code==='video_too_long');
+const allShort=structuredClone(base);allShort.media.track[1].Duration=5;allShort.media.track[2].Duration=5.02;allShort.media.track[0].Duration=5.02;assert.equal(validateVideoTracks(allShort,'video/mp4').durationSeconds,5);});
+
+// MEDIA_MAX_VIDEO_SECONDS is read at import: it may lower the limit for a test, never raise the owner's 30 seconds.
+test('the duration override can only lower the 30-second limit',async()=>{const {execFileSync}=await import('node:child_process');const read=value=>Number(execFileSync(process.execPath,['--input-type=module','-e',`import('${new URL('../src/mediaInspection.js',import.meta.url).href}').then(m=>process.stdout.write(String(m.MAX_VIDEO_SECONDS)))`],{env:{...process.env,MEDIA_MAX_VIDEO_SECONDS:value}}).toString());assert.equal(read('600'),30);assert.equal(read('5'),5);assert.equal(read('abc'),30);assert.equal(read('-1'),30);});
 
 // Phones add timed-metadata, timecode or chapter tracks beside the picture and
 // the sound; they are ignored, while a second video or audio track still refuses.
-test('metadata tracks of a phone recording are ignored; a second video or audio track is still refused',()=>{const base={media:{track:[{'@type':'General',Format:'MPEG-4'},{'@type':'Video',Format:'AVC',Format_Profile:'High@L4',BitDepth:8,ChromaSubsampling:'4:2:0',Duration:5,Width:1080,Height:1920},{'@type':'Audio',Format:'AAC',Format_AdditionalFeatures:'LC'}]}};for(const extra of [{'@type':'Other',Type:'meta'},{'@type':'Text',Format:'Timed Text'},{'@type':'Menu'}]){const withExtra=structuredClone(base);withExtra.media.track.push(extra);assert.equal(validateVideoTracks(withExtra,'video/mp4').videoCodec,'h264');}for(const extra of [{'@type':'Video',Format:'AVC',Format_Profile:'High@L4',BitDepth:8,ChromaSubsampling:'4:2:0',Duration:5,Width:320,Height:240},{'@type':'Audio',Format:'AAC',Format_AdditionalFeatures:'LC'},{'@type':'Subtitle'}]){const withExtra=structuredClone(base);withExtra.media.track.push(extra);assert.throws(()=>validateVideoTracks(withExtra,'video/mp4'),e=>e.code==='unsupported_media');}});
+test('metadata tracks of a phone recording are ignored; a second video or audio track is still refused',()=>{const base={media:{track:[{'@type':'General',Format:'MPEG-4'},{'@type':'Video',Format:'AVC',Format_Profile:'High@L4',BitDepth:8,ChromaSubsampling:'4:2:0',Duration:5,Width:1080,Height:1920},{'@type':'Audio',Format:'AAC',Format_AdditionalFeatures:'LC'}]}};for(const extra of [{'@type':'Other',Type:'meta'},{'@type':'Text',Format:'Timed Text'},{'@type':'Menu'}]){const withExtra=structuredClone(base);withExtra.media.track.push(extra);assert.equal(validateVideoTracks(withExtra,'video/mp4').videoCodec,'h264');}for(const extra of [{'@type':'Video',Format:'AVC',Format_Profile:'High@L4',BitDepth:8,ChromaSubsampling:'4:2:0',Duration:5,Width:320,Height:240},{'@type':'Audio',Format:'AAC',Format_AdditionalFeatures:'LC'},{'@type':'Subtitle'},{'@type':'Image',Format:'JPEG'}]){const withExtra=structuredClone(base);withExtra.media.track.push(extra);assert.throws(()=>validateVideoTracks(withExtra,'video/mp4'),e=>e.code==='unsupported_media');}
+// At most eight ignored tracks.
+const eight=structuredClone(base);for(let i=0;i<8;i++)eight.media.track.push({'@type':'Other',Type:'meta'});assert.equal(validateVideoTracks(eight,'video/mp4').videoCodec,'h264');const nine=structuredClone(eight);nine.media.track.push({'@type':'Menu'});assert.throws(()=>validateVideoTracks(nine,'video/mp4'),e=>e.code==='unsupported_media');});
 test('presigner binds actual size, MIME and create-only header without exposing secret',async()=>{const secret='not-a-real-secret-key';const adapter=createR2UploadStore({R2_ACCOUNT_ID:'a'.repeat(32),R2_ACCESS_KEY_ID:'test-key-id',R2_SECRET_ACCESS_KEY:secret,R2_BUCKET:'optimove-exercise-videos'});const signed=await adapter.signPut({temporary_object_key:'pending/test',expected_mime_type:'video/mp4',expected_size_bytes:'60',expires_at:new Date(Date.now()+600000)});const url=new URL(signed.url),headers=url.searchParams.get('X-Amz-SignedHeaders');for(const h of ['content-length','content-type','if-none-match'])assert.ok(headers.includes(h));assert.equal(signed.headers['If-None-Match'],'*');assert.ok(!signed.url.includes(secret));assert.equal(url.searchParams.get('X-Amz-Expires'),'600');});
 test('HTTP response follows contract and lifecycle audit is append-only',async()=>{const r=await http('/api/media/uploads',{method:'POST',body:body(),key:randomUUID()});assert.equal(r.status,201);const u=await r.json();assert.equal(u.mediaId.length,36);assert.equal(u.upload.headers['If-None-Match'],'*');assert.equal((await(await http('/api/media/uploads/'+u.uploadId)).json()).status,'pending');await assert.rejects(pool.query("update media.upload_events set event='failed'"),e=>e.code==='42501');assert.equal((await http('/api/media/uploads',{method:'POST',body:body(),key:'bad'})).status,400);});
+
+// A real WebM VP8 file built by hand (16x16), with its declared duration in milliseconds.
+async function webmClip(durationMs=1000){
+  const webp=await sharp({create:{width:16,height:16,channels:3,background:'#ff0000'}}).webp().toBuffer();
+  let vp8;for(let p=12;p+8<=webp.length;){const n=webp.readUInt32LE(p+4);if(webp.toString('ascii',p,p+4)==='VP8 ')vp8=webp.subarray(p+8,p+8+n);p+=8+n+(n%2);}
+  assert.ok(vp8);
+  const e=(id,data)=>{let width=1;while(data.length>=2**(7*width)-1)width++;const size=Buffer.alloc(width);let n=BigInt(data.length)|(1n<<BigInt(7*width));for(let i=width-1;i>=0;i--){size[i]=Number(n&255n);n>>=8n;}return Buffer.concat([Buffer.from(id,'hex'),size,data]);};
+  const uint=(id,n)=>{const data=Buffer.alloc(n>65535?4:n>255?2:1);data.writeUIntBE(n,0,data.length);return e(id,data);};
+  const text=(id,s)=>e(id,Buffer.from(s));
+  const header=e('1a45dfa3',Buffer.concat([uint('4286',1),uint('42f7',1),uint('42f2',4),uint('42f3',8),text('4282','webm'),uint('4287',4),uint('4285',2)]));
+  const duration=Buffer.alloc(8);duration.writeDoubleBE(durationMs);
+  const info=e('1549a966',Buffer.concat([uint('2ad7b1',1000000),e('4489',duration),text('4d80','OptiMove test'),text('5741','OptiMove test')]));
+  const tracks=e('1654ae6b',e('ae',Buffer.concat([uint('d7',1),uint('73c5',1),uint('83',1),text('86','V_VP8'),e('e0',Buffer.concat([uint('b0',16),uint('ba',16)]))])));
+  const cluster=e('1f43b675',Buffer.concat([uint('e7',0),e('a3',Buffer.concat([Buffer.from([0x81,0,0,0x80]),vp8]))]));
+  return Buffer.concat([header,e('18538067',Buffer.concat([info,tracks,cluster]))]);
+}
+
+// Real outputs of the on-device preparation, made in Chrome with the vendored Mediabunny 1.61.1
+// (tests/fixtures/media): the server's real parser must accept exactly what the client sends.
+const mediaFixture=name=>fs.readFile(new URL(`./fixtures/media/${name}`,import.meta.url));
+async function completeReal(data,name){const u=await start(body({file:{name,sizeBytes:String(data.length),mimeType:'video/mp4'}}));await put(u,data,'video/mp4');inspectImpl=inspectMedia;return {u,r:await uploads.complete(req,u.uploadId)};}
+
+test('a converted phone video (HEVC with rotation 90 prepared into H.264 High + AAC-LC) passes the real inspection',async()=>{
+  const data=await mediaFixture('converted-hevc-rot90.mp4');
+  const {r}=await completeReal(data,'converted.mp4');
+  assert.equal(r.httpStatus,200);assert.equal(r.body.media.status,'ready');
+  assert.equal(r.body.media.metadata.videoCodec,'h264');assert.equal(r.body.media.metadata.audioCodec,'aac');
+  assert.ok(r.body.media.metadata.durationSeconds>0.5 && r.body.media.metadata.durationSeconds<1);
+  assert.equal((await storage.getAccount(accountId)).usedBytes,String(data.length));
+});
+
+test('a compliant MP4 sent as it is with a text track beside the picture and the sound passes the real inspection',async()=>{
+  // The client keeps this file untouched (Mediabunny does not list the text track); the parser labels it Text and it is ignored.
+  // Synthetic: its only descriptive tags are a title and a date written by the test page (no location, no device).
+  const data=await mediaFixture('h264-aac-text-track.mp4');
+  const {r}=await completeReal(data,'passthrough.mp4');
+  assert.equal(r.httpStatus,200);assert.equal(r.body.media.metadata.videoCodec,'h264');assert.equal(r.body.media.metadata.audioCodec,'aac');
+});
+
+// The 30-second refusal travels through the real worker as its own code: the session is cancelled and nothing is charged.
+test('the real parser refuses a 31-second video as video_too_long and charges nothing',async()=>{
+  const data=await webmClip(31000);
+  const u=await start(body({file:{name:'long.webm',sizeBytes:String(data.length),mimeType:'video/webm'}}));await put(u,data,'video/webm');inspectImpl=inspectMedia;
+  await assert.rejects(uploads.complete(req,u.uploadId),e=>e.code==='video_too_long' && e.status===415);
+  const r=await row(u.uploadId);assert.equal(r.status,'failed');assert.equal(r.error_code,'video_too_long');
+  const a=await storage.getAccount(accountId);assert.equal(a.usedBytes,'0');assert.equal(a.reservedBytes,'0');
+  assert.equal((await store.head(r.temporary_object_key)).tombstone,true);
+});
 
 test('actual WebM VP8 parser runs with bounded R2 range reads',async()=>{
   const webp=await sharp({create:{width:16,height:16,channels:3,background:'#ff0000'}}).webp().toBuffer();

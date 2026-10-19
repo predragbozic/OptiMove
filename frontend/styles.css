@@ -6047,6 +6047,17 @@ body.specific-program-open {
 .exercise-media-progress { display: block; width: 100%; height: 8px; }
 .exercise-media-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .exercise-media-actions .plain-button, .exercise-media-actions .text-action { min-height: 44px; min-width: 44px; }
+/* While a video is prepared or uploaded the other controls are disabled: they
+   must look it (.plain-button:disabled exists; .text-action had no state). */
+.exercise-media-actions .text-action:disabled { opacity: .45; cursor: not-allowed; }
+/* A link shown in the status line truncates on its own line instead of
+   widening the field (an inline span cannot ellipsize). */
+.exercise-media-field > .exercise-media-status { min-width: 0; }
+.exercise-media-status > .exercise-media-file-name { display: block; max-width: 100%; }
+/* The editor's own exits are real touch targets too. */
+.exercise-editor-modal .builder-modal-actions .plain-button,
+.exercise-editor-modal .builder-modal-actions .text-action,
+.exercise-editor-modal .builder-modal-head .plain-button { min-height: 44px; min-width: 44px; }
 .exercise-media-technical { font-size: 12px; color: var(--muted); }
 .exercise-media-preview-local video, .exercise-media-preview-local img { display: block; width: 100%; max-height: 240px; object-fit: contain; border-radius: 6px; background: #000; }
 .exercise-media-origin { margin: 0; font-size: 13px; }
@@ -6057,6 +6068,9 @@ body.specific-program-open {
 @media (max-width: 760px) {
   .exercise-media-fields { grid-template-columns: 1fr; }
   .exercise-media-field .builder-text-input { font-size: 16px; }
+  /* The name on its own line (truncated), the size and "prepared from" under it. */
+  .exercise-media-file { flex-wrap: wrap; row-gap: 2px; }
+  .exercise-media-file > .exercise-media-file-name { flex: 1 1 100%; }
 }
 .builder-modal-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 .exercise-tag-form .search-field { margin: 0; }
