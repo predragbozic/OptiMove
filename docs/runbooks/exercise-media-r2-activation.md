@@ -183,15 +183,62 @@ Identifiers (not secrets): C4 upload `e4db8e48-3352-42ae-a1e3-c170d8bfaf28`, med
 - the tombstone was proven by the server's `200 cancelled` (the server writes it and reads it back with HEAD
   before answering), **not seen in the Cloudflare panel**;
 - C2 was read from the console of one origin; the second app origin, if any, was not tested;
-- the negative tests N1–N5 and the rollback were not run (not approved).
+- the negative tests were run later the same day (N1, N2, N4, N5 — see "Negative tests — result" below;
+  N3 is C6); the rollback was not run (not approved).
 
-**Before phase D (the owner's approval 3), the remaining checks:** one C1–C4 pass with a real MP4 with
-audio (any exercise video coaches use, under 50 MB); the negative tests N1 (415 at initiation), N2 (429 /
-413 at initiation), N4 (the expired session: `complete` → 409 `upload_expired`, then the cron sweep) and
-N5 (idempotency) — N3 is covered by C6; a look at the bucket for the two objects above. Phase D's own
-criteria are in its table: D1 health and 401, D2 a coach's editor unchanged until a file is chosen, D3 the
-pilot upload through the editor, D4 / D5 the two cancels, D6 / D7 the legacy exercise and the Builder
-unchanged, D8 the cleanup run.
+### Negative tests — result (2026-10-19, `OptiMove-eu`, the same pilot account)
+
+Run from the same console, `exercise_create`, on the owner's approvals (N1, N2, N5 together; N4 alone).
+Quota before each group: used 189 793 B, reserved 0, active sessions 0. Nothing unexpected; no PUT was
+sent in any of them. N3 (cancel) is covered by C6.
+
+| Test | Request (`POST /api/media/uploads`) | Answer | Quota after |
+|---|---|---|---|
+| N1a | `mimeType: "video/quicktime"` | **415** `unsupported_media` | unchanged, nothing reserved |
+| N1b | `kind: "video"` with `mimeType: "image/png"` | **415** `unsupported_media` | unchanged |
+| N2a | video, `sizeBytes: "300000000"` (over 200 MiB) | **413** `file_too_large` | unchanged |
+| N2b | image, `sizeBytes: "20000000"` (over 10 MiB) | **413** `file_too_large` | unchanged |
+| N2c | video, `sizeBytes: "2000000000"` (over the quota too) | **413** `file_too_large` | unchanged |
+| N5a | a new key, 189 793 B | **201** pending, upload `c5e02071-904b-4a64-b5bc-f4b6b61caf94`, media `457e9b46…` | reserved 189 793, active 1 |
+| N5b | the same key, the same body | **201**, the **same** `uploadId` and `mediaId` | still one reservation (189 793, active 1) |
+| N5c | the same key, another `sizeBytes` | **409** `idempotency_conflict` | unchanged |
+| N5d | the same key, another file name | **409** `idempotency_conflict` | unchanged |
+| N5 close | `DELETE …/c5e02071…` (no PUT ever sent) | **200** `cancelled` (the server's tombstone) | reserved 0, active 0 |
+
+**429 `storage_quota_exceeded` was not reachable** on this account: with 1 GB free and the per-file ceilings
+of 200 MiB (video) and 10 MiB (image), `reserveUpload` refuses the size (413) before it compares the quota,
+and no single file can exceed a quota larger than the ceiling. That path stays covered by the backend and
+frontend test suites; in production it appears only on an account whose remaining space is below the
+ceiling.
+
+**N4 — the expired session, by the real deadlines of the code** (`ttlSeconds: 600`; renew until the expiry
+and at most 20 minutes after creation):
+
+| When (UTC) | Step | Answer |
+|---|---|---|
+| 14:46:37 | initiate, 189 793 B, **no PUT** | **201** pending, upload `ba6358b0-61f4-44cd-9451-ceaa21605355`, media `09cc1a2e…`, `expiresAt` 14:56:37; reserved 189 793, active 1 |
+| 14:57:31 | `POST …/renew` after the expiry | **409** `upload_expired`, `retryable: false` |
+| 14:57:31 | `GET …/:id` | still `pending`, `expiresAt` in the past; the reservation and the slot still held — by design, expiry alone releases nothing |
+| 15:00 | the **automatic** hourly cron run (`0 * * * *`) | swept the session (the only path that yields the state below without a `complete` call) |
+| after 15:00 | the owner's manual "Trigger run" | `{"cleaned":0,"failed":0}` — correct for a run that came second and found nothing left |
+| 15:09:51 | `GET …/:id`; `GET /api/media/storage` | session **`failed`**, `errorCode: upload_expired`; **reserved 0, active 0**, used 189 793 unchanged; the C4 asset still `ready` |
+
+The expired session's final state is `failed` + `upload_expired` (the sweep sets the error code, then
+`releaseAfterCleanup` turns an error-coded session into `failed`, never `cancelled`), its reservation and
+slot are released, and a zero-byte tombstone stands on `pending/ba6358b0-…`. **Still to confirm in the Render
+log of the 15:00 UTC run: `{"cleaned":1,"failed":0}`** — the session's own state proves the sweep, the log
+proves which run did it.
+
+Objects in the bucket after phases C and the negatives: `pending/e4db8e48-…` (the ready C4 video,
+189 793 B) and three zero-byte tombstones, `pending/a529c990-…` (C6), `pending/c5e02071-…` (N5),
+`pending/ba6358b0-…` (N4). Nothing else was written.
+
+**Before phase D (the owner's approval 3), the remaining checks:** one C1–C4 pass with a real MP4 **with
+an AAC audio track** (any exercise video coaches use, under 50 MB); a look at the bucket for the four
+objects above (the three tombstones at 0 B with the `optimove-tombstone` metadata); the Render log of the
+15:00 UTC run. Phase D's own criteria are in its table: D1 health and 401, D2 a coach's editor unchanged
+until a file is chosen, D3 the pilot upload through the editor, D4 / D5 the two cancels, D6 / D7 the
+legacy exercise and the Builder unchanged, D8 the cleanup run.
 
 ### Phase D — frontend transport activation, the editor pilot (owner approval 3)
 
