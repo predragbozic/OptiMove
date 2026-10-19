@@ -1,92 +1,109 @@
-# Exercise media — FE-2 upload UI and the open BE-2 contract questions
+# Exercise media — FE-2 upload UI, the BE-2 transport and the integration guards
 
-Status: FE-2 as built on `feat/exercise-media-r2-fe2` (2026-10-19), frontend only. The backend of
-the upload (BE-2, direct upload to the private R2 bucket) is being built by Codex in parallel; at
-the time of writing its routes are not defined in any document or branch the frontend can read.
-The owner's rule for this case: report the open questions first, implement only what does not
-depend on them, and keep every contract-dependent line in one place.
+Status: FE-2 as built on `feat/exercise-media-r2-fe2` (PR #186), frontend only, integrated with
+the normative contract `docs/backend/r2-upload-api-v1.md` (v1.0.0, commit `5aa5589` on
+`codex/r2-be2-upload`, draft PR #187), which answered the eleven questions of the first version of
+this document. The questions are kept at the end for the record.
 
-## What FE-2 implements without the upload contract
+## What FE-2 does
 
-- **The media fields of the exercise editor** (`frontend/exercise-editor.js`, `renderExerciseMediaFields()`):
-  one box per slot (Video, Image) with the faces of the plan's section 2 — a link (Preview, Edit
-  link, Replace with a file, Remove), a stored R2 file (Preview through the FE-1 player, Replace,
-  Remove, the media id under Technical details), an upload in flight (file name, size, a progress
-  bar and "42 % · 77 MB of 184 MB", Cancel), an uploaded file (Preview of the local file, Replace,
-  Remove), a failure (the sentence, Retry with the same file, Choose another file, Use a link,
-  Clear) and a cancelled upload (Upload again, Use a link). Save is disabled while an upload
-  runs; closing the editor, a reload or a closed tab asks first and cancels on "yes".
-- **Who sees the upload controls** (`uploadsOffered()`): only while BE-1's `GET /api/media/storage`
-  answers 200 — a 503 `media_storage_disabled` (the flag off, today's production) or a 403
-  `operation_not_allowed` leaves the editor exactly as it is today, links only — and only for an
-  exercise that already exists (see Q6). The right to edit is the existing one: the editor opens
-  only when `canEdit` is true (platform admin for application exercises, the owner for private
-  ones), and a copy starts without the original's media, as with links.
-- **Limits and quota** (`frontend/exercise-media-upload.js`): the usage line "Storage (personal
-  storage): 1.2 GB used of 5 GB · 3.8 GB free · one video up to 200 MB, one picture up to 10 MB"
-  from BE-1's usage row (decimal strings), re-read with "Read again" on failure; `validateFile()`
-  refuses locally, before any request, a type outside the slot's and the server's allowlist, a
-  file over `maxVideoBytes` / `maxImageBytes`, a file larger than `availableBytes` or an account
-  `overLimit`, and a start while `activeUploads >= maxParallelUploads`; `describeUploadError()`
-  renders BE-1's codes (`file_too_large`, `unsupported_media`, `storage_quota_exceeded`,
-  `parallel_upload_limit`, `media_verification_failed`, `media_storage_disabled`,
-  `media_storage_busy`) as sentences, never "nothing was uploaded" after a lost answer.
-- **Drive, YouTube and direct links**: unchanged — the same `videoUrl` / `imageUrl` fields, the
-  same save body, the same FE-1 player.
-- **The Builder**: Edit on a library result or an added item opens this same editor, so it gets the
-  upload fields; the "Add custom exercise" modal keeps its link fields (its stale "File upload will
-  be added when Supabase Storage is connected" note is removed) — see Q7.
+- **The media fields of the exercise editor** (`frontend/exercise-editor.js`,
+  `renderExerciseMediaFields()`): a link as before (Preview, Edit link, Replace with a file,
+  Remove); a stored R2 file (Preview through the FE-1 player with the row's access context;
+  Replace / Remove only behind the BE-3 guard); an upload in flight (name, size, a progress bar
+  patched in place, Cancel); "Cancelling..." until the server answered the DELETE; an uploaded
+  and verified file (local Preview, Replace, Remove); a failure (the sentence, Retry, Choose
+  another file, Use a link, Clear); a verification still pending after the budget (Check again
+  reads the same session, never a new upload); a cancelled upload (Upload again, Use a link). Save
+  is held while an upload runs; closing the editor, a reload or a closed tab asks first and
+  cancels on yes, on the server too.
+- **The transport** (`frontend/exercise-media-upload.js`, `startUpload()`), exactly the contract:
+  `POST /api/media/uploads` with an `Idempotency-Key` (a fresh UUID per attempt; a lost answer
+  retried once with the same key; a resumable failure — the PUT or the completion did not land —
+  continues the same session with the same key; a terminal failure is a new attempt with a new
+  key); the raw `File` by `XMLHttpRequest` to the presigned URL with exactly the returned method
+  and headers (`Content-Type`, `If-None-Match: *`; never `Content-Length`, never OptiMove's
+  session), progress from `xhr.upload`; 2xx → completion, 412 → completion (the object exists,
+  never overwritten), a 403 / network / CORS failure → the server's status decides, then one whole
+  PUT of the same File, never byte ranges; a permission within 60 s of its expiry is renewed first
+  (`/renew`); `POST /complete` with a 60 s bound, 202 → the status polled at 1, 2, 4, 4 … s inside
+  a 120 s budget; a timed-out completion is an unknown state → the status before anything is
+  repeated (a session still pending gets one more completion); Cancel = stop the request **and**
+  `DELETE /api/media/uploads/:id` (quota is the server's; `cancel_unconfirmed` when it did not
+  answer; a cancel that came too late returns the ready media). Error codes map to one sentence
+  each; never "nothing was uploaded" after a lost answer.
+- **Contexts**: `{ type: "exercise_edit", exerciseId }` for an existing exercise,
+  `{ type: "exercise_create" }` for a new one or a copy; FE-1's access context
+  `{ type: "exercise", id }` is refused before any request.
+- **Storage usage, target-aware** (Q8): an existing exercise reads
+  `GET /api/media/storage?exerciseId=` and shows the server's `selectedStorageAccountId` row; a new
+  exercise or a copy reads the plain route and shows the signed-in user's own row; the label says
+  "personal storage", "personal storage (uploading administrator)" for an application exercise, or
+  "club storage of …"; `validateFile()` refuses locally, before any request, a type outside the
+  slot's and the server's allowlist, a file over `maxVideoBytes` / `maxImageBytes`, a file larger
+  than `availableBytes` or an account `overLimit`, and a start while `activeUploads >=
+  maxParallelUploads`.
+- **Drive, YouTube and direct links**: unchanged fields, unchanged save body, the FE-1 player.
+- **The Builder**: Edit on a result or an added item opens this same editor; the custom-exercise
+  modal keeps its links (Q7: no asset binding in BE-2).
 
-## The seam (`frontend/exercise-media-upload.js`)
+## The two integration guards (owner's order; contract preamble)
 
-- `startUpload({ file, slot, context }, { onProgress, signal })` — the one function BE-2's contract
-  fills in. Until then it refuses locally with `upload_contract_pending` ("Uploading files is not
-  available yet in this version. Use a link for now.") and **sends nothing**.
-- `mediaSavePayload(media)` — the fields of `POST` / `PATCH /api/exercises` that carry a new or a
-  removed media. Until the contract names them it returns `{}`, so the save body is byte-identical
-  to today's.
-- The editor's state machine, progress patching, cancel (`AbortController`), retry (the `File`
-  stays in state), validation and messages are complete and tested against a fake transport.
+Both are module-level defaults in `frontend/exercise-media-upload.js`, `false`, changed only by a
+deliberate code change — never by a server answer. `GET /api/media/storage` = 200 is quota
+availability, not proof of R2 credentials, CORS, binding or playback.
 
-## Open questions for BE-2 (each blocks exactly the line it names)
+| Guard | Off (today, production) | On |
+|---|---|---|
+| `UPLOAD_TRANSPORT_ENABLED` | no media request at all from the editor; the two link fields exactly as before; a stored file shows Preview only; `startUpload()` refuses with `upload_transport_disabled` and sends nothing | the editor reads storage, offers Upload / Use a link and runs the transport above |
+| `MEDIA_SAVE_ENABLED` (BE-3) | a completed upload is **never** presented as saved: "Uploaded and verified. Saving it with the exercise is not available yet."; Save is disabled and refused while such a file is in the editor; Replace / Remove of a stored file are not offered; the save body is byte-identical to today's | the Q5 selection travels in the save body (`media: { video: { source: "asset", mediaId } \| { source: "none" } \| { source: "legacy", url } }`, the legacy field of a selected slot omitted); a new exercise or a copy may upload (`exercise_create`) |
 
-1. **Start of an upload.** Route and body to reserve an upload for a context (`{ context: { type:
-   "exercise", id }, slot, fileName, mimeType, sizeBytes }` is the proposal); the answer's shape
-   (`uploadId`, the presigned `PUT` URL and the headers to send, its expiry, multipart or single
-   `PUT`, the part size and the per-part URLs if multipart).
-2. **The bytes.** Is the `PUT` a single request up to `maxVideoBytes` (200 MiB today)? The bucket's
-   CORS must allow the app's origin, `PUT` and `Content-Type`, and expose `ETag` for multipart. The
-   frontend sends the object with `XMLHttpRequest` for progress; the JSON calls use `api()`.
-3. **Completion.** Route and body to tell the server the bytes are in (`{ uploadId, etag? }`), the
-   verification step (422 `media_verification_failed`) and the answer: the media record
-   `{ mediaId, status, mimeType, sizeBytes, durationSeconds?, width?, height? }`. Does the server
-   verify synchronously, or does the record carry a `pending` status the editor must wait for?
-4. **Cancel / abort.** Is there a route to abandon a reserved upload (and free the reservation and
-   the parallel slot), and what happens to a reservation the browser never completes (TTL, sweeper)?
-   The frontend can only stop sending.
-5. **The exercise save.** Which fields of `POST` / `PATCH /api/exercises` attach the uploaded media
-   (`videoMediaId` / `imageMediaId`?) and which remove a stored one (`removeVideoMedia` /
-   `removeImageMedia`, or `videoMediaId: null`?). Does attaching a media that belongs to another
-   context, or to another owner, answer 404 like the exercise itself?
-6. **A new exercise.** An upload needs a context, and a new exercise has no id until it is saved.
-   Options: (a) save first, then upload (what FE-2 offers now: "Save the exercise first, then add a
-   video or picture file"); (b) a draft context the server issues before the save; (c) upload to
-   the user's context and attach on save. The same question for a copy.
-7. **The Builder's custom exercise.** Same as 6: the modal creates the exercise on submit, so a file
-   can only follow the creation unless (b) or (c) exists.
-8. **Charging.** BE-1 charges private content to its owner and club content to its club. Which
-   storage account does an **application** exercise's media (edited by a platform administrator)
-   count against, and which account should the editor's usage line show in that case?
-9. **Replace.** When a stored media is replaced, does the old object stay until the exercise is
-   saved with the new id (so a cancelled Replace changes nothing), and who deletes the old object?
-10. **Error codes of the upload routes** beyond BE-1's list: an expired presigned URL, an upload id
-    the context does not own, a size that differs from the reservation.
-11. **The access route after an upload.** Does `POST /api/media/access` (FE-1) serve a media whose
-    record is `pending` verification, or only `ready` ones (the editor's Preview of a freshly
-    uploaded file uses the local object URL meanwhile)?
+Production behaviour stays unchanged while both are off: with the flag off the server answers 503
+`media_storage_disabled` anyway, and with the guard off the editor never asks.
 
-## How the answers land
+## Integration dependencies before each guard is flipped
 
-Every answer changes `frontend/exercise-media-upload.js` (`startUpload`, `mediaSavePayload`, the
-error map) and the fake transport in `frontend/tests/exercise-editor-media.test.mjs`; the editor's
-faces and the state machine stay as they are.
+Transport (`UPLOAD_TRANSPORT_ENABLED`), from `docs/backend/r2-be2-upload.md` "Configuration /
+activation gate": BE-2 (PR #187) merged and deployed with its migration; R2 credentials and the
+private bucket; CORS for the exact app origins with `PUT`, `Content-Type`, `If-None-Match`; the
+signed `Content-Length` and the create-only `If-None-Match` proven on a controlled non-production
+object from a real browser; the cleanup CLI scheduled; `MEDIA_STORAGE_ENABLED=true` on the services.
+Without the cleanup job an abandoned upload keeps its reservation.
+
+Save (`MEDIA_SAVE_ENABLED`): BE-3 — binding on `POST` / `PATCH /api/exercises` and `/copy` with the
+Q5 `media` selection; `POST /api/media/access` for `{ type: "upload", id }` so a ready unsaved file
+can be previewed from the server; the Builder custom-exercise route accepting the selection.
+
+Still open after BE-2: reference-aware deletion of unused ready assets (a replaced or removed file
+stays charged; the UI does not promise freed space); the thumbnail purposes `video_frame` /
+`automatic_thumbnail` (PR 3).
+
+## Tests
+
+`frontend/tests/exercise-media-upload.test.mjs` (the transport against a fake API and a fake
+`XMLHttpRequest`, the storage read, the local checks, the sentences, the guards) and
+`frontend/tests/exercise-editor-media.test.mjs` (the editor against a fake transport: production
+unchanged, the faces, the BE-3 boundary, the cancel / retry / check flows, the guards, a new
+exercise, a failed storage read).
+
+## The eleven questions, as answered by `r2-upload-api-v1.md`
+
+1. Initiation: `POST /api/media/uploads` + `Idempotency-Key`; single presigned `PUT`; 10-minute
+   permission; the same key returns the same session; a changed payload is 409.
+2. Bytes: single `PUT` of the raw File with the returned headers; 412 = exists; unknown outcomes
+   go through the status; whole-file retry.
+3. Completion: `POST …/complete` → 200 completed + `media` (`status: "ready"`) or 202 verifying,
+   polled through `GET …/:id`; verification inside 30 s; H.264 / VP8 only, no transcoding.
+4. Cancel: `DELETE …/:id`; renew `POST …/renew` within 20 minutes; expiry is not cleanup; the
+   sweeper handles abandoned sessions; a ready unsaved file stays charged.
+5. Save: the additive `media` selection (BE-3); never both formats for one slot; no invented
+   `videoMediaId` fields.
+6. New exercise / copy: `exercise_create`, no draft id; the copy uploads its own files.
+7. Builder custom exercise: links for now; BE-3 snapshots the selection into both rows.
+8. Quota owner: private → owner, new / copy → creator, club → club (edit rights only), application
+   → the uploading administrator; the target-aware storage selector.
+9. Replace: the old media stays until a successful BE-3 save; no delete endpoint; no promise of
+   freed space.
+10. Errors: the table of codes; polling with increasing delays; rate limits 20/min, 200/day.
+11. Preview: local object URL while in the editor; `{ type: "upload", id }` access context in BE-3;
+    FE-1 unchanged.

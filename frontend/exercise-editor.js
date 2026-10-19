@@ -1,5 +1,8 @@
 import { api } from "./api.js";
-import { chargedAccount, describeStorageAccount, describeUploadError, emptyStorageState, mediaSavePayload, readStorageUsage, startUpload, UPLOAD_SLOTS, validateFile } from "./exercise-media-upload.js";
+import {
+  applyMediaToSavePayload, chargedAccount, checkUploadStatus, describeStorageAccount, describeUploadError, emptyStorageState,
+  isMediaSaveEnabled, isResumableCode, isUploadTransportEnabled, readStorageUsage, startUpload, uploadContextFor, UPLOAD_SLOTS, validateFile,
+} from "./exercise-media-upload.js";
 import { exerciseMediaOf, legacyMediaKind, mediaAccessAttributes } from "./media.js";
 import { escapeAttr, escapeHtml, formatBytes } from "./utils.js";
 
@@ -10,22 +13,24 @@ export const emptyExerciseEditorData = () => ({
 });
 
 // One media slot of the editor (FE-2). `state` is the file's own story -
-// none, stored (an R2 asset the exercise already has), uploading, uploaded
-// (a record exists, the exercise not saved yet), failed, cancelled - while
-// a Google Drive, YouTube or direct link lives in data.videoUrl / imageUrl as
-// before. The File, the progress and the AbortController live here, never in
-// the DOM: the editor is drawn again from scratch on every change.
+// none, stored (an R2 asset the exercise already has), uploading, cancelling,
+// uploaded (a ready asset, the exercise not saved yet), failed, cancelled -
+// while a Google Drive, YouTube or direct link lives in data.videoUrl /
+// imageUrl as before. The File, the progress, the AbortController, the
+// upload session (uploadId, idempotencyKey) and the ready media record live
+// here, never in the DOM: the editor is drawn again from scratch on every
+// change.
 export const emptyMediaField = () => ({
   state: "none", mediaId: "", file: null, fileName: "", fileSize: 0, mimeType: "",
-  progress: { sent: 0, total: 0 }, error: null, controller: null, uploadId: "",
-  linkOpen: false, previewOpen: false, previewUrl: "", removedMediaId: "", previous: null,
+  progress: { sent: 0, total: 0 }, error: null, controller: null, uploadId: "", idempotencyKey: "", resumable: false,
+  media: null, cancelOutcome: "", linkOpen: false, previewOpen: false, previewUrl: "", removedMediaId: "", previous: null,
 });
 
 export const emptyExerciseMedia = () => ({ video: emptyMediaField(), image: emptyMediaField(), storage: emptyStorageState() });
 
 export const emptyExerciseEditor = () => ({
   open: false, isNew: false, isCopy: false, exerciseId: "", ownerScope: "user", loading: false, error: "", data: emptyExerciseEditorData(),
-  media: emptyExerciseMedia(),
+  media: emptyExerciseMedia(), viewerId: "",
 });
 
 const SINGLE_FIELDS = [
@@ -49,9 +54,12 @@ const MEDIA_SLOTS = [
 ];
 
 const LINK_KINDS = { youtube: "YouTube", drive: "Google Drive", url: "Direct link" };
+const SAVE_BLOCKED_SENTENCE = "This uploaded file can't be saved with the exercise yet. Remove it, or use a link, to save the other changes.";
 
 export function renderExerciseEditorHtml(editor, filterOptions = {}) {
   const d = editor.data;
+  const held = uploadInFlight(editor);
+  const blocked = mediaSaveBlocked(editor);
   return `
     <div class="exercise-editor-overlay">
       <button class="exercise-editor-backdrop" type="button" data-action="exercise-editor-close" aria-label="Close"></button>
@@ -77,9 +85,10 @@ export function renderExerciseEditorHtml(editor, filterOptions = {}) {
             ${MULTI_FIELDS.map((field) => renderMultiField(field, d[field.key] || [], filterOptions[field.optionsKey] || [])).join("")}
           </div>
           ${editor.error ? `<p class="builder-error" role="alert">${escapeHtml(editor.error)}</p>` : ""}
+          ${blocked && !editor.error ? `<p class="muted exercise-media-note" role="status">${escapeHtml(SAVE_BLOCKED_SENTENCE)}</p>` : ""}
         </div>
         <div class="builder-modal-actions">
-          <button class="plain-button" type="button" data-action="exercise-editor-save" ${editor.loading || uploadInFlight(editor) ? "disabled" : ""}>${uploadInFlight(editor) ? `Uploading... ${uploadPercent(editor)}%` : editor.loading ? "Saving..." : editor.isCopy ? "Save private copy" : "Save"}</button>
+          <button class="plain-button" type="button" data-action="exercise-editor-save" ${editor.loading || held || blocked ? "disabled" : ""}>${held ? `Uploading... ${uploadPercent(editor)}%` : editor.loading ? "Saving..." : editor.isCopy ? "Save private copy" : "Save"}</button>
           <button class="text-action" type="button" data-action="exercise-editor-close">Cancel</button>
         </div>
       </section>
@@ -90,11 +99,17 @@ export function renderExerciseEditorHtml(editor, filterOptions = {}) {
 // ---- Media fields (FE-2) ---------------------------------------------------
 
 export function uploadInFlight(editor) {
-  return MEDIA_SLOTS.some(({ slot }) => editor?.media?.[slot]?.state === "uploading");
+  return MEDIA_SLOTS.some(({ slot }) => ["uploading", "cancelling"].includes(editor?.media?.[slot]?.state));
+}
+
+// BE-3 boundary: a completed upload is not a saved media until the binding
+// routes exist; Save is refused while one sits in the editor.
+export function mediaSaveBlocked(editor) {
+  return !isMediaSaveEnabled() && MEDIA_SLOTS.some(({ slot }) => editor?.media?.[slot]?.state === "uploaded");
 }
 
 function uploadPercent(editor) {
-  const field = MEDIA_SLOTS.map(({ slot }) => editor.media[slot]).find((entry) => entry.state === "uploading");
+  const field = MEDIA_SLOTS.map(({ slot }) => editor.media[slot]).find((entry) => entry.state === "uploading" || entry.state === "cancelling");
   return percentOf(field?.progress);
 }
 
@@ -103,52 +118,58 @@ function percentOf(progress) {
   return total ? Math.min(100, Math.floor((Number(progress.sent) || 0) / total * 100)) : 0;
 }
 
-// Uploading is offered only while the server offers storage (BE-1: a 503
-// media_storage_disabled or a 403 means no control at all, the links as
-// before) and for an exercise that already exists (a new one or a copy has
-// no context to upload into yet).
+// Uploading is offered only behind the transport guard (a code change after
+// the activation gates), and then only while the server offers storage (a 503
+// media_storage_disabled or a 403 leaves the editor as it is today) and, for
+// a new exercise or a copy, only once BE-3 can bind the upload on save.
 function uploadsOffered(editor) {
+  if (!isUploadTransportEnabled()) return false;
   const storage = editor.media?.storage;
-  return Boolean(storage) && !storage.disabled && !storage.unavailable && !editor.isNew && !editor.isCopy;
+  if (!storage || storage.disabled || storage.unavailable) return false;
+  if ((editor.isNew || editor.isCopy) && !isMediaSaveEnabled()) return false;
+  return true;
+}
+
+function storageWanted(editor) {
+  if (!isUploadTransportEnabled()) return false;
+  return editor.isNew || editor.isCopy ? isMediaSaveEnabled() : Boolean(editor.exerciseId);
 }
 
 function renderExerciseMediaFields(editor) {
   const offered = uploadsOffered(editor);
-  const storage = editor.media?.storage;
-  // A new exercise or a copy: links only, nothing said about files (see the
-  // open questions of docs/ai/exercise-media-r2-fe2-upload-contract.md).
-  const note = !storage || storage.disabled || storage.unavailable || editor.isNew || editor.isCopy ? "" : renderStorageLine(storage);
   return `
     <div class="exercise-media-fields" data-exercise-media-fields>
       ${MEDIA_SLOTS.map((spec) => renderMediaField(editor, spec, offered)).join("")}
-      ${note}
+      ${offered ? renderStorageLine(editor) : ""}
     </div>
   `;
 }
 
-function renderStorageLine(storage) {
+function renderStorageLine(editor) {
+  const storage = editor.media.storage;
   if (storage.loading) return `<p class="muted exercise-media-storage" role="status">Reading storage...</p>`;
   if (storage.error) {
     return `<p class="muted exercise-media-storage">Storage usage could not be read; the server still checks every upload. <button class="text-action" type="button" data-action="exercise-media-storage-reload">Read again</button></p>`;
   }
-  const account = chargedAccount(storage.data?.accounts);
+  const account = chargedAccount(storage.data, { userId: editor.viewerId });
   if (!account) return "";
   const used = formatBytes(account.usedBytes);
   const limit = formatBytes(account.limitBytes);
   const free = formatBytes(account.availableBytes);
-  return `<p class="muted exercise-media-storage" data-exercise-media-storage>Storage (${escapeHtml(describeStorageAccount(account))}): ${escapeHtml(used)} used of ${escapeHtml(limit)} · ${escapeHtml(free)} free · one video up to ${escapeHtml(formatBytes(account.maxVideoBytes))}, one picture up to ${escapeHtml(formatBytes(account.maxImageBytes))}</p>`;
+  return `<p class="muted exercise-media-storage" data-exercise-media-storage>Storage (${escapeHtml(describeStorageAccount(account, { ownerScope: editor.ownerScope }))}): ${escapeHtml(used)} used of ${escapeHtml(limit)} · ${escapeHtml(free)} free · one video up to ${escapeHtml(formatBytes(account.maxVideoBytes))}, one picture up to ${escapeHtml(formatBytes(account.maxImageBytes))}</p>`;
 }
 
 function renderMediaField(editor, spec, offered) {
   const field = editor.media[spec.slot];
   const url = String(editor.data[spec.urlKey] || "").trim();
-  const upload = (label, action, extra = "") => `<button class="plain-button compact-button" type="button" data-action="${action}" data-slot="${spec.slot}" ${extra}>${label}</button>`;
+  const saveEnabled = isMediaSaveEnabled();
+  const upload = (label, action) => `<button class="plain-button compact-button" type="button" data-action="${action}" data-slot="${spec.slot}">${label}</button>`;
   const link = (label = "Use a link") => `<button class="text-action" type="button" data-action="exercise-media-link" data-slot="${spec.slot}">${label}</button>`;
   const remove = (label = "Remove") => `<button class="text-action" type="button" data-action="exercise-media-remove" data-slot="${spec.slot}">${label}</button>`;
   const picker = offered ? `<input type="file" accept="${escapeAttr(UPLOAD_SLOTS[spec.slot].accept)}" data-exercise-media-file="${spec.slot}" aria-label="Choose a ${spec.noun} file">` : "";
   const linkInput = `<label class="search-field"><span>${spec.label} URL</span><input class="builder-text-input" type="url" data-exercise-editor-field="${spec.urlKey}" value="${escapeAttr(url)}" placeholder="Google Drive, YouTube or direct link"></label>`;
-  // No storage offered (the flag off, another workspace, a new exercise, a
-  // copy) and no stored file: the plain link field, exactly as before.
+  // No storage offered (the guard, the flag off, another workspace, a new
+  // exercise, a copy) and no stored file: the plain link field, exactly as before.
   if (!offered && field.state !== "stored") {
     return `
     <section class="exercise-media-field" data-exercise-media-slot="${spec.slot}" aria-label="${spec.label}">
@@ -165,24 +186,35 @@ function renderMediaField(editor, spec, offered) {
         <p class="muted exercise-media-status" role="status" data-exercise-media-progress-text="${spec.slot}">${escapeHtml(progressText(field))}</p>
         <div class="exercise-media-actions">${upload("Cancel", "exercise-media-cancel")}</div>`;
       break;
+    case "cancelling":
+      body = `
+        ${renderFileLine(field)}
+        <p class="muted exercise-media-status" role="status">Cancelling...</p>`;
+      break;
     case "uploaded":
       body = `
         ${renderFileLine(field)}
-        <p class="muted exercise-media-status" role="status">Uploaded. It is saved with the exercise.</p>
+        <p class="${saveEnabled ? "muted" : ""} exercise-media-status" role="status">${saveEnabled
+          ? "Uploaded and verified. It is saved with the exercise when you press Save."
+          : "Uploaded and verified. Saving it with the exercise is not available yet."}</p>
         ${field.previewOpen ? renderLocalPreview(field, spec) : ""}
         <div class="exercise-media-actions">${field.previewUrl ? upload(field.previewOpen ? "Hide preview" : "Preview", "exercise-media-preview-local") : ""}${upload("Replace...", "exercise-media-pick")}${remove()}</div>`;
       break;
     case "failed":
-    case "cancelled":
+    case "cancelled": {
+      const code = field.error?.code || "";
+      const retry = field.state === "failed" && field.file && !["upload_transport_disabled", "upload_contract_pending", "verification_timeout"].includes(code);
       body = `
         ${field.fileName ? renderFileLine(field) : ""}
         <p class="${field.state === "failed" ? "builder-error" : "muted"} exercise-media-status" role="alert">${escapeHtml(field.error?.message || "")}</p>
         <div class="exercise-media-actions">
-          ${field.file && field.state === "failed" && field.error?.code !== "upload_contract_pending" ? upload("Retry", "exercise-media-retry") : ""}
+          ${code === "verification_timeout" && field.uploadId ? upload("Check again", "exercise-media-check") : ""}
+          ${retry ? upload("Retry", "exercise-media-retry") : ""}
           ${offered ? upload(field.state === "cancelled" ? "Upload again" : "Choose another file", "exercise-media-pick") : ""}
           ${link()}${remove("Clear")}
         </div>`;
       break;
+    }
     case "stored": {
       const media = exerciseMediaOf({ media: { video: spec.slot === "video" ? { source: "asset", mediaId: field.mediaId } : { source: "none" }, image: spec.slot === "image" ? { source: "asset", mediaId: field.mediaId } : { source: "none" }, accessContext: { type: "exercise", id: editor.exerciseId } } });
       body = `
@@ -190,7 +222,7 @@ function renderMediaField(editor, spec, offered) {
         <details class="exercise-media-technical"><summary>Technical details</summary><code>media ${escapeHtml(field.mediaId)}</code></details>
         <div class="exercise-media-actions">
           <button class="plain-button compact-button" type="button" data-action="open-media" data-title="${escapeAttr(editor.data.name || "Exercise media")}" ${mediaAccessAttributes(media)}>Preview</button>
-          ${offered ? upload("Replace...", "exercise-media-pick") : ""}${remove()}
+          ${offered && saveEnabled ? upload("Replace...", "exercise-media-pick") : ""}${saveEnabled ? remove() : ""}
         </div>`;
       break;
     }
@@ -274,11 +306,10 @@ export function renderMultiField(field, values, options) {
 
 export async function openExerciseEditor(state, handlers, exerciseId, { copy = false } = {}) {
   releaseMediaPreviews(state.exerciseEditor);
-  state.exerciseEditor = { ...emptyExerciseEditor(), open: true, isNew: !exerciseId, isCopy: copy, exerciseId: exerciseId || "" };
+  state.exerciseEditor = { ...emptyExerciseEditor(), open: true, isNew: !exerciseId, isCopy: copy, exerciseId: exerciseId || "", viewerId: String(state.currentUser?.id || "") };
   const editor = state.exerciseEditor;
-  // Storage is read only where an upload could be offered: an existing
-  // exercise that is edited, not a new one or a copy (links only there).
-  if (exerciseId && !copy) void loadExerciseMediaStorage(state, handlers);
+  // Storage is read only where an upload could be offered.
+  if (storageWanted(editor)) void loadExerciseMediaStorage(state, handlers);
   if (exerciseId) {
     editor.loading = true;
     handlers.rerender();
@@ -297,7 +328,7 @@ export async function openExerciseEditor(state, handlers, exerciseId, { copy = f
         tags: detail.tags || [],
       };
       // An R2 asset the exercise already has (the media descriptor, FE-1): a
-      // copy starts without it, like the links.
+      // copy starts without it, like the links (Q6: a copy uploads its own files).
       if (!copy) {
         const media = exerciseMediaOf(detail);
         for (const { slot } of MEDIA_SLOTS) {
@@ -320,24 +351,26 @@ async function loadExerciseMediaStorage(state, handlers) {
   storage.loading = true;
   storage.error = "";
   try {
-    const data = await readStorageUsage();
+    // An existing exercise: the server resolves the owner it would charge (Q8).
+    const data = await readStorageUsage({ exerciseId: editor.isNew || editor.isCopy ? "" : editor.exerciseId });
     if (state.exerciseEditor !== editor) return;
     Object.assign(storage, { loading: false, data, disabled: false, unavailable: false });
   } catch (error) {
     if (state.exerciseEditor !== editor) return;
+    const code = error?.code;
     Object.assign(storage, {
       loading: false,
       data: null,
-      disabled: error?.code === "media_storage_disabled",
-      unavailable: error?.code === "operation_not_allowed",
-      error: error?.code === "media_storage_disabled" || error?.code === "operation_not_allowed" ? "" : "unreadable",
+      disabled: code === "media_storage_disabled",
+      unavailable: code === "operation_not_allowed" || code === "resource_not_found",
+      error: ["media_storage_disabled", "operation_not_allowed", "resource_not_found"].includes(code) ? "" : "unreadable",
     });
   }
   handlers.rerender();
 }
 
 // Closing with an upload in flight asks first (the browser's own confirm);
-// "yes" cancels the upload. Returns true when the editor closed.
+// "yes" cancels the upload, on the server too. Returns true when the editor closed.
 export function closeExerciseEditor(state, handlers) {
   const editor = state.exerciseEditor;
   if (uploadInFlight(editor)) {
@@ -394,11 +427,14 @@ export function handleExerciseEditorChange(state, handlers, event) {
 export async function chooseExerciseMediaFile(state, handlers, slot, file) {
   const editor = state.exerciseEditor;
   const field = editor.media[slot];
-  if (!uploadsOffered(editor) || field.state === "uploading") return;
+  if (!uploadsOffered(editor) || uploadInFlight(editor)) return;
   if (field.state === "stored") field.previous = { state: "stored", mediaId: field.mediaId };
   releaseFieldPreview(field);
-  Object.assign(field, { file, fileName: file.name || "file", fileSize: Number(file.size) || 0, mimeType: file.type || "", error: null, previewOpen: false, mediaId: "", uploadId: "", linkOpen: false });
-  const account = chargedAccount(editor.media.storage.data?.accounts);
+  Object.assign(field, {
+    file, fileName: file.name || "file", fileSize: Number(file.size) || 0, mimeType: file.type || "", error: null, previewOpen: false,
+    mediaId: "", uploadId: "", idempotencyKey: "", resumable: false, media: null, cancelOutcome: "", linkOpen: false,
+  });
+  const account = chargedAccount(editor.media.storage.data, { userId: editor.viewerId });
   const check = validateFile(file, slot, editor.media.storage.data ? account : null);
   if (!check.ok) {
     // A file the limits refuse would be refused again: no Retry, another file.
@@ -409,21 +445,23 @@ export async function chooseExerciseMediaFile(state, handlers, slot, file) {
   await uploadExerciseMedia(state, handlers, slot);
 }
 
-async function uploadExerciseMedia(state, handlers, slot) {
+async function uploadExerciseMedia(state, handlers, slot, { resume = false } = {}) {
   const editor = state.exerciseEditor;
   const field = editor.media[slot];
   const file = field.file;
   if (!file) return;
   const controller = new AbortController();
-  Object.assign(field, { state: "uploading", controller, progress: { sent: 0, total: Number(file.size) || 0 }, error: null });
+  Object.assign(field, { state: "uploading", controller, progress: { sent: 0, total: Number(file.size) || 0 }, error: null, cancelOutcome: "" });
   handlers.rerender();
   const live = () => state.exerciseEditor === editor && field.controller === controller;
   const transport = handlers.upload || startUpload;
+  const urlKey = MEDIA_SLOTS.find((spec) => spec.slot === slot).urlKey;
   try {
     const result = await transport(
-      { file, slot, context: { type: "exercise", id: editor.exerciseId } },
+      { file, slot, context: uploadContextFor(editor), purpose: UPLOAD_SLOTS[slot].purpose },
       {
         signal: controller.signal,
+        idempotencyKey: resume ? field.idempotencyKey : "",
         onProgress: (progress) => {
           if (!live()) return;
           field.progress = { sent: Number(progress?.sent) || 0, total: Number(progress?.total) || Number(file.size) || 0 };
@@ -433,22 +471,58 @@ async function uploadExerciseMedia(state, handlers, slot) {
     );
     if (!live()) return;
     Object.assign(field, {
-      state: "uploaded", mediaId: String(result?.mediaId || ""), uploadId: String(result?.uploadId || ""), progress: { sent: field.progress.total, total: field.progress.total },
+      state: "uploaded", mediaId: String(result?.mediaId || ""), uploadId: String(result?.uploadId || ""), media: result?.media || null,
+      progress: { sent: field.progress.total, total: field.progress.total }, idempotencyKey: "", resumable: false,
       previewUrl: typeof globalThis.URL?.createObjectURL === "function" ? safeObjectUrl(file) : "", previous: null,
     });
     // An uploaded file replaces the link of the same slot.
-    editor.data[MEDIA_SLOTS.find((spec) => spec.slot === slot).urlKey] = "";
+    editor.data[urlKey] = "";
   } catch (error) {
     if (!live()) return;
-    const cancelled = controller.signal.aborted;
-    const code = cancelled ? "cancelled" : error?.code || "upload_failed";
-    Object.assign(field, { state: cancelled ? "cancelled" : "failed", error: { code, message: describeUploadError(code, { slot, file, account: chargedAccount(editor.media.storage.data?.accounts) }) } });
+    const code = error?.code || "upload_failed";
+    const cancelled = code === "cancelled" || code === "cancel_unconfirmed";
+    Object.assign(field, {
+      state: cancelled ? "cancelled" : "failed",
+      error: { code, message: describeUploadError(code, { slot, file, account: chargedAccount(editor.media.storage.data, { userId: editor.viewerId }) }) },
+      uploadId: String(error?.uploadId || field.uploadId || ""),
+      idempotencyKey: String(error?.idempotencyKey || ""),
+      resumable: !cancelled && isResumableCode(code),
+      cancelOutcome: String(error?.cancelOutcome || ""),
+    });
     if (cancelled && field.previous) {
       // A Replace that was cancelled keeps what the exercise had.
       Object.assign(field, { state: field.previous.state, mediaId: field.previous.mediaId, file: null, fileName: "", fileSize: 0, error: null, previous: null });
     }
   } finally {
     if (field.controller === controller) field.controller = null;
+  }
+  handlers.rerender();
+}
+
+// After a verification timeout: the same session's status, no new upload.
+async function checkExerciseMediaUpload(state, handlers, slot) {
+  const editor = state.exerciseEditor;
+  const field = editor.media[slot];
+  if (!field.uploadId) return;
+  const check = handlers.checkUpload || checkUploadStatus;
+  try {
+    const status = await check(field.uploadId);
+    if (state.exerciseEditor !== editor) return;
+    if (status?.status === "completed") {
+      Object.assign(field, {
+        state: "uploaded", mediaId: String(status.mediaId || status.media?.mediaId || ""), media: status.media || null, error: null, resumable: false, idempotencyKey: "",
+        previewUrl: field.file && typeof globalThis.URL?.createObjectURL === "function" ? safeObjectUrl(field.file) : field.previewUrl,
+      });
+      editor.data[MEDIA_SLOTS.find((spec) => spec.slot === slot).urlKey] = "";
+    } else if (["failed", "cancelled", "expired"].includes(status?.status)) {
+      const code = status.errorCode || "upload_failed";
+      Object.assign(field, { state: "failed", error: { code, message: describeUploadError(code, { slot, file: field.file }) }, resumable: false });
+    }
+    // Still verifying: the sentence and Check again stay.
+  } catch (error) {
+    if (state.exerciseEditor !== editor) return;
+    const code = error?.code || "network";
+    Object.assign(field, { state: "failed", error: { code: "verification_timeout", message: describeUploadError(code === "resource_not_found" ? code : "verification_timeout", { slot }) } });
   }
   handlers.rerender();
 }
@@ -494,7 +568,7 @@ function handleExerciseMediaAction(state, handlers, action) {
   if (!spec) return true;
   const field = editor.media[slot];
   if (type === "exercise-media-pick") {
-    if (!uploadsOffered(editor) || field.state === "uploading") return true;
+    if (!uploadsOffered(editor) || uploadInFlight(editor)) return true;
     action.closest?.("[data-exercise-media-slot]")?.querySelector?.("[data-exercise-media-file]")?.click?.();
     return true;
   }
@@ -505,11 +579,19 @@ function handleExerciseMediaAction(state, handlers, action) {
     return true;
   }
   if (type === "exercise-media-cancel") {
-    field.controller?.abort();
+    if (field.state !== "uploading" || !field.controller) return true;
+    // The transport tells the server (DELETE); the field settles when it answers.
+    field.state = "cancelling";
+    field.controller.abort();
+    handlers.rerender();
     return true;
   }
   if (type === "exercise-media-retry") {
-    if (field.state === "failed" && field.file) void uploadExerciseMedia(state, handlers, slot);
+    if (field.state === "failed" && field.file) void uploadExerciseMedia(state, handlers, slot, { resume: field.resumable && Boolean(field.idempotencyKey) });
+    return true;
+  }
+  if (type === "exercise-media-check") {
+    void checkExerciseMediaUpload(state, handlers, slot);
     return true;
   }
   if (type === "exercise-media-preview-local") {
@@ -518,9 +600,12 @@ function handleExerciseMediaAction(state, handlers, action) {
     return true;
   }
   if (type === "exercise-media-remove") {
-    if (field.state === "uploading") return true;
-    // A stored asset removed here is dropped from the exercise on Save
-    // (the field BE-2 names); the link of the same slot is cleared at once.
+    if (uploadInFlight(editor)) return true;
+    if (field.state === "stored" && !isMediaSaveEnabled()) return true;
+    // A stored file removed here is dropped from the exercise on Save (Q5,
+    // { source: "none" }, the object stays); an uploaded, unsaved file is
+    // simply left out (it stays charged until the lifecycle work, Q9); the
+    // link of the same slot is cleared at once.
     const removedMediaId = field.state === "stored" ? field.mediaId : field.previous?.state === "stored" ? field.previous.mediaId : field.removedMediaId;
     releaseFieldPreview(field);
     editor.media[slot] = { ...emptyMediaField(), removedMediaId: removedMediaId || "" };
@@ -568,11 +653,16 @@ export async function handleExerciseEditorAction(state, handlers, action) {
       handlers.rerender();
       return true;
     }
+    if (mediaSaveBlocked(editor)) {
+      editor.error = SAVE_BLOCKED_SENTENCE;
+      handlers.rerender();
+      return true;
+    }
     editor.loading = true;
     editor.error = "";
     handlers.rerender();
     try {
-      const payload = { ...editor.data, ...mediaSavePayload(editor.media) };
+      const payload = applyMediaToSavePayload({ ...editor.data }, editor.media);
       delete payload.tags;
       if (editor.isCopy) {
         await api(`/api/exercises/${encodeURIComponent(editor.exerciseId)}/copy`, { method: "POST", body: JSON.stringify(payload) });
