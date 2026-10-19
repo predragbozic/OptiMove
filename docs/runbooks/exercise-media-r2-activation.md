@@ -364,6 +364,59 @@ replaced or removed asset stays charged (reference-aware GC is separate backend 
 range headers in CORS (above); the hourly cron is kept for the pilot (an abandoned upload holds its
 reservation up to an hour).
 
+### E-2 — the pilot result (2026-10-19, `OptiMove-eu`, commits `66862a7` then `7806450`; the pilot account, the test exercise)
+
+**Run by the main session in the signed-in pilot account's browser page, on the owner's orders, with the
+STOP rule above.** No real exercise, program or athlete was touched; no quota, cron, CORS, Render or R2
+change; no R2 object deleted. The test data (to be deleted by the owner after the pilot): the exercise
+"R2 pilot test (obrisati posle pilota)" `cb99c1d2-f902-4a17-8a20-3d9becf9ddcd`, the legacy exercise
+"R2 pilot legacy test RENAMED (obrisati posle pilota)" `8cac8fca-7cd4-4fb9-8514-30ff2d7d18fe`, and the
+unassigned Builder draft "R2 pilot test program" `430ea51d-e39a-4743-aafa-0fe23f929895`. No test athlete
+and no test account were created (the owner's decision). Every file was an in-page MediaRecorder MP4
+(H.264 Baseline + AAC-LC) handed to the editor's own file input.
+
+| # | Expected | Actual | Verdict |
+|---|---|---|---|
+| E1 | health ×3 = the merge commit; signed out 401; a 0 B coach's editor unchanged | `/api/health` ×3 served `66862a7` (the merge of #192); signed out, `GET /api/media/storage`, `GET /api/media/uploads/<zero uuid>`, `GET /api/admin/media/storage-policy` and `POST /api/media/access` answered 401. **The 0 B coach's editor was not opened** (it needs another coach account; the owner's check) | PASS (partial) |
+| E2 | upload → verified → Save binds | a new exercise through *+ Add exercise*: `Upload video…`, 100 %, "Uploaded and verified…", the automatic thumbnail at 1.7 s, Save; `GET /api/exercises/:id` carried `media.video.source: "asset"` and `media.image.source: "asset"`, `videoUrl` ""; used 710,083 B, reserved 0 | PASS |
+| E3 | Preview plays and seeks | the FE-1 player opened the signed address (duration 6.94 s, play, seek to 5.0 s, poster set); the reopened editor showed Preview / Replace / Remove and the storage line | PASS |
+| E4 | the library card; the Builder; the athlete view | the card's thumbnail through the batch access (signed, 640 px, the `exercise` context). The Builder: a new draft "R2 pilot test program" (a program without an athlete, which the Builder shows as "Reusable template"), one block, one AM / Training session, one section; the library result card carried the thumbnail and the video id; the added item carried `media.video` / `media.image` `{ source: "asset", mediaId }` with `accessContext { type: "plan_item" }`, its thumbnail resolved and its Preview played. **The athlete view was not run** (no athlete; no test athlete by the owner's decision) | library + Builder PASS; athlete view NOT TESTED |
+| E5 (first run, `66862a7`) | the picture is the frame; the card shows it | the frame at 4.0 s uploaded and bound (`media.image.mediaId` changed; used +9,891 B); the reopened editor showed it; **the library card kept the previous thumbnail after the Save and after a new search, until a page reload** — the first unexpected outcome | **STOP** |
+| E5 (again, `7806450`, after #194) | the same | the frame at 2.5 s; **without a reload the card showed the new picture at once** (a new media id and object, signed, 640 px); the detail carried the same id, the video unchanged; the reopened editor showed the stored picture; the card's Preview played the video with the new picture as the poster; used +10,565 B, reserved 0 | PASS |
+| E6 | Replace → the new asset bound; Remove → `{ source: "none" }`, the link fields back; the old objects stay charged | Replace with a second file (108,942 B): the new video id bound, the card's Preview played the **new** object (4.93 s, not the previous 6.94 s), the frame stayed the poster; used +108,942 B. Remove → Save: `media.video = { source: "none" }`, `videoUrl` ""; the reopened editor showed *Upload video… / Use a link*, the image without *Replace with a frame…*; the card without a video; used unchanged (839,481 B), reserved 0 | PASS |
+| E7 | "Upload cancelled." both times | a 10.8 MB file. Cancel at 15 % of the PUT → "Cancelling..." → "Upload cancelled."; Cancel at 100 % (the PUT just finished, before the completion request) → "Upload cancelled." within a second. Both: `POST /api/media/uploads` 201 → `DELETE` 200, no completion request; afterwards reserved 0, active 0, both sessions `cancelled`. **No 202 "verifying" window occurred in the whole pilot** (every completion answered 200 at once), so the cancel during the poll sleep is not exercised in production | PASS (with the note) |
+| E8 | a legacy rename: the links unchanged; the custom-exercise modal: link fields only | a new legacy test exercise with a YouTube link, renamed: the `PATCH` body carried `videoUrl` / `imageUrl` as loaded and **no `media` key**; the detail kept `media.video = { source: "legacy", url }`. The Builder's custom-exercise form: name, instruction, sets, reps, load, Image URL, Video URL — no file input, no Upload / Storage text | PASS |
+| E9 | the cron's next run `{"cleaned":N,"failed":0}`; the used bytes = the bound assets plus the earlier pilot files | closed on the state before the 20:00 UTC run, by the owner's decision: both cancelled sessions read `cancelled`, used 839,481 B = the phase C files 445,210 + the E2 video 255,600 + the automatic thumbnail 9,273 + the two frames 9,891 and 10,565 + the E6 video 108,942, reserved 0, activeUploads 0; the cron log (`cleaned` / `failed`) is the owner's check on Render | PASS (pre-cron state) |
+
+**The E5 stop and its fix.** `frontend/media-playback.js` caches a signed address per (context, slot) and
+the thumbnail resolver writes the cached object back onto a card; the editor's Save invalidated the
+exercises view-cache and read the list again, but never forgot the saved exercise's media access context,
+so the redrawn card kept the pre-save answer until the address expired (600 s) or the page reloaded.
+Display only; the server was right at once. **The owner waived lever (1) for this stop** — the owner's
+reason: a display problem with no sign of a data or authorization risk — so the pilot limit stayed 1 GB; the
+owner stopped the pilot at E5 and ordered the fix as its own PR: **#194** (merge `7806450`) — after a
+confirmed Save of an existing exercise the editor forgets exactly that exercise's context (both slots; a
+failed Save, a private copy and every other context keep their addresses), and an access answer that lands
+after a forget is handed to its caller but never kept; pinned by
+`frontend/tests/exercise-editor-media-cache.test.mjs` (4 tests; the two mutations of the fix — no forget
+after Save, a stale answer kept — each made its test fail). **On the owner's decision the pilot resumed at
+E5, not from E1 as the STOP rule prescribes:** `/api/health` ×3 served `7806450` (19:01:48–19:02:09 UTC)
+before E5 was repeated; the signed-out 401 checks and the 0 B editor check of E1 were not repeated. Both
+deviations are the owner's decisions for this pilot, not a change of the STOP rule.
+
+**Observations, not defects:** a Builder item keeps the media snapshot of the moment the exercise was
+added (BE-3): after E5 and E6 the test program's item still carried the first video and the first
+thumbnail and resolved them through its `plan_item` context — a later edit of the exercise does not
+change an existing item (a product decision to confirm before the wider activation). A program created
+without an athlete is a template draft ("Reusable template"). After a video is removed, the image slot
+offers no *Replace with a frame…* (there is no video to take a frame from).
+
+**What the pilot leaves open:** the 0 B coach's editor (E1), the athlete-side playback (E4, the stated
+blocker for the wider activation), the 20:00 UTC cron log (E9), the product decision on the Builder
+snapshot, the reference-aware GC (a replaced or removed asset stays charged; cancelled uploads never
+counted), and the quota policy for the wider activation. The wider activation itself is a separate owner
+order; its lever is the quota, not the code.
+
 ### Phase D readiness — the transport-only variant (reviewed 2026-10-19; superseded by E-2 above)
 
 **The exact change.** Against `main` (`2798faa`) the PR carries one line of code —

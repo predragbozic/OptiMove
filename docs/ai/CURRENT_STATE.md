@@ -1,9 +1,52 @@
 # Current state
 
-Last reviewed: 2026-10-15. Last `origin/main` commit checked: `60aadb9` (merge of PR #163, M3-0, the
-canonical-variable admin API and migration v36; PR #162 `9e4dfb5`, the GPEXE check timing line, before it).
+Last reviewed: 2026-10-19, for the **Exercise media (R2)** track only — last `origin/main` commit checked:
+`7806450` (merge of PR #194). The Training Load / GPEXE / metrics sections below were last reviewed on
+2026-10-15 at `60aadb9` (merge of PR #163, M3-0, the canonical-variable admin API and migration v36;
+PR #162 `9e4dfb5`, the GPEXE check timing line, before it) and were not re-derived in this update; the
+Exercise Library work of 2026-10-17/18 (blocks, the cover slideshow, bulk move, user grants) is not
+recorded here yet.
 
 ## Active phase
+
+**Exercise media on Cloudflare R2 (the Exercise Library and the Builder) — merged, deployed and piloted
+(2026-10-19).** A coach with a storage quota uploads a video or a picture of an exercise straight to R2
+through a presigned PUT, the server verifies and binds it on Save, and every screen plays it through
+short-lived signed addresses. The track, all on `main` and deployed on `OptiMove-eu`: BE-1 the storage
+foundation (PR #184), FE-1 the player and the thumbnail resolver (PR #185), FE-2 the upload UI and
+transport behind two build-time guards (PR #186), BE-2 the upload lifecycle (PR #187), a fix for missing
+exercise images in the Builder and plans (PR #188), BE-3 the binding and the private playback contexts
+`exercise` / `plan_item` / `upload` (PR #189), the Settings → Storage
+administration of quotas (PR #190), the automatic thumbnail and the frame picker (PR #191), the quota
+gate — a 0 B account sees today's editor byte for byte (PR #193), the activation that sets both guards
+on with the quota as the only gate (PR #192, merge `66862a7`), and the pilot's one fix, the per-context
+access cache forgotten after a confirmed Save (PR #194, merge `7806450`). The runbook is
+`docs/runbooks/exercise-media-r2-activation.md`: what is live, the switches, the phases A–E with the
+owner's approvals, the phase C, negative and H.264 + AAC-LC results, the E-2 activation and **the E-2 pilot
+result**. The backend contracts are `docs/backend/r2-upload-api-v1.md` and the BE-3 binding contract.
+
+Where it stands after the pilot (owner-run orders, main session in the pilot account's browser):
+- E1 partial (the 0 B coach's editor not opened — another coach account), E2, E3 PASS; E4 library and
+  Builder PASS, **the athlete-side playback NOT TESTED** (no athlete on the pilot account, no test athlete by
+  the owner's decision; the stated blocker for the wider activation); E5 STOP on `66862a7` (the library card
+  kept the previous thumbnail until a reload) → fix PR #194 → E5 PASS on `7806450`; E6, E7, E8 PASS; E9
+  closed on the pre-cron state (the owner reads the cron log).
+- The owner waived the runbook's STOP lever (1) for the E5 stop (display only, the pilot quota stayed 1 GB).
+- Every coach stays at the default 0 B and sees nothing new; the pilot accounts (two user accounts with
+  1 GB) have the complete flow. The wider activation is a quota decision on a separate owner order, with the
+  rollback levers of the runbook (the limit back to 0 per account; `MEDIA_STORAGE_ENABLED=false` at
+  runtime; a PR setting both defaults back).
+- Open before the wider activation: the athlete-side playback check, the 0 B editor check, the product
+  decision that a Builder item keeps the media snapshot of the moment the exercise was added (BE-3, by
+  design today), the reference-aware GC (a replaced or removed asset stays charged; a cancelled upload is
+  released at once), the quota policy, and the optional bucket CORS additions (`HEAD`, `Content-Range`,
+  `Accept-Ranges`). Known limits: no 202 "verifying" window has occurred in production, so the cancel
+  during the verification poll is unexercised there; the hourly cleanup cron stays at 60 minutes.
+- Test data left on the pilot account for the owner to delete: the exercises
+  `cb99c1d2-f902-4a17-8a20-3d9becf9ddcd` and `8cac8fca-7cd4-4fb9-8514-30ff2d7d18fe` and the unassigned
+  draft "R2 pilot test program" `430ea51d-e39a-4743-aafa-0fe23f929895`.
+
+The Training Load / GPEXE record follows as last reviewed on 2026-10-15.
 
 The **Training Load Dashboards UX redesign (H-slices)** is complete: H1 (PR #89), H2
 (PR #93), H3 (PR #95) and H4 (PR #97) are merged, no further slice is scheduled, and the
@@ -2940,6 +2983,11 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
 4. PR B, the F3c4 cut-over (see the active step).
 5. The second owner-run procedure for one controlled real import (after M6).
 6. **Phase 5a3c** (Complete and Needs review).
+
+For the **Exercise media (R2)** track (see the top of Active phase), in the owner's order: the owner's two
+checks (the 0 B coach's editor, the 20:00 UTC cron log of the pilot day), the athlete-side playback with
+an isolated test athlete (the owner decides when and how), the product decision on the Builder's media
+snapshot, the reference-aware GC and the quota policy, and only then the wider activation by quota.
 
 Conditions 1–3, 6 and 7 under Separate tasks come before the first real local import (and before the
 switch is turned on in any environment), and conditions 4–5 before regular production imports.
