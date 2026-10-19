@@ -5,6 +5,8 @@ Backend branch: `codex/r2-be2-upload` (PR #187).
 Frontend questions: `docs/ai/exercise-media-r2-fe2-upload-contract.md` on
 `feat/exercise-media-r2-fe2` (PR #186), questions 1–11 answered below.
 
+BE-3 implementation/dependency and rollout notes: `r2-be3-binding.md`.
+
 This document defines the agreed interface, not a claim that every phase is
 implemented. Availability is explicit:
 
@@ -12,8 +14,8 @@ implemented. Availability is explicit:
 |---|---|
 | Upload initiation/status/renew/complete/cancel, quota settlement | Implemented in BE-2 |
 | Target-aware storage usage, verification-expiry race fix | Implemented in BE-2 |
-| Attach/replace/remove on exercise/copy/Builder save, read descriptors | Reserved contract for BE-3, NOT implemented by BE-2 |
-| `/api/media/access` and `/access/batch` | FE-1 contract; backend BE-3, NOT implemented by BE-2 |
+| Attach/replace/remove on exercise/copy/Builder save, read descriptors | Implemented on BE-3 branch `codex/r2-be3-binding`; requires BE-2 |
+| `/api/media/access` and `/access/batch` | Implemented on BE-3 branch `codex/r2-be3-binding`; FE-1 format unchanged |
 | Deleting unused ready assets / reference-aware GC | Separate lifecycle work; NOT an upload cancellation |
 
 Do not enable end-user R2 save/replace merely because upload endpoints exist.
@@ -212,6 +214,13 @@ Each slot is one of:
 Do not invent videoMediaId/removeVideoMedia/imageMediaId fields. Retain current
 legacy videoUrl/imageUrl behavior. Never send both formats for the SAME slot;
 for asset/none selection omit that slot's legacy field from the save body.
+For existing asset/none selections, implicit legacy fields are compared with the
+locked pre-save row. Unchanged retained URLs and empty/null/whitespace URL fields
+are no-ops: they neither detach the asset nor erase its retained URL. A genuinely
+changed nonempty legacy URL selects legacy for that slot. Explicit media selections
+remain authoritative (and the same-slot mixed-format conflict rule still applies).
+New exercise/custom creation and copy do not inherit source asset IDs this way.
+
 Unchanged legacy slots may keep their existing fields. Old URLs are retained
 for compatibility, but source none/asset must not fall back to those old values.
 

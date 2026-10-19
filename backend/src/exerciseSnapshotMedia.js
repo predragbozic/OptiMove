@@ -9,7 +9,9 @@ export const effectiveExerciseMediaSql = `select e.id, e.name, e.aim, e.executio
 
 export async function completeCopiedExerciseImages(runQuery, items, targetSessionOf) {
   const requested = items.filter((item) => item.image_url === null && item.exercise_id
-    && item.item_type === "exercise").map((item) => ({
+    && item.item_type === "exercise"
+    && (item.image_source || 'legacy') === 'legacy'
+    && (item.video_source || 'legacy') === 'legacy').map((item) => ({
     id: item.id, exercise_id: item.exercise_id, video_url: item.video_url,
     target_session_id: targetSessionOf(item),
   }));

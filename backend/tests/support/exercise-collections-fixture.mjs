@@ -58,3 +58,13 @@ export const EXERCISE_COLLECTIONS_FIXTURE_SQL = `
   ${readFileSync(new URL("../../../migrations_v2/202610162230_exercise_block_catalog.sql", import.meta.url), "utf8")}
   ${readFileSync(new URL("../../../migrations_v2/202610171200_exercise_block_soft_delete.sql", import.meta.url), "utf8")}
 `;
+
+// BE-1 selection columns for legacy runtime fixtures, without a media store.
+export async function addMediaSelectionFixture(runQuery) {
+  for(const table of ['library.exercises','plans.plan_items']) {
+    if(!(await runQuery('select to_regclass($1) as table_name',[table])).rows[0].table_name)continue;
+    await runQuery(`alter table ${table}
+      add column video_source text not null default 'legacy',add column video_asset_id uuid,
+      add column image_source text not null default 'legacy',add column image_asset_id uuid`);
+  }
+}

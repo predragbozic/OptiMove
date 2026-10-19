@@ -1,3 +1,4 @@
+import { bindExerciseMedia, decorateMediaRows, snapshotExerciseMedia, mediaSelections } from '../exerciseMedia.js';
 import { Router } from "express";
 import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
@@ -1576,7 +1577,7 @@ router.post("/nodes/:nodeId/exercises", withBatchReuseGuard(async (req, res, nex
     await runQuery("set local statement_timeout = '10s'");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const exerciseResult = await runQuery(
-      effectiveExerciseMediaSql, [req.user.id, text(req.body?.exerciseId)],
+      effectiveExerciseMediaSql + ' for share of e', [req.user.id, text(req.body?.exerciseId)],
     );
     const exercise = exerciseResult.rows[0];
     if (!exercise) {
@@ -1585,7 +1586,7 @@ router.post("/nodes/:nodeId/exercises", withBatchReuseGuard(async (req, res, nex
     }
     const order = await nextOrder("plans.plan_items", "plan_session_id", node.plan_session_id, "item_order", runQuery);
     const ancestry = await getNodeAncestryMeta(node, runQuery);
-    await runQuery(
+    const insertedItem=await runQuery(
       `insert into plans.plan_items (
         plan_session_id, plan_node_id, item_type, exercise_id, title, description, image_url, video_url,
         sets, reps, load, item_order, exercise_order,
@@ -1595,7 +1596,7 @@ router.post("/nodes/:nodeId/exercises", withBatchReuseGuard(async (req, res, nex
       ) values ($1, $2, 'exercise', $3, $4, $5, $6, $7, $8, $9, $10, $11, $11,
         $12, $13, $14, $15, $16, $17,
         $18, $19, $20, $21, $22, $23,
-        $24, $25, $26, $27, $28, $29)`,
+        $24, $25, $26, $27, $28, $29) returning id`,
       [node.plan_session_id, node.id, exercise.id, exercise.name,
         text(exercise.instruction) || text(exercise.execution_notes) || text(exercise.aim) || null,
         exercise.image_url, exercise.video_url, nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), order,
@@ -1603,6 +1604,7 @@ router.post("/nodes/:nodeId/exercises", withBatchReuseGuard(async (req, res, nex
         ancestry.category?.name || null, ancestry.category?.color || null, ancestry.category?.icon_url || null, ancestry.category?.short_note || null, ancestry.category?.note || null, ancestry.category?.node_order ?? null,
         ancestry.section?.name || null, ancestry.section?.color || null, ancestry.section?.icon_url || null, ancestry.section?.short_note || null, ancestry.section?.note || null, ancestry.section?.node_order ?? null],
     );
+    await snapshotExerciseMedia(runQuery,exercise.id,insertedItem.rows[0].id);
     await runQuery("commit");
     client.release();
     client = null;
@@ -1614,22 +1616,32 @@ router.post("/nodes/:nodeId/exercises", withBatchReuseGuard(async (req, res, nex
 }));
 
 router.post("/nodes/:nodeId/custom-exercise", withBatchReuseGuard(async (req, res, next) => {
+  let client;
   try {
     const node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
     if (node.node_type !== "section") return res.status(400).json({ error: "Exercises can only be added to an exercise section." });
     const name = text(req.body?.name);
     if (!name) return res.status(400).json({ error: "Custom exercise name is required." });
-    const created = await query(
+    mediaSelections(req.body||{});
+    client=await pool.connect();const runQuery=client.query.bind(client);
+    await runQuery('begin isolation level read committed');
+    await runQuery("set local statement_timeout='10s'");await lockExerciseReuse(client,req.exerciseReuseGuard);
+    // Recheck and lock the plan/node inside the same transaction as both inserts.
+    const target=await runQuery('select id from plans.plan_nodes where id=$1 for update',[node.id]);
+    if(!target.rowCount)throw Object.assign(new Error('Program node not found'),{status:404});
+    if(!await canAccessPlan(runQuery,req,node.plan.id,{editable:true}))throw Object.assign(new Error('Forbidden'),{status:403});
+    const created = await runQuery(
       `insert into library.exercises (owner_scope, owner_user_id, created_by_user_id, exercise_code, slug, name, instruction, image_url, video_url, is_active)
        values ('user', $1, $1, concat('CUSTOM-', substring(gen_random_uuid()::text from 1 for 8)), concat('custom-', gen_random_uuid()), $2, $3, $4, $5, true)
        returning id, name, instruction, image_url, video_url`,
       [req.user.id, name, nullableText(req.body?.instruction), nullableText(req.body?.imageUrl), nullableText(req.body?.videoUrl)],
     );
     const exercise = created.rows[0];
-    const order = await nextOrder("plans.plan_items", "plan_session_id", node.plan_session_id, "item_order");
-    const ancestry = await getNodeAncestryMeta(node);
-    await query(
+    await bindExerciseMedia(client,req,exercise.id,req.body||{},{creating:true});
+    const order = await nextOrder("plans.plan_items", "plan_session_id", node.plan_session_id, "item_order",runQuery);
+    const ancestry = await getNodeAncestryMeta(node,runQuery);
+    const insertedItem=await runQuery(
       `insert into plans.plan_items (
         plan_session_id, plan_node_id, item_type, exercise_id, title, description, image_url, video_url,
         sets, reps, load, item_order, exercise_order,
@@ -1639,15 +1651,17 @@ router.post("/nodes/:nodeId/custom-exercise", withBatchReuseGuard(async (req, re
       ) values ($1, $2, 'exercise', $3, $4, $5, $6, $7, $8, $9, $10, $11, $11,
         $12, $13, $14, $15, $16, $17,
         $18, $19, $20, $21, $22, $23,
-        $24, $25, $26, $27, $28, $29)`,
+        $24, $25, $26, $27, $28, $29) returning id`,
       [node.plan_session_id, node.id, exercise.id, exercise.name, exercise.instruction, exercise.image_url, exercise.video_url,
         nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), order,
         ancestry.domain?.name || null, ancestry.domain?.color || null, ancestry.domain?.icon_url || null, ancestry.domain?.short_note || null, ancestry.domain?.note || null, ancestry.domain?.node_order ?? null,
         ancestry.category?.name || null, ancestry.category?.color || null, ancestry.category?.icon_url || null, ancestry.category?.short_note || null, ancestry.category?.note || null, ancestry.category?.node_order ?? null,
         ancestry.section?.name || null, ancestry.section?.color || null, ancestry.section?.icon_url || null, ancestry.section?.short_note || null, ancestry.section?.note || null, ancestry.section?.node_order ?? null],
     );
+    await snapshotExerciseMedia(runQuery,exercise.id,insertedItem.rows[0].id);
+    await runQuery('commit');client.release();client=null;
     return await respondWithDraft(req, res, req.user, node.plan, { status: 201 });
-  } catch (error) { next(error); }
+  } catch (error) { if(client)await client.query('rollback').catch(()=>{});next(error); } finally {client?.release();}
 }));
 
 // Source resolved with READ/copy access (getCopySourceNode), not edit
@@ -1765,6 +1779,7 @@ async function buildDraft(plan) {
      where pd.plan_id = $1
      order by pd.block_order nulls last, pd.block_index, ps.session_order nulls last, pn.node_order nulls last, pi.item_order nulls last`, [plan.id],
   );
+  await decorateMediaRows(result.rows,'plan_item',query);
   const blocks = new Map();
   result.rows.forEach((row) => {
     if (!blocks.has(row.block_id)) blocks.set(row.block_id, { id: row.block_id, index: row.block_index, name: row.block_name, type: row.block_type, date: row.date || "", dayOrder: Number(row.day_order || 0), note: row.day_note, sessions: [] });
@@ -1778,7 +1793,7 @@ async function buildDraft(plan) {
       node = { id: row.node_id, parentId: row.parent_id || "", type: row.node_type, name: row.node_name, color: row.color || "", iconUrl: row.icon_url || "", shortNote: row.short_note || "", note: row.note || "", order: Number(row.node_order || 0), items: [] };
       session.nodes.push(node);
     }
-    if (row.item_id) node.items.push({ id: row.item_id, exerciseId: row.exercise_id, title: row.title, description: row.description || "", imageUrl: row.image_url || "", videoUrl: row.video_url || "", sets: row.sets || "", reps: row.reps || "", load: row.load || "", itemOrder: Number(row.item_order || 0) });
+    if (row.item_id) node.items.push({ ...(row.media?{media:row.media}:{}),id: row.item_id, exerciseId: row.exercise_id, title: row.title, description: row.description || "", imageUrl: row.image_url || "", videoUrl: row.video_url || "", sets: row.sets || "", reps: row.reps || "", load: row.load || "", itemOrder: Number(row.item_order || 0) });
   });
   return {
     plan: {
@@ -2362,6 +2377,7 @@ async function copyLegacySession(client, sourceSessionId, targetSessionId, loade
       item.domain_name, item.category_name, item.section_name, item.domain_color, item.category_color, item.section_color,
       item.domain_icon_url, item.category_icon_url, item.section_icon_url, item.domain_short_note, item.category_short_note, item.section_short_note,
       item.domain_note, item.category_note, item.section_note, item.domain_order, item.category_order, item.section_order,
+      item.video_source || 'legacy',item.video_asset_id || null,item.image_source || 'legacy',item.image_asset_id || null,
     ];
     values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
     params.push(...row);
@@ -2372,7 +2388,8 @@ async function copyLegacySession(client, sourceSessionId, targetSessionId, loade
       sets, reps, load, item_order, exercise_order, source_row_ref,
       domain_name, category_name, section_name, domain_color, category_color, section_color,
       domain_icon_url, category_icon_url, section_icon_url, domain_short_note, category_short_note, section_short_note,
-      domain_note, category_note, section_note, domain_order, category_order, section_order
+      domain_note, category_note, section_note, domain_order, category_order, section_order,
+      video_source,video_asset_id,image_source,image_asset_id
     ) values ${values.join(", ")}`,
     params,
   );
@@ -2556,6 +2573,7 @@ export async function copySessionContent(client, sourceSessionId, targetSessionI
       item.domain_name, item.category_name, item.section_name, item.domain_color, item.category_color, item.section_color,
       item.domain_icon_url, item.category_icon_url, item.section_icon_url, item.domain_short_note, item.category_short_note, item.section_short_note,
       item.domain_note, item.category_note, item.section_note, item.domain_order, item.category_order, item.section_order,
+      item.video_source || 'legacy',item.video_asset_id || null,item.image_source || 'legacy',item.image_asset_id || null,
     ];
     values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
     params.push(...row);
@@ -2567,7 +2585,8 @@ export async function copySessionContent(client, sourceSessionId, targetSessionI
       sets, reps, load, item_order, exercise_order, source_row_ref,
       domain_name, category_name, section_name, domain_color, category_color, section_color,
       domain_icon_url, category_icon_url, section_icon_url, domain_short_note, category_short_note, section_short_note,
-      domain_note, category_note, section_note, domain_order, category_order, section_order
+      domain_note, category_note, section_note, domain_order, category_order, section_order,
+      video_source,video_asset_id,image_source,image_asset_id
     ) values ${values.join(", ")}`,
     params,
   );
@@ -2598,15 +2617,15 @@ async function copyNodeTree(sourceId, targetSessionId, targetParentId, runQuery 
         sets, reps, load, item_order, exercise_order,
         domain_name, domain_color, domain_icon_url, domain_short_note, domain_note, domain_order,
         category_name, category_color, category_icon_url, category_short_note, category_note, category_order,
-        section_name, section_color, section_icon_url, section_short_note, section_note, section_order
+        section_name, section_color, section_icon_url, section_short_note, section_note, section_order,video_source,video_asset_id,image_source,image_asset_id
       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,
         $15,$16,$17,$18,$19,$20,
         $21,$22,$23,$24,$25,$26,
-        $27,$28,$29,$30,$31,$32)`,
+        $27,$28,$29,$30,$31,$32,$33,$34,$35,$36)`,
       [targetSessionId, newNodeId, item.item_type, item.exercise_id, item.title, item.description, item.short_note, item.note, item.image_url, item.video_url, item.sets, item.reps, item.load, itemOrder,
         ancestry.domain?.name || null, ancestry.domain?.color || null, ancestry.domain?.icon_url || null, ancestry.domain?.short_note || null, ancestry.domain?.note || null, ancestry.domain?.node_order ?? null,
         ancestry.category?.name || null, ancestry.category?.color || null, ancestry.category?.icon_url || null, ancestry.category?.short_note || null, ancestry.category?.note || null, ancestry.category?.node_order ?? null,
-        ancestry.section?.name || null, ancestry.section?.color || null, ancestry.section?.icon_url || null, ancestry.section?.short_note || null, ancestry.section?.note || null, ancestry.section?.node_order ?? null],
+        ancestry.section?.name || null, ancestry.section?.color || null, ancestry.section?.icon_url || null, ancestry.section?.short_note || null, ancestry.section?.note || null, ancestry.section?.node_order ?? null, item.video_source || 'legacy',item.video_asset_id || null,item.image_source || 'legacy',item.image_asset_id || null],
     );
   }
   const children = await runQuery("select id from plans.plan_nodes where parent_id = $1 order by node_order", [sourceId]);

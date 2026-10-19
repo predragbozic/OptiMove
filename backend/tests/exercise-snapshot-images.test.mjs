@@ -10,6 +10,7 @@ import pg from "pg";
 import { createDisposableDatabase } from "./support/disposable-db.mjs";
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../src/exerciseSnapshotMedia.js";
 import { applySnapshotImages, previewSnapshotImages, validateRepairIds } from "../src/exerciseSnapshotRepair.js";
+import { addMediaSelectionFixture } from './support/exercise-collections-fixture.mjs';
 import { copyBuilderSessionContents } from "../src/builderTreeBatch.js";
 
 let database;
@@ -53,6 +54,7 @@ before(async () => {
         `${level}_short_note text`, `${level}_note text`, `${level}_order numeric`,
       ]).join(",")});
   `);
+  await addMediaSelectionFixture(client.query.bind(client));
   const plan = randomUUID();
   const day = randomUUID();
   await client.query("insert into plans.plans values($1,$2)", [plan, owner]);
