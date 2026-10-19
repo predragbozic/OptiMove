@@ -1,6 +1,6 @@
 import { normalizeExerciseView, renderExerciseThumb } from "./exercise-view-modes.js";
 import { libraryDragAvailable } from "./builder-library-drag.js";
-import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes, renderMediaImage } from "./media.js";
+import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes } from "./media.js";
 import { autogrowRows } from "./textarea-autosize.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -112,7 +112,7 @@ export function renderBuilderExerciseResults(exercises, markedExerciseIds, node,
 function renderAddedThumb(item, { containerClass, imageClass, fallbackClass, emptyLabel = "" }) {
   const media = exerciseMediaOf(item);
   if (hasAnyMedia(media)) {
-    return `<button type="button" class="${containerClass}" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)}>${media.image.source !== "none" ? renderMediaImage(media, imageClass) : `<span class="${fallbackClass}">Video</span>`}</button>`;
+    return `<button type="button" class="${containerClass}" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)}>${renderExerciseThumb(item, imageClass)}</button>`;
   }
   return `<span class="${fallbackClass}">${escapeHtml(emptyLabel || (item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`;
 }
@@ -267,7 +267,7 @@ export function renderBuilderStickyBar(node, mobileMode) {
     <span class="builder-sticky-bar-thumbs">
       ${recent.map((item) => {
         const media = exerciseMediaOf(item);
-        return `<span class="builder-sticky-thumb" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)} role="button" tabindex="0" aria-label="Preview ${escapeAttr(item.title || "exercise")}">${media.image.source !== "none" ? renderMediaImage(media, "builder-sticky-thumb-image") : `<span class="builder-sticky-thumb-fallback">${escapeHtml((item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`}</span>`;
+        return `<span class="builder-sticky-thumb" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)} role="button" tabindex="0" aria-label="Preview ${escapeAttr(item.title || "exercise")}">${renderExerciseThumb(item, "builder-sticky-thumb-image")}</span>`;
       }).join("")}
       ${overflow ? `<span class="builder-sticky-thumb-overflow">+${overflow}</span>` : ""}
     </span>

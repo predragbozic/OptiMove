@@ -1,4 +1,5 @@
-import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes, renderImage, renderMediaImage, renderMediaThumbOf } from "./media.js";
+import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes, renderImage, renderMediaImage } from "./media.js";
+import { renderExerciseThumb } from "./exercise-view-modes.js";
 import { clean, escapeAttr, escapeHtml, initialsFor } from "./utils.js";
 
 export function renderExerciseListHtml(items, itemIds, layout) {
@@ -37,7 +38,7 @@ export function renderExerciseItemHtml(item, itemId, layout) {
             </button>
             ${hasMedia ? `
               <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)}>
-                ${media.image.source !== "none" ? renderMediaThumbOf(media, "") : `<span class="media-fallback">Video</span>`}
+                ${renderExerciseThumb(item, "media-thumb")}
               </button>
             ` : ""}
           </div>
@@ -53,7 +54,7 @@ export function renderExerciseItemHtml(item, itemId, layout) {
     <article class="plan-item exercise-item ${hasMedia ? "" : "no-media"}" style="border-left-color:${escapeAttr(color)}">
       ${hasMedia ? `
         <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)}>
-          ${media.image.source !== "none" ? renderMediaThumbOf(media, "") : `<span class="media-fallback">Video</span>`}
+          ${renderExerciseThumb(item, "media-thumb")}
         </button>
       ` : ""}
       <button class="exercise-open plan-exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
@@ -127,7 +128,7 @@ export function renderExerciseDetailHtml({ item, itemId, ids, getItemById }) {
           <div class="exercise-detail-media">
             ${hasAnyMedia(media)
               ? `<button class="exercise-media detail-media" data-action="open-media" data-title="${escapeAttr(title)}" ${mediaAccessAttributes(media)}>
-                  ${media.image.source !== "none" ? renderMediaThumbOf(media) : `<span class="media-fallback">Video</span>`}
+                  ${renderExerciseThumb(item, "media-thumb")}
                 </button>`
               : `<div class="detail-media-empty">No image</div>`}
           </div>
