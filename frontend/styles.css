@@ -6049,6 +6049,11 @@ body.specific-program-open {
 .exercise-media-actions .plain-button, .exercise-media-actions .text-action { min-height: 44px; min-width: 44px; }
 .exercise-media-technical { font-size: 12px; color: var(--muted); }
 .exercise-media-preview-local video, .exercise-media-preview-local img { display: block; width: 100%; max-height: 240px; object-fit: contain; border-radius: 6px; background: #000; }
+.exercise-media-origin { margin: 0; font-size: 13px; }
+.exercise-media-frame-picker { display: grid; gap: 8px; padding: 10px; border: 1px dashed var(--line); border-radius: 8px; }
+.exercise-media-frame-video { display: block; width: 100%; max-height: 280px; object-fit: contain; border-radius: 6px; background: #000; }
+.exercise-media-frame-time { display: grid; gap: 4px; font-size: 13px; }
+.exercise-media-frame-time input[type="range"] { width: 100%; min-height: 44px; margin: 0; font-size: 16px; }
 @media (max-width: 760px) {
   .exercise-media-fields { grid-template-columns: 1fr; }
   .exercise-media-field .builder-text-input { font-size: 16px; }
