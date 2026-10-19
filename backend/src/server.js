@@ -37,6 +37,9 @@ import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT } from "./db.js";
 import { realtimeRouter } from "./realtime.js";
 import { assertEmailConfigValid } from "./email.js";
 
+import { createMediaStorageService } from './mediaStorage.js';
+import { createMediaStorageRouter } from './routes/mediaStorage.js';
+
 const app = express();
 const port = Number(process.env.PORT || 3001);
 const isProduction = process.env.NODE_ENV === "production";
@@ -73,6 +76,10 @@ app.get("/api/health", async (_req, res, next) => {
     next(error);
   }
 });
+
+const mediaStorage = createMediaStorageService(pool);
+app.use('/api/media', createMediaStorageRouter({ service: mediaStorage }));
+app.use('/api/admin/media', createMediaStorageRouter({ service: mediaStorage, admin: true }));
 
 app.use("/api/auth", authRouter);
 app.use("/api/athletes", requireAuth, athletesRouter);
