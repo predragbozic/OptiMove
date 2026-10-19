@@ -29,6 +29,8 @@ import {
 import { renderCheckInContent, renderCheckInPage as renderCheckInPageAction, submitCheckInLogin as submitCheckInLoginAction } from "./check-in-actions.js";
 import { handleDataSourcesAction, submitDataSourcesForm } from "./data-sources-actions.js";
 import { enterDataSourcesSection, loadDataSources } from "./data-sources-data.js";
+import { handleStorageAdminAction, submitStorageAdminForm } from "./media-storage-admin-actions.js";
+import { enterStorageAdminSection, loadStorageAdmin, storageAdminContext, storageAdminNeedsLoad } from "./media-storage-admin-data.js";
 import { handleSourceConnectionsAction, handleSourceConnectionsBeforeUnload, submitSourceConnectionsForm } from "./source-connections-actions.js";
 import { enterSourceConnectionsSection, loadSourceConnections, sourceConnectionsNeedLoad } from "./source-connections-data.js";
 import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
@@ -649,6 +651,14 @@ async function handleContentSubmit(event) {
   if (sourceConnectionsForm) {
     event.preventDefault();
     await submitSourceConnectionsForm(sourceConnectionsForm, { render: renderDataSourcesSurface });
+    return;
+  }
+
+  // Settings -> Storage (R2 media, PR 5): the defaults form and a limit form.
+  const storageAdminForm = event.target.closest("[data-storage-admin-form]");
+  if (storageAdminForm) {
+    event.preventDefault();
+    await submitStorageAdminForm(storageAdminForm, { render: renderDataSourcesSurface });
     return;
   }
 
@@ -2087,6 +2097,7 @@ async function loadActiveTab() {
     // also the Data sources repaint, so a reset there would loop.
     if (state.organization.section === "dataSources") enterDataSourcesSection();
     if (state.organization.section === "sourceConnections") enterSourceConnectionsSection();
+    if (state.organization.section === "storage") enterStorageAdminSection();
     return renderOrganizationPanel({ refresh: false });
   }
   if (state.activeTab === "coach-home") return loadCoachHome();
@@ -2699,6 +2710,7 @@ async function handleContentClick(event) {
   if (handleTemplateLibraryAction(action, { loadTemplates, renderCoachContext, renderTemplateLibrary })) return;
   if (await handleDataSourcesAction(action, { render: renderDataSourcesSurface })) return;
   if (await handleSourceConnectionsAction(action, { render: renderDataSourcesSurface, openDataSources: openDataSourcesFromSourceConnections })) return;
+  if (await handleStorageAdminAction(action, { render: renderDataSourcesSurface })) return;
   if (await handleOrganizationAction(action, {
     loadAthletes,
     refreshOrganizationData,
@@ -2831,6 +2843,10 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     // without a chosen club (platform workspace) nothing is sent.
     if (state.organization.section === "sourceConnections" && sourceConnectionsNeedLoad()) {
       void loadSourceConnections(renderDataSourcesSurface);
+    }
+    // Storage (PR 5): the same one-shot read of the defaults and the accounts.
+    if (state.organization.section === "storage" && storageAdminContext(state.organization.data) && storageAdminNeedsLoad()) {
+      void loadStorageAdmin(renderDataSourcesSurface);
     }
     const data = state.organization.data || { clubs: [], teams: [], athletes: [], users: [], canCreateClub: false, canCreateTeam: false, canCreateAthlete: true, canCreateUser: true };
     normalizeOrganizationSelection(data);

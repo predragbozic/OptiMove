@@ -1,4 +1,6 @@
 import { renderDataSourcesPanelHtml } from "./data-sources-view.js";
+import { storageAdminContext } from "./media-storage-admin-data.js";
+import { renderManageAccountStorageSection, renderStorageAdminPanelHtml } from "./media-storage-admin-view.js";
 import { sourceConnectionsAdminContext } from "./source-connections-data.js";
 import { renderSourceConnectionsPanelHtml } from "./source-connections-view.js";
 import { renderImage } from "./media.js";
@@ -70,6 +72,7 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
   // showed the tab) must not be left on a section it cannot see.
   if (state.organization.section === "dataSources" && !data.isPlatformAdmin) state.organization.section = "overview";
   if (state.organization.section === "sourceConnections" && !sourceConnectionsAdminContext()) state.organization.section = "overview";
+  if (state.organization.section === "storage" && !storageAdminContext(data)) state.organization.section = "overview";
   return `
     <section class="content-section organization-view">
       <section class="panel organization-hero">
@@ -92,7 +95,7 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
       </section>
       ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
       ${renderSettingsNavHtml(data)}
-      ${state.organization.section === "dataSources" ? renderDataSourcesPanelHtml() : state.organization.section === "sourceConnections" ? renderSourceConnectionsPanelHtml() : state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : state.organization.section === "joinLinks" ? `
+      ${state.organization.section === "dataSources" ? renderDataSourcesPanelHtml() : state.organization.section === "sourceConnections" ? renderSourceConnectionsPanelHtml() : state.organization.section === "storage" ? renderStorageAdminPanelHtml(data) : state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : state.organization.section === "joinLinks" ? `
         ${renderOrganizationActions(data)}
         ${renderJoinLinksSection(data)}
       ` : `
@@ -1426,6 +1429,7 @@ export function renderManageAccountModal(data) {
         ${renderManageAccountClubRolesSection(row, data)}
         ${renderManageAccountTeamRolesSection(row, data)}
         ${renderManageAccountBlocksSection(row, data)}
+        ${renderManageAccountStorageSection(row, data)}
         <section class="manage-account-section">
           <p class="eyebrow">Athlete profile</p>
           <p>${row.isAthlete === true ? "Athlete profile linked" : "No athlete profile linked"}</p>

@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { enterDataSourcesSection } from "./data-sources-data.js";
 import { openExerciseBlockGrants, USER_SELECTION_LIMIT } from "./exercise-block-grants.js";
+import { emptyAccountStorage, enterStorageAdminSection, loadManageAccountStorage, storageAdminContext } from "./media-storage-admin-data.js";
 import { userCanReceiveBlocks, viewerManagesBlocks, visibleOrganizationUsers } from "./organization-view.js";
 import { confirmLeaveSourceConnections } from "./source-connections-actions.js";
 import { enterSourceConnectionsSection } from "./source-connections-data.js";
@@ -279,6 +280,8 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     // connections reads its club again for the same reason.
     if (state.organization.section === "dataSources") enterDataSourcesSection();
     if (state.organization.section === "sourceConnections") enterSourceConnectionsSection();
+    // Storage (PR 5) reads everything again on entry for the same reason.
+    if (state.organization.section === "storage") enterStorageAdminSection();
     void renderOrganizationPanel({ refresh: false });
     return true;
   }
@@ -335,9 +338,12 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     const userId = action.dataset.userId;
     if (!userId) return true;
     const blocks = viewerManagesBlocks(state.organization.data) ? { loading: true, data: null, error: "", unavailable: false, pending: false, note: "" } : null;
-    state.organizationUserManage = { open: true, userId, pending: false, error: "", blocks };
+    // Storage (PR 5): the account's own storage, the same administrator.
+    const storage = storageAdminContext(state.organization.data) ? { ...emptyAccountStorage(), loading: true } : null;
+    state.organizationUserManage = { open: true, userId, pending: false, error: "", blocks, storage };
     void renderOrganizationPanel({ refresh: false });
     if (blocks) void loadManageAccountBlocks(userId, renderOrganizationPanel);
+    if (storage) void loadManageAccountStorage(userId, () => renderOrganizationPanel({ refresh: false }));
     return true;
   }
   if (type === "organization-block-grants-reload") {

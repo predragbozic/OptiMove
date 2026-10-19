@@ -1,5 +1,6 @@
 import { hasOrganizationAccess, isAthleteMode } from "./access.js";
 import { sourceConnectionsAdminContext } from "./source-connections-data.js";
+import { storageAdminContext } from "./media-storage-admin-data.js";
 import { els } from "./dom.js";
 import { ATHLETE_TEMPLATE_SCOPES, TEMPLATE_SCOPES, state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -148,6 +149,10 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
     // protection either - every route behind it resolves the same two bases
     // again and answers 404 to everyone else.
     ...(sourceConnectionsAdminContext() ? [["sourceConnections", "Source connections"]] : []),
+    // Media storage limits (R2, PR 5): a platform administrator in the
+    // platform workspace, like application blocks. Every route behind it
+    // checks the active platform_admin role again.
+    ...(storageAdminContext(data) ? [["storage", "Storage"]] : []),
   ];
   return `
     <nav class="settings-tabs" aria-label="Settings sections">
