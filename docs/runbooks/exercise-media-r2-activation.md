@@ -260,20 +260,77 @@ bucket, bound to nothing, like the C4 video.
 With this the inspection is proven on production for both accepted shapes of an MP4 — video only and
 video with AAC-LC audio — and the AAC-LC rule is no longer an untested limit of phase C.
 
-**Still to confirm by the owner (not reachable from the session — no Cloudflare or Render access):**
+**Confirmed by the owner (2026-10-19), from the Cloudflare and Render panels, read-only:**
 
-- **Cloudflare R2, read-only:** the two ready videos `pending/e4db8e48-3352-42ae-a1e3-c170d8bfaf28`
-  (189 793 B) and `pending/b3fecad3-1adc-4083-9303-514dc24ad0ba` (255 417 B), and the three zero-byte
-  tombstones `pending/a529c990-…`, `pending/c5e02071-…`, `pending/ba6358b0-…` with the
-  `optimove-tombstone` metadata — **NOT CONFIRMED** until the owner reports what the panel shows; nothing
-  is deleted or changed there.
-- **The Render log of the automatic cleanup run of 15:00 UTC:** expected `{"cleaned":1,"failed":0}` — **NOT
-  CONFIRMED** until the owner reports it.
+- **Cloudflare R2:** both ready videos are in the bucket (189 793 B and 255 417 B —
+  `pending/e4db8e48-3352-42ae-a1e3-c170d8bfaf28` and `pending/b3fecad3-1adc-4083-9303-514dc24ad0ba`) and the
+  three tombstones `pending/a529c990-…`, `pending/c5e02071-…`, `pending/ba6358b0-…` are there at 0 B.
+  Nothing was deleted or changed.
+- **The Render log of the automatic cleanup run of 15:00 UTC:** `{"cleaned":1,"failed":0}` — the expired N4
+  session was swept by the scheduled run, as the session's state already showed.
 
-**Before phase D (the owner's approval 3), the remaining checks:** the two confirmations above. Phase D's own
-criteria are in its table: D1 health and 401, D2 a coach's editor unchanged until a file is chosen, D3 the
-pilot upload through the editor, D4 / D5 the two cancels, D6 / D7 the legacy exercise and the Builder
-unchanged, D8 the cleanup run.
+**Phase C is closed.** Everything the pilot was meant to prove on production holds: the R2 variables, CORS
+for the `OptiMove-eu` origin, the signed `Content-Length`, the create-only PUT, HEAD and inspection for
+video without and with AAC-LC audio, quota reservation and settlement, cancel through the server with a
+verified tombstone, idempotency, the refusals by type and size, expiry, and the scheduled sweep. The one
+path not reached, 429 `storage_quota_exceeded`, is below the per-file ceiling on this account and stays
+covered by the test suites. Phase D's criteria are in its table: D1 health and 401, D2 a coach's editor
+unchanged until a file is chosen, D3 the pilot upload through the editor, D4 / D5 the two cancels, D6 / D7
+the legacy exercise and the Builder unchanged, D8 the cleanup run — and the readiness section below.
+
+### Phase D readiness — what the merge of #192 does (reviewed 2026-10-19)
+
+**The exact change.** Against `main` (`2798faa`) the PR carries one line of code —
+`DEFAULT_UPLOAD_TRANSPORT_ENABLED` from `false` to `true` in `frontend/exercise-media-upload.js` — plus this
+runbook and `frontend/tests/exercise-media-pilot-mode.test.mjs`. No backend change, no migration, no
+environment change: the deploy is a frontend build (`vite build`) and the usual start (the migrator finds
+nothing new). `MEDIA_SAVE_ENABLED` stays `false`.
+
+**Who reads the guard.** `uploadsOffered()` and `storageWanted()` in `frontend/exercise-editor.js`: an upload
+is offered only for an **existing** exercise (a new exercise or a copy needs the save guard too), only when
+the storage read answered (a 503 or 403 leaves the link fields), and never while something uploads; a
+stored R2 file keeps Preview only; a frame or thumbnail needs the save guard (#191 stays inert); the Builder's
+Edit opens this same editor and its custom-exercise modal keeps its link fields; Settings → Storage is
+unchanged by the merge.
+
+**What every signed-in coach sees right after the merge** (the backend flag is already on):
+
+1. Opening an existing exercise in the editor sends one `GET /api/media/storage?exerciseId=…` and shows the
+   storage line, e.g. "Storage (personal storage): 0 B used of 0 B · 0 B free · one video up to 209.7 MB,
+   one picture up to 10.5 MB", with *Upload video… / Use a link* and *Upload picture… / Use a link*; an
+   existing link shows *Preview / Edit link / Replace with a file… / Remove* as FE-2 built it.
+2. Choosing a file on an account with **0 B free** is refused locally, before any request: "This file needs
+   189.4 KB, but only 0 B of your storage are free. Remove media you no longer use or ask an administrator
+   for more storage." — the server would answer the same 429 anyway (phase C, N2).
+3. A new exercise or a copy: the two link fields exactly as today.
+4. Saving an exercise sends the body of today (pinned by the pilot-mode test, byte-identical with the guard
+   on and off); nothing of R2 reaches an exercise until the save guard flips.
+
+**Upload is therefore not restricted to the pilot account by code — it is restricted by the quota.** The
+frontend guard is global; every account whose limit is above 0 can upload after the merge, and the file is
+charged and stays unsaved. On 2026-10-19 two user accounts carry a 1 GB override (the pilot account
+`267c7e75…` and the administrator account `491e8789…`); every other account, and the club account, is at the
+default 0 B. Keep it that way through phase D: no default-limit change, no further overrides, nothing
+announced. If the owner prefers that no coach sees *Upload* at all before phase E, the alternative is to
+hold #192 and merge it together with phase E's PR; otherwise coaches see the buttons and the quota sentence.
+
+**Tests on this branch, merged with `main` (2026-10-19):** `exercise-media-pilot-mode` (6), FE-2's
+`exercise-media-upload` (13) and `exercise-editor-media` (10), `exercise-media-thumbnail` (5),
+`exercise-editor-thumbnail` (7), `media-storage-admin` (9) and `media-playback` — 58 of 58; `npm run build`
+built. The FE-2 and thumbnail suites set both guards explicitly in every test, so the flipped default
+changes none of them; the pilot-mode suite is the one that reads the shipped default.
+
+**Activation (phase D), in order:** approval 3 → the owner merges #192 (merge commit, head as reviewed) →
+Render deploys `OptiMove-eu` → D1 `/api/health` three times with the merge commit, signed out a media route
+401 → D2–D8 of the table below, the pilot account on the test exercise → the results recorded here. The old
+service `optimove.onrender.com` also builds the new bundle at its next deploy; with its backend flag off the
+editor there shows the link fields (503 read as "storage off"), nothing else.
+
+**Rollback, two levers:** (a) immediate — `MEDIA_STORAGE_ENABLED=false` on `OptiMove-eu` and the cron, a
+restart: every media route 503, the editor back to the link fields with no error, uploads in flight end with
+their sentences, nothing deleted; (b) the guard itself — a PR that sets `DEFAULT_UPLOAD_TRANSPORT_ENABLED`
+back to `false`, a build and a deploy, with the backend still on. The ready pilot videos and the tombstones
+stay in the bucket under either lever.
 
 ### Phase D — frontend transport activation, the editor pilot (owner approval 3)
 
