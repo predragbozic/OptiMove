@@ -1,3 +1,4 @@
+import { bindExerciseMedia, decorateMediaRows, mediaSelections } from '../exerciseMedia.js';
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { pool, query, queryWithoutJit } from "../db.js";
@@ -382,6 +383,7 @@ router.get("/", async (req, res, next) => {
       && !admin && !owner && !["private","mine"].includes(kind) && visibility === "active" && hidden === "visible"
       && !Object.values(filters).some(Boolean);
     const previews = previewEligible ? await loadLockedExercisePreviews(req.user.id,search,collection,limit) : { exercises: [], hasMore: false };
+    await decorateMediaRows(result.rows,'exercise',query);
     res.json({
       exercises: result.rows.slice(0, limit),
       lockedPreviews: previews.exercises,
@@ -418,6 +420,7 @@ async function loadExerciseDetail(userId, exerciseId, runQuery = query, includeA
     `,
     [userId, exerciseId],
   );
+  await decorateMediaRows(result.rows,'exercise',runQuery);
   return result.rows[0] || null;
 }
 
@@ -445,6 +448,7 @@ router.get("/:exerciseId", async (req, res, next) => {
     if (!row) return res.status(404).json({ error: "Exercise not found." });
     res.json({
       id: row.id,
+      ...(row.media?{media:row.media}:{}),
       ownerScope: row.owner_scope,
       ownerUserId: row.owner_user_id,
       isActive: row.is_active,
@@ -481,6 +485,8 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
   const name = text(body.name);
   if (!name) { res.status(400).json({ error: "Exercise name is required." }); return; }
 
+  let selections=mediaSelections(body);
+  let previousMedia=null;
   const client = await pool.connect();
   const runQuery = (sql, params) => client.query(sql, params);
   let copySourceId = null;
@@ -488,8 +494,8 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
   let dataOwnerId = userId;
   let editingSystem = false;
   let exerciseCode = nullableText(body.exerciseCode);
-  const videoUrl = nullableText(body.videoUrl);
-  const imageUrl = nullableText(body.imageUrl);
+  let videoUrl = nullableText(selections.video?.source==='legacy'?selections.video.url:body.videoUrl);
+  let imageUrl = nullableText(selections.image?.source==='legacy'?selections.image.url:body.imageUrl);
   try {
     await runQuery("begin isolation level read committed");
     await runQuery("set local lock_timeout = '2s'");
@@ -498,7 +504,7 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
     req.exerciseAdmin = await hasExerciseAdministration(userId, req.authz, runQuery);
     if (exerciseId) {
       const existing = await runQuery(
-        `select e.id, e.owner_scope, e.owner_user_id, coalesce(e.video_url,fallback_media.video_url) as video_url, coalesce(e.image_url,fallback_media.image_url) as image_url from library.exercises e ${exerciseMediaJoinSql} where e.id = $2 and (${exerciseLibraryScopeSql}) and e.is_active=true for update of e`,
+        `select e.id, e.owner_scope, e.owner_user_id, e.video_source,e.image_source,e.video_url as stored_video_url,e.image_url as stored_image_url, coalesce(e.video_url,fallback_media.video_url) as video_url, coalesce(e.image_url,fallback_media.image_url) as image_url from library.exercises e ${exerciseMediaJoinSql} where e.id = $2 and (${exerciseLibraryScopeSql}) and e.is_active=true for update of e`,
         [userId, exerciseId],
       );
       if (!existing.rows[0]) {
@@ -508,6 +514,12 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
       if (!copying && existing.rows[0].owner_scope === "system" && !req.exerciseAdmin) {
         await runQuery("rollback");
         return res.status(403).json({ error: "Only platform administrators can edit application exercises." });
+      }
+      if(!copying) {
+        previousMedia={...existing.rows[0],video_url:existing.rows[0].stored_video_url,image_url:existing.rows[0].stored_image_url};
+        selections=mediaSelections(body,previousMedia);
+        videoUrl=selections.video?.source==='legacy'?nullableText(selections.video.url):previousMedia.video_url;
+        imageUrl=selections.image?.source==='legacy'?nullableText(selections.image.url):previousMedia.image_url;
       }
       editingSystem = !copying && existing.rows[0].owner_scope === "system";
       if (!copying && existing.rows[0].owner_scope === "user") dataOwnerId = existing.rows[0].owner_user_id;
@@ -562,6 +574,8 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
       finalId = inserted.rows[0].id;
     }
 
+    await bindExerciseMedia(client,req,finalId,body,{creating:!exerciseId,previous:previousMedia});
+
     const domainIds = await Promise.all(splitNames(body.purposes).map((value) => getOrCreateLookup("domains", value, dataOwnerId, {}, runQuery, editingSystem)));
     const categoryIds = await Promise.all(splitNames(body.qualities).map((value) => getOrCreateLookup("categories", value, dataOwnerId, {}, runQuery, editingSystem)));
     const sectionIds = await Promise.all(splitNames(body.groups).map((value) => getOrCreateLookup("sections", value, dataOwnerId, {}, runQuery, editingSystem)));
@@ -601,6 +615,7 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
     if (req.exerciseAdmin) console.info(JSON.stringify({ event: "exercise.save", actor: userId, exercise: finalId, operation: copying ? "copy" : exerciseId ? "edit" : "create" }));
     res.status(exerciseId ? 200 : 201).json({
       id: detail.id,
+      ...(detail.media?{media:detail.media}:{}),
       ownerScope: detail.owner_scope,
       sourceExerciseId: detail.source_exercise_id || null,
       copiedFromSystem: Boolean(copySourceId),

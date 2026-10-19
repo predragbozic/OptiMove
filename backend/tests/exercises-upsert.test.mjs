@@ -24,7 +24,7 @@ import http from "node:http";
 import "dotenv/config";
 import pg from "pg";
 import { createDisposableDatabase } from "./support/disposable-db.mjs";
-import { EXERCISE_COLLECTIONS_FIXTURE_SQL } from "./support/exercise-collections-fixture.mjs";
+import { EXERCISE_COLLECTIONS_FIXTURE_SQL, addMediaSelectionFixture } from "./support/exercise-collections-fixture.mjs";
 
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 if (!ORIGINAL_DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -255,6 +255,7 @@ before(async () => {
   await adminClient.query(AUTH_FIXTURE_SQL);
   await adminClient.query(LIBRARY_FIXTURE_SQL);
   await adminClient.query(EXERCISE_COLLECTIONS_FIXTURE_SQL);
+  await addMediaSelectionFixture(adminClient.query.bind(adminClient));
 
   process.env.DATABASE_URL = db.url;
   const dbModule = await import("../src/db.js");

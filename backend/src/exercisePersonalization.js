@@ -41,7 +41,7 @@ export const exerciseMediaJoinSql = `left join lateral (
     where not ancestor.id=any(media_sources.path)
   )
   select
-    (select source.video_url from media_sources source where source.video_url is not null order by source.depth limit 1) as video_url,
-    (select source.image_url from media_sources source where source.image_url is not null order by source.depth limit 1) as image_url
+    (select case when coalesce(to_jsonb(source)->>'video_source','legacy')='legacy' then source.video_url end from media_sources source where source.video_url is not null or coalesce(to_jsonb(source)->>'video_source','legacy')<>'legacy' order by source.depth limit 1) as video_url,
+    (select case when coalesce(to_jsonb(source)->>'image_source','legacy')='legacy' then source.image_url end from media_sources source where source.image_url is not null or coalesce(to_jsonb(source)->>'image_source','legacy')<>'legacy' order by source.depth limit 1) as image_url
   where not exists (select 1 from media_sources e where not coalesce((${exerciseReadScopeSql}),false))
 ) fallback_media on true`;
