@@ -57,8 +57,8 @@ export const PERMISSION_RENEW_MARGIN_MS = 60_000;
 // After an interrupted PUT, one more whole PUT of the same File (the contract: no byte ranges).
 export const PUT_RETRY_LIMIT = 1;
 
-const DEFAULT_UPLOAD_TRANSPORT_ENABLED = false;
-const DEFAULT_MEDIA_SAVE_ENABLED = false;
+const DEFAULT_UPLOAD_TRANSPORT_ENABLED = true;
+const DEFAULT_MEDIA_SAVE_ENABLED = true;
 let uploadTransportEnabled = DEFAULT_UPLOAD_TRANSPORT_ENABLED;
 let mediaSaveEnabled = DEFAULT_MEDIA_SAVE_ENABLED;
 
