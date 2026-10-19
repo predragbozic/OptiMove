@@ -34,8 +34,13 @@ export const PLAYBACK_CLIENT_BOUND_MS = 15 * 1000;
 
 const cache = new Map(); // key -> { url, mediaId, expiresAt }
 const inFlight = new Map(); // key -> Promise<entry | null>
+// key -> how many times the key was forgotten: an answer that lands after a
+// forget was asked for the object the context had before, so it is handed
+// to its own caller but never kept.
+const revisions = new Map();
 
 const now = () => Date.now();
+const revisionOf = (key) => revisions.get(key) || 0;
 
 // The cache key of one slot of one context; "" for anything malformed.
 export function accessKey(context, slot) {
@@ -57,9 +62,11 @@ function readEntry(value) {
   return { url, mediaId, expiresAt: readExpiry(value.expiresAt) };
 }
 
-function remember(key, value) {
+// `revision` is the key's revision when its request was sent: an answer to a
+// request older than the last forget is returned but not kept.
+function remember(key, value, revision = revisionOf(key)) {
   const entry = readEntry(value);
-  if (entry && key) cache.set(key, entry);
+  if (entry && key && revisionOf(key) === revision) cache.set(key, entry);
   return entry;
 }
 
@@ -98,7 +105,9 @@ export function forgetMediaAccess(context, slot) {
   }
   for (const each of slot ? [slot] : MEDIA_SLOTS) {
     const key = accessKey(context, each);
-    if (key) cache.delete(key);
+    if (!key) continue;
+    cache.delete(key);
+    revisions.set(key, revisionOf(key) + 1);
   }
 }
 
@@ -125,6 +134,7 @@ export async function loadMediaAccess(context, slots, { signal } = {}) {
   const onOuterAbort = () => controller.abort();
   if (signal?.aborted) controller.abort();
   signal?.addEventListener?.("abort", onOuterAbort, { once: true });
+  const sent = new Map(missing.map((slot) => [slot, revisionOf(accessKey(normalized, slot))]));
   try {
     const answer = await api(ACCESS_ROUTE, {
       method: "POST",
@@ -133,7 +143,7 @@ export async function loadMediaAccess(context, slots, { signal } = {}) {
     });
     if (!answer || typeof answer !== "object") throw accessError("answer_unexpected");
     for (const slot of missing) {
-      const entry = remember(accessKey(normalized, slot), answer[slot]);
+      const entry = remember(accessKey(normalized, slot), answer[slot], sent.get(slot));
       if (entry) result[slot] = entry;
     }
     return result;
@@ -158,6 +168,13 @@ export async function loadPlayback(context, { withPoster = false, signal } = {})
 async function requestBatch(requests) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PLAYBACK_CLIENT_BOUND_MS);
+  const sent = new Map();
+  for (const request of requests) {
+    for (const slot of request.slots) {
+      const key = accessKey(request.context, slot);
+      sent.set(key, revisionOf(key));
+    }
+  }
   try {
     const answer = await api(ACCESS_BATCH_ROUTE, { method: "POST", signal: controller.signal, body: JSON.stringify({ requests }) });
     const answers = new Map();
@@ -166,7 +183,7 @@ async function requestBatch(requests) {
       if (!request) continue;
       for (const slot of request.slots) {
         const key = accessKey(request.context, slot);
-        const entry = remember(key, result?.media?.[slot]);
+        const entry = remember(key, result?.media?.[slot], sent.get(key));
         if (entry) answers.set(key, entry);
       }
     }
