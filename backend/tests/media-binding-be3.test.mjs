@@ -414,3 +414,51 @@ test('system/club binding follows existing administrator rights and the actual s
   assert.equal((await client.query('select video_asset_id from library.exercises where id=$1',[id])).rows[0].video_asset_id,a.id);
  }
 });
+
+async function h1AssetExercise() {
+ const id=await exercise('H1 exercise'),video=await ready({type:'exercise_edit',exerciseId:id}),image=await ready({type:'exercise_edit',exerciseId:id},'image');
+ assert.equal((await patch(id,{video:selected(video.id),image:selected(image.id)})).status,200);
+ return {id,video,image};
+}
+async function h1MediaRow(id) {return (await client.query('select video_source,video_asset_id,video_url,image_source,image_asset_id,image_url from library.exercises where id=$1',[id])).rows[0];}
+
+test('H1: metadata-only and unchanged retained URL echoes preserve both asset selections',async()=>{
+ const {id}=await h1AssetExercise(),before=await h1MediaRow(id);
+ for(const fields of [{},{videoUrl:before.video_url,imageUrl:before.image_url},{videoUrl:' '+before.video_url+' ',imageUrl:' '+before.image_url+' '}]) {
+  const r=await request('/api/exercises/'+id,{name:'Renamed',instruction:'Changed description',...fields},{method:'PATCH'});assert.equal(r.status,200,JSON.stringify(r.body));assert.deepEqual(await h1MediaRow(id),before);assert.equal(r.body.media.video.mediaId,before.video_asset_id);assert.equal(r.body.media.image.mediaId,before.image_asset_id);
+ }
+});
+
+test('H1: empty/null/whitespace implicit URL fields never remove an asset or erase retained links',async()=>{
+ const {id}=await h1AssetExercise(),before=await h1MediaRow(id);
+ for(const empty of ['',null,'   ']){const r=await request('/api/exercises/'+id,{name:'Ordinary save',videoUrl:empty,imageUrl:empty},{method:'PATCH'});assert.equal(r.status,200);assert.deepEqual(await h1MediaRow(id),before);}
+});
+
+test('H1: explicit asset/none/legacy choices remain authoritative and omitted slots stay unchanged',async()=>{
+ const {id,video,image}=await h1AssetExercise(),replacement=await ready({type:'exercise_edit',exerciseId:id});
+ assert.equal((await patch(id,{video:selected(replacement.id)})).status,200);assert.equal((await h1MediaRow(id)).video_asset_id,replacement.id);assert.equal((await h1MediaRow(id)).image_asset_id,image.id);
+ assert.equal((await patch(id,{video:{source:'none'},image:{source:'none'}})).status,200);const none=await h1MediaRow(id);assert.equal(none.video_source,'none');assert.equal(none.image_source,'none');
+ assert.equal((await request('/api/exercises/'+id,{name:'Keep removed',videoUrl:none.video_url,imageUrl:''},{method:'PATCH'})).status,200);assert.deepEqual(await h1MediaRow(id),none);
+ assert.equal((await patch(id,{video:selected(video.id),image:selected(image.id)})).status,200);
+ const before=await h1MediaRow(id);assert.equal((await patch(id,{video:{source:'legacy',url:before.video_url},image:{source:'legacy',url:before.image_url}})).status,200);const legacy=await h1MediaRow(id);assert.equal(legacy.video_source,'legacy');assert.equal(legacy.image_source,'legacy');assert.equal(legacy.video_asset_id,null);assert.equal(legacy.image_asset_id,null);
+});
+
+test('H1: genuinely changed nonempty implicit legacy URLs still switch only their own slot',async()=>{
+ for(const slot of ['video','image']){
+  const {id}=await h1AssetExercise(),before=await h1MediaRow(id),url='https://changed.test/'+slot,other=slot==='video'?'image':'video';
+  const r=await request('/api/exercises/'+id,{name:'New legacy media',[slot+'Url']:url},{method:'PATCH'});assert.equal(r.status,200);const after=await h1MediaRow(id);assert.equal(after[slot+'_source'],'legacy');assert.equal(after[slot+'_asset_id'],null);assert.equal(after[slot+'_url'],url);assert.equal(after[other+'_source'],'asset');assert.equal(after[other+'_asset_id'],before[other+'_asset_id']);
+ }
+});
+
+test('H1: Builder add/copy and private-copy round trips retain R2 snapshots after ordinary saves',async()=>{
+ const {id,video,image}=await h1AssetExercise(),before=await h1MediaRow(id),node=await makeSection(coachId);
+ assert.equal((await addExercise(id,{},node)).status,201);assert.equal((await request('/api/exercises/'+id,{name:'Renamed for Builder',videoUrl:before.video_url,imageUrl:''},{method:'PATCH'})).status,200);assert.equal((await addExercise(id,{},node)).status,201);
+ const session=(await client.query('select plan_session_id from plans.plan_nodes where id=$1',[node])).rows[0].plan_session_id,r=await request('/api/builder/nodes/'+node+'/copy',{targetSessionId:session});assert.equal(r.status,201);const items=(await client.query('select * from plans.plan_items where exercise_id=$1',[id])).rows;assert.equal(items.length,4);assert.ok(items.every(i=>i.video_asset_id===video.id && i.image_asset_id===image.id));
+ const ownVideo=await ready(),ownImage=await ready({type:'exercise_create'},'image'),copy=await request('/api/exercises/'+id+'/copy',{name:'Own private copy',media:{video:selected(ownVideo.id),image:selected(ownImage.id)}});assert.equal(copy.status,201);const copyBefore=await h1MediaRow(copy.body.id);
+ assert.equal((await request('/api/exercises/'+copy.body.id,{name:'Edited private copy',instruction:'Notes',videoUrl:'',imageUrl:''},{method:'PATCH'})).status,200);assert.deepEqual(await h1MediaRow(copy.body.id),copyBefore);assert.equal((await addExercise(copy.body.id)).status,201);const item=await oneItem(copy.body.id);assert.equal(item.video_asset_id,ownVideo.id);assert.equal(item.image_asset_id,ownImage.id);assert.deepEqual(await h1MediaRow(id),before);
+});
+
+test('H1: Builder custom R2 exercise survives an ordinary Library editor save',async()=>{
+ const video=await ready(),image=await ready({type:'exercise_create'},'image'),r=await request('/api/builder/nodes/'+sectionId+'/custom-exercise',{name:'H1 custom',media:{video:selected(video.id),image:selected(image.id)}});assert.equal(r.status,201);
+ const item=(await client.query('select * from plans.plan_items where video_asset_id=$1',[video.id])).rows[0],before=await h1MediaRow(item.exercise_id);assert.equal((await request('/api/exercises/'+item.exercise_id,{name:'Custom renamed',videoUrl:'',imageUrl:null},{method:'PATCH'})).status,200);assert.deepEqual(await h1MediaRow(item.exercise_id),before);const snapshot=await oneItem(item.exercise_id);assert.equal(snapshot.video_asset_id,video.id);assert.equal(snapshot.image_asset_id,image.id);
+});

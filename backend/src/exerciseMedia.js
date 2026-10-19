@@ -6,7 +6,7 @@ import { needsTemplateApproval } from './programAccessPolicy.js';
 const slots=['video','image'];
 const fail=(status,code)=>{throw new MediaStorageError(status,code);};
 export const mediaEnabled=()=>process.env.MEDIA_STORAGE_ENABLED==='true';
-export function mediaSelections(body) {
+export function mediaSelections(body,current=null) {
   const result={};
   if(body.media!==undefined) {
     if(!body.media || typeof body.media!=='object' || Array.isArray(body.media) || Object.keys(body.media).some(k=>!slots.includes(k)))fail(400,'invalid_request');
@@ -17,6 +17,13 @@ export function mediaSelections(body) {
     if(explicit!==undefined && Object.hasOwn(body,legacy))fail(400,'invalid_request');
     const value=explicit===undefined?(Object.hasOwn(body,legacy)?{source:'legacy',url:body[legacy]}:undefined):explicit;
     if(value===undefined)continue;
+    // Legacy editors echo hidden/retained URLs or blank inputs on metadata saves.
+    // Only a genuinely changed, nonempty implicit URL may replace an asset/none.
+    if(explicit===undefined && ['asset','none'].includes(current?.[slot+'_source'])) {
+      const incoming=typeof body[legacy]==='string'?body[legacy].trim():'';
+      const retained=typeof current[slot+'_url']==='string'?current[slot+'_url'].trim():'';
+      if(!incoming || incoming===retained)continue;
+    }
     if(!value || !['asset','legacy','none'].includes(value.source))fail(400,'invalid_request');
     if(value.source==='asset')result[slot]={source:'asset',mediaId:uuid(value.mediaId)};
     else if(value.source==='legacy') {
@@ -62,14 +69,15 @@ export async function decorateMediaRows(rows,type,runQuery) {
 
 // Caller owns the exercise transaction and existing edit/copy/reuse guard.
 // Upload row lock serializes the first exercise_create binding without a new table.
-export async function bindExerciseMedia(client,req,exerciseId,body,{creating=false}={}) {
+export async function bindExerciseMedia(client,req,exerciseId,body,{creating=false,previous=null}={}) {
   if(body.media===undefined && !mediaEnabled())return;
-  const selections=mediaSelections(body);
-  if(!Object.keys(selections).length)return;
+  if(!Object.keys(mediaSelections(body)).length)return;
   const run=client.query.bind(client);
   await lockExerciseReuse(client,req.exerciseReuseGuard);
   const exercise=(await run(`select e.* from library.exercises e where e.id=$2 and (${exerciseLibraryScopeSql}) and e.is_active=true for update of e`,[req.user.id,uuid(exerciseId)])).rows[0];
   if(!exercise)fail(404,'resource_not_found');
+  const selections=mediaSelections(body,previous||exercise);
+  if(!Object.keys(selections).length)return;
   const admin=await hasExerciseAdministration(req.user.id,req.authz,run);
   if(!req.authz?.capabilities?.coachWorkspace || !(admin || exercise.owner_scope==='user' && exercise.owner_user_id===req.user.id))fail(403,'operation_not_allowed');
   const assetIds=Object.values(selections).filter(s=>s.source==='asset').map(s=>s.mediaId).sort();

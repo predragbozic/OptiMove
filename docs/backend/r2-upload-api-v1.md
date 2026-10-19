@@ -214,6 +214,13 @@ Each slot is one of:
 Do not invent videoMediaId/removeVideoMedia/imageMediaId fields. Retain current
 legacy videoUrl/imageUrl behavior. Never send both formats for the SAME slot;
 for asset/none selection omit that slot's legacy field from the save body.
+For existing asset/none selections, implicit legacy fields are compared with the
+locked pre-save row. Unchanged retained URLs and empty/null/whitespace URL fields
+are no-ops: they neither detach the asset nor erase its retained URL. A genuinely
+changed nonempty legacy URL selects legacy for that slot. Explicit media selections
+remain authoritative (and the same-slot mixed-format conflict rule still applies).
+New exercise/custom creation and copy do not inherit source asset IDs this way.
+
 Unchanged legacy slots may keep their existing fields. Old URLs are retained
 for compatibility, but source none/asset must not fall back to those old values.
 

@@ -485,7 +485,8 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
   const name = text(body.name);
   if (!name) { res.status(400).json({ error: "Exercise name is required." }); return; }
 
-  const selections=mediaSelections(body);
+  let selections=mediaSelections(body);
+  let previousMedia=null;
   const client = await pool.connect();
   const runQuery = (sql, params) => client.query(sql, params);
   let copySourceId = null;
@@ -503,7 +504,7 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
     req.exerciseAdmin = await hasExerciseAdministration(userId, req.authz, runQuery);
     if (exerciseId) {
       const existing = await runQuery(
-        `select e.id, e.owner_scope, e.owner_user_id, e.video_url as stored_video_url,e.image_url as stored_image_url, coalesce(e.video_url,fallback_media.video_url) as video_url, coalesce(e.image_url,fallback_media.image_url) as image_url from library.exercises e ${exerciseMediaJoinSql} where e.id = $2 and (${exerciseLibraryScopeSql}) and e.is_active=true for update of e`,
+        `select e.id, e.owner_scope, e.owner_user_id, e.video_source,e.image_source,e.video_url as stored_video_url,e.image_url as stored_image_url, coalesce(e.video_url,fallback_media.video_url) as video_url, coalesce(e.image_url,fallback_media.image_url) as image_url from library.exercises e ${exerciseMediaJoinSql} where e.id = $2 and (${exerciseLibraryScopeSql}) and e.is_active=true for update of e`,
         [userId, exerciseId],
       );
       if (!existing.rows[0]) {
@@ -515,8 +516,10 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
         return res.status(403).json({ error: "Only platform administrators can edit application exercises." });
       }
       if(!copying) {
-        if(!Object.hasOwn(body,'videoUrl') && selections.video?.source!=='legacy')videoUrl=existing.rows[0].stored_video_url;
-        if(!Object.hasOwn(body,'imageUrl') && selections.image?.source!=='legacy')imageUrl=existing.rows[0].stored_image_url;
+        previousMedia={...existing.rows[0],video_url:existing.rows[0].stored_video_url,image_url:existing.rows[0].stored_image_url};
+        selections=mediaSelections(body,previousMedia);
+        videoUrl=selections.video?.source==='legacy'?nullableText(selections.video.url):previousMedia.video_url;
+        imageUrl=selections.image?.source==='legacy'?nullableText(selections.image.url):previousMedia.image_url;
       }
       editingSystem = !copying && existing.rows[0].owner_scope === "system";
       if (!copying && existing.rows[0].owner_scope === "user") dataOwnerId = existing.rows[0].owner_user_id;
@@ -571,7 +574,7 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
       finalId = inserted.rows[0].id;
     }
 
-    await bindExerciseMedia(client,req,finalId,body,{creating:!exerciseId});
+    await bindExerciseMedia(client,req,finalId,body,{creating:!exerciseId,previous:previousMedia});
 
     const domainIds = await Promise.all(splitNames(body.purposes).map((value) => getOrCreateLookup("domains", value, dataOwnerId, {}, runQuery, editingSystem)));
     const categoryIds = await Promise.all(splitNames(body.qualities).map((value) => getOrCreateLookup("categories", value, dataOwnerId, {}, runQuery, editingSystem)));

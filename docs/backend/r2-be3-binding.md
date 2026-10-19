@@ -127,3 +127,32 @@ NO-GO until the approved deployment/preflight and a controlled real R2/mobile
 smoke check are completed. Roll back application code/disable the flag without
 removing additive DB columns or stored objects; retained legacy URLs are recovery
 material, never an automatic fallback after a private-media denial.
+
+## H1 review correction (2026-10-19)
+
+Ordinary metadata saves must not interpret retained URL echoes or empty media
+inputs as removal of an existing R2 selection. Implicit legacy selection now
+compares normalized input with the exercise row locked BEFORE metadata/URL updates.
+Asset/none slots ignore unchanged or blank implicit URLs; both source and retained
+URL are preserved. Explicit media selection remains authoritative; a different
+nonempty legacy URL still switches only that slot. Genuine legacy slots retain
+existing edit/clear behavior. Creation/copy remain separate from editing.
+
+The locked pre-save snapshot is passed to the common binding function so the
+route's preceding SQL update cannot hide a real change. Builder custom creation,
+private-copy subsequent edits and Builder add/copy snapshots are covered.
+H1 validation: BE-3 suite 21/21 passes (six new H1 regression cases); syntax and
+whitespace checks pass. Prior BE-1/BE-2 and filtered regression results above were
+not rerun for this narrow correction.
+
+Main conflict checked against origin/main f9509b0 (merged PR #188), using merge-tree
+only: one content conflict in backend/src/routes/builder.js. BE-3's add-exercise
+query with FOR SHARE overlaps main's effectiveExerciseMediaSql query from #188.
+The other #188 edits in Builder copy paths/builderTreeBatch merge automatically.
+A future conflict resolution must preserve BOTH #188's effective legacy image
+snapshot/fill behavior and BE-3's row-lock/independent asset selection snapshots;
+the selection-copy helper must not overwrite a resolved legacy image with a raw
+null library image. No branch merge or #188 integration was performed here.
+PR #189 remains draft and blocked for merge by dependency #187 AND this main
+conflict. BE-2 branch/PR #187 is unchanged. No migration, deployment or production
+operation was performed.
