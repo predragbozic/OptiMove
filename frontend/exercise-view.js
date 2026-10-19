@@ -1,4 +1,4 @@
-import { renderImage, renderMediaThumb } from "./media.js";
+import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes, renderImage, renderMediaImage, renderMediaThumbOf } from "./media.js";
 import { clean, escapeAttr, escapeHtml, initialsFor } from "./utils.js";
 
 export function renderExerciseListHtml(items, itemIds, layout) {
@@ -23,10 +23,9 @@ export function renderExerciseListHtml(items, itemIds, layout) {
 
 export function renderExerciseItemHtml(item, itemId, layout) {
   const color = item.section_color || item.category_color || item.domain_color || "#1f6f68";
-  const image = item.image || item.image_url || "";
-  const video = item.video || item.video_url || "";
+  const media = exerciseMediaOf(item);
   const doseRows = exerciseDoseRows(item);
-  const hasMedia = Boolean(image || video);
+  const hasMedia = hasAnyMedia(media);
   if (!isExerciseItem(item)) return renderOrganizationItemHtml(item, color);
   if (layout === "vertical") {
     return `
@@ -37,8 +36,8 @@ export function renderExerciseItemHtml(item, itemId, layout) {
               <span class="item-title">${escapeHtml(item.title || "Untitled")}</span>
             </button>
             ${hasMedia ? `
-              <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}">
-                ${image ? renderMediaThumb(image, "") : `<span class="media-fallback">Video</span>`}
+              <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)}>
+                ${media.image.source !== "none" ? renderMediaThumbOf(media, "") : `<span class="media-fallback">Video</span>`}
               </button>
             ` : ""}
           </div>
@@ -53,8 +52,8 @@ export function renderExerciseItemHtml(item, itemId, layout) {
   return `
     <article class="plan-item exercise-item ${hasMedia ? "" : "no-media"}" style="border-left-color:${escapeAttr(color)}">
       ${hasMedia ? `
-        <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}">
-          ${image ? renderMediaThumb(image, "") : `<span class="media-fallback">Video</span>`}
+        <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)}>
+          ${media.image.source !== "none" ? renderMediaThumbOf(media, "") : `<span class="media-fallback">Video</span>`}
         </button>
       ` : ""}
       <button class="exercise-open plan-exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
@@ -94,8 +93,7 @@ export function renderExerciseDetailHtml({ item, itemId, ids, getItemById }) {
   const canGoPrevious = hasSequence && currentIndex > 0;
   const canGoNext = hasSequence;
   const title = clean(item.title || item.name || "Exercise");
-  const image = item.image || item.image_url || "";
-  const video = item.video || item.video_url || "";
+  const media = exerciseMediaOf(item);
   const exerciseId = item.exercise_id || item.id || "";
   const hierarchy = [item.domain, item.category, item.section].filter(Boolean).join(" / ");
   const doseRows = [
@@ -127,9 +125,9 @@ export function renderExerciseDetailHtml({ item, itemId, ids, getItemById }) {
 
         <div class="exercise-detail-layout">
           <div class="exercise-detail-media">
-            ${image || video
-              ? `<button class="exercise-media detail-media" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}">
-                  ${image ? renderMediaThumb(image) : `<span class="media-fallback">Video</span>`}
+            ${hasAnyMedia(media)
+              ? `<button class="exercise-media detail-media" data-action="open-media" data-title="${escapeAttr(title)}" ${mediaAccessAttributes(media)}>
+                  ${media.image.source !== "none" ? renderMediaThumbOf(media) : `<span class="media-fallback">Video</span>`}
                 </button>`
               : `<div class="detail-media-empty">No image</div>`}
           </div>
@@ -178,7 +176,7 @@ export function isExerciseItem(item) {
   if (["category", "section", "domain"].includes(type)) return false;
   if (type === "exercise") return true;
   if (item.exercise_id || item.exercise_code) return true;
-  if (item.image || item.image_url || item.video || item.video_url) return true;
+  if (hasAnyMedia(exerciseMediaOf(item))) return true;
   if (exerciseDoseRows(item).length) return true;
   return !type;
 }
@@ -226,10 +224,10 @@ function renderExerciseSiblingStripHtml(ids, itemId, getItemById) {
           if (!sibling) return "";
           const isActive = id === itemId;
           const siblingTitle = clean(sibling.title || sibling.name || "Exercise");
-          const siblingImage = sibling.image || sibling.image_url || "";
+          const siblingPicture = renderMediaImage(exerciseMediaOf(sibling), "exercise-sibling-image");
           return `
             <button class="exercise-sibling-card ${isActive ? "is-active" : ""}" type="button" data-action="exercise-jump" data-item-id="${escapeAttr(id)}" ${isActive ? "disabled" : ""}>
-              ${siblingImage ? renderImage(siblingImage, "exercise-sibling-image") : `<span class="exercise-sibling-fallback">${escapeHtml(initialsFor(siblingTitle))}</span>`}
+              ${siblingPicture || `<span class="exercise-sibling-fallback">${escapeHtml(initialsFor(siblingTitle))}</span>`}
               <span>${escapeHtml(siblingTitle)}</span>
             </button>
           `;

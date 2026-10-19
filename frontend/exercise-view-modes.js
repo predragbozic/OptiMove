@@ -1,4 +1,4 @@
-import { imageSources, videoThumbnailSources } from "./media.js";
+import { exerciseMediaOf, imageSources, renderAssetImage, videoThumbnailSources } from "./media.js";
 import { escapeAttr, escapeHtml, initialsFor } from "./utils.js";
 
 // How exercises are laid out in the Exercise Library and in the Builder's
@@ -65,7 +65,12 @@ function imageAttributes(sources) {
 // shown whole (Big, Details) never sits in empty bars. Decorative: it walks
 // the same sources as the picture and, when none loads, is hidden by the
 // app's image error handler (image-missing).
-export function renderExerciseThumbBackdrop(sources) {
+// `asset`: an R2 image ({ assetId, accessContext }) resolved by
+// media-playback.js, with `sources` as its public fallbacks.
+export function renderExerciseThumbBackdrop(sources, asset = null) {
+  if (asset) {
+    return renderAssetImage(asset.assetId, asset.accessContext, "exercise-thumb-backdrop", { fallbacks: sources, attributes: 'loading="lazy" decoding="async" aria-hidden="true"' });
+  }
   return sources.length ? `<img class="exercise-thumb-backdrop" ${imageAttributes(sources)} aria-hidden="true">` : "";
 }
 
@@ -74,15 +79,28 @@ export function renderExerciseThumbBackdrop(sources) {
 // a private Drive file, a broken link) its initials - never an empty frame.
 // The browser walks data-fallbacks on each load error (handleImageError in
 // app.js) and finally swaps in the initials from data-fallback-initials.
+// An R2 image (the media descriptor, FE-1) has no public address: the <img>
+// carries the asset id and media-playback.js fills in its short-lived
+// address in a batch with the other pictures on screen; should it get none,
+// the same fallbacks and initials apply.
 // `backdrop`: a picture across a card - larger video covers, shown whole
 // over its blurred copy.
 export function renderExerciseThumb(exercise, className, { backdrop = false } = {}) {
   const name = exercise.name || exercise.title || "Exercise";
   const initials = initialsFor(name).toUpperCase() || "?";
+  const media = exerciseMediaOf(exercise);
   const sources = [
-    ...imageSources(exercise.image_url || exercise.imageUrl || exercise.image || ""),
-    ...videoThumbnailSources(exercise.video_url || exercise.videoUrl || exercise.video || "", { large: backdrop }),
+    ...(media.image.source === "legacy" ? imageSources(media.image.url) : []),
+    ...(media.video.source === "legacy" ? videoThumbnailSources(media.video.url, { large: backdrop }) : []),
   ];
+  if (media.image.source === "asset") {
+    const asset = { assetId: media.image.assetId, accessContext: media.accessContext };
+    const picture = renderAssetImage(asset.assetId, asset.accessContext, className, {
+      fallbacks: sources,
+      attributes: `loading="lazy" decoding="async" data-fallback-initials="${escapeAttr(initials)}"`,
+    });
+    return `${backdrop ? renderExerciseThumbBackdrop(sources, asset) : ""}${picture}`;
+  }
   if (!sources.length) return `<span class="${escapeAttr(className)} exercise-thumb-fallback" aria-hidden="true">${escapeHtml(initials)}</span>`;
   return `${backdrop ? renderExerciseThumbBackdrop(sources) : ""}<img class="${escapeAttr(className)}" ${imageAttributes(sources)} data-fallback-initials="${escapeAttr(initials)}">`;
 }

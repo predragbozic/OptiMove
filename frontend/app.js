@@ -111,6 +111,7 @@ import {
   parseImageFallbacks,
 } from "./media.js";
 import { closeMedia, handleFullscreenChange, handleMediaAction } from "./media-modal.js";
+import { installThumbnailResolver, retryExpiredMediaImage } from "./media-playback.js";
 import {
   closeMessagesIfOutside,
   handleMessageAction,
@@ -509,6 +510,9 @@ function bindEvents() {
   document.addEventListener("click", handleGlobalClick);
   document.addEventListener("submit", handleGlobalSubmit);
   document.addEventListener("error", handleImageError, true);
+  // R2 pictures (FE-1): whatever renders one, its short-lived address is
+  // asked for in a batch on the next frame - see media-playback.js.
+  installThumbnailResolver(document.body);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     // feature/mobile-messages-fullscreen: same priority chain as
@@ -1592,6 +1596,10 @@ function openWeeklyCalendarFromRail() {
 function handleImageError(event) {
   const image = event.target;
   if (!(image instanceof HTMLImageElement)) return;
+
+  // An R2 picture whose short-lived address failed asks for a new one once
+  // (media-playback.js); only after that do its fallbacks apply.
+  if (retryExpiredMediaImage(image)) return;
 
   const fallbacks = parseImageFallbacks(image.dataset.fallbacks);
   const next = fallbacks.shift();
@@ -3596,7 +3604,9 @@ async function renderExerciseDetail(item, itemId = state.exerciseDetail.currentI
       const detail = await api(`/api/exercises/${encodeURIComponent(exerciseId)}?archived=true`);
       item = { ...item, id: exerciseId, can_edit: detail.canEdit, can_copy: detail.canCopy,
         image_url: item.owner_scope ? detail.effectiveImageUrl || "" : item.image_url || detail.effectiveImageUrl || "",
-        video_url: item.owner_scope ? detail.effectiveVideoUrl || "" : item.video_url || detail.effectiveVideoUrl || "" };
+        video_url: item.owner_scope ? detail.effectiveVideoUrl || "" : item.video_url || detail.effectiveVideoUrl || "",
+        // The media descriptor (R2, FE-1): the detail's, else the item's own.
+        media: detail.media && typeof detail.media === "object" ? detail.media : item.media || null };
     } catch {
       if (item.owner_scope) return;
       item = { ...item, can_edit: false, can_copy: false };

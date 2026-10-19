@@ -1,6 +1,6 @@
 import { normalizeExerciseView, renderExerciseThumb } from "./exercise-view-modes.js";
 import { libraryDragAvailable } from "./builder-library-drag.js";
-import { renderImage } from "./media.js";
+import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes, renderMediaImage } from "./media.js";
 import { autogrowRows } from "./textarea-autosize.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -51,20 +51,19 @@ export function builderAddedCounts(node) {
 // (builder-library-drag.js). `backdrop`: the Big view shows the whole
 // picture over its blurred copy.
 export function renderBuilderExerciseResult(exercise, markedExerciseIds, addedCount = 0, { draggable = false, backdrop = false } = {}) {
-  const image = exercise.image_url || "";
-  const video = exercise.video_url || "";
+  const media = exerciseMediaOf(exercise);
   const title = exercise.name || "Exercise";
   const marked = markedExerciseIds.has(exercise.id);
   const tags = exercise.tags || [];
   const thumb = renderExerciseThumb(exercise, "builder-exercise-thumb", { backdrop });
   return `
     <article class="builder-exercise-result ${addedCount ? "is-already-added" : ""}"${draggable ? ` draggable="true" data-builder-library-drag data-exercise-id="${escapeAttr(exercise.id)}"` : ""}>
-      ${image || video
-        ? `<button type="button" class="builder-exercise-preview" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}" aria-label="Preview ${escapeAttr(title)}">${thumb}</button>`
+      ${hasAnyMedia(media)
+        ? `<button type="button" class="builder-exercise-preview" data-action="open-media" data-title="${escapeAttr(title)}" ${mediaAccessAttributes(media)} aria-label="Preview ${escapeAttr(title)}">${thumb}</button>`
         : `<span class="builder-exercise-preview builder-exercise-preview-empty">${thumb}</span>`}
       <span class="builder-exercise-result-text">
         <strong data-clamp-title>${escapeHtml(title)}</strong>
-        <small>${addedCount ? `Added ${addedCount}×` : (video ? "Preview or add" : "Add to section")}</small>
+        <small>${addedCount ? `Added ${addedCount}×` : (media.video.source !== "none" ? "Preview or add" : "Add to section")}</small>
         <span class="builder-exercise-mini-actions"><button type="button" class="plain-button builder-icon-action builder-mini-toggle ${exercise.is_favorite ? "is-favorite" : ""}" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${exercise.is_favorite ? "true" : "false"}" aria-label="${exercise.is_favorite ? "Remove favorite" : "Mark as favorite"}" title="Favorite">${ICON_STAR}</button><button type="button" class="plain-button builder-icon-action builder-mini-toggle ${marked ? "is-marked" : ""}" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}" aria-label="${marked ? "Unmark" : "Mark"}" title="Marked">${ICON_BOOKMARK}</button><button type="button" class="text-action" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(title)}">Tags${tags.length ? ` (${tags.length})` : ""}</button></span>
       </span>
       <button type="button" class="plain-button builder-exercise-add" data-action="builder-pick-exercise" data-exercise-id="${escapeAttr(exercise.id)}"><span class="builder-exercise-add-plus" aria-hidden="true">+</span><span class="builder-exercise-add-label">${addedCount ? "Add again" : "Add"}</span></button>
@@ -109,11 +108,13 @@ export function renderBuilderExerciseResults(exercises, markedExerciseIds, node,
 // the DOM with a correct src, but rendered at its raw intrinsic size inside
 // a small overflow:hidden button, so effectively nothing recognizable
 // showed through.
-function renderAddedThumb(item, { containerClass, imageClass, fallbackClass }) {
-  if (item.imageUrl || item.videoUrl) {
-    return `<button type="button" class="${containerClass}" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(item.imageUrl || "")}" data-video="${escapeAttr(item.videoUrl || "")}">${item.imageUrl ? renderImage(item.imageUrl, imageClass) : `<span class="${fallbackClass}">Video</span>`}</button>`;
+// `emptyLabel`: what an item without media shows (its initial by default).
+function renderAddedThumb(item, { containerClass, imageClass, fallbackClass, emptyLabel = "" }) {
+  const media = exerciseMediaOf(item);
+  if (hasAnyMedia(media)) {
+    return `<button type="button" class="${containerClass}" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)}>${media.image.source !== "none" ? renderMediaImage(media, imageClass) : `<span class="${fallbackClass}">Video</span>`}</button>`;
   }
-  return `<span class="${fallbackClass}">${escapeHtml((item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`;
+  return `<span class="${fallbackClass}">${escapeHtml(emptyLabel || (item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`;
 }
 
 // The grip that starts a drag-to-reorder (builder-item-drag.js), shown only
@@ -135,7 +136,7 @@ export function renderBuilderItems(node) {
     <form class="builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}" data-drag-item>
       <div class="builder-item-head${node.items.length > 1 ? " has-drag-handle" : ""}">
         ${node.items.length > 1 ? renderDragHandle(item, index, node.items.length, "builder-item-drag") : ""}
-        ${item.imageUrl || item.videoUrl ? `<button type="button" class="builder-added-exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(item.imageUrl || "")}" data-video="${escapeAttr(item.videoUrl || "")}">${item.imageUrl ? renderImage(item.imageUrl, "builder-added-exercise-image") : `<span class="builder-added-exercise-fallback">Video</span>`}</button>` : `<span class="builder-added-exercise-fallback">Exercise</span>`}
+        ${renderAddedThumb(item, { containerClass: "builder-added-exercise-media", imageClass: "builder-added-exercise-image", fallbackClass: "builder-added-exercise-fallback", emptyLabel: "Exercise" })}
         <div><strong>${escapeHtml(item.title || "Exercise")}</strong><div class="builder-item-actions"><button class="plain-button builder-icon-action builder-item-move-up" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="up" aria-label="Move up" title="Move up" ${index === 0 ? "disabled" : ""}>${ICON_ARROW_UP}</button><button class="plain-button builder-icon-action builder-item-move-down" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="down" aria-label="Move down" title="Move down" ${index === node.items.length - 1 ? "disabled" : ""}>${ICON_ARROW_UP}</button><button class="plain-button builder-icon-action builder-delete-icon" type="button" data-action="builder-delete-item" data-item-id="${escapeAttr(item.id)}" aria-label="Remove" title="Remove">${ICON_TRASH}</button></div></div>
       </div>
       <div class="builder-dose-inputs builder-item-dose">
@@ -264,7 +265,10 @@ export function renderBuilderStickyBar(node, mobileMode) {
   const isAdded = mobileMode === "added";
   const summaryInner = `
     <span class="builder-sticky-bar-thumbs">
-      ${recent.map((item) => `<span class="builder-sticky-thumb" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(item.imageUrl || "")}" data-video="${escapeAttr(item.videoUrl || "")}" role="button" tabindex="0" aria-label="Preview ${escapeAttr(item.title || "exercise")}">${item.imageUrl ? renderImage(item.imageUrl, "builder-sticky-thumb-image") : `<span class="builder-sticky-thumb-fallback">${escapeHtml((item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`}</span>`).join("")}
+      ${recent.map((item) => {
+        const media = exerciseMediaOf(item);
+        return `<span class="builder-sticky-thumb" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)} role="button" tabindex="0" aria-label="Preview ${escapeAttr(item.title || "exercise")}">${media.image.source !== "none" ? renderMediaImage(media, "builder-sticky-thumb-image") : `<span class="builder-sticky-thumb-fallback">${escapeHtml((item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`}</span>`;
+      }).join("")}
       ${overflow ? `<span class="builder-sticky-thumb-overflow">+${overflow}</span>` : ""}
     </span>
     <span class="builder-sticky-bar-label">Added exercises (${count})</span>

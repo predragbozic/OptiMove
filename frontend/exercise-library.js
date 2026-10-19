@@ -1,5 +1,5 @@
 import { normalizeExerciseView, renderExerciseThumb, renderExerciseThumbBackdrop, renderExerciseViewSwitcher } from "./exercise-view-modes.js";
-import { imageSources, renderMediaThumb, videoThumbnailSources } from "./media.js";
+import { exerciseMediaOf, hasAnyMedia, imageSources, mediaAccessAttributes, renderMediaThumb, videoThumbnailSources } from "./media.js";
 import { EXERCISE_FILTERS } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -205,15 +205,16 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platform
   const marked = markedExerciseIds.has(exercise.id);
   const tags = exercise.tags || [];
   const check = renderExerciseSelectCheck(exercise, selection);
+  const media = exerciseMediaOf(exercise);
   return `
     <article class="exercise-card${selectableClasses(check, selection, exercise)}"${check ? ` data-exercise-card="${escapeAttr(exercise.id)}"` : ""}>
       ${check}
-      ${exercise.image_url || exercise.video_url ? `
-        <button class="exercise-media library-media" data-action="open-media" data-title="${escapeAttr(exercise.name || "Exercise media")}" data-image="${escapeAttr(exercise.image_url)}" data-video="${escapeAttr(exercise.video_url || "")}">
-          ${exercise.image_url
-            ? `${renderExerciseThumbBackdrop(imageSources(exercise.image_url))}${renderMediaThumb(exercise.image_url)}`
-            : videoThumbnailSources(exercise.video_url).length
-              ? renderExerciseThumb({ name: exercise.name, video_url: exercise.video_url }, "media-thumb", { backdrop: true })
+      ${hasAnyMedia(media) ? `
+        <button class="exercise-media library-media" data-action="open-media" data-title="${escapeAttr(exercise.name || "Exercise media")}" ${mediaAccessAttributes(media)}>
+          ${media.image.source === "legacy"
+            ? `${renderExerciseThumbBackdrop(imageSources(media.image.url))}${renderMediaThumb(media.image.url)}`
+            : media.image.source === "asset" || (media.video.source === "legacy" && videoThumbnailSources(media.video.url).length)
+              ? renderExerciseThumb({ name: exercise.name, media: exercise.media, video_url: media.video.url }, "media-thumb", { backdrop: true })
               : `<span class="media-fallback">Video</span>`}
         </button>
       ` : ""}
@@ -254,8 +255,9 @@ function renderExerciseViewCard(exercise, itemId, markedExerciseIds, platformAdm
   const tags = exercise.tags || [];
   // Big shows the whole picture over its blurred copy; Tile and List crop it.
   const thumb = renderExerciseThumb(exercise, "exercise-view-thumb", { backdrop: view === "big" });
-  const media = exercise.image_url || exercise.video_url
-    ? `<button class="exercise-view-media" type="button" data-action="open-media" data-title="${escapeAttr(name)}" data-image="${escapeAttr(exercise.image_url || "")}" data-video="${escapeAttr(exercise.video_url || "")}" aria-label="Preview ${escapeAttr(name)}">${thumb}</button>`
+  const exerciseMedia = exerciseMediaOf(exercise);
+  const media = hasAnyMedia(exerciseMedia)
+    ? `<button class="exercise-view-media" type="button" data-action="open-media" data-title="${escapeAttr(name)}" ${mediaAccessAttributes(exerciseMedia)} aria-label="Preview ${escapeAttr(name)}">${thumb}</button>`
     : `<span class="exercise-view-media">${thumb}</span>`;
   return `
     <article class="exercise-view-card${selectableClasses(check, selection, exercise)}"${check ? ` data-exercise-card="${escapeAttr(exercise.id)}"` : ""}>
