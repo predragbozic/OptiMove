@@ -184,11 +184,13 @@ export async function readVideoMetadata(src, { createVideo = defaultCreateVideo,
 }
 
 // One frame of the video at `timeSeconds` (clamped to the video) as a JPEG
-// File, scaled to at most `maxWidth` wide. Throws an error whose `code` is
-// one of FRAME_ERROR_CODES. `createVideo` / `createCanvas` exist for tests.
+// File, scaled to at most `maxWidth` wide and named after `videoName` and the
+// moment actually captured (`fileName` overrides). Throws an error whose
+// `code` is one of FRAME_ERROR_CODES. `createVideo` / `createCanvas` exist
+// for tests.
 export async function captureVideoFrame(src, timeSeconds, {
   createVideo = defaultCreateVideo, createCanvas = defaultCreateCanvas, crossOrigin = "", bound = FRAME_CAPTURE_BOUND_MS,
-  mimeType = FRAME_MIME_TYPE, quality = FRAME_QUALITY, maxWidth = FRAME_MAX_WIDTH, fileName = "",
+  mimeType = FRAME_MIME_TYPE, quality = FRAME_QUALITY, maxWidth = FRAME_MAX_WIDTH, videoName = "video", fileName = "",
 } = {}) {
   const canvas = createCanvas();
   const context = canvas?.getContext?.("2d") || null;
@@ -221,7 +223,7 @@ export async function captureVideoFrame(src, timeSeconds, {
       }
     }), bound, "frame_capture_timeout");
     if (!blob || !Number(blob.size)) throw frameError("frame_capture_failed");
-    const name = fileName || frameFileName("video", actual);
+    const name = fileName || frameFileName(videoName, actual);
     const file = typeof globalThis.File === "function" ? new globalThis.File([blob], name, { type: mimeType }) : Object.assign(blob, { name });
     return { file, timeSeconds: roundFrameTime(actual), width: canvas.width, height: canvas.height };
   } finally {

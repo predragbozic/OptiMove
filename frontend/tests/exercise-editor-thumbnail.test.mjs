@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 
 // PR 3: thumbnails in the exercise editor, against a fake transport and
@@ -19,6 +20,7 @@ globalThis.URL.revokeObjectURL = () => {};
 
 const editor = await import("../exercise-editor.js");
 const guards = await import("../exercise-media-upload.js");
+const { frameFileName } = await import("../exercise-media-thumbnail.js");
 const { STORAGE_ROUTE } = guards;
 
 const content = document.querySelector("#content");
@@ -69,9 +71,9 @@ function fakeFrames({ duration = 40 } = {}) {
   const frames = { captures: [], reads: [], playbacks: [], fail: "", playbackFail: "" };
   frames.handlers = {
     captureFrame: async (src, time, options = {}) => {
-      frames.captures.push({ src, time, crossOrigin: options.crossOrigin || "", fileName: options.fileName });
+      frames.captures.push({ src, time, crossOrigin: options.crossOrigin || "", videoName: options.videoName });
       if (frames.fail) throw Object.assign(new Error(frames.fail), { code: frames.fail });
-      return { file: new File(["jpg"], options.fileName || "frame.jpg", { type: "image/jpeg" }), timeSeconds: time, width: 1280, height: 720 };
+      return { file: new File(["jpg"], frameFileName(options.videoName, time), { type: "image/jpeg" }), timeSeconds: time, width: 1280, height: 720 };
     },
     readVideoMetadata: async (src, options = {}) => {
       frames.reads.push({ src, crossOrigin: options.crossOrigin || "" });
@@ -156,7 +158,7 @@ test("2. after a video upload that left the picture empty: a thumbnail a quarter
   await settle();
   // The server's 36 s wins over the file's 40 s: the moment is 9 s.
   assert.equal(frames.reads.length, 0, "the server's duration is known: the file is not read");
-  assert.deepEqual(frames.captures, [{ src: "blob:preview", time: 9, crossOrigin: "", fileName: "Squat-Jump-frame-9s.jpg" }]);
+  assert.deepEqual(frames.captures, [{ src: "blob:preview", time: 9, crossOrigin: "", videoName: "Squat Jump.mp4" }]);
   assert.equal(transport.calls.length, 2);
   const request = transport.calls[1];
   assert.deepEqual({ slot: request.slot, purpose: request.purpose, sourceMediaId: request.sourceMediaId, frameTimeSeconds: request.frameTimeSeconds, context: request.context }, { slot: "image", purpose: "automatic_thumbnail", sourceMediaId: "new-1", frameTimeSeconds: 9, context: { type: "exercise_edit", exerciseId: "e1" } });
@@ -265,7 +267,7 @@ test("4. the picker: the video a quarter in with the slider to the end, the slid
   editor.handleExerciseEditorInput(state, { target: again });
   await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-use", "image"));
   await settle();
-  assert.deepEqual(frames.captures, [{ src: "blob:preview", time: 22.3, crossOrigin: "", fileName: "clip-frame-22_3s.jpg" }]);
+  assert.deepEqual(frames.captures, [{ src: "blob:preview", time: 22.3, crossOrigin: "", videoName: "clip.mp4" }]);
   assert.equal(image().framePicker, null, "the picker closes once the frame is taken");
   assert.equal(image().state, "uploading");
   const request = transport.calls[1];
@@ -311,7 +313,7 @@ test("5. a stored video with BE-3: the picker opens the signed playback address 
   assert.equal(video.getAttribute("src"), "https://r2.example/signed/vid-1?sig=1#t=10");
   await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-use", "image"));
   await settle();
-  assert.deepEqual(frames.captures, [{ src: "https://r2.example/signed/vid-1?sig=1", time: 10, crossOrigin: "anonymous", fileName: "Dead-Bug-frame-10s.jpg" }]);
+  assert.deepEqual(frames.captures, [{ src: "https://r2.example/signed/vid-1?sig=1", time: 10, crossOrigin: "anonymous", videoName: "Dead Bug" }]);
   const request = transport.calls[0];
   assert.deepEqual({ purpose: request.purpose, sourceMediaId: request.sourceMediaId, frameTimeSeconds: request.frameTimeSeconds }, { purpose: "video_frame", sourceMediaId: "vid-1", frameTimeSeconds: 10 });
   transport.release();
@@ -369,4 +371,11 @@ test("6. a thumbnail made automatically goes with its video (removed or replaced
   assert.equal(frames.captures.length, 3);
   editor.closeExerciseEditor(state, h);
   withGuards();
+});
+
+test("7. the picker's CSS: a 44 px slider row at 16 px, 44 px actions, the video bounded", () => {
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.exercise-media-frame-time input\[type="range"\] \{[^}]*min-height: 44px;[^}]*font-size: 16px;/);
+  assert.match(css, /\.exercise-media-frame-video \{[^}]*max-height: 280px;/);
+  assert.match(css, /\.exercise-media-actions \.plain-button, \.exercise-media-actions \.text-action \{ min-height: 44px; min-width: 44px; \}/);
 });

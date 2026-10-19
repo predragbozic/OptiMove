@@ -4,8 +4,8 @@ import {
   isMediaSaveEnabled, isResumableCode, isUploadTransportEnabled, readStorageUsage, startUpload, uploadContextFor, UPLOAD_SLOTS, validateFile,
 } from "./exercise-media-upload.js";
 import {
-  automaticThumbnailTime, captureVideoFrame, describeFrameError, describeFrameOrigin, formatFrameTime, FRAME_ERROR_CODES, frameFileName,
-  frameOrigin, readVideoMetadata, renderFramePickerHtml, roundFrameTime,
+  automaticThumbnailTime, captureVideoFrame, describeFrameError, describeFrameOrigin, formatFrameTime, FRAME_ERROR_CODES, frameOrigin,
+  readVideoMetadata, renderFramePickerHtml, roundFrameTime,
 } from "./exercise-media-thumbnail.js";
 import { exerciseMediaOf, legacyMediaKind, mediaAccessAttributes } from "./media.js";
 import { loadPlayback } from "./media-playback.js";
@@ -634,7 +634,7 @@ async function makeAutomaticThumbnail(state, handlers, editor) {
     if (!live()) return;
     const timeSeconds = automaticThumbnailTime(duration);
     const capture = handlers.captureFrame || captureVideoFrame;
-    const frame = await capture(source.src, timeSeconds, { fileName: frameFileName(video.fileName, timeSeconds) });
+    const frame = await capture(source.src, timeSeconds, { videoName: video.fileName || editor.data.name });
     if (!live()) return;
     image.capturing = false;
     await chooseExerciseMediaFile(state, handlers, "image", frame.file, { origin: { purpose: "automatic_thumbnail", sourceMediaId, frameTimeSeconds: frame.timeSeconds } });
@@ -694,7 +694,7 @@ async function useFrame(state, handlers) {
   const live = () => state.exerciseEditor === editor && editor.media.image === image && image.framePicker === picker;
   try {
     const capture = handlers.captureFrame || captureVideoFrame;
-    const frame = await capture(picker.src, timeSeconds, { crossOrigin: picker.crossOrigin, fileName: frameFileName(editor.media.video.fileName || editor.data.name, timeSeconds) });
+    const frame = await capture(picker.src, timeSeconds, { crossOrigin: picker.crossOrigin, videoName: editor.media.video.fileName || editor.data.name });
     if (!live()) return;
     image.framePicker = null;
     await chooseExerciseMediaFile(state, handlers, "image", frame.file, { origin: { purpose: "video_frame", sourceMediaId: picker.sourceMediaId, frameTimeSeconds: frame.timeSeconds } });

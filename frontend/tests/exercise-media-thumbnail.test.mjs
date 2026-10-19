@@ -118,10 +118,12 @@ test("2. the capture: the video opened detached and muted, the seek to the momen
   assert.equal(result.file.type, "image/jpeg");
   assert.ok(result.file.size > 0);
   assert.deepEqual([result.timeSeconds, result.width, result.height], [12.5, 1280, 720]);
-  // A moment past the end lands a tenth before it.
+  // A moment past the end lands a tenth before it, and the name says the moment actually captured.
   const late = new FakeVideo({ duration: 40 });
-  await thumb.captureVideoFrame("blob:clip", 99, { createVideo: () => late, createCanvas: () => new FakeCanvas() });
+  const clamped = await thumb.captureVideoFrame("blob:clip", 99, { createVideo: () => late, createCanvas: () => new FakeCanvas(), videoName: "Squat Jump.mp4" });
   assert.deepEqual(late.seeks, [39.9]);
+  assert.equal(clamped.timeSeconds, 39.9);
+  assert.equal(clamped.file.name, "Squat-Jump-frame-39_9s.jpg");
   // An unknown duration seeks to the asked moment; a small video is not scaled up.
   const endless = new FakeVideo({ duration: Infinity, width: 640, height: 360 });
   const small = new FakeCanvas();
