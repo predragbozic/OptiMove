@@ -30,7 +30,9 @@ Where it stands after the pilot (owner-run orders, main session in the pilot acc
   Builder PASS, **the athlete-side playback NOT TESTED** (no athlete on the pilot account, no test athlete by
   the owner's decision; the stated blocker for the wider activation); E5 STOP on `66862a7` (the library card
   kept the previous thumbnail until a reload) → fix PR #194 → E5 PASS on `7806450`; E6, E7, E8 PASS; E9
-  closed on the pre-cron state (the owner reads the cron log).
+  PASS (the 20:01 UTC cron run printed `{"cleaned":0,"failed":0}` — both cancels had completed
+  synchronously, so nothing was left to sweep; the account read the same before and after: used 839,481 B,
+  reserved 0).
 - The owner waived the runbook's STOP lever (1) for the E5 stop (display only, the pilot quota stayed 1 GB).
 - Every coach stays at the default 0 B and sees nothing new; the pilot accounts (two user accounts with
   1 GB) have the complete flow. The wider activation is a quota decision on a separate owner order, with the
@@ -2984,10 +2986,10 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
 5. The second owner-run procedure for one controlled real import (after M6).
 6. **Phase 5a3c** (Complete and Needs review).
 
-For the **Exercise media (R2)** track (see the top of Active phase), in the owner's order: the owner's two
-checks (the 0 B coach's editor, the 20:00 UTC cron log of the pilot day), the athlete-side playback with
-an isolated test athlete (the owner decides when and how), the product decision on the Builder's media
-snapshot, the reference-aware GC and the quota policy, and only then the wider activation by quota.
+For the **Exercise media (R2)** track (see the top of Active phase), in the owner's order: the owner's
+check of the 0 B coach's editor, the athlete-side playback with an isolated test athlete (the owner
+decides when and how), the product decision on the Builder's media snapshot, the reference-aware GC and
+the quota policy, and only then the wider activation by quota.
 
 Conditions 1–3, 6 and 7 under Separate tasks come before the first real local import (and before the
 switch is turned on in any environment), and conditions 4–5 before regular production imports.

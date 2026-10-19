@@ -386,7 +386,7 @@ and no test account were created (the owner's decision). Every file was an in-pa
 | E6 | Replace → the new asset bound; Remove → `{ source: "none" }`, the link fields back; the old objects stay charged | Replace with a second file (108,942 B): the new video id bound, the card's Preview played the **new** object (4.93 s, not the previous 6.94 s), the frame stayed the poster; used +108,942 B. Remove → Save: `media.video = { source: "none" }`, `videoUrl` ""; the reopened editor showed *Upload video… / Use a link*, the image without *Replace with a frame…*; the card without a video; used unchanged (839,481 B), reserved 0 | PASS |
 | E7 | "Upload cancelled." both times | a 10.8 MB file. Cancel at 15 % of the PUT → "Cancelling..." → "Upload cancelled."; Cancel at 100 % (the PUT just finished, before the completion request) → "Upload cancelled." within a second. Both: `POST /api/media/uploads` 201 → `DELETE` 200, no completion request; afterwards reserved 0, active 0, both sessions `cancelled`. **No 202 "verifying" window occurred in the whole pilot** (every completion answered 200 at once), so the cancel during the poll sleep is not exercised in production | PASS (with the note) |
 | E8 | a legacy rename: the links unchanged; the custom-exercise modal: link fields only | a new legacy test exercise with a YouTube link, renamed: the `PATCH` body carried `videoUrl` / `imageUrl` as loaded and **no `media` key**; the detail kept `media.video = { source: "legacy", url }`. The Builder's custom-exercise form: name, instruction, sets, reps, load, Image URL, Video URL — no file input, no Upload / Storage text | PASS |
-| E9 | the cron's next run `{"cleaned":N,"failed":0}`; the used bytes = the bound assets plus the earlier pilot files | closed on the state before the 20:00 UTC run, by the owner's decision: both cancelled sessions read `cancelled`, used 839,481 B = the phase C files 445,210 + the E2 video 255,600 + the automatic thumbnail 9,273 + the two frames 9,891 and 10,565 + the E6 video 108,942, reserved 0, activeUploads 0; the cron log (`cleaned` / `failed`) is the owner's check on Render | PASS (pre-cron state) |
+| E9 | the cron's next run `{"cleaned":N,"failed":0}`; the used bytes = the bound assets plus the earlier pilot files | the Render cron run of 20:01:16 UTC (`npm --prefix backend run media:cleanup`) printed `{"cleaned":0,"failed":0}` and finished successfully (the owner's screenshot of the log): nothing was left for the sweep, because both E7 cancels had completed synchronously (`DELETE` 200, the rows `cancelled` and the reservation released at once), so N = 0 is the correct count. Before (19:11 UTC) and after the run (20:05 UTC) the account read the same: used 839,481 B = the phase C files 445,210 + the E2 video 255,600 + the automatic thumbnail 9,273 + the two frames 9,891 and 10,565 + the E6 video 108,942; reserved 0; activeUploads 0; both sessions still `cancelled` | PASS |
 
 **The E5 stop and its fix.** `frontend/media-playback.js` caches a signed address per (context, slot) and
 the thumbnail resolver writes the cached object back onto a card; the editor's Save invalidated the
@@ -412,10 +412,10 @@ without an athlete is a template draft ("Reusable template"). After a video is r
 offers no *Replace with a frame…* (there is no video to take a frame from).
 
 **What the pilot leaves open:** the 0 B coach's editor (E1), the athlete-side playback (E4, the stated
-blocker for the wider activation), the 20:00 UTC cron log (E9), the product decision on the Builder
-snapshot, the reference-aware GC (a replaced or removed asset stays charged; cancelled uploads never
-counted), and the quota policy for the wider activation. The wider activation itself is a separate owner
-order; its lever is the quota, not the code.
+blocker for the wider activation), the product decision on the Builder snapshot, the reference-aware GC
+(a replaced or removed asset stays charged; cancelled uploads never counted), and the quota policy for
+the wider activation. The wider activation itself is a separate owner order; its lever is the quota, not
+the code.
 
 ### Phase D readiness — the transport-only variant (reviewed 2026-10-19; superseded by E-2 above)
 
