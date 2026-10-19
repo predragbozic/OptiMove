@@ -84,8 +84,50 @@ Q5 `media` selection; `POST /api/media/access` for `{ type: "upload", id }` so a
 can be previewed from the server; the Builder custom-exercise route accepting the selection.
 
 Still open after BE-2: reference-aware deletion of unused ready assets (a replaced or removed file
-stays charged; the UI does not promise freed space); the thumbnail purposes `video_frame` /
-`automatic_thumbnail` (PR 3).
+stays charged; the UI does not promise freed space). The thumbnail purposes `video_frame` /
+`automatic_thumbnail` are PR 3 (next section).
+
+## Thumbnails (PR 3)
+
+Branch `feat/exercise-media-r2-thumbnails`, stacked on FE-2; frontend only. Owner decisions
+(2026-10-19): browser-only, no transcoding; R2 only (a Drive / YouTube link has no frame the browser
+may read); behind the existing guards.
+
+- **A frame as the picture** (`frontend/exercise-media-thumbnail.js`): a detached `<video>` seeks to
+  the moment and a `<canvas>` draws it, scaled to at most 1280 px wide, as a JPEG (quality 0.85)
+  named `<video>-frame-<moment>s.jpg`; every step bounded (15 s); the refusals
+  `frame_capture_unsupported`, `frame_source_unreadable`, `frame_source_unavailable`,
+  `frame_source_cross_origin`, `frame_capture_timeout` and `frame_capture_failed`, one sentence each.
+- **The picker** (in the image field: *Choose a frame of the video…*, *Replace with a frame…*,
+  *Choose another frame…*): the video with its own controls opened a quarter in, a slider to a tenth
+  before the end (the slider moves the video; no redraw), *Use this frame* takes the moment the coach
+  left the video at and uploads it through the FE-2 transport as `kind: "image"`,
+  `purpose: "video_frame"` with the top-level `sourceMediaId` (the ready R2 video) and
+  `frameTimeSeconds` (contract Q1); the picture then says "Frame of the video at m:ss."; a failed
+  capture keeps the picker with its sentence; Cancel closes it.
+- **The automatic thumbnail**: after a video upload that left the picture empty (no file, no link), a
+  frame a quarter into the video — the server's verified `durationSeconds` when the completion
+  answer carries it, else the file's own metadata — uploads as `purpose: "automatic_thumbnail"`; the
+  picture says "Thumbnail made from the video at m:ss, a quarter in." and may be replaced like any
+  picture; a failed capture leaves one muted sentence and the picture empty, never a red error. An
+  automatic thumbnail belongs to its video: it goes when the video is removed or replaced (a frame
+  the coach chose stays).
+- **Where**: only when uploads are offered (the transport guard, storage readable, an existing
+  exercise or — with BE-3 — a new one or a copy) **and** `MEDIA_SAVE_ENABLED` is on (an upload nobody
+  can save would only be charged), and never while something uploads. The uploaded video is read
+  through its own object URL; the stored video (BE-3 only) through its signed playback address
+  (`loadPlayback()`, FE-1) with `crossorigin="anonymous"` — **the bucket's CORS must allow GET from
+  the app origin** for that, or the canvas is tainted and the sentence says so (an activation gate,
+  not a code path that guesses).
+- **The save body**: a frame is an uploaded picture like any other — `media.image = { source:
+  "asset", mediaId }` with the legacy field omitted (Q5); nothing of the origin travels on the save
+  (the server recorded it at the upload).
+- **Unchanged**: the backend, the two guards' defaults, the link fields, the FE-1 player, the Builder.
+- Tests: `frontend/tests/exercise-media-thumbnail.test.mjs` (the capture against a fake video and
+  canvas, the moments, the sentences, the picker's markup, the transport's two extra facts) and
+  `frontend/tests/exercise-editor-thumbnail.test.mjs` (the editor: nothing without BE-3 or over a
+  link video, the automatic thumbnail, the failure sentence, the picker, the stored video, what goes
+  with the video).
 
 ## Tests
 

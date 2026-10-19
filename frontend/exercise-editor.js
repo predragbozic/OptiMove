@@ -3,7 +3,12 @@ import {
   applyMediaToSavePayload, chargedAccount, checkUploadStatus, describeStorageAccount, describeUploadError, emptyStorageState,
   isMediaSaveEnabled, isResumableCode, isUploadTransportEnabled, readStorageUsage, startUpload, uploadContextFor, UPLOAD_SLOTS, validateFile,
 } from "./exercise-media-upload.js";
+import {
+  automaticThumbnailTime, captureVideoFrame, describeFrameError, describeFrameOrigin, formatFrameTime, FRAME_ERROR_CODES, frameFileName,
+  frameOrigin, readVideoMetadata, renderFramePickerHtml, roundFrameTime,
+} from "./exercise-media-thumbnail.js";
 import { exerciseMediaOf, legacyMediaKind, mediaAccessAttributes } from "./media.js";
+import { loadPlayback } from "./media-playback.js";
 import { escapeAttr, escapeHtml, formatBytes } from "./utils.js";
 
 export const emptyExerciseEditorData = () => ({
@@ -24,6 +29,11 @@ export const emptyMediaField = () => ({
   state: "none", mediaId: "", file: null, fileName: "", fileSize: 0, mimeType: "",
   progress: { sent: 0, total: 0 }, error: null, controller: null, uploadId: "", idempotencyKey: "", resumable: false,
   media: null, cancelOutcome: "", linkOpen: false, previewOpen: false, previewUrl: "", removedMediaId: "", previous: null,
+  // PR 3: a picture that is a frame of the video carries its origin (purpose,
+  // the ready R2 video, the moment); the image field also holds the inline
+  // frame picker, whether an automatic thumbnail is being made ("capturing")
+  // and the sentence when none could be made ("note").
+  origin: null, framePicker: null, capturing: false, note: "",
 });
 
 export const emptyExerciseMedia = () => ({ video: emptyMediaField(), image: emptyMediaField(), storage: emptyStorageState() });
@@ -135,6 +145,25 @@ function storageWanted(editor) {
   return editor.isNew || editor.isCopy ? isMediaSaveEnabled() : Boolean(editor.exerciseId);
 }
 
+// PR 3: the R2 video a frame of which may become the picture - the uploaded
+// file through its own object URL, or the stored file through its signed
+// playback address (read when the picker opens). A Drive / YouTube link has
+// no frame the browser may read.
+function frameSource(editor) {
+  const video = editor?.media?.video;
+  if (!video) return null;
+  if (video.state === "uploaded" && video.mediaId && video.previewUrl) return { kind: "file", src: video.previewUrl, sourceMediaId: video.mediaId };
+  if (video.state === "stored" && video.mediaId && editor.exerciseId) return { kind: "stored", src: "", sourceMediaId: video.mediaId };
+  return null;
+}
+
+// A frame is offered only where the picture it makes can be saved with the
+// exercise (BE-3) - an upload nobody can save would only be charged - and
+// never while something uploads.
+function frameOffered(editor) {
+  return uploadsOffered(editor) && isMediaSaveEnabled() && !uploadInFlight(editor) && frameSource(editor) !== null;
+}
+
 function renderExerciseMediaFields(editor) {
   const offered = uploadsOffered(editor);
   return `
@@ -166,6 +195,9 @@ function renderMediaField(editor, spec, offered) {
   const upload = (label, action) => `<button class="plain-button compact-button" type="button" data-action="${action}" data-slot="${spec.slot}">${label}</button>`;
   const link = (label = "Use a link") => `<button class="text-action" type="button" data-action="exercise-media-link" data-slot="${spec.slot}">${label}</button>`;
   const remove = (label = "Remove") => `<button class="text-action" type="button" data-action="exercise-media-remove" data-slot="${spec.slot}">${label}</button>`;
+  // PR 3: the picture may be a frame of the exercise's R2 video.
+  const frame = (label) => (spec.slot === "image" && frameOffered(editor) ? `<button class="plain-button compact-button" type="button" data-action="exercise-media-frame-pick" data-slot="image">${label}</button>` : "");
+  const origin = spec.slot === "image" && field.origin ? `<p class="muted exercise-media-origin">${escapeHtml(describeFrameOrigin(field.origin))}</p>` : "";
   const picker = offered ? `<input type="file" accept="${escapeAttr(UPLOAD_SLOTS[spec.slot].accept)}" data-exercise-media-file="${spec.slot}" aria-label="Choose a ${spec.noun} file">` : "";
   const linkInput = `<label class="search-field"><span>${spec.label} URL</span><input class="builder-text-input" type="url" data-exercise-editor-field="${spec.urlKey}" value="${escapeAttr(url)}" placeholder="Google Drive, YouTube or direct link"></label>`;
   // No storage offered (the guard, the flag off, another workspace, a new
@@ -197,8 +229,9 @@ function renderMediaField(editor, spec, offered) {
         <p class="${saveEnabled ? "muted" : ""} exercise-media-status" role="status">${saveEnabled
           ? "Uploaded and verified. It is saved with the exercise when you press Save."
           : "Uploaded and verified. Saving it with the exercise is not available yet."}</p>
+        ${origin}
         ${field.previewOpen ? renderLocalPreview(field, spec) : ""}
-        <div class="exercise-media-actions">${field.previewUrl ? upload(field.previewOpen ? "Hide preview" : "Preview", "exercise-media-preview-local") : ""}${upload("Replace...", "exercise-media-pick")}${remove()}</div>`;
+        <div class="exercise-media-actions">${field.previewUrl ? upload(field.previewOpen ? "Hide preview" : "Preview", "exercise-media-preview-local") : ""}${upload("Replace...", "exercise-media-pick")}${frame(field.origin ? "Choose another frame..." : "Replace with a frame...")}${remove()}</div>`;
       break;
     case "failed":
     case "cancelled": {
@@ -210,7 +243,7 @@ function renderMediaField(editor, spec, offered) {
         <div class="exercise-media-actions">
           ${code === "verification_timeout" && field.uploadId ? upload("Check again", "exercise-media-check") : ""}
           ${retry ? upload("Retry", "exercise-media-retry") : ""}
-          ${offered ? upload(field.state === "cancelled" ? "Upload again" : "Choose another file", "exercise-media-pick") : ""}
+          ${offered ? upload(field.state === "cancelled" ? "Upload again" : "Choose another file", "exercise-media-pick") : ""}${frame("Use a frame of the video...")}
           ${link()}${remove("Clear")}
         </div>`;
       break;
@@ -222,7 +255,7 @@ function renderMediaField(editor, spec, offered) {
         <details class="exercise-media-technical"><summary>Technical details</summary><code>media ${escapeHtml(field.mediaId)}</code></details>
         <div class="exercise-media-actions">
           <button class="plain-button compact-button" type="button" data-action="open-media" data-title="${escapeAttr(editor.data.name || "Exercise media")}" ${mediaAccessAttributes(media)}>Preview</button>
-          ${offered && saveEnabled ? upload("Replace...", "exercise-media-pick") : ""}${saveEnabled ? remove() : ""}
+          ${offered && saveEnabled ? upload("Replace...", "exercise-media-pick") : ""}${frame("Replace with a frame...")}${saveEnabled ? remove() : ""}
         </div>`;
       break;
     }
@@ -233,18 +266,20 @@ function renderMediaField(editor, spec, offered) {
           ${field.linkOpen ? linkInput : ""}
           <div class="exercise-media-actions">
             <button class="plain-button compact-button" type="button" data-action="open-media" data-title="${escapeAttr(editor.data.name || "Exercise media")}" data-image="${escapeAttr(spec.slot === "image" ? url : "")}" data-video="${escapeAttr(spec.slot === "video" ? url : "")}">Preview</button>
-            ${field.linkOpen ? "" : link("Edit link")}${offered ? upload("Replace with a file...", "exercise-media-pick") : ""}${remove()}
+            ${field.linkOpen ? "" : link("Edit link")}${offered ? upload("Replace with a file...", "exercise-media-pick") : ""}${frame("Replace with a frame...")}${remove()}
           </div>`;
       } else {
         body = `
-          ${offered && !field.linkOpen ? `<p class="muted exercise-media-status">No ${spec.noun} yet.</p>` : ""}
-          ${offered && !field.linkOpen ? `<div class="exercise-media-actions">${upload(`Upload ${spec.noun}...`, "exercise-media-pick")}${link()}</div>` : linkInput}`;
+          ${offered && !field.linkOpen ? `<p class="muted exercise-media-status"${field.capturing ? ` role="status"` : ""}>${field.capturing ? "Making a thumbnail from the video..." : `No ${spec.noun} yet.`}</p>` : ""}
+          ${field.note && !field.capturing ? `<p class="muted exercise-media-status" role="status">${escapeHtml(field.note)}</p>` : ""}
+          ${offered && !field.linkOpen ? `<div class="exercise-media-actions">${upload(`Upload ${spec.noun}...`, "exercise-media-pick")}${field.capturing ? "" : frame("Choose a frame of the video...")}${link()}</div>` : linkInput}`;
       }
   }
   return `
     <section class="exercise-media-field" data-exercise-media-slot="${spec.slot}" aria-label="${spec.label}">
       <p class="eyebrow">${spec.label}</p>
       ${body}
+      ${spec.slot === "image" ? renderFramePickerHtml(field.framePicker, { slot: "image" }) : ""}
       ${picker}
     </section>
   `;
@@ -408,6 +443,8 @@ export function handleExerciseEditorInput(state, event) {
     state.exerciseEditor.data[field.dataset.exerciseEditorField] = field.value;
     return true;
   }
+  const slider = event.target.closest?.("[data-exercise-media-frame-time]");
+  if (slider) return handleFrameSliderInput(state, slider);
   return false;
 }
 
@@ -424,15 +461,18 @@ export function handleExerciseEditorChange(state, handlers, event) {
 
 // ---- The upload itself (FE-2) ---------------------------------------------
 
-export async function chooseExerciseMediaFile(state, handlers, slot, file) {
+export async function chooseExerciseMediaFile(state, handlers, slot, file, { origin = null } = {}) {
   const editor = state.exerciseEditor;
   const field = editor.media[slot];
   if (!uploadsOffered(editor) || uploadInFlight(editor)) return;
   if (field.state === "stored") field.previous = { state: "stored", mediaId: field.mediaId };
+  // A new video: the picker and a thumbnail being made belong to the old one.
+  if (slot === "video") detachVideoDependents(editor);
   releaseFieldPreview(field);
   Object.assign(field, {
     file, fileName: file.name || "file", fileSize: Number(file.size) || 0, mimeType: file.type || "", error: null, previewOpen: false,
     mediaId: "", uploadId: "", idempotencyKey: "", resumable: false, media: null, cancelOutcome: "", linkOpen: false,
+    origin: slot === "image" ? frameOrigin(origin || {}) : null, framePicker: null, capturing: false, note: "",
   });
   const account = chargedAccount(editor.media.storage.data, { userId: editor.viewerId });
   const check = validateFile(file, slot, editor.media.storage.data ? account : null);
@@ -458,7 +498,11 @@ async function uploadExerciseMedia(state, handlers, slot, { resume = false } = {
   const urlKey = MEDIA_SLOTS.find((spec) => spec.slot === slot).urlKey;
   try {
     const result = await transport(
-      { file, slot, context: uploadContextFor(editor), purpose: UPLOAD_SLOTS[slot].purpose },
+      {
+        file, slot, context: uploadContextFor(editor), purpose: field.origin?.purpose || UPLOAD_SLOTS[slot].purpose,
+        // A frame of the video (PR 3): the contract's two extra top-level facts.
+        ...(field.origin ? { sourceMediaId: field.origin.sourceMediaId, frameTimeSeconds: field.origin.frameTimeSeconds } : {}),
+      },
       {
         signal: controller.signal,
         idempotencyKey: resume ? field.idempotencyKey : "",
@@ -477,6 +521,12 @@ async function uploadExerciseMedia(state, handlers, slot, { resume = false } = {
     });
     // An uploaded file replaces the link of the same slot.
     editor.data[urlKey] = "";
+    if (slot === "video") {
+      // A new video: a thumbnail made from the previous one goes with it, and
+      // one is made from this one when the picture is empty (PR 3).
+      dropAutomaticThumbnail(editor, field.mediaId);
+      void makeAutomaticThumbnail(state, handlers, editor);
+    }
   } catch (error) {
     if (!live()) return;
     const code = error?.code || "upload_failed";
@@ -533,6 +583,143 @@ function safeObjectUrl(file) {
   } catch {
     return "";
   }
+}
+
+// ---- Thumbnails (PR 3) ------------------------------------------------------
+
+// The picker and a thumbnail being made depend on the video field as it is.
+function detachVideoDependents(editor) {
+  const image = editor.media.image;
+  image.framePicker = null;
+  image.capturing = false;
+}
+
+// An automatic thumbnail belongs to the video it was made from: when that
+// video is removed or replaced it goes too. A frame the coach chose stays.
+function dropAutomaticThumbnail(editor, keepSourceMediaId = "") {
+  detachVideoDependents(editor);
+  const image = editor.media.image;
+  if (image.state !== "uploaded" || !image.origin?.automatic || image.origin.sourceMediaId === keepSourceMediaId) return;
+  releaseFieldPreview(image);
+  editor.media.image = { ...emptyMediaField(), removedMediaId: image.removedMediaId };
+}
+
+// The duration the server verified (the completed upload's media metadata),
+// or the file's own metadata read in the browser.
+async function videoDuration(handlers, video, src, { crossOrigin = "" } = {}) {
+  const known = Number(video.media?.metadata?.durationSeconds);
+  if (Number.isFinite(known) && known > 0) return known;
+  const read = handlers.readVideoMetadata || readVideoMetadata;
+  return (await read(src, { crossOrigin })).durationSeconds;
+}
+
+// After a video upload that left the picture empty: a thumbnail a quarter
+// into the video, through the same transport as any picture
+// (`automatic_thumbnail`). Nothing is made where the picture could not be
+// saved (BE-3), where the coach has a link or a file, or while something
+// uploads; a failure leaves one sentence and the picture empty.
+async function makeAutomaticThumbnail(state, handlers, editor) {
+  const video = editor.media.video;
+  const image = editor.media.image;
+  const source = frameSource(editor);
+  if (!frameOffered(editor) || source?.kind !== "file") return;
+  if (image.state !== "none" || String(editor.data.imageUrl || "").trim() || image.capturing || image.framePicker) return;
+  const sourceMediaId = source.sourceMediaId;
+  image.capturing = true;
+  image.note = "";
+  handlers.rerender();
+  const live = () => state.exerciseEditor === editor && editor.media.image === image && editor.media.video === video && video.state === "uploaded" && video.mediaId === sourceMediaId && image.capturing;
+  try {
+    const duration = await videoDuration(handlers, video, source.src);
+    if (!live()) return;
+    const timeSeconds = automaticThumbnailTime(duration);
+    const capture = handlers.captureFrame || captureVideoFrame;
+    const frame = await capture(source.src, timeSeconds, { fileName: frameFileName(video.fileName, timeSeconds) });
+    if (!live()) return;
+    image.capturing = false;
+    await chooseExerciseMediaFile(state, handlers, "image", frame.file, { origin: { purpose: "automatic_thumbnail", sourceMediaId, frameTimeSeconds: frame.timeSeconds } });
+    return;
+  } catch (error) {
+    if (!live()) return;
+    image.capturing = false;
+    image.note = `No thumbnail was made from the video. ${describeFrameError(error?.code)}`;
+  }
+  handlers.rerender();
+}
+
+// The inline picker of the image field: the video opened at a quarter in,
+// the coach moves to a moment, Use this frame captures and uploads it
+// (`video_frame`). A stored file is read through its signed playback address.
+async function openFramePicker(state, handlers) {
+  const editor = state.exerciseEditor;
+  const image = editor.media.image;
+  const source = frameSource(editor);
+  if (!frameOffered(editor) || !source) return;
+  const picker = { open: true, loading: true, src: "", crossOrigin: "", sourceMediaId: source.sourceMediaId, durationSeconds: 0, timeSeconds: 0, busy: false, error: "" };
+  image.framePicker = picker;
+  image.note = "";
+  handlers.rerender();
+  const live = () => state.exerciseEditor === editor && editor.media.image === image && image.framePicker === picker;
+  try {
+    let src = source.src;
+    let crossOrigin = "";
+    if (source.kind === "stored") {
+      const playback = await (handlers.loadPlayback || loadPlayback)({ type: "exercise", id: editor.exerciseId });
+      src = String(playback?.url || "");
+      crossOrigin = "anonymous";
+      if (!src) throw Object.assign(new Error("frame_source_unavailable"), { code: "frame_source_unavailable" });
+    }
+    const duration = await videoDuration(handlers, editor.media.video, src, { crossOrigin });
+    if (!live()) return;
+    Object.assign(picker, { loading: false, src, crossOrigin, durationSeconds: duration, timeSeconds: automaticThumbnailTime(duration) });
+  } catch (error) {
+    if (!live()) return;
+    const code = FRAME_ERROR_CODES.includes(error?.code) ? error.code : source.kind === "stored" ? "frame_source_unavailable" : "frame_capture_failed";
+    Object.assign(picker, { loading: false, src: "", error: describeFrameError(code) });
+  }
+  handlers.rerender();
+}
+
+async function useFrame(state, handlers) {
+  const editor = state.exerciseEditor;
+  const image = editor.media.image;
+  const picker = image.framePicker;
+  if (!picker || picker.loading || picker.busy || !picker.src || !frameOffered(editor)) return;
+  // The moment: where the coach left the video (its own controls or the slider).
+  const element = globalThis.document?.querySelector?.('[data-exercise-media-frame-video="image"]');
+  const shown = Number(element?.currentTime);
+  const timeSeconds = roundFrameTime(Number(element?.readyState) > 0 && Number.isFinite(shown) ? shown : picker.timeSeconds);
+  Object.assign(picker, { timeSeconds, busy: true, error: "" });
+  handlers.rerender();
+  const live = () => state.exerciseEditor === editor && editor.media.image === image && image.framePicker === picker;
+  try {
+    const capture = handlers.captureFrame || captureVideoFrame;
+    const frame = await capture(picker.src, timeSeconds, { crossOrigin: picker.crossOrigin, fileName: frameFileName(editor.media.video.fileName || editor.data.name, timeSeconds) });
+    if (!live()) return;
+    image.framePicker = null;
+    await chooseExerciseMediaFile(state, handlers, "image", frame.file, { origin: { purpose: "video_frame", sourceMediaId: picker.sourceMediaId, frameTimeSeconds: frame.timeSeconds } });
+    return;
+  } catch (error) {
+    if (!live()) return;
+    Object.assign(picker, { busy: false, error: describeFrameError(error?.code) });
+  }
+  handlers.rerender();
+}
+
+// The picker's slider: the moment in state and in the video, no redraw (a
+// redraw would reopen the video).
+function handleFrameSliderInput(state, slider) {
+  const picker = state.exerciseEditor?.media?.image?.framePicker;
+  if (!picker || picker.loading) return true;
+  picker.timeSeconds = roundFrameTime(slider.value);
+  const doc = globalThis.document;
+  const video = doc?.querySelector?.('[data-exercise-media-frame-video="image"]');
+  if (video) {
+    try { video.currentTime = picker.timeSeconds; } catch { /* not seekable yet */ }
+  }
+  const label = doc?.querySelector?.('[data-exercise-media-frame-label="image"]');
+  if (label) label.textContent = formatFrameTime(picker.timeSeconds);
+  return true;
 }
 
 function releaseFieldPreview(field) {
@@ -607,10 +794,27 @@ function handleExerciseMediaAction(state, handlers, action) {
     // simply left out (it stays charged until the lifecycle work, Q9); the
     // link of the same slot is cleared at once.
     const removedMediaId = field.state === "stored" ? field.mediaId : field.previous?.state === "stored" ? field.previous.mediaId : field.removedMediaId;
+    // The video goes: so does a thumbnail made from it, and the picker over it (PR 3).
+    if (slot === "video") dropAutomaticThumbnail(editor);
     releaseFieldPreview(field);
     editor.media[slot] = { ...emptyMediaField(), removedMediaId: removedMediaId || "" };
     editor.data[spec.urlKey] = "";
     handlers.rerender();
+    return true;
+  }
+  if (type === "exercise-media-frame-pick") {
+    if (slot === "image") void openFramePicker(state, handlers);
+    return true;
+  }
+  if (type === "exercise-media-frame-cancel") {
+    if (field.framePicker && !field.framePicker.busy) {
+      field.framePicker = null;
+      handlers.rerender();
+    }
+    return true;
+  }
+  if (type === "exercise-media-frame-use") {
+    if (slot === "image") void useFrame(state, handlers);
     return true;
   }
   return true;

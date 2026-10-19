@@ -85,6 +85,9 @@ export const UPLOAD_SLOTS = Object.freeze({
 });
 
 export const UPLOAD_CONTEXT_TYPES = Object.freeze(["exercise_create", "exercise_edit"]);
+// The picture purposes that come from a video (contract Q1): both carry the
+// top-level `sourceMediaId` and `frameTimeSeconds`.
+export const FRAME_PURPOSES = Object.freeze(["video_frame", "automatic_thumbnail"]);
 
 // The upload context of the editor: never FE-1's access context.
 export function uploadContextFor({ isNew = false, isCopy = false, exerciseId = "" } = {}) {
@@ -436,16 +439,23 @@ export async function cancelUpload(uploadId, { signal } = {}) {
 // after the caller's signal aborted (the server was told); the error carries
 // `uploadId` and `idempotencyKey` so a resumable failure can continue the
 // same session.
-export async function startUpload({ file, slot, context, purpose } = {}, { onProgress, signal, sleep = sleepFor, now = Date.now, idempotencyKey = "" } = {}) {
+export async function startUpload({ file, slot, context, purpose, sourceMediaId = "", frameTimeSeconds = null } = {}, { onProgress, signal, sleep = sleepFor, now = Date.now, idempotencyKey = "" } = {}) {
   if (!uploadTransportEnabled) throw uploadError("upload_transport_disabled");
   const spec = UPLOAD_SLOTS[slot];
   if (!file || !spec) throw uploadError("invalid_file");
   if (!context || !UPLOAD_CONTEXT_TYPES.includes(context.type)) throw uploadError("invalid_request");
+  const chosenPurpose = purpose || spec.purpose;
+  // A frame of a video (PR 3): a picture with the contract's two extra top-level
+  // facts - the ready R2 video it came from and the moment - or no request at all.
+  const frame = FRAME_PURPOSES.includes(chosenPurpose);
+  const moment = frameTimeSeconds === null || frameTimeSeconds === undefined || frameTimeSeconds === "" ? NaN : Number(frameTimeSeconds);
+  if (frame && (slot !== "image" || !sourceMediaId || !Number.isFinite(moment) || moment < 0)) throw uploadError("invalid_request");
   const key = idempotencyKey || newIdempotencyKey();
   const body = JSON.stringify({
     context: context.type === "exercise_edit" ? { type: "exercise_edit", exerciseId: String(context.exerciseId || "") } : { type: "exercise_create" },
     kind: slot,
-    purpose: purpose || spec.purpose,
+    purpose: chosenPurpose,
+    ...(frame ? { sourceMediaId: String(sourceMediaId), frameTimeSeconds: moment } : {}),
     file: { name: String(file.name || "file"), mimeType: String(file.type || ""), sizeBytes: String(Number(file.size) || 0) },
   });
   let uploadId = "";
