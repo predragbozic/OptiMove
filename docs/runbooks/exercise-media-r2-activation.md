@@ -23,6 +23,11 @@ Sources: `docs/backend/r2-be1-storage.md` (BE-1, the deployment / migration gate
 | Settings → Storage (#190) | merged, deployed | none: a platform administrator sees it; it reads 503 while the backend flag is off |
 | Thumbnails (#191) | merged, deployed | both guards: a frame is offered only with `MEDIA_SAVE_ENABLED` on — inert through phases A–D |
 
+**Status (2026-10-19):** phases A, B and C are done — see "Phase C — result" below. `MEDIA_STORAGE_ENABLED=true`
+on `OptiMove-eu` (`optimove-eu.onrender.com`) only; the old service `optimove.onrender.com` stays off; the
+cleanup cron `optimove-media-cleanup` runs hourly; the pilot account has a 1 GB override; both frontend
+guards are still off in the deployed bundle (#192 not merged). Phase D waits for the owner's approval 3.
+
 ## The owner's decision (2026-10-19): gradual activation, pilot first
 
 First the pilot with the transport on and the save off; only after the real R2 upload, the quota, the
@@ -141,6 +146,52 @@ rollback B (the flag off), fix, and start phase C again.
 
 Rollback of phase C: the same as phase B. Objects already written stay in the bucket (a ready file or a
 tombstone), the quota rows stay; nothing is deleted by a rollback.
+
+### Phase C — result (2026-10-19, `OptiMove-eu`, commit `2798faa`)
+
+Run from the browser console of `https://optimove-eu.onrender.com` signed in as the pilot account (user
+`267c7e75…`, platform workspace, 1 GB override), context `exercise_create`, on the owner's approval of C1–C4
+and then of C5–C7. The test file was made in the page: `optimove-r2-pilot-clip.mp4`, H.264 (`avc1.42E01E`,
+Constrained Baseline), 640 × 360, 5.9 s, **no audio track**, 189 793 bytes. No signed URL, cookie or token
+was recorded. Every step answered as expected; nothing was repeated.
+
+| Step | Request | Answer |
+|---|---|---|
+| C1 | `POST /api/media/uploads` with an `Idempotency-Key` | **201**, `status: "pending"`, `upload.headers` = `Content-Type`, `If-None-Match`; reservation 189 793 B, expiry 10 min; quota before: 1 000 000 000 B free |
+| C2 | the signed `PUT`, raw File | **200** in 0.9 s, `ETag "b6b154068773cd7d724ed3eb0423d63b"`; R2 exposed `etag`, `content-type`, `content-length` through CORS |
+| C3 | the same `PUT` again | **412** |
+| C4 | `POST …/complete {}` | **200** in 2.0 s, `status: "completed"`, `media.status: "ready"`, metadata h264 5.884 s 640 × 360, audio `null`, 189 793 B; no 202, no polling |
+| C5 | `GET /api/media/storage` | used **189 793 B**, reserved **0**, active uploads 0, free 999 810 207 B |
+| C6 | a second session: C1 (201, reserved 189 793, active 1) → PUT (200, the same ETag) → `DELETE …/:id` | **200** `status: "cancelled"` in 1.0 s; status read again `cancelled`; reserved back to **0**, used unchanged, active 0 |
+| C7 | the owner's Render "Trigger run" of `optimove-media-cleanup` | `{"cleaned":0,"failed":0}`, "Cron job run finished successfully"; afterwards the C4 asset still `ready`, the C6 session still `cancelled`, quota unchanged (read at 14:37:33 and 14:39:31 UTC) |
+
+Identifiers (not secrets): C4 upload `e4db8e48-3352-42ae-a1e3-c170d8bfaf28`, media
+`12c935d7-2ab8-4add-9e95-2f071619c8c1`, object `pending/e4db8e48-3352-42ae-a1e3-c170d8bfaf28`; C6 upload
+`a529c990-d552-430b-bdab-5a514badf639`, media `f6b17f5f-a781-46aa-a462-1f023ab20440`, tombstone
+`pending/a529c990-d552-430b-bdab-5a514badf639` (0 B).
+
+**What stays:** the C4 test video remains in R2 as a `ready` asset bound to no exercise and **occupies
+189 793 B of the pilot account's 1 GB** (no delete endpoint by design); the C6 tombstone (0 B) stays; two
+`media.uploads` rows, two `media.assets` rows and their `upload_events`. No exercise was changed.
+
+**Limits of this test:**
+
+- the MP4 had **no audio track** and was a fragmented MediaRecorder file; a standard phone or exported MP4
+  with AAC audio was not sent, so the AAC-LC rule of the inspection is untested on production;
+- the cleanup run was a **no-op**: C6 was cleaned inside its own `DELETE`, so the sweep of an expired or
+  crashed session was not exercised (that is negative test N4);
+- the tombstone was proven by the server's `200 cancelled` (the server writes it and reads it back with HEAD
+  before answering), **not seen in the Cloudflare panel**;
+- C2 was read from the console of one origin; the second app origin, if any, was not tested;
+- the negative tests N1–N5 and the rollback were not run (not approved).
+
+**Before phase D (the owner's approval 3), the remaining checks:** one C1–C4 pass with a real MP4 with
+audio (any exercise video coaches use, under 50 MB); the negative tests N1 (415 at initiation), N2 (429 /
+413 at initiation), N4 (the expired session: `complete` → 409 `upload_expired`, then the cron sweep) and
+N5 (idempotency) — N3 is covered by C6; a look at the bucket for the two objects above. Phase D's own
+criteria are in its table: D1 health and 401, D2 a coach's editor unchanged until a file is chosen, D3 the
+pilot upload through the editor, D4 / D5 the two cancels, D6 / D7 the legacy exercise and the Builder
+unchanged, D8 the cleanup run.
 
 ### Phase D — frontend transport activation, the editor pilot (owner approval 3)
 
