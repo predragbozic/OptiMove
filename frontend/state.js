@@ -1014,6 +1014,15 @@ export const createInitialState = () => ({
     checkBusy: false, unconfirmed: null, staleAfterWrite: "",
   },
   organizationEditor: { open: false, type: "", row: null },
+  // Settings -> Storage (R2 media, PR 5), platform admin only: the defaults
+  // for every storage account and the accounts themselves, with their inline
+  // edits. Read again on every entry; a write reads again after a refusal or
+  // a lost answer (media-storage-admin-data.js).
+  storageAdmin: {
+    loading: false, error: "", disabled: false, unavailable: false, generation: 0,
+    policy: null, revision: 0, accounts: [], nextCursor: null, loadingMore: false,
+    policyEdit: null, limitEdit: null, history: {}, busy: false, notice: "",
+  },
   organizationUserManage: { open: false, userId: "", pending: false, error: "" },
   // The block administrator's selection of accounts in Settings -> Users
   // (id -> name), to grant them application blocks at once; never stored.
