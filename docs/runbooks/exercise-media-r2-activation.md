@@ -23,10 +23,14 @@ Sources: `docs/backend/r2-be1-storage.md` (BE-1, the deployment / migration gate
 | Settings → Storage (#190) | merged, deployed | none: a platform administrator sees it; it reads 503 while the backend flag is off |
 | Thumbnails (#191) | merged, deployed | both guards: a frame is offered only with `MEDIA_SAVE_ENABLED` on — inert through phases A–D |
 
-**Status (2026-10-19):** phases A, B and C are done — see "Phase C — result" below. `MEDIA_STORAGE_ENABLED=true`
-on `OptiMove-eu` (`optimove-eu.onrender.com`) only; the old service `optimove.onrender.com` stays off; the
-cleanup cron `optimove-media-cleanup` runs hourly; the pilot account has a 1 GB override; both frontend
-guards are still off in the deployed bundle (#192 not merged). Phase D waits for the owner's approval 3.
+**Status (2026-10-19, evening):** phases A, B and C are done — see "Phase C — result" below.
+`MEDIA_STORAGE_ENABLED=true` on `OptiMove-eu` (`optimove-eu.onrender.com`) only; the old service
+`optimove.onrender.com` stays off; the cleanup cron `optimove-media-cleanup` runs hourly (not to be
+changed for the pilot); two user accounts hold a 1 GB override, everyone else the default 0 B. **E-1 is
+merged and deployed** (#193: the storage quota gates the upload controls — an account at 0 B keeps the
+editor of today whatever the guards say). The deployed bundle still has both frontend guards off. **This
+PR (#192) is E-2:** both guards on together, so the complete flow opens for the quota accounts only —
+see "E-2 — the pilot activation" below. The transport-only phase D was not taken (owner, 2026-10-19).
 
 ## The owner's decision (2026-10-19): gradual activation, pilot first
 
@@ -278,7 +282,72 @@ covered by the test suites. Phase D's criteria are in its table: D1 health and 4
 unchanged until a file is chosen, D3 the pilot upload through the editor, D4 / D5 the two cancels, D6 / D7
 the legacy exercise and the Builder unchanged, D8 the cleanup run — and the readiness section below.
 
-### Phase D readiness — what the merge of #192 does (reviewed 2026-10-19)
+### E-2 — the pilot activation: both guards on, the quota as the gate (prepared 2026-10-19)
+
+**The exact change of #192 against `main` (`7b55344`, after #193):** `DEFAULT_UPLOAD_TRANSPORT_ENABLED` and
+`DEFAULT_MEDIA_SAVE_ENABLED` both from `false` to `true` in `frontend/exercise-media-upload.js`, this
+runbook, and `frontend/tests/exercise-media-pilot-mode.test.mjs`. Build time only: a frontend build and the
+usual start; no backend change, no migration, no environment change, no quota change. The old service is
+not touched (its backend flag is off, so its editor shows the link fields whatever the bundle says).
+
+**Who sees what after the merge (the quota gate of #193, pinned by its suite and the pilot-mode suite):**
+
+| Account | Existing exercise | New exercise / copy | Stored R2 file |
+|---|---|---|---|
+| default **0 B** (every coach today) | the editor of today, byte for byte: the two link fields, no storage line, no Upload, no frame picker; one `GET /api/media/storage` read that shows nothing | the two link fields | Preview; Remove (an explicit `{ source: "none" }` on Save) |
+| **pilot** (a limit above 0) | the storage line, *Upload video… / Upload picture… / Use a link*, Replace with a file, the frame picker | the same, charged to the coach's own row | Preview, Replace, Remove |
+| pilot, **full** | Preview and Remove; no Upload / Replace; the line says "Storage is full" | the link fields | Preview, Remove |
+| a club exercise | the **club's** account decides (the server's selection), never the coach's own row | — | — |
+| a storage answer that failed / is loading / 503 / 403 | nothing new, for anyone | nothing new | Preview |
+
+So no coach at 0 B sees anything new; the pilot accounts get the complete flow: upload → R2 → complete →
+Save binds the asset (`media.video = { source: "asset", mediaId }`, BE-3) → the exercise reopens with the
+stored file → Preview plays it through the FE-1 player (`POST /api/media/access`, a signed GET of 600 s) →
+Replace / Remove → the automatic thumbnail and the frame picker (#191). The library card, the Builder's
+cards and the Builder's added-item snapshots carry the asset; the Builder's custom-exercise modal keeps its
+link fields (Q7).
+
+**CORS, checked from the app origin on 2026-10-19** (a signed GET of the C4 video, from the signed-in
+pilot account's page; nothing written): `GET` 200 and `GET` with `Range: bytes=0-1` **206** — CORS allows
+GET and the Range header, so the frame picker's `crossorigin="anonymous"` read of a stored video works;
+a `<video>` element loads the signed address, reports the duration and **seeks** (readyState 4) — playback
+and seeking need no CORS at all; the exposed response headers are `content-length`, `content-type`,
+`etag` (and the safelisted `cache-control`, `last-modified`). **Not allowed: `HEAD`** ("Failed to fetch");
+**not exposed: `Content-Range`, `Accept-Ranges`.** The frontend sends no HEAD and reads neither header, so
+the pilot is not blocked. Recommended, optional, on the bucket's CORS rule: add `HEAD` to `AllowedMethods`
+and `Content-Range`, `Accept-Ranges` to `ExposeHeaders` (BE-3's stated set), so a future client that
+inspects a response does not meet a CORS error. The signed PUT (`PUT`, `Content-Type`, `If-None-Match`)
+was proven in phase C.
+
+**The pilot procedure (after approval 3 and the deploy; the pilot account, the test exercise; record each
+outcome in this runbook):**
+
+| # | Step | Expected |
+|---|---|---|
+| E1 | `/api/health` three times with the merge commit; signed out a media route 401; **a 0 B coach's editor unchanged** (open an existing legacy exercise as a coach without a limit: the link fields, no line, no Upload) | as stated |
+| E2 | Pilot: open the test exercise → *Upload video…* → the H.264 + AAC-LC MP4 → "Uploaded and verified. It is saved with the exercise when you press Save." → **Save** | the exercise closes; `GET /api/exercises/:id` carries `media.video.source: "asset"`; Settings → Storage shows the bytes |
+| E3 | Reopen the exercise → **Preview** (the FE-1 player) → play and seek | the signed address plays; seeking works; the player's address refresh after 10 min (optional wait) |
+| E4 | The library card of the exercise; **Builder**: add the exercise to a section → the card's Preview → open the program as the **athlete** of that plan (the athlete page) and play from the session view | the thumbnail / player through the `plan_item` context (BE-3 decorates athlete rows; the athlete page loads the same `app.js` and FE-1 renderer) — **this is the first real athlete-side playback**: if it does not play, record it as a blocker for the wider activation, not for the pilot |
+| E5 | Pilot: *Choose a frame of the video…* → a moment → *Use this frame* → Save; reopen | the picture is the frame; the card shows it |
+| E6 | Pilot: **Replace…** the video with a second file → Save → reopen; then **Remove** → Save → reopen | the new asset bound; then `{ source: "none" }`, the link fields back; the old objects stay charged (no delete endpoint; the GC is separate work) |
+| E7 | Cancel during the PUT; Cancel during verification (the wait of up to 4 s) | "Upload cancelled." both times |
+| E8 | A rename of a legacy exercise by the pilot; the Builder custom-exercise modal | the links unchanged; the modal's link fields only |
+| E9 | The hourly cron's next run; Settings → Storage | `{"cleaned":N,"failed":0}` where N = the cancelled sessions; the used bytes = the bound assets plus the earlier pilot files |
+
+**Rollback of E-2, from the finest lever:** (1) per account — the limit back to 0 through Settings →
+Storage: uploads stop at once, Preview of stored files continues; (2) runtime — `MEDIA_STORAGE_ENABLED=false`
+on `OptiMove-eu` and the cron, a restart: every media route 503, every editor shows the link fields with no
+error, stored R2 files are unplayable until the flag returns (nothing lost); (3) build — a PR setting both
+defaults back to `false`, a build and a deploy. Nothing is deleted under any lever.
+
+**Known limits going into the pilot (not blockers for the pilot itself):** athlete-side playback of an R2
+video is wired (BE-3 `plan_item` decoration, the FE-1 renderer in `app.js`) but **not yet exercised in
+production** — E4 is its first run, and a failure there blocks the wider activation, not the pilot; a
+replaced or removed asset stays charged (reference-aware GC is separate backend work); `HEAD` and the two
+range headers in CORS (above); the hourly cron is kept for the pilot (an abandoned upload holds its
+reservation up to an hour).
+
+### Phase D readiness — the transport-only variant (reviewed 2026-10-19; superseded by E-2 above)
 
 **The exact change.** Against `main` (`2798faa`) the PR carries one line of code —
 `DEFAULT_UPLOAD_TRANSPORT_ENABLED` from `false` to `true` in `frontend/exercise-media-upload.js` — plus this
