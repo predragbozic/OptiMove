@@ -22,16 +22,55 @@ cleanup job), `docs/backend/r2-upload-api-v1.md` (the contract),
 | PR 3 thumbnails (#191) | open, stacked on FE-2 | both guards: a frame is offered only with `MEDIA_SAVE_ENABLED` on |
 | BE-3 binding on save (#189, Codex) | open | `MEDIA_SAVE_ENABLED` in `frontend/exercise-media-upload.js` (a second, separate flip PR) |
 
-**Sequencing decision for the owner.** With the transport on and the save guard off, a coach can
-upload a file that cannot be saved with the exercise (FE-2 shows "Saving it with the exercise is not
-available yet." and blocks Save): the file is charged to the quota and stays unused until BE-3. Two
-sane orders:
+**Sequencing decision (owner, 2026-10-19): pilot first.** The transport guard is flipped alone (this
+runbook's companion PR), and only after steps 1–4 below are done and recorded; BE-3 and the second
+flip (`MEDIA_SAVE_ENABLED`) come later as their own PR. Consequences during the pilot, by design:
 
-1. **Pilot first (recommended for the proof, not for coaches):** flip the transport, let only the
-   owner upload on a test exercise, verify the R2 object, then wait for BE-3 before telling anyone.
-2. **Both at once:** merge BE-3, flip both guards in one PR, one deploy, one announcement.
+- with the save guard off, a file uploaded by the pilot account is charged to the quota but is **not**
+  saved with the exercise (the editor says "Saving it with the exercise is not available yet." and
+  blocks Save until the file is removed);
+- no thumbnail and no frame is offered (PR 3 needs the save guard);
+- only the owner uploads, on a test exercise; nothing is announced to coaches before BE-3.
 
-Either way the steps 1–4 below come first and are the same.
+What the pilot proves: the signed PUT from a real browser (CORS, the signed `Content-Length`, the
+create-only 412), verification and quota settlement, the Storage tab's numbers, the cleanup job.
+
+## How the guards are switched (build time, not runtime)
+
+`UPLOAD_TRANSPORT_ENABLED` and `MEDIA_SAVE_ENABLED` are **module constants** in
+`frontend/exercise-media-upload.js` (`DEFAULT_UPLOAD_TRANSPORT_ENABLED`, `DEFAULT_MEDIA_SAVE_ENABLED`).
+They are compiled into the frontend bundle by `vite build`: a change is a **code change, a merge and
+a deploy** — never an environment variable, never a runtime switch, never a database value. The
+exported `setUploadTransportEnabled()` / `setMediaSaveEnabled()` exist for the tests (and would act
+only inside one open page, never persisted). The test `frontend/tests/exercise-media-pilot-mode.test.mjs`
+pins the shipped defaults of this branch and that no runtime source feeds them.
+
+The backend's `MEDIA_STORAGE_ENABLED` is the opposite kind: a **runtime** environment variable on
+Render, read at start; `false` makes every media route answer 503 whatever the frontend guards say.
+
+## Pilot prerequisites — the checklist (owner, before the flip PR is merged)
+
+Each line names the step below, who does it, and the expected result to record. Nothing of this is
+done by a Claude session.
+
+| # | Prerequisite | Where | Expected result (record it) |
+|---|---|---|---|
+| P1 | BE-1 (#184), FE-2 (#186), BE-2 (#187), BE-3 (#189) merged and deployed; `/api/health` serves the current merge commit | GitHub, Render | the commit three times with `ok: true` |
+| P2 | The BE-2 migration applied at the deploy (the start log after `node src/migrate.js`) | Render deploy log | `202610191300_media_upload_lifecycle.sql` applied, the server started |
+| P3 | R2 bucket `optimove-exercise-videos`, private, no lifecycle rule on `pending/` | Cloudflare | bucket settings read once |
+| P4 | R2 API token: Object Read & Write on that bucket only | Cloudflare | the token's scope read once; the secret in the password manager only |
+| P5 | CORS on the bucket: the exact app origins, `PUT`, `Content-Type`, `If-None-Match`, `ETag` exposed (section 1.4) | Cloudflare | the rule as saved |
+| P6 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` on the web service; `MEDIA_STORAGE_ENABLED` still unset / `false` | Render | the four present, the flag off |
+| P7 | Node ≥ 20.9 on the service (`sharp`) | Render deploy log | the version line |
+| P8 | The cleanup cron: `npm --prefix backend run media:cleanup` every five minutes, same variables | Render cron job | the job exists; its first run logs a no-op while the flag is off |
+| P9 | Quota: the pilot account's limit above 0 (Settings → Storage, PR 5 #190), or the default limit | the app, a platform admin | the limit and the reason in the History |
+| P10 | The controlled browser PUT on a non-production object (section 4): initiation 201, PUT 200, the same PUT 412, complete 200 `completed`, a cancelled session 200 `cancelled`, the tombstone under `pending/` after the next cleanup run | a browser console on the app origin, as the pilot account | the five status codes, the object key, the date |
+| P11 | `MEDIA_STORAGE_ENABLED=true` on the web service and the cron job — only after P1–P10 | Render | set at the same time as the flip PR's deploy |
+| P12 | The flip PR (#192, transport only) merged and deployed | GitHub, Render | `/api/health` three times; a signed-out call to a media route 401 |
+
+#190 (Settings → Storage) and #191 (thumbnails) are independent of the pilot: #190 is needed for P9
+through the app (otherwise P9 is a database-side limit by the operator), #191 stays inert during the
+pilot (a frame needs the save guard).
 
 ## 1. Cloudflare R2 (owner, Cloudflare dashboard)
 
@@ -113,10 +152,24 @@ any coach can upload:
 2. Merge the **flip PR** (this runbook's companion: `UPLOAD_TRANSPORT_ENABLED` default `true`, one
    line, nothing else) and set `MEDIA_STORAGE_ENABLED=true` on the web service and the cron job;
    deploy.
-3. Smoke as the owner: open a test exercise → the storage line shows the pilot account's numbers →
-   upload the same small MP4 → progress → "Uploaded and verified." → Settings → Storage shows the
-   bytes used. With the save guard still off the file is **not** saved with the exercise (by
-   design); Remove it or leave it until BE-3.
+3. Smoke as the owner, on a test exercise, in this order (record each outcome):
+   1. open the editor → the storage line shows the pilot account's numbers;
+   2. upload the small MP4 → progress → "Uploaded and verified. Saving it with the exercise is not
+      available yet." → Settings → Storage shows the bytes used. With the save guard off the file
+      is **not** saved with the exercise (by design): Remove it afterwards or leave it until BE-3;
+   3. **Cancel during the PUT**: start the upload again, press Cancel while the bar moves → the PUT
+      is aborted at once, "Cancelling…", then `DELETE` → "Upload cancelled." with *Upload again*;
+   4. **Cancel during verification**: start the upload again, press Cancel right after the bar
+      reaches 100 % (the completion / verification phase) → "Cancelling…" **may last up to 4 s**
+      (the verification poll sleeps 1, 2, 4 s and is not interrupted by the cancel — a known FE-2
+      nit, see #186), then `DELETE` → "Upload cancelled."; if the verification completed meanwhile
+      the cancel comes too late and the ready file comes back as "Uploaded and verified." — both are
+      correct, nothing is lost or charged twice;
+   5. after the next cleanup run: the cancelled sessions settled, the quota back to the one ready
+      file (or to zero after its Remove), the tombstones under `pending/`;
+   6. a legacy exercise (a Drive or YouTube link) opened and saved with a name change: its links
+      unchanged after the save, the Builder's cards and the player as before (the pilot never
+      touches existing media — pinned by `frontend/tests/exercise-media-pilot-mode.test.mjs`).
 
 ## 6. Switching the save on (after BE-3)
 
