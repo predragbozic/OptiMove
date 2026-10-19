@@ -6008,6 +6008,26 @@ body.specific-program-open {
 .exercise-editor-multi-field { display: grid; gap: 6px; }
 .exercise-editor-multi-add { display: flex; gap: 6px; align-items: center; }
 .exercise-editor-multi-add input { flex: 1 1 auto; }
+
+/* Exercise media fields (FE-2): one box per slot - a link, a stored file, an
+   upload with its progress, a failure with Retry - and the storage line. */
+.exercise-media-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+.exercise-media-fields > .exercise-media-storage, .exercise-media-fields > .exercise-media-note { grid-column: 1 / -1; margin: 0; font-size: 13px; }
+.exercise-media-field { display: grid; gap: 8px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
+.exercise-media-field > .eyebrow { margin: 0; }
+.exercise-media-field input[type="file"] { display: none; }
+.exercise-media-status { margin: 0; font-size: 13px; }
+.exercise-media-file { display: flex; gap: 8px; align-items: baseline; min-width: 0; margin: 0; }
+.exercise-media-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exercise-media-progress { display: block; width: 100%; height: 8px; }
+.exercise-media-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.exercise-media-actions .plain-button, .exercise-media-actions .text-action { min-height: 44px; min-width: 44px; }
+.exercise-media-technical { font-size: 12px; color: var(--muted); }
+.exercise-media-preview-local video, .exercise-media-preview-local img { display: block; width: 100%; max-height: 240px; object-fit: contain; border-radius: 6px; background: #000; }
+@media (max-width: 760px) {
+  .exercise-media-fields { grid-template-columns: 1fr; }
+  .exercise-media-field .builder-text-input { font-size: 16px; }
+}
 .builder-modal-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 .exercise-tag-form .search-field { margin: 0; }
 .exercise-tag-form select { min-height: 42px; border: 1px solid var(--line); border-radius: 5px; padding: 9px; background: #fff; font: inherit; }
@@ -8197,7 +8217,6 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-section-editor-actions .plain-button:active, .builder-custom-exercise-button:active, .builder-exercise-result:active { transform: translateY(1px); }
 .builder-custom-exercise-form { display: grid; gap: 12px; }
 .builder-custom-exercise-form .search-field { margin: 0; }
-.builder-upload-note { margin: 0; color: var(--muted, #667085); font-size: 12px; line-height: 1.4; }
 /* z-index: 1300 - must clear every overlay it can be opened from, not just
    the plain Builder page (whose own sticky bits sit around z-index 40-90).
    "Copy"/"Assign to athlete" open this exact modal (renderCopyPlanModal)

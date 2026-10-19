@@ -26,7 +26,6 @@ export function renderCustomExerciseModal(section, dose = {}) {
           <div class="builder-dose-inputs"><label><span>Sets</span><input name="sets" placeholder="3" value="${escapeAttr(dose.sets || "")}"></label><label><span>Reps</span><input name="reps" placeholder="8" value="${escapeAttr(dose.reps || "")}"></label><label><span>Load</span><input name="load" placeholder="Optional" value="${escapeAttr(dose.load || "")}"></label></div>
           <label class="search-field"><span>Image URL</span><input name="imageUrl" type="url" placeholder="https://..."></label>
           <label class="search-field"><span>Video URL</span><input name="videoUrl" type="url" placeholder="https://..."></label>
-          <p class="builder-upload-note">File upload will be added when Supabase Storage is connected.</p>
           <p class="builder-error" aria-live="polite"></p>
           <button class="plain-button" type="submit">Add custom exercise</button>
         </form>
