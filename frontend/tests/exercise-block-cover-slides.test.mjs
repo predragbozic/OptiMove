@@ -215,3 +215,45 @@ test("arrow styling: 44 px round targets over the picture, hidden with a single 
   assert.match(css, /\.exercise-block-cover-step\s*\{[^}]*touch-action:\s*manipulation/);
   assert.match(css, /@media \(hover: hover\)\s*\{\s*\.exercise-block-cover-step:hover/);
 });
+
+test("an R2 picture in a card's turn (the media descriptor) is asked for in the resolver's batch when its turn comes, with the video cover as its fallback", async () => {
+  const playback = await import("../media-playback.js");
+  playback.forgetMediaAccess();
+  const context = { type: "exercise", id: "ex-1" };
+  const assetSlide = { imageUrl: "", videoUrl: "https://www.youtube.com/watch?v=abcdefghijk", media: { video: { source: "legacy", url: "https://www.youtube.com/watch?v=abcdefghijk" }, image: { source: "asset", mediaId: "cover-1" }, accessContext: context } };
+  const sources = blockCoverSlides({ ...block, coverSlides: [assetSlide, slides[0], { ...assetSlide, media: { ...assetSlide.media, accessContext: { type: "exercise", id: "ex-2" } } }] });
+  assert.deepEqual(sources, [
+    [{ mediaId: "cover-1", accessContext: context }, "https://i.ytimg.com/vi/abcdefghijk/mqdefault.jpg", "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg"],
+    ["https://example.test/a.jpg"],
+  ], "the asset first, its public fallbacks after it, the same object once");
+  const { dom, doc } = renderCatalog([{ ...block, coverSlides: [assetSlide, slides[0]] }]);
+  const frame = doc.querySelector("[data-block-slides]");
+  const image = frame.querySelector(".exercise-block-cover-image");
+  assert.equal(image.hasAttribute("src"), false, "no address until the server issued one");
+  assert.equal(image.dataset.mediaId, "cover-1");
+  assert.equal(image.dataset.mediaSlot, "image");
+  assert.equal(image.dataset.mediaAccessContext, JSON.stringify(context));
+  assert.deepEqual(JSON.parse(image.dataset.fallbacks), ["https://i.ytimg.com/vi/abcdefghijk/mqdefault.jpg", "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg"]);
+  assert.equal(image.getAttribute("referrerpolicy"), "no-referrer");
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url: String(url), body: JSON.parse(options.body) });
+    return { ok: true, json: async () => ({ results: [{ index: 0, media: { image: { source: "asset", mediaId: "cover-1", url: "https://r2.example/cover-1", expiresAt: new Date(Date.now() + 600_000).toISOString(), mimeType: "image/jpeg" } } }] }) };
+  };
+  await playback.resolvePendingThumbnails(doc);
+  assert.deepEqual(calls, [{ url: playback.ACCESS_BATCH_ROUTE, body: { requests: [{ context, slots: ["image"] }] } }]);
+  assert.equal(image.src, "https://r2.example/cover-1");
+  // The next picture is a public one; back again, the asset is asked for anew (its cached address, no request).
+  assert.equal(stepBlockCover(frame, 1), true);
+  assert.equal(image.src, "https://example.test/a.jpg");
+  assert.equal(image.dataset.mediaId, undefined);
+  assert.equal(stepBlockCover(frame, -1), true);
+  assert.equal(image.hasAttribute("src"), false);
+  assert.equal(image.dataset.mediaId, "cover-1");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(image.src, "https://r2.example/cover-1");
+  assert.equal(calls.length, 1, "a fresh address is not asked for again");
+  assert.equal(frame.dataset.blockSlides.includes("r2.example"), false, "the turn's list never holds an address");
+  playback.forgetMediaAccess();
+  dom.window.close();
+});

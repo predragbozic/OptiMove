@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { ICON_SETTINGS } from "./exercise-library.js";
-import { imageSources, parseImageFallbacks, renderImage, videoThumbnailSources } from "./media.js";
+import { encodeAccessContext, exerciseMediaOf, imageSources, parseImageFallbacks, renderAssetImage, renderImage, videoThumbnailSources } from "./media.js";
+import { resolvePendingThumbnails } from "./media-playback.js";
 import { emptyExerciseFilters, state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -16,6 +17,12 @@ const CHEVRON = { "-1": '<path d="M15 5l-7 7 7 7"></path>', 1: '<path d="M9 5l7 
 
 const PLACEHOLDER = '<span class="exercise-block-placeholder" aria-hidden="true">▦</span>';
 
+// A slide's first source is a public address (a string) or, for an R2 image
+// (the media descriptor, FE-1), the asset to resolve - { mediaId,
+// accessContext } - followed by its public fallbacks.
+const isAssetSource = (source) => Boolean(source) && typeof source === "object" && typeof source.mediaId === "string";
+const sourceKey = (source) => (isAssetSource(source) ? `asset:${source.mediaId}` : source);
+
 // The pictures a card without a cover of its own steps through (the
 // catalog's coverSlides, never sent for a locked block): each exercise's
 // image first, then its video's cover - the order a library card walks.
@@ -25,14 +32,24 @@ export function blockCoverSlides(block) {
   if (block.locked || !Array.isArray(block.coverSlides)) return [];
   const seen = new Set();
   return block.coverSlides
-    .map((slide) => [...imageSources(slide?.imageUrl), ...videoThumbnailSources(slide?.videoUrl, { large: true })])
-    .filter((sources) => sources.length && !seen.has(sources[0]) && seen.add(sources[0]))
+    .map((slide) => {
+      const media = exerciseMediaOf(slide);
+      const sources = [
+        ...(media.image.source === "legacy" ? imageSources(media.image.url) : []),
+        ...(media.video.source === "legacy" ? videoThumbnailSources(media.video.url, { large: true }) : []),
+      ];
+      return media.image.source === "asset" ? [{ mediaId: media.image.mediaId, accessContext: media.accessContext }, ...sources] : sources;
+    })
+    .filter((sources) => sources.length && !seen.has(sourceKey(sources[0])) && seen.add(sourceKey(sources[0])))
     .slice(0, COVER_SLIDE_LIMIT);
 }
 
 function renderSlideImage(sources, index) {
-  const fallbacks = sources.slice(1);
-  return `<img class="exercise-block-cover-image" src="${escapeAttr(sources[0])}" alt="" referrerpolicy="no-referrer" decoding="async" data-slide="${index}"${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}>`;
+  const [first, ...fallbacks] = sources;
+  if (isAssetSource(first)) {
+    return renderAssetImage(first.mediaId, first.accessContext, "exercise-block-cover-image", { fallbacks, attributes: `referrerpolicy="no-referrer" decoding="async" data-slide="${index}"` });
+  }
+  return `<img class="exercise-block-cover-image" src="${escapeAttr(first)}" alt="" referrerpolicy="no-referrer" decoding="async" data-slide="${index}"${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}>`;
 }
 
 // A card's picture: the block's own cover; without one, its exercises'
@@ -70,10 +87,24 @@ function showBlockCover(frame, index) {
   const image = frame.querySelector(".exercise-block-cover-image");
   if (!sources || !image) return false;
   image.classList.remove("image-missing");
-  if (sources.length > 1) image.dataset.fallbacks = JSON.stringify(sources.slice(1));
+  const [first, ...fallbacks] = sources;
+  if (fallbacks.length) image.dataset.fallbacks = JSON.stringify(fallbacks);
   else delete image.dataset.fallbacks;
   image.dataset.slide = String(index);
-  image.src = sources[0];
+  delete image.dataset.mediaRetried;
+  if (isAssetSource(first)) {
+    // An R2 picture: its address is asked for now, in the resolver's batch.
+    image.removeAttribute("src");
+    image.dataset.mediaId = first.mediaId;
+    image.dataset.mediaSlot = "image";
+    image.dataset.mediaAccessContext = encodeAccessContext(first.accessContext);
+    void resolvePendingThumbnails(frame);
+  } else {
+    delete image.dataset.mediaId;
+    delete image.dataset.mediaSlot;
+    delete image.dataset.mediaAccessContext;
+    image.src = first;
+  }
   frame.dataset.slideIndex = String(index);
   frame.querySelectorAll(".exercise-block-cover-dots > span").forEach((dot, dotIndex) => dot.classList.toggle("is-active", dotIndex === index));
   return true;
@@ -99,7 +130,8 @@ export function stepBlockCover(frame, step) {
   if (!showBlockCover(frame, index)) return false;
   const next = after(index);
   const view = frame.ownerDocument?.defaultView;
-  if (next !== index && view?.Image) {
+  // An R2 picture has no address to warm up before its turn.
+  if (next !== index && view?.Image && !isAssetSource(slides[next][0])) {
     const preload = new view.Image();
     preload.referrerPolicy = "no-referrer";
     preload.src = slides[next][0];
