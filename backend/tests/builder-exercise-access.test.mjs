@@ -5,7 +5,7 @@ import http from "node:http";
 import express from "express";
 import pg from "pg";
 import { createDisposableDatabase } from "./support/disposable-db.mjs";
-import { EXERCISE_COLLECTIONS_FIXTURE_SQL } from "./support/exercise-collections-fixture.mjs";
+import { EXERCISE_COLLECTIONS_FIXTURE_SQL, addMediaSelectionFixture } from "./support/exercise-collections-fixture.mjs";
 
 const coachId = crypto.randomUUID();
 const otherCoachId = crypto.randomUUID();
@@ -119,6 +119,7 @@ before(async () => {
   `);
   await client.query("insert into public.users (id) values ($1),($2),($3)", [coachId, otherCoachId, athleteUserId]);
   await client.query(EXERCISE_COLLECTIONS_FIXTURE_SQL);
+  await addMediaSelectionFixture(client.query.bind(client));
   await client.query("insert into public.user_global_roles (user_id,role,is_active) values ($1,'platform_admin',true)", [otherCoachId]);
   for (const [key, ownerScope, ownerId, active] of [
     ["own", "user", coachId, true],
@@ -251,6 +252,19 @@ for (const key of ["own", "system"]) {
     assert.equal(items[0].image_url, "https://example.com/exercise.png");
   });
 }
+
+test("Builder snapshots inherited media for an authorized copy without changing its Library fields", async () => {
+  const original = (await client.query(`insert into library.exercises(name,owner_scope,image_url,video_url)
+    values('Snapshot media original','system','https://example.com/inherited.png','https://example.com/inherited.mp4') returning id`)).rows[0].id;
+  const copy = (await client.query(`insert into library.exercises(name,owner_scope,owner_user_id,source_exercise_id)
+    values('Snapshot media copy','user',$1,$2) returning id`, [coachId, original])).rows[0].id;
+  const response = await addExercise(copy);
+  assert.equal(response.status, 201);
+  const snapshot = (await client.query("select image_url,video_url from plans.plan_items where exercise_id=$1", [copy])).rows[0];
+  assert.deepEqual(snapshot, { image_url: "https://example.com/inherited.png", video_url: "https://example.com/inherited.mp4" });
+  assert.deepEqual((await client.query("select image_url,video_url from library.exercises where id=$1", [copy])).rows[0],
+    { image_url: null, video_url: null });
+});
 
 for (const key of ["inactive", "inactiveSystem"]) {
   test(`an ${key} exercise cannot be added and creates no item`, async () => {
