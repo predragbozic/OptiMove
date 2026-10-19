@@ -462,3 +462,22 @@ test('H1: Builder custom R2 exercise survives an ordinary Library editor save',a
  const video=await ready(),image=await ready({type:'exercise_create'},'image'),r=await request('/api/builder/nodes/'+sectionId+'/custom-exercise',{name:'H1 custom',media:{video:selected(video.id),image:selected(image.id)}});assert.equal(r.status,201);
  const item=(await client.query('select * from plans.plan_items where video_asset_id=$1',[video.id])).rows[0],before=await h1MediaRow(item.exercise_id);assert.equal((await request('/api/exercises/'+item.exercise_id,{name:'Custom renamed',videoUrl:'',imageUrl:null},{method:'PATCH'})).status,200);assert.deepEqual(await h1MediaRow(item.exercise_id),before);const snapshot=await oneItem(item.exercise_id);assert.equal(snapshot.video_asset_id,video.id);assert.equal(snapshot.image_asset_id,image.id);
 });
+
+test('main #188: Builder add keeps the effective inherited legacy image on a private copy',async()=>{
+ const source=await exercise('Inherited cover source','system',null),copy=await request('/api/exercises/'+source+'/copy',{name:'Inherited private image'});assert.equal(copy.status,201,JSON.stringify(copy.body));
+ assert.equal((await client.query('select image_url from library.exercises where id=$1',[copy.body.id])).rows[0].image_url,null);
+ assert.equal((await addExercise(copy.body.id)).status,201);const item=await oneItem(copy.body.id);assert.equal(item.image_source,'legacy');assert.equal(item.image_url,'https://legacy.test/old.png');assert.equal(item.video_url,'https://legacy.test/old.mp4');
+});
+
+test('main #188: image completion preserves asset/none snapshot choices instead of filling legacy URLs',async()=>{
+ const id=await exercise('R2 snapshot'),a=await ready({type:'exercise_edit',exerciseId:id},'image');await patch(id,{image:selected(a.id)});await addExercise(id);const item=await oneItem(id);
+ const {completeCopiedExerciseImages}=await import('../src/exerciseSnapshotMedia.js');
+ for(const selection of [{image_source:'asset',image_asset_id:a.id},{image_source:'none',image_asset_id:null},{image_source:'legacy',image_asset_id:null,video_source:'asset',video_asset_id:crypto.randomUUID()}]){
+  const snapshot={...item,...selection,image_url:null};await client.query('begin');try{assert.deepEqual(await completeCopiedExerciseImages(client.query.bind(client),[snapshot],()=>item.plan_session_id),[snapshot]);}finally{await client.query('rollback');}
+ }
+});
+
+test('main #188: a mixed private copy snapshots inherited legacy image alongside its own R2 video',async()=>{
+ const source=await exercise('Mixed media source','system',null),video=await ready(),copy=await request('/api/exercises/'+source+'/copy',{name:'Mixed media private copy',media:{video:selected(video.id)}});assert.equal(copy.status,201);
+ assert.equal((await addExercise(copy.body.id)).status,201);const item=await oneItem(copy.body.id);assert.equal(item.video_source,'asset');assert.equal(item.video_asset_id,video.id);assert.equal(item.image_source,'legacy');assert.equal(item.image_url,'https://legacy.test/old.png');
+});

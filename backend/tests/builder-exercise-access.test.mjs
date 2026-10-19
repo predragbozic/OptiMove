@@ -253,6 +253,19 @@ for (const key of ["own", "system"]) {
   });
 }
 
+test("Builder snapshots inherited media for an authorized copy without changing its Library fields", async () => {
+  const original = (await client.query(`insert into library.exercises(name,owner_scope,image_url,video_url)
+    values('Snapshot media original','system','https://example.com/inherited.png','https://example.com/inherited.mp4') returning id`)).rows[0].id;
+  const copy = (await client.query(`insert into library.exercises(name,owner_scope,owner_user_id,source_exercise_id)
+    values('Snapshot media copy','user',$1,$2) returning id`, [coachId, original])).rows[0].id;
+  const response = await addExercise(copy);
+  assert.equal(response.status, 201);
+  const snapshot = (await client.query("select image_url,video_url from plans.plan_items where exercise_id=$1", [copy])).rows[0];
+  assert.deepEqual(snapshot, { image_url: "https://example.com/inherited.png", video_url: "https://example.com/inherited.mp4" });
+  assert.deepEqual((await client.query("select image_url,video_url from library.exercises where id=$1", [copy])).rows[0],
+    { image_url: null, video_url: null });
+});
+
 for (const key of ["inactive", "inactiveSystem"]) {
   test(`an ${key} exercise cannot be added and creates no item`, async () => {
     assert.equal((await addExercise(exercises[key])).status, 404);

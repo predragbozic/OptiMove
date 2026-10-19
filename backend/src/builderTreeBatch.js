@@ -1,3 +1,5 @@
+import { completeCopiedExerciseImages } from "./exerciseSnapshotMedia.js";
+
 const NODE_COLUMNS = "plan_session_id, parent_id, node_type, name, color, icon_url, short_note, note, node_order";
 const ITEM_FIELDS = [
   "video_source", "video_asset_id", "image_source", "image_asset_id",
@@ -37,6 +39,8 @@ export async function copyBuilderSessionContents(client, sessionMap, copyLegacyS
     "select * from plans.plan_items where plan_session_id = any($1::uuid[]) order by item_order",
     [sessionIds],
   );
+  items.rows = await completeCopiedExerciseImages(client.query.bind(client), items.rows,
+    (item) => sessionMap.get(item.plan_session_id));
   const sessionsWithNodes = new Set(nodes.rows.map((node) => node.plan_session_id));
   const children = new Map();
   for (const node of nodes.rows) {

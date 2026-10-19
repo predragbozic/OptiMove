@@ -1,11 +1,11 @@
 # BE-3 — exercise media binding and private playback
 
 Branch: `codex/r2-be3-binding`.
-Stacked dependency: draft PR #187 (`codex/r2-be2-upload`), pinned base
-`5aa5589fadd2a359d166461c76bd0d6fa606e43b`. BE-2 is still open, not deployed.
-Review BE-3 against the BE-2 branch. Merge/deploy BE-2 first; after its merge,
-retarget/rebase this PR onto main and resolve any BE-2 changes before approval.
-No automatic merge, deployment or feature activation is authorized.
+Integrated base: origin/main `57d97e2`, containing merged BE-2 #187,
+FE-2 #186 (including its H1 save-payload fix) and Builder image fix #188.
+PR #189 now targets main. BE-2 ancestry is shared with main; its commits and
+migration are not repeated in the BE-3 diff. No merge of PR #189, deployment or
+feature activation is authorized.
 
 ## Scope and storage
 
@@ -122,7 +122,9 @@ responses, flag-off legacy flow, and local GET signing. Existing Exercise/Builde
 copy/revoke/snapshot/cover/custom tests are filtered by relevant names only.
 No full suite, frontend changes, agents, actual R2 calls or production writes.
 
-GO for draft review. Merge is blocked on #187 and explicit approval. Activation is
+GO for reviewed merge with MEDIA_STORAGE_ENABLED remaining disabled, subject to
+explicit owner approval. Dependencies #187/#186 are merged and the #188 conflict
+is resolved. Activation is
 NO-GO until the approved deployment/preflight and a controlled real R2/mobile
 smoke check are completed. Roll back application code/disable the flag without
 removing additive DB columns or stored objects; retained legacy URLs are recovery
@@ -145,7 +147,7 @@ H1 validation: BE-3 suite 21/21 passes (six new H1 regression cases); syntax and
 whitespace checks pass. Prior BE-1/BE-2 and filtered regression results above were
 not rerun for this narrow correction.
 
-Main conflict checked against origin/main f9509b0 (merged PR #188), using merge-tree
+Historical pre-integration check: main conflict checked against origin/main f9509b0 (merged PR #188), using merge-tree
 only: one content conflict in backend/src/routes/builder.js. BE-3's add-exercise
 query with FOR SHARE overlaps main's effectiveExerciseMediaSql query from #188.
 The other #188 edits in Builder copy paths/builderTreeBatch merge automatically.
@@ -153,6 +155,40 @@ A future conflict resolution must preserve BOTH #188's effective legacy image
 snapshot/fill behavior and BE-3's row-lock/independent asset selection snapshots;
 the selection-copy helper must not overwrite a resolved legacy image with a raw
 null library image. No branch merge or #188 integration was performed here.
-PR #189 remains draft and blocked for merge by dependency #187 AND this main
-conflict. BE-2 branch/PR #187 is unchanged. No migration, deployment or production
+At that checkpoint PR #189 was draft and blocked by dependency #187 and the main
+conflict; both are resolved by the integration below. BE-2 branch/PR #187 is unchanged. No migration, deployment or production
 operation was performed.
+
+## Final main integration
+
+Main integrated at 57d97e2. The only textual conflict was the Builder exercise
+query. Resolution uses effectiveExerciseMediaSql from #188 with FOR SHARE OF e
+from BE-3. The shared row lock lasts through insertion/selection snapshot, while
+legacy inherited images/videos are resolved exactly as #188 intended.
+
+snapshotExerciseMedia preserves already resolved legacy URLs in the newly
+inserted item (coalesce(item URL, raw exercise URL)); R2/none selectors and IDs
+are copied independently. completeCopiedExerciseImages now restricts inference
+to legacy/legacy items: an R2 or explicit none snapshot cannot be filled with a
+legacy URL. All #188 copy completion calls and BE-3 four-column copy paths remain.
+No repair CLI, production repair or migration was run.
+
+FE-2 H1 compatibility was checked in applyMediaToSavePayload and its committed
+payload assertions: stored/failed-replace slots omit legacy fields; uploaded,
+removed and link-replaced slots emit the agreed explicit selection and remove
+same-slot legacy fields. BE-3 also preserves assets if an older client echoes
+unchanged/empty URL fields. Same-slot mixed-format 400 remains unchanged.
+Frontend files are identical to origin/main; neither frontend integration guard
+nor backend feature flag was enabled.
+
+Current targeted local results: 24 BE-3 cases, 59 Builder exercise/access/copy/
+revoke cases, and five #188 snapshot-image cases pass (88 total). This includes
+H1, inherited legacy images, R2/none image-copy protection and mixed inherited-image
+plus private-R2-video snapshots. No full suite, browser, cloud or repair checks.
+
+GO for merge approval with the feature disabled after normal required GitHub
+checks. Real private R2/browser/mobile seek/CORS/refresh validation and the BE-2
+cleanup/resource prerequisites remain activation gates, not completed checks.
+Signed URLs can remain usable up to ten minutes after revoke; ready unused media
+still requires future reference-aware deletion. There is no new BE-3 migration,
+environment setting, DB privilege or dependency change.

@@ -1,6 +1,6 @@
 import { normalizeExerciseView, renderExerciseThumb } from "./exercise-view-modes.js";
 import { libraryDragAvailable } from "./builder-library-drag.js";
-import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes, renderMediaImage } from "./media.js";
+import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes } from "./media.js";
 import { autogrowRows } from "./textarea-autosize.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -26,7 +26,6 @@ export function renderCustomExerciseModal(section, dose = {}) {
           <div class="builder-dose-inputs"><label><span>Sets</span><input name="sets" placeholder="3" value="${escapeAttr(dose.sets || "")}"></label><label><span>Reps</span><input name="reps" placeholder="8" value="${escapeAttr(dose.reps || "")}"></label><label><span>Load</span><input name="load" placeholder="Optional" value="${escapeAttr(dose.load || "")}"></label></div>
           <label class="search-field"><span>Image URL</span><input name="imageUrl" type="url" placeholder="https://..."></label>
           <label class="search-field"><span>Video URL</span><input name="videoUrl" type="url" placeholder="https://..."></label>
-          <p class="builder-upload-note">File upload will be added when Supabase Storage is connected.</p>
           <p class="builder-error" aria-live="polite"></p>
           <button class="plain-button" type="submit">Add custom exercise</button>
         </form>
@@ -112,7 +111,7 @@ export function renderBuilderExerciseResults(exercises, markedExerciseIds, node,
 function renderAddedThumb(item, { containerClass, imageClass, fallbackClass, emptyLabel = "" }) {
   const media = exerciseMediaOf(item);
   if (hasAnyMedia(media)) {
-    return `<button type="button" class="${containerClass}" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)}>${media.image.source !== "none" ? renderMediaImage(media, imageClass) : `<span class="${fallbackClass}">Video</span>`}</button>`;
+    return `<button type="button" class="${containerClass}" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)}>${renderExerciseThumb(item, imageClass)}</button>`;
   }
   return `<span class="${fallbackClass}">${escapeHtml(emptyLabel || (item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`;
 }
@@ -267,7 +266,7 @@ export function renderBuilderStickyBar(node, mobileMode) {
     <span class="builder-sticky-bar-thumbs">
       ${recent.map((item) => {
         const media = exerciseMediaOf(item);
-        return `<span class="builder-sticky-thumb" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)} role="button" tabindex="0" aria-label="Preview ${escapeAttr(item.title || "exercise")}">${media.image.source !== "none" ? renderMediaImage(media, "builder-sticky-thumb-image") : `<span class="builder-sticky-thumb-fallback">${escapeHtml((item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`}</span>`;
+        return `<span class="builder-sticky-thumb" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" ${mediaAccessAttributes(media)} role="button" tabindex="0" aria-label="Preview ${escapeAttr(item.title || "exercise")}">${renderExerciseThumb(item, "builder-sticky-thumb-image")}</span>`;
       }).join("")}
       ${overflow ? `<span class="builder-sticky-thumb-overflow">+${overflow}</span>` : ""}
     </span>

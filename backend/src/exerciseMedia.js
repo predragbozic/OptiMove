@@ -104,7 +104,7 @@ export async function bindExerciseMedia(client,req,exerciseId,body,{creating=fal
   }
 }
 export async function snapshotExerciseMedia(run,exerciseId,itemId) {
-  await run(`update plans.plan_items p set video_source=e.video_source,video_asset_id=e.video_asset_id,image_source=e.image_source,image_asset_id=e.image_asset_id,video_url=e.video_url,image_url=e.image_url
+  await run(`update plans.plan_items p set video_source=e.video_source,video_asset_id=e.video_asset_id,image_source=e.image_source,image_asset_id=e.image_asset_id,video_url=case when e.video_source='legacy' then coalesce(p.video_url,e.video_url) else e.video_url end,image_url=case when e.image_source='legacy' then coalesce(p.image_url,e.image_url) else e.image_url end
     from library.exercises e where e.id=$1 and p.id=$2`,[exerciseId,itemId]);
 }
 export function createMediaAccessService({pool,store,canReadPlan=canAccessPlan,approvalRequired=needsTemplateApproval}) {
