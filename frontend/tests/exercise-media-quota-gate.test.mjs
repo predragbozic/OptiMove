@@ -122,6 +122,14 @@ test("2. a pilot account (a limit above 0) sees the upload controls and the stor
   fakeApi({ storage: usage([pilotAccount()]) });
   await open();
   assert.deepEqual(controlsOf("video"), ["Upload video...", "Use a link", "<input file>"], "an existing exercise: the transport guard alone offers (FE-2), the quota allows");
+  assert.equal(storageLine(), null, "the storage line waits for the save guard too (owner, 2026-10-19)");
+  close();
+  // The storage line of a pilot account under each guard alone: never.
+  withGuards({ save: true });
+  fakeApi({ storage: usage([pilotAccount()]) });
+  await open();
+  assert.equal(storageLine(), null, "save guard alone: no line");
+  assert.equal(content.querySelectorAll("[data-exercise-media-file]").length, 0, "save guard alone: no upload either");
   close();
   await open("");
   assert.equal(content.querySelectorAll("[data-exercise-media-file]").length, 0, "a new exercise waits for the save guard");

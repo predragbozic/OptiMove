@@ -89,7 +89,9 @@ exercise the uploading administrator; a new exercise or a copy the coach's own r
 - a storage answer that **failed, is still loading, says the storage is off (503) or refuses (403)**
   enables nothing — an unknown account is never a permission; the "Read again" button is gone with it
   (reopening the editor reads again; the `exercise-media-storage-reload` action still works);
-- the storage line appears only for an account with a limit above zero.
+- the storage line appears only for an account with a limit above zero, and only once **both** guards
+  are on (owner, 2026-10-19): with the transport guard alone a pilot account gets the upload controls
+  FE-2 shipped but no line, so E-1 changes nothing on screen for any user until the save works.
 
 Tests: `frontend/tests/exercise-media-quota-gate.test.mjs` (the byte-identical editor at 0 B, the pilot
 account with each guard, the full account, Remove's independence and semantics, the club exercise's

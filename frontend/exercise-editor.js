@@ -193,9 +193,11 @@ function frameOffered(editor) {
 
 function renderExerciseMediaFields(editor) {
   const offered = uploadsOffered(editor);
-  // The storage line belongs to an account with a limit: a full one sees its
-  // numbers and why nothing can be added; a 0 B account sees no line at all.
-  const account = isUploadTransportEnabled() ? chargedStorageAccount(editor) : null;
+  // The storage line belongs to an account with a limit, and only once both
+  // guards are on (owner, 2026-10-19: E-1 changes nothing on screen for
+  // anyone, pilots included, until the save works): a full account then sees
+  // its numbers and why nothing can be added; a 0 B account never sees a line.
+  const account = isUploadTransportEnabled() && isMediaSaveEnabled() ? chargedStorageAccount(editor) : null;
   const quotaAccount = account && Number(account.limitBytes) > 0 ? account : null;
   return `
     <div class="exercise-media-fields" data-exercise-media-fields>

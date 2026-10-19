@@ -104,7 +104,7 @@ test("2. the transport guard on: the owner-resolved storage line, Upload and Use
   await editor.openExerciseEditor(state, handlers(), "e1");
   await settle();
   assert.equal(calls.find((call) => call.url.startsWith(STORAGE_ROUTE)).url, `${STORAGE_ROUTE}?exerciseId=e1`, "the target-aware selector");
-  assert.equal(content.querySelector("[data-exercise-media-storage]").textContent, "Storage (personal storage (uploading administrator)): 1.2 GB used of 5 GB · 3.8 GB free · one video up to 209.7 MB, one picture up to 10.5 MB");
+  assert.equal(content.querySelector("[data-exercise-media-storage]"), null, "E-1: no storage line until the save guard is on too");
   assert.deepEqual(controlsOf("video"), ["Preview", "<input file>"], "no Replace / Remove of a stored file until BE-3 can save it");
   assert.deepEqual(controlsOf("image"), ["Preview", "Edit link", "Replace with a file...", "Remove", "<input file>"]);
   assert.equal(content.querySelector('[data-exercise-media-file="video"]').getAttribute("accept"), "video/mp4,video/webm");
@@ -481,8 +481,8 @@ test("9. a storage read that fails never offers an upload (E-1): the editor stay
   fail = false;
   await editor.handleExerciseEditorAction(state, handlers(), { dataset: { action: "exercise-media-storage-reload" } });
   await settle();
-  assert.match(content.querySelector("[data-exercise-media-storage]").textContent, /3\.8 GB free/);
-  assert.ok(content.querySelector('[data-exercise-media-file="video"]'));
+  assert.equal(content.querySelector("[data-exercise-media-storage]"), null, "E-1: the line waits for the save guard");
+  assert.ok(content.querySelector('[data-exercise-media-file="video"]'), "the good read brings the upload control");
   assert.equal(storageReads, 2);
   editor.closeExerciseEditor(state, handlers());
   withGuards();
