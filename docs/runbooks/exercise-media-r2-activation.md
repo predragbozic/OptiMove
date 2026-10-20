@@ -313,6 +313,16 @@ Replace / Remove → the automatic thumbnail and the frame picker (#191). The li
 cards and the Builder's added-item snapshots carry the asset; the Builder's custom-exercise modal keeps its
 link fields (Q7).
 
+**The frame picker on iPhone (found in the pilot, 2026-10-20).** iOS Safari loads no media data for a video
+that has never played (`preload` is ignored, a `#t=` fragment on a blob: address is not honoured), so the
+picker's video stayed dark while the slider moved; Android Chrome draws the moment at once. The picker now
+asks its own video for the moment and, when no picture comes within 0.7 s, starts it muted and pauses it at
+once (allowed without a tap on iOS), which makes it load; a browser that refuses even that (iOS in Low Power
+Mode) shows "If the video stays dark, tap play on it once, then move to the moment." *Use this frame* takes
+the frame from the picker's own video when it shows the moment (the frame the coach sees), otherwise from a
+video of its own, woken the same way. Checked in Chrome (unchanged: no start, no sentence) and with the iOS
+behaviour simulated in Chrome; **not yet checked on a physical iPhone.**
+
 **CORS, checked from the app origin on 2026-10-19** (a signed GET of the C4 video, from the signed-in
 pilot account's page; nothing written): `GET` 200 and `GET` with `Range: bytes=0-1` **206** — CORS allows
 GET and the Range header, so the frame picker's `crossorigin="anonymous"` read of a stored video works;

@@ -31,6 +31,11 @@ export const FRAME_CAPTURE_BOUND_MS = 15_000;
 export const AUTOMATIC_THUMBNAIL_FRACTION = 0.25;
 // A seek to the very end often gives a black frame: the last moment offered is this much earlier.
 export const FRAME_END_MARGIN_SECONDS = 0.1;
+// How long a video may take to show a moment by itself before it is woken
+// (a muted start, paused at once - see wakeVideo).
+export const FRAME_PREVIEW_WAIT_MS = 700;
+// The picker's one sentence when a video stays dark (the browser refused even a muted start).
+export const FRAME_TAP_HINT = "If the video stays dark, tap play on it once, then move to the moment.";
 
 const FRAME_ERRORS = Object.freeze({
   frame_capture_unsupported: "This browser cannot take a frame from a video. Upload a picture instead.",
@@ -139,6 +144,100 @@ function awaitEvent(target, successEvents, failureEvents, code) {
   });
 }
 
+// iOS Safari loads no media data for a video that has never played: preload
+// is ignored and a `#t=` fragment on a blob: address is not honoured, so a
+// seek alone draws nothing and the video stays dark (Android and desktop
+// browsers load and draw at once). A muted, inline video may be started
+// without a tap on iOS, and starting it - paused at once - makes it load.
+// Only done when the picture is still missing after a short wait.
+const HAVE_CURRENT_DATA = 2;
+const NETWORK_LOADING = 2;
+const hasPicture = (video) => Number(video?.readyState) >= HAVE_CURRENT_DATA;
+// The moment last asked of each video: a start that ends late seeks to it, never to an older one.
+const wantedTimes = new WeakMap();
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer?.unref?.();
+  });
+}
+
+// Resolves after one of `events` or after `ms`, whichever comes first; never rejects.
+function eventOrDelay(target, events, ms) {
+  return new Promise((resolve) => {
+    let timer = null;
+    const done = () => {
+      clearTimeout(timer);
+      for (const name of events) target.removeEventListener?.(name, done);
+      resolve();
+    };
+    for (const name of events) target.addEventListener?.(name, done);
+    timer = setTimeout(done, ms);
+    timer?.unref?.();
+  });
+}
+
+// Resolves once the video has a picture or after `ms`, whichever comes first; never rejects.
+function pictureOrDelay(video, ms) {
+  return new Promise((resolve) => {
+    const events = ["loadeddata", "seeked", "canplay", "progress"];
+    let timer = null;
+    const done = () => {
+      clearTimeout(timer);
+      for (const name of events) video.removeEventListener?.(name, check);
+      resolve();
+    };
+    function check() { if (hasPicture(video)) done(); }
+    for (const name of events) video.addEventListener?.(name, check);
+    timer = setTimeout(done, ms);
+    timer?.unref?.();
+  });
+}
+
+// Starts the video muted and inline and pauses it at once. Resolves to true
+// when the browser allowed the start (iOS refuses it in Low Power Mode);
+// never throws; bounded by `ms`.
+async function wakeVideo(video, ms) {
+  try {
+    video.muted = true;
+    video.playsInline = true;
+    const started = video.play?.();
+    if (started && typeof started.then === "function") {
+      // A start that comes late is paused as well.
+      const allowed = started.then(() => { try { video.pause?.(); } catch { /* gone */ } return true; }, () => false);
+      return await Promise.race([allowed, delay(ms).then(() => false)]);
+    }
+    video.pause?.();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Shows `timeSeconds` in a video on the page (the picker's own). Resolves to
+// "shown" (the browser drew it by itself), "woken" (drawn after the muted
+// start) or "tap" (still no picture: the browser refused even a muted start,
+// as iOS does in Low Power Mode, so the coach taps play once). The muted
+// start is tried once per video element. Never rejects.
+export async function showFrameAt(video, timeSeconds, { waitMs = FRAME_PREVIEW_WAIT_MS } = {}) {
+  if (!video) return "tap";
+  wantedTimes.set(video, roundFrameTime(timeSeconds));
+  const seek = () => { try { video.currentTime = wantedTimes.get(video); } catch { /* no metadata yet */ } };
+  seek();
+  if (hasPicture(video)) return "shown";
+  // A browser already fetching (Android on a slow network) is given longer, until the picture comes, before it is started.
+  if (Number(video.networkState) === NETWORK_LOADING) await pictureOrDelay(video, waitMs * 4);
+  else await eventOrDelay(video, ["loadeddata", "seeked", "canplay"], waitMs);
+  if (hasPicture(video)) return "shown";
+  if (video.dataset?.frameWoken === "1") return "tap";
+  if (video.dataset) video.dataset.frameWoken = "1";
+  if (!(await wakeVideo(video, waitMs))) return "tap";
+  seek();
+  if (!hasPicture(video)) await eventOrDelay(video, ["loadeddata", "seeked", "canplay"], waitMs);
+  return hasPicture(video) ? "woken" : "tap";
+}
+
 function release(video) {
   try {
     video.removeAttribute?.("src");
@@ -191,6 +290,7 @@ export async function readVideoMetadata(src, { createVideo = defaultCreateVideo,
 export async function captureVideoFrame(src, timeSeconds, {
   createVideo = defaultCreateVideo, createCanvas = defaultCreateCanvas, crossOrigin = "", bound = FRAME_CAPTURE_BOUND_MS,
   mimeType = FRAME_MIME_TYPE, quality = FRAME_QUALITY, maxWidth = FRAME_MAX_WIDTH, videoName = "video", fileName = "",
+  wakeAfterMs = FRAME_PREVIEW_WAIT_MS,
 } = {}) {
   const canvas = createCanvas();
   const context = canvas?.getContext?.("2d") || null;
@@ -203,31 +303,72 @@ export async function captureVideoFrame(src, timeSeconds, {
     video.currentTime = target;
     await withBound(seeked, bound, "frame_capture_timeout");
     // Some browsers report the seek before the frame is decoded: wait for data if it is not there yet.
-    if (Number(video.readyState) < 2) {
-      await withBound(awaitEvent(video, ["loadeddata", "canplay"], ["error"], "frame_source_unreadable"), bound, "frame_capture_timeout");
+    if (!hasPicture(video)) {
+      const data = awaitEvent(video, ["loadeddata", "canplay"], ["error"], "frame_source_unreadable");
+      data.catch(() => { /* awaited below when still needed */ });
+      await Promise.race([data.catch(() => {}), delay(wakeAfterMs)]);
+      // Still nothing (iOS Safari loads nothing before playback): a muted start, paused at once, then the seek again.
+      if (!hasPicture(video) && (await wakeVideo(video, wakeAfterMs))) {
+        const again = awaitEvent(video, ["seeked"], ["error"], "frame_source_unreadable");
+        video.currentTime = target;
+        await withBound(again, bound, "frame_capture_timeout");
+      }
+      if (!hasPicture(video)) await withBound(data, bound, "frame_capture_timeout");
     }
     const actual = Number.isFinite(Number(video.currentTime)) ? Number(video.currentTime) : target;
-    const scale = width > maxWidth ? maxWidth / width : 1;
-    canvas.width = Math.max(1, Math.round(width * scale));
-    canvas.height = Math.max(1, Math.round(height * scale));
-    try {
-      context.drawImage(video, 0, 0, canvas.width, canvas.height);
-    } catch (error) {
-      throw frameError(isSecurityError(error) ? "frame_source_cross_origin" : "frame_capture_failed", error);
-    }
-    const blob = await withBound(new Promise((resolve, reject) => {
-      try {
-        canvas.toBlob(resolve, mimeType, quality);
-      } catch (error) {
-        reject(frameError(isSecurityError(error) ? "frame_source_cross_origin" : "frame_capture_failed", error));
-      }
-    }), bound, "frame_capture_timeout");
-    if (!blob || !Number(blob.size)) throw frameError("frame_capture_failed");
-    const name = fileName || frameFileName(videoName, actual);
-    const file = typeof globalThis.File === "function" ? new globalThis.File([blob], name, { type: mimeType }) : Object.assign(blob, { name });
-    return { file, timeSeconds: roundFrameTime(actual), width: canvas.width, height: canvas.height };
+    drawScaled(context, canvas, video, width, height, maxWidth);
+    return await encodeFrame(canvas, { mimeType, quality, bound, name: fileName || frameFileName(videoName, actual), timeSeconds: actual });
   } finally {
     release(video);
+  }
+}
+
+function drawScaled(context, canvas, video, width, height, maxWidth) {
+  const scale = width > maxWidth ? maxWidth / width : 1;
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  try {
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  } catch (error) {
+    throw frameError(isSecurityError(error) ? "frame_source_cross_origin" : "frame_capture_failed", error);
+  }
+}
+
+async function encodeFrame(canvas, { mimeType, quality, bound, name, timeSeconds }) {
+  const blob = await withBound(new Promise((resolve, reject) => {
+    try {
+      canvas.toBlob(resolve, mimeType, quality);
+    } catch (error) {
+      reject(frameError(isSecurityError(error) ? "frame_source_cross_origin" : "frame_capture_failed", error));
+    }
+  }), bound, "frame_capture_timeout");
+  if (!blob || !Number(blob.size)) throw frameError("frame_capture_failed");
+  const file = typeof globalThis.File === "function" ? new globalThis.File([blob], name, { type: mimeType }) : Object.assign(blob, { name });
+  return { file, timeSeconds: roundFrameTime(timeSeconds), width: canvas.width, height: canvas.height };
+}
+
+// The frame a video on the page shows right now (the picker's own: the
+// frame the coach sees, with no second video to open - which on iOS would
+// draw nothing until it had played). The frame is drawn at once, before the
+// call returns, so the element may be redrawn while the JPEG is made. Refused
+// when the video has no picture.
+export function captureFrameFromElement(video, {
+  createCanvas = defaultCreateCanvas, bound = FRAME_CAPTURE_BOUND_MS, mimeType = FRAME_MIME_TYPE, quality = FRAME_QUALITY,
+  maxWidth = FRAME_MAX_WIDTH, videoName = "video", fileName = "",
+} = {}) {
+  try {
+    const canvas = createCanvas();
+    const context = canvas?.getContext?.("2d") || null;
+    if (!context || typeof canvas.toBlob !== "function") throw frameError("frame_capture_unsupported");
+    if (!hasPicture(video)) throw frameError("frame_capture_failed");
+    const width = Number(video.videoWidth) || 0;
+    const height = Number(video.videoHeight) || 0;
+    if (!width || !height) throw frameError("frame_source_unreadable");
+    const actual = Number.isFinite(Number(video.currentTime)) ? Number(video.currentTime) : 0;
+    drawScaled(context, canvas, video, width, height, maxWidth);
+    return encodeFrame(canvas, { mimeType, quality, bound, name: fileName || frameFileName(videoName, actual), timeSeconds: actual });
+  } catch (error) {
+    return Promise.reject(error);
   }
 }
 
@@ -253,7 +394,8 @@ export function renderFramePickerHtml(picker, { slot = "image" } = {}) {
       <label class="exercise-media-frame-time">
         <span>Moment: <output data-exercise-media-frame-label="${escapeAttr(slot)}">${escapeHtml(formatFrameTime(time))}</output>${last ? ` of ${escapeHtml(formatFrameTime(picker.durationSeconds))}` : ""}</span>
         <input type="range" min="0" max="${escapeAttr(String(last))}" step="0.1" value="${escapeAttr(String(time))}" data-exercise-media-frame-time="${escapeAttr(slot)}" aria-label="Moment of the video"${last ? "" : " disabled"}>
-      </label>` : ""}
+      </label>
+      <p class="muted exercise-media-status" role="status" data-exercise-media-frame-hint="${escapeAttr(slot)}">${picker.needsTap ? escapeHtml(FRAME_TAP_HINT) : ""}</p>` : ""}
       ${picker.error ? `<p class="builder-error exercise-media-status" role="alert">${escapeHtml(picker.error)}</p>` : ""}
       <div class="exercise-media-actions">
         ${playable ? `<button class="plain-button compact-button" type="button" data-action="exercise-media-frame-use" data-slot="${escapeAttr(slot)}"${busy ? " disabled" : ""}>${busy ? "Taking the frame..." : "Use this frame"}</button>` : ""}
