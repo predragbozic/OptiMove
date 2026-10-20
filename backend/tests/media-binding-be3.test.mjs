@@ -8,6 +8,7 @@ import { createDisposableDatabase } from "./support/disposable-db.mjs";
 import { EXERCISE_COLLECTIONS_FIXTURE_SQL } from "./support/exercise-collections-fixture.mjs";
 
 import {readFile} from 'node:fs/promises';
+import {mediaRetentionDatabaseError} from '../src/mediaReferences.js';
 import {createMediaAccessService} from '../src/exerciseMedia.js';
 import {createR2UploadStore} from '../src/r2UploadStore.js';
 import {createMediaStorageService,MediaStorageError} from '../src/mediaStorage.js';
@@ -230,7 +231,7 @@ before(async () => {
   await client.query("alter table library.exercises add column owner_club_id uuid,add column place_id uuid,add column complexity_level_id uuid,add column starting_position_id uuid,add column attractor_id uuid");
   await client.query(EXERCISE_COLLECTIONS_FIXTURE_SQL);
   await client.query("create table public.clubs(id uuid primary key)");
-  for(const name of ['202610191100_media_storage_foundation.sql','202610191300_media_upload_lifecycle.sql'])await client.query(await readFile(new URL('../../migrations_v2/'+name,import.meta.url),'utf8'));
+  for(const name of ['202610191100_media_storage_foundation.sql','202610191300_media_upload_lifecycle.sql',...(process.env.MEDIA_L1_TEST==='true'?['202610201100_media_reference_protection.sql']:[])])await client.query(await readFile(new URL('../../migrations_v2/'+name,import.meta.url),'utf8'));
   process.env.MEDIA_STORAGE_ENABLED='true';
   await client.query("insert into public.user_global_roles (user_id,role,is_active) values ($1,'platform_admin',true)", [otherCoachId]);
   for (const [key, ownerScope, ownerId, active] of [
@@ -282,7 +283,7 @@ before(async () => {
   accessService=createMediaAccessService({pool,store:{signGet:async a=>({url:'https://private.test/'+a.id,expiresAt:new Date(Date.now()+600000).toISOString()})}});
   const {createMediaStorageRouter}=await import('../src/routes/mediaStorage.js');
   app.use('/api/media',(req,_res,next)=>{const athlete=req.headers['x-test-athlete']==='true';req.user={id:athlete?athleteUserId:coachId};req.authz={platformRoles:[],isAthlete:athlete,capabilities:{coachWorkspace:!athlete}};next();},createMediaStorageRouter({service:createMediaStorageService(pool),access:accessService}));
-  app.use((error, req, res, next) => res.status(error.status || 500).json({ error: error.message }));
+  app.use((error, req, res, next) => {error=mediaRetentionDatabaseError(error)||error;res.status(error.status || 500).json({ error: error.message,code:error.code });});
   server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -367,7 +368,7 @@ test('revoke denies Library/new reuse while an assigned plan snapshot retains pl
 });
 test('playback denies foreign/pending/inactive/deleting media and feature-off requests',async()=>{
  const foreign=await exercise('Foreign','user',otherCoachId),id=await exercise(),a=await ready({type:'exercise_edit',exerciseId:id});await patch(id,{video:selected(a.id)});assert.equal((await access({type:'exercise',id:foreign})).status,404);assert.equal((await access({type:'exercise',id})).status,200);
- await client.query("update media.assets set status='deleting' where id=$1",[a.id]);assert.equal((await access({type:'exercise',id})).status,404);const pending=await ready({type:'exercise_create'},'video',coachId,'pending');assert.equal((await access({type:'upload',id:pending.uploadId})).status,404);await client.query('update library.exercises set is_active=false where id=$1',[id]);assert.equal((await access({type:'exercise',id})).status,404);
+ if(process.env.MEDIA_L1_TEST==='true'){await assert.rejects(client.query("update media.assets set status='deleting' where id=$1",[a.id]),e=>e.code==='P7502');assert.equal((await access({type:'exercise',id})).status,200);}else{await client.query("update media.assets set status='deleting' where id=$1",[a.id]);assert.equal((await access({type:'exercise',id})).status,404);}const pending=await ready({type:'exercise_create'},'video',coachId,'pending');assert.equal((await access({type:'upload',id:pending.uploadId})).status,404);await client.query('update library.exercises set is_active=false where id=$1',[id]);assert.equal((await access({type:'exercise',id})).status,404);
  process.env.MEDIA_STORAGE_ENABLED='false';assert.equal((await access({type:'upload',id:a.uploadId})).status,503);assert.equal((await patch(id,{video:{source:'none'}})).status,503);
 });
 test('ready upload preview is uploader-only and rechecks its bound exercise',async()=>{const a=await ready();assert.equal((await access({type:'upload',id:a.uploadId})).body.video.mediaId,a.id);const foreign=await ready({type:'exercise_create'},'video',otherCoachId);assert.equal((await access({type:'upload',id:foreign.uploadId})).status,404);const saved=await request('/api/exercises',{name:'Preview target',media:{video:selected(a.id)}});assert.equal(saved.status,201);await client.query('update library.exercises set is_active=false where id=$1',[saved.body.id]);assert.equal((await access({type:'upload',id:a.uploadId})).status,404);});
@@ -480,4 +481,13 @@ test('main #188: image completion preserves asset/none snapshot choices instead 
 test('main #188: a mixed private copy snapshots inherited legacy image alongside its own R2 video',async()=>{
  const source=await exercise('Mixed media source','system',null),video=await ready(),copy=await request('/api/exercises/'+source+'/copy',{name:'Mixed media private copy',media:{video:selected(video.id)}});assert.equal(copy.status,201);
  assert.equal((await addExercise(copy.body.id)).status,201);const item=await oneItem(copy.body.id);assert.equal(item.video_source,'asset');assert.equal(item.video_asset_id,video.id);assert.equal(item.image_source,'legacy');assert.equal(item.image_url,'https://legacy.test/old.png');
+});
+
+if(process.env.MEDIA_L1_TEST==='true')test('L1 HTTP: protected plan deletion returns 409 and rolls back all item deletions',async()=>{
+ const {id,video}=await h1AssetExercise(),node=await makeSection(coachId);await addExercise(id,{},node);
+ const p=(await client.query('select d.plan_id from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id where s.id=(select plan_session_id from plans.plan_nodes where id=$1)',[node])).rows[0].plan_id;
+ await client.query("insert into library.program_access(plan_id,user_id,access_type,status) values($1,$2,'downloaded','accessed')",[p,athleteUserId]);
+ const before=(await client.query('select id,video_asset_id from plans.plan_items where video_asset_id=$1',[video.id])).rows;
+ const r=await request('/api/builder/plans/'+p,undefined,{method:'DELETE'});assert.equal(r.status,409,JSON.stringify(r.body));assert.equal(r.body.code,'media_retention_protected');
+ assert.deepEqual((await client.query('select id,video_asset_id from plans.plan_items where video_asset_id=$1',[video.id])).rows,before);
 });
