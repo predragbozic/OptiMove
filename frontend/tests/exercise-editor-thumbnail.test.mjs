@@ -542,3 +542,56 @@ test("10. a picker video the browser cannot read: the unreadable-video sentence,
   editor.closeExerciseEditor(state, h);
   withGuards();
 });
+
+test("11. any redraw of the editor while the picker is open asks the new video for the chosen moment again (a slot's Preview, any other redraw); the read-failure listener is attached once per video, however often it is asked", async () => {
+  withGuards({ transport: true, save: true });
+  const frames = fakeFrames({ duration: 40 });
+  const transport = fakeTransport();
+  const calls = [];
+  const h = handlers({ upload: transport.upload, ...frames.handlers, showFrameAt: async (video, time) => { calls.push({ video, time, inPage: content.contains(video) }); return "shown"; } });
+  fakeApi({ exercise: detail({ imageUrl: "https://drive.google.com/file/d/IMG_1/view" }) });
+  await editor.openExerciseEditor(state, h, "e1");
+  await settle();
+  await uploadVideo(h, transport);
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-pick", "image"));
+  await settle();
+  await settle();
+  const slider = picker().querySelector("[data-exercise-media-frame-time]");
+  slider.value = "22.3";
+  editor.handleExerciseEditorInput(state, { target: slider });
+  await settle();
+  const before = calls.length;
+  const oldVideo = picker().querySelector("video");
+  // The video slot's Preview redraws the whole editor: the picker's video is a new element.
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-preview-local", "video"));
+  await settle();
+  const newVideo = picker().querySelector("video");
+  assert.notEqual(newVideo, oldVideo, "the redraw replaced the video");
+  assert.equal(calls.length, before + 1, "asked once more, after the redraw");
+  assert.deepEqual({ same: calls.at(-1).video === newVideo, inPage: calls.at(-1).inPage, time: calls.at(-1).time }, { same: true, inPage: true, time: 22.3 });
+  // Any other redraw (the app's own) does the same.
+  h.rerender();
+  await settle();
+  assert.equal(calls.at(-1).video, picker().querySelector("video"));
+  assert.equal(calls.at(-1).time, 22.3);
+  // No redraw while the picker is closed asks anything.
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-cancel", "image"));
+  const closed = calls.length;
+  h.rerender();
+  await settle();
+  assert.equal(calls.length, closed);
+  // One read-failure listener per video, however many slides.
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-pick", "image"));
+  await settle();
+  await settle();
+  const video = picker().querySelector("video");
+  let errorListeners = 0;
+  const add = video.addEventListener.bind(video);
+  video.addEventListener = (name, ...rest) => { if (name === "error") errorListeners += 1; return add(name, ...rest); };
+  const s = picker().querySelector("[data-exercise-media-frame-time]");
+  for (const value of ["1", "2", "3", "4", "5"]) { s.value = value; editor.handleExerciseEditorInput(state, { target: s }); }
+  await settle();
+  assert.equal(errorListeners, 0, "already listening since it was first asked");
+  editor.closeExerciseEditor(state, h);
+  withGuards();
+});

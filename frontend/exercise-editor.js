@@ -70,7 +70,19 @@ const MEDIA_SLOTS = [
 const LINK_KINDS = { youtube: "YouTube", drive: "Google Drive", url: "Direct link" };
 const SAVE_BLOCKED_SENTENCE = "This uploaded file can't be saved with the exercise yet. Remove it, or use a link, to save the other changes.";
 
+// Every redraw replaces the whole editor, the picker's video included (the
+// app removes the overlay and inserts the new HTML at once): once the new
+// element is in the page, it is asked for the chosen moment again - whoever
+// redrew (a slot's Preview, a tag, Save, a storage answer).
 export function renderExerciseEditorHtml(editor, filterOptions = {}) {
+  const html = editorHtml(editor, filterOptions);
+  const picker = editor?.media?.image?.framePicker;
+  const state = framePickerState;
+  if (picker?.src && !picker.loading && state?.exerciseEditor === editor) queueMicrotask(() => previewFrame(state, picker));
+  return html;
+}
+
+function editorHtml(editor, filterOptions) {
   const d = editor.data;
   const held = uploadInFlight(editor);
   const blocked = mediaSaveBlocked(editor);
@@ -794,6 +806,9 @@ async function makeAutomaticThumbnail(state, handlers, editor) {
 // patched in place - a redraw would reopen the video. The handlers of the
 // open picker are kept for the slider, whose input has none.
 let framePickerHandlers = null;
+let framePickerState = null;
+// The picker videos already listening for a read failure (one listener each, however often they are asked).
+const failureHeard = new WeakSet();
 
 function previewFrame(state, picker) {
   const video = globalThis.document?.querySelector?.('[data-exercise-media-frame-video="image"]');
@@ -803,7 +818,12 @@ function previewFrame(state, picker) {
   const seq = (picker.previewSeq = (picker.previewSeq || 0) + 1);
   const current = () => state.exerciseEditor?.media?.image?.framePicker === picker && picker.previewSeq === seq;
   // A video the browser cannot read says so (no tap would help); it may fail after the answer too.
-  video.addEventListener?.("error", () => { if (state.exerciseEditor?.media?.image?.framePicker === picker) setFrameHint(picker, "error"); }, { once: true });
+  if (!failureHeard.has(video)) {
+    failureHeard.add(video);
+    video.addEventListener?.("error", () => {
+      if (state.exerciseEditor?.media?.image?.framePicker === picker && video.isConnected !== false) setFrameHint(picker, "error");
+    });
+  }
   Promise.resolve()
     .then(() => show(video, picker.timeSeconds))
     .then((result) => {
@@ -848,6 +868,7 @@ async function openFramePicker(state, handlers) {
   image.framePicker = picker;
   image.note = "";
   framePickerHandlers = handlers;
+  framePickerState = state;
   handlers.rerender();
   const live = () => state.exerciseEditor === editor && editor.media.image === image && image.framePicker === picker;
   try {
@@ -868,7 +889,6 @@ async function openFramePicker(state, handlers) {
     Object.assign(picker, { loading: false, src: "", error: describeFrameError(code) });
   }
   handlers.rerender();
-  previewFrame(state, picker);
 }
 
 async function useFrame(state, handlers) {
@@ -905,7 +925,6 @@ async function useFrame(state, handlers) {
     Object.assign(picker, { busy: false, error: describeFrameError(error?.code) });
   }
   handlers.rerender();
-  previewFrame(state, picker);
 }
 
 // The picker's slider: the moment in state and in the video, no redraw (a

@@ -392,3 +392,36 @@ test("6c. a video the browser cannot read at all (iOS refused the address): show
   assert.match(thumb.renderFramePickerHtml({ ...open, previewError: true }), /data-exercise-media-frame-hint="image">The video could not be read for a frame\. Upload a picture instead\.<\/p>/);
   assert.match(thumb.renderFramePickerHtml({ ...open, previewError: true }), /data-action="exercise-media-frame-use"/, "Use this frame stays: it reads the moment from a video of its own");
 });
+
+test("6d. every way a video can fail while it is being shown answers \"error\", never \"tap\": while a fetching browser is waited for, when the start itself fails, and on the seek after the start", async () => {
+  // A fetching browser (networkState 2) waited for: the failure ends the longer wait at once.
+  const fetching = new PhoneVideo();
+  fetching.networkState = 2;
+  Object.defineProperty(fetching, "currentTime", { configurable: true, get() { return 0; }, set() { setTimeout(() => { fetching.error = { code: 2 }; fetching.emit("error"); }, 5); } });
+  const started = Date.now();
+  assert.equal(await thumb.showFrameAt(fetching, 5, { waitMs: 400 }), "error");
+  assert.ok(Date.now() - started < 300, "not the whole 4 x 400 ms");
+  assert.equal(fetching.plays, 0);
+  // The start fails because the video cannot be read.
+  const refusedRead = new PhoneVideo();
+  refusedRead.play = function () { this.plays += 1; this.error = { code: 4 }; return Promise.reject(Object.assign(new Error("not supported"), { name: "NotSupportedError" })); };
+  assert.equal(await thumb.showFrameAt(refusedRead, 5, { waitMs: 20 }), "error");
+  assert.equal(refusedRead.plays, 1);
+  // Started, then the seek to the moment fails.
+  const lateFailure = new PhoneVideo();
+  let seeks = 0;
+  Object.defineProperty(lateFailure, "currentTime", {
+    configurable: true,
+    get() { return 0; },
+    set() {
+      seeks += 1;
+      setTimeout(() => {
+        if (seeks === 1) { lateFailure.emit("seeked"); return; }
+        lateFailure.error = { code: 3 };
+        lateFailure.emit("error");
+      }, 0);
+    },
+  });
+  assert.equal(await thumb.showFrameAt(lateFailure, 5, { waitMs: 20 }), "error");
+  assert.equal(lateFailure.plays, 1);
+});
