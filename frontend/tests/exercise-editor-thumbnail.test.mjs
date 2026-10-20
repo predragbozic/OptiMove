@@ -248,7 +248,7 @@ test("4. the picker: the video a quarter in with the slider to the end, the slid
   const p = image().framePicker;
   assert.deepEqual({ src: p.src, duration: p.durationSeconds, time: p.timeSeconds, crossOrigin: p.crossOrigin, sourceMediaId: p.sourceMediaId, loading: p.loading }, { src: "blob:preview", duration: 40, time: 10, crossOrigin: "", sourceMediaId: "new-1", loading: false });
   const video = picker().querySelector("video");
-  assert.equal(video.getAttribute("src"), "blob:preview#t=10");
+  assert.equal(video.getAttribute("src"), "blob:preview", "no #t= fragment: iOS Safari refuses a blob: address with one");
   assert.ok(video.hasAttribute("controls"));
   assert.ok(video.hasAttribute("muted"));
   assert.equal(video.hasAttribute("crossorigin"), false);
@@ -315,7 +315,7 @@ test("5. a stored video with BE-3: the picker opens the signed playback address 
   assert.deepEqual(frames.reads, [{ src: "https://r2.example/signed/vid-1?sig=1", crossOrigin: "anonymous" }]);
   const video = picker().querySelector("video");
   assert.equal(video.getAttribute("crossorigin"), "anonymous");
-  assert.equal(video.getAttribute("src"), "https://r2.example/signed/vid-1?sig=1#t=10");
+  assert.equal(video.getAttribute("src"), "https://r2.example/signed/vid-1?sig=1");
   await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-use", "image"));
   await settle();
   assert.deepEqual(frames.captures, [{ src: "https://r2.example/signed/vid-1?sig=1", time: 10, crossOrigin: "anonymous", videoName: "Dead Bug" }]);
@@ -507,6 +507,38 @@ test("9. the tap sentence goes by itself once the video shows a picture (a tap o
   await settle();
   assert.equal(fromElement.length, 0);
   assert.deepEqual(frames.captures.map((c) => c.time), [13]);
+  editor.closeExerciseEditor(state, h);
+  withGuards();
+});
+
+test("10. a picker video the browser cannot read: the unreadable-video sentence, not the tap one - from the answer, and from a failure after it", async () => {
+  withGuards({ transport: true, save: true });
+  const frames = fakeFrames({ duration: 40 });
+  const transport = fakeTransport();
+  let answer = "error";
+  const h = handlers({ upload: transport.upload, ...frames.handlers, showFrameAt: async () => answer });
+  fakeApi({ exercise: detail({ imageUrl: "https://drive.google.com/file/d/IMG_1/view" }) });
+  await editor.openExerciseEditor(state, h, "e1");
+  await settle();
+  await uploadVideo(h, transport);
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-pick", "image"));
+  await settle();
+  await settle();
+  const hint = () => picker().querySelector("[data-exercise-media-frame-hint]");
+  assert.equal(hint().textContent, "The video could not be read for a frame. Upload a picture instead.");
+  assert.deepEqual([image().framePicker.previewError, image().framePicker.needsTap], [true, false]);
+  // A later slide that shows the moment clears it.
+  answer = "shown";
+  const slider = picker().querySelector("[data-exercise-media-frame-time]");
+  slider.value = "12";
+  editor.handleExerciseEditorInput(state, { target: slider });
+  await settle();
+  await settle();
+  assert.equal(hint().textContent, "");
+  // The video fails after the answer: the sentence comes from its error event.
+  picker().querySelector("video").dispatchEvent(new Event("error"));
+  await settle();
+  assert.equal(hint().textContent, "The video could not be read for a frame. Upload a picture instead.");
   editor.closeExerciseEditor(state, h);
   withGuards();
 });

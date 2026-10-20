@@ -145,9 +145,11 @@ function awaitEvent(target, successEvents, failureEvents, code) {
 }
 
 // iOS Safari loads no media data for a video that has never played: preload
-// is ignored and a `#t=` fragment on a blob: address is not honoured, so a
-// seek alone draws nothing and the video stays dark (Android and desktop
-// browsers load and draw at once). A muted, inline video may be started
+// is ignored, so a seek alone draws nothing and the video stays dark (Android
+// and desktop browsers load and draw at once). It also refuses a blob:
+// address that carries a `#t=` fragment altogether - the video fails to load
+// (the crossed-out play icon, found in the pilot) - so the picker's address
+// has no fragment and the moment is asked of the video instead. A muted, inline video may be started
 // without a tap on iOS, and starting it - paused at once - makes it load.
 // Only done when the picture is still missing after a short wait.
 const HAVE_CURRENT_DATA = 2;
@@ -163,8 +165,9 @@ function delay(ms) {
   });
 }
 
-// Resolves after one of `events` or after `ms`, whichever comes first; never rejects.
-function eventOrDelay(target, events, ms) {
+// Resolves after one of `events` (or an error of the target) or after `ms`, whichever comes first; never rejects.
+function eventOrDelay(target, someEvents, ms) {
+  const events = [...someEvents, "error"];
   return new Promise((resolve) => {
     let timer = null;
     const done = () => {
@@ -181,14 +184,14 @@ function eventOrDelay(target, events, ms) {
 // Resolves once the video has a picture or after `ms`, whichever comes first; never rejects.
 function pictureOrDelay(video, ms) {
   return new Promise((resolve) => {
-    const events = ["loadeddata", "seeked", "canplay", "progress"];
+    const events = ["loadeddata", "seeked", "canplay", "progress", "error"];
     let timer = null;
     const done = () => {
       clearTimeout(timer);
       for (const name of events) video.removeEventListener?.(name, check);
       resolve();
     };
-    function check() { if (hasPicture(video)) done(); }
+    function check() { if (hasPicture(video) || video.error) done(); }
     for (const name of events) video.addEventListener?.(name, check);
     timer = setTimeout(done, ms);
     timer?.unref?.();
@@ -217,11 +220,14 @@ async function wakeVideo(video, ms) {
 
 // Shows `timeSeconds` in a video on the page (the picker's own). Resolves to
 // "shown" (the browser drew it by itself), "woken" (drawn after the muted
-// start) or "tap" (still no picture: the browser refused even a muted start,
-// as iOS does in Low Power Mode, so the coach taps play once). The muted
-// start is tried once per video element. Never rejects.
+// start), "tap" (still no picture: the browser refused even a muted start,
+// as iOS does in Low Power Mode, so the coach taps play once) or "error"
+// (the browser cannot read the video at all: no start, no tap helps). The
+// muted start is tried once per video element. Never rejects.
 export async function showFrameAt(video, timeSeconds, { waitMs = FRAME_PREVIEW_WAIT_MS } = {}) {
   if (!video) return "tap";
+  const failed = () => Boolean(video.error);
+  if (failed()) return "error";
   wantedTimes.set(video, roundFrameTime(timeSeconds));
   const seek = () => { try { video.currentTime = wantedTimes.get(video); } catch { /* no metadata yet */ } };
   seek();
@@ -229,12 +235,14 @@ export async function showFrameAt(video, timeSeconds, { waitMs = FRAME_PREVIEW_W
   // A browser already fetching (Android on a slow network) is given longer, until the picture comes, before it is started.
   if (Number(video.networkState) === NETWORK_LOADING) await pictureOrDelay(video, waitMs * 4);
   else await eventOrDelay(video, ["loadeddata", "seeked", "canplay"], waitMs);
+  if (failed()) return "error";
   if (hasPicture(video)) return "shown";
   if (video.dataset?.frameWoken === "1") return "tap";
   if (video.dataset) video.dataset.frameWoken = "1";
-  if (!(await wakeVideo(video, waitMs))) return "tap";
+  if (!(await wakeVideo(video, waitMs))) return failed() ? "error" : "tap";
   seek();
   if (!hasPicture(video)) await eventOrDelay(video, ["loadeddata", "seeked", "canplay"], waitMs);
+  if (failed()) return "error";
   return hasPicture(video) ? "woken" : "tap";
 }
 
@@ -376,7 +384,8 @@ export function captureFrameFromElement(video, {
 
 // The inline frame picker of the image field: the video with its own
 // controls, a slider for the moment, Use this frame / Cancel. The address
-// carries `#t=<moment>` so a redraw opens the video at the chosen moment.
+// carries no `#t=` fragment - iOS Safari refuses a blob: address with one -
+// the editor asks the video for the moment after every redraw instead.
 export function renderFramePickerHtml(picker, { slot = "image" } = {}) {
   if (!picker?.open) return "";
   if (picker.loading) {
@@ -390,12 +399,12 @@ export function renderFramePickerHtml(picker, { slot = "image" } = {}) {
     <div class="exercise-media-frame-picker" data-exercise-media-frame-picker="${escapeAttr(slot)}">
       ${playable ? `
       <p class="muted exercise-media-status">Move to the moment you want as the picture, then press Use this frame.</p>
-      <video class="exercise-media-frame-video" data-exercise-media-frame-video="${escapeAttr(slot)}" controls muted playsinline preload="auto"${picker.crossOrigin ? ` crossorigin="${escapeAttr(picker.crossOrigin)}"` : ""} src="${escapeAttr(`${picker.src}#t=${time}`)}"></video>
+      <video class="exercise-media-frame-video" data-exercise-media-frame-video="${escapeAttr(slot)}" controls muted playsinline preload="auto"${picker.crossOrigin ? ` crossorigin="${escapeAttr(picker.crossOrigin)}"` : ""} src="${escapeAttr(picker.src)}"></video>
       <label class="exercise-media-frame-time">
         <span>Moment: <output data-exercise-media-frame-label="${escapeAttr(slot)}">${escapeHtml(formatFrameTime(time))}</output>${last ? ` of ${escapeHtml(formatFrameTime(picker.durationSeconds))}` : ""}</span>
         <input type="range" min="0" max="${escapeAttr(String(last))}" step="0.1" value="${escapeAttr(String(time))}" data-exercise-media-frame-time="${escapeAttr(slot)}" aria-label="Moment of the video"${last ? "" : " disabled"}>
       </label>
-      <p class="muted exercise-media-status" role="status" data-exercise-media-frame-hint="${escapeAttr(slot)}">${picker.needsTap ? escapeHtml(FRAME_TAP_HINT) : ""}</p>` : ""}
+      <p class="muted exercise-media-status" role="status" data-exercise-media-frame-hint="${escapeAttr(slot)}">${escapeHtml(picker.needsTap ? FRAME_TAP_HINT : picker.previewError ? describeFrameError("frame_source_unreadable") : "")}</p>` : ""}
       ${picker.error ? `<p class="builder-error exercise-media-status" role="alert">${escapeHtml(picker.error)}</p>` : ""}
       <div class="exercise-media-actions">
         ${playable ? `<button class="plain-button compact-button" type="button" data-action="exercise-media-frame-use" data-slot="${escapeAttr(slot)}"${busy ? " disabled" : ""}>${busy ? "Taking the frame..." : "Use this frame"}</button>` : ""}

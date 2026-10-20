@@ -180,13 +180,15 @@ test("4. the picker's markup: the video at the moment with its own controls, the
   assert.equal(thumb.renderFramePickerHtml({ open: false }), "");
   assert.match(thumb.renderFramePickerHtml({ open: true, loading: true }), /Opening the video\.\.\./);
   const html = thumb.renderFramePickerHtml({ open: true, loading: false, src: "https://r2.example/v?sig=1&x=2", crossOrigin: "anonymous", durationSeconds: 40, timeSeconds: 10 });
-  assert.match(html, /<video class="exercise-media-frame-video" data-exercise-media-frame-video="image" controls muted playsinline preload="auto" crossorigin="anonymous" src="https:\/\/r2\.example\/v\?sig=1&amp;x=2#t=10"><\/video>/);
+  assert.match(html, /<video class="exercise-media-frame-video" data-exercise-media-frame-video="image" controls muted playsinline preload="auto" crossorigin="anonymous" src="https:\/\/r2\.example\/v\?sig=1&amp;x=2"><\/video>/);
   assert.match(html, /<input type="range" min="0" max="39.9" step="0.1" value="10" data-exercise-media-frame-time="image" aria-label="Moment of the video">/);
   assert.match(html, /Moment: <output data-exercise-media-frame-label="image">0:10<\/output> of 0:40/);
   assert.match(html, /data-action="exercise-media-frame-use" data-slot="image">Use this frame</);
   assert.match(html, /data-action="exercise-media-frame-cancel" data-slot="image">Cancel</);
   const local = thumb.renderFramePickerHtml({ open: true, src: "blob:clip", durationSeconds: 40, timeSeconds: 55 });
-  assert.match(local, /src="blob:clip#t=39.9"/, "a moment past the end is clamped");
+  assert.match(local, /src="blob:clip"/, "the address as it is: no #t= fragment (iOS Safari refuses a blob: address with one)");
+  assert.doesNotMatch(local, /#t=/);
+  assert.match(local, /value="39.9"/, "a moment past the end is clamped");
   assert.doesNotMatch(local, /crossorigin/);
   const busy = thumb.renderFramePickerHtml({ open: true, src: "blob:clip", durationSeconds: 40, timeSeconds: 10, busy: true });
   assert.match(busy, /data-slot="image" disabled>Taking the frame\.\.\.</);
@@ -372,4 +374,21 @@ test("6b. a slide while the video is being started wins: the late start seeks to
   setTimeout(() => { slow.played = true; slow.readyState = 2; slow.emit("loadeddata"); }, 50);
   assert.equal(await thumb.showFrameAt(slow, 5, { waitMs: 20 }), "shown");
   assert.equal(slow.plays, 0, "not started");
+});
+
+test("6c. a video the browser cannot read at all (iOS refused the address): showFrameAt says so at once and never starts it; the picker shows the unreadable-video sentence, not the tap one", async () => {
+  const broken = new PhoneVideo();
+  broken.error = { code: 4 };
+  assert.equal(await thumb.showFrameAt(broken, 5, { waitMs: 20 }), "error");
+  assert.equal(broken.plays, 0, "never started");
+  // It fails while the picker waits for it: an address the browser refuses answers a seek with an error, never a seeked.
+  const failing = new PhoneVideo();
+  Object.defineProperty(failing, "currentTime", { configurable: true, get() { return 0; }, set() { setTimeout(() => { failing.error = { code: 4 }; failing.emit("error"); }, 5); } });
+  const started = Date.now();
+  assert.equal(await thumb.showFrameAt(failing, 5, { waitMs: 400 }), "error");
+  assert.ok(Date.now() - started < 300, "the error ends the wait");
+  assert.equal(failing.plays, 0);
+  const open = { open: true, loading: false, src: "blob:clip", durationSeconds: 40, timeSeconds: 10 };
+  assert.match(thumb.renderFramePickerHtml({ ...open, previewError: true }), /data-exercise-media-frame-hint="image">The video could not be read for a frame\. Upload a picture instead\.<\/p>/);
+  assert.match(thumb.renderFramePickerHtml({ ...open, previewError: true }), /data-action="exercise-media-frame-use"/, "Use this frame stays: it reads the moment from a video of its own");
 });

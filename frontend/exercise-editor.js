@@ -802,20 +802,24 @@ function previewFrame(state, picker) {
   // Only the answer to the latest request counts: an older one ending late changes nothing.
   const seq = (picker.previewSeq = (picker.previewSeq || 0) + 1);
   const current = () => state.exerciseEditor?.media?.image?.framePicker === picker && picker.previewSeq === seq;
+  // A video the browser cannot read says so (no tap would help); it may fail after the answer too.
+  video.addEventListener?.("error", () => { if (state.exerciseEditor?.media?.image?.framePicker === picker) setFrameHint(picker, "error"); }, { once: true });
   Promise.resolve()
     .then(() => show(video, picker.timeSeconds))
     .then((result) => {
       if (!current()) return;
-      setFrameHint(picker, result === "tap");
+      setFrameHint(picker, result === "tap" || result === "error" ? result : "");
       if (result === "tap") clearHintOnPicture(state, picker, video);
     }, () => { /* the video is gone: nothing to show */ });
 }
 
-// The sentence lives in a status region that is always there; only its text changes (a screen reader reads the change).
-function setFrameHint(picker, needsTap) {
-  picker.needsTap = needsTap;
+// The sentence lives in a status region that is always there; only its text
+// changes (a screen reader reads the change). `kind`: "" | "tap" | "error".
+function setFrameHint(picker, kind) {
+  picker.needsTap = kind === "tap";
+  picker.previewError = kind === "error";
   const hint = globalThis.document?.querySelector?.('[data-exercise-media-frame-hint="image"]');
-  if (hint) hint.textContent = needsTap ? FRAME_TAP_HINT : "";
+  if (hint) hint.textContent = picker.needsTap ? FRAME_TAP_HINT : picker.previewError ? describeFrameError("frame_source_unreadable") : "";
 }
 
 // The sentence goes as soon as the video shows a picture - the coach tapped its
@@ -827,7 +831,7 @@ function clearHintOnPicture(state, picker, video) {
     if (state.exerciseEditor?.media?.image?.framePicker !== picker || video.isConnected === false) { off(); return; }
     if (Number(video.readyState) < 2) return;
     off();
-    if (picker.needsTap) setFrameHint(picker, false);
+    if (picker.needsTap) setFrameHint(picker, "");
   }
   for (const name of events) video.addEventListener?.(name, check);
 }
@@ -840,7 +844,7 @@ async function openFramePicker(state, handlers) {
   const image = editor.media.image;
   const source = frameSource(editor);
   if (!frameOffered(editor) || !source) return;
-  const picker = { open: true, loading: true, src: "", crossOrigin: "", sourceMediaId: source.sourceMediaId, durationSeconds: 0, timeSeconds: 0, busy: false, error: "", needsTap: false };
+  const picker = { open: true, loading: true, src: "", crossOrigin: "", sourceMediaId: source.sourceMediaId, durationSeconds: 0, timeSeconds: 0, busy: false, error: "", needsTap: false, previewError: false };
   image.framePicker = picker;
   image.note = "";
   framePickerHandlers = handlers;
