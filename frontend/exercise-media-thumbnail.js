@@ -28,6 +28,11 @@ export const FRAME_MIME_TYPE = "image/jpeg";
 export const FRAME_QUALITY = 0.85;
 export const FRAME_MAX_WIDTH = 1280;
 export const FRAME_CAPTURE_BOUND_MS = 15_000;
+// The automatic thumbnail gives up sooner - the whole attempt, not each of its
+// steps: nothing waits for it (the coach may choose a frame at once), and a
+// device that cannot make it should not keep "Making a thumbnail from the
+// video..." on screen.
+export const AUTOMATIC_THUMBNAIL_BOUND_MS = 6_000;
 export const AUTOMATIC_THUMBNAIL_FRACTION = 0.25;
 // A seek to the very end often gives a black frame: the last moment offered is this much earlier.
 export const FRAME_END_MARGIN_SECONDS = 0.1;
@@ -115,7 +120,23 @@ export function describeFrameOrigin(origin) {
 
 // ---- Capture ---------------------------------------------------------------
 
-const defaultCreateVideo = () => globalThis.document?.createElement?.("video") || null;
+// The capture video is put in the page, out of sight: iOS Safari loads and
+// draws no frame for a <video> that is not in the document (on an iPhone the
+// automatic thumbnail waited for its whole bound, then failed). 2 px, almost
+// transparent, behind everything, never focused or read out; removed again
+// when the capture is done (release).
+export function createCaptureVideo(doc = globalThis.document) {
+  const video = doc?.createElement?.("video") || null;
+  if (!video) return null;
+  video.setAttribute?.("aria-hidden", "true");
+  video.setAttribute?.("tabindex", "-1");
+  video.setAttribute?.("data-exercise-media-capture-video", "");
+  Object.assign(video.style || {}, { position: "fixed", left: "0", top: "0", width: "2px", height: "2px", opacity: "0.01", pointerEvents: "none", zIndex: "-1" });
+  (doc.body || doc.documentElement)?.appendChild?.(video);
+  return video;
+}
+
+const defaultCreateVideo = () => createCaptureVideo();
 const defaultCreateCanvas = () => globalThis.document?.createElement?.("canvas") || null;
 
 // A promise bounded in time; the timer never keeps a process alive.
@@ -251,6 +272,7 @@ function release(video) {
     video.removeAttribute?.("src");
     if (typeof video.load === "function") video.load();
   } catch { /* already released */ }
+  try { video.remove?.(); } catch { /* not in a page */ }
 }
 
 const isSecurityError = (error) => error?.name === "SecurityError" || /tainted|cross-origin|insecure/i.test(String(error?.message || ""));
@@ -282,12 +304,45 @@ async function openVideo(src, { createVideo, crossOrigin, bound }) {
   return { video, durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : 0, width, height };
 }
 
+// An attempt its caller may stop at any moment (a deadline, the coach taking
+// over): on a stop it rejects at once - with the code the stop's reason
+// carries, else frame_capture_timeout - and its video is released (it stops
+// loading and leaves the page) without waiting for a pending step.
+const stopCode = (signal) => (FRAME_ERROR_CODES.includes(signal?.reason?.code) ? signal.reason.code : "frame_capture_timeout");
+
+async function stoppable(signal, createVideo, run) {
+  if (signal?.aborted) throw frameError(stopCode(signal));
+  let video = null;
+  const tracked = () => (video = createVideo());
+  const check = () => { if (signal?.aborted) throw frameError(stopCode(signal)); };
+  const work = run(tracked, check);
+  if (!signal) return work;
+  work.catch(() => { /* settled through the race below */ });
+  let onStop = null;
+  const stopped = new Promise((_, reject) => {
+    onStop = () => {
+      if (video) release(video);
+      reject(frameError(stopCode(signal)));
+    };
+    signal.addEventListener("abort", onStop, { once: true });
+  });
+  stopped.catch(() => { /* settled through the race below */ });
+  try {
+    return await Promise.race([work, stopped]);
+  } finally {
+    signal.removeEventListener("abort", onStop);
+  }
+}
+
 // The duration and size of a video at an address (an object URL of a chosen
 // file, or a signed playback address). Nothing is drawn.
-export async function readVideoMetadata(src, { createVideo = defaultCreateVideo, crossOrigin = "", bound = FRAME_CAPTURE_BOUND_MS } = {}) {
-  const opened = await openVideo(src, { createVideo, crossOrigin, bound });
-  release(opened.video);
-  return { durationSeconds: opened.durationSeconds, width: opened.width, height: opened.height };
+export async function readVideoMetadata(src, { createVideo = defaultCreateVideo, crossOrigin = "", bound = FRAME_CAPTURE_BOUND_MS, signal = null } = {}) {
+  return stoppable(signal, createVideo, async (tracked, check) => {
+    const opened = await openVideo(src, { createVideo: tracked, crossOrigin, bound });
+    release(opened.video);
+    check();
+    return { durationSeconds: opened.durationSeconds, width: opened.width, height: opened.height };
+  });
 }
 
 // One frame of the video at `timeSeconds` (clamped to the video) as a JPEG
@@ -298,37 +353,45 @@ export async function readVideoMetadata(src, { createVideo = defaultCreateVideo,
 export async function captureVideoFrame(src, timeSeconds, {
   createVideo = defaultCreateVideo, createCanvas = defaultCreateCanvas, crossOrigin = "", bound = FRAME_CAPTURE_BOUND_MS,
   mimeType = FRAME_MIME_TYPE, quality = FRAME_QUALITY, maxWidth = FRAME_MAX_WIDTH, videoName = "video", fileName = "",
-  wakeAfterMs = FRAME_PREVIEW_WAIT_MS,
+  wakeAfterMs = FRAME_PREVIEW_WAIT_MS, signal = null,
 } = {}) {
   const canvas = createCanvas();
   const context = canvas?.getContext?.("2d") || null;
   if (!context || typeof canvas.toBlob !== "function") throw frameError("frame_capture_unsupported");
-  const { video, durationSeconds, width, height } = await openVideo(src, { createVideo, crossOrigin, bound });
-  try {
-    const wanted = roundFrameTime(timeSeconds);
-    const target = durationSeconds > 0 ? Math.min(wanted, lastFrameTime(durationSeconds)) : wanted;
-    const seeked = awaitEvent(video, ["seeked"], ["error"], "frame_source_unreadable");
-    video.currentTime = target;
-    await withBound(seeked, bound, "frame_capture_timeout");
-    // Some browsers report the seek before the frame is decoded: wait for data if it is not there yet.
-    if (!hasPicture(video)) {
-      const data = awaitEvent(video, ["loadeddata", "canplay"], ["error"], "frame_source_unreadable");
-      data.catch(() => { /* awaited below when still needed */ });
-      await Promise.race([data.catch(() => {}), delay(wakeAfterMs)]);
-      // Still nothing (iOS Safari loads nothing before playback): a muted start, paused at once, then the seek again.
-      if (!hasPicture(video) && (await wakeVideo(video, wakeAfterMs))) {
-        const again = awaitEvent(video, ["seeked"], ["error"], "frame_source_unreadable");
-        video.currentTime = target;
-        await withBound(again, bound, "frame_capture_timeout");
+  return stoppable(signal, createVideo, async (tracked, check) => {
+    const { video, durationSeconds, width, height } = await openVideo(src, { createVideo: tracked, crossOrigin, bound });
+    try {
+      check();
+      const wanted = roundFrameTime(timeSeconds);
+      const target = durationSeconds > 0 ? Math.min(wanted, lastFrameTime(durationSeconds)) : wanted;
+      const seeked = awaitEvent(video, ["seeked"], ["error"], "frame_source_unreadable");
+      video.currentTime = target;
+      await withBound(seeked, bound, "frame_capture_timeout");
+      check();
+      // Some browsers report the seek before the frame is decoded: wait for data if it is not there yet.
+      if (!hasPicture(video)) {
+        const data = awaitEvent(video, ["loadeddata", "canplay"], ["error"], "frame_source_unreadable");
+        data.catch(() => { /* awaited below when still needed */ });
+        await Promise.race([data.catch(() => {}), delay(wakeAfterMs)]);
+        check();
+        // Still nothing (iOS Safari loads nothing before playback): a muted start, paused at once, then the seek again.
+        if (!hasPicture(video) && (await wakeVideo(video, wakeAfterMs))) {
+          check();
+          const again = awaitEvent(video, ["seeked"], ["error"], "frame_source_unreadable");
+          video.currentTime = target;
+          await withBound(again, bound, "frame_capture_timeout");
+          check();
+        }
+        if (!hasPicture(video)) await withBound(data, bound, "frame_capture_timeout");
+        check();
       }
-      if (!hasPicture(video)) await withBound(data, bound, "frame_capture_timeout");
+      const actual = Number.isFinite(Number(video.currentTime)) ? Number(video.currentTime) : target;
+      drawScaled(context, canvas, video, width, height, maxWidth);
+      return await encodeFrame(canvas, { mimeType, quality, bound, name: fileName || frameFileName(videoName, actual), timeSeconds: actual });
+    } finally {
+      release(video);
     }
-    const actual = Number.isFinite(Number(video.currentTime)) ? Number(video.currentTime) : target;
-    drawScaled(context, canvas, video, width, height, maxWidth);
-    return await encodeFrame(canvas, { mimeType, quality, bound, name: fileName || frameFileName(videoName, actual), timeSeconds: actual });
-  } finally {
-    release(video);
-  }
+  });
 }
 
 function drawScaled(context, canvas, video, width, height, maxWidth) {

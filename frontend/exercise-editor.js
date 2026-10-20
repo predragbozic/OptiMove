@@ -4,7 +4,7 @@ import {
   isMediaSaveEnabled, isResumableCode, isUploadTransportEnabled, readStorageUsage, startUpload, uploadContextFor, UPLOAD_SLOTS, validateFile,
 } from "./exercise-media-upload.js";
 import {
-  automaticThumbnailTime, captureFrameFromElement, captureVideoFrame, describeFrameError, describeFrameOrigin, formatFrameTime, FRAME_ERROR_CODES,
+  AUTOMATIC_THUMBNAIL_BOUND_MS, automaticThumbnailTime, captureFrameFromElement, captureVideoFrame, describeFrameError, describeFrameOrigin, formatFrameTime, FRAME_ERROR_CODES,
   FRAME_TAP_HINT, frameOrigin, readVideoMetadata, renderFramePickerHtml, roundFrameTime, showFrameAt,
 } from "./exercise-media-thumbnail.js";
 import { prepareVideo } from "./exercise-media-prepare.js";
@@ -34,7 +34,7 @@ export const emptyMediaField = () => ({
   // the ready R2 video, the moment); the image field also holds the inline
   // frame picker, whether an automatic thumbnail is being made ("capturing")
   // and the sentence when none could be made ("note").
-  origin: null, framePicker: null, capturing: false, note: "",
+  origin: null, framePicker: null, capturing: false, captureStop: null, note: "",
   // The on-device preparation of a video: its progress, the size it came from,
   // and whether the file in the field is the converted one.
   prepare: null,
@@ -351,7 +351,7 @@ function renderMediaField(editor, spec, offered) {
         body = `
           ${offered && !field.linkOpen ? `<p class="muted exercise-media-status"${field.capturing ? ` role="status"` : ""}>${field.capturing ? "Making a thumbnail from the video..." : `No ${spec.noun} yet.`}</p>` : ""}
           ${field.note && !field.capturing ? `<p class="muted exercise-media-status" role="status">${escapeHtml(field.note)}</p>` : ""}
-          ${offered && !field.linkOpen ? `<div class="exercise-media-actions">${upload(`Upload ${spec.noun}...`, "exercise-media-pick")}${field.capturing ? "" : frame("Choose a frame of the video...")}${link()}</div>` : linkInput}`;
+          ${offered && !field.linkOpen ? `<div class="exercise-media-actions">${upload(`Upload ${spec.noun}...`, "exercise-media-pick")}${frame("Choose a frame of the video...")}${link()}</div>` : linkInput}`;
       }
   }
   return `
@@ -500,6 +500,7 @@ export function closeExerciseEditor(state, handlers) {
     for (const { slot } of MEDIA_SLOTS) editor.media[slot].controller?.abort();
   }
   releaseMediaPreviews(editor);
+  stopAutomaticThumbnail(editor.media?.image);
   state.exerciseEditor = emptyExerciseEditor();
   handlers.rerender();
   return true;
@@ -554,11 +555,13 @@ export async function chooseExerciseMediaFile(state, handlers, slot, file, { ori
   if (field.state === "stored") field.previous = { state: "stored", mediaId: field.mediaId };
   // A new video: the picker and a thumbnail being made belong to the old one.
   if (slot === "video") detachVideoDependents(editor);
+  // A picture chosen by the coach: a thumbnail still being made is stopped (its video stops loading).
+  else stopAutomaticThumbnail(field);
   releaseFieldPreview(field);
   Object.assign(field, {
     file, fileName: file.name || "file", fileSize: Number(file.size) || 0, mimeType: file.type || "", error: null, previewOpen: false,
     mediaId: "", uploadId: "", idempotencyKey: "", resumable: false, media: null, cancelOutcome: "", linkOpen: false,
-    origin: slot === "image" ? frameOrigin(origin || {}) : null, framePicker: null, capturing: false, note: "", prepare: null,
+    origin: slot === "image" ? frameOrigin(origin || {}) : null, framePicker: null, capturing: false, captureStop: null, note: "", prepare: null,
   });
   if (slot === "video") {
     // The chosen video is read and, when the server would refuse it as it
@@ -744,7 +747,18 @@ function safeObjectUrl(file) {
 function detachVideoDependents(editor) {
   const image = editor.media.image;
   image.framePicker = null;
+  stopAutomaticThumbnail(image);
+}
+
+// An automatic thumbnail in progress is stopped: its result is not used and
+// its video stops loading at once (the coach chose a frame, the video changed,
+// the editor closed).
+function stopAutomaticThumbnail(image) {
+  if (!image) return;
   image.capturing = false;
+  const stop = image.captureStop;
+  image.captureStop = null;
+  stop?.abort();
 }
 
 // An automatic thumbnail belongs to the video it was made from: when that
@@ -759,11 +773,11 @@ function dropAutomaticThumbnail(editor, keepSourceMediaId = "") {
 
 // The duration the server verified (the completed upload's media metadata),
 // or the file's own metadata read in the browser.
-async function videoDuration(handlers, video, src, { crossOrigin = "" } = {}) {
+async function videoDuration(handlers, video, src, { crossOrigin = "", signal = null } = {}) {
   const known = Number(video.media?.metadata?.durationSeconds);
   if (Number.isFinite(known) && known > 0) return known;
   const read = handlers.readVideoMetadata || readVideoMetadata;
-  return (await read(src, { crossOrigin })).durationSeconds;
+  return (await read(src, { crossOrigin, ...(signal ? { signal } : {}) })).durationSeconds;
 }
 
 // After a video upload that left the picture empty: a thumbnail a quarter
@@ -778,24 +792,34 @@ async function makeAutomaticThumbnail(state, handlers, editor) {
   if (!frameOffered(editor) || source?.kind !== "file") return;
   if (image.state !== "none" || String(editor.data.imageUrl || "").trim() || image.capturing || image.framePicker) return;
   const sourceMediaId = source.sourceMediaId;
+  // One deadline for the whole attempt (reading the video included), and a stop the coach's own choice uses too.
+  const stop = new AbortController();
+  const limit = Number(handlers.automaticThumbnailBoundMs) > 0 ? Number(handlers.automaticThumbnailBoundMs) : AUTOMATIC_THUMBNAIL_BOUND_MS;
+  const deadline = setTimeout(() => stop.abort(Object.assign(new Error("frame_capture_timeout"), { code: "frame_capture_timeout" })), limit);
+  deadline?.unref?.();
   image.capturing = true;
+  image.captureStop = stop;
   image.note = "";
   handlers.rerender();
-  const live = () => state.exerciseEditor === editor && editor.media.image === image && editor.media.video === video && video.state === "uploaded" && video.mediaId === sourceMediaId && image.capturing;
+  const live = () => state.exerciseEditor === editor && editor.media.image === image && editor.media.video === video && video.state === "uploaded" && video.mediaId === sourceMediaId && image.capturing && image.captureStop === stop;
   try {
-    const duration = await videoDuration(handlers, video, source.src);
+    const duration = await videoDuration(handlers, video, source.src, { signal: stop.signal });
     if (!live()) return;
     const timeSeconds = automaticThumbnailTime(duration);
     const capture = handlers.captureFrame || captureVideoFrame;
-    const frame = await capture(source.src, timeSeconds, { videoName: video.fileName || editor.data.name });
+    const frame = await capture(source.src, timeSeconds, { videoName: video.fileName || editor.data.name, bound: limit, signal: stop.signal });
     if (!live()) return;
     image.capturing = false;
+    image.captureStop = null;
     await chooseExerciseMediaFile(state, handlers, "image", frame.file, { origin: { purpose: "automatic_thumbnail", sourceMediaId, frameTimeSeconds: frame.timeSeconds } });
     return;
   } catch (error) {
     if (!live()) return;
     image.capturing = false;
+    image.captureStop = null;
     image.note = `No thumbnail was made from the video. ${describeFrameError(error?.code)}`;
+  } finally {
+    clearTimeout(deadline);
   }
   handlers.rerender();
 }
@@ -865,6 +889,8 @@ async function openFramePicker(state, handlers) {
   const source = frameSource(editor);
   if (!frameOffered(editor) || !source) return;
   const picker = { open: true, loading: true, src: "", crossOrigin: "", sourceMediaId: source.sourceMediaId, durationSeconds: 0, timeSeconds: 0, busy: false, error: "", needsTap: false, previewError: false };
+  // The coach chooses: an automatic thumbnail still being made is stopped (its result is not used, its video stops).
+  stopAutomaticThumbnail(image);
   image.framePicker = picker;
   image.note = "";
   framePickerHandlers = handlers;

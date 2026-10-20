@@ -425,3 +425,41 @@ test("6d. every way a video can fail while it is being shown answers \"error\", 
   assert.equal(await thumb.showFrameAt(lateFailure, 5, { waitMs: 20 }), "error");
   assert.equal(lateFailure.plays, 1);
 });
+
+test("8. a capture or a reading of the video can be stopped at any moment: it rejects at once with the stop's code (else the timeout's), its video is released and leaves the page; a stop given before the start makes no video; an unstopped capture works as before", async () => {
+  class PageVideo extends FakeVideo {
+    constructor(options) { super(options); this.removed = 0; }
+    remove() { this.removed += 1; }
+  }
+  // Waiting on a seek that never answers, then stopped by a deadline.
+  const stuck = new PageVideo({ seekSilent: true });
+  const deadline = new AbortController();
+  const capture = thumb.captureVideoFrame("blob:clip", 5, { createVideo: () => stuck, createCanvas: () => new FakeCanvas(), signal: deadline.signal });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(stuck.seeks, [5], "waiting on the seek");
+  const started = Date.now();
+  deadline.abort(Object.assign(new Error("deadline"), { code: "frame_capture_timeout" }));
+  assert.equal(await codeOf(capture), "frame_capture_timeout");
+  assert.ok(Date.now() - started < 100, "at once, not after the step's own bound");
+  assert.ok(stuck.released >= 1, "released: it stops loading");
+  assert.ok(stuck.removed >= 1, "it leaves the page");
+  // Reading the video, stopped while its metadata has not come (a stop without a coded reason: the coach chose).
+  const silent = new PageVideo({ silent: true });
+  const chosen = new AbortController();
+  const read = thumb.readVideoMetadata("blob:clip", { createVideo: () => silent, signal: chosen.signal });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  chosen.abort();
+  assert.equal(await codeOf(read), "frame_capture_timeout");
+  assert.ok(silent.removed >= 1);
+  // Already stopped: no video is made at all.
+  let made = 0;
+  const before = new AbortController();
+  before.abort();
+  assert.equal(await codeOf(thumb.captureVideoFrame("blob:clip", 1, { createVideo: () => { made += 1; return new PageVideo(); }, createCanvas: () => new FakeCanvas(), signal: before.signal })), "frame_capture_timeout");
+  assert.equal(made, 0);
+  // Not stopped: the capture works as before and its video leaves the page afterwards.
+  const fine = new PageVideo();
+  const frame = await thumb.captureVideoFrame("blob:clip", 2, { createVideo: () => fine, createCanvas: () => new FakeCanvas(), signal: new AbortController().signal });
+  assert.equal(frame.timeSeconds, 2);
+  assert.ok(fine.removed >= 1);
+});
