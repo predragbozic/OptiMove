@@ -1064,12 +1064,6 @@ function handleContentInput(event) {
     if (list) list.innerHTML = renderCoachHomeAthleteRows(coachHomeRows, coachHomePicker);
     return;
   }
-  const metadataInput = event.target.closest("[data-template-metadata-form] input[name='coverImageUrl'], [data-template-metadata-form] input[name='accessDurationDays']");
-  if (metadataInput) {
-    if (metadataInput.name === "coverImageUrl") scheduleProgramCoverPreview(metadataInput);
-    else syncTemplateMetadataForm(metadataInput.form, metadataInput);
-    return;
-  }
   // The create-form's name input has no value= binding to state, so a full
   // re-render (e.g. opening the athlete picker) would otherwise wipe it -
   // mirror every keystroke into state, same idea as createAthleteId.
@@ -1158,6 +1152,14 @@ function handleContentInput(event) {
     state.selectedTemplateId = null;
     state.templatePreview = emptyTemplatePreview();
     debounceTemplateResultRender();
+    return;
+  }
+  // Library settings: the cover picture follows the link while it is typed,
+  // the open-ended access note follows the access length (program-preview.js).
+  const metadataInput = event.target.closest("[data-template-metadata-form] input[name='coverImageUrl'], [data-template-metadata-form] input[name='accessDurationDays']");
+  if (metadataInput) {
+    if (metadataInput.name === "coverImageUrl") scheduleProgramCoverPreview(metadataInput);
+    else syncTemplateMetadataForm(metadataInput.form, metadataInput);
     return;
   }
   if (handleExerciseEditorInput(state, event)) return;
