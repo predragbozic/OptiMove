@@ -239,3 +239,137 @@ test("5. the transport sends a frame's two extra facts top level on the initiati
   assert.equal(await refused({ file: frame, slot: "image", context: edit, purpose: "video_frame", sourceMediaId: "vid-1", frameTimeSeconds: 1 }), "upload_transport_disabled");
   assert.equal(calls.length, before, "the guard first");
 });
+
+// A <video> on a page that, like iOS Safari, loads nothing before it has
+// played: a seek is acknowledged but no frame comes until play() was called
+// (or play() is refused, as in Low Power Mode, or never answers).
+class PhoneVideo {
+  constructor({ play = "allowed", time = 0, width = 1920, height = 1080 } = {}) {
+    Object.assign(this, { readyState: 1, videoWidth: width, videoHeight: height, duration: 40, dataset: {}, listeners: {}, seeks: [], plays: 0, pauses: 0, played: false, _time: time });
+    this.mode = play;
+  }
+  addEventListener(name, fn) { (this.listeners[name] ||= []).push(fn); }
+  removeEventListener(name, fn) { this.listeners[name] = (this.listeners[name] || []).filter((entry) => entry !== fn); }
+  emit(name) { for (const fn of [...(this.listeners[name] || [])]) fn({ target: this }); }
+  set currentTime(value) {
+    this._time = value;
+    this.seeks.push(value);
+    setTimeout(() => {
+      if (this.played) this.readyState = 2;
+      this.emit("seeked");
+      if (this.played) this.emit("loadeddata");
+    }, 0);
+  }
+  get currentTime() { return this._time; }
+  play() {
+    this.plays += 1;
+    if (this.mode === "refused") return Promise.reject(Object.assign(new Error("not allowed"), { name: "NotAllowedError" }));
+    if (this.mode === "silent") return new Promise(() => {});
+    this.played = true;
+    return Promise.resolve();
+  }
+  pause() { this.pauses += 1; }
+  removeAttribute(name) { if (name === "src") this._src = ""; }
+  load() {}
+  set src(value) {
+    this._src = value;
+    if (!value) return;
+    setTimeout(() => { this.emit("loadedmetadata"); }, 0);
+  }
+  get src() { return this._src; }
+}
+
+test("6. a phone that draws nothing before playback (iOS Safari): the picker's video is woken by a muted start, paused at once, and then shows the moment; a refused or silent start asks for a tap; a browser that draws by itself is never started; the frame the coach sees is taken from that video; the detached capture wakes its video too", async () => {
+  // Android / desktop: the moment is drawn by itself - never started.
+  const android = new PhoneVideo();
+  android.readyState = 2;
+  assert.equal(await thumb.showFrameAt(android, 12.34, { waitMs: 20 }), "shown");
+  assert.deepEqual([android.seeks, android.plays], [[12.3], 0]);
+  // A browser that draws after the seek (the data arrives a moment later): still never started.
+  const late = new PhoneVideo();
+  late.played = true; // it loads by itself
+  assert.equal(await thumb.showFrameAt(late, 3, { waitMs: 200 }), "shown");
+  assert.equal(late.plays, 0);
+  // iOS: nothing until a muted start; then the moment shows; the start is paused at once and tried once per video.
+  const iphone = new PhoneVideo();
+  assert.equal(await thumb.showFrameAt(iphone, 10, { waitMs: 20 }), "woken");
+  assert.equal(iphone.plays, 1);
+  assert.ok(iphone.pauses >= 1, "paused at once");
+  assert.equal(iphone.muted, true);
+  assert.equal(iphone.playsInline, true);
+  assert.equal(iphone.readyState, 2);
+  assert.deepEqual(iphone.seeks, [10, 10], "the moment asked for again after the start");
+  assert.equal(await thumb.showFrameAt(iphone, 22.3, { waitMs: 20 }), "shown");
+  assert.equal(iphone.plays, 1, "not started again");
+  // Low Power Mode: the start is refused - the coach is asked to tap play; not tried twice.
+  const lowPower = new PhoneVideo({ play: "refused" });
+  assert.equal(await thumb.showFrameAt(lowPower, 10, { waitMs: 20 }), "tap");
+  assert.equal(await thumb.showFrameAt(lowPower, 11, { waitMs: 20 }), "tap");
+  assert.equal(lowPower.plays, 1);
+  // A start that never answers is bounded.
+  const silent = new PhoneVideo({ play: "silent" });
+  const started = Date.now();
+  assert.equal(await thumb.showFrameAt(silent, 10, { waitMs: 20 }), "tap");
+  assert.ok(Date.now() - started < 1000);
+  assert.equal(await thumb.showFrameAt(null, 1), "tap", "no video: nothing to show");
+
+  // The frame the coach sees: drawn from the page's video at once (before the call returns), as a JPEG named for its moment.
+  const shown = new PhoneVideo({ time: 22.34 });
+  shown.readyState = 2;
+  const canvas = new FakeCanvas();
+  const pending = thumb.captureFrameFromElement(shown, { createCanvas: () => canvas, videoName: "Squat Jump.mp4" });
+  assert.equal(canvas.draws.length, 1, "drawn before the call returns");
+  assert.equal(canvas.draws[0][0], shown);
+  const frame = await pending;
+  assert.deepEqual([frame.timeSeconds, frame.width, frame.height, frame.file.name, frame.file.type], [22.3, 1280, 720, "Squat-Jump-frame-22_3s.jpg", "image/jpeg"]);
+  // No picture yet, a tainted canvas, no canvas: refused with their codes.
+  assert.equal(await codeOf(thumb.captureFrameFromElement(new PhoneVideo(), { createCanvas: () => new FakeCanvas() })), "frame_capture_failed");
+  assert.equal(await codeOf(thumb.captureFrameFromElement(shown, { createCanvas: () => new FakeCanvas({ drawError: securityError() }) })), "frame_source_cross_origin");
+  assert.equal(await codeOf(thumb.captureFrameFromElement(shown, { createCanvas: () => null })), "frame_capture_unsupported");
+
+  // The detached capture (the automatic thumbnail, or a moment not shown yet) on iOS: woken, then drawn.
+  const detached = new PhoneVideo();
+  const detachedCanvas = new FakeCanvas();
+  const captured = await thumb.captureVideoFrame("blob:clip", 7, { createVideo: () => detached, createCanvas: () => detachedCanvas, wakeAfterMs: 20 });
+  assert.equal(detached.plays, 1);
+  assert.deepEqual(detached.seeks, [7, 7]);
+  assert.equal(detachedCanvas.draws.length, 1);
+  assert.equal(captured.timeSeconds, 7);
+  // Refused there too: it waits for data as before and ends in the timeout sentence, not a dark picture.
+  const refused = new PhoneVideo({ play: "refused" });
+  assert.equal(await codeOf(thumb.captureVideoFrame("blob:clip", 7, { createVideo: () => refused, createCanvas: () => new FakeCanvas(), wakeAfterMs: 20, bound: 60 })), "frame_capture_timeout");
+
+  // The picker's markup: the status region is always there (a screen reader reads a change of its text), empty until the video cannot show the moment.
+  const open = { open: true, loading: false, src: "blob:clip", durationSeconds: 40, timeSeconds: 10 };
+  const quiet = thumb.renderFramePickerHtml(open);
+  assert.match(quiet, /role="status" data-exercise-media-frame-hint="image"><\/p>/);
+  assert.doesNotMatch(quiet, /frame-hint="image" hidden/);
+  assert.match(thumb.renderFramePickerHtml({ ...open, needsTap: true }), /data-exercise-media-frame-hint="image">If the video stays dark, tap play on it once, then move to the moment\.<\/p>/);
+  assert.equal(thumb.FRAME_TAP_HINT, "If the video stays dark, tap play on it once, then move to the moment.");
+  assert.doesNotMatch(thumb.renderFramePickerHtml({ ...open, src: "" }), /frame-hint/, "no sentence without a video");
+});
+
+test("6b. a slide while the video is being started wins: the late start seeks to the latest moment, never back to the older one; a browser already fetching is given longer and is not started when its data comes", async () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  // iOS: the start answers only when released by hand.
+  const v = new PhoneVideo();
+  let releasePlay = null;
+  v.play = function () { this.plays += 1; return new Promise((resolve) => { releasePlay = () => { this.played = true; resolve(); }; }); };
+  const opening = thumb.showFrameAt(v, 10, { waitMs: 300 });
+  await sleep(80); // the seek was acknowledged without a picture: waiting on the start now (bounded at 300 ms)
+  assert.equal(v.plays, 1);
+  const slide = thumb.showFrameAt(v, 22, { waitMs: 300 });
+  await sleep(20);
+  releasePlay(); // the start answers late, after the slide
+  assert.equal(await opening, "woken");
+  await Promise.all([opening, slide]);
+  await sleep(10);
+  assert.equal(v.currentTime, 22, "the latest moment, not the opening one");
+  assert.equal(v.seeks.at(-1), 22);
+  // Android on a slow network: fetching (networkState 2), the picture comes after 50 ms - more than one wait, less than the longer one.
+  const slow = new PhoneVideo();
+  slow.networkState = 2;
+  setTimeout(() => { slow.played = true; slow.readyState = 2; slow.emit("loadeddata"); }, 50);
+  assert.equal(await thumb.showFrameAt(slow, 5, { waitMs: 20 }), "shown");
+  assert.equal(slow.plays, 0, "not started");
+});

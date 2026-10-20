@@ -82,6 +82,8 @@ function fakeFrames({ duration = 40 } = {}) {
       frames.reads.push({ src, crossOrigin: options.crossOrigin || "" });
       return { durationSeconds: duration, width: 1920, height: 1080 };
     },
+    // The real one starts a video; jsdom has none.
+    showFrameAt: async () => "shown",
     loadPlayback: async (context) => {
       frames.playbacks.push(context);
       if (frames.playbackFail) throw Object.assign(new Error(frames.playbackFail), { code: frames.playbackFail });
@@ -381,4 +383,130 @@ test("7. the picker's CSS: a 44 px slider row at 16 px, 44 px actions, the video
   assert.match(css, /\.exercise-media-frame-time input\[type="range"\] \{[^}]*min-height: 44px;[^}]*font-size: 16px;/);
   assert.match(css, /\.exercise-media-frame-video \{[^}]*max-height: 280px;/);
   assert.match(css, /\.exercise-media-actions \.plain-button, \.exercise-media-actions \.text-action \{ min-height: 44px; min-width: 44px; \}/);
+});
+
+test("8. a phone that draws nothing before playback (iPhone): the picker asks its own video for the moment on open and on every slide; a moment it cannot show asks for one tap on play, in place, and the sentence goes once the moment shows; Use this frame takes the frame the coach sees from that video, drawn before the picker redraws; a video with no picture falls back to the capture of its own", async () => {
+  withGuards({ transport: true, save: true });
+  const frames = fakeFrames({ duration: 40 });
+  const transport = fakeTransport();
+  const shows = [];
+  let answer = "tap";
+  const fromElement = [];
+  const h = handlers({
+    upload: transport.upload,
+    ...frames.handlers,
+    showFrameAt: async (video, time) => { shows.push({ video, time, inPage: content.contains(video) }); return answer; },
+    captureFrameFromElement: (video, options) => {
+      fromElement.push({ video, inPage: content.contains(video), videoName: options.videoName });
+      return Promise.resolve({ file: new File(["jpg"], frameFileName(options.videoName, video.currentTime), { type: "image/jpeg" }), timeSeconds: 22.3, width: 1280, height: 720 });
+    },
+  });
+  fakeApi({ exercise: detail({ imageUrl: "https://drive.google.com/file/d/IMG_1/view" }) });
+  await editor.openExerciseEditor(state, h, "e1");
+  await settle();
+  await uploadVideo(h, transport);
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-pick", "image"));
+  await settle();
+  await settle();
+  const video = picker().querySelector("video");
+  assert.deepEqual(shows.map(({ time, inPage }) => ({ time, inPage })), [{ time: 10, inPage: true }], "asked for the opening moment in its own video");
+  assert.equal(shows[0].video, video);
+  const hint = () => picker().querySelector("[data-exercise-media-frame-hint]");
+  assert.equal(hint().textContent, "If the video stays dark, tap play on it once, then move to the moment.", "the tap sentence shows");
+  assert.equal(hint().hidden, false);
+  assert.equal(hint().getAttribute("role"), "status");
+  assert.equal(image().framePicker.needsTap, true);
+  // A slide: asked again, in place; once the moment shows the sentence goes, without a redraw.
+  answer = "woken";
+  const before = picker();
+  const slider = picker().querySelector("[data-exercise-media-frame-time]");
+  slider.value = "22.3";
+  editor.handleExerciseEditorInput(state, { target: slider });
+  await settle();
+  await settle();
+  assert.equal(picker(), before, "no redraw");
+  assert.equal(shows.at(-1).time, 22.3);
+  assert.equal(hint().textContent, "", "the sentence goes; the status region stays");
+  assert.equal(image().framePicker.needsTap, false);
+  // Use this frame: the picker's video shows the moment, so the frame comes from it - drawn while it is still in the page.
+  Object.defineProperty(video, "readyState", { value: 2, configurable: true });
+  Object.defineProperty(video, "currentTime", { value: 22.34, writable: true, configurable: true });
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-use", "image"));
+  await settle();
+  assert.deepEqual(fromElement.map(({ video: v, inPage, videoName }) => ({ same: v === video, inPage, videoName })), [{ same: true, inPage: true, videoName: "clip.mp4" }]);
+  assert.equal(frames.captures.length, 0, "no second video opened");
+  const request = transport.calls[1];
+  assert.deepEqual({ purpose: request.purpose, sourceMediaId: request.sourceMediaId, frameTimeSeconds: request.frameTimeSeconds }, { purpose: "video_frame", sourceMediaId: "new-1", frameTimeSeconds: 22.3 });
+  transport.release();
+  await settle();
+  // A picker whose video has no picture yet: Use this frame reads the moment from a video of its own, as before.
+  answer = "shown";
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-pick", "image"));
+  await settle();
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-use", "image"));
+  await settle();
+  assert.equal(fromElement.length, 1, "nothing taken from a video without a picture");
+  assert.equal(frames.captures.length, 1);
+  editor.closeExerciseEditor(state, h);
+  withGuards();
+});
+
+test("9. the tap sentence goes by itself once the video shows a picture (a tap on its own play, its scrubber, late data); an older answer ending late changes nothing; a video still seeking is not drawn - its moment is read from a video of its own", async () => {
+  withGuards({ transport: true, save: true });
+  const frames = fakeFrames({ duration: 40 });
+  const transport = fakeTransport();
+  const pending = [];
+  const fromElement = [];
+  const h = handlers({
+    upload: transport.upload,
+    ...frames.handlers,
+    showFrameAt: (video, time) => new Promise((resolve) => pending.push({ time, resolve })),
+    captureFrameFromElement: (video) => { fromElement.push(video); return Promise.resolve({ file: new File(["jpg"], "f.jpg", { type: "image/jpeg" }), timeSeconds: 5, width: 1280, height: 720 }); },
+  });
+  fakeApi({ exercise: detail({ imageUrl: "https://drive.google.com/file/d/IMG_1/view" }) });
+  await editor.openExerciseEditor(state, h, "e1");
+  await settle();
+  await uploadVideo(h, transport);
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-pick", "image"));
+  await settle();
+  await settle();
+  const hint = () => picker().querySelector("[data-exercise-media-frame-hint]");
+  const video = picker().querySelector("video");
+  // An older answer ending after a newer one: the newer one counts.
+  const slider = picker().querySelector("[data-exercise-media-frame-time]");
+  slider.value = "12";
+  editor.handleExerciseEditorInput(state, { target: slider });
+  await settle();
+  assert.deepEqual(pending.map((p) => p.time), [10, 12]);
+  pending[1].resolve("shown");
+  await settle();
+  pending[0].resolve("tap");
+  await settle();
+  assert.equal(hint().textContent, "", "the late, older 'tap' is ignored");
+  assert.equal(image().framePicker.needsTap, false);
+  // A 'tap' answer: the sentence shows - and goes by itself when the video gets a picture, no slide needed.
+  slider.value = "13";
+  editor.handleExerciseEditorInput(state, { target: slider });
+  await settle();
+  pending[2].resolve("tap");
+  await settle();
+  await settle();
+  assert.equal(hint().textContent, "If the video stays dark, tap play on it once, then move to the moment.");
+  video.dispatchEvent(new Event("timeupdate"));
+  await settle();
+  assert.notEqual(hint().textContent, "", "no picture yet: the sentence stays");
+  Object.defineProperty(video, "readyState", { value: 2, configurable: true });
+  video.dispatchEvent(new Event("playing"));
+  await settle();
+  assert.equal(hint().textContent, "");
+  assert.equal(image().framePicker.needsTap, false);
+  // A video still seeking: its picture may be the previous moment, so the frame is read from a video of its own.
+  Object.defineProperty(video, "seeking", { value: true, configurable: true });
+  Object.defineProperty(video, "currentTime", { value: 13, writable: true, configurable: true });
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-use", "image"));
+  await settle();
+  assert.equal(fromElement.length, 0);
+  assert.deepEqual(frames.captures.map((c) => c.time), [13]);
+  editor.closeExerciseEditor(state, h);
+  withGuards();
 });

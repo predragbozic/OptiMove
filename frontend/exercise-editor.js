@@ -4,8 +4,8 @@ import {
   isMediaSaveEnabled, isResumableCode, isUploadTransportEnabled, readStorageUsage, startUpload, uploadContextFor, UPLOAD_SLOTS, validateFile,
 } from "./exercise-media-upload.js";
 import {
-  automaticThumbnailTime, captureVideoFrame, describeFrameError, describeFrameOrigin, formatFrameTime, FRAME_ERROR_CODES, frameOrigin,
-  readVideoMetadata, renderFramePickerHtml, roundFrameTime,
+  automaticThumbnailTime, captureFrameFromElement, captureVideoFrame, describeFrameError, describeFrameOrigin, formatFrameTime, FRAME_ERROR_CODES,
+  FRAME_TAP_HINT, frameOrigin, readVideoMetadata, renderFramePickerHtml, roundFrameTime, showFrameAt,
 } from "./exercise-media-thumbnail.js";
 import { prepareVideo } from "./exercise-media-prepare.js";
 import { exerciseMediaOf, legacyMediaKind, mediaAccessAttributes } from "./media.js";
@@ -788,6 +788,50 @@ async function makeAutomaticThumbnail(state, handlers, editor) {
   handlers.rerender();
 }
 
+// The picker's own video is asked for its moment (on open, after a redraw
+// and on every slide): iOS Safari draws nothing in a video that has never
+// played (see showFrameAt). A moment it cannot show asks for one tap on play,
+// patched in place - a redraw would reopen the video. The handlers of the
+// open picker are kept for the slider, whose input has none.
+let framePickerHandlers = null;
+
+function previewFrame(state, picker) {
+  const video = globalThis.document?.querySelector?.('[data-exercise-media-frame-video="image"]');
+  if (!video || !picker?.src || picker.loading) return;
+  const show = framePickerHandlers?.showFrameAt || showFrameAt;
+  // Only the answer to the latest request counts: an older one ending late changes nothing.
+  const seq = (picker.previewSeq = (picker.previewSeq || 0) + 1);
+  const current = () => state.exerciseEditor?.media?.image?.framePicker === picker && picker.previewSeq === seq;
+  Promise.resolve()
+    .then(() => show(video, picker.timeSeconds))
+    .then((result) => {
+      if (!current()) return;
+      setFrameHint(picker, result === "tap");
+      if (result === "tap") clearHintOnPicture(state, picker, video);
+    }, () => { /* the video is gone: nothing to show */ });
+}
+
+// The sentence lives in a status region that is always there; only its text changes (a screen reader reads the change).
+function setFrameHint(picker, needsTap) {
+  picker.needsTap = needsTap;
+  const hint = globalThis.document?.querySelector?.('[data-exercise-media-frame-hint="image"]');
+  if (hint) hint.textContent = needsTap ? FRAME_TAP_HINT : "";
+}
+
+// The sentence goes as soon as the video shows a picture - the coach tapped its
+// play or used its own scrubber, or the data came late - not only on the next slide.
+function clearHintOnPicture(state, picker, video) {
+  const events = ["loadeddata", "seeked", "playing", "timeupdate"];
+  const off = () => { for (const name of events) video.removeEventListener?.(name, check); };
+  function check() {
+    if (state.exerciseEditor?.media?.image?.framePicker !== picker || video.isConnected === false) { off(); return; }
+    if (Number(video.readyState) < 2) return;
+    off();
+    if (picker.needsTap) setFrameHint(picker, false);
+  }
+  for (const name of events) video.addEventListener?.(name, check);
+}
+
 // The inline picker of the image field: the video opened at a quarter in,
 // the coach moves to a moment, Use this frame captures and uploads it
 // (`video_frame`). A stored file is read through its signed playback address.
@@ -796,9 +840,10 @@ async function openFramePicker(state, handlers) {
   const image = editor.media.image;
   const source = frameSource(editor);
   if (!frameOffered(editor) || !source) return;
-  const picker = { open: true, loading: true, src: "", crossOrigin: "", sourceMediaId: source.sourceMediaId, durationSeconds: 0, timeSeconds: 0, busy: false, error: "" };
+  const picker = { open: true, loading: true, src: "", crossOrigin: "", sourceMediaId: source.sourceMediaId, durationSeconds: 0, timeSeconds: 0, busy: false, error: "", needsTap: false };
   image.framePicker = picker;
   image.note = "";
+  framePickerHandlers = handlers;
   handlers.rerender();
   const live = () => state.exerciseEditor === editor && editor.media.image === image && image.framePicker === picker;
   try {
@@ -819,6 +864,7 @@ async function openFramePicker(state, handlers) {
     Object.assign(picker, { loading: false, src: "", error: describeFrameError(code) });
   }
   handlers.rerender();
+  previewFrame(state, picker);
 }
 
 async function useFrame(state, handlers) {
@@ -830,12 +876,22 @@ async function useFrame(state, handlers) {
   const element = globalThis.document?.querySelector?.('[data-exercise-media-frame-video="image"]');
   const shown = Number(element?.currentTime);
   const timeSeconds = roundFrameTime(Number(element?.readyState) > 0 && Number.isFinite(shown) ? shown : picker.timeSeconds);
+  const videoName = editor.media.video.fileName || editor.data.name;
+  const capture = handlers.captureFrame || captureVideoFrame;
+  // The frame the coach sees, taken from the picker's own video while it shows
+  // that moment - drawn now, before the redraw below replaces the element.
+  // Otherwise (no picture yet) the moment is read from a video of its own.
+  let drawn = null;
+  if (element && Number(element.readyState) >= 2 && !element.seeking && Number.isFinite(shown)) {
+    drawn = Promise.resolve((handlers.captureFrameFromElement || captureFrameFromElement)(element, { videoName }));
+    drawn.catch(() => { /* falls back below */ });
+  }
   Object.assign(picker, { timeSeconds, busy: true, error: "" });
   handlers.rerender();
   const live = () => state.exerciseEditor === editor && editor.media.image === image && image.framePicker === picker;
   try {
-    const capture = handlers.captureFrame || captureVideoFrame;
-    const frame = await capture(picker.src, timeSeconds, { crossOrigin: picker.crossOrigin, videoName: editor.media.video.fileName || editor.data.name });
+    const fromVideo = () => capture(picker.src, timeSeconds, { crossOrigin: picker.crossOrigin, videoName });
+    const frame = drawn ? await drawn.catch(fromVideo) : await fromVideo();
     if (!live()) return;
     image.framePicker = null;
     await chooseExerciseMediaFile(state, handlers, "image", frame.file, { origin: { purpose: "video_frame", sourceMediaId: picker.sourceMediaId, frameTimeSeconds: frame.timeSeconds } });
@@ -845,6 +901,7 @@ async function useFrame(state, handlers) {
     Object.assign(picker, { busy: false, error: describeFrameError(error?.code) });
   }
   handlers.rerender();
+  previewFrame(state, picker);
 }
 
 // The picker's slider: the moment in state and in the video, no redraw (a
@@ -854,10 +911,7 @@ function handleFrameSliderInput(state, slider) {
   if (!picker || picker.loading) return true;
   picker.timeSeconds = roundFrameTime(slider.value);
   const doc = globalThis.document;
-  const video = doc?.querySelector?.('[data-exercise-media-frame-video="image"]');
-  if (video) {
-    try { video.currentTime = picker.timeSeconds; } catch { /* not seekable yet */ }
-  }
+  previewFrame(state, picker);
   const label = doc?.querySelector?.('[data-exercise-media-frame-label="image"]');
   if (label) label.textContent = formatFrameTime(picker.timeSeconds);
   return true;
