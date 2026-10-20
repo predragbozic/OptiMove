@@ -4,12 +4,12 @@ Local implementation for review. Base: origin/main 7704909900c07da805fd6bc762190
 
 ## Scope and data model
 
-Migration: migrations_v2/202610201100_media_reference_protection.sql. Depends on deployed BE-1/BE-2 tables and existing Builder/program_access schema. No frontend, upload transport, codec, playback or ownership API changes.
+Migration: migrations_v2/202610201100_media_reference_protection.sql. Depends on deployed BE-1/BE-2 tables and existing Builder/program_access schema. No frontend, upload transport, codec, playback authorization or ownership API changes. BE-3 binding changes only its transaction lock order. This migration is still unpublished/local, so the original L1 migration is corrected in place; it is not an upgrade script for a database that applied commit 232692a.
 
 | Object | Purpose |
 | --- | --- |
 | media.asset_reference_matrix | Derived, security-invoker view of actual Library video/image selections, plan-item snapshots, derived-image ancestry, upload reservations and durable manifests. No cached refcount. |
-| media.retention_holds | Immutable reason, basis snapshot, plan, beneficiary, original owner/athlete and review-required flag. |
+| media.retention_holds | Immutable reason, basis snapshot, historical plan/beneficiary/owner/athlete UUIDs and review-required flag. No FK to deletable business rows. |
 | media.hold_assets | Immutable asset/slot/item provenance for each hold. Item/grant UUIDs deliberately survive their source row deletion. |
 | media.retention_events | Append-only reference, ancestry, grant and manifest events with reason, transaction ID and database role. |
 | backend/src/mediaReferences.js | Internal platform-admin inspection service and safe mapping of DB rejection codes. No new HTTP endpoint or hold-release API. |
@@ -32,23 +32,29 @@ Grant transfer to another plan/user creates a distinct immutable manifest. Revok
 
 Uncertainty remains explicit: old revoked/expired/historical records cannot prove what rights existed before L1. Backfill does not reconstruct missing facts. Existing structural references remain protected; a future GC must require review before removing those protections. Retention duration, post-subscription rules and verified commercial entitlements remain undecided. No 7/30/90-day policy is encoded.
 
+## Approved behavior and deletion
+
+Templates Access remains attached to its original template. Revoke deletes only its grant. Deleting the template removes its original content/grants as on main, while independent Builder copies and athlete assignments remain separate plans with independent media selections. Deleting a program from an athlete profile still physically deletes that plan and its item tree; the athlete loses that context. An immutable hold is never used by BE-3 as playback authorization.
+
+Historical source_plan_id, source_program_access_id, beneficiary_user_id, source_owner_user_id and assigned_athlete_id do not reference live business rows. RESTRICT remains only inside the private media evidence/asset graph. No plan-delete guard remains. A source_plan_deleted event preserves why evidence exists after business deletion. Revoke/reject record grant transitions without recapturing the old plan. Existing manifests were already captured by backfill, activation, assignment and item changes.
+
+Hard deletion of a user may still be blocked by pre-existing BE-1 storage/upload/audit FKs; L1 adds no new user/athlete deletion blocker and does not change ownership or accounting. Ordinary account deactivation/athlete archive is unchanged. No detached playback endpoint or reconstruction of a deleted template is introduced. Future perpetual content access would need separate product approval.
+
 ## Database protection and concurrency
 
-New/changed Library and item asset references, and new thumbnail ancestry/hold membership, lock and validate a ready asset of the correct kind. Raw SQL and bulk inserts receive the same status/kind protection as routes. Database triggers do not invent per-user authorization: trusted backend BE-3 checks still apply before a write. An unchanged existing selection and ordinary metadata edits do not acquire new rights.
+New/changed Library/item selections, derived-source links and manifest membership validate ready assets of the correct kind using FOR SHARE. These reader locks are mutually compatible but conflict with unavailable-status/object-key/kind updates. The transition guard rechecks live references using READ COMMITTED. An unchanged snapshot/metadata edit does not acquire new rights. SQL guardrails supplement, rather than replace, existing backend ownership and revoke authorization.
 
-Plan-item writes acquire plan locks before asset locks; capture uses FOR NO KEY UPDATE so concurrent FK key-share checks do not create a lock-upgrade cycle. Two-slot IDs and multi-plan move targets use sorted ordering. New refs and ready-to-unavailable/key/kind transitions serialize on the asset row. A protected ready asset cannot leave ready or change object key/kind. Existing FKs prevent removal of referenced metadata rows.
+Builder custom operations lock plan before node/exercise. Section, block, day and session copy entries lock the target plan and recheck target membership before child/FK writes. Program duplicate locks its source before copying and the copied-grant upsert. This matches plan DELETE's plan-before-children order, including legacy/flag-off custom operations.
 
-Reference creation, capture and ready-state transitions require READ COMMITTED. Repeatable-read/serializable attempts return P7503 rather than relying on a stale reference snapshot. General multi-row transactions may still deadlock or reach lock_timeout; PostgreSQL rolls the entire transaction back. Callers must retry the whole operation, never continue a failed transaction. No claim of globally deadlock-free arbitrary SQL is made.
+BE-3 binder locks uploader-owned uploads in sorted ID order before taking sorted asset FOR SHARE locks, matching BE-2 completion's upload-before-asset order. The upload row still serializes first exercise_create binding. The binder never mutates an asset or upgrades a shared asset lock.
 
-| SQLSTATE | HTTP | Public code |
-| --- | --- | --- |
-| P7501 | 409 | media_reference_unavailable |
-| P7502 | 409 | media_retention_protected |
-| P7503 | 409 | media_retention_isolation_required |
+Active-grant INSERT/UPDATE captures that grant; approve/use/assignment application paths already lock plan first. Revoke/reject do not need a plan lock and cannot invert DELETE's grant cascade. Raw administrative multi-row SQL must also follow plan-before-child/grant lock order; general arbitrary transactions can still deadlock and must retry as a whole after PostgreSQL abort. L1 does not promise globally deadlock-free arbitrary SQL.
 
-A protected plan hard-delete returns 409 and its existing transactional child deletes roll back. FK RESTRICT on hold plan/beneficiary/owner/athlete prevents destructive cascades from erasing protection; hard user deletion may instead fail through the existing FK handler. L1 deliberately blocks destructive deletion rather than transferring ownership or implementing anonymization. Existing archive/deactivation behavior remains available. Deleting an exercise can clear its source FK without altering independent item snapshots.
+Item triggers call capture_plan with the changed item ID: primary-key lookup and at most two media candidates per applicable basis. They do not rescan the whole plan. capture_members excludes existing manifest members before INSERT, avoiding repeated BEFORE guard work that ON CONFLICT alone would still execute. Full capture remains for backfill, activation/new entitlement and hierarchy moves. Cost is linear in items times applicable rights; many distinct rights still increase work and production backfill timing is unmeasured.
 
-The matrix covers present FK-backed selections, not JSON/string guesses. Future media reference tables require an explicit matrix/guard addition. A future GC must fail closed for unknown reference types, ambiguous entitlements and holds; it cannot treat an empty matrix as sufficient deletion authorization. No deletion candidate, retention-release function, R2 delete or quota-release path is shipped.
+Reference/capture/ready-state transitions require READ COMMITTED. Other isolation levels return P7503 rather than accepting a stale reference snapshot. HTTP mapping remains P7501 -> 409 media_reference_unavailable, P7502 -> 409 media_retention_protected (asset transitions only, not business DELETE), P7503 -> 409 media_retention_isolation_required.
+
+The matrix covers current FK-backed selections, not guessed JSON/string references. A future GC must fail closed for unknown references, ambiguous rights and retained manifests. Historical audit alone is not a perpetual right. No GC, R2 deletion, quota release, hold release or retention deadline is implemented.
 
 ## Migration, privileges and recovery
 
@@ -60,20 +66,22 @@ Trigger DDL/backfill takes database locks. Runner defaults are MIGRATION_LOCK_TI
 
 Failure recovery: runner transaction rollback removes all new objects and manifests; the migration is not recorded. Fix/review the cause before retrying. This rollback and an invalid-reference preflight rejection were rehearsed on disposable PostgreSQL. No migration SQL or recovery operation was executed in production.
 
-After a successful migration, an application rollback can leave the additive schema and protective triggers in place. Do not DROP the hold/audit tables to roll back: that would lose protected-right evidence. A complete schema reversal/release needs a separately approved forward migration and retention decision. L1 intentionally ships no destructive down migration.
+After successful migration, prefer roll-forward and keep the corrected backend lock ordering. An application-only rollback to old main while retaining the new triggers can reintroduce the reviewed lock inversions; it is not claimed to be a validated rollback. A full reversal requires a separately reviewed forward migration and a retention-safe recovery plan. Never DROP immutable manifests/audit as a shortcut. No destructive down migration is shipped. Startup/preflight and post-commit operational recovery must be approved before any production rollout.
 
-## Verification and reviews
+## Verification and independent reviews
 
-2026-10-20, local disposable PostgreSQL only. Both fixtures use the repository disposable-db helper, which rejects remote URLs/managed service roles/non-loopback server addresses before database creation. L1 exercises a non-superuser table-owner role and a separate denied role; random databases and roles are removed after tests.
+Local disposable PostgreSQL only. Fixtures use the repository safety helper, which validates loopback URLs/server addresses and rejects managed service roles before creation. L1 also runs as a non-superuser table owner plus a denied outsider role; random databases and roles are removed afterwards. No production SQL was executed.
 
-- L1 media-retention-l1.test.mjs: 21/21 passed. Includes migration backfill/transaction rollback/preflight failure, raw/bulk guards, reference derivation, grant ambiguity, reassignment/transfer, immutable manifests, revoke/delete, source deactivation, snapshot preservation, private ACL/RLS, five blocking transaction interleavings, isolation rejection and item/session/day moves. Actual BE-2 service completion/cancel runs against a mock object store; fixture-only quota setup verifies existing accounting.
-- BE-3/Builder media-binding-be3.test.mjs with MEDIA_L1_TEST=true: 25/25 passed, including ownership, revoke, H1, copies, custom exercises, legacy #188 behavior, playback/feature-off compatibility and transactional protected-delete HTTP 409.
-- No broad suite, browser check, R2 integration or production execution. No performance claim for production backfill.
+- L1 media-retention-l1.test.mjs: 24/24 PASS. Backfill, runner-compatible SQL, transactional rollback/preflight failure, private privileges, immutable evidence, unknown commercial grants, reassignment/transfer, user/athlete/plan deletion, snapshot/derivation matrix, revoke/reject-versus-delete races, status/reference races, isolation rejection and hierarchy relocation. Disposable instrumentation confirms 40 inserted items invoke delta membership capture 40 times, not N-squared. Existing BE-2 completion/cancellation accounting is checked with a mock object store; fixture-only quota setup does not change application quota logic.
+- BE-3 media-binding-be3.test.mjs with MEDIA_L1_TEST=true: 33/33 PASS, covering existing ownership/copy/H1/revoke/legacy behavior, actual HTTP template/assigned-program DELETE and Access revoke, independent athlete snapshots, shared R2 assets, custom DELETE races with flag on/off, section-copy/DELETE, repeated program-copy/grant-upsert/DELETE, binder waiting on completion, and block/day/session copy regressions.
+- Existing legacy Builder suites requiring a persistent local OPTIMOVE database were deliberately not executed. No broad suite, browser check, R2 integration or production backfill benchmark.
 
-Code review and security review were separate self-review passes by the implementing agent, not independent reviews or additional agents. Findings fixed before delivery: plan/asset lock ordering and FK-compatible plan locks; nullable grant/owner ambiguity; separate manifests after reassignment/transfer; derived-source audit; protecting referenced asset kind; adaptation of the old corruption-fixture test to expect the stronger L1 rejection. ACL, invoker/RLS exposure, SQL parameterization, immutable evidence, delete cascades, payment assumptions, isolation and rollback were checked. No unresolved blocking finding in those passes; independent review remains the next review gate.
+Two separate agents, neither an implementer, performed independent read-only code and security reviews. Both final verdicts: READY for the reviewed local correction, no remaining API blockers. Their initial additional findings were fixed before the final reviews: revoke grant-row/plan cascade inversion, section-copy child-FK/plan inversion, and repeated plain-copy grant-upsert/source-plan inversion. They did not execute tests or modify code. The implementing agent executed the disposable tests. Final added block/day/session regression changes affect tests only.
 
-## PR #196 isolation
+## PR #196 isolation and remaining risks
 
-Read-only GitHub filename/metadata check: PR #196 open against main, head b6f50463b3b6471c82e99fbfbb4c6c8e2bf6ef7d. No exact changed-file overlap with L1. Its backend changes are mediaInspection.js, mediaInspectionWorker.js, media-upload-be2.test.mjs and media fixtures; L1 does not edit them. Its frontend preparation, WebCodecs/Mediabunny, upload API/runbook files are untouched. No PR branch checkout, fetch, patch, review comment or merge was performed. Semantic integration risk remains normal: inspected completion produces ready assets before BE-3 binds them; L1 leaves that transport/inspection lifecycle intact. Recheck file overlap if either branch changes before a future PR.
+Read-only GitHub file/metadata recheck: PR #196 is closed, head df8487d4cf249b852548b0ed8e4b5493268fee37. Its changed-file list still has no exact overlap with L1, including the added BE-3 binder and Builder lock fixes. L1 does not edit mediaInspection.js/mediaInspectionWorker.js, upload transport, WebCodecs/Mediabunny, frontend, its fixtures or its API/runbook documents. No PR code was checked out, downloaded, changed or merged.
 
-Ready for local review only. Stop here pending owner approval; no push/PR/merge/deploy is authorized.
+Remaining gates: production privilege/data/lock/timeout preflight; backfill scale; separately approved retention-release/GC policy; and integration against the then-current main before a future PR. General raw SQL lock-order violations can abort and require complete retry; no R2 object or storage quota is changed by L1. Immutable evidence remains conservatively protected pending future policy, without granting playback.
+
+READY for local owner review only. No push, PR, merge, deployment, feature-flag change or production migration is authorized. Stop pending approval.

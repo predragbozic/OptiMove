@@ -17,12 +17,13 @@ create table media.retention_holds (
   id uuid primary key default gen_random_uuid(),
   basis_key text not null unique,
   basis_type text not null check (basis_type in ('assigned_plan','program_grant','unverified_commercial','ambiguous_grant')),
-  source_plan_id uuid not null references plans.plans(id) on delete restrict,
+  -- Historical identities deliberately have no FK to deletable business rows.
+  source_plan_id uuid not null,
   -- Deliberately historical UUID, not a cascading FK: revoke may delete the grant.
   source_program_access_id uuid,
-  beneficiary_user_id uuid references public.users(id) on delete restrict,
-  source_owner_user_id uuid references public.users(id) on delete restrict,
-  assigned_athlete_id uuid references public.athletes(id) on delete restrict,
+  beneficiary_user_id uuid,
+  source_owner_user_id uuid,
+  assigned_athlete_id uuid,
   review_required boolean not null,
   reason text not null check (length(reason)>0),
   basis_snapshot jsonb not null check (jsonb_typeof(basis_snapshot)='object'),
@@ -78,7 +79,7 @@ declare a media.assets%rowtype;
 begin
   if p_asset is null then return; end if;
   if current_setting('transaction_isolation')<>'read committed' then raise exception 'media_retention_isolation_required' using errcode='P7503'; end if;
-  select * into a from media.assets where id=p_asset for update;
+  select * into a from media.assets where id=p_asset for share;
   if not found or a.status<>'ready' or a.kind<>p_kind then
     raise exception 'media_reference_unavailable' using errcode='P7501';
   end if;
@@ -155,24 +156,48 @@ create trigger media_l1_derivation_event after insert or update of source_video_
   for each row execute function media.l1_derivation_event();
 
 -- A retention manifest is NOT playback authorization or proof of payment.
-create function media.l1_capture_plan(p_plan uuid) returns void language plpgsql as $$
-declare p plans.plans%rowtype; basis record; hold_uuid uuid; new_hold boolean; inserted record;
+-- Insert only missing members: ON CONFLICT alone still runs BEFORE INSERT guards.
+create function media.l1_capture_members(p_hold uuid,p_item uuid,p_video uuid,p_image uuid) returns void language plpgsql as $$
+declare inserted record;
 begin
+  for inserted in
+    insert into media.hold_assets(hold_id,asset_id,plan_item_id,slot)
+      select p_hold,v.asset,p_item,v.slot from (values(p_video,'video'),(p_image,'image')) v(asset,slot)
+      where v.asset is not null and not exists(select 1 from media.hold_assets h
+        where h.hold_id=p_hold and h.asset_id=v.asset and h.plan_item_id=p_item and h.slot=v.slot)
+      order by v.asset,v.slot on conflict(hold_id,asset_id,plan_item_id,slot) do nothing returning asset_id,slot
+  loop
+    insert into media.retention_events(asset_id,hold_id,event,source_table,source_id,reason,details)
+      values(inserted.asset_id,p_hold,'manifest_asset_captured','plans.plan_items',p_item,
+        'Preserve acquired-use evidence; not playback authorization',jsonb_build_object('slot',inserted.slot));
+  end loop;
+end; $$;
+
+-- Full scan only on a new entitlement/assignment or hierarchy move; item writes use a primary-key delta.
+create function media.l1_capture_plan(p_plan uuid,p_item uuid default null,p_grant uuid default null) returns void language plpgsql as $$
+declare p plans.plans%rowtype; basis record; hold_uuid uuid; new_hold boolean; member record; delta plans.plan_items%rowtype;
+begin
+  if p_item is not null then
+    select i.* into delta from plans.plan_items i join plans.plan_sessions ps on ps.id=i.plan_session_id
+      join plans.plan_days d on d.id=ps.plan_day_id where i.id=p_item and d.plan_id=p_plan;
+    if not found or (delta.video_asset_id is null and delta.image_asset_id is null) then return; end if;
+  end if;
   select * into p from plans.plans where id=p_plan for no key update;
-  if not found or not exists(select 1 from plans.plan_items i join plans.plan_sessions s on s.id=i.plan_session_id
-    join plans.plan_days d on d.id=s.plan_day_id where d.plan_id=p_plan and (i.video_asset_id is not null or i.image_asset_id is not null)) then return; end if;
+  if not found then return; end if;
+  if p_item is null and not exists(select 1 from plans.plan_items i join plans.plan_sessions ps on ps.id=i.plan_session_id
+    join plans.plan_days d on d.id=ps.plan_day_id where d.plan_id=p_plan and (i.video_asset_id is not null or i.image_asset_id is not null)) then return; end if;
   if current_setting('transaction_isolation')<>'read committed' then raise exception 'media_retention_isolation_required' using errcode='P7503'; end if;
   for basis in
     select 'assigned:'||p.id||':'||p.athlete_id as basis_key,'assigned_plan'::text as kind,null::uuid as grant_id,null::uuid as beneficiary,
       p.athlete_id as athlete,false as needs_review,jsonb_build_object('planStatus',p.status,'athleteId',p.athlete_id) as snapshot
-      where p.athlete_id is not null and not coalesce(p.is_template,false) and p.status='active' and coalesce(p.is_active,true)
+      where p_grant is null and p.athlete_id is not null and not coalesce(p.is_template,false) and p.status='active' and coalesce(p.is_active,true)
     union all
     select 'grant:'||g.id||':'||p.id||':'||coalesce(g.user_id::text,'unknown'),case when g.access_type='purchased' then 'unverified_commercial'
       when g.access_type in ('assigned','coach_assigned','downloaded') then 'program_grant' else 'ambiguous_grant' end,
       g.id,g.user_id,null,coalesce(g.access_type not in ('assigned','coach_assigned','downloaded'),true),
       jsonb_build_object('accessType',g.access_type,'status',g.status,'startsAt',g.starts_at,'expiresAt',g.expires_at,'source',g.source,'license',g.license_snapshot)
       from library.program_access g where g.plan_id=p_plan and g.status in ('accessed','used','completed')
-        and (g.expires_at is null or g.expires_at>now())
+        and (g.expires_at is null or g.expires_at>now()) and (p_grant is null or g.id=p_grant)
         -- Own copy receipts are history, not another person's acquired right.
         and not (g.access_type is not distinct from 'copied' and g.user_id is not distinct from p.created_by_user_id)
   loop
@@ -185,17 +210,14 @@ begin
     if not new_hold then select id into hold_uuid from media.retention_holds where basis_key=basis.basis_key; end if;
     if new_hold then insert into media.retention_events(hold_id,event,source_table,source_id,reason,details)
       values(hold_uuid,'hold_created','plans.plans',p_plan,'Acquired-use retention captured; not playback authorization',basis.snapshot); end if;
-    for inserted in
-      insert into media.hold_assets(hold_id,asset_id,plan_item_id,slot)
-        select hold_uuid,v.asset,i.id,v.slot from plans.plan_items i join plans.plan_sessions s on s.id=i.plan_session_id
-        join plans.plan_days d on d.id=s.plan_day_id cross join lateral(values(i.video_asset_id,'video'),(i.image_asset_id,'image')) v(asset,slot)
-        where d.plan_id=p_plan and v.asset is not null order by v.asset,i.id,v.slot
-        on conflict(hold_id,asset_id,plan_item_id,slot) do nothing returning asset_id,plan_item_id,slot
-    loop
-      insert into media.retention_events(asset_id,hold_id,event,source_table,source_id,reason,details)
-        values(inserted.asset_id,hold_uuid,'manifest_asset_captured','plans.plan_items',inserted.plan_item_id,
-          'Preserve independently acquired snapshot',jsonb_build_object('slot',inserted.slot));
-    end loop;
+    if p_item is not null then
+      perform media.l1_capture_members(hold_uuid,delta.id,delta.video_asset_id,delta.image_asset_id);
+    else
+      for member in select i.id,i.video_asset_id,i.image_asset_id from plans.plan_items i
+        join plans.plan_sessions ps on ps.id=i.plan_session_id join plans.plan_days d on d.id=ps.plan_day_id
+        where d.plan_id=p_plan and (i.video_asset_id is not null or i.image_asset_id is not null) order by i.id
+      loop perform media.l1_capture_members(hold_uuid,member.id,member.video_asset_id,member.image_asset_id); end loop;
+    end if;
   end loop;
 end; $$;
 
@@ -219,7 +241,7 @@ begin
   end if;
   if TG_TABLE_SCHEMA='plans' and TG_OP<>'DELETE' then
     select d.plan_id into plan_uuid from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id where s.id=NEW.plan_session_id;
-    perform media.l1_capture_plan(plan_uuid);
+    perform media.l1_capture_plan(plan_uuid,NEW.id);
   end if;
   return null;
 end; $$;
@@ -251,26 +273,31 @@ create trigger media_l1_plan_event after insert or update of athlete_id,is_templ
   for each row execute function media.l1_plan_event();
 create function media.l1_grant_event() returns trigger language plpgsql as $$
 begin
-  if TG_WHEN='BEFORE' then
-    perform media.l1_capture_plan(OLD.plan_id);
-    if TG_OP='UPDATE' then return NEW; end if;
-  end if;
+  -- Evidence already exists from grant creation/activation and item deltas.
+  -- A revoke/delete must never take grant -> plan locks against plan DELETE's cascade.
+  if TG_WHEN='BEFORE' and TG_OP='UPDATE' then return NEW; end if;
   insert into media.retention_events(event,source_table,source_id,reason,details)
     values('grant_'||lower(TG_OP),'library.program_access',coalesce(NEW.id,OLD.id),
       'Grant transition recorded; historical event alone is not an entitlement',
       jsonb_build_object('before',case when TG_OP<>'INSERT' then to_jsonb(OLD) else null end,'after',case when TG_OP<>'DELETE' then to_jsonb(NEW) else null end));
-  if TG_WHEN='AFTER' then perform media.l1_capture_plan(NEW.plan_id); end if;
+  if TG_WHEN='AFTER' and NEW.status in ('accessed','used','completed') and (NEW.expires_at is null or NEW.expires_at>now()) then
+    perform media.l1_capture_plan(NEW.plan_id,null,NEW.id);
+  end if;
   if TG_OP='DELETE' then return OLD; end if;return NEW;
 end; $$;
 create trigger media_l1_grant_before before update or delete on library.program_access for each row execute function media.l1_grant_event();
 create trigger media_l1_grant_after after insert or update on library.program_access for each row execute function media.l1_grant_event();
-create function media.l1_plan_delete_guard() returns trigger language plpgsql as $$
+-- Deletion remains the existing business operation; immutable evidence is detached.
+create function media.l1_plan_delete_event() returns trigger language plpgsql as $$
 begin
-  if exists(select 1 from media.retention_holds where source_plan_id=OLD.id) then
-    raise exception 'media_retention_protected' using errcode='P7502';
-  end if;return OLD;
+  insert into media.retention_events(hold_id,event,source_table,source_id,reason,details)
+    select h.id,'source_plan_deleted','plans.plans',OLD.id,
+      'Business row deleted; historical evidence retained without playback rights',
+      jsonb_build_object('athleteId',OLD.athlete_id,'ownerUserId',OLD.created_by_user_id)
+    from media.retention_holds h where h.source_plan_id=OLD.id;
+  return OLD;
 end; $$;
-create trigger media_l1_plan_delete_guard before delete on plans.plans for each row execute function media.l1_plan_delete_guard();
+create trigger media_l1_plan_delete_event before delete on plans.plans for each row execute function media.l1_plan_delete_event();
 
 -- Append-only: no L1 API, TTL or background process can release protection.
 create trigger retention_holds_immutable before update or delete or truncate on media.retention_holds for each statement execute function media.reject_audit_mutation();

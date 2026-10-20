@@ -70,11 +70,11 @@ test('reference matrix derives Library, plan snapshot, thumbnail ancestry and up
 test('assigned plan captures independent manifest and source removal/revoke never releases it',async()=>{
  const a=await asset(),p=await plan(true),i=await item(p,a),h=await holds(p);assert.equal(h[0].basis_type,'assigned_plan');
  await pool.query("update plans.plan_items set video_asset_id=null,video_source='none' where id=$1",[i]);await pool.query('update plans.plans set is_active=false,status=\'archived\' where id=$1',[p.id]);
- assert.equal((await pool.query('select count(*) from media.hold_assets where hold_id=$1 and asset_id=$2',[h[0].id,a])).rows[0].count,'1');await rejectCode(pool.query("update media.assets set status='deleting' where id=$1",[a]),'P7502');await rejectCode(pool.query('delete from plans.plans where id=$1',[p.id]),'P7502');
+ assert.equal((await pool.query('select count(*) from media.hold_assets where hold_id=$1 and asset_id=$2',[h[0].id,a])).rows[0].count,'1');await rejectCode(pool.query("update media.assets set status='deleting' where id=$1",[a]),'P7502');await pool.query('delete from plans.plans where id=$1',[p.id]);assert.equal((await holds(p)).length,1);
 });
 test('existing grants preserve media through revoke/deletion and distinguish commercial uncertainty',async()=>{
  for(const type of ['downloaded','coach_assigned','assigned','purchased','copied']){const a=await asset(),p=await plan();await item(p,a);const g=await grant(p,type),h=await holds(p);assert.equal(h.length,1);assert.equal(h[0].review_required,['purchased','copied'].includes(type));
- await pool.query("update library.program_access set status='revoked' where id=$1",[g]);await pool.query('delete from library.program_access where id=$1',[g]);assert.equal((await holds(p))[0].id,h[0].id);await rejectCode(pool.query('delete from plans.plans where id=$1',[p.id]),'P7502');}
+ await pool.query("update library.program_access set status='revoked' where id=$1",[g]);await pool.query('delete from library.program_access where id=$1',[g]);assert.equal((await holds(p))[0].id,h[0].id);await pool.query('delete from plans.plans where id=$1',[p.id]);assert.equal((await holds(p)).length,1);}
 });
 test('requested/rejected/revoked/expired grants and own copy receipts are not permanent entitlement proof',async()=>{
  for(const [type,status,expiry,user] of [['purchased','requested',null,viewer],['downloaded','rejected',null,viewer],['purchased','revoked',null,viewer],['downloaded','completed','2000-01-01',viewer],['copied','accessed',null,owner]]){const p=await plan(),a=await asset();await item(p,a);await grant(p,type,status,expiry,user);assert.equal((await holds(p)).length,0);}
@@ -127,9 +127,9 @@ test('concurrency: an unavailable-status transition wins and the waiting new ref
  const a=await asset(),p=await plan();await race(c=>c.query("update media.assets set status='deleting' where id=$1",[a]),
  (c,t)=>c.query(`/* ${t} */ insert into plans.plan_items(plan_session_id,video_source,video_asset_id) values($1,'asset',$2)`,[p.session,a]),'P7501','l1_status_wins');assert.equal((await pool.query('select count(*) from plans.plan_items where video_asset_id=$1',[a])).rows[0].count,'0');
 });
-test('concurrency: a grant protects its media before a waiting plan deletion can commit',async()=>{
+test('concurrency: a waiting plan deletion succeeds without removing the committed grant manifest',async()=>{
  const a=await asset(),p=await plan();await item(p,a);await race(c=>c.query("insert into library.program_access(plan_id,user_id,access_type,status) values($1,$2,'downloaded','accessed')",[p.id,viewer]),
- (c,t)=>c.query(`/* ${t} */ delete from plans.plans where id=$1`,[p.id]),'P7502','l1_grant_wins');assert.equal((await holds(p)).length,1);
+ (c,t)=>c.query(`/* ${t} */ delete from plans.plans where id=$1`,[p.id]),undefined,'l1_grant_wins');assert.equal((await holds(p)).length,1);
 });
 test('concurrency: deleted plan cannot receive a successful grant or partial manifest',async()=>{
  const a=await asset(),p=await plan();await item(p,a);await race(c=>c.query('delete from plans.plans where id=$1',[p.id]),
@@ -140,6 +140,14 @@ test('concurrency: grant and new item serialize plan before assets without a loc
  await race(c=>c.query("insert into library.program_access(plan_id,user_id,access_type,status) values($1,$2,'downloaded','accessed')",[p.id,viewer]),
  c=>c.query("insert into plans.plan_items(plan_session_id,video_source,video_asset_id) values($1,'asset',$2)",[p.session,b]),undefined,'l1_grant_item');
  await item(p,b);const h=await holds(p);assert.equal((await pool.query('select count(distinct asset_id) from media.hold_assets where hold_id=$1',[h[0].id])).rows[0].count,'2');
+});
+
+test('revoke/reject never wait for a plan lock held by a concurrent plan DELETE',async()=>{
+ for(const action of ['delete','reject']){const p=await plan(),a=await asset();await item(p,a);const g=await grant(p),h=await holds(p),deleter=await pool.connect(),revoker=await pool.connect();
+ try{await deleter.query('begin');await deleter.query('select id from plans.plans where id=$1 for update',[p.id]);await revoker.query('begin');await revoker.query("set local lock_timeout='250ms'");
+ if(action==='delete')await revoker.query('delete from library.program_access where id=$1',[g]);else await revoker.query("update library.program_access set status='rejected' where id=$1",[g]);
+ await revoker.query('commit');await deleter.query('delete from plans.plans where id=$1',[p.id]);await deleter.query('commit');assert.equal((await holds(p))[0].id,h[0].id);
+ }finally{await deleter.query('rollback');await revoker.query('rollback');deleter.release();revoker.release();}}
 });
 
 test('repeatable-read cannot use a stale snapshot to bypass new-reference/status checks',async()=>{
@@ -154,6 +162,23 @@ test('item/session/day relocation captures the receiving assigned-plan right and
 });
 test('historical usage events alone do not create retention holds; ordinary unassigned draft remains deletable',async()=>{
  const p=await plan(),a=await asset();await item(p,a);const g=await grant(p,'downloaded','rejected');await pool.query("insert into library.program_usage_events(program_access_id,event_type) values($1,'completed')",[g]);assert.equal((await holds(p)).length,0);await pool.query('delete from plans.plans where id=$1',[p.id]);assert.equal((await pool.query('select status from media.assets where id=$1',[a])).rows[0].status,'ready');
+});
+
+test('detached manifests survive deletion of beneficiary, athlete and source owner business rows',async()=>{
+ const beneficiary=randomUUID();await pool.query('insert into public.users(id) values($1)',[beneficiary]);
+ const p=await plan();await item(p,await asset());await grant(p,'downloaded','accessed',null,beneficiary);await pool.query('delete from public.users where id=$1',[beneficiary]);assert.equal((await holds(p))[0].beneficiary_user_id,beneficiary);
+ const sport=randomUUID();await pool.query('insert into public.athletes(id) values($1)',[sport]);const q=await plan();await pool.query('update plans.plans set athlete_id=$2,is_template=false where id=$1',[q.id,sport]);await item(q,await asset());await pool.query('delete from public.athletes where id=$1',[sport]);assert.equal((await holds(q))[0].assigned_athlete_id,sport);assert.equal((await pool.query('select count(*) from plans.plans where id=$1',[q.id])).rows[0].count,'0');
+ const sourceOwner=randomUUID();await pool.query('insert into public.users(id) values($1)',[sourceOwner]);const r=await plan(true);await pool.query('update plans.plans set created_by_user_id=$2 where id=$1',[r.id,sourceOwner]);await item(r,await asset());await pool.query('delete from public.users where id=$1',[sourceOwner]);assert.equal((await holds(r))[0].source_owner_user_id,sourceOwner);
+});
+
+test('bulk item copy invokes delta membership capture once per item, not once per existing item',async()=>{
+ // Transactional instrumentation exists only in this disposable fixture and is rolled back.
+ const p=await plan(true),a=await asset(),c=await pool.connect();try{await c.query('begin');
+ await c.query('create table media.l1_test_visits(id uuid)');
+ await c.query('alter function media.l1_capture_members(uuid,uuid,uuid,uuid) rename to l1_capture_members_impl');
+ await c.query(`create function media.l1_capture_members(h uuid,i uuid,v uuid,m uuid) returns void language plpgsql as $$ begin insert into media.l1_test_visits values(i);perform media.l1_capture_members_impl(h,i,v,m);end; $$`);
+ const n=40;await c.query("insert into plans.plan_items(plan_session_id,video_source,video_asset_id) select $1,'asset',$2 from generate_series(1,$3)",[p.session,a,n]);assert.equal((await c.query('select count(*) from media.l1_test_visits')).rows[0].count,String(n));
+ }finally{await c.query('rollback');c.release();}
 });
 
 test('BE-2 upload completion and cancellation retain their existing quota lifecycle with L1 guards',async()=>{
