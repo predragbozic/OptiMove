@@ -3786,6 +3786,9 @@ input:focus {
   z-index: 1;
   width: min(1180px, calc(100vw - 56px));
   max-height: min(820px, calc(100vh - 56px));
+  /* dvh: on phones 100vh includes the browser's own bars, which hid the
+     modal's bottom edge behind them. */
+  max-height: min(820px, calc(100dvh - 56px));
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto auto minmax(0, 1fr);
@@ -3915,21 +3918,213 @@ body.specific-program-open {
   gap: 6px;
 }
 
+/* Program preview (program-preview.js): the header stays put and everything
+   under it - Library settings, Assign, Program access, the program - scrolls
+   as one region, so the end of a long settings form is always reachable. */
+.program-template-preview-modal {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.program-preview-scroll {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.program-preview-scroll > .program-preview-body {
+  overflow: visible;
+}
+
 .program-metadata-form {
   padding: 14px 20px;
   border-bottom: 1px solid var(--line);
   background: var(--surface-soft);
 }
 
+.program-metadata-section {
+  min-width: 0;
+  margin: 0 0 14px;
+  padding: 0 0 14px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.program-metadata-section legend {
+  float: left;
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.program-metadata-section legend + * {
+  clear: both;
+}
+
 .program-metadata-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 10px;
 }
 
 .program-metadata-grid .search-field {
   margin: 0;
+}
+
+.program-metadata-form select,
+.program-metadata-form textarea,
+.program-metadata-form input:not([type="checkbox"]) {
+  width: 100%;
+  min-height: 42px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.program-metadata-form select {
+  padding: 0 10px;
+}
+
+.program-metadata-form textarea {
+  display: block;
+  min-height: 96px;
+  padding: 10px 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.program-metadata-form select:focus,
+.program-metadata-form textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(31, 111, 104, 0.14);
+}
+
+.program-metadata-form input:disabled {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.program-metadata-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.program-metadata-description {
+  margin: 0;
+}
+
+.program-metadata-cover {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+.program-metadata-cover-field .search-field {
+  margin: 0;
+}
+
+/* Same look as the library card's media box (.program-library-card-media),
+   so the coach sees what the card will show. */
+.program-metadata-cover-preview {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background:
+    linear-gradient(135deg, rgba(31, 122, 111, 0.9), rgba(35, 51, 66, 0.92)),
+    var(--surface-soft);
+}
+
+.program-metadata-cover-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.program-metadata-cover-initials {
+  color: #fff;
+  font-size: 22px;
+  font-weight: 950;
+}
+
+.program-metadata-cover-error {
+  padding: 8px 10px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.program-metadata-permissions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 8px;
+}
+
+.program-metadata-permission {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.program-metadata-permission input[type="checkbox"] {
+  flex: 0 0 20px;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.program-metadata-permission strong,
+.program-metadata-permission small {
+  display: block;
+}
+
+.program-metadata-permission strong {
+  font-size: 13px;
+}
+
+.program-metadata-permission small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.program-metadata-permission:has(input:checked) {
+  border-color: var(--accent);
+  background: rgba(31, 111, 104, 0.06);
+}
+
+.program-metadata-permission:focus-within {
+  box-shadow: 0 0 0 3px rgba(31, 111, 104, 0.24);
+}
+
+.program-metadata-save {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
 }
 
 .program-metadata-actions {
@@ -4279,6 +4474,87 @@ body.specific-program-open {
   .program-preview-modal {
     width: calc(100vw - 24px);
     max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+  }
+
+  /* On a phone the header's buttons stack and take about a third of the
+     screen; a fixed header would leave little room for the settings, so the
+     whole preview - header included - scrolls as one page here. */
+  .program-template-preview-modal {
+    display: block;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .program-template-preview-modal .program-preview-scroll {
+    overflow: visible;
+  }
+
+  /* Header: the title on its own, close (x) pinned top-right, the other
+     actions as one wrapping row of 44 px targets. Three classes so this
+     beats the later .builder-source-actions rules (stacked column, 34 px
+     buttons) further down in this file. */
+  .program-template-preview-modal .program-preview-head {
+    position: relative;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .program-template-preview-modal .program-preview-head > div:first-child {
+    padding-right: 52px;
+  }
+
+  .program-template-preview-modal .program-preview-head .builder-source-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+  }
+
+  .program-template-preview-modal .builder-source-actions .plain-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .program-template-preview-modal .program-preview-head [data-action="template-close"] {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+  }
+
+  .program-template-preview-modal .program-metadata-actions .plain-button,
+  .program-template-preview-modal .program-inline-tag-form .plain-button,
+  .program-template-preview-modal .program-review-actions .plain-button,
+  .program-template-preview-modal .program-review-form .plain-button {
+    min-height: 44px;
+  }
+
+  /* The 18 px tag-remove circle keeps its look; its hit area grows to 44 px.
+     Rows of 24 px pills 20 px apart keep two rows' 44 px areas from
+     overlapping (a tap between them never removes the other tag). */
+  .program-template-preview-modal .program-tag-list {
+    row-gap: 20px;
+  }
+
+  .program-template-preview-modal .exercise-tag-pill button {
+    position: relative;
+  }
+
+  .program-template-preview-modal .exercise-tag-pill button::after {
+    content: "";
+    position: absolute;
+    inset: -13px;
+  }
+
+  /* The athlete's own review form in the same modal (iOS zoom below 16px). */
+  .program-template-preview-modal .program-review-form select,
+  .program-template-preview-modal .program-review-form textarea {
+    width: 100%;
+    min-height: 44px;
+    font-size: 16px;
   }
 
   .program-preview-head {
@@ -4290,6 +4566,26 @@ body.specific-program-open {
   }
 
   .program-metadata-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* iOS zooms into any field under 16px on focus. */
+  .program-metadata-form select,
+  .program-metadata-form textarea,
+  .program-metadata-form input:not([type="checkbox"]) {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .program-metadata-cover {
+    grid-template-columns: 1fr;
+  }
+
+  .program-metadata-cover-preview {
+    width: min(100%, 320px);
+  }
+
+  .program-metadata-permissions {
     grid-template-columns: 1fr;
   }
 

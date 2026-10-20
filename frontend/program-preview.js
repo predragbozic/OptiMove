@@ -22,10 +22,15 @@ export function renderTemplatePreviewModalHtml(data) {
   const selectedMeta = selected ? [templateCategoryLabel(selected), programPriceLabel(selected)].filter(Boolean).join(" - ") : "Program template";
   const creatorName = clean(selected?.creator_name);
   const creatorProfileId = clean(selected?.creator_profile_id);
+  // Everything below the header scrolls as ONE region: Library settings,
+  // Assign, Program access and the program itself can together be taller
+  // than any screen, and the modal itself never scrolls (overflow: hidden),
+  // so a region of its own is the only way the bottom of the settings
+  // (Save, Program access) stays reachable on every device.
   return `
     <div class="program-preview-overlay">
       <button class="program-preview-backdrop" type="button" data-action="template-close" aria-label="Close program preview"></button>
-      <section class="program-preview-modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(selected?.plan_name || "Program preview")}">
+      <section class="program-preview-modal program-template-preview-modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(selected?.plan_name || "Program preview")}">
         <div class="program-preview-head">
           <div>
             <p class="eyebrow">Program preview</p>
@@ -41,19 +46,21 @@ export function renderTemplatePreviewModalHtml(data) {
           <div class="builder-source-actions">
             ${preview.loading ? `<span class="item-badge">Loading</span>` : ""}
             ${selected ? `<span class="item-badge">${escapeHtml(ratingLabel(selected))}</span>` : ""}
-            ${selected && currentUserRole !== "athlete" && selected.can_assign_to_athlete !== false ? `<button class="plain-button compact-button" type="button" data-action="template-assign" data-template-id="${escapeAttr(selected.plan_id)}">Assign</button>` : ""}
+            ${selected && currentUserRole !== "athlete" && selected.can_assign_to_athlete !== false ? `<button class="plain-button compact-button" type="button" data-action="template-assign" data-template-id="${escapeAttr(selected.plan_id)}">${preview.assignOpen ? "Hide assign" : "Assign"}</button>` : ""}
             ${selected && currentUserRole !== "athlete" ? `<button class="plain-button compact-button" type="button" data-action="template-settings-toggle">${preview.settingsOpen ? "Hide settings" : "Library settings"}</button>` : ""}
             ${selected && currentUserRole !== "athlete" ? renderPlanMoreMenu(selected.plan_id, "template") : ""}
             <button class="plain-button icon-button" type="button" data-action="template-close" aria-label="Close"><span class="button-icon">x</span></button>
           </div>
         </div>
-        ${selected && preview.settingsOpen ? renderTemplateMetadataForm(selected, templateOptions, programTagEditor, currentUserRole) : ""}
-        ${selected && preview.assignOpen && currentUserRole !== "athlete" ? renderTemplateAssignmentPanel(selected, preview, athletes || []) : ""}
-        ${selected && !preview.loading ? renderTemplateReviewPanel(selected, preview, currentUserRole) : ""}
-        <div class="program-preview-body">
-          ${preview.loading ? `<div class="empty-state">Loading program...</div>` : preview.error ? `<div class="empty-state">${escapeHtml(preview.error)}</div>` : isMicrocycle
-            ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
-            : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`}
+        <div class="program-preview-scroll" data-program-preview-scroll data-plan-id="${escapeAttr(selected?.plan_id || "")}" data-preview-panels="${preview.settingsOpen ? "settings" : ""}|${preview.assignOpen ? "assign" : ""}">
+          ${selected && preview.settingsOpen ? renderTemplateMetadataForm(selected, templateOptions, programTagEditor, currentUserRole) : ""}
+          ${selected && preview.assignOpen && currentUserRole !== "athlete" ? renderTemplateAssignmentPanel(selected, preview, athletes || []) : ""}
+          ${selected && !preview.loading ? renderTemplateReviewPanel(selected, preview, currentUserRole) : ""}
+          <div class="program-preview-body">
+            ${preview.loading ? `<div class="empty-state">Loading program...</div>` : preview.error ? `<div class="empty-state">${escapeHtml(preview.error)}</div>` : isMicrocycle
+              ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
+              : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`}
+          </div>
         </div>
       </section>
     </div>
@@ -237,59 +244,284 @@ function renderTemplateMetadataForm(template, templateOptions, programTagEditor,
   const blockedShelfNotice = canEditCurrentScope ? "" : `
     <p class="muted small">This program is currently in ${escapeHtml(labelForLibraryScope(currentLibraryScope))}. Save it to My Programs or ask an admin to edit that shelf.</p>
   `;
-  const derivedOwner = ownerLabelForLibraryScope(template.library_scope || "my");
-  const derivedAudience = visibilityLabelForLibraryScope(template.library_scope || "my");
+  // The form posts exactly the fields it always did (same names, same
+  // "true"/"false" values) - only the layout changed: four short sections,
+  // the derived audience/owner as one sentence instead of two read-only
+  // inputs, the five permissions as checkboxes (an unchecked box posts
+  // nothing, which the submit already reads as false), and the cover link
+  // with a picture of what it shows.
   return `
-    <form class="program-metadata-form" data-template-metadata-form data-plan-id="${escapeAttr(template.plan_id)}">
-      <div class="program-metadata-grid">
-        <label class="search-field"><span>Library shelf</span><select name="libraryScope">
-          ${allowedLibraryScopes.map((scope) => renderOption(scope.value, scope.label, selectedLibraryScope)).join("")}
-        </select></label>
-        <label class="search-field"><span>Program status</span><select name="programStatus">
-          ${renderOption("draft", "Draft", programStatus)}
-          ${renderOption("active", "Published", programStatus)}
-          ${renderOption("archived", "Archived", programStatus)}
-        </select></label>
-        <label class="search-field"><span>Program group</span><input name="libraryCategory" list="program-settings-group-options" value="${escapeAttr(programGroup)}" placeholder="e.g. Rehabilitation"></label>
-        <label class="search-field"><span>Cover image URL</span><input name="coverImageUrl" type="url" value="${escapeAttr(template.cover_image_url || "")}" placeholder="https://..."></label>
-        <label class="search-field"><span>Audience</span><input value="${escapeAttr(derivedAudience)}" readonly></label>
-        <label class="search-field"><span>Owner scope</span><input value="${escapeAttr(derivedOwner)}" readonly></label>
-        <label class="search-field"><span>Pricing</span><select name="isFree">
-          ${renderOption("true", "Free", isFree ? "true" : "false")}
-          ${renderOption("false", "Paid", isFree ? "true" : "false")}
-        </select></label>
-        <label class="search-field"><span>Price EUR</span><input name="price" type="number" min="0" step="0.01" value="${escapeAttr(price)}" placeholder="0" ${isFree ? "disabled" : ""}></label>
-        <label class="search-field"><span>Available until</span><input name="availableUntil" type="date" value="${escapeAttr(template.available_until || "")}"></label>
-        <label class="search-field"><span>License model</span><select name="accessModel">
-          ${renderOption("free_forever", "Free forever", accessModel)}
-          ${renderOption("one_time_forever", "One-time forever", accessModel)}
-          ${renderOption("time_limited", "Time-limited", accessModel)}
-          ${renderOption("subscription", "Subscription", accessModel)}
-          ${renderOption("assigned", "Assigned only", accessModel)}
-          ${renderOption("trial", "Trial", accessModel)}
-        </select></label>
-        <label class="search-field"><span>Duration days</span><input name="accessDurationDays" type="number" min="1" step="1" value="${escapeAttr(template.access_duration_days || "")}" placeholder="e.g. 30"></label>
-        <label class="search-field"><span>Subscription</span><select name="subscriptionPeriod">
-          ${renderOption("month", "Monthly", template.subscription_period || "month")}
-          ${renderOption("year", "Yearly", template.subscription_period)}
-        </select></label>
-        ${renderBooleanSelect("canCopy", "Can copy", template.can_copy !== false)}
-        ${renderBooleanSelect("canEditCopy", "Can edit copy", template.can_edit_copy !== false)}
-        ${renderBooleanSelect("canAssignToAthlete", "Can assign", template.can_assign_to_athlete !== false)}
-        ${renderBooleanSelect("athleteCanViewDirectly", "Athlete view", template.athlete_can_view_directly === true)}
-        ${renderBooleanSelect("requiresApproval", "Needs approval", template.requires_approval === true)}
-      </div>
+    <form class="program-metadata-form" data-template-metadata-form data-plan-id="${escapeAttr(template.plan_id)}" data-plan-name="${escapeAttr(template.plan_name || "")}">
+      <fieldset class="program-metadata-section">
+        <legend>Library</legend>
+        <div class="program-metadata-grid">
+          <label class="search-field"><span>Library shelf</span><select name="libraryScope">
+            ${allowedLibraryScopes.map((scope) => renderOption(scope.value, scope.label, selectedLibraryScope)).join("")}
+          </select></label>
+          <label class="search-field"><span>Program status</span><select name="programStatus">
+            ${renderOption("draft", "Draft", programStatus)}
+            ${renderOption("active", "Published", programStatus)}
+            ${renderOption("archived", "Archived", programStatus)}
+          </select></label>
+          <label class="search-field"><span>Program group</span><input name="libraryCategory" list="program-settings-group-options" value="${escapeAttr(programGroup)}" placeholder="e.g. Rehabilitation"></label>
+        </div>
+        <p class="muted program-metadata-note" data-program-shelf-summary aria-live="polite">${escapeHtml(libraryScopeSummary(selectedLibraryScope, programStatus))}</p>
+        ${blockedShelfNotice}
+      </fieldset>
       <datalist id="program-settings-group-options">
         ${(templateOptions?.categories || []).map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
       </datalist>
-      <label class="search-field"><span>Description</span><textarea name="description" rows="3" placeholder="What is this program about? Shown to coaches and athletes in the program information popup.">${escapeHtml(template.description || "")}</textarea></label>
-      ${blockedShelfNotice}
+      <fieldset class="program-metadata-section">
+        <legend>Cover and description</legend>
+        <div class="program-metadata-cover">
+          <div class="program-metadata-cover-preview" data-program-cover-preview>${renderProgramCoverPreviewHtml(template.cover_image_url, template.plan_name)}</div>
+          <div class="program-metadata-cover-field">
+            <label class="search-field"><span>Cover image link</span><input name="coverImageUrl" type="url" value="${escapeAttr(template.cover_image_url || "")}" placeholder="Google Drive or direct image link"></label>
+            <p class="muted program-metadata-note">A Google Drive file must be shared as "Anyone with the link". Leave empty to show the program's initials.</p>
+          </div>
+        </div>
+        <label class="search-field program-metadata-description"><span>Description</span><textarea name="description" rows="4" placeholder="What is this program about?">${escapeHtml(template.description || "")}</textarea></label>
+        <p class="muted program-metadata-note">Shown to coaches and athletes in the program information popup.</p>
+      </fieldset>
+      <fieldset class="program-metadata-section">
+        <legend>Price and license</legend>
+        <div class="program-metadata-grid">
+          <label class="search-field"><span>Pricing</span><select name="isFree">
+            ${renderOption("true", "Free", isFree ? "true" : "false")}
+            ${renderOption("false", "Paid", isFree ? "true" : "false")}
+          </select></label>
+          <label class="search-field"><span>Price (EUR)</span><input name="price" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeAttr(price)}" placeholder="0" ${isFree ? "disabled" : ""}></label>
+          <label class="search-field"><span>License model</span><select name="accessModel">
+            ${renderOption("free_forever", "Free forever", accessModel)}
+            ${renderOption("one_time_forever", "One-time forever", accessModel)}
+            ${renderOption("time_limited", "Time-limited", accessModel)}
+            ${renderOption("subscription", "Subscription", accessModel)}
+            ${renderOption("assigned", "Assigned only", accessModel)}
+            ${renderOption("trial", "Trial", accessModel)}
+          </select></label>
+          <label class="search-field" data-program-subscription-field ${accessModel === "subscription" ? "" : "hidden"}><span>Subscription</span><select name="subscriptionPeriod">
+            ${renderOption("month", "Monthly", template.subscription_period || "month")}
+            ${renderOption("year", "Yearly", template.subscription_period)}
+          </select></label>
+          <label class="search-field"><span>Access length (days)</span><input name="accessDurationDays" type="number" min="1" step="1" inputmode="numeric" value="${escapeAttr(template.access_duration_days || "")}" placeholder="No limit"></label>
+          <label class="search-field"><span>Available until</span><input name="availableUntil" type="date" value="${escapeAttr(template.available_until || "")}"></label>
+        </div>
+        <p class="muted program-metadata-note" data-program-access-length-note ${accessLengthNoteHidden(accessModel, template.access_duration_days) ? "hidden" : ""}>Without an access length, access never ends.</p>
+        <p class="muted program-metadata-note">Available until is saved for your records only: the program is not hidden on that date yet.</p>
+      </fieldset>
+      <fieldset class="program-metadata-section">
+        <legend>Permissions</legend>
+        <div class="program-metadata-permissions">
+          ${renderPermissionCheckbox("canCopy", "Can copy", "Others can make their own copy.", template.can_copy !== false)}
+          ${renderPermissionCheckbox("canEditCopy", "Can edit copy", "Saved with the license; copies can still be edited for now.", template.can_edit_copy !== false)}
+          ${renderPermissionCheckbox("canAssignToAthlete", "Can assign", "Coaches can assign it to athletes.", template.can_assign_to_athlete !== false)}
+          ${renderPermissionCheckbox("athleteCanViewDirectly", "Athlete view", "Athletes can open it in their library once it is published.", template.athlete_can_view_directly === true)}
+          ${renderPermissionCheckbox("requiresApproval", "Needs approval", "Athlete requests wait for approval.", template.requires_approval === true)}
+        </div>
+      </fieldset>
       ${renderProgramInlineTags(template, templateOptions, programTagEditor)}
       <div class="program-metadata-actions">
         <p class="builder-error" aria-live="polite"></p>
-        <button class="plain-button compact-button" type="submit">Save library settings</button>
+        <button class="plain-button program-metadata-save" type="submit">Save library settings</button>
       </div>
     </form>
+  `;
+}
+
+// The library page is re-rendered on every preview action (a ticked athlete,
+// a tag, Library settings). Desktop scrolls the region under the header, a
+// phone the whole modal (styles.css), so both offsets are captured.
+export function capturePreviewScroll(root) {
+  const region = root?.querySelector("[data-program-preview-scroll]");
+  if (!region) return null;
+  return {
+    planId: region.dataset.planId || "",
+    panels: region.dataset.previewPanels || "",
+    top: region.scrollTop || 0,
+    modalTop: region.closest(".program-preview-modal")?.scrollTop || 0,
+  };
+}
+
+const PANEL_SELECTORS = {
+  settings: "[data-template-metadata-form]",
+  assign: ".program-assignment-panel",
+};
+
+// Same program and the same panels open: the coach stays where they were.
+// A panel just opened (Library settings, Assign): it is brought into view
+// when the kept offset would leave it above or below the visible area. A
+// panel just closed: the region starts from its top (on a phone the modal
+// goes back to where the region begins, never further down). Desktop
+// scrolls the region, a phone the modal; the one that does not scroll
+// simply stays at 0.
+export function restorePreviewScroll(kept, root) {
+  const region = root?.querySelector("[data-program-preview-scroll]");
+  if (!kept || !region || (region.dataset.planId || "") !== kept.planId) return;
+  const modal = region.closest(".program-preview-modal");
+  const panels = region.dataset.previewPanels || "";
+  if (panels === kept.panels) {
+    if (kept.top) region.scrollTop = kept.top;
+    if (kept.modalTop && modal) modal.scrollTop = kept.modalTop;
+    return;
+  }
+  const wasOpen = new Set(kept.panels.split("|").filter(Boolean));
+  const opened = panels.split("|").filter(Boolean).find((name) => !wasOpen.has(name));
+  const target = opened ? root.querySelector(PANEL_SELECTORS[opened]) : null;
+  if (!target) {
+    region.scrollTop = 0;
+    if (kept.modalTop && modal) modal.scrollTop = Math.min(kept.modalTop, region.offsetTop || 0);
+    return;
+  }
+  const inRegion = Math.max(0, (target.offsetTop || 0) - (region.offsetTop || 0));
+  region.scrollTop = offsetShowing(inRegion, kept.top, region.clientHeight);
+  if (modal) modal.scrollTop = offsetShowing(target.offsetTop || 0, kept.modalTop, modal.clientHeight);
+}
+
+// Keep the current offset when the target's top is already on screen,
+// otherwise put the target's top at the top.
+function offsetShowing(targetTop, current, viewHeight) {
+  const visible = targetTop >= current && targetTop <= current + Math.max(0, (viewHeight || 0) - 80);
+  return visible ? current : targetTop;
+}
+
+// The re-render after a tag, an athlete tick or a review action rebuilds the
+// form from the SAVED values; what the coach typed but did not save yet is
+// carried over to the new form of the same program (Hide settings, Close, a
+// successful Save or another program leave no form to carry it to).
+export function captureMetadataFormDraft(root) {
+  const form = root?.querySelector("[data-template-metadata-form]");
+  if (!form) return null;
+  const fields = {};
+  for (const element of form.querySelectorAll("input[name], select[name], textarea[name]")) {
+    fields[element.name] = element.type === "checkbox" ? { checked: element.checked } : { value: element.value };
+  }
+  return { planId: form.dataset.planId || "", fields };
+}
+
+export function restoreMetadataFormDraft(draft, root) {
+  const form = root?.querySelector("[data-template-metadata-form]");
+  if (!draft || !form || (form.dataset.planId || "") !== draft.planId) return;
+  for (const element of form.querySelectorAll("input[name], select[name], textarea[name]")) {
+    const saved = draft.fields[element.name];
+    if (!saved) continue;
+    if (element.type === "checkbox") element.checked = saved.checked;
+    else if (element.value !== saved.value) element.value = saved.value;
+  }
+  for (const name of ["libraryScope", "isFree", "accessModel", "coverImageUrl"]) {
+    const element = form.querySelector(`[name="${name}"]`);
+    if (element && (name !== "coverImageUrl" || element.value !== element.defaultValue)) syncTemplateMetadataForm(form, element);
+  }
+}
+
+// The cover the library card will show for this link (renderImage turns a
+// Drive link into Drive's thumbnail with its fallbacks), or the initials the
+// card shows without one.
+export function renderProgramCoverPreviewHtml(url, planName = "") {
+  const image = renderImage(clean(url), "program-metadata-cover-image", "Cover preview");
+  if (image) return image;
+  return `<span class="program-metadata-cover-initials" aria-hidden="true">${escapeHtml(programInitials(planName || "Program"))}</span>`;
+}
+
+// One sentence for what the save will do with the shelf and the status - the
+// same rule the server applies (resolveProgramMetadataPolicy in
+// backend/src/routes/templates.js): a draft always goes to Draft / working
+// material, and that shelf is always a draft.
+export function libraryScopeSummary(scope, status = "active") {
+  const normalizedScope = clean(scope || "my").toLowerCase();
+  const normalizedStatus = clean(status || "active").toLowerCase();
+  if (normalizedStatus === "draft" || normalizedScope === "workspace") {
+    return "Saved as a draft in Draft / working material · Sharing: Private · Owner: Coach";
+  }
+  return `Sharing: ${sharingLabelForLibraryScope(normalizedScope)} · Owner: ${ownerLabelForLibraryScope(normalizedScope)}`;
+}
+
+const SYNCED_FIELDS = new Set(["libraryScope", "programStatus", "isFree", "accessModel", "accessDurationDays", "coverImageUrl"]);
+
+// Live parts of the Library settings form that need no re-render (which would
+// drop what the coach typed): the shelf sentence, the price only for Paid,
+// the subscription period only for a subscription, the open-ended access
+// note, and the cover picture for the link. Returns whether it applied.
+export function syncTemplateMetadataForm(form, changed) {
+  if (!form || !changed || !SYNCED_FIELDS.has(changed.name)) return false;
+  const valueOf = (name) => form.querySelector(`[name="${name}"]`)?.value || "";
+  if (changed.name === "libraryScope" || changed.name === "programStatus") {
+    const summary = form.querySelector("[data-program-shelf-summary]");
+    if (summary) summary.textContent = libraryScopeSummary(valueOf("libraryScope"), valueOf("programStatus"));
+  }
+  if (changed.name === "isFree") {
+    const price = form.querySelector("input[name='price']");
+    if (price) {
+      price.disabled = changed.value === "true";
+      if (price.disabled) price.value = "";
+    }
+  }
+  if (changed.name === "accessModel") {
+    const field = form.querySelector("[data-program-subscription-field]");
+    if (field) field.hidden = changed.value !== "subscription";
+  }
+  if (changed.name === "accessModel" || changed.name === "accessDurationDays") {
+    const note = form.querySelector("[data-program-access-length-note]");
+    if (note) note.hidden = accessLengthNoteHidden(valueOf("accessModel"), valueOf("accessDurationDays"));
+  }
+  if (changed.name === "coverImageUrl") {
+    const preview = form.querySelector("[data-program-cover-preview]");
+    if (preview) preview.innerHTML = renderProgramCoverPreviewHtml(changed.value, form.dataset.planName || "");
+  }
+  return true;
+}
+
+// The server gives no end date without an access length, whatever the model
+// (accessExpiresAt in backend/src/programAccessPolicy.js) - say so where the
+// coach most likely expects one.
+function accessLengthNoteHidden(accessModel, days) {
+  return !["time_limited", "trial"].includes(accessModel) || Number(days) > 0;
+}
+
+// The cover picture follows the link while it is typed or pasted, not only
+// when the field loses focus.
+let coverPreviewTimer = null;
+export function scheduleProgramCoverPreview(input, delayMs = 400) {
+  clearTimeout(coverPreviewTimer);
+  coverPreviewTimer = setTimeout(() => {
+    if (input.isConnected) syncTemplateMetadataForm(input.form, input);
+  }, delayMs);
+}
+
+// Enter inside Library settings must not save the whole form by accident:
+// in Add tag it adds the tag, in the cover link it shows the picture.
+export function handleTemplateMetadataKeydown(event) {
+  if (event.key !== "Enter" || event.isComposing) return false;
+  const target = event.target;
+  if (!target?.closest?.("[data-template-metadata-form]")) return false;
+  if (target.matches("[data-program-tag-input]")) {
+    event.preventDefault();
+    target.closest(".program-inline-tag-form")?.querySelector("[data-action='program-tag-add']")?.click();
+    return true;
+  }
+  if (target.matches("input[name='coverImageUrl']")) {
+    event.preventDefault();
+    clearTimeout(coverPreviewTimer);
+    syncTemplateMetadataForm(target.form, target);
+    return true;
+  }
+  return false;
+}
+
+// A cover link whose every source failed (a private Drive file, a page that
+// is not a picture): say so beside the field instead of a broken image.
+export function showProgramCoverPreviewError(image) {
+  const preview = image?.closest?.("[data-program-cover-preview]");
+  if (!preview) return false;
+  preview.innerHTML = `<span class="program-metadata-cover-error" role="status">This link does not show a picture.</span>`;
+  return true;
+}
+
+function renderPermissionCheckbox(name, label, hint, checked) {
+  return `
+    <label class="program-metadata-permission">
+      <input type="checkbox" name="${escapeAttr(name)}" value="true" ${checked ? "checked" : ""}>
+      <span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(hint)}</small></span>
+    </label>
   `;
 }
 
@@ -320,11 +552,11 @@ function ownerLabelForLibraryScope(scope) {
   return "Coach";
 }
 
-function visibilityLabelForLibraryScope(scope) {
+function sharingLabelForLibraryScope(scope) {
   const normalized = clean(scope).toLowerCase();
-  if (normalized === "team") return "Team visible";
-  if (normalized === "club") return "Club visible";
-  if (normalized === "optimove" || normalized === "marketplace") return "Platform visible";
+  if (normalized === "team") return "Team";
+  if (normalized === "club") return "Club";
+  if (normalized === "optimove" || normalized === "marketplace") return "Platform";
   return "Private";
 }
 
@@ -363,16 +595,6 @@ function renderProgramInlineTags(template, templateOptions, programTagEditor) {
         <button class="plain-button compact-button" type="button" data-action="program-tag-add" data-plan-id="${escapeAttr(template.plan_id)}">Add</button>
       </div>
     </section>
-  `;
-}
-
-function renderBooleanSelect(name, label, selected) {
-  const value = selected ? "true" : "false";
-  return `
-    <label class="search-field"><span>${escapeHtml(label)}</span><select name="${escapeAttr(name)}">
-      ${renderOption("true", "Yes", value)}
-      ${renderOption("false", "No", value)}
-    </select></label>
   `;
 }
 
