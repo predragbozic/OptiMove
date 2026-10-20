@@ -1,6 +1,6 @@
 # L1 — Media reference and retention protection
 
-Local implementation for review. Base: origin/main 7704909900c07da805fd6bc76219070d731d7277; branch codex/r2-l1-retention. No PR/push, deployment, production SQL, R2 operations, quota changes or GC activation.
+Integrated PR candidate. Base: origin/main a585af8e61bbd5c950f61e0ddc060f415a624344 (PR #196); branch codex/r2-l1-retention. Owner authorized integration, push and PR preparation only. No deploy, production SQL, R2 operation, quota change or GC activation.
 
 ## Scope and data model
 
@@ -25,7 +25,7 @@ Audit is evidence of a transition, not an entitlement. It is not a GC root. Audi
 | Active, non-template, active-status plan assigned to athlete | Capture assigned-plan manifest. Reassignment creates a separate beneficiary manifest. |
 | accessed/used/completed, unexpired assigned/coach_assigned/downloaded program_access grant | Capture application-grant manifest and current license snapshot; this is not proof of payment. |
 | Active purchased grant | Preserve with unverified_commercial and review_required=true; never infer a real purchase. |
-| Active foreign copied or unknown grant type / missing source owner | Preserve conservatively as ambiguous_grant, review required. |
+| Active foreign copied or unknown grant type (including copied receipt with missing source owner) | Preserve conservatively as ambiguous_grant, review required. |
 | Own copied receipt, requested/rejected/revoked grant, already-expired grant, usage-event history alone | Do not create a new acquired-right hold from that record alone. Actual exercise/item references still protect the asset. Previously captured holds are never automatically released. |
 
 Grant transfer to another plan/user creates a distinct immutable manifest. Revoke, grant deletion, expiry after capture, source-owner/club deactivation, replacement/removal of a Library selection or replacement/deletion of an item never releases a captured hold. These records do not authorize playback or further copies; BE-3 still checks the current context and existing revoke/ownership rules.
@@ -74,14 +74,19 @@ Local disposable PostgreSQL only. Fixtures use the repository safety helper, whi
 
 - L1 media-retention-l1.test.mjs: 24/24 PASS. Backfill, runner-compatible SQL, transactional rollback/preflight failure, private privileges, immutable evidence, unknown commercial grants, reassignment/transfer, user/athlete/plan deletion, snapshot/derivation matrix, revoke/reject-versus-delete races, status/reference races, isolation rejection and hierarchy relocation. Disposable instrumentation confirms 40 inserted items invoke delta membership capture 40 times, not N-squared. Existing BE-2 completion/cancellation accounting is checked with a mock object store; fixture-only quota setup does not change application quota logic.
 - BE-3 media-binding-be3.test.mjs with MEDIA_L1_TEST=true: 33/33 PASS, covering existing ownership/copy/H1/revoke/legacy behavior, actual HTTP template/assigned-program DELETE and Access revoke, independent athlete snapshots, shared R2 assets, custom DELETE races with flag on/off, section-copy/DELETE, repeated program-copy/grant-upsert/DELETE, binder waiting on completion, and block/day/session copy regressions.
-- Existing legacy Builder suites requiring a persistent local OPTIMOVE database were deliberately not executed. No broad suite, browser check, R2 integration or production backfill benchmark.
+- Integrated PR #196 media-upload-be2.test.mjs: 31/31 PASS, including real container inspection/metadata fixtures and the 30-second rule, on a disposable database with mock R2.
+- Isolated builder-tree-batch.test.mjs: 11/11 PASS. Its pre-existing main fixture cap of 17k parameters was stale after four media snapshot columns were added; cap updated to a conservative 20k. Production batching code is unchanged.
+- Offline migration check: 64 SQL files, 63 historical checksums unchanged, one new L1 migration; canonical UTF-8, unique sorted prefixes and runner transaction-control checks passed. L1 SHA-256: a969eae0d3ef6c5ec45907db124e7250515feeea97c3309430bec292e06750c8.
+- Persistent local OPTIMOVE suites were deliberately not executed. No broad suite, browser check, real R2 operation or production backfill benchmark.
 
 Two separate agents, neither an implementer, performed independent read-only code and security reviews. Both final verdicts: READY for the reviewed local correction, no remaining API blockers. Their initial additional findings were fixed before the final reviews: revoke grant-row/plan cascade inversion, section-copy child-FK/plan inversion, and repeated plain-copy grant-upsert/source-plan inversion. They did not execute tests or modify code. The implementing agent executed the disposable tests. Final added block/day/session regression changes affect tests only.
 
-## PR #196 isolation and remaining risks
+## Integration, preflight and remaining risks
 
-Read-only GitHub file/metadata recheck: PR #196 is closed, head df8487d4cf249b852548b0ed8e4b5493268fee37. Its changed-file list still has no exact overlap with L1, including the added BE-3 binder and Builder lock fixes. L1 does not edit mediaInspection.js/mediaInspectionWorker.js, upload transport, WebCodecs/Mediabunny, frontend, its fixtures or its API/runbook documents. No PR code was checked out, downloaded, changed or merged.
+Rebased onto a585af8e61bbd5c950f61e0ddc060f415a624344 with no conflicts. PR #196's complete file set, including backend inspection/worker and frontend phone preparation, is unchanged by L1. No intervening main migrations or runner/dependency changes were introduced. Final independent integrated code and security reviews: READY for PR. The security review's COMMIT-unknown recovery finding was fixed: absence of ledger/objects is not treated as rollback until original runners/transactions are quiescent, the advisory lock is released, replacement runners prevented and a fresh state check repeated.
 
-Remaining gates: production privilege/data/lock/timeout preflight; backfill scale; separately approved retention-release/GC policy; and integration against the then-current main before a future PR. General raw SQL lock-order violations can abort and require complete retry; no R2 object or storage quota is changed by L1. Immutable evidence remains conservatively protected pending future policy, without granting playback.
+Deployment/read-only production preflight and recovery are specified in [the runbook](../runbooks/r2-l1-deployment-preflight.md); [proposed SQL](../runbooks/r2-l1-preflight.sql) is a template only and was NOT executed in production. All actual production privilege/count/lock/timing results remain UNKNOWN. Runbook requires controlled auto-deploy and draining both old services' writers through the schema transition, and roll-forward after commit; old backend alone is not a safe rollback.
 
-READY for local owner review only. No push, PR, merge, deployment, feature-flag change or production migration is authorized. Stop pending approval.
+Remaining gates: separate approval and execution of production privilege/data/lock/timeout preflight; comparable-scale disposable backfill timing; operator-approved write-drain/recovery mechanism; future retention-release/GC policy. General raw SQL lock-order violations can abort and require complete retry. No R2 object, feature flag or storage quota is changed. Immutable evidence remains conservatively protected without granting playback.
+
+READY for PR review. Push/PR preparation is authorized; merge, deploy, production SQL and feature-flag changes remain prohibited pending further owner approval.
