@@ -100,13 +100,16 @@ const IDENTITY = bytesOf(u32(0x00010000), u32(0), u32(0), u32(0), u32(0x00010000
  *            hdlrName = "<handler>Handler", compressor = "" (the video entry's compressorname), entry = null (a whole sample entry instead of the default),
  *            minfHdlr = false (a QuickTime data handler in minf), uniform = false (one stsz size for all samples),
  *            slack = { tkhd, mdhd, stts, stsz, stco, ... } (bytes appended after a box's fields), hdlrReserved = null (12 bytes),
- *            drefText = null (a string after a self-contained url entry), dinfExtra = [], edtsExtra = [] }]
+ *            drefText = null (a string after a self-contained url entry), dinfExtra = [], edtsExtra = [],
+ *            stscEntries = null ([[first_chunk, samples_per_chunk, sample_description_index], ...]),
+ *            leadingChunks = 0 (extra chunk offsets in front, pointing at the first real chunk),
+ *            trakExtra = [], mdiaExtra = [], minfExtra = [] (boxes appended at that level) }]
  * options: { brand = "isom", moovFirst = false, moovPrivate = true, topBeforeMdat = [], topAfter = [], trailer = null,
  *            staleInMdat = null, mdatSplit = false, mvex = false, stz2 = false, externalData = false, times = 0x5f5e1000,
  *            largeMdat = false (64-bit mdat headers: size 1 + a 64-bit size), mdatToEnd = false (size 0: the mdat runs
  *            to the end of the file; moov first, nothing after), timesVersion = 0 (1: 64-bit times in mvhd / tkhd / mdhd),
  *            interleave = false (chunks of all tracks round-robin), mvhdSlack = null, iods = null (bytes of an iods payload), ftyp = null (whole ftyp bytes),
- *            zeroTimes = false (creation and modification times 0, as a cleaned file has them) }
+ *            zeroTimes = false (creation and modification times 0, as a cleaned file has them), moovExtra = [] }
  */
 export function buildMp4(tracks, options = {}) {
   const o = { brand: "isom", moovFirst: false, moovPrivate: true, topBeforeMdat: [], topAfter: [], trailer: null, staleInMdat: null, mdatSplit: false, mvex: false, stz2: false, externalData: false, times: 0x5f5e1000, largeMdat: false, mdatToEnd: false, timesVersion: 0, interleave: false, mvhdSlack: null, iods: null, ftyp: null, ...options };
@@ -150,9 +153,9 @@ export function buildMp4(tracks, options = {}) {
       const stbl = box("stbl",
         full("stsd", 0, 0, u32(1), entry),
         full("stts", 0, 0, u32(1), u32(t.samples.length), u32(1000), ...S("stts")),
-        full("stsc", 0, 0, u32(1), u32(1), u32(t.perChunk || 1), u32(1), ...S("stsc")),
+        t.stscEntries ? full("stsc", 0, 0, u32(t.stscEntries.length), ...t.stscEntries.flat().map(u32)) : full("stsc", 0, 0, u32(1), u32(1), u32(t.perChunk || 1), u32(1), ...S("stsc")),
         o.stz2 && ti === 0 ? full("stz2", 0, 0, u8(0, 0, 0, 8), u32(t.samples.length), ...t.samples.map((s) => u8(s.length))) : stsz,
-        t.co64 ? full("co64", 0, 0, u32(chunks[ti].length), ...chunkPlace[ti].map(([m, at]) => u64(offsetOf(m, at))), ...S("co64")) : full("stco", 0, 0, u32(chunks[ti].length), ...chunkPlace[ti].map(([m, at]) => u32(offsetOf(m, at))), ...S("stco")),
+        t.co64 ? full("co64", 0, 0, u32(chunks[ti].length), ...chunkPlace[ti].map(([m, at]) => u64(offsetOf(m, at))), ...S("co64")) : full("stco", 0, 0, u32(chunks[ti].length + (t.leadingChunks || 0)), ...new Array(t.leadingChunks || 0).fill(u32(offsetOf(...chunkPlace[ti][0]))), ...chunkPlace[ti].map(([m, at]) => u32(offsetOf(m, at))), ...S("stco")),
         ...(t.stblExtra || []),
       );
       const mhd = t.handler === "vide" ? full("vmhd", 0, 1, new Uint8Array(8)) : t.handler === "soun" ? full("smhd", 0, 0, new Uint8Array(4)) : full("nmhd", 0, 0);
@@ -165,14 +168,17 @@ export function buildMp4(tracks, options = {}) {
         box("mdia",
           full("mdhd", tv, 0, C(0), C(2), u32(1000), T(t.samples.length * 1000), u8(0x55, 0xc4, 0, 0), ...S("mdhd")),
           full("hdlr", 0, 0, u32(0), t.handler, t.hdlrReserved ?? new Uint8Array(12), t.hdlrName ?? `${t.handler}Handler`, u8(0)),
-          box("minf", mhd, ...(t.minfHdlr ? [full("hdlr", 0, 0, "dhlr", "alis", "appl", u32(0), u32(0), u8(0))] : []), box("dinf", dref, ...(t.dinfExtra || [])), stbl),
+          box("minf", mhd, ...(t.minfHdlr ? [full("hdlr", 0, 0, "dhlr", "alis", "appl", u32(0), u32(0), u8(0))] : []), box("dinf", dref, ...(t.dinfExtra || [])), stbl, ...(t.minfExtra || [])),
+          ...(t.mdiaExtra || []),
         ),
         ...(t.udta ? [privateUdta()] : []),
+        ...(t.trakExtra || []),
       );
     });
     return box("moov",
       full("mvhd", tv, 0, C(0), C(3), u32(1000), T(tracks[0].samples.length * 1000), u32(0x00010000), u8(1, 0), new Uint8Array(10), IDENTITY, new Uint8Array(24), u32(tracks.length + 1), ...(o.mvhdSlack ? [o.mvhdSlack] : [])),
       ...(o.iods ? [full("iods", 0, 0, o.iods)] : []),
+      ...(o.moovExtra || []),
       ...traks,
       ...(o.mvex ? [box("mvex", full("trex", 0, 0, u32(1), u32(1), u32(0), u32(0), u32(0)))] : []),
       ...(o.moovPrivate ? [privateUdta(), privateMeta(), xmpUuid(), box("free", MARKERS.padding)] : []),

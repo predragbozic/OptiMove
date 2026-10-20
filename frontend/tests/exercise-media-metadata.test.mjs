@@ -25,7 +25,7 @@ const gpsTrack = (overrides = {}) => ({ id: 5, handler: "meta", samples: [new Te
 const asFile = (bytes, name = "clip.mp4", type = "video/mp4") => new File([bytes], name, { type });
 const bytesOfFile = async (file) => new Uint8Array(await file.arrayBuffer());
 
-const PRIVATE_TEXTS = [MARKERS.gps, MARKERS.make, MARKERS.model, MARKERS.software, MARKERS.title, MARKERS.author, MARKERS.xmp, MARKERS.appleLocation, MARKERS.caption, MARKERS.stale, MARKERS.trailer, MARKERS.padding, "+45.2671"];
+const PRIVATE_TEXTS = [MARKERS.gps, MARKERS.make, MARKERS.model, MARKERS.software, MARKERS.title, MARKERS.author, MARKERS.xmp, MARKERS.appleLocation, MARKERS.caption, MARKERS.stale, MARKERS.trailer, MARKERS.padding, "+12.3456"];
 
 async function stripAndRead(bytes, options) {
   const { file, report } = await meta.stripPrivateMetadata(asFile(bytes), options);
@@ -88,12 +88,14 @@ test("3. 64-bit chunk offsets (co64) and two mdat boxes: each chunk moves with i
   await assertNothingPrivate(out);
 });
 
-test("4. a reference that names a kept track and a removed one keeps only the kept track", async () => {
-  const bytes = buildMp4([video({ tref: [{ type: "cdsc", ids: [2, 5] }] }), audio(), gpsTrack()]);
-  const { after: a } = await stripAndRead(bytes);
-  const tref = a[1].tref;
-  assert.ok(tref, "the tref stays");
-  assert.deepEqual([...tref.subarray(8)], [...box("cdsc", u32(2))], "cdsc -> [2] only");
+test("4. track references are left out entirely (one picture and one sound track need none), whatever their type", async () => {
+  const bytes = buildMp4([video({ tref: [{ type: "cdsc", ids: [2, 5] }, { type: "meta", ids: [2] }] }), audio(), gpsTrack()]);
+  const { report, out, before, after: a } = await stripAndRead(bytes);
+  assert.equal(a[1].tref, null, "no tref in the file that is sent");
+  assert.equal(occurrences(out, "tref"), 0);
+  assert.ok(report.removed.boxes.includes("tref"));
+  assertSameMedia(before, a, [1, 2]);
+  assert.ok((await meta.inspectPrivacy(asFile(bytes))).findings.includes("box:tref"), "the check flags a tref in the raw file");
 });
 
 test("5. stale private data in an unused part of the mdat and the removed tracks' samples are written as zero: nothing of them can be recovered from the file that is sent", async () => {
@@ -381,4 +383,81 @@ test("17. hostile sizes are refused quickly, not worked through: too many sample
   for (let k = 0; k < sv.getUint32(stcos[1] + 12); k += 1) sv.setUint32(stcos[1] + 16 + 4 * k, firstVideoChunk);
   await timed(shared, "sample_overlap");
   assert.equal((await meta.inspectPrivacy(asFile(shared))).clean, false);
+});
+
+test("18. a chunk map a decoder would read another way is refused, never cleaned: a first run that does not start at chunk 1, a run without samples, a sample description other than 1", async () => {
+  const samples = video().samples;
+  const cases = [
+    ["first run at chunk 2", video({ perChunk: 1, leadingChunks: 1, stscEntries: [[2, 1, 1]] })],
+    ["a run of 0 samples", video({ perChunk: 1, leadingChunks: 1, stscEntries: [[1, 0, 1], [2, 1, 1]] })],
+    ["sample description 2", video({ perChunk: 1, stscEntries: [[1, 1, 2]] })],
+  ];
+  for (const [label, track] of cases) {
+    assert.equal(track.samples.length, samples.length);
+    const bytes = buildMp4([track, audio()], { moovPrivate: false });
+    await assert.rejects(meta.stripPrivateMetadata(asFile(bytes)), (e) => e.code === "metadata_unsupported" && e.reason === "chunk_map_broken", label);
+    assert.ok((await meta.inspectPrivacy(asFile(bytes))).findings.includes("structure:chunk_map_broken"), label);
+  }
+  // The same samples in the standard map are cleaned as usual.
+  const { before, after } = await stripAndRead(buildMp4([video({ perChunk: 1, stscEntries: [[1, 1, 1]] }), audio()], { moovPrivate: false }));
+  assertSameMedia(before, after, [1, 2]);
+});
+
+test("19. a box that may appear once and appears twice is refused, one that must be there is required, the media header must match the track", async () => {
+  const fixed = (type, length) => box(type, new Uint8Array(length));
+  const dref = box("dinf", box("dref", u32(0), u32(1), box("url ", u32(1))));
+  const cases = [
+    ["duplicate_box", "a second tkhd (same track id)", plain({ video: { trakExtra: [box("tkhd", new Uint8Array(12), u32(1), new Uint8Array(68))] } })],
+    ["duplicate_box", "a second edts", plain({ video: { trakExtra: [box("edts", box("elst", u32(0), u32(0)))] } })],
+    ["duplicate_box", "a second mdhd", plain({ video: { mdiaExtra: [fixed("mdhd", 24)] } })],
+    ["duplicate_box", "a second hdlr naming another handler", plain({ video: { mdiaExtra: [box("hdlr", u32(0), u32(0), "GPS!", new Uint8Array(12), u8(0))] } })],
+    ["duplicate_box", "a second hdlr before the real one", plain({ video: { mdiaExtra: [box("hdlr", u32(0), u32(0), "vide", new Uint8Array(12), u8(0))], hdlrName: "GPS!" } })],
+    ["duplicate_box", "a second dinf", plain({ video: { minfExtra: [dref] } })],
+    ["duplicate_box", "a second vmhd", plain({ video: { minfExtra: [box("vmhd", u32(1), new Uint8Array(8))] } })],
+    ["duplicate_box", "a second avcC", plain({ video: { entry: visualEntry("", [avcC(), avcC()]) } })],
+    ["duplicate_box", "a second esds", plain({ audio: { entry: audioEntry([esds(), esds()]) } })],
+    ["box_missing", "no avcC", plain({ video: { entry: visualEntry("", []) } })],
+    ["box_missing", "no esds", plain({ audio: { entry: audioEntry([]) } })],
+    ["media_header", "a sound header in the picture track", plain({ video: { minfExtra: [box("smhd", new Uint8Array(8))] } })],
+  ];
+  for (const [reason, label, bytes] of cases) {
+    await assert.rejects(meta.stripPrivateMetadata(asFile(bytes)), (e) => e.code === "metadata_unsupported" && e.reason === reason, `${label}: ${reason}`);
+    assert.ok((await meta.inspectPrivacy(asFile(bytes))).findings.includes(`structure:${reason}`), label);
+  }
+  assert.equal(occurrences(plain({ video: { mdiaExtra: [box("hdlr", u32(0), u32(0), "GPS!", new Uint8Array(12), u8(0))] } }), "GPS!"), 1, "the canary is in the refused input");
+});
+
+test("20. nested boxes have plain 32-bit sizes, and a box holds at most 4096 children: a size-0 or 64-bit box inside the moov, and a million padding boxes, are refused quickly", async () => {
+  const zeroSized = avcC();
+  zeroSized.set([0, 0, 0, 0], 0); // the last child of the entry, "to the end"
+  const wide = bytesOf(u32(1), "btrt", u32(0), u32(20), new Uint8Array(12)); // a 64-bit size inside the entry
+  for (const [label, entry] of [["a size-0 avcC", visualEntry("", [zeroSized])], ["a 64-bit btrt", visualEntry("", [avcC(), wide])]]) {
+    const bytes = plain({ video: { entry } });
+    await assert.rejects(meta.stripPrivateMetadata(asFile(bytes)), (e) => e.reason === "broken_box", label);
+    assert.ok((await meta.inspectPrivacy(asFile(bytes))).findings.includes("structure:broken_box"), label);
+  }
+  const padding = new Uint8Array(8 * 1_000_000);
+  const pv = new DataView(padding.buffer);
+  for (let i = 0; i < 1_000_000; i += 1) { pv.setUint32(8 * i, 8); padding.set([0x66, 0x72, 0x65, 0x65], 8 * i + 4); }
+  const crowded = plain({}, { moovExtra: [padding] });
+  let started = performance.now();
+  await assert.rejects(meta.stripPrivateMetadata(asFile(crowded)), (e) => e.reason === "too_many_boxes");
+  assert.ok(performance.now() - started < 1500, `refused in ${(performance.now() - started).toFixed(0)} ms`);
+  started = performance.now();
+  assert.equal((await meta.inspectPrivacy(asFile(crowded))).clean, false);
+  assert.ok(performance.now() - started < 1500, `checked in ${(performance.now() - started).toFixed(0)} ms`);
+});
+
+test("21. the marker search takes the same time whatever the moov holds: a valid 15 MB composition table full of 0xA9 (the first byte of ten markers) is checked quickly, and a real marker inside numbers is still found", async () => {
+  const n = Math.floor((15 * 1024 * 1024) / 8);
+  const ctts = box("ctts", u32(0), u32(n), new Uint8Array(8 * n).fill(0xa9));
+  const { out } = await stripAndRead(plain({ video: { stblExtra: [ctts] } }));
+  const started = performance.now();
+  assert.deepEqual(await meta.inspectPrivacy(asFile(out)), { clean: true, findings: [] });
+  const ms = performance.now() - started;
+  assert.ok(ms < 1500, `checked in ${ms.toFixed(0)} ms`);
+  const marked = new Uint8Array(8 * 4);
+  marked.set([0xa9, 0x78, 0x79, 0x7a], 9); // "©xyz" across two entries
+  const found = await meta.inspectPrivacy(asFile(plain({ video: { stblExtra: [box("ctts", u32(0), u32(4), marked)] } })));
+  assert.ok(found.findings.includes("marker:©xyz"), found.findings.join(", "));
 });

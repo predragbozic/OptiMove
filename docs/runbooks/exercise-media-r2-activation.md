@@ -452,7 +452,8 @@ file sent without conversion included — and re-encodes nothing:
   left out is not in the sent file at all, and every size above it is recomputed.
 - **What goes.** udta (location ©xyz, make, model, software, author, dates), meta (Apple keys / ilst,
   title), XMP uuid, iods, free / skip padding, any vendor box and every timed-metadata / timecode /
-  caption / GPS track; references to a removed track; every top-level box other than ftyp / moov / mdat and
+  caption / GPS track; track references (tref — one picture and one sound track need none); every
+  top-level box other than ftyp / moov / mdat and
   whatever follows the last box (a Samsung `SEFH` trailer, a top-level XMP). The creation and modification
   times and the reserved / QuickTime vendor fields of mvhd / tkhd / mdhd are written as zero; the hdlr keeps
   only its handler type (name, vendor and reserved bytes emptied); dinf is rebuilt as self-contained
@@ -464,9 +465,12 @@ file sent without conversion included — and re-encodes nothing:
   is written as zero inside the mdat — raw payload, so a zero there is correct structure — and nothing of it
   can be recovered; every chunk offset moves exactly with its mdat.
 - **Exact shapes.** One ftyp (at most 128 bytes, readable brands), one moov, one picture track and at most
-  one sound track; fixed-size boxes at their exact size; every sample table at its exact size (no bytes
-  after its entries), none twice; no two tracks sharing a byte; at most 200,000 samples and chunks, 10,000
-  gaps and 8 MB of unused media. Anything else is refused, never worked around.
+  one sound track; inside the moov plain 32-bit box sizes and at most 4,096 children per box; a box that
+  may appear once appears once, and the required ones are there (tkhd, mdia, mdhd, hdlr, minf, the media
+  header of the track's kind, dinf, stbl, avcC or esds); fixed-size boxes at their exact size; every sample
+  table at its exact size (no bytes after its entries), none twice, the chunk map as ISO 14496-12 defines it
+  (first run at chunk 1, no empty run, sample description 1); no two tracks sharing a byte; at most 200,000
+  samples and chunks, 10,000 gaps and 8 MB of unused media. Anything else is refused, never worked around.
 - **What stays.** The picture and the sound byte for byte; rotation (the tkhd matrix), edit lists,
   durations, timescales, language, the codec configuration and the sync / composition tables.
 - **Memory.** Only the box headers, the ftyp and the moov are read (10.8 KB of an 86.9 MB file in the

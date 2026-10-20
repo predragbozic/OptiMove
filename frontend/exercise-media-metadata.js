@@ -11,10 +11,11 @@
 //    moov, the mdat boxes; every other box and whatever follows the last box
 //    are left out;
 //  - the moov is rebuilt from an allowlist: mvhd; one picture track and at
-//    most one sound track, each with tkhd, tref (only references to kept
-//    tracks), edts (only its elst), mdia / mdhd / hdlr / minf / vmhd or smhd /
-//    dinf / stbl. udta, meta, uuid, iods, free / skip / wide, any vendor box
-//    and every other track are left out, not masked;
+//    most one sound track, each with exactly one tkhd, edts (only its elst),
+//    mdia / mdhd / hdlr / minf / vmhd or smhd / dinf / stbl. udta, meta, uuid,
+//    iods, tref (one picture and one sound track need no references), free /
+//    skip / wide, any vendor box and every other track are left out, not
+//    masked; a box that may appear once and appears twice is refused;
 //  - fixed-size boxes must have their exact size; their creation and
 //    modification times and their reserved / vendor fields are written as 0;
 //    the hdlr name is rebuilt empty; dinf is rebuilt as one dref of
@@ -48,6 +49,8 @@ export const METADATA_LIMITS = Object.freeze({
   maxHoles: 10_000,
   maxDepth: 12,
   maxTracks: 32,
+  // children of one box (a real moov has a few dozen per parent)
+  maxChildBoxes: 4096,
   // all kept tracks together; a 30-second phone video has a few thousand
   maxSamples: 200_000,
   maxChunks: 200_000,
@@ -69,7 +72,7 @@ const cancelled = () => Object.assign(new Error("preparation_cancelled"), { code
 // What a rebuilt moov keeps, per level (everything else is left out).
 const KEEP = Object.freeze({
   moov: new Set(["mvhd", "trak"]),
-  trak: new Set(["tkhd", "tref", "edts", "mdia"]),
+  trak: new Set(["tkhd", "edts", "mdia"]),
   mdia: new Set(["mdhd", "hdlr", "minf"]),
   minf: new Set(["vmhd", "smhd", "dinf", "stbl"]),
 });
@@ -112,26 +115,20 @@ const printable = (type) => /^[\x20-\x7e©]{4}$/.test(type);
 const view = (bytes) => new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 const typeBytes = (type) => Uint8Array.from(type, (c) => c.charCodeAt(0));
 
+// A box inside another one: a plain 32-bit size of at least 8 (a 64-bit size
+// or a size running "to the end" is for top-level boxes only).
 function boxAt(bytes, at, limit) {
   if (at + 8 > limit) return null;
-  const v = view(bytes);
-  let size = v.getUint32(at);
-  let head = 8;
-  if (size === 1) {
-    if (at + 16 > limit) return null;
-    size = v.getUint32(at + 8) * 2 ** 32 + v.getUint32(at + 12);
-    head = 16;
-  } else if (size === 0) {
-    size = limit - at;
-  }
-  if (size < head || at + size > limit) return null;
-  return { type: fourcc(bytes, at + 4), start: at, size, head, end: at + size };
+  const size = view(bytes).getUint32(at);
+  if (size < 8 || at + size > limit) return null;
+  return { type: fourcc(bytes, at + 4), start: at, size, head: 8, end: at + size };
 }
 
 function children(bytes, from, to) {
   const list = [];
   let at = from;
   while (at < to) {
+    if (list.length >= METADATA_LIMITS.maxChildBoxes) throw unsupported("too_many_boxes");
     const box = boxAt(bytes, at, to);
     if (!box || !printable(box.type)) throw unsupported("broken_box");
     list.push(box);
@@ -153,13 +150,40 @@ function makeBox(type, ...parts) {
 
 const payloadOf = (bytes, box) => bytes.subarray(box.start + box.head, box.end);
 
-function indexOf(hay, needle) {
-  const first = needle[0];
-  outer: for (let i = hay.indexOf(first); i !== -1 && i + needle.length <= hay.length; i = hay.indexOf(first, i + 1)) {
-    for (let k = 1; k < needle.length; k += 1) if (hay[i + k] !== needle[k]) continue outer;
-    return i;
+// The markers found in `bytes`, in one pass: every marker is at least 4
+// bytes long, and the 4 bytes ending at each position are looked up as one
+// number, so the time does not depend on what the bytes are.
+const MARKERS_BY_PREFIX = new Map();
+for (const marker of [...MARKERS, { text: "xmp_uuid", bytes: XMP_UUID }]) {
+  const key = ((marker.bytes[0] << 24) | (marker.bytes[1] << 16) | (marker.bytes[2] << 8) | marker.bytes[3]) >>> 0;
+  if (!MARKERS_BY_PREFIX.has(key)) MARKERS_BY_PREFIX.set(key, []);
+  MARKERS_BY_PREFIX.get(key).push(marker);
+}
+function markersIn(bytes) {
+  const found = [];
+  let word = 0;
+  for (let i = 0; i < bytes.length; i += 1) {
+    word = ((word << 8) | bytes[i]) >>> 0;
+    if (i < 3) continue;
+    const list = MARKERS_BY_PREFIX.get(word);
+    if (!list) continue;
+    const start = i - 3;
+    for (const marker of list) {
+      if (!found.includes(marker.text) && start + marker.bytes.length <= bytes.length && marker.bytes.every((b, k) => bytes[start + k] === b)) found.push(marker.text);
+    }
   }
-  return -1;
+  return found;
+}
+
+// Each box type may be added once; `require` lists the ones that must be there.
+function single() {
+  const seen = new Set();
+  const add = (type) => {
+    if (seen.has(type)) throw unsupported("duplicate_box");
+    seen.add(type);
+  };
+  add.require = (types) => { for (const type of types) if (!seen.has(type)) throw unsupported("box_missing"); };
+  return add;
 }
 
 // Reads a byte range of the File, counting what was read (the memory proof).
@@ -226,12 +250,18 @@ function readTrack(moov, trak) {
       if (child.type === "tkhd") {
         const p = child.start + child.head;
         if (p + 24 > child.end) throw unsupported("broken_box");
+        // One identity per track: a second tkhd or hdlr is refused whatever its order.
+        if (track.id || track.tkhdSeen) throw unsupported("duplicate_box");
+        track.tkhdSeen = true;
         track.id = moov[p] === 1 ? view(moov).getUint32(p + 20) : view(moov).getUint32(p + 12);
       } else if (child.type === "hdlr") {
         // Only the hdlr directly under mdia names the track; a QuickTime data
         // handler under minf (alis / url) does not.
         const p = child.start + child.head;
-        if (box.type === "mdia" && p + 12 <= child.end) track.handler = fourcc(moov, p + 8);
+        if (box.type === "mdia") {
+          if (track.handler) throw unsupported("duplicate_box");
+          if (p + 12 <= child.end) track.handler = fourcc(moov, p + 8);
+        }
       } else if (["stsz", "stz2", "stsc", "stco", "co64"].includes(child.type)) {
         if (track.tables[child.type] || (child.type === "stco" && track.tables.co64) || (child.type === "co64" && track.tables.stco)) throw unsupported("duplicate_sample_table");
         track.tables[child.type] = child;
@@ -436,7 +466,12 @@ function canonStsd(bytes, stsd, handler) {
   if (entry.head !== 8 || !spec.types.has(entry.type) || entry.size < spec.fixed) throw unsupported("sample_description");
   // A QuickTime sound description of version 1 / 2 has another layout.
   if (handler === "soun" && view(bytes).getUint16(entry.start + 16) !== 0) throw unsupported("sample_description");
-  for (const child of children(bytes, entry.start + spec.fixed, entry.end)) checkEntryChild(bytes, child, spec.children);
+  const once = single();
+  for (const child of children(bytes, entry.start + spec.fixed, entry.end)) {
+    once(child.type);
+    checkEntryChild(bytes, child, spec.children);
+  }
+  once.require([handler === "vide" ? "avcC" : "esds"]);
   const out = bytes.slice(entry.start, entry.end);
   for (const [from, to] of spec.zero) out.fill(0, from, to);
   const head = new Uint8Array(8);
@@ -489,32 +524,38 @@ function serialize(n, out, at, marks) {
 
 function rebuildMoov(moov, moovBox, kept, removed) {
   const kids = [];
-  const keptIds = new Set(kept.map((track) => track.id));
   for (const box of children(moov, moovBox.start + moovBox.head, moovBox.end)) {
     if (!KEEP.moov.has(box.type)) { removed.boxes.push(box.type); continue; }
     if (box.type === "mvhd") { kids.push(leaf(canonFixed(moov, box))); continue; }
     const track = kept.find((t) => t.trak.start === box.start);
-    if (track) kids.push(rebuildTrak(moov, box, track, keptIds, removed));
+    if (track) kids.push(rebuildTrak(moov, box, track, removed));
   }
   return node("moov", kids);
 }
 
-function rebuildTrak(moov, trak, track, keptIds, removed) {
+function rebuildTrak(moov, trak, track, removed) {
   const kids = [];
+  const once = single();
   for (const box of children(moov, trak.start + trak.head, trak.end)) {
     if (!KEEP.trak.has(box.type)) { removed.boxes.push(box.type); continue; }
+    once(box.type);
     if (box.type === "tkhd") kids.push(leaf(canonFixed(moov, box)));
     else if (box.type === "mdia") kids.push(rebuildLevel(moov, box, "mdia", track, removed));
-    else if (box.type === "tref") { const tref = rebuildTref(moov, box, keptIds, removed); if (tref) kids.push(tref); }
     else if (box.type === "edts") { const edts = canonEdts(moov, box, removed); if (edts) kids.push(leaf(edts)); }
   }
+  once.require(["tkhd", "mdia"]);
   return node("trak", kids);
 }
 
+const MEDIA_HEADER = Object.freeze({ vide: "vmhd", soun: "smhd" });
+
 function rebuildLevel(moov, box, level, track, removed) {
   const kids = [];
+  const once = single();
   for (const child of children(moov, box.start + box.head, box.end)) {
     if (!KEEP[level].has(child.type)) { removed.boxes.push(child.type); continue; }
+    once(child.type);
+    if ((child.type === "vmhd" || child.type === "smhd") && child.type !== MEDIA_HEADER[track.handler]) throw unsupported("media_header");
     if (child.type === "minf") kids.push(rebuildLevel(moov, child, "minf", track, removed));
     else if (child.type === "stbl") kids.push(rebuildStbl(moov, child, track, removed));
     else if (child.type === "hdlr") kids.push(leaf(canonHdlr(moov, child)));
@@ -523,6 +564,7 @@ function rebuildLevel(moov, box, level, track, removed) {
     else if (child.type === "smhd") kids.push(leaf(canonSmhd(moov, child)));
     else if (child.type === "dinf") kids.push(leaf(canonDinf(moov, child, removed)));
   }
+  once.require(level === "mdia" ? ["mdhd", "hdlr", "minf"] : [MEDIA_HEADER[track.handler], "dinf", "stbl"]);
   return node(level, kids);
 }
 
@@ -543,24 +585,6 @@ function rebuildStbl(moov, stbl, track, removed) {
   }
   for (const required of ["stsd", "stts", "stsc", "stsz", "stco"]) if (!seen.has(required)) throw unsupported("sample_table_missing");
   return node("stbl", kids);
-}
-
-// tref: every reference to a removed track is dropped; an empty reference
-// type, and an empty tref, go too.
-function rebuildTref(moov, tref, keptIds, removed) {
-  const kids = [];
-  for (const ref of children(moov, tref.start + tref.head, tref.end)) {
-    if ((ref.end - ref.start - ref.head) % 4) throw unsupported("broken_box");
-    const ids = [];
-    for (let p = ref.start + ref.head; p + 4 <= ref.end; p += 4) ids.push(view(moov).getUint32(p));
-    const kept = ids.filter((id) => keptIds.has(id));
-    if (kept.length !== ids.length) removed.references += ids.length - kept.length;
-    if (!kept.length) continue;
-    const payload = new Uint8Array(4 * kept.length);
-    kept.forEach((id, i) => view(payload).setUint32(4 * i, id));
-    kids.push(leaf(makeBox(ref.type, payload)));
-  }
-  return kids.length ? node("tref", kids) : null;
 }
 
 // The byte range of every chunk of a kept track (the samples of a chunk are
@@ -590,7 +614,10 @@ function chunkRanges(moov, tables, budget) {
     const first = v.getUint32(sp + 8 + 12 * r);
     const perChunk = v.getUint32(sp + 12 + 12 * r);
     const next = r + 1 < runs ? v.getUint32(sp + 8 + 12 * (r + 1)) : chunks + 1;
-    if (first < 1 || next <= first) throw unsupported("chunk_map_broken");
+    // ISO 14496-12: the first run starts at chunk 1, runs strictly increase,
+    // every run has samples, and the one sample description is number 1 - a
+    // map a decoder would read another way is refused, never guessed.
+    if ((r === 0 && first !== 1) || first < 1 || next <= first || perChunk === 0 || v.getUint32(sp + 16 + 12 * r) !== 1) throw unsupported("chunk_map_broken");
     for (let c = first; c < next && c <= chunks; c += 1) {
       let size = 0;
       for (let s = 0; s < perChunk && sample < count; s += 1, sample += 1) size += uniform || v.getUint32(zp + 12 + 4 * sample);
@@ -641,7 +668,7 @@ async function planCleaning(file, signal) {
   if (kept.filter((track) => track.handler === "vide").length !== 1 || kept.filter((track) => track.handler === "soun").length > 1) throw unsupported("track_count");
   if (kept.some((track) => !track.id) || new Set(kept.map((track) => track.id)).size !== kept.length) throw unsupported("track_ids");
   if (kept.some((track) => track.external)) throw unsupported("external_data");
-  const removed = { boxes: [], tracks: tracks.filter((track) => !KEEP_HANDLERS.has(track.handler)).map((track) => track.handler || "unknown"), references: 0, topBoxes: top.filter((box) => !KEEP_TOP.has(box.type)).map((box) => box.type), trailerBytes: trailer, zeroedBytes: 0 };
+  const removed = { boxes: [], tracks: tracks.filter((track) => !KEEP_HANDLERS.has(track.handler)).map((track) => track.handler || "unknown"), topBoxes: top.filter((box) => !KEEP_TOP.has(box.type)).map((box) => box.type), trailerBytes: trailer, zeroedBytes: 0 };
 
   // The rebuilt moov.
   const tree = rebuildMoov(moovBytes, moovBox, kept, removed);
@@ -698,13 +725,16 @@ async function planCleaning(file, signal) {
         const m = mdatOf(old);
         if (!m) throw unsupported("chunk_outside_mdat");
         const moved = old + shift.get(m);
+        if (moved < 0 || moved > Number.MAX_SAFE_INTEGER) throw unsupported("offset_overflow");
         nv.setUint32(p + 8 + 8 * i, Math.floor(moved / 2 ** 32));
         nv.setUint32(p + 12 + 8 * i, moved % 2 ** 32);
       } else {
         const old = nv.getUint32(p + 8 + 4 * i);
         const m = mdatOf(old);
         if (!m) throw unsupported("chunk_outside_mdat");
-        nv.setUint32(p + 8 + 4 * i, old + shift.get(m));
+        const moved = old + shift.get(m);
+        if (moved < 0 || moved > 0xffffffff) throw unsupported("offset_overflow");
+        nv.setUint32(p + 8 + 4 * i, moved);
       }
     }
   }
@@ -805,8 +835,7 @@ export async function inspectPrivacy(file, { signal } = {}) {
   if (moovs.length !== 1 || moovs[0].size > METADATA_LIMITS.maxMoovBytes) return { clean: false, findings: [...new Set([...findings, "moov"])] };
   const moovTop = moovs[0];
   const moov = await read(moovTop.start, moovTop.end);
-  for (const marker of MARKERS) if (indexOf(moov, marker.bytes) !== -1) findings.push(`marker:${marker.text}`);
-  if (indexOf(moov, XMP_UUID) !== -1) findings.push("marker:xmp_uuid");
+  for (const text of markersIn(moov)) findings.push(`marker:${text}`);
   const tracks = [];
   try {
     const box = { type: "moov", start: 0, size: moov.length, head: moovTop.head, end: moov.length };
