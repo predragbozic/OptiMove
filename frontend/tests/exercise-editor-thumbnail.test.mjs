@@ -75,6 +75,12 @@ function fakeFrames({ duration = 40 } = {}) {
   frames.handlers = {
     captureFrame: async (src, time, options = {}) => {
       frames.captures.push({ src, time, crossOrigin: options.crossOrigin || "", videoName: options.videoName });
+      frames.bounds = [...(frames.bounds || []), options.bound];
+      frames.signals = [...(frames.signals || []), options.signal];
+      if (frames.gate) {
+        // Waits like a slow device; a stop ends it the way the real capture does.
+        await Promise.race([frames.gate, new Promise((_, reject) => options.signal?.addEventListener("abort", () => reject(Object.assign(new Error("stopped"), { code: options.signal.reason?.code || "frame_capture_timeout" })), { once: true }))]);
+      }
       if (frames.fail) throw Object.assign(new Error(frames.fail), { code: frames.fail });
       return { file: new File(["jpg"], frameFileName(options.videoName, time), { type: "image/jpeg" }), timeSeconds: time, width: 1280, height: 720 };
     },
@@ -592,6 +598,134 @@ test("11. any redraw of the editor while the picker is open asks the new video f
   for (const value of ["1", "2", "3", "4", "5"]) { s.value = value; editor.handleExerciseEditorInput(state, { target: s }); }
   await settle();
   assert.equal(errorListeners, 0, "already listening since it was first asked");
+  editor.closeExerciseEditor(state, h);
+  withGuards();
+});
+
+test("12. while the automatic thumbnail is made, Choose a frame of the video is there at once; choosing drops the automatic attempt (its result is never uploaded); the automatic attempt gives up after 6 s; the capture video is put in the page out of sight and removed afterwards", async () => {
+  withGuards({ transport: true, save: true });
+  const frames = fakeFrames({ duration: 40 });
+  let open;
+  frames.gate = new Promise((resolve) => { open = resolve; });
+  const transport = fakeTransport();
+  const h = handlers({ upload: transport.upload, ...frames.handlers });
+  fakeApi();
+  await editor.openExerciseEditor(state, h, "e1");
+  await settle();
+  const uploading = editor.chooseExerciseMediaFile(state, h, "video", file("clip.mp4", 100, "video/mp4"));
+  await settle();
+  transport.release();
+  await uploading;
+  await settle();
+  // The automatic thumbnail is being made (the capture waits): the button is already there.
+  assert.equal(image().capturing, true);
+  assert.match(statusesOf("image"), /Making a thumbnail from the video\.\.\./);
+  assert.ok(controlsOf("image").includes("Choose a frame of the video..."), controlsOf("image").join(", "));
+  assert.equal(frames.bounds.at(-1), 6000, "the automatic attempt's own bound");
+  // The coach chooses at once: the automatic attempt is stopped (its video stops loading), not only ignored.
+  const attempt = frames.signals.at(-1);
+  assert.equal(attempt.aborted, false);
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-pick", "image"));
+  await settle();
+  assert.equal(attempt.aborted, true, "stopped");
+  assert.equal(image().capturing, false);
+  assert.equal(image().note, "", "no failure sentence for a stopped attempt");
+  assert.ok(image().framePicker, "the picker is open");
+  assert.doesNotMatch(statusesOf("image"), /Making a thumbnail/);
+  // The automatic capture finishes late: nothing is uploaded, the picker stays.
+  open();
+  await settle();
+  await settle();
+  assert.equal(transport.calls.length, 1, "only the video");
+  assert.ok(image().framePicker);
+  assert.equal(image().state, "none");
+  editor.closeExerciseEditor(state, h);
+  withGuards();
+  // The capture video: in the page, out of sight, never read out; removed when done.
+  const thumb = await import("../exercise-media-thumbnail.js");
+  const video = thumb.createCaptureVideo(document);
+  assert.equal(video.isConnected, true);
+  assert.equal(video.getAttribute("aria-hidden"), "true");
+  assert.equal(video.getAttribute("tabindex"), "-1");
+  assert.deepEqual([video.style.position, video.style.width, video.style.height, video.style.opacity, video.style.pointerEvents], ["fixed", "2px", "2px", "0.01", "none"]);
+  const read = thumb.readVideoMetadata("blob:never", { createVideo: () => video, bound: 30 });
+  await assert.rejects(read, (e) => e.code === "frame_capture_timeout");
+  assert.equal(video.isConnected, false, "removed after the attempt");
+  assert.equal(document.querySelectorAll("[data-exercise-media-capture-video]").length, 0);
+});
+
+test("13. the automatic attempt has one deadline for the whole of it: past it the attempt is stopped and the picture field says why; closing the editor or changing the video stops it too", async () => {
+  withGuards({ transport: true, save: true });
+  const frames = fakeFrames({ duration: 40 });
+  frames.gate = new Promise(() => {}); // a device that never makes the frame
+  const transport = fakeTransport();
+  const h = handlers({ upload: transport.upload, ...frames.handlers, automaticThumbnailBoundMs: 40 });
+  fakeApi();
+  await editor.openExerciseEditor(state, h, "e1");
+  await settle();
+  const uploading = editor.chooseExerciseMediaFile(state, h, "video", file("clip.mp4", 100, "video/mp4"));
+  await settle();
+  transport.release();
+  await uploading;
+  await settle();
+  assert.equal(image().capturing, true);
+  assert.equal(frames.bounds.at(-1), 40);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  await settle();
+  assert.equal(frames.signals.at(-1).aborted, true, "stopped at the deadline");
+  assert.equal(image().capturing, false);
+  assert.equal(image().note, "No thumbnail was made from the video. Reading the video for a frame took too long. Try again, or upload a picture.");
+  assert.ok(controlsOf("image").includes("Choose a frame of the video..."));
+  editor.closeExerciseEditor(state, h);
+  // Closing the editor while it runs stops it.
+  const h2 = handlers({ upload: transport.upload, ...frames.handlers });
+  fakeApi();
+  await editor.openExerciseEditor(state, h2, "e1");
+  await settle();
+  const second = editor.chooseExerciseMediaFile(state, h2, "video", file("clip.mp4", 100, "video/mp4"));
+  await settle();
+  transport.release();
+  await second;
+  await settle();
+  const running = frames.signals.at(-1);
+  assert.equal(running.aborted, false);
+  editor.closeExerciseEditor(state, h2);
+  assert.equal(running.aborted, true, "closing the editor stops it");
+  withGuards();
+});
+
+test("14. uploading a picture while the automatic thumbnail is made stops the automatic attempt at once; only the coach's picture is uploaded", async () => {
+  withGuards({ transport: true, save: true });
+  const frames = fakeFrames({ duration: 40 });
+  let open;
+  frames.gate = new Promise((resolve) => { open = resolve; });
+  const transport = fakeTransport();
+  const h = handlers({ upload: transport.upload, ...frames.handlers });
+  fakeApi();
+  await editor.openExerciseEditor(state, h, "e1");
+  await settle();
+  const uploading = editor.chooseExerciseMediaFile(state, h, "video", file("clip.mp4", 100, "video/mp4"));
+  await settle();
+  transport.release();
+  await uploading;
+  await settle();
+  assert.equal(image().capturing, true);
+  const attempt = frames.signals.at(-1);
+  assert.equal(attempt.aborted, false);
+  const picture = editor.chooseExerciseMediaFile(state, h, "image", file("p.jpg", 10, "image/jpeg"));
+  assert.equal(attempt.aborted, true, "stopped at once, not at the deadline");
+  await settle();
+  transport.release();
+  await picture;
+  await settle();
+  // The automatic capture would have finished late: nothing more is uploaded.
+  open();
+  await settle();
+  await settle();
+  assert.equal(transport.calls.length, 2, "the video and the coach's picture");
+  assert.equal(transport.calls[1].slot, "image");
+  assert.equal(image().note, "", "no failure sentence for a stopped attempt");
+  assert.equal(image().origin, null, "the coach's own picture, not a frame");
   editor.closeExerciseEditor(state, h);
   withGuards();
 });
