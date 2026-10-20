@@ -156,6 +156,28 @@ the original PUT permission expires while verification is already running.
 Formats: MP4/H.264 Baseline/Constrained Baseline/Main/High, 8-bit 4:2:0,
 optional AAC-LC; WebM/VP8, optional Opus/Vorbis; JPEG/PNG/WebP single image.
 HEVC, VP9, unsupported tracks/profiles and unverifiable input are rejected.
+At most eight tracks of type Other / Text / Menu beside the one video and the
+at most one audio track (the timed metadata, timecode, chapter or caption
+tracks phones and editors write; the player never parses them) are ignored, not
+refused; any other track type (a second video or audio track, Image, Subtitle,
+an unknown type) still refuses. A video that plays longer than 30 seconds
+(`MAX_VIDEO_SECONDS`, `backend/src/mediaInspection.js`) is refused as 415
+`video_too_long`: the server takes the longest of the container's declared
+durations (the video, the audio, an ignored track, the file itself). It reads
+headers, not the sample tables, so a file whose headers understate its length
+is bounded by the size cap, not by this rule; the 30 seconds is a product rule,
+and the client refuses a longer video before preparing or sending it.
+`MEDIA_MAX_VIDEO_SECONDS` can only lower the limit (tests). Phone recordings
+that the inspection would refuse (HEVC, MOV, other audio codecs) are converted
+on the coach's device before the upload (`frontend/exercise-media-prepare.js`,
+WebCodecs through Mediabunny) into exactly this shape, and every video the
+client sends — a compliant one sent without conversion included — has its
+private metadata removed first (`frontend/exercise-media-metadata.js`: location,
+device, software, author, title, dates, XMP, metadata tracks, trailers; the
+picture and the sound unchanged; refused when it cannot be done safely). This
+protects the coach's own recording on the device; the server neither removes
+nor checks such metadata. The real parser accepts the client's real output and finds no private
+field in it (`backend/tests/fixtures/media/`, tested in `media-upload-be2.test.mjs`).
 There is no transcoding. Video inspection is bounded metadata/container parsing,
 not full frame-by-frame decode. Detailed resource bounds: r2-be2-upload.md.
 
@@ -322,6 +344,7 @@ required references. It is never inferred from replacing/removing one exercise.
 | 409 | upload_already_completed | Do not cancel; use ready media/status |
 | 413 | file_too_large | Choose smaller file |
 | 415 | unsupported_media | Unsupported MIME/container/codec; choose supported file |
+| 415 | video_too_long | The video is longer than 30 seconds; the session is cancelled like unsupported_media; choose a shorter video |
 | 422 | media_verification_failed | Invalid actual bytes/size/type/inspection; no attachment |
 | 429 | storage_quota_exceeded / parallel_upload_limit | Refresh usage; wait/change file/ask admin |
 | 429 | upload_rate_limit | Back off; caps currently 20 initiation/renew requests/min and 200/day per uploader |

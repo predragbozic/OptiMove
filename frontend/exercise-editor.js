@@ -7,6 +7,7 @@ import {
   automaticThumbnailTime, captureVideoFrame, describeFrameError, describeFrameOrigin, formatFrameTime, FRAME_ERROR_CODES, frameOrigin,
   readVideoMetadata, renderFramePickerHtml, roundFrameTime,
 } from "./exercise-media-thumbnail.js";
+import { prepareVideo } from "./exercise-media-prepare.js";
 import { exerciseMediaOf, legacyMediaKind, mediaAccessAttributes } from "./media.js";
 import { forgetMediaAccess, loadPlayback } from "./media-playback.js";
 import { escapeAttr, escapeHtml, formatBytes } from "./utils.js";
@@ -34,6 +35,9 @@ export const emptyMediaField = () => ({
   // frame picker, whether an automatic thumbnail is being made ("capturing")
   // and the sentence when none could be made ("note").
   origin: null, framePicker: null, capturing: false, note: "",
+  // The on-device preparation of a video: its progress, the size it came from,
+  // and whether the file in the field is the converted one.
+  prepare: null,
 });
 
 export const emptyExerciseMedia = () => ({ video: emptyMediaField(), image: emptyMediaField(), storage: emptyStorageState() });
@@ -98,7 +102,7 @@ export function renderExerciseEditorHtml(editor, filterOptions = {}) {
           ${blocked && !editor.error ? `<p class="muted exercise-media-note" role="status">${escapeHtml(SAVE_BLOCKED_SENTENCE)}</p>` : ""}
         </div>
         <div class="builder-modal-actions">
-          <button class="plain-button" type="button" data-action="exercise-editor-save" ${editor.loading || held || blocked ? "disabled" : ""}>${held ? `Uploading... ${uploadPercent(editor)}%` : editor.loading ? "Saving..." : editor.isCopy ? "Save private copy" : "Save"}</button>
+          <button class="plain-button" type="button" data-action="exercise-editor-save" ${editor.loading || held || blocked ? "disabled" : ""}>${held ? busyLabel(editor) : editor.loading ? "Saving..." : editor.isCopy ? "Save private copy" : "Save"}</button>
           <button class="text-action" type="button" data-action="exercise-editor-close">Cancel</button>
         </div>
       </section>
@@ -108,8 +112,12 @@ export function renderExerciseEditorHtml(editor, filterOptions = {}) {
 
 // ---- Media fields (FE-2) ---------------------------------------------------
 
+// A video being checked or prepared on the device counts like an upload: Save
+// waits, the editor asks before closing, a reload asks first.
+export const BUSY_STATES = Object.freeze(["checking", "preparing", "uploading", "cancelling"]);
+
 export function uploadInFlight(editor) {
-  return MEDIA_SLOTS.some(({ slot }) => ["uploading", "cancelling"].includes(editor?.media?.[slot]?.state));
+  return MEDIA_SLOTS.some(({ slot }) => BUSY_STATES.includes(editor?.media?.[slot]?.state));
 }
 
 // BE-3 boundary: a completed upload is not a saved media until the binding
@@ -121,6 +129,19 @@ export function mediaSaveBlocked(editor) {
 function uploadPercent(editor) {
   const field = MEDIA_SLOTS.map(({ slot }) => editor.media[slot]).find((entry) => entry.state === "uploading" || entry.state === "cancelling");
   return percentOf(field?.progress);
+}
+
+// The Save button's label while a slot is busy: the phase and its percent.
+function busyLabel(editor) {
+  const field = MEDIA_SLOTS.map(({ slot }) => editor.media[slot]).find((entry) => BUSY_STATES.includes(entry.state));
+  if (!field) return "Save";
+  if (field.state === "checking") return "Checking...";
+  if (field.state === "preparing") return `Preparing... ${preparePercent(field)}%`;
+  return `Uploading... ${uploadPercent(editor)}%`;
+}
+
+function preparePercent(field) {
+  return Math.min(100, Math.floor((Number(field.prepare?.fraction) || 0) * 100));
 }
 
 function percentOf(progress) {
@@ -219,9 +240,14 @@ function renderMediaField(editor, spec, offered) {
   const field = editor.media[spec.slot];
   const url = String(editor.data[spec.urlKey] || "").trim();
   const saveEnabled = isMediaSaveEnabled();
-  const upload = (label, action) => `<button class="plain-button compact-button" type="button" data-action="${action}" data-slot="${spec.slot}">${label}</button>`;
-  const link = (label = "Use a link") => `<button class="text-action" type="button" data-action="exercise-media-link" data-slot="${spec.slot}">${label}</button>`;
-  const remove = (label = "Remove") => `<button class="text-action" type="button" data-action="exercise-media-remove" data-slot="${spec.slot}">${label}</button>`;
+  // While a video or a picture is being prepared or uploaded, every other
+  // control of both slots is shown disabled (its handler ignores it anyway);
+  // only the busy slot's Cancel stays live.
+  const busy = uploadInFlight(editor);
+  const off = (action) => (busy && action !== "exercise-media-cancel" ? " disabled" : "");
+  const upload = (label, action) => `<button class="plain-button compact-button" type="button" data-action="${action}" data-slot="${spec.slot}"${off(action)}>${label}</button>`;
+  const link = (label = "Use a link") => `<button class="text-action" type="button" data-action="exercise-media-link" data-slot="${spec.slot}"${off("exercise-media-link")}>${label}</button>`;
+  const remove = (label = "Remove") => `<button class="text-action" type="button" data-action="exercise-media-remove" data-slot="${spec.slot}"${off("exercise-media-remove")}>${label}</button>`;
   // PR 3: the picture may be a frame of the exercise's R2 video.
   const frame = (label) => (spec.slot === "image" && frameOffered(editor) ? `<button class="plain-button compact-button" type="button" data-action="exercise-media-frame-pick" data-slot="image">${label}</button>` : "");
   const origin = spec.slot === "image" && field.origin ? `<p class="muted exercise-media-origin">${escapeHtml(describeFrameOrigin(field.origin))}</p>` : "";
@@ -238,11 +264,25 @@ function renderMediaField(editor, spec, offered) {
   }
   let body = "";
   switch (field.state) {
+    case "checking":
+      body = `
+        ${renderFileLine(field)}
+        <progress class="exercise-media-progress" data-exercise-media-progress="${spec.slot}" aria-label="Checking the ${spec.noun}"></progress>
+        <p class="muted exercise-media-status" role="status" data-exercise-media-progress-text="${spec.slot}">Checking the ${spec.noun}...</p>
+        <div class="exercise-media-actions">${upload("Cancel", "exercise-media-cancel")}</div>`;
+      break;
+    case "preparing":
+      body = `
+        ${renderFileLine(field)}
+        <progress class="exercise-media-progress" max="100" value="${preparePercent(field)}" data-exercise-media-progress="${spec.slot}" aria-label="Preparation progress"></progress>
+        <p class="muted exercise-media-status" role="status" data-exercise-media-progress-text="${spec.slot}">${escapeHtml(prepareText(field, spec))}</p>
+        <div class="exercise-media-actions">${upload("Cancel", "exercise-media-cancel")}</div>`;
+      break;
     case "uploading":
       body = `
         ${renderFileLine(field)}
         <progress class="exercise-media-progress" max="100" value="${percentOf(field.progress)}" data-exercise-media-progress="${spec.slot}" aria-label="Upload progress"></progress>
-        <p class="muted exercise-media-status" role="status" data-exercise-media-progress-text="${spec.slot}">${escapeHtml(progressText(field))}</p>
+        <p class="muted exercise-media-status" role="status" data-exercise-media-progress-text="${spec.slot}">${escapeHtml(progressText(field, spec))}</p>
         <div class="exercise-media-actions">${upload("Cancel", "exercise-media-cancel")}</div>`;
       break;
     case "cancelling":
@@ -263,14 +303,14 @@ function renderMediaField(editor, spec, offered) {
     case "failed":
     case "cancelled": {
       const code = field.error?.code || "";
-      const retry = field.state === "failed" && field.file && !["upload_transport_disabled", "upload_contract_pending", "verification_timeout"].includes(code);
+      const retry = field.state === "failed" && field.file && !["upload_transport_disabled", "upload_contract_pending", "verification_timeout", "video_too_long"].includes(code);
       body = `
         ${field.fileName ? renderFileLine(field) : ""}
         <p class="${field.state === "failed" ? "builder-error" : "muted"} exercise-media-status" role="alert">${escapeHtml(field.error?.message || "")}</p>
         <div class="exercise-media-actions">
           ${code === "verification_timeout" && field.uploadId ? upload("Check again", "exercise-media-check") : ""}
           ${retry ? upload("Retry", "exercise-media-retry") : ""}
-          ${offered ? upload(field.state === "cancelled" ? "Upload again" : "Choose another file", "exercise-media-pick") : ""}${frame("Use a frame of the video...")}
+          ${offered ? upload(code === "preparation_cancelled" ? `Choose a ${spec.noun}` : field.state === "cancelled" ? "Upload again" : "Choose another file", "exercise-media-pick") : ""}${frame("Use a frame of the video...")}
           ${link()}${remove("Clear")}
         </div>`;
       break;
@@ -313,13 +353,20 @@ function renderMediaField(editor, spec, offered) {
 }
 
 function renderFileLine(field) {
-  return `<p class="exercise-media-file"><span class="exercise-media-file-name" title="${escapeAttr(field.fileName)}">${escapeHtml(field.fileName)}</span><span class="muted">${escapeHtml(formatBytes(field.fileSize))}</span></p>`;
+  // A prepared video shows its new size and the size it came from.
+  const prepared = field.prepare?.converted && field.prepare.sourceSize ? ` · prepared from ${formatBytes(field.prepare.sourceSize)}` : "";
+  return `<p class="exercise-media-file"><span class="exercise-media-file-name" title="${escapeAttr(field.fileName)}">${escapeHtml(field.fileName)}</span><span class="muted">${escapeHtml(formatBytes(field.fileSize) + prepared)}</span></p>`;
 }
 
-function progressText(field) {
+function progressText(field, spec = null) {
   const sent = Number(field.progress?.sent) || 0;
   const total = Number(field.progress?.total) || field.fileSize || 0;
-  return `${percentOf({ sent, total })} % · ${formatBytes(sent)} of ${formatBytes(total)}`;
+  const bytes = `${percentOf({ sent, total })} % · ${formatBytes(sent)} of ${formatBytes(total)}`;
+  return spec ? `Uploading the ${spec.noun}... ${bytes}` : bytes;
+}
+
+function prepareText(field, spec) {
+  return `Preparing the ${spec.noun}... ${preparePercent(field)} %`;
 }
 
 function renderLocalPreview(field, spec) {
@@ -437,7 +484,7 @@ export function closeExerciseEditor(state, handlers) {
   const editor = state.exerciseEditor;
   if (uploadInFlight(editor)) {
     const ask = typeof globalThis.confirm === "function" ? globalThis.confirm : () => true;
-    if (!ask("An upload is still running. Close the editor and cancel it?")) return false;
+    if (!ask("A video is still being prepared or uploaded. Close the editor and cancel it?")) return false;
     for (const { slot } of MEDIA_SLOTS) editor.media[slot].controller?.abort();
   }
   releaseMediaPreviews(editor);
@@ -460,7 +507,7 @@ function releaseMediaPreviews(editor) {
 export function handleExerciseMediaBeforeUnload(event, state) {
   if (!uploadInFlight(state?.exerciseEditor)) return false;
   event.preventDefault();
-  event.returnValue = "An upload is still running.";
+  event.returnValue = "A video is still being prepared or uploaded.";
   return true;
 }
 
@@ -499,8 +546,15 @@ export async function chooseExerciseMediaFile(state, handlers, slot, file, { ori
   Object.assign(field, {
     file, fileName: file.name || "file", fileSize: Number(file.size) || 0, mimeType: file.type || "", error: null, previewOpen: false,
     mediaId: "", uploadId: "", idempotencyKey: "", resumable: false, media: null, cancelOutcome: "", linkOpen: false,
-    origin: slot === "image" ? frameOrigin(origin || {}) : null, framePicker: null, capturing: false, note: "",
+    origin: slot === "image" ? frameOrigin(origin || {}) : null, framePicker: null, capturing: false, note: "", prepare: null,
   });
+  if (slot === "video") {
+    // The chosen video is read and, when the server would refuse it as it
+    // is, converted on this device first; the upload then takes the result.
+    const prepared = await prepareChosenVideo(state, handlers, editor, field, file);
+    if (!prepared) return;
+    file = prepared;
+  }
   const account = chargedAccount(editor.media.storage.data, { userId: editor.viewerId });
   const check = validateFile(file, slot, editor.media.storage.data ? account : null);
   if (!check.ok) {
@@ -510,6 +564,66 @@ export async function chooseExerciseMediaFile(state, handlers, slot, file, { ori
     return;
   }
   await uploadExerciseMedia(state, handlers, slot);
+}
+
+// The on-device preparation of a chosen video (exercise-media-prepare.js):
+// "Checking the video..." while it is read, "Preparing the video... N %" while
+// it is converted, then the prepared file replaces the chosen one in the
+// field and the upload starts. Resolves to the file to upload, or null when
+// the field already says why there is none (refused, cancelled, the editor
+// closed). The field's controller cancels it like an upload.
+async function prepareChosenVideo(state, handlers, editor, field, file) {
+  const controller = new AbortController();
+  Object.assign(field, { state: "checking", controller, prepare: { fraction: 0, percent: 0, sourceSize: Number(file.size) || 0, converted: false }, progress: { sent: 0, total: 0 } });
+  handlers.rerender();
+  const live = () => state.exerciseEditor === editor && field.controller === controller;
+  const prepare = handlers.prepareVideo || prepareVideo;
+  let settled = false;
+  try {
+    const result = await prepare(file, {
+      signal: controller.signal,
+      onPhase: (phase) => {
+        if (!live() || field.state === "cancelling") return;
+        // The same face in place (no redraw): a Cancel being tapped is not replaced under the finger.
+        if (phase === "preparing" && field.state === "checking") { field.state = "preparing"; if (!patchPrepareStart("video", field)) handlers.rerender(); }
+        if (phase === "verifying" && field.state === "preparing") { field.prepare.fraction = 1; patchPrepareProgress("video", field); }
+      },
+      onProgress: (fraction) => {
+        if (!live() || field.state !== "preparing") return;
+        field.prepare.fraction = Math.max(0, Math.min(1, Number(fraction) || 0));
+        // One patch per whole percent: the encoder may report far more often.
+        if (preparePercent(field) === field.prepare.percent) return;
+        field.prepare.percent = preparePercent(field);
+        patchPrepareProgress("video", field);
+      },
+    });
+    if (!live()) return null;
+    // A Cancel that landed after the preparation's last check: the result is dropped, nothing goes up.
+    if (controller.signal.aborted || field.state === "cancelling") throw Object.assign(new Error("preparation_cancelled"), { code: "preparation_cancelled" });
+    const prepared = result.file;
+    Object.assign(field, {
+      file: prepared, fileName: prepared.name || field.fileName, fileSize: Number(prepared.size) || 0, mimeType: prepared.type || "",
+      prepare: { fraction: 1, percent: 100, sourceSize: Number(file.size) || 0, converted: result.converted === true },
+    });
+    // The upload draws the next face itself.
+    settled = true;
+    return prepared;
+  } catch (error) {
+    if (!live()) return null;
+    const code = error?.code || "conversion_failed";
+    const cancelled = code === "preparation_cancelled";
+    // A refused or failed preparation offers another file, never a retry of
+    // the same bytes; a cancelled Replace keeps what the exercise had.
+    Object.assign(field, {
+      state: cancelled ? "cancelled" : "failed", file: null, error: { code, message: describeUploadError(code, { slot: "video", file, detail: error?.detail || null }) },
+      prepare: null, cancelOutcome: "",
+    });
+    if (cancelled && field.previous) Object.assign(field, { state: field.previous.state, mediaId: field.previous.mediaId, fileName: "", fileSize: 0, error: null, previous: null });
+    return null;
+  } finally {
+    if (field.controller === controller) field.controller = null;
+    if (!settled && state.exerciseEditor === editor) handlers.rerender();
+  }
 }
 
 async function uploadExerciseMedia(state, handlers, slot, { resume = false } = {}) {
@@ -761,12 +875,39 @@ function releaseFieldPreview(field) {
 function patchUploadProgress(slot, field) {
   const doc = globalThis.document;
   if (!doc?.querySelector) return;
+  const spec = MEDIA_SLOTS.find((entry) => entry.slot === slot);
   const bar = doc.querySelector(`[data-exercise-media-progress="${slot}"]`);
   if (bar) bar.value = percentOf(field.progress);
   const text = doc.querySelector(`[data-exercise-media-progress-text="${slot}"]`);
-  if (text) text.textContent = progressText(field);
+  if (text) text.textContent = progressText(field, spec);
   const save = doc.querySelector('[data-action="exercise-editor-save"]');
   if (save) save.textContent = `Uploading... ${percentOf(field.progress)}%`;
+}
+
+// "Checking" becomes "Preparing" in place: the bar gains its scale, the
+// sentence and the Save label change. False when the face is not on screen.
+function patchPrepareStart(slot, field) {
+  const doc = globalThis.document;
+  const bar = doc?.querySelector?.(`[data-exercise-media-progress="${slot}"]`);
+  if (!bar) return false;
+  bar.setAttribute("max", "100");
+  bar.setAttribute("value", String(preparePercent(field)));
+  bar.setAttribute("aria-label", "Preparation progress");
+  field.prepare.percent = preparePercent(field);
+  patchPrepareProgress(slot, field);
+  return true;
+}
+
+function patchPrepareProgress(slot, field) {
+  const doc = globalThis.document;
+  if (!doc?.querySelector) return;
+  const spec = MEDIA_SLOTS.find((entry) => entry.slot === slot);
+  const bar = doc.querySelector(`[data-exercise-media-progress="${slot}"]`);
+  if (bar) bar.value = preparePercent(field);
+  const text = doc.querySelector(`[data-exercise-media-progress-text="${slot}"]`);
+  if (text) text.textContent = prepareText(field, spec);
+  const save = doc.querySelector('[data-action="exercise-editor-save"]');
+  if (save) save.textContent = `Preparing... ${preparePercent(field)}%`;
 }
 
 function handleExerciseMediaAction(state, handlers, action) {
@@ -793,8 +934,9 @@ function handleExerciseMediaAction(state, handlers, action) {
     return true;
   }
   if (type === "exercise-media-cancel") {
-    if (field.state !== "uploading" || !field.controller) return true;
-    // The transport tells the server (DELETE); the field settles when it answers.
+    if (!["uploading", "checking", "preparing"].includes(field.state) || !field.controller) return true;
+    // An upload: the transport tells the server (DELETE) and the field settles
+    // when it answers. A preparation: the conversion stops on the device.
     field.state = "cancelling";
     field.controller.abort();
     handlers.rerender();

@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { describePrepareError, PREPARE_ERROR_CODES } from "./exercise-media-prepare.js";
 import { formatBytes } from "./utils.js";
 
 // ---------------------------------------------------------------------------
@@ -79,9 +80,12 @@ export function setMediaSaveEnabled(value) {
   mediaSaveEnabled = Boolean(value);
 }
 
+// `accept` is what the picker offers (every phone video: the preparation step
+// reads the file and converts what the server would refuse); `mimeTypes` is
+// what the server takes and what the local check compares against.
 export const UPLOAD_SLOTS = Object.freeze({
-  video: Object.freeze({ accept: "video/mp4,video/webm", label: "video", limitKey: "maxVideoBytes", types: "MP4 (H.264) or WebM (VP8) video files", purpose: "exercise_video" }),
-  image: Object.freeze({ accept: "image/jpeg,image/png,image/webp", label: "picture", limitKey: "maxImageBytes", types: "JPG, PNG or WebP pictures", purpose: "exercise_image" }),
+  video: Object.freeze({ accept: "video/*,.mp4,.mov", mimeTypes: Object.freeze(["video/mp4", "video/webm"]), label: "video", limitKey: "maxVideoBytes", types: "MP4 or MOV videos", purpose: "exercise_video" }),
+  image: Object.freeze({ accept: "image/jpeg,image/png,image/webp", mimeTypes: Object.freeze(["image/jpeg", "image/png", "image/webp"]), label: "picture", limitKey: "maxImageBytes", types: "JPG, PNG or WebP pictures", purpose: "exercise_image" }),
 });
 
 export const UPLOAD_CONTEXT_TYPES = Object.freeze(["exercise_create", "exercise_edit"]);
@@ -220,7 +224,7 @@ export function describeStorageAccount(account, { ownerScope = "user" } = {}) {
 export function validateFile(file, slot, account) {
   const spec = UPLOAD_SLOTS[slot];
   if (!file || !spec) return { ok: false, code: "invalid_file" };
-  const slotTypes = spec.accept.split(",");
+  const slotTypes = spec.mimeTypes;
   const allowed = Array.isArray(account?.allowedMimeTypes) ? account.allowedMimeTypes.filter((type) => slotTypes.includes(type)) : slotTypes;
   if (!allowed.includes(file.type)) return { ok: false, code: "unsupported_media" };
   const size = toNumber(file.size);
@@ -246,9 +250,10 @@ export function isResumableCode(code) {
 
 // One sentence per code, in the coach's words; never "nothing was uploaded"
 // after a lost answer, since the server may hold a complete object.
-export function describeUploadError(code, { slot = "video", file = null, account = null } = {}) {
+export function describeUploadError(code, { slot = "video", file = null, account = null, detail = null } = {}) {
   const spec = UPLOAD_SLOTS[slot] || UPLOAD_SLOTS.video;
   const size = file ? formatBytes(file.size) : "";
+  if (PREPARE_ERROR_CODES.includes(code)) return describePrepareError(code, { detail, file });
   switch (code) {
     case "unsupported_media":
     case "invalid_file":

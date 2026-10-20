@@ -19,6 +19,9 @@ globalThis.URL.revokeObjectURL = () => {};
 
 const editor = await import("../exercise-editor.js");
 const guards = await import("../exercise-media-upload.js");
+// Node has no WebCodecs: the on-device preparation answers from the fake file's facts (a compliant MP4 here).
+const { installVideoPrepareFake } = await import("./support/video-prepare-fake.mjs");
+installVideoPrepareFake();
 const { STORAGE_ROUTE } = guards;
 
 const content = document.querySelector("#content");
@@ -107,7 +110,7 @@ test("2. the transport guard on: the owner-resolved storage line, Upload and Use
   assert.equal(content.querySelector("[data-exercise-media-storage]"), null, "E-1: no storage line until the save guard is on too");
   assert.deepEqual(controlsOf("video"), ["Preview", "<input file>"], "no Replace / Remove of a stored file until BE-3 can save it");
   assert.deepEqual(controlsOf("image"), ["Preview", "Edit link", "Replace with a file...", "Remove", "<input file>"]);
-  assert.equal(content.querySelector('[data-exercise-media-file="video"]').getAttribute("accept"), "video/mp4,video/webm");
+  assert.equal(content.querySelector('[data-exercise-media-file="video"]').getAttribute("accept"), "video/*,.mp4,.mov");
   await editor.handleExerciseEditorAction(state, handlers(), action("exercise-media-remove", "video"));
   assert.equal(state.exerciseEditor.media.video.state, "stored", "Remove of a stored file is refused before BE-3");
   await editor.handleExerciseEditorAction(state, handlers(), action("exercise-media-link", "image"));
@@ -134,7 +137,8 @@ test("3. a file the limits refuse is refused locally with the sentence, nothing 
   await settle();
   await editor.chooseExerciseMediaFile(state, handlers(), "video", file("big.mp4", 300000000, "video/mp4"));
   assert.equal(state.exerciseEditor.media.video.state, "failed");
-  assert.equal(content.querySelector('[data-exercise-media-slot="video"] .exercise-media-status').textContent, "This file is 300 MB. The limit for one video is 209.7 MB.");
+  // The input cap of the on-device preparation (100 MB) comes before the server's per-file limit.
+  assert.equal(content.querySelector('[data-exercise-media-slot="video"] .exercise-media-status').textContent, "This video is 300 MB. Choose a video under 100 MB (a shorter clip).");
   assert.deepEqual(controlsOf("video"), ["Choose another file", "Use a link", "Clear", "<input file>"]);
   assert.equal(saveButton().disabled, false);
   assert.equal(calls.filter((call) => call.url.startsWith("/api/media/uploads")).length, 0);
@@ -152,7 +156,10 @@ test("4. the BE-3 boundary: an uploaded file is never a saved media - Save is re
   const chosen = file("clip.mp4", 100, "video/mp4");
   const uploading = editor.chooseExerciseMediaFile(state, h, "video", chosen);
   await settle();
-  assert.deepEqual(transport.calls[0], { file: chosen, slot: "video", context: { type: "exercise_edit", exerciseId: "e1" }, purpose: "exercise_video" }, "the upload context, never FE-1's");
+  const { file: sent, ...request } = transport.calls[0];
+  assert.deepEqual(request, { slot: "video", context: { type: "exercise_edit", exerciseId: "e1" }, purpose: "exercise_video" }, "the upload context, never FE-1's");
+  assert.notEqual(sent, chosen, "never the chosen original");
+  assert.equal(sent.of, chosen, "its cleaned copy");
   transport.release();
   await uploading;
   assert.equal(state.exerciseEditor.media.video.state, "uploaded");
@@ -213,7 +220,7 @@ test("5. the transport flow in the editor: progress patched in place, Save held,
   transport.progress({ sent: 50, total: 100 });
   assert.equal(content.querySelector(".exercise-media-progress"), before, "patched in place");
   assert.equal(before.value, 50);
-  assert.equal(content.querySelector('[data-exercise-media-progress-text="video"]').textContent, "50 % · 50 B of 100 B");
+  assert.equal(content.querySelector('[data-exercise-media-progress-text="video"]').textContent, "Uploading the video... 50 % · 50 B of 100 B");
   assert.equal(saveButton().textContent, "Uploading... 50%");
   assert.equal(editor.handleExerciseMediaBeforeUnload({ preventDefault() {} }, state), true);
   await editor.handleExerciseEditorAction(state, h, action("exercise-media-cancel", "video"));
@@ -239,7 +246,8 @@ test("5. the transport flow in the editor: progress patched in place, Save held,
   const h3 = handlers({ upload: transport.upload });
   await editor.handleExerciseEditorAction(state, h3, action("exercise-media-retry", "video"));
   await settle();
-  assert.equal(transport.calls[0].file, chosen, "the same File");
+  assert.notEqual(transport.calls[0].file, chosen, "never the chosen original");
+  assert.equal(transport.calls[0].file.of, chosen, "the same prepared (cleaned) file");
   assert.equal(transport.options[0].idempotencyKey, "key-from-transport", "the same session");
   transport.release();
   await settle();

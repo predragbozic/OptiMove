@@ -102,7 +102,12 @@ test("3. one sentence per code; a lost answer is never 'nothing was uploaded'", 
   const a = account();
   assert.equal(upload.describeUploadError("file_too_large", { slot: "video", file: file("a.mp4", 300000000, "video/mp4"), account: a }), "This file is 300 MB. The limit for one video is 209.7 MB.");
   assert.equal(upload.describeUploadError("storage_quota_exceeded", { slot: "video", file: file("a.mp4", 184000000, "video/mp4"), account: account({ availableBytes: "120000000" }) }), "This file needs 184 MB, but only 120 MB of your storage are free. Remove media you no longer use or ask an administrator for more storage.");
-  assert.match(upload.describeUploadError("unsupported_media", { slot: "video" }), /MP4 \(H\.264\) or WebM \(VP8\)/);
+  assert.match(upload.describeUploadError("unsupported_media", { slot: "video" }), /MP4 or MOV videos/);
+  // The on-device preparation's codes have their own sentences.
+  assert.match(upload.describeUploadError("video_too_long", { slot: "video", detail: { durationSeconds: 51.2, maxSeconds: 30 } }), /51 seconds long\. The limit is 30 seconds/);
+  assert.match(upload.describeUploadError("input_too_large", { slot: "video", detail: { size: 300000000, maxInputBytes: 100000000 } }), /300 MB\. Choose a video under 100 MB/);
+  assert.match(upload.describeUploadError("conversion_unavailable", { slot: "video" }), /can't be prepared on this device/);
+  assert.equal(upload.describeUploadError("preparation_cancelled", { slot: "video" }), "Preparation cancelled.");
   assert.match(upload.describeUploadError("media_verification_failed", { slot: "image" }), /could not be verified/);
   assert.match(upload.describeUploadError("upload_expired"), /permission expired/);
   assert.match(upload.describeUploadError("upload_rate_limit"), /Too many uploads/);

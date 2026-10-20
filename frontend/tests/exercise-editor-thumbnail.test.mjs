@@ -20,6 +20,9 @@ globalThis.URL.revokeObjectURL = () => {};
 
 const editor = await import("../exercise-editor.js");
 const guards = await import("../exercise-media-upload.js");
+// Node has no WebCodecs: the on-device preparation answers from the fake file's facts (a compliant MP4 here).
+const { installVideoPrepareFake } = await import("./support/video-prepare-fake.mjs");
+installVideoPrepareFake();
 const { frameFileName } = await import("../exercise-media-thumbnail.js");
 const { STORAGE_ROUTE } = guards;
 
