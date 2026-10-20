@@ -170,9 +170,14 @@ and the client refuses a longer video before preparing or sending it.
 `MEDIA_MAX_VIDEO_SECONDS` can only lower the limit (tests). Phone recordings
 that the inspection would refuse (HEVC, MOV, other audio codecs) are converted
 on the coach's device before the upload (`frontend/exercise-media-prepare.js`,
-WebCodecs through Mediabunny) into exactly this shape; a converted file carries
-no descriptive metadata. The real parser accepts the client's real output
-(`backend/tests/fixtures/media/`, tested in `media-upload-be2.test.mjs`).
+WebCodecs through Mediabunny) into exactly this shape, and every video the
+client sends — a compliant one sent without conversion included — has its
+private metadata removed first (`frontend/exercise-media-metadata.js`: location,
+device, software, author, title, dates, XMP, metadata tracks, trailers; the
+picture and the sound unchanged; refused when it cannot be done safely). This
+protects the coach's own recording on the device; the server neither removes
+nor checks such metadata. The real parser accepts the client's real output and finds no private
+field in it (`backend/tests/fixtures/media/`, tested in `media-upload-be2.test.mjs`).
 There is no transcoding. Video inspection is bounded metadata/container parsing,
 not full frame-by-frame decode. Detailed resource bounds: r2-be2-upload.md.
 

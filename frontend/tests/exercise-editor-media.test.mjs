@@ -156,7 +156,10 @@ test("4. the BE-3 boundary: an uploaded file is never a saved media - Save is re
   const chosen = file("clip.mp4", 100, "video/mp4");
   const uploading = editor.chooseExerciseMediaFile(state, h, "video", chosen);
   await settle();
-  assert.deepEqual(transport.calls[0], { file: chosen, slot: "video", context: { type: "exercise_edit", exerciseId: "e1" }, purpose: "exercise_video" }, "the upload context, never FE-1's");
+  const { file: sent, ...request } = transport.calls[0];
+  assert.deepEqual(request, { slot: "video", context: { type: "exercise_edit", exerciseId: "e1" }, purpose: "exercise_video" }, "the upload context, never FE-1's");
+  assert.notEqual(sent, chosen, "never the chosen original");
+  assert.equal(sent.of, chosen, "its cleaned copy");
   transport.release();
   await uploading;
   assert.equal(state.exerciseEditor.media.video.state, "uploaded");
@@ -243,7 +246,8 @@ test("5. the transport flow in the editor: progress patched in place, Save held,
   const h3 = handlers({ upload: transport.upload });
   await editor.handleExerciseEditorAction(state, h3, action("exercise-media-retry", "video"));
   await settle();
-  assert.equal(transport.calls[0].file, chosen, "the same File");
+  assert.notEqual(transport.calls[0].file, chosen, "never the chosen original");
+  assert.equal(transport.calls[0].file.of, chosen, "the same prepared (cleaned) file");
   assert.equal(transport.options[0].idempotencyKey, "key-from-transport", "the same session");
   transport.release();
   await settle();

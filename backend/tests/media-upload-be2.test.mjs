@@ -127,6 +127,30 @@ test('a compliant MP4 sent as it is with a text track beside the picture and the
   assert.equal(r.httpStatus,200);assert.equal(r.body.media.metadata.videoCodec,'h264');assert.equal(r.body.media.metadata.audioCodec,'aac');
 });
 
+// The client's metadata removal (frontend/exercise-media-metadata.js, run here in Node on the same
+// bytes) checked by the real parser: a phone-like recording with location, device, software,
+// author, title, dates, XMP, a caption track and a vendor trailer comes out with none of them,
+// no conformance error, and passes the inspection.
+const PRIVATE_FIELDS=/^(Title|Movie|Performer|Composer|Copyright|Comment|Description|Recorded_Date|Encoded_Date|Tagged_Date|Mastered_Date|Recorded_Location|Encoded_Application|Encoded_Library_Name|Make|Model|xyz|Location)$/i;
+async function mediaInfoOf(buffer){const {default:factory}=await import('mediainfo.js');const info=await factory({format:'object',chunkSize:65536});try{const r=await info.analyzeData(buffer.length,(size,offset)=>buffer.subarray(offset,offset+size));const general=r.media.track.find(t=>t['@type']==='General');const fields=[...Object.keys(general),...Object.keys(general.extra||{})];return {types:r.media.track.map(t=>t['@type']),private:fields.filter(k=>PRIVATE_FIELDS.test(k)),extra:Object.keys(general.extra||{})};}finally{info.close();}}
+
+test('the real parser sees no private metadata in a phone-like recording cleaned by the client, and the inspection passes',async()=>{
+  const {stripPrivateMetadata}=await import('../../frontend/exercise-media-metadata.js');
+  const original=await mediaFixture('phone-like-gps-moov-end.mp4');
+  const before=await mediaInfoOf(original);
+  // The fixture really carries what a phone writes (the check below would otherwise prove nothing).
+  for(const field of ['Title','Performer','Recorded_Date','Recorded_Location','Encoded_Application','Make','Model'])assert.ok(before.private.includes(field),`the original shows ${field}`);
+  assert.deepEqual(before.types,['General','Video','Audio','Text']);
+  const {file}=await stripPrivateMetadata(new File([original],'phone.mp4',{type:'video/mp4'}));
+  const cleaned=Buffer.from(await file.arrayBuffer());
+  const after=await mediaInfoOf(cleaned);
+  assert.deepEqual(after.private,[],'no title, author, dates, location, software, make or model');
+  assert.deepEqual(after.types,['General','Video','Audio'],'no caption track');
+  assert.deepEqual(after.extra,[],'no conformance error, nothing truncated');
+  const {r}=await completeReal(cleaned,'phone.mp4');
+  assert.equal(r.httpStatus,200);assert.equal(r.body.media.metadata.videoCodec,'h264');assert.equal(r.body.media.metadata.audioCodec,'aac');
+});
+
 // The 30-second refusal travels through the real worker as its own code: the session is cancelled and nothing is charged.
 test('the real parser refuses a 31-second video as video_too_long and charges nothing',async()=>{
   const data=await webmClip(31000);

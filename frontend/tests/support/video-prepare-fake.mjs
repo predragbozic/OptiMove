@@ -3,7 +3,7 @@
 // adapter answers the inspection from the fake file's own facts and converts
 // by handing back a new fake file. The real conversion is exercised in the
 // browser harness (see docs/runbooks/exercise-media-r2-activation.md).
-import { setVideoPrepareAdapter } from "../../exercise-media-prepare.js";
+import { setMetadataTools, setVideoPrepareAdapter } from "../../exercise-media-prepare.js";
 
 // A compliant phone MP4 unless the fake file says otherwise through `video`
 // (container, codec, audio, duration, size, tracks) - a plain object a test
@@ -25,8 +25,21 @@ export function inspectionOf(file) {
 // Installs the fake. `convert` may be a gate: it receives (file, info, options)
 // and must resolve to the converted fake file; by default it answers at once
 // with a compliant 720p MP4 a quarter of the size, reporting 0.5 then 1.
-export function installVideoPrepareFake({ convert = null, canConvert = () => true } = {}) {
-  const calls = { inspect: [], convert: [] };
+export function installVideoPrepareFake({ convert = null, canConvert = () => true, strip = null, privacy = null } = {}) {
+  const calls = { inspect: [], convert: [], strip: [], privacy: [] };
+  // The metadata removal: by default a new object - the cleaned copy - with the
+  // same facts, found clean; never the file it was given, so a test can tell the
+  // copy that goes up from the chosen original (the real removal is tested in
+  // exercise-media-metadata.test.mjs on real bytes).
+  setMetadataTools({
+    async strip(file, options) {
+      calls.strip.push(file);
+      if (strip) return strip(file, options);
+      const copy = { __cleaned: true, of: file, name: String(file?.name || "video").replace(/\.[^.]+$/, "") + ".mp4", size: file?.size, type: "video/mp4", ...(file?.video ? { video: file.video } : {}) };
+      return { file: copy, report: { fake: true } };
+    },
+    async privacy(file, options) { calls.privacy.push(file); if (privacy) return privacy(file, options); return { clean: true, findings: [] }; },
+  });
   setVideoPrepareAdapter({
     async inspect(file) { calls.inspect.push(file); if (file?.video?.unreadable) { const e = new Error("video_unreadable"); e.code = "video_unreadable"; throw e; } return inspectionOf(file); },
     async canConvert(info) { return canConvert(info); },
@@ -41,4 +54,4 @@ export function installVideoPrepareFake({ convert = null, canConvert = () => tru
   return calls;
 }
 
-export function uninstallVideoPrepareFake() { setVideoPrepareAdapter(null); }
+export function uninstallVideoPrepareFake() { setVideoPrepareAdapter(null); setMetadataTools(null); }

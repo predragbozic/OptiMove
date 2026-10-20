@@ -49,7 +49,10 @@ const MB = {
   Input: class {
     constructor({ source }) {
       fake.inputs += 1;
-      this.facts = source.blob.video ? sourceFacts(source.blob) : fake.outputs.get(source.blob) || fake.lastOutputFacts;
+      // A cleaned copy reads like the file it was cleaned from (or as the fake says it changed).
+      const blob = source.blob.__cleaned ? source.blob.of : source.blob;
+      const base = blob.video ? sourceFacts(blob) : fake.outputs.get(blob) || fake.lastOutputFacts;
+      this.facts = source.blob.__cleaned && source.blob.changes ? { ...base, ...source.blob.changes } : base;
       this.disposed = false;
     }
     async getFormat() { return { name: this.facts.format }; }
@@ -106,19 +109,128 @@ globalThis.AudioEncoder = class {};
 
 const file = (name, size, type, video) => ({ name, size, type, video });
 
+// The metadata tools: a cleaned copy of a fake file, and a privacy verdict the
+// test decides (the real ones run on real bytes in exercise-media-metadata.test.mjs).
+const meta = { strips: [], privacy: [], stripFails: () => false, unclean: () => false, changes: () => null };
+function installMetadataFakes() {
+  prepare.setMetadataTools({
+    async strip(f) {
+      meta.strips.push(f);
+      if (meta.stripFails(f)) throw new MetadataUnsupported("fragmented");
+      return { file: { __cleaned: true, of: f, name: String(f.name).replace(/\.[^.]+$/, "") + ".mp4", size: f.size, type: "video/mp4", changes: meta.changes(f) }, report: { removed: {} } };
+    },
+    async privacy(f) { meta.privacy.push(f); return meta.unclean(f) ? { clean: false, findings: ["marker:©xyz"] } : { clean: true, findings: [] }; },
+  });
+}
+const { MetadataUnsupported } = await import("../exercise-media-metadata.js");
+
 beforeEach(() => {
   Object.assign(fake, { inits: [], inputs: 0, disposed: 0, cancels: 0, executeGate: null, valid: true, lastOutputFacts: null });
+  Object.assign(meta, { strips: [], privacy: [], stripFails: () => false, unclean: () => false, changes: () => null });
   prepare.setVideoPrepareAdapter(null);
   prepare.setMediabunnyLoader(async () => MB);
+  installMetadataFakes();
 });
 
-test("1. a compliant H.264 / AAC-LC MP4 (rotation 90) is never handed to a conversion; its Input is disposed", async () => {
+test("1. a compliant H.264 / AAC-LC MP4 (rotation 90) is never handed to a conversion: its metadata is removed in place and the cleaned copy (never the original) is what goes up", async () => {
   const clip = file("portrait.mp4", 3_550_000, "video/mp4", { rotation: 90, bitrate: 2_000_000 });
   const result = await prepare.prepareVideo(clip);
   assert.equal(result.converted, false);
-  assert.equal(result.file, clip);
+  assert.equal(result.metadataRemoved, true);
+  assert.notEqual(result.file, clip, "never the original");
+  assert.equal(result.file.of, clip);
+  assert.equal(meta.strips.length, 1);
+  assert.equal(meta.privacy.length, 1, "the cleaned copy is checked independently");
+  assert.equal(result.info.rotation, 90);
   assert.equal(fake.inits.length, 0, "no Conversion.init at all");
   assert.equal(fake.disposed, fake.inputs);
+});
+
+test("11. cleaning in place not reliable (an unsupported structure): a remux copies the tracks (nothing re-encoded), the remuxed file is cleaned and checked, and that goes up", async () => {
+  const clip = file("odd.mp4", 5_000_000, "video/mp4", { rotation: 90 });
+  meta.stripFails = (f) => f === clip;
+  const phases = [];
+  const result = await prepare.prepareVideo(clip, { onPhase: (p) => phases.push(p) });
+  assert.equal(fake.inits.length, 1);
+  assert.deepEqual(fake.inits[0].video, {}, "the picture is copied");
+  assert.deepEqual(fake.inits[0].audio, {}, "the sound is copied");
+  assert.deepEqual(fake.inits[0].tags, {});
+  assert.equal(meta.strips.length, 2, "the original, then the remuxed file");
+  assert.notEqual(meta.strips[1], clip);
+  assert.equal(result.converted, true);
+  assert.equal(result.videoReencoded, false);
+  assert.deepEqual(result.reasons, ["metadata"]);
+  assert.notEqual(result.file, clip);
+  assert.notEqual(result.file.of, clip, "the cleaned remux, never the original");
+  assert.deepEqual(phases, ["checking", "preparing", "verifying"]);
+});
+
+test("12. a cleaned copy that the independent check still finds private data in, or that plays differently, is not sent: the remux path takes over", async () => {
+  const clip = file("a.mp4", 1_000, "video/mp4", {});
+  meta.unclean = (f) => f.of === clip;
+  const result = await prepare.prepareVideo(clip);
+  assert.equal(fake.inits.length, 1, "remuxed");
+  assert.notEqual(result.file.of, clip);
+  Object.assign(fake, { inits: [] });
+  Object.assign(meta, { strips: [], unclean: () => false, changes: (f) => (f.video ? { rotation: 0 } : null) });
+  const turned = file("b.mp4", 1_000, "video/mp4", { rotation: 90 });
+  const second = await prepare.prepareVideo(turned);
+  assert.equal(fake.inits.length, 1, "a rotation that changed is not accepted: remuxed instead");
+  assert.equal(second.info.rotation, 90);
+});
+
+test("13. when the remuxed file cannot be cleaned either, the upload is refused with its own sentence - the original is never sent", async () => {
+  const clip = file("a.mp4", 1_000, "video/mp4", {});
+  meta.stripFails = () => true;
+  await assert.rejects(prepare.prepareVideo(clip), (e) => e.code === "metadata_unremovable" && e.detail.stage.startsWith("remux_clean"));
+  meta.stripFails = (f) => f === clip;
+  meta.unclean = () => true;
+  await assert.rejects(prepare.prepareVideo(clip), (e) => e.code === "metadata_unremovable");
+  assert.match(prepare.describePrepareError("metadata_unremovable"), /could not be removed safely, so it was not uploaded/);
+});
+
+test("14. when the remux itself fails (the library declares it invalid, it fails while running, or the library is gone), the upload is refused - not sent as it is; a tool that could not be loaded keeps its own sentence", async () => {
+  const clip = file("a.mp4", 1_000, "video/mp4", {});
+  const refused = (e) => e.code === "metadata_unremovable" && e.detail.stage === "remux:fragmented";
+  meta.stripFails = (f) => f === clip;
+  fake.valid = false;
+  await assert.rejects(prepare.prepareVideo(clip), refused);
+  assert.equal(meta.strips.length, 1, "no remuxed file to clean");
+  fake.valid = true;
+  meta.strips = [];
+  fake.executeGate = async () => { throw new Error("decoder error"); };
+  await assert.rejects(prepare.prepareVideo(clip), refused);
+  assert.equal(meta.strips.length, 1);
+  fake.executeGate = null;
+  meta.strips = [];
+  // The first read works; when the remux needs the library again it is gone.
+  meta.stripFails = (f) => { prepare.setMediabunnyLoader(() => Promise.reject(new Error("chunk 404"))); return f === clip; };
+  await assert.rejects(prepare.prepareVideo(clip), (e) => e.code === "preparation_unavailable");
+  assert.equal(meta.strips.length, 1);
+});
+
+test("17. a cleaning tool that hands back the file it was given is not trusted: the remux takes over, and if that comes back the same too, the upload is refused", async () => {
+  const clip = file("a.mp4", 1_000, "video/mp4", {});
+  prepare.setMetadataTools({ async strip(f) { meta.strips.push(f); return { file: f, report: {} }; }, async privacy() { return { clean: true, findings: [] }; } });
+  await assert.rejects(prepare.prepareVideo(clip), (e) => e.code === "metadata_unremovable" && e.detail.reason === "not_cleaned");
+  assert.equal(fake.inits.length, 1, "the remux was tried");
+  assert.equal(meta.strips.length, 2);
+});
+
+test("15. a converted file (HEVC → H.264) is cleaned and checked before it goes up; if it cannot be, the upload is refused", async () => {
+  const result = await prepare.prepareVideo(file("h.mp4", 10_000_000, "video/mp4", { videoCodec: "hevc", width: 1080, height: 1920, durationSeconds: 10 }));
+  assert.equal(result.metadataRemoved, true);
+  assert.equal(result.file.__cleaned, true);
+  assert.equal(meta.privacy.length, 1);
+  meta.unclean = () => true;
+  await assert.rejects(prepare.prepareVideo(file("h.mp4", 10_000_000, "video/mp4", { videoCodec: "hevc", width: 1080, height: 1920, durationSeconds: 10 })), (e) => e.code === "metadata_unremovable" && e.detail.stage === "converted");
+});
+
+test("16. a Cancel during the cleaning stays a Cancel (no remux, no refusal sentence)", async () => {
+  const controller = new AbortController();
+  prepare.setMetadataTools({ async strip() { controller.abort(); throw Object.assign(new Error("preparation_cancelled"), { code: "preparation_cancelled" }); }, async privacy() { return { clean: true, findings: [] }; } });
+  await assert.rejects(prepare.prepareVideo(file("a.mp4", 1_000, "video/mp4", {}), { signal: controller.signal }), (e) => e.code === "preparation_cancelled");
+  assert.equal(fake.inits.length, 0);
 });
 
 test("2. an H.264 MOV: the picture and the AAC-LC sound are copied (option-less entries), no metadata; MP4 out", async () => {

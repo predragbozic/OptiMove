@@ -428,8 +428,8 @@ audio kept) showed the device can do it without a server or a paid service.
 slot: the chosen file is read (Mediabunny 1.61.1, vendored under `frontend/vendor/mediabunny/`, MPL-2.0,
 loaded only when a video is chosen); a file the inspection would accept as it is — MP4, one H.264 track in
 Baseline / Main / High, AAC-LC or no audio, nothing else, at most 4096 px a side — is **never re-encoded**
-(passthrough first; its type is made `video/mp4` when the browser reported none, its rotation metadata is
-untouched); anything else is converted on the device with WebCodecs: the picture is copied when it is
+(passthrough first; its picture and sound are sent byte for byte, its rotation metadata is untouched, only
+its private metadata is removed — see below); anything else is converted on the device with WebCodecs: the picture is copied when it is
 already H.264 (a MOV is remuxed in milliseconds) and re-encoded only for another codec or profile, then at
 most 720p on the long side (`VIDEO_PREPARE_RULES`), the audio copied when it is AAC-LC and encoded to AAC
 otherwise; the output is MP4 with faststart, read again before it is accepted. The upload then takes the
@@ -444,19 +444,60 @@ own header, so a rare file whose metadata track or header declares more than 30 
 sound do not is sent whole and then refused (`video_too_long`, nothing charged, the coach chooses another
 file).
 
-**Embedded metadata of a file sent as it is (open owner decision, security review of 2026-10-20, F2).** A
-compliant file goes up byte for byte (passthrough first, the owner's decision), so whatever the phone wrote
-into it reaches every viewer of the exercise: the location and device atoms of the container (they reached
-viewers before this change too) and, new with this change, timed-metadata / timecode / caption tracks, which
-the server now ignores instead of refusing. The player never parses them. The alternative is a remux of
-every file (the picture and the sound copied bit for bit, no re-encode, milliseconds, no metadata) at the
-cost of holding the whole file in memory once on the phone; it is the owner's call, not built.
+**Private metadata is removed from every file before it is sent (the owner's decision F2, 2026-10-20).**
+`frontend/exercise-media-metadata.js` rebuilds the container of every video the device sends — the compliant
+file sent without conversion included — and re-encodes nothing:
+- **The rule.** Every box that is kept has a known shape and is rebuilt in its canonical form; a box
+  outside a known shape is refused, and the file goes to the remux below. Nothing is masked: a box that is
+  left out is not in the sent file at all, and every size above it is recomputed.
+- **What goes.** udta (location ©xyz, make, model, software, author, dates), meta (Apple keys / ilst,
+  title), XMP uuid, iods, free / skip padding, any vendor box and every timed-metadata / timecode /
+  caption / GPS track; references to a removed track; every top-level box other than ftyp / moov / mdat and
+  whatever follows the last box (a Samsung `SEFH` trailer, a top-level XMP). The creation and modification
+  times and the reserved / QuickTime vendor fields of mvhd / tkhd / mdhd are written as zero; the hdlr keeps
+  only its handler type (name, vendor and reserved bytes emptied); dinf is rebuilt as self-contained
+  `url ` entries (no location string, no alias record); edts keeps only its elst; the sample description
+  keeps exactly one avc1 / avc3 or mp4a entry with its reserved, vendor and compressorname fields zeroed (a
+  camera or an encoder writes its name there) and only known codec boxes (avcC and esds parsed to their
+  end, btrt, pasp, clap, fiel, colr only nclx / nclc — an ICC profile is refused); sdtp / stps (a free
+  byte per sample) are left out. Every mdat byte no kept sample uses (a removed track's samples, stale data)
+  is written as zero inside the mdat — raw payload, so a zero there is correct structure — and nothing of it
+  can be recovered; every chunk offset moves exactly with its mdat.
+- **Exact shapes.** One ftyp (at most 128 bytes, readable brands), one moov, one picture track and at most
+  one sound track; fixed-size boxes at their exact size; every sample table at its exact size (no bytes
+  after its entries), none twice; no two tracks sharing a byte; at most 200,000 samples and chunks, 10,000
+  gaps and 8 MB of unused media. Anything else is refused, never worked around.
+- **What stays.** The picture and the sound byte for byte; rotation (the tkhd matrix), edit lists,
+  durations, timescales, language, the codec configuration and the sync / composition tables.
+- **Memory.** Only the box headers, the ftyp and the moov are read (10.8 KB of an 86.9 MB file in the
+  browser check, 36 ms); the output is slices of the original plus the rebuilt moov and zero fills.
+- **The check before sending.** `inspectPrivacy` re-reads the cleaned file. By its own walk it looks for
+  every channel listed above (top-level boxes, a trailer, the boxes inside the moov, tracks, times, hdlr
+  names, compressorname, dangling references, metadata markers anywhere in the moov); then it requires the
+  file to be a fixed point of the cleaning (the cleaning would change nothing: same boxes, the moov byte for
+  byte, every unused mdat byte zero, read back) and the used bytes to equal the sample sizes counted on
+  their own. It proves the absence of the known channels, not of every conceivable one; the file is then
+  read again and must play the same (container, codecs, size, rotation, duration).
+- **When the cleaning is not reliable.** A structure it does not handle (fragmented, external data, compact
+  sample sizes, an unknown box or shape, a hostile size) is remuxed instead — the tracks copied, nothing
+  re-encoded, no metadata — and the remux is cleaned and checked the same way. When that fails too, the
+  upload is refused: "The recording details in this video (such as where it was recorded) could not be
+  removed safely, so it was not uploaded. Choose another video." (a video tool that could not be loaded
+  keeps its own sentence). **The original is never sent**: the cleaning always writes a new file, and a tool
+  that hands back the file it was given is not trusted. A converted (HEVC → H.264) file is cleaned and
+  checked the same way.
+- **Not covered.** Data inside the codec bitstream itself (for example H.264 SEI user data, where x264
+  writes its version), deliberately crafted values in numeric fields, and the file name (its base is kept;
+  phones put the date and time there — an owner decision). Not verified on a physical iPhone (an iPhone MOV
+  takes the remux). Stricter shapes mean more files take the remux; how many real Samsung files are
+  cleaned in place is measured in the planned S24 FE check.
 
 **What the coach sees.** "Checking the video..." → "Preparing the video... N %" with Cancel → the upload's
 "Uploading the video... N %" → "Uploaded and verified..."; the file line names the prepared size and the
 size it came from. Save waits, the editor asks before closing, a reload asks first, like an upload. A
 refused video says why in one sentence (over 100 MB, longer than 30 seconds, not readable, cannot be
-prepared on this device, the video tool could not be loaded, preparation failed) and offers another file.
+prepared on this device, the video tool could not be loaded, preparation failed, the recording details
+could not be removed safely) and offers another file.
 While a video is prepared or uploaded every other media control is shown disabled and only its Cancel is
 live; a Cancel that lands while the converted file is read back drops it (nothing is uploaded, a Replace
 keeps the stored file). No codec, size or setting is ever asked.
@@ -472,8 +513,8 @@ convert gets the sentence and may use a link. ffmpeg.wasm is not used (0.48× re
 adapter (Node has no WebCodecs): the rules, passthrough of a compliant and of a rotated file, HEVC,
 MOV (remux), Cancel, the limits, a device that cannot convert, a failed conversion, Save held and the
 guards, the server's `video_too_long`. The real conversion: the browser harness `_qa-media-harness.html`
-(untracked) with clips made in the page — compliant H.264 (passthrough, same bytes), H.264 with rotation
-90 (passthrough, plays 360×640), HEVC (re-encoded), H.264 MOV (remuxed, picture copied), HEVC without
+(untracked) with clips made in the page — compliant H.264 (passthrough, the same samples, metadata
+removed), H.264 with rotation 90 (passthrough, plays 360×640), HEVC (re-encoded), H.264 MOV (remuxed, picture copied), HEVC without
 audio, WebM VP8, HEVC 1080×1920 25 s (720×1280 in 2.8 s), a 31 s clip (refused), Cancel at 20 %, the
 server's 415. `frontend/tests/exercise-media-prepare-glue.test.mjs` runs the Mediabunny glue through a
 fake of the library module (what is passed to `Conversion.init`: copy vs re-encode, size, bitrate, AAC,
@@ -485,12 +526,28 @@ and any other type still refuse), the override that can only lower the limit, th
 with the vendored Mediabunny (`backend/tests/fixtures/media/`): an HEVC recording with rotation 90 prepared
 into H.264 High + AAC-LC, and a compliant H.264 / AAC MP4 with a WebVTT text track sent as it is — both
 accepted by the real parser.
+The metadata removal: `frontend/tests/exercise-media-metadata.test.mjs` on real bytes built box by box
+(`frontend/tests/support/mp4-builder.mjs`, with an independent reader): a phone-like MP4 with the moov at
+the end (location, device, software, author, title, Apple keys, XMP, padding, caption / timecode / GPS
+tracks, a trailer), the moov first with boxes before the mdat, 64-bit offsets and two mdat boxes, track
+references, stale and removed samples zeroed, MOV brand, idempotence, the refused structures, Cancel, a
+40 MB file read in under 64 KB, the independent check's findings, the sample tables kept, a camera's name
+in the hdlr and the compressorname, 64-bit mdat headers / an mdat to the end of the file / version-1 times,
+a private text hidden in every kept box (rebuilt without it, or refused), hostile sizes refused quickly, and
+the playable fixtures packet by packet through the real Mediabunny demuxer. `exercise-media-prepare-glue.test.mjs` tests 11–17: the remux fallback, an unclean or differently
+playing copy, a remux that fails or cannot be cleaned, a converted file, Cancel, a cleaning tool that hands
+back the same file. Backend: the real parser
+(mediainfo.js) reads `backend/tests/fixtures/media/phone-like-gps-moov-end.mp4` — a real Chrome-made H.264
+/ AAC file with rotation 90, title / date tags, a WebVTT track, injected location / device / software /
+author atoms, a top-level XMP and a vendor trailer — before (Title, Performer, Recorded_Date,
+Recorded_Location, Encoded_Application, Make, Model, a Text track) and after the client's cleaning (none of
+them, no extra field, accepted). Mutations: 38 of 38 killed.
 
 **Review (2026-10-20, before the PR).** `code-reviewer` NOT READY (HIGH: a Cancel while the converted file
 was read back did not stop the upload; MEDIUM: no real output through the real parser; MEDIUM: the
 Mediabunny glue untested) → all fixed with the tests above. `security-reviewer` READY WITH NOTES (MEDIUM
 F1: the 30 s measured on the video track only → fixed; MEDIUM F2: embedded metadata of a file sent as it is
-→ the owner's decision above; LOW: `Image` dropped, ignored tracks capped, the override clamped, the
+→ removed from every file, the owner's decision above; LOW: `Image` dropped, ignored tracks capped, the override clamped, the
 vendored file recorded in `frontend/vendor/mediabunny/VENDOR.md`). `mobile-qa` READY WITH NOTES (MEDIUM:
 the other slot's controls dead during a preparation → disabled; MEDIUM: the editor's exits under 44 px and
 a long link widening the field → fixed in CSS).

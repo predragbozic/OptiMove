@@ -121,17 +121,19 @@ test("1. prepareVideo on its own: the input cap before any read, the length befo
   await assert.rejects(prepare.prepareVideo(file("x.bin", 10, "", { unreadable: true })), (e) => e.code === "video_unreadable");
   const same = file("clip.mp4", 10, "video/mp4");
   const passed = await prepare.prepareVideo(same);
-  assert.equal(passed.file, same, "a compliant file keeps its bytes and its object");
+  assert.notEqual(passed.file, same, "never the chosen file itself");
+  assert.equal(passed.file.of, same, "the cleaned copy of it (its media unchanged, its metadata removed)");
   assert.equal(passed.converted, false);
   const untyped = await prepare.prepareVideo(file("clip.mp4", 10, "application/octet-stream"));
-  assert.equal(untyped.file.type, "video/mp4", "a wrongly typed compliant file gets the canonical type");
-  assert.equal(untyped.file.name, "clip.mp4");
+  assert.equal(untyped.metadataRemoved, true, "a compliant file still goes through the metadata removal");
+  assert.equal(calls.strip.length >= 1, true);
   // Passthrough first: a compliant H.264 / AAC MP4 recorded upright on a phone
   // (rotation metadata 90°, coded 1920×1080 shown as 1080×1920) is never re-encoded.
   const rotated = file("portrait.mp4", 3_550_000, "video/mp4", { rotation: 90, width: 1920, height: 1080, durationSeconds: 12 });
   const kept = await prepare.prepareVideo(rotated);
   assert.equal(kept.converted, false);
-  assert.equal(kept.file, rotated);
+  assert.notEqual(kept.file, rotated);
+  assert.equal(kept.file.of, rotated, "the cleaned copy of the rotated file");
   assert.equal(kept.info.rotation, 90);
   assert.equal(calls.convert.length, 0, "a compliant rotated file is not converted");
   // The same facts in a 1080p file: compliant, kept at 1080p (the 720p rule is for conversions only).
@@ -150,7 +152,9 @@ test("1. prepareVideo on its own: the input cap before any read, the length befo
   assert.equal(result.converted, true);
   assert.equal(result.videoReencoded, true);
   assert.equal(result.file.type, "video/mp4");
-  assert.equal(good.inspect.length, 2, "the result is read again before it is accepted");
+  assert.equal(good.inspect.length, 3, "the original, the converted result, and the cleaned copy are each read before it is accepted");
+  assert.equal(good.strip.length, 1, "the converted file is cleaned too");
+  assert.equal(good.privacy.length, 1);
   assert.deepEqual(result.reasons, ["video_codec"]);
   // A 1080p H.264 MOV: remuxed, the picture copied, so its full size stays (the 720p rule is for re-encodes).
   const remux = installVideoPrepareFake({ convert: async (f, info) => ({ name: "clip.mp4", size: f.size, type: "video/mp4", video: { width: 1920, height: 1080, durationSeconds: info.durationSeconds } }) });
@@ -163,7 +167,7 @@ test("1. prepareVideo on its own: the input cap before any read, the length befo
 
 // ---- the editor flow ------------------------------------------------------
 
-test("2. a compliant phone MP4: no conversion, the same file goes up at once, the sentences of an upload", async () => {
+test("2. a compliant phone MP4: no conversion, its cleaned copy (never the chosen file) goes up at once, the sentences of an upload", async () => {
   const calls = installVideoPrepareFake();
   const transport = fakeTransport();
   const h = handlers({ upload: transport.upload });
@@ -173,7 +177,8 @@ test("2. a compliant phone MP4: no conversion, the same file goes up at once, th
   await settle(); await settle();
   assert.equal(calls.convert.length, 0);
   assert.equal(transport.calls.length, 1);
-  assert.equal(transport.calls[0].file, clip, "the chosen file itself");
+  assert.notEqual(transport.calls[0].file, clip, "never the chosen file itself");
+  assert.equal(transport.calls[0].file.of, clip, "the cleaned copy of the chosen file");
   assert.equal(state.exerciseEditor.media.video.state, "uploading");
   assert.match(status()[0], /^Uploading the video\.\.\. 0 %/);
   transport.release(); await chosen; await settle();

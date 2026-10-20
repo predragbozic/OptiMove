@@ -11,6 +11,7 @@
 // of 2026-10-19: an input file of at most 100 MB and a video of at most 30
 // seconds (no trimming here; a longer video is refused with its length).
 
+import { inspectPrivacy, MetadataUnsupported, stripPrivateMetadata } from "./exercise-media-metadata.js";
 import { formatBytes } from "./utils.js";
 
 export const VIDEO_PREPARE_RULES = Object.freeze({
@@ -40,6 +41,14 @@ export function setMediabunnyLoader(loader) {
 // A test seam: { inspect(file, options), convert(file, info, options), canConvert(info) }.
 export function setVideoPrepareAdapter(value) {
   adapter = value || null;
+}
+
+// The metadata removal and its independent check (exercise-media-metadata.js);
+// a test seam as well, since Node tests drive fake files without bytes.
+const REAL_METADATA_TOOLS = Object.freeze({ strip: stripPrivateMetadata, privacy: inspectPrivacy });
+let metadataTools = REAL_METADATA_TOOLS;
+export function setMetadataTools(tools) {
+  metadataTools = tools ? { ...REAL_METADATA_TOOLS, ...tools } : REAL_METADATA_TOOLS;
 }
 
 // A failed load (a flaky connection, a tab left open across a deploy) is its
@@ -262,16 +271,53 @@ export async function convertVideo(file, info, { onProgress, signal, rules = VID
   return new File([buffer], preparedFileName(file.name), { type: "video/mp4", lastModified: Date.now() });
 }
 
-// A compliant file keeps its bytes; only its type is made canonical when the
-// browser reported none or a wrong one (a download, a share, a USB copy).
-function canonicalFile(file) {
-  if (file.type === "video/mp4") return file;
-  return new File([file], file.name, { type: "video/mp4", lastModified: file.lastModified });
+// The same picture and sound: the codecs, the coded size, the rotation, the
+// duration and the container of the file that will be sent.
+function samePlayback(expected, actual) {
+  return actual.container === "mp4"
+    && actual.videoCodecString === expected.videoCodecString
+    && actual.codedWidth === expected.codedWidth && actual.codedHeight === expected.codedHeight
+    && actual.rotation === expected.rotation
+    && Math.abs(actual.durationSeconds - expected.durationSeconds) <= 0.05
+    && (actual.audioCodecString || null) === (expected.audioCodecString || null);
 }
 
-// The whole step. Resolves to { file, converted, info, source, reasons };
-// throws an error whose code is one of: input_too_large, video_unreadable,
-// video_too_long, conversion_unavailable, conversion_failed,
+// Removes the private metadata of a file about to be sent and proves it: an
+// independent check finds nothing private left, and the file plays the same
+// picture and sound. Throws MetadataUnsupported when either cannot be shown.
+async function cleanFile(file, expected, { signal }) {
+  try {
+    const { file: stripped, report } = await metadataTools.strip(file, { signal });
+    if (isAborted(signal)) throw prepareError("preparation_cancelled");
+    // The cleaning always writes a new file; the one it was given is never sent.
+    if (!stripped || stripped === file) throw new MetadataUnsupported("not_cleaned");
+    const privacy = await metadataTools.privacy(stripped, { signal });
+    if (!privacy.clean) throw new MetadataUnsupported(`not_clean:${privacy.findings.join(",")}`);
+    const check = await inspectVideo(stripped, { signal });
+    if (isAborted(signal)) throw prepareError("preparation_cancelled");
+    if (!samePlayback(expected, check)) throw new MetadataUnsupported("playback_changed");
+    return { file: stripped, info: check, report };
+  } catch (error) {
+    // A Cancel stays a Cancel; anything else (a structure this code does not
+    // handle, a result that reads differently, an unexpected error) means
+    // the cleaning is not reliable for this file.
+    if (error?.code === "preparation_cancelled" || isAborted(signal)) throw prepareError("preparation_cancelled", error);
+    if (error?.code === "metadata_unsupported") throw error;
+    throw Object.assign(new MetadataUnsupported(error?.code || "error"), { cause: error });
+  }
+}
+
+// A Cancel stays a Cancel and a tool that could not be loaded keeps its own
+// sentence (a reload helps); anything else is metadata_unremovable. Every one
+// of them refuses the upload.
+const metadataFailure = (error, stage) => (error?.code === "preparation_cancelled" || error?.code === "preparation_unavailable" ? error : prepareError("metadata_unremovable", error, { stage, reason: error?.reason || error?.code || "unknown" }));
+
+// The whole step. Resolves to { file, converted, metadataRemoved, info,
+// source, reasons }; the file is never the chosen original: its private
+// metadata is removed (see exercise-media-metadata.js), or the upload is
+// refused. Throws an error whose code is one of: input_too_large,
+// video_unreadable, video_too_long, conversion_unavailable,
+// preparation_unavailable, conversion_failed, metadata_unremovable,
 // preparation_cancelled. `onPhase` gets "checking", "preparing", "verifying".
 export async function prepareVideo(file, { onProgress, onPhase, signal, rules = VIDEO_PREPARE_RULES } = {}) {
   if (!file) throw prepareError("video_unreadable");
@@ -282,7 +328,34 @@ export async function prepareVideo(file, { onProgress, onPhase, signal, rules = 
   if (!(Number(info.durationSeconds) > 0)) throw prepareError("video_unreadable", null, { reason: "duration" });
   if (info.durationSeconds > rules.maxSeconds + 0.05) throw prepareError("video_too_long", null, { durationSeconds: info.durationSeconds, maxSeconds: rules.maxSeconds });
   const compliance = videoCompliance(info);
-  if (compliance.ok) return { file: canonicalFile(file), converted: false, info, source: info, reasons: [] };
+  if (compliance.ok) {
+    // Passthrough first: the media is never re-encoded; only its private metadata goes, in place.
+    try {
+      const clean = await cleanFile(file, info, { signal });
+      return { file: clean.file, converted: false, metadataRemoved: true, info: clean.info, source: info, reasons: [], metadata: clean.report };
+    } catch (error) {
+      if (error?.code !== "metadata_unsupported") throw error;
+      // Cleaning in place is not reliable for this file: a remux (the tracks
+      // copied, nothing re-encoded) writes a new file, which is then cleaned
+      // and checked the same way. Never the original.
+      let remuxed;
+      try {
+        if (!(await canConvertVideo(info))) throw prepareError("conversion_unavailable");
+        onPhase?.("preparing");
+        remuxed = await convertVideo(file, info, { onProgress, signal, rules });
+      } catch (remuxError) {
+        throw metadataFailure(remuxError, `remux:${error.reason}`);
+      }
+      if (isAborted(signal)) throw prepareError("preparation_cancelled");
+      onPhase?.("verifying");
+      try {
+        const clean = await cleanFile(remuxed, info, { signal });
+        return { file: clean.file, converted: true, videoReencoded: false, metadataRemoved: true, info: clean.info, source: info, reasons: ["metadata"], metadata: clean.report };
+      } catch (cleanError) {
+        throw metadataFailure(cleanError, `remux_clean:${error.reason}`);
+      }
+    }
+  }
   if (!(await canConvertVideo(info))) throw prepareError("conversion_unavailable", null, { reasons: compliance.reasons });
   onPhase?.("preparing");
   const converted = await convertVideo(file, info, { onProgress, signal, rules });
@@ -298,7 +371,14 @@ export async function prepareVideo(file, { onProgress, onPhase, signal, rules = 
     && Math.abs(check.durationSeconds - info.durationSeconds) <= 0.5
     && Math.max(check.codedWidth, check.codedHeight) <= maxLongSide;
   if (!verified) throw prepareError("conversion_failed", null, { stage: "verify", check });
-  return { file: converted, converted: true, videoReencoded: videoNeedsTranscode(info), info: check, source: info, reasons: compliance.reasons };
+  // The converted file is cleaned and checked like any other before it is sent.
+  let clean;
+  try {
+    clean = await cleanFile(converted, check, { signal });
+  } catch (error) {
+    throw metadataFailure(error, "converted");
+  }
+  return { file: clean.file, converted: true, videoReencoded: videoNeedsTranscode(info), metadataRemoved: true, info: clean.info, source: info, reasons: compliance.reasons, metadata: clean.report };
 }
 
 // One sentence per code, in the coach's words.
@@ -319,6 +399,8 @@ export function describePrepareError(code, { detail = null, file = null } = {}) 
       return "The video tool could not be loaded. Check the connection and choose the video again.";
     case "conversion_failed":
       return "The video could not be prepared. Choose another video, or try again.";
+    case "metadata_unremovable":
+      return "The recording details in this video (such as where it was recorded) could not be removed safely, so it was not uploaded. Choose another video.";
     case "preparation_cancelled":
       return "Preparation cancelled.";
     default:
@@ -326,4 +408,4 @@ export function describePrepareError(code, { detail = null, file = null } = {}) 
   }
 }
 
-export const PREPARE_ERROR_CODES = Object.freeze(["input_too_large", "video_too_long", "video_unreadable", "conversion_unavailable", "preparation_unavailable", "conversion_failed", "preparation_cancelled"]);
+export const PREPARE_ERROR_CODES = Object.freeze(["input_too_large", "video_too_long", "video_unreadable", "conversion_unavailable", "preparation_unavailable", "conversion_failed", "metadata_unremovable", "preparation_cancelled"]);
