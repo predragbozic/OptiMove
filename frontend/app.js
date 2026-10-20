@@ -191,6 +191,16 @@ import {
   renderTemplateToolbarHtml,
 } from "./program-library-view.js";
 import {
+  captureMetadataFormDraft,
+  capturePreviewScroll,
+  handleTemplateMetadataKeydown,
+  restoreMetadataFormDraft,
+  restorePreviewScroll,
+  scheduleProgramCoverPreview,
+  showProgramCoverPreviewError,
+  syncTemplateMetadataForm,
+} from "./program-preview.js";
+import {
   handleTemplateLibraryAction,
   submitProgramTagForm as submitProgramTagFormAction,
   submitTemplateMetadataForm as submitTemplateMetadataFormAction,
@@ -439,6 +449,7 @@ function bindEvents() {
   els.content.addEventListener("submit", handleContentSubmit);
   els.content.addEventListener("input", handleContentInput);
   els.content.addEventListener("keydown", handleBuilderSearchKeydown);
+  els.content.addEventListener("keydown", handleTemplateMetadataKeydown);
   // Text fields that grow with their text (textarea-autosize.js), wherever
   // they are rendered (the content area and the Builder's modals).
   document.addEventListener("input", (event) => {
@@ -1053,6 +1064,12 @@ function handleContentInput(event) {
     if (list) list.innerHTML = renderCoachHomeAthleteRows(coachHomeRows, coachHomePicker);
     return;
   }
+  const metadataInput = event.target.closest("[data-template-metadata-form] input[name='coverImageUrl'], [data-template-metadata-form] input[name='accessDurationDays']");
+  if (metadataInput) {
+    if (metadataInput.name === "coverImageUrl") scheduleProgramCoverPreview(metadataInput);
+    else syncTemplateMetadataForm(metadataInput.form, metadataInput);
+    return;
+  }
   // The create-form's name input has no value= binding to state, so a full
   // re-render (e.g. opening the athlete picker) would otherwise wipe it -
   // mirror every keystroke into state, same idea as createAthleteId.
@@ -1262,15 +1279,10 @@ async function handleContentChange(event) {
     return;
   }
 
-  const metadataPricing = event.target.closest("[data-template-metadata-form] select[name='isFree']");
-  if (metadataPricing) {
-    const priceInput = metadataPricing.form?.querySelector("input[name='price']");
-    if (priceInput) {
-      priceInput.disabled = metadataPricing.value === "true";
-      if (priceInput.disabled) priceInput.value = "";
-    }
-    return;
-  }
+  // Library settings: Pricing, shelf, status, license, access length and the
+  // cover link update their dependent parts in place (program-preview.js).
+  const metadataForm = event.target.closest("[data-template-metadata-form]");
+  if (metadataForm && syncTemplateMetadataForm(metadataForm, event.target)) return;
 
   const pastelCustom = event.target.closest("[data-pastel-custom-color]");
   if (pastelCustom) {
@@ -1629,6 +1641,8 @@ function handleImageError(event) {
     image.remove();
     return;
   }
+
+  if (image.classList.contains("program-metadata-cover-image") && showProgramCoverPreviewError(image)) return;
 
   // An exercise picture (exercise-view-modes.js renderExerciseThumb) whose
   // image and video covers all failed: show the exercise's initials.
@@ -3445,6 +3459,9 @@ function renderTemplateLibrary(templates) {
   els.title.textContent = scope.label;
   els.toolbar.innerHTML = "";
 
+  const keptScroll = capturePreviewScroll(document);
+  const keptDraft = captureMetadataFormDraft(document);
+
   els.content.innerHTML = renderTemplateLibraryPageHtml({
     coaches: state.coaches,
     currentUser: state.currentUser,
@@ -3455,6 +3472,9 @@ function renderTemplateLibrary(templates) {
     templateFiltersHtml: renderTemplateFilters(),
     templatePreviewHtml: renderTemplatePreviewModal(),
   });
+
+  restoreMetadataFormDraft(keptDraft, document);
+  restorePreviewScroll(keptScroll, document);
 }
 
 function renderTemplateLibraryResults() {
