@@ -7,6 +7,7 @@ import {
   renderAssetImage,
   renderImage,
   toDrivePreviewUrl,
+  toDriveViewUrl,
   toImageUrl,
   toYouTubeEmbedUrl,
   withAutoplayParam,
@@ -50,13 +51,14 @@ export function openMedia(title, imageUrl, videoUrl, access = {}) {
             : ""}
     ${!videoEmbed && !imageMediaId && !hasImage && !imagePreviewUrl ? `<div class="empty">No media available.</div>` : ""}
   `;
+  markFrameVideo();
   els.mediaModal.hidden = false;
   if (videoMediaId) {
     wireAssetPlayback(session, { context: accessContext, withPoster: Boolean(imageMediaId) });
     return;
   }
   if (imageMediaId) void resolvePendingThumbnails(els.mediaBody);
-  wireVideoFallback(cleanVideoUrl);
+  wireVideoFallback(cleanVideoUrl, session);
   if (videoEmbed && isMobileViewport()) enterMediaFullscreen(true);
 }
 
@@ -68,7 +70,7 @@ function videoEmbedMarkup(videoUrl, imageUrl = "") {
   const youTubeEmbed = toYouTubeEmbedUrl(raw, { autoplay: true });
   if (youTubeEmbed) return renderVideoFrame(youTubeEmbed);
   if (driveId) {
-    return renderVideoFrame(toDrivePreviewUrl(raw, { autoplay: true }));
+    return renderVideoFrame(toDrivePreviewUrl(raw, { autoplay: true }), { driveViewUrl: toDriveViewUrl(raw) });
   }
   if (/\.(mp4|webm|mov)(\?|#|$)/i.test(raw)) {
     return `
@@ -80,12 +82,35 @@ function videoEmbedMarkup(videoUrl, imageUrl = "") {
   return renderVideoFrame(toDrivePreviewUrl(raw, { autoplay: true }));
 }
 
-function renderVideoFrame(src) {
+// An embedded player (Google Drive, YouTube, any other link) is always shown
+// and played inline (is-frame-video): iPhone Safari cannot put an iframe in
+// full screen, so the player never waits behind a cover for it. Under it, in
+// a bar that covers none of the player's controls: a link to the same file
+// in Drive for a Drive video, for when Drive's own player fails inside the
+// frame (Safari blocks Drive's cookies there), and the full-screen button,
+// only where the browser can do it.
+function renderVideoFrame(src, { driveViewUrl = "" } = {}) {
+  const fullscreen = canFullscreenFrame()
+    ? `<button class="media-fullscreen-button" data-action="enter-fullscreen" type="button" aria-label="Full screen"></button>`
+    : "";
+  const driveLink = driveViewUrl
+    ? `<a class="media-drive-link" href="${escapeAttr(driveViewUrl)}" target="_blank" rel="noopener noreferrer">Open in Google Drive</a>`
+    : "";
+  const actions = `${driveLink}${fullscreen}`;
   return `
-    <iframe class="media-frame media-frame-video" src="${escapeAttr(src)}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>
-    <p class="media-fullscreen-note">Opening video in full screen</p>
-    <button class="media-fullscreen-button" data-action="enter-fullscreen" type="button" aria-label="Full screen"></button>
+    <iframe class="media-frame media-frame-video" src="${escapeAttr(src)}" title="Exercise video" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>
+    ${actions ? `<div class="media-frame-actions">${actions}</div>` : ""}
   `;
+}
+
+function canFullscreenFrame() {
+  const root = document.documentElement;
+  return Boolean(document.fullscreenEnabled || document.webkitFullscreenEnabled)
+    && typeof (root?.requestFullscreen || root?.webkitRequestFullscreen) === "function";
+}
+
+function markFrameVideo() {
+  els.mediaModal.classList.toggle("is-frame-video", Boolean(els.mediaBody.querySelector(".media-frame-video")));
 }
 
 // An R2 video: the same HTML5 player as a direct link, without an address
@@ -189,16 +214,19 @@ function stopPlayback() {
   retryPlayback = null;
 }
 
-function wireVideoFallback(videoUrl) {
+// The fallback belongs to its own opening: a timer left by a direct link
+// that was closed never replaces a video opened after it.
+function wireVideoFallback(videoUrl, session) {
   const video = els.mediaBody?.querySelector(".media-video");
   if (!video) return;
   let settled = false;
   const fallbackSrc = video.dataset.fallbackSrc || toDrivePreviewUrl(videoUrl);
   video.addEventListener("ended", closeMedia, { once: true });
   const showFallback = () => {
-    if (settled || !fallbackSrc || !els.mediaBody || els.mediaModal.hidden) return;
+    if (settled || session !== opening || !fallbackSrc || !els.mediaBody || els.mediaModal.hidden) return;
     settled = true;
     els.mediaBody.innerHTML = renderVideoFrame(withAutoplayParam(fallbackSrc));
+    markFrameVideo();
   };
   video.addEventListener("loadedmetadata", () => {
     settled = true;
@@ -255,9 +283,11 @@ export function handleMediaAction(action) {
   return false;
 }
 
+// Leaving full screen closes a <video>'s small box, which shows nothing
+// inline; an embedded player stays, with its Drive link, inline.
 export function handleFullscreenChange() {
   const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
-  if (!fullscreenElement && els.mediaModal?.classList.contains("is-video") && !els.mediaModal.hidden) {
+  if (!fullscreenElement && els.mediaModal?.classList.contains("is-video") && !els.mediaModal.classList.contains("is-frame-video") && !els.mediaModal.hidden) {
     closeMedia();
   }
 }
@@ -273,6 +303,6 @@ export function closeMedia() {
   // The short-lived address leaves with the element.
   els.mediaBody.querySelector("video[src]")?.removeAttribute("src");
   els.mediaModal.hidden = true;
-  els.mediaModal.classList.remove("is-video");
+  els.mediaModal.classList.remove("is-video", "is-frame-video");
   els.mediaBody.innerHTML = "";
 }

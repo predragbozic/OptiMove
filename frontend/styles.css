@@ -6968,6 +6968,47 @@ body.specific-program-open {
   border-radius: 0;
 }
 
+/* An embedded player (renderVideoFrame) fills the dialog above its actions:
+   the link to the file in Google Drive and, where the browser has it, the
+   full-screen button. */
+.media-modal.is-frame-video .media-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.media-modal.is-frame-video .media-frame-video {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
+}
+
+.media-frame-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: #000;
+}
+
+.media-drive-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #fff;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.media-frame-actions .media-fullscreen-button {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  flex: none;
+  margin-left: auto;
+}
+
 .media-video {
   width: 100%;
   height: 100%;
@@ -6979,7 +7020,8 @@ body.specific-program-open {
 
 /* An R2 video (FE-1): the player while its short-lived address is fetched,
    and the error with Try again when it could not be. Both sit above the
-   phone layout's black cover (.media-modal.is-video .media-body::after). */
+   phone layout's black cover (.media-modal.is-video:not(.is-frame-video)
+   .media-body::after). */
 .media-asset {
   position: relative;
   width: 100%;
@@ -7731,19 +7773,17 @@ img[data-media-id]:not([src]) {
     line-height: 1.45;
   }
 
-  .media-modal.is-video .media-dialog {
+  /* A <video> (an R2 asset or a direct link) plays in the phone's own
+     full-screen player; the small black box holds only the button that
+     asks for it. */
+  .media-modal.is-video:not(.is-frame-video) .media-dialog {
     width: min(82vw, 320px);
     height: 140px;
     max-height: 140px;
     border: 1px solid rgba(255, 255, 255, 0.18);
   }
 
-  .media-modal.is-video .media-frame-video {
-    position: absolute;
-    inset: 0;
-  }
-
-  .media-modal.is-video .media-body::after {
+  .media-modal.is-video:not(.is-frame-video) .media-body::after {
     content: "";
     position: absolute;
     inset: 0;
@@ -7751,7 +7791,7 @@ img[data-media-id]:not([src]) {
     background: #000;
   }
 
-  .media-modal.is-video .media-fullscreen-button {
+  .media-modal.is-video:not(.is-frame-video) .media-fullscreen-button {
     right: 50%;
     bottom: 48px;
     transform: translateX(50%);
@@ -7759,11 +7799,51 @@ img[data-media-id]:not([src]) {
     height: 58px;
   }
 
-  .media-modal.is-video .media-fullscreen-note {
+  .media-modal.is-video:not(.is-frame-video) .media-fullscreen-note {
     right: 16px;
     bottom: 16px;
     left: 16px;
     text-align: center;
+  }
+
+}
+
+/* An embedded player (Google Drive, YouTube, any other link) on a phone held
+   upright (up to 640 px wide) or turned (up to 500 px high) is shown and
+   played inline across the screen: iPhone Safari cannot put an iframe in
+   full screen. The Close bar sits above the player so it covers none of the
+   player's own controls. */
+@media (max-width: 640px), (max-height: 500px) {
+
+  .media-modal.is-video.is-frame-video {
+    padding: max(8px, env(safe-area-inset-top, 0px)) max(8px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px));
+  }
+
+  .media-modal.is-video.is-frame-video .media-dialog {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
+  }
+
+  .media-modal.is-video.is-frame-video .media-header {
+    position: relative;
+    inset: auto;
+    flex: none;
+    justify-content: flex-end;
+    padding: 4px;
+  }
+
+  .media-modal.is-video.is-frame-video .media-header .plain-button {
+    width: 44px;
+    min-height: 44px;
+  }
+
+  .media-modal.is-video.is-frame-video .media-body {
+    flex: 1 1 0;
+    min-height: 0;
+    height: auto;
   }
 
 }
