@@ -97,7 +97,10 @@ export async function bindExerciseMedia(client,req,exerciseId,body,{creating=fal
   const admin=await hasExerciseAdministration(req.user.id,req.authz,run);
   if(!req.authz?.capabilities?.coachWorkspace || !(admin || exercise.owner_scope==='user' && exercise.owner_user_id===req.user.id))fail(403,'operation_not_allowed');
   const assetIds=Object.values(selections).filter(s=>s.source==='asset').map(s=>s.mediaId).sort();
-  if(assetIds.length)await run('select id from media.assets where id=any($1::uuid[]) order by id for update',[assetIds]);
+  if(assetIds.length) {
+    await run('select id from media.uploads where asset_id=any($1::uuid[]) and uploaded_by_user_id=$2 order by id for update',[assetIds,req.user.id]);
+    await run('select id from media.assets where id=any($1::uuid[]) order by id for share',[assetIds]);
+  }
   for(const slot of slots) {
     const selection=selections[slot];if(!selection)continue;
     if(selection.source==='asset') {
@@ -148,7 +151,14 @@ export function createMediaAccessService({pool,store,canReadPlan=canAccessPlan,a
         const u=(await run("select u.*,a.kind from media.uploads u join media.assets a on a.id=u.asset_id where u.id=$1 and u.uploaded_by_user_id=$2 and u.status='completed'",[id,req.user.id])).rows[0];
         if(u) {
           // A completed edit upload is still subject to current source rights.
-          if(u.context.type==='exercise_edit' || u.context.boundExerciseId) {
+          if(u.context.type==='drive_import') {
+            if(!req.authz?.platformRoles?.includes('platform_admin'))fail(404,'resource_not_found');
+            const mapped=await run(`select c.asset_id from media.drive_copies c
+              join media.storage_accounts a on a.id=$3 and a.owner_platform
+              where c.drive_file_id=$1 and c.kind=$2 and c.asset_id=$4 for share of c`,
+              [u.context.driveFileId,u.kind,u.storage_account_id,u.asset_id]);
+            if(!mapped.rowCount)fail(404,'resource_not_found');
+          } else if(u.context.type==='exercise_edit' || u.context.boundExerciseId) {
             const target=u.context.exerciseId||u.context.boundExerciseId;
             if(!req.authz?.capabilities?.coachWorkspace || !(await run(`select e.id from library.exercises e where e.id=$2 and ${exerciseReadScopeSql}`,[req.user.id,target])).rowCount)fail(404,'resource_not_found');
           } else if(!req.authz?.capabilities?.coachWorkspace)fail(404,'resource_not_found');

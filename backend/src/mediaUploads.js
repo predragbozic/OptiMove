@@ -213,7 +213,7 @@ export function createMediaUploadService({pool,storage,store,inspect=inspectMedi
         let completed;
         try {
           completed=await storage.commitVerifiedUpload(u.id,{sizeBytes:head.sizeBytes,mimeType:head.mimeType,metadata,verificationToken:token,objectKey:u.temporary_object_key},
-            isImport(u)?{onCommit:(c,current)=>driveCopies.insertCopy(c,current,req.user.id),commitBoundMs}:{});
+            isImport(u)?{beforeCommit:c=>c.query('select media.l1_lock_drive_import($1,$2)',[u.context.driveFileId,u.purpose==='drive_import_video'?'video':'image']),onCommit:(c,current)=>driveCopies.insertCopy(c,current,req.user.id),commitBoundMs}:{});
         } catch(e) {
           if(!(isImport(u) && e?.code==='commit_outcome_unknown'))throw e;
           // Never "not written" by guess: written -> 200, still verifying -> not

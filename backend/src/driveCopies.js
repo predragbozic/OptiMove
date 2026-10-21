@@ -39,6 +39,14 @@ export async function readyDriveCopies(run,ids) {
   return copies;
 }
 
+export async function recordedDriveCopies(run,ids) {
+  const wanted=[...new Set(ids.filter(Boolean))];
+  if(!wanted.length)return new Set();
+  const result=await run(`select drive_file_id,kind from media.drive_copies where drive_file_id=any($1::text[])
+    union select drive_file_id,kind from media.drive_copy_events where event='created' and drive_file_id=any($1::text[])`,[wanted]);
+  return new Set(result.rows.map(row=>`${row.drive_file_id}:${row.kind}`));
+}
+
 // Every legacy link that names a Drive file, in exercises and plan items.
 const legacyLinksSql=kind=>{if(!kinds.includes(kind))fail(400,'invalid_request');return `
   select ${kind}_url as url from library.exercises where coalesce(${kind}_source,'legacy')='legacy' and (${kind}_url ilike '%drive.google.com%' or ${kind}_url ilike '%googleusercontent.com%')

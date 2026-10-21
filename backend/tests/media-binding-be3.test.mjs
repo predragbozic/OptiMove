@@ -8,6 +8,7 @@ import { createDisposableDatabase } from "./support/disposable-db.mjs";
 import { EXERCISE_COLLECTIONS_FIXTURE_SQL } from "./support/exercise-collections-fixture.mjs";
 
 import {readFile} from 'node:fs/promises';
+import {mediaRetentionDatabaseError} from '../src/mediaReferences.js';
 import {createMediaAccessService,decorateMediaRows} from '../src/exerciseMedia.js';
 import {createR2UploadStore} from '../src/r2UploadStore.js';
 import {createMediaStorageService,MediaStorageError} from '../src/mediaStorage.js';
@@ -100,12 +101,12 @@ before(async () => {
         "can_view_exercise_groups","free_only","require_approval","selected_programs_only"].map((field) => field + " boolean").join(",")}
     );
     create table library.program_access (
-      id uuid primary key default gen_random_uuid(), plan_id uuid, related_plan_id uuid, user_id uuid, access_type varchar,
+      id uuid primary key default gen_random_uuid(), plan_id uuid references plans.plans(id) on delete cascade, related_plan_id uuid references plans.plans(id) on delete set null, user_id uuid, access_type varchar,
       status varchar, expires_at timestamptz, starts_at timestamptz, source text, license_snapshot jsonb,
       accessed_at timestamptz, used_at timestamptz, created_at timestamptz default now(), updated_at timestamptz default now(),
       unique(plan_id,user_id,access_type)
     );
-    create table library.program_usage_events (program_access_id uuid,user_id uuid,event_type varchar,note text);
+    create table library.program_usage_events (program_access_id uuid references library.program_access(id) on delete cascade,user_id uuid,event_type varchar,note text);
     create table public.builder_assignment_requests (id uuid primary key,user_id uuid,source_plan_id uuid,payload_key text,
       status text default 'pending',result jsonb,updated_at timestamptz default now());
     create table public.app_notifications (
@@ -230,7 +231,7 @@ before(async () => {
   await client.query("alter table library.exercises add column owner_club_id uuid,add column place_id uuid,add column complexity_level_id uuid,add column starting_position_id uuid,add column attractor_id uuid");
   await client.query(EXERCISE_COLLECTIONS_FIXTURE_SQL);
   await client.query("create table public.clubs(id uuid primary key)");
-  for(const name of ['202610191100_media_storage_foundation.sql','202610191300_media_upload_lifecycle.sql','202610211000_media_drive_copies.sql'])await client.query(await readFile(new URL('../../migrations_v2/'+name,import.meta.url),'utf8'));
+  for(const name of ['202610191100_media_storage_foundation.sql','202610191300_media_upload_lifecycle.sql','202610211000_media_drive_copies.sql',...(process.env.MEDIA_L1_TEST==='true'?['202610201100_media_reference_protection.sql','202610211200_media_drive_reference_bridge.sql']:[])])await client.query(await readFile(new URL('../../migrations_v2/'+name,import.meta.url),'utf8'));
   process.env.MEDIA_STORAGE_ENABLED='true';
   await client.query("insert into public.user_global_roles (user_id,role,is_active) values ($1,'platform_admin',true)", [otherCoachId]);
   for (const [key, ownerScope, ownerId, active] of [
@@ -282,7 +283,7 @@ before(async () => {
   accessService=createMediaAccessService({pool,store:{signGet:async a=>({url:'https://private.test/'+a.id,expiresAt:new Date(Date.now()+600000).toISOString()})}});
   const {createMediaStorageRouter}=await import('../src/routes/mediaStorage.js');
   app.use('/api/media',(req,_res,next)=>{const athlete=req.headers['x-test-athlete']==='true';req.user={id:athlete?athleteUserId:coachId};req.authz={platformRoles:[],isAthlete:athlete,capabilities:{coachWorkspace:!athlete}};next();},createMediaStorageRouter({service:createMediaStorageService(pool),access:accessService}));
-  app.use((error, req, res, next) => res.status(error.status || 500).json({ error: error.message }));
+  app.use((error, req, res, next) => {error=mediaRetentionDatabaseError(error)||error;res.status(error.status || 500).json({ error: error.message,code:error.code });});
   server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -302,8 +303,8 @@ after(async () => {
 
 beforeEach(async () => {process.env.MEDIA_STORAGE_ENABLED='true';await client.query('delete from plans.plan_items');});
 
-async function makeSection(ownerId) {
-  const plan = await client.query("insert into plans.plans (created_by_user_id, name) values ($1,'Access test') returning id", [ownerId]);
+async function makeSection(ownerId,planId=crypto.randomUUID()) {
+  const plan = await client.query("insert into plans.plans (id,created_by_user_id, name) values ($2,$1,'Access test') returning id", [ownerId,planId]);
   const day = await client.query("insert into plans.plan_days (plan_id) values ($1) returning id", [plan.rows[0].id]);
   const session = await client.query("insert into plans.plan_sessions (plan_day_id) values ($1) returning id", [day.rows[0].id]);
   return (await client.query("insert into plans.plan_nodes (plan_session_id) values ($1) returning id", [session.rows[0].id])).rows[0].id;
@@ -367,7 +368,7 @@ test('revoke denies Library/new reuse while an assigned plan snapshot retains pl
 });
 test('playback denies foreign/pending/inactive/deleting media and feature-off requests',async()=>{
  const foreign=await exercise('Foreign','user',otherCoachId),id=await exercise(),a=await ready({type:'exercise_edit',exerciseId:id});await patch(id,{video:selected(a.id)});assert.equal((await access({type:'exercise',id:foreign})).status,404);assert.equal((await access({type:'exercise',id})).status,200);
- await client.query("update media.assets set status='deleting' where id=$1",[a.id]);assert.equal((await access({type:'exercise',id})).status,404);const pending=await ready({type:'exercise_create'},'video',coachId,'pending');assert.equal((await access({type:'upload',id:pending.uploadId})).status,404);await client.query('update library.exercises set is_active=false where id=$1',[id]);assert.equal((await access({type:'exercise',id})).status,404);
+ if(process.env.MEDIA_L1_TEST==='true'){await assert.rejects(client.query("update media.assets set status='deleting' where id=$1",[a.id]),e=>e.code==='P7502');assert.equal((await access({type:'exercise',id})).status,200);}else{await client.query("update media.assets set status='deleting' where id=$1",[a.id]);assert.equal((await access({type:'exercise',id})).status,404);}const pending=await ready({type:'exercise_create'},'video',coachId,'pending');assert.equal((await access({type:'upload',id:pending.uploadId})).status,404);await client.query('update library.exercises set is_active=false where id=$1',[id]);assert.equal((await access({type:'exercise',id})).status,404);
  process.env.MEDIA_STORAGE_ENABLED='false';assert.equal((await access({type:'upload',id:a.uploadId})).status,503);assert.equal((await patch(id,{video:{source:'none'}})).status,503);
 });
 test('ready upload preview is uploader-only and rechecks its bound exercise',async()=>{const a=await ready();assert.equal((await access({type:'upload',id:a.uploadId})).body.video.mediaId,a.id);const foreign=await ready({type:'exercise_create'},'video',otherCoachId);assert.equal((await access({type:'upload',id:foreign.uploadId})).status,404);const saved=await request('/api/exercises',{name:'Preview target',media:{video:selected(a.id)}});assert.equal(saved.status,201);await client.query('update library.exercises set is_active=false where id=$1',[saved.body.id]);assert.equal((await access({type:'upload',id:a.uploadId})).status,404);});
@@ -482,6 +483,148 @@ test('main #188: a mixed private copy snapshots inherited legacy image alongside
  assert.equal((await addExercise(copy.body.id)).status,201);const item=await oneItem(copy.body.id);assert.equal(item.video_source,'asset');assert.equal(item.video_asset_id,video.id);assert.equal(item.image_source,'legacy');assert.equal(item.image_url,'https://legacy.test/old.png');
 });
 
+if(process.env.MEDIA_L1_TEST==='true') {
+ async function planOf(node){return (await client.query('select d.plan_id from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id where s.id=(select plan_session_id from plans.plan_nodes where id=$1)',[node])).rows[0].plan_id;}
+ async function assignedSection(){const node=await makeSection(coachId),plan=await planOf(node),athlete=crypto.randomUUID();await client.query('insert into public.athletes(id,user_id,is_active) values($1,$2,true)',[athlete,athleteUserId]);await client.query("insert into public.user_athletes(user_id,athlete_id,is_active,relationship_type) values($1,$2,true,'coach')",[coachId,athlete]);await client.query("update plans.plans set athlete_id=$2,is_template=false,status='active' where id=$1",[plan,athlete]);return {node,plan,athlete};}
+ async function cloneToAthlete(source){const target=await assignedSection();const {copyProgramTree}=await import('../src/routes/builder.js');await client.query('begin');try{await copyProgramTree(client,source,target.plan);await client.query('commit');}catch(e){await client.query('rollback');throw e;}return target;}
+ async function assetItem(plan,asset){return (await client.query('select i.* from plans.plan_items i join plans.plan_sessions s on s.id=i.plan_session_id join plans.plan_days d on d.id=s.plan_day_id where d.plan_id=$1 and i.video_asset_id=$2',[plan,asset])).rows[0];}
+ async function evidence(plan){return (await client.query('select count(*) from media.hold_assets m join media.retention_holds h on h.id=m.hold_id where h.source_plan_id=$1',[plan])).rows[0].count;}
+ async function waitBlockedQuery(fragment){for(let n=0;n<150;n++){const r=await client.query('select pid from pg_stat_activity where datname=current_database() and pid<>pg_backend_pid() and position($1 in query)>0 and cardinality(pg_blocking_pids(pid))>0',[fragment]);if(r.rowCount)return;await new Promise(r=>setTimeout(r,10));}throw Error('Blocked route query not observed: '+fragment);}
+ // Pause after a real route query has obtained its locks, without changing application code.
+ async function pauseQueries(match,count,work){let release,arrived;const gate=new Promise(r=>release=r),ready=new Promise(r=>arrived=r),wrapped=new Map();let hits=0;
+ const hook=c=>{if(wrapped.has(c))return;const query=c.query;wrapped.set(c,query);c.query=function(...args){const result=query.apply(this,args);if(typeof args.at(-1)==='function'||hits>=count||!match(String(args[0])))return result;hits++;return Promise.resolve(result).then(async value=>{if(hits===count)arrived();await gate;return value;});};};pool.on('acquire',hook);
+ try{await work({ready,release,wait:async()=>{await Promise.race([ready,new Promise((_,reject)=>{const t=setTimeout(()=>reject(Error('Route pause was not reached')),3000);t.unref();})]);}});}finally{release();pool.off('acquire',hook);for(const [c,q] of wrapped)c.query=q;}
+ }
+ test('L1 HTTP: deleting assigned program removes its rows/access but preserves another athlete and detached evidence',async()=>{
+ const {id,video}=await h1AssetExercise(),target=await assignedSection();assert.equal((await addExercise(id,{},target.node)).status,201);const copy=await cloneToAthlete(target.plan),oldItem=await assetItem(target.plan,video.id),otherItem=await assetItem(copy.plan,video.id),before=await evidence(target.plan);
+ assert.equal((await access({type:'plan_item',id:otherItem.id},['video'],true)).status,200);const r=await request('/api/builder/plans/'+target.plan,undefined,{method:'DELETE'});assert.equal(r.status,200,JSON.stringify(r.body));assert.equal((await client.query('select count(*) from plans.plans where id=$1',[target.plan])).rows[0].count,'0');assert.equal((await access({type:'plan_item',id:oldItem.id},['video'],true)).status,404);assert.equal((await access({type:'plan_item',id:otherItem.id},['video'],true)).status,200);assert.equal(await evidence(target.plan),before);assert.equal((await client.query("select count(*) from media.retention_events where source_id=$1 and event='source_plan_deleted'",[target.plan])).rows[0].count,'1');
+ });
+ test('L1 HTTP: template deletion cascades original grants but not independent Builder copies',async()=>{
+ const {id,video}=await h1AssetExercise(),node=await makeSection(coachId),source=await planOf(node);await addExercise(id,{},node);const copy=await cloneToAthlete(source),original=await assetItem(source,video.id),retained=await assetItem(copy.plan,video.id);await client.query("insert into library.program_access(plan_id,user_id,access_type,status) values($1,$2,'downloaded','accessed')",[source,athleteUserId]);const before=await evidence(source);
+ const r=await request('/api/builder/plans/'+source,undefined,{method:'DELETE'});assert.equal(r.status,200,JSON.stringify(r.body));assert.equal((await client.query('select count(*) from library.program_access where plan_id=$1',[source])).rows[0].count,'0');assert.equal((await access({type:'plan_item',id:original.id},['video'],true)).status,404);assert.equal((await access({type:'plan_item',id:retained.id},['video'],true)).status,200);assert.equal(await evidence(source),before);assert.ok(Number(before)>0);
+ });
+ test('L1 HTTP: Revoke removes only its original Access; assigned snapshot remains authorized',async()=>{
+ const {id,video}=await h1AssetExercise(),node=await makeSection(coachId),source=await planOf(node);await addExercise(id,{},node);const copy=await cloneToAthlete(source),original=await assetItem(source,video.id),retained=await assetItem(copy.plan,video.id);
+ await client.query("update plans.plans set status='active',visibility='public',library_scope='optimove',athlete_can_view_directly=true,requires_approval=true where id=$1",[source]);await client.query('insert into public.athlete_library_access(athlete_id,can_view_optimove_library,require_approval,free_only) values($1,true,true,true)',[copy.athlete]);const grant=(await client.query("insert into library.program_access(plan_id,user_id,access_type,status) values($1,$2,'coach_assigned','accessed') returning id",[source,athleteUserId])).rows[0].id;
+ assert.equal((await access({type:'plan_item',id:original.id},['video'],true)).status,200);const before=await evidence(source),r=await request('/api/organization/program-access/'+grant+'/revoke',{});assert.equal(r.status,200,JSON.stringify(r.body));assert.equal((await client.query('select count(*) from library.program_access where id=$1',[grant])).rows[0].count,'0');assert.equal((await access({type:'plan_item',id:original.id},['video'],true)).status,404);assert.equal((await access({type:'plan_item',id:retained.id},['video'],true)).status,200);assert.equal(await evidence(source),before);
+ });
+ test('L1 concurrent HTTP: custom exercise holds plan before node while DELETE waits, including feature-off legacy',async()=>{
+ for(const withMedia of [false,true]){const target=await assignedSection(),a=withMedia?await ready():null;process.env.MEDIA_STORAGE_ENABLED=String(withMedia);let custom,deleted;
+ await pauseQueries(sql=>sql.includes('select id from plans.plan_nodes where id=$1 for update'),1,async gate=>{
+ custom=request('/api/builder/nodes/'+target.node+'/custom-exercise',{name:'Concurrent custom',...(a?{media:{video:selected(a.id)}}:{})});try{await gate.wait();deleted=request('/api/builder/plans/'+target.plan,undefined,{method:'DELETE'});await waitBlockedQuery('select id from plans.plans where id = $1 for update');}finally{gate.release();}assert.equal((await custom).status,201);const r=await deleted;assert.equal(r.status,200,JSON.stringify(r.body));});process.env.MEDIA_STORAGE_ENABLED='true';}
+ });
+ test('L1 concurrent HTTP: opposite shared videos in two assigned plans complete without cross-plan deadlock',async()=>{
+ const first=await h1AssetExercise(),second=await h1AssetExercise(),p=await assignedSection(),q=await assignedSection();await addExercise(second.id,{},p.node);await addExercise(first.id,{},q.node);
+ await pauseQueries(sql=>sql.includes('insert into plans.plan_items ('),2,async gate=>{const jobs=[addExercise(first.id,{},p.node),addExercise(second.id,{},q.node)];try{await gate.wait();}finally{gate.release();}for(const r of await Promise.all(jobs))assert.equal(r.status,201,JSON.stringify(r.body));});assert.ok(await assetItem(p.plan,first.video.id));assert.ok(await assetItem(q.plan,second.video.id));assert.equal(await evidence(p.plan),'4');assert.equal(await evidence(q.plan),'4');
+ });
+ test('L1 concurrent HTTP: section copy locks target plan before child FK locks while DELETE waits',async()=>{
+ const source=await assignedSection(),target=await assignedSection(),media=await h1AssetExercise();await addExercise(media.id,{},source.node);const session=(await client.query('select plan_session_id from plans.plan_nodes where id=$1',[target.node])).rows[0].plan_session_id;
+ await pauseQueries(sql=>sql.includes('insert into plans.plan_nodes'),1,async gate=>{const copying=request('/api/builder/nodes/'+source.node+'/copy',{targetSessionId:session});let deleting;try{await gate.wait();deleting=request('/api/builder/plans/'+target.plan,undefined,{method:'DELETE'});await waitBlockedQuery('select id from plans.plans where id = $1 for update');}finally{gate.release();}const copied=await copying;assert.equal(copied.status,201,JSON.stringify(copied.body));const r=await deleting;assert.equal(r.status,200,JSON.stringify(r.body));});assert.ok(await assetItem(source.plan,media.video.id));assert.equal(await evidence(target.plan),'2');
+ });
+ test('L1 concurrent HTTP: repeated program copy upsert locks source before grant while DELETE waits',async()=>{
+ const node=await makeSection(coachId),source=await planOf(node),media=await h1AssetExercise();await addExercise(media.id,{},node);const first=await request('/api/builder/plans/'+source+'/duplicate',{});assert.equal(first.status,201,JSON.stringify(first.body));
+ let second;await pauseQueries(sql=>sql.includes('insert into library.program_access (plan_id, user_id, access_type, status, related_plan_id)'),1,async gate=>{const copying=request('/api/builder/plans/'+source+'/duplicate',{});let deleting;try{await gate.wait();deleting=request('/api/builder/plans/'+source,undefined,{method:'DELETE'});await waitBlockedQuery('select id from plans.plans where id = $1 for update');}finally{gate.release();}second=await copying;assert.equal(second.status,201,JSON.stringify(second.body));const r=await deleting;assert.equal(r.status,200,JSON.stringify(r.body));});
+ for(const copy of [first,second]){const row=await assetItem(copy.body.plan.id,media.video.id);assert.ok(row);assert.equal((await access({type:'plan_item',id:row.id})).status,200);}
+ });
+ test('L1 HTTP: block copy, day paste and session paste preserve R2 snapshots after target plan locking',async()=>{
+ for(const mode of ['block','day','session']){const source=await assignedSection(),media=await h1AssetExercise();await addExercise(media.id,{},source.node);const src=(await client.query('select s.id as session,d.id as day from plans.plan_nodes n join plans.plan_sessions s on s.id=n.plan_session_id join plans.plan_days d on d.id=s.plan_day_id where n.id=$1',[source.node])).rows[0];
+ if(mode==='block'){const r=await request('/api/builder/blocks/'+src.day+'/copy',{});assert.equal(r.status,201,JSON.stringify(r.body));assert.equal(await evidence(source.plan),'4');}
+ else{const target=await assignedSection();await client.query("update plans.plans set plan_type='weekly' where id=$1",[target.plan]);const targetDay=(await client.query('select d.id from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id where s.id=(select plan_session_id from plans.plan_nodes where id=$1)',[target.node])).rows[0].id;
+ const path=mode==='day'?'/api/builder/blocks/'+src.day+'/copy-into/'+targetDay:'/api/builder/sessions/'+src.session+'/copy-into/'+targetDay,r=await request(path,{confirmOverwrite:true});assert.equal(r.status,200,JSON.stringify(r.body));assert.ok(await assetItem(target.plan,media.video.id));assert.equal(await evidence(target.plan),'2');}}
+ });
+ test('Drive L1 HTTP: Builder copy/assignment, Access revoke, source deletion and mapping rollback preserve independent rights',async()=>{
+ const id=await driveExercise(),node=await makeSection(coachId),source=await planOf(node);await addExercise(id,{},node);
+ const video=await driveCopy('1DriveVideoFile0000000000AB'),copy=await cloneToAthlete(source);
+ const legacyItem=async plan=>(await client.query('select i.* from plans.plan_items i join plans.plan_sessions s on s.id=i.plan_session_id join plans.plan_days d on d.id=s.plan_day_id where d.plan_id=$1 and i.exercise_id=$2',[plan,id])).rows[0];
+ const original=await legacyItem(source),retained=await legacyItem(copy.plan);
+ await client.query("update plans.plans set status='active',visibility='public',library_scope='optimove',athlete_can_view_directly=true,requires_approval=true where id=$1",[source]);
+ await client.query('insert into public.athlete_library_access(athlete_id,can_view_optimove_library,require_approval,free_only) values($1,true,true,true)',[copy.athlete]);
+ const grant=(await client.query("insert into library.program_access(plan_id,user_id,access_type,status) values($1,$2,'coach_assigned','accessed') returning id",[source,athleteUserId])).rows[0].id;
+ assert.equal((await access({type:'plan_item',id:original.id},['video'],true)).body.video.mediaId,video);
+ const sourceEvidence=await evidence(source),copyEvidence=await evidence(copy.plan);assert.ok(Number(sourceEvidence)>0);assert.ok(Number(copyEvidence)>0);
+ assert.equal((await request('/api/organization/program-access/'+grant+'/revoke',{})).status,200);
+ assert.equal((await access({type:'plan_item',id:original.id},['video'],true)).status,404);
+ assert.equal((await access({type:'plan_item',id:retained.id},['video'],true)).body.video.mediaId,video);
+ assert.equal((await request('/api/builder/plans/'+source,undefined,{method:'DELETE'})).status,200);
+ assert.equal(await evidence(source),sourceEvidence);assert.equal(await evidence(copy.plan),copyEvidence);
+ await client.query('delete from media.drive_copies where asset_id=$1',[video]);
+ assert.deepEqual((await access({type:'plan_item',id:retained.id},['video'],true)).body,{});
+ assert.equal((await access({type:'plan_item',id:original.id},['video'],true)).status,404);
+ await assert.rejects(client.query("update media.assets set status='deleting' where id=$1",[video]),error=>error.code==='P7502');
+ });
+ test('Drive L1 concurrent HTTP: import refuses busy edit draft without blocking actual submit and completes on retry',async()=>{
+ const source='00000000-0000-4000-8000-000000000001',node=await makeSection(coachId,source),exerciseId=await driveExercise();
+ await addExercise(exerciseId,{},node);await client.query("update plans.plans set status='active' where id=$1",[source]);
+ const opened=await request('/api/builder/plans/'+source+'/edit',{});assert.equal(opened.status,200,JSON.stringify(opened.body));
+ const draft=(await client.query('select id from plans.plans where is_edit_draft and edit_source_plan_id=$1',[source])).rows[0].id;assert.ok(source<draft);
+ const {createMediaUploadService}=await import('../src/mediaUploads.js'),{createDriveCopyService}=await import('../src/driveCopies.js');
+ const storage=createMediaStorageService(pool),platform=await storage.ensureAccount({type:'platform'}),actor={user:{id:otherCoachId},authz:{platformRoles:['platform_admin'],capabilities:{coachWorkspace:true}}};
+ await client.query('update media.storage_accounts set override_limit_bytes=1000000 where id=$1',[platform]);
+ const objects=new Map(),store={assertConfigured(){},async signPut(){return {};},async head(key){return objects.get(key);},async tombstone(){}};
+ const imports=createMediaUploadService({pool,storage,store,driveCopies:createDriveCopyService({pool}),inspect:async()=>({durationSeconds:2,width:320,height:240,videoCodec:'h264'})});
+ const started=await imports.importInitiate(actor,{driveFileId:'1DriveVideoFile0000000000AB',kind:'video',file:{name:'test.mp4',sizeBytes:'60',mimeType:'video/mp4'}},crypto.randomUUID());
+ const upload=(await client.query('select * from media.uploads where id=$1',[started.uploadId])).rows[0];objects.set(upload.temporary_object_key,{sizeBytes:'60',mimeType:'video/mp4',etag:'fixture'});
+ await pauseQueries(sql=>sql.includes('from plans.plans where id = $1 for update')&&sql.includes('is_edit_draft'),1,async gate=>{
+  const submitting=request('/api/builder/plans/'+draft+'/submit',{});
+  try {
+   await gate.wait();await assert.rejects(imports.complete(actor,started.uploadId),error=>error.code==='55P03'&&error.message.startsWith('could not obtain lock on row'));
+   await client.query('begin');try {
+    await client.query('select id from plans.plans where id=$1 for update nowait',[source]);
+    await client.query('select id from media.uploads where id=$1 for update nowait',[started.uploadId]);
+    await client.query('select id from media.assets where id=$1 for update nowait',[started.mediaId]);
+   } finally {await client.query('rollback');}
+  } finally {gate.release();}
+  const saved=await submitting;assert.equal(saved.status,200,JSON.stringify(saved.body));
+ });
+ assert.equal((await imports.complete(actor,started.uploadId)).httpStatus,200);
+ assert.equal((await client.query('select count(*) from media.drive_copies where asset_id=$1',[started.mediaId])).rows[0].count,'1');
+ });
+ test('L1 concurrent HTTP: binder waits for upload completion before locking its asset',async()=>{
+ const id=await exercise(),a=await ready({type:'exercise_edit',exerciseId:id},'video',coachId,'pending'),writer=await pool.connect();let binding;try{await writer.query('begin');await writer.query("set local lock_timeout='2s'");await writer.query('select id from media.uploads where id=$1 for update',[a.uploadId]);binding=patch(id,{video:selected(a.id)});await waitBlockedQuery('select id from media.uploads where asset_id=any');await writer.query("update media.assets set status='ready' where id=$1",[a.id]);await writer.query("update media.uploads set status='completed' where id=$1",[a.uploadId]);await writer.query('commit');const r=await binding;assert.equal(r.status,200,JSON.stringify(r.body));}finally{await writer.query('rollback');writer.release();if(binding)await binding;}
+ });
+}
+
+test('Drive rollback: blank legacy saves preserve recorded URLs, while explicit none remains authorized',async()=>{
+ const id=await driveExercise(),asset=await driveCopy('1DriveVideoFile0000000000AB');
+ await client.query("insert into media.drive_copy_events(drive_file_id,kind,asset_id,event,performed_by_user_id) values('1DriveVideoFile0000000000AB','video',$1,'created',$2)",[asset,otherCoachId]);
+ assert.equal((await detail(id)).videoUrl,'');
+ await client.query('delete from media.drive_copies where asset_id=$1',[asset]);
+ for(const enabled of ['true','false']) {
+  process.env.MEDIA_STORAGE_ENABLED=enabled;
+  const saved=await request('/api/exercises/'+id,{name:'Saved after rollback',videoUrl:''},{method:'PATCH'});
+  assert.equal(saved.status,200,JSON.stringify(saved.body));
+  assert.equal((await client.query('select video_url from library.exercises where id=$1',[id])).rows[0].video_url,DRIVE_VIDEO);
+ }
+ process.env.MEDIA_STORAGE_ENABLED='true';
+ const removed=await patch(id,{video:{source:'none'}});assert.equal(removed.status,200);
+ assert.equal((await detail(id)).media.video.source,'none');
+ assert.equal((await client.query('select video_url from library.exercises where id=$1',[id])).rows[0].video_url,DRIVE_VIDEO);
+});
+
+test('Drive import previews recheck platform role, uploader and mapping independently of coach capability',{skip:process.env.MEDIA_L1_TEST!=='true'},async()=>{
+ const {createMediaUploadService}=await import('../src/mediaUploads.js');
+ const {createDriveCopyService}=await import('../src/driveCopies.js');
+ const req={user:{id:otherCoachId},authz:{platformRoles:['platform_admin'],capabilities:{coachWorkspace:true}}};
+ const objects=new Map(),store={assertConfigured(){},async signPut(){return {};},async head(key){return objects.get(key);},async tombstone(){}};
+ await driveExercise();
+ const storage=createMediaStorageService(pool),platform=await storage.ensureAccount({type:'platform'});
+ await client.query('update media.storage_accounts set override_limit_bytes=1000000 where id=$1',[platform]);
+ const service=createMediaUploadService({pool,storage,store,driveCopies:createDriveCopyService({pool}),inspect:async()=>({durationSeconds:2,width:320,height:240,videoCodec:'h264'})});
+ const started=await service.importInitiate(req,{driveFileId:'1DriveVideoFile0000000000AB',kind:'video',file:{name:'video.mp4',sizeBytes:'60',mimeType:'video/mp4'}},crypto.randomUUID());
+ const upload=(await client.query('select * from media.uploads where id=$1',[started.uploadId])).rows[0];
+ objects.set(upload.temporary_object_key,{sizeBytes:'60',mimeType:'video/mp4',etag:'fixture'});
+ await service.complete(req,started.uploadId);
+ const body={context:{type:'upload',id:started.uploadId},slots:['video']};
+ assert.equal((await accessService.access(req,body)).video.mediaId,started.mediaId);
+ const revoked={...req,authz:{platformRoles:[],capabilities:{coachWorkspace:true}}};
+ await assert.rejects(accessService.access(revoked,body),error=>error.code==='resource_not_found');
+ await assert.rejects(service.status(revoked,started.uploadId),error=>error.code==='operation_not_allowed');
+ await assert.rejects(accessService.access({...req,user:{id:coachId}},body),error=>error.code==='resource_not_found');
+ await client.query('delete from media.drive_copies where asset_id=$1',[started.mediaId]);
+ await assert.rejects(accessService.access(req,body),error=>error.code==='resource_not_found');
+ await assert.rejects(accessService.access(revoked,body),error=>error.code==='resource_not_found');
+});
+
 // ---- Drive copies (migration 202610211000) ------------------------------------
 // A legacy Drive link whose file has a ready copy in the platform account reads
 // and plays as that asset (exercise, private copy, plan item); nothing is rewritten.
@@ -536,9 +679,15 @@ test('Drive copy: a plan item with the legacy Drive snapshot plays the copy for 
  await decorateMediaRows(rows,'plan_item',(sql,params)=>pool.query(sql,params));
  assert.deepEqual(rows[0].media.video,{source:'asset',mediaId:copy,kind:'video'});assert.equal(rows[0].video_url,'');
  assert.equal((await client.query('select video_source from plans.plan_items where id=$1',[item.id])).rows[0].video_source,'legacy','the plan item is not rewritten');
- await client.query("update media.assets set status='deleting' where id=$1",[copy]);
- assert.deepEqual((await access({type:'plan_item',id:item.id},['video'],true)).body,{},'an unready copy is not served');
- await client.query("update media.assets set status='ready' where id=$1",[copy]);await client.query('delete from media.drive_copies');
+ if(process.env.MEDIA_L1_TEST==='true') {
+  await assert.rejects(client.query("update media.assets set status='deleting' where id=$1",[copy]),error=>error.code==='P7502');
+  assert.equal((await access({type:'plan_item',id:item.id},['video'],true)).body.video.mediaId,copy);
+ } else {
+  await client.query("update media.assets set status='deleting' where id=$1",[copy]);
+  assert.deepEqual((await access({type:'plan_item',id:item.id},['video'],true)).body,{});
+  await client.query("update media.assets set status='ready' where id=$1",[copy]);
+ }
+ await client.query('delete from media.drive_copies');
  const back=[{plan_item_id:item.id,video_url:item.video_url}];
  await decorateMediaRows(back,'plan_item',(sql,params)=>pool.query(sql,params));
  assert.equal(back[0].media.video.source,'legacy');assert.equal(back[0].media.video.url,DRIVE_VIDEO);

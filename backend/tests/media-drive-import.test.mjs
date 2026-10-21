@@ -29,7 +29,11 @@ create table public.users(id uuid primary key);create table public.clubs(id uuid
 create table public.user_global_roles(user_id uuid,role text,is_active boolean default true);
 create table public.user_workspace_preferences(user_id uuid,workspace_type text);
 create table library.exercises(id uuid primary key default gen_random_uuid(),owner_scope text default 'user',owner_user_id uuid,owner_club_id uuid,is_active boolean default true,source_exercise_id uuid,copy_parent_id uuid,video_url text,image_url text);
-create table plans.plan_items(id uuid primary key default gen_random_uuid(),exercise_id uuid references library.exercises(id),video_url text,image_url text);
+create table plans.plans(id uuid primary key default gen_random_uuid(),created_by_user_id uuid,athlete_id uuid,is_template boolean default true,status text default 'active',is_active boolean default true);
+create table plans.plan_days(id uuid primary key default gen_random_uuid(),plan_id uuid references plans.plans(id) on delete cascade);
+create table plans.plan_sessions(id uuid primary key default gen_random_uuid(),plan_day_id uuid references plans.plan_days(id) on delete cascade);
+create table plans.plan_items(id uuid primary key default gen_random_uuid(),plan_session_id uuid references plans.plan_sessions(id) on delete cascade,exercise_id uuid references library.exercises(id),video_url text,image_url text);
+create table library.program_access(id uuid primary key default gen_random_uuid(),plan_id uuid references plans.plans(id) on delete cascade,user_id uuid,access_type text,status text,starts_at timestamptz,expires_at timestamptz,source text,license_snapshot jsonb);
 create table library.exercise_collections(id uuid primary key,access_all boolean default false,deleted_at timestamptz);
 create table library.exercise_collection_items(exercise_id uuid,collection_id uuid);
 create table library.exercise_collection_users(collection_id uuid,user_id uuid);`;
@@ -51,7 +55,7 @@ before(async()=>{
  await dbAdmin.connect();await dbAdmin.query(`create role ${roleName} nologin nosuperuser nocreatedb nocreaterole noinherit`);roleCreated=true;await dbAdmin.query(`grant ${roleName} to current_user`);await dbAdmin.query(`create database ${dbName} owner ${roleName}`);created=true;
  pool=new pg.Pool({connectionString:testUrl.toString(),options:'-c role='+roleName,max:12});await pool.query(fixture);
  await pool.query('insert into public.users values($1),($2)',[adminId,coachId]);await pool.query("insert into public.user_global_roles values($1,'platform_admin',true)",[adminId]);
- for(const name of ['202610191100_media_storage_foundation.sql','202610191300_media_upload_lifecycle.sql','202610211000_media_drive_copies.sql']){const sql=await fs.readFile(new URL('../../migrations_v2/'+name,import.meta.url),'utf8');const c=await pool.connect();try{await c.query('begin');await c.query(sql);await c.query('commit');}catch(e){await c.query('rollback');throw e;}finally{c.release();}}
+ for(const name of ['202610191100_media_storage_foundation.sql','202610191300_media_upload_lifecycle.sql','202610201100_media_reference_protection.sql','202610211000_media_drive_copies.sql','202610211200_media_drive_reference_bridge.sql']){const sql=await fs.readFile(new URL('../../migrations_v2/'+name,import.meta.url),'utf8');const c=await pool.connect();try{await c.query('begin');await c.query(sql);await c.query('commit');}catch(e){await c.query('rollback');throw e;}finally{c.release();}}
  storage=createMediaStorageService(pool);await storage.updatePolicy(adminId,{expectedRevision:1,reason:'test allocation',changes:{defaultLimitBytes:'1000000',maxParallelUploads:2}});
  process.env.DATABASE_URL=testUrl.toString();const {createMediaStorageRouter}=await import('../src/routes/mediaStorage.js');
  const app=express();app.use(express.json());app.use((r,_s,next)=>{Object.assign(r,{admin:adminReq,coach:coachReq,athlete:{user:{id:coachId},authz:{capabilities:{coachWorkspace:false},platformRoles:[]}}}[r.headers['x-test-actor']]||{});next();});

@@ -213,10 +213,11 @@ export function createMediaStorageService(pool) {
     // This does not itself verify an R2 object and is deliberately not routable.
     // onCommit(c, upload) runs in the same transaction, after the asset is ready:
     // a Drive import's copy row commits with its asset or not at all.
-    async commitVerifiedUpload(uploadId, verified, { onCommit = null, commitBoundMs = 0 } = {}) {
+    async commitVerifiedUpload(uploadId, verified, { beforeCommit = null, onCommit = null, commitBoundMs = 0 } = {}) {
       uuid(uploadId); object(verified); bytes(verified.sizeBytes,{positive:true}); object(verified.metadata);
       if (JSON.stringify(verified.metadata).length>16384) fail(400,'invalid_request');
       return tx(async c => {
+        if (beforeCommit) await beforeCommit(c);
         const found = (await c.query('select storage_account_id from media.uploads where id=$1',[uploadId])).rows[0];
         if (!found) fail(404,'resource_not_found');
         await lockAccount(c,found.storage_account_id);

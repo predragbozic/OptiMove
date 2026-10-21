@@ -1,3 +1,4 @@
+import { mediaRetentionDatabaseError } from './mediaReferences.js';
 import "dotenv/config";
 import express from "express";
 // Before any router is used: an async route handler's rejection reaches the
@@ -223,6 +224,7 @@ app.use((error, req, res, next) => {
     const tooLarge = error.type === "entity.too.large";
     return res.status(status).json({ error: tooLarge ? "body_too_large" : "invalid_json", message: tooLarge ? "The request body is larger than this server accepts." : "The request body could not be read as JSON." });
   }
+  error = mediaRetentionDatabaseError(error) || error;
   if (error instanceof MediaStorageError) return res.status(error.status).json({error:error.code,code:error.code,retryable:Boolean(error.retryable),details:error.details});
   console.error(error);
   const status = Number(error.status || error.statusCode || 500);
