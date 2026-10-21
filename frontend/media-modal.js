@@ -3,6 +3,7 @@ import {
   decodeAccessContext,
   getDriveId,
   imageSources,
+  isAppleTouchDevice,
   normalizeAccessContext,
   renderAssetImage,
   renderImage,
@@ -70,7 +71,8 @@ function videoEmbedMarkup(videoUrl, imageUrl = "") {
   const youTubeEmbed = toYouTubeEmbedUrl(raw, { autoplay: true });
   if (youTubeEmbed) return renderVideoFrame(youTubeEmbed);
   if (driveId) {
-    return renderVideoFrame(toDrivePreviewUrl(raw, { autoplay: true }), { driveViewUrl: toDriveViewUrl(raw) });
+    // Not on an iPhone or iPad: there the player would sit black until tapped (see isAppleTouchDevice).
+    return renderVideoFrame(toDrivePreviewUrl(raw, { autoplay: !isAppleTouchDevice() }), { driveViewUrl: toDriveViewUrl(raw) });
   }
   if (/\.(mp4|webm|mov)(\?|#|$)/i.test(raw)) {
     return `

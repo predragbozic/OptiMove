@@ -15,6 +15,16 @@ export function toDriveViewUrl(url) {
   return driveId ? `https://drive.google.com/file/d/${driveId}/view` : "";
 }
 
+// iPhone and iPad (iPadOS reports a Mac with touch). Safari there - and every
+// iOS browser, all WebKit - never lets a video with sound start by itself
+// inside another site's frame: Drive's player, asked to autoplay, starts
+// loading, is stopped, and stays black until it is tapped (owner's iPhone,
+// 2026-10-21). Not asked, it shows its preview frame and play button.
+export function isAppleTouchDevice(nav = globalThis.navigator) {
+  if (!nav) return false;
+  return /iPhone|iPad|iPod/.test(String(nav.userAgent || "")) || (nav.platform === "MacIntel" && Number(nav.maxTouchPoints) > 1);
+}
+
 export function withAutoplayParam(url) {
   const raw = String(url || "").trim();
   if (!raw) return "";
