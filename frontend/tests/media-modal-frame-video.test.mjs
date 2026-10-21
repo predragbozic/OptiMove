@@ -217,3 +217,41 @@ test("6. styles.css: on a phone the black cover and the 140 px box are only for 
   assert.match(ruleOf(css, ".media-drive-link"), /min-height: 44px;/);
   assert.match(ruleOf(css, ".media-modal.is-frame-video .media-frame-video"), /flex: 1 1 0;/);
 });
+
+test("7. a Drive video on an iPhone or iPad is not asked to start by itself (its player would sit black until tapped); everywhere else it still is", () => {
+  const nav = dom.window.navigator;
+  const set = (props) => { for (const [key, value] of Object.entries(props)) Object.defineProperty(nav, key, { configurable: true, get: () => value }); };
+  const frameSrc = () => body().querySelector("iframe.media-frame-video").getAttribute("src");
+  const original = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { configurable: true, writable: true, value: nav });
+  phone();
+  try {
+    for (const [device, props] of [
+      ["iPhone Safari", { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1", platform: "iPhone", maxTouchPoints: 5 }],
+      ["Chrome on iPhone (WebKit too)", { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0 Mobile/15E148 Safari/604.1", platform: "iPhone", maxTouchPoints: 5 }],
+      ["iPad (reports a Mac with touch)", { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15", platform: "MacIntel", maxTouchPoints: 5 }],
+    ]) {
+      set(props);
+      assert.equal(media.isAppleTouchDevice(nav), true, device);
+      modal.openMedia("Drive", "", DRIVE_VIDEO);
+      assert.equal(frameSrc(), "https://drive.google.com/file/d/FILE_1/preview", `${device}: no autoplay`);
+      assert.ok(body().querySelector("a.media-drive-link"), `${device}: the Drive link stays`);
+      modal.closeMedia();
+    }
+    for (const [device, props] of [
+      ["Android Chrome", { userAgent: "Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36", platform: "Linux armv8l", maxTouchPoints: 5 }],
+      ["a Mac without touch", { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15", platform: "MacIntel", maxTouchPoints: 0 }],
+      ["Windows Edge", { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 Edg/130.0", platform: "Win32", maxTouchPoints: 0 }],
+    ]) {
+      set(props);
+      assert.equal(media.isAppleTouchDevice(nav), false, device);
+      modal.openMedia("Drive", "", DRIVE_VIDEO);
+      assert.equal(frameSrc(), "https://drive.google.com/file/d/FILE_1/preview?autoplay=1", `${device}: autoplay as before`);
+      modal.closeMedia();
+    }
+    assert.equal(media.isAppleTouchDevice(null), false, "no navigator: as before");
+  } finally {
+    for (const key of ["userAgent", "platform", "maxTouchPoints"]) delete nav[key];
+    if (original) Object.defineProperty(globalThis, "navigator", original); else delete globalThis.navigator;
+  }
+});
