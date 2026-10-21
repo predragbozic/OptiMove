@@ -3,7 +3,7 @@ import { MediaStorageError, uuid } from '../mediaStorage.js';
 import { isPlatformAdministrator } from '../authz.js';
 
 // Service injection keeps HTTP authorization tests independent of R2 credentials.
-export function createMediaStorageRouter({ service, uploads, access, enabled = () => process.env.MEDIA_STORAGE_ENABLED === 'true', admin = false }) {
+export function createMediaStorageRouter({ service, uploads, access, driveCopies, enabled = () => process.env.MEDIA_STORAGE_ENABLED === 'true', admin = false }) {
   const router = Router();
   router.use((req, res, next) => {
     res.set('Cache-Control', 'no-store');
@@ -27,6 +27,15 @@ export function createMediaStorageRouter({ service, uploads, access, enabled = (
     router.get('/storage-accounts/:id',handle(async (req,res) => res.json(await service.getAccount(uuid(req.params.id)))));
     router.patch('/storage-accounts/:id/limit',handle(async (req,res) => res.json(await service.updateLimit(req.user.id,uuid(req.params.id),req.body))));
     router.get('/storage-limit-audit',handle(async (req,res) => res.json(await service.listAudit(req.query))));
+    // Drive import (migration 202610211000): copies of the Drive files that
+    // exercises and plan items name, charged to the platform account.
+    if (uploads && driveCopies) {
+      router.get('/drive-import/status',handle(async (_req,res) => res.json(await driveCopies.status())));
+      router.post('/drive-import/uploads',handle(async (req,res) => res.status(201).json(await uploads.importInitiate(req,req.body,req.get('Idempotency-Key')))));
+      router.post('/drive-import/uploads/:id/complete',handle(async (req,res) => {const r=await uploads.complete(req,req.params.id);res.status(r.httpStatus).json(r.body);}));
+      router.delete('/drive-import/uploads/:id',handle(async (req,res) => {const r=await uploads.cancel(req,req.params.id);res.status(r.httpStatus).json(r.body);}));
+      router.delete('/drive-import/copies/:kind/:driveFileId',handle(async (req,res) => res.json(await driveCopies.remove(req.user.id,req.params.kind,req.params.driveFileId,req.body?.reason))));
+    }
   } else {
     if (access) {
       router.post('/access',handle(async(req,res)=>res.json(await access.access(req,req.body))));

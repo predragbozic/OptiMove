@@ -1,4 +1,5 @@
-import { bindExerciseMedia, decorateMediaRows, mediaSelections } from '../exerciseMedia.js';
+import { bindExerciseMedia, decorateMediaRows, mediaEnabled, mediaSelections } from '../exerciseMedia.js';
+import { driveFileIdOf, readyDriveCopies } from '../driveCopies.js';
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { pool, query, queryWithoutJit } from "../db.js";
@@ -517,6 +518,11 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
       }
       if(!copying) {
         previousMedia={...existing.rows[0],video_url:existing.rows[0].stored_video_url,image_url:existing.rows[0].stored_image_url};
+        if(mediaEnabled()) {
+          const linked=slot=>(previousMedia[slot+'_source'] || 'legacy')==='legacy'?driveFileIdOf(previousMedia[slot+'_url']):null;
+          const copies=await readyDriveCopies(runQuery,[linked('video'),linked('image')]);
+          for(const slot of ['video','image'])previousMedia[slot+'_copied']=copies.has(`${linked(slot)}:${slot}`);
+        }
         selections=mediaSelections(body,previousMedia);
         videoUrl=selections.video?.source==='legacy'?nullableText(selections.video.url):previousMedia.video_url;
         imageUrl=selections.image?.source==='legacy'?nullableText(selections.image.url):previousMedia.image_url;

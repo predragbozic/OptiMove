@@ -134,6 +134,7 @@ test("3. the defaults and the accounts: two groups, the owner's name from the or
   assert.match(content.textContent, /Boris Coach/);
   assert.equal(content.querySelector('[data-action="storage-admin-load-more"]'), null, "no next page");
   assert.equal(data.ownerLabel({ type: "user", id: "ghost" }, state.organization.data), "User account (not in this list)");
+  assert.equal(data.ownerLabel({ type: "platform", id: null }, state.organization.data), "OptiMove system storage", "the Drive copies account, no coach");
   assert.equal(data.usageSentence(account({ reservedBytes: "100000000", activeUploads: 1 })), "1.2 GB used of 5 GB · 3.8 GB free · 100 MB reserved by uploads in progress · 1 upload running");
 });
 
