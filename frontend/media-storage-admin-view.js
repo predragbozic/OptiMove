@@ -9,6 +9,7 @@
 // yet. Carbon informs the structure (one card per thing, status first, the
 // destructive step named); it is a design reference only.
 import { bytesToGigabytes, bytesToMegabytes, ownerLabel, REASON_MAX_LENGTH, storageAdminContext, usageSentence } from "./media-storage-admin-data.js";
+import { renderDriveImportCardHtml } from "./drive-import-view.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatBytes } from "./utils.js";
 
@@ -145,6 +146,7 @@ export function renderStorageAdminPanelHtml(data = state.organization?.data) {
   if (admin.error || !admin.policy) {
     return `${intro}<section class="panel storage-admin-card"><p class="builder-error" role="alert">${escapeHtml(admin.error || "Storage could not be read.")}</p><div class="storage-admin-actions"><button class="plain-button compact-button" type="button" data-action="storage-admin-reload">Read again</button></div></section>`;
   }
+  const platform = admin.accounts.filter((account) => account.owner?.type === "platform");
   const users = admin.accounts.filter((account) => account.owner?.type === "user");
   const clubs = admin.accounts.filter((account) => account.owner?.type === "club");
   const group = (title, rows, empty) => `
@@ -157,6 +159,8 @@ export function renderStorageAdminPanelHtml(data = state.organization?.data) {
     ${intro}
     ${renderNotice(admin.notice)}
     ${renderPolicyCard(admin)}
+    ${renderDriveImportCardHtml()}
+    ${platform.length ? group("OptiMove system storage", platform, "") : ""}
     ${group("User storage accounts", users, "No user has a storage account yet. One appears when a coach's storage is first read or when you set a limit from Manage account.")}
     ${group("Club storage accounts", clubs, "No club has a storage account yet. One appears when a club exercise's storage is first read.")}
     ${admin.nextCursor ? `<div class="load-more-row"><button class="plain-button" type="button" data-action="storage-admin-load-more" ${admin.loadingMore ? "disabled" : ""}>${admin.loadingMore ? "Loading..." : "Load more accounts"}</button></div>` : ""}
