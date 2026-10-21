@@ -7,7 +7,7 @@ import {
   refreshPlatformAccount, requeueFailedImports, runDriveImport,
 } from "./drive-import-data.js";
 import {
-  driveImportActiveKey, driveImportAttentionKey, driveImportCardKey, itemStateText, platformMissing, progressCountsText,
+  driveImportActiveKey, driveImportAttentionKey, driveImportCardKey, importNeedsComputer, itemStateText, platformMissing, progressCountsText,
   renderDriveImportActiveHtml, renderDriveImportAttentionHtml, renderDriveImportCardHtml,
 } from "./drive-import-view.js";
 import { loadStorageAdmin, provisionStorageAccount, storageAdminContext } from "./media-storage-admin-data.js";
@@ -168,7 +168,8 @@ export async function handleDriveImportAction(action, { render }) {
   const imp = state.driveImport;
   if (type === "drive-import-start") {
     // Start, or Continue: the files a repeat can change go back in the queue first.
-    if (imp.running || platformMissing()) return true;
+    // Not on a touch device (the button is shown there, switched off), and not without system storage.
+    if (imp.running || platformMissing() || importNeedsComputer()) return true;
     requeueFailedImports();
     if (imp.items.some((item) => item.state === "queued")) void start(render);
     else render();
@@ -218,7 +219,7 @@ export async function handleDriveImportAction(action, { render }) {
 export async function handleDriveImportChange(event, { render }) {
   const input = event.target?.closest?.("[data-drive-import-folder]");
   if (!input) return false;
-  if (!storageAdminContext() || state.driveImport.running) return true;
+  if (!storageAdminContext() || state.driveImport.running || importNeedsComputer()) return true;
   await chooseDriveImportFolder(input.files, importRenders(render).render);
   input.value = "";
   return true;

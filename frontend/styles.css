@@ -6160,9 +6160,10 @@ body.specific-program-open {
   /* A list item keeps its disclosure marker; the padding makes it a 44 px touch target. */
   .storage-admin-technical > summary, .drive-import-problems > summary, .drive-import-failed > summary { display: list-item; box-sizing: border-box; min-height: 44px; padding-block: 12px; }
 }
-/* Importing reads a folder on the computer that holds it; a phone only follows along. */
-.drive-import-phone-note { display: none; }
-@media (max-width: 760px) { .drive-import-phone-note { display: block; } }
+/* On a touch device the import is shown switched off; this says why, next to its buttons. */
+.drive-import-computer-note { margin: 0; font-size: 16px; font-weight: 600; }
+/* A switched-off Start reads as off but stays legible (the accent at .45 opacity did not). */
+.drive-import-primary:disabled { opacity: 1; border-color: var(--line-strong); background: var(--surface-soft); color: var(--muted); }
 .storage-admin-notice { margin: 0; }
 .storage-admin-history { margin: 0; padding-left: 18px; font-size: 13px; display: grid; gap: 4px; }
 .storage-admin-technical { font-size: 12px; color: var(--muted); }

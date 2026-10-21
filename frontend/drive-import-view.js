@@ -34,6 +34,14 @@ const PREPARE_REASONS = {
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
+// A touch device (a phone or a tablet) cannot choose a folder: the import is
+// shown there, switched off, with the reason next to its buttons (owner
+// decision 2026-10-21). Read at every paint.
+export const COMPUTER_ONLY_QUERY = "(pointer: coarse)";
+export const importNeedsComputer = () => Boolean(globalThis.matchMedia?.(COMPUTER_ONLY_QUERY)?.matches);
+const COMPUTER_NOTE_ID = "drive-import-computer-note";
+const describedByNote = (on) => (on ? ` aria-describedby="${COMPUTER_NOTE_ID}"` : "");
+
 // A <details> keeps what the administrator opened or closed across repaints
 // (drive-import-actions.js records the toggle); `fallback` until then.
 const openAttr = (key, fallback = false) => {
@@ -163,11 +171,12 @@ function renderControls(imp, counts) {
   const retryable = imp.items.filter(isRetryable).length;
   const next = counts.queued + retryable;
   const begun = counts.copied + counts.already + counts.failed + counts.unconfirmed + counts.waiting > 0;
-  const blocked = platformMissing();
+  const phone = importNeedsComputer();
+  const blocked = platformMissing() || phone;
   return `
-    ${next ? `<button class="plain-button compact-button drive-import-primary" type="button" data-action="drive-import-start" ${blocked ? "disabled" : ""}>${begun ? "Continue" : "Start import"} (${next})</button>` : ""}
+    ${next ? `<button class="plain-button compact-button drive-import-primary" type="button" data-action="drive-import-start" ${blocked ? "disabled" : ""}${describedByNote(phone)}>${begun ? "Continue" : "Start import"} (${next})</button>` : ""}
     <button class="text-action" type="button" data-action="drive-import-status">Check what is already copied</button>
-    ${next && blocked ? `<p class="muted">Create OptiMove system storage first.</p>` : ""}
+    ${next && platformMissing() ? `<p class="muted">Create OptiMove system storage first.</p>` : ""}
   `;
 }
 
@@ -194,7 +203,8 @@ function renderProgress(imp) {
 export function renderDriveImportCardHtml() {
   const imp = state.driveImport;
   const locked = imp.running || imp.reading;
-  const folderBlocked = locked || platformMissing();
+  const phone = importNeedsComputer();
+  const folderBlocked = locked || platformMissing() || phone;
   const body = imp.statusError
     ? `<p class="builder-error" role="alert">${escapeHtml(statusMessage(imp.statusError))}</p><div class="storage-admin-actions"><button class="plain-button compact-button" type="button" data-action="drive-import-status">Check again</button></div>`
     : `
@@ -203,10 +213,12 @@ export function renderDriveImportCardHtml() {
       <div class="storage-admin-actions">
         <label class="plain-button compact-button drive-import-folder${folderBlocked ? " is-disabled" : ""}">
           ${imp.items.length || imp.report ? "Choose another folder..." : "Choose the prepared folder..."}
-          <input class="drive-import-folder-input" type="file" webkitdirectory directory multiple data-drive-import-folder ${folderBlocked ? "disabled" : ""}>
+          <input class="drive-import-folder-input" type="file" webkitdirectory directory multiple data-drive-import-folder ${folderBlocked ? "disabled" : ""}${describedByNote(phone)}>
         </label>
       </div>
-      <p class="muted drive-import-hint">Your browser asks to upload the folder's files: that only lets this page read them. Nothing is sent until you choose Start import.</p>
+      ${phone
+        ? `<p class="drive-import-computer-note" id="${COMPUTER_NOTE_ID}">Import works only on a computer. A phone or tablet cannot choose the prepared folder.</p>`
+        : `<p class="muted drive-import-hint">Your browser asks to upload the folder's files: that only lets this page read them. Nothing is sent until you choose Start import.</p>`}
       ${imp.reading || imp.loadingStatus ? `<p class="muted" role="status">${imp.reading ? "Reading the folder..." : "Checking what is already copied..."}</p>` : ""}
       ${imp.readError ? `<p class="builder-error" role="alert">${escapeHtml(READ_ERRORS[imp.readError] || READ_ERRORS.manifest_unreadable)}</p>` : ""}
       ${imp.report && !imp.reading ? `${renderPlan(imp)}${imp.items.length ? renderProgress(imp) : `<p>Nothing to copy from this folder: every file it can copy is already copied.</p>`}` : ""}
@@ -216,8 +228,7 @@ export function renderDriveImportCardHtml() {
       <p class="eyebrow">Import from Google Drive</p>
       <h3>Copy exercise videos and pictures into OptiMove storage</h3>
       <p class="muted">Exercises and plans keep their Google Drive links. Once a file is copied, OptiMove plays the copy: on every phone, without a Google account. Copies count against OptiMove system storage, never against a coach.</p>
-      <p class="muted">Keep this page open while the import runs. Pause and Continue are safe and never copy a file twice. If you are signed out or the page closes, sign in again, open Settings → Storage and choose the same folder: copied files are skipped and unfinished ones continue the same import.</p>
-      <p class="muted drive-import-phone-note">Importing needs the computer that holds the prepared folder.</p>
+      <p class="muted">Keep this page open while the import runs. Pause and Continue are safe and never copy a file twice. If you are signed out or the page closes, sign in again on the computer, open Settings → Storage and choose the same folder: copied files are skipped and unfinished ones continue the same import.</p>
       ${body}
     </section>
   `;

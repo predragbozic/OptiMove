@@ -93,6 +93,19 @@ const statusFor = (videos, images = [], copied = []) => ({
 const reply = (statusCode, body) => ({ ok: statusCode < 400, status: statusCode, statusText: "", json: async () => body });
 const refusal = (statusCode, code, retryable = false) => reply(statusCode, { error: code, code, retryable, details: {} });
 
+// Every fake request in flight, whichever test's server started it: a test that
+// counts paints first waits for the previous test's un-awaited reads to land.
+const inflight = new Set();
+async function quiet() {
+  for (let round = 0; round < 50; round += 1) {
+    while (inflight.size) await Promise.allSettled([...inflight]);
+    await settle();
+    await settle();
+    if (!inflight.size) return;
+  }
+  assert.fail("fake requests never settled");
+}
+
 function fakeServer({ status = statusFor([1, 2, 3]), accounts = null, on = {} } = {}) {
   const server = { calls: [], uploads: new Map(), byKey: new Map(), copied: new Set(), active: 0, maxActive: 0, seq: 0, status, platformId: status.platformStorageAccountId, account: platformAccount() };
   // The server's own start of an import (the same key -> the same session).
@@ -109,7 +122,7 @@ function fakeServer({ status = statusFor([1, 2, 3]), accounts = null, on = {} } 
     server.maxActive = Math.max(server.maxActive, server.active);
     return reply(201, upload);
   };
-  globalThis.fetch = async (url, options = {}) => {
+  const handle = async (url, options = {}) => {
     const path = new URL(String(url), "https://optimove.test").pathname;
     const method = options.method || "GET";
     const body = options.body ? JSON.parse(options.body) : undefined;
@@ -142,6 +155,12 @@ function fakeServer({ status = statusFor([1, 2, 3]), accounts = null, on = {} } 
       return reply(200, { uploadId: upload.uploadId, status: "cancelled" });
     }
     return refusal(404, "resource_not_found");
+  };
+  globalThis.fetch = (url, options) => {
+    const pending = handle(url, options);
+    inflight.add(pending);
+    pending.then(() => inflight.delete(pending), () => inflight.delete(pending));
+    return pending;
   };
   return server;
 }
@@ -558,6 +577,8 @@ test("17. a running import never paints the rest of the tab: progress is patched
   reset();resetPuts(["hold", "hold", "hold", "hold"]);
   fakeServer({ status: statusFor([1, 2, 3, 4]) });
   await chooseFolder(folder({ videos: [1, 2, 3, 4] }));
+  // The previous test's run ends with an account read nobody awaits: let it land before counting paints.
+  await quiet();
   render();
   const paintsAtStart = renders;
   await click("drive-import-start");
@@ -697,7 +718,9 @@ test("20. app.js wires the actions, the folder input, the leave guard, the repai
   assert.match(css, /\.drive-import-folder \{[^}]*min-height: 44px/);
   assert.match(css, /\.drive-import-folder-input \{[^}]*font-size: 16px/);
   assert.match(css, /\.drive-import-card \{ overflow-wrap: anywhere; \}/);
-  assert.match(css, /@media \(max-width: 760px\) \{ \.drive-import-phone-note \{ display: block; \} \}/);
+  assert.match(css, /\.drive-import-computer-note \{[^}]*font-size: 16px;[^}]*font-weight: 600/);
+  assert.match(css, /\.drive-import-primary:disabled \{ opacity: 1;[^}]*color: var\(--muted\)/, "a switched-off Start stays legible");
+  assert.doesNotMatch(css, /drive-import-phone-note/, "the width-only phone note is gone: the touch check decides");
 });
 
 test("21. a pointer held on the 'not copied' list keeps that list (and its summary) through a change, which lands right after the pointer is up; a focused summary keeps its focus; a hold expires; a second finger does not count", async () => {
@@ -830,4 +853,52 @@ test("25. byte progress is not a live region (a screen reader is not flooded); t
   assert.equal(renders, before, "the tab (and the open form) is not painted again");
   assert.match(content.querySelector("[data-drive-import-card]").textContent, /2 videos and 0 pictures to copy/, "the card shows the new plan");
   assert.equal(state.driveImport.items.length, 2);
+});
+
+test("26. on a touch device (phone or tablet) the import is shown but switched off, with the reason next to its buttons (described for screen readers); nothing can start or read a folder there; a computer is unaffected", async () => {
+  const coarse = { on: true };
+  const realMatchMedia = globalThis.matchMedia;
+  globalThis.matchMedia = (query) => ({ media: query, matches: query === view.COMPUTER_ONLY_QUERY && coarse.on, addEventListener() {}, removeEventListener() {} });
+  try {
+    reset();resetPuts();
+    const server = fakeServer({ status: statusFor([1, 2]) });
+    await data.loadDriveImportStatus(render);
+    const folderInput = () => content.querySelector("[data-drive-import-folder]");
+    const note = () => content.querySelector("#drive-import-computer-note");
+    assert.ok(folderInput().disabled, "the folder button is switched off");
+    assert.match(folderInput().closest("label").className, /is-disabled/);
+    assert.match(folderInput().closest("label").textContent, /Choose the prepared folder/, "still shown");
+    assert.equal(note()?.textContent, "Import works only on a computer. A phone or tablet cannot choose the prepared folder.");
+    assert.equal(folderInput().getAttribute("aria-describedby"), "drive-import-computer-note", "the reason is announced with the control");
+    assert.doesNotMatch(content.textContent, /Your browser asks to upload/, "no folder-dialog hint on a phone");
+    // A plan already on screen (chosen on another device in this browser's state): Start is shown, switched off, described.
+    await chooseFolder(folder({ videos: [1, 2] }));
+    const start = content.querySelector('[data-action="drive-import-start"]');
+    assert.ok(start, "Start is shown");
+    assert.ok(start.disabled);
+    assert.equal(start.getAttribute("aria-describedby"), "drive-import-computer-note");
+    assert.ok(content.querySelector(`#${start.getAttribute("aria-describedby")}`), "it points at the visible note");
+    assert.doesNotMatch(content.textContent, /Create OptiMove system storage first/, "not the system-storage sentence: storage exists");
+    await click("drive-import-start");
+    assert.equal(state.driveImport.running, false);
+    assert.equal(imports(server).length, 0, "nothing sent");
+    const input = document.createElement("input");input.setAttribute("data-drive-import-folder", "");
+    Object.defineProperty(input, "files", { value: folder({ videos: [1] }) });
+    const planBefore = state.driveImport.items.length;
+    assert.equal(await actions.handleDriveImportChange({ target: input }, { render }), true, "claimed and ignored");
+    assert.equal(state.driveImport.items.length, planBefore, "no folder is read on a touch device");
+    // A computer: everything as before, no note.
+    coarse.on = false;
+    render();
+    assert.equal(folderInput().disabled, false);
+    assert.equal(folderInput().hasAttribute("aria-describedby"), false);
+    assert.equal(note(), null);
+    assert.equal(content.querySelector('[data-action="drive-import-start"]').disabled, false);
+    assert.match(content.textContent, /Your browser asks to upload/);
+    await click("drive-import-start");
+    await until(() => !state.driveImport.running, "the run ends");
+    assert.deepEqual(state.driveImport.items.map((item) => item.state), ["copied", "copied"]);
+  } finally {
+    globalThis.matchMedia = realMatchMedia;
+  }
 });
