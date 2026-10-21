@@ -229,3 +229,55 @@ for(const order of [[l1,drive],[drive,l1]])test('integration '+order.join(' then
   await context.test('no measured deadlocks',async()=>{assert.equal((await env.pool.query('select deadlocks from pg_stat_database where datname=current_database()')).rows[0].deadlocks,'0');});
  } finally {await env.close();}
 });
+
+// Validate the operator SQL on a non-superuser disposable DB at every possible
+// committed prefix. No production connection or production fixture is used.
+test('read-only preflight executes at all four migration prefixes',async context=>{
+ const database=await createDisposableDatabase({prefix:'drive_preflight',label:'prefixes',baseDatabaseUrl:source});
+ const admin=new pg.Client({connectionString:database.url});await admin.connect();
+ const role='drive_preflight_'+fileId();let pool;
+ try {
+  await admin.query(`create role ${role} nologin nosuperuser`);await admin.query(`grant ${role} to current_user`);
+  pool=new pg.Pool({connectionString:database.url,options:'-c role='+role});
+  await admin.query(`grant all on schema public to ${role}`);
+  await admin.query(`grant create on database ${database.name} to ${role}`);
+  await pool.query(fixture);
+  await pool.query('create table public.schema_migrations(migration_name text,checksum text,execution_time_ms bigint,runner_version text)');
+  const migrate=async name=>{const c=await pool.connect();try{await c.query('begin');await c.query(await readFile(new URL('../../migrations_v2/'+name,import.meta.url),'utf8'));await c.query('commit');}catch(e){await c.query('rollback');throw e;}finally{c.release();}};
+  for(const name of ['202610191100_media_storage_foundation.sql','202610191300_media_upload_lifecycle.sql'])await migrate(name);
+  const sql=await readFile(new URL('../../docs/runbooks/r2-l1-preflight.sql',import.meta.url),'utf8');
+  const [a,rest]=sql.split('-- STAGE B:'),[b,c]=rest.split('-- STAGE C:');
+  for(const [index,name] of [null,l1,drive,bridge].entries()) {
+   if(name)await migrate(name);
+   if(index===2) {
+    const actor=randomUUID(),asset=randomUUID(),driveId=fileId();
+    await pool.query('insert into public.users values($1)',[actor]);
+    const account=await createMediaStorageService(pool).ensureAccount({type:'platform'});
+    await pool.query("insert into media.assets(id,object_key,kind,storage_account_id,uploaded_by_user_id,status,size_bytes,mime_type) values($1,$2,'video',$3,$4,'ready',60,'video/mp4')",[asset,'fixture/'+asset,account,actor]);
+    const plan=(await pool.query('insert into plans.plans(created_by_user_id,athlete_id,is_template) values($1,$2,false) returning id',[actor,randomUUID()])).rows[0].id;
+    const day=(await pool.query('insert into plans.plan_days(plan_id) values($1) returning id',[plan])).rows[0].id;
+    const session=(await pool.query('insert into plans.plan_sessions(plan_day_id) values($1) returning id',[day])).rows[0].id;
+    await pool.query('insert into plans.plan_items(plan_session_id,video_url) values($1,$2)',[session,urlOf(driveId)]);
+    await pool.query("insert into library.program_access(plan_id,user_id,access_type,status) values($1,$2,'assigned','accessed')",[plan,actor]);
+    await pool.query("insert into media.drive_copies(drive_file_id,kind,asset_id,created_by_user_id) values($1,'video',$2,$3)",[driveId,asset,actor]);
+   }
+   await context.test(['none','L1','L1 + Drive','all three'][index],async()=>{
+    const client=await pool.connect();
+    try {
+     await client.query(a);
+     if(index>=2) {
+      const results=await client.query(b.slice(b.indexOf('\nbegin read only;')));
+      const scale=results.find(result=>result.rows[0]?.effective_item_slots!==undefined).rows[0];
+      assert.equal(scale.mapped_legacy_slots,'1');assert.equal(scale.manifest_member_upper_bound,'2');
+      assert.equal(scale.largest_plan_manifest_upper_bound,'2');
+     }
+     await client.query(c.slice(c.indexOf('\nbegin read only;')));
+    } finally {await client.query('rollback');client.release();}
+   });
+  }
+ } finally {
+  if(pool)await pool.end();await admin.end();await database.drop();
+  const maintenance=new pg.Client({connectionString:source});await maintenance.connect();
+  try{await maintenance.query(`drop role ${role}`);}finally{await maintenance.end();}
+ }
+});

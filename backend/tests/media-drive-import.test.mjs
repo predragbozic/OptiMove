@@ -298,3 +298,140 @@ test('18. the new tables are private like the rest of media, a copy row is never
  await assert.rejects(pool.query("update media.drive_copies set created_at=now()"),e=>e.code==='42501');
  await assert.rejects(pool.query("insert into media.drive_copy_events(drive_file_id,kind,asset_id,event,performed_by_user_id) values($1,'video',$2,'removed',$3)",[VIDEO_ID,u.mediaId,adminId]),e=>e.code==='23514');
 });
+
+// Faults on the claim transaction, rather than the final asset transaction.
+// Only injected after initiation; every reconciliation uses a new checkout.
+function claimPool(mode) {
+ return {query:(...a)=>pool.query(...a),connect:async()=>{
+  const c=await pool.connect();mode.connections=(mode.connections||0)+1;
+  return new Proxy(c,{get(target,key){
+   if(key==='query')return async(sql,...rest)=>{
+    if(mode.failRead && String(sql).startsWith('select * from media.uploads where id=$1 for update')) {
+     mode.failRead=false;throw new Error('outcome read unavailable');
+    }
+    if(mode.armed && String(sql).trim().toLowerCase()==='commit') {
+     mode.armed=false;
+     if(mode.kind==='lands'){await target.query('commit');mode.afterCommit?.();mode.failRead=!!mode.unreadable;throw new Error('lost claim COMMIT');}
+     if(mode.kind==='refused'){await target.query('rollback');throw new Error('refused claim COMMIT');}
+     if(mode.kind==='lands-hangs'){await target.query('commit');return new Promise(()=>{});}
+     return new Promise(()=>{});
+    }
+    return target.query(sql,...rest);
+   };
+   const value=target[key];return typeof value==='function'?value.bind(target):value;
+  }});
+ }};
+}
+function claimService(mode,inspect=async()=>({durationSeconds:2,width:320,height:240,videoCodec:'h264',audioCodec:null})) {
+ return createMediaUploadService({pool:claimPool(mode),storage,store,driveCopies,inspect,commitBoundMs:100});
+}
+
+test('19. lost claim COMMIT, including a missing response, reconciles its own token and completes exactly once',async()=>{
+ for(const kind of ['lands','lands-hangs']) {
+  await pool.query('delete from media.drive_copies');
+  const mode={kind},service=claimService(mode),u=await service.importInitiate(adminReq,importBody(),randomUUID());await put(u);
+  mode.armed=true;const before=mode.connections;
+  assert.equal((await service.complete(adminReq,u.uploadId)).httpStatus,200);
+  assert.ok(mode.connections>=before+2,'fresh checkout reconciles the COMMIT');
+  const charged=(await platform()).usedBytes;
+  assert.equal((await service.complete(adminReq,u.uploadId)).httpStatus,200);
+  assert.equal((await platform()).usedBytes,charged);
+  assert.equal((await pool.query('select count(*)::int n from media.drive_copies where asset_id=$1',[u.mediaId])).rows[0].n,1);
+ }
+});
+
+test('20. uncommitted claim COMMIT is bounded and retryable; retry obtains a real verifier',async()=>{
+ for(const kind of ['refused','hangs']) {
+  await pool.query('delete from media.drive_copies');
+  const mode={kind},service=claimService(mode),u=await service.importInitiate(adminReq,importBody(),randomUUID());await put(u);
+  mode.armed=true;
+  await assert.rejects(service.complete(adminReq,u.uploadId),e=>e.code==='verification_outcome_unknown'&&e.retryable===true);
+  assert.equal((await row(u.uploadId)).status,'reserved');
+  assert.equal((await service.complete(adminReq,u.uploadId)).httpStatus,200);
+ }
+});
+
+test('21. unreadable claim outcome is explicit; an abandoned lease is recoverable without cleanup cron',async()=>{
+ const mode={kind:'lands',unreadable:true},service=claimService(mode),u=await service.importInitiate(adminReq,importBody(),randomUUID());await put(u);
+ mode.armed=true;
+ await assert.rejects(service.complete(adminReq,u.uploadId),e=>e.code==='verification_outcome_unknown'&&e.retryable===true);
+ const old=await row(u.uploadId);assert.equal(old.status,'verifying');
+ assert.equal((await service.complete(adminReq,u.uploadId)).httpStatus,202,'unexpired claim is not stolen');
+ await pool.query("update media.uploads set verification_until=now()-interval '1 second' where id=$1",[u.uploadId]);
+ assert.equal((await service.complete(adminReq,u.uploadId)).httpStatus,200);
+ assert.notEqual((await row(u.uploadId)).verification_token,old.verification_token);
+});
+
+test('22. parallel completion cannot inspect while the reconciled verifier owns the lease',async()=>{
+ let entered,finish;
+ const started=new Promise(r=>entered=r),gate=new Promise(r=>finish=r);let inspections=0;
+ const mode={kind:'lands'},service=claimService(mode,async()=>{inspections++;entered();await gate;return {durationSeconds:2,width:320,height:240,videoCodec:'h264',audioCodec:null};});
+ const u=await service.importInitiate(adminReq,importBody(),randomUUID());await put(u);mode.armed=true;
+ const first=service.complete(adminReq,u.uploadId);await started;
+ try {assert.equal((await service.complete(adminReq,u.uploadId)).httpStatus,202);assert.equal(inspections,1);}
+ finally {finish();}
+ assert.equal((await first).httpStatus,200);
+ assert.equal((await service.complete(adminReq,u.uploadId)).httpStatus,200);
+});
+
+test('23. reconciliation cannot continue inspection under another token or a revoked role',async()=>{
+ const u=await start();await put(u);let inspected=false;
+ const mode={kind:'lands'};
+ const wrapped=claimPool(mode),original=wrapped.connect;
+ wrapped.connect=async()=>{
+  const c=await original();
+  if(mode.armed && !mode.hooked){mode.hooked=true;
+   return new Proxy(c,{get(target,key){
+    if(key==='query')return async(sql,...a)=>{
+     try{return await target.query(sql,...a);}catch(e){
+      if(String(sql)==='commit')await pool.query('update media.uploads set verification_token=$2 where id=$1',[u.uploadId,randomUUID()]);
+      throw e;
+     }
+    };
+    const v=target[key];return typeof v==='function'?v.bind(target):v;
+   }});
+  }return c;
+ };
+ const service=createMediaUploadService({pool:wrapped,storage,store,driveCopies,inspect:async()=>{inspected=true;return {};},commitBoundMs:100});mode.armed=true;
+ await assert.rejects(service.complete(adminReq,u.uploadId),e=>e.code==='verification_outcome_unknown'&&e.retryable);
+ assert.equal(inspected,false);
+ const revoked={...adminReq,authz:{...adminReq.authz,platformRoles:[]}};
+ await assert.rejects(service.complete(revoked,u.uploadId),e=>e.code==='operation_not_allowed');
+});
+
+test('24. final COMMIT with unreadable reconciliation replays one charged completion',async()=>{
+ const mode={kind:'lands',armed:false},trapped=trappedStorage(mode);let refuse=false;
+ const commitStorage={...trapped,commitVerifiedUpload:async(...a)=>{try{return await trapped.commitVerifiedUpload(...a);}catch(e){refuse=true;throw e;}}};
+ const wrapped={query:(...a)=>pool.query(...a),connect:async()=>{const c=await pool.connect();return new Proxy(c,{get(t,k){
+  if(k==='query')return (sql,...args)=>{
+   if(refuse&&sql==='select * from media.uploads where id=$1 for update'){refuse=false;return Promise.reject(new Error('reconciliation unavailable'));}
+   return t.query(sql,...args);
+  };
+  const v=t[k];return typeof v==='function'?v.bind(t):v;
+ }});}};
+ const service=createMediaUploadService({pool:wrapped,storage:commitStorage,store,driveCopies,inspect:async()=>({durationSeconds:2,width:320,height:240}),commitBoundMs:100});
+ const u=await start();await put(u);mode.armed=true;
+ await assert.rejects(service.complete(adminReq,u.uploadId),e=>e.code==='import_outcome_unknown'&&e.retryable);
+ assert.equal((await row(u.uploadId)).status,'completed');const before=(await platform()).usedBytes;
+ assert.equal((await service.complete(adminReq,u.uploadId)).httpStatus,200);assert.equal((await platform()).usedBytes,before);
+ assert.equal((await pool.query('select count(*)::int n from media.drive_copies where asset_id=$1',[u.mediaId])).rows[0].n,1);
+});
+
+test('25. lost claim COMMIT and unavailable fresh connection never starts inspection',async()=>{
+ const mode={kind:'lands'},wrapped=claimPool(mode),connect=wrapped.connect;
+ wrapped.connect=async()=>{if(mode.hadClaim&&!mode.armed)throw new Error('fresh connection unavailable');mode.hadClaim=true;return connect();};
+ let inspected=false;
+ const service=createMediaUploadService({pool:wrapped,storage,store,driveCopies,inspect:async()=>{inspected=true;return {};},commitBoundMs:100});
+ const u=await start();await put(u);mode.armed=true;
+ await assert.rejects(service.complete(adminReq,u.uploadId),e=>e.code==='verification_outcome_unknown'&&e.retryable);
+ assert.equal(inspected,false);assert.equal((await row(u.uploadId)).status,'verifying');
+});
+
+test('26. authorization is rechecked after recovering a committed claim',async()=>{
+ let inspected=false;
+ const mode={kind:'lands',afterCommit:()=>{adminReq.authz.platformRoles=[];}};
+ const service=claimService(mode,async()=>{inspected=true;return {};});const u=await start();await put(u);mode.armed=true;
+ await assert.rejects(service.complete(adminReq,u.uploadId),e=>e.code==='operation_not_allowed');
+ assert.equal(inspected,false);
+ assert.equal((await pool.query('select count(*)::int n from media.drive_copies where asset_id=$1',[u.mediaId])).rows[0].n,0);
+});

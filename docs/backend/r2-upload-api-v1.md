@@ -351,11 +351,15 @@ required references. It is never inferred from replacing/removing one exercise.
 | 503 | media_storage_disabled | Keep current legacy UI; don't start transport |
 | 503 | media_storage_unavailable | Missing config/provider unavailable; retryable, no claim space was freed |
 | 503 | media_storage_busy / media_inspection_busy | Back off, query status and retry |
+| 503 | verification_outcome_unknown | Claim COMMIT outcome could not be confirmed; retryable. Query status and retry completion with backoff; do not create a second upload |
+| 503 | import_outcome_unknown | Final Drive import COMMIT outcome could not be confirmed; retryable. Query status/retry the same upload; never assume quota or mapping was rolled back |
 
 Always inspect retryable/status; no tight polling/retry loop. Poll verifying or
 cancelling with a short increasing delay (e.g. 1,2,4 seconds), stop on terminal
-state, authentication failure or editor close. The cleanup worker recovers
-expired verification claims after its 2-minute lease, not through browser clocks.
+state, authentication failure or editor close. A completion retry can atomically
+reclaim an expired 2-minute verification lease while the upload is still valid;
+it never steals a live claim. The cleanup worker also fences expired uploads.
+Expiry decisions are server-side, never made through browser clocks.
 Raw R2 HTTP 403/412 have no OptiMove error JSON; translate as described in Q2.
 
 ## Q11 — Preview and FE-1 access compatibility

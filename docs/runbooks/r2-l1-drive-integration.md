@@ -55,3 +55,17 @@ node --test --test-concurrency=1 tests/media-drive-l1-integration.test.mjs tests
 ```
 
 Each DB suite creates and drops a unique disposable database. Object stores/signatures are simulated; real media inspection uses local fixtures. No live R2 request is part of these checks. Final measured counts and independent review results belong in the delivery report, not in assumptions about this runbook.
+
+## PR #203 correction addendum
+
+The current three-migration preflight, prefix recovery matrix and bounded verification-claim COMMIT contract are normative in [r2-l1-deployment-preflight.md](r2-l1-deployment-preflight.md). The earlier local-only status text above describes the original integration exercise; the user subsequently authorized this existing draft PR and targeted correction push only. No release or production operation is authorized. The two source migrations and bridge SQL remain byte-identical.
+
+## Correction validation (local only)
+
+- Existing Builder Submit/import NOWAIT, retry/reference-change, hold preservation and mapping-removal authorization regressions remain in the targeted suite.
+- Added claim COMMIT faults: committed but response lost/hung, rolled back/refused, never sent, unreadable outcome, unavailable fresh connection, foreign token, parallel completion and abandoned lease recovery.
+- Added final COMMIT/unreadable-outcome replay: one mapping and one quota charge.
+- Preflight SQL executes on disposable PostgreSQL as a non-superuser for none/L1/L1+Drive/all-three prefixes. This validates syntax and applicability, not production privileges, data volumes or timing.
+- Production credential rotation remains unconfirmed and blocks release. No production read or write was performed for these corrections.
+
+Final targeted run: **140/140 PASS, 0 failed, 0 skipped**, 16.74 s (local PostgreSQL, non-superuser disposable databases, fake R2). Suites: `media-drive-import`, `media-drive-l1-integration`, `media-binding-be3`, `media-upload-be2`. Includes four preflight-prefix subtests with a synthetic mapped assignment/grant fan-out check. All three migration SHA-256 values match the reviewed originals; no migration file changed. `git diff --check` passes. No new independent review agent was used for this targeted correction.

@@ -15,10 +15,25 @@ const isImport=u=>u?.context?.type==='drive_import';
 const dto=u=>({uploadId:u.id,mediaId:u.asset_id,status:u.status==='reserved'?'pending':u.status,expiresAt:u.expires_at,errorCode:u.error_code || null});
 
 export function createMediaUploadService({pool,storage,store,inspect=inspectMedia,driveCopies=null,commitBoundMs=15000}) {
-  async function tx(work) {
+  async function tx(work,{boundedCommit=false}={}) {
     const c=await pool.connect();
-    try {await c.query('begin');await c.query("set local lock_timeout='5s'");await c.query("set local statement_timeout='15s'");const r=await work(c);await c.query('commit');return r;}
-    catch(e){await c.query('rollback').catch(()=>{});throw e;}finally{c.release();}
+    let discard=false;
+    try {
+      await c.query('begin');await c.query("set local lock_timeout='5s'");await c.query("set local statement_timeout='15s'");
+      const r=await work(c);
+      if(!boundedCommit){await c.query('commit');return r;}
+      let timer;
+      try {
+        await Promise.race([c.query('commit'),new Promise((_,reject)=>{
+          timer=setTimeout(()=>reject(new Error('commit_timeout')),commitBoundMs);
+        })]);
+      } catch {
+        // Never reuse a connection whose COMMIT may still be in flight.
+        discard=true;fail(503,'commit_outcome_unknown',true);
+      } finally {clearTimeout(timer);}
+      return r;
+    } catch(e){if(!discard)await c.query('rollback').catch(()=>{});throw e;}
+    finally{c.release(discard || undefined);}
   }
   async function audit(c,u,event,errorCode=null) {
     await c.query('insert into media.upload_events(upload_id,performed_by_user_id,event,error_code) values($1,$2,$3,$4)',[u?.id || null,u.uploaded_by_user_id,event,errorCode]);
@@ -103,7 +118,7 @@ export function createMediaUploadService({pool,storage,store,inspect=inspectMedi
   // upload row read under its own lock on another connection, so a COMMIT still
   // in flight finishes first. null: not even this could be read.
   async function importOutcome(id) {
-    try {return await tx(async c=>(await c.query('select * from media.uploads where id=$1 for update',[id])).rows[0] || null);}
+    try {return await tx(async c=>(await c.query('select * from media.uploads where id=$1 for update',[id])).rows[0] || null,{boundedCommit:true});}
     catch {return null;}
   }
   async function media(u,connection=pool) {
@@ -186,18 +201,31 @@ export function createMediaUploadService({pool,storage,store,inspect=inspectMedi
       if(initial.status==='completed')return {httpStatus:200,body:{...dto(initial),media:await media(initial)}};
       if(terminal.has(initial.status) || initial.status==='cancelling')fail(409,'state_conflict');
       const token=randomUUID();
-      const u=await tx(async c=>{
+      let u;
+      try {u=await tx(async c=>{
         const current=await locked(c,initial.id);
         if(current.status==='completed')return current;
-        if(current.status==='verifying')return null;
-        if(current.status!=='reserved')fail(409,'state_conflict');
+        // An abandoned verifier cannot leave retries returning 202 forever.
+        // A live lease is never stolen; an expired lease gets a new fenced token.
+        if(current.status==='verifying' && new Date(current.verification_until)>new Date())return null;
+        if(!['reserved','verifying'].includes(current.status))fail(409,'state_conflict');
         if(new Date(current.expires_at)<=new Date()) {
           const expired=(await c.query("update media.uploads set status='cancelling',verification_token=null,verification_until=null,error_code='upload_expired',updated_at=now() where id=$1 returning *",[current.id])).rows[0];
           await audit(c,expired,'cancelling','upload_expired');return expired;
         }
         const r=(await c.query("update media.uploads set status='verifying',verification_token=$2,verification_until=now()+interval '2 minutes',updated_at=now() where id=$1 returning *",[current.id,token])).rows[0];
         await audit(c,r,'verifying');return r;
-      });
+      },{boundedCommit:true});}
+      catch(e) {
+        if(e?.code!=='commit_outcome_unknown')throw e;
+        const found=await importOutcome(initial.id);
+        if(found?.status==='completed')return {httpStatus:200,body:{...dto(found),media:await media(found),verifiedAfterCommitError:true}};
+        if(found?.status!=='verifying' || found.verification_token!==token || new Date(found.verification_until)<=new Date())
+          fail(503,'verification_outcome_unknown',true);
+        // This invocation still owns the durable claim. Recheck authorization
+        // before R2 inspection, just as we do again before committing the asset.
+        await authorize(req,found);u=found;
+      }
       if(!u)return {httpStatus:202,body:{...dto(initial),status:'verifying'}};
       if(u.status==='completed')return {httpStatus:200,body:{...dto(u),media:await media(u)}};
       if(u.status==='cancelling') {await cleanup(u);fail(409,'upload_expired');}
