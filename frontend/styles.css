@@ -6847,6 +6847,70 @@ body.specific-program-open {
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.26);
 }
 
+/* A newer deploy (frontend/app-update.js): a notice at the top of the screen,
+   clear of the iPhone's notch, shown only when there is something to refresh.
+   Above the app's sticky top bars (z 40-45), which Later uncovers in one tap;
+   below every menu and overlay (z 55 and up: the Builder editors, menus, the
+   video, Messages), so their own controls are never covered. */
+.app-update-banner {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  right: 0;
+  left: 0;
+  z-index: 50;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  width: min(560px, calc(100% - 24px));
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  margin-inline: auto;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+}
+
+.app-update-text {
+  flex: 1 1 200px;
+  margin: 0;
+  font-weight: 600;
+}
+
+.app-update-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-update-refresh,
+.app-update-later {
+  min-height: 44px;
+}
+
+/* .text-action (later in the file) zeroes padding: Later keeps a 44 px wide target. */
+.app-update-actions .app-update-later {
+  min-width: 44px;
+  padding: 0 8px;
+}
+
+/* A panel of the athlete's top bar (Messages, notifications, the workspace
+   menu) lives inside that sticky bar's layer (z 45), under the notice: the
+   notice steps aside while one is open. */
+body.messages-open .app-update-banner,
+body:has(#notificationPanel:not([hidden])) .app-update-banner,
+body:has(#workspacePanel:not([hidden])) .app-update-banner {
+  display: none;
+}
+
+.app-update-busy {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
 .media-modal.is-video {
   display: flex;
   align-items: center;

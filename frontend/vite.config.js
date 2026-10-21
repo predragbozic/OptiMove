@@ -21,9 +21,21 @@ import { resolve } from "node:path";
 // "invite" HTML entry is needed because none exists today.
 const rootDir = import.meta.dirname;
 
+// The deploy commit this build is made from (Render sets RENDER_GIT_COMMIT for
+// the build), as <meta name="optimove-build"> in the two HTML entries, which
+// are served no-cache: a running app can tell that a newer deploy exists
+// (frontend/app-update.js) while the hashed bundles keep their names across
+// deploys that do not change them. Nothing in a local build.
+const buildCommit = String(process.env.RENDER_GIT_COMMIT || "").trim();
+const buildStamp = {
+  name: "optimove-build-stamp",
+  transformIndexHtml: () => (/^[0-9a-f]{7,40}$/i.test(buildCommit) ? [{ tag: "meta", attrs: { name: "optimove-build", content: buildCommit }, injectTo: "head" }] : []),
+};
+
 export default defineConfig({
   root: rootDir,
   base: "/",
+  plugins: [buildStamp],
   build: {
     outDir: "dist",
     emptyOutDir: true,
