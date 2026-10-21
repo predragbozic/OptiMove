@@ -8,6 +8,13 @@ export function toDrivePreviewUrl(url, options = {}) {
   return options.autoplay ? withAutoplayParam(previewUrl) : previewUrl;
 }
 
+// The file's own page in Google Drive (or the Drive app, on a phone that has
+// it): the way out when Drive's player fails inside OptiMove's frame.
+export function toDriveViewUrl(url) {
+  const driveId = getDriveId(url);
+  return driveId ? `https://drive.google.com/file/d/${driveId}/view` : "";
+}
+
 export function withAutoplayParam(url) {
   const raw = String(url || "").trim();
   if (!raw) return "";
