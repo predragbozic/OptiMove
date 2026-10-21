@@ -81,7 +81,11 @@ export async function bindExerciseMedia(client,req,exerciseId,body,{creating=fal
   const admin=await hasExerciseAdministration(req.user.id,req.authz,run);
   if(!req.authz?.capabilities?.coachWorkspace || !(admin || exercise.owner_scope==='user' && exercise.owner_user_id===req.user.id))fail(403,'operation_not_allowed');
   const assetIds=Object.values(selections).filter(s=>s.source==='asset').map(s=>s.mediaId).sort();
-  if(assetIds.length)await run('select id from media.assets where id=any($1::uuid[]) order by id for update',[assetIds]);
+  if(assetIds.length) {
+    // Match BE-2 completion's upload -> asset order; binding never changes an asset.
+    await run('select id from media.uploads where asset_id=any($1::uuid[]) and uploaded_by_user_id=$2 order by id for update',[assetIds,req.user.id]);
+    await run('select id from media.assets where id=any($1::uuid[]) order by id for share',[assetIds]);
+  }
   for(const slot of slots) {
     const selection=selections[slot];if(!selection)continue;
     if(selection.source==='asset') {
