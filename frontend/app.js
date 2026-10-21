@@ -115,6 +115,7 @@ import {
   parseImageFallbacks,
 } from "./media.js";
 import { closeMedia, handleFullscreenChange, handleMediaAction } from "./media-modal.js";
+import { startAppUpdateWatch } from "./app-update.js";
 import { installThumbnailResolver, retryExpiredMediaImage } from "./media-playback.js";
 import {
   closeMessagesIfOutside,
@@ -268,6 +269,11 @@ async function init() {
   state.railExpanded = window.matchMedia("(min-width: 900px)").matches;
   state.exerciseLayout = window.matchMedia("(max-width: 760px)").matches ? "vertical" : "horizontal";
   renderRailState();
+  // A newer deploy than the one this page runs: a notice at the top with
+  // Refresh and Later (the app installed on an iPhone keeps an old version
+  // until iOS restarts it). Never refreshes by itself; an unsaved Training
+  // Load draft (a dashboard layout, Advanced settings) is asked about first.
+  startAppUpdateWatch({ mayLeave: () => confirmLeaveTrainingLoad(null, { discard: false }) });
   if (window.location.pathname === "/invite") {
     await renderInviteAcceptAction({ renderUserControls, setStatus });
     return;
