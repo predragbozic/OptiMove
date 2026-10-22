@@ -371,8 +371,18 @@ test("api probe: the quick paging check touches only the lists, and its progress
 });
 
 test("api probe: a GPEXE that never answers is stopped at the time limit, and what was found is still reported", async () => {
+  // A real request in flight holds a socket that keeps the process running
+  // until the probe aborts it; the probe's AbortSignal.timeout() alone does
+  // not (its timer is unref'd), and node:test on Node 20-22 cancels a test
+  // whose only pending work is such a timer. The interval stands in for that
+  // socket and never settles the request itself, so a time limit that never
+  // fires still fails the test.
   const hanging = async (_url, init) => new Promise((_resolve, reject) => {
-    init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "TimeoutError" })));
+    const socket = setInterval(() => {}, 60_000);
+    init.signal.addEventListener("abort", () => {
+      clearInterval(socket);
+      reject(Object.assign(new Error("aborted"), { name: "TimeoutError" }));
+    }, { once: true });
   });
   const started = Date.now();
   const report = await probe(["--team", "980", "--from", "2026-09-14", "--to", "2026-09-14", "--max-seconds", "1"], { fetchImpl: hanging, token: TOKEN, sleep: noSleep, log: () => {} });

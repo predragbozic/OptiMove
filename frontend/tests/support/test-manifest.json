@@ -4,7 +4,7 @@
   "fileOptions": {
     "training-load.actions.test.mjs": {
       "testTimeoutMs": 15000,
-      "note": "tests X5a and X5b start and never finish (115 tests pass); known since 2026-09-18 as 'the process never exits', found to be two hanging tests by the T1 discovery run on origin/main 241765e (2026-10-11); node cancels each after 15 s so the rest of the file runs and the process exits"
+      "note": "tests X5a and X5b start and never finish (115 tests pass); known since 2026-09-18 as 'the process never exits', found to be two hanging tests by the T1 discovery run on origin/main 241765e (2026-10-11); node cancels each after 15 s so the rest of the file runs and the process exits. Cause: switching to the 'today' section now sends GET /api/training-load/calendar for the current week, which the test's deferred fetch mock never answers, so the section action never settles (the test expects that switch to be a fetch-free cache hit); diagnosed 2026-10-16 on caa2d2d"
     }
   },
   "knownFailures": [
@@ -70,7 +70,15 @@
       "failureType": "testTimeoutFailure",
       "messagePattern": "^test timed out after \\d+ms$",
       "since": "2026-10-11",
-      "note": "never finishes (a promise that is never settled); cancelled by node's per-test limit set in fileOptions; cause not established"
+      "note": "never finishes: switching to the 'today' section now sends GET /api/training-load/calendar for the current week, which the test's deferred fetch mock never answers, so the section action never settles (the test expects that switch to be a fetch-free cache hit); diagnosed 2026-10-16 on caa2d2d; on Node 24 node:test keeps the test running until the per-test limit set in fileOptions"
+    },
+    {
+      "file": "training-load.actions.test.mjs",
+      "test": "X5a. cross-section race, A resolves BEFORE B: Today ends up showing B's real fresh post-toggle content, never A's stale one, never data:null",
+      "failureType": "cancelledByParent",
+      "messagePattern": "^Promise resolution is still pending but the event loop has already resolved$",
+      "since": "2026-10-16",
+      "note": "the same hang seen on Node 20-22: node:test cancels a test at once when the event loop has nothing left to wait for, instead of waiting for the per-test limit (reproduced on Node 20.20.0, 21.7.3 and 22.22.0 at f3be9f0 and af11338; X5a and X5b are the file's last tests, so nothing after them is lost)"
     },
     {
       "file": "training-load.actions.test.mjs",
@@ -78,7 +86,15 @@
       "failureType": "testTimeoutFailure",
       "messagePattern": "^test timed out after \\d+ms$",
       "since": "2026-10-11",
-      "note": "never finishes (a promise that is never settled); cancelled by node's per-test limit set in fileOptions; cause not established"
+      "note": "never finishes: switching to the 'today' section now sends GET /api/training-load/calendar for the current week, which the test's deferred fetch mock never answers, so the section action never settles (the test expects that switch to be a fetch-free cache hit); diagnosed 2026-10-16 on caa2d2d; on Node 24 node:test keeps the test running until the per-test limit set in fileOptions"
+    },
+    {
+      "file": "training-load.actions.test.mjs",
+      "test": "X5b. cross-section race, B resolves BEFORE A: Today ends up showing B's real fresh post-toggle content, A's later stale response never clobbers it, never data:null",
+      "failureType": "cancelledByParent",
+      "messagePattern": "^Promise resolution is still pending but the event loop has already resolved$",
+      "since": "2026-10-16",
+      "note": "the same hang seen on Node 20-22: node:test cancels a test at once when the event loop has nothing left to wait for, instead of waiting for the per-test limit (reproduced on Node 20.20.0, 21.7.3 and 22.22.0 at f3be9f0 and af11338; X5a and X5b are the file's last tests, so nothing after them is lost)"
     }
   ],
   "knownNoExit": []

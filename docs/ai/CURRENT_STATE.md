@@ -2591,9 +2591,29 @@ pre-existing; pass/fail counts don't belong in this file
   occurrence-generation phase catches an ahead athlete's occurrence in its very next
   cycle…" fails; reproduced identically on a clean detached `origin/main` worktree
   (`3ef6033`) on 2026-09-17.
-- `frontend/tests/training-load.actions.test.mjs` — the process never exits after the
-  suite runs. It was reproduced on clean `main` on 2026-09-18, but the baseline commit
-  was not recorded. Not fixed.
+- `frontend/tests/training-load.actions.test.mjs` — tests X5a and X5b (the file's last two) never finish
+  (first recorded on 2026-09-18 as "the process never exits"). Cause found on 2026-10-16: switching to the
+  `today` section now sends `GET /api/training-load/calendar` for the current week, which the test's deferred
+  fetch mock never answers, so the section action never settles; the tests expect that switch to be a
+  fetch-free cache hit. On Node 24 the per-test limit in the T1 manifest cancels them after
+  15 s (`testTimeoutFailure`); on Node 20–22 node:test cancels them at once (`cancelledByParent`, the
+  Node 22.22.0 Claude Code cloud container); both fingerprints are listed. Not fixed: rewriting them for
+  the current sections is a separate task.
+- **Tests that depend on the Node version or the time zone** (2026-10-16): on Node 20–22, node:test cancels a
+  test whose only pending work is an unref'd timer such as `AbortSignal.timeout()`, while Node 24 keeps it
+  running. The two "never answers" fakes in `gpexe-client.test.mjs` and `gpexe-rest-v1-adapter-reads.test.mjs`
+  B4.2 waited on such a timer alone; they now hold a ref'd interval like a real socket, so they pass on
+  Node 22 and 24. They failed on Node 20–22 at `af11338` and `f3be9f0` alike, so they were not a regression.
+  A test asserting a local time depends on the machine's zone (the cloud container runs UTC): the *Link
+  athletes* test in `gpexe-import.actions.test.mjs` was made zone-independent on `main` by `3c64b8a`
+  (2026-10-16).
+- `scripts/test-runner.selftest.mjs` (`npm run test:runner`) — two checks built on hung-test fixtures fail on
+  Node 22 and pass on Node 24, reproduced on `caa2d2d` (2026-10-16). Not changed:
+  - "a test that never finishes is cancelled by node's per-test limit, reported as a failure, and the file
+    still runs on and exits": the fixture's status is `fail` instead of `xfail`, because on Node 22 the hang
+    ends as `cancelledByParent`, not as the `testTimeoutFailure` its fixture manifest lists;
+  - "a file whose stuck test keeps a grandchild alive is a failure (the per-test limit cancelled it) and the
+    process is ended at the file limit": the fixture's status is `timeout` instead of `fail`.
 - `backend/tests/activity-roster-5a2.test.mjs` — test "56. migration v26: applied by the runner
   on v25, the rollback returns the schema to v25 exactly…" fails on the digest of
   `training.lock_activity_decider`; reproduced identically on a clean detached `origin/main`

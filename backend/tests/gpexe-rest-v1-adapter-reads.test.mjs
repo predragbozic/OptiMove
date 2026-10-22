@@ -507,7 +507,10 @@ test("B4.2 statuses and transport on a drill read: 401 and 403 end the whole ope
     ["a falsely small content-length", () => streamedBody(bigChunks(), { "content-length": "10" }), "source_answer_unexpected", "answer_too_large"],
     ["a body without a stream", () => ({ status: 200, headers: new Headers(json), body: "{}", text: async () => "{}" }), "source_answer_unexpected", "answer_unreadable"],
     ["a broken stream", () => ({ status: 200, headers: new Headers(json), body: new ReadableStream({ pull(c) { c.error(new Error("reset Marker Athlete Name")); } }) }), "source_unavailable", "source_unavailable"],
-    ["a timeout", () => (u, init) => new Promise((_, reject) => { init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))); }), "source_unavailable", "source_unavailable"],
+    // The interval stands in for the socket of a real request in flight: the adapter's AbortSignal.timeout() timer is
+    // unref'd, and node:test on Node 20-22 cancels a test whose only pending work is such a timer. It never settles the
+    // request itself, so a time limit that never fires still fails the test.
+    ["a timeout", () => (u, init) => new Promise((_, reject) => { const socket = setInterval(() => {}, 60_000); init.signal.addEventListener("abort", () => { clearInterval(socket); reject(Object.assign(new Error("aborted"), { name: "AbortError" })); }, { once: true }); }), "source_unavailable", "source_unavailable"],
     ["not JSON", () => answer(200, "not json at all"), "source_answer_unexpected", "answer_not_json"],
   ];
   for (const [label, resp, expected, reason] of perDrill) {
