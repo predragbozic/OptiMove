@@ -35,11 +35,13 @@ export function toImageUrl(url) {
   return imageSources(url)[0] || "";
 }
 
-export function renderImage(url, className, alt = "", previewUrl = "") {
+// `lazy`: a picture that may sit off screen (a strip of many) loads only as
+// it comes near the view.
+export function renderImage(url, className, alt = "", previewUrl = "", { lazy = false } = {}) {
   const sources = imageSources(url);
   if (!sources.length) return "";
   const fallbacks = sources.slice(1);
-  return `<img class="${escapeAttr(className)}" src="${escapeAttr(sources[0])}" alt="${escapeAttr(alt)}"${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}${previewUrl ? ` data-preview-url="${escapeAttr(previewUrl)}"` : ""}>`;
+  return `<img class="${escapeAttr(className)}" src="${escapeAttr(sources[0])}" alt="${escapeAttr(alt)}"${lazy ? ' loading="lazy" decoding="async"' : ""}${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}${previewUrl ? ` data-preview-url="${escapeAttr(previewUrl)}"` : ""}>`;
 }
 
 export function renderMediaThumb(url, fallbackLabel = "Image") {

@@ -1687,7 +1687,9 @@ test("H2 (owner review): every main sidebar/rail navigation and browser Back in 
   const tabs = slice("els.tabs.forEach((tab) => {");
   before(tabs, "if (!confirmLeaveTrainingLoad(tab.dataset.tab)) {", "pushAppHistory();", "sidebar tabs");
   assert.match(tabs, /if \(!confirmLeaveTrainingLoad\(tab\.dataset\.tab\)\) \{\s*event\.stopPropagation\(\);\s*return;/);
-  before(slice("els.libraryTabs.forEach((button) => {"), "if (!confirmLeaveTrainingLoad(button.dataset.libraryTab)) return;", "pushAppHistory();", "sidebar library tabs");
+  // The sidebar library tabs and Home's library cards share openLibraryTab.
+  assert.match(slice("els.libraryTabs.forEach((button) => {", 200), /openLibraryTab\(button\.dataset\)/, "sidebar library tabs go through openLibraryTab");
+  before(slice("function openLibraryTab("), "if (!confirmLeaveTrainingLoad(libraryTab)) return Promise.resolve(false);", "pushAppHistory();", "sidebar library tabs");
   before(slice("els.athleteTabs.forEach((button) => {"), "if (!confirmLeaveTrainingLoad(", "pushAppHistory();", "athlete tabs");
   before(slice("function openWeeklyCalendarFromRail() {"), 'if (!confirmLeaveTrainingLoad("weekly")) return;', "pushAppHistory();", "rail calendar");
   before(slice("async function handleGlobalClick(event) {"), "if (!confirmLeaveTrainingLoad(nextTab)) return;", "pushAppHistory();", "global [data-tab]");

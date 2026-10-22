@@ -73,6 +73,19 @@ export function monthMatrixIso(monthIso) {
   return cells;
 }
 
+// The same Monday-first month as whole weeks of seven ISO dates, the days of
+// the neighbouring months included (Home's calendar shows one of these
+// weeks on a phone, so a week across a month boundary stays whole).
+export function monthWeeksIso(monthIso) {
+  const first = `${String(monthIso).slice(0, 7)}-01`;
+  const last = addDaysIso(addMonthsIso(first, 1), -1);
+  const weeks = [];
+  for (let day = weekMondayIso(first); day <= last; day = addDaysIso(day, 7)) {
+    weeks.push(Array.from({ length: 7 }, (_, index) => addDaysIso(day, index)));
+  }
+  return weeks;
+}
+
 export function startOfWeekIso(value) {
   const date = new Date(`${value}T12:00:00`);
   const day = date.getDay() || 7;

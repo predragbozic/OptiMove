@@ -68,9 +68,10 @@ import {
   submitCoachProfileForm as submitCoachProfileFormAction,
 } from "./coach-profile-actions.js";
 import { renderCoachesHtml } from "./coach-profiles.js";
-import { renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
+import { coachHomePickerRows, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
+import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
-import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
+import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoachHomeExtras, loadMoreCoachHomeExercises, resetCoachHomeForWorkspaceChange } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { calendarToggled as importsCalendarToggled, clearPendingIdentityLoads } from "./gpexe-import-data.js";
@@ -203,6 +204,7 @@ import {
 } from "./program-preview.js";
 import {
   handleTemplateLibraryAction,
+  openTemplatePreviewFromCoachProgram,
   submitProgramTagForm as submitProgramTagFormAction,
   submitTemplateMetadataForm as submitTemplateMetadataFormAction,
   submitTemplateReviewForm as submitTemplateReviewFormAction,
@@ -357,6 +359,39 @@ function applyDefaultInitialTab() {
   }
 }
 
+// A menu library item (Coaches, Builder, Program Library and its sections,
+// Exercise Library, Tests, Training load, Settings, Account), from the menu
+// itself or from a Home card that opens the same place. Resolves once the
+// tab has loaded; false when the coach chose to stay (an unsaved Training
+// Load draft).
+function openLibraryTab({ libraryTab, templateScope, programLibrarySection, organizationSection } = {}) {
+  if (!confirmLeaveTrainingLoad(libraryTab)) return Promise.resolve(false);
+  if (state.activeTab !== libraryTab) pushAppHistory();
+  state.activeTab = libraryTab;
+  if (templateScope) {
+    state.programLibrarySection = "programs";
+    state.templateScope = templateScope;
+    if (state.templateScope !== "my_programs") state.templateFilters.lifecycle = "all";
+    ensureTemplateScopeIsVisible();
+  }
+  if (programLibrarySection) state.programLibrarySection = programLibrarySection;
+  if (organizationSection) {
+    state.organization.section = organizationSection;
+    state.organization.addFormOpen = false;
+  }
+  state.selectedProgramId = null;
+  state.selectedTemplateId = null;
+  state.navStack = [];
+  state.athletesExpanded = false;
+  state.weekSelectorOpen = false;
+  state.openWeekCalendarOnLoad = false;
+  collapseRailAfterNav();
+  renderAthleteListState();
+  renderTabs();
+  renderLibraryNav();
+  return Promise.resolve(loadActiveTab()).then(() => true);
+}
+
 function bindEvents() {
   els.athleteSearch?.addEventListener("input", renderAthleteList);
   els.athletesToggle?.addEventListener("click", toggleAthletesList);
@@ -387,33 +422,7 @@ function bindEvents() {
     });
   });
   els.libraryTabs.forEach((button) => {
-    button.addEventListener("click", () => {
-      if (!confirmLeaveTrainingLoad(button.dataset.libraryTab)) return;
-      if (state.activeTab !== button.dataset.libraryTab) pushAppHistory();
-      state.activeTab = button.dataset.libraryTab;
-      if (button.dataset.templateScope) {
-        state.programLibrarySection = "programs";
-        state.templateScope = button.dataset.templateScope;
-        if (state.templateScope !== "my_programs") state.templateFilters.lifecycle = "all";
-        ensureTemplateScopeIsVisible();
-      }
-      if (button.dataset.programLibrarySection) state.programLibrarySection = button.dataset.programLibrarySection;
-      if (button.dataset.organizationSection) {
-        state.organization.section = button.dataset.organizationSection;
-        state.organization.addFormOpen = false;
-      }
-      state.selectedProgramId = null;
-      state.selectedTemplateId = null;
-      state.navStack = [];
-      state.athletesExpanded = false;
-      state.weekSelectorOpen = false;
-      state.openWeekCalendarOnLoad = false;
-      collapseRailAfterNav();
-      renderAthleteListState();
-      renderTabs();
-      renderLibraryNav();
-      loadActiveTab();
-    });
+    button.addEventListener("click", () => { void openLibraryTab(button.dataset); });
   });
   els.athleteTabs.forEach((button) => {
     button.addEventListener("click", () => {
@@ -1067,7 +1076,7 @@ function handleContentInput(event) {
   if (event.target.matches("[data-coach-home-search]")) {
     coachHomePicker.query = event.target.value;
     const list = els.content.querySelector(".coach-home-picker-list");
-    if (list) list.innerHTML = renderCoachHomeAthleteRows(coachHomeRows, coachHomePicker);
+    if (list) list.innerHTML = coachHomePickerListHtml();
     return;
   }
   // The create-form's name input has no value= binding to state, so a full
@@ -2147,12 +2156,21 @@ async function loadCoachHome({ forceRefresh = false } = {}) {
   els.context.textContent = "Overview";
   els.title.textContent = "Home";
   els.toolbar.innerHTML = "";
+  // The calendar's dots, the chosen day and the exercise and program strips
+  // load beside the roster, each drawing its own card when it arrives.
+  if (state.currentUser?.activeWorkspace?.type !== "platform") void loadCoachHomeExtras({ onChange: refreshCoachHomeSection, forceRefresh });
   return loadCoachHomeData({ setLoading, renderCoachHome, forceRefresh });
 }
 
 function renderCoachHome({ rows, error }) {
   coachHomeRows = rows || [];
-  els.content.innerHTML = renderCoachHomeHtml({ rows: coachHomeRows, error, user: state.currentUser, picker: coachHomePicker });
+  // A redraw (the athlete list opening, a background refresh) keeps every
+  // strip where the coach left it and the focus where it was.
+  const view = captureCoachHomeView(els.content.querySelector(".coach-home"));
+  els.content.innerHTML = renderCoachHomeHtml({ rows: coachHomeRows, error, user: state.currentUser, picker: coachHomePicker, home: state.coachHome });
+  const home = els.content.querySelector(".coach-home");
+  restoreCoachHomeView(home, view);
+  bindCoachHomeCarousels(home, { onNearEnd: loadMoreCoachHomeOnNearEnd });
   const dialog = els.content.querySelector(".coach-home-picker");
   if (dialog) {
     dialog.showModal();
@@ -2164,6 +2182,23 @@ function renderCoachHome({ rows, error }) {
     });
     dialog.querySelector("input")?.focus();
   }
+}
+
+// One Home card drawn again once its data changed (coach-home-actions.js
+// renderCoachHomeSection), never while another screen is open.
+function refreshCoachHomeSection(section, appended) {
+  if (state.activeTab !== "coach-home") return;
+  renderCoachHomeSection(els.content, section, { rows: coachHomeRows, appended, onNearEnd: loadMoreCoachHomeOnNearEnd });
+}
+
+// After a failed page only its Try again loads it again, never a scroll.
+function loadMoreCoachHomeOnNearEnd(track) {
+  if (track === "exercises" && !state.coachHome.exercises.moreError) void loadMoreCoachHomeExercises({ onChange: refreshCoachHomeSection });
+}
+
+// The open athlete list's rows for the search field (coach-home.js).
+function coachHomePickerListHtml() {
+  return renderCoachHomeAthleteRows(coachHomePickerRows(coachHomeRows, coachHomePicker, state.coachHome), coachHomePicker);
 }
 
 function closeCoachHomePicker() {
@@ -2530,7 +2565,8 @@ async function handleContentClick(event) {
     return;
   }
   if (type === "coach-home-picker-open") {
-    coachHomePicker = { mode: ["load", "today"].includes(action.dataset.mode) ? action.dataset.mode : "plan", query: "" };
+    const mode = ["load", "day"].includes(action.dataset.mode) ? action.dataset.mode : "plan";
+    coachHomePicker = { mode, date: mode === "day" ? action.dataset.date || "" : "", query: "" };
     renderCoachHome({ rows: coachHomeRows, error: "" });
     return;
   }
@@ -2578,10 +2614,33 @@ async function handleContentClick(event) {
     renderAthleteList();
     renderTabs();
     renderLibraryNav();
-    if (action.dataset.mode === "today") await openWeeklyPlanOnDate(localDateIso());
+    if (action.dataset.mode === "day") await openWeeklyPlanOnDate(/^\d{4}-\d{2}-\d{2}$/.test(action.dataset.date || "") ? action.dataset.date : localDateIso());
     else await loadWeekly();
     return;
   }
+  // Home's library cards: the title opens the library itself, the menu's
+  // way; an exercise or a program opens in it.
+  if (type === "coach-home-open-library") {
+    await openLibraryTab(action.dataset.library === "programs" ? { libraryTab: "templates", templateScope: "my_programs" } : { libraryTab: "exercises" });
+    return;
+  }
+  if (type === "coach-home-open-exercise") {
+    const exercise = state.coachHome.exercises.items.find((entry) => String(entry.id) === action.dataset.exerciseId);
+    if (!exercise || !(await openLibraryTab({ libraryTab: "exercises" })) || state.activeTab !== "exercises") return;
+    // In the library's own list (with its order around it) when it is there,
+    // else on its own - the library may be filtered or not yet paged that far.
+    const itemId = (state.exerciseDetail.ids || []).find((id) => String(getItemById(id)?.id) === String(exercise.id)) || registerItem(exercise);
+    pushAppHistory();
+    await renderExerciseDetail(getItemById(itemId), itemId);
+    return;
+  }
+  if (type === "coach-home-open-program") {
+    const template = state.coachHome.programs.items.find((entry) => String(entry.plan_id) === action.dataset.templateId);
+    if (!template || !(await openLibraryTab({ libraryTab: "templates", templateScope: "my_programs" })) || state.activeTab !== "templates") return;
+    await openTemplatePreviewFromCoachProgram(template, () => renderTemplateLibrary(state.lastTemplates));
+    return;
+  }
+  if (handleCoachHomeAction(action, { root: els.content, onChange: refreshCoachHomeSection })) return;
   if (type === "athlete-home-open-today" || type === "athlete-home-open-day") {
     await openWeeklyPlanOnDate(action.dataset.date || localDateIso());
     return;
@@ -2921,6 +2980,7 @@ async function onWorkspaceChanged() {
   const contextKey = buildContextKey(currentUserWorkspaceContextParts());
   coachHomeRows = [];
   coachHomePicker = { mode: "", query: "" };
+  resetCoachHomeForWorkspaceChange();
   state.athletes = [];
   state.selectedAthleteId = null;
   renderAthleteList();
