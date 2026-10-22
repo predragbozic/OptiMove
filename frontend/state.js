@@ -29,6 +29,18 @@ export const emptyExerciseFilters = () => ({
   marked: false,
 });
 
+// Coach Home beyond its roster (coach-home-data.js): the calendar's chosen
+// day and visible month, that day's athletes, the month's dots, and the
+// exercise and program strips. `selected` and `cursor` are ISO dates, ""
+// meaning today, so a Home left open overnight moves to the new today.
+export const emptyCoachHomeState = () => ({
+  calendar: { selected: "", cursor: "", expanded: false },
+  day: { date: "", rows: [], loading: false, error: "" },
+  days: { from: "", to: "", counts: {}, error: "" },
+  exercises: { items: [], hasMore: false, loaded: false, loading: false, loadingMore: false, error: "", moreError: "" },
+  programs: { items: [], loaded: false, loading: false, error: "" },
+});
+
 export const emptyExerciseOptions = () => ({
   purposes: [],
   qualities: [],
@@ -1051,6 +1063,7 @@ export const createInitialState = () => ({
     addOpenKind: "",
   },
   coaches: { rows: [], selected: null, detail: null, editOpen: false, contactOpen: false, error: "" },
+  coachHome: emptyCoachHomeState(),
   notifications: { rows: [], unreadCount: 0, open: false, loading: false, error: "" },
   tests: emptyTestsState(),
   trainingLoad: emptyTrainingLoadState(),

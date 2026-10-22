@@ -7,6 +7,31 @@ import { currentAthleteRosterScope } from "../athleteRosterScope.js";
 
 const router = Router();
 
+// Kept local, the same small validators trainingLoad.js and tests.js keep in
+// their own route modules.
+const DATE_STRING_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+function isValidGregorianDateString(value) {
+  const match = DATE_STRING_PATTERN.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function addDaysIso(iso, days) {
+  const date = new Date(`${iso}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+// Home's calendar asks for one Monday-first month grid at a time: at most
+// six weeks.
+const TRAINING_DAYS_MAX_SPAN = 42;
+
 router.get("/", async (req, res, next) => {
   try {
     const filter = await currentAthleteRosterScope(req, "a");
@@ -51,9 +76,22 @@ router.get("/", async (req, res, next) => {
   }
 });
 
+// Home's day overview. Without `date` it is today by the server's own clock,
+// exactly as before; with `date` (Home's calendar) the same roster and the
+// same counts for that one day.
 router.get("/today", async (req, res, next) => {
   try {
+    const requestedDate = req.query?.date === undefined ? "" : String(req.query.date);
+    if (requestedDate && !isValidGregorianDateString(requestedDate)) {
+      return res.status(400).json({ error: "date must be a valid YYYY-MM-DD date." });
+    }
     const filter = await currentAthleteRosterScope(req, "a");
+    const params = [...filter.params];
+    let dateSql = "current_date";
+    if (requestedDate) {
+      params.push(requestedDate);
+      dateSql = `$${params.length}::date`;
+    }
     const result = await query(`
       select
         a.id as athlete_uuid,
@@ -74,14 +112,15 @@ router.get("/today", async (req, res, next) => {
           (array_agg(plan_id order by plan_id))[1] as plan_id,
           (array_agg(plan_name order by plan_id))[1] as plan_name
         from plans.v_weekly_plan_items
-        where date = current_date
+        where date = ${dateSql}
         group by athlete_uuid
       ) today on today.athlete_uuid = a.id
       where coalesce(a.is_active, true)
         ${filter.sql}
       order by (today.session_count is null or today.session_count = 0) asc, athlete_name
-    `, filter.params);
+    `, params);
     res.json({
+      ...(requestedDate ? { date: requestedDate } : {}),
       rows: result.rows.map((row) => ({
         athleteUuid: row.athlete_uuid,
         athleteId: row.athlete_source_external_id || row.athlete_id,
@@ -93,6 +132,42 @@ router.get("/today", async (req, res, next) => {
         itemCount: Number(row.item_count || 0),
         hasTrainingToday: Number(row.session_count || 0) > 0,
       })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// The dots of Home's calendar: per day of [from, to], how many athletes of
+// the active workspace's roster have at least one weekly-plan session that
+// day. The same roster scope and the same session rule as /today, read only.
+router.get("/training-days", async (req, res, next) => {
+  try {
+    const from = String(req.query?.from || "");
+    const to = String(req.query?.to || "");
+    if (!isValidGregorianDateString(from) || !isValidGregorianDateString(to)) {
+      return res.status(400).json({ error: "from and to must be valid YYYY-MM-DD dates." });
+    }
+    if (to < from || addDaysIso(from, TRAINING_DAYS_MAX_SPAN - 1) < to) {
+      return res.status(400).json({ error: `to must not be before from, and the range may cover at most ${TRAINING_DAYS_MAX_SPAN} days.` });
+    }
+    const filter = await currentAthleteRosterScope(req, "a");
+    const params = [...filter.params, from, to];
+    const result = await query(`
+      select to_char(i.date, 'YYYY-MM-DD') as day, count(distinct a.id) as athlete_count
+      from plans.v_weekly_plan_items i
+      join public.athletes a on a.id = i.athlete_uuid
+      where i.date between $${params.length - 1}::date and $${params.length}::date
+        and i.plan_session_id is not null
+        and coalesce(a.is_active, true)
+        ${filter.sql}
+      group by i.date
+      order by i.date
+    `, params);
+    res.json({
+      from,
+      to,
+      days: result.rows.map((row) => ({ date: row.day, athleteCount: Number(row.athlete_count || 0) })),
     });
   } catch (error) {
     next(error);

@@ -10275,7 +10275,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   display: block;
 }
 
-/* Coach home: "today across my athletes" overview */
+/* Coach home: the coach's cards (Training plan, Training load, the day with
+   its calendar, Exercise Library, Program Library) */
 .coach-home {
   display: flex;
   flex-direction: column;
@@ -10286,6 +10287,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   width: 38px;
   height: 38px;
   border-radius: 50%;
+  /* The circle while a lazily loaded picture is still on its way. */
+  background: var(--surface-soft, #f7f8fa);
   object-fit: cover;
   object-position: top;
   flex: 0 0 auto;
@@ -10302,20 +10305,91 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 
 /* Coach home workflows, states, the admin workspace list and the athlete picker. */
 .coach-home-header, .coach-home-picker > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.coach-home-header h2, .coach-home-today h3, .coach-home-picker h3 { margin: 0; font-size: 20px; overflow-wrap: anywhere; }
-.coach-home-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-block: 1px solid var(--line); margin: 24px 0; }
-.coach-home-actions > button { display: flex; align-items: center; gap: 14px; min-height: 104px; padding: 24px; border: 0; background: transparent; font-size: 18px; font-weight: 650; text-align: left; color: var(--text); }
-.coach-home-actions > button + button { border-left: 1px solid var(--line); }
-.coach-home-actions > button:hover, .coach-home-workspace:hover, .coach-home-athlete-row:hover { background: var(--accent-soft); }
-.coach-home-actions svg { width: 28px; height: 28px; flex: 0 0 28px; fill: none; stroke: currentColor; stroke-width: 1.7; }
-.coach-home-actions > button:first-child { color: var(--accent); }
-.coach-home-actions > button:last-child { color: #934c65; }
-.coach-home-today { display: flex; align-items: center; gap: 16px; width: 100%; min-height: 64px; border: 0; border-block: 1px solid var(--line); padding: 12px 4px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
-.coach-home-today-label { display: grid; gap: 4px; flex: 1; min-width: 0; }
-.coach-home-today-label strong { font-size: 18px; overflow-wrap: anywhere; }
-.coach-home-today-label span { color: var(--muted); font-size: 14px; }
-.coach-home-today svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
-.coach-home-today:hover { background: var(--accent-soft); }
+.coach-home-header h2, .coach-home-picker h3 { margin: 0; font-size: 20px; overflow-wrap: anywhere; }
+.coach-home-workspace:hover, .coach-home-athlete-row:hover { background: var(--accent-soft); }
+.coach-home-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.coach-home-grid > .coach-home-state, .coach-home-grid > .coach-home-day { grid-column: 1 / -1; }
+.coach-home-panel { display: grid; gap: 12px; min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.coach-home-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.coach-home-panel-title { display: flex; align-items: center; gap: 10px; min-width: 0; margin: 0; font-size: 17px; font-weight: 750; overflow-wrap: anywhere; }
+.coach-home-panel-icon { width: 24px; height: 24px; flex: 0 0 24px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; color: var(--accent); }
+.coach-home-panel-load .coach-home-panel-icon { color: #934c65; }
+.coach-home-panel-link { display: inline-flex; align-items: center; gap: 10px; min-width: 0; min-height: 44px; margin-left: -8px; padding: 0 8px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.coach-home-panel-link:hover { background: var(--accent-soft); }
+.coach-home-panel-link .coach-home-workspace-arrow { flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.coach-home-search-button, .coach-home-inline-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 0 14px; flex-shrink: 0; }
+.coach-home-search-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+/* A strip of cards paged by its arrows (and a swipe on a touch screen); the
+   arrows are dimmed at either end and hidden when every card fits
+   (coach-home-actions.js syncCoachHomeCarousel). Cards keep a fixed width, so
+   the next one peeks in at the edge. */
+.coach-home-carousel { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 4px; }
+.coach-home-carousel.is-static { grid-template-columns: minmax(0, 1fr); }
+.coach-home-carousel.is-static .coach-home-carousel-arrow { display: none; }
+.coach-home-carousel-arrow { display: grid; place-items: center; width: 44px; height: 44px; min-height: 44px; padding: 0; border-radius: 50%; }
+.coach-home-carousel-arrow svg, .coach-home-cal-step svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.coach-home-carousel-arrow[aria-disabled="true"] { opacity: .35; cursor: default; }
+.coach-home-track { display: flex; gap: 8px; min-width: 0; margin: 0; padding: 4px; list-style: none; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x mandatory; scroll-padding-inline: 4px; scrollbar-width: none; }
+.coach-home-track::-webkit-scrollbar { display: none; }
+.coach-home-track > li { flex: 0 0 84px; min-width: 0; scroll-snap-align: start; }
+.coach-home-library .coach-home-track > li { flex-basis: 136px; }
+.coach-home-strip-item { display: grid; justify-items: center; align-content: start; gap: 6px; width: 100%; min-height: 44px; padding: 6px 4px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text); font: inherit; text-align: center; cursor: pointer; }
+.coach-home-strip-item:hover { background: var(--accent-soft); }
+.coach-home-strip-item:focus-visible, .coach-home-cal-day:focus-visible, .coach-home-panel-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.coach-home-strip-avatar { width: 56px; height: 56px; font-size: 15px; }
+.coach-home-strip-label { display: -webkit-box; max-width: 100%; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 13px; font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
+.coach-home-strip-card { justify-items: stretch; padding: 4px; text-align: left; }
+.coach-home-strip-media { display: block; aspect-ratio: 4 / 3; overflow: hidden; border-radius: 6px; background: var(--surface-soft); }
+.coach-home-strip-thumb { display: block; width: 100%; height: 100%; object-fit: cover; }
+.coach-home-strip-thumb.exercise-thumb-fallback, .coach-home-strip-initials { display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-size: 20px; font-weight: 800; }
+.coach-home-strip-more { display: grid; place-items: center; min-height: 100px; }
+.coach-home-library-note, .coach-home-day-note { display: grid; gap: 8px; justify-items: start; margin: 0; }
+.coach-home-library-note p, .coach-home-day-note p { margin: 0; overflow-wrap: anywhere; }
+/* The day card: the calendar beside the chosen day's athletes. */
+.coach-home-day-heading { display: grid; gap: 2px; min-width: 0; }
+.coach-home-day-date { margin-left: 4px; color: var(--muted); font-size: 15px; font-weight: 600; }
+.coach-home-day-count { margin: 0; color: var(--muted); font-size: 14px; }
+.coach-home-day-body { display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); gap: 24px; align-items: start; }
+/* The day's athletes: on a computer a list beside the calendar (the first
+   six, "Show all" for the rest), on a phone a strip under it (below). */
+.coach-home-day-list .coach-home-carousel { grid-template-columns: minmax(0, 1fr); }
+.coach-home-day-list .coach-home-carousel-arrow { display: none; }
+.coach-home-day-list .coach-home-track { display: block; overflow: visible; padding: 0; border-top: 1px solid var(--line); scroll-snap-type: none; }
+.coach-home-day-list .coach-home-track > li { border-bottom: 1px solid var(--line); }
+.coach-home-day-list .coach-home-track > li.is-beyond-list { display: none; }
+.coach-home-day-athlete { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 6px 4px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.coach-home-day-athlete:hover { background: var(--accent-soft); }
+.coach-home-day-athlete:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.coach-home-day-athlete-text { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.coach-home-day-athlete-text small { color: var(--muted); }
+.coach-home-cal-note { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.coach-home-cal-note p { margin: 0; font-size: 14px; }
+.coach-home-day-list { display: grid; gap: 10px; justify-items: stretch; min-width: 0; }
+.coach-home-day-list > .coach-home-inline-button { justify-self: start; }
+.coach-home-cal { display: grid; gap: 4px; min-width: 0; }
+.coach-home-cal-head { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; }
+.coach-home-cal-month { font-size: 15px; text-align: center; }
+.coach-home-cal-step { display: grid; place-items: center; width: 44px; height: 44px; min-height: 44px; padding: 0; border-color: transparent; background: transparent; }
+.coach-home-cal-step.is-week, .coach-home-cal-toggle { display: none; }
+.coach-home-cal-weekdays, .coach-home-cal-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; }
+.coach-home-cal-weekdays span { color: var(--muted); font-size: 12px; font-weight: 700; text-align: center; }
+.coach-home-cal-grid { display: grid; gap: 2px; }
+.coach-home-cal-day { position: relative; display: grid; place-items: center; min-width: 0; height: 40px; padding: 0; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--text); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.coach-home-cal-day:hover { background: var(--accent-soft); }
+.coach-home-cal-day.is-outside { color: var(--muted); font-weight: 500; }
+.coach-home-cal-day.is-today { border-color: var(--accent); }
+.coach-home-cal-day.is-selected { border-color: var(--accent); background: var(--accent); color: #fff; }
+.coach-home-cal-day.has-training::after { content: ""; position: absolute; bottom: 4px; left: 50%; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: var(--accent); }
+.coach-home-cal-day.is-selected.has-training::after { background: #fff; }
+/* Tapped again and again: never read as a double-tap zoom. */
+.coach-home-carousel-arrow, .coach-home-cal-step, .coach-home-cal-day, .coach-home-cal-toggle { touch-action: manipulation; }
+/* .plain-button draws only a faint shadow for the keyboard; Home's own
+   buttons get the outline the cards and days have. */
+.coach-home-carousel-arrow:focus-visible, .coach-home-cal-step:focus-visible, .coach-home-cal-toggle:focus-visible, .coach-home-search-button:focus-visible, .coach-home-inline-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* A touch screen of any width (a tablet, a phone on its side) gets 44 px days. */
+@media (pointer: coarse) {
+  .coach-home-cal-day { height: 44px; }
+}
 .coach-home-state { display: grid; gap: 10px; justify-items: start; padding: 20px; border: 1px dashed var(--line-strong); border-radius: var(--radius); background: var(--surface); }
 .coach-home-state p { margin: 0; overflow-wrap: anywhere; }
 .coach-home-state .muted { font-size: 14px; }
@@ -10344,8 +10418,40 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .coach-home-athlete-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 68px; border: 0; border-bottom: 1px solid var(--line); padding: 10px 4px; background: transparent; color: var(--text); text-align: left; }
 .coach-home-athlete-row > span:last-child { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
 .coach-home-athlete-row small { color: var(--muted); }
+/* One card per row below the width where two cards side by side still show
+   a few athletes each (the rail's own 900 px line). */
+@media (max-width: 900px) {
+  .coach-home-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+}
 @media (max-width: 600px) {
-  .coach-home-actions > button { padding: 18px 12px; font-size: 16px; gap: 10px; min-height: 92px; }
+  .coach-home-day-body { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+}
+/* Phones: the calendar shows the chosen week, the month one tap away; every
+   control at least 44 px. */
+@media (max-width: 600px) {
+  .coach-home-panel { padding: 12px; }
+  .coach-home-carousel { gap: 2px; }
+  .coach-home-track > li { flex-basis: 76px; }
+  .coach-home-library .coach-home-track > li { flex-basis: 120px; }
+  .coach-home-strip-avatar { width: 52px; height: 52px; }
+  .coach-home-cal-weekdays, .coach-home-cal-week { gap: 0; }
+  .coach-home-cal-day { height: 44px; }
+  .coach-home-cal:not(.is-expanded) .coach-home-cal-week:not([data-cursor-week]) { display: none; }
+  .coach-home-cal:not(.is-expanded) .coach-home-cal-step.is-month { display: none; }
+  .coach-home-cal:not(.is-expanded) .coach-home-cal-step.is-week { display: grid; }
+  .coach-home-cal-toggle { display: inline-flex; align-items: center; justify-self: center; min-height: 44px; }
+  .coach-home-day-list .coach-home-carousel { grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 2px; }
+  .coach-home-day-list .coach-home-carousel.is-static { grid-template-columns: minmax(0, 1fr); }
+  .coach-home-day-list .coach-home-carousel-arrow { display: grid; }
+  .coach-home-day-list .coach-home-carousel.is-static .coach-home-carousel-arrow { display: none; }
+  .coach-home-day-list .coach-home-track { display: flex; overflow-x: auto; padding: 4px; border-top: 0; scroll-snap-type: x mandatory; }
+  .coach-home-day-list .coach-home-track > li, .coach-home-day-list .coach-home-track > li.is-beyond-list { display: block; flex-basis: 76px; border-bottom: 0; }
+  .coach-home-day-athlete { flex-direction: column; justify-content: flex-start; gap: 6px; padding: 6px 4px; text-align: center; }
+  .coach-home-day-athlete .coach-home-avatar { width: 52px; height: 52px; font-size: 15px; }
+  .coach-home-day-athlete-text { justify-items: center; }
+  .coach-home-day-athlete-text strong { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 13px; line-height: 1.3; }
+  .coach-home-day-athlete-text small { font-size: 12px; }
+  .coach-home-day-show-all { display: none; }
   .coach-home-picker { width: 100vw; max-width: none; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; border-radius: 0; padding: 20px 16px; }
   .coach-home-picker-list { max-height: none; }
 }
