@@ -39,7 +39,8 @@ function database(source) {
     assert.ok(match, sql);
     const columns = match[2].split(", ");
     assert.equal(params.length % columns.length, 0);
-    assert.ok(params.length <= 17000, "batch must stay below PostgreSQL parameter limits");
+    // Media snapshot columns raised a 500-row item batch above the old 17k fixture cap.
+    assert.ok(params.length <= 20000, "batch must stay conservatively below PostgreSQL parameter limits");
     const rows = [];
     for (let offset = 0; offset < params.length; offset += columns.length) {
       const row = Object.fromEntries(columns.map((column, i) => [column, params[offset + i]]));

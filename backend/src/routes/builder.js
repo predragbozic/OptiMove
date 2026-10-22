@@ -701,6 +701,9 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
 
+    // Source must remain stable until the copied grant upsert finishes.
+    await lockCopyTargetPlan(client,source.id);
+
     if (intent === "assign") {
       let claimed = false;
       let replay = null;
@@ -979,6 +982,7 @@ router.post("/blocks/:blockId/copy", withBatchReuseGuard(async (req, res, next) 
     client = await pool.connect();
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
+    await lockCopyTargetPlan(client,block.plan.id,{dayId:block.id});
     const created = await client.query(
       `insert into plans.plan_days (plan_id, block_index, block_order, block_name, block_type, day_note)
        values ($1, $2, $3, $4, $5, $6) returning id`,
@@ -1046,6 +1050,7 @@ async function respondCopyIntoDay(req, res, next, source, target, { allowCrossPl
 
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
+    await lockCopyTargetPlan(client,target.plan.id,{dayId:target.id});
     await deleteDayContentWithClient(client, target.id);
     await copyDaySessions(client, source.id, target.id);
     await assertExerciseReuseAllowed(client, req.user.id, { dayIds: [target.id], guard: req.exerciseReuseGuard });
@@ -1213,6 +1218,7 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", withBatchReuseGuard(a
     );
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
+    await lockCopyTargetPlan(client,target.plan.id,{dayId:target.id});
     const created = await client.query(
       // session_time/rpe_enabled/training_load_enabled: content
       // properties, always copied unconditionally (session_time was
@@ -1627,7 +1633,9 @@ router.post("/nodes/:nodeId/custom-exercise", withBatchReuseGuard(async (req, re
     client=await pool.connect();const runQuery=client.query.bind(client);
     await runQuery('begin isolation level read committed');
     await runQuery("set local statement_timeout='10s'");await lockExerciseReuse(client,req.exerciseReuseGuard);
-    // Recheck and lock the plan/node inside the same transaction as both inserts.
+    // Match DELETE/apply: plan before child node, exercise and media locks.
+    const lockedPlan=await runQuery('select id from plans.plans where id=$1 for no key update',[node.plan.id]);
+    if(!lockedPlan.rowCount)throw Object.assign(new Error('Program not found'),{status:404});
     const target=await runQuery('select id from plans.plan_nodes where id=$1 for update',[node.id]);
     if(!target.rowCount)throw Object.assign(new Error('Program node not found'),{status:404});
     if(!await canAccessPlan(runQuery,req,node.plan.id,{editable:true}))throw Object.assign(new Error('Forbidden'),{status:403});
@@ -1687,6 +1695,7 @@ router.post("/nodes/:nodeId/copy", withBatchReuseGuard(async (req, res, next) =>
     client = await pool.connect();
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
+    await lockCopyTargetPlan(client,targetSession.plan.id,{sessionId:targetSession.id});
     const newNodeId = await copyNodeTree(source.id, targetSession.id, targetParentId, client.query.bind(client));
     await assertExerciseReuseAllowed(client, req.user.id, { nodeIds: [newNodeId], guard: req.exerciseReuseGuard });
     await client.query("commit");
@@ -2765,6 +2774,15 @@ async function getEditablePlan(req, planId) {
        )`, [planId, req.user.id, canAccessAllAthletes(req)],
   );
   return result.rows[0] || null;
+}
+
+// Copy paths must lock the target plan before child FK/row locks (same order as DELETE).
+async function lockCopyTargetPlan(client,planId,{dayId=null,sessionId=null}={}) {
+  const plan=await client.query('select id from plans.plans where id=$1 for no key update',[planId]);
+  if(!plan.rowCount)throw Object.assign(new Error('Program not found'),{status:404});
+  const child=dayId?await client.query('select id from plans.plan_days where id=$1 and plan_id=$2',[dayId,planId]):
+    sessionId?await client.query('select s.id from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id where s.id=$1 and d.plan_id=$2',[sessionId,planId]):null;
+  if(child&&!child.rowCount)throw Object.assign(new Error('Copy target not found'),{status:404});
 }
 
 async function getCopySource(req, planId) {
