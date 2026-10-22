@@ -842,7 +842,7 @@ merged; contract `docs/ai/source-connections-f3c2-contract.md` section 2.10):
   `Authorization` header. `401` is `source_auth_rejected`, `403` is `source_access_refused` (on
   the bound team's own read both `403` and `404` are `source_team_not_visible`; what `rest_v1`
   really answers for a team the account cannot see is part of the next probe).
-- No retry by default: one attempt per read; a caller may ask for at most three, and `429`, `401`, `403`, `404` and a redirect are never repeated. Timeout and retry delay are bounded. An answer is at
+- No retry by default: one attempt per read; a caller may ask for at most three, and `401`, `403`, `404` and a redirect are never repeated. A `429` is never repeated either, except by an import check (the `rateLimit` option, owner decision 2026-10-22): once per check, only after a whole-seconds `Retry-After` of at most 60 s, and any other `429` stops the check with nothing more sent (runbook section "When GPEXE asks to slow down (429)"). Timeout and retry delay are bounded. An answer is at
   most 5 MiB (5 242 880 bytes) **as received**: the body is read from its stream chunk by chunk,
   the bytes are counted (after decompression, so a small compressed answer that unpacks large is
   stopped too), and the stream is cancelled when the count passes the limit; `Content-Length` is

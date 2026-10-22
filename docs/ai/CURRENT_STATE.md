@@ -1905,6 +1905,25 @@ Technical details.
   value or error text. No change of requests, order, heartbeat frequency, results, database, route or UI.
   Any optimization (fewer heartbeat writes, pipelining, concurrency) waits for one owner-run check and its
   line.
+- **GPEXE's rate limit (429) during a check** (owner order 2026-10-22; branch `fix/gpexe-check-rate-limit` from
+  `12beb86`; **not merged, not deployed**; backend, tests and docs, no migration, no frontend change).
+  - **Production, 2026-10-22 (as reported by the owner, sanitized):** two checks of First team failed with
+    `source_unavailable` "The source server asked to slow down." (HTTP 429): the default 14 days at 10:03,
+    and 18.10.2026 - 19.10.2026 at 17:11 after one session. Nothing was published; the switch stays off.
+  - **As built:** an import check (only; Connect, Test, Bind and the identity load are unchanged) repeats a
+    rate-limited request **at most once per check**, only after a whole-seconds `Retry-After` of at most
+    60 s; it waits in ticks of at most 10 s with a heartbeat after each, and before the repeat requires the
+    run still running and the binding facts unchanged. Any other 429 stops the check at once with nothing
+    more sent; the administrator reads a closed-grammar line after " Diagnostic: " (`op=rate_limit; ...`).
+    Runbook section "When GPEXE asks to slow down (429)"; `backend/src/gpexeCheckRateLimit.js`; tests
+    `gpexe-rest-v1-rate-limit.test.mjs` (unit) and `gpexe-check-rate-limit.test.mjs` (disposable), with
+    mutation evidence. External review (trigger 4, retry) before any merge.
+  - **The 17:11 check's timing line (owner, sanitized):** 455 requests in 4 min 51 s, the 429 on the last;
+    193 athlete rows for 22 athletes - server3 lists one row per athlete for the session and one per drill.
+  - **Request count (analysis only, nothing implemented):** about 200 - 330 requests per production session,
+    mostly the row and `/more/` reads; `docs/ai/gpexe-check-request-count-analysis.md` lists the reduction
+    options, each an owner decision (the largest safe one, rows from the athlete list, needs one owner-run
+    read-only comparison first).
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2611,6 +2630,23 @@ pre-existing; pass/fail counts don't belong in this file
   `3ef6033`.
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
+
+- **The Imports screen stops following a running check after one failed status poll** (found 2026-10-22,
+  frontend only, small; not scheduled). `pollGpexeCheck` (`frontend/gpexe-import-data.js`) polls every 2 s with no
+  time limit, but one failed poll (a 503 `database_busy`, a 502 while Render restarts, a lost answer) sets
+  `checkError`, drops the check from view and re-enables *Find new sessions*; the screen then reads "Finding new
+  sessions could not start. Try again in a moment." although the check started and may still run, and a second
+  press answers `check_already_running`. Reproduced on the real frontend modules with a fake API (2026-10-22). Fix:
+  a failed poll keeps the check as running, says the status could not be read, retries the poll (bounded backoff),
+  and never says "could not start"; with a frontend test.
+- **A cooldown per GPEXE connection after a rate-limit stop** (owner, 2026-10-22, at the review of the 429 PR; plan
+  first, not built): after a check stops on a 429, a new check of any team bound to the same connection could be
+  refused for the valid `Retry-After`, or 15 minutes when there is none. The plan and its impact on the 429 PR are
+  for the owner to approve before any code.
+- **A read-only check of the nine athlete-row fields in server3's athlete list** (owner, 2026-10-22; plan first,
+  no GPEXE request until the owner approves): whether `rest/v1/athlete_session/?teamsession=` rows carry the nine
+  projected fields with the same values as the per-row read - the precondition of the largest request saving in
+  `docs/ai/gpexe-check-request-count-analysis.md`.
 
 - **Separate migration and runtime database roles** (owner, 2026-10-13, at the v35 decisions; an
   infrastructure hardening task, not blocking v35): today the migrations and the server use the same

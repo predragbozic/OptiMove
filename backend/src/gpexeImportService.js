@@ -952,7 +952,9 @@ export async function startCheck(teamId, { userId, window, wait = false, adminVi
   let source = null;
   if (facts.path === PATH_SOURCE_CONNECTION) {
     try {
-      source = openImportSource(facts, { meter });
+      // A check honours the source's rate limit once (Retry-After within the
+      // resolver's maximum); an identity load never waits.
+      source = openImportSource(facts, { meter, rateLimitRetry: true });
       client = importClientFor(source, { meter });
     } catch (error) {
       const code = error instanceof SourceImportResolveError ? error.code : "internal_error";
@@ -1043,6 +1045,9 @@ async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpex
   // slow source never makes a live check look abandoned. This ping never
   // throws: the throwing alive() calls below decide whether the run goes on.
   if (source) source.setRequestProgress(async () => { try { await beat(); } catch { /* alive() decides */ } });
+  // Before the one repeat of a rate-limited request: the throwing alive(), so a
+  // check closed elsewhere (abandoned) during the wait sends nothing more.
+  if (source) source.setBeforeRateLimitRetry(alive);
   try {
     // Every check is also a retention run, so expired snapshots go even when
     // no scheduler ran; a failure here must not stop the check.
