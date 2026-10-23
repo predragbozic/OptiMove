@@ -800,7 +800,8 @@ an athlete row (`BUNDLE_FIELDS.athleteSession`: `id, athlete, track, teamsession
 total_time, total_distance, max_v`) with the same values as `rest/v1/athlete_session/<id>/`? If it
 does, a check could take the rows from the list instead of reading each one. That would save about 42 %
 of a check's requests (the request-count analysis of Draft PR #209). The full plan and the decision
-rules are `docs/ai/gpexe-athlete-list-nine-fields-plan.md` (added by that PR).
+rules are `docs/ai/gpexe-athlete-list-nine-fields-plan.md`, added by Draft PR #209 (see *Integration with PR
+#209* below).
 
 **The run** (`--mode athlete-list`, owner-run only, same terminal rules as section 4):
 - **Requests:** one exchange in the host's confirmed form, then at most 11 GET requests for Team ID 980
@@ -817,15 +818,38 @@ rules are `docs/ai/gpexe-athlete-list-nine-fields-plan.md` (added by that PR).
 - **Printed per field:** presence, kind words, equality and whether the list value is one the adapter's
   projection accepts. Per row: the differing field names (from the closed list of nine). Per session:
   counts.
-- **Never printed:** an id, a value, a name, a date or a key outside the closed list.
+- **Never printed:** an id, a value, a name, a date or an answer key outside the closed list.
+- **Known limit (security review 2026-10-23, LOW, recorded and not changed):** each request entry keeps
+  the probe's shared description, as the full and drill runs do. That means the header names and up to
+  80 characters of `content-type`, `allow` and `x-gpexe-version`. The identity run's header filter is the
+  fix, if the owner wants it.
 - **Verdict:**
-  - `same` only for two parents, every compared row equal and every list value projectable;
-  - `differs` when a compared row differs;
-  - otherwise `not_observed` with its reason.
+  - `same` only for a run that ended as built, with two parents, every compared row equal and every list
+    value projectable;
+  - `differs` only for a run that ended as built in which a compared row differs (also with one parent);
+  - otherwise `not_observed` with its reason. A run that stopped (a 429, a refused read, an isolation
+    stop) is `not_observed` with its stop code even after a difference was seen; the per-field facts are
+    still printed.
 
-**Status: not run.** Fake-fetch contract tests only (`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`,
-AL1–AL15). The terminal commands are handed over only after the owner's external review of the tool. The
-verdict is recorded here; the reduction itself is a separate PR on the owner's order.
+**Status: not run against GPEXE. The nine fields are not confirmed compatible.**
+- **Confirmed by the fake-fetch contract tests only** (`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`,
+  AL1–AL15): the tool's own behaviour, that is its requests, pace, stops, report and verdict rules.
+- **Not confirmed:** anything about server3's answers. That covers whether its list rows carry the nine
+  fields, with which values, and whether the session list holds two parents with drills.
+- Only the owner-run read, on a separate owner order after the external review of the tool, can give a
+  verdict. Until it returns `same`, taking a check's rows from the list stays unproven. The terminal
+  commands are handed over only after that review. The verdict is recorded here; the reduction itself is a
+  separate PR on the owner's order.
+
+**Integration with PR #209.**
+- **Recommended order:** merge Draft PR #209 first, then this PR. After #209 merges, check this PR against
+  the new `main` (one look at the reference above and a run of the probe's test file).
+- **The dependency is documentation only:**
+  - the tool does not import or need anything from #209 (it reads `BUNDLE_FIELDS`, `readBounded` and
+    `teamScopedPath`, which are already on `main`);
+  - its tests do not depend on #209.
+
+  If this PR were merged first, only the plan reference above would point to a file that arrives with #209.
 
 ## 5. Rules the adapter keeps, whatever is added later
 
