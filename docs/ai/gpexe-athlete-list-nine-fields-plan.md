@@ -1,9 +1,11 @@
 # Plan: a read-only check of the nine athlete-row fields in server3's athlete list
 
-Status: **plan; no GPEXE request has been sent.** Owner orders 2026-10-22 (plan) and 2026-10-23 (prepare the tool
-and test it against a fake server only). The owner-run read happens only on a separate owner order, after the
-tool's review. The internal `code-reviewer` and `security-reviewer` checked the plan and the prepared tool on
-2026-10-23; their corrections are in this text and in the tool.
+Status: **plan; the tool is implemented and tested against a fake server only, in Draft PR #210 (not merged). No
+GPEXE request has been sent. The real read is neither approved nor run, so the nine fields are not confirmed
+compatible.** Owner orders 2026-10-22 (plan) and 2026-10-23 (prepare the tool and test it against a fake server
+only; commit it as a separate Draft PR). The owner-run read happens only on a separate owner order, after the
+owner's external review of the tool. The internal `code-reviewer` and `security-reviewer` checked the plan and
+the tool on 2026-10-23; their corrections are in this text and in the tool.
 
 Last verified against commit: `12beb86` (`origin/main`). Sources: `backend/src/gpexeRestV1Adapter.js`,
 `backend/scripts/gpexe-rest-v1-capability-probe.mjs`, `docs/ai/gpexe-check-request-count-analysis.md`.
@@ -135,15 +137,20 @@ mutation evidence for its guards. They cover:
 - an unreadable total, on a read and on the exchange;
 - a difference with one parent.
 
-They live on a separate branch and enter the repository only through step 1 below, on the owner's order. Until
-then this section is the specification.
+They are in Draft PR #210 (`feature/gpexe-athlete-list-probe`), with section 4c of
+`docs/ai/gpexe-rest-v1-compatibility.md`, and are not merged. What they confirm is the tool's own behaviour
+against a fake server. They confirm nothing about server3's answers.
 
 ## 4. Order of work (each step on the owner's order)
 
-1. **The tool's PR**, on its own branch: the mode, the tests and section 4 of
-   `docs/ai/gpexe-rest-v1-compatibility.md`. No change to the adapter, routes, database or screens.
-2. **Reviews:** `code-reviewer` and `security-reviewer` (the tool sends a credential), then the owner's external
-   review.
+1. **The tool's PR:** done as Draft PR #210 (the mode, the tests and section 4c of
+   `docs/ai/gpexe-rest-v1-compatibility.md`). No change to the adapter, routes, database or screens.
+2. **Reviews:** `code-reviewer` and `security-reviewer` are done (READY WITH NON-BLOCKING NOTES). The owner's
+   external review is open.
+   - **Recommended integration order:** this plan's PR #209 first, then #210, and #210 checked against `main`
+     after #209 merges.
+   - **The dependency is documentation only:** #210 needs no code from #209; only its reference to this plan
+     resolves once #209 is merged.
 3. **The PowerShell commands are handed over only after that review.** Before the run:
    - no check, identity load, Connect, Reconnect, Test or Bind is running;
    - the last 429 was at least 60 minutes earlier, or its `Retry-After` has passed;

@@ -3,7 +3,8 @@
 Status: **plan only.** No code, no migration and no GPEXE request. Owner order 2026-10-22 ("plan first, with
 its impact on the 429 PR"). The final operation matrix follows the owner's order of 2026-10-23. The plan was
 checked by the internal `code-reviewer`, `db-reviewer` and `security-reviewer` on 2026-10-23, and their
-corrections are in this text.
+corrections are in this text. The final code and security reviews of the pushed commit found it accurate against
+`adaa0eb`. No decision of section 3 is taken yet, and nothing of the pause is built.
 
 Last verified against commit: `adaa0eb` (the 429 PR, `fix/gpexe-check-rate-limit`, on `origin/main` `12beb86`).
 Paths below are under `backend/src/`.
