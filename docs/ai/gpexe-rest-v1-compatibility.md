@@ -826,25 +826,26 @@ rules are `docs/ai/gpexe-athlete-list-nine-fields-plan.md`, added by Draft PR #2
   the probe's shared description, as the full and drill runs do. That means the header names and up to
   80 characters of `content-type`, `allow` and `x-gpexe-version`. The identity run's header filter is the
   fix, if the owner wants it.
-- **Verdict:**
-  - `same` only for a run that ended as built, with two different parents compared, every compared row
-    equal and every list value projectable. A final check counts the different parents again from the
-    ids their own reads confirmed, not from the number of sessions compared (`athleteListOutcome`);
-  - `insufficient` for a run that ended as built with fewer than two different parents
-    (`fewer_distinct_parents_than_planned`), also when a compared row differed: never `same`. The
-    differing field is still named per row (owner order 2026-10-23);
-  - `differs` only for a run that ended as built, with two different parents, in which a compared row
-    differs;
-  - otherwise `not_observed` with its reason. A run that stopped (a 429, a refused read, an isolation
-    stop) is `not_observed` with its stop code even after a difference was seen; the per-field facts are
-    still printed.
-  - The plan's section 3 (in Draft PR #209) still names the earlier outcome for one parent: `not_observed`
-    with `fewer_parents_than_planned`, and `differs` for a difference. This section and the code win; the
-    plan is aligned after #209 merges, since #209 is not changed now (owner order 2026-10-23).
+- **Verdict** (`athleteListOutcome`, owner order 2026-10-23):
+  - `same`: two different parents compared, every compared row equal and every list value projectable.
+    A final check counts the different parents again from the ids their own reads confirmed, not from
+    the number of sessions compared. `same` is never possible without two different parents.
+  - `differs`: any compared row differs. This holds even with one parent, and even when the run stopped
+    afterwards (its stop code stays in `stoppedBy`). A row is compared only after its own read confirmed
+    its id and session, so the difference is confirmed. The differing field is named per row.
+  - `insufficient`, with its reason, for everything else when no confirmed difference was seen:
+    - a stopped run (the stop code: a 429, a refused read, an isolation stop);
+    - nothing compared (`nothing_compared`);
+    - one parent, or fewer than two different parents (`fewer_distinct_parents_than_planned`);
+    - a list value the adapter would not accept (`value_shape_not_projectable`).
+  - The per-field facts are printed in every case.
+  - The plan's section 3 (in PR #209) still names the earlier words: `not_observed` for an incomplete run,
+    and `differs` only for a run that ended as built. This section and the code win. The plan is aligned
+    after #209 merges, since #209 is not changed now (owner order 2026-10-23).
 
 **Status: not run against GPEXE. The nine fields are not confirmed compatible.**
 - **Confirmed by the fake-fetch contract tests only** (`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`,
-  AL1–AL20): the tool's own behaviour, that is its requests, pace, stops, report and verdict rules.
+  AL1–AL21): the tool's own behaviour, that is its requests, pace, stops, report and verdict rules.
 - **Not confirmed:** anything about server3's answers. That covers whether its list rows carry the nine
   fields, with which values, and whether the session list holds two parents with drills.
 - Only the owner-run read, on a separate owner order after the external review of the tool, can give a

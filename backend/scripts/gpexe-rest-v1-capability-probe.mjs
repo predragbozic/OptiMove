@@ -244,21 +244,25 @@ export const ATHLETE_LIST_MODE_MAX_REQUESTS = 1 + 1 + ATHLETE_LIST_SESSIONS * (2
 export const ATHLETE_LIST_PAUSE_MS = 2_000;
 // The nine fields compared: exactly what the adapter projects from an athlete row.
 export const ATHLETE_LIST_FIELDS = BUNDLE_FIELDS.athleteSession;
-// The athlete-list verdict from what the run compared. `same` needs exactly two different parents -
-// counted again here from the ids the parents' own reads confirmed, never from the number of sessions
-// alone -, every compared row equal and every list value projectable. Fewer than two different parents
-// is `insufficient`, never `same`, even when a row differed (its field is still named per row). A stopped
-// run is never more than not_observed. Only the number of different parents leaves this function.
+// The athlete-list verdict from what the run compared (owner order 2026-10-23):
+// - a compared row that differs is `differs`, even with one parent or in a run that stopped later: a row
+//   is compared only after its own read confirmed its id and session, so the difference is confirmed;
+// - `same` needs exactly two different parents - counted again here from the ids the parents' own reads
+//   confirmed, never from the number of sessions alone -, every compared row equal and every list value
+//   projectable;
+// - anything else is `insufficient` with its reason: the stop code of a run that stopped, nothing
+//   compared, fewer than two different parents, or a list value the adapter would not accept.
+// Only the number of different parents leaves this function.
 export function athleteListOutcome({ reason = null, rowsCompared, sessionsCompared, comparedParentIds, allEqual, allProjectable }) {
   const distinctParents = new Set(comparedParentIds).size;
   const twoDistinct = sessionsCompared === ATHLETE_LIST_SESSIONS && comparedParentIds.length === ATHLETE_LIST_SESSIONS
     && distinctParents === ATHLETE_LIST_SESSIONS;
   const outcome = (verdict, why = null) => ({ verdict, reason: why, distinctParents });
-  if (reason !== null) return outcome("not_observed", reason);
-  if (rowsCompared === 0) return outcome("not_observed", "nothing_compared");
+  if (rowsCompared > 0 && !allEqual) return outcome("differs");
+  if (reason !== null) return outcome("insufficient", reason);
+  if (rowsCompared === 0) return outcome("insufficient", "nothing_compared");
   if (!twoDistinct) return outcome("insufficient", "fewer_distinct_parents_than_planned");
-  if (!allEqual) return outcome("differs");
-  if (!allProjectable) return outcome("not_observed", "value_shape_not_projectable");
+  if (!allProjectable) return outcome("insufficient", "value_shape_not_projectable");
   return outcome("same");
 }
 // What a 429's Retry-After said, as a kind word and a bounded number of seconds; never the raw text.
