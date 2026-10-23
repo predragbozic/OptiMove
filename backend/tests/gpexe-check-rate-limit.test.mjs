@@ -496,3 +496,56 @@ test("9. fail-closed: a source opened with rateLimitRetry but without the run's 
   assert.equal(src.calls.filter((k) => LIST_FIRST.test(k)).length, 1, "the list page was not repeated");
   assert.equal(src.calls.length, 1, "nothing else was sent");
 });
+
+// After the repeat was spent (owner, 2026-10-23): the check's adapter has one
+// attempt per read, so a repeat that fails for another reason ends the check
+// as that failure; a later 429 is never repeated, and nothing follows a stop.
+test("10. a 429, then a 5xx or no answer to the repeat (a track): the check fails as that failure with no request after it and nothing published; a second wait or repeat never happens", async () => {
+  for (const [label, second, message] of [
+    ["5xx", () => new Response("{}", { status: 503, headers: { "content-type": "application/json" } }), "The source server is not available."],
+    ["no answer", () => { throw new TypeError("fetch failed"); }, "The source server did not answer."],
+  ]) {
+    const o = await org();
+    serve(o);
+    sleeps.length = 0;
+    src.fault = async (key, n) => (key !== TRACK(o) ? null : n === 1 ? slowDown({ "retry-after": "2" }) : second());
+    const { row, calls } = await runCheck(o);
+    assert.equal(row.status, "failed", label);
+    assert.equal(row.error_code, "source_unavailable", label);
+    assert.ok(row.error_message.startsWith(message), `${label}: ${row.error_message}`);
+    assert.deepEqual(sleeps, [2000], `${label}: one wait`);
+    assert.equal(calls.filter((k) => k === TRACK(o)).length, 2, `${label}: the 429 and its one repeat`);
+    assert.equal(calls[calls.length - 1], TRACK(o), `${label}: nothing after the failed repeat`);
+    assert.equal(await published(o), 0, label);
+  }
+});
+
+test("11. a drill's repeat answers 5xx or gets no answer: the drill set ends there; the brief and the thresholds still go out, a 429 on the thresholds stops the check without a repeat (retry_already_used), and nothing follows - no other drill, session or request", async () => {
+  for (const [label, second] of [
+    ["5xx", () => new Response("{}", { status: 502, headers: { "content-type": "application/json" } })],
+    ["no answer", () => { throw new TypeError("fetch failed"); }],
+  ]) {
+    const o = await org();
+    serve(o);
+    sleeps.length = 0;
+    const D0 = "/api/team_session/3001/details/?drill=0";
+    const THRESHOLDS = new RegExp(`^/rest/v1/team/${o.sourceTeamId}/thresholds/`);
+    src.fault = async (key, n) => {
+      if (key === D0) return n === 1 ? slowDown({ "retry-after": "1" }) : second();
+      return THRESHOLDS.test(key) ? slowDown({ "retry-after": "1" }) : null;
+    };
+    const { row, calls } = await runCheck(o);
+    assert.equal(row.status, "failed", label);
+    assert.equal(row.error_code, "source_unavailable", label);
+    const line = row.error_message.slice(row.error_message.indexOf(DIAGNOSTIC) + DIAGNOSTIC.length);
+    assert.ok(rateLimitDiagnosticAccepted(line), `${label}: ${line}`);
+    assert.match(line, /request_kind=thresholds; requests_sent=(\d+); .*retry_after=seconds; retry_after_s=1; retry_used=yes; outcome=retry_already_used\.$/, label);
+    assert.equal(Number(line.match(/requests_sent=(\d+);/)[1]), calls.length, `${label}: the count is every request of this check`);
+    const after = calls.slice(calls.indexOf(D0));
+    assert.deepEqual(after.map((k) => (THRESHOLDS.test(k) ? "thresholds" : k)), [D0, D0, "/api/team_session/3001/brief/", "thresholds"], `${label}: after the failed repeat the brief and the thresholds, and nothing after the stop`);
+    assert.ok(!calls.some((k) => /\?drill=[1-9]/.test(k)), `${label}: no other drill`);
+    assert.ok(!calls.some((k) => /team_session\/30(11|21)\//.test(k)), `${label}: no other session`);
+    assert.deepEqual(sleeps, [1000], `${label}: one wait in the whole check`);
+    assert.equal(await published(o), 0, label);
+  }
+});

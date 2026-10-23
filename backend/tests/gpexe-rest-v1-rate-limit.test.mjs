@@ -273,6 +273,86 @@ test("RL16 the refused answer's body is let go, never read and never waited for:
   }
 });
 
+// After the repeat was spent (owner, 2026-10-23): the check's adapter has one
+// attempt per read, so a repeat that fails for another reason is that failure,
+// never a third request; the spent repeat is never given back, and a stop sends
+// nothing more.
+test("RL17 the check's one attempt: a 5xx on the repeat fails that read as the 5xx (no third request, no second wait, not a rate-limit stop); the repeat stays spent, so a later 429 with a valid Retry-After stops the instance for good", async () => {
+  const l = limited();
+  const server = fakeServer({
+    [TEAM_READ]: script(slowDown({ "retry-after": "1" }), answer(503, { detail: "busy" }), teamOk()),
+    [LIST]: script(answer(200, [], { "x-total-count": "0" }), slowDown({ "retry-after": "1" }), answer(200, [], { "x-total-count": "0" })),
+  });
+  const a = make(server.fetchImpl, l.options);
+  const e = await errorOf(a.verifyBoundTeam());
+  assert.equal(e?.code, "source_unavailable");
+  assert.equal(e.status, 503);
+  assert.equal(e.reason, undefined, "a 5xx is not a rate-limit stop");
+  assert.deepEqual([server.calls.length, l.sleeps, l.retries], [2, [1000], ["before"]], "the 429 and its one repeat, nothing more");
+  await a.listSessions();
+  assert.equal(server.calls.length, 3, "a 5xx does not stop the instance: the next read is sent");
+  const stop = await errorOf(a.listSessions());
+  assert.equal(stop?.reason, "rate_limited");
+  assert.deepEqual({ outcome: stop.rateLimit.outcome, retryUsed: stop.rateLimit.retryUsed, requestsSent: stop.rateLimit.requestsSent, first429Request: stop.rateLimit.first429Request }, { outcome: "retry_already_used", retryUsed: true, requestsSent: 4, first429Request: 1 });
+  assert.deepEqual([server.calls.length, l.sleeps, l.retries], [4, [1000], ["before"]], "never a second wait or repeat");
+  assert.equal(await errorOf(a.verifyBoundTeam()), stop, "the same stop, without a request");
+  assert.equal(await errorOf(a.listSessions()), stop);
+  assert.equal(server.calls.length, 4);
+});
+
+test("RL18 the check's one attempt: no answer to the repeat (a network error) fails that read as no answer, with no third request; the next read is sent, and a 429 after it stops the instance without a second repeat", async () => {
+  const l = limited();
+  const server = fakeServer({
+    [TEAM_READ]: script(slowDown({ "retry-after": "2" }), () => { throw new TypeError("fetch failed"); }, teamOk()),
+    [LIST]: script(answer(200, [], { "x-total-count": "0" }), slowDown({ "retry-after": "1" }), answer(200, [], { "x-total-count": "0" })),
+  });
+  const a = make(server.fetchImpl, l.options);
+  const e = await errorOf(a.verifyBoundTeam());
+  assert.deepEqual([e?.code, e?.reason, e?.status], ["source_unavailable", "no_answer", undefined]);
+  assert.deepEqual([server.calls.length, l.sleeps], [2, [2000]]);
+  await a.listSessions();
+  assert.equal(server.calls.length, 3);
+  const stop = await errorOf(a.listSessions());
+  assert.deepEqual([stop?.reason, stop?.rateLimit?.outcome], ["rate_limited", "retry_already_used"]);
+  assert.deepEqual([server.calls.length, l.sleeps], [4, [2000]], "never a second wait or repeat");
+  assert.equal(await errorOf(a.verifyBoundTeam()), stop);
+  assert.equal(server.calls.length, 4);
+});
+
+test("RL19 a drill's repeat answers 5xx: the drill set ends there (the next drill is not read); a 429 on the brief that follows stops the bundle without a repeat, and no tag or thresholds request is sent", async () => {
+  const l = limited();
+  const { a, calls } = await confirmedAdapter({
+    [D0]: script(slowDown({ "retry-after": "1" }), answer(502, { detail: "bad gateway" })),
+    [BRIEF]: slowDown({ "retry-after": "1" }),
+  }, (f) => make(f, l.options));
+  const e = await errorOf(a.fetchSessionBundle({ sessionId: "100" }));
+  assert.deepEqual([e?.reason, e?.rateLimit?.outcome, e?.rateLimit?.requestKind], ["rate_limited", "retry_already_used", "brief_tags"]);
+  const paths = pathsOf(calls);
+  assert.deepEqual(paths.slice(paths.indexOf(D0)), [D0, D0, BRIEF], "the 429, its one repeat (5xx), the brief's 429 - and nothing after it");
+  assert.ok(!paths.includes(D1) && !paths.includes(TAGS) && !paths.includes(THRESH));
+  assert.deepEqual(l.sleeps, [1000], "one wait");
+  const sent = calls.length;
+  assert.equal(await errorOf(a.getTeamThresholds({ sessionId: "100" })), e, "the instance stays stopped");
+  assert.equal(calls.length, sent);
+});
+
+test("RL20 a drill's repeat gets no answer: the drill set ends there; the brief, the tag list and the thresholds are the only requests after it, and a 429 on the thresholds stops the bundle without a repeat", async () => {
+  const l = limited();
+  const { a, calls } = await confirmedAdapter({
+    [D0]: script(slowDown({ "retry-after": "1" }), () => { throw new TypeError("fetch failed"); }),
+    [THRESH]: slowDown({ "retry-after": "1" }),
+  }, (f) => make(f, l.options));
+  const e = await errorOf(a.fetchSessionBundle({ sessionId: "100" }));
+  assert.deepEqual([e?.reason, e?.rateLimit?.outcome, e?.rateLimit?.requestKind], ["rate_limited", "retry_already_used", "thresholds"]);
+  const paths = pathsOf(calls);
+  assert.deepEqual(paths.slice(paths.indexOf(D0)), [D0, D0, BRIEF, TAGS, THRESH], "after the failed repeat: the brief, the tag list and the thresholds, and nothing after the stop");
+  assert.ok(!paths.includes(D1));
+  assert.deepEqual(l.sleeps, [1000]);
+  const sent = calls.length;
+  assert.equal(await errorOf(a.verifyBoundTeam()), e);
+  assert.equal(calls.length, sent);
+});
+
 test("RL6 one repeat per instance: after a repeat that succeeded, a later 429 is not repeated and stops the instance", async () => {
   const l = limited();
   const server = fakeServer({
