@@ -2641,12 +2641,14 @@ pre-existing; pass/fail counts don't belong in this file
   and never says "could not start"; with a frontend test.
 - **A cooldown per GPEXE connection after a rate-limit stop** (owner, 2026-10-22, at the review of the 429 PR; plan
   first, not built): after a check stops on a 429, a new check of any team bound to the same connection could be
-  refused for the valid `Retry-After`, or 15 minutes when there is none. The plan and its impact on the 429 PR are
-  for the owner to approve before any code.
+  refused for the valid `Retry-After`, or 15 minutes when there is none. The plan, its impact on the 429 PR and the
+  matrix of which operations call GPEXE (and so would be refused) against local ones:
+  `docs/ai/gpexe-connection-cooldown-plan.md`. For the owner to approve before any code or migration.
 - **A read-only check of the nine athlete-row fields in server3's athlete list** (owner, 2026-10-22; plan first,
   no GPEXE request until the owner approves): whether `rest/v1/athlete_session/?teamsession=` rows carry the nine
   projected fields with the same values as the per-row read - the precondition of the largest request saving in
-  `docs/ai/gpexe-check-request-count-analysis.md`.
+  `docs/ai/gpexe-check-request-count-analysis.md`. Plan: `docs/ai/gpexe-athlete-list-nine-fields-plan.md` (a probe
+  mode `--mode athlete-list`; not in the repository until the owner orders its commit and review).
 
 - **Separate migration and runtime database roles** (owner, 2026-10-13, at the v35 decisions; an
   infrastructure hardening task, not blocking v35): today the migrations and the server use the same

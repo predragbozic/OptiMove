@@ -63,7 +63,7 @@ a holdover from the e03 pilot ("The list rows are enough for the ids; the full r
 
 | Option | Saving | Risk / evidence needed | Owner decision |
 |---|---|---|---|
-| **Take the row fields from the athlete list** instead of `A` row reads; move the row / track confirmation to the list | about `-A` per session (193 of the 455 requests of the production check, about 42 %) | needs owner-run evidence that server3's list rows carry all 9 fields with the same values as the row read (never compared); the stored bundle and its hash stay identical if they do | yes - the largest safe saving |
+| **Take the row fields from the athlete list** instead of `A` row reads; move the row / track confirmation to the list | about `-A` per session (193 of the 455 requests of the production check, about 42 %) | needs owner-run evidence that server3's list rows carry all 9 fields with the same values as the row read (never compared; plan and probe mode: `docs/ai/gpexe-athlete-list-nine-fields-plan.md`); the stored bundle and its hash stay identical if they do | yes - the largest safe saving |
 | **Skip the brief and tag reads in a check** (their output is discarded) | `-1` (or more) per session with drills | removes the brief's failure modes too; drill-label storage is still an open decision | yes - low risk |
 | **Thresholds once per day per check** (cached in the one adapter instance) | sessions minus distinct days | none for the data (same URL, same answer); touches the "one bundle is the re-validation window" principle | yes - narrow |
 | **Stop a bundle at the first failed drill** before brief / thresholds | 1-2 per failure | none; already true for a rate-limit stop on this branch | yes - low |
