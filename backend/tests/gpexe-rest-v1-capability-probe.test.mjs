@@ -7,6 +7,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  ATHLETE_LIST_FIELDS, ATHLETE_LIST_MODE_MAX_REQUESTS, ATHLETE_LIST_PRINTABLE_KEYS, athleteListFilterDescribed, projectableValue, ATHLETE_LIST_PAUSE_MS, ATHLETE_LIST_ROWS_PER_SESSION, ATHLETE_LIST_SESSIONS, retryAfterOf, valueKind,
   answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, describeDrillLink, describeTeamValue, diagnosticLinkConfirmed, DRILL_MODE_MAX_REQUESTS, DRILL_POSITIONS, DRILL_READ_SEQUENCE, LEGACY_API_PATH, LEGACY_API_PREFIX, assertNoIdentityValueInReport, reportVocabulary, IDENTITY_CHILD_KEYS, IDENTITY_NAME_FIELDS, IDENTITY_BIRTH_FIELDS, IDENTITY_SCHEMA_FIELDS, IDENTITY_HEADER_NAMES, IDENTITY_HEADER_VALUE_SHAPES, IDENTITY_AUTH_SCHEMES, identityFilterDescribed, describeAthleteTeams, describeIdentityFields, describeResourceIndex, IDENTITY_BIRTH_KEY, IDENTITY_CONTAINER_KEYS, IDENTITY_MAX_DEPTH, IDENTITY_MAX_ITEMS, IDENTITY_MAX_PATHS, IDENTITY_MODE_MAX_REQUESTS, IDENTITY_NAME_KEY, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId, TEAM_VALUE_KINDS,
 } from "../scripts/gpexe-rest-v1-capability-probe.mjs";
 import { DiscoveryUsageError } from "../scripts/gpexe-auth-discovery.mjs";
@@ -518,7 +519,8 @@ test("9. the target cannot be changed: only server3 and Team ID 980 are accepted
   assert.deepEqual(parseArgs([]), { host: PROBE_HOST, team: PROBE_TEAM, mode: "full" });
   assert.deepEqual(parseArgs(["--host", "server3", "--team", "980", "--mode", "drill"]), { host: "server3", team: "980", mode: "drill" });
   assert.deepEqual(parseArgs(["--mode", "identity"]), { host: PROBE_HOST, team: PROBE_TEAM, mode: "identity" });
-  assert.deepEqual([...PROBE_MODES], ["full", "drill", "identity"]);
+  assert.deepEqual([...PROBE_MODES], ["full", "drill", "identity", "athlete-list"]);
+  assert.deepEqual(parseArgs(["--mode", "athlete-list"]), { host: PROBE_HOST, team: PROBE_TEAM, mode: "athlete-list" });
   for (const bad of [["--mode", "drills"], ["--mode", ""], ["--mode", "FULL"], ["--mode", "IDENTITY"], ["--mode", "names"]]) assert.throws(() => parseArgs(bad), DiscoveryUsageError, bad.join(" "));
   await assert.rejects(runCapabilityProbe({ mode: "all" }, ENV, fakeServer().fetchImpl), DiscoveryUsageError);
   for (const bad of [["--host", "e03"], ["--team", "981"], ["--host", "https://server3.gpexe.com/"], ["--team", "980", "--extra", "x"]]) assert.throws(() => parseArgs(bad), DiscoveryUsageError, bad.join(" "));
@@ -1341,4 +1343,320 @@ test("25. the identity run prints the source's header values and scheme word onl
   const full = fakeServer({ ...happyRoutes(), "GET /rest/v1/track/900/": answer(200, { id: 900, timezone: MARKERS.tz }, { "x-gpexe-version": "9.11.8" }) });
   const fr = await runCapabilityProbe({}, ENV, full.fetchImpl);
   assert.equal(fr.requests.find((r) => r.path === "rest/v1/track/<id>/").gpexeVersion, "9.11.8");
+});
+
+// ---------------------------------------------------------------------------
+// The athlete-list run (owner order 2026-10-23): do the rows of a session's athlete list carry the
+// importer's nine row fields with the same values as each row's own read? Fake server only. Two
+// parents of team 980 (100 with two drills, 300 with one), the drill rows of the session list
+// (101, 102, 301) named by their parents and never chosen; one athlete row per athlete for the whole
+// session and one per drill (2 athletes: 6 rows for 100, 4 for 300).
+// ---------------------------------------------------------------------------
+const AL_EXCHANGE = "POST /api-token-auth/";
+const AL_LIST = "GET /rest/v1/team_session/?team=980&limit=100";
+const alRow = (id, athlete, session, drill, extra = {}) => ({ id, athlete, track: 70000 + id, teamsession: session, drill, is_stats_valid: true, total_time: 3000 + id, total_distance: 5000.25 + id, max_v: 7.75, athlete_name: MARKERS.athleteName, ...extra });
+const AL_ROWS = {
+  100: [alRow(8001, 4711, 100, null), alRow(8002, 4712, 100, null), alRow(8003, 4711, 100, 0), alRow(8004, 4712, 100, 0), alRow(8005, 4711, 100, 1), alRow(8006, 4712, 100, 1)],
+  300: [alRow(9001, 4711, 300, null), alRow(9002, 4712, 300, null), alRow(9003, 4711, 300, 0), alRow(9004, 4712, 300, 0)],
+};
+const alSessionRows = [sess(100, 980, DAY, [101, 102]), sess(101, 980, DAY, []), sess(102, 980, DAY, []), sess(200, 980, OTHER_DAY, []), sess(300, 980, DAY, [301]), sess(301, 980, DAY, [])];
+function athleteListRoutes({ rows = AL_ROWS, detail = (r) => ({ ...r, more_field: MARKERS.note }), sessions = alSessionRows, over = {} } = {}) {
+  const routes = {
+    [AL_EXCHANGE]: happyRoutes()[AL_EXCHANGE],
+    [AL_LIST]: answer(200, sessions, { "x-total-count": String(sessions.length) }),
+    "GET /rest/v1/team_session/100/": answer(200, sess(100, 980, DAY, [101, 102])),
+    "GET /rest/v1/team_session/300/": answer(200, sess(300, 980, DAY, [301])),
+  };
+  for (const [sid, list] of Object.entries(rows)) {
+    routes[`GET /rest/v1/athlete_session/?teamsession=${sid}&limit=100`] = answer(200, list, { "x-total-count": String(list.length) });
+    for (const r of list) routes[`GET /rest/v1/athlete_session/${r.id}/`] = answer(200, detail(r));
+  }
+  return { ...routes, ...over };
+}
+const alRun = (fetchImpl, over = {}) => {
+  const sleeps = [];
+  const promise = runCapabilityProbe({ mode: "athlete-list", sleep: async (ms) => { sleeps.push(ms); }, ...over }, ENV, fetchImpl);
+  return promise.then((report) => ({ report, sleeps }));
+};
+const AL_EXPECTED_ORDER = [
+  AL_EXCHANGE, AL_LIST,
+  "GET /rest/v1/team_session/100/", "GET /rest/v1/athlete_session/?teamsession=100&limit=100",
+  "GET /rest/v1/athlete_session/8001/", "GET /rest/v1/athlete_session/8003/", "GET /rest/v1/athlete_session/8006/",
+  "GET /rest/v1/team_session/300/", "GET /rest/v1/athlete_session/?teamsession=300&limit=100",
+  "GET /rest/v1/athlete_session/9001/", "GET /rest/v1/athlete_session/9003/", "GET /rest/v1/athlete_session/9004/",
+];
+const alNoLeak = (report) => {
+  const text = JSON.stringify(report);
+  for (const leak of [USER, PASSWORD, ISSUED, MARKERS.athleteName, MARKERS.note, MARKERS.sessionName, "4711", "4712", "8001", "8006", "9004", "70000", "78006", "11001", "13001.25", "14006.25", "7.75"]) assert.ok(!text.includes(leak), `the report never carries ${leak}`);
+};
+
+test("AL1 the athlete-list run: one exchange, then eleven GETs in a fixed order with a pause before every read; two parents, three rows each; every field present and equal is `same`; nothing but kinds, counts and booleans", async () => {
+  const { calls, fetchImpl } = fakeServer(athleteListRoutes());
+  const { report, sleeps } = await alRun(fetchImpl);
+  assert.equal(report.stoppedBy, null);
+  assert.deepEqual(paths(calls), AL_EXPECTED_ORDER);
+  assert.equal(ATHLETE_LIST_MODE_MAX_REQUESTS, AL_EXPECTED_ORDER.length, "the cap is exactly the plan");
+  assert.equal(report.requestCount, 12);
+  assert.deepEqual(sleeps, Array(11).fill(ATHLETE_LIST_PAUSE_MS), "a pause before every read, none before the exchange");
+  assert.equal(ATHLETE_LIST_PAUSE_MS, 2000);
+  assert.equal(report.pauseMs, 2000);
+  assert.ok(calls.slice(1).every((c) => c.method === "GET" && c.headers.Authorization === `Token ${ISSUED}` && c.redirect === "manual"));
+  const v = report.capabilities.athlete_list_fields;
+  assert.equal(v.verdict, "same");
+  assert.deepEqual([v.sessionsCompared, v.rowsCompared, v.allProjectedEqual], [ATHLETE_LIST_SESSIONS, ATHLETE_LIST_SESSIONS * ATHLETE_LIST_ROWS_PER_SESSION, true]);
+  assert.deepEqual(Object.keys(v.fields), [...ATHLETE_LIST_FIELDS]);
+  assert.deepEqual([...ATHLETE_LIST_FIELDS], ["id", "athlete", "track", "teamsession", "drill", "is_stats_valid", "total_time", "total_distance", "max_v"]);
+  for (const f of ATHLETE_LIST_FIELDS) assert.deepEqual([v.fields[f].inListAll, v.fields[f].inDetailAll, v.fields[f].equalAll, v.fields[f].projectableAll], [true, true, true, true], f);
+  assert.deepEqual(v.fields.drill.kindsList, ["null", "number"]);
+  assert.deepEqual(v.fields.total_distance.kindsDetail, ["number"]);
+  assert.deepEqual(v.sessions.map((x) => [x.drillsCount, x.listTotal, x.rowsOnPage, x.pageComplete, x.wholeRows, x.drillRows, x.distinctAthletes, x.rowsMatchOnePerAthleteAndDrill, x.listRowsHaveTrackField]),
+    [[2, 6, 6, true, 2, 4, 2, true, true], [1, 4, 4, true, 2, 2, 2, true, true]]);
+  assert.deepEqual(v.sessions.map((x) => x.rows.map((r) => r.rowKind)), [["whole", "drill", "drill"], ["whole", "drill", "drill"]]);
+  assert.ok(v.sessions.every((x) => x.rows.every((r) => r.projectedEqual && r.differingFields.length === 0)));
+  assert.deepEqual(report.capabilities.session_list, { verdict: "proven", status: 200, rowCount: 6, totalIsNumber: true, parentsChosen: 2 });
+  alNoLeak(report);
+});
+
+test("AL2 a value that differs, or a field the list does not carry, makes the verdict `differs` and names only the field (from the closed list of nine)", async () => {
+  // The list's distance rounded on one drill row of session 100.
+  const rounded = { ...AL_ROWS, 100: AL_ROWS[100].map((r) => (r.id === 8006 ? { ...r, total_distance: Math.round(r.total_distance) } : r)) };
+  const one = fakeServer(athleteListRoutes({ rows: rounded, detail: (r) => ({ ...(r.id === 8006 ? AL_ROWS[100][5] : r) }) }));
+  const { report } = await alRun(one.fetchImpl);
+  const v = report.capabilities.athlete_list_fields;
+  assert.equal(v.verdict, "differs");
+  assert.equal(v.allProjectedEqual, false);
+  assert.equal(v.fields.total_distance.equalAll, false);
+  assert.ok(ATHLETE_LIST_FIELDS.filter((f) => f !== "total_distance").every((f) => v.fields[f].equalAll), "only that field");
+  assert.deepEqual(v.sessions[0].rows.map((r) => r.differingFields), [[], [], ["total_distance"]]);
+  alNoLeak(report);
+  // The list carries no `track` at all: every row differs in exactly that field.
+  const noTrack = Object.fromEntries(Object.entries(AL_ROWS).map(([sid, list]) => [sid, list.map(({ track, ...r }) => r)]));
+  const two = fakeServer(athleteListRoutes({ rows: noTrack, detail: (r) => ({ ...r, track: 70000 + r.id }) }));
+  const { report: r2 } = await alRun(two.fetchImpl);
+  const v2 = r2.capabilities.athlete_list_fields;
+  assert.equal(v2.verdict, "differs");
+  assert.deepEqual([v2.fields.track.inListAll, v2.fields.track.inDetailAll, v2.fields.track.equalAll, v2.fields.track.kindsList], [false, true, false, ["absent"]]);
+  assert.ok(v2.sessions.every((x) => !x.listRowsHaveTrackField && x.rows.every((r) => r.differingFields.length === 1 && r.differingFields[0] === "track")));
+  // Both reads lack a field: the same projection (nothing), not a difference.
+  const neither = Object.fromEntries(Object.entries(AL_ROWS).map(([sid, list]) => [sid, list.map(({ max_v, ...r }) => r)]));
+  const three = fakeServer(athleteListRoutes({ rows: neither, detail: (r) => ({ ...r }) }));
+  const v3 = (await alRun(three.fetchImpl)).report.capabilities.athlete_list_fields;
+  assert.deepEqual([v3.verdict, v3.fields.max_v.inListAll, v3.fields.max_v.inDetailAll, v3.fields.max_v.equalAll], ["same", false, false, true]);
+  for (const x of [v, v2, v3]) for (const s of x.sessions) for (const r of s.rows) assert.ok(r.differingFields.every((f) => ATHLETE_LIST_FIELDS.includes(f)));
+});
+
+test("AL3 the first 429 ends the run at once, without a repeat: its Retry-After as a kind word and bounded seconds, the request number, and no further request", async () => {
+  for (const [at, headers, expected] of [
+    ["GET /rest/v1/athlete_session/?teamsession=100&limit=100", { "retry-after": "30" }, { requestNumber: 4, retryAfter: "seconds", retryAfterS: 30 }],
+    ["GET /rest/v1/athlete_session/8003/", {}, { requestNumber: 6, retryAfter: "absent", retryAfterS: null }],
+    ["GET /rest/v1/team_session/300/", { "retry-after": "Wed, 21 Oct 2026 07:28:00 GMT" }, { requestNumber: 8, retryAfter: "other", retryAfterS: null }],
+    [AL_LIST, { "retry-after": "90000" }, { requestNumber: 2, retryAfter: "seconds", retryAfterS: "over_day" }],
+  ]) {
+    const { calls, fetchImpl } = fakeServer(athleteListRoutes({ over: { [at]: answer(429, { detail: "Request was throttled." }, headers) } }));
+    const { report, sleeps } = await alRun(fetchImpl);
+    assert.equal(report.stoppedBy, "rate_limited", at);
+    assert.deepEqual(report.rateLimit, expected, at);
+    assert.equal(paths(calls)[calls.length - 1], at, `${at}: the 429 was the last request`);
+    assert.equal(paths(calls).filter((p) => p === at).length, 1, `${at}: never repeated`);
+    assert.equal(calls.length, expected.requestNumber);
+    assert.equal(sleeps.length, calls.length - 1, "only the pauses before each read");
+    assert.equal(report.capabilities.athlete_list_fields.verdict, "not_observed");
+    assert.equal(report.capabilities.athlete_list_fields.reason, "rate_limited");
+    alNoLeak(report);
+  }
+  assert.deepEqual(retryAfterOf(" 7 "), { retryAfter: "seconds", retryAfterS: 7 });
+  assert.deepEqual(retryAfterOf("1.5"), { retryAfter: "other", retryAfterS: null });
+  assert.deepEqual(retryAfterOf(""), { retryAfter: "absent", retryAfterS: null });
+});
+
+test("AL4 every identity, session and team is confirmed before the next request: a foreign team, a row of another session, a row or a parent answering another id, or an unconfirmed parent stops the run there", async () => {
+  const cases = [
+    ["team_isolation_failed", { sessions: [...alSessionRows, sess(400, 981, DAY, [401])] }, 2],
+    ["team_isolation_failed", { rows: { ...AL_ROWS, 100: [...AL_ROWS[100], alRow(8007, 4713, 777, null)] } }, 4],
+    ["row_id_mismatch", { detail: (r) => ({ ...r, id: r.id === 8003 ? 8004 : r.id }) }, 6],
+    ["team_isolation_failed", { detail: (r) => ({ ...r, teamsession: r.id === 9003 ? 100 : r.teamsession }) }, 11],
+    ["detail_does_not_name_session", { detail: (r) => ({ ...r, teamsession: r.id === 8001 ? null : r.teamsession }) }, 5],
+    ["parent_id_mismatch", { over: { "GET /rest/v1/team_session/100/": answer(200, sess(101, 980, DAY, [101, 102])) } }, 3],
+    ["parent_not_confirmed", { over: { "GET /rest/v1/team_session/100/": answer(200, { ...sess(100, 980, DAY, []), drills_count: 0 }) } }, 3],
+    ["team_isolation_failed", { over: { "GET /rest/v1/team_session/300/": answer(200, sess(300, 981, DAY, [301])) } }, 8],
+    ["parent_not_confirmed", { over: { "GET /rest/v1/team_session/300/": answer(404, { detail: "Not found." }) } }, 8],
+    ["rows_do_not_name_session", { rows: { ...AL_ROWS, 300: AL_ROWS[300].map((r) => ({ ...r, teamsession: undefined })) } }, 9],
+    ["row_identity_unreadable", { rows: { ...AL_ROWS, 100: AL_ROWS[100].map((r) => (r.id === 8004 ? { ...r, athlete: "04712" } : r)) } }, 4],
+    ["row_ids_repeated", { rows: { ...AL_ROWS, 100: [...AL_ROWS[100], AL_ROWS[100][1]] } }, 4],
+    ["athlete_list_unavailable", { over: { "GET /rest/v1/athlete_session/?teamsession=100&limit=100": answer(500, { detail: "error" }) } }, 4],
+    ["row_detail_unavailable", { over: { "GET /rest/v1/athlete_session/8006/": answer(404, { detail: "Not found." }) } }, 7],
+  ];
+  for (const [code, config, sent] of cases) {
+    const { calls, fetchImpl } = fakeServer(athleteListRoutes(config));
+    const { report } = await alRun(fetchImpl);
+    assert.equal(report.stoppedBy, code, `${code} after ${sent}`);
+    assert.equal(calls.length, sent, `${code}: nothing after the request that failed`);
+    assert.equal(report.capabilities.athlete_list_fields.verdict, "not_observed", code);
+    alNoLeak(report);
+  }
+});
+
+test("AL5 the parents come from the list page only: a row named in another row's drills is never a parent, a row without drills is not chosen, one parent is read alone, none ends the run after the list", async () => {
+  // No row with drills: nothing but the exchange and the list.
+  const none = fakeServer(athleteListRoutes({ sessions: [sess(200, 980, OTHER_DAY, []), sess(201, 980, DAY, [])] }));
+  const { report } = await alRun(none.fetchImpl);
+  assert.equal(report.stoppedBy, "no_parent_session");
+  assert.deepEqual(paths(none.calls), [AL_EXCHANGE, AL_LIST]);
+  assert.equal(report.capabilities.athlete_list_fields.verdict, "not_observed");
+  // A named drill row with drills of its own is still never a parent; only 300 is left.
+  const named = fakeServer(athleteListRoutes({ sessions: [sess(101, 980, DAY, [102]), sess(300, 980, DAY, [301, 101]), sess(301, 980, DAY, []), sess(102, 980, DAY, [])] }));
+  const r2 = await alRun(named.fetchImpl);
+  assert.equal(r2.report.capabilities.session_list.parentsChosen, 1);
+  assert.deepEqual(paths(named.calls).slice(2), ["GET /rest/v1/team_session/300/", "GET /rest/v1/athlete_session/?teamsession=300&limit=100", "GET /rest/v1/athlete_session/9001/", "GET /rest/v1/athlete_session/9003/", "GET /rest/v1/athlete_session/9004/"]);
+  // One parent is not the plan's evidence: its facts are printed, the verdict is never `same`.
+  assert.deepEqual([r2.report.capabilities.athlete_list_fields.verdict, r2.report.capabilities.athlete_list_fields.reason], ["not_observed", "fewer_parents_than_planned"]);
+  assert.equal(r2.report.capabilities.athlete_list_fields.sessionsCompared, 1);
+  assert.equal(r2.report.capabilities.athlete_list_fields.allProjectedEqual, true);
+  // Only the first two parents of the page are read, whatever follows.
+  const many = fakeServer(athleteListRoutes({ sessions: [...alSessionRows, sess(500, 980, DAY, [501]), sess(501, 980, DAY, [])] }));
+  await alRun(many.fetchImpl);
+  assert.ok(!paths(many.calls).some((p) => p.includes("/500/") || p.includes("teamsession=500")));
+});
+
+test("AL6 the rows read: the first whole-session row, the first drill row and the last row, then the next in order; a short list is read whole; the formula is judged only on a complete page", async () => {
+  // No drill row in the list although the parent has two drills: three rows in order, the formula fails.
+  const wholeOnly = { ...AL_ROWS, 100: [alRow(8001, 4711, 100, null), alRow(8002, 4712, 100, null), alRow(8008, 4713, 100, null), alRow(8009, 4714, 100, null)] };
+  const a = fakeServer(athleteListRoutes({ rows: wholeOnly }));
+  const ra = await alRun(a.fetchImpl);
+  assert.deepEqual(paths(a.calls).slice(4, 7), ["GET /rest/v1/athlete_session/8001/", "GET /rest/v1/athlete_session/8009/", "GET /rest/v1/athlete_session/8002/"]);
+  assert.equal(ra.report.capabilities.athlete_list_fields.sessions[0].rowsMatchOnePerAthleteAndDrill, false);
+  // Two rows: both read, no third; a page whose total says more rows exist is not judged.
+  const short = { ...AL_ROWS, 300: AL_ROWS[300].slice(0, 2) };
+  const routes = athleteListRoutes({ rows: short });
+  routes["GET /rest/v1/athlete_session/?teamsession=300&limit=100"] = answer(200, short[300], { "x-total-count": "250" });
+  const b = fakeServer(routes);
+  const rb = await alRun(b.fetchImpl);
+  assert.equal(rb.report.requestCount, 11);
+  const s300 = rb.report.capabilities.athlete_list_fields.sessions[1];
+  assert.deepEqual([s300.rows.length, s300.pageComplete, s300.rowsMatchOnePerAthleteAndDrill, s300.listTotal], [2, false, null, 250]);
+  assert.equal(rb.report.capabilities.athlete_list_fields.verdict, "same");
+});
+
+test("AL7 the limits: the run's cap, a pause that cannot be turned into a burst, and the probe's other boundaries unchanged", async () => {
+  const { calls, fetchImpl } = fakeServer(athleteListRoutes());
+  const { report } = await alRun(fetchImpl, { maxRequests: 5 });
+  assert.equal(report.stoppedBy, "request_limit");
+  assert.equal(calls.length, 5);
+  for (const bad of [-1, 1.5, 10_001, "2000"]) await assert.rejects(runCapabilityProbe({ mode: "athlete-list", pauseMs: bad }, ENV, fetchImpl), DiscoveryUsageError, String(bad));
+  await assert.rejects(runCapabilityProbe({ mode: "athlete-list", sleep: "no" }, ENV, fetchImpl), DiscoveryUsageError);
+  // A larger maxRequests never lifts the run's own cap.
+  const big = fakeServer(athleteListRoutes());
+  const r2 = await alRun(big.fetchImpl, { maxRequests: 14 });
+  assert.equal(big.calls.length, ATHLETE_LIST_MODE_MAX_REQUESTS);
+  assert.equal(r2.report.stoppedBy, null);
+  // The flow sends exactly the cap; the cap itself is the backstop should the flow ever grow.
+  const source = await fsp.readFile(path.resolve(ROOT, "backend/scripts/gpexe-rest-v1-capability-probe.mjs"), "utf8");
+  assert.match(source, /if \(mode === "athlete-list"\) maxRequests = Math\.min\(maxRequests, ATHLETE_LIST_MODE_MAX_REQUESTS\);/);
+  // The other runs never pause.
+  const full = fakeServer();
+  const sleeps = [];
+  await runCapabilityProbe({ sleep: async (ms) => { sleeps.push(ms); } }, ENV, full.fetchImpl);
+  assert.deepEqual(sleeps, []);
+  assert.equal(valueKind({ a: null }, "a"), "null");
+  assert.equal(valueKind({}, "a"), "absent");
+  assert.equal(valueKind({ a: [1] }, "a"), "array");
+});
+
+test("AL8 a failed exchange in the athlete-list run (refused, timed out or redirected) is reported as exchange_failed with its request entry, nothing more is sent, nothing paused", async () => {
+  const hang = (init) => new Promise((_, reject) => { init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))); });
+  for (const [label, exchange, entry] of [
+    ["refused", answer(400, { non_field_errors: ["Unable to log in."] }), { status: 400 }],
+    ["timeout", hang, { error: "timeout" }],
+    ["redirect", answer(302, {}, { location: "https://elsewhere.example/" }), { status: 302, redirected: true }],
+  ]) {
+    const { calls, fetchImpl } = fakeServer(athleteListRoutes({ over: { [AL_EXCHANGE]: exchange } }));
+    const { report, sleeps } = await alRun(fetchImpl, { timeoutMs: 50 });
+    assert.equal(report.stoppedBy, "exchange_failed", label);
+    assert.equal(calls.length, 1, `${label}: only the exchange`);
+    assert.deepEqual(sleeps, [], `${label}: no pause before the exchange`);
+    assert.deepEqual(report.capabilities.athlete_list_fields.verdict, "not_observed", label);
+    assert.equal(report.capabilities.athlete_list_fields.reason, "exchange_failed", label);
+    for (const [k, value] of Object.entries(entry)) assert.equal(report.requests[0][k], value, `${label}: ${k}`);
+    assert.equal(report.rateLimit, undefined, label);
+    alNoLeak(report);
+  }
+});
+
+test("AL9 the athlete-list run prints only the closed list of an answer's key names; every other key is only counted", async () => {
+  const { fetchImpl } = fakeServer(athleteListRoutes({ detail: (r) => ({ ...r, more_field: MARKERS.note, zzz_unknown_key: 1 }) }));
+  const { report } = await alRun(fetchImpl);
+  assert.equal(report.capabilities.athlete_list_fields.verdict, "same");
+  for (const r of report.requests) {
+    for (const key of ["fieldNames", "resultFieldNames"]) if (Array.isArray(r[key])) assert.ok(r[key].every((k) => ATHLETE_LIST_PRINTABLE_KEYS.includes(k)), `${r.path}: ${r[key]}`);
+  }
+  const text = JSON.stringify(report);
+  for (const key of ["more_field", "zzz_unknown_key", "\"notes\"", "\"name\"", "athlete_name", "\"token\""]) assert.ok(!text.includes(key), key);
+  const row = report.requests.find((r) => r.path === "rest/v1/athlete_session/<id>/");
+  assert.equal(row.otherFieldCount, 2, "the detail's two other keys are counted, not named");
+  // The session read: the drop list removes its notes; its name is a key outside the closed list, so it is only counted.
+  const own = report.requests.find((r) => r.path === "rest/v1/team_session/<id>/");
+  assert.deepEqual([own.fieldNames.includes("drills_count"), own.fieldNames.includes("name"), own.otherFieldCount], [true, false, 1]);
+  assert.deepEqual(athleteListFilterDescribed({ fieldNames: ["id", "secret_key"], resultFieldNames: ["max_v"], count: 1e300 }), { fieldNames: ["id"], otherFieldCount: 1, resultFieldNames: ["max_v"], count: "<unprintable>" });
+  // The other runs keep their description.
+  const full = await runCapabilityProbe({}, ENV, fakeServer().fetchImpl);
+  assert.ok(full.requests.some((r) => Array.isArray(r.fieldNames) && r.fieldNames.includes("notes") === false && r.fieldNames.length > 0));
+});
+
+test("AL10 a parent whose athlete list is empty stops the run (athlete_list_empty) after that list: an empty list is never a vacuous `same`", async () => {
+  const { calls, fetchImpl } = fakeServer(athleteListRoutes({ rows: { ...AL_ROWS, 300: [] } }));
+  const { report } = await alRun(fetchImpl);
+  assert.equal(report.stoppedBy, "athlete_list_empty");
+  assert.equal(calls.length, 9, "nothing after the empty list of the second parent");
+  assert.deepEqual([report.capabilities.athlete_list_fields.verdict, report.capabilities.athlete_list_fields.reason, report.capabilities.athlete_list_fields.rowsCompared], ["not_observed", "athlete_list_empty", 3]);
+});
+
+test("AL11 a 429 on the exchange in the athlete-list run is named as the source's rate limit: request 1, its Retry-After as a kind word, nothing more sent", async () => {
+  const { calls, fetchImpl } = fakeServer(athleteListRoutes({ over: { [AL_EXCHANGE]: answer(429, { detail: "Request was throttled." }, { "retry-after": "30" }) } }));
+  const { report, sleeps } = await alRun(fetchImpl);
+  assert.equal(report.stoppedBy, "rate_limited");
+  assert.deepEqual(report.rateLimit, { requestNumber: 1, retryAfter: "seconds", retryAfterS: 30 });
+  assert.deepEqual([calls.length, sleeps], [1, []]);
+  assert.equal(report.capabilities.athlete_list_fields.reason, "rate_limited");
+  // The other runs keep exchange_failed for the same answer.
+  const other = fakeServer(happyRoutes({ "POST /api-token-auth/": answer(429, {}, { "retry-after": "30" }) }));
+  assert.equal((await run(other.fetchImpl)).stoppedBy, "exchange_failed");
+});
+
+test("AL12 a list value the adapter would not accept (a long or multi-line text, a non-canonical track) is never `same`, even when both reads carry it", async () => {
+  for (const [field, value] of [["total_time", "x".repeat(65)], ["max_v", "7.75\n"], ["track", "0123"], ["is_stats_valid", { ok: true }]]) {
+    const rows = Object.fromEntries(Object.entries(AL_ROWS).map(([sid, list]) => [sid, list.map((r) => ({ ...r, [field]: value }))]));
+    const { fetchImpl } = fakeServer(athleteListRoutes({ rows }));
+    const v = (await alRun(fetchImpl)).report.capabilities.athlete_list_fields;
+    assert.equal(v.allProjectedEqual, true, field);
+    assert.deepEqual([v.verdict, v.reason, v.fields[field].projectableAll], ["not_observed", "value_shape_not_projectable", false], field);
+  }
+  assert.equal(projectableValue("track", 70001), true);
+  assert.equal(projectableValue("track", null), true);
+  assert.equal(projectableValue("total_distance", 5000.25), true);
+  assert.equal(projectableValue("total_distance", Infinity), false);
+});
+
+test("AL13 a list total is printed only as a bounded whole number; an unreadable one is null and the page is not judged complete", async () => {
+  const routes = athleteListRoutes();
+  routes["GET /rest/v1/athlete_session/?teamsession=100&limit=100"] = answer(200, AL_ROWS[100], { "x-total-count": "1e300" });
+  const { report } = await alRun(fakeServer(routes).fetchImpl);
+  const s100 = report.capabilities.athlete_list_fields.sessions[0];
+  assert.deepEqual([s100.listTotal, s100.pageComplete, s100.rowsMatchOnePerAthleteAndDrill], [null, false, null]);
+});
+
+test("AL14 a count header on the exchange's answer is printed only as a bounded whole number", async () => {
+  const exchange = (init) => { const a = happyRoutes()[AL_EXCHANGE](init); a.headers.set("x-total-count", "MARKER-free-text"); return a; };
+  const { report } = await alRun(fakeServer(athleteListRoutes({ over: { [AL_EXCHANGE]: exchange } })).fetchImpl);
+  assert.equal(report.stoppedBy, null);
+  assert.equal(report.requests[0].totalCount, "<unprintable>");
+  assert.ok(!JSON.stringify(report).includes("MARKER-free-text"));
+  assert.deepEqual(athleteListFilterDescribed({ totalCount: "308" }), { totalCount: "308" });
+});
+
+test("AL15 a compared row that differs is `differs` even when the page held one parent: the difference is already the answer", async () => {
+  const sessions = [sess(300, 980, DAY, [301]), sess(301, 980, DAY, [])];
+  const rows = { 300: AL_ROWS[300].map((r) => (r.id === 9003 ? { ...r, max_v: 8.5 } : r)) };
+  const { report } = await alRun(fakeServer(athleteListRoutes({ sessions, rows, detail: (r) => ({ ...(r.id === 9003 ? AL_ROWS[300][2] : r) }) })).fetchImpl);
+  const v = report.capabilities.athlete_list_fields;
+  assert.deepEqual([v.verdict, v.reason, v.sessionsCompared, v.fields.max_v.equalAll], ["differs", undefined, 1, false]);
 });

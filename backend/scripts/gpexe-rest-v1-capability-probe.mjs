@@ -25,6 +25,12 @@
 // is masked or only counted; a second final guard refuses a report that would
 // contain any value seen under such a field.
 //
+// The athlete-list run (`--mode athlete-list`, owner order 2026-10-23) asks whether a row of a
+// session's athlete list carries the nine fields the importer reads (BUNDLE_FIELDS.athleteSession)
+// with the same values as that row's own read. Two parent sessions of team 980, three rows each, a
+// pause before every read and no repeat: the first 429 ends the run. The values are compared in
+// memory; it prints per field presence, kind words and one equality boolean, never a value.
+//
 // Boundaries, each one tested (backend/tests/gpexe-rest-v1-capability-probe.test.mjs):
 // GET only after the one exchange; one host; the family and the URLs from the
 // application's catalog, except the drill-only run's two fixed legacy reads
@@ -33,7 +39,7 @@
 // no retry; no database; nothing written anywhere.
 import { pathToFileURL } from "node:url";
 import { assertNoSecretInReport, describeResponse, discoveryProfile, DiscoveryUsageError, maskPath } from "./gpexe-auth-discovery.mjs";
-import { readBounded, teamScopedPath } from "../src/gpexeRestV1Adapter.js";
+import { BUNDLE_FIELDS, readBounded, teamScopedPath } from "../src/gpexeRestV1Adapter.js";
 import { redactGpexe } from "../src/gpexeClient.js";
 
 export const PROBE_HOST = "server3";
@@ -224,11 +230,56 @@ export function describeDrillLink(body, parentRow, rows, team) {
 export const diagnosticLinkConfirmed = (link, playersPresent) =>
   link.teamsessionCanonical && link.teamsessionParentDrillMatchCount === 1 && link.teamsessionHasUniqueListRow && link.teamsessionListRowTeamIs980 && playersPresent;
 
-export const PROBE_MODES = Object.freeze(["full", "drill", "identity"]);
+export const PROBE_MODES = Object.freeze(["full", "drill", "identity", "athlete-list"]);
 // The drill-only run: one exchange and these six reads, nothing else.
 export const DRILL_MODE_MAX_REQUESTS = 7;
 // The identity run (owner order 2026-10-06): one exchange and at most eight reads, nothing else.
 export const IDENTITY_MODE_MAX_REQUESTS = 9;
+// The athlete-list run (owner order 2026-10-23, docs/ai/gpexe-athlete-list-nine-fields-plan.md): one
+// exchange and at most eleven reads - the session list, then for each of two parents its own read,
+// its athlete list (first page) and three of its rows -, a pause before every read, no repeat.
+export const ATHLETE_LIST_SESSIONS = 2;
+export const ATHLETE_LIST_ROWS_PER_SESSION = 3;
+export const ATHLETE_LIST_MODE_MAX_REQUESTS = 1 + 1 + ATHLETE_LIST_SESSIONS * (2 + ATHLETE_LIST_ROWS_PER_SESSION);
+export const ATHLETE_LIST_PAUSE_MS = 2_000;
+// The nine fields compared: exactly what the adapter projects from an athlete row.
+export const ATHLETE_LIST_FIELDS = BUNDLE_FIELDS.athleteSession;
+// What a 429's Retry-After said, as a kind word and a bounded number of seconds; never the raw text.
+export function retryAfterOf(value) {
+  if (value === null || value === undefined || value === "") return { retryAfter: "absent", retryAfterS: null };
+  const v = String(value).trim();
+  if (/^[0-9]{1,9}$/.test(v)) return { retryAfter: "seconds", retryAfterS: Number(v) > 86_400 ? "over_day" : Number(v) };
+  return { retryAfter: "other", retryAfterS: null };
+}
+// The athlete-list run prints, of an answer's own key names, only the fields the importer reads from a
+// session or an athlete row (and `drills`); every other key is only counted. A count from the answer is
+// printed only when it is a bounded whole number.
+export const ATHLETE_LIST_PRINTABLE_KEYS = Object.freeze([...new Set([...BUNDLE_FIELDS.teamSession, ...BUNDLE_FIELDS.athleteSession, "drills"])]);
+export function athleteListFilterDescribed(described) {
+  for (const [key, other] of [["fieldNames", "otherFieldCount"], ["resultFieldNames", "otherResultFieldCount"]]) {
+    if (!Array.isArray(described[key])) continue;
+    const kept = described[key].filter((k) => ATHLETE_LIST_PRINTABLE_KEYS.includes(k));
+    if (kept.length < described[key].length) described[other] = described[key].length - kept.length;
+    described[key] = kept;
+  }
+  if ("count" in described && described.count !== null && !(Number.isInteger(described.count) && described.count >= 0 && described.count <= 999_999_999)) described.count = "<unprintable>";
+  if (described.totalCount !== null && described.totalCount !== undefined && !/^\d{1,9}$/.test(String(described.totalCount))) described.totalCount = "<unprintable>";
+  return described;
+}
+// The adapter's own rule for a projected row value (gpexeRestV1Adapter.js `pick`): null, a boolean, a
+// finite number or a one-line string of at most 64 characters; a track is also a canonical id or null.
+// Only a list value the adapter would accept can stand for the same bundle.
+export function projectableValue(field, v) {
+  const scalar = v === null || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v)) || (typeof v === "string" && v.length <= 64 && !/[\r\n\t]/.test(v));
+  if (!scalar) return false;
+  return field !== "track" || v === null || safeId(v) !== null;
+}
+// A value's kind, as the athlete-list run prints it.
+export const valueKind = (o, k) => {
+  if (!o || typeof o !== "object" || !Object.prototype.hasOwnProperty.call(o, k)) return "absent";
+  const v = o[k];
+  return v === null ? "null" : Array.isArray(v) ? "array" : typeof v;
+};
 
 // ---------------------------------------------------------------------------
 // The identity run: which answers of the bound team carry an athlete's name and date of birth,
@@ -547,7 +598,7 @@ export function parseArgs(argv) {
     if (!["--host", "--team", "--mode"].includes(key) || value === undefined) throw new DiscoveryUsageError(`unknown or incomplete argument ${key}`);
     opts[key.slice(2)] = value;
   }
-  if (!PROBE_MODES.includes(opts.mode)) throw new DiscoveryUsageError("--mode must be full, drill or identity");
+  if (!PROBE_MODES.includes(opts.mode)) throw new DiscoveryUsageError("--mode must be full, drill, identity or athlete-list");
   // This probe is for the one confirmed host and the one bound team: the
   // options exist so that a wrong value is refused loudly, not so that
   // another target can be chosen.
@@ -556,12 +607,15 @@ export function parseArgs(argv) {
   return opts;
 }
 
-// maxRequests and timeoutMs exist for the tests; the defaults are the limits.
-export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM, mode = "full", maxRequests = MAX_REQUESTS, timeoutMs = REQUEST_TIMEOUT_MS } = {}, env, fetchImpl = globalThis.fetch) {
-  if (!PROBE_MODES.includes(mode)) throw new DiscoveryUsageError("mode must be full, drill or identity");
+// maxRequests, timeoutMs and sleep exist for the tests; the defaults are the limits. pauseMs is the
+// athlete-list run's pause before every read.
+export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM, mode = "full", maxRequests = MAX_REQUESTS, timeoutMs = REQUEST_TIMEOUT_MS, pauseMs = ATHLETE_LIST_PAUSE_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}, env, fetchImpl = globalThis.fetch) {
+  if (!PROBE_MODES.includes(mode)) throw new DiscoveryUsageError("mode must be full, drill, identity or athlete-list");
   // The drill-only run never sends more than its own six reads, the identity run never more than its eight.
   if (mode === "drill") maxRequests = Math.min(maxRequests, DRILL_MODE_MAX_REQUESTS);
   if (mode === "identity") maxRequests = Math.min(maxRequests, IDENTITY_MODE_MAX_REQUESTS);
+  if (mode === "athlete-list") maxRequests = Math.min(maxRequests, ATHLETE_LIST_MODE_MAX_REQUESTS);
+  if (!Number.isInteger(pauseMs) || pauseMs < 0 || pauseMs > 10_000 || typeof sleep !== "function") throw new DiscoveryUsageError("pauseMs is a whole number up to 10000 and sleep a function");
   if (!Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > MAX_REQUESTS) throw new DiscoveryUsageError(`maxRequests is a whole number from 1 to ${MAX_REQUESTS}`);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > REQUEST_TIMEOUT_MS) throw new DiscoveryUsageError(`timeoutMs is a whole number up to ${REQUEST_TIMEOUT_MS}`);
   const profile = discoveryProfile(host, PROBE_FAMILY);
@@ -573,6 +627,7 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
   const report = {
     source: "gpexe", hostKey: host, apiFamily: profile.apiFamily, teamId: team, mode, ranAt: new Date().toISOString(),
     requests: [], capabilities: {}, stoppedBy: null,
+    ...(mode === "athlete-list" ? { pauseMs } : {}),
   };
   // The identity run: every value seen under an identity key, with the masked path of the read that
   // carried it first, for the final guard only.
@@ -583,9 +638,49 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     if (requests > maxRequests) throw new ProbeStop("request_limit", `more than ${maxRequests} requests would be needed`);
   };
   const verdict = (name, value) => { report.capabilities[name] = value; };
+  // The athlete-list run (owner order 2026-10-23). Does a row of a session's athlete list carry the
+  // nine fields the importer reads with the same values as that row's own read? If it does, a check
+  // could take the rows from the list instead of reading each one (about 42 % of its requests,
+  // docs/ai/gpexe-check-request-count-analysis.md). Every id comes from an answer already checked;
+  // any identity, session or team not confirmed stops the run before the next request; the first 429
+  // stops it without a repeat. The values are compared in memory and never leave this function.
+  const athleteRun = {
+    sessions: [], rowsCompared: 0,
+    fields: Object.fromEntries(ATHLETE_LIST_FIELDS.map((f) => [f, { inListAll: true, inDetailAll: true, equalAll: true, projectableAll: true, kindsList: new Set(), kindsDetail: new Set() }])),
+  };
+  function athleteListVerdict(reason = null) {
+    const compared = athleteRun.rowsCompared;
+    const allEqual = compared > 0 && athleteRun.sessions.every((x) => x.rows.every((r) => r.projectedEqual));
+    const allProjectable = compared > 0 && ATHLETE_LIST_FIELDS.every((f) => athleteRun.fields[f].projectableAll);
+    // "same" only for a run that ended as built, with both planned parents and every compared list
+    // value in a shape the adapter accepts; a stopped run is never more than not_observed. A compared row
+    // that differs is "differs" whatever else is missing: that is already the answer.
+    const why = reason ?? (compared === 0 ? "nothing_compared"
+      : !allEqual ? null
+      : athleteRun.sessions.length < ATHLETE_LIST_SESSIONS ? "fewer_parents_than_planned"
+      : !allProjectable ? "value_shape_not_projectable" : null);
+    verdict("athlete_list_fields", {
+      verdict: why !== null ? "not_observed" : allEqual ? "same" : "differs",
+      ...(why !== null ? { reason: why } : {}),
+      sessionsCompared: athleteRun.sessions.length, rowsCompared: compared, allProjectedEqual: allEqual,
+      fields: Object.fromEntries(ATHLETE_LIST_FIELDS.map((f) => {
+        const t = athleteRun.fields[f];
+        return [f, { inListAll: compared > 0 && t.inListAll, inDetailAll: compared > 0 && t.inDetailAll, equalAll: compared > 0 && t.equalAll, projectableAll: compared > 0 && t.projectableAll, kindsList: [...t.kindsList].sort(), kindsDetail: [...t.kindsDetail].sort() }];
+      })),
+      sessions: athleteRun.sessions,
+    });
+  }
+  const stopAt = (code, message) => { throw new ProbeStop(code, message); };
+  // The first 429 of the run: its Retry-After as a kind word and bounded seconds, then nothing more.
+  const unlessRateLimited = (answer) => {
+    if (answer.status !== 429) return answer;
+    report.rateLimit = { requestNumber: requests, ...(answer.retryAfter ?? retryAfterOf(null)) };
+    return stopAt("rate_limited", "the source asked to slow down; nothing more is sent");
+  };
   // The one exit: the drill-only run always names its drill verdict, whatever stopped it.
   const done = () => {
     if (mode === "drill" && report.stoppedBy && !report.capabilities.session_drill_details) verdict("session_drill_details", { verdict: "not_observed", reason: report.stoppedBy });
+    if (mode === "athlete-list" && !report.capabilities.athlete_list_fields) athleteListVerdict(report.stoppedBy ?? "not_read");
     if (mode === "identity" && !report.capabilities.identity_fields) {
       const described = Object.entries(report.capabilities).filter(([k, v]) => k.startsWith("identity_") && v?.verdict === "described");
       const nameIn = described.filter(([, v]) => v.nameLikeField === true).map(([k]) => k);
@@ -601,6 +696,8 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     return finish(report, env, issued ?? null, identityValues);
   };
 
+  // A 429 on the exchange (the athlete-list run names it as the source's rate limit).
+  let exchangeRateLimit = null;
   // 1. The one exchange, in the host's confirmed form, with the same timeout
   //    and a bounded answer like every read. The issued token lives in this
   //    closure and nowhere else.
@@ -623,6 +720,7 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
         return null;
       }
       const header = (name) => (typeof res.headers?.get === "function" ? res.headers.get(name) : null);
+      if (res.status === 429) exchangeRateLimit = retryAfterOf(header("retry-after"));
       let body;
       try {
         const text = await readBounded(res, header("content-length"), MAX_EXCHANGE_BYTES);
@@ -633,6 +731,7 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       }
       const exchangeDescribed = describeResponse(res, body, { teamId: team });
       if (mode === "identity") identityFilterDescribed(exchangeDescribed);
+      if (mode === "athlete-list") athleteListFilterDescribed(exchangeDescribed);
       report.requests.push({ ...entry, ...sanitizeDescribed(exchangeDescribed) });
       const field = profile.exchange.tokenField;
       return res.status === 200 && body && typeof body === "object" && !Array.isArray(body) && Object.prototype.hasOwnProperty.call(body, field) && typeof body[field] === "string" && body[field] ? body[field] : null;
@@ -644,7 +743,12 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     }
   })();
   if (!issued) {
-    report.stoppedBy = "exchange_failed";
+    if (mode === "athlete-list" && exchangeRateLimit) {
+      report.rateLimit = { requestNumber: 1, ...exchangeRateLimit };
+      report.stoppedBy = "rate_limited";
+    } else {
+      report.stoppedBy = "exchange_failed";
+    }
     return done();
   }
 
@@ -658,6 +762,8 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
   };
   async function read(prefix, resourcePath) {
     countRequest();
+    // The athlete-list run never sends two reads back to back.
+    if (mode === "athlete-list" && pauseMs > 0) await sleep(pauseMs);
     const url = new URL(`${prefix}${resourcePath}`, profile.baseUrl);
     if (!url.href.startsWith(`${profile.baseUrl}${prefix}`)) throw new ProbeStop("path_refused", "a path left its prefix");
     const entry = { method: "GET", path: maskProbePath(`${prefix}${resourcePath}`, team), authenticated: true };
@@ -677,6 +783,8 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
         return { status: res.status, body: undefined, redirected: true };
       }
       const header = (name) => (typeof res.headers?.get === "function" ? res.headers.get(name) : null);
+      // A 429's Retry-After as a kind word and bounded seconds, for the athlete-list run's stop.
+      const retryAfter = res.status === 429 ? retryAfterOf(header("retry-after")) : null;
       let body;
       let identity = null;
       let index = null;
@@ -694,18 +802,19 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
       } catch (e) {
         const error = e?.code === "source_answer_unexpected" ? "answer_too_large_or_unreadable" : "answer_unreadable";
         report.requests.push({ ...entry, status: res.status, error });
-        return { status: res.status, body: undefined, error };
+        return { status: res.status, body: undefined, error, retryAfter };
       }
       // Key names are printed only when every one is an identifier: a body keyed by ids or dates,
       // at the top level or under `results`, prints none of its keys.
       const described = describeResponse(res, body, { teamId: team });
       // The identity run prints source key names only from its closed lists, and none of the index's.
       if (mode === "identity") identityFilterDescribed(described, { index: prefix === api && resourcePath === "" });
+      if (mode === "athlete-list") athleteListFilterDescribed(described);
       sanitizeDescribed(described);
       // A count is printed only when it is a count.
       if (described.totalCount !== null && !/^\d{1,9}$/.test(described.totalCount)) described.totalCount = "<unprintable>";
       report.requests.push({ ...entry, ...described });
-      return { status: res.status, body, totalCount: header("x-total-count"), identity, index };
+      return { status: res.status, body, totalCount: header("x-total-count"), identity, index, retryAfter };
     } finally {
       clearTimeout(timer);
     }
@@ -855,8 +964,109 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     return done();
   }
 
+  async function runAthleteList() {
+    // 2. The session list of team 980 (one page).
+    const list = unlessRateLimited(await get(teamScopedPath("team_session/", team, [["limit", LIST_LIMIT]])));
+    if (list.status !== 200 || !Array.isArray(list.body)) {
+      report.stoppedBy = "session_list_unavailable";
+      return done();
+    }
+    const rows = list.body.filter((r) => r && typeof r === "object");
+    assertTeam(rows, "session list");
+    // A parent: a row of team 980 with a readable id, named in no other row's `drills`, with an
+    // explicit `drills` list of at least one entry, so its athlete list holds drill rows too. No
+    // `drills` entry is ever used as an id.
+    const named = new Set(rows.flatMap((r) => (Array.isArray(r.drills) ? r.drills.map((d) => safeId(d)).filter(Boolean) : [])));
+    const parents = rows.filter((r) => safeId(r.id) !== null && namesTeam(r.team, team) === true && !named.has(safeId(r.id))
+      && Array.isArray(r.drills) && r.drills.length >= 1).slice(0, ATHLETE_LIST_SESSIONS);
+    verdict("session_list", { verdict: "proven", status: 200, rowCount: rows.length, totalIsNumber: parseTotal(list.totalCount) !== null, parentsChosen: parents.length });
+    if (parents.length === 0) {
+      report.stoppedBy = "no_parent_session";
+      return done();
+    }
+    const isDrillRow = (r) => r.drill !== null && r.drill !== undefined;
+    for (const parentRow of parents) {
+      const sessionId = safeId(parentRow.id);
+      // 3. The parent's own read: the same id, team 980 and a drill count from 1 to 30.
+      const own = unlessRateLimited(await get(`team_session/${sessionId}/`));
+      const ob = own.body;
+      if (!(own.status === 200 && ob && typeof ob === "object" && !Array.isArray(ob))) stopAt("parent_not_confirmed", "the session's own read failed");
+      assertTeam([ob], "session");
+      if (safeId(ob.id) !== sessionId) stopAt("parent_id_mismatch", "the session's own read named another id");
+      if (namesTeam(ob.team, team) !== true || !Number.isInteger(ob.drills_count) || ob.drills_count < 1 || ob.drills_count > 30) stopAt("parent_not_confirmed", "the session's own read did not confirm team 980 and its drills");
+      // 4. Its athlete list (the first page): every row names this session, a readable id and athlete.
+      const athletes = unlessRateLimited(await get(`athlete_session/?teamsession=${sessionId}&limit=${LIST_LIMIT}`));
+      if (athletes.status !== 200 || !Array.isArray(athletes.body)) stopAt("athlete_list_unavailable", "the athlete list could not be read");
+      const arows = athletes.body.filter((r) => r && typeof r === "object" && !Array.isArray(r));
+      if (arows.length !== athletes.body.length) stopAt("athlete_rows_unreadable", "an athlete row is not an object");
+      // A parent with drills and no athlete row is no evidence either way: never a vacuous "same".
+      if (arows.length === 0) stopAt("athlete_list_empty", "the parent's athlete list holds no row");
+      assertTeam(arows, "athlete list");
+      for (const r of arows) {
+        const ts = safeId(r.teamsession);
+        if (ts !== null && ts !== sessionId) throw new ProbeStop("team_isolation_failed", "athlete rows of another session were returned");
+        if (ts === null) stopAt("rows_do_not_name_session", "an athlete row names no session in a readable way");
+        if (safeId(r.id) === null || safeId(r.athlete) === null) stopAt("row_identity_unreadable", "an athlete row's id or athlete is not readable");
+      }
+      const ids = arows.map((r) => safeId(r.id));
+      if (new Set(ids).size !== ids.length) stopAt("row_ids_repeated", "the athlete list names one row twice");
+      // The rows read: the first whole-session row, the first drill row and the last row of the
+      // list, then the next ones in order until three are chosen.
+      const sample = [];
+      const add = (r) => { if (r && sample.length < ATHLETE_LIST_ROWS_PER_SESSION && !sample.includes(r)) sample.push(r); };
+      add(arows.find((r) => !isDrillRow(r)));
+      add(arows.find(isDrillRow));
+      add(arows[arows.length - 1]);
+      for (const r of arows) add(r);
+      // A count is printed only when it is a bounded whole number.
+      const listTotal = typeof athletes.totalCount === "string" && /^\d{1,9}$/.test(athletes.totalCount) ? Number(athletes.totalCount) : null;
+      const pageComplete = listTotal !== null && listTotal === arows.length;
+      const facts = {
+        drillsCount: ob.drills_count, listTotal, rowsOnPage: arows.length, pageComplete,
+        wholeRows: arows.filter((r) => !isDrillRow(r)).length, drillRows: arows.filter(isDrillRow).length,
+        distinctAthletes: new Set(arows.map((r) => safeId(r.athlete))).size,
+        listRowsHaveTrackField: arows.every((r) => "track" in r),
+        rows: [],
+      };
+      // The analysis's formula, judged only on a complete page: one row per athlete for the whole
+      // session and one per drill.
+      facts.rowsMatchOnePerAthleteAndDrill = pageComplete ? arows.length === facts.distinctAthletes * (1 + ob.drills_count) : null;
+      athleteRun.sessions.push(facts);
+      for (const listRow of sample) {
+        // 5. The row's own read: the same id, the same session; then the nine fields compared.
+        const athleteId = safeId(listRow.id);
+        const one = unlessRateLimited(await get(`athlete_session/${athleteId}/`));
+        const d = one.body;
+        if (!(one.status === 200 && d && typeof d === "object" && !Array.isArray(d))) stopAt("row_detail_unavailable", "an athlete row's own read failed");
+        assertTeam([d], "athlete row");
+        if (safeId(d.id) !== athleteId) stopAt("row_id_mismatch", "an athlete row's own read named another id");
+        const dts = safeId(d.teamsession);
+        if (dts !== null && dts !== sessionId) throw new ProbeStop("team_isolation_failed", "an athlete row's detail names another session");
+        if (dts === null) stopAt("detail_does_not_name_session", "an athlete row's own read names no session in a readable way");
+        const differingFields = [];
+        for (const f of ATHLETE_LIST_FIELDS) {
+          const t = athleteRun.fields[f];
+          const kl = valueKind(listRow, f);
+          const kd = valueKind(d, f);
+          const same = (kl === "absent" && kd === "absent") || (kl !== "absent" && kd !== "absent" && canonical(listRow[f]) === canonical(d[f]));
+          t.kindsList.add(kl);
+          t.kindsDetail.add(kd);
+          if (kl === "absent") t.inListAll = false;
+          if (kl !== "absent" && !projectableValue(f, listRow[f])) t.projectableAll = false;
+          if (kd === "absent") t.inDetailAll = false;
+          if (!same) { t.equalAll = false; differingFields.push(f); }
+        }
+        athleteRun.rowsCompared += 1;
+        facts.rows.push({ rowKind: isDrillRow(listRow) ? "drill" : "whole", projectedEqual: differingFields.length === 0, differingFields });
+      }
+    }
+    athleteListVerdict(null);
+    return done();
+  }
+
   try {
     if (mode === "identity") return await runIdentity();
+    if (mode === "athlete-list") return await runAthleteList();
     // 2. The unfiltered session list of this run (one page).
     const list = await get(teamScopedPath("team_session/", team, [["limit", LIST_LIMIT]]));
     const rows = Array.isArray(list.body) ? list.body.filter((r) => r && typeof r === "object") : [];

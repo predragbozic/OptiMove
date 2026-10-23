@@ -792,6 +792,41 @@ merged; contract `docs/ai/source-connections-f3c2-contract.md` section 2.10):
 - **Date of birth, the one concretisation of option A:** a date before 1900-01-01 or after today (UTC)
   counts as "an impossible date". It is shown as not provided and counted as unrecognised.
 
+## 4c. The athlete list's rows against each row's own read (the athlete-list run, prepared 2026-10-23)
+
+**Owner orders 2026-10-22 and 2026-10-23.** Does a row of
+`rest/v1/athlete_session/?teamsession=<id>&limit=100` carry the nine fields the adapter projects from
+an athlete row (`BUNDLE_FIELDS.athleteSession`: `id, athlete, track, teamsession, drill, is_stats_valid,
+total_time, total_distance, max_v`) with the same values as `rest/v1/athlete_session/<id>/`? If it
+does, a check could take the rows from the list instead of reading each one. That would save about 42 %
+of a check's requests (the request-count analysis of Draft PR #209). The full plan and the decision
+rules are `docs/ai/gpexe-athlete-list-nine-fields-plan.md` (added by that PR).
+
+**The run** (`--mode athlete-list`, owner-run only, same terminal rules as section 4):
+- **Requests:** one exchange in the host's confirmed form, then at most 11 GET requests for Team ID 980
+  (`ATHLETE_LIST_MODE_MAX_REQUESTS` = 12), with a pause of 2 s before every read:
+  - the first page of the session list;
+  - for each of the first two parents of the page (team 980, a readable id, named in no other row's
+    `drills`, an explicit `drills` list): its own read, its athlete list (first page) and the own read of
+    three of its rows (the first whole-session row, the first drill row and the last row).
+- **No repeat:** the first 429, the exchange's included, ends the run (`rate_limited`, the request
+  number, `Retry-After` as a kind word and bounded seconds).
+- **Stops before the next request:**
+  - any identity, session or team not confirmed;
+  - an empty athlete list, or a repeated row id.
+- **Printed per field:** presence, kind words, equality and whether the list value is one the adapter's
+  projection accepts. Per row: the differing field names (from the closed list of nine). Per session:
+  counts.
+- **Never printed:** an id, a value, a name, a date or a key outside the closed list.
+- **Verdict:**
+  - `same` only for two parents, every compared row equal and every list value projectable;
+  - `differs` when a compared row differs;
+  - otherwise `not_observed` with its reason.
+
+**Status: not run.** Fake-fetch contract tests only (`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`,
+AL1–AL15). The terminal commands are handed over only after the owner's external review of the tool. The
+verdict is recorded here; the reduction itself is a separate PR on the owner's order.
+
 ## 5. Rules the adapter keeps, whatever is added later
 
 - Selected by `(source_system, apiFamily)`; a family without an adapter is
