@@ -7,7 +7,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  ATHLETE_LIST_FIELDS, ATHLETE_LIST_MODE_MAX_REQUESTS, ATHLETE_LIST_PRINTABLE_KEYS, athleteListFilterDescribed, projectableValue, ATHLETE_LIST_PAUSE_MS, ATHLETE_LIST_ROWS_PER_SESSION, ATHLETE_LIST_SESSIONS, retryAfterOf, valueKind,
+  ATHLETE_LIST_FIELDS, ATHLETE_LIST_MODE_MAX_REQUESTS, athleteListOutcome, ATHLETE_LIST_PRINTABLE_KEYS, athleteListFilterDescribed, projectableValue, ATHLETE_LIST_PAUSE_MS, ATHLETE_LIST_ROWS_PER_SESSION, ATHLETE_LIST_SESSIONS, retryAfterOf, valueKind,
   answerWithContent, canonical, dayOf, maskProbePath, printableFieldNames, describeDrillAnswer, describeDrillEntries, describeDrillLink, describeTeamValue, diagnosticLinkConfirmed, DRILL_MODE_MAX_REQUESTS, DRILL_POSITIONS, DRILL_READ_SEQUENCE, LEGACY_API_PATH, LEGACY_API_PREFIX, assertNoIdentityValueInReport, reportVocabulary, IDENTITY_CHILD_KEYS, IDENTITY_NAME_FIELDS, IDENTITY_BIRTH_FIELDS, IDENTITY_SCHEMA_FIELDS, IDENTITY_HEADER_NAMES, IDENTITY_HEADER_VALUE_SHAPES, IDENTITY_AUTH_SCHEMES, identityFilterDescribed, describeAthleteTeams, describeIdentityFields, describeResourceIndex, IDENTITY_BIRTH_KEY, IDENTITY_CONTAINER_KEYS, IDENTITY_MAX_DEPTH, IDENTITY_MAX_ITEMS, IDENTITY_MAX_PATHS, IDENTITY_MODE_MAX_REQUESTS, IDENTITY_NAME_KEY, MAX_EXCHANGE_BYTES, MAX_REQUESTS, parseArgs, parseTotal, PROBE_HOST, PROBE_MODES, PROBE_TEAM, runCapabilityProbe, safeId, TEAM_VALUE_KINDS,
 } from "../scripts/gpexe-rest-v1-capability-probe.mjs";
 import { DiscoveryUsageError } from "../scripts/gpexe-auth-discovery.mjs";
@@ -1403,7 +1403,7 @@ test("AL1 the athlete-list run: one exchange, then eleven GETs in a fixed order 
   assert.ok(calls.slice(1).every((c) => c.method === "GET" && c.headers.Authorization === `Token ${ISSUED}` && c.redirect === "manual"));
   const v = report.capabilities.athlete_list_fields;
   assert.equal(v.verdict, "same");
-  assert.deepEqual([v.sessionsCompared, v.rowsCompared, v.allProjectedEqual], [ATHLETE_LIST_SESSIONS, ATHLETE_LIST_SESSIONS * ATHLETE_LIST_ROWS_PER_SESSION, true]);
+  assert.deepEqual([v.sessionsCompared, v.distinctParentsCompared, v.rowsCompared, v.allProjectedEqual], [ATHLETE_LIST_SESSIONS, ATHLETE_LIST_SESSIONS, ATHLETE_LIST_SESSIONS * ATHLETE_LIST_ROWS_PER_SESSION, true]);
   assert.deepEqual(Object.keys(v.fields), [...ATHLETE_LIST_FIELDS]);
   assert.deepEqual([...ATHLETE_LIST_FIELDS], ["id", "athlete", "track", "teamsession", "drill", "is_stats_valid", "total_time", "total_distance", "max_v"]);
   for (const f of ATHLETE_LIST_FIELDS) assert.deepEqual([v.fields[f].inListAll, v.fields[f].inDetailAll, v.fields[f].equalAll, v.fields[f].projectableAll], [true, true, true, true], f);
@@ -1413,7 +1413,7 @@ test("AL1 the athlete-list run: one exchange, then eleven GETs in a fixed order 
     [[2, 6, 6, true, 2, 4, 2, true, true], [1, 4, 4, true, 2, 2, 2, true, true]]);
   assert.deepEqual(v.sessions.map((x) => x.rows.map((r) => r.rowKind)), [["whole", "drill", "drill"], ["whole", "drill", "drill"]]);
   assert.ok(v.sessions.every((x) => x.rows.every((r) => r.projectedEqual && r.differingFields.length === 0)));
-  assert.deepEqual(report.capabilities.session_list, { verdict: "proven", status: 200, rowCount: 6, totalIsNumber: true, parentsChosen: 2 });
+  assert.deepEqual(report.capabilities.session_list, { verdict: "proven", status: 200, rowCount: 6, totalIsNumber: true, parentsChosen: 2, repeatedParentIds: 0 });
   alNoLeak(report);
 });
 
@@ -1508,8 +1508,8 @@ test("AL5 the parents come from the list page only: a row named in another row's
   const r2 = await alRun(named.fetchImpl);
   assert.equal(r2.report.capabilities.session_list.parentsChosen, 1);
   assert.deepEqual(paths(named.calls).slice(2), ["GET /rest/v1/team_session/300/", "GET /rest/v1/athlete_session/?teamsession=300&limit=100", "GET /rest/v1/athlete_session/9001/", "GET /rest/v1/athlete_session/9003/", "GET /rest/v1/athlete_session/9004/"]);
-  // One parent is not the plan's evidence: its facts are printed, the verdict is never `same`.
-  assert.deepEqual([r2.report.capabilities.athlete_list_fields.verdict, r2.report.capabilities.athlete_list_fields.reason], ["not_observed", "fewer_parents_than_planned"]);
+  // One parent is not the plan's evidence: its facts are printed, the verdict is `insufficient`, never `same`.
+  assert.deepEqual([r2.report.capabilities.athlete_list_fields.verdict, r2.report.capabilities.athlete_list_fields.reason], ["insufficient", "fewer_distinct_parents_than_planned"]);
   assert.equal(r2.report.capabilities.athlete_list_fields.sessionsCompared, 1);
   assert.equal(r2.report.capabilities.athlete_list_fields.allProjectedEqual, true);
   // Only the first two parents of the page are read, whatever follows.
@@ -1653,10 +1653,93 @@ test("AL14 a count header on the exchange's answer is printed only as a bounded 
   assert.deepEqual(athleteListFilterDescribed({ totalCount: "308" }), { totalCount: "308" });
 });
 
-test("AL15 a compared row that differs is `differs` even when the page held one parent: the difference is already the answer", async () => {
+test("AL15 a compared row that differs with only one parent is `insufficient` (owner order 2026-10-23: fewer than two different parents is never more), and the differing field is still named", async () => {
   const sessions = [sess(300, 980, DAY, [301]), sess(301, 980, DAY, [])];
   const rows = { 300: AL_ROWS[300].map((r) => (r.id === 9003 ? { ...r, max_v: 8.5 } : r)) };
   const { report } = await alRun(fakeServer(athleteListRoutes({ sessions, rows, detail: (r) => ({ ...(r.id === 9003 ? AL_ROWS[300][2] : r) }) })).fetchImpl);
   const v = report.capabilities.athlete_list_fields;
-  assert.deepEqual([v.verdict, v.reason, v.sessionsCompared, v.fields.max_v.equalAll], ["differs", undefined, 1, false]);
+  assert.deepEqual([v.verdict, v.reason, v.sessionsCompared, v.distinctParentsCompared, v.fields.max_v.equalAll], ["insufficient", "fewer_distinct_parents_than_planned", 1, 1, false]);
+  assert.deepEqual(v.sessions[0].rows.filter((r) => !r.projectedEqual).map((r) => r.differingFields), [["max_v"]]);
+});
+
+// A session the page names twice (the external review's P2, 2026-10-23): it is one parent, read once;
+// the two parents compared are always two different sessions, and fewer is `insufficient`, never `same`.
+const AL_ONE_PARENT_ORDER = [AL_EXCHANGE, AL_LIST, "GET /rest/v1/team_session/100/", "GET /rest/v1/athlete_session/?teamsession=100&limit=100", "GET /rest/v1/athlete_session/8001/", "GET /rest/v1/athlete_session/8003/", "GET /rest/v1/athlete_session/8006/"];
+
+test("AL16 a page naming parent 100 twice ([100, 100]) is one parent read once: `insufficient`, never `same`, also when the repeat spells the id as a string", async () => {
+  for (const second of [100, "100"]) {
+    const sessions = [sess(100, 980, DAY, [101, 102]), sess(second, 980, DAY, [101, 102]), sess(101, 980, DAY, []), sess(102, 980, DAY, [])];
+    const { calls, fetchImpl } = fakeServer(athleteListRoutes({ sessions }));
+    const { report, sleeps } = await alRun(fetchImpl);
+    assert.equal(report.stoppedBy, null, String(typeof second));
+    assert.deepEqual(paths(calls), AL_ONE_PARENT_ORDER, "parent 100 is read once, nothing else");
+    assert.deepEqual(sleeps, Array(AL_ONE_PARENT_ORDER.length - 1).fill(ATHLETE_LIST_PAUSE_MS));
+    assert.deepEqual([report.capabilities.session_list.parentsChosen, report.capabilities.session_list.repeatedParentIds], [1, 1]);
+    const v = report.capabilities.athlete_list_fields;
+    assert.deepEqual([v.verdict, v.reason, v.sessionsCompared, v.distinctParentsCompared, v.rowsCompared, v.allProjectedEqual], ["insufficient", "fewer_distinct_parents_than_planned", 1, 1, ATHLETE_LIST_ROWS_PER_SESSION, true]);
+    alNoLeak(report);
+  }
+});
+
+test("AL17 a page [100, 100, 101] gives two different parents, 100 then 101, in the page's order: the run is as built and `same` stays possible", async () => {
+  const sessions = [sess(100, 980, DAY, [110, 111]), sess(100, 980, DAY, [110, 111]), sess(101, 980, DAY, [112]), sess(110, 980, DAY, []), sess(111, 980, DAY, []), sess(112, 980, DAY, [])];
+  const rows = { 100: AL_ROWS[100], 101: AL_ROWS[300].map((r) => ({ ...r, id: r.id + 100, teamsession: 101 })) };
+  const over = { "GET /rest/v1/team_session/100/": answer(200, sess(100, 980, DAY, [110, 111])), "GET /rest/v1/team_session/101/": answer(200, sess(101, 980, DAY, [112])) };
+  const { calls, fetchImpl } = fakeServer(athleteListRoutes({ sessions, rows, over }));
+  const { report } = await alRun(fetchImpl);
+  assert.equal(report.stoppedBy, null);
+  assert.deepEqual(paths(calls), [...AL_ONE_PARENT_ORDER, "GET /rest/v1/team_session/101/", "GET /rest/v1/athlete_session/?teamsession=101&limit=100", "GET /rest/v1/athlete_session/9101/", "GET /rest/v1/athlete_session/9103/", "GET /rest/v1/athlete_session/9104/"]);
+  assert.equal(report.requestCount, ATHLETE_LIST_MODE_MAX_REQUESTS);
+  assert.deepEqual([report.capabilities.session_list.parentsChosen, report.capabilities.session_list.repeatedParentIds], [2, 1]);
+  const v = report.capabilities.athlete_list_fields;
+  assert.deepEqual([v.verdict, v.sessionsCompared, v.distinctParentsCompared, v.rowsCompared], ["same", 2, 2, 6]);
+  alNoLeak(report);
+  assert.ok(!JSON.stringify(report).includes("9104"));
+});
+
+test("AL18 one unique matching parent, every compared row equal and projectable, is `insufficient`: its facts are printed, the verdict is never `same`", async () => {
+  const sessions = [sess(300, 980, DAY, [301]), sess(301, 980, DAY, []), sess(200, 980, OTHER_DAY, [])];
+  const { calls, fetchImpl } = fakeServer(athleteListRoutes({ sessions }));
+  const { report } = await alRun(fetchImpl);
+  assert.equal(report.stoppedBy, null);
+  assert.equal(paths(calls).length, 7);
+  const v = report.capabilities.athlete_list_fields;
+  assert.deepEqual([v.verdict, v.reason, v.sessionsCompared, v.distinctParentsCompared, v.allProjectedEqual], ["insufficient", "fewer_distinct_parents_than_planned", 1, 1, true]);
+  for (const f of ATHLETE_LIST_FIELDS) assert.deepEqual([v.fields[f].equalAll, v.fields[f].projectableAll], [true, true], f);
+  assert.equal(v.sessions.length, 1);
+});
+
+test("AL19 two different parents with matching data stay `same`; with a differing row they stay `differs`", async () => {
+  const same = await alRun(fakeServer(athleteListRoutes()).fetchImpl);
+  const vs = same.report.capabilities.athlete_list_fields;
+  assert.deepEqual([vs.verdict, vs.reason, vs.distinctParentsCompared], ["same", undefined, 2]);
+  const rows = { ...AL_ROWS, 300: AL_ROWS[300].map((r) => (r.id === 9003 ? { ...r, max_v: 8.5 } : r)) };
+  const differs = await alRun(fakeServer(athleteListRoutes({ rows, detail: (r) => ({ ...(r.id === 9003 ? AL_ROWS[300][2] : r) }) })).fetchImpl);
+  const vd = differs.report.capabilities.athlete_list_fields;
+  assert.deepEqual([vd.verdict, vd.reason, vd.distinctParentsCompared, vd.fields.max_v.equalAll], ["differs", undefined, 2, false]);
+});
+
+test("AL20 the final check counts the different parents itself: two sessions compared with the same parent id are `insufficient`, and no input with fewer than two different parents is ever `same`", () => {
+  const base = { reason: null, rowsCompared: 6, sessionsCompared: 2, comparedParentIds: ["100", "300"], allEqual: true, allProjectable: true };
+  assert.deepEqual(athleteListOutcome(base), { verdict: "same", reason: null, distinctParents: 2 });
+  assert.deepEqual(athleteListOutcome({ ...base, comparedParentIds: ["100", "100"] }), { verdict: "insufficient", reason: "fewer_distinct_parents_than_planned", distinctParents: 1 });
+  assert.equal(athleteListOutcome({ ...base, comparedParentIds: ["100", "100"], allEqual: false }).verdict, "insufficient");
+  assert.equal(athleteListOutcome({ ...base, sessionsCompared: 1 }).verdict, "insufficient");
+  assert.equal(athleteListOutcome({ ...base, comparedParentIds: ["100"] }).verdict, "insufficient");
+  assert.equal(athleteListOutcome({ ...base, comparedParentIds: ["100", "300", "500"], sessionsCompared: 3 }).verdict, "insufficient");
+  assert.deepEqual(athleteListOutcome({ ...base, allEqual: false }), { verdict: "differs", reason: null, distinctParents: 2 });
+  assert.deepEqual(athleteListOutcome({ ...base, allProjectable: false }), { verdict: "not_observed", reason: "value_shape_not_projectable", distinctParents: 2 });
+  assert.deepEqual(athleteListOutcome({ ...base, comparedParentIds: ["100", "100"], reason: "rate_limited" }), { verdict: "not_observed", reason: "rate_limited", distinctParents: 1 });
+  assert.equal(athleteListOutcome({ ...base, rowsCompared: 0, sessionsCompared: 0, comparedParentIds: [] }).reason, "nothing_compared");
+  for (const ids of [[], ["100"], ["100", "100"], ["100", "100", "100"], ["100", "300"], ["100", "300", "300"]]) {
+    for (const sessionsCompared of [0, 1, 2, 3]) {
+      for (const allEqual of [true, false]) {
+        for (const allProjectable of [true, false]) {
+          const o = athleteListOutcome({ reason: null, rowsCompared: 6, sessionsCompared, comparedParentIds: ids, allEqual, allProjectable });
+          if (new Set(ids).size < 2 || ids.length !== 2 || sessionsCompared !== 2) assert.equal(o.verdict, "insufficient", JSON.stringify({ ids, sessionsCompared, allEqual, allProjectable }));
+          assert.ok(o.verdict !== "same" || (new Set(ids).size === 2 && ids.length === 2 && sessionsCompared === 2 && allEqual && allProjectable));
+        }
+      }
+    }
+  }
 });

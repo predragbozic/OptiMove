@@ -244,6 +244,23 @@ export const ATHLETE_LIST_MODE_MAX_REQUESTS = 1 + 1 + ATHLETE_LIST_SESSIONS * (2
 export const ATHLETE_LIST_PAUSE_MS = 2_000;
 // The nine fields compared: exactly what the adapter projects from an athlete row.
 export const ATHLETE_LIST_FIELDS = BUNDLE_FIELDS.athleteSession;
+// The athlete-list verdict from what the run compared. `same` needs exactly two different parents -
+// counted again here from the ids the parents' own reads confirmed, never from the number of sessions
+// alone -, every compared row equal and every list value projectable. Fewer than two different parents
+// is `insufficient`, never `same`, even when a row differed (its field is still named per row). A stopped
+// run is never more than not_observed. Only the number of different parents leaves this function.
+export function athleteListOutcome({ reason = null, rowsCompared, sessionsCompared, comparedParentIds, allEqual, allProjectable }) {
+  const distinctParents = new Set(comparedParentIds).size;
+  const twoDistinct = sessionsCompared === ATHLETE_LIST_SESSIONS && comparedParentIds.length === ATHLETE_LIST_SESSIONS
+    && distinctParents === ATHLETE_LIST_SESSIONS;
+  const outcome = (verdict, why = null) => ({ verdict, reason: why, distinctParents });
+  if (reason !== null) return outcome("not_observed", reason);
+  if (rowsCompared === 0) return outcome("not_observed", "nothing_compared");
+  if (!twoDistinct) return outcome("insufficient", "fewer_distinct_parents_than_planned");
+  if (!allEqual) return outcome("differs");
+  if (!allProjectable) return outcome("not_observed", "value_shape_not_projectable");
+  return outcome("same");
+}
 // What a 429's Retry-After said, as a kind word and a bounded number of seconds; never the raw text.
 export function retryAfterOf(value) {
   if (value === null || value === undefined || value === "") return { retryAfter: "absent", retryAfterS: null };
@@ -645,24 +662,18 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
   // any identity, session or team not confirmed stops the run before the next request; the first 429
   // stops it without a repeat. The values are compared in memory and never leave this function.
   const athleteRun = {
-    sessions: [], rowsCompared: 0,
+    sessions: [], rowsCompared: 0, comparedParentIds: [],
     fields: Object.fromEntries(ATHLETE_LIST_FIELDS.map((f) => [f, { inListAll: true, inDetailAll: true, equalAll: true, projectableAll: true, kindsList: new Set(), kindsDetail: new Set() }])),
   };
   function athleteListVerdict(reason = null) {
     const compared = athleteRun.rowsCompared;
     const allEqual = compared > 0 && athleteRun.sessions.every((x) => x.rows.every((r) => r.projectedEqual));
     const allProjectable = compared > 0 && ATHLETE_LIST_FIELDS.every((f) => athleteRun.fields[f].projectableAll);
-    // "same" only for a run that ended as built, with both planned parents and every compared list
-    // value in a shape the adapter accepts; a stopped run is never more than not_observed. A compared row
-    // that differs is "differs" whatever else is missing: that is already the answer.
-    const why = reason ?? (compared === 0 ? "nothing_compared"
-      : !allEqual ? null
-      : athleteRun.sessions.length < ATHLETE_LIST_SESSIONS ? "fewer_parents_than_planned"
-      : !allProjectable ? "value_shape_not_projectable" : null);
+    const o = athleteListOutcome({ reason, rowsCompared: compared, sessionsCompared: athleteRun.sessions.length, comparedParentIds: athleteRun.comparedParentIds, allEqual, allProjectable });
     verdict("athlete_list_fields", {
-      verdict: why !== null ? "not_observed" : allEqual ? "same" : "differs",
-      ...(why !== null ? { reason: why } : {}),
-      sessionsCompared: athleteRun.sessions.length, rowsCompared: compared, allProjectedEqual: allEqual,
+      verdict: o.verdict,
+      ...(o.reason !== null ? { reason: o.reason } : {}),
+      sessionsCompared: athleteRun.sessions.length, distinctParentsCompared: o.distinctParents, rowsCompared: compared, allProjectedEqual: allEqual,
       fields: Object.fromEntries(ATHLETE_LIST_FIELDS.map((f) => {
         const t = athleteRun.fields[f];
         return [f, { inListAll: compared > 0 && t.inListAll, inDetailAll: compared > 0 && t.inDetailAll, equalAll: compared > 0 && t.equalAll, projectableAll: compared > 0 && t.projectableAll, kindsList: [...t.kindsList].sort(), kindsDetail: [...t.kindsDetail].sort() }];
@@ -975,11 +986,15 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
     assertTeam(rows, "session list");
     // A parent: a row of team 980 with a readable id, named in no other row's `drills`, with an
     // explicit `drills` list of at least one entry, so its athlete list holds drill rows too. No
-    // `drills` entry is ever used as an id.
+    // `drills` entry is ever used as an id. A session the page names twice is one parent: repeats are
+    // dropped before the choice, in the page's order, so the two parents read are two different sessions.
     const named = new Set(rows.flatMap((r) => (Array.isArray(r.drills) ? r.drills.map((d) => safeId(d)).filter(Boolean) : [])));
-    const parents = rows.filter((r) => safeId(r.id) !== null && namesTeam(r.team, team) === true && !named.has(safeId(r.id))
-      && Array.isArray(r.drills) && r.drills.length >= 1).slice(0, ATHLETE_LIST_SESSIONS);
-    verdict("session_list", { verdict: "proven", status: 200, rowCount: rows.length, totalIsNumber: parseTotal(list.totalCount) !== null, parentsChosen: parents.length });
+    const candidates = rows.filter((r) => safeId(r.id) !== null && namesTeam(r.team, team) === true && !named.has(safeId(r.id))
+      && Array.isArray(r.drills) && r.drills.length >= 1);
+    const seenParents = new Set();
+    const distinctCandidates = candidates.filter((r) => !seenParents.has(safeId(r.id)) && seenParents.add(safeId(r.id)));
+    const parents = distinctCandidates.slice(0, ATHLETE_LIST_SESSIONS);
+    verdict("session_list", { verdict: "proven", status: 200, rowCount: rows.length, totalIsNumber: parseTotal(list.totalCount) !== null, parentsChosen: parents.length, repeatedParentIds: candidates.length - distinctCandidates.length });
     if (parents.length === 0) {
       report.stoppedBy = "no_parent_session";
       return done();
@@ -1059,6 +1074,8 @@ export async function runCapabilityProbe({ host = PROBE_HOST, team = PROBE_TEAM,
         athleteRun.rowsCompared += 1;
         facts.rows.push({ rowKind: isDrillRow(listRow) ? "drill" : "whole", projectedEqual: differingFields.length === 0, differingFields });
       }
+      // The parent counts for the verdict once its rows are compared, by the id its own read confirmed.
+      athleteRun.comparedParentIds.push(safeId(ob.id));
     }
     athleteListVerdict(null);
     return done();

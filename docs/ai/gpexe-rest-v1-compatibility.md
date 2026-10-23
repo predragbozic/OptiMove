@@ -807,9 +807,11 @@ rules are `docs/ai/gpexe-athlete-list-nine-fields-plan.md`, added by Draft PR #2
 - **Requests:** one exchange in the host's confirmed form, then at most 11 GET requests for Team ID 980
   (`ATHLETE_LIST_MODE_MAX_REQUESTS` = 12), with a pause of 2 s before every read:
   - the first page of the session list;
-  - for each of the first two parents of the page (team 980, a readable id, named in no other row's
-    `drills`, an explicit `drills` list): its own read, its athlete list (first page) and the own read of
-    three of its rows (the first whole-session row, the first drill row and the last row).
+  - for each of the first two different parents of the page (team 980, a readable id, named in no other
+    row's `drills`, an explicit `drills` list): its own read, its athlete list (first page) and the own
+    read of three of its rows (the first whole-session row, the first drill row and the last row);
+  - a session the page names twice counts once: repeats are dropped before the choice, in the page's
+    order, so it is read once (external review 2026-10-23, P2).
 - **No repeat:** the first 429, the exchange's included, ends the run (`rate_limited`, the request
   number, `Retry-After` as a kind word and bounded seconds).
 - **Stops before the next request:**
@@ -817,23 +819,32 @@ rules are `docs/ai/gpexe-athlete-list-nine-fields-plan.md`, added by Draft PR #2
   - an empty athlete list, or a repeated row id.
 - **Printed per field:** presence, kind words, equality and whether the list value is one the adapter's
   projection accepts. Per row: the differing field names (from the closed list of nine). Per session:
-  counts.
+  counts. For the run: the number of different parents compared (`distinctParentsCompared`) and of
+  repeated parent ids on the page (`repeatedParentIds`).
 - **Never printed:** an id, a value, a name, a date or an answer key outside the closed list.
 - **Known limit (security review 2026-10-23, LOW, recorded and not changed):** each request entry keeps
   the probe's shared description, as the full and drill runs do. That means the header names and up to
   80 characters of `content-type`, `allow` and `x-gpexe-version`. The identity run's header filter is the
   fix, if the owner wants it.
 - **Verdict:**
-  - `same` only for a run that ended as built, with two parents, every compared row equal and every list
-    value projectable;
-  - `differs` only for a run that ended as built in which a compared row differs (also with one parent);
+  - `same` only for a run that ended as built, with two different parents compared, every compared row
+    equal and every list value projectable. A final check counts the different parents again from the
+    ids their own reads confirmed, not from the number of sessions compared (`athleteListOutcome`);
+  - `insufficient` for a run that ended as built with fewer than two different parents
+    (`fewer_distinct_parents_than_planned`), also when a compared row differed: never `same`. The
+    differing field is still named per row (owner order 2026-10-23);
+  - `differs` only for a run that ended as built, with two different parents, in which a compared row
+    differs;
   - otherwise `not_observed` with its reason. A run that stopped (a 429, a refused read, an isolation
     stop) is `not_observed` with its stop code even after a difference was seen; the per-field facts are
     still printed.
+  - The plan's section 3 (in Draft PR #209) still names the earlier outcome for one parent: `not_observed`
+    with `fewer_parents_than_planned`, and `differs` for a difference. This section and the code win; the
+    plan is aligned after #209 merges, since #209 is not changed now (owner order 2026-10-23).
 
 **Status: not run against GPEXE. The nine fields are not confirmed compatible.**
 - **Confirmed by the fake-fetch contract tests only** (`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`,
-  AL1–AL15): the tool's own behaviour, that is its requests, pace, stops, report and verdict rules.
+  AL1–AL20): the tool's own behaviour, that is its requests, pace, stops, report and verdict rules.
 - **Not confirmed:** anything about server3's answers. That covers whether its list rows carry the nine
   fields, with which values, and whether the session list holds two parents with drills.
 - Only the owner-run read, on a separate owner order after the external review of the tool, can give a
