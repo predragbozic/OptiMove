@@ -1907,20 +1907,22 @@ Technical details.
   line.
 - **GPEXE's rate limit (429) during a check** (owner order 2026-10-22; PR #209, branch
   `fix/gpexe-check-rate-limit` from `12beb86`; backend, tests and docs, no migration, no frontend change).
-  - **Merged and deployed** on the owner's order (2026-10-24), together with the two read-only probe tools; each
-    was deployed before the next was merged:
+  - **Merged and deployed** on the owner's order (2026-10-24), together with the two read-only probe tools and the
+    request reduction; each was deployed before the next was merged:
 
     | PR | Merge commit | Merged (UTC) | `/api/health` first served it with `ok: true` (UTC) |
     |---|---|---|---|
     | #209, the 429 repeat | `12b0f2e` | 00:39:19 | 00:44:41 |
     | #210, the athlete-list probe | `38c2431` | 00:44:55 | 00:46:35 |
     | #211, the details-coverage probe | `8e20da1` | 00:47:07 | 00:48:31 |
+    | #212, the request reduction | `e8c5eb9` | 11:24:16 | 11:26:45 |
 
     - Each commit was then served three times in a row.
     - Without a login, `GET /api/auth/me` answered 200 with no user, and the GPEXE team status (zero UUID) and the
       source-connection list answered 401.
     - Render did not deploy by itself; the owner started each deploy.
-    - No check, GPEXE request or migration was run.
+    - No migration was run, and no check or GPEXE request was sent at the merges; the probe sittings and the
+      check below were owner-run, each on its own order.
   - **Production, 2026-10-22 (as reported by the owner, sanitized):** two checks of First team failed with
     `source_unavailable` "The source server asked to slow down." (HTTP 429): the default 14 days at 10:03,
     and 18.10.2026 - 19.10.2026 at 17:11 after one session. Nothing was published; the switch stays off.
@@ -1942,14 +1944,32 @@ Technical details.
     193 athlete rows for 22 athletes - server3 lists one row per athlete for the session and one per drill.
   - **Request count:** about 200 - 330 requests per production session, mostly the row and `/more/` reads
     (`docs/ai/gpexe-check-request-count-analysis.md`, section 5).
-  - **The reduction** (Draft PR #212, branch `feature/gpexe-check-request-reduction`; not merged, not deployed):
+  - **The reduction** (PR #212, branch `feature/gpexe-check-request-reduction`; merged and deployed, see the table
+    above; backend, tests and docs, no migration):
     - a check reads no drill brief or tag list, and reads the thresholds once per day;
     - it takes each athlete row from the list, with `max_v` from the details it reads anyway, and reads one
       canary row per session on its own;
     - a row the details do not cover, or a session whose canary differs, is read row by row as before.
 
-    That is 146 instead of 206 requests on the fake-source check, with the same stored bundles, and about 262
-    instead of 455 on the owner's check of 2026-10-22.
+    That is 146 instead of 206 requests on the fake-source check, with the same stored bundles.
+  - **The first production check on `e8c5eb9`** (2026-10-24, 11:30:20 - 11:39:35 UTC, owner-run once, First team,
+    the default 14 days 11.10.2026 - 24.10.2026; sanitized, from the Imports screen and the check's timing line):
+    - **Confirmed (measured):**
+      - `succeeded`, with no HTTP 429 (no `op=rate_limit` line);
+      - 12 sessions found and done: 10 new, 0 changed, 2 unchanged;
+      - 201 athletes (201 tracks), 507 athlete rows, 17 drills;
+      - **792 GPEXE requests** in **9 min 14 s** (`total_ms=554367`). By kind: session list 8, parents 12,
+        athlete lists 13, row reads 12, `/more/` 507, tracks 201, whole details 12, drills 17, thresholds 10,
+        brief / tags 0;
+      - the row reads were exactly the 12 canaries, one per session. Every canary matched, and none of the 507
+        rows needed a fallback read on its own;
+      - the 2 unchanged sessions were stored before by the old path, which read every row. They have the same
+        content fingerprint now, so the stored data is the same.
+    - **Estimated, not measured:** the old path would have sent about 1,300 requests for the same scope (507 row
+      reads instead of 12, 12 thresholds instead of 10, plus a brief per session with drills), so about 39% more.
+      The largest remaining times are the database preview (163 s), the session list (141 s), `/more/` (97 s), and
+      the details with the drills (85 s).
+  - **The GPEXE check request optimization is complete,** confirmed by this production check.
   - **The owner-run read-only sitting** (2026-10-24, 08:55 UTC, run once; 23 requests, no 429; sanitized reports
     as returned by the owner):
     - **A, athlete list:** `differs`. Eight of the nine row fields are equal, but `max_v` is absent from the list,
