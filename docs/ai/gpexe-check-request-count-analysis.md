@@ -141,5 +141,16 @@ track. The proven saving is only the drill labels and the repeated thresholds:
 - **The row read:** it could go only if `max_v` came from another answer with proven equal values. The details'
   `max_values_speed` is a candidate, but the sitting could not compare it, and its unit is not one of the closed
   words.
+  - **The last check of this option** (owner order 2026-10-24): `backend/scripts/gpexe-max-speed-probe.mjs`, tested
+    against a fake server only (`backend/tests/gpexe-max-speed-probe.test.mjs`).
+  - **What it reads:** one exchange and at most 15 GETs. That is the parent, its athlete list, the whole details,
+    drills 0 and 1 in the check's `api/` form, and the own read of up to three athletes' rows at those three
+    levels. It pauses 2 s before every read and stops on the first 429.
+  - **When it says `same`:** every compared pair keeps the importer's value exactly (the same m/s number, or
+    exactly 3.6 times it in km/h, with nothing rounded), the details cover every valid row of the three levels,
+    and drill 0 and drill 1 differ.
+  - **If it does:** rows from the list plus `max_values_speed` would remove the per-row read, about 193 of the
+    455 requests.
+  - It has not been run yet.
 - **`/more/`:** it stays as long as the power and speed zones come from it. The details' zones are not the same
   zones.
