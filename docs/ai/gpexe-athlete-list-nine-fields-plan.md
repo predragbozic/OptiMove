@@ -1,7 +1,11 @@
 # Plan: a read-only check of the nine athlete-row fields in server3's athlete list
 
-Status: **plan; the tool is implemented and tested against a fake server only, and merged and deployed as PR #210
-(merge commit `38c2431`, 2026-10-24). No GPEXE request has been sent. The real read is neither approved nor run, so the nine fields are not confirmed
+**Result (owner-run read, 2026-10-24, run once): `differs`.** Eight of the nine fields are equal in every compared
+list row; `max_v` is absent from the list, and the mapper needs it for every row. So a check keeps each row's own
+read; see `docs/ai/gpexe-check-request-count-analysis.md` section 5.
+
+Status before that read: **plan; the tool is implemented and tested against a fake server only, and merged and
+deployed as PR #210 (merge commit `38c2431`, 2026-10-24). No GPEXE request had been sent. The real read is neither approved nor run, so the nine fields are not confirmed
 compatible.** Owner orders 2026-10-22 (plan) and 2026-10-23 (prepare the tool and test it against a fake server
 only; commit it as a separate Draft PR). The owner-run read happens only on a separate owner order, after the
 owner's external review of the tool. The internal `code-reviewer` and `security-reviewer` checked the plan and

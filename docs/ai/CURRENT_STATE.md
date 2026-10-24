@@ -1941,12 +1941,18 @@ Technical details.
   - **The 17:11 check's timing line (owner, sanitized):** 455 requests in 4 min 51 s, the 429 on the last;
     193 athlete rows for 22 athletes - server3 lists one row per athlete for the session and one per drill.
   - **Request count:** about 200 - 330 requests per production session, mostly the row and `/more/` reads
-    (`docs/ai/gpexe-check-request-count-analysis.md`). The first reduction is in a Draft PR on branch
-    `feature/gpexe-check-request-reduction`; it is not merged and not deployed.
-    - **On:** a check reads no drill brief or tag list, and reads the thresholds once per day.
-    - **Built but off:** the rows from the athlete list, with a canary row read per session.
-    - **What decides the larger savings:** the one owner-run read-only sitting with both probe tools (at most 24
-      requests), described in section 6 of `docs/ai/gpexe-details-coverage-plan.md`. It is not run yet.
+    (`docs/ai/gpexe-check-request-count-analysis.md`, section 5).
+  - **The reduction** (Draft PR #212, branch `feature/gpexe-check-request-reduction`; not merged, not deployed): a
+    check reads no drill brief or tag list, and reads the thresholds once per day. That is 203 instead of 206
+    requests on the fake-source check, and about 453 instead of 455 on the owner's check of 2026-10-22.
+  - **The owner-run read-only sitting** (2026-10-24, 08:55 UTC, run once; 23 requests, no 429; sanitized reports
+    as returned by the owner):
+    - **A, athlete list:** `differs`. Eight of the nine row fields are equal, but `max_v` is absent from the list,
+      so each row's own read stays.
+    - **B, grouped details:** `differs`. Events, the mapping and the drill level are `same`. The power zones
+      differ (4 zones against 5), and the speed zones are `insufficient`. So `/more/` stays for every row.
+    - **Consequence:** no larger saving is proven. Cutting the per-row reads would need `max_v` from another
+      proven answer, and zones the details do not carry. Each is a new owner decision.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2675,7 +2681,8 @@ pre-existing; pass/fail counts don't belong in this file
   PR #209).
   - **The probe mode** (`--mode athlete-list`): implemented and tested against a fake server only, merged and
     deployed as PR #210 (`38c2431`). The details-coverage tool (question B) is PR #211 (`8e20da1`).
-  - **The real GPEXE read** is neither approved nor run, so the nine fields are not confirmed compatible.
+  - **The real GPEXE read** ran once on 2026-10-24: `differs`, because `max_v` is not in the list (see the 429
+    entry under the active phase).
   - **Merged in that order on 2026-10-24:** #209, then #210, then #211.
 
 - **Separate migration and runtime database roles** (owner, 2026-10-13, at the v35 decisions; an

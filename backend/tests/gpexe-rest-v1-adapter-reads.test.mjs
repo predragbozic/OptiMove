@@ -2060,8 +2060,7 @@ test("B10.6 static guard: the fingerprint is computed only in the adapter's dril
 
 // ---------------------------------------------------------------------------
 // B13. The check's bundle read plan (owner order 2026-10-23, the request reduction): no drill labels
-// (the check strips them), thresholds once per day per instance, and - only once the owner-run
-// comparison proved them equal - the rows from the athlete list with one canary row read.
+// (the check strips them) and the thresholds once per day per instance.
 // ---------------------------------------------------------------------------
 const CHECK_PLAN = { bundleDrillLabels: false };
 const withoutLabels = ({ drillLabels, ...rest }) => { void drillLabels; return rest; };
@@ -2101,34 +2100,8 @@ test("B13.2 the thresholds of a day are read once per instance; another day is r
   assert.equal(pathsOf(calls).filter((p) => p === THRESH).length, 2);
 });
 
-test("B13.3 rows from the athlete list: one canary row read instead of every row, the same /more/ and tracks, and the same bundle", async () => {
-  const base = full();
-  const plain = await (await primed(base.fetchImpl, CHECK_PLAN)).fetchSessionBundle({ sessionId: "100" });
-  const { calls, fetchImpl } = full();
-  const bundle = await (await primed(fetchImpl, { ...CHECK_PLAN, bundleRowsFromList: true })).fetchSessionBundle({ sessionId: "100" });
-  assert.deepEqual(pathsOf(calls), [
-    LIST, PARENT, ATHLETES, "/rest/v1/athlete_session/500/",
-    "/rest/v1/athlete_session/500/more/", "/rest/v1/track/900/", "/rest/v1/athlete_session/501/more/", "/rest/v1/track/901/",
-    WHOLE, D0, D1, THRESH,
-  ]);
-  assert.deepEqual(bundle, plain, "the stored bundle is the same, so its hash is the same");
-  noNames(bundle);
-});
-
-test("B13.4 a canary that differs from its list row refuses the bundle before any /more/ or track read; a list row whose track is unreadable is refused before the canary", async () => {
-  const { calls, fetchImpl } = full({ "/rest/v1/athlete_session/500/": answer(200, athleteRow(500, 4711, { total_distance: 3001 })) });
-  const e = await errorOf((await primed(fetchImpl, { ...CHECK_PLAN, bundleRowsFromList: true })).fetchSessionBundle({ sessionId: "100" }));
-  assert.equal(e?.code, "source_answer_unexpected");
-  assert.equal(e?.reason, "list_row_differs_from_row_read");
-  assert.equal(pathsOf(calls).at(-1), "/rest/v1/athlete_session/500/", "nothing after the canary");
-  const bad = full({ [ATHLETES]: answer(200, [athleteRow(500, 4711, { track: "a-track" }), athleteRow(501, 4712, { track: 901 })], { "x-total-count": "2" }) });
-  const e2 = await errorOf((await primed(bad.fetchImpl, { ...CHECK_PLAN, bundleRowsFromList: true })).fetchSessionBundle({ sessionId: "100" }));
-  assert.equal(e2?.code, "source_answer_unexpected");
-  assert.equal(pathsOf(bad.calls).at(-1), ATHLETES, "no canary, no /more/, no track");
-});
-
-test("B13.5 the read plan is two booleans", () => {
-  for (const over of [{ bundleDrillLabels: "no" }, { bundleRowsFromList: 1 }, { bundleRowsFromList: null }]) {
+test("B13.3 whether the bundle reads the drill labels is a boolean", () => {
+  for (const over of [{ bundleDrillLabels: "no" }, { bundleDrillLabels: 1 }, { bundleDrillLabels: null }]) {
     assert.throws(() => make(async () => { throw new Error("never"); }, over), code("invalid_options"), JSON.stringify(over));
   }
 });

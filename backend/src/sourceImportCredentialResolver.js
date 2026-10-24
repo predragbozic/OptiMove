@@ -323,9 +323,8 @@ export function preflightImportSource(facts) {
 // request. Only a check asks for it (`rateLimitRetry`); an identity load keeps
 // its own short budget and never waits.
 // `checkBundle` is a check's read plan for a session's bundle (owner order
-// 2026-10-23): no drill labels (the check strips them before storing), and
-// rows from the athlete list only when the check turns that on.
-export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalThis.fetch, timeoutMs = 90_000, meter = NOOP_CHECK_METER, rateLimitRetry = false, checkBundle = null } = {}) {
+// 2026-10-23): no drill labels, because the check strips them before storing.
+export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalThis.fetch, timeoutMs = 90_000, meter = NOOP_CHECK_METER, rateLimitRetry = false, checkBundle = false } = {}) {
   requireIssued(facts);
   if (facts.path !== PATH_SOURCE_CONNECTION || !facts.credential) throw fail("binding_ambiguous");
   let keyring;
@@ -379,7 +378,7 @@ export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalTh
           }
         },
       } : null;
-      const bundlePlan = checkBundle === null ? {} : { bundleDrillLabels: false, bundleRowsFromList: checkBundle.rowsFromList === true };
+      const bundlePlan = checkBundle === true ? { bundleDrillLabels: false } : {};
       adapter = createSourceAdapter({ sourceSystem: facts.sourceSystem, hostKey: facts.hostKey, catalogRow: facts.catalogRow, credential: token, boundSourceTeamId: facts.sourceTeamId, fetchImpl: trackedFetch, timeoutMs, attempts: 1, rateLimit, ...bundlePlan, ...(sleepForImport ? { sleep: sleepForImport } : {}) });
     } catch (error) {
       if (error?.code === "adapter_not_available") throw fail("adapter_not_available");

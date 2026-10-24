@@ -161,7 +161,7 @@ function fixture(sourceTeamId) {
 // The fake server3: the exchange and team reads (Connect / bind) and the
 // rest_v1 / legacy reads of the served team. `calls` holds what a check sent.
 const visibleTeams = new Set();
-const src = { calls: [], served: null, data: null, faults: { drillMissing: null, rowDiffers: null } };
+const src = { calls: [], served: null, data: null, faults: { drillMissing: null } };
 const json = (status, body, headers = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 async function fakeFetch(url, init = {}) {
   const u = new URL(String(url));
@@ -194,7 +194,6 @@ async function fakeFetch(url, init = {}) {
   if (m) {
     for (const b of bundles) {
       const row = b.athleteSessions.find((r) => String(r.id) === m[1]);
-      if (row && !m[2] && src.faults.rowDiffers === m[1]) return json(200, { ...row, total_distance: row.total_distance + 1 });
       if (row) return json(200, m[2] ? b.more[m[1]] : row);
     }
     return json(404, {});
@@ -480,48 +479,5 @@ test("7. a finalization whose COMMIT is never answered writes outcome=unknown wi
     assertNothingPrivate(run.lines[0]);
   } finally {
     importer.setCheckFinalizeForTests({});
-  }
-});
-
-test("8. rows from the athlete list (the switch the owner turns on after the comparison returns `same`): 146 requests instead of 203 - one canary row read per session - and the same stored bundles, so a check after a check with every row read finds every session unchanged", async () => {
-  const o = await org();
-  serve(o);
-  assert.equal(importer.CHECK_ROWS_FROM_LIST, false, "off in production until the owner-run comparison returns `same`");
-  const first = await runCheck(o);
-  assert.equal(first.row.status, "succeeded", JSON.stringify(first.row));
-  assert.equal(first.row.candidates_new, 3);
-  importer.setCheckRowsFromListForTests(true);
-  try {
-    const run = await runCheck(o);
-    assert.equal(run.row.status, "succeeded", JSON.stringify(run.row));
-    assert.deepEqual([run.row.candidates_new, run.row.candidates_changed, run.row.candidates_unchanged], [0, 0, 3], "the stored bundles and their hashes are the same");
-    const line = parseLine(run.lines[0]);
-    assert.deepEqual(line.requests, { ...EXPECTED_REQUESTS, athlete_detail: 3 });
-    assert.equal(run.calls.length, 146, "8 + 3 × (parent, list, 1 canary, 20 /more/, 20 tracks, whole details) + 5 drills + 1 thresholds");
-    const rowReads = run.calls.filter((k) => /^\/rest\/v1\/athlete_session\/\d+\/$/.test(k));
-    const firstRows = src.data.bundles.map((b) => `/rest/v1/athlete_session/${b.athleteSessions[0].id}/`);
-    assert.deepEqual(rowReads, firstRows, "the canary is each session's first listed row, read once");
-  } finally {
-    importer.setCheckRowsFromListForTests(null);
-  }
-});
-
-test("9. a canary row that differs from its list row fails the check fail-closed: source_answer_unexpected, nothing of the session read further or published", async () => {
-  const o = await org();
-  serve(o);
-  const firstSession = src.data.bundles[0];
-  src.faults.rowDiffers = String(firstSession.athleteSessions[0].id);
-  importer.setCheckRowsFromListForTests(true);
-  try {
-    const run = await runCheck(o);
-    assert.equal(run.row.status, "failed");
-    assert.equal(run.row.error_code, "source_answer_unexpected");
-    assert.equal(run.row.candidates_new, 0);
-    const canary = `/rest/v1/athlete_session/${firstSession.athleteSessions[0].id}/`;
-    assert.equal(run.calls.at(-1), canary, "nothing after the canary");
-    assert.ok(!run.calls.some((k) => k.endsWith("/more/")), "no /more/ of the refused session");
-  } finally {
-    src.faults.rowDiffers = null;
-    importer.setCheckRowsFromListForTests(null);
   }
 });
