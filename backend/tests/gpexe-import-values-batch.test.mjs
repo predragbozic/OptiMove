@@ -7,7 +7,10 @@
 // replayed as the old per-value statements, word for word, on the same
 // connection - and the two must give the same preview, the same previewHash,
 // the same rows after a real import, the same refusal for a bad value and the
-// same state after a rollback. Only the number of statements may differ.
+// same state after a rollback. Besides the number of statements, the only
+// differences are in refusals the writer cannot produce, pinned here (7.3,
+// 8.x) and reported to the owner: the parameter an error's `where` names, and
+// which refusal comes first when one result holds two refused values.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
@@ -62,12 +65,19 @@ after(async () => {
 // Counts every statement and, in legacy mode, replays each multi-row value
 // INSERT as the old per-value statements in the same order on the same
 // connection (a failing value stops the replay where the old loop stopped).
-function driver(client, mode) {
+// `tamper` edits the parameters of the first value statement, the same way
+// for both modes: a fault the writer itself cannot produce.
+function driver(client, mode, { tamper = null } = {}) {
   const stats = { statements: 0, valueStatements: 0, values: 0 };
+  let tampered = false;
   return {
     stats,
     query: async (text, params) => {
       if (typeof text === "string" && VALUE_INSERT.test(text)) {
+        if (tamper && !tampered) {
+          params = tamper([...params]);
+          tampered = true;
+        }
         const [occasionId, ...rest] = params;
         assert.equal(rest.length % 6, 0, "six parameters per value after the occasion");
         stats.values += rest.length / 6;
@@ -382,11 +392,15 @@ const FAULTS = [
   // other field stay the same. Unreachable through the mapper, which emits
   // finite numbers only, and no code reads an error's `where`.
   { label: "a value that is not a number (numeric input)", code: "22P02", message: /invalid input syntax for type numeric/, apply: (r) => { r.values[1] = { ...r.values[1], value: "not-a-number" }; },
-    knownWhere: { legacy: "unnamed portal parameter $4 = '...'", batched: "unnamed portal parameter $10 = '...'" } },
+    knownWhere: { legacy: /^unnamed portal parameter \$4\b/, batched: /^unnamed portal parameter \$10\b/ } },
   // Without a definition the version is missing too: the scope trigger
   // refuses the row before the NOT NULL check would.
   { label: "a metric the plan has no definition for (no definition, no version)", code: "P0001", message: /has no declared scope_capability/, apply: (r) => { r.values[3] = { ...r.values[3], metricKey: "gpexe_unknown_metric" }; } },
   { label: "a refused value as the LAST of the result", code: "P0001", message: /value_type=numeric requires value_numeric only/, apply: (r) => { r.values[r.values.length - 1] = { ...r.values[r.values.length - 1], value: null }; } },
+  // Below the writer (a definition and its version come from the same row):
+  // the second value carries the third value's version.
+  { label: "a version of another definition (composite foreign key)", code: "23503", message: /metric_values_definition_version_fk/, apply: () => {},
+    tamper: (params) => { params[1 + 6 * 1 + 1] = params[1 + 6 * 2 + 1]; return params; } },
 ];
 
 for (const [i, fault] of FAULTS.entries()) {
@@ -405,7 +419,7 @@ for (const [i, fault] of FAULTS.entries()) {
     for (const mode of ["legacy", "batched"]) {
       seen[mode] = await withClient(async (client) => {
         const before = await tableCounts(client);
-        const d = driver(client, mode);
+        const d = driver(client, mode, { tamper: fault.tamper ?? null });
         // As previewLocked runs it: a savepoint inside the locked transaction.
         await client.query("begin");
         let savepointError;
@@ -426,7 +440,7 @@ for (const [i, fault] of FAULTS.entries()) {
         // As the approval runs it: its own transaction, rolled back on error.
         let importError;
         try {
-          await importGpexePlan(driver(client, mode), faulty(), ctx());
+          await importGpexePlan(driver(client, mode, { tamper: fault.tamper ?? null }), faulty(), ctx());
         } catch (error) {
           importError = error;
         }
@@ -438,7 +452,7 @@ for (const [i, fault] of FAULTS.entries()) {
     if (fault.knownWhere) {
       for (const where of ["savepoint", "real"]) {
         for (const mode of ["legacy", "batched"]) {
-          assert.equal(seen[mode][where].where, fault.knownWhere[mode], `${mode} ${where}: the parameter PostgreSQL names`);
+          assert.match(seen[mode][where].where, fault.knownWhere[mode], `${mode} ${where}: the parameter PostgreSQL names`);
           seen[mode][where].where = "<parameter position>";
         }
       }
@@ -448,6 +462,70 @@ for (const [i, fault] of FAULTS.entries()) {
       assert.equal(seen.batched[where].gpexe, false, `${where}: the database's own error, passed on`);
       assert.equal(seen.batched[where].code, fault.code, `${where}: SQLSTATE`);
       assert.match(seen.batched[where].message, fault.message, `${where}: message`);
+    }
+  });
+}
+
+// Two refused values in one result: which refusal comes first is the second
+// and third reported difference (code review of 452aa57). One statement
+// converts every parameter before its first row and checks its foreign keys
+// at its end, while the old loop met each value's own refusal in turn. The
+// writer cannot produce either case (a value is a finite number; a
+// definition and its version come from the same row), so the tests build
+// them below the writer, and they pin the refusal each way gives: a change
+// in it can no longer pass unnoticed.
+const MULTI_FAULTS = [
+  {
+    label: "a value of another definition's version (composite foreign key) before a null value",
+    // Row 1 carries row 2's version: valid for the triggers, refused by
+    // metric_values_definition_version_fk - after its own statement in the
+    // old loop, at the end of the one statement in the new way, which row 3's
+    // trigger has already ended.
+    tamper: (params) => { params[1 + 6 * 1 + 1] = params[1 + 6 * 2 + 1]; return params; },
+    apply: (r) => { r.values[3] = { ...r.values[3], value: null }; },
+    expect: {
+      legacy: { code: "23503", constraint: "metric_values_definition_version_fk" },
+      batched: { code: "P0001", constraint: null, message: /value_type=numeric requires value_numeric only/ },
+    },
+  },
+  {
+    label: "a null value before a value that is not a number",
+    // The new statement's parameters are converted before row 0's trigger
+    // runs; the old loop reached row 0's trigger first.
+    apply: (r) => { r.values[0] = { ...r.values[0], value: null }; r.values[2] = { ...r.values[2], value: "x" }; },
+    expect: {
+      legacy: { code: "P0001", constraint: null, message: /value_type=numeric requires value_numeric only/ },
+      batched: { code: "22P02", constraint: null, message: /invalid input syntax for type numeric/ },
+    },
+  },
+];
+
+for (const [i, fault] of MULTI_FAULTS.entries()) {
+  test(`8.${i + 1} two refused values in one result - ${fault.label}: each way refuses (pinned), nothing is left behind`, async () => {
+    const b = makeBundle({ sessionId: 8300 + i, gpexeTeamId: GPEXE_TEAM, start: `2026-10-${String(16 + i).padStart(2, "0")}T09:00:00`, drillsCount: 2, athletes: standardAthletes().slice(0, 2), detailsDrills: [0, 1] });
+    const faulty = () => {
+      const plan = importablePlan(b);
+      fault.apply(plan.participants[0].results[0]);
+      return plan;
+    };
+    assert.ok(faulty().participants[0].results[0].values.length >= 4, "the fixture maps");
+    for (const mode of ["legacy", "batched"]) {
+      await withClient(async (client) => {
+        const before = await tableCounts(client);
+        let refused;
+        try {
+          await importGpexePlan(driver(client, mode, { tamper: fault.tamper ?? null }), faulty(), ctx());
+        } catch (error) {
+          refused = errorFacts(error);
+        }
+        assert.ok(refused, `${mode}: the import is refused`);
+        const want = fault.expect[mode];
+        assert.equal(refused.gpexe, false, `${mode}: the database's own error`);
+        assert.equal(refused.code, want.code, `${mode}: SQLSTATE`);
+        assert.equal(refused.constraint, want.constraint, `${mode}: constraint`);
+        if (want.message) assert.match(refused.message, want.message, `${mode}: message`);
+        assert.deepEqual(await tableCounts(client), before, `${mode}: nothing left behind`);
+      });
     }
   });
 }

@@ -972,6 +972,55 @@ test("approve: when the preview changed under the approval's lock, everything th
   });
 });
 
+// The importer writes a result's values in one multi-row INSERT
+// (metricValuesInsert): a value the database refuses in the middle of that
+// statement, through the real route. A test-only trigger, armed by a flag row
+// after the check (so the check's own preview ran clean), refuses the
+// distance value of every result - the second row of each statement.
+test("approve: a value the database refuses inside the import answers 500 internal_error, writes nothing, keeps the candidate pending, and releases its lock and connection", async () => {
+  const team = await setupTeam();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7190 })] }));
+  await checkNow(team);
+  const reviewed = await pendingCandidate(team);
+  assert.equal(reviewed.status, "pending");
+  await admin.query(`create table public.zz_test_refuse_values_flag (armed boolean)`);
+  await admin.query(`
+    create function training_load.zz_test_refuse_value() returns trigger as $$
+    begin
+      if exists (select 1 from public.zz_test_refuse_values_flag)
+         and (select key from training_load.metric_definitions where id = new.metric_definition_id) = 'gpexe_total_distance' then
+        raise exception 'zz_test_refuse_value';
+      end if;
+      return new;
+    end $$ language plpgsql`);
+  await admin.query(`create trigger zz_test_refuse_value before insert on training_load.metric_values for each row execute function training_load.zz_test_refuse_value()`);
+  try {
+    await admin.query(`insert into public.zz_test_refuse_values_flag values (true)`);
+    const before = await allRowCounts();
+    await withSwitchOn(async () => {
+      const r = await approve(team, reviewed, team.padmin.cookie);
+      assert.equal(r.status, 500, JSON.stringify(r.body));
+      assert.equal(r.body.error, "internal_error");
+      assert.match(r.body.message, /nothing was imported/);
+      assert.doesNotMatch(JSON.stringify(r.body), /zz_test_refuse_value/, "the database's text never reaches the caller");
+      assert.deepEqual(await allRowCounts(), before, "every table exactly as before");
+      assert.equal((await approvalsOf(reviewed.id)).length, 0);
+      assert.equal((await candidateRow(reviewed.id)).status, "pending");
+
+      // The flag gone, the same approval goes through: the team's import
+      // lock and the connection were released.
+      await admin.query(`delete from public.zz_test_refuse_values_flag`);
+      const ok = await approve(team, reviewed, team.padmin.cookie);
+      assert.equal(ok.status, 200, JSON.stringify(ok.body));
+      assert.equal((await candidateRow(reviewed.id)).status, "imported");
+    });
+  } finally {
+    await admin.query(`drop trigger if exists zz_test_refuse_value on training_load.metric_values`);
+    await admin.query(`drop function if exists training_load.zz_test_refuse_value()`);
+    await admin.query(`drop table if exists public.zz_test_refuse_values_flag`);
+  }
+});
+
 test("approve: a preview hash other than the stored one is refused before anything is written", async () => {
   const team = await setupTeam();
   service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7104 })] }));
