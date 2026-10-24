@@ -318,7 +318,7 @@ function assertNothingPrivate(line) {
 }
 
 
-const BASELINE_REQUESTS = 206; // the discovery fixture's check without a 429 (gpexe-check-timing.test.mjs)
+const BASELINE_REQUESTS = 203; // the discovery fixture's check without a 429 (gpexe-check-timing.test.mjs; 206 before the request reduction)
 const slowDown = (headers = {}) => new Response("{}", { status: 429, headers: { "content-type": "application/json", ...headers } });
 const TRACK = (o) => `/rest/v1/track/${3011 * 1000 + 4}/`; // one athlete's track of the second session
 const DIAGNOSTIC = " Diagnostic: ";
@@ -520,7 +520,7 @@ test("10. a 429, then a 5xx or no answer to the repeat (a track): the check fail
   }
 });
 
-test("11. a drill's repeat answers 5xx or gets no answer: the drill set ends there; the brief and the thresholds still go out, a 429 on the thresholds stops the check without a repeat (retry_already_used), and nothing follows - no other drill, session or request", async () => {
+test("11. a drill's repeat answers 5xx or gets no answer: the drill set ends there; the thresholds still go out (a check reads no brief), a 429 on the thresholds stops the check without a repeat (retry_already_used), and nothing follows - no other drill, session or request", async () => {
   for (const [label, second] of [
     ["5xx", () => new Response("{}", { status: 502, headers: { "content-type": "application/json" } })],
     ["no answer", () => { throw new TypeError("fetch failed"); }],
@@ -542,7 +542,7 @@ test("11. a drill's repeat answers 5xx or gets no answer: the drill set ends the
     assert.match(line, /request_kind=thresholds; requests_sent=(\d+); .*retry_after=seconds; retry_after_s=1; retry_used=yes; outcome=retry_already_used\.$/, label);
     assert.equal(Number(line.match(/requests_sent=(\d+);/)[1]), calls.length, `${label}: the count is every request of this check`);
     const after = calls.slice(calls.indexOf(D0));
-    assert.deepEqual(after.map((k) => (THRESHOLDS.test(k) ? "thresholds" : k)), [D0, D0, "/api/team_session/3001/brief/", "thresholds"], `${label}: after the failed repeat the brief and the thresholds, and nothing after the stop`);
+    assert.deepEqual(after.map((k) => (THRESHOLDS.test(k) ? "thresholds" : k)), [D0, D0, "thresholds"], `${label}: after the failed repeat the thresholds, and nothing after the stop`);
     assert.ok(!calls.some((k) => /\?drill=[1-9]/.test(k)), `${label}: no other drill`);
     assert.ok(!calls.some((k) => /team_session\/30(11|21)\//.test(k)), `${label}: no other session`);
     assert.deepEqual(sleeps, [1000], `${label}: one wait in the whole check`);

@@ -854,8 +854,7 @@ rules are `docs/ai/gpexe-athlete-list-nine-fields-plan.md`, added by Draft PR #2
   separate PR on the owner's order.
 
 **Integration with PR #209.**
-- **Recommended order:** merge Draft PR #209 first, then this PR. After #209 merges, check this PR against
-  the new `main` (one look at the reference above and a run of the probe's test file).
+- **Order, as merged (2026-10-24):** PR #209 (`12b0f2e`), then PR #210 (`38c2431`), each deployed before the next.
 - **The dependency is documentation only:**
   - the tool does not import or need anything from #209 (it reads `BUNDLE_FIELDS`, `readBounded` and
     `teamScopedPath`, which are already on `main`);

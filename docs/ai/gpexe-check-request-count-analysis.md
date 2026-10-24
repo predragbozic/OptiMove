@@ -83,3 +83,62 @@ requests per session will meet it after a few sessions; the rate-limit line of a
 re-validation counts), `gpexe-rest-v1-adapter-reads.test.mjs` (B2.1 path order, B5.1 brief / tags, B7.4,
 B9.x), `gpexe-import-credential-resolver.test.mjs`, `gpexe-check-finalization.test.mjs` (withdrawal and
 staging counts) and `gpexe-in-app-import.test.mjs` (a repeat check counts unchanged).
+
+## 5. The reduction (owner order 2026-10-23)
+
+### Done now, without new evidence
+
+On branch `feature/gpexe-check-request-reduction`, on top of #209. The stored bundle stays the same, and so does its
+hash:
+- **No brief and no tag list in a check.** The check strips the drill labels before storing (`importClientFor`).
+  The adapter option is `bundleDrillLabels: false`, set by `openImportSource(…, { checkBundle })`.
+- **The thresholds of a day are read once per check** (`thresholdsByDay`, one adapter instance per check). Every
+  later answer is a copy, so nothing a caller changes reaches the next session.
+- **Rows from the athlete list, behind `CHECK_ROWS_FROM_LIST` (`gpexeImportService.js`).**
+  - **What it does:** it reads one canary row per session instead of every row. If the canary's own read differs
+    from its list row, the session is refused (`source_answer_unexpected`, reason `list_row_differs_from_row_read`).
+    A list row whose track cannot be read is refused before the canary.
+  - **It stays `false`** until the owner-run athlete-list comparison returns `same`. Its rules are in
+    `docs/ai/gpexe-athlete-list-nine-fields-plan.md` section 5, and the tool is PR #210. The one sitting that
+    runs it is section 6 of `docs/ai/gpexe-details-coverage-plan.md`, added by PR #211 (merged as `8e20da1`).
+  - Turning it on is that one line; its tests are already here.
+
+### Measured on the same fixture
+
+`gpexe-check-timing.test.mjs` uses three sessions of one day, one with five drills, and 20 athletes, through the real
+check route on a disposable database:
+
+| | Requests |
+|---|---|
+| Before (main + #209) | 206 |
+| Now (no brief or tags, thresholds once per day) | **203** |
+| With rows from the list (after the athlete-list comparison returns `same`) | **146** |
+
+Test 8 proves the stored bundles are the same: after a check with every row read, a check with the rows from the
+list finds all three sessions unchanged.
+
+### Estimated for the owner's check of 2026-10-22, 17:11
+
+That check had two sessions, 22 and 21 athletes, 3 and 4 drills, 455 requests.
+
+| Step | Requests |
+|---|---|
+| Brief and tags dropped | about 453 |
+| Rows from the list (athlete-list comparison `same`) | about 262 |
+| `/more/` from the grouped details (details-coverage `same` for every family) | about 71, close to the 67 estimated |
+
+### After the owner-run sitting (each step only for a `same`)
+
+1. **The athlete-list comparison (PR #210) returns `same`:** `CHECK_ROWS_FROM_LIST = true`, then one controlled
+   check with its timing line.
+2. **The details-coverage probe (PR #211) returns `same`** for events, both zone families, the mapping and the
+   drill level:
+   - **Mapper:** it takes events and zones from the details answers the check already reads (`details.full` and
+     the drill answers), with the same thresholds, bands and readiness guards.
+   - **Reads:** the per-row `/more/` read is dropped, except one `/more/` canary per session compared with the
+     details.
+   - **Report before building:** this changes the stored value provenance (`sourceContext.field`) of those six
+     metrics and the bundle's shape. Stored candidates would read as changed once. Nothing has been imported yet.
+3. **Anything `insufficient` or `differs`:** that data keeps its present read. Zone readiness is the likely case,
+   since the old script shows no zone-level `is_ready`. In that case `/more/` stays for every row, because the zones
+   need it.

@@ -322,7 +322,10 @@ export function preflightImportSource(facts) {
 // facts are checked again. Any other 429 stops the check with no further
 // request. Only a check asks for it (`rateLimitRetry`); an identity load keeps
 // its own short budget and never waits.
-export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalThis.fetch, timeoutMs = 90_000, meter = NOOP_CHECK_METER, rateLimitRetry = false } = {}) {
+// `checkBundle` is a check's read plan for a session's bundle (owner order
+// 2026-10-23): no drill labels (the check strips them before storing), and
+// rows from the athlete list only when the check turns that on.
+export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalThis.fetch, timeoutMs = 90_000, meter = NOOP_CHECK_METER, rateLimitRetry = false, checkBundle = null } = {}) {
   requireIssued(facts);
   if (facts.path !== PATH_SOURCE_CONNECTION || !facts.credential) throw fail("binding_ambiguous");
   let keyring;
@@ -376,7 +379,8 @@ export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalTh
           }
         },
       } : null;
-      adapter = createSourceAdapter({ sourceSystem: facts.sourceSystem, hostKey: facts.hostKey, catalogRow: facts.catalogRow, credential: token, boundSourceTeamId: facts.sourceTeamId, fetchImpl: trackedFetch, timeoutMs, attempts: 1, rateLimit, ...(sleepForImport ? { sleep: sleepForImport } : {}) });
+      const bundlePlan = checkBundle === null ? {} : { bundleDrillLabels: false, bundleRowsFromList: checkBundle.rowsFromList === true };
+      adapter = createSourceAdapter({ sourceSystem: facts.sourceSystem, hostKey: facts.hostKey, catalogRow: facts.catalogRow, credential: token, boundSourceTeamId: facts.sourceTeamId, fetchImpl: trackedFetch, timeoutMs, attempts: 1, rateLimit, ...bundlePlan, ...(sleepForImport ? { sleep: sleepForImport } : {}) });
     } catch (error) {
       if (error?.code === "adapter_not_available") throw fail("adapter_not_available");
       if (error?.code === "host_not_allowed" || error?.code === "path_not_allowed") throw fail("host_not_allowed");

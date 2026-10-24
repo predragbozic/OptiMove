@@ -161,7 +161,7 @@ function fixture(sourceTeamId) {
 // The fake server3: the exchange and team reads (Connect / bind) and the
 // rest_v1 / legacy reads of the served team. `calls` holds what a check sent.
 const visibleTeams = new Set();
-const src = { calls: [], served: null, data: null, faults: { drillMissing: null } };
+const src = { calls: [], served: null, data: null, faults: { drillMissing: null, rowDiffers: null } };
 const json = (status, body, headers = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 async function fakeFetch(url, init = {}) {
   const u = new URL(String(url));
@@ -194,6 +194,7 @@ async function fakeFetch(url, init = {}) {
   if (m) {
     for (const b of bundles) {
       const row = b.athleteSessions.find((r) => String(r.id) === m[1]);
+      if (row && !m[2] && src.faults.rowDiffers === m[1]) return json(200, { ...row, total_distance: row.total_distance + 1 });
       if (row) return json(200, m[2] ? b.more[m[1]] : row);
     }
     return json(404, {});
@@ -292,9 +293,12 @@ function assertNothingPrivate(line) {
   for (const s of SECRETS) assert.ok(!line.includes(s), `no secret marker or name (${s.slice(0, 12)}…)`);
 }
 
+// The request reduction (owner order 2026-10-23): a check reads no brief and no tag list (it strips the
+// drill labels) and the thresholds once per day; before it this fixture cost 206 requests (brief_tags 1,
+// thresholds 3).
 const EXPECTED_REQUESTS = {
   list_sessions: 8, parent_session: 3, athlete_list: 3, athlete_detail: 60, more: 60, track: 60,
-  whole_details: 3, drill: 5, brief_tags: 1, thresholds: 3, other: 0,
+  whole_details: 3, drill: 5, brief_tags: 0, thresholds: 1, other: 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -311,15 +315,15 @@ test("1. a succeeded check writes exactly one timing line: the discovery fixture
   assert.equal(line.code, "none");
   assert.deepEqual(line.requests, EXPECTED_REQUESTS, "the fixture's request kinds (other stays 0)");
   assert.equal(sum(line.requests), run.calls.length, "the kinds sum to every request the check sent");
-  assert.equal(run.calls.length, 206, "the formula of the discovery: 8 + 70 + 64 + 64");
+  assert.equal(run.calls.length, 203, "8 list pages + 3 × (parent, list, 20 rows, 20 /more/, 20 tracks, whole details) + 5 drills + 1 thresholds (206 before the reduction)");
   assert.deepEqual(Object.keys(line.net_ms), timing.CHECK_TIMING_REQUEST_KINDS, "a network time for every kind");
   assert.equal(line.sessions_found, "3");
   assert.equal(line.sessions_done, "3");
   assert.equal(line.athletes, "60");
   assert.equal(line.tracks, "60");
   assert.equal(line.drills, "5");
-  // 206 per-response pings + 2 after the list + 3 per session.
-  assert.equal(line.heartbeats, "217");
+  // 203 per-response pings + 2 after the list + 3 per session.
+  assert.equal(line.heartbeats, "214");
   // before, between the two complete reads and after the list; before and after each bundle.
   assert.equal(line.revalidations, "9");
   assert.equal(line.previews, "3");
@@ -346,7 +350,7 @@ test("2. a failed check writes exactly one timing line with its stable code; the
     assert.equal(line.code, "drill_set_incomplete");
     assert.deepEqual(line.requests, {
       list_sessions: 8, parent_session: 1, athlete_list: 1, athlete_detail: 20, more: 20, track: 20,
-      whole_details: 1, drill: 3, brief_tags: 1, thresholds: 1, other: 0,
+      whole_details: 1, drill: 3, brief_tags: 0, thresholds: 1, other: 0,
     });
     assert.equal(sum(line.requests), run.calls.length);
     assert.equal(line.sessions_found, "3");
@@ -476,5 +480,48 @@ test("7. a finalization whose COMMIT is never answered writes outcome=unknown wi
     assertNothingPrivate(run.lines[0]);
   } finally {
     importer.setCheckFinalizeForTests({});
+  }
+});
+
+test("8. rows from the athlete list (the switch the owner turns on after the comparison returns `same`): 146 requests instead of 203 - one canary row read per session - and the same stored bundles, so a check after a check with every row read finds every session unchanged", async () => {
+  const o = await org();
+  serve(o);
+  assert.equal(importer.CHECK_ROWS_FROM_LIST, false, "off in production until the owner-run comparison returns `same`");
+  const first = await runCheck(o);
+  assert.equal(first.row.status, "succeeded", JSON.stringify(first.row));
+  assert.equal(first.row.candidates_new, 3);
+  importer.setCheckRowsFromListForTests(true);
+  try {
+    const run = await runCheck(o);
+    assert.equal(run.row.status, "succeeded", JSON.stringify(run.row));
+    assert.deepEqual([run.row.candidates_new, run.row.candidates_changed, run.row.candidates_unchanged], [0, 0, 3], "the stored bundles and their hashes are the same");
+    const line = parseLine(run.lines[0]);
+    assert.deepEqual(line.requests, { ...EXPECTED_REQUESTS, athlete_detail: 3 });
+    assert.equal(run.calls.length, 146, "8 + 3 × (parent, list, 1 canary, 20 /more/, 20 tracks, whole details) + 5 drills + 1 thresholds");
+    const rowReads = run.calls.filter((k) => /^\/rest\/v1\/athlete_session\/\d+\/$/.test(k));
+    const firstRows = src.data.bundles.map((b) => `/rest/v1/athlete_session/${b.athleteSessions[0].id}/`);
+    assert.deepEqual(rowReads, firstRows, "the canary is each session's first listed row, read once");
+  } finally {
+    importer.setCheckRowsFromListForTests(null);
+  }
+});
+
+test("9. a canary row that differs from its list row fails the check fail-closed: source_answer_unexpected, nothing of the session read further or published", async () => {
+  const o = await org();
+  serve(o);
+  const firstSession = src.data.bundles[0];
+  src.faults.rowDiffers = String(firstSession.athleteSessions[0].id);
+  importer.setCheckRowsFromListForTests(true);
+  try {
+    const run = await runCheck(o);
+    assert.equal(run.row.status, "failed");
+    assert.equal(run.row.error_code, "source_answer_unexpected");
+    assert.equal(run.row.candidates_new, 0);
+    const canary = `/rest/v1/athlete_session/${firstSession.athleteSessions[0].id}/`;
+    assert.equal(run.calls.at(-1), canary, "nothing after the canary");
+    assert.ok(!run.calls.some((k) => k.endsWith("/more/")), "no /more/ of the refused session");
+  } finally {
+    src.faults.rowDiffers = null;
+    importer.setCheckRowsFromListForTests(null);
   }
 });

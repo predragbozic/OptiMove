@@ -1,7 +1,7 @@
 # Plan: a read-only check of the nine athlete-row fields in server3's athlete list
 
-Status: **plan; the tool is implemented and tested against a fake server only, in Draft PR #210 (not merged). No
-GPEXE request has been sent. The real read is neither approved nor run, so the nine fields are not confirmed
+Status: **plan; the tool is implemented and tested against a fake server only, and merged and deployed as PR #210
+(merge commit `38c2431`, 2026-10-24). No GPEXE request has been sent. The real read is neither approved nor run, so the nine fields are not confirmed
 compatible.** Owner orders 2026-10-22 (plan) and 2026-10-23 (prepare the tool and test it against a fake server
 only; commit it as a separate Draft PR). The owner-run read happens only on a separate owner order, after the
 owner's external review of the tool. The internal `code-reviewer` and `security-reviewer` checked the plan and
@@ -137,13 +137,13 @@ mutation evidence for its guards. They cover:
 - an unreadable total, on a read and on the exchange;
 - a difference with one parent.
 
-They are in Draft PR #210 (`feature/gpexe-athlete-list-probe`), with section 4c of
-`docs/ai/gpexe-rest-v1-compatibility.md`, and are not merged. What they confirm is the tool's own behaviour
+They came with PR #210 (`feature/gpexe-athlete-list-probe`, merged as `38c2431`), with section 4c of
+`docs/ai/gpexe-rest-v1-compatibility.md`. What they confirm is the tool's own behaviour
 against a fake server. They confirm nothing about server3's answers.
 
 ## 4. Order of work (each step on the owner's order)
 
-1. **The tool's PR:** done as Draft PR #210 (the mode, the tests and section 4c of
+1. **The tool's PR:** done as PR #210, merged after #209 (2026-10-24) (the mode, the tests and section 4c of
    `docs/ai/gpexe-rest-v1-compatibility.md`). No change to the adapter, routes, database or screens.
 2. **Reviews:** `code-reviewer` and `security-reviewer` are done (READY WITH NON-BLOCKING NOTES). The owner's
    external review is open.

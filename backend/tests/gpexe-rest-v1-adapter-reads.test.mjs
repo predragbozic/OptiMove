@@ -2057,3 +2057,78 @@ test("B10.6 static guard: the fingerprint is computed only in the adapter's dril
     assert.doesNotMatch(await fsp.readFile(path.join(srcDir, f), "utf8"), /drillAnswerFingerprint|canonicalFingerprintInput/, `${f} names the fingerprint`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// B13. The check's bundle read plan (owner order 2026-10-23, the request reduction): no drill labels
+// (the check strips them), thresholds once per day per instance, and - only once the owner-run
+// comparison proved them equal - the rows from the athlete list with one canary row read.
+// ---------------------------------------------------------------------------
+const CHECK_PLAN = { bundleDrillLabels: false };
+const withoutLabels = ({ drillLabels, ...rest }) => { void drillLabels; return rest; };
+
+test("B13.1 a check's bundle reads no brief and no tag list, and is the default bundle without its labels", async () => {
+  const base = full();
+  const plain = await (await primed(base.fetchImpl)).fetchSessionBundle({ sessionId: "100" });
+  const { calls, fetchImpl } = full();
+  const bundle = await (await primed(fetchImpl, CHECK_PLAN)).fetchSessionBundle({ sessionId: "100" });
+  assert.ok(!pathsOf(calls).some((p) => p === BRIEF || p === TAGS), "no brief, no tag list");
+  assert.equal(pathsOf(calls).length, pathsOf(base.calls).length - 2);
+  assert.equal("drillLabels" in bundle, false);
+  assert.deepEqual(bundle, withoutLabels(plain));
+});
+
+test("B13.2 the thresholds of a day are read once per instance; another day is read; a day without thresholds stays null; every answer is a copy", async () => {
+  const { calls, fetchImpl } = full({
+    "/rest/v1/team_session/200/": answer(200, { ...session(200, 980, { start_timestamp: "2026-09-20T10:00:00" }) }),
+  });
+  const a = await primed(fetchImpl);
+  await a.getSession({ sessionId: "100" });
+  await a.getSession({ sessionId: "200" });
+  const first = await a.getTeamThresholds({ sessionId: "100" });
+  first.power_thresholds.push(99);
+  const second = await a.getTeamThresholds({ sessionId: "100" });
+  assert.deepEqual(second.power_thresholds, [20, 25, 60, 75], "a copy: the first answer's change does not reach the second");
+  second.speed_thresholds.push(99);
+  assert.deepEqual((await a.getTeamThresholds({ sessionId: "100" })).speed_thresholds, [5.5, 7], "and a cached answer's change does not reach the next");
+  assert.equal(await a.getTeamThresholds({ sessionId: "200" }), null);
+  assert.equal(await a.getTeamThresholds({ sessionId: "200" }), null);
+  assert.equal(pathsOf(calls).filter((p) => p === THRESH).length, 1);
+  assert.equal(pathsOf(calls).filter((p) => p === "/rest/v1/team/980/thresholds/?valid_on=2026-09-20").length, 1);
+  // A new instance (the next check) reads again.
+  const b = await primed(fetchImpl);
+  await b.getSession({ sessionId: "100" });
+  await b.getTeamThresholds({ sessionId: "100" });
+  assert.equal(pathsOf(calls).filter((p) => p === THRESH).length, 2);
+});
+
+test("B13.3 rows from the athlete list: one canary row read instead of every row, the same /more/ and tracks, and the same bundle", async () => {
+  const base = full();
+  const plain = await (await primed(base.fetchImpl, CHECK_PLAN)).fetchSessionBundle({ sessionId: "100" });
+  const { calls, fetchImpl } = full();
+  const bundle = await (await primed(fetchImpl, { ...CHECK_PLAN, bundleRowsFromList: true })).fetchSessionBundle({ sessionId: "100" });
+  assert.deepEqual(pathsOf(calls), [
+    LIST, PARENT, ATHLETES, "/rest/v1/athlete_session/500/",
+    "/rest/v1/athlete_session/500/more/", "/rest/v1/track/900/", "/rest/v1/athlete_session/501/more/", "/rest/v1/track/901/",
+    WHOLE, D0, D1, THRESH,
+  ]);
+  assert.deepEqual(bundle, plain, "the stored bundle is the same, so its hash is the same");
+  noNames(bundle);
+});
+
+test("B13.4 a canary that differs from its list row refuses the bundle before any /more/ or track read; a list row whose track is unreadable is refused before the canary", async () => {
+  const { calls, fetchImpl } = full({ "/rest/v1/athlete_session/500/": answer(200, athleteRow(500, 4711, { total_distance: 3001 })) });
+  const e = await errorOf((await primed(fetchImpl, { ...CHECK_PLAN, bundleRowsFromList: true })).fetchSessionBundle({ sessionId: "100" }));
+  assert.equal(e?.code, "source_answer_unexpected");
+  assert.equal(e?.reason, "list_row_differs_from_row_read");
+  assert.equal(pathsOf(calls).at(-1), "/rest/v1/athlete_session/500/", "nothing after the canary");
+  const bad = full({ [ATHLETES]: answer(200, [athleteRow(500, 4711, { track: "a-track" }), athleteRow(501, 4712, { track: 901 })], { "x-total-count": "2" }) });
+  const e2 = await errorOf((await primed(bad.fetchImpl, { ...CHECK_PLAN, bundleRowsFromList: true })).fetchSessionBundle({ sessionId: "100" }));
+  assert.equal(e2?.code, "source_answer_unexpected");
+  assert.equal(pathsOf(bad.calls).at(-1), ATHLETES, "no canary, no /more/, no track");
+});
+
+test("B13.5 the read plan is two booleans", () => {
+  for (const over of [{ bundleDrillLabels: "no" }, { bundleRowsFromList: 1 }, { bundleRowsFromList: null }]) {
+    assert.throws(() => make(async () => { throw new Error("never"); }, over), code("invalid_options"), JSON.stringify(over));
+  }
+});

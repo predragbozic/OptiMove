@@ -759,6 +759,12 @@ export function createGpexeRestV1Adapter({
   retryDelayMs = 1_000,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   rateLimit = null,
+  // What fetchSessionBundle reads (owner order 2026-10-23, the check's request reduction). A check
+  // discards the drill labels, so it asks for none (no brief, no tag list). Rows from the athlete list
+  // instead of one read per row only once the owner-run comparison proved them equal
+  // (docs/ai/gpexe-athlete-list-nine-fields-plan.md); off by default.
+  bundleDrillLabels = true,
+  bundleRowsFromList = false,
 } = {}) {
   // The gate: the key's own approved catalog row, and the family this file is for.
   const probeUrl = sourceApiUrl(ADAPTER_SOURCE, hostKey, catalogRow, "team/");
@@ -779,6 +785,7 @@ export function createGpexeRestV1Adapter({
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) throw new SourceAdapterError("invalid_options", "The timeout is a whole number of milliseconds up to 120000.");
   if (!Number.isInteger(retryDelayMs) || retryDelayMs < 0 || retryDelayMs > 10_000) throw new SourceAdapterError("invalid_options", "The retry delay is a whole number of milliseconds up to 10000.");
   if (typeof sleep !== "function") throw new SourceAdapterError("invalid_options", "The source adapter needs a sleep function.");
+  if (typeof bundleDrillLabels !== "boolean" || typeof bundleRowsFromList !== "boolean") throw new SourceAdapterError("invalid_options", "The bundle's read plan is two booleans.");
   const rl = rateLimit === null || rateLimit === undefined ? null : rateLimitState(rateLimit);
   // Every request this instance sends, and when the first one left: the
   // counts a rate-limit refusal reports (integers only).
@@ -828,6 +835,9 @@ export function createGpexeRestV1Adapter({
   // thrown away unrecorded (a concurrent stale answer cannot re-confirm).
   const sessionEpoch = new Map();
   const trackOwner = new Map(); // track id → the session its row was read under
+  // The bound team's threshold set per day, read once per instance (one check): the same URL gives the
+  // same answer, so a second session of the day reads it from here.
+  const thresholdsByDay = new Map();
   const epochOf = (id) => sessionEpoch.get(id) ?? 0;
   const revokeDependents = (id) => {
     sessionEpoch.set(id, epochOf(id) + 1);
@@ -1565,11 +1575,19 @@ export function createGpexeRestV1Adapter({
       const { sessionId } = only(options, ["sessionId"]);
       const parent = confirmed(sessionId);
       if (parent.day === null) throw unexpected("The confirmed session carries no day to read thresholds for.");
+      if (thresholdsByDay.has(parent.day)) {
+        const cached = thresholdsByDay.get(parent.day);
+        return cached === null ? null : structuredClone(cached);
+      }
+      const remember = (value) => {
+        thresholdsByDay.set(parent.day, value === null ? null : structuredClone(value));
+        return value;
+      };
       let res;
       try {
         res = await read(`team/${team}/thresholds/?valid_on=${parent.day}`, "thresholds");
       } catch (error) {
-        if (error.code === "source_not_found") return null;
+        if (error.code === "source_not_found") return remember(null);
         throw error;
       }
       const body = res.body;
@@ -1579,7 +1597,7 @@ export function createGpexeRestV1Adapter({
         if (named === null) throw unexpected("The source server's thresholds name their team in an unknown way.");
         if (named === false) throw new SourceAdapterError("source_team_mismatch", "The source server returned thresholds of another team.");
       }
-      return pick(body, BUNDLE_FIELDS.teamThresholds);
+      return remember(pick(body, BUNDLE_FIELDS.teamThresholds));
     },
 
     async getUnits(options) { refuseTeamOptions(options); throw unavailable("units"); },
@@ -1646,12 +1664,12 @@ export function createGpexeRestV1Adapter({
       const teamSession = await adapter.getSession({ sessionId });
       const id = canonicalId(teamSession.id);
       const { rows } = await adapter.listAthleteSessions({ sessionId: id });
-      const athleteSessions = [];
+      const athleteSessions = bundleRowsFromList ? await rowsFromList(id, rows) : [];
       const more = {};
       const tracks = {};
       for (const listed of rows) {
-        const row = await adapter.getAthleteSession({ sessionId: id, athleteSessionId: canonicalId(listed.id) });
-        athleteSessions.push(row);
+        const row = bundleRowsFromList ? athleteSessions.find((r) => canonicalId(r.id) === canonicalId(listed.id)) : await adapter.getAthleteSession({ sessionId: id, athleteSessionId: canonicalId(listed.id) });
+        if (!bundleRowsFromList) athleteSessions.push(row);
         more[canonicalId(row.id)] = await adapter.getAthleteSessionMore({ athleteSessionId: canonicalId(row.id) });
         const trackId = row.track === undefined || row.track === null ? null : canonicalId(row.track);
         if (trackId !== null && !tracks[trackId]) tracks[trackId] = await adapter.getTrack({ trackId });
@@ -1659,15 +1677,42 @@ export function createGpexeRestV1Adapter({
       const full = await adapter.getSessionDetails({ sessionId: id });
       const drillSet = await adapter.getSessionDrills({ sessionId: id });
       const drills = Object.fromEntries(drillSet.drills.map((d) => [String(d.drillIndex), d.details]));
-      const labels = await adapter.getDrillLabels({ sessionId: id });
+      const labels = bundleDrillLabels ? await adapter.getDrillLabels({ sessionId: id }) : null;
       const teamThresholds = await adapter.getTeamThresholds({ sessionId: id });
       return {
         teamSession, teamThresholds, athleteSessions, more, tracks,
         details: { full, drills },
         drillsStatus: { complete: drillSet.complete, drillsCount: drillSet.drillsCount, failed: drillSet.failed, ...(drillSet.complete ? { parameterEffect: drillSet.parameterEffect } : {}) },
-        drillLabels: labels,
+        ...(bundleDrillLabels ? { drillLabels: labels } : {}),
       };
     },
   };
+  // The rows of a confirmed parent taken from its own athlete list (already checked there: every row
+  // names this session, a canonical id and athlete), confirmed with their tracks exactly as a row's own
+  // read confirms them. A canary - the first row's own read - must project to the same fields with the
+  // same values, or the whole bundle is refused (fail-closed, nothing of the session is recorded).
+  async function rowsFromList(sessionId, rows) {
+    const parent = confirmed(sessionId);
+    const listed = listedAthleteRows.get(parent.id);
+    const out = [];
+    for (const row of rows) {
+      const id = canonicalId(row.id);
+      if (!listed?.has(id)) throw new SourceAdapterError("athlete_row_not_listed", "That athlete row was not named by the confirmed session's own athlete list read by this adapter.");
+      const trackId = row.track === undefined || row.track === null ? null : canonicalId(row.track);
+      if (row.track !== undefined && row.track !== null && trackId === null) throw unexpected("An athlete row of the source's list names its track in an unknown way.");
+      out.push(row);
+    }
+    if (out.length > 0) {
+      const canary = await adapter.getAthleteSession({ sessionId: parent.id, athleteSessionId: canonicalId(out[0].id) });
+      if (JSON.stringify(canary) !== JSON.stringify(out[0])) throw unexpected("A row of the source's athlete list differs from the same row's own read.", { reason: "list_row_differs_from_row_read" });
+    }
+    for (const row of out) {
+      const id = canonicalId(row.id);
+      const trackId = row.track === undefined || row.track === null ? null : canonicalId(row.track);
+      confirmedAthleteRows.set(id, { sessionId: parent.id, trackId });
+      if (trackId !== null) { confirmedTracks.add(trackId); trackOwner.set(trackId, parent.id); }
+    }
+    return out;
+  }
   return Object.freeze(adapter);
 }

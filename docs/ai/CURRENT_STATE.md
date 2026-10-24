@@ -1905,9 +1905,22 @@ Technical details.
   value or error text. No change of requests, order, heartbeat frequency, results, database, route or UI.
   Any optimization (fewer heartbeat writes, pipelining, concurrency) waits for one owner-run check and its
   line.
-- **GPEXE's rate limit (429) during a check** (owner order 2026-10-22; Draft PR #209, branch
-  `fix/gpexe-check-rate-limit` from `12beb86`; **not merged, not deployed**; backend, tests and docs, no migration,
-  no frontend change).
+- **GPEXE's rate limit (429) during a check** (owner order 2026-10-22; PR #209, branch
+  `fix/gpexe-check-rate-limit` from `12beb86`; backend, tests and docs, no migration, no frontend change).
+  - **Merged and deployed** on the owner's order (2026-10-24), together with the two read-only probe tools; each
+    was deployed before the next was merged:
+
+    | PR | Merge commit | Merged (UTC) | `/api/health` first served it with `ok: true` (UTC) |
+    |---|---|---|---|
+    | #209, the 429 repeat | `12b0f2e` | 00:39:19 | 00:44:41 |
+    | #210, the athlete-list probe | `38c2431` | 00:44:55 | 00:46:35 |
+    | #211, the details-coverage probe | `8e20da1` | 00:47:07 | 00:48:31 |
+
+    - Each commit was then served three times in a row.
+    - Without a login, `GET /api/auth/me` answered 200 with no user, and the GPEXE team status (zero UUID) and the
+      source-connection list answered 401.
+    - Render did not deploy by itself; the owner started each deploy.
+    - No check, GPEXE request or migration was run.
   - **Production, 2026-10-22 (as reported by the owner, sanitized):** two checks of First team failed with
     `source_unavailable` "The source server asked to slow down." (HTTP 429): the default 14 days at 10:03,
     and 18.10.2026 - 19.10.2026 at 17:11 after one session. Nothing was published; the switch stays off.
@@ -1927,10 +1940,13 @@ Technical details.
     Covered by tests RL17-RL20 (unit) and 10-11 (disposable), test-only.
   - **The 17:11 check's timing line (owner, sanitized):** 455 requests in 4 min 51 s, the 429 on the last;
     193 athlete rows for 22 athletes - server3 lists one row per athlete for the session and one per drill.
-  - **Request count (analysis only, nothing implemented):** about 200 - 330 requests per production session,
-    mostly the row and `/more/` reads; `docs/ai/gpexe-check-request-count-analysis.md` lists the reduction
-    options, each an owner decision. The largest safe one, rows from the athlete list, needs one owner-run
-    read-only comparison first: plan `docs/ai/gpexe-athlete-list-nine-fields-plan.md`, tool in Draft PR #210.
+  - **Request count:** about 200 - 330 requests per production session, mostly the row and `/more/` reads
+    (`docs/ai/gpexe-check-request-count-analysis.md`). The first reduction is in a Draft PR on branch
+    `feature/gpexe-check-request-reduction`; it is not merged and not deployed.
+    - **On:** a check reads no drill brief or tag list, and reads the thresholds once per day.
+    - **Built but off:** the rows from the athlete list, with a canary row read per session.
+    - **What decides the larger savings:** the one owner-run read-only sitting with both probe tools (at most 24
+      requests), described in section 6 of `docs/ai/gpexe-details-coverage-plan.md`. It is not run yet.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2657,11 +2673,10 @@ pre-existing; pass/fail counts don't belong in this file
   projected fields with the same values as the per-row read - the precondition of the largest request saving in
   `docs/ai/gpexe-check-request-count-analysis.md`. Plan: `docs/ai/gpexe-athlete-list-nine-fields-plan.md` (in Draft
   PR #209).
-  - **The probe mode** (`--mode athlete-list`): implemented and tested against a fake server only, in Draft PR
-    #210 (`feature/gpexe-athlete-list-probe`, not merged).
+  - **The probe mode** (`--mode athlete-list`): implemented and tested against a fake server only, merged and
+    deployed as PR #210 (`38c2431`). The details-coverage tool (question B) is PR #211 (`8e20da1`).
   - **The real GPEXE read** is neither approved nor run, so the nine fields are not confirmed compatible.
-  - **Recommended order:** #209 first, then #210, checked against `main` after #209 merges. Only a
-    documentation reference ties the two, so that order is no technical blocker.
+  - **Merged in that order on 2026-10-24:** #209, then #210, then #211.
 
 - **Separate migration and runtime database roles** (owner, 2026-10-13, at the v35 decisions; an
   infrastructure hardening task, not blocking v35): today the migrations and the server use the same
