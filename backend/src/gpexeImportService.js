@@ -72,6 +72,10 @@ export function setGpexeClientFactory(factory) {
 // that the two reads must agree (gpexe_change_busy, no check row).
 let preReadHold = null;
 export function setImportSourcePreReadHoldForTests(fn) { preReadHold = fn ?? null; }
+// A check takes each row's max_v from the details answers it reads anyway (one canary row read per
+// session; owner order 2026-10-24). The tests turn it off to compare with every row read.
+let maxSpeedFromDetailsForTests = null;
+export function setCheckMaxSpeedFromDetailsForTests(value) { maxSpeedFromDetailsForTests = typeof value === "boolean" ? value : null; }
 // F3c2g test seam: a fault in place of the COMMIT of the check's start
 // transaction (the F2 discipline: a sent COMMIT whose answer is lost never
 // becomes "nothing was written").
@@ -954,7 +958,7 @@ export async function startCheck(teamId, { userId, window, wait = false, adminVi
     try {
       // A check honours the source's rate limit once (Retry-After within the
       // resolver's maximum); an identity load never waits.
-      source = openImportSource(facts, { meter, rateLimitRetry: true });
+      source = openImportSource(facts, { meter, rateLimitRetry: true, checkBundle: { maxSpeedFromDetails: maxSpeedFromDetailsForTests ?? true } });
       client = importClientFor(source, { meter });
     } catch (error) {
       const code = error instanceof SourceImportResolveError ? error.code : "internal_error";

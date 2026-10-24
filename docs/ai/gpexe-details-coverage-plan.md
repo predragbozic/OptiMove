@@ -1,6 +1,12 @@
 # Plan: can the grouped details answer replace each row's /more/ read? (details-coverage probe)
 
-Status: **prepared and tested against a fake server only. No GPEXE request has been sent.** Owner order 2026-10-23,
+**Result (owner-run sitting, 2026-10-24, run once, 11 requests, no 429): `differs`.**
+- `events`, `mapping` and `drillLevel`: `same`.
+- `powerZones`: `differs`. The details carry 4 zones and `/more/` carries 5, and no numbering reproduces them.
+- `speedZones`: `insufficient`.
+- So `/more/` stays for every row. Details: `docs/ai/gpexe-check-request-count-analysis.md` section 5.
+
+Status before that sitting: **prepared and tested against a fake server only. No GPEXE request had been sent.** Owner order 2026-10-23,
 after the read-only analysis of the request count and of the old Google Apps Script. The owner-run read happens
 only on a separate owner order, after the owner has reviewed this preparation.
 

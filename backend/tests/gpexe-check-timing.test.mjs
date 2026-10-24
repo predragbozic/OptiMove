@@ -142,6 +142,8 @@ function fixture(sourceTeamId) {
     for (let k = 0; k < drills; k += 1) {
       b.details.drills[String(k)].players = Object.fromEntries(athleteIds.map((id, i) => [String(id), { tot_burst_events: { unit: "number", value: 1 + k + i }, tot_brake_events: { unit: "number", value: 1 + k } }]));
     }
+    // Each whole-session row's max_v in the whole details, as the owner-run reads of 2026-10-24 saw it.
+    for (const r of b.athleteSessions) if (r.drill === null) b.details.full.players[String(r.athlete)].max_values_speed = { unit: "speed", value: r.max_v };
     return b;
   });
   const rows = [];
@@ -292,9 +294,12 @@ function assertNothingPrivate(line) {
   for (const s of SECRETS) assert.ok(!line.includes(s), `no secret marker or name (${s.slice(0, 12)}…)`);
 }
 
+// The request reduction (owner orders 2026-10-23 and 2026-10-24): a check reads no brief and no tag list
+// (it strips the drill labels), the thresholds once per day, and one canary row per session (max_v from
+// the details); before it this fixture cost 206 requests (athlete_detail 60, brief_tags 1, thresholds 3).
 const EXPECTED_REQUESTS = {
-  list_sessions: 8, parent_session: 3, athlete_list: 3, athlete_detail: 60, more: 60, track: 60,
-  whole_details: 3, drill: 5, brief_tags: 1, thresholds: 3, other: 0,
+  list_sessions: 8, parent_session: 3, athlete_list: 3, athlete_detail: 3, more: 60, track: 60,
+  whole_details: 3, drill: 5, brief_tags: 0, thresholds: 1, other: 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -311,15 +316,15 @@ test("1. a succeeded check writes exactly one timing line: the discovery fixture
   assert.equal(line.code, "none");
   assert.deepEqual(line.requests, EXPECTED_REQUESTS, "the fixture's request kinds (other stays 0)");
   assert.equal(sum(line.requests), run.calls.length, "the kinds sum to every request the check sent");
-  assert.equal(run.calls.length, 206, "the formula of the discovery: 8 + 70 + 64 + 64");
+  assert.equal(run.calls.length, 146, "8 list pages + 3 × (parent, list, whole details, 1 canary row, 20 /more/, 20 tracks) + 5 drills + 1 thresholds (206 before the reduction)");
   assert.deepEqual(Object.keys(line.net_ms), timing.CHECK_TIMING_REQUEST_KINDS, "a network time for every kind");
   assert.equal(line.sessions_found, "3");
   assert.equal(line.sessions_done, "3");
   assert.equal(line.athletes, "60");
   assert.equal(line.tracks, "60");
   assert.equal(line.drills, "5");
-  // 206 per-response pings + 2 after the list + 3 per session.
-  assert.equal(line.heartbeats, "217");
+  // 146 per-response pings + 2 after the list + 3 per session.
+  assert.equal(line.heartbeats, "157");
   // before, between the two complete reads and after the list; before and after each bundle.
   assert.equal(line.revalidations, "9");
   assert.equal(line.previews, "3");
@@ -344,9 +349,11 @@ test("2. a failed check writes exactly one timing line with its stable code; the
     const line = parseLine(run.lines[0]);
     assert.equal(line.outcome, "failed");
     assert.equal(line.code, "drill_set_incomplete");
+    // The details and drills are read before the rows (max_v from the details), and an incomplete drill
+    // set reads no row, /more/ or track: the check stops before recording the session.
     assert.deepEqual(line.requests, {
-      list_sessions: 8, parent_session: 1, athlete_list: 1, athlete_detail: 20, more: 20, track: 20,
-      whole_details: 1, drill: 3, brief_tags: 1, thresholds: 1, other: 0,
+      list_sessions: 8, parent_session: 1, athlete_list: 1, athlete_detail: 0, more: 0, track: 0,
+      whole_details: 1, drill: 3, brief_tags: 0, thresholds: 1, other: 0,
     });
     assert.equal(sum(line.requests), run.calls.length);
     assert.equal(line.sessions_found, "3");
@@ -477,4 +484,38 @@ test("7. a finalization whose COMMIT is never answered writes outcome=unknown wi
   } finally {
     importer.setCheckFinalizeForTests({});
   }
+});
+
+test("8. max_v from the details: 146 requests instead of 203 (one canary row read per session) and the same stored bundles - a check with every row read, then the default check, finds every session unchanged", async () => {
+  const o = await org();
+  serve(o);
+  importer.setCheckMaxSpeedFromDetailsForTests(false);
+  let first;
+  try {
+    first = await runCheck(o);
+  } finally {
+    importer.setCheckMaxSpeedFromDetailsForTests(null);
+  }
+  assert.equal(first.row.status, "succeeded", JSON.stringify(first.row));
+  assert.equal(first.row.candidates_new, 3);
+  assert.equal(first.calls.length, 203, "every row read");
+  const run = await runCheck(o);
+  assert.equal(run.row.status, "succeeded", JSON.stringify(run.row));
+  assert.deepEqual([run.row.candidates_new, run.row.candidates_changed, run.row.candidates_unchanged], [0, 0, 3], "the stored bundles and their hashes are the same");
+  assert.deepEqual(parseLine(run.lines[0]).requests, EXPECTED_REQUESTS);
+  assert.equal(run.calls.length, 146);
+  const rowReads = run.calls.filter((k) => /^\/rest\/v1\/athlete_session\/\d+\/$/.test(k));
+  assert.deepEqual(rowReads, src.data.bundles.map((b) => `/rest/v1/athlete_session/${b.athleteSessions[0].id}/`), "the canary is each session's first row, read once");
+});
+
+test("9. a canary that differs from its list row with the details' max_v: that session's rows are all read on their own, the others keep one canary, and the check succeeds with the rows' own values", async () => {
+  const o = await org();
+  serve(o);
+  const second = src.data.bundles[1];
+  second.details.full.players[String(second.athleteSessions[0].athlete)].max_values_speed.value += 0.5;
+  const run = await runCheck(o);
+  assert.equal(run.row.status, "succeeded", JSON.stringify(run.row));
+  assert.equal(run.row.candidates_new, 3);
+  assert.equal(parseLine(run.lines[0]).requests.athlete_detail, 1 + 20 + 1, "one canary, every row of the second session, one canary");
+  assert.equal(run.calls.length, 146 + 19);
 });

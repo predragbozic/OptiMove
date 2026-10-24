@@ -82,6 +82,9 @@ export const MAX_WINDOW_DAYS = 31;
 // importer's mapper (gpexeImportMapper.js) and the candidate service read.
 // Everything else — whatever the source adds, in any spelling — is dropped
 // by projection, not by a list of forbidden names.
+// The details field and unit word that carry a row's max_v (owner-run reads 2026-10-24: the same number).
+export const DETAILS_MAX_SPEED = "max_values_speed";
+export const DETAILS_MAX_SPEED_UNIT = "speed";
 export const BUNDLE_FIELDS = Object.freeze({
   teamSession: Object.freeze(["id", "team", "category_name", "start_timestamp", "end_timestamp", "updated_on", "drills_count", "is_stats_valid"]),
   athleteSession: Object.freeze(["id", "athlete", "track", "teamsession", "drill", "is_stats_valid", "total_time", "total_distance", "max_v"]),
@@ -759,6 +762,16 @@ export function createGpexeRestV1Adapter({
   retryDelayMs = 1_000,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   rateLimit = null,
+  // Whether fetchSessionBundle reads the drill labels (owner order 2026-10-23, the check's request
+  // reduction). A check discards them, so it asks for none: no brief, no tag list.
+  bundleDrillLabels = true,
+  // Whether fetchSessionBundle takes a session's athlete rows from its athlete list, with each row's
+  // max_v from the details answers it reads anyway, instead of one read per row (owner order
+  // 2026-10-24, after the owner-run reads: the list carries the other eight projected fields with
+  // equal values, and the details' max_values_speed is the same number as max_v). One row per
+  // session is still read on its own and compared whole (the canary). A row the details do not cover,
+  // or a whole session whose canary differs or whose drill set is incomplete, is read row by row as before.
+  bundleMaxSpeedFromDetails = false,
 } = {}) {
   // The gate: the key's own approved catalog row, and the family this file is for.
   const probeUrl = sourceApiUrl(ADAPTER_SOURCE, hostKey, catalogRow, "team/");
@@ -779,6 +792,8 @@ export function createGpexeRestV1Adapter({
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) throw new SourceAdapterError("invalid_options", "The timeout is a whole number of milliseconds up to 120000.");
   if (!Number.isInteger(retryDelayMs) || retryDelayMs < 0 || retryDelayMs > 10_000) throw new SourceAdapterError("invalid_options", "The retry delay is a whole number of milliseconds up to 10000.");
   if (typeof sleep !== "function") throw new SourceAdapterError("invalid_options", "The source adapter needs a sleep function.");
+  if (typeof bundleDrillLabels !== "boolean") throw new SourceAdapterError("invalid_options", "Whether the bundle reads the drill labels is a boolean.");
+  if (typeof bundleMaxSpeedFromDetails !== "boolean") throw new SourceAdapterError("invalid_options", "Whether the bundle takes max_v from the details is a boolean.");
   const rl = rateLimit === null || rateLimit === undefined ? null : rateLimitState(rateLimit);
   // Every request this instance sends, and when the first one left: the
   // counts a rate-limit refusal reports (integers only).
@@ -828,10 +843,17 @@ export function createGpexeRestV1Adapter({
   // thrown away unrecorded (a concurrent stale answer cannot re-confirm).
   const sessionEpoch = new Map();
   const trackOwner = new Map(); // track id → the session its row was read under
+  // The bound team's threshold set per day, read once per instance (one check): the same URL gives the
+  // same answer, so a second session of the day reads it from here.
+  const thresholdsByDay = new Map();
+  // The details' max_values_speed per athlete, per confirmed parent and level ("whole", "drill<i>"),
+  // kept only while bundleMaxSpeedFromDetails is on and only until the session's rows are withdrawn.
+  const detailsMaxSpeeds = new Map();
   const epochOf = (id) => sessionEpoch.get(id) ?? 0;
   const revokeDependents = (id) => {
     sessionEpoch.set(id, epochOf(id) + 1);
     listedAthleteRows.delete(id);
+    detailsMaxSpeeds.delete(id);
     for (const [rowId, info] of confirmedAthleteRows) if (info.sessionId === id) confirmedAthleteRows.delete(rowId);
     for (const [trackId, owner] of trackOwner) if (owner === id) { trackOwner.delete(trackId); confirmedTracks.delete(trackId); }
   };
@@ -1403,7 +1425,9 @@ export function createGpexeRestV1Adapter({
       const { body } = await read(`team_session/${parent.id}/details/`, "whole_details");
       refreshedDuring(parent.id, epoch);
       // Projected to the consumed fields (drills too, since 2026-10-09).
-      return projectSessionDetails(body, parent.drillsCount);
+      const projected = projectSessionDetails(body, parent.drillsCount);
+      if (bundleMaxSpeedFromDetails) rememberMaxSpeeds(parent.id, "whole", body.players);
+      return projected;
     },
 
     // The drill at one zero-based position of a confirmed parent, through the
@@ -1442,6 +1466,7 @@ export function createGpexeRestV1Adapter({
           // The full map passed the projection's guards (canonical athlete
           // ids, metric names, bounds) before it is fingerprinted.
           fingerprints.push(Object.keys(details.players).length > 0 ? drillAnswerFingerprint(body.players) : null);
+          if (bundleMaxSpeedFromDetails) rememberMaxSpeeds(parent.id, `drill${index}`, body.players);
           drills.push({ drillIndex: index, details });
         } catch (error) {
           if (!(error instanceof SourceAdapterError) || isGlobal(error) || error.code === "session_refreshed") throw error;
@@ -1565,11 +1590,19 @@ export function createGpexeRestV1Adapter({
       const { sessionId } = only(options, ["sessionId"]);
       const parent = confirmed(sessionId);
       if (parent.day === null) throw unexpected("The confirmed session carries no day to read thresholds for.");
+      if (thresholdsByDay.has(parent.day)) {
+        const cached = thresholdsByDay.get(parent.day);
+        return cached === null ? null : structuredClone(cached);
+      }
+      const remember = (value) => {
+        thresholdsByDay.set(parent.day, value === null ? null : structuredClone(value));
+        return value;
+      };
       let res;
       try {
         res = await read(`team/${team}/thresholds/?valid_on=${parent.day}`, "thresholds");
       } catch (error) {
-        if (error.code === "source_not_found") return null;
+        if (error.code === "source_not_found") return remember(null);
         throw error;
       }
       const body = res.body;
@@ -1579,7 +1612,7 @@ export function createGpexeRestV1Adapter({
         if (named === null) throw unexpected("The source server's thresholds name their team in an unknown way.");
         if (named === false) throw new SourceAdapterError("source_team_mismatch", "The source server returned thresholds of another team.");
       }
-      return pick(body, BUNDLE_FIELDS.teamThresholds);
+      return remember(pick(body, BUNDLE_FIELDS.teamThresholds));
     },
 
     async getUnits(options) { refuseTeamOptions(options); throw unavailable("units"); },
@@ -1646,28 +1679,107 @@ export function createGpexeRestV1Adapter({
       const teamSession = await adapter.getSession({ sessionId });
       const id = canonicalId(teamSession.id);
       const { rows } = await adapter.listAthleteSessions({ sessionId: id });
-      const athleteSessions = [];
+      // With max_v from the details, the details and drills are read first; the rows follow from them.
+      const full = bundleMaxSpeedFromDetails ? await adapter.getSessionDetails({ sessionId: id }) : null;
+      const earlyDrills = bundleMaxSpeedFromDetails ? await adapter.getSessionDrills({ sessionId: id }) : null;
+      const athleteSessions = earlyDrills?.complete ? await rowsWithDetailsMaxSpeed(id, rows) : [];
+      // An incomplete drill set stops the check before anything of the session is recorded
+      // (sourceImportCredentialResolver.js), so its rows, /more/ and tracks are not read.
+      const rowsToRead = earlyDrills && !earlyDrills.complete ? [] : rows;
       const more = {};
       const tracks = {};
-      for (const listed of rows) {
-        const row = await adapter.getAthleteSession({ sessionId: id, athleteSessionId: canonicalId(listed.id) });
-        athleteSessions.push(row);
+      for (const [i, listed] of rowsToRead.entries()) {
+        let row = athleteSessions[i];
+        if (!earlyDrills?.complete) {
+          row = await adapter.getAthleteSession({ sessionId: id, athleteSessionId: canonicalId(listed.id) });
+          athleteSessions.push(row);
+        }
         more[canonicalId(row.id)] = await adapter.getAthleteSessionMore({ athleteSessionId: canonicalId(row.id) });
         const trackId = row.track === undefined || row.track === null ? null : canonicalId(row.track);
         if (trackId !== null && !tracks[trackId]) tracks[trackId] = await adapter.getTrack({ trackId });
       }
-      const full = await adapter.getSessionDetails({ sessionId: id });
-      const drillSet = await adapter.getSessionDrills({ sessionId: id });
+      const fullDetails = full ?? await adapter.getSessionDetails({ sessionId: id });
+      const drillSet = earlyDrills ?? await adapter.getSessionDrills({ sessionId: id });
       const drills = Object.fromEntries(drillSet.drills.map((d) => [String(d.drillIndex), d.details]));
-      const labels = await adapter.getDrillLabels({ sessionId: id });
+      const labels = bundleDrillLabels ? await adapter.getDrillLabels({ sessionId: id }) : null;
       const teamThresholds = await adapter.getTeamThresholds({ sessionId: id });
       return {
         teamSession, teamThresholds, athleteSessions, more, tracks,
-        details: { full, drills },
+        details: { full: fullDetails, drills },
         drillsStatus: { complete: drillSet.complete, drillsCount: drillSet.drillsCount, failed: drillSet.failed, ...(drillSet.complete ? { parameterEffect: drillSet.parameterEffect } : {}) },
-        drillLabels: labels,
+        ...(bundleDrillLabels ? { drillLabels: labels } : {}),
       };
     },
   };
+  // The details' max_values_speed of every athlete of one answer: only the shape the owner-run reads
+  // saw (an object with the unit word "speed" and a finite number); anything else is no value, and
+  // that athlete's row is then read on its own. Keys were checked canonical by the projection.
+  function rememberMaxSpeeds(sessionId, level, players) {
+    const byAthlete = new Map();
+    for (const [athlete, values] of Object.entries(players)) {
+      const v = isPlainObject(values) ? values[DETAILS_MAX_SPEED] : undefined;
+      if (isPlainObject(v) && v.unit === DETAILS_MAX_SPEED_UNIT && typeof v.value === "number" && Number.isFinite(v.value)) byAthlete.set(athlete, v.value);
+    }
+    if (!detailsMaxSpeeds.has(sessionId)) detailsMaxSpeeds.set(sessionId, new Map());
+    detailsMaxSpeeds.get(sessionId).set(level, byAthlete);
+  }
+  // A confirmed parent's rows from its own athlete list, each with max_v from the same athlete's
+  // details entry at the row's level. The first covered row is read on its own and must equal its
+  // list row with that max_v exactly (the canary); a row the details do not cover (no value, an invalid
+  // row, or one of several rows of its athlete at that level) is read on its own.
+  // If the canary differs, every row of the session is read on its own, as before this reduction.
+  async function rowsWithDetailsMaxSpeed(sessionId, rows) {
+    const parent = confirmed(sessionId);
+    const epoch = epochOf(parent.id);
+    const listed = listedAthleteRows.get(parent.id);
+    const speeds = detailsMaxSpeeds.get(parent.id) ?? new Map();
+    const readRow = (row) => adapter.getAthleteSession({ sessionId: parent.id, athleteSessionId: canonicalId(row.id) });
+    const levelOf = (row) => (row.drill === null || row.drill === undefined ? "whole"
+      : Number.isInteger(row.drill) && row.drill >= 0 && row.drill < parent.drillsCount ? `drill${row.drill}` : null);
+    // The details hold one entry per athlete and level, so only a valid row that is its athlete's only
+    // row at that level may take it (two tracks of one athlete, for example, are read on their own).
+    // An athlete with any row of an unreadable level is read row by row as a whole.
+    const rowsPerKey = new Map();
+    const unreadableLevel = new Set();
+    for (const row of rows) {
+      const key = `${canonicalId(row.athlete)}|${levelOf(row)}`;
+      rowsPerKey.set(key, (rowsPerKey.get(key) ?? 0) + 1);
+      if (levelOf(row) === null) unreadableLevel.add(canonicalId(row.athlete));
+    }
+    const speedOf = (row) => {
+      const level = levelOf(row);
+      if (level === null || unreadableLevel.has(canonicalId(row.athlete)) || row.is_stats_valid !== true || rowsPerKey.get(`${canonicalId(row.athlete)}|${level}`) !== 1) return undefined;
+      return speeds.get(level)?.get(canonicalId(row.athlete));
+    };
+    for (const row of rows) {
+      if (!listed?.has(canonicalId(row.id))) throw new SourceAdapterError("athlete_row_not_listed", "That athlete row was not named by the confirmed session's own athlete list read by this adapter.");
+      if (row.track !== undefined && row.track !== null && canonicalId(row.track) === null) throw unexpected("An athlete row of the source's list names its track in an unknown way.");
+    }
+    const out = [];
+    let canaryHeld = false;
+    for (const [i, row] of rows.entries()) {
+      const speed = speedOf(row);
+      if (speed === undefined) { out.push(await readRow(row)); continue; }
+      const fromList = pick({ ...row, max_v: speed }, BUNDLE_FIELDS.athleteSession);
+      if (!canaryHeld) {
+        const canary = await readRow(row);
+        if (JSON.stringify(canary) !== JSON.stringify(fromList)) {
+          // The proven equality does not hold for this session: every remaining row is read on its own.
+          out.push(canary);
+          for (const rest of rows.slice(i + 1)) out.push(await readRow(rest));
+          return out;
+        }
+        canaryHeld = true;
+        out.push(canary);
+        continue;
+      }
+      refreshedDuring(parent.id, epoch);
+      const trackId = row.track === undefined || row.track === null ? null : canonicalId(row.track);
+      confirmedAthleteRows.set(canonicalId(row.id), { sessionId: parent.id, trackId });
+      if (trackId !== null) { confirmedTracks.add(trackId); trackOwner.set(trackId, parent.id); }
+      out.push(fromList);
+    }
+    return out;
+  }
   return Object.freeze(adapter);
 }

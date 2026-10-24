@@ -1905,9 +1905,22 @@ Technical details.
   value or error text. No change of requests, order, heartbeat frequency, results, database, route or UI.
   Any optimization (fewer heartbeat writes, pipelining, concurrency) waits for one owner-run check and its
   line.
-- **GPEXE's rate limit (429) during a check** (owner order 2026-10-22; Draft PR #209, branch
-  `fix/gpexe-check-rate-limit` from `12beb86`; **not merged, not deployed**; backend, tests and docs, no migration,
-  no frontend change).
+- **GPEXE's rate limit (429) during a check** (owner order 2026-10-22; PR #209, branch
+  `fix/gpexe-check-rate-limit` from `12beb86`; backend, tests and docs, no migration, no frontend change).
+  - **Merged and deployed** on the owner's order (2026-10-24), together with the two read-only probe tools; each
+    was deployed before the next was merged:
+
+    | PR | Merge commit | Merged (UTC) | `/api/health` first served it with `ok: true` (UTC) |
+    |---|---|---|---|
+    | #209, the 429 repeat | `12b0f2e` | 00:39:19 | 00:44:41 |
+    | #210, the athlete-list probe | `38c2431` | 00:44:55 | 00:46:35 |
+    | #211, the details-coverage probe | `8e20da1` | 00:47:07 | 00:48:31 |
+
+    - Each commit was then served three times in a row.
+    - Without a login, `GET /api/auth/me` answered 200 with no user, and the GPEXE team status (zero UUID) and the
+      source-connection list answered 401.
+    - Render did not deploy by itself; the owner started each deploy.
+    - No check, GPEXE request or migration was run.
   - **Production, 2026-10-22 (as reported by the owner, sanitized):** two checks of First team failed with
     `source_unavailable` "The source server asked to slow down." (HTTP 429): the default 14 days at 10:03,
     and 18.10.2026 - 19.10.2026 at 17:11 after one session. Nothing was published; the switch stays off.
@@ -1927,10 +1940,26 @@ Technical details.
     Covered by tests RL17-RL20 (unit) and 10-11 (disposable), test-only.
   - **The 17:11 check's timing line (owner, sanitized):** 455 requests in 4 min 51 s, the 429 on the last;
     193 athlete rows for 22 athletes - server3 lists one row per athlete for the session and one per drill.
-  - **Request count (analysis only, nothing implemented):** about 200 - 330 requests per production session,
-    mostly the row and `/more/` reads; `docs/ai/gpexe-check-request-count-analysis.md` lists the reduction
-    options, each an owner decision. The largest safe one, rows from the athlete list, needs one owner-run
-    read-only comparison first: plan `docs/ai/gpexe-athlete-list-nine-fields-plan.md`, tool in Draft PR #210.
+  - **Request count:** about 200 - 330 requests per production session, mostly the row and `/more/` reads
+    (`docs/ai/gpexe-check-request-count-analysis.md`, section 5).
+  - **The reduction** (Draft PR #212, branch `feature/gpexe-check-request-reduction`; not merged, not deployed):
+    - a check reads no drill brief or tag list, and reads the thresholds once per day;
+    - it takes each athlete row from the list, with `max_v` from the details it reads anyway, and reads one
+      canary row per session on its own;
+    - a row the details do not cover, or a session whose canary differs, is read row by row as before.
+
+    That is 146 instead of 206 requests on the fake-source check, with the same stored bundles, and about 262
+    instead of 455 on the owner's check of 2026-10-22.
+  - **The owner-run read-only sitting** (2026-10-24, 08:55 UTC, run once; 23 requests, no 429; sanitized reports
+    as returned by the owner):
+    - **A, athlete list:** `differs`. Eight of the nine row fields are equal, but `max_v` is absent from the list,
+      so each row's own read stays.
+    - **B, grouped details:** `differs`. Events, the mapping and the drill level are `same`. The power zones
+      differ (4 zones against 5), and the speed zones are `insufficient`. So `/more/` stays for every row.
+    - **C, `max_values_speed` against each row's `max_v`** (10:57 UTC, 16 requests, no 429): 9 of 9 pairs were
+      the same number, and the details covered all 39 valid rows. The details' unit word is `speed`, so the tool
+      printed `insufficient`, but the number is the very `max_v`. This is what lets a check drop the per-row read.
+    - `/more/` stays for every row (B).
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2657,11 +2686,11 @@ pre-existing; pass/fail counts don't belong in this file
   projected fields with the same values as the per-row read - the precondition of the largest request saving in
   `docs/ai/gpexe-check-request-count-analysis.md`. Plan: `docs/ai/gpexe-athlete-list-nine-fields-plan.md` (in Draft
   PR #209).
-  - **The probe mode** (`--mode athlete-list`): implemented and tested against a fake server only, in Draft PR
-    #210 (`feature/gpexe-athlete-list-probe`, not merged).
-  - **The real GPEXE read** is neither approved nor run, so the nine fields are not confirmed compatible.
-  - **Recommended order:** #209 first, then #210, checked against `main` after #209 merges. Only a
-    documentation reference ties the two, so that order is no technical blocker.
+  - **The probe mode** (`--mode athlete-list`): implemented and tested against a fake server only, merged and
+    deployed as PR #210 (`38c2431`). The details-coverage tool (question B) is PR #211 (`8e20da1`).
+  - **The real GPEXE read** ran once on 2026-10-24: `differs`, because `max_v` is not in the list (see the 429
+    entry under the active phase).
+  - **Merged in that order on 2026-10-24:** #209, then #210, then #211.
 
 - **Separate migration and runtime database roles** (owner, 2026-10-13, at the v35 decisions; an
   infrastructure hardening task, not blocking v35): today the migrations and the server use the same

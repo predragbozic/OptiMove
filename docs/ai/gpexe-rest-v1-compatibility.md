@@ -843,7 +843,13 @@ rules are `docs/ai/gpexe-athlete-list-nine-fields-plan.md`, added by Draft PR #2
     and `differs` only for a run that ended as built. This section and the code win. The plan is aligned
     after #209 merges, since #209 is not changed now (owner order 2026-10-23).
 
-**Status: not run against GPEXE. The nine fields are not confirmed compatible.**
+**Result of the owner-run read (2026-10-24, run once, 12 requests, no 429): `differs`.**
+- Eight of the nine fields are equal in every compared list row: `id`, `athlete`, `track`, `teamsession`, `drill`,
+  `is_stats_valid`, `total_time`, `total_distance`. The read covered two parents and 6 rows.
+- **`max_v` is absent from the list.** A check therefore keeps each row's own read.
+- Details: `docs/ai/gpexe-check-request-count-analysis.md` section 5.
+
+**Status before that read** (kept as written):
 - **Confirmed by the fake-fetch contract tests only** (`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`,
   AL1–AL21): the tool's own behaviour, that is its requests, pace, stops, report and verdict rules.
 - **Not confirmed:** anything about server3's answers. That covers whether its list rows carry the nine
@@ -854,8 +860,7 @@ rules are `docs/ai/gpexe-athlete-list-nine-fields-plan.md`, added by Draft PR #2
   separate PR on the owner's order.
 
 **Integration with PR #209.**
-- **Recommended order:** merge Draft PR #209 first, then this PR. After #209 merges, check this PR against
-  the new `main` (one look at the reference above and a run of the probe's test file).
+- **Order, as merged (2026-10-24):** PR #209 (`12b0f2e`), then PR #210 (`38c2431`), each deployed before the next.
 - **The dependency is documentation only:**
   - the tool does not import or need anything from #209 (it reads `BUNDLE_FIELDS`, `readBounded` and
     `teamScopedPath`, which are already on `main`);

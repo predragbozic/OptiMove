@@ -322,7 +322,11 @@ export function preflightImportSource(facts) {
 // facts are checked again. Any other 429 stops the check with no further
 // request. Only a check asks for it (`rateLimitRetry`); an identity load keeps
 // its own short budget and never waits.
-export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalThis.fetch, timeoutMs = 90_000, meter = NOOP_CHECK_METER, rateLimitRetry = false } = {}) {
+// `checkBundle` is a check's read plan for a session's bundle (owner orders
+// 2026-10-23 and 2026-10-24): no drill labels, because the check strips them
+// before storing, and the rows from the athlete list with max_v from the
+// details (one canary row read per session) unless it says otherwise.
+export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalThis.fetch, timeoutMs = 90_000, meter = NOOP_CHECK_METER, rateLimitRetry = false, checkBundle = null } = {}) {
   requireIssued(facts);
   if (facts.path !== PATH_SOURCE_CONNECTION || !facts.credential) throw fail("binding_ambiguous");
   let keyring;
@@ -376,7 +380,8 @@ export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalTh
           }
         },
       } : null;
-      adapter = createSourceAdapter({ sourceSystem: facts.sourceSystem, hostKey: facts.hostKey, catalogRow: facts.catalogRow, credential: token, boundSourceTeamId: facts.sourceTeamId, fetchImpl: trackedFetch, timeoutMs, attempts: 1, rateLimit, ...(sleepForImport ? { sleep: sleepForImport } : {}) });
+      const bundlePlan = checkBundle === null ? {} : { bundleDrillLabels: false, bundleMaxSpeedFromDetails: checkBundle.maxSpeedFromDetails !== false };
+      adapter = createSourceAdapter({ sourceSystem: facts.sourceSystem, hostKey: facts.hostKey, catalogRow: facts.catalogRow, credential: token, boundSourceTeamId: facts.sourceTeamId, fetchImpl: trackedFetch, timeoutMs, attempts: 1, rateLimit, ...bundlePlan, ...(sleepForImport ? { sleep: sleepForImport } : {}) });
     } catch (error) {
       if (error?.code === "adapter_not_available") throw fail("adapter_not_available");
       if (error?.code === "host_not_allowed" || error?.code === "path_not_allowed") throw fail("host_not_allowed");
