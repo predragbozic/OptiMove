@@ -1160,7 +1160,59 @@ transport APIs), the body read time, and the legacy path's requests (its client 
 **Reading it.** The owner reads the line in the Render logs after a check run on the owner's order. The
 GPEXE share is the sum of `net_ms`; the database share is `heartbeat_ms + revalidation_ms + preview_ms +
 staging_ms + finalize_ms + retention_ms`; the rest of `total_ms` is the body reads and the server's own
-work. That split decides the next step (fewer heartbeat writes against concurrency or fewer requests).
+work - and, in a check that met a 429 and waited, that wait (up to 60 s; no field of the line measures it,
+the rate-limit line of a failed check names its `Retry-After`). That split decides the next step (fewer
+heartbeat writes against concurrency or fewer requests).
+
+## When GPEXE asks to slow down (429): a check waits once (owner decision 2026-10-22)
+
+On 2026-10-22 two production checks of First team stopped with `source_unavailable` and "The source
+server asked to slow down." - the default 14 days at 10:03, and 18.10.2026 - 19.10.2026 at 17:11, the second
+after one session. Until then a 429 stopped a check at once and its headers were never read.
+
+What a check does now (`rateLimit` option of `backend/src/gpexeRestV1Adapter.js`, enabled only by
+`startCheck` through `openImportSource(..., { rateLimitRetry: true })`; Connect, Test, Bind and the identity
+load are unchanged - a 429 still stops them at once):
+
+- **At most one repeat per check**, and only when the 429 names a whole number of seconds in `Retry-After`
+  that is at most 60 s (`IMPORT_RATE_LIMIT_MAX_WAIT_MS`, `backend/src/gpexeCheckRateLimit.js`). No
+  `Retry-After`, an HTTP date, any other form, or more than 60 s: **no repeat**. `Retry-After: 0` still
+  waits one second; the refused answer's body is never read (it is released before the wait).
+- **The wait** runs in ticks of at most 10 s; after every tick the check writes its heartbeat, so a waiting
+  check never looks abandoned (the stale bound is 15 minutes) and the screen keeps showing it as running.
+- **Before the repeat** the run must still be running (a check closed elsewhere stops here; a source opened
+  without that check never repeats - fail-closed) and the binding facts are checked again (binding active, connection verified, same credential, approved host); an Unbind
+  or a Reconnect during the wait stops the check with its own code and the repeat is never sent.
+- **The repeat** is the same GET with a fresh per-request timeout.
+- **Any other 429** - a second 429 after the wait, a 429 after the one repeat was used, or a 429 that may
+  not be repeated - **stops the check at once: nothing more is sent to GPEXE in that check** (no other
+  drill, brief, tag list, thresholds or session). The check fails with `source_unavailable`, publishes
+  nothing (v33), and the next check has its own one repeat again.
+
+An administrator reads why under *Technical details → Server message*, after " Diagnostic: " (a coach sees
+the sentence only):
+
+```
+op=rate_limit; request_kind=<list_sessions|parent_session|athlete_list|athlete_detail|more|track|whole_details|drill|brief_tags|thresholds|other>; requests_sent=N; elapsed_s=N; first_429_request=N; first_429_elapsed_s=N; retry_after=<absent|seconds|date|invalid>; retry_after_s=<N|over_day|none>; retry_used=<yes|no>; outcome=<second_429|no_retry_after|retry_after_date|retry_after_invalid|retry_after_over_max|retry_already_used>.
+```
+
+- `requests_sent` / `elapsed_s`: every request this check sent (the repeat included) and the seconds since
+  its first request, when it stopped; `first_429_request` / `first_429_elapsed_s`: the same at the check's
+  first 429 - together they show how many requests GPEXE allows and over how long.
+- `retry_after`, `retry_after_s`: what the 429 carried (only whole seconds carry a number; above a day it
+  reads `over_day`); `retry_used`: whether the one repeat was spent.
+- Integers and closed words only, checked by a final guard (`rateLimitDiagnosticAccepted`); never an id,
+  URL, name, date or source text.
+
+What to do: send the line to the developer. With `retry_after=absent` GPEXE does not say how long to wait:
+wait before the next search and prefer short date ranges. Fewer requests per session is a separate,
+owner-decided change (`docs/ai/gpexe-check-request-count-analysis.md`).
+
+Tests (fake server3 only, no GPEXE request): `backend/tests/gpexe-rest-v1-rate-limit.test.mjs` (unit, the
+adapter's rule and the line) and `backend/tests/gpexe-check-rate-limit.test.mjs` (disposable database,
+through the real check route: the repeat, the stop, an Unbind or a closed check during the wait, the stale
+sweep during a wait, a 429 on the list, one repeat per check, the fail-closed hook), with mutation evidence
+for each guard.
 
 ## Database pool checkout bound
 

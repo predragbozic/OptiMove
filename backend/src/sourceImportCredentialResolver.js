@@ -44,6 +44,7 @@ import { decryptCredential, keyringFromEnv } from "./sourceCredentialCrypto.js";
 import { resolveApprovedSourceHost } from "./sourceHosts.js";
 import { createSourceAdapter, SourceAdapterError, DIAGNOSTIC_MARK, projectStoredDetails, DRILL_FAILURE_REASONS, drillParameterEffectOfFullBundle } from "./sourceAdapters.js";
 import { NOOP_CHECK_METER } from "./gpexeCheckTiming.js";
+import { IMPORT_RATE_LIMIT_MAX_WAIT_MS, IMPORT_RATE_LIMIT_WAIT_TICK_MS, rateLimitDiagnostic } from "./gpexeCheckRateLimit.js";
 
 // The importer sees the adapter's error class only through this module: the
 // resolver is the importer's one door to the source-connection infrastructure.
@@ -150,6 +151,8 @@ let revalidateHold = null;
 export function setImportSourceRevalidateHoldForTests(fn) { revalidateHold = fn ?? null; }
 let autoInvalidateCommitFault = null;
 export function setImportSourceAutoInvalidateCommitFaultForTests(fn) { autoInvalidateCommitFault = fn ?? null; }
+let sleepForImport = null;
+export function setImportSourceSleepForTests(fn) { sleepForImport = typeof fn === "function" ? fn : null; }
 let autoInvalidateBoundMs = AUTO_INVALIDATE_BOUND_MS;
 export function setImportSourceAutoInvalidateBoundForTests(ms) { autoInvalidateBoundMs = Number.isInteger(ms) && ms > 0 ? ms : AUTO_INVALIDATE_BOUND_MS; }
 
@@ -311,7 +314,15 @@ export function preflightImportSource(facts) {
 // `meter` (a check's timing, gpexeCheckTiming.js) counts each request by the
 // kind the adapter labels it with and times it up to its response headers;
 // it never sees the URL and never throws.
-export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalThis.fetch, timeoutMs = 90_000, meter = NOOP_CHECK_METER } = {}) {
+// A check's rate limit (owner decision 2026-10-22): a 429 is repeated at most
+// once per check, only after the whole-seconds Retry-After the source named and
+// only when it is at most this long; during the wait the check reports it is
+// alive every tick (far inside CHECK_STALE_AFTER_MINUTES), and before the one
+// repeat the run's own beforeRetry (the check still running) and the binding
+// facts are checked again. Any other 429 stops the check with no further
+// request. Only a check asks for it (`rateLimitRetry`); an identity load keeps
+// its own short budget and never waits.
+export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalThis.fetch, timeoutMs = 90_000, meter = NOOP_CHECK_METER, rateLimitRetry = false } = {}) {
   requireIssued(facts);
   if (facts.path !== PATH_SOURCE_CONNECTION || !facts.credential) throw fail("binding_ambiguous");
   let keyring;
@@ -322,6 +333,8 @@ export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalTh
   }
   if (typeof fetchImpl !== "function") throw fail("adapter_not_available");
   const progress = { fn: null };
+  const hooks = { beforeRateLimitRetry: null };
+  let issued = null;
   const trackedFetch = async (url, init, call = null) => {
     const started = meter.start();
     let res;
@@ -342,14 +355,35 @@ export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalTh
     }
     let adapter;
     try {
-      adapter = createSourceAdapter({ sourceSystem: facts.sourceSystem, hostKey: facts.hostKey, catalogRow: facts.catalogRow, credential: token, boundSourceTeamId: facts.sourceTeamId, fetchImpl: trackedFetch, timeoutMs, attempts: 1 });
+      const rateLimit = rateLimitRetry === true ? {
+        maxWaitMs: IMPORT_RATE_LIMIT_MAX_WAIT_MS,
+        tickMs: IMPORT_RATE_LIMIT_WAIT_TICK_MS,
+        // A heartbeat per tick; it never throws (the run's own alive() decides).
+        onWaitTick: async () => { if (progress.fn) { try { await progress.fn(); } catch { /* alive() decides */ } } },
+        // The run first (a check closed elsewhere stops here), then the same
+        // facts as before every operation: never a repeat after an Unbind, a
+        // Reconnect or a state change during the wait.
+        beforeRetry: async () => {
+          // Fail-closed: without the run's own check (setBeforeRateLimitRetry)
+          // the repeat is never sent.
+          if (!hooks.beforeRateLimitRetry) throw fail("context_not_issued");
+          await hooks.beforeRateLimitRetry();
+          const started = meter.start();
+          try {
+            await assertImportSourceStillUsable(issued);
+          } finally {
+            meter.revalidation(started);
+          }
+        },
+      } : null;
+      adapter = createSourceAdapter({ sourceSystem: facts.sourceSystem, hostKey: facts.hostKey, catalogRow: facts.catalogRow, credential: token, boundSourceTeamId: facts.sourceTeamId, fetchImpl: trackedFetch, timeoutMs, attempts: 1, rateLimit, ...(sleepForImport ? { sleep: sleepForImport } : {}) });
     } catch (error) {
       if (error?.code === "adapter_not_available") throw fail("adapter_not_available");
       if (error?.code === "host_not_allowed" || error?.code === "path_not_allowed") throw fail("host_not_allowed");
       if (error?.code === "credential_missing" || error?.code === "invalid_bound_team" || error?.code === "invalid_options") throw fail("credential_unreadable", { status: 503 });
       throw error;
     }
-    return issue({
+    issued = issue({
       path: PATH_SOURCE_CONNECTION,
       teamId: facts.teamId,
       teamClubId: facts.teamClubId,
@@ -362,7 +396,9 @@ export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalTh
       credentialFingerprint: facts.credentialFingerprint,
       adapter,
       setRequestProgress(fn) { progress.fn = typeof fn === "function" ? fn : null; },
+      setBeforeRateLimitRetry(fn) { hooks.beforeRateLimitRetry = typeof fn === "function" ? fn : null; },
     });
+    return issued;
   } finally {
     token = null;
     keyring = null;
@@ -504,6 +540,20 @@ export function drillSetDiagnostic(drillsStatus, { sessionPosition } = {}) {
   return drillDiagnosticAccepted(line) ? line : null;
 }
 
+// A rate-limit stop leaves the adapter with its facts; the check row gets the
+// same code and sentence, and for an administrator the line after the mark.
+async function withRateLimitDiagnostic(operation) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof SourceAdapterError && error.reason === "rate_limited" && error.rateLimit) {
+      const line = rateLimitDiagnostic(error.rateLimit);
+      throw new SourceAdapterError("source_unavailable", line ? `${error.message}${DIAGNOSTIC_MARK}${line}` : error.message, { status: 429, reason: "rate_limited" });
+    }
+    throw error;
+  }
+}
+
 // The importer reads through the same two operations whatever the path. For
 // the binding path they are the adapter's reads, with the re-validation
 // before each, the bound team enforced, and the drill rules of the owner
@@ -535,7 +585,7 @@ export function importClientFor(source, { meter = NOOP_CHECK_METER } = {}) {
       // The facts are re-checked between the adapter's two complete reads of
       // the list too, so the second read is never sent after an Unbind, a
       // Reconnect or a state change during the first.
-      const result = await adapter.listSessionsByDay({ fromDay, toDay, beforeSecondRead: () => stillUsable() });
+      const result = await withRateLimitDiagnostic(() => adapter.listSessionsByDay({ fromDay, toDay, beforeSecondRead: () => stillUsable() }));
       if (onProgress) await onProgress();
       // A list — empty or not — is returned only when the facts still hold
       // after the read: a binding that ended or a credential replaced while
@@ -546,7 +596,7 @@ export function importClientFor(source, { meter = NOOP_CHECK_METER } = {}) {
     async fetchSessionBundle({ gpexeTeamId, sessionId, sessionPosition = null, onProgress = null } = {}) {
       sameTeam(gpexeTeamId);
       await stillUsable();
-      const bundle = await adapter.fetchSessionBundle({ sessionId });
+      const bundle = await withRateLimitDiagnostic(() => adapter.fetchSessionBundle({ sessionId }));
       if (onProgress) await onProgress();
       // The re-validation window is one bundle (the adapter's dependent reads
       // of one session); a bundle read across the end of its binding, a

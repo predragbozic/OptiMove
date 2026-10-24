@@ -714,6 +714,40 @@ export function parseDrillTags(drillTags, drillsCount) {
   return byIndex;
 }
 
+// A source's "slow down" (429), honoured at most once per adapter instance
+// (owner decision 2026-10-22, the importer's check only): the one repeat is
+// sent only when the answer names a whole number of seconds (Retry-After)
+// within the caller's maximum wait; without it, or with any other form, the
+// request is not repeated. A second 429 - or any 429 once the one repeat was
+// used - stops the instance: nothing more is sent through it. Without the
+// `rateLimit` option a 429 stays what it always was: one refusal, never
+// repeated, and the instance goes on.
+export const RATE_LIMIT_MAX_WAIT_CAP_MS = 120_000;
+export const RATE_LIMIT_WAIT_TICK_MS = 10_000;
+const RETRY_AFTER_SECONDS = /^[0-9]{1,9}$/;
+const RETRY_AFTER_HTTP_DATE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), [0-9]{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT$/;
+// What a Retry-After header holds, as a closed kind: only `seconds` carries a
+// number; an HTTP date is recognised (and reported) but never waited for.
+export function parseRetryAfter(value) {
+  if (value === null || value === undefined) return { kind: "absent", seconds: null };
+  const text = String(value).trim();
+  if (RETRY_AFTER_SECONDS.test(text)) return { kind: "seconds", seconds: Number(text) };
+  if (RETRY_AFTER_HTTP_DATE.test(text)) return { kind: "date", seconds: null };
+  return { kind: "invalid", seconds: null };
+}
+// Why a 429 was not repeated, by the kind of its Retry-After.
+const RATE_LIMIT_NOT_REPEATED = Object.freeze({ absent: "no_retry_after", date: "retry_after_date", invalid: "retry_after_invalid", seconds: "retry_after_over_max" });
+function rateLimitState(rateLimit) {
+  const plain = rateLimit !== null && typeof rateLimit === "object" && !Array.isArray(rateLimit);
+  const { maxWaitMs, tickMs = RATE_LIMIT_WAIT_TICK_MS, beforeRetry, onWaitTick = null } = plain ? rateLimit : {};
+  if (!plain || !Number.isInteger(maxWaitMs) || maxWaitMs < 1_000 || maxWaitMs > RATE_LIMIT_MAX_WAIT_CAP_MS
+    || !Number.isInteger(tickMs) || tickMs < 1 || tickMs > 30_000
+    || typeof beforeRetry !== "function" || (onWaitTick !== null && typeof onWaitTick !== "function")) {
+    throw new SourceAdapterError("invalid_options", "The rate-limit option needs a maximum wait of 1000 to 120000 ms, a tick of at most 30000 ms and a beforeRetry function.");
+  }
+  return { maxWaitMs, tickMs, beforeRetry, onWaitTick, retryUsed: false, first: null, halted: null };
+}
+
 export function createGpexeRestV1Adapter({
   hostKey,
   catalogRow,
@@ -724,6 +758,7 @@ export function createGpexeRestV1Adapter({
   attempts = 1,
   retryDelayMs = 1_000,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  rateLimit = null,
 } = {}) {
   // The gate: the key's own approved catalog row, and the family this file is for.
   const probeUrl = sourceApiUrl(ADAPTER_SOURCE, hostKey, catalogRow, "team/");
@@ -744,6 +779,35 @@ export function createGpexeRestV1Adapter({
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) throw new SourceAdapterError("invalid_options", "The timeout is a whole number of milliseconds up to 120000.");
   if (!Number.isInteger(retryDelayMs) || retryDelayMs < 0 || retryDelayMs > 10_000) throw new SourceAdapterError("invalid_options", "The retry delay is a whole number of milliseconds up to 10000.");
   if (typeof sleep !== "function") throw new SourceAdapterError("invalid_options", "The source adapter needs a sleep function.");
+  const rl = rateLimit === null || rateLimit === undefined ? null : rateLimitState(rateLimit);
+  // Every request this instance sends, and when the first one left: the
+  // counts a rate-limit refusal reports (integers only).
+  let requestsSent = 0;
+  let firstRequestAt = null;
+  const elapsedSeconds = () => (firstRequestAt === null ? 0 : Math.max(0, Math.floor((Date.now() - firstRequestAt) / 1_000)));
+  // The wait a Retry-After asks for, in ticks: the caller's onWaitTick runs
+  // after each (the importer's heartbeat), so a waiting check never looks
+  // abandoned.
+  const rateLimitWait = async (ms) => {
+    let left = ms;
+    while (left > 0) {
+      const step = Math.min(left, rl.tickMs);
+      await sleep(step);
+      left -= step;
+      if (rl.onWaitTick) await rl.onWaitTick();
+    }
+  };
+  const rateLimitStop = (refusal, kind, retryAfter, outcome) => {
+    rl.halted = Object.assign(refusal, {
+      reason: "rate_limited",
+      rateLimit: Object.freeze({
+        requestKind: kind, requestsSent, elapsedS: elapsedSeconds(),
+        first429Request: rl.first?.requests ?? requestsSent, first429ElapsedS: rl.first?.elapsedS ?? elapsedSeconds(),
+        retryAfter: retryAfter.kind, retryAfterS: retryAfter.seconds, retryUsed: rl.retryUsed, outcome,
+      }),
+    });
+    return rl.halted;
+  };
   const root = probeUrl.slice(0, -"team/".length);
   const authorization = `${host.authScheme} ${credential}`;
 
@@ -827,7 +891,15 @@ export function createGpexeRestV1Adapter({
   // first two arguments.
   async function fetchBuilt(url, project = redactGpexe, kind = "other") {
     let last = null;
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    // The one repeat of a rate-limited request adds one attempt, once; the
+    // loop and every backoff decision use the same extended bound.
+    let rateLimitRetried = false;
+    const limit = () => attempts + (rateLimitRetried ? 1 : 0);
+    for (let attempt = 1; attempt <= limit(); attempt += 1) {
+      // After a rate-limit stop nothing more leaves this instance.
+      if (rl?.halted) throw rl.halted;
+      requestsSent += 1;
+      if (firstRequestAt === null) firstRequestAt = Date.now();
       let res;
       try {
         res = await fetchImpl(url, {
@@ -838,25 +910,56 @@ export function createGpexeRestV1Adapter({
         }, { kind });
       } catch {
         last = new SourceAdapterError("source_unavailable", "The source server did not answer.", { reason: "no_answer" });
-        if (attempt < attempts) await sleep(retryDelayMs * attempt);
+        if (attempt < limit()) await sleep(retryDelayMs * attempt);
         continue;
       }
       const status = res.status;
+      const header = (name) => (typeof res.headers?.get === "function" ? res.headers.get(name) : null);
       if (status >= 300 && status < 400) throw new SourceAdapterError("source_answer_unexpected", "The source server answered with a redirect, which is refused.", { status, reason: "redirect" });
       // 401: the credential itself was refused. 403: the credential was read
       // but may not do this; the two are told apart for the administrator.
       if (status === 401) throw new SourceAdapterError("source_auth_rejected", "The source server refused the credential.", { status });
       if (status === 403) throw new SourceAdapterError("source_access_refused", "The source server does not allow this credential to read that.", { status });
       if (status === 404) throw new SourceAdapterError("source_not_found", "The source server has nothing at that place.", { status });
-      // Asked to slow down: not repeated, so a rate limit is never made worse.
-      if (status === 429) throw new SourceAdapterError("source_unavailable", "The source server asked to slow down.", { status });
+      // Asked to slow down. Without the rateLimit option: not repeated, so a
+      // rate limit is never made worse. With it: repeated once per instance,
+      // only after the whole-seconds wait the source named (within the
+      // maximum), and only if the caller's beforeRetry still allows it; any
+      // other 429 stops the instance.
+      if (status === 429) {
+        const refusal = new SourceAdapterError("source_unavailable", "The source server asked to slow down.", { status });
+        if (!rl) throw refusal;
+        const retryAfter = parseRetryAfter(header("retry-after"));
+        if (rl.first === null) rl.first = { requests: requestsSent, elapsedS: elapsedSeconds() };
+        const fits = retryAfter.kind === "seconds" && retryAfter.seconds * 1_000 <= rl.maxWaitMs;
+        if (!rateLimitRetried && !rl.retryUsed && fits) {
+          rl.retryUsed = true;
+          rateLimitRetried = true;
+          // The refused answer is never read; letting go of its body is asked
+          // for, never waited for (as in readBounded), so a cancel that never
+          // settles cannot hold the wait or the heartbeat. Retry-After 0 still
+          // waits a second: a source that just said "slow down" is never asked
+          // again at once.
+          try { Promise.resolve(res.body?.cancel?.()).catch(() => {}); } catch { /* a cancel that throws changes nothing */ }
+          try {
+            await rateLimitWait(Math.max(1, retryAfter.seconds) * 1_000);
+            await rl.beforeRetry();
+          } catch (error) {
+            // Whatever stopped the wait (an ended binding, a reconnect, a check
+            // closed elsewhere) ends this instance too: its own error goes on.
+            rateLimitStop(refusal, kind, retryAfter, "stopped_before_retry");
+            throw error;
+          }
+          continue;
+        }
+        throw rateLimitStop(refusal, kind, retryAfter, rateLimitRetried ? "second_429" : rl.retryUsed ? "retry_already_used" : RATE_LIMIT_NOT_REPEATED[retryAfter.kind]);
+      }
       if (status >= 500) {
         last = new SourceAdapterError("source_unavailable", "The source server is not available.", { status });
-        if (attempt < attempts) await sleep(retryDelayMs * attempt);
+        if (attempt < limit()) await sleep(retryDelayMs * attempt);
         continue;
       }
       if (status !== 200) throw new SourceAdapterError("source_answer_unexpected", "The source server answered in a way that is not expected.", { status, reason: "status_unexpected" });
-      const header = (name) => (typeof res.headers?.get === "function" ? res.headers.get(name) : null);
       const text = await readBounded(res, header("content-length"));
       let body;
       try {
@@ -1080,7 +1183,10 @@ export function createGpexeRestV1Adapter({
   };
   // Errors that end a whole operation whatever it was reading: the credential
   // or the team is the problem, not one resource.
-  const isGlobal = (e) => ["source_auth_rejected", "source_access_refused", "source_team_mismatch", "source_identity_mismatch", "host_not_allowed", "path_not_allowed", "credential_missing"].includes(e?.code);
+  // A rate-limit stop (rateLimit option) ends the whole operation too: it is
+  // never a failed drill or a missing brief, and nothing more is sent.
+  const isGlobal = (e) => ["source_auth_rejected", "source_access_refused", "source_team_mismatch", "source_identity_mismatch", "host_not_allowed", "path_not_allowed", "credential_missing"].includes(e?.code)
+    || (rl !== null && e?.reason === "rate_limited");
 
   const adapter = {
     sourceSystem: ADAPTER_SOURCE,
