@@ -1,13 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import { MediaStorageError, bytes, uuid } from './mediaStorage.js';
 import { exerciseLibraryScopeSql, hasExerciseAdministration } from './exerciseAccess.js';
-import { inspectMedia } from './mediaInspection.js';
+import { inspectMedia, DRIVE_IMPORT_MAX_VIDEO_SECONDS } from './mediaInspection.js';
+import { isPlatformAdministrator } from './authz.js';
+import { copyKind, driveFileId, driveFileInUse, withReadOnly } from './driveCopies.js';
 const fail=(status,code,retryable=false)=>{const e=new MediaStorageError(status,code);e.retryable=retryable;throw e;};
 const sourcePurposes=new Set(['video_frame','automatic_thumbnail']);
 const terminal=new Set(['completed','cancelled','failed']);
+// A Drive import (migration 202610211000): a platform administrator copies a
+// Drive file that exercises or plan items name into the platform account.
+const importPurposes={video:'drive_import_video',image:'drive_import_image'};
+const importMimeTypes={video:['video/mp4'],image:['image/jpeg','image/png','image/webp']};
+const isImport=u=>u?.context?.type==='drive_import';
 const dto=u=>({uploadId:u.id,mediaId:u.asset_id,status:u.status==='reserved'?'pending':u.status,expiresAt:u.expires_at,errorCode:u.error_code || null});
 
-export function createMediaUploadService({pool,storage,store,inspect=inspectMedia}) {
+export function createMediaUploadService({pool,storage,store,inspect=inspectMedia,driveCopies=null,commitBoundMs=15000}) {
   async function tx(work) {
     const c=await pool.connect();
     try {await c.query('begin');await c.query("set local lock_timeout='5s'");await c.query("set local statement_timeout='15s'");const r=await work(c);await c.query('commit');return r;}
@@ -47,6 +54,12 @@ export function createMediaUploadService({pool,storage,store,inspect=inspectMedi
     fail(403,'operation_not_allowed');
   }
   async function authorize(req,u) {
+    if(isImport(u)) {
+      // Re-checked at every step: a revoked administrator cannot complete an import.
+      const a=(await pool.query('select owner_platform from media.storage_accounts where id=$1',[u.storage_account_id])).rows[0];
+      if(!isPlatformAdministrator(req.authz || {platformRoles:[]}) || !a?.owner_platform)fail(403,'operation_not_allowed');
+      return;
+    }
     const actual=await owner(req,u.context);
     const a=(await pool.query('select owner_user_id,owner_club_id from media.storage_accounts where id=$1',[u.storage_account_id])).rows[0];
     if(!a || (actual.type==='user'?a.owner_user_id:a.owner_club_id)!==actual.id)fail(403,'operation_not_allowed');
@@ -86,6 +99,13 @@ export function createMediaUploadService({pool,storage,store,inspect=inspectMedi
     await store.tombstone(u.temporary_object_key);
     return storage.releaseAfterCleanup(u.id,{cleanupVerified:true,outcome:u.error_code?'failed':'cancelled'});
   }
+  // The outcome of an import completion whose COMMIT answer was lost: the
+  // upload row read under its own lock on another connection, so a COMMIT still
+  // in flight finishes first. null: not even this could be read.
+  async function importOutcome(id) {
+    try {return await tx(async c=>(await c.query('select * from media.uploads where id=$1 for update',[id])).rows[0] || null);}
+    catch {return null;}
+  }
   async function media(u,connection=pool) {
     const a=(await connection.query('select * from media.assets where id=$1',[u.asset_id])).rows[0];
     return {source:'asset',mediaId:a.id,kind:a.kind,status:a.status,mimeType:a.mime_type,sizeBytes:a.size_bytes,metadata:a.metadata};
@@ -117,9 +137,43 @@ export function createMediaUploadService({pool,storage,store,inspect=inspectMedi
         sizeBytes:file.sizeBytes,mimeType:file.mimeType,context,ttlSeconds:600});
       return issue(req,u,'issued');
     },
-    async status(req,id) {const u=await owned(req,id);return {...dto(u),...(u.status==='completed'?{media:await media(u)}:{})};},
+    // A Drive import: the file must be one that an exercise or a plan item names
+    // in a legacy slot, have no copy yet and no other import in flight. It is
+    // charged to the platform account, outside the coach upload rate limit
+    // (the platform account's parallel-upload limit bounds it).
+    async importInitiate(req,body,key) {
+      if(!isPlatformAdministrator(req.authz || {platformRoles:[]}) || !driveCopies)fail(403,'operation_not_allowed');
+      uuid(key);store.assertConfigured();
+      if(!body || typeof body!=='object')fail(400,'invalid_request');
+      const kind=copyKind(body.kind),id=driveFileId(body.driveFileId),file=body.file;
+      if(!file || typeof file!=='object' || typeof file.name!=='string' || !file.name.trim() || file.name.length>255)fail(400,'invalid_request');
+      bytes(file.sizeBytes,{positive:true});
+      if(!importMimeTypes[kind].includes(file.mimeType))fail(415,'unsupported_media');
+      if(!await withReadOnly(pool,run=>driveFileInUse(run,kind,id)))fail(404,'resource_not_found');
+      const accountId=await storage.ensureAccount({type:'platform'});
+      // Checked and reserved in one transaction under the file's own lock: two
+      // imports of one file never both reserve. (A replay of the same key is
+      // answered before this, by the reservation's idempotency.)
+      const precheck=async c=>{
+        await c.query('select pg_advisory_xact_lock(hashtextextended($1,0))',[`drive-import:${id}:${kind}`]);
+        if((await c.query('select 1 from media.drive_copies where drive_file_id=$1 and kind=$2',[id,kind])).rowCount)fail(409,'already_copied');
+        if((await c.query("select 1 from media.uploads where purpose=$1 and context->>'driveFileId'=$2 and status in ('reserved','verifying','cancelling')",[importPurposes[kind],id])).rowCount)fail(409,'import_in_progress');
+      };
+      let u;
+      try {
+        u=await storage.reserveUpload({storageAccountId:accountId,uploadedByUserId:req.user.id,idempotencyKey:key,kind,purpose:importPurposes[kind],
+          sizeBytes:file.sizeBytes,mimeType:file.mimeType,context:{type:'drive_import',driveFileId:id,fileName:file.name},ttlSeconds:600,precheck});
+      } catch(e) {
+        // The database's own guard (uploads_active_drive_import), should the lock ever be bypassed.
+        if(e?.code==='23505')fail(409,'import_in_progress');
+        throw e;
+      }
+      if(!isImport(u))fail(409,'idempotency_conflict');
+      return issue(req,u,'issued');
+    },
+    async status(req,id) {const u=await owned(req,id);if(isImport(u))await authorize(req,u);return {...dto(u),...(u.status==='completed'?{media:await media(u)}:{})};},
     async renew(req,id) {
-      const u=await owned(req,id);await authorize(req,u);store.assertConfigured();await rate(req);
+      const u=await owned(req,id);await authorize(req,u);store.assertConfigured();if(!isImport(u))await rate(req);
       await tx(async c=>{
         const current=await locked(c,u.id);
         if(current.status!=='reserved' || new Date(current.expires_at)<=new Date() || Date.now()-new Date(current.created_at).getTime()>1200000)fail(409,'upload_expired');
@@ -151,14 +205,28 @@ export function createMediaUploadService({pool,storage,store,inspect=inspectMedi
         const head=await store.head(u.temporary_object_key);
         if(!head)fail(409,'upload_not_present',true);
         if(head.tombstone || !head.etag || head.sizeBytes!==u.expected_size_bytes || head.mimeType!==u.expected_mime_type)fail(422,'media_verification_failed');
-        const metadata=await inspect(store,u,head);
-        if(u.expected_mime_type.startsWith('image/'))Object.assign(metadata,{origin:u.purpose==='exercise_image'?'manual':u.purpose==='video_frame'?'frame':'automatic',
+        const metadata=await inspect(store,u,head,isImport(u)?{maxVideoSeconds:DRIVE_IMPORT_MAX_VIDEO_SECONDS}:{});
+        if(isImport(u))metadata.origin='drive_import';
+        else if(u.expected_mime_type.startsWith('image/'))Object.assign(metadata,{origin:u.purpose==='exercise_image'?'manual':u.purpose==='video_frame'?'frame':'automatic',
           ...(u.context.sourceMediaId?{sourceVideoMediaId:u.context.sourceMediaId,frameTimeSeconds:u.context.frameTimeSeconds}:{})});
         await authorize(req,u);
-        const completed=await storage.commitVerifiedUpload(u.id,{sizeBytes:head.sizeBytes,mimeType:head.mimeType,metadata,verificationToken:token,objectKey:u.temporary_object_key});
+        let completed;
+        try {
+          completed=await storage.commitVerifiedUpload(u.id,{sizeBytes:head.sizeBytes,mimeType:head.mimeType,metadata,verificationToken:token,objectKey:u.temporary_object_key},
+            isImport(u)?{onCommit:(c,current)=>driveCopies.insertCopy(c,current,req.user.id),commitBoundMs}:{});
+        } catch(e) {
+          if(!(isImport(u) && e?.code==='commit_outcome_unknown'))throw e;
+          // Never "not written" by guess: written -> 200, still verifying -> not
+          // written (retryable, the claim is returned below), unreadable -> unknown.
+          const found=await importOutcome(u.id);
+          if(found?.status==='completed')return {httpStatus:200,body:{...dto(found),media:await media(found),verifiedAfterCommitError:true}};
+          if(found?.status==='verifying')fail(503,'media_storage_unavailable',true);
+          fail(503,'import_outcome_unknown',true);
+        }
         return {httpStatus:200,body:{...dto(completed),media:await media(completed)}};
       } catch(e) {
-        if(e instanceof MediaStorageError && [415,422].includes(e.status)) {await cleanup(await beginCancel(u.id,e.code));throw e;}
+        // A refused file, or a copy of this Drive file that landed first: the upload ends now, its reservation and slot are freed.
+        if(e instanceof MediaStorageError && ([415,422].includes(e.status) || e.code==='already_copied')) {await cleanup(await beginCancel(u.id,e.code));throw e;}
         // Missing object / transient provider failure can be retried. A cancelled
         // or stolen verification claim cannot return the session to pending.
         await tx(async c=>{const current=await locked(c,u.id);if(current.status==='verifying' && current.verification_token===token)
@@ -166,7 +234,7 @@ export function createMediaUploadService({pool,storage,store,inspect=inspectMedi
         throw e;
       }
     },
-    async cancel(req,id) {const u=await owned(req,id);const cancelled=await cleanup(await beginCancel(u.id));return {httpStatus:200,body:dto(cancelled)};},
+    async cancel(req,id) {const u=await owned(req,id);if(isImport(u))await authorize(req,u);const cancelled=await cleanup(await beginCancel(u.id));return {httpStatus:200,body:dto(cancelled)};},
     async cleanupExpired(limit=20) {
       store.assertConfigured();
       if(!Number.isInteger(limit) || limit<1 || limit>100)fail(400,'invalid_request');

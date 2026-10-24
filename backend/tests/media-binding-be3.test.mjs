@@ -8,7 +8,7 @@ import { createDisposableDatabase } from "./support/disposable-db.mjs";
 import { EXERCISE_COLLECTIONS_FIXTURE_SQL } from "./support/exercise-collections-fixture.mjs";
 
 import {readFile} from 'node:fs/promises';
-import {createMediaAccessService} from '../src/exerciseMedia.js';
+import {createMediaAccessService,decorateMediaRows} from '../src/exerciseMedia.js';
 import {createR2UploadStore} from '../src/r2UploadStore.js';
 import {createMediaStorageService,MediaStorageError} from '../src/mediaStorage.js';
 let accessService;
@@ -230,7 +230,7 @@ before(async () => {
   await client.query("alter table library.exercises add column owner_club_id uuid,add column place_id uuid,add column complexity_level_id uuid,add column starting_position_id uuid,add column attractor_id uuid");
   await client.query(EXERCISE_COLLECTIONS_FIXTURE_SQL);
   await client.query("create table public.clubs(id uuid primary key)");
-  for(const name of ['202610191100_media_storage_foundation.sql','202610191300_media_upload_lifecycle.sql'])await client.query(await readFile(new URL('../../migrations_v2/'+name,import.meta.url),'utf8'));
+  for(const name of ['202610191100_media_storage_foundation.sql','202610191300_media_upload_lifecycle.sql','202610211000_media_drive_copies.sql'])await client.query(await readFile(new URL('../../migrations_v2/'+name,import.meta.url),'utf8'));
   process.env.MEDIA_STORAGE_ENABLED='true';
   await client.query("insert into public.user_global_roles (user_id,role,is_active) values ($1,'platform_admin',true)", [otherCoachId]);
   for (const [key, ownerScope, ownerId, active] of [
@@ -480,4 +480,89 @@ test('main #188: image completion preserves asset/none snapshot choices instead 
 test('main #188: a mixed private copy snapshots inherited legacy image alongside its own R2 video',async()=>{
  const source=await exercise('Mixed media source','system',null),video=await ready(),copy=await request('/api/exercises/'+source+'/copy',{name:'Mixed media private copy',media:{video:selected(video.id)}});assert.equal(copy.status,201);
  assert.equal((await addExercise(copy.body.id)).status,201);const item=await oneItem(copy.body.id);assert.equal(item.video_source,'asset');assert.equal(item.video_asset_id,video.id);assert.equal(item.image_source,'legacy');assert.equal(item.image_url,'https://legacy.test/old.png');
+});
+
+// ---- Drive copies (migration 202610211000) ------------------------------------
+// A legacy Drive link whose file has a ready copy in the platform account reads
+// and plays as that asset (exercise, private copy, plan item); nothing is rewritten.
+const DRIVE_VIDEO='https://drive.google.com/file/d/1DriveVideoFile0000000000AB/view?usp=sharing';
+const DRIVE_IMAGE='https://drive.google.com/open?id=1DriveImageFile0000000000CD';
+async function driveCopy(driveId,kind='video',status='ready') {
+ const account=await createMediaStorageService(pool).ensureAccount({type:'platform'}),id=crypto.randomUUID();
+ await client.query("insert into media.assets(id,object_key,kind,storage_account_id,uploaded_by_user_id,status,size_bytes,mime_type) values($1,$2,$3,$4,$5,$6,1,$7)",[id,'assets/'+id,kind,account,otherCoachId,status,kind==='video'?'video/mp4':'image/jpeg']);
+ await client.query('insert into media.drive_copies(drive_file_id,kind,asset_id,created_by_user_id) values($1,$2,$3,$4)',[driveId,kind,id,otherCoachId]);
+ return id;
+}
+async function driveExercise(owner=coachId,extra={}) {
+ return (await client.query("insert into library.exercises(name,owner_scope,owner_user_id,video_url,image_url) values('Drive exercise',$4,$1,$2,$3) returning id",[owner,extra.video??DRIVE_VIDEO,extra.image??DRIVE_IMAGE,extra.scope??'user'])).rows[0].id;
+}
+const detail=async id=>(await request('/api/exercises/'+id,undefined,{method:'GET'})).body;
+beforeEach(async()=>{await client.query('delete from media.drive_copies');});
+
+test('Drive copy: an exercise whose legacy Drive video has a ready copy reads and plays as that asset; its image without a copy stays the Drive link',async()=>{
+ const id=await driveExercise();
+ let body=await detail(id);
+ assert.equal(body.media.video.source,'legacy');assert.equal(body.media.video.url,DRIVE_VIDEO);
+ const copy=await driveCopy('1DriveVideoFile0000000000AB');
+ body=await detail(id);
+ assert.deepEqual(body.media.video,{source:'asset',mediaId:copy,kind:'video'});
+ assert.equal(body.videoUrl,'','the Drive link is not offered beside the copy');
+ assert.equal(body.media.image.source,'legacy');assert.equal(body.media.image.url,DRIVE_IMAGE);
+ const played=await access({type:'exercise',id},['video','image']);
+ assert.equal(played.status,200);assert.equal(played.body.video.mediaId,copy);assert.equal(played.body.image,undefined,'no copy, nothing signed');
+ assert.equal((await client.query('select video_source from library.exercises where id=$1',[id])).rows[0].video_source,'legacy','the row is not rewritten');
+});
+
+test('Drive copy: the ?id= form, an image copy and a personal copy of a system exercise inheriting its link all resolve; a foreign exercise stays 404',async()=>{
+ const id=await driveExercise(null,{scope:'system'}),image=await driveCopy('1DriveImageFile0000000000CD','image');
+ assert.deepEqual((await detail(id)).media.image,{source:'asset',mediaId:image,kind:'image'});
+ const video=await driveCopy('1DriveVideoFile0000000000AB');
+ const copyRow=(await client.query("insert into library.exercises(name,owner_scope,owner_user_id,source_exercise_id) values('Private copy','user',$1,$2) returning id",[coachId,id])).rows[0].id;
+ const played=await access({type:'exercise',id:copyRow},['video','image']);
+ assert.equal(played.status,200);assert.equal(played.body.video.mediaId,video);assert.equal(played.body.image.mediaId,image);
+ const foreign=await driveExercise(otherCoachId);
+ assert.equal((await access({type:'exercise',id:foreign})).status,404,'a copy never widens who may play a row');
+});
+
+test('Drive copy: a plan item with the legacy Drive snapshot plays the copy for its athlete; the decorator describes it; removal and an unready copy fall back to Drive',async()=>{
+ const id=await driveExercise();assert.equal((await addExercise(id)).status,201);
+ const item=await oneItem(id);assert.equal(item.video_source,'legacy');assert.equal(item.video_url,DRIVE_VIDEO);
+ const plan=(await client.query('select d.plan_id from plans.plan_days d join plans.plan_sessions s on s.plan_day_id=d.id where s.id=$1',[item.plan_session_id])).rows[0].plan_id,athlete=crypto.randomUUID();
+ await client.query('insert into public.athletes(id,user_id,is_active) values($1,$2,true)',[athlete,athleteUserId]);await client.query("update plans.plans set athlete_id=$2,is_template=false,status='active' where id=$1",[plan,athlete]);
+ assert.deepEqual((await access({type:'plan_item',id:item.id},['video'],true)).body,{},'no copy yet: nothing to sign, Drive as before');
+ const copy=await driveCopy('1DriveVideoFile0000000000AB');
+ assert.equal((await access({type:'plan_item',id:item.id},['video'],true)).body.video.mediaId,copy);
+ const rows=[{plan_item_id:item.id,video_url:item.video_url,image_url:item.image_url}];
+ await decorateMediaRows(rows,'plan_item',(sql,params)=>pool.query(sql,params));
+ assert.deepEqual(rows[0].media.video,{source:'asset',mediaId:copy,kind:'video'});assert.equal(rows[0].video_url,'');
+ assert.equal((await client.query('select video_source from plans.plan_items where id=$1',[item.id])).rows[0].video_source,'legacy','the plan item is not rewritten');
+ await client.query("update media.assets set status='deleting' where id=$1",[copy]);
+ assert.deepEqual((await access({type:'plan_item',id:item.id},['video'],true)).body,{},'an unready copy is not served');
+ await client.query("update media.assets set status='ready' where id=$1",[copy]);await client.query('delete from media.drive_copies');
+ const back=[{plan_item_id:item.id,video_url:item.video_url}];
+ await decorateMediaRows(back,'plan_item',(sql,params)=>pool.query(sql,params));
+ assert.equal(back[0].media.video.source,'legacy');assert.equal(back[0].media.video.url,DRIVE_VIDEO);
+ await client.query('update public.athletes set user_id=null where id=$1',[athlete]);await driveCopy('1DriveVideoFile0000000000AB');
+ assert.equal((await access({type:'plan_item',id:item.id},['video'],true)).status,404,'the plan rule still decides');
+});
+
+test('Drive copy: with media storage off nothing is mapped, and a none slot never turns into a copy',async()=>{
+ const id=await driveExercise();await driveCopy('1DriveVideoFile0000000000AB');
+ process.env.MEDIA_STORAGE_ENABLED='false';
+ const off=await detail(id);assert.notEqual(off.media?.video?.source,'asset');assert.equal(off.videoUrl,DRIVE_VIDEO);
+ process.env.MEDIA_STORAGE_ENABLED='true';
+ await client.query("update library.exercises set video_source='none' where id=$1",[id]);
+ assert.deepEqual((await detail(id)).media.video,{source:'none'});
+ assert.deepEqual((await access({type:'exercise',id})).body,{},'a none slot signs nothing');
+});
+
+test('Drive copy: an editor echoing the blank link fields keeps the Drive link of a copied slot; an uncopied link is cleared as before',async()=>{
+ const id=await driveExercise();await driveCopy('1DriveVideoFile0000000000AB');
+ const saved=await request('/api/exercises/'+id,{name:'Renamed',videoUrl:'',imageUrl:''},{method:'PATCH'});
+ assert.equal(saved.status,200,JSON.stringify(saved.body));
+ const stored=(await client.query('select video_source,video_url,image_url from library.exercises where id=$1',[id])).rows[0];
+ assert.equal(stored.video_source,'legacy');assert.equal(stored.video_url,DRIVE_VIDEO,'the copied slot keeps its Drive link');
+ assert.equal(stored.image_url,null,'the image has no copy: a blank link clears it, as before');
+ const changed=await request('/api/exercises/'+id,{name:'Relinked',videoUrl:'https://youtu.be/dQw4w9WgXcQ'},{method:'PATCH'});
+ assert.equal(changed.status,200);assert.equal((await client.query('select video_url from library.exercises where id=$1',[id])).rows[0].video_url,'https://youtu.be/dQw4w9WgXcQ','a new link still replaces it');
 });

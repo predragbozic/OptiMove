@@ -14,13 +14,19 @@ const MAX_PIXELS=16777216;
 const PRODUCT_MAX_VIDEO_SECONDS=30;
 const envSeconds=Number(process.env.MEDIA_MAX_VIDEO_SECONDS);
 export const MAX_VIDEO_SECONDS=Number.isFinite(envSeconds) && envSeconds>0 ? Math.min(PRODUCT_MAX_VIDEO_SECONDS,envSeconds) : PRODUCT_MAX_VIDEO_SECONDS;
+// The owner's rule of 2026-10-21 for the Drive import: existing exercise videos
+// are kept whole (the longest is 154 s), so an import allows up to 180 s.
+// MEDIA_MAX_IMPORT_VIDEO_SECONDS can only lower it (tests).
+const IMPORT_MAX_VIDEO_SECONDS=180;
+const envImportSeconds=Number(process.env.MEDIA_MAX_IMPORT_VIDEO_SECONDS);
+export const DRIVE_IMPORT_MAX_VIDEO_SECONDS=Number.isFinite(envImportSeconds) && envImportSeconds>0 ? Math.min(IMPORT_MAX_VIDEO_SECONDS,envImportSeconds) : IMPORT_MAX_VIDEO_SECONDS;
 // Track kinds phones write beside the picture and the sound (timed metadata,
 // timecode, chapters, captions): the player never parses them, so they do not
 // count as media - but at most a few, and their length still counts.
 const IGNORED_TRACK_TYPES=new Set(['Other','Text','Menu']);
 const MAX_IGNORED_TRACKS=8;
 
-export function validateVideoTracks(result,mimeType) {
+export function validateVideoTracks(result,mimeType,{maxSeconds=MAX_VIDEO_SECONDS}={}) {
   const tracks=result?.media?.track || [];
   const general=tracks.find(t=>t['@type']==='General');
   const videos=tracks.filter(t=>t['@type']==='Video');
@@ -33,7 +39,7 @@ export function validateVideoTracks(result,mimeType) {
   // A file plays until its longest track ends: the video, the audio, an
   // ignored track or the container's own duration, whichever is longest.
   const playing=Math.max(duration,Number(general?.Duration)||0,...audio.map(a=>Number(a.Duration)||0),...ignored.map(t=>Number(t.Duration)||0));
-  if (playing>MAX_VIDEO_SECONDS+0.05) throw tooLong();
+  if (playing>maxSeconds+0.05) throw tooLong();
   if (mimeType==='video/mp4') {
     if (general?.Format!=='MPEG-4' || v.Format!=='AVC' || !/^(Baseline|Constrained Baseline|Main|High)(@|$)/.test(v.Format_Profile || '') || Number(v.BitDepth)!==8 || v.ChromaSubsampling!=='4:2:0') throw unsupported();
     if (audio.some(a=>a.Format!=='AAC' || !/LC/.test(String(a.Format_AdditionalFeatures || a.Format_Profile || a.CommercialName || '')))) throw unsupported();
@@ -43,12 +49,12 @@ export function validateVideoTracks(result,mimeType) {
   return {durationSeconds:duration,width,height,videoCodec:mimeType==='video/mp4'?'h264':'vp8',audioCodec:audio[0]?.Format?.toLowerCase() || null};
 }
 let activeInspections=0;
-export async function inspectMedia(store,upload,head) {
+export async function inspectMedia(store,upload,head,{maxVideoSeconds=MAX_VIDEO_SECONDS}={}) {
   if(activeInspections>=1) {const e=new MediaStorageError(503,'media_inspection_busy');e.retryable=true;throw e;}
   activeInspections++;
   try {
     return await new Promise((resolve,reject)=>{
-      const worker=new Worker(new URL('./mediaInspectionWorker.js',import.meta.url),{workerData:{size:Number(head.sizeBytes),mimeType:upload.expected_mime_type},resourceLimits:{maxOldGenerationSizeMb:64}});
+      const worker=new Worker(new URL('./mediaInspectionWorker.js',import.meta.url),{workerData:{size:Number(head.sizeBytes),mimeType:upload.expected_mime_type,maxVideoSeconds},resourceLimits:{maxOldGenerationSizeMb:64}});
       let settled=false,readBytes=0,reads=0;
       const finish=(error,result)=>{if(settled)return;settled=true;clearTimeout(timer);void worker.terminate();error?reject(error):resolve(result);};
       const timer=setTimeout(()=>finish(invalid()),30000);

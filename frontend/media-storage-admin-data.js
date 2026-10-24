@@ -185,6 +185,8 @@ export function validReason(value) {
 // never a raw id in the open (it sits under Technical details).
 export function ownerLabel(owner, data = state.organization?.data) {
   if (!owner) return "Unknown account";
+  // The one platform account: copies of exercise media from Google Drive, no coach's quota.
+  if (owner.type === "platform") return "OptiMove system storage";
   if (owner.type === "user") {
     const user = (data?.users || []).find((row) => String(row.id) === String(owner.id));
     return user ? user.name || user.email || "User account" : "User account (not in this list)";

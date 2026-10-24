@@ -2,6 +2,8 @@ import { MediaStorageError, uuid } from './mediaStorage.js';
 import { exerciseReadScopeSql, exerciseLibraryScopeSql, hasExerciseAdministration, lockExerciseReuse } from './exerciseAccess.js';
 import { canAccessPlan } from './access.js';
 import { needsTemplateApproval } from './programAccessPolicy.js';
+import { exerciseMediaJoinSql } from './exercisePersonalization.js';
+import { driveFileIdOf, readyDriveCopies } from './driveCopies.js';
 
 const slots=['video','image'];
 const fail=(status,code)=>{throw new MediaStorageError(status,code);};
@@ -19,7 +21,9 @@ export function mediaSelections(body,current=null) {
     if(value===undefined)continue;
     // Legacy editors echo hidden/retained URLs or blank inputs on metadata saves.
     // Only a genuinely changed, nonempty implicit URL may replace an asset/none.
-    if(explicit===undefined && ['asset','none'].includes(current?.[slot+'_source'])) {
+    // A legacy link with a ready Drive copy is shown as that copy, its link field
+    // blank (decorateMediaRows): an echoed blank link leaves it as it is too.
+    if(explicit===undefined && (['asset','none'].includes(current?.[slot+'_source']) || current?.[slot+'_copied']===true)) {
       const incoming=typeof body[legacy]==='string'?body[legacy].trim():'';
       const retained=typeof current[slot+'_url']==='string'?current[slot+'_url'].trim():'';
       if(!incoming || incoming===retained)continue;
@@ -35,12 +39,17 @@ export function mediaSelections(body,current=null) {
   }
   return result;
 }
-export function describeMedia(row,context) {
+// A legacy slot whose link names a Drive file with a ready copy (copies:
+// readyDriveCopies) is described as that asset: it plays from R2, not Drive.
+const legacyUrlOf=(row,slot)=>row['effective_'+slot+'_url']??row[slot+'_url']??'';
+export function describeMedia(row,context,copies=null) {
   const media={accessContext:context};
   for(const slot of slots) {
     const source=row[slot+'_source']||'legacy',id=row[slot+'_asset_id'];
-    const url=row['effective_'+slot+'_url']??row[slot+'_url']??'';
+    const url=legacyUrlOf(row,slot);
+    const copy=source==='legacy' && url && copies?.get(`${driveFileIdOf(url)}:${slot}`);
     media[slot]=source==='asset'?{source:'asset',mediaId:id,kind:slot}:
+      copy?{source:'asset',mediaId:copy,kind:slot}:
       source==='legacy' && url?{source:'legacy',url}:{source:'none'};
   }
   return media;
@@ -55,12 +64,19 @@ export async function decorateMediaRows(rows,type,runQuery) {
   const found=await runQuery(`select id,coalesce(to_jsonb(m)->>'video_source','legacy') as video_source,(to_jsonb(m)->>'video_asset_id')::uuid as video_asset_id,
       coalesce(to_jsonb(m)->>'image_source','legacy') as image_source,(to_jsonb(m)->>'image_asset_id')::uuid as image_asset_id from ${table} m where id=any($1::uuid[])`,[ids]);
   const byId=new Map(found.rows.map(r=>[r.id,r]));
+  // The Drive files named by legacy slots, and their ready copies: one query.
+  const driveIds=[];
+  if(mediaEnabled())for(const row of rows) {
+    const selection=byId.get(idOf(row));if(!selection)continue;
+    for(const slot of slots)if(selection[slot+'_source']==='legacy')driveIds.push(driveFileIdOf(legacyUrlOf(row,slot)));
+  }
+  const copies=await readyDriveCopies(runQuery,driveIds);
   for(const row of rows) {
     const selection=byId.get(idOf(row));if(!selection)continue;
     if(!mediaEnabled() && selection.video_source==='legacy' && selection.image_source==='legacy')continue;
     Object.assign(row,selection,{id:row.id});
-    row.media=describeMedia(row,{type,id:idOf(row)});
-    for(const slot of slots)if(selection[slot+'_source']!=='legacy') {
+    row.media=describeMedia(row,{type,id:idOf(row)},copies);
+    for(const slot of slots)if(selection[slot+'_source']!=='legacy' || row.media[slot].source==='asset') {
       row[slot+'_url']='';if(Object.hasOwn(row,'effective_'+slot+'_url'))row['effective_'+slot+'_url']='';
     }
   }
@@ -119,7 +135,9 @@ export function createMediaAccessService({pool,store,canReadPlan=canAccessPlan,a
       const run=c.query.bind(c);let row;
       if(context.type==='exercise') {
         if(!req.authz?.capabilities?.coachWorkspace)fail(404,'resource_not_found');
-        row=(await run(`select e.* from library.exercises e where e.id=$2 and ${exerciseReadScopeSql}`,[req.user.id,id])).rows[0];
+        // The effective links (a private copy inherits its source's): a Drive copy is found by them.
+        row=(await run(`select e.*,coalesce(e.video_url,fallback_media.video_url) as effective_video_url,coalesce(e.image_url,fallback_media.image_url) as effective_image_url
+          from library.exercises e ${exerciseMediaJoinSql} where e.id=$2 and ${exerciseReadScopeSql}`,[req.user.id,id])).rows[0];
       } else if(context.type==='plan_item') {
         const item=(await run(`select pi.*,pd.plan_id from plans.plan_items pi join plans.plan_sessions ps on ps.id=pi.plan_session_id join plans.plan_days pd on pd.id=ps.plan_day_id where pi.id=$1`,[id])).rows[0];
         if(item) {
@@ -140,8 +158,14 @@ export function createMediaAccessService({pool,store,canReadPlan=canAccessPlan,a
       if(!row)fail(404,'resource_not_found');
       const result={};
       for(const slot of new Set(wanted)) {
-        if(row[slot+'_source']!=='asset')continue;
-        const asset=(await run("select * from media.assets where id=$1 and status='ready' and kind=$2 for share",[row[slot+'_asset_id'],slot])).rows[0];
+        let assetId=row[slot+'_source']==='asset'?row[slot+'_asset_id']:null;
+        if(!assetId && (row[slot+'_source'] || 'legacy')==='legacy') {
+          // A legacy Drive link of this row, authorized above, with a ready copy.
+          const drive=driveFileIdOf(legacyUrlOf(row,slot));
+          if(drive)assetId=(await readyDriveCopies(run,[drive])).get(`${drive}:${slot}`) || null;
+        }
+        if(!assetId)continue;
+        const asset=(await run("select * from media.assets where id=$1 and status='ready' and kind=$2 for share",[assetId,slot])).rows[0];
         if(!asset)fail(404,'resource_not_found');
         const signed=await store.signGet(asset);
         result[slot]={source:'asset',mediaId:asset.id,mimeType:asset.mime_type,...signed};
