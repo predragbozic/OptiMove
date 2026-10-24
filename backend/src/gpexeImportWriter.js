@@ -412,15 +412,50 @@ async function insertOccasionWithValues(client, { participantId, segmentId, iden
     [participantId, segmentId, contentHash, identityId, sourceReportedAt, batchId, batch.nextRow(), performedByUserId, supersedesOccasionId, conflictStatus],
   );
   const occasionId = occasion.rows[0].id;
-  for (const v of values) {
-    await client.query(
-      `insert into training_load.metric_values
-         (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, is_derived, aggregation_role, coverage)
-       values ($1,$2,$3,$4,$5,false,$6,$7)`,
-      [occasionId, v.metricDefinitionId, v.metricDefinitionVersionId, v.value, v.unit, v.aggregationRole, v.coverage],
-    );
+  if (values.length) {
+    const { text, params } = metricValuesInsert(occasionId, values);
+    await client.query(text, params);
   }
   return occasionId;
+}
+
+// Every value of one occasion in ONE statement, one row per value in the
+// order of `values` - the rows, columns and parameters the per-value INSERT
+// used to send, without one database round trip per value. The BEFORE INSERT
+// row triggers of metric_values (validate_metric_value,
+// check_metric_value_scope_capability) still fire once per row, in row order,
+// and read only other tables (the definition, its version and capabilities,
+// the occasion inserted by the statement before this one, its event and
+// segment link), never metric_values itself; unique (occasion_id,
+// metric_definition_id) is checked at each row as before. A refused row fails
+// the whole statement, and with it the transaction, as the refused single
+// INSERT did, and leaves no row behind.
+// Where one statement differs from one per value - accepted by the owner on
+// 2026-10-24 as limitations of this optimization, pinned in
+// gpexe-import-values-batch.test.mjs, none of it reachable through this
+// writer (its values are finite numbers, a definition and its version come
+// from the same row): PostgreSQL converts every parameter before the first
+// row runs and checks the foreign keys at the end of the statement, so of two
+// refused values in one result the refusal reported can differ; and a
+// parameter it cannot read is named in the error's `where` by its position in
+// this statement. No code reads `where`, and every caller answers a database
+// error with the same internal_error whatever its SQLSTATE (the check, the
+// approval and the batch; only 42501 is told apart at approval).
+// Parameter layout: $1 the occasion, then six per value - tests that replay
+// the old per-value statements rely on it.
+export function metricValuesInsert(occasionId, values) {
+  const params = [occasionId];
+  const rows = values.map((v) => {
+    const n = params.length;
+    params.push(v.metricDefinitionId, v.metricDefinitionVersionId, v.value, v.unit, v.aggregationRole, v.coverage);
+    return `($1,$${n + 1},$${n + 2},$${n + 3},$${n + 4},false,$${n + 5},$${n + 6})`;
+  });
+  return {
+    text: `insert into training_load.metric_values
+         (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, is_derived, aggregation_role, coverage)
+       values ${rows.join(",")}`,
+    params,
+  };
 }
 
 // Every identity of the plan is created and locked (FOR UPDATE, ordered by
