@@ -106,9 +106,8 @@ compared): `differs`.
 - Eight of the nine projected fields are in every list row with equal values: `id`, `athlete`, `track`,
   `teamsession`, `drill`, `is_stats_valid`, `total_time`, `total_distance`.
 - **`max_v` is absent from every list row** and present in every row's own read.
-- The mapper reads `max_v` for every row, whole and drill (SPEEDmax). So the per-row read stays, and rows from the
-  list would save nothing. The switch built for it on the first commit of PR #212 was removed again, and it
-  stays in that commit's history.
+- The mapper reads `max_v` for every row, whole and drill (SPEEDmax). So rows from the list alone save nothing.
+  They save the per-row read only together with `max_v` from the details (C below).
 - **Seen in passing:** in one of the two sessions, not every athlete has a row per drill (13 whole rows, 23 drill
   rows for 2 drills). The importer already allows that.
 
@@ -125,32 +124,46 @@ compared): `differs`.
 
 The details carry no zone-level readiness (`detailsHasReadinessKey: false`).
 
-### What a check reads now
+### C. `max_values_speed` against each row's `max_v` (owner-run, 2026-10-24, 10:57 UTC, run once; 16 requests, no 429)
 
-For each row, a check still reads the row (for `max_v`), `/more/` (for the zones and events) and the athlete's
-track. The proven saving is only the drill labels and the repeated thresholds:
+`backend/scripts/gpexe-max-speed-probe.mjs` read one parent with 2 drills, its 39 rows (13 athletes) and the
+whole and drill 0 and 1 details in the check's own forms.
+
+**Exact equality:** for 3 athletes at all three levels, 9 of 9 pairs were **the same number** (`===`, no
+rounding). Drill 0 and drill 1 gave different values.
+
+**Coverage:** every valid row of the three levels had a `max_values_speed` in its details, 39 of 39. This session
+held no row with invalid statistics and no details entry without a row.
+
+**The unit:**
+- The details' unit word is `speed`, a quantity word, as `number` is for the event counts. The tool's own rule
+  expected `m/s` for an equal number, so it printed `insufficient` (`unit_not_consistent`).
+- The numbers are the very `max_v` the importer reads as m/s. So the replacement keeps the value, its precision
+  and its meaning.
+
+### What a check reads now (PR #212)
+
+- **Rows come from the athlete list,** each with `max_v` taken from the details at the row's own level. The
+  check reads those details anyway, now before the rows.
+- **One canary per session:** the first covered row is still read on its own and must equal its list row with
+  that `max_v` exactly.
+- **Fallbacks:**
+  - a row the details do not cover is read on its own: no entry, another unit word, no number, a row with invalid
+    statistics, or one of several rows of its athlete at that level (two tracks; the details hold one entry per
+    athlete);
+  - a session whose canary differs is read row by row, as before;
+  - a session whose drill set is incomplete reads no rows, because the check stops before recording it.
+- `/more/` and the tracks stay for every row.
+- **The stored bundle and its hash are the same:** `gpexe-check-timing.test.mjs` test 8 runs a check with every
+  row read, then the default check, and finds every session unchanged.
+- **Residual risk, accepted on the evidence of A:** only one row per session is compared whole. If a list field
+  other than `max_v` ever differed on a row that is not the canary, that row would carry the list's value.
 
 | | Requests |
 |---|---|
-| The fake-source check of `gpexe-check-timing.test.mjs` before (main + #209) | 206 |
-| The same check with PR #212 | **203** |
-| The owner's check of 2026-10-22, 17:11 (455 requests), estimated with PR #212 | about 453 |
+| The fake-source check (3 sessions, 20 athletes, whole rows), before (main + #209) | 206 |
+| The same check with PR #212 | **146** |
+| The owner's check of 2026-10-22, 17:11 (2 sessions, 193 rows, 455 requests), estimated | **about 262** (455 - 2 brief/tags - 193 row reads + 2 canaries) |
 
-### What would still cut the per-row reads (not built, each a new owner decision)
-
-- **The row read:** it could go only if `max_v` came from another answer with proven equal values. The details'
-  `max_values_speed` is a candidate, but the sitting could not compare it, and its unit is not one of the closed
-  words.
-  - **The last check of this option** (owner order 2026-10-24): `backend/scripts/gpexe-max-speed-probe.mjs`, tested
-    against a fake server only (`backend/tests/gpexe-max-speed-probe.test.mjs`).
-  - **What it reads:** one exchange and at most 15 GETs. That is the parent, its athlete list, the whole details,
-    drills 0 and 1 in the check's `api/` form, and the own read of up to three athletes' rows at those three
-    levels. It pauses 2 s before every read and stops on the first 429.
-  - **When it says `same`:** every compared pair keeps the importer's value exactly (the same m/s number, or
-    exactly 3.6 times it in km/h, with nothing rounded), the details cover every valid row of the three levels,
-    and drill 0 and drill 1 differ.
-  - **If it does:** rows from the list plus `max_values_speed` would remove the per-row read, about 193 of the
-    455 requests.
-  - It has not been run yet.
-- **`/more/`:** it stays as long as the power and speed zones come from it. The details' zones are not the same
-  zones.
+**What stays and why:** `/more/` stays for every row, because the details' power zones differ (4 against 5) and
+their speed zones are `insufficient` (sitting B above).

@@ -1942,17 +1942,24 @@ Technical details.
     193 athlete rows for 22 athletes - server3 lists one row per athlete for the session and one per drill.
   - **Request count:** about 200 - 330 requests per production session, mostly the row and `/more/` reads
     (`docs/ai/gpexe-check-request-count-analysis.md`, section 5).
-  - **The reduction** (Draft PR #212, branch `feature/gpexe-check-request-reduction`; not merged, not deployed): a
-    check reads no drill brief or tag list, and reads the thresholds once per day. That is 203 instead of 206
-    requests on the fake-source check, and about 453 instead of 455 on the owner's check of 2026-10-22.
+  - **The reduction** (Draft PR #212, branch `feature/gpexe-check-request-reduction`; not merged, not deployed):
+    - a check reads no drill brief or tag list, and reads the thresholds once per day;
+    - it takes each athlete row from the list, with `max_v` from the details it reads anyway, and reads one
+      canary row per session on its own;
+    - a row the details do not cover, or a session whose canary differs, is read row by row as before.
+
+    That is 146 instead of 206 requests on the fake-source check, with the same stored bundles, and about 262
+    instead of 455 on the owner's check of 2026-10-22.
   - **The owner-run read-only sitting** (2026-10-24, 08:55 UTC, run once; 23 requests, no 429; sanitized reports
     as returned by the owner):
     - **A, athlete list:** `differs`. Eight of the nine row fields are equal, but `max_v` is absent from the list,
       so each row's own read stays.
     - **B, grouped details:** `differs`. Events, the mapping and the drill level are `same`. The power zones
       differ (4 zones against 5), and the speed zones are `insufficient`. So `/more/` stays for every row.
-    - **Consequence:** no larger saving is proven. Cutting the per-row reads would need `max_v` from another
-      proven answer, and zones the details do not carry. Each is a new owner decision.
+    - **C, `max_values_speed` against each row's `max_v`** (10:57 UTC, 16 requests, no 429): 9 of 9 pairs were
+      the same number, and the details covered all 39 valid rows. The details' unit word is `speed`, so the tool
+      printed `insufficient`, but the number is the very `max_v`. This is what lets a check drop the per-row read.
+    - `/more/` stays for every row (B).
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
