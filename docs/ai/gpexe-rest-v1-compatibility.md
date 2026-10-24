@@ -792,6 +792,77 @@ merged; contract `docs/ai/source-connections-f3c2-contract.md` section 2.10):
 - **Date of birth, the one concretisation of option A:** a date before 1900-01-01 or after today (UTC)
   counts as "an impossible date". It is shown as not provided and counted as unrecognised.
 
+## 4c. The athlete list's rows against each row's own read (the athlete-list run, prepared 2026-10-23)
+
+**Owner orders 2026-10-22 and 2026-10-23.** Does a row of
+`rest/v1/athlete_session/?teamsession=<id>&limit=100` carry the nine fields the adapter projects from
+an athlete row (`BUNDLE_FIELDS.athleteSession`: `id, athlete, track, teamsession, drill, is_stats_valid,
+total_time, total_distance, max_v`) with the same values as `rest/v1/athlete_session/<id>/`? If it
+does, a check could take the rows from the list instead of reading each one. That would save about 42 %
+of a check's requests (the request-count analysis of Draft PR #209). The full plan and the decision
+rules are `docs/ai/gpexe-athlete-list-nine-fields-plan.md`, added by Draft PR #209 (see *Integration with PR
+#209* below).
+
+**The run** (`--mode athlete-list`, owner-run only, same terminal rules as section 4):
+- **Requests:** one exchange in the host's confirmed form, then at most 11 GET requests for Team ID 980
+  (`ATHLETE_LIST_MODE_MAX_REQUESTS` = 12), with a pause of 2 s before every read:
+  - the first page of the session list;
+  - for each of the first two different parents of the page (team 980, a readable id, named in no other
+    row's `drills`, an explicit `drills` list): its own read, its athlete list (first page) and the own
+    read of three of its rows (the first whole-session row, the first drill row and the last row);
+  - a session the page names twice counts once: repeats are dropped before the choice, in the page's
+    order, so it is read once (external review 2026-10-23, P2).
+- **No repeat:** the first 429, the exchange's included, ends the run (`rate_limited`, the request
+  number, `Retry-After` as a kind word and bounded seconds).
+- **Stops before the next request:**
+  - any identity, session or team not confirmed;
+  - an empty athlete list, or a repeated row id.
+- **Printed per field:** presence, kind words, equality and whether the list value is one the adapter's
+  projection accepts. Per row: the differing field names (from the closed list of nine). Per session:
+  counts. For the run: the number of different parents compared (`distinctParentsCompared`) and of
+  repeated parent ids on the page (`repeatedParentIds`).
+- **Never printed:** an id, a value, a name, a date or an answer key outside the closed list.
+- **Known limit (security review 2026-10-23, LOW, recorded and not changed):** each request entry keeps
+  the probe's shared description, as the full and drill runs do. That means the header names and up to
+  80 characters of `content-type`, `allow` and `x-gpexe-version`. The identity run's header filter is the
+  fix, if the owner wants it.
+- **Verdict** (`athleteListOutcome`, owner order 2026-10-23):
+  - `same`: two different parents compared, every compared row equal and every list value projectable.
+    A final check counts the different parents again from the ids their own reads confirmed, not from
+    the number of sessions compared. `same` is never possible without two different parents.
+  - `differs`: any compared row differs. This holds even with one parent, and even when the run stopped
+    afterwards (its stop code stays in `stoppedBy`). A row is compared only after its own read confirmed
+    its id and session, so the difference is confirmed. The differing field is named per row.
+  - `insufficient`, with its reason, for everything else when no confirmed difference was seen:
+    - a stopped run (the stop code: a 429, a refused read, an isolation stop);
+    - nothing compared (`nothing_compared`);
+    - one parent, or fewer than two different parents (`fewer_distinct_parents_than_planned`);
+    - a list value the adapter would not accept (`value_shape_not_projectable`).
+  - The per-field facts are printed in every case.
+  - The plan's section 3 (in PR #209) still names the earlier words: `not_observed` for an incomplete run,
+    and `differs` only for a run that ended as built. This section and the code win. The plan is aligned
+    after #209 merges, since #209 is not changed now (owner order 2026-10-23).
+
+**Status: not run against GPEXE. The nine fields are not confirmed compatible.**
+- **Confirmed by the fake-fetch contract tests only** (`backend/tests/gpexe-rest-v1-capability-probe.test.mjs`,
+  AL1–AL21): the tool's own behaviour, that is its requests, pace, stops, report and verdict rules.
+- **Not confirmed:** anything about server3's answers. That covers whether its list rows carry the nine
+  fields, with which values, and whether the session list holds two parents with drills.
+- Only the owner-run read, on a separate owner order after the external review of the tool, can give a
+  verdict. Until it returns `same`, taking a check's rows from the list stays unproven. The terminal
+  commands are handed over only after that review. The verdict is recorded here; the reduction itself is a
+  separate PR on the owner's order.
+
+**Integration with PR #209.**
+- **Recommended order:** merge Draft PR #209 first, then this PR. After #209 merges, check this PR against
+  the new `main` (one look at the reference above and a run of the probe's test file).
+- **The dependency is documentation only:**
+  - the tool does not import or need anything from #209 (it reads `BUNDLE_FIELDS`, `readBounded` and
+    `teamScopedPath`, which are already on `main`);
+  - its tests do not depend on #209.
+
+  If this PR were merged first, only the plan reference above would point to a file that arrives with #209.
+
 ## 5. Rules the adapter keeps, whatever is added later
 
 - Selected by `(source_system, apiFamily)`; a family without an adapter is
