@@ -213,7 +213,7 @@ function fakeSource({ token = TOKEN } = {}) {
     const t = state.served; const b = state.bundle;
     if (t === null) return json(404, { detail: "no team served" });
     const sid = b.teamSession.id;
-    if (key === `/rest/v1/team_session/?team=${t}&limit=100`) {
+    if (key.replace(/&start_timestamp_gte=[^&]*&start_timestamp_lte=[^&]*/, "") === `/rest/v1/team_session/?team=${t}&limit=100`) {
       if (state.gates.list) await abortable(init, state.gates.list.p);
       if (state.faults.listStatus !== 200) return json(state.faults.listStatus, { detail: SOURCE_SENTENCE });
       if (state.faults.emptyList) return json(200, [], { "x-total-count": "0" });
@@ -1799,7 +1799,7 @@ const raceWith = (promise, ms) => Promise.race([promise.then((v) => ({ v }), (e)
 const lastRun = async () => (await q(`select purged_count, error_message, finished_at from training_load.gpexe_retention_runs order by started_at desc limit 1`))[0];
 const openTransactions = async () => (await q(`select count(*)::int as n from pg_stat_activity where datname = current_database() and state like 'idle in transaction%' and pid <> pg_backend_pid()`))[0].n;
 
-test("21. option (c): the window is picked out of the whole team list - five sessions after the period and one of the look-back day are left out and only the window's session becomes a candidate (no bundle read for the others); a start that cannot be read or an unstable X-Total-Count fails the check with its own code, writes no candidate and reads no bundle; no date bound is ever sent", async () => {
+test("21. option (c): the window is picked out of the whole team list - five sessions after the period and one of the look-back day are left out and only the window's session becomes a candidate (no bundle read for the others); a start that cannot be read or an unstable X-Total-Count fails the check with its own code, writes no candidate and reads no bundle; the list is asked with the date filter and its margin (owner decision 2026-10-24)", async () => {
   const o = await org();
   useSource();
   await bound(o);
@@ -1816,7 +1816,7 @@ test("21. option (c): the window is picked out of the whole team list - five ses
     assert.equal(ok.status, "succeeded", JSON.stringify(ok.error));
     assert.equal(await candidates(), 1, "only the window's session");
     assert.ok(!src.calls.some((c) => /99123456\d/.test(c.key)), "no session outside the window was read");
-    assert.ok(!src.calls.some((c) => c.key.includes("start_timestamp")), "no date bound is sent");
+    assert.ok(src.calls.filter((c) => c.key.includes("/team_session/?team=")).every((c) => c.key.includes("start_timestamp_gte=2026-09-11%2000%3A00%3A00&start_timestamp_lte=2026-09-16%2023%3A59%3A59")), "the date filter with its margin: the look-back day minus two days, the end plus two (owner decision 2026-10-24)");
     const before = await candidates();
     for (const [fault, expected, listReads] of [[{ listExtraRows: [{ id: 991234570, start_timestamp: null }] }, "source_session_start_unreadable", 1], [{ listExtraRows: [], listTotal: "99" }, "source_list_incomplete", 1], [{ listExtraRows: [], listTotal: null }, "source_answer_unexpected", 1], [{ listExtraRows: [], listChangeOnEvenRead: true }, "source_list_changed", 2]]) {
       Object.assign(src.state.faults, { listTotal: undefined, listChangeOnEvenRead: false }, fault);

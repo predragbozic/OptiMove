@@ -1970,6 +1970,30 @@ Technical details.
       The largest remaining times are the database preview (163 s), the session list (141 s), `/more/` (97 s), and
       the details with the drills (85 s).
   - **The GPEXE check request optimization is complete,** confirmed by this production check.
+  - **The window's session list through the server's date filter** (owner order 2026-10-24; branch
+    `feature/gpexe-check-window-filter` from `9f7291c`; **not merged, not deployed**; adapter, tests and docs, no
+    migration, no change to the import, Metrics Core, storage or the UI):
+    - **The owner-run window-filter probe** (2026-10-24, 12:04 UTC, run once; 9 requests, no 429; sanitized) ran
+      against the whole list of 374 sessions, for 11.10 - 24.10 and 05.10 - 06.10, each with a margin of two days
+      and without:
+      - **0 missing window parents, 0 missing look-back parents and 0 missing drills** in all four answers, and
+        the same window parents from the filtered rows alone;
+      - **rows in excess only:** the margin days, and after the end. The counts fit a server that does not
+        apply the upper bound at all: the 2-day window's answer held every session up to the day of the run.
+      - **Durations:** the whole list took 75.1 s for 4 pages; one filtered page took 7.2 - 11.3 s.
+      - Record: `docs/ai/gpexe-rest-v1-compatibility.md` section 4d.
+    - **What changes:** `listSessionsByDay` asks for the look-back day and the window widened by
+      `WINDOW_FILTER_MARGIN_DAYS` (2) on both sides. The rest is unchanged:
+      - every page of the answer is read, and every next link must keep the same bounds;
+      - the list is read twice and both reads must agree;
+      - parents and drills are classified on the list, and the window is picked out locally;
+      - rows outside the window are left out, never refused.
+    - **Expected for a 14-day check ending today:** 2 list requests instead of 8, about 18 s instead of about
+      141 s, so about 7 min 10 s instead of 9 min 14 s. This is an estimate from the probe's durations, not yet
+      measured in a check.
+    - **An older window costs more**, because every later session comes with it, but never more than the
+      whole list from the window's start. The first answer longer than 100 rows will be the first to page a
+      filtered next link in production.
   - **The owner-run read-only sitting** (2026-10-24, 08:55 UTC, run once; 23 requests, no 429; sanitized reports
     as returned by the owner):
     - **A, athlete list:** `differs`. Eight of the nine row fields are equal, but `max_v` is absent from the list,

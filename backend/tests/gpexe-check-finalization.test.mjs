@@ -206,7 +206,7 @@ function fakeSource() {
     if (m) return visibleTeams.has(Number(m[1])) ? json(200, { id: Number(m[1]), name: `Team ${m[1]}` }) : json(404, { detail: SOURCE_SENTENCE });
     const t = state.served;
     if (t === null) return json(404, { detail: "no team served" });
-    if (key === `/rest/v1/team_session/?team=${t}&limit=100`) {
+    if (key.replace(/&start_timestamp_gte=[^&]*&start_timestamp_lte=[^&]*/, "") === `/rest/v1/team_session/?team=${t}&limit=100`) {
       const lg = state.gates.list;
       if (lg) { lg.reached = true; await lg.p; }
       const rows = [];

@@ -40,15 +40,27 @@ const session = (id, team = 980, extra = {}) => ({
 });
 const parent = (id, drills, team = 980, extra = {}) => session(id, team, { drills, drills_count: drills.length, ...extra });
 
+// A window's session list carries the server's date filter (owner decision 2026-10-24). Unless a test
+// serves the filtered query itself, the fake answers it with the route of the same list without the
+// filter - the whole list, rows in excess, as server3 can answer - and keeps the filter in the
+// answer's next link, as the server's paging does.
+const DATE_FILTER = /&start_timestamp_gte=[^&]*&start_timestamp_lte=[^&]*/;
 function fakeServer(routes = {}) {
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url: String(url), method: init.method, headers: { ...init.headers }, redirect: init.redirect });
     const u = new URL(url);
     const key = `${u.pathname}${u.search}`;
-    const route = routes[key] ?? routes[u.pathname];
+    const filter = key.match(DATE_FILTER)?.[0] ?? "";
+    const direct = routes[key] ?? (filter ? undefined : routes[u.pathname]);
+    const route = direct ?? (filter ? routes[key.replace(DATE_FILTER, "")] : undefined);
     if (route === undefined) return answer(404, { detail: "Not found." });
-    return typeof route === "function" ? route(u, init) : route;
+    const res = typeof route === "function" ? route(u, init) : route;
+    const link = direct === undefined && filter ? res?.headers?.get?.("link") : null;
+    if (!link || !link.includes("/team_session/?team=980")) return res;
+    const headers = new Headers(res.headers);
+    headers.set("link", link.replace("/team_session/?team=980", `/team_session/?team=980${filter}`));
+    return { ...res, headers };
   };
   return { calls, fetchImpl };
 }
@@ -195,7 +207,8 @@ function fullRoutes(over = {}) {
   };
 }
 const full = (over) => fakeServer(fullRoutes(over));
-const pathsOf = (calls) => calls.map((c) => { const u = new URL(c.url); return `${u.pathname}${u.search}`; });
+// The paths sent, without a window list's date filter (its bounds are checked by the C-filter tests).
+const pathsOf = (calls) => calls.map((c) => { const u = new URL(c.url); return `${u.pathname}${u.search}`.replace(DATE_FILTER, ""); });
 const noNames = (value, extra = []) => {
   const text = JSON.stringify(value);
   for (const leak of ["Marker Athlete Name", "a private note", "private", "someone", "zzzOpaqueKey", "evil.example", "424242", CREDENTIAL, ...extra]) assert.ok(!text.includes(leak), leak);
@@ -330,7 +343,7 @@ test("B2.3 athlete rows: whole or refused, every row of the confirmed session; a
   assert.ok(!calls.some((x) => x.url.includes("teamsession=200")));
 });
 
-test("B2.4 the date window: two calendar days, forward, at most 31 days; the WHOLE team list is read (never a server-side date filter) and the window is picked out locally; the same parent/drill classification and the same team rules apply", async () => {
+test("B2.4 the date window: two calendar days, forward, at most 31 days; the server's date filter is sent with a margin of two days around the look-back day and the window (owner decision 2026-10-24) and the window is picked out locally; the same parent/drill classification and the same team rules apply", async () => {
   const { a, calls } = await confirmedAdapter();
   for (const bad of [{ fromDay: "2026-09-14" }, { toDay: "2026-09-14" }, { fromDay: "2026-9-14", toDay: "2026-09-15" }, { fromDay: "2026-02-30", toDay: "2026-03-01" }, { fromDay: "2026-09-15", toDay: "2026-09-14" }, { fromDay: "2026-09-01", toDay: "2026-10-02" }, { fromDay: "2026-09-14", toDay: "2026-09-15", limit: 5 }, { fromDay: "2026-09-14 00:00:00", toDay: "2026-09-15" }, { fromDay: "2026-09-14%2000", toDay: "2026-09-15" }]) {
     await assert.rejects(a.listSessionsByDay(bad), code("invalid_options"), JSON.stringify(bad));
@@ -339,8 +352,7 @@ test("B2.4 the date window: two calendar days, forward, at most 31 days; the WHO
   const ok = await a.listSessionsByDay({ fromDay: "2026-09-14", toDay: "2026-09-15" });
   assert.deepEqual(idsOf(ok), ["100"]);
   const sent = new URL(calls[calls.length - 1].url);
-  assert.equal(sent.search, "?team=980&limit=100", "no date bound is ever sent");
-  assert.ok(!calls.some((c) => c.url.includes("start_timestamp")), "the server-side date filter is never used");
+  assert.equal(sent.search, "?team=980&start_timestamp_gte=2026-09-11%2000%3A00%3A00&start_timestamp_lte=2026-09-17%2023%3A59%3A59&limit=100", "the look-back day 2026-09-13 minus two days, the end plus two days");
   // Exactly 31 days is allowed, 32 is not (the whole list either way).
   assert.deepEqual(idsOf(await make(full().fetchImpl).listSessionsByDay({ fromDay: "2026-09-01", toDay: "2026-10-01" })), ["100", "200"]);
   // A row outside the window is left out locally, not refused.
@@ -639,11 +651,13 @@ test("B5.2 parseDrillTags on its own: the two candidate shapes and nothing else"
   }
 });
 
+const REST_V1_CAPABILITIES_SOURCE = JSON.stringify((await import("../src/gpexeRestV1Adapter.js")).REST_V1_CAPABILITIES ?? {});
 test("B6. regression: the capabilities say what is implemented, the e03 importer and the host allowlist are untouched, and nothing writes", async () => {
   const { a } = await confirmedAdapter();
   const declared = a.capabilities();
   assert.deepEqual(declared.session_list, { status: "proven", available: true });
-  assert.deepEqual(declared.session_list_by_date, { status: "unknown", available: false }, "the server-side date filter is not trusted (owner decision 2026-10-08)");
+  assert.deepEqual(declared.session_list_by_date, { status: "proven", available: true }, "the server's date filter with a margin (owner decision 2026-10-24)");
+  assert.doesNotMatch(REST_V1_CAPABILITIES_SOURCE, /read for a date window/, "no capability text still says a window reads the whole list");
   for (const name of ["session_read", "session_details", "athlete_session_list", "athlete_session_read", "athlete_session_more", "track_read", "team_thresholds"]) assert.deepEqual(declared[name], { status: "proven", available: true }, name);
   assert.deepEqual(declared.session_drill_details, { status: "observed", available: true });
   assert.deepEqual(declared.session_tags, { status: "observed", available: true });
@@ -1419,7 +1433,8 @@ test("C1. four and more pages: the whole list is read page by page (limit=100, o
   const onePass = [LIST, `${LIST}&offset=100`, `${LIST}&offset=200`, `${LIST}&offset=300`];
   assert.deepEqual(listCalls(server.calls), [...onePass, ...onePass], "snapshot A, then snapshot B, each first to last page");
   assert.equal(r.listReads, 2);
-  assert.ok(server.calls.every((c) => c.method === "GET" && new URL(c.url).origin === "https://server3.gpexe.com" && !c.url.includes("start_timestamp")));
+  assert.ok(server.calls.every((c) => c.method === "GET" && new URL(c.url).origin === "https://server3.gpexe.com"));
+  assert.ok(server.calls.every((c) => c.url.includes("start_timestamp_gte=2026-10-02%2000%3A00%3A00&start_timestamp_lte=2026-10-08%2023%3A59%3A59")), "every page of both reads keeps the filter: the look-back day 2026-10-04 minus two days, the end plus two");
 });
 
 test("C2. the five rows after the period of the owner-run check are left out locally, and the parents inside it are returned; nothing is refused for them", async () => {
@@ -1589,7 +1604,9 @@ test("C14. the runbook's window section names every whole-list fail-closed cause
   assert.doesNotMatch(section, /nothing wrong is written/i, "the residual risk is not played down");
   assert.match(section, /twice/i);
   assert.match(section, /not a transactional snapshot/i, "the two reads are not claimed to be a snapshot");
-  assert.match(section, /eight GET requests/i, "the request budget is stated");
+  assert.match(section, /two complete reads of the filtered answer/i, "the request budget is stated");
+  assert.match(section, /upper bound is not applied/i, "the excess after the end is stated");
+  assert.doesNotMatch(section, /one page each for a window of up to a few weeks/i, "the budget is not taken from a fresh window alone");
   assert.match(section, /condition 6/i, "the candidate-withdrawal blocker is referenced");
   const state = await fsp.readFile(path.resolve(ROOT, "docs/ai/CURRENT_STATE.md"), "utf8");
   const next = state.slice(state.indexOf("## Most likely next step"));
@@ -1812,7 +1829,7 @@ test("C11. any failed check returns nothing: no session of the window is returne
   const e = await errorOf(a.listSessionsByDay({ fromDay: "2026-08-01", toDay: "2026-08-02" }));
   assert.equal(e?.code, "source_list_changed");
   await assert.rejects(a.getSession({ sessionId: "5000" }), code("session_not_listed"), "nothing of the refused list became readable");
-  assert.ok(!server.calls.some((c) => c.url.includes("start_timestamp")), "no fallback to the date filter");
+  assert.ok(server.calls.every((c) => !c.url.includes("/team_session/?") || c.url.includes("start_timestamp_gte=")), "no fallback to the whole list without the filter");
   assert.equal(listCalls(server.calls).length, 3, "no retry, and snapshot B is not sent after A failed");
 });
 
@@ -2243,4 +2260,112 @@ test("B13.12 an athlete with a row of an unreadable drill value: every row of th
   const bundle = await (await primed(fetchImpl, MAX_PLAN)).fetchSessionBundle({ sessionId: "100" });
   assert.deepEqual(pathsOf(calls).filter((p) => /^\/rest\/v1\/athlete_session\/\d+\/$/.test(p)), [ROW(500), ROW(510), ROW(511), ROW(501)], "4711 row by row; 4712 is the canary");
   assert.deepEqual(bundle, plain);
+});
+
+// ---------------------------------------------------------------------------
+// F. The window's date filter (owner decision 2026-10-24, after the owner-run window-filter probe): the
+// look-back day and the window, widened by two days on both sides; every page read, both reads, and the
+// window picked out locally. These routes are keyed by the filtered query itself.
+// ---------------------------------------------------------------------------
+const { WINDOW_FILTER_MARGIN_DAYS } = await import("../src/gpexeRestV1Adapter.js");
+const FILTERED = (gte, lte, extra = "") => `/rest/v1/team_session/?team=980&start_timestamp_gte=${gte}%2000%3A00%3A00&start_timestamp_lte=${lte}%2023%3A59%3A59&limit=100${extra}`;
+const NEXT_FILTERED = (gte, lte, offset) => `<https://server3.gpexe.com${FILTERED(gte, lte, `&offset=${offset}`)}>; rel="next"`;
+const rawListCalls = (calls) => calls.map((c) => { const u = new URL(c.url); return `${u.pathname}${u.search}`; }).filter((p) => p.startsWith("/rest/v1/team_session/?"));
+
+test("F1 the bounds: the look-back day minus two days to the end plus two, for one day, 14 days and 31 days, across a month and a year", async () => {
+  assert.equal(WINDOW_FILTER_MARGIN_DAYS, 2);
+  for (const [fromDay, toDay, gte, lte] of [
+    ["2026-10-24", "2026-10-24", "2026-10-21", "2026-10-26"],
+    ["2026-10-11", "2026-10-24", "2026-10-08", "2026-10-26"],
+    ["2026-09-01", "2026-10-01", "2026-08-29", "2026-10-03"],
+    ["2026-01-01", "2026-01-01", "2025-12-29", "2026-01-03"],
+    ["2026-12-30", "2026-12-31", "2026-12-27", "2027-01-02"],
+  ]) {
+    const server = fakeServer({ ...fullRoutes(), [FILTERED(gte, lte)]: answer(200, [], { "x-total-count": "0" }) });
+    const r = await make(server.fetchImpl).listSessionsByDay({ fromDay, toDay });
+    assert.deepEqual(idsOf(r), [], `${fromDay}..${toDay}`);
+    assert.deepEqual(rawListCalls(server.calls), [FILTERED(gte, lte), FILTERED(gte, lte)], `${fromDay}..${toDay}: two reads with exactly these bounds`);
+  }
+});
+
+test("F2 rows in excess (the margin days, days far after the end, as on 2026-10-07 and 2026-10-24) are left out locally, never refused; a drill of a window parent is never a session", async () => {
+  const rows = [
+    session(1, 980, { start_timestamp: "2026-10-02T10:00:00" }), // margin day before the look-back day
+    session(2, 980, { start_timestamp: "2026-10-04T10:00:00" }), // look-back day
+    parent(3, [4], 980, { start_timestamp: "2026-10-05T18:00:00" }),
+    session(4, 980, { start_timestamp: "2026-10-05T18:10:00" }),
+    session(5, 980, { start_timestamp: "2026-10-06T09:00:00" }),
+    session(6, 980, { start_timestamp: "2026-10-07T10:00:00" }), // margin day after
+    session(7, 980, { start_timestamp: "2026-10-20T10:00:00" }), // far after the end and the margin
+  ];
+  const server = fakeServer({ ...fullRoutes(), [FILTERED("2026-10-02", "2026-10-08")]: answer(200, rows, { "x-total-count": String(rows.length) }) });
+  const r = await byDay(make(server.fetchImpl));
+  assert.deepEqual(idsOf(r), ["3", "5"]);
+  assert.deepEqual([r.lookBackParentsLeftOut, r.otherParentsLeftOut, r.drillsLeftOut], [1, 3, 1]);
+});
+
+test("F3 a filtered answer with a large excess is read page by page, both reads, every next link keeping the same bounds; a link without them, with other bounds, or with another offset is refused", async () => {
+  const [gte, lte] = ["2026-10-02", "2026-10-08"];
+  const rows = history(250, "2026-06-01");
+  const pages = [rows.slice(0, 100), rows.slice(100, 200), rows.slice(200)];
+  const routes = (links) => ({
+    ...fullRoutes(),
+    [FILTERED(gte, lte)]: answer(200, pages[0], { "x-total-count": "250", link: links[0] }),
+    [FILTERED(gte, lte, "&offset=100")]: answer(200, pages[1], { "x-total-count": "250", link: links[1] }),
+    [FILTERED(gte, lte, "&offset=200")]: answer(200, pages[2], { "x-total-count": "250" }),
+  });
+  const good = fakeServer(routes([NEXT_FILTERED(gte, lte, 100), NEXT_FILTERED(gte, lte, 200)]));
+  const r = await byDay(make(good.fetchImpl));
+  assert.deepEqual(idsOf(r), ["5126", "5127"], "2026-10-05 and 2026-10-06 of a history from 2026-06-01");
+  const pass = [FILTERED(gte, lte), FILTERED(gte, lte, "&offset=100"), FILTERED(gte, lte, "&offset=200")];
+  assert.deepEqual(rawListCalls(good.calls), [...pass, ...pass]);
+  for (const [label, link, expected] of [
+    ["no bounds", NEXT(100), "source_answer_unexpected"],
+    ["other bounds", NEXT_FILTERED("2026-10-01", lte, 100), "source_answer_unexpected"],
+    ["another offset", NEXT_FILTERED(gte, lte, 99), "source_list_changed"],
+  ]) {
+    const bad = fakeServer(routes([link, NEXT_FILTERED(gte, lte, 200)]));
+    await assert.rejects(byDay(make(bad.fetchImpl)), code(expected), label);
+    assert.equal(rawListCalls(bad.calls).length, 1, `${label}: nothing followed`);
+  }
+});
+
+test("F4 the two reads of the filtered list must agree: a row that changes between them fails the window (source_list_changed), and nothing of it is readable", async () => {
+  const rows = [session(10, 980, { start_timestamp: "2026-10-05T10:00:00" })];
+  let n = 0;
+  const server = fakeServer({ ...fullRoutes(), [FILTERED("2026-10-02", "2026-10-08")]: () => { n += 1; return answer(200, n === 1 ? rows : [{ ...rows[0], updated_on: "2026-10-06T00:00:00" }], { "x-total-count": "1" }); } });
+  const a = make(server.fetchImpl);
+  await assert.rejects(byDay(a), code("source_list_changed"));
+  await assert.rejects(a.getSession({ sessionId: "10" }), code("session_not_listed"));
+});
+
+test("F5 a drill row the filtered answer leaves out: its parent stays the window's session and the reference is only counted; the drill is still read through its parent's ?drill=", async () => {
+  const rows = [parent(3, [4, 8], 980, { start_timestamp: "2026-10-05T18:00:00" }), session(4, 980, { start_timestamp: "2026-10-05T18:10:00" })];
+  const server = fakeServer({ ...fullRoutes(), [FILTERED("2026-10-02", "2026-10-08")]: answer(200, rows, { "x-total-count": "2" }) });
+  const r = await byDay(make(server.fetchImpl));
+  assert.deepEqual(idsOf(r), ["3"]);
+  assert.deepEqual([r.drillsLeftOut, r.drillReferencesNotListed], [1, 1]);
+});
+
+test("F6 the look-back rule: a drill after midnight inside the window whose parent started the evening before is a drill, not a session; the look-back parent itself is left out", async () => {
+  const rows = [parent(30, [31], 980, { start_timestamp: "2026-10-04T23:30:00" }), session(31, 980, { start_timestamp: "2026-10-05T00:05:00" }), session(32, 980, { start_timestamp: "2026-10-05T10:00:00" })];
+  const server = fakeServer({ ...fullRoutes(), [FILTERED("2026-10-02", "2026-10-08")]: answer(200, rows, { "x-total-count": "3" }) });
+  const r = await byDay(make(server.fetchImpl));
+  assert.deepEqual(idsOf(r), ["32"]);
+  assert.deepEqual([r.lookBackParentsLeftOut, r.drillsLeftOut], [1, 1]);
+});
+
+test("F3b a next link in the form the server's framework writes (keys sorted, a plus for the space) is followed with the same bounds, sent back in the proven encoding", async () => {
+  const [gte, lte] = ["2026-10-02", "2026-10-08"];
+  const rows = history(150, "2026-08-01");
+  const drfNext = '<https://server3.gpexe.com/rest/v1/team_session/?limit=100&offset=100&start_timestamp_gte=2026-10-02+00%3A00%3A00&start_timestamp_lte=2026-10-08+23%3A59%3A59&team=980>; rel="next"';
+  const second = "/rest/v1/team_session/?team=980&limit=100&offset=100&start_timestamp_gte=2026-10-02%2000%3A00%3A00&start_timestamp_lte=2026-10-08%2023%3A59%3A59";
+  const server = fakeServer({
+    ...fullRoutes(),
+    [FILTERED(gte, lte)]: answer(200, rows.slice(0, 100), { "x-total-count": "150", link: drfNext }),
+    [second]: answer(200, rows.slice(100), { "x-total-count": "150" }),
+  });
+  const r = await byDay(make(server.fetchImpl));
+  assert.deepEqual(idsOf(r), ["5065", "5066"], "2026-10-05 and 2026-10-06 of a history from 2026-08-01");
+  assert.deepEqual(rawListCalls(server.calls), [FILTERED(gte, lte), second, FILTERED(gte, lte), second]);
 });
