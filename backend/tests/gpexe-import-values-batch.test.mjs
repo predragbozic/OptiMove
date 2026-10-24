@@ -9,8 +9,9 @@
 // the same rows after a real import, the same refusal for a bad value and the
 // same state after a rollback. Besides the number of statements, the only
 // differences are in refusals the writer cannot produce, pinned here (7.3,
-// 8.x) and reported to the owner: the parameter an error's `where` names, and
-// which refusal comes first when one result holds two refused values.
+// 8.x) and accepted by the owner on 2026-10-24 as limitations of the
+// optimization: the parameter an error's `where` names, and which refusal
+// comes first when one result holds two refused values.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";

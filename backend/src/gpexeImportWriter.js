@@ -430,14 +430,17 @@ async function insertOccasionWithValues(client, { participantId, segmentId, iden
 // metric_definition_id) is checked at each row as before. A refused row fails
 // the whole statement, and with it the transaction, as the refused single
 // INSERT did, and leaves no row behind.
-// Where one statement differs from one per value (reported to the owner and
-// pinned in gpexe-import-values-batch.test.mjs; none of it reachable through
-// this writer, whose values are finite numbers and whose definition and
-// version come from the same row): PostgreSQL converts every parameter before
-// the first row runs and checks the foreign keys at the end of the statement,
-// so of two refused values in one result the refusal reported can differ;
-// and a parameter it cannot read is named in the error's `where` by its
-// position in this statement. No code reads `where`.
+// Where one statement differs from one per value - accepted by the owner on
+// 2026-10-24 as limitations of this optimization, pinned in
+// gpexe-import-values-batch.test.mjs, none of it reachable through this
+// writer (its values are finite numbers, a definition and its version come
+// from the same row): PostgreSQL converts every parameter before the first
+// row runs and checks the foreign keys at the end of the statement, so of two
+// refused values in one result the refusal reported can differ; and a
+// parameter it cannot read is named in the error's `where` by its position in
+// this statement. No code reads `where`, and every caller answers a database
+// error with the same internal_error whatever its SQLSTATE (the check, the
+// approval and the batch; only 42501 is told apart at approval).
 // Parameter layout: $1 the occasion, then six per value - tests that replay
 // the old per-value statements rely on it.
 export function metricValuesInsert(occasionId, values) {
