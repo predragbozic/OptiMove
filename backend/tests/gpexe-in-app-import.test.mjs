@@ -983,18 +983,18 @@ test("approve: a value the database refuses inside the import answers 500 intern
   await checkNow(team);
   const reviewed = await pendingCandidate(team);
   assert.equal(reviewed.status, "pending");
-  await admin.query(`create table public.zz_test_refuse_values_flag (armed boolean)`);
-  await admin.query(`
-    create function training_load.zz_test_refuse_value() returns trigger as $$
-    begin
-      if exists (select 1 from public.zz_test_refuse_values_flag)
-         and (select key from training_load.metric_definitions where id = new.metric_definition_id) = 'gpexe_total_distance' then
-        raise exception 'zz_test_refuse_value';
-      end if;
-      return new;
-    end $$ language plpgsql`);
-  await admin.query(`create trigger zz_test_refuse_value before insert on training_load.metric_values for each row execute function training_load.zz_test_refuse_value()`);
   try {
+    await admin.query(`create table public.zz_test_refuse_values_flag (armed boolean)`);
+    await admin.query(`
+      create function training_load.zz_test_refuse_value() returns trigger as $$
+      begin
+        if exists (select 1 from public.zz_test_refuse_values_flag)
+           and (select key from training_load.metric_definitions where id = new.metric_definition_id) = 'gpexe_total_distance' then
+          raise exception 'zz_test_refuse_value';
+        end if;
+        return new;
+      end $$ language plpgsql`);
+    await admin.query(`create trigger zz_test_refuse_value before insert on training_load.metric_values for each row execute function training_load.zz_test_refuse_value()`);
     await admin.query(`insert into public.zz_test_refuse_values_flag values (true)`);
     const before = await allRowCounts();
     await withSwitchOn(async () => {
