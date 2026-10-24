@@ -119,9 +119,12 @@ export function projectMore(body) {
 }
 // The only query parameters a server-given next-page link may carry back.
 const NEXT_LINK_KEYS = new Set(["limit", "offset", "start_timestamp_gte", "start_timestamp_lte"]);
-// ... and of the whole session list read for a date window: the page
-// position only, never a server-side date bound.
-const WHOLE_LIST_NEXT_KEYS = new Set(["limit", "offset"]);
+// The date filter of a window's session list (owner decision 2026-10-24, after the owner-run
+// window-filter probe: two windows, no session and no drill missing; the counts fit a server that
+// applies the lower bound and not the upper one, returning every later session too): the look-back
+// day and the window, widened by this many days on both sides. Whatever the server returns outside is
+// left out locally, never refused, and every page of it is read.
+export const WINDOW_FILTER_MARGIN_DAYS = 2;
 // The legacy drill reads: the only `api/` host key and the only two shapes.
 export const LEGACY_DRILL_HOST_KEY = "server3";
 export const LEGACY_API_PREFIX = "api/";
@@ -155,7 +158,8 @@ const validDay = (value) => {
   const d = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === value ? value : null;
 };
-const dayBefore = (day) => new Date(Date.parse(`${day}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+const shiftDay = (day, days) => new Date(Date.parse(`${day}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+const dayBefore = (day) => shiftDay(day, -1);
 const dayOf = (timestamp) => (typeof timestamp === "string" && DAY.test(timestamp.slice(0, 10)) ? timestamp.slice(0, 10) : null);
 
 // A strict reading of a session's start (owner decisions 2026-10-07 / 2026-10-08):
@@ -196,8 +200,8 @@ export class SourceAdapterError extends Error {
 export const REST_V1_CAPABILITIES = Object.freeze({
   team_list: Object.freeze({ status: "proven", importerUse: "verify the bound team is visible", e03: "not used", evidence: "probe 2026-09-29: GET team/ 200, array, X-Total-Count" }),
   team_read: Object.freeze({ status: "proven", importerUse: "verify the bound team is visible", e03: "not used", evidence: "probe 2026-09-29: GET team/<id>/ 200, object" }),
-  session_list: Object.freeze({ status: "proven", importerUse: "the whole team list, read for a date window and filtered locally (owner decision 2026-10-08)", e03: "not sent without a date window", evidence: "probe 2026-09-29: GET team_session/?team=&limit=1 200, array, X-Total-Count, Link" }),
-  session_list_by_date: Object.freeze({ status: "unknown", importerUse: "none: the server-side date filter is not sent (owner decision 2026-10-08)", e03: "team_session/?team=&start_timestamp_gte=&start_timestamp_lte=&limit=", evidence: "probe 2026-10-01: the filter applied once; owner-run check 2026-10-07: the filtered answer carried rows after the asked window (refused source_filter_ignored) - not trusted for completeness" }),
+  session_list: Object.freeze({ status: "proven", importerUse: "not used by a check since 2026-10-24: a window reads session_list_by_date (from 2026-10-08 to 2026-10-24 it read this whole list)", e03: "not sent without a date window", evidence: "probe 2026-09-29: GET team_session/?team=&limit=1 200, array, X-Total-Count, Link" }),
+  session_list_by_date: Object.freeze({ status: "proven", importerUse: "the window's session list: the look-back day and the window widened by WINDOW_FILTER_MARGIN_DAYS on both sides, read twice, the window picked out locally (owner decision 2026-10-24)", e03: "team_session/?team=&start_timestamp_gte=&start_timestamp_lte=&limit=", evidence: "probe 2026-10-01: the filter applied once; owner-run check 2026-10-07: rows after the asked window (refused then, source_filter_ignored); owner-run window-filter probe 2026-10-24 against the whole list of 374: 11.10-24.10 and 05.10-06.10, with the margin and without, no window parent, look-back parent or named drill missing, the same window parents from the filtered rows alone, rows only in excess (after the end, and the margin days)" }),
   session_read: Object.freeze({ status: "proven", importerUse: "one session, its team and drills_count", e03: "team_session/<id>/", evidence: "probe 2026-10-01: 200, object, team, drills_count, start_timestamp; no drills list on this read" }),
   session_details: Object.freeze({ status: "proven", importerUse: "whole-session values per athlete", e03: "team_session/<id>/details/", evidence: "probe 2026-10-01: 200 (status only; no metric value shape recorded; first real check 2026-10-05 refused metric_shape_unknown); owner-run diagnostic 2026-10-06: tot_burst_events / tot_brake_events in the documented shape for every athlete, one unconsumed metric an object of another shape - the read is projected to the consumed fields" }),
   session_drill_details: Object.freeze({ status: "observed", importerUse: "values per drill", e03: "team_session/<id>/details/?drill=<n>", evidence: "legacy api family on server3 (owner-run 2026-10-01: 200, object, players map); form per the GPEXE REST handbook pages 31-33; read through legacyDrillDetailsUrl() only; first whole-list check 2026-10-09: drill 0 carried both consumed fields in the documented shape and one unconsumed object metric - projected to the consumed fields since then" }),
@@ -1044,16 +1048,17 @@ export function createGpexeRestV1Adapter({
       throw unexpected("The source server pointed to a next page that cannot be read.");
     }
   }
-  // A next-page link of the whole session list (read for a date window): the
-  // checks of nextPath(), and then nothing but the page size asked and an
-  // offset that is exactly the number of rows read so far - a link that would
-  // skip or repeat rows, or carries a date bound, is refused.
-  function nextWholeSessionListPath(next, rowsRead) {
+  // A next-page link of a window's filtered session list: the checks of
+  // nextPath(), and then nothing but the page size asked, the same two date
+  // bounds and an offset that is exactly the number of rows read so far - a
+  // link that would skip or repeat rows, or page another query, is refused.
+  function nextFilteredSessionListPath(next, rowsRead, bounds) {
     const path = nextPath(next, "team_session/");
     const params = new URL(next).searchParams;
     const keys = [...params.keys()].filter((k) => k !== "team");
-    if (keys.some((k) => !WHOLE_LIST_NEXT_KEYS.has(k)) || params.get("limit") !== String(SESSION_PAGE_LIMIT_MAX)) {
-      throw unexpected("The source server pointed to a next page of the session list with a parameter this adapter does not follow.");
+    if (keys.some((k) => !NEXT_LINK_KEYS.has(k)) || params.get("limit") !== String(SESSION_PAGE_LIMIT_MAX)
+      || params.get("start_timestamp_gte") !== bounds.gte || params.get("start_timestamp_lte") !== bounds.lte) {
+      throw unexpected("The source server pointed to a next page of the session list with a parameter or a date bound this adapter does not follow.");
     }
     if (params.get("offset") !== String(rowsRead)) {
       throw new SourceAdapterError("source_list_changed", "The next page of the session list does not start after the rows already read; read it again.");
@@ -1302,15 +1307,19 @@ export function createGpexeRestV1Adapter({
 
     // The parent sessions of the bound team that start inside a date window
     // (naive source days, the window inclusive on both days, at most 31 days).
-    // Owner decision 2026-10-08 (option (c)), after an owner-run check whose
-    // date-filtered answer carried rows after the asked window: the server's
-    // date filter is not trusted for completeness and is not sent. The WHOLE
-    // list of the bound team is read (team_session/?team=&limit=100, header
-    // paged, a stable X-Total-Count, every next link checked, at most
-    // SESSION_LIST_MAX_ROWS rows), its rows checked, parents and drills told
-    // apart on the whole list and every start read strictly (one that is not
-    // a real date and time refuses the list: where it belongs is never guessed).
-    // Owner decision 2026-10-09: the whole list is read TWICE, one complete
+    // Owner decision 2026-10-24, after the owner-run window-filter probe (two
+    // windows against the whole list: no window parent, look-back parent or
+    // named drill missing; rows in excess after the end): the server's date
+    // filter is sent again, for the look-back day and the window widened by
+    // WINDOW_FILTER_MARGIN_DAYS on both sides (it replaced the whole list read
+    // since 2026-10-08, option (c)). Its answer is read whole
+    // (team_session/?team=&start_timestamp_gte=&start_timestamp_lte=&limit=100,
+    // header paged, a stable X-Total-Count, every next link checked to keep the
+    // same bounds, at most SESSION_LIST_MAX_ROWS rows), its rows checked,
+    // parents and drills told apart on it and every start read strictly (one
+    // that is not a real date and time refuses the list: where it belongs is
+    // never guessed). A row outside the window is left out below, never refused.
+    // Owner decision 2026-10-09: the list is read TWICE, one complete
     // read after the other, each with every check of its own; the second is
     // used only when both agree on the total, on every id in the same order and
     // on every field in SNAPSHOT_FIELDS - otherwise source_list_changed. This
@@ -1336,10 +1345,16 @@ export function createGpexeRestV1Adapter({
       if (span < 0 || span + 1 > MAX_WINDOW_DAYS) throw new SourceAdapterError("invalid_options", `A date window runs forward and covers at most ${MAX_WINDOW_DAYS} days.`);
       const lookFrom = dayBefore(from);
       const ticket = nextListTicket();
-      const path = teamScopedPath("team_session/", team, [["limit", SESSION_PAGE_LIMIT_MAX]]);
+      // The server's date filter, widened by the margin on both sides of the look-back day and the
+      // window; every page of its answer is read, and the window is picked out locally below.
+      const filterFrom = shiftDay(lookFrom, -WINDOW_FILTER_MARGIN_DAYS);
+      const filterTo = shiftDay(to, WINDOW_FILTER_MARGIN_DAYS);
+      const bounds = { gte: `${filterFrom} 00:00:00`, lte: `${filterTo} 23:59:59` };
+      const path = teamScopedPath("team_session/", team, [["start_timestamp_gte", `${filterFrom}%2000%3A00%3A00`], ["start_timestamp_lte", `${filterTo}%2023%3A59%3A59`], ["limit", SESSION_PAGE_LIMIT_MAX]]);
+      const follow = (next, rowsRead) => nextFilteredSessionListPath(next, rowsRead, bounds);
       // One complete read with every check of its own; pure: no adapter state.
       const snapshot = async () => {
-        const { rows, total } = await wholeList(path, nextWholeSessionListPath, "the session list", MAX_PAGES, SESSION_LIST_MAX_ROWS, "list_sessions");
+        const { rows, total } = await wholeList(path, follow, "the session list", MAX_PAGES, SESSION_LIST_MAX_ROWS, "list_sessions");
         checkSessionRows(rows);
         const classified = classifyParents(rows);
         const days = new Map(rows.map((row) => [canonicalId(row.id), strictDay(row.start_timestamp)]));

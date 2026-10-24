@@ -202,10 +202,13 @@ async function fakeFetch(url, init = {}) {
   if (t === null) return json(404, {});
   const { bundles, rows } = src.data;
   const bySid = (sid) => bundles.find((b) => String(b.teamSession.id) === String(sid));
-  m = key.match(new RegExp(`^/rest/v1/team_session/\\?team=${t}&limit=100(?:&offset=(\\d+))?$`));
+  // A window's list carries the server's date filter (owner decision 2026-10-24); this fake answers it
+  // with the whole list (rows in excess, as server3 can) and keeps the filter in its next links.
+  const filter = key.match(/&start_timestamp_gte=[^&]*&start_timestamp_lte=[^&]*/)?.[0] ?? "";
+  m = key.replace(filter, "").match(new RegExp(`^/rest/v1/team_session/\\?team=${t}&limit=100(?:&offset=(\\d+))?$`));
   if (m) {
     const offset = Number(m[1] ?? 0);
-    const next = offset + 100 < rows.length ? { link: `<${REST}team_session/?team=${t}&limit=100&offset=${offset + 100}>; rel="next"` } : {};
+    const next = offset + 100 < rows.length ? { link: `<${REST}team_session/?team=${t}${filter}&limit=100&offset=${offset + 100}>; rel="next"` } : {};
     return json(200, rows.slice(offset, offset + 100), { "x-total-count": String(rows.length), ...next });
   }
   m = key.match(/^\/rest\/v1\/team_session\/(\d+)\/$/);
@@ -456,7 +459,7 @@ test("6. the stale sweep during a wait does not close the waiting check: a heart
 test("7. a 429 with Retry-After 1 on the second page of the whole list: repeated once, the two complete reads still agree, the check succeeds", async () => {
   const o = await org();
   serve(o);
-  const page2 = new RegExp(`^/rest/v1/team_session/\\?team=${o.sourceTeamId}&limit=100&offset=100$`);
+  const page2 = new RegExp(`^/rest/v1/team_session/\\?team=${o.sourceTeamId}(?:&start_timestamp_gte=[^&]*&start_timestamp_lte=[^&]*)?&limit=100&offset=100$`);
   src.fault = async (key, n) => (page2.test(key) && n === 1 ? slowDown({ "retry-after": "1" }) : null);
   const { row, calls } = await runCheck(o);
   assert.equal(row.status, "succeeded", row.error_message ?? "");
@@ -488,7 +491,7 @@ test("9. fail-closed: a source opened with rateLimitRetry but without the run's 
   const facts = await resolver.resolveImportSourceFacts(admin, { teamId: o.teamId });
   resolver.preflightImportSource(facts);
   const source = resolver.openImportSource(facts, { rateLimitRetry: true });
-  const LIST_FIRST = new RegExp(`^/rest/v1/team_session/\\?team=${o.sourceTeamId}&limit=100$`);
+  const LIST_FIRST = new RegExp(`^/rest/v1/team_session/\\?team=${o.sourceTeamId}(?:&start_timestamp_gte=[^&]*&start_timestamp_lte=[^&]*)?&limit=100$`);
   src.calls.length = 0;
   src.fault = async (key, n) => (LIST_FIRST.test(key) && n === 1 ? slowDown({ "retry-after": "1" }) : null);
   const client = resolver.importClientFor(source);

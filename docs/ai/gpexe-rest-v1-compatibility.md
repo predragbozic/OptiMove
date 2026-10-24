@@ -82,8 +82,8 @@ but OptiMove has never seen its answer: it is still **unknown** for the adapter.
 |---|---|---|---|---|---|
 | — | Team list (not used by the importer; used to check visibility) | not used | **same**: `team/` | probe: 200, array, `X-Total-Count` 8, contains 980 | `countVisibleTeams()` — count and a boolean only |
 | — | Team read (not used by the importer; used to check the binding) | not used | **same**: `team/<id>/` | probe: 200, object | `verifyBoundTeam()` |
-| 1a | Sessions of a team, by team and page size (**the importer's request since 2026-10-08**, option (c): a date window reads this whole list and filters it locally, see row 1b) | not sent without a date window | the resource and its paging are proven: `team_session/?team=&limit=` | probe: 200, array of 1, `X-Total-Count` 308, `Link` header; field names include every field the importer's list reads (`id`, `team`, `category_name`, `start_timestamp`, `updated_on`, `drills`, `drills_count`, `is_stats_valid`) | `listSessions({ limit, maxPages })` — the whole list or a refusal; parents and drills told apart by the list structure, an ambiguous page refused (F3c2c) |
-| 1b | Sessions of a team **in a date window** | `…&start_timestamp_gte=&start_timestamp_lte=` | **same** | probe 2026-10-01: the filter is applied under the section-4 rule (every row of team 980 and inside the window, the chosen session among them, the filtered count smaller than the unfiltered count of the same run) | **not used since 2026-10-08 (option (c))**: an owner-run check of 05.10 - 06.10.2026 got rows after the asked window from this filter (`source_filter_ignored`, diagnostic `after_end=5`); `listSessionsByDay({ fromDay, toDay })` now reads the whole team list twice (row 1a, `limit=100`, stable `X-Total-Count`, next links with `limit=100` and the exact `offset` only, at most 2000 rows or `source_list_too_large`; the two complete reads must agree on total, id order and the classification / candidate fields or `source_list_changed`, owner decision 2026-10-09), classifies parents and drills on it, refuses an unreadable start (`source_session_start_unreadable`) and picks the window out locally; the capability is declared `unknown` |
+| 1a | Sessions of a team, by team and page size (the importer's request from 2026-10-08 to 2026-10-24, option (c); since 2026-10-24 a window reads row 1b) | not sent without a date window | the resource and its paging are proven: `team_session/?team=&limit=` | probe: 200, array of 1, `X-Total-Count` 308, `Link` header; field names include every field the importer's list reads (`id`, `team`, `category_name`, `start_timestamp`, `updated_on`, `drills`, `drills_count`, `is_stats_valid`) | `listSessions({ limit, maxPages })` — the whole list or a refusal; parents and drills told apart by the list structure, an ambiguous page refused (F3c2c) |
+| 1b | Sessions of a team **in a date window** | `…&start_timestamp_gte=&start_timestamp_lte=` | **same** | probe 2026-10-01: the filter is applied; owner-run window-filter probe 2026-10-24 against the whole list of 374 (section 4d): two windows, with a margin of two days and without, no window parent, look-back parent or named drill missing, only rows in excess | **the importer's request since 2026-10-24** (owner decision): `listSessionsByDay({ fromDay, toDay })` asks for the look-back day and the window widened by `WINDOW_FILTER_MARGIN_DAYS` (2) on both sides, reads the whole answer twice (`limit=100`, stable `X-Total-Count`, next links with the same bounds, `limit=100` and the exact `offset` only, at most 2000 rows or `source_list_too_large`; the two complete reads must agree or `source_list_changed`, owner decision 2026-10-09), classifies parents and drills on it, refuses an unreadable start (`source_session_start_unreadable`) and picks the window out locally, every other row left out; from 2026-10-08 to 2026-10-24 (option (c)) the whole team list was read instead (row 1a) |
 | 2 | One session (its team, `drills_count`, start) | `team_session/<id>/` | **same** | probe 2026-10-01: 200, object, team 980, `drills_count` and `start_timestamp` present; **no `drills` list** on this read (the list rows carry it) | **implemented (F3c2c)**: `getSession({ sessionId })` — the read that confirms a parent (same id, team 980, `drills_count` 0–30) |
 | 3 | Athlete rows of a session | `athlete_session/?teamsession=<id>&limit=` | **same** | probe 2026-10-01: 200, every row of the asked session | **implemented (F3c2c)**: `listAthleteSessions({ sessionId })` on a confirmed parent, whole or refused, every row of that session |
 | 4 | One athlete row | `athlete_session/<id>/` | **same** | probe 2026-10-01: 200, names the same session | **implemented (F3c2c)**: `getAthleteSession({ sessionId, athleteSessionId })` under a confirmed parent; the detail must name that session |
@@ -867,6 +867,50 @@ rules are `docs/ai/gpexe-athlete-list-nine-fields-plan.md`, added by Draft PR #2
   - its tests do not depend on #209.
 
   If this PR were merged first, only the plan reference above would point to a file that arrives with #209.
+
+## 4d. The date filter against the whole list (the window-filter run, 2026-10-24)
+
+**Status: run once by the owner (2026-10-24, 12:04 UTC; 9 requests, no 429; sanitized report, counts and
+durations only). Verdict `safe`.**
+
+The tool is `backend/scripts/gpexe-window-filter-probe.mjs`, tested against a fake server
+(`backend/tests/gpexe-window-filter-probe.test.mjs`).
+
+**What it read:**
+- one exchange;
+- the whole session list of team 980: 4 pages, 374 rows, 75.1 s;
+- the filtered list for two windows, each with a margin of two days around the look-back day and the
+  window, and exactly as sent until 2026-10-08.
+
+**How it compared:** in memory, against the whole list, for each answer:
+- the window's parents, the look-back day's parents and every drill row they name;
+- whether the filtered rows alone give the same window parents;
+- the rows outside the look-back day and the window.
+
+| Window | Form | Rows | Missing parents / look-back / drills | Same window parents | Outside | Time |
+|---|---|---|---|---|---|---|
+| 11.10 - 24.10 (12 parents, 2 look-back, 19 drills) | margin | 35 | 0 / 0 / 0 | yes | 2, the margin days | 9.0 s |
+| | exact | 33 | 0 / 0 / 0 | yes | 0 | 7.2 s |
+| 05.10 - 06.10 (3 parents, 5 drills) | margin | 57 | 0 / 0 / 0 | yes | 49: 9 of the margin days, 40 after the end | 11.3 s |
+| | exact | 48 | 0 / 0 / 0 | yes | 40 after the end, 33 of them more than 72 h | 9.6 s |
+
+**What it says:**
+- **The start bound:** the server keeps it; nothing earlier than asked came back.
+- **The end bound:** the counts fit a server that **does not apply it at all** (an inference from counts, not
+  a documented rule):
+  - the 05.10 - 06.10 answer held every session after its end up to the day of the run;
+  - its 5 + 1 + 1 rows within 72 hours are 07.10 - 09.10;
+  - its 33 rows beyond 72 hours are exactly the 33 rows of the 10.10 - 24.10 answer.
+- **The 14-day window:** it ends on the day of the run, so it could not show this.
+- **Consequences for a check:**
+  - the excess of a window is every session from its end to the day of the check;
+  - a window that ended weeks ago costs more pages than a fresh one, though never more than the whole list
+    from the window's start;
+  - an answer longer than 100 rows is paged through a filtered next link, whose form server3 has not shown
+    yet.
+
+Nothing was missing in either window. The importer sends the filter with the margin since 2026-10-24
+(row 1b).
 
 ## 5. Rules the adapter keeps, whatever is added later
 
