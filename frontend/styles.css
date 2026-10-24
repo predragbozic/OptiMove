@@ -6133,6 +6133,37 @@ body.specific-program-open {
 .storage-admin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
 .storage-admin-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .storage-admin-actions .plain-button, .storage-admin-actions .text-action { min-height: 44px; min-width: 44px; }
+/* Settings -> Storage -> Import from Google Drive (platform administrator). */
+.drive-import-primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+.drive-import-folder { position: relative; display: inline-flex; align-items: center; min-height: 44px; cursor: pointer; }
+.drive-import-folder.is-disabled { opacity: 0.6; cursor: default; }
+.drive-import-folder:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.drive-import-folder-input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; font-size: 16px; }
+.drive-import-progress { display: grid; gap: 4px; }
+.drive-import-progress progress { width: 100%; height: 10px; }
+.drive-import-progress p { margin: 0; overflow-wrap: anywhere; }
+.drive-import-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.drive-import-item { display: grid; gap: 2px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; }
+.drive-import-item-name { font-weight: 600; overflow-wrap: anywhere; }
+.drive-import-item-state, .drive-import-item-reason { font-size: 13px; }
+.drive-import-item-reason { color: var(--danger); }
+.drive-import-problems ul, .drive-import-failed ul { margin: 6px 0 0; }
+.drive-import-problems code, .drive-import-item code { overflow-wrap: anywhere; }
+.drive-import-live { display: grid; gap: 10px; }
+.drive-import-hint { margin: 0; font-size: 13px; }
+.drive-import-done { margin: 0; font-weight: 600; }
+/* A folder name or an exercise name from the manifest is not ours: it wraps (.panel clips). */
+.drive-import-card { overflow-wrap: anywhere; }
+/* The disclosures of the Storage tab are touch targets too. */
+.storage-admin-technical > summary, .drive-import-problems > summary, .drive-import-failed > summary { cursor: pointer; }
+@media (max-width: 760px) {
+  /* A list item keeps its disclosure marker; the padding makes it a 44 px touch target. */
+  .storage-admin-technical > summary, .drive-import-problems > summary, .drive-import-failed > summary { display: list-item; box-sizing: border-box; min-height: 44px; padding-block: 12px; }
+}
+/* On a touch device the import is shown switched off; this says why, next to its buttons. */
+.drive-import-computer-note { margin: 0; font-size: 16px; font-weight: 600; }
+/* A switched-off Start reads as off but stays legible (the accent at .45 opacity did not). */
+.drive-import-primary:disabled { opacity: 1; border-color: var(--line-strong); background: var(--surface-soft); color: var(--muted); }
 .storage-admin-notice { margin: 0; }
 .storage-admin-history { margin: 0; padding-left: 18px; font-size: 13px; display: grid; gap: 4px; }
 .storage-admin-technical { font-size: 12px; color: var(--muted); }
