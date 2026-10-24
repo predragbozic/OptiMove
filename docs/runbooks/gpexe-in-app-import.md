@@ -1034,25 +1034,39 @@ team or workspace change, or signing out drops it.
 
 ## How a check finds the sessions of its window (server3 / `rest_v1`)
 
-Owner decision 2026-10-08 (option (c)), after an owner-run check of 05.10 - 06.10.2026 whose
-date-filtered answer carried five rows after the window (`source_filter_ignored`; sanitized
-diagnostic `rows=13; after_end=5`, all five 3 - 24 hours after the end, no zone suffix): the server's
-date filter is no longer sent or trusted. A check on the binding path reads the **whole session
-list of the bound team** (`team_session/?team=<id>&limit=100`, header paged) **twice**, one
-complete read after the other (owner decision 2026-10-09), and picks the window out itself. Each of
-the two reads - snapshot A, then snapshot B - passes steps 1 to 5 on its own:
+**Owner decision 2026-10-24:** the server's date filter is sent again, with a margin.
+
+**History:**
+- 2026-10-08 (option (c)): an owner-run check of 05.10 - 06.10.2026 got a date-filtered answer with five
+  rows after the window (`source_filter_ignored`; `after_end=5`). From then until 2026-10-24 the filter
+  was not sent, and every check read the whole team list.
+- 2026-10-24: the owner-run window-filter probe (`backend/scripts/gpexe-window-filter-probe.mjs`)
+  compared the filtered answers with the whole list of 374 sessions. It used two windows, 11.10 -
+  24.10 and 05.10 - 06.10, each with the margin and without. **No window parent, look-back parent or
+  named drill was missing.** The filter returned only rows in excess: the margin days, and after the
+  end. The counts fit a server that applies the start bound but **not the upper bound**: the 2-day
+  window's answer held every session up to the day of the run.
+
+**How a check on the binding path reads the list now:**
+- it asks for the look-back day and the window, widened by `WINDOW_FILTER_MARGIN_DAYS` (2) on both
+  sides: `team_session/?team=<id>&start_timestamp_gte=<look-back day - 2> 00:00:00&start_timestamp_lte=<last day + 2> 23:59:59&limit=100`,
+  header paged;
+- it reads that list **twice**, one complete read after the other (owner decision 2026-10-09);
+- it picks the window out itself; a row outside the window is left out, never refused.
+
+Each of the two reads (snapshot A, then snapshot B) passes steps 1 to 5 on its own:
 
 1. every page answers a list with the same `X-Total-Count`; every next link stays on the host, the
-   `rest/v1/` family, the `team_session/` resource and the bound team, carries only `limit=100` and
-   an `offset` equal to the rows read so far (never a date bound); a row seen twice, a total that
+   `rest/v1/` family, the `team_session/` resource and the bound team, carries only `limit=100`, the
+   same two date bounds and an `offset` equal to the rows read so far; a row seen twice, a total that
    changes or does not match the rows read, or a link that would skip or repeat rows refuses the
    list (`source_list_changed` / `source_list_incomplete` / `source_answer_unexpected` /
    `source_team_mismatch`);
 2. at most `SESSION_LIST_MAX_ROWS` (2000) rows - 20 pages of 100: a longer list is refused at the
    first page by its `X-Total-Count`, before any further request (`source_list_too_large`);
 3. every row names the bound team in a known form;
-4. parents and drills are told apart on the whole list (a drill row is never a session, whichever
-   day its parent started);
+4. parents and drills are told apart on the filtered list. The margin keeps the parent of every
+   drill of the window and of the look-back day in it, so a drill row is never a session;
 5. every start must be a real calendar date and time (`YYYY-MM-DD[T ]HH:MM:SS`, never normalised);
    one that is not - anywhere in the list - refuses it (`source_session_start_unreadable`): where it
    belongs is never guessed;
@@ -1066,9 +1080,18 @@ the two reads - snapshot A, then snapshot B - passes steps 1 to 5 on its own:
    window returned; a parent of the day before (the one-day look-back) and of any other day is left
    out.
 
-**Request budget:** the list costs two complete reads - for team 980's 308 - 350 sessions about
-eight GET requests per check (four pages, twice), at most 40 at the 2000-row cap - plus the bundle
-reads of the window's sessions. No retry; no request budget other than the per-request timeout
+**Request budget:** the list costs two complete reads of the filtered answer, plus the bundle reads
+of the window's sessions.
+- **Rows:** the answer holds every session from the window's start (with its margin) to the day of the
+  check, because the upper bound is not applied.
+- **A window ending today:** one page each. The probe saw 35 rows for 11.10 - 24.10.
+- **An older window:** more. The 2-day window of 05.10 - 06.10 gave 57 rows on 2026-10-24, and a window a
+  few months back pages like the whole list since then.
+- **The cap:** at most 40 requests, at the 2000-row cap.
+- **Time:** 7 - 11 s per filtered page against about 19 s per page of the whole list, which was 4 pages
+  for 374 sessions.
+- **The first filtered next link:** the first check whose filtered answer exceeds 100 rows is the first
+  to page one in production. No retry; no request budget other than the per-request timeout
 bounds a check (the 90 s budget is Connect / Test's).
 
 Any refusal fails the check with its own code: the failed check row is stored, no candidate,
@@ -1077,17 +1100,19 @@ server-side filter is never used as a fallback.
 
 **Operational notes (fail-closed, deliberate):**
 
-- the whole history is checked, not only the window: one session with an unreadable start
-  (`source_session_start_unreadable`), one ambiguous parent / drill pair anywhere in the list
-  (`source_list_ambiguous`, with its `reason`), or a list longer than 2000 sessions
-  (`source_list_too_large`) fails every check of that team until the row is corrected in GPEXE (or,
-  for the cap, until the cap is changed in code); there is no fix inside the app;
-- **the form of a server3 next link has never been observed** (only that a `Link` header is sent):
-  the adapter accepts only `limit=100` and `offset=<rows read>`; a page-number or cursor link refuses
-  the list (`source_answer_unexpected`, "a parameter this adapter does not follow"). Team 980's list
-  held 308 rows on 2026-09-29, so the first real check after this change is the first proof of the
-  paging and of the classification of the whole history; on any of these codes the owner stops and
-  reports only the code;
+- everything the filter returns is checked, the excess included. One session with an unreadable
+  start (`source_session_start_unreadable`) or one ambiguous parent / drill pair in it
+  (`source_list_ambiguous`, with its `reason`) fails the check of that window until the row is
+  corrected in GPEXE; there is no fix inside the app;
+- the filter is trusted on the evidence of two windows (see above), and the margin covers a shift of
+  the server's bounds of up to 48 hours. A session the server's filter left out entirely could not be
+  seen by a check; none was in the probe;
+- **the form of a server3 next link of a filtered answer has never been observed:** the probe's
+  filtered answers fit one page, while the whole list has paged with `limit` / `offset` links in every
+  check since 2026-10-09. The adapter accepts only `limit=100`, the same two date bounds and
+  `offset=<rows read>`; a link without the bounds, with other bounds, or with a page number or cursor
+  refuses the list (`source_answer_unexpected`, "a parameter this adapter does not follow"). On any of
+  these codes the owner stops and reports only the code;
 - **what the two reads close, and what stays a residual risk:** offset paging alone cannot see a
   session deleted and another created between two page reads (the total unchanged): one row is
   missed, and if it is a parent with drills, its drill rows are no longer named by any listed row and

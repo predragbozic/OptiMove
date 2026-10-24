@@ -163,7 +163,7 @@ function fixture(sourceTeamId) {
 // The fake server3: the exchange and team reads (Connect / bind) and the
 // rest_v1 / legacy reads of the served team. `calls` holds what a check sent.
 const visibleTeams = new Set();
-const src = { calls: [], served: null, data: null, faults: { drillMissing: null } };
+const src = { calls: [], served: null, data: null, applyDateFilter: false, faults: { drillMissing: null } };
 const json = (status, body, headers = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 async function fakeFetch(url, init = {}) {
   const u = new URL(String(url));
@@ -182,11 +182,18 @@ async function fakeFetch(url, init = {}) {
   if (t === null) return json(404, {});
   const { bundles, rows } = src.data;
   const bySid = (sid) => bundles.find((b) => String(b.teamSession.id) === String(sid));
-  m = key.match(new RegExp(`^/rest/v1/team_session/\\?team=${t}&limit=100(?:&offset=(\\d+))?$`));
+  // A window's list carries the server's date filter (owner decision 2026-10-24); this fake answers it
+  // with the whole list (rows in excess, as server3 can) and keeps the filter in its next links.
+  const filter = key.match(/&start_timestamp_gte=[^&]*&start_timestamp_lte=[^&]*/)?.[0] ?? "";
+  m = key.replace(filter, "").match(new RegExp(`^/rest/v1/team_session/\\?team=${t}&limit=100(?:&offset=(\\d+))?$`));
   if (m) {
     const offset = Number(m[1] ?? 0);
-    const next = offset + 100 < rows.length ? { link: `<${REST}team_session/?team=${t}&limit=100&offset=${offset + 100}>; rel="next"` } : {};
-    return json(200, rows.slice(offset, offset + 100), { "x-total-count": String(rows.length), ...next });
+    // With src.applyDateFilter the fake applies the bounds as server3 does (test 10).
+    const u = new URL(String(url));
+    const [gte, lte] = ["start_timestamp_gte", "start_timestamp_lte"].map((k) => (u.searchParams.get(k) ?? "").replace(" ", "T"));
+    const set = src.applyDateFilter && filter ? rows.filter((r) => r.start_timestamp >= gte && r.start_timestamp <= lte) : rows;
+    const next = offset + 100 < set.length ? { link: `<${REST}team_session/?team=${t}${filter}&limit=100&offset=${offset + 100}>; rel="next"` } : {};
+    return json(200, set.slice(offset, offset + 100), { "x-total-count": String(set.length), ...next });
   }
   m = key.match(/^\/rest\/v1\/team_session\/(\d+)\/$/);
   if (m && bySid(m[1])) return json(200, { ...bySid(m[1]).teamSession });
@@ -518,4 +525,23 @@ test("9. a canary that differs from its list row with the details' max_v: that s
   assert.equal(run.row.candidates_new, 3);
   assert.equal(parseLine(run.lines[0]).requests.athlete_detail, 1 + 20 + 1, "one canary, every row of the second session, one canary");
   assert.equal(run.calls.length, 146 + 19);
+});
+
+test("10. the date filter applied by the source: the check asks for the look-back day and the window with two days of margin, reads 2 list pages instead of 8 (two reads of one page), and finds the same sessions with the same stored bundles", async () => {
+  const o = await org();
+  serve(o);
+  const first = await runCheck(o);
+  assert.equal(first.row.status, "succeeded", JSON.stringify(first.row));
+  assert.equal(first.row.candidates_new, 3);
+  src.applyDateFilter = true;
+  try {
+    const run = await runCheck(o);
+    assert.equal(run.row.status, "succeeded", JSON.stringify(run.row));
+    assert.deepEqual([run.row.candidates_new, run.row.candidates_changed, run.row.candidates_unchanged], [0, 0, 3], "the same sessions, the same stored bundles");
+    assert.deepEqual(parseLine(run.lines[0]).requests, { ...EXPECTED_REQUESTS, list_sessions: 2 });
+    assert.equal(run.calls.length, 146 - 6);
+    assert.ok(run.calls.filter((k) => k.startsWith("/rest/v1/team_session/?")).every((k) => k.includes("start_timestamp_gte=") && k.includes("start_timestamp_lte=")));
+  } finally {
+    src.applyDateFilter = false;
+  }
 });
