@@ -58,12 +58,14 @@ const uid = () => crypto.randomBytes(4).toString("hex");
 const one = async (sql, params = []) => (await k.query(sql, params)).rows[0];
 const rows = async (sql, params = []) => (await k.query(sql, params)).rows;
 
-async function api(path, { method = "GET", body, who, prefix = OLD, signal } = {}) {
+// `raw` sends a body exactly as given, declared as JSON (an unreadable body).
+async function api(path, { method = "GET", body, raw, who, prefix = OLD, signal } = {}) {
+  const sendsBody = body !== undefined || raw !== undefined;
   const res = await fetch(`${base}${prefix}${path}`, {
     method,
     signal,
-    headers: { ...(body === undefined ? {} : { "Content-Type": "application/json" }), ...(who ? { Cookie: who.cookie } : {}) },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: { ...(sendsBody ? { "Content-Type": "application/json" } : {}), ...(who ? { Cookie: who.cookie } : {}) },
+    body: raw !== undefined ? raw : body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
   let json = null;
@@ -201,6 +203,83 @@ test("3. ADR-006: a definition that is missing, malformed, another club's, visib
     }
   }
 });
+
+test("3b. the two writers that take a body (levels, a new version): the right is decided before the body - every missing, malformed, hidden or not-manageable id answers the identical 404 and every canonical variable the 409 whatever the body (none, empty, wrong, valid); only a definition the caller may write gets the body's 400; an unreadable body is refused before any route, identically for every id; nothing is ever written by a refusal", async () => {
+  const teamDef = await api("/definitions", { method: "POST", who: W.coach, body: { key: `body_team_${uid()}`, label: "Body team", ownerScope: "team", ownerTeamId: W.teamA, valueType: "numeric", unit: "m", scopeCapabilities: ["session"] } });
+  const userDef = await api("/definitions", { method: "POST", who: W.privateCoach, body: { key: `body_user_${uid()}`, label: "Body user", ownerScope: "user", valueType: "numeric", unit: "m", scopeCapabilities: ["session"] } });
+  for (const res of [teamDef, userDef]) assert.equal(res.status, 201, res.text);
+  const TEAM = teamDef.body.row.id;
+  const USER = userDef.body.row.id;
+  const world_ = async () => ({ system: await snapshot(W.system), club: await snapshot(W.club), team: await snapshot(TEAM), user: await snapshot(USER) });
+
+  const BODIES = {
+    levels: {
+      path: (id) => `/definitions/${id}/scope-capabilities`,
+      method: "PUT",
+      invalid: [["no body", {}], ["an empty object", { body: {} }], ["an array", { body: [] }], ["not an array", { body: { scopeCapabilities: "session" } }], ["an unknown level", { body: { scopeCapabilities: ["bogus"] } }], ["null levels", { body: { scopeCapabilities: null } }]],
+      valid: { body: { scopeCapabilities: ["session", "component"] } },
+    },
+    version: {
+      path: (id) => `/definitions/${id}/versions`,
+      method: "POST",
+      invalid: [["no body", {}], ["an empty object", { body: {} }], ["an array", { body: [] }], ["an unknown value type", { body: { valueType: "bogus", unit: "m" } }], ["bounds reversed", { body: { valueType: "numeric", unit: "m", minValue: 5, maxValue: 1 } }], ["a condition that is not an object", { body: { valueType: "numeric", unit: "m", conditionDescription: "x" } }]],
+      valid: { body: { valueType: "numeric", unit: "km" } },
+    },
+  };
+  const NOT_WRITABLE = [
+    [W.coach, crypto.randomUUID(), 404, "a missing id"],
+    [W.coach, "not-a-uuid", 404, "a malformed id"],
+    [W.caB, W.club, 404, "another club's club variable (hidden)"],
+    [W.privateCoach, TEAM, 404, "someone's team definition (hidden)"],
+    [W.caB, TEAM, 404, "another club's team definition (hidden)"],
+    [W.coach, W.system, 404, "a system variable a coach sees but may not manage"],
+    [W.coach, USER, 404, "another coach's own definition (hidden)"],
+    [W.pa, W.system, 409, "a platform admin on a system variable"],
+    [W.paInClubA, W.club, 409, "a platform admin in the club's workspace on its club variable"],
+    [W.caA, W.club, 409, "the club's admin on its club variable"],
+  ];
+  for (const [writer, spec] of Object.entries(BODIES)) {
+    for (const [who, id, status, label] of NOT_WRITABLE) {
+      for (const [bodyName, opts] of [...spec.invalid, ["a valid body", spec.valid]]) {
+        const before_ = await world_();
+        const res = await api(spec.path(id), { method: spec.method, who, ...opts });
+        if (status === 404) assert.deepEqual([res.status, res.text], [404, DEFINITION_404], `${writer} / ${label} / ${bodyName}`);
+        else assert.deepEqual([res.status, res.body], [409, READ_ONLY], `${writer} / ${label} / ${bodyName}`);
+        assert.deepEqual(await world_(), before_, `${writer} / ${label} / ${bodyName}: nothing written`);
+      }
+    }
+    // A definition the caller may write: the body is judged, and refused
+    // with its own 400 before anything is written.
+    for (const [who, id, label] of [[W.coach, TEAM, "a team coach on the team's definition"], [W.pa, TEAM, "a platform admin on a team definition"], [W.privateCoach, USER, "a private coach on their own definition"]]) {
+      for (const [bodyName, opts] of spec.invalid) {
+        const before_ = await world_();
+        const res = await api(spec.path(id), { method: spec.method, who, ...opts });
+        assert.equal(res.status, 400, `${writer} / ${label} / ${bodyName}: ${res.text}`);
+        assert.equal(typeof res.body?.error, "string", `${writer} / ${label} / ${bodyName}: a validation sentence`);
+        assert.notEqual(res.text, DEFINITION_404);
+        assert.deepEqual(await world_(), before_, `${writer} / ${label} / ${bodyName}: nothing written`);
+      }
+    }
+    // An unreadable body never reaches a route: the app-wide JSON parser
+    // answers the same 400 whatever the id and whoever asks.
+    const unreadable = [];
+    for (const [who, id] of [...NOT_WRITABLE.map(([w, i]) => [w, i]), [W.coach, TEAM], [null, W.system]]) {
+      const before_ = await world_();
+      const res = await api(spec.path(id), { method: spec.method, who: who || undefined, raw: "{not json" });
+      unreadable.push([res.status, res.text]);
+      assert.deepEqual(await world_(), before_, `${writer} / unreadable body: nothing written`);
+    }
+    assert.equal(new Set(unreadable.map((x) => JSON.stringify(x))).size, 1, `${writer}: one answer for every id and caller`);
+    assert.equal(unreadable[0][0], 400);
+    assert.equal(JSON.parse(unreadable[0][1]).error, "invalid_json");
+  }
+  // The valid bodies still write for those who may.
+  const levels = await api(BODIES.levels.path(TEAM), { method: "PUT", who: W.coach, ...BODIES.levels.valid });
+  assert.deepEqual([levels.status, levels.body.row?.scope_capabilities], [200, ["component", "session"]], levels.text);
+  const version = await api(BODIES.version.path(USER), { method: "POST", who: W.privateCoach, ...BODIES.version.valid });
+  assert.deepEqual([version.status, version.body.row?.version_number], [201, 2], version.text);
+});
+
 
 test("4. ADR-006 across the catalog: archiving a domain or category and deleting a structure link the caller may not manage - not visible, or visible but not theirs - answer exactly like a missing or malformed id and change nothing; the owner still can", async () => {
   const TABLE = { domain: "metric_domains", category: "metric_categories", "structure link": "metric_structure_links" };

@@ -41,10 +41,11 @@ function definitionWriteRefusal(req, row) {
 }
 
 // The three writers that lock the definition row decide on an unlocked read
-// first, so a refused caller never takes or waits for that lock (a wait
-// would tell an existing row from a missing one, and would briefly hold up
-// every value write on someone else's definition); the decision is made
-// again on the row read under the lock.
+// first - before they judge the body, so the answer to a caller who may not
+// write the row never depends on the body either - and a refused caller never
+// takes or waits for that lock (a wait would tell an existing row from a
+// missing one, and would briefly hold up every value write on someone else's
+// definition); the decision is made again on the row read under the lock.
 async function definitionWritePreCheck(req, id) {
   const existing = await query(`select * from training_load.metric_definitions where id = $1`, [id]);
   return definitionWriteRefusal(req, existing.rows[0]);
@@ -306,12 +307,14 @@ export async function createDefinition(req, body) {
 // `onLocked` (default no-op) is a test-only hook, same convention as
 // this app's other deterministic-concurrency-tested functions.
 export async function setDefinitionScopeCapabilities(req, id, rawScopeCapabilities, { onLocked } = {}) {
+  // The right first: a body is judged only for a definition the caller may
+  // write here, so a missing, hidden or foreign id never answers 400.
+  const preRefusal = await definitionWritePreCheck(req, id);
+  if (preRefusal) return preRefusal;
   const validated = validateScopeCapabilities(rawScopeCapabilities);
   if (validated.error) return validated;
   if (validated.scopeCapabilities === undefined) return { error: "scopeCapabilities is required.", status: 400 };
   const desired = new Set(validated.scopeCapabilities);
-  const preRefusal = await definitionWritePreCheck(req, id);
-  if (preRefusal) return preRefusal;
 
   const client = await pool.connect();
   try {
@@ -447,10 +450,11 @@ export async function archiveDefinition(req, id, { onLocked } = {}) {
 // (default no-op) is a test-only hook, same convention as this app's
 // other deterministic-concurrency-tested functions.
 export async function createDefinitionVersion(req, id, body, { onLocked } = {}) {
-  const versionInput = validateVersionInput(body);
-  if (versionInput.error) return versionInput;
+  // The right first, as in setDefinitionScopeCapabilities.
   const preRefusal = await definitionWritePreCheck(req, id);
   if (preRefusal) return preRefusal;
+  const versionInput = validateVersionInput(body);
+  if (versionInput.error) return versionInput;
 
   const client = await pool.connect();
   try {

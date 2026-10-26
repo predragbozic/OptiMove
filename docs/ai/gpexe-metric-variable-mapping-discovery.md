@@ -152,9 +152,9 @@ occasions only (:786-790). Readers: `backend/src/trainingActivityResults.js:49`,
 POST/DELETE `/definitions/:id/hide` (:367, :377); GET/POST/DELETE `/structure-links` (:391, :403,
 :418); POST `/events` (:486); `/occasions/:id`, `/occasions/:id/history`, `/occasions/:id/correct`,
 `/occasions/imported-correction` (:554); GET `/results` (:575). Service:
-`backend/src/trainingLoadMetricsCatalog.js` (`createDefinition` :230-283 writes version 1 with unit,
+`backend/src/trainingLoadMetricsCatalog.js` (`createDefinition` :231-284 writes version 1 with unit,
 value type, bounds, `conditionDescription`, `dailyAggregationMethod` and the scope capabilities;
-`createDefinitionVersion` :449; `updateDefinitionCosmetic` :380-400; `archiveDefinition` :413-436).
+`createDefinitionVersion` :452; `updateDefinitionCosmetic` :383-403; `archiveDefinition` :416-439).
 Ownership of catalog objects is a client-requested scope checked by `resolveCatalogOwnerScope` in
 `backend/src/trainingLoadMetricsAccess.js:78-108` (`system` only for a platform admin, `club` /
 `team` by the manage right, `user` by default).
@@ -168,7 +168,10 @@ check sits in the service, always after the existing right check (`definitionWri
 `FOR UPDATE` (levels, archive, new version) decide on an unlocked read first
 (`definitionWritePreCheck`), so a caller refused on the committed row never takes or waits for the row
 lock; a caller that read allows is decided again on the row read under the lock, and may be refused
-there if the row changed meanwhile. A definition that is
+there if the row changed meanwhile. The two writers that take a body (levels, new version) judge it
+only after that: the order is the right (`404`), then the canonical variable (`409`), then the body
+(`400`), then the lock and the second decision, then the write - so a missing, hidden or foreign id
+never answers `400`, and a canonical variable answers `409` whatever the body. A definition that is
 missing, not visible or not the caller's to manage answers the byte-identical
 `404 {"error":"Metric definition not found."}` - the body the routes already send for a malformed id
 (ADR-006, never `403`); the archive of a domain or category and the delete of a structure link answer
@@ -841,6 +844,20 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
     - the 409 sentence names Training Load > Data configuration, the screen of Draft PR #218; until that
       screen is deployed only an API client can meet the sentence (no frontend writes through these
       routes);
+    - the order of the answers on an existing row (the independent review of the pull request, MEDIUM):
+      the right (`404`), then the canonical variable (`409`), then the body (`400`), then the lock and
+      the second decision, then the write; a missing, malformed, hidden or not-manageable id answers the
+      identical `404` with no body, an empty or a wrong body alike, and nothing is written before the
+      right and the body are both settled. A body that is not readable JSON never reaches a route: the
+      app-wide parser (`backend/src/server.js`) answers `400 {"error":"invalid_json"}` before routing,
+      the same for every id and every caller (unchanged by C98);
+    - known and accepted (the independent review, LOW): in an athlete workspace a malformed id answers
+      the route's `404` (the id is checked before the workspace), any well-formed id - existing or not -
+      the workspace's `403 Forbidden`; the answer differs by the id's form only, never by whether a row
+      exists. The cosmetic edit (`PATCH`) decides on an unlocked read and then updates without a lock
+      or an owner-scope condition: a row whose owner changed between the two would be renamed, but no
+      code path changes a definition's owner (only raw SQL could, the next limit); the three writers
+      that lock the row decide again under the lock;
     - limit, stated: raw SQL and whoever holds the database credentials can still bypass it (the v35
       limit); a database guard for canonical rows stays an optional later hardening (a migration), before
       M4.

@@ -39,8 +39,9 @@ the Training Load dashboard, that's `404 {error: "notFound"}` in both cases.
   link answer `404 {error:"Not found."}` the same way. Before C98 these answered `403 "Outside your
   access."` for an existing row. The three writers that lock the definition row decide on an unlocked
   read first, so a caller refused on the committed row never waits for that lock either (a caller that
-  read allows is decided again under the lock). Proven by
-  `backend/tests/metrics-core-canonical-guard.test.mjs` (tests 3, 4 and 7b).
+  read allows is decided again under the lock); the two writers that take a body judge it only after the
+  right, so a missing or hidden id answers the same `404` with any body. Proven by
+  `backend/tests/metrics-core-canonical-guard.test.mjs` (tests 3, 3b, 4 and 7b).
 - Confirmed as a deliberate, app-wide convention (not just this one router) in
   `backend/src/trainingActivityMaterialize.js:706-707`: "a 404 here — never a 403 leaking
   that a participant id exists — matches this app's existing not-yours-vs-missing
