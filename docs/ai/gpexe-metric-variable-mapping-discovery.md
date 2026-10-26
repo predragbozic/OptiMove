@@ -10,8 +10,8 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 |---|---|
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
-| Last verified against commit | `60aadb9` (merge of PR #163, M3-0; the base of the M2b pull request) — its tree is the integrated M3-0 branch's own (`a9a6d5e`), so nothing documented changed — before it `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
-| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), merged and deployed (PR #163, `60aadb9`; v36 directly confirmed on production by the owner's read-only post-check); M2b, the source-field evidence confirmation and its database guards v37 (C89–C97, J4), implemented in an open pull request — not merged, not deployed, v37 applied to no persistent database, no production field confirmed; the revision lifecycle (C91), the M3 frontend and M4–M6 not started** |
+| Last verified against commit | `deb2aa1` (merge of PR #217; the base of the canonical-guard pull request, C98) — re-verified for the Metrics Core catalog only (`trainingLoadMetricsCatalog.js`, `trainingLoadMetricsAccess.js`, `routes/trainingLoadMetrics.js`, A6, C82, C98); the other sections were not re-derived — before it `60aadb9` (merge of PR #163, M3-0; the base of the M2b pull request) — its tree is the integrated M3-0 branch's own (`a9a6d5e`), so nothing documented changed — before it `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
+| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), merged and deployed (PR #163, `60aadb9`; v36 directly confirmed on production by the owner's read-only post-check); M2b, the source-field evidence confirmation and its database guards v37 (C89–C97, J4), merged (PR #164, `66c50d6`; its deploy and v37 on the production database not re-verified in this update), no production field confirmed; the older catalog's guard on the canonical variables (C98, no migration) implemented in an open pull request — not merged, not deployed; the M3 frontend's Variables tab in Draft PR #218, not merged; the revision lifecycle (C91), the rest of the M3 frontend and M4–M6 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
 **Which changes require a targeted re-verification of this document** (not a repeat of the whole
@@ -152,21 +152,43 @@ occasions only (:786-790). Readers: `backend/src/trainingActivityResults.js:49`,
 POST/DELETE `/definitions/:id/hide` (:367, :377); GET/POST/DELETE `/structure-links` (:391, :403,
 :418); POST `/events` (:486); `/occasions/:id`, `/occasions/:id/history`, `/occasions/:id/correct`,
 `/occasions/imported-correction` (:554); GET `/results` (:575). Service:
-`backend/src/trainingLoadMetricsCatalog.js` (`createDefinition` :193-245 writes version 1 with unit,
+`backend/src/trainingLoadMetricsCatalog.js` (`createDefinition` :231-284 writes version 1 with unit,
 value type, bounds, `conditionDescription`, `dailyAggregationMethod` and the scope capabilities;
-`createDefinitionVersion` :413; `updateDefinitionCosmetic` :343-363; `archiveDefinition` :376-400).
+`createDefinitionVersion` :452; `updateDefinitionCosmetic` :383-403; `archiveDefinition` :416-439).
 Ownership of catalog objects is a client-requested scope checked by `resolveCatalogOwnerScope` in
 `backend/src/trainingLoadMetricsAccess.js:78-108` (`system` only for a platform admin, `club` /
 `team` by the manage right, `user` by default).
+**Since C98** (owner, 2026-10-26; the canonical-guard pull request, no migration): for a `system` or
+`club` definition - a canonical variable - this API's create (`POST /definitions` with that
+`ownerScope`), cosmetic edit, level change, archive and new version answer a caller authorized for
+the row (for a create: for the scope) `409 {"error":"System and club variables can only be changed in
+Training Load > Data configuration.","code":"canonical_variable_read_only"}` and write nothing; the
+check sits in the service, always after the existing right check (`definitionWriteRefusal`,
+`isCanonicalOwnerScope`, `CANONICAL_VARIABLE_READ_ONLY`). The three writers that lock the row
+`FOR UPDATE` (levels, archive, new version) decide on an unlocked read first
+(`definitionWritePreCheck`), so a caller refused on the committed row never takes or waits for the row
+lock; a caller that read allows is decided again on the row read under the lock, and may be refused
+there if the row changed meanwhile. The two writers that take a body (levels, new version) judge it
+only after that: the order is the right (`404`), then the canonical variable (`409`), then the body
+(`400`), then the lock and the second decision, then the write - so a missing, hidden or foreign id
+never answers `400`, and a canonical variable answers `409` whatever the body. A definition that is
+missing, not visible or not the caller's to manage answers the byte-identical
+`404 {"error":"Metric definition not found."}` - the body the routes already send for a malformed id
+(ADR-006, never `403`); the archive of a domain or category and the delete of a structure link answer
+`404 {"error":"Not found."}` the same way. `team` and `user` definitions, the reads, the per-user hide,
+and creating domains, categories and structure links are unchanged. Tests:
+`backend/tests/metrics-core-canonical-guard.test.mjs`.
 
 **What that existing API does today, as checked out — not the M2 contract of section G:** the gate
-is the manage right alone, with no active-workspace check, and a foreign club or team answers `403`
-with a sentence ("That club is outside your access.", :98; "That team is outside your access.",
-:104), not the ADR-006 `404`; `requireMetricsScope` (`routes/trainingLoadMetrics.js:128-135`)
+is the manage right alone, with no active-workspace check; a create for a foreign club or team answers
+`403` with a sentence ("That club is outside your access.", :98; "That team is outside your access.",
+:104), while a write on an existing row the caller may not manage answers the ADR-006 `404` since
+C98; `requireMetricsScope` (`routes/trainingLoadMetrics.js:128-135`)
 admits every coach-capable workspace, so a coach may create `team`- and `user`-owned definitions;
 `respondToWriteError` (:110-113) forwards a `P0001` trigger message as `400 {error: <message>}` and
 maps `23505` to `409` — a deliberate choice recorded in `.claude/rules/backend-security.md`. Whether
-M3 hardens this API (identical 404, stable codes) or keeps it is an open item of section K; the M2
+M3 hardens the rest of this API (stable codes) or keeps it is an open item of section K (the identical
+404 for an existing row and the canonical variables are decided by C98); the M2
 routes of the new tables follow the stable-code / identical-404 contract from the start (section D).
 
 **No frontend writes to the registry.** The frontend calls only the four GET routes
@@ -690,7 +712,9 @@ the M3-0 delta discovery; as built in section J3):**
     derived basis (the v35 functions) and that the definition and the version are this transaction's
     own. **Limit, stated:** the older `/api/training-load/metrics` API and the GPEXE team-owned writer
     keep writing Metrics Core definitions without a request row or an acting user (compatibility,
-    unchanged). A deferred "every definition this transaction wrote has its request row" check is not
+    unchanged). *Superseded in part by C98 (2026-10-26):* the older API no longer creates or changes a
+    `system` or `club` definition; it keeps writing `team` and `user` definitions, and the GPEXE writer
+    its team-owned ones. A deferred "every definition this transaction wrote has its request row" check is not
     built in M3-0: it could only be opt-in - scoped to the transactions that carry the acting-user setting,
     the same limit as C74 - and the admin service writes the row as the last statement of its transaction,
     before the COMMIT, which its tests prove. The guard is point-in-time: it proves that the row agrees with
@@ -781,6 +805,62 @@ discovery; as built in section J4):**
     athlete compared between the raw server3 answer and the GPEXE UI, the exact factor documented, the
     evidence sanitized (no identity, no id); the meaning and the bound operator need official
     documentation or the written confirmation of GPEXE support.
+
+**The older catalog and the canonical variables (owner's decision of 2026-10-26, after the M3a review's
+findings M-1 and P-1; built in the canonical-guard pull request, no migration):**
+
+98. **One rule for a canonical variable, no way around it through the older catalog** (supersedes the
+    part of C82 and of the "decided (C81, C82)" bullet of section K that kept the older
+    `/api/training-load/metrics` API "as it is" for `system` and `club` definitions and kept its `403`):
+    - a `system` or `club` definition is created, versioned and otherwise changed only through the
+      canonical-variable admin API (M3-0, J3); the older API's create of that scope, cosmetic edit
+      (name, short name, description, icon), level change, archive and new version answer a caller
+      authorized for the row (for a create: for the scope) `409 canonical_variable_read_only` and write
+      nothing - an unauthorized caller keeps getting the identical `404` (or, for a create, the existing
+      `403` of the scope check, which names no row); the three writers that lock the definition row
+      decide on an unlocked read first and again under the lock, so a caller refused on the committed
+      row never takes or waits for that lock, while a caller that read allows may still be refused under
+      the lock if the row changed meanwhile (an existing row would otherwise answer later than a missing
+      one while another transaction holds it, and any coach could briefly hold up the value writes of a
+      definition that is not theirs - the security review of the pull request, MEDIUM, pre-existing);
+    - the rule follows the owner scope, not the creation path: a `system` or `club` definition the older
+      API wrote before this decision is covered too (the owner's read-only production check of
+      2026-10-26 found none: no `system` or `club` definition exists there);
+    - ADR-006 across the older catalog: a definition, domain, category or structure link that is
+      missing, not visible or not the caller's to manage answers the byte-identical `404`, the body the
+      route sends for a malformed id - never `403`;
+    - unchanged: `team` and `user` definitions (coach content, never a mapping target, D4), the reads,
+      the per-user hide, creating domains, categories and structure links, the M3-0 API, the GPEXE
+      writer;
+    - which fields are permanent: the key, the owner and the value type never change; the semantics
+      (unit, the day's combination, allowed values, condition) change only by a new immutable M3-0
+      version; the name, short name, description, icon and the status (archive) have no route today and
+      may change later only through a controlled M3-0 route with its request record and acting user (a
+      separate owner order); the levels have no route either, and may later at most be added to by such
+      a controlled change, never removed;
+    - unchanged as well: the classification of a canonical variable through structure links (a caller
+      links it into the domains and categories of their own scope); governing it like the variable itself
+      would need its own owner decision;
+    - the 409 sentence names Training Load > Data configuration, the screen of Draft PR #218; until that
+      screen is deployed only an API client can meet the sentence (no frontend writes through these
+      routes);
+    - the order of the answers on an existing row (the independent review of the pull request, MEDIUM):
+      the right (`404`), then the canonical variable (`409`), then the body (`400`), then the lock and
+      the second decision, then the write; a missing, malformed, hidden or not-manageable id answers the
+      identical `404` with no body, an empty or a wrong body alike, and nothing is written before the
+      right and the body are both settled. A body that is not readable JSON never reaches a route: the
+      app-wide parser (`backend/src/server.js`) answers `400 {"error":"invalid_json"}` before routing,
+      the same for every id and every caller (unchanged by C98);
+    - known and accepted (the independent review, LOW): in an athlete workspace a malformed id answers
+      the route's `404` (the id is checked before the workspace), any well-formed id - existing or not -
+      the workspace's `403 Forbidden`; the answer differs by the id's form only, never by whether a row
+      exists. The cosmetic edit (`PATCH`) decides on an unlocked read and then updates without a lock
+      or an owner-scope condition: a row whose owner changed between the two would be renamed, but no
+      code path changes a definition's owner (only raw SQL could, the next limit); the three writers
+      that lock the row decide again under the lock;
+    - limit, stated: raw SQL and whoever holds the database credentials can still bypass it (the v35
+      limit); a database guard for canonical rows stays an optional later hardening (a migration), before
+      M4.
 
 ---
 
@@ -1821,7 +1901,10 @@ Decisions that may safely wait, with the PR that takes them:
   min and max (M2);
 - decided (C81, C82): the existing Metrics Core catalog API stays as it is for its current callers (its
   `403` for a foreign club or team, the forwarded `P0001` text, coach-created `team` / `user` definitions,
-  A6); the M3 frontend writes canonical variables only through the M3-0 admin API (J3);
+  A6); the M3 frontend writes canonical variables only through the M3-0 admin API (J3); *superseded in
+  part by C98 (2026-10-26):* the older API no longer creates or changes a `system` or `club` definition,
+  and a write on an existing row the caller may not manage answers the identical `404` instead of `403`
+  (a create for a foreign club or team keeps its `403`);
 - the shape of the platform-admin operation that ends a held source instance (D9) (M2);
 - **the mandatory gate of C73 is built in v35 (J2, C74–C79)**, merged and deployed (PR #161) and
   confirmed by the owner's production post-check;

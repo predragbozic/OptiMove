@@ -375,13 +375,20 @@ async function ensureSystemDefinition() {
   await grantGlobalRole(sysAdminId, "platform_admin");
   await setActiveWorkspace(sysAdminId, "platform", null);
   sysAdminCookie = await loginCookie(sysAdminId);
-  const res = await api("/api/training-load/metrics/definitions", {
-    method: "POST", cookie: sysAdminCookie,
-    body: { key: `total_distance_${uid()}`, label: "Total Distance", ownerScope: "system", unit: "m", valueType: "numeric", dailyAggregationMethod: "sum", scopeCapabilities: ["session", "component", "day"] },
-  });
-  assert.equal(res.status, 201, JSON.stringify(res.body));
-  distanceDefId = res.body.row.id;
-  distanceVersionId = res.body.row.current_version_id;
+  // A system definition is a canonical variable (C98): the older catalog
+  // API no longer creates one, so this fixture writes it directly, in the
+  // shape the canonical-variable admin API writes (definition, version 1, levels).
+  const definition = (await query(`insert into training_load.metric_definitions (key, label, owner_scope) values ($1,$2,'system') returning id`, [`total_distance_${uid()}`, "Total Distance"])).rows[0];
+  const version = (await query(
+    `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method) values ($1,1,'m','numeric','sum') returning id`,
+    [definition.id],
+  )).rows[0];
+  await query(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [version.id, definition.id]);
+  for (const level of ["session", "component", "day"]) {
+    await query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,$2)`, [definition.id, level]);
+  }
+  distanceDefId = definition.id;
+  distanceVersionId = version.id;
   return distanceDefId;
 }
 function distanceValue(value, extra = {}) {

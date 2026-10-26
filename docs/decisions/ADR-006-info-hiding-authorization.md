@@ -32,6 +32,16 @@ the Training Load dashboard, that's `404 {error: "notFound"}` in both cases.
   something this ADR should claim is fully closed — treat "info-hiding 404" as "same
   status/error code," not "byte-identical body," until/unless the `message` field is
   aligned across all three paths.
+- The older Metrics Core catalog (`backend/src/trainingLoadMetricsCatalog.js`, since decision C98 of
+  `docs/ai/gpexe-metric-variable-mapping-discovery.md`, 2026-10-26): a definition that is missing, not
+  visible or not the caller's to manage answers `404 {error:"Metric definition not found."}`, byte-identical
+  to the route's own answer for a malformed id; archiving a domain or category and deleting a structure
+  link answer `404 {error:"Not found."}` the same way. Before C98 these answered `403 "Outside your
+  access."` for an existing row. The three writers that lock the definition row decide on an unlocked
+  read first, so a caller refused on the committed row never waits for that lock either (a caller that
+  read allows is decided again under the lock); the two writers that take a body judge it only after the
+  right, so a missing or hidden id answers the same `404` with any body. Proven by
+  `backend/tests/metrics-core-canonical-guard.test.mjs` (tests 3, 3b, 4 and 7b).
 - Confirmed as a deliberate, app-wide convention (not just this one router) in
   `backend/src/trainingActivityMaterialize.js:706-707`: "a 404 here — never a 403 leaking
   that a participant id exists — matches this app's existing not-yours-vs-missing

@@ -404,12 +404,19 @@ async function ensureSystemDefinition() {
   await query(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true)`, [sysAdminId]);
   const token = await createSession(sysAdminId);
   sysAdminCookie = `optimove_session=${token}`;
-  const res = await api("/api/training-load/metrics/definitions", {
-    method: "POST", cookie: sysAdminCookie,
-    body: { key: `tl_metrics_editdraft_distance_${uid()}`, label: "Edit-draft Distance", ownerScope: "system", unit: "m", valueType: "numeric", scopeCapabilities: ["session", "component", "day"] },
-  });
-  assert.equal(res.status, 201, JSON.stringify(res.body));
-  return res.body.row;
+  // A system definition is a canonical variable (C98): the older catalog
+  // API no longer creates one, so this fixture writes it directly, in the
+  // shape the canonical-variable admin API writes (definition, version 1, levels).
+  const definition = (await query(`insert into training_load.metric_definitions (key, label, owner_scope) values ($1,$2,'system') returning id`, [`tl_metrics_editdraft_distance_${uid()}`, "Edit-draft Distance"])).rows[0];
+  const version = (await query(
+    `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method) values ($1,1,'m','numeric','sum') returning id`,
+    [definition.id],
+  )).rows[0];
+  await query(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [version.id, definition.id]);
+  for (const level of ["session", "component", "day"]) {
+    await query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,$2)`, [definition.id, level]);
+  }
+  return { id: definition.id, current_version_id: version.id };
 }
 
 test("a real Builder create -> publish -> measurement -> edit-draft -> submit HTTP flow preserves the measurement's identity and historical snapshot, and correctly re-targets the recreated live session for a NEW measurement", async () => {

@@ -11,6 +11,45 @@ import { query, pool } from "./db.js";
 import { canManageCatalogRow, catalogVisibilitySql, resolveCatalogOwnerScope } from "./trainingLoadMetricsAccess.js";
 
 const DEFAULT_ICON_URL = "/assets/icons/metric-default.svg";
+
+// ADR-006: a catalog row that is missing, and one that exists but the caller
+// may not manage, get the same status and the same body - the body each
+// route already sends for an id that is not even a UUID.
+const NODE_NOT_FOUND = Object.freeze({ error: "Not found.", status: 404 });
+const DEFINITION_NOT_FOUND = Object.freeze({ error: "Metric definition not found.", status: 404 });
+
+// Owner decision (2026-10-26, discovery document C98): a system or club
+// definition is a canonical variable. Its name, levels, status and versions
+// change only through the canonical-variable admin API (M3-0,
+// canonicalVariableAdminService.js), never through this older catalog; and
+// it is created only there. Answered only to a caller already authorized for
+// the row (or, for a create, for the scope) - everyone else keeps getting the
+// identical 404 / the existing 403 - and nothing is written.
+export const CANONICAL_VARIABLE_READ_ONLY = Object.freeze({
+  error: "System and club variables can only be changed in Training Load > Data configuration.",
+  status: 409,
+  code: "canonical_variable_read_only",
+});
+export const isCanonicalOwnerScope = (ownerScope) => ownerScope === "system" || ownerScope === "club";
+
+// The refusal of a write on an existing definition row, or null when the
+// caller may write it: the identical 404 first, the 409 only after it.
+function definitionWriteRefusal(req, row) {
+  if (!row || !canManageCatalogRow(req, row)) return { ...DEFINITION_NOT_FOUND };
+  if (isCanonicalOwnerScope(row.owner_scope)) return { ...CANONICAL_VARIABLE_READ_ONLY };
+  return null;
+}
+
+// The three writers that lock the definition row decide on an unlocked read
+// first - before they judge the body, so the answer to a caller who may not
+// write the row never depends on the body either - and a refused caller never
+// takes or waits for that lock (a wait would tell an existing row from a
+// missing one, and would briefly hold up every value write on someone else's
+// definition); the decision is made again on the row read under the lock.
+async function definitionWritePreCheck(req, id) {
+  const existing = await query(`select * from training_load.metric_definitions where id = $1`, [id]);
+  return definitionWriteRefusal(req, existing.rows[0]);
+}
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 30;
 
@@ -51,8 +90,7 @@ async function createNode(req, table, body) {
 async function archiveNode(req, table, id) {
   const existing = await query(`select * from training_load.${table} where id = $1`, [id]);
   const row = existing.rows[0];
-  if (!row) return { error: "Not found.", status: 404 };
-  if (!canManageCatalogRow(req, row)) return { error: "Outside your access.", status: 403 };
+  if (!row || !canManageCatalogRow(req, row)) return { ...NODE_NOT_FOUND };
   const result = await query(`update training_load.${table} set is_active = false, updated_at = now() where id = $1 returning *`, [id]);
   return { row: result.rows[0] };
 }
@@ -199,6 +237,7 @@ export async function createDefinition(req, body) {
   if (versionInput.error) return versionInput;
   const owner = resolveCatalogOwnerScope(req, body);
   if (owner.error) return owner;
+  if (isCanonicalOwnerScope(owner.ownerScope)) return { ...CANONICAL_VARIABLE_READ_ONLY };
   const scopeCapInput = validateScopeCapabilities(body?.scopeCapabilities);
   if (scopeCapInput.error) return scopeCapInput;
 
@@ -268,6 +307,10 @@ export async function createDefinition(req, body) {
 // `onLocked` (default no-op) is a test-only hook, same convention as
 // this app's other deterministic-concurrency-tested functions.
 export async function setDefinitionScopeCapabilities(req, id, rawScopeCapabilities, { onLocked } = {}) {
+  // The right first: a body is judged only for a definition the caller may
+  // write here, so a missing, hidden or foreign id never answers 400.
+  const preRefusal = await definitionWritePreCheck(req, id);
+  if (preRefusal) return preRefusal;
   const validated = validateScopeCapabilities(rawScopeCapabilities);
   if (validated.error) return validated;
   if (validated.scopeCapabilities === undefined) return { error: "scopeCapabilities is required.", status: 400 };
@@ -279,13 +322,10 @@ export async function setDefinitionScopeCapabilities(req, id, rawScopeCapabiliti
     const existing = await client.query(`select * from training_load.metric_definitions where id = $1 for update`, [id]);
     if (onLocked) await onLocked(client);
     const row = existing.rows[0];
-    if (!row) {
+    const refusal = definitionWriteRefusal(req, row);
+    if (refusal) {
       await client.query("rollback");
-      return { error: "Not found.", status: 404 };
-    }
-    if (!canManageCatalogRow(req, row)) {
-      await client.query("rollback");
-      return { error: "Outside your access.", status: 403 };
+      return refusal;
     }
 
     const current = await client.query(`select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [id]);
@@ -343,8 +383,8 @@ function toVersionFields(v) {
 export async function updateDefinitionCosmetic(req, id, body) {
   const existing = await query(`select * from training_load.metric_definitions where id = $1`, [id]);
   const row = existing.rows[0];
-  if (!row) return { error: "Not found.", status: 404 };
-  if (!canManageCatalogRow(req, row)) return { error: "Outside your access.", status: 403 };
+  const refusal = definitionWriteRefusal(req, row);
+  if (refusal) return refusal;
   const label = body?.label !== undefined ? String(body.label).trim() : row.label;
   if (!label) return { error: "label cannot be empty.", status: 400 };
   const result = await query(
@@ -374,19 +414,18 @@ export async function updateDefinitionCosmetic(req, id, body) {
 // `onLocked` (default no-op) is a test-only hook, same convention as this
 // app's other deterministic-concurrency-tested functions.
 export async function archiveDefinition(req, id, { onLocked } = {}) {
+  const preRefusal = await definitionWritePreCheck(req, id);
+  if (preRefusal) return preRefusal;
   const client = await pool.connect();
   try {
     await client.query("begin");
     const existing = await client.query(`select * from training_load.metric_definitions where id = $1 for update`, [id]);
     if (onLocked) await onLocked(client);
     const row = existing.rows[0];
-    if (!row) {
+    const refusal = definitionWriteRefusal(req, row);
+    if (refusal) {
       await client.query("rollback");
-      return { error: "Not found.", status: 404 };
-    }
-    if (!canManageCatalogRow(req, row)) {
-      await client.query("rollback");
-      return { error: "Outside your access.", status: 403 };
+      return refusal;
     }
     const result = await client.query(`update training_load.metric_definitions set state = 'archived', updated_at = now() where id = $1 returning *`, [id]);
     await client.query("commit");
@@ -411,6 +450,9 @@ export async function archiveDefinition(req, id, { onLocked } = {}) {
 // (default no-op) is a test-only hook, same convention as this app's
 // other deterministic-concurrency-tested functions.
 export async function createDefinitionVersion(req, id, body, { onLocked } = {}) {
+  // The right first, as in setDefinitionScopeCapabilities.
+  const preRefusal = await definitionWritePreCheck(req, id);
+  if (preRefusal) return preRefusal;
   const versionInput = validateVersionInput(body);
   if (versionInput.error) return versionInput;
 
@@ -420,13 +462,10 @@ export async function createDefinitionVersion(req, id, body, { onLocked } = {}) 
     const existing = await client.query(`select * from training_load.metric_definitions where id = $1 for update`, [id]);
     if (onLocked) await onLocked(client);
     const row = existing.rows[0];
-    if (!row) {
+    const refusal = definitionWriteRefusal(req, row);
+    if (refusal) {
       await client.query("rollback");
-      return { error: "Not found.", status: 404 };
-    }
-    if (!canManageCatalogRow(req, row)) {
-      await client.query("rollback");
-      return { error: "Outside your access.", status: 403 };
+      return refusal;
     }
     const currentVersionResult = await client.query(
       `select version_number from training_load.metric_definition_versions where metric_definition_id = $1 order by version_number desc limit 1 for update`,
@@ -577,8 +616,7 @@ export async function createStructureLink(req, body) {
 export async function deleteStructureLink(req, id) {
   const existing = await query(`select * from training_load.metric_structure_links where id = $1`, [id]);
   const row = existing.rows[0];
-  if (!row) return { error: "Not found.", status: 404 };
-  if (!canManageCatalogRow(req, row)) return { error: "Outside your access.", status: 403 };
+  if (!row || !canManageCatalogRow(req, row)) return { ...NODE_NOT_FOUND };
   await query(`delete from training_load.metric_structure_links where id = $1`, [id]);
   return { deleted: true };
 }

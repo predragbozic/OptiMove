@@ -658,9 +658,11 @@ test("8. a new version: expectedCurrentVersionId is a precondition (current_vers
     assert.equal((await post(`/variables/${v.id}/versions`, W.pa.cookie, versionBody(res.body.variable, { [field]: "x" }))).body.error, "invalid_body", field);
   }
   assert.equal((await post(`/variables/${v.id}/versions`, W.pa.cookie, { requestKey: key(), unit: "m", dailyAggregationMethod: "sum" })).body.error, "invalid_body", "expectedCurrentVersionId is required");
-  // Archived through the older catalog API: variable_not_active.
+  // An archived variable: variable_not_active. (The older catalog API no
+  // longer archives a system or club variable - C98 - so the state is set
+  // directly; no route archives a canonical variable yet.)
   const arch = await created(W.pa.cookie);
-  assert.equal((await api(`/definitions/${arch.id}/archive`, { method: "POST", cookie: W.pa.cookie, base: "/api/training-load/metrics", body: {} })).status, 200);
+  await k.query(`update training_load.metric_definitions set state = 'archived' where id = $1`, [arch.id]);
   const na = await post(`/variables/${arch.id}/versions`, W.pa.cookie, versionBody(arch, { unit: "km" }));
   assert.deepEqual([na.status, na.body.error], [409, "variable_not_active"]);
   // Another scope: a system variable from a club workspace, a club A variable from club B or the platform workspace, an unknown or malformed id.
@@ -931,11 +933,20 @@ test("14. the acting user: the admin API sets the transaction-local setting from
   }
 });
 
-test("15. compatibility: the older /api/training-load/metrics catalog API still creates and versions definitions without a request row or an actor; a team-owned definition (the GPEXE writer's shape) is written without either; its GET lists the admin API's variables; only the three known modules write Metrics Core definitions and only the admin service writes request records", async () => {
+test("15. compatibility (C98, superseding part of C82): the older /api/training-load/metrics catalog API refuses to create or version a system variable (409 canonical_variable_read_only, nothing written) and still creates and versions a team definition without a request row or an actor; a team-owned definition (the GPEXE writer's shape) is written without either; its GET lists the admin API's variables; only the three known modules write Metrics Core definitions and only the admin service writes request records", async () => {
+  const counts = async () => one(k, `select (select count(*) from training_load.metric_definitions)::int as d, (select count(*) from training_load.metric_definition_versions)::int as v, (select count(*) from training_load.metric_variable_requests)::int as r`);
+  const before = await counts();
   const oldCreate = await api("/definitions", { method: "POST", cookie: W.pa.cookie, base: "/api/training-load/metrics", body: { key: `old_${uid()}`, label: "Old API", valueType: "numeric", unit: "m", ownerScope: "system", scopeCapabilities: ["session"] } });
-  assert.equal(oldCreate.status, 201, oldCreate.text);
-  assert.equal((await api(`/definitions/${oldCreate.body.row.id}/versions`, { method: "POST", cookie: W.pa.cookie, base: "/api/training-load/metrics", body: { valueType: "numeric", unit: "km" } })).status, 201);
-  assert.equal((await one(k, `select count(*)::int as n from training_load.metric_variable_requests where metric_definition_id = $1`, [oldCreate.body.row.id])).n, 0);
+  assert.deepEqual([oldCreate.status, oldCreate.body.code], [409, "canonical_variable_read_only"], oldCreate.text);
+  const adminMade = await created(W.pa.cookie);
+  const oldVersion = await api(`/definitions/${adminMade.id}/versions`, { method: "POST", cookie: W.pa.cookie, base: "/api/training-load/metrics", body: { valueType: "numeric", unit: "km" } });
+  assert.deepEqual([oldVersion.status, oldVersion.body.code], [409, "canonical_variable_read_only"], oldVersion.text);
+  const after = await counts();
+  assert.deepEqual(after, { d: before.d + 1, v: before.v + 1, r: before.r + 1 }, "only the admin API's own create was written");
+  const teamCreate = await api("/definitions", { method: "POST", cookie: W.pa.cookie, base: "/api/training-load/metrics", body: { key: `old_team_${uid()}`, label: "Old API team", valueType: "numeric", unit: "m", ownerScope: "team", ownerTeamId: W.teamA, scopeCapabilities: ["session"] } });
+  assert.equal(teamCreate.status, 201, teamCreate.text);
+  assert.equal((await api(`/definitions/${teamCreate.body.row.id}/versions`, { method: "POST", cookie: W.pa.cookie, base: "/api/training-load/metrics", body: { valueType: "numeric", unit: "km" } })).status, 201);
+  assert.equal((await one(k, `select count(*)::int as n from training_load.metric_variable_requests where metric_definition_id = $1`, [teamCreate.body.row.id])).n, 0);
   okTx(await tx(null, (c) => rawVariable(c, { scope: "team", teamId: W.teamA, by: W.pa.id, label: "GPEXE team-owned" })));
   const made = await created(W.pa.cookie, { label: `Visible ${uid()}` });
   const list = await api(`/definitions?search=${encodeURIComponent(made.label)}`, { cookie: W.pa.cookie, base: "/api/training-load/metrics" });
