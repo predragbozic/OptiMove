@@ -5,6 +5,11 @@ const SOURCE_FIELDS = ["source", "sourceId", "sourceConnectionId", "source_conne
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const copy = value => value === undefined ? null : structuredClone(value);
 
+function validDisplayValue(value) {
+  if (Array.isArray(value)) return value.every(validDisplayValue);
+  return value === null || (typeof value === "number" ? Number.isFinite(value) : ["string", "boolean"].includes(typeof value));
+}
+
 function identityKey(value) {
   if (Array.isArray(value)) return `[${value.map(identityKey).join(",")}]`;
   if (object(value)) return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${identityKey(value[key])}`).join(",")}}`;
@@ -34,7 +39,7 @@ function normalizeRow(original, index, series, groupBy) {
   if (reasons.includes("invalidResult") || reasons.includes("rowError")) status = "error";
   else if (reasons.length) status = "conflict";
   else if (row.value === null) status = "missing";
-  else if ((valueType === "number" ? !Number.isFinite(row.value) : !["string", "boolean", "array"].includes(valueType)) || (valueType === "array" && row.value.some(value => value !== null && !(typeof value === "number" ? Number.isFinite(value) : ["string", "boolean"].includes(typeof value))))) {
+  else if (!validDisplayValue(row.value)) {
     status = "error";
     reasons.push("invalidValue");
   }
@@ -81,7 +86,7 @@ function chartGroups(rows) {
   return [...groups.values()];
 }
 
-function buildSeries(definition, results, groupBy, loading) {
+function buildSeries(definition, results, groupBy, loading, querySkipped) {
   const series = {
     id: definition.id, definition: copy(definition), status: "ready", reasons: [],
     current: [], comparison: [], comparisonRange: null, chartGroups: [], comparisonGroups: [],
@@ -100,6 +105,7 @@ function buildSeries(definition, results, groupBy, loading) {
     series.status = "loading";
     return series;
   }
+  if (querySkipped) return series;
   if (results.length !== 1 || !object(results[0])) {
     series.status = "error";
     series.reasons.push("invalidResult");
@@ -178,7 +184,7 @@ function kpiModel(series, period) {
   return model;
 }
 
-export function buildDashboardWidgetDisplayModel(widget, queryResult, { loading = false, error = null, period = null } = {}) {
+export function buildDashboardWidgetDisplayModel(widget, queryResult, { loading = false, error = null, period = null, querySkipped = false } = {}) {
   const config = normalizeDashboardDisplayConfig(widget);
   const groupBy = widget?.group_by ?? "day";
   const model = {
@@ -207,13 +213,13 @@ export function buildDashboardWidgetDisplayModel(widget, queryResult, { loading 
     return model;
   }
   if (loading) model.status = "loading";
-  else if (widget.series.some(definition => !["unresolved", "ambiguous"].includes(definition.resolution_status)) && (!object(queryResult) || (queryResult.widgetId !== undefined && queryResult.widgetId !== widget.id) || !Array.isArray(queryResult.series) || queryResult.series.some(result => !object(result) || !ids.includes(result.seriesId)))) {
+  else if (!querySkipped && widget.series.some(definition => !["unresolved", "ambiguous"].includes(definition.resolution_status)) && (!object(queryResult) || (queryResult.widgetId !== undefined && queryResult.widgetId !== widget.id) || !Array.isArray(queryResult.series) || queryResult.series.some(result => !object(result) || !ids.includes(result.seriesId)))) {
     model.status = "error";
     model.reasons.push("invalidResult");
     return model;
   }
   const resultSeries = Array.isArray(queryResult?.series) ? queryResult.series.filter(object) : [];
-  model.series = widget.series.map(definition => buildSeries(definition, resultSeries.filter(result => result.seriesId === definition.id), groupBy, loading));
+  model.series = widget.series.map(definition => buildSeries(definition, resultSeries.filter(result => result.seriesId === definition.id), groupBy, loading, querySkipped));
   if (widget.widget_type === "kpi") model.kpi = kpiModel(model.series, period);
   return model;
 }

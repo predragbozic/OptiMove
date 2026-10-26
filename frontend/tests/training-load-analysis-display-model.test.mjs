@@ -168,6 +168,45 @@ test("no rows, an explicit missing row, loading and errors are separate outcomes
   assert.equal(buildDashboardWidgetDisplayModel(widget(), failed).kpi.status, "error");
 });
 
+test("nested and mixed raw arrays retain their structure without scalar conversion or input mutation", () => {
+  for (const values of [[[10, 20], 30], [null, [0, false, "text", []], 30], [[[[10]]]]]) {
+    const response = freeze(result([row(values)]));
+    const normalized = buildDashboardWidgetDisplayModel(widget(), response);
+    assert.deepEqual(normalized.series[0].current[0].value, values);
+    assert.equal(normalized.series[0].current[0].status, "value");
+    assert.equal(normalized.series[0].current[0].chartStatus, "unsupported");
+    assert.equal(normalized.kpi.status, "unsupported");
+    normalized.series[0].current[0].value.push("detached");
+    assert.deepEqual(response.series[0].data.current[0].value, values);
+  }
+  for (const invalid of [[[{}]], [[Infinity]], [[undefined]]]) {
+    assert.equal(buildDashboardWidgetDisplayModel(widget(), result([row(invalid)])).kpi.status, "error");
+  }
+});
+
+test("intentionally skipped queries retain empty and unresolved states without hiding real loading or errors", () => {
+  assert.equal(buildDashboardWidgetDisplayModel(widget(), null, { querySkipped: true }).kpi.status, "empty");
+  const unresolved = widget();
+  unresolved.series[0].resolution_status = "unresolved";
+  assert.equal(buildDashboardWidgetDisplayModel(unresolved, null, { querySkipped: true }).kpi.status, "unresolved");
+  assert.equal(buildDashboardWidgetDisplayModel(widget(), null, { querySkipped: true, loading: true }).status, "loading");
+  assert.equal(buildDashboardWidgetDisplayModel(widget(), null).status, "error");
+});
+
+test("configured source and multiple reported provenance entries remain separate and detached", () => {
+  const selected = widget();
+  selected.series[0].source_connection_id = "configured-only";
+  const provenance = [{ sourceConnectionId: "actual-one" }, { sourceConnectionId: "actual-two" }];
+  const response = freeze(result([row(30, { provenance })]));
+  const normalized = buildDashboardWidgetDisplayModel(selected, response);
+  const source = normalized.kpi.row.identity.source;
+  assert.equal(source.configuredConnectionId, "configured-only");
+  assert.deepEqual(source.reported, { provenance });
+  source.reported.provenance[0].sourceConnectionId = "changed";
+  assert.equal(response.series[0].data.current[0].provenance[0].sourceConnectionId, "actual-one");
+  assert.deepEqual(buildDashboardWidgetDisplayModel(selected, result()).kpi.row.identity.source.reported, {});
+});
+
 test("unresolved and ambiguous legacy widgets do not require an executable query result", () => {
   for (const status of ["unresolved", "ambiguous"]) {
     const original = widget();

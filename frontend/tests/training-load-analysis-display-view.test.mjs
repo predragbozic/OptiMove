@@ -142,3 +142,61 @@ test("V2 number formatting changes presentation only; legacy scalar text and boo
     assert.equal(rendered().querySelector(".tl-analysis-kpi-value").textContent, String(value));
   }
 });
+
+test("tables display nested and mixed arrays losslessly while KPI and charts refuse scalar conversion", () => {
+  for (const value of [[[10, 20], 30], [null, [0, false, "text", []], 30]]) {
+    setup("table", [row(value)]);
+    assert.equal(rendered().querySelector(".tl-analysis-table tbody tr").children[2].textContent, JSON.stringify(value));
+    for (const type of ["kpi", "line_chart", "bar_chart"]) {
+      setup(type, [row(value)]);
+      const body = rendered().querySelector(".tl-analysis-widget");
+      assert.match(body.textContent, /Use a table/);
+      assert.equal(body.querySelector(".tl-analysis-kpi-value, .tl-analysis-chart-track"), null);
+    }
+  }
+});
+
+for (const dashboardKind of ["template", "archived"]) {
+  test(`${dashboardKind}: intentionally unqueried widgets retain empty and Choose a metric states`, () => {
+    for (const type of ["kpi", "table", "line_chart", "bar_chart"]) {
+      const analysis = setup(type, []);
+      analysis.dashboard.is_template = dashboardKind === "template";
+      analysis.dashboard.status = dashboardKind === "archived" ? "archived" : "active";
+      analysis.queryResult = null;
+      analysis.queryLoading = false;
+      let body = rendered().querySelector(".tl-analysis-widget");
+      assert.match(body.textContent, /No data/);
+      assert.doesNotMatch(body.textContent, /Loading|Invalid or unavailable/);
+      analysis.widgets[0].series[0].resolution_status = "unresolved";
+      body = rendered().querySelector(".tl-analysis-widget");
+      assert.match(body.textContent, /Choose a metric/);
+      assert.doesNotMatch(body.textContent, /Loading/);
+    }
+  });
+}
+
+test("only an active request displays Loading when the result is null", () => {
+  const analysis = setup("kpi", []);
+  analysis.queryResult = null;
+  analysis.queryLoading = true;
+  assert.match(rendered().querySelector(".tl-analysis-widget").textContent, /Loading/);
+  analysis.queryLoading = false;
+  assert.doesNotMatch(rendered().querySelector(".tl-analysis-widget").textContent, /Loading/);
+});
+
+test("source labels use reported provenance rather than configured connections and preserve multiple sources", () => {
+  for (const type of ["table", "line_chart", "bar_chart"]) {
+    const analysis = setup(type, [row(30)]);
+    analysis.widgets[0].series[0].source_connection_id = "configured-only";
+    let body = rendered().querySelector(".tl-analysis-widget");
+    assert.doesNotMatch(body.textContent, /configured-only|Source /);
+    const reported = analysis.queryResult.widgets[0].series[0].data.current[0];
+    reported.sourceConnectionId = "actual-one";
+    reported.provenance = [{ sourceConnectionId: "actual-one" }, { sourceConnectionId: "actual-two" }];
+    body = rendered().querySelector(".tl-analysis-widget");
+    assert.match(body.textContent, /Source provenance/);
+    assert.match(body.textContent, /actual-one/);
+    assert.match(body.textContent, /actual-two/);
+    assert.doesNotMatch(body.textContent, /configured-only|Source actual-one/);
+  }
+});

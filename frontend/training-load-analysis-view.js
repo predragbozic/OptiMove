@@ -440,8 +440,10 @@ function renderDisplayStatusHtml(status, reasons) {
 function displayRowContext(row) {
   const identity = row.identity;
   const reported = identity.source.reported;
-  const sourceId = reported.sourceConnectionId ?? reported.source_connection_id ?? reported.sourceId ?? identity.source.configuredConnectionId;
-  return [identity.athleteId ? `Athlete ${identity.athleteId}` : "", typeof sourceId === "string" ? `Source ${sourceId}` : ""].filter(Boolean).join(" · ");
+  const sourceId = reported.sourceConnectionId ?? reported.source_connection_id ?? reported.sourceId;
+  const provenance = Object.keys(reported).some(key => ["provenance", "sourceProvenance", "source"].includes(key));
+  const sourceLabel = provenance ? `Source provenance ${JSON.stringify(reported)}` : typeof sourceId === "string" ? `Source ${sourceId}` : "";
+  return [identity.athleteId ? `Athlete ${identity.athleteId}` : "", sourceLabel].filter(Boolean).join(" · ");
 }
 
 function renderKpiHtml(model) {
@@ -523,7 +525,8 @@ function renderChartHtml(model) {
 
 function renderWidgetBodyHtml(widget, results) {
   const analysis = state.trainingLoad.analysis;
-  const model = buildDashboardWidgetDisplayModel(widget, results, { loading: analysis.queryLoading || analysis.queryResult === null, error: analysis.queryError, period: analysis.period });
+  const querySkipped = analysis.queryResult === null && (analysis.dashboard?.is_template || analysis.dashboard?.status === "archived");
+  const model = buildDashboardWidgetDisplayModel(widget, results, { loading: analysis.queryLoading, querySkipped, error: analysis.queryError, period: analysis.period });
   if (model.status === "unsupported") return `<p class="builder-error" role="alert">Unsupported display configuration version.</p>`;
   if (model.config.status !== "ready") return `<p class="builder-error" role="alert">Invalid display configuration.</p>`;
   if (model.status === "loading") return `<p class="muted tl-analysis-loading" aria-live="polite">Loading...</p>`;

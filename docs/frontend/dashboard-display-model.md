@@ -12,9 +12,12 @@ calculation. The backend remains authoritative for values, aggregation and confl
   `frontend/training-load-analysis-display-model.js`.
 
 `queryResult` is ONE widget's existing `{widgetId, series}` batch-response entry, not
-the whole dashboard response. `options` accepts `loading`, `error`, and `period`
+the whole dashboard response. `options` accepts `loading`, `error`, `querySkipped`, and `period`
 (`{dateFrom, dateTo}`). Explicit loading supersedes cached values. A completed query
 with a missing/malformed entry is an error, not an empty measurement.
+`querySkipped` explicitly marks intentionally unqueried templates/archived dashboards:
+resolved series retain their empty state and unresolved series retain “Choose a metric”.
+A null response alone never implies loading; only an active request does.
 
 These functions have no state, DOM, fetch or mutation dependencies. They do not change
 the saved widget or API response. Returned definitions, raw rows, source context and
@@ -80,6 +83,9 @@ source fields actually reported on a row. Known camel/snake-case source identifi
 entry method, source metric/mapping identifiers and nested provenance are retained.
 No actual source is inferred from a configured policy. If the server omitted an
 individual fact's source, the display layer cannot reconstruct it.
+Visible source labels never fall back to the configured connection. When nested
+provenance is supplied, the renderer shows the reported provenance together rather
+than choosing a single connection or inventing a combined source identifier.
 
 ## Values and grouping
 
@@ -87,7 +93,7 @@ individual fact's source, the display layer cannot reconstruct it.
 |---|---|
 | Finite number, including zero/negative | `value`; no coercion |
 | String or boolean, including empty text/false | `value`; table/KPI retain its type |
-| Array of scalar values/nulls | `value`, type `array`; retain it for a table |
+| Array of scalar values/nulls or recursively nested arrays | `value`, type `array`; retain the complete structure for a table |
 | Explicit null without a problem flag | `missing` |
 | Source/unit/type/semantic conflict | `conflict`; keep all reasons/raw values |
 | Row error, missing value field, malformed identity/value/flag | `error` |
