@@ -576,6 +576,93 @@ test("Analysis dashboard selection and runtime filters use the selected dashboar
   assert.equal(state.trainingLoad.analysis.runtimeFilter.componentId, componentId);
 });
 
+async function verifyDashboardQueryTransition(kind, oldOutcome, settleAfterReturn = false) {
+  resetState();
+  const analysis = state.trainingLoad.analysis;
+  analysis.dashboard = dashboard();
+  analysis.selectedDashboardId = dashboardId;
+  analysis.widgets = [widget()];
+  const destination = dashboard({ id: templateId, is_template: kind === "template", status: kind === "archived" ? "archived" : "active" });
+  const unresolved = widget({ id: secondWidgetId, series: [{ id: "unresolved-series", resolution_status: "unresolved" }] });
+  let finishOld;
+  let markStarted;
+  const started = new Promise(resolve => { markStarted = resolve; });
+  const delayedResponse = new Promise(resolve => { finishOld = resolve; });
+  let queryCount = 0;
+  const freshResult = { widgets: [{ widgetId, series: [{ seriesId, status: "ok", data: { current: [{ athleteId: null, bucketKey: "2026-10-01", unit: "AU", value: 42 }] } }] }] };
+  installFetchMock(async call => {
+    if (call.url === `/api/training-load/dashboards/${templateId}`) return { status: 200, body: { dashboard: destination, widgets: [widget(), unresolved] } };
+    if (call.url === `/api/training-load/dashboards/${dashboardId}`) return { status: 200, body: detail() };
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/query`) {
+      queryCount += 1;
+      if (queryCount === 1) {
+        markStarted();
+        return delayedResponse;
+      }
+      return { status: 200, body: freshResult };
+    }
+    assert.fail(`Unexpected request: ${call.method} ${call.url}`);
+  });
+  const oldQuery = queryAnalysisDashboard(renderTrainingLoad, { force: true });
+  await started;
+  assert.equal(analysis.queryLoading, true);
+  const oldResponse = oldOutcome === "success"
+    ? { status: 200, body: { widgets: [], stale: true } }
+    : { status: 500, body: { error: "previous-query-failed" } };
+  if (oldOutcome === "previous-error") {
+    finishOld(oldResponse);
+    await oldQuery;
+    assert.equal(analysis.queryError, "previous-query-failed");
+  }
+  const selecting = handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-select-dashboard", dashboardId: templateId }), { renderTrainingLoad });
+  assert.equal(analysis.queryLoading, false);
+  assert.equal(analysis.queryError, "");
+  assert.equal(analysis.queryResult, null);
+  await selecting;
+  assert.equal(analysis.dashboard.id, templateId);
+  assert.equal(queryCount, 1);
+  const assertSkippedState = () => {
+    assert.equal(analysis.queryLoading, false);
+    assert.equal(analysis.queryError, "");
+    assert.equal(analysis.queryResult, null);
+    const html = renderTrainingLoadAnalysisHtml();
+    assert.match(html, /No data/);
+    assert.match(html, /Choose a metric/);
+    assert.doesNotMatch(html, /Loading\.\.\.|previous-query-failed|Invalid or unavailable result/);
+  };
+  assertSkippedState();
+  if (!settleAfterReturn && oldOutcome !== "previous-error") {
+    finishOld(oldResponse);
+    await oldQuery;
+    assertSkippedState();
+  }
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-select-dashboard", dashboardId }), { renderTrainingLoad });
+  assert.equal(queryCount, 2);
+  assert.equal(analysis.dashboard.id, dashboardId);
+  assert.deepEqual(analysis.queryResult, freshResult);
+  if (settleAfterReturn) {
+    finishOld(oldResponse);
+    await oldQuery;
+  }
+  assert.equal(analysis.queryLoading, false);
+  assert.equal(analysis.queryError, "");
+  assert.deepEqual(analysis.queryResult, freshResult);
+  assert.match(renderTrainingLoadAnalysisHtml(), /tl-analysis-kpi-value">42</);
+}
+
+for (const kind of ["template", "archived"]) {
+  for (const outcome of ["success", "error", "previous-error"]) {
+    test(`Analysis pending/failed query to ${kind}: ${outcome} cannot retain or restore old query state`, async () => {
+      await verifyDashboardQueryTransition(kind, outcome);
+    });
+  }
+  for (const outcome of ["success", "error"]) {
+    test(`Analysis active to ${kind} and back: late ${outcome} cannot overwrite a new query for the same context`, async () => {
+      await verifyDashboardQueryTransition(kind, outcome, true);
+    });
+  }
+}
+
 test("Analysis drag and resize stay local until one atomic layout save; cancel is local", async () => {
   resetState();
   state.trainingLoad.section = "analysis";

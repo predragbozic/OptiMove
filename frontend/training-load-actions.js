@@ -54,6 +54,7 @@ import {
   nudgeAnalysisWidget,
   openAnalysisWidgetEditor,
   queryAnalysisDashboard,
+  resetAnalysisDashboardQuery,
   removeEditorSeries,
   resizeAnalysisWidget,
   saveAnalysisLayout,
@@ -958,10 +959,10 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       return true;
     }
     a.picker.search = "";
+    resetAnalysisDashboardQuery();
     a.selectedDashboardId = dashboardId;
     a.dashboard = null;
     a.widgets = [];
-    a.queryResult = null;
     a.editMode = false;
     a.layoutDraft = null;
     renderTrainingLoad();
