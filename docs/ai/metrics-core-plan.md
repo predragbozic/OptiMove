@@ -80,9 +80,9 @@ This standing order departs from two project rules, and only for this plan's fea
   opened as the vehicle of that review. Merge-readiness, a ready-for-review PR and the merge still wait for the
   external review and the owner.
 
-A third owner-ordered departure is the relay of approvals (below). Everywhere else, `CLAUDE.md` and `.claude/rules/`
-apply as written. Where this file and a rule differ outside those three named points, the rule applies until the owner
-amends it.
+A third owner-ordered departure is the relay of approvals, and a fourth the standing merge order (both below).
+Everywhere else, `CLAUDE.md` and `.claude/rules/` apply as written. Where this file and a rule differ outside those
+four named points, the rule applies until the owner amends it.
 
 Two protections of the same model:
 - after every phase the owner gets a short report (what was done, the PR, the tests, the review outcome);
@@ -93,12 +93,13 @@ Two protections of the same model:
 Each step needs the owner's explicit word for that specific case. The list adds to the hard prohibitions of
 `.claude/rules/git-safety.md` and `.claude/rules/database-safety.md` and never narrows them.
 - **Git and GitHub:**
-  - a merge, including bringing `main` into a branch;
+  - a merge into `main` outside the standing merge order (below);
+  - bringing `main` into a branch;
   - deleting a branch or a PR;
   - a force push;
   - any write through a GitHub tool other than this plan's branches and Draft PRs.
 - **Deploy and hosting:**
-  - a deploy;
+  - a deploy, other than the one a merge under the standing merge order starts;
   - a Render or Supabase setting.
 - **Databases:**
   - any access to the production database, reads included;
@@ -117,10 +118,34 @@ Each step needs the owner's explicit word for that specific case. The list adds 
   - a BLOCKER or HIGH that cannot be fixed within the task;
   - a disagreement between the executor and a reviewer.
 
+### Standing merge order (PRs without a migration)
+
+The owner, in the executor's chat, 2026-10-26: „Trajni nalog: PR bez migracije baze spajaš u main posle GO
+Rukovodioca, bez mog posebnog naloga, kad Rukovodilac oceni da je rizik nizak; o neslaganju sa Rukovodiocem obaveštavate
+mene. PR sa migracijom uvek traži moj nalog koji imenuje migraciju. Upiši ovo u plan.”
+
+- **What it allows.** The executor merges a PR of this plan into `main` without a separate order from the owner when
+  all of these hold:
+  - the PR has no migration: its diff adds or changes no file under `migrations_v2/` or `migrations/`, and nothing in
+    it changes a database when it is deployed;
+  - the *Rukovodilac* gave GO on the exact head, and its GO says the risk is low;
+  - no BLOCKER or HIGH is open, and no reviewer disagrees (the *Nezavisni revizor* too, on a ★★ phase);
+  - the merge is made from exactly that head (`expectedHeadSha` / `--match-head-commit`).
+- **What follows.** The merge is also the deploy to `optimove-eu` (below). The smoke of section 4 follows, and the
+  owner gets the short report of the phase.
+- **What it does not allow.**
+  - A PR with a migration: it always needs the owner's order that names the migration (below).
+  - A PR that changes section 2 of this file, `approval-channel.md`, `CLAUDE.md`, `.claude/**`, a setting or a
+    permission: approved only directly in the executor's chat, or merged by the owner personally ("Never by relay").
+    The owner's own instruction to write a change into this plan is such a direct approval for that change.
+  - Bringing `main` into a branch, or any other red-zone step.
+- **A disagreement** between the executor and the *Rukovodilac*, or between the two reviewers, goes to the owner; the
+  PR is not merged until the owner decides (A4).
+
 **A merge is a deploy.** The owner reported on 2026-10-26, through the *Rukovodilac*, that Render's auto-deploy is now
 on for `optimove-eu` only; the old `optimove` service has none. The merge of PR #219 (`7a9e59d`, 2026-10-26 22:08 UTC)
 was served by `optimove-eu` about a minute later.
-- So the owner's order to merge a PR is also the order to deploy it.
+- So a merge is also a deploy, whether the owner ordered it or the standing merge order covers it.
 - A PR with a migration also migrates the production database at that deploy (`npm start` runs
   `node src/migrate.js`). By `.claude/rules/database-safety.md` that needs its own explicit confirmation:
   - the merge request put to the owner states, in so many words, that the merge deploys to `optimove-eu` and
@@ -160,10 +185,11 @@ proverava citat u njegovom transkriptu.”
 
 - **A1. External review.** The *Rukovodilac*'s GO counts as the external review of `CLAUDE.md` because the owner
   designated the reviewers (section 1).
-  - For a ★ phase the owner also confirms, before the merge, that the review was looked at.
-  - For a ★★ phase the owner approves the contract before any code and confirms the external review before the merge.
+  - For a ★★ phase the owner approves the contract before any code.
+  - For a PR with a migration, the owner also confirms, with the merge order, that the external review was looked at.
+    A PR without a migration is merged under the standing merge order (section 2), which replaces that confirmation.
 - **A2. Moving on.** A GO closes a phase. A phase that builds on the code of the previous one (every phase but 5
-  and P) starts only after the previous one is **merged** into `main`. The merge is red zone.
+  and P) starts only after the previous one is **merged** into `main`, as section 2 says.
 - **A3. Owner decisions as input.** A phase whose input is an owner decision does not start with code. The executor
   prepares the proposal as text, the owner decides, and the decision is written into section C of the discovery
   document before the implementation.
