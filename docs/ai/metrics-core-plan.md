@@ -19,7 +19,8 @@ The same day the owner added three things to it:
 - R1 (re-import of a session);
 - the decisions recorded in section 5 and in `docs/ai/phase10-estimates-decisions.md`.
 
-Added after the adoption, the same day: R2 (phases 2b and 2c), and the executor as the one who merges (section 1).
+Added after the adoption, the same day: R2 (phases 2b and 2c), the executor as the one who merges (section 1), and the
+standing merge order for PRs without a migration (section 2).
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
@@ -33,7 +34,7 @@ Last verified against commit: `deb2aa1` (`origin/main`, merge of PR #217). The r
 | Role | Session | Does |
 |---|---|---|
 | Owner | — | Decides. Every red-zone step is the owner's, case by case (section 2). |
-| Executor | the main Claude session of `CLAUDE.md` | The only writer: code, migrations, documents, branches, Draft PRs. Runs the internal reviewers by the orchestration matrix of `CLAUDE.md`. Makes every merge into `main`, on the owner's order and after checking it (section 2). |
+| Executor | the main Claude session of `CLAUDE.md` | The only writer: code, migrations, documents, branches, Draft PRs. Runs the internal reviewers by the orchestration matrix of `CLAUDE.md`. Makes every merge into `main`, on the owner's order or under the standing merge order, after checking it (section 2). |
 | *Rukovodilac* (planning and review) | `session_01MCgqwiexBgNEBaMKskhbTZ` | Plans and leads the phases. Reviews every phase and gives GO or NO-GO on an exact head. It is the designated external reviewer for the five triggers of `CLAUDE.md` (owner: „… revizori …” in the adoption above). Relays the owner's words (section 2). |
 | *Nezavisni revizor* (independent reviewer) | `session_01YC2kSvwQcRiYteWE268sNf` | A third review of the ★★ phases (4, 7, 9, 10 and R1). Its packet carries no conclusion of the *Rukovodilac*. Disagreements between the two reviewers go to the owner. |
 
@@ -44,9 +45,12 @@ Both review sessions are read-only toward the repository, its pull requests and 
 create and drop its own disposable test databases. A finding they report is text for the executor to act on
 (`CLAUDE.md`, "Model pisanja: jedan writer").
 
-**Who merges.** The *Rukovodilac* merged PR #219 itself, on the owner's order in its chat; that stays a one-time
-exception. Since then the executor makes the merges: the owner, 2026-10-26, „Slažem se sa tobom idemo za sada tako pa
-ćemo menjati ako bude potrebe”, answering the *Rukovodilac*'s proposal „… merge radi izvršilac”.
+**Who merges.** The executor makes the merges: the owner, 2026-10-26, „Slažem se sa tobom idemo za sada tako pa ćemo
+menjati ako bude potrebe”, answering the *Rukovodilac*'s proposal „… merge radi izvršilac”. There were two exceptions,
+and no further one is made without a new owner decision:
+- the *Rukovodilac* merged PR #219, on the owner's order in its chat;
+- the *Rukovodilac* merged PR #221 (`16ef080`), on the owner's direct order in its chat, 2026-10-26 22:59 UTC: „Mozes
+  li ti to da radiš umesto mene”. The executor had objected and both positions went to the owner, who decided (A4).
 
 ## 2. Green zone, red zone and the owner's words
 
@@ -78,7 +82,7 @@ This standing order departs from two project rules, and only for this plan's fea
   - every other hard prohibition of that file.
 - **`CLAUDE.md`** ("External-review okidači") says no PR is opened before the external review. Here a **Draft** PR is
   opened as the vehicle of that review. Merge-readiness, a ready-for-review PR and the merge still wait for the
-  external review and the owner.
+  external review, and for the owner outside the standing merge order (below).
 
 A third owner-ordered departure is the relay of approvals, and a fourth the standing merge order (both below).
 Everywhere else, `CLAUDE.md` and `.claude/rules/` apply as written. Where this file and a rule differ outside those
@@ -95,6 +99,7 @@ Each step needs the owner's explicit word for that specific case. The list adds 
 - **Git and GitHub:**
   - a merge into `main` outside the standing merge order (below);
   - bringing `main` into a branch;
+  - any other merge (between branches, or of a PR whose base is not `main`);
   - deleting a branch or a PR;
   - a force push;
   - any write through a GitHub tool other than this plan's branches and Draft PRs.
@@ -124,23 +129,55 @@ The owner, in the executor's chat, 2026-10-26: „Trajni nalog: PR bez migracije
 Rukovodioca, bez mog posebnog naloga, kad Rukovodilac oceni da je rizik nizak; o neslaganju sa Rukovodiocem obaveštavate
 mene. PR sa migracijom uvek traži moj nalog koji imenuje migraciju. Upiši ovo u plan.”
 
-- **What it allows.** The executor merges a PR of this plan into `main` without a separate order from the owner when
-  all of these hold:
-  - the PR has no migration: its diff adds or changes no file under `migrations_v2/` or `migrations/`, and nothing in
-    it changes a database when it is deployed;
-  - the *Rukovodilac* gave GO on the exact head, and its GO says the risk is low;
-  - no BLOCKER or HIGH is open, and no reviewer disagrees (the *Nezavisni revizor* too, on a ★★ phase);
-  - the merge is made from exactly that head (`expectedHeadSha` / `--match-head-commit`).
+This order departs from two project rules, and only for the PRs it covers:
+- **`.claude/rules/git-safety.md`** ("Merge / deploy / migrations"): no merge or deploy without the owner's
+  authorization for that specific action in the current session;
+- **`CLAUDE.md`** ("Granice dozvoljenih operacija", "Definition of done"): stop before a merge and a deploy.
+
+Every other rule of those files applies as written.
+
+- **What it allows.** The executor marks the PR ready for review and merges it into `main`, without a separate order
+  from the owner, when all of these hold:
+  - **No migration**, checked on the reviewed base and head:
+    - (a) `git diff --name-status <base>...<head>` lists no file under `migrations_v2/` or `migrations/` (no add,
+      change, delete, rename or mode change);
+    - (b) the diff touches none of: `backend/src/migrate.js`; the `start` or `build` script of `package.json` or
+      `backend/package.json`; code the server runs by itself at start-up or on a schedule (the start-up block of
+      `backend/src/server.js` and the jobs it starts, such as the retention and cleanup runs); `.github/**`;
+    - (c) it changes neither the default nor the reading of a switch that gates writes in production (for example
+      `GPEXE_IMPORT_APPLY_ENABLED` or `MEDIA_STORAGE_ENABLED`).
+
+    If (b) or (c) is touched, the PR is covered only when its body says what then runs at start-up or on a schedule
+    and why it writes nothing to production data, and the GO confirms that. The GO records the result of (a).
+  - **The GO.** The *Rukovodilac* gave GO naming the PR, the exact head and the base, and saying „no migration” and
+    „risk low”. The executor finds that GO as the *Rukovodilac*'s own turn in the session named in section 1, after
+    the frozen head, and records its event id and its words in the PR body before the merge. A GO it cannot find there
+    is not a GO.
+  - **The base.** `main` is still at the base the GO names, or the *Rukovodilac* confirmed the GO again on the new
+    base.
+  - **A ★★ phase.** The *Nezavisni revizor* gave its own GO on the same head, on a packet without the *Rukovodilac*'s
+    conclusion, found the same way in its session (section 1).
+  - **No open finding.** No BLOCKER or HIGH is open, and no reviewer disagrees.
+  - **The head.** The merge is made from exactly that head (`expectedHeadSha` / `--match-head-commit`).
 - **What follows.** The merge is also the deploy to `optimove-eu` (below). The smoke of section 4 follows, and the
-  owner gets the short report of the phase.
+  owner gets the short report of the phase. If the smoke fails, no further merge is made under this order until the
+  owner has been told.
 - **What it does not allow.**
   - A PR with a migration: it always needs the owner's order that names the migration (below).
-  - A PR that changes section 2 of this file, `approval-channel.md`, `CLAUDE.md`, `.claude/**`, a setting or a
-    permission: approved only directly in the executor's chat, or merged by the owner personally ("Never by relay").
-    The owner's own instruction to write a change into this plan is such a direct approval for that change.
-  - Bringing `main` into a branch, or any other red-zone step.
+  - A PR that changes this file, except one that only adds a "Done" entry or the deploy facts of a finished phase in
+    section 5. It needs the owner's word naming the PR, given after the GO on its final head; a new commit voids it.
+  - A PR that changes sections 1 to 4 of this file, `approval-channel.md`, `CLAUDE.md`, `.claude/**`, `.github/**`, a
+    setting or a permission. The owner's word for it is given only directly in the executor's chat, or the owner merges
+    it personally ("Never by relay").
+  - An owner's instruction to write such a change authorizes writing it and opening its Draft PR only, never its
+    merge.
+  - A PR that records an owner decision (section C of the discovery document, `docs/ai/phase10-estimates-decisions.md`)
+    is covered only when its body carries the owner's verbatim words and their event id.
+  - Bringing `main` into a branch, any other merge, or any other red-zone step.
 - **A disagreement** between the executor and the *Rukovodilac*, or between the two reviewers, goes to the owner; the
   PR is not merged until the owner decides (A4).
+- **When it is in force.** From the merge of this section into `main`, for the executor of this plan, until the owner
+  changes or revokes it. A revocation or a „stop” is followed at once, whatever channel it comes through.
 
 **A merge is a deploy.** The owner reported on 2026-10-26, through the *Rukovodilac*, that Render's auto-deploy is now
 on for `optimove-eu` only; the old `optimove` service has none. The merge of PR #219 (`7a9e59d`, 2026-10-26 22:08 UTC)
@@ -177,9 +214,9 @@ proverava citat u njegovom transkriptu.”
 - The owner may still write any approval directly in the executor's chat.
 - **When the relay is in force:** in the executor session where the owner typed the order. A later executor session
   uses it only once `approval-channel.md` is merged, or after the owner repeats the order in that session.
-- **Never by relay:** a change to section 2 of this file, to `approval-channel.md`, to `CLAUDE.md`, `.claude/**`,
-  a setting or a permission, and the merge of a PR that makes such a change. These are approved only directly in the
-  executor's chat, or by the owner merging personally.
+- **Never by relay:** a change to sections 1 to 4 of this file, to `approval-channel.md`, to `CLAUDE.md`,
+  `.claude/**`, `.github/**`, a setting or a permission, and the merge of a PR that makes such a change. These are
+  approved only directly in the executor's chat, or by the owner merging personally.
 
 ## 3. How the model works
 
@@ -187,7 +224,8 @@ proverava citat u njegovom transkriptu.”
   designated the reviewers (section 1).
   - For a ★★ phase the owner approves the contract before any code.
   - For a PR with a migration, the owner also confirms, with the merge order, that the external review was looked at.
-    A PR without a migration is merged under the standing merge order (section 2), which replaces that confirmation.
+  - A PR that the standing merge order covers (section 2) is merged under it, which replaces that confirmation. Every
+    other PR keeps the owner's confirmation with the merge order.
 - **A2. Moving on.** A GO closes a phase. A phase that builds on the code of the previous one (every phase but 5
   and P) starts only after the previous one is **merged** into `main`, as section 2 says.
 - **A3. Owner decisions as input.** A phase whose input is an owner decision does not start with code. The executor
@@ -195,7 +233,9 @@ proverava citat u njegovom transkriptu.”
   document before the implementation.
 - **A4. Disagreement.** When the executor disagrees with a review finding, it does not fix it quietly or work
   around it. Both positions go to the owner.
-- **A5. This document.** It is a memory file. Its PR is reviewed as docs-only, and its merge is the owner's.
+- **A5. This document.** It is a memory file. Its PR is reviewed as docs-only, and its merge needs the owner's word
+  as section 2 says ("What it does not allow"). The standing merge order covers only a PR that adds a "Done" entry or
+  the deploy facts of a finished phase.
 
 ## 4. Standing rules for every phase
 
@@ -222,6 +262,9 @@ proverava citat u njegovom transkriptu.”
   UUID, on the PR's own routes only; it touches no data.
 
 ## 5. Phases
+
+In the phases below, a "Red zone: merge" line means a merge outside the standing merge order of section 2. A PR that
+order covers is merged under it.
 
 ### Phase 0: this document (docs-only)
 - **Green zone:** a branch, this document and `docs/ai/phase10-estimates-decisions.md`, a Draft PR, the packet to the
