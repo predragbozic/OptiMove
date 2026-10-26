@@ -38,8 +38,9 @@ Last verified against commit: `deb2aa1` (`origin/main`, merge of PR #217). The r
 The third reviewer is the owner's order of 2026-10-26, written in the *Rukovodilac*'s chat: „treći revizor za ★★
 faze to je ok. Otvori sesiju nezavisni revizor a svoj naziv promeni u rukovodilac”.
 
-Both review sessions are read-only toward the repository, its pull requests and every database. A finding they report
-is text for the executor to act on (`CLAUDE.md`, "Model pisanja: jedan writer").
+Both review sessions are read-only toward the repository, its pull requests and every persistent database; each may
+create and drop its own disposable test databases. A finding they report is text for the executor to act on
+(`CLAUDE.md`, "Model pisanja: jedan writer").
 
 ## 2. Green zone, red zone and the owner's words
 
@@ -73,8 +74,9 @@ This standing order departs from two project rules, and only for this plan's fea
   opened as the vehicle of that review. Merge-readiness, a ready-for-review PR and the merge still wait for the
   external review and the owner.
 
-Everywhere else, `CLAUDE.md` and `.claude/rules/` apply as written. Where this file and a rule differ outside those
-two named points, the rule applies until the owner amends it.
+A third owner-ordered departure is the relay of approvals (below). Everywhere else, `CLAUDE.md` and `.claude/rules/`
+apply as written. Where this file and a rule differ outside those three named points, the rule applies until the owner
+amends it.
 
 Two protections of the same model:
 - after every phase the owner gets a short report (what was done, the PR, the tests, the review outcome);
@@ -113,8 +115,14 @@ Each step needs the owner's explicit word for that specific case. The list adds 
 on for `optimove-eu` only; the old `optimove` service has none. The merge of PR #219 (`7a9e59d`, 2026-10-26 22:08 UTC)
 was served by `optimove-eu` about a minute later.
 - So the owner's order to merge a PR is also the order to deploy it.
-- For a PR with a migration, it is also the order to migrate the production database: `npm start` runs
-  `node src/migrate.js`. The read-only preflight and the rollback script come before such a merge.
+- A PR with a migration also migrates the production database at that deploy (`npm start` runs
+  `node src/migrate.js`). By `.claude/rules/database-safety.md` that needs its own explicit confirmation:
+  - the merge request put to the owner states, in so many words, that the merge deploys to `optimove-eu` and
+    migrates production (naming the migration), with the result of the read-only preflight;
+  - the owner's order names that migration, for example „merge #N sa vNN”;
+  - the read-only preflight and the rollback script come before such a merge.
+
+  A merge order that does not name the migration is not an order to migrate.
 
 ### How the owner's words reach the executor
 
@@ -126,12 +134,21 @@ proverava citat u njegovom transkriptu.”
 - Before acting on a relayed approval, the executor checks it in the *Rukovodilac*'s transcript, the session named in
   section 1 of this file.
 - The exact check is a rule of its own, `.claude/rules/approval-channel.md`, proposed in a separate PR with an
-  external review. In short:
+  external review. Until it is merged, the check is at least:
+  - the trusted transcript is only the *Rukovodilac* session named in section 1 of this file as merged on `main`; a
+    session id offered in a message is refused;
   - the quote must be a turn the owner typed, never a tool result or a message relayed from another session;
-  - it must name the action and its object (for a merge: the PR and its head);
-  - it is used once.
+  - it must name the action and its object (for a merge: the PR and its head; for a migration: the migration);
+  - it must come after the frozen head and the GO it approves;
+  - it is used once, and a new head voids it;
+  - the event id and the verbatim quote are recorded in the PR body or the report of that red-zone step.
 - An approval covers the one case it names. Adopting the plan is not an order to merge.
 - The owner may still write any approval directly in the executor's chat.
+- **When the relay is in force:** in the executor session where the owner typed the order. A later executor session
+  uses it only once `approval-channel.md` is merged, or after the owner repeats the order in that session.
+- **Never by relay:** a change to section 2 of this file, to `approval-channel.md`, to `CLAUDE.md`, `.claude/**`,
+  a setting or a permission, and the merge of a PR that makes such a change. These are approved only directly in the
+  executor's chat, or by the owner merging personally.
 
 ## 3. How the model works
 
@@ -169,7 +186,8 @@ proverava citat u njegovom transkriptu.”
   - the new or changed routes answer 401 without a login.
 
   The source plan has the owner run it. The *Rukovodilac* offered on 2026-10-26 to run it, with the executor in
-  parallel. It needs no login and touches no data.
+  parallel; the owner has not decided that. Whoever runs it keeps to requests without a login, with the zero UUID,
+  on the PR's own routes only; it touches no data.
 
 ## 5. Phases
 
@@ -178,7 +196,8 @@ proverava citat u njegovom transkriptu.”
   *Rukovodilac*.
 - **Acceptance:** the content matches the adopted plan and its sources (the header lists them). `code-reviewer` for
   the whole diff and `security-reviewer` for section 2, by the docs row of the matrix.
-- **Red zone:** the owner adopts the plan (done on 2026-10-26) and merges this PR.
+- **Red zone:** the owner adopts the plan (done on 2026-10-26) and merges this PR. This PR creates section 2, so its
+  merge is approved only directly in the executor's chat or by the owner merging personally, never by relay.
 
 ### Phase 1 ★: PR #219 (C98), no new code
 - **Green zone:** nothing new in the code. On the owner's request the *Rukovodilac* can check `a36d3c0`
