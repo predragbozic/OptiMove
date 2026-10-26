@@ -4,7 +4,7 @@ Status: **adopted by the owner on 2026-10-26**, in the executor's chat: „ok: p
 prenete odluke za fazu 10 i R1; D1, D3–D5, D8–D12 ostaju preporuke.”
 
 It covers:
-- the canonical variables;
+- the canonical variables, and renaming and archiving them (R2, phases 2b and 2c);
 - the source-field lifecycle;
 - the rest of M2 and M4;
 - the manual corrections and estimates (phase 10);
@@ -19,6 +19,8 @@ The same day the owner added three things to it:
 - R1 (re-import of a session);
 - the decisions recorded in section 5 and in `docs/ai/phase10-estimates-decisions.md`.
 
+Added after the adoption, the same day: R2 (phases 2b and 2c), and the executor as the one who merges (section 1).
+
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
 
@@ -31,7 +33,7 @@ Last verified against commit: `deb2aa1` (`origin/main`, merge of PR #217). The r
 | Role | Session | Does |
 |---|---|---|
 | Owner | — | Decides. Every red-zone step is the owner's, case by case (section 2). |
-| Executor | the main Claude session of `CLAUDE.md` | The only writer: code, migrations, documents, branches, Draft PRs. Runs the internal reviewers by the orchestration matrix of `CLAUDE.md`. |
+| Executor | the main Claude session of `CLAUDE.md` | The only writer: code, migrations, documents, branches, Draft PRs. Runs the internal reviewers by the orchestration matrix of `CLAUDE.md`. Makes every merge into `main`, on the owner's order and after checking it (section 2). |
 | *Rukovodilac* (planning and review) | `session_01MCgqwiexBgNEBaMKskhbTZ` | Plans and leads the phases. Reviews every phase and gives GO or NO-GO on an exact head. It is the designated external reviewer for the five triggers of `CLAUDE.md` (owner: „… revizori …” in the adoption above). Relays the owner's words (section 2). |
 | *Nezavisni revizor* (independent reviewer) | `session_01YC2kSvwQcRiYteWE268sNf` | A third review of the ★★ phases (4, 7, 9, 10 and R1). Its packet carries no conclusion of the *Rukovodilac*. Disagreements between the two reviewers go to the owner. |
 
@@ -39,7 +41,9 @@ The third reviewer is the owner's order of 2026-10-26, written in the *Rukovodil
 faze to je ok. Otvori sesiju nezavisni revizor a svoj naziv promeni u rukovodilac”.
 
 Both review sessions are read-only toward the repository, its pull requests and every persistent database; each may
-create and drop its own disposable test databases. A finding they report is text for the executor to act on
+create and drop its own disposable test databases. The *Rukovodilac* merged PR #219 itself, on the owner's order; that
+stays an exception. Since then the executor makes the merges: the owner, 2026-10-26, „Slažem se sa tobom idemo za sada
+tako pa ćemo menjati ako bude potrebe”, answering the *Rukovodilac*'s proposal „… merge radi izvršilac”. A finding they report is text for the executor to act on
 (`CLAUDE.md`, "Model pisanja: jedan writer").
 
 ## 2. Green zone, red zone and the owner's words
@@ -239,6 +243,40 @@ proverava citat u njegovom transkriptu.”
   - the integration QA passes, with its record in the PR.
 - **Red zone:** merge, deploy, smoke.
 - **★:** trigger 4 (idempotency), external review.
+
+### Phase 2b ★★: R2, renaming and archiving canonical variables (backend), after #218 is merged
+- **Owner, 2026-10-26** (in the *Rukovodilac*'s chat):
+  - „Preimenuj je bilo bi dobro”;
+  - „Zašto trener ne moze imati opciju da moze da menja.”;
+  - to the *Rukovodilac*'s option 2: „Slažem se sa tobom idemo za sada tako pa ćemo menjati ako bude potrebe”.
+- **Scope (option 2):**
+  - rename (label, short label, description) and archive a canonical variable through the M3-0 admin API;
+  - an archived variable can be restored (unarchive);
+  - the key never changes;
+  - who: a coach of a team of the club may rename, archive and restore that **club's** variables; **system**
+    variables stay the platform admin's;
+  - every change is audited: who, when, the old and the new value.
+- **Facts at `7a9e59d`:**
+  - `backend/src/routes/sourceMetrics.js` has, for variables, only the reads, `POST /variables` and
+    `POST /variables/:variableId/versions`;
+  - the v36 request record allows only the operations `variable_create` and `variable_version_create` (its CHECK and
+    its insert guard).
+
+  So R2 needs a migration: new operations, their database actor guards (C76), a rollback, and the read-only
+  preflight and post-check scripts. It is v38 or v39, depending on its order with phase 4.
+- **Archiving a pinned variable:** the v34 guard (decision 9) already refuses it; the API answers it as
+  `409 variable_pinned`, as for a new version.
+- **Decision record:** the coach as an administrator of club variables changes the audience of the M3-0 admin API
+  (C80 / C88). Before the code, it is written into section C of the discovery document as a new decision (A3).
+- **Reviewers:** `db-reviewer`, `security-reviewer`, `code-reviewer`, and the external review of the *Rukovodilac*
+  and the *Nezavisni revizor* (triggers 1, 2 and 4).
+- **Red zone:** the production preflight, merge (and so deploy and migration, by an order that names it), the
+  production post-check.
+
+### Phase 2c ★: R2 in the Variables tab (frontend), after 2b is merged
+- Rename, archive and restore in the Variables tab, for the rights of 2b.
+- **Reviewers:** `code-reviewer`, `mobile-qa`, `ux-design-reviewer`.
+- **Red zone:** merge, deploy, smoke.
 
 ### Phase 3: docs sync, after #218 is deployed
 - **Green zone:**
