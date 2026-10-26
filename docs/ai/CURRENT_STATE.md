@@ -7,6 +7,9 @@ PR #162 `9e4dfb5`, the GPEXE check timing line, before it) and were not re-deriv
 Exercise Library work of 2026-10-17/18 (blocks, the cover slideshow, bulk move, user grants) is not
 recorded here yet. The entries for PR #214 and #215 (the GPEXE check) were added on 2026-10-24 at
 `306abd7` (merge of PR #215); nothing else in the Training Load / GPEXE / metrics record was re-derived then.
+The Metrics Core entries (M2b PR #164, C98 PR #219, the plan PR #221, M3a PR #218) were brought up to date on
+2026-10-26 at `6c7dfa4` (merge of PR #218), as phase 3 of `docs/ai/metrics-core-plan.md`; nothing else was
+re-derived then.
 
 ## Active phase
 
@@ -1622,7 +1625,7 @@ Technical details.
     status (zero UUID) answered 401. No test was run against production; no Check, Link, Approve or Import;
     Render, credentials and the switch untouched; the eight leftover `optimove_tests_gpexe_f3c2g_*`
     databases on the development workstation were left in place, as ordered.
-- **GPEXE metric / variable mapping discovery (2026-10-11, accepted; PR #156; M1 merged as PR #159, the first M2 PR merged as PR #160, v35 merged as PR #161, M3-0 merged as PR #163, M2b open, see below).** The authoritative
+- **GPEXE metric / variable mapping discovery (2026-10-11, accepted; PR #156; M1 merged as PR #159, the first M2 PR merged as PR #160, v35 merged as PR #161, M3-0 merged as PR #163, M2b merged as PR #164, the older catalog's guard C98 as PR #219, M3a as PR #218, see below).** The authoritative
   document is `docs/ai/gpexe-metric-variable-mapping-discovery.md` (rule:
   `.claude/rules/metrics-core-mapping.md`; ADR-007 records only the three decisions the code already
   proves — Metrics Core as the canonical registry, no automatic merge of several sources, no
@@ -1861,8 +1864,12 @@ Technical details.
     `GPEXE_IMPORT_APPLY_ENABLED` untouched.
 - **M2b — the source-field evidence confirmation and its database guards v37** (owner order and decisions
   2026-10-15, after the M2b delta discovery; branch `feature/metrics-mapping-m2b-v37` from `60aadb9`;
-  **implemented in an open pull request — not merged, not deployed, v37 applied to no persistent database,
-  no production field confirmed**). Contract: decisions C89–C97 and section J4 of the discovery document.
+  **merged as PR #164**, merge commit `66c50d6` on 2026-10-15 at 09:23:42 UTC; its own deploy and smoke are not
+  recorded here. **v37 on the deployed database is inferred, not queried:** every later deploy started the
+  server after the migration step (`npm start` runs `node src/migrate.js &&` the server), the last one serving
+  `6c7dfa4` on 2026-10-26. The owner's read-only post-check
+  (`docs/runbooks/source-metric-revision-guards-v37-postcheck.sql`) is not recorded. **No production field is
+  confirmed.**). Contract: decisions C89–C97 and section J4 of the discovery document.
   - Routes under `/api/training-load/sources/metrics`:
     - `GET /fields/:fieldId`: a field with its revisions and the history of its acts, for the audience of
       `/fields`;
@@ -2067,6 +2074,38 @@ Technical details.
       the same number, and the details covered all 39 valid rows. The details' unit word is `speed`, so the tool
       printed `insufficient`, but the number is the very `max_v`. This is what lets a check drop the per-row read.
     - `/more/` stays for every row (B).
+- **The Metrics Core plan (2026-10-26).** The owner adopted a plan for the rest of the Metrics Core work:
+  `docs/ai/metrics-core-plan.md` (phases 0–10, R1 and R2), with the phase 10 decisions in
+  `docs/ai/phase10-estimates-decisions.md`. Its roles, reviewers and rules of work are in that file only;
+  this file records what was merged and deployed.
+  - **Phase 0, PR #221** (docs only): merge commit `16ef080` (parents `7a9e59d` and `5ef3334`) on 2026-10-26 at
+    22:59:53 UTC, made by the *Rukovodilac* on the owner's words in its chat (PR #222 records them in the plan). `/api/health` served `16ef080` with `ok: true` three times in a
+    row (23:01:37, 23:01:47 and 23:01:58 UTC).
+  - **Phase 1, PR #219: the older catalog's guard on the canonical variables (C98, no migration).** The older
+    API `/api/training-load/metrics` no longer creates or changes a `system` or `club` definition: it answers
+    `409 canonical_variable_read_only` and writes nothing. A definition the caller may not manage answers the
+    byte-identical `404` (ADR-006). Details are in section A6 of the discovery document.
+    - Read-only preflight: the owner counted 0 `system` / `club` definitions in production.
+    - Merge commit `7a9e59d` (parents `deb2aa1` and `a36d3c0`) on 2026-10-26 at 22:07:59 UTC, made by the
+      *Rukovodilac* on the owner's order (phase 1 of the plan records it), after the GO of the *Rukovodilac* and
+      of the third reviewer on `a36d3c0`.
+    - `/api/health` served `7a9e59d` with `ok: true` three times in a row from 22:09:09 UTC. Without a login the
+      older API's write routes answered 401. No production write.
+  - **Phase 2, PR #218: M3a, the Variables view (Training Load → Data configuration).** Frontend over the M3-0
+    admin API: the list, a variable's versions, create and a new version, one write at a time, and *Result not
+    confirmed* · *Check result* with the same request key after a lost answer. A club sees the system variables
+    as a read-only reference. Details are in section H of the discovery document.
+    - Integration QA against the real API on disposable databases migrated through v37: the executor's run
+      passed 57 of 59 checks (the two others are the client's intended normalisation), and the *Rukovodilac*'s
+      own run passed 16 of 16.
+    - Merge commit `6c7dfa4` (parents `16ef080` and `6436461`) on 2026-10-26 at 23:31:43 UTC, made by the
+      executor under the owner's standing merge order for PRs without a migration (typed in the executor's chat
+      on 2026-10-26; PR #222 records it in the plan), after the *Rukovodilac*'s GO on `6436461` with low risk.
+    - `/api/health` served `6c7dfa4` with `ok: true` three times in a row (23:33:01, 23:33:11 and 23:33:22 UTC).
+      Without a login the variables list, one variable and the key suggestion (GET) and the create and new
+      version (POST, `{}`) answered 401.
+    - Not checked on a physical device (iOS `datalist`, WebKit `select`). Neither the executor nor the
+      *Rukovodilac* created a variable in production; the production database was not queried.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2566,8 +2605,19 @@ nothing imported is visible in the app.
   existing metrics GET route tried 401. **v36 on the deployed database is directly confirmed** by the
   owner's read-only post-check (all eight blocks). PR #162 (`9e4dfb5`, the GPEXE check timing line) was
   deployed before it: `/api/health` served `9e4dfb5` until 15:02:08 UTC.
-- M2b (the source-field evidence confirmation, migration v37) is **not merged, not deployed and v37 is
-  applied to no persistent database**; it ran only on disposable `optimove_tests_gpexe_*` databases.
+- PR #218 (merge commit `6c7dfa4`, 2026-10-26 23:31:43 UTC exactly from head `6436461`; M3a, frontend and
+  docs, no migration) is deployed: `/api/health` served `6c7dfa4` with `ok: true` three times in a row
+  (23:33:01–23:33:22 UTC); without a login the five `/api/training-load/sources/metrics/variables` routes tried
+  answered 401.
+- PR #221 (merge commit `16ef080`, 2026-10-26 22:59:53 UTC exactly from head `5ef3334`; the plan, docs only) is
+  deployed: `/api/health` served `16ef080` with `ok: true` three times in a row (23:01:37–23:01:58 UTC).
+- PR #219 (merge commit `7a9e59d`, 2026-10-26 22:07:59 UTC exactly from head `a36d3c0`; C98, no migration) is
+  deployed: `/api/health` served `7a9e59d` with `ok: true` three times in a row from 22:09:09 UTC; without a
+  login the older API's write routes answered 401.
+- M2b (PR #164, merge commit `66c50d6`, 2026-10-15 09:23:42 UTC; migration v37) is merged. Its own deploy is
+  not recorded; **v37 on the deployed database is inferred** from every later deploy starting the server after
+  the migration step, the last one serving `6c7dfa4`. It was not queried; the owner's read-only post-check is
+  not recorded.
 - PR #157 (merge commit `0098638`, merged 2026-10-12 11:52:30 UTC exactly from head `ce571d3`; Coach
   Home empty and error states, frontend only) is deployed: `/api/health` first served `0098638` with
   `ok: true` at 12:25:26 UTC, then three times in a row (12:25:47, 12:25:58 and 12:26:09 UTC); the
@@ -2808,7 +2858,7 @@ pre-existing; pass/fail counts don't belong in this file
 - **Database actor guards for the other M2 writers** (owner, 2026-10-13, C76): v35 covers T3, T4 and
   T8 only. Every future route that writes T2a, T2b, `unit_conversions` or T5 gets its own database
   actor guard (the v35 pattern) before it is released. The T2b confirmations and their guards are M2b,
-  migration v37 (open pull request; v37 also refuses every other T2b write and every T8 action without a
+  migration v37 (merged as PR #164; v37 also refuses every other T2b write and every T8 action without a
   built chain, C90).
 - **v35 / v36 test hardening: one SQL statement never writes two audit rows** (owner, 2026-10-14, the
   non-blocking note of the external review of PR #161; not scheduled): a regression test that a
@@ -3146,24 +3196,18 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), and M3-0, the canonical-variable admin API (PR #163, v36) are merged and deployed; PR #142 is closed as superseded. Next steps, in order:
-1. **M2b** (the source-field evidence confirmation and its database guards v37, section J4) is
-   implemented in an open pull request.
-   - Next for it: the owner's external review (triggers: migration and rollback, authorization,
-     idempotency, transactions and lock order).
-   - Merge and deploy only on the owner's order, after the read-only production preflight
-     `docs/runbooks/source-metric-revision-guards-v37-preflight.sql`.
-   - No production field is confirmed through it before the revision lifecycle (C91) and the owner-run
-     evidence (C97) exist.
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221) and M3a, the Variables view (PR #218) are merged and deployed; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
+1. **The Metrics Core plan** (`docs/ai/metrics-core-plan.md`) sets the order of the Metrics Core work. Its
+   phases 0, 1 and 2 are done; phase 3 is this update. Next by the plan:
+   - phase 2b, R2: renaming, archiving and restoring a canonical variable, backend and a migration, ★★;
+     then 2c, its Variables-tab part;
+   - phase P, the owner only: the read-only v37 post-check, and the evidence for the nine `rest_v1` fields
+     (C97);
+   - phase 4, the revision lifecycle (C91), after the v37 post-check;
+   - phases 5–10 and R1, as the plan orders them.
 
-   After M2b, on the owner's orders:
-   - the revision lifecycle;
-   - the zone model decision (C89);
-   - the M3 frontend (Training Load → Data configuration, C80) over the M3-0, M2 and M2b APIs, rendering
-     every unit and evidence reference as escaped text (J4);
-   - the further M2 parts (activation and disabling, T5, conversion maintenance, the preview), M4 and M6.
-
-   The import switch stays off throughout.
+   No production field is confirmed through M2b before the revision lifecycle (C91) and the owner-run evidence
+   (C97) exist. The import switch stays off throughout.
 2. The owner states the state of the production-use gate and of the two gates before a link (an identity
    load and one link were run after PR #146; the owner's check after PR #154 reports every athlete of the
    three sessions of 05.10–06.10.2026 linked; when the remaining links were made and whether those gates
