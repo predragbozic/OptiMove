@@ -4,6 +4,8 @@ import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 import { renderTrainingLoadAnalysisHtml } from "./training-load-analysis-view.js";
 import { renderTrainingLoadCalendarHtml } from "./training-load-calendar-view.js";
 import { renderGpexeImportsHtml } from "./gpexe-import-view.js";
+import { variablesContext } from "./metric-variables-data.js";
+import { renderVariablesHtml } from "./metric-variables-view.js";
 
 // Training load (RPE/sRPE), first complete phase. Deliberately its own
 // visual language - white surfaces, neutral gray borders, dark text, muted
@@ -26,6 +28,7 @@ const TRAINING_LOAD_TAB_ICONS = {
   schedule: `<path d="M12 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4"></path><path d="M16 3v4"></path><path d="M8 3v4"></path><path d="M3 11h11"></path><circle cx="18" cy="18" r="4"></circle><path d="M18 16.5V18l1 1"></path>`,
   results: `<circle cx="4" cy="12" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="9" cy="7" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="14" cy="10" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="19" cy="6" r="1.3" fill="currentColor" stroke="none"></circle><path d="M4 12l5-5 5 3 5-4"></path><path d="M4 21v-6"></path><path d="M9 21v-9"></path><path d="M14 21v-7"></path><path d="M19 21v-11"></path>`,
   analysis: `<path d="M4 19V5"></path><path d="M4 19h16"></path><rect x="7" y="11" width="3" height="5" rx="1"></rect><rect x="12" y="8" width="3" height="8" rx="1"></rect><rect x="17" y="6" width="3" height="10" rx="1"></rect>`,
+  dataConfig: `<ellipse cx="12" cy="5.5" rx="7" ry="2.5"></ellipse><path d="M5 5.5v6c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-6"></path><path d="M5 11.5v6c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-6"></path>`,
 };
 
 function renderTrainingLoadTabIcon(section) {
@@ -1448,6 +1451,7 @@ function trainingLoadFilterCount() {
 // Pure, exported so both the render side and tests can assert space
 // membership directly instead of re-deriving it from markup.
 export function trainingLoadTopLevelSpace(section) {
+  if (section === "variables") return "dataConfig";
   return section === "schedule" ? "schedule" : "dataAnalysis";
 }
 
@@ -1569,8 +1573,14 @@ export function renderTrainingLoadCoachHtml() {
         <div class="training-load-tabs" role="tablist" aria-label="Training Load spaces">
           <button type="button" class="training-load-tab ${space === "schedule" ? "is-active" : ""}" role="tab" aria-selected="${space === "schedule" ? "true" : "false"}" data-action="training-load-section" data-section="schedule">${renderTrainingLoadTabIcon("schedule")}<span>Schedule</span></button>
           <button type="button" class="training-load-tab ${space === "dataAnalysis" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataAnalysis" ? "true" : "false"}" data-action="training-load-section" data-section="${dataAnalysisTargetSection}">${renderTrainingLoadTabIcon("analysis")}<span>Data &amp; Analysis</span></button>
+          ${variablesContext()
+            // C80: an administrator's item - the platform workspace or a club
+            // workspace only; the server answers anyone else with 404.
+            ? `<button type="button" class="training-load-tab ${space === "dataConfig" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataConfig" ? "true" : "false"}" data-action="training-load-section" data-section="variables">${renderTrainingLoadTabIcon("dataConfig")}<span>Data configuration</span></button>`
+            : ""}
         </div>
-        ${section === "analysis" || section === "imports"
+        ${space === "dataConfig" ? ""
+          : section === "analysis" || section === "imports"
           // Phase F (confirmed decision): the shell's Club/Team/Athletes
           // filter never reaches the Dashboards query (it only ever sends
           // the runtime activity/component filter - see
@@ -1591,6 +1601,7 @@ export function renderTrainingLoadCoachHtml() {
       ${section === "results" ? renderTrainingLoadResultsHtml() : ""}
       ${section === "analysis" ? renderTrainingLoadAnalysisHtml() : ""}
       ${section === "imports" ? renderGpexeImportsHtml() : ""}
+      ${section === "variables" ? renderVariablesHtml() : ""}
       ${state.trainingLoad.filterPicker.open ? renderTrainingLoadFilterPickerHtml() : ""}
     </div>
   `;
