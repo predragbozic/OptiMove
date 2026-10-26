@@ -448,7 +448,7 @@ test("Analysis renders real KPI and table results from the batch response", () =
   const html = renderTrainingLoadAnalysisHtml();
   assert.match(html, />7\.5</);
   assert.match(html, /Session load/);
-  assert.match(html, /420/);
+  assert.doesNotMatch(html, />420</);
   assert.match(html, /Conflict \/ Unit conflict/);
 });
 
