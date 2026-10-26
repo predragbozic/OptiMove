@@ -441,6 +441,35 @@ test("create: once the form is sent, no key suggestion is read or shown (a lost 
   assert.ok(!/already used here/.test($("[data-mv-key-hint]")?.textContent || ""), "the late answer is dropped");
 });
 
+test("create: a suggestion dropped by a send never leaves 'Making the key...'; after a definite refusal suggestions work again", async () => {
+  let answerSuggestion;
+  let answerSave;
+  await openCreateFilled();
+  respond = (call) => {
+    if (call.url.startsWith(`${BASE}/key-suggestion`)) return new Promise((resolve) => { answerSuggestion = () => resolve({ status: 200, body: { key: "total_distance", taken: true } }); });
+    if (call.method === "POST") return new Promise((resolve) => { answerSave = () => resolve({ status: 400, body: { error: "invalid_unit" } }); });
+    return listing([])(call);
+  };
+  type("label", "Total distance");
+  await new Promise((resolve) => setTimeout(resolve, KEY_SUGGESTION_DELAY_MS + 50));
+  assert.ok(answerSuggestion, "the suggestion read is in flight");
+  const saving = submit();
+  await settle();
+  assert.equal(variablesState().form.busy, true, "the save is in flight");
+  answerSuggestion();
+  await settle();
+  answerSave();
+  await saving;
+  await settle();
+  assert.equal(variablesState().form.unconfirmed, false, "a definite refusal unlocks the form");
+  assert.equal(variablesState().form.busy, false);
+  assert.doesNotMatch($("[data-mv-key-hint]")?.textContent || "", /Making the key/);
+  respond = (call) => (call.url.startsWith(`${BASE}/key-suggestion`) ? { status: 200, body: { key: "total_distance_2", taken: false } } : listing([])(call));
+  type("label", "Total distance 2");
+  await new Promise((resolve) => setTimeout(resolve, KEY_SUGGESTION_DELAY_MS + 50));
+  assert.match($("[data-mv-key-hint]").textContent, /Key: total_distance_2/);
+});
+
 // ---------------------------------------------------------------------------
 // A new version
 // ---------------------------------------------------------------------------

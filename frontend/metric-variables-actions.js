@@ -321,7 +321,10 @@ export async function submitVariablesForm(_formElement, { render }) {
     globalThis.document?.querySelector?.('.metric-variables-form [aria-invalid="true"]')?.focus?.();
     return;
   }
+  // A suggestion read still in flight is dropped when it answers; its
+  // "Making the key..." goes now, so an unlocked form never keeps it.
   clearTimeout(keyTimer);
+  if (form.keyHint?.loading) form.keyHint = { ...form.keyHint, loading: false };
   form.sentBody = body;
   await send(render);
 }
