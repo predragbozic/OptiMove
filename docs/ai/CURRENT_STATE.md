@@ -2079,8 +2079,9 @@ Technical details.
   `docs/ai/phase10-estimates-decisions.md`. Its roles, reviewers and rules of work are in that file only;
   this file records what was merged and deployed.
   - **Phase 0, PR #221** (docs only): merge commit `16ef080` (parents `7a9e59d` and `5ef3334`) on 2026-10-26 at
-    22:59:53 UTC, made by the *Rukovodilac* on the owner's words in its chat (PR #222 records them in the plan). `/api/health` served `16ef080` with `ok: true` three times in a
-    row (23:01:37, 23:01:47 and 23:01:58 UTC).
+    22:59:53 UTC, made by the *Rukovodilac*; how it was authorized is recorded in PR #222 (not merged when this
+    was written). `/api/health` served `16ef080` with `ok: true` three times in a row (23:01:37, 23:01:47 and
+    23:01:58 UTC).
   - **Phase 1, PR #219: the older catalog's guard on the canonical variables (C98, no migration).** The older
     API `/api/training-load/metrics` no longer creates or changes a `system` or `club` definition: it answers
     `409 canonical_variable_read_only` and writes nothing. A definition the caller may not manage answers the
@@ -2095,12 +2096,12 @@ Technical details.
     admin API: the list, a variable's versions, create and a new version, one write at a time, and *Result not
     confirmed* · *Check result* with the same request key after a lost answer. A club sees the system variables
     as a read-only reference. Details are in section H of the discovery document.
-    - Integration QA against the real API on disposable databases migrated through v37: the executor's run
-      passed 57 of 59 checks (the two others are the client's intended normalisation), and the *Rukovodilac*'s
-      own run passed 16 of 16.
+    - Integration QA against the real API on disposable databases migrated through v37, by the executor and,
+      separately, by the *Rukovodilac*, passed on `6436461`; the only differences are the client's intended
+      normalisation of whitespace and of "-0". The record is in PR #218.
     - Merge commit `6c7dfa4` (parents `16ef080` and `6436461`) on 2026-10-26 at 23:31:43 UTC, made by the
-      executor under the owner's standing merge order for PRs without a migration (typed in the executor's chat
-      on 2026-10-26; PR #222 records it in the plan), after the *Rukovodilac*'s GO on `6436461` with low risk.
+      executor after the *Rukovodilac*'s GO on `6436461`; how it was authorized is recorded in PR #218's
+      description.
     - `/api/health` served `6c7dfa4` with `ok: true` three times in a row (23:33:01, 23:33:11 and 23:33:22 UTC).
       Without a login the variables list, one variable and the key suggestion (GET) and the create and new
       version (POST, `{}`) answered 401.

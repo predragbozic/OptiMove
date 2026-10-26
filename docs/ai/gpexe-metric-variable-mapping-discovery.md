@@ -846,7 +846,7 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
       would need its own owner decision;
     - the 409 sentence names Training Load > Data configuration, the screen of Draft PR #218; until that
       screen is deployed only an API client can meet the sentence (no frontend writes through these
-      routes);
+      routes) — the screen is merged and deployed since 2026-10-26 (PR #218, `6c7dfa4`);
     - the order of the answers on an existing row (the independent review of the pull request, MEDIUM):
       the right (`404`), then the canonical variable (`409`), then the body (`400`), then the lock and
       the second decision, then the write; a missing, malformed, hidden or not-manageable id answers the
@@ -1626,7 +1626,8 @@ Three administrator views - since C80 in **Training Load → Data configuration 
   body again. The Source fields and Mappings views are not built yet, so the tab shows Variables alone.
   Tested with a fake fetch (jsdom) and in Chromium at 1280 / 390 / 375 / 360 px against an in-page fake
   of the M3-0 routes. **The integration with the real API is confirmed** (2026-10-26, on disposable
-  databases migrated through v37; the branch's real server in process and the real frontend in Chromium):
+  databases migrated through v37; the branch's real server in process and the real frontend in Chromium;
+  the record is in PR #218):
   the executor's run on head `6436461` (57 of 59 checks; the two others are the client's intended
   normalisation of whitespace and of "-0") and the *Rukovodilac*'s own run on the same head (16 of 16).
   Not checked on a physical device (iOS `datalist`, WebKit `select`).
@@ -1957,7 +1958,7 @@ later M2 PR, C59) maps the two `metric_definitions` / scope-capability guard ref
 constraint name) to a stable `409` in `backend/src/routes/trainingLoadMetrics.js` — *superseded by C98
 (PR #219), no longer needed:* a mapping targets only a `system` or `club` definition (D4), and for those the
 older API refuses an archive, a new version and a level change with `409 canonical_variable_read_only`
-before it touches the row, so neither guard refusal can reach its `respondToWriteError` any more; the
+and writes nothing, so neither guard refusal can reach its `respondToWriteError` any more; the
 M3-0 API maps the pin guard to `409 variable_pinned` for a new version (J3), and the archive of R2
 (phase 2b of `docs/ai/metrics-core-plan.md`) is planned to answer the same; M2 maps every native
 error by constraint name and never forwards its DETAIL, and maps `40P01` to `try_again` (done in the
