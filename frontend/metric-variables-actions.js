@@ -275,7 +275,9 @@ function scheduleKeySuggestion(form) {
   }
   keyTimer = setTimeout(async () => {
     const s = variablesState();
-    if (s.form !== form) return;
+    // A sent form (saving, or its result not confirmed) is locked: a hint now
+    // could describe the key of the very variable just saved as "already used".
+    if (s.form !== form || form.busy || form.unconfirmed) return;
     form.keyHint = { ...form.keyHint, loading: true, label };
     paintKeyHint(form);
     let hint;
@@ -286,8 +288,9 @@ function scheduleKeySuggestion(form) {
       const info = errorInfo(error);
       hint = { key: "", taken: false, required: info.code === "key_required", loading: false, label };
     }
-    // Only the answer for what the field holds now, in the same open form.
-    if (variablesState().form !== form || form.draft.label.replace(/\s+/g, " ").trim() !== label) return;
+    // Only the answer for what the field holds now, in the same open form,
+    // and never once that form was sent.
+    if (variablesState().form !== form || form.busy || form.unconfirmed || form.draft.label.replace(/\s+/g, " ").trim() !== label) return;
     form.keyHint = hint;
     paintKeyHint(form);
   }, KEY_SUGGESTION_DELAY_MS);
@@ -318,6 +321,7 @@ export async function submitVariablesForm(_formElement, { render }) {
     globalThis.document?.querySelector?.('.metric-variables-form [aria-invalid="true"]')?.focus?.();
     return;
   }
+  clearTimeout(keyTimer);
   form.sentBody = body;
   await send(render);
 }

@@ -349,6 +349,14 @@ test("create: an event threshold carries its operator and seconds; empty optiona
   assert.deepEqual(body.condition, { kind: "event_threshold", operator: ">", value: "3", durationSeconds: "0.5", unit: "m/s2" });
   form.draft.conditionDuration = "-1";
   assert.equal(buildRequest(form).errors.conditionDuration, "Zero or more.");
+  for (const [typed, sent] of [["-0", "0"], ["-0,000", "0.000"]]) {
+    form.draft.conditionDuration = typed;
+    const zero = buildRequest(form);
+    assert.equal(zero.errors.conditionDuration, undefined, `${typed} is zero, as the server reads it`);
+    assert.equal(zero.body.condition.durationSeconds, sent);
+  }
+  form.draft.conditionDuration = "-0.5";
+  assert.equal(buildRequest(form).errors.conditionDuration, "Zero or more.");
   Object.assign(form.draft, { conditionKind: "zone_between", conditionLower: "5", conditionUpper: "5" });
   assert.ok(buildRequest(form).errors.conditionUpper, "a zone's upper value is above its lower one");
   Object.assign(form.draft, { conditionKind: "none", minValue: "10", maxValue: "2" });
@@ -399,6 +407,38 @@ test("create: a key suggestion that answers after the name changed is never show
   pending.Beta();
   await settle();
   assert.match($("[data-mv-key-hint]").textContent, /Key: beta/);
+});
+
+test("create: once the form is sent, no key suggestion is read or shown (a lost save never reads as 'already used')", async () => {
+  // Saved within the suggestion delay: the pending read is cancelled.
+  await openCreateFilled();
+  respond = (call) => {
+    if (call.url.startsWith(`${BASE}/key-suggestion`)) return { status: 200, body: { key: "total_distance", taken: true } };
+    return call.method === "POST" ? { throwNetworkError: true } : listing([])(call);
+  };
+  await submit();
+  assert.equal(variablesState().form.unconfirmed, true);
+  await new Promise((resolve) => setTimeout(resolve, KEY_SUGGESTION_DELAY_MS + 50));
+  assert.deepEqual(gets().filter((url) => url.includes("key-suggestion")), [], "no suggestion read after the save");
+  assert.ok(!/already used here/.test($("[data-mv-key-hint]")?.textContent || ""));
+
+  // A read already in flight when the form is sent is not shown when it answers.
+  resetVariables();
+  calls.length = 0;
+  let answerSuggestion;
+  await openCreateFilled();
+  respond = (call) => {
+    if (call.url.startsWith(`${BASE}/key-suggestion`)) return new Promise((resolve) => { answerSuggestion = () => resolve({ status: 200, body: { key: "total_distance", taken: true } }); });
+    return call.method === "POST" ? { throwNetworkError: true } : listing([])(call);
+  };
+  type("label", "Total distance");
+  await new Promise((resolve) => setTimeout(resolve, KEY_SUGGESTION_DELAY_MS + 50));
+  assert.ok(answerSuggestion, "the suggestion read is in flight");
+  await submit();
+  assert.equal(variablesState().form.unconfirmed, true);
+  answerSuggestion();
+  await settle();
+  assert.ok(!/already used here/.test($("[data-mv-key-hint]")?.textContent || ""), "the late answer is dropped");
 });
 
 // ---------------------------------------------------------------------------

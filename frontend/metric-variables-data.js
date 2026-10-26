@@ -352,8 +352,12 @@ export function buildRequest(form) {
     } else if (d.conditionKind === "zone_one_sided") {
       condition = { kind: "zone", operator: d.conditionOperator, value: need("conditionValue", decimalText(d.conditionValue)), unit: cUnit };
     } else if (d.conditionKind === "event_threshold") {
-      const durationSeconds = need("conditionDuration", decimalText(d.conditionDuration));
-      if (!errors.conditionDuration && durationSeconds.startsWith("-")) errors.conditionDuration = "Zero or more.";
+      let durationSeconds = need("conditionDuration", decimalText(d.conditionDuration));
+      // "-0" is zero, as the server reads it; any other negative value is refused.
+      if (!errors.conditionDuration && durationSeconds.startsWith("-")) {
+        if (decimalCompare(durationSeconds, "0") === 0) durationSeconds = durationSeconds.slice(1);
+        else errors.conditionDuration = "Zero or more.";
+      }
       condition = { kind: "event_threshold", operator: d.conditionOperator, value: need("conditionValue", decimalText(d.conditionValue)), durationSeconds, unit: cUnit };
     } else {
       errors.conditionKind = "Choose one.";
