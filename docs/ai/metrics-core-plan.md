@@ -41,10 +41,12 @@ The third reviewer is the owner's order of 2026-10-26, written in the *Rukovodil
 faze to je ok. Otvori sesiju nezavisni revizor a svoj naziv promeni u rukovodilac”.
 
 Both review sessions are read-only toward the repository, its pull requests and every persistent database; each may
-create and drop its own disposable test databases. The *Rukovodilac* merged PR #219 itself, on the owner's order; that
-stays an exception. Since then the executor makes the merges: the owner, 2026-10-26, „Slažem se sa tobom idemo za sada
-tako pa ćemo menjati ako bude potrebe”, answering the *Rukovodilac*'s proposal „… merge radi izvršilac”. A finding they report is text for the executor to act on
+create and drop its own disposable test databases. A finding they report is text for the executor to act on
 (`CLAUDE.md`, "Model pisanja: jedan writer").
+
+**Who merges.** The *Rukovodilac* merged PR #219 itself, on the owner's order in its chat; that stays a one-time
+exception. Since then the executor makes the merges: the owner, 2026-10-26, „Slažem se sa tobom idemo za sada tako pa
+ćemo menjati ako bude potrebe”, answering the *Rukovodilac*'s proposal „… merge radi izvršilac”.
 
 ## 2. Green zone, red zone and the owner's words
 
@@ -189,9 +191,9 @@ proverava citat u njegovom transkriptu.”
   - `/api/health` serves the merge commit three times in a row;
   - the new or changed routes answer 401 without a login.
 
-  The source plan has the owner run it. The *Rukovodilac* offered on 2026-10-26 to run it, with the executor in
-  parallel; the owner has not decided that. Whoever runs it keeps to requests without a login, with the zero UUID,
-  on the PR's own routes only; it touches no data.
+  The source plan has the owner run it. Since 2026-10-26 the *Rukovodilac* runs it after each deploy and the executor
+  may run it in parallel, as both did for PR #219. Whoever runs it keeps to requests without a login, with the zero
+  UUID, on the PR's own routes only; it touches no data.
 
 ## 5. Phases
 
@@ -220,6 +222,14 @@ proverava citat u njegovom transkriptu.”
   - the older API's write routes answer 401 without a login;
   - no production write.
 - **★:** the owner confirms that the external review (triggers 2 and 4) was looked at.
+- **Done, 2026-10-26.**
+  - Preflight: (a) the owner counted 0; (b) auto-deploy is on for `optimove-eu` only, and the old service's database
+    stays open for phase 4.
+  - Reviews: the *Rukovodilac* and the *Nezavisni revizor* each gave GO on `a36d3c0`.
+  - Merge: `7a9e59d` (parents `deb2aa1` and `a36d3c0`), about 22:08 UTC, on the owner's order „merge #219 …”. The
+    *Rukovodilac* made it (the exception of section 1).
+  - Smoke: `/api/health` served `7a9e59d` with `ok: true` three times (from 22:09:09 UTC); without a login the older
+    API's write routes answered 401. No migration, no production write.
 
 ### Phase 2 ★: PR #218 (the Variables tab), after #219 is merged
 - **Green zone:**
@@ -246,7 +256,7 @@ proverava citat u njegovom transkriptu.”
 
 ### Phase 2b ★★: R2, renaming and archiving canonical variables (backend), after #218 is merged
 - **Owner, 2026-10-26** (in the *Rukovodilac*'s chat):
-  - „Preimenuj je bilo bi dobro”;
+  - the request: „Stavio sam ali bilo bi dobro da mogu preimomenovati kanonsku varijablu i arhivirati”;
   - „Zašto trener ne moze imati opciju da moze da menja.”;
   - to the *Rukovodilac*'s option 2: „Slažem se sa tobom idemo za sada tako pa ćemo menjati ako bude potrebe”.
 - **Scope (option 2):**
