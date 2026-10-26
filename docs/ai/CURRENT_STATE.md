@@ -5,7 +5,8 @@ Last reviewed: 2026-10-19, for the **Exercise media (R2)** track only — last `
 2026-10-15 at `60aadb9` (merge of PR #163, M3-0, the canonical-variable admin API and migration v36;
 PR #162 `9e4dfb5`, the GPEXE check timing line, before it) and were not re-derived in this update; the
 Exercise Library work of 2026-10-17/18 (blocks, the cover slideshow, bulk move, user grants) is not
-recorded here yet.
+recorded here yet. The entries for PR #214 and #215 (the GPEXE check) were added on 2026-10-24 at
+`306abd7` (merge of PR #215); nothing else in the Training Load / GPEXE / metrics record was re-derived then.
 
 ## Active phase
 
@@ -1969,10 +1970,10 @@ Technical details.
       reads instead of 12, 12 thresholds instead of 10, plus a brief per session with drills), so about 39% more.
       The largest remaining times are the database preview (163 s), the session list (141 s), `/more/` (97 s), and
       the details with the drills (85 s).
-  - **The GPEXE check request optimization is complete,** confirmed by this production check.
+  - **The request reduction (PR #212) is complete,** confirmed by this production check.
   - **The window's session list through the server's date filter** (owner order 2026-10-24; branch
-    `feature/gpexe-check-window-filter` from `9f7291c`; **not merged, not deployed**; adapter, tests and docs, no
-    migration, no change to the import, Metrics Core, storage or the UI):
+    `feature/gpexe-check-window-filter` from `9f7291c`; **merged and deployed as PR #214**, see below; adapter,
+    tests and docs, no migration, no change to the import, Metrics Core, storage or the UI):
     - **The owner-run window-filter probe** (2026-10-24, 12:04 UTC, run once; 9 requests, no 429; sanitized) ran
       against the whole list of 374 sessions, for 11.10 - 24.10 and 05.10 - 06.10, each with a margin of two days
       and without:
@@ -1994,6 +1995,68 @@ Technical details.
     - **An older window costs more**, because every later session comes with it, but never more than the
       whole list from the window's start. The first answer longer than 100 rows will be the first to page a
       filtered next link in production.
+    - **PR #214 is merged and deployed.** Head `b545af4`, merge commit `bb6072b` on 2026-10-24 at about
+      12:49 UTC, merged exactly from that head on the owner's order. Render did not deploy by itself; the owner
+      started the deploy. `/api/health` served `bb6072b` with `ok: true` three times in a row (12:54:13, 12:54:24
+      and 12:54:34 UTC). Without a login `GET /api/auth/me` answered 200 with no user, and five protected GPEXE
+      and source-connection GET routes (zero UUID) answered 401. No check or GPEXE request at the merge.
+    - **The check on `bb6072b`** (2026-10-24, ended at about 13:02 UTC, owner-run once, First team, 11.10.2026 -
+      24.10.2026; sanitized, from the Imports screen and the timing line): `succeeded`, no 429; 12 sessions,
+      0 new, 0 changed, 12 unchanged; 201 athletes, 507 rows, 17 drills. **2 list requests in 16.0 s instead of
+      8 in 140.6 s**, 786 GPEXE requests instead of 792, the whole check **7 min 32 s** instead of 9 min 14 s
+      (`total_ms=451826`; the estimate was about 7 min 10 s - the other reads were about 21 s slower this time,
+      at the same request counts). The same sessions and drills as the check on `e8c5eb9`, every one unchanged.
+  - **One INSERT per result for the values (option A of the preview analysis)** (owner order 2026-10-24, after a
+    read-only analysis of the preview phase; PR #215, branch `feature/gpexe-preview-values-batch` from `bb6072b`;
+    backend writer and tests, no migration):
+    - **Where the time went (analysis):** with the switch off nothing was ever imported, so every check's preview
+      runs the first import of every session in a rolled-back transaction. Locally that was 358 statements for a
+      17-athlete session without drills and 1573 with 5 drills (1122 of them, 71 %, one INSERT per metric
+      value); SQL itself took under 1 ms per statement, so the 163 s in production were almost all round trips.
+      The heartbeat measured about 25 ms per statement; the local counts scaled to the 12 sessions give about
+      8,600 preview statements, so about 19 ms each (an estimate).
+    - **As built:** `insertOccasionWithValues` (`backend/src/gpexeImportWriter.js`) sends one multi-row INSERT
+      per result (`metricValuesInsert`) with the same rows, columns, parameters and order; nothing else of the
+      import, the preview transaction, locks, rollback or identity rules changed. The same code serves the
+      preview and the real import at approval. Locally 358 -> 188 and 1573 -> 553 statements per preview. A
+      session already imported with the same values (the preview writes nothing: 79 / 264 statements) is not
+      affected; with the switch off no session has been imported, so every check's previews benefit, whether
+      the candidate is new or unchanged.
+    - **Proof:** `backend/tests/gpexe-import-values-batch.test.mjs` runs every step with the new code and with
+      the old per-value statements replayed, from the same state: the same preview, previewHash, stored rows and
+      rollback, and the same refusal for six bad-value cases (apart from the accepted `where`, below); `gpexe-in-app-import.test.mjs` adds a value refused
+      by the database in the middle of the statement through the real approve route (500 `internal_error`,
+      nothing written, the candidate still pending, the retry imports). Mutation evidence. Not tested on
+      PostgreSQL 17 (production runs 17.6).
+    - **Accepted limitations (owner, 2026-10-24):** three differences in SQL errors that the writer cannot
+      produce (its values are finite numbers, a definition and its version come from the same row), each pinned
+      by a test: a 22P02's `where` names the parameter by its position in the statement (`$10` instead of `$4`);
+      with two refused values in one result, the refusal reported can differ (an FK fault before a null value:
+      23503 -> P0001; a null value before a non-number: P0001 -> 22P02). Accepted on the condition, checked in the
+      code, that none affects user behaviour, audit, error handling or data integrity: no code reads `where`, and
+      the check, the approval and the batch answer every database error on this path with the same
+      `internal_error` (only 42501 is told apart at approval).
+    - **Review:** `code-reviewer` and `db-reviewer` (the refusal-order differences and a wrong comment found and
+      fixed, the approval route test added); the external review the owner designated (an independent process
+      outside the internal reviewers): **READY**, with its own old-vs-new comparison through the real service,
+      including the deploy transition (a preview computed by the old code and approved by the new one).
+    - **PR #215 is merged and deployed.** Reviewed head `4210f20`, merge commit `306abd7` on 2026-10-24 at
+      14:27 UTC, merged exactly from that head on the owner's order. Render did not deploy by itself; the owner
+      started the deploy. `/api/health` first served `306abd7` with `ok: true` at 14:29:12 UTC, then three times
+      in a row (14:29:26, 14:29:36 and 14:29:47 UTC). Without a login `GET /api/auth/me` answered 200 with no
+      user, and six protected GPEXE, source-connection and metrics GET routes (zero UUID) answered 401. No check
+      or GPEXE request at the merge.
+    - **The check on `306abd7`** (2026-10-24, ended at about 14:36 UTC, owner-run once, First team, 11.10.2026 -
+      24.10.2026; sanitized): `succeeded`, no 429; 12 sessions, 0 new, 0 changed, 12 unchanged; 201 athletes, 507
+      rows, 17 drills; the same 786 GPEXE requests. **The preview took 66.4 s instead of 163.3 s** (-59 %), the
+      whole check **5 min 59 s** instead of 7 min 32 s (`total_ms=358844`); the GPEXE reads were 4.3 s slower
+      this time at the same counts. The number of database statements is not logged; it is estimated at about
+      3,500 instead of about 8,600 for the 12 previews (the local counts give about 5,000 fewer value
+      statements, and 66.4 s at about 19 ms per statement is about 3,500).
+  - **The result of the check optimization:** over PR #214 and #215 the same 14-day check went from 9 min 14 s
+    (the check on `e8c5eb9`, already after PR #212) to 5 min 59 s (-35 %), with the same sessions, drills and
+    stored data. PR #212 itself cut the requests to 792 from an estimated 1,300; its time saving was not
+    measured.
   - **The owner-run read-only sitting** (2026-10-24, 08:55 UTC, run once; 23 requests, no 429; sanitized reports
     as returned by the owner):
     - **A, athlete list:** `differs`. Eight of the nine row fields are equal, but `max_v` is absent from the list,
