@@ -1226,40 +1226,51 @@ test("18. a seed marker is accepted only inside the seeding migration (42501 aft
   await refused(() => k.query(`update training_load.source_host_catalog set api_family = 'rest_v1' where host_key = 'e97'`), { code: "23514", message: /API family of a host key is immutable/ });
 });
 
-test("19. the existing Metrics Core catalog writers work beside the v34 guards: a new semantic version, an archive and a level removal succeed with no active mapping version and are refused (23514, nothing changed) while one pins the definition", async () => {
+test("19. the older Metrics Core catalog writers refuse a canonical (system / club) definition before writing anything, pinned or not (C98, 409 canonical_variable_read_only), still change a team definition, and the v34 guards still refuse the same changes made directly while a mapping pins the definition (23514, nothing changed)", async () => {
   const w = W;
   const { catalog } = await appModules();
-  {
-    const req ={ user: { id: w.pa }, authz: { platformRoles: ["platform_admin"], clubRoles: [], teamRoles: [], managedTeamIds: [] } };
-    // (a) Nothing pins these definitions.
-    const free1 = await canonical(k, { unit: "min" });
-    const v = await catalog.createDefinitionVersion(req, free1.id, { valueType: "numeric", unit: "min", reason: "New semantics" });
-    assert.ok(v.row?.id, JSON.stringify(v));
-    assert.equal((await one(k, `select current_version_id from training_load.metric_definitions where id = $1`, [free1.id])).current_version_id, v.row.id);
-    const free2 = await canonical(k, { unit: "min" });
-    assert.equal((await catalog.setDefinitionScopeCapabilities(req, free2.id, ["session"])).row.scope_capabilities.join(","), "session");
-    assert.equal((await catalog.archiveDefinition(req, free2.id)).row.state, "archived");
-    // (b) An active mapping version pins the current version and applies to both levels.
-    const g = await field(k, w, { unit: "s" });
-    const pinned = await canonical(k, { unit: "min" });
-    await activeVersion(k, w, await mapping(k, w, g, pinned), FP.minutes);
-    const before = await one(k, `select current_version_id, state from training_load.metric_definitions where id = $1`, [pinned.id]);
-    const versionRows = async () => (await one(k, `select count(*)::int as n from training_load.metric_definition_versions where metric_definition_id = $1`, [pinned.id])).n;
-    const versionsBefore = await versionRows();
-    for (const write of [
-      () => catalog.createDefinitionVersion(req, pinned.id, { valueType: "numeric", unit: "min" }),
-      () => catalog.archiveDefinition(req, pinned.id),
-      () => catalog.setDefinitionScopeCapabilities(req, pinned.id, ["session"]),
-    ]) {
-      const err = await write().then(() => null, (e) => e);
-      assert.ok(err, "the catalog write is refused");
-      assert.equal(err.code, "23514", err.message);
-      triggerMessages.add(err.message);
+  const req = { user: { id: w.pa }, authz: { platformRoles: ["platform_admin"], clubRoles: [], teamRoles: [], managedTeamIds: [] } };
+  const state = async (id) => ({
+    definition: await one(k, `select current_version_id, state, label from training_load.metric_definitions where id = $1`, [id]),
+    versions: (await one(k, `select count(*)::int as n from training_load.metric_definition_versions where metric_definition_id = $1`, [id])).n,
+    levels: (await rows(k, `select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 order by 1`, [id])).map((r) => r.scope_level),
+  });
+  const writes = (id) => [
+    () => catalog.createDefinitionVersion(req, id, { valueType: "numeric", unit: "min", reason: "New semantics" }),
+    () => catalog.archiveDefinition(req, id),
+    () => catalog.setDefinitionScopeCapabilities(req, id, ["session"]),
+    () => catalog.updateDefinitionCosmetic(req, id, { label: "Renamed" }),
+  ];
+  // (a) A canonical definition, with nothing pinning it and while a mapping
+  // version pins it: every older writer answers 409 and changes nothing.
+  const g = await field(k, w, { unit: "s" });
+  const pinned = await canonical(k, { unit: "min" });
+  await activeVersion(k, w, await mapping(k, w, g, pinned), FP.minutes);
+  for (const target of [await canonical(k, { unit: "min" }), await canonical(k, { scope: "club", clubId: w.clubA, unit: "min" }), pinned]) {
+    const before = await state(target.id);
+    for (const write of writes(target.id)) {
+      const result = await write();
+      assert.deepEqual(result, { error: catalog.CANONICAL_VARIABLE_READ_ONLY.error, status: 409, code: "canonical_variable_read_only" });
     }
-    assert.deepEqual(await one(k, `select current_version_id, state from training_load.metric_definitions where id = $1`, [pinned.id]), before, "nothing changed");
-    assert.equal((await one(k, `select count(*)::int as n from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [pinned.id])).n, 2);
-    assert.equal(await versionRows(), versionsBefore, "the refused re-version leaves no version row behind");
+    assert.deepEqual(await state(target.id), before, "nothing changed");
   }
+  // (b) A team definition is not canonical: the older writers still change it.
+  const teamId = (await one(k, `insert into public.teams (club_id, name) values ($1, 'M1 team') returning id`, [w.clubA])).id;
+  const teamDef = await canonical(k, { scope: "team", teamId, unit: "min" });
+  const v = await catalog.createDefinitionVersion(req, teamDef.id, { valueType: "numeric", unit: "min", reason: "New semantics" });
+  assert.ok(v.row?.id, JSON.stringify(v));
+  assert.equal((await catalog.setDefinitionScopeCapabilities(req, teamDef.id, ["session"])).row.scope_capabilities.join(","), "session");
+  assert.equal((await catalog.archiveDefinition(req, teamDef.id)).row.state, "archived");
+  // (c) The v34 guards are the backstop for a direct write of the pinned
+  // definition: a new current version, an archive and a level removal.
+  const before = await state(pinned.id);
+  await inRolledBackTx(k, async () => {
+    const extra = await one(k, `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type) values ($1, 99, 'min', 'numeric') returning id`, [pinned.id]);
+    await refused(() => k.query(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [extra.id, pinned.id]), { code: "23514", message: /an active mapping version pins the current version/ });
+  });
+  await refused(() => k.query(`update training_load.metric_definitions set state = 'archived' where id = $1`, [pinned.id]), { code: "23514", message: /an active mapping version pins the current version/ });
+  await refused(() => k.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 and scope_level = 'component'`, [pinned.id]), { code: "23514", message: /an active mapping version applies to this level/ });
+  assert.deepEqual(await state(pinned.id), before, "nothing changed");
 });
 
 test("20. the serialization the lock order promises, both orders, with the second operation proven to wait: T5 insert vs version disable, version activation vs canonical repoint and vs a level removal, revision retirement vs version submission, field retirement vs revision insert", async () => {

@@ -353,9 +353,32 @@ async function makeClubWithAthletes(label, count) {
   return { clubId, coachId, coachCookie, athletes };
 }
 
-// A ready-to-use system-scoped metric definition (numeric, m, sum) —
-// created via the REAL API as platform admin, so every test that just
-// needs "some valid metric" doesn't hand-roll SQL for it.
+// A system or club definition is a canonical variable (C98): this older
+// catalog API no longer creates or changes one - the canonical-variable
+// admin API does, which needs migrations this harness does not apply. A test
+// that only needs one as a FIXTURE writes it directly, in the shape that API
+// writes (a definition, its version 1 and its levels); a test about this
+// API's own writes uses a user-owned definition, which keeps every older
+// behaviour (see metrics-core-canonical-guard.test.mjs for the refusal).
+async function insertCatalogDefinition({ ownerScope = "system", ownerClubId = null, key, label, unit = null, valueType = "numeric", conditionDescription = null, dailyAggregationMethod = "sum", scopeCapabilities = [] }) {
+  const definition = (await query(
+    `insert into training_load.metric_definitions (key, label, owner_scope, owner_club_id) values ($1,$2,$3,$4) returning *`,
+    [key, label, ownerScope, ownerClubId],
+  )).rows[0];
+  const version = (await query(
+    `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, condition_description, daily_aggregation_method)
+     values ($1,1,$2,$3,$4,$5) returning *`,
+    [definition.id, unit, valueType, conditionDescription ? JSON.stringify(conditionDescription) : null, dailyAggregationMethod],
+  )).rows[0];
+  await query(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [version.id, definition.id]);
+  for (const level of scopeCapabilities) {
+    await query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,$2)`, [definition.id, level]);
+  }
+  return { ...definition, current_version_id: version.id, version_number: 1, unit, value_type: valueType, scope_capabilities: scopeCapabilities };
+}
+
+// A ready-to-use system-scoped metric definition (numeric, m, sum), so every
+// test that just needs "some valid metric" shares one.
 let sysAdminId, sysAdminCookie, distanceDefId, distanceVersionId;
 async function ensureSystemDefinition() {
   if (distanceDefId) return distanceDefId;
@@ -363,13 +386,9 @@ async function ensureSystemDefinition() {
   await grantGlobalRole(sysAdminId, "platform_admin");
   await setActiveWorkspace(sysAdminId, "platform", null);
   sysAdminCookie = await loginCookie(sysAdminId);
-  const res = await api("/api/training-load/metrics/definitions", {
-    method: "POST", cookie: sysAdminCookie,
-    body: { key: `total_distance_${uid()}`, label: "Total Distance", ownerScope: "system", unit: "m", valueType: "numeric", dailyAggregationMethod: "sum", scopeCapabilities: ["session", "component", "day"] },
-  });
-  assert.equal(res.status, 201, JSON.stringify(res.body));
-  distanceDefId = res.body.row.id;
-  distanceVersionId = res.body.row.current_version_id;
+  const row = await insertCatalogDefinition({ key: `total_distance_${uid()}`, label: "Total Distance", unit: "m", dailyAggregationMethod: "sum", scopeCapabilities: ["session", "component", "day"] });
+  distanceDefId = row.id;
+  distanceVersionId = row.current_version_id;
   return distanceDefId;
 }
 // Every value entry must now name an explicit metricDefinitionVersionId
@@ -700,9 +719,11 @@ test("7b. a private domain never leaks through a club-scoped structure link, but
 // =========================================================================
 test("8. a new semantic version never reinterprets an already-captured value", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("versioning", 1);
+  // The coach's own definition: this older API still versions it (a system
+  // or club one is versioned only through the canonical-variable admin API).
   const created = await api("/api/training-load/metrics/definitions", {
-    method: "POST", cookie: sysAdminCookie,
-    body: { key: `explosive_${uid()}`, label: "Explosive Distance", ownerScope: "system", unit: "m", valueType: "numeric", conditionDescription: { operator: ">", value: 60, unit: "W/kg" }, scopeCapabilities: ["session"] },
+    method: "POST", cookie: coachCookie,
+    body: { key: `explosive_${uid()}`, label: "Explosive Distance", ownerScope: "user", unit: "m", valueType: "numeric", conditionDescription: { operator: ">", value: 60, unit: "W/kg" }, scopeCapabilities: ["session"] },
   });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const defId = created.body.row.id;
@@ -719,7 +740,7 @@ test("8. a new semantic version never reinterprets an already-captured value", a
   assert.equal(v1VersionId, v1VersionIdAtSubmit);
 
   const newVersion = await api(`/api/training-load/metrics/definitions/${defId}/versions`, {
-    method: "POST", cookie: sysAdminCookie,
+    method: "POST", cookie: coachCookie,
     body: { unit: "m", valueType: "numeric", conditionDescription: { operator: ">", value: 55, unit: "W/kg" }, reason: "threshold corrected" },
   });
   assert.equal(newVersion.status, 201, JSON.stringify(newVersion.body));
@@ -736,7 +757,7 @@ test("8. a new semantic version never reinterprets an already-captured value", a
 test("9. manual correction preserves history, is retry-safe, and requires the complete value set", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("correction", 1);
   const distDef = await ensureSystemDefinition();
-  const speedDefRow = (await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `max_speed_${uid()}`, label: "Max Speed", ownerScope: "system", unit: "km/h", valueType: "numeric", scopeCapabilities: ["session"] } })).body.row;
+  const speedDefRow = await insertCatalogDefinition({ key: `max_speed_${uid()}`, label: "Max Speed", unit: "km/h", scopeCapabilities: ["session"] });
   const speedDef = speedDefRow.id;
   const speedVersionId = speedDefRow.current_version_id;
 
@@ -826,9 +847,8 @@ test("11. concurrent identical group-event submissions never create two events",
 test("12. definitions catalog paginates with a keyset cursor, never returns everything at once", async () => {
   const seeded = [];
   for (let i = 0; i < 5; i += 1) {
-    const res = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `page_metric_${uid()}_${i}`, label: `ZZPage Metric ${uid()}`, ownerScope: "system", unit: "u", valueType: "numeric" } });
-    assert.equal(res.status, 201);
-    seeded.push(res.body.row.id);
+    const row = await insertCatalogDefinition({ key: `page_metric_${uid()}_${i}`, label: `ZZPage Metric ${uid()}`, unit: "u" });
+    seeded.push(row.id);
   }
   const firstPage = await api(`/api/training-load/metrics/definitions?search=ZZPage&limit=2`, { cookie: sysAdminCookie });
   assert.equal(firstPage.status, 200);
@@ -989,8 +1009,11 @@ test("17b. archiving a definition/domain/category requires management rights and
   const domainRes = await api("/api/training-load/metrics/domains", { method: "POST", cookie: ownerCookie, body: { name: "Archivable Domain", ownerScope: "user" } });
   assert.equal(domainRes.status, 201);
   const { coachCookie: otherCookie } = await makeClubWithAthletes("archiveOther", 0);
+  // ADR-006: not yours answers exactly like missing.
   const forbidden = await api(`/api/training-load/metrics/domains/${domainRes.body.row.id}/archive`, { method: "POST", cookie: otherCookie });
-  assert.equal(forbidden.status, 403, JSON.stringify(forbidden.body));
+  const missing = await api(`/api/training-load/metrics/domains/${crypto.randomUUID()}/archive`, { method: "POST", cookie: otherCookie });
+  assert.equal(forbidden.status, 404, JSON.stringify(forbidden.body));
+  assert.deepEqual(forbidden.body, missing.body);
   const archived = await api(`/api/training-load/metrics/domains/${domainRes.body.row.id}/archive`, { method: "POST", cookie: ownerCookie });
   assert.equal(archived.status, 200);
   assert.equal(archived.body.row.is_active, false);
@@ -1004,8 +1027,11 @@ test("17c. deleting a structure link requires management rights over the link it
   const linkRes = await api("/api/training-load/metrics/structure-links", { method: "POST", cookie: ownerCookie, body: { metricDefinitionId: defId, ownerScope: "user" } });
   assert.equal(linkRes.status, 201, JSON.stringify(linkRes.body));
   const { coachCookie: otherCookie } = await makeClubWithAthletes("linkdelOther", 0);
+  // ADR-006: not yours answers exactly like missing.
   const forbidden = await api(`/api/training-load/metrics/structure-links/${linkRes.body.row.id}`, { method: "DELETE", cookie: otherCookie });
-  assert.equal(forbidden.status, 403);
+  const missing = await api(`/api/training-load/metrics/structure-links/${crypto.randomUUID()}`, { method: "DELETE", cookie: otherCookie });
+  assert.equal(forbidden.status, 404, JSON.stringify(forbidden.body));
+  assert.deepEqual(forbidden.body, missing.body);
   const deleted = await api(`/api/training-load/metrics/structure-links/${linkRes.body.row.id}`, { method: "DELETE", cookie: ownerCookie });
   assert.equal(deleted.status, 200);
 });
@@ -1221,7 +1247,7 @@ test("22. two concurrent corrections of the SAME occasion with different request
 
 test("23. correcting one metric never silently reinterprets an untouched sibling metric under a version that appeared later; an explicit version bump is still allowed", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("correctversion", 1);
-  const stableDef = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `stable_${uid()}`, label: "Stable Metric", ownerScope: "system", unit: "m", valueType: "numeric", scopeCapabilities: ["session"] } });
+  const stableDef = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: coachCookie, body: { key: `stable_${uid()}`, label: "Stable Metric", ownerScope: "user", unit: "m", valueType: "numeric", scopeCapabilities: ["session"] } });
   const stableDefId = stableDef.body.row.id;
   const stableV1 = stableDef.body.row.current_version_id;
 
@@ -1235,7 +1261,7 @@ test("23. correcting one metric never silently reinterprets an untouched sibling
   assert.equal(entry.status, 201, JSON.stringify(entry.body));
   const occasionId = entry.body.participants[0].occasionIds[0];
 
-  const v2 = await api(`/api/training-load/metrics/definitions/${stableDefId}/versions`, { method: "POST", cookie: sysAdminCookie, body: { unit: "km", valueType: "numeric" } });
+  const v2 = await api(`/api/training-load/metrics/definitions/${stableDefId}/versions`, { method: "POST", cookie: coachCookie, body: { unit: "km", valueType: "numeric" } });
   assert.equal(v2.status, 201, JSON.stringify(v2.body));
 
   const correction = await api(`/api/training-load/metrics/occasions/${occasionId}/correct`, {
@@ -1259,10 +1285,10 @@ test("23. correcting one metric never silently reinterprets an untouched sibling
 
 test("24. a new entry submitted against a version that is no longer current is rejected with a controlled conflict, never silently reinterpreted under the new version", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("staleform", 1);
-  const created = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `stale_${uid()}`, label: "Stale Form Metric", ownerScope: "system", unit: "m", valueType: "numeric" } });
+  const created = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: coachCookie, body: { key: `stale_${uid()}`, label: "Stale Form Metric", ownerScope: "user", unit: "m", valueType: "numeric" } });
   const defId = created.body.row.id;
   const v1 = created.body.row.current_version_id;
-  const v2res = await api(`/api/training-load/metrics/definitions/${defId}/versions`, { method: "POST", cookie: sysAdminCookie, body: { unit: "km", valueType: "numeric" } });
+  const v2res = await api(`/api/training-load/metrics/definitions/${defId}/versions`, { method: "POST", cookie: coachCookie, body: { unit: "km", valueType: "numeric" } });
   assert.equal(v2res.status, 201);
 
   const res = await api("/api/training-load/metrics/events", {
@@ -1276,7 +1302,7 @@ test("24. a new entry submitted against a version that is no longer current is r
 
 test("25. an identical retry stays idempotent even after its definition was archived in the meantime", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("retryarchive", 1);
-  const created = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `retryarch_${uid()}`, label: "Retry Archive Metric", ownerScope: "system", unit: "u", valueType: "numeric", scopeCapabilities: ["session"] } });
+  const created = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: coachCookie, body: { key: `retryarch_${uid()}`, label: "Retry Archive Metric", ownerScope: "user", unit: "u", valueType: "numeric", scopeCapabilities: ["session"] } });
   const defId = created.body.row.id;
   const v1 = created.body.row.current_version_id;
   const requestKey = crypto.randomUUID();
@@ -1284,7 +1310,7 @@ test("25. an identical retry stays idempotent even after its definition was arch
   const first = await api("/api/training-load/metrics/events", { method: "POST", cookie: coachCookie, body });
   assert.equal(first.status, 201, JSON.stringify(first.body));
 
-  const archiveRes = await api(`/api/training-load/metrics/definitions/${defId}/archive`, { method: "POST", cookie: sysAdminCookie });
+  const archiveRes = await api(`/api/training-load/metrics/definitions/${defId}/archive`, { method: "POST", cookie: coachCookie });
   assert.equal(archiveRes.status, 200);
 
   const retry = await api("/api/training-load/metrics/events", { method: "POST", cookie: coachCookie, body });
@@ -1298,7 +1324,7 @@ test("25. an identical retry stays idempotent even after its definition was arch
 
 test("26. results pagination at limit=1 never loses a value from a multi-value occasion", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("paginate-multi", 1);
-  const speedDefRow = (await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `pagespeed_${uid()}`, label: "Page Speed", ownerScope: "system", unit: "km/h", valueType: "numeric", scopeCapabilities: ["session"] } })).body.row;
+  const speedDefRow = await insertCatalogDefinition({ key: `pagespeed_${uid()}`, label: "Page Speed", unit: "km/h", scopeCapabilities: ["session"] });
 
   const entry = await api("/api/training-load/metrics/events", {
     method: "POST", cookie: coachCookie,
@@ -1463,7 +1489,7 @@ test("30. a whitespace-only numeric value is rejected, never silently stored as 
 });
 
 test("31. a cosmetic PATCH of a definition cannot change its semantics", async () => {
-  const created = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `cosmetic_${uid()}`, label: "Cosmetic Original", ownerScope: "system", unit: "m", valueType: "numeric" } });
+  const created = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `cosmetic_${uid()}`, label: "Cosmetic Original", ownerScope: "user", unit: "m", valueType: "numeric" } });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const defId = created.body.row.id;
   const v1 = created.body.row.current_version_id;

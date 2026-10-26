@@ -341,11 +341,14 @@ async function makeAthleteInClub(clubId, { timezone = "UTC" } = {}) {
 }
 
 // A REAL, active, session-scope, numeric metric definition, club-owned —
-// mirrors makeQuickMetric() from the design-proof harness.
-async function makeMetricDefinition({ clubId, adminId, label, valueType = "numeric", dailyAggregationMethod = "sum", scopeLevels = ["session", "component"], key } = {}) {
+// mirrors makeQuickMetric() from the design-proof harness. With `teamId` it
+// is team-owned instead: the older catalog writers change only team and user
+// definitions (a club or system one is a canonical variable, C98), so the
+// tests that drive those writers use one.
+async function makeMetricDefinition({ clubId, teamId = null, adminId, label, valueType = "numeric", dailyAggregationMethod = "sum", scopeLevels = ["session", "component"], key } = {}) {
   const def = await query(
-    `insert into training_load.metric_definitions (key, label, owner_scope, owner_club_id, state, created_by_user_id) values ($1,$2,'club',$3,'active',$4) returning id`,
-    [key || `metric-${uid()}`, label || `Metric ${uid()}`, clubId, adminId],
+    `insert into training_load.metric_definitions (key, label, owner_scope, owner_club_id, owner_team_id, state, created_by_user_id) values ($1,$2,$3,$4,$5,'active',$6) returning id`,
+    [key || `metric-${uid()}`, label || `Metric ${uid()}`, teamId ? "team" : "club", teamId ? null : clubId, teamId, adminId],
   );
   const ver = await query(
     `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, created_by_user_id) values ($1,1,'bpm',$2,$3,$4) returning id`,
@@ -1055,8 +1058,9 @@ test("§6.6 NO N+1: querying 20 widgets against the SAME date range issues a bou
 // ============================================================
 
 test("§7.1 REAL setDefinitionScopeCapabilities() genuinely serializes against a concurrent dashboard series-add through the real add_series() sanctioned function", async () => {
-  const { clubId, coachId, coachCookie } = await makeClubCoach("l71");
-  const { metricDefinitionId } = await makeMetricDefinition({ clubId, adminId: coachId, scopeLevels: ["session", "component"] });
+  // A team coach, a team dashboard and a team definition (see makeMetricDefinition).
+  const { teamId, coachId, coachCookie } = await makeTeamCoach("l71");
+  const { metricDefinitionId } = await makeMetricDefinition({ teamId, adminId: coachId, scopeLevels: ["session", "component"] });
   const catalogModule = await import("../src/trainingLoadMetricsCatalog.js");
   const platformAdminReq = { user: { id: coachId }, authz: { platformRoles: ["platform_admin"] } };
 
@@ -2575,7 +2579,8 @@ test("§10.9 clone aborts atomically (409 sourceConnectionResolutionRequired, ze
 });
 
 test("§10.10 REAL concurrency: add_series() vs createDefinitionVersion(), BOTH lock orderings, proven via two real connections and pg_stat_activity — never a sleep() heuristic; whichever wins, the resulting hint never straddles an old and a new version", async () => {
-  const { clubId, coachId, coachCookie } = await makeClubCoach("l1010");
+  // A team coach, team dashboards and team definitions (see makeMetricDefinition).
+  const { teamId, coachId, coachCookie } = await makeTeamCoach("l1010");
   const catalogModule = await import("../src/trainingLoadMetricsCatalog.js");
   const platformAdminReq = { user: { id: coachId }, authz: { platformRoles: ["platform_admin"] } };
 
@@ -2583,8 +2588,8 @@ test("§10.10 REAL concurrency: add_series() vs createDefinitionVersion(), BOTH 
   //     add_series()'s own `FOR SHARE OF d` must genuinely queue behind it,
   //     then see the FULLY COMMITTED new version once unblocked.
   {
-    const { metricDefinitionId } = await makeMetricDefinition({ clubId, adminId: coachId, valueType: "numeric" });
-    const template = await api("/api/training-load/dashboards", { method: "POST", cookie: coachCookie, body: { name: "Concurrency A", ownerScope: "club", ownerClubId: clubId, isTemplate: true } });
+    const { metricDefinitionId } = await makeMetricDefinition({ teamId, adminId: coachId, valueType: "numeric" });
+    const template = await api("/api/training-load/dashboards", { method: "POST", cookie: coachCookie, body: { name: "Concurrency A", ownerScope: "team", ownerTeamId: teamId, isTemplate: true } });
     const w = await makeWidgetHttp(coachCookie, template.body.dashboard);
 
     let releaseLock; const lockHeld = new Promise((resolve) => { releaseLock = resolve; });
@@ -2621,8 +2626,8 @@ test("§10.10 REAL concurrency: add_series() vs createDefinitionVersion(), BOTH 
   //     must keep the OLD version — never retroactively see a version that
   //     committed AFTER it had already read.
   {
-    const { metricDefinitionId } = await makeMetricDefinition({ clubId, adminId: coachId, valueType: "numeric" });
-    const template = await api("/api/training-load/dashboards", { method: "POST", cookie: coachCookie, body: { name: "Concurrency B", ownerScope: "club", ownerClubId: clubId, isTemplate: true } });
+    const { metricDefinitionId } = await makeMetricDefinition({ teamId, adminId: coachId, valueType: "numeric" });
+    const template = await api("/api/training-load/dashboards", { method: "POST", cookie: coachCookie, body: { name: "Concurrency B", ownerScope: "team", ownerTeamId: teamId, isTemplate: true } });
     const w = await makeWidgetHttp(coachCookie, template.body.dashboard);
 
     const c = await newClient();
