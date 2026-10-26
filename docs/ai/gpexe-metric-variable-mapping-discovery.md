@@ -10,8 +10,8 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 |---|---|
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
-| Last verified against commit | `deb2aa1` (merge of PR #217; the base of the canonical-guard pull request, C98) — re-verified for the Metrics Core catalog only (`trainingLoadMetricsCatalog.js`, `trainingLoadMetricsAccess.js`, `routes/trainingLoadMetrics.js`, A6, C82, C98); the other sections were not re-derived — before it `60aadb9` (merge of PR #163, M3-0; the base of the M2b pull request) — its tree is the integrated M3-0 branch's own (`a9a6d5e`), so nothing documented changed — before it `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
-| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), merged and deployed (PR #163, `60aadb9`; v36 directly confirmed on production by the owner's read-only post-check); M2b, the source-field evidence confirmation and its database guards v37 (C89–C97, J4), merged (PR #164, `66c50d6`; its deploy and v37 on the production database not re-verified in this update), no production field confirmed; the older catalog's guard on the canonical variables (C98, no migration) merged and deployed (PR #219, `7a9e59d`); M3a, the Variables view of the M3 frontend (section H, C80) over the M3-0 API, in Draft PR #218 — not merged, not deployed; the revision lifecycle (C91), the rest of the M3 frontend and M4–M6 not started** |
+| Last verified against commit | `6c7dfa4` (merge of PR #218, M3a) — `deb2aa1..6c7dfa4` changed the older catalog's write guard (C98, PR #219, already verified against `deb2aa1` below), the plan documents (PR #221) and the M3a frontend (PR #218, section H); no migration, mapping, binding, importer or snapshot contract changed; re-verified for the status line, section H and the K note on the two `23514` guard refusals — before it `deb2aa1` (merge of PR #217; the base of the canonical-guard pull request, C98) — re-verified for the Metrics Core catalog only (`trainingLoadMetricsCatalog.js`, `trainingLoadMetricsAccess.js`, `routes/trainingLoadMetrics.js`, A6, C82, C98); the other sections were not re-derived — before it `60aadb9` (merge of PR #163, M3-0; the base of the M2b pull request) — its tree is the integrated M3-0 branch's own (`a9a6d5e`), so nothing documented changed — before it `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
+| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), merged and deployed (PR #163, `60aadb9`; v36 directly confirmed on production by the owner's read-only post-check); M2b, the source-field evidence confirmation and its database guards v37 (C89–C97, J4), merged (PR #164, `66c50d6`; its deploy and v37 on the production database not re-verified in this update), no production field confirmed; the older catalog's guard on the canonical variables (C98, no migration) merged and deployed (PR #219, `7a9e59d`); M3a, the Variables view of the M3 frontend (section H, C80) over the M3-0 API, merged and deployed (PR #218, `6c7dfa4`, no migration); the revision lifecycle (C91), the rest of the M3 frontend and M4–M6 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
 **Which changes require a targeted re-verification of this document** (not a repeat of the whole
@@ -846,7 +846,7 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
       would need its own owner decision;
     - the 409 sentence names Training Load > Data configuration, the screen of Draft PR #218; until that
       screen is deployed only an API client can meet the sentence (no frontend writes through these
-      routes);
+      routes) — the screen is merged and deployed since 2026-10-26 (PR #218, `6c7dfa4`);
     - the order of the answers on an existing row (the independent review of the pull request, MEDIUM):
       the right (`404`), then the canonical variable (`409`), then the body (`400`), then the lock and
       the second decision, then the write; a missing, malformed, hidden or not-manageable id answers the
@@ -1618,15 +1618,19 @@ Three administrator views - since C80 in **Training Load → Data configuration 
   numeric, a canonical unit token, minimum and maximum, the session and drill levels, the daily
   aggregation, a zone or threshold condition) and a new semantic version; archived variables read-only;
   in a club workspace the system variables as a read-only reference (C88). Not a new registry.
-  *As built (M3a, open pull request; frontend only):* the Training Load tab **Data configuration** shows
+  *As built (M3a, PR #218, merged and deployed as `6c7dfa4`; frontend only):* the Training Load tab **Data configuration** shows
   this view (`frontend/metric-variables-{data,view,actions}.js`), offered only from the active workspace
   (platform, or a club workspace); the server still decides on every request. It sends only the J3 bodies
   (never an owner, actor or basis), checks the J3 input rules before sending, keeps one write at a time,
   and shows a lost answer as *Result not confirmed* · *Check result*, which sends the same request key and
   body again. The Source fields and Mappings views are not built yet, so the tab shows Variables alone.
-  Tested with a fake fetch (jsdom) and in Chromium at 1280 / 390 / 375 / 360 px against an **in-page
-  fake of the M3-0 routes**: the integration with the real API (a real server and database) is **not
-  confirmed yet**.
+  Tested with a fake fetch (jsdom) and in Chromium at 1280 / 390 / 375 / 360 px against an in-page fake
+  of the M3-0 routes. **The integration with the real API is confirmed** (2026-10-26, on disposable
+  databases migrated through v37; the branch's real server in process and the real frontend in Chromium;
+  the record is in PR #218):
+  the executor's run on head `6436461` (57 of 59 checks; the two others are the client's intended
+  normalisation of whitespace and of "-0") and the *Rukovodilac*'s own run on the same head (16 of 16).
+  Not checked on a physical device (iOS `datalist`, WebKit `select`).
 - **Source metrics** — source system and API family, field key and label, revisions with expected
   and proven units, value shape, session / drill scope, evidence status and references, unit and
   meaning confirmation.
@@ -1951,9 +1955,12 @@ Nothing of this list is open any more.
 
 **Carried into later PRs by the M1 reviews:** the PR that introduces an active mapping version (a
 later M2 PR, C59) maps the two `metric_definitions` / scope-capability guard refusals (`23514`, no
-constraint name) to a stable `409` in `backend/src/routes/trainingLoadMetrics.js` (`respondToWriteError`
-maps only `P0001` and `23505` today, so from the first active mapping version an archive, a new
-semantic version or a level removal of a pinned variable would answer `500`); M2 maps every native
+constraint name) to a stable `409` in `backend/src/routes/trainingLoadMetrics.js` — *superseded by C98
+(PR #219), no longer needed:* a mapping targets only a `system` or `club` definition (D4), and for those the
+older API refuses an archive, a new version and a level change with `409 canonical_variable_read_only`
+and writes nothing, so neither guard refusal can reach its `respondToWriteError` any more; the
+M3-0 API maps the pin guard to `409 variable_pinned` for a new version (J3), and the archive of R2
+(phase 2b of `docs/ai/metrics-core-plan.md`) is planned to answer the same; M2 maps every native
 error by constraint name and never forwards its DETAIL, and maps `40P01` to `try_again` (done in the
 first M2 PR, J1); M2 pre-locks the `unit_conversions` rows it relies on, then T2b → T3 → T4, before a
 transition (done for the version create and the submit, J1); indexes on the M1 foreign keys come with
