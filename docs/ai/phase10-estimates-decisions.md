@@ -10,6 +10,10 @@ Status: **decisions and recommendations, not built.** Phase 10 of `docs/ai/metri
 Nothing here is code, a migration or a schema. The formulas are new owner decisions, since
 `docs/ai/phase5a-discovery-and-contract.md` §3.7 says "No formula is part of this".
 
+**Numbering.** D1–D13 and Q1–Q5 here are phase 10's own numbers; the owner's words below use them. The discovery
+document has its own D1–D12. When these decisions go into its section C, they are written as P10-D1 … P10-D13 so the
+two never clash.
+
 Last verified against commit: `deb2aa1`.
 
 **Basis:**
@@ -36,8 +40,10 @@ session's transcript):
 - the window: „180 dana moze da se menja”;
 - Q5: „Burst i brake se preuzimaju kao broj koji je neko uradio funkcioniše isto kao i acc dec. Ne znam sta je tu
   nesljasno”;
-- D13: „Može, prenesi (a)”;
-- the whole package: „Potvrdi i da krenemo”.
+- D13: „Može, prenesi (a)”.
+
+The owner then adopted the plan with these decisions in the executor's chat: „ok: plan v2 sa R1, zelena zona,
+revizori, prenete odluke za fazu 10 i R1; D1, D3–D5, D8–D12 ostaju preporuke.”
 
 ## 0. General rules (every method)
 
@@ -52,8 +58,13 @@ session's transcript):
    - Nothing is deleted by itself.
 3. **No estimate from an estimate.** Only measured values (`api_import` / `csv_import`) are an input. Other athletes'
    manual values and estimates are an input of no method. The one exception is D7a (b), section 5.
-4. **The right.** An estimate is made only by someone who may decide an athlete's state in the session (§3.6: the
-   team coach, the club admin, the platform admin), under the same lock order.
+4. **The right (D12, recommendation).** An estimate is made only by someone who may decide an athlete's state in the
+   session, under the same lock order. That is §3.6 (`training.lock_activity_decider`):
+   - the team coach, the club admin or the platform admin;
+   - checked on exactly the path of the active workspace, with no priority order between the roles;
+   - the import approver grant plays no role.
+
+   The write also needs the target Metrics Core definition to be visible to the caller.
 5. **Target variables.** After M4 (phase 9) an estimate is written into a canonical Metrics Core variable, under the
    definition's current version that the measurement of that team uses (section 8). That is why phase 10 follows
    phase 9.
@@ -105,7 +116,8 @@ say whether the tracks overlap in time.
   - So the chosen values lose their GPEXE identity and the idempotency of a re-import, and a later correction of that
     track in GPEXE is not recognised as its change.
   - *Alternative:* the chosen track stays `api_import` with its source identity, and the manual choice is recorded as
-    a decision.
+    a decision. It would change the scope the owner accepted (every value of this phase is an estimate or a manual
+    entry, never a measurement), so choosing it needs the owner.
   - *Recommendation:* `estimated`. It is simpler and never looks like a plain measurement, and the loss of
     correction tracking is accepted knowingly.
 - **In `reference`:**
@@ -174,7 +186,8 @@ not entered by hand.
 **Precondition.** The GPEXE import accepts only the `FULL TRAINING` category today (`ACTIVITY_TYPE_BY_CATEGORY`).
 Matches are refused (`unsupported_category`), so the database holds no measured match from GPEXE.
 - Importing GPEXE matches (mapping a GPEXE category to the activity type `match`, which already exists in
-  `training.activity_types`) is a separate owner decision and a separate phase (D9).
+  `training.activity_types`) is a separate owner decision and a separate phase (D9). Until then, D7a lets method 5
+  run on manually entered matches.
 
 **D7a (owner): until matches are imported, both ways are allowed:**
 - (a) a **manual entry** of a match's values (`entry_method = 'manual'`);
@@ -227,8 +240,9 @@ method is missing.
 - **Team settings (Q3, owner):**
   - N, the minimum number of matches, the minimum minutes played and the window in days (default 180; the owner:
     „180 dana moze da se menja”) are team settings of method 5, not part of `method_version`;
-  - the coach changes them for their own team, with the same right as D12 (the team coach, the club admin, the
-    platform admin).
+  - **owner:** the coach changes them for their own team („Trener za svoj tim”);
+  - **recommendation (D12):** the club admin and the platform admin may change them too, as they may decide an
+    athlete's state (§3.6).
 - **The *Rukovodilac*'s proposal for the settings**, so that it is always visible what an estimate rests on:
   - every estimate records in `reference` the settings it was computed with;
   - every change of a setting has an audit row (who, when, old, new);
@@ -252,7 +266,7 @@ method is missing.
 
 | # | Question | Decision / recommendation |
 |---|---|---|
-| D1 | Every value of this phase as `estimated` (the track choice included), losing the chosen track's GPEXE identity (2.1) | recommendation: yes (alternative: `api_import` + a decision) |
+| D1 | Every value of this phase as `estimated` (the track choice included), losing the chosen track's GPEXE identity (2.1) | recommendation: yes (the alternative, `api_import` + a decision, changes the accepted scope and needs the owner) |
 | D2 | Burst / brake | **owner:** they enter the estimates; working definition: accelerations and decelerations above 80 % of the A-V / D-V profile, linear in speed; **Q1 (b):** a description until GPEXE confirms it, C97 stays; **Q5:** every method, like acc / dec |
 | D3 | Sum of tracks: two tracks only; the coach's confirmation is the only basis (the system cannot check the overlap); max speed = the larger | recommendation: yes |
 | D4 | Copy: same activity only; no automatic following of the source | recommendation: yes |
@@ -261,13 +275,13 @@ method is missing.
 | D7 | Match: type `match`; weighted rate × entered minutes | **owner:** played ≥ 60 min (Q2); N = 5, at least 5 matches, window 180 days (Q4); N, the minimums and the window are team settings the coach changes for their own team (Q3) |
 | D7a | Until matches are imported | **owner:** both a manual entry and an estimate by D7 over manual matches, visibly marked |
 | D8 | SPEEDmax in the per-minute method | recommendation: refuse (`not_rate_scalable`) |
-| D9 | Importing GPEXE matches as the precondition of method 5 | recommendation: a separate decision and phase, before phase 10 |
+| D9 | Importing GPEXE matches for method 5 | recommendation: a separate decision and phase; until then D7a covers method 5 with manual matches |
 | D10 | Dashboards: estimates excluded by default, included explicitly with a label | recommendation: yes |
 | D11 | Method version: every change raises it; no automatic recomputation | recommendation: yes |
 | D12 | The right: the same as deciding an athlete's state in a session (§3.6) | recommendation: yes |
 | D13 | The rejected GPS track | **owner: (a):** only its source identity, who and when, in the same decision record as D1; none of its data, no §3.5 extension, no migration of its own |
 
-## 10. Open technical question (for the phase 10 contract, not an owner decision)
+## 10. Open technical questions (for the phase 10 contract, not owner decisions)
 
 - **T1.** The choice of one track (D1) is made, and a new GPEXE check brings different content for one of the two
   tracks.
@@ -276,3 +290,6 @@ method is missing.
     existing `change_pending` / "Measured values arrived after the decision" path.
   - It also has to say what holds until the confirmation. Proposal: the old estimate stays visible, marked as having
     a changed source.
+- **T2.** Who sees `reference`. It holds other athletes' ids and a snapshot of their values, and athletes may be
+  minors. The contract states the audience; a viewer who may not see a source athlete gets that part left out
+  (security review of phase 0).
