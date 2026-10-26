@@ -32,6 +32,7 @@ import { enterDataSourcesSection, loadDataSources } from "./data-sources-data.js
 import { handleStorageAdminAction, submitStorageAdminForm } from "./media-storage-admin-actions.js";
 import { enterStorageAdminSection, loadStorageAdmin, storageAdminContext, storageAdminNeedsLoad } from "./media-storage-admin-data.js";
 import { handleSourceConnectionsAction, handleSourceConnectionsBeforeUnload, submitSourceConnectionsForm } from "./source-connections-actions.js";
+import { handleVariablesAction, handleVariablesInput, submitVariablesForm } from "./metric-variables-actions.js";
 import { enterSourceConnectionsSection, loadSourceConnections, sourceConnectionsNeedLoad } from "./source-connections-data.js";
 import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
 import { loadPendingCount as loadTestsPendingCount, loadTests, reportDeviceTimezone } from "./tests-data.js";
@@ -472,6 +473,9 @@ function bindEvents() {
     if (event.target.matches?.(AUTOGROW_SELECTOR)) autosizeTextarea(event.target);
   });
   els.content.addEventListener("change", handleContentChange);
+  // Data configuration -> Variables: a select or a level box also reports its
+  // choice through "change", for a browser that fires no "input" for it.
+  els.content.addEventListener("change", (event) => handleVariablesInput(event.target, { render: renderActiveTrainingLoadSurface }));
   // Imports (phase 4b): the sessions calendar is a <details>; the browser
   // opens and folds it itself, and its own "toggle" event (it does not
   // bubble, hence the capture) keeps that state for the next repaint. A
@@ -608,6 +612,15 @@ async function handleContentSubmit(event) {
       dataset: { action: `training-load-analysis-${trainingLoadForm.dataset.tlAnalysisForm}-form-submit` },
       querySelector: (selector) => trainingLoadForm.querySelector(selector),
     }, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate });
+    return;
+  }
+
+  // Training Load -> Data configuration -> Variables: create a variable or a
+  // new version of one.
+  const variablesForm = event.target.closest("[data-metric-variables-form]");
+  if (variablesForm) {
+    event.preventDefault();
+    await submitVariablesForm(variablesForm, { render: renderActiveTrainingLoadSurface });
     return;
   }
 
@@ -1188,6 +1201,9 @@ function handleContentInput(event) {
   // athlete-search box all carry their own data-action directly on the
   // input element itself (same convention as the WELLNESS slider above) -
   // handleTrainingLoadAction reads the live value straight off it.
+  // Data configuration -> Variables: the form's values and the list filter.
+  if (handleVariablesInput(event.target, { render: renderActiveTrainingLoadSurface })) return;
+
   const trainingLoadInput = event.target.closest("[data-action^='training-load-']");
   if (trainingLoadInput && trainingLoadInput.matches("input, textarea")) {
     // Dashboards UX H1: the dashboard picker's and the metric panel's
@@ -2795,6 +2811,7 @@ async function handleContentClick(event) {
   if (await handleTaxonomyAction(action, { renderOrganizationPanel })) return;
   if (handleWeeklyAction(action, { moveWeek, renderWeeklyRoot })) return;
   if (await handleTestsAction(action, { renderTests: renderActiveTestsSurface })) return;
+  if (await handleVariablesAction(action, { render: renderActiveTrainingLoadSurface })) return;
   if (await handleTrainingLoadAction(action, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate })) return;
   handleMediaAction(action);
 }

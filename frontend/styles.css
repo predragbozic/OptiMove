@@ -17610,13 +17610,14 @@ p.muted.gpexe-approve-note {
 /* A disclosure marker on the summaries that display: flex removed. */
 .data-sources-tech summary::before,
 .data-sources-history summary::before {
-  content: "B8";
+  content: "\25B8";
   margin-right: 6px;
 }
+.data-sources-tech[open] > summary::before,
 .data-sources-tech details[open] > summary::before,
 .data-sources-history[open] > summary::before,
 details[open] > .data-sources-tech-summary::before {
-  content: "BE";
+  content: "\25BE";
 }
 .source-connections-team-list .data-sources-state {
   justify-self: start;
@@ -18321,3 +18322,263 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 .exercise-block-pick-image { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; }
 .exercise-block-cover-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .exercise-collections-overlay .compact-button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+
+/* Training Load -> Data configuration -> Variables (M3a): the list, one
+   variable with its versions, and the create / new-version form. Every
+   control is a 44px target and every field 16px, so iOS does not zoom. */
+.metric-variables {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.metric-variables h2,
+.metric-variables h3,
+.metric-variables p {
+  margin: 0;
+}
+.metric-variables-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.metric-variables-head > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 260px;
+}
+.metric-variables .plain-button {
+  min-height: 44px;
+}
+.metric-variables .plain-button.ghost {
+  background: transparent;
+  border-color: var(--line-strong);
+  color: var(--muted);
+  font-weight: 600;
+}
+.metric-variables-back {
+  justify-self: start;
+}
+.metric-variables-notice {
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.metric-variables-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 16px;
+}
+.metric-variables-segmented {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.metric-variables-segmented .plain-button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+.metric-variables-segmented .plain-button.is-active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(22, 34, 45, 0.08);
+}
+.metric-variables select,
+.metric-variables input[type="text"] {
+  font-size: 16px;
+  min-height: 44px;
+  width: 100%;
+}
+/* The selects read like the app's text fields. */
+.metric-variables select {
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+.metric-variables select:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(31, 111, 104, 0.14);
+}
+.metric-variables-state {
+  min-width: 200px;
+}
+.metric-variables-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.metric-variables-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.metric-variables-item:hover {
+  border-color: var(--line-strong);
+}
+.metric-variables-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.metric-variables-item-name {
+  font-weight: 600;
+}
+.metric-variables-item .item-badge {
+  justify-self: start;
+}
+.metric-variables-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px 16px;
+  margin: 0;
+}
+.metric-variables-facts dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.metric-variables-facts dd {
+  margin: 0;
+}
+.metric-variables-versions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.metric-variables-version {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.metric-variables-form {
+  grid-template-columns: minmax(0, 1fr);
+}
+.metric-variables-fieldset {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.metric-variables-fieldset legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+.metric-variables-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px 14px;
+}
+.metric-variables-grid {
+  align-items: start;
+}
+.metric-variables-grid .search-field,
+.metric-variables-form .search-field {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  margin-bottom: 0;
+}
+.metric-variables-form .search-field > span {
+  margin-bottom: 0;
+}
+/* "(optional)" stays on the label's line. */
+.metric-variables-form .search-field span span {
+  display: inline;
+  margin: 0;
+}
+.metric-variables-levels {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+}
+.metric-variables-levels > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.metric-variables-levels input[type="checkbox"] {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+}
+.metric-variables-levels > .muted,
+.metric-variables-levels > .metric-variables-field-error {
+  flex-basis: 100%;
+}
+.metric-variables-field-error,
+.metric-variables-form .search-field > span.metric-variables-field-error {
+  color: var(--danger);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.metric-variables [aria-invalid="true"] {
+  border-color: var(--danger);
+}
+/* Not a failure: an outcome not known yet (a caution, not an error). */
+.metric-variables-unconfirmed {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--tlc-warning, #8a5a00) 45%, transparent);
+  border-left-width: 4px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--tlc-warning, #8a5a00) 8%, var(--surface));
+}
+@media (max-width: 760px) {
+  .metric-variables-controls,
+  .metric-variables-segmented {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .metric-variables-segmented {
+    grid-template-columns: 1fr 1fr;
+  }
+  .metric-variables-state {
+    min-width: 0;
+  }
+  .metric-variables-head > .plain-button,
+  .metric-variables-form .data-sources-form-actions .plain-button,
+  .metric-variables > .plain-button {
+    width: 100%;
+    justify-content: center;
+  }
+  .metric-variables-grid,
+  .metric-variables-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
