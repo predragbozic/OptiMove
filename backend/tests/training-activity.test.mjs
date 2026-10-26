@@ -942,11 +942,15 @@ test("16. the DB trigger enforces scope capability unconditionally — a definit
   );
 });
 
+// The definitions below are the coach's own (user-owned): a club or system
+// definition is a canonical variable (C98), which this older catalog API no
+// longer creates or changes; the scope-capability, archive and version paths
+// and their locks are the same for every owner scope.
 test("17. creating a metric definition with an explicit scopeCapabilities list configures it immediately, and GET returns them", async () => {
   const { clubId, coachCookie } = await makeClubCoach("scopecap17");
   const created = await api("/api/training-load/metrics/definitions", {
     method: "POST", cookie: coachCookie,
-    body: { key: `configured_${uid()}`, label: "Configured", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric", scopeCapabilities: ["session", "component"] },
+    body: { key: `configured_${uid()}`, label: "Configured", ownerScope: "user", unit: "m", valueType: "numeric", scopeCapabilities: ["session", "component"] },
   });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   assert.deepEqual([...created.body.row.scope_capabilities].sort(), ["component", "session"]);
@@ -961,7 +965,7 @@ test("18. PUT scope-capabilities configures a previously-unconfigured definition
   const athlete = await makeAthleteInClub(clubId);
   const created = await api("/api/training-load/metrics/definitions", {
     method: "POST", cookie: coachCookie,
-    body: { key: `unconfigured_then_set_${uid()}`, label: "Unconfigured Then Set", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric" },
+    body: { key: `unconfigured_then_set_${uid()}`, label: "Unconfigured Then Set", ownerScope: "user", unit: "m", valueType: "numeric" },
   });
   assert.equal(created.status, 201);
   assert.deepEqual(created.body.row.scope_capabilities, []);
@@ -987,7 +991,7 @@ test("19. submitting a value against a definition with NO configured scope capab
   const athlete = await makeAthleteInClub(clubId);
   const created = await api("/api/training-load/metrics/definitions", {
     method: "POST", cookie: coachCookie,
-    body: { key: `still_unconfigured_${uid()}`, label: "Still Unconfigured", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric" },
+    body: { key: `still_unconfigured_${uid()}`, label: "Still Unconfigured", ownerScope: "user", unit: "m", valueType: "numeric" },
   });
   assert.equal(created.status, 201);
 
@@ -1011,7 +1015,7 @@ test("20. removing a scope capability that already has real historical values is
   const athlete = await makeAthleteInClub(clubId);
   const created = await api("/api/training-load/metrics/definitions", {
     method: "POST", cookie: coachCookie,
-    body: { key: `history_protected_${uid()}`, label: "History Protected", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric", scopeCapabilities: ["session"] },
+    body: { key: `history_protected_${uid()}`, label: "History Protected", ownerScope: "user", unit: "m", valueType: "numeric", scopeCapabilities: ["session"] },
   });
   assert.equal(created.status, 201);
   const eventRes = await api("/api/training-load/metrics/events", {
@@ -1267,7 +1271,7 @@ test("31. capability removal vs value insert race: the value insert wins first, 
   const athlete = await makeAthleteInClub(clubId);
   const created = await api("/api/training-load/metrics/definitions", {
     method: "POST", cookie: coachCookie,
-    body: { key: `caprace31_${uid()}`, label: "Cap Race 31", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric", scopeCapabilities: ["session"] },
+    body: { key: `caprace31_${uid()}`, label: "Cap Race 31", ownerScope: "user", unit: "m", valueType: "numeric", scopeCapabilities: ["session"] },
   });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const defId = created.body.row.id;
@@ -1322,7 +1326,7 @@ test("32. capability removal vs value insert race: the removal wins first, so th
   const athlete = await makeAthleteInClub(clubId);
   const created = await api("/api/training-load/metrics/definitions", {
     method: "POST", cookie: coachCookie,
-    body: { key: `caprace32_${uid()}`, label: "Cap Race 32", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric", scopeCapabilities: ["session"] },
+    body: { key: `caprace32_${uid()}`, label: "Cap Race 32", ownerScope: "user", unit: "m", valueType: "numeric", scopeCapabilities: ["session"] },
   });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const defId = created.body.row.id;
@@ -1496,16 +1500,16 @@ test("36. the paginated definitions list returns scope_capabilities for every ro
   const unconfiguredKey = `listcaps_unconfigured_${uid()}`;
   const configured = await api("/api/training-load/metrics/definitions", {
     method: "POST", cookie: coachCookie,
-    body: { key: configuredKey, label: "List Caps Configured", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric", scopeCapabilities: ["session", "component"] },
+    body: { key: configuredKey, label: "List Caps Configured", ownerScope: "user", unit: "m", valueType: "numeric", scopeCapabilities: ["session", "component"] },
   });
   assert.equal(configured.status, 201);
   const unconfigured = await api("/api/training-load/metrics/definitions", {
     method: "POST", cookie: coachCookie,
-    body: { key: unconfiguredKey, label: "List Caps Unconfigured", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric" },
+    body: { key: unconfiguredKey, label: "List Caps Unconfigured", ownerScope: "user", unit: "m", valueType: "numeric" },
   });
   assert.equal(unconfigured.status, 201);
 
-  const list = await api(`/api/training-load/metrics/definitions?search=listcaps_&ownerScope=club`, { cookie: coachCookie });
+  const list = await api(`/api/training-load/metrics/definitions?search=listcaps_&ownerScope=user`, { cookie: coachCookie });
   assert.equal(list.status, 200, JSON.stringify(list.body));
   const configuredRow = list.body.rows.find((r) => r.key === configuredKey);
   const unconfiguredRow = list.body.rows.find((r) => r.key === unconfiguredKey);
@@ -1792,7 +1796,7 @@ test("46. new-entry value write vs archive: the value write wins first, so archi
   const athlete = await makeAthleteInClub(clubId);
   const created = await api("/api/training-load/metrics/definitions", {
     method: "POST", cookie: coachCookie,
-    body: { key: `verrace46_${uid()}`, label: "Version Race 46", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric", scopeCapabilities: ["session"] },
+    body: { key: `verrace46_${uid()}`, label: "Version Race 46", ownerScope: "user", unit: "m", valueType: "numeric", scopeCapabilities: ["session"] },
   });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const defId = created.body.row.id;
@@ -1845,7 +1849,7 @@ test("47. archive vs new-entry value write: archive wins first, so the value wri
   const athlete = await makeAthleteInClub(clubId);
   const created = await api("/api/training-load/metrics/definitions", {
     method: "POST", cookie: coachCookie,
-    body: { key: `verrace47_${uid()}`, label: "Version Race 47", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric", scopeCapabilities: ["session"] },
+    body: { key: `verrace47_${uid()}`, label: "Version Race 47", ownerScope: "user", unit: "m", valueType: "numeric", scopeCapabilities: ["session"] },
   });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const defId = created.body.row.id;
@@ -1900,7 +1904,7 @@ test("48. a new version bump vs new-entry value write: the version bump wins fir
   const athlete = await makeAthleteInClub(clubId);
   const created = await api("/api/training-load/metrics/definitions", {
     method: "POST", cookie: coachCookie,
-    body: { key: `verrace48_${uid()}`, label: "Version Race 48", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric", scopeCapabilities: ["session"] },
+    body: { key: `verrace48_${uid()}`, label: "Version Race 48", ownerScope: "user", unit: "m", valueType: "numeric", scopeCapabilities: ["session"] },
   });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const defId = created.body.row.id;
