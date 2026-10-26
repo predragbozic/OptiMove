@@ -175,16 +175,36 @@ function renderExerciseFilterSelect(filter, value, options, attr) {
   if (!options?.length) return "";
   const listId = `exercise-filter-options-${filter.key}`;
   const currentValue = value && options.includes(value) ? value : "";
+  // The text shows an offered option or nothing; the hidden twin keeps the
+  // filter actually applied, so a filter whose value is no longer offered is
+  // cleared by the first keystroke that names no option.
   return `
     <label class="search-field exercise-filter-field">
       <span>${escapeHtml(filter.label)}</span>
       <input type="search" list="${escapeAttr(listId)}" placeholder="All" autocomplete="off" value="${escapeAttr(currentValue)}" data-exercise-filter-search>
-      <input type="hidden" ${attr}="${escapeAttr(filter.key)}" value="${escapeAttr(currentValue)}">
+      <input type="hidden" ${attr}="${escapeAttr(filter.key)}" value="${escapeAttr(value || "")}">
       <datalist id="${escapeAttr(listId)}">
         ${options.map((option) => `<option value="${escapeAttr(option)}"></option>`).join("")}
       </datalist>
     </label>
   `;
+}
+
+// A typed filter field (renderExerciseFilterSelect) hands its choice to its
+// hidden twin, whose "change" sets the filter and reads the list: the option
+// the text names - case and outer spaces aside, in the option's own spelling -
+// or no filter. Only an actual change is passed on, so typing on without
+// naming an option reads the list once, not at every key. Called for typing
+// in #content (app.js, the Builder) and in the view toolbar (the library).
+export function syncExerciseFilterSearch(searchInput) {
+  const hidden = searchInput.closest(".exercise-filter-field")?.querySelector('input[type="hidden"]');
+  if (!hidden) return;
+  const term = searchInput.value.trim().toLocaleLowerCase();
+  const option = term ? Array.from(searchInput.list?.options || []).find((candidate) => candidate.value.toLocaleLowerCase() === term) : null;
+  const value = option ? option.value : "";
+  if (hidden.value === value) return;
+  hidden.value = value;
+  hidden.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function renderExerciseFilterToggle(key, label, checked, attr) {

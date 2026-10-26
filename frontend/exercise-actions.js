@@ -6,7 +6,7 @@ import { els } from "./dom.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions, loadMarkedExerciseVisibility } from "./exercise-data.js";
 import { normalizeExerciseView, saveExerciseViewPreference } from "./exercise-view-modes.js";
 import { EXERCISE_SELECTION_LIMIT, openExerciseBulkMove } from "./exercise-bulk-move.js";
-import { filterIconSvg, isSelectableExercise, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters, renderExerciseSelectionBar, renderExerciseVisibilityFilters, renderExerciseOwnerOptions } from "./exercise-library.js";
+import { filterIconSvg, isSelectableExercise, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters, renderExerciseSelectionBar, renderExerciseVisibilityFilters, renderExerciseOwnerOptions, syncExerciseFilterSearch } from "./exercise-library.js";
 import { emptyExerciseFilters, emptyExerciseOptions, EXERCISE_FILTERS, state } from "./state.js";
 import { debounce, escapeHtml } from "./utils.js";
 import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
@@ -206,6 +206,11 @@ export async function loadExercises(handlers) {
     state.exerciseSearch.limit = 30;
     searchExercises(input.value, handlers);
   }, 250));
+  // The typed filter fields are in the toolbar, outside #content where
+  // app.js hears typing: their own listener hands the choice on.
+  document.querySelectorAll("[data-exercise-filter-search]").forEach((field) => {
+    field.addEventListener("input", () => syncExerciseFilterSearch(field));
+  });
   document.querySelectorAll("[data-exercise-filter]").forEach((control) => {
     control.addEventListener("change", () => {
       state.exerciseSearch.filters[control.dataset.exerciseFilter] =
