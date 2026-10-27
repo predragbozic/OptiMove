@@ -1,5 +1,10 @@
 # Dashboard D6 — verification and review
 
+Subsequent whole-chain review, npm remediation, current-main validation and merge
+gates are recorded in [dashboard-integration-review.md](dashboard-integration-review.md).
+The HIGH findings below describe the earlier checkpoint and are now resolved;
+the full-suite baseline failures and release HOLD remain explicit in that update.
+
 ## Scope and dependency
 
 The D0–D6 branches are stacked on the approved PR #220 commit
