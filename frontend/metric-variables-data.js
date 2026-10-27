@@ -71,14 +71,32 @@ export { v as variablesState };
 
 // Who is looking, from the active workspace the client already holds (/me).
 // The platform workspace is a platform admin's; a club workspace is its club
-// admin's or a platform admin's for support (C80). The server decides again
-// on every request and answers anyone else with the same 404.
+// admin's or a platform admin's for support (C80). A team workspace of a club
+// is its coach's (R2, C99): the club's variables in the reduced view (Q7),
+// renamed, archived and restored, never created or versioned. The server
+// decides again on every request and answers anyone else with the same 404.
 export function variablesContext(user = state.currentUser) {
   const ws = user?.activeWorkspace || null;
   if (!ws) return null;
-  if (ws.type === "platform") return { owner: "system", clubId: null, clubName: "" };
-  if (ws.type === "club" && ws.scopeId) return { owner: "club", clubId: String(ws.scopeId), clubName: ws.label || "" };
+  if (ws.type === "platform") return { owner: "system", clubId: null, clubName: "", view: "admin" };
+  if (ws.type === "club" && ws.scopeId) return { owner: "club", clubId: String(ws.scopeId), clubName: ws.label || "", view: "admin" };
+  if (ws.type === "team" && ws.scopeId && ws.clubId) {
+    const clubId = String(ws.clubId);
+    return { owner: "club", clubId, clubName: "", view: "coach", teamName: ws.label || "", basis: teamBasis(user, clubId) };
+  }
   return null;
+}
+// The basis the server writes for this user's changes in a team workspace
+// (J3b.3: the strongest role the user holds there - platform admin, then the
+// club's admin, then the team's coach), from the same facts /me gives: a
+// platform workspace, or this club's own workspace. It decides only what the
+// archive form promises about a later restore (Q8); null when /me does not say.
+function teamBasis(user, clubId) {
+  const available = user?.availableWorkspaces;
+  if (!Array.isArray(available)) return null;
+  if (available.some((w) => w?.type === "platform")) return "platform_admin";
+  if (available.some((w) => w?.type === "club" && String(w.scopeId || "") === clubId)) return "club_admin";
+  return "team_coach";
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +133,10 @@ function write(path, body) {
 }
 export const createVariable = (body) => write(BASE, body);
 export const createVersion = (id, body) => write(`${BASE}/${encodeURIComponent(id)}/versions`, body);
+// R2 (J3b.2): a new name, an archive, a restore of an existing variable.
+export const renameVariable = (id, body) => write(`${BASE}/${encodeURIComponent(id)}/rename`, body);
+export const archiveVariable = (id, body) => write(`${BASE}/${encodeURIComponent(id)}/archive`, body);
+export const restoreVariable = (id, body) => write(`${BASE}/${encodeURIComponent(id)}/restore`, body);
 
 export function errorInfo(error) {
   const data = error?.data && typeof error.data === "object" ? error.data : null;
@@ -146,6 +168,8 @@ export function outcomeUnknown(info) {
 const SETTLED_ON_CHECK = new Set([
   "invalid_body", "invalid_unit", "invalid_condition", "key_required", "key_taken",
   "current_version_changed", "variable_not_active", "variable_pinned", "version_unchanged",
+  // R2's refusals come after the request record too (J3b.2, step 6).
+  "variable_changed", "rename_unchanged", "variable_active", "restore_by_admin",
 ]);
 export const checkSettles = (info) => SETTLED_ON_CHECK.has(info.code);
 export function checkNoteText(info) {
@@ -172,11 +196,30 @@ const CODE_TEXT = {
   version_unchanged: "Nothing changed: these values are the same as the current version's.",
   request_key_reused: "An earlier save of this form may already be stored. Cancel and check the list before saving again.",
   invalid_query: "The list could not be read with these settings. Reload.",
+  variable_changed: "Someone changed this variable in the meantime, so your change was not saved. This is how it is now; make your change again if it is still needed.",
+  rename_unchanged: "Nothing changed: these names are the ones already saved.",
+  variable_active: "This variable is active (perhaps restored in the meantime), so there is nothing to restore.",
+  restore_by_admin: "An administrator archived this variable, so only an administrator can restore it.",
 };
-export function codeText(info) {
+// The same code means a different thing in each form (R2, J3b.2).
+const MODE_TEXT = {
+  rename: {
+    variable_not_active: "This variable is archived now, so it cannot be renamed. Nothing was saved.",
+    // Only a coach is refused this (J3b.2).
+    variable_pinned: "A data source is now mapped to this variable (an active mapping), so only an administrator of the club can rename it. Nothing was saved.",
+  },
+  archive: {
+    variable_not_active: "This variable is already archived.",
+    variable_pinned: "A data source is now mapped to this variable (an active mapping), so it cannot be archived now. Nothing was saved.",
+  },
+  restore: {
+    variable_pinned: "A data source is now mapped to this variable (an active mapping), so it cannot be restored now. Nothing was saved.",
+  },
+};
+export function codeText(info, mode = "") {
   // The server's own sentence names API fields; the form says it in its words.
   if (info.code === "invalid_body") return "Not saved: the server refused a value. Check the fields and save again.";
-  return CODE_TEXT[info.code] || (info.status ? "Something went wrong. Nothing was saved." : "No answer from the server.");
+  return MODE_TEXT[mode]?.[info.code] || CODE_TEXT[info.code] || (info.status ? "Something went wrong. Nothing was saved." : "No answer from the server.");
 }
 
 const READINESS_TEXT = {
@@ -250,14 +293,53 @@ export function draftFromVersion(version) {
   return draft;
 }
 
+// The three R2 forms (J3b.2) never change how a variable is measured.
+export const CHANGE_MODES = Object.freeze(["rename", "archive", "restore"]);
+
+// The names a rename edits. A name the form cannot show exactly as it is saved
+// is "locked": read only, and never sent, until the coach chooses to replace
+// it. Why, in this order: the read may have cut it at its limit ("cut":
+// `truncated` says that some text was cut, not which, so every name at its
+// limit counts), it holds a line break ("lines"), or spacing a field would tidy
+// ("spaces": a double space, a space at an end, a non-breaking space).
+export const NAME_FIELDS = Object.freeze(["label", "shortLabel", "description"]);
+const LINE_BREAK = /[\n\r\v\f\u0085\u2028\u2029]/;
+function nameLock(value, field, truncated) {
+  if (!value) return false;
+  if (truncated && [...value].length >= LIMITS[field]) return "cut";
+  if (LINE_BREAK.test(value)) return "lines";
+  return value !== oneLine(value) ? "spaces" : false;
+}
+function readNames(variable) {
+  const names = {};
+  const locked = {};
+  for (const field of NAME_FIELDS) {
+    names[field] = variable?.[field] || "";
+    locked[field] = nameLock(names[field], field, variable?.truncated === true);
+  }
+  return { names, locked };
+}
+
 export function openForm(mode, { variable = null } = {}) {
   const current = variable?.currentVersion || null;
+  const change = CHANGE_MODES.includes(mode);
+  // A rename starts from the names as read; a name goes into the request only
+  // when what the coach typed differs from what its field showed: the saved
+  // name, as one line.
+  const read = mode === "rename" ? readNames(variable) : null;
   return {
     mode,
     variableId: variable?.id || null,
     variableLabel: variable?.label || "",
     expectedCurrentVersionId: current?.id || null,
-    draft: mode === "version" ? draftFromVersion(current) : emptyDraft(),
+    labelsToken: change ? variable?.labelsToken || null : null,
+    original: read ? read.names : null,
+    locked: read ? read.locked : null,
+    // A locked name the coach chose to replace: saving replaces the whole saved text.
+    replacing: read ? { label: false, shortLabel: false, description: false } : null,
+    // Set by a 409 variable_changed: the names someone else saved meanwhile.
+    conflict: null,
+    draft: mode === "version" ? draftFromVersion(current) : read ? { ...emptyDraft(), ...read.names } : emptyDraft(),
     dirty: false,
     requestKey: newRequestKey(),
     busy: false,
@@ -303,9 +385,89 @@ function decimalCompare(a, b) {
   return x === y ? 0 : x > y ? 1 : -1;
 }
 
+// The body of a rename, an archive or a restore (J3b.2) and its field errors;
+// `body` is null while a field is wrong or, for a rename, nothing changed
+// (`unchanged`).
+function buildChangeRequest(form) {
+  const d = form.draft;
+  const errors = {};
+  if (form.mode === "rename") {
+    const changed = {};
+    for (const [field, max, required] of [["label", LIMITS.label, true], ["shortLabel", LIMITS.shortLabel, false], ["description", LIMITS.description, false]]) {
+      // A locked name is never sent: the saved text is kept whole.
+      if (form.locked?.[field]) continue;
+      const value = oneLine(d[field]);
+      // Only a name the coach changed from what its field showed (the saved
+      // name, as one line) is checked and sent: a stored one the server would
+      // refuse today is kept as it is (Q10, J3b.9).
+      if (value === oneLine(form.original?.[field])) continue;
+      const message = textError(value, max, { required });
+      if (message) errors[field] = message;
+      else changed[field] = value || null;
+    }
+    if (Object.keys(errors).length) return { body: null, errors };
+    if (!Object.keys(changed).length) return { body: null, errors, unchanged: true };
+    return { errors, body: { requestKey: form.requestKey, labelsToken: form.labelsToken, ...changed } };
+  }
+  const reason = oneLine(d.reason);
+  const message = textError(reason, LIMITS.reason, { required: form.mode === "archive" });
+  if (message) return { body: null, errors: { reason: message } };
+  return { errors, body: { requestKey: form.requestKey, ...(reason ? { reason } : {}) } };
+}
+
+// "Replace": the coach chooses to type over a locked name. The field starts
+// from the text shown, as one line; saving replaces the whole saved text.
+// What replacing a locked name loses: its lock reason, and for a name that may
+// be cut, whether its line breaks are joined too ("cut_lines").
+const replaceReason = (lock, value) => (lock === "cut" && LINE_BREAK.test(value) ? "cut_lines" : lock);
+export function replaceName(form, field) {
+  if (form?.mode !== "rename" || !form.locked?.[field]) return false;
+  // Why it was locked stays known, so the field can say what replacing loses.
+  form.replacing[field] = replaceReason(form.locked[field], form.original[field]);
+  form.locked[field] = false;
+  form.draft[field] = oneLine(form.original[field]);
+  return true;
+}
+
+// A 409 variable_changed (J3b.2) answers with the variable as it is saved now
+// (`current`, with its new token). The form stays open on it: a name the coach
+// changed keeps the coach's text, every other name shows the saved value, and
+// the coach saves again - a new attempt, so a new request key. `conflict` holds
+// each name someone else changed. False when `current` cannot be renamed by
+// this user any more (the form is then closed instead).
+export function rebaseRename(form, current) {
+  if (form?.mode !== "rename" || !current || typeof current.labelsToken !== "string" || !(current.actions || []).includes("rename")) return false;
+  const read = readNames(current);
+  const conflict = {};
+  for (const field of NAME_FIELDS) {
+    const edited = !form.locked[field] && oneLine(form.draft[field]) !== oneLine(form.original[field]);
+    if (edited) {
+      // The coach's text stays and replaces whatever is saved now.
+      form.locked[field] = false;
+      form.replacing[field] = read.locked[field] ? replaceReason(read.locked[field], read.names[field]) : false;
+    } else {
+      form.locked[field] = read.locked[field];
+      form.replacing[field] = false;
+      form.draft[field] = read.names[field];
+    }
+    if (read.names[field] !== form.original[field]) {
+      conflict[field] = { now: read.names[field], edited, same: edited && oneLine(form.draft[field]) === oneLine(read.names[field]) };
+    }
+  }
+  form.original = read.names;
+  form.labelsToken = current.labelsToken;
+  form.variableLabel = current.label || form.variableLabel;
+  form.conflict = conflict;
+  form.requestKey = newRequestKey();
+  form.errors = {};
+  form.error = "";
+  return true;
+}
+
 // The request body of the draft and its field errors; `body` is null while any
 // field is wrong. Numbers stay exact decimal text, never a binary float.
 export function buildRequest(form) {
+  if (CHANGE_MODES.includes(form.mode)) return buildChangeRequest(form);
   const d = form.draft;
   const errors = {};
   const isCreate = form.mode === "create";
