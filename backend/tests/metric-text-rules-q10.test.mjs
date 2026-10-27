@@ -34,7 +34,7 @@ const GROUPS = [
   ["the tags and the variation selectors supplement", 0xe0000, 0xe0fff],
 ];
 const inGroups = (cp) => GROUPS.some(([, first, last]) => cp >= first && cp <= last);
-// The blanks a text may not consist of only (the space separators).
+// The blanks a text may not start or end with (the space separators).
 const BLANKS = new Set([0x20, 0xa0, 0x1680, 0x202f, 0x205f, 0x3000]);
 for (let cp = 0x2000; cp <= 0x200a; cp += 1) BLANKS.add(cp);
 
@@ -73,16 +73,18 @@ test("3. the frontend's copies hold exactly the server's characters (every code 
     const c = ch(cp);
     if (front.TEXT_FORBIDDEN.test(c) !== rules.TEXT_FORBIDDEN.test(c)) assert.fail(`text: ${hex(cp)} differs between the server and the frontend`);
     if (front.UNIT_FORBIDDEN.test(c) !== rules.UNIT_FORBIDDEN.test(c)) assert.fail(`unit: ${hex(cp)} differs between the server and the frontend`);
-    if (rules.TEXT_BLANK.test(c) !== BLANKS.has(cp)) assert.fail(`blank: ${hex(cp)} should be ${BLANKS.has(cp) ? "a blank" : "no blank"}`);
+    if (rules.TEXT_EDGE_BLANK.test(c) !== BLANKS.has(cp)) assert.fail(`blank: ${hex(cp)} should be ${BLANKS.has(cp) ? "a blank" : "no blank"}`);
   }
   for (const cp of BLANKS) assert.match(ch(cp), /^\s$/, `${hex(cp)} is whitespace to oneLine()`);
 });
 
-test("4. a text made only of blanks is refused; blanks between visible characters are not", () => {
+test("4. a text made only of blanks, or starting or ending with a blank, is refused; blanks between visible characters are not", () => {
   for (const cp of BLANKS) {
     assert.equal(rules.boundedText(ch(cp), 80), false, `${hex(cp)} alone`);
     assert.equal(rules.boundedText(`${ch(cp)}${ch(cp)}`, 80), false, `${hex(cp)} twice`);
-    if (cp !== 0x20) assert.equal(rules.boundedText(`a${ch(cp)}b`, 80), true, `${hex(cp)} between letters`);
+    assert.equal(rules.boundedText(`${ch(cp)}Total`, 80), false, `${hex(cp)} leading`);
+    assert.equal(rules.boundedText(`Total${ch(cp)}`, 80), false, `${hex(cp)} trailing`);
+    assert.equal(rules.boundedText(`a${ch(cp)}b`, 80), true, `${hex(cp)} between letters`);
   }
   assert.equal(rules.boundedText("\u3000\u00a0\u2003", 80), false, "a mix of blanks");
   assert.equal(rules.boundedText("", 80), false);

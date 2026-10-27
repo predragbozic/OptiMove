@@ -282,7 +282,7 @@ function textError(value, max, { required = false } = {}) {
 export function unitError(value) {
   if (!value) return "Required.";
   if ([...value].length > LIMITS.unit) return `At most ${LIMITS.unit} characters.`;
-  if (UNIT_FORBIDDEN.test(value)) return "No spaces, '|' or '='.";
+  if (UNIT_FORBIDDEN.test(value)) return "No spaces, '|', '=' or hidden characters.";
   return "";
 }
 function decimalError(value) {

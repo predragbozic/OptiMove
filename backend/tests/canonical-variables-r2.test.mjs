@@ -1155,6 +1155,10 @@ test("17. Q10: every character group Q10 adds, and a text of blanks only, is ref
     const res = await post("/variables", W.caA.cookie, createBody({ label: blank }));
     assert.deepEqual([res.status, res.body.error], [400, "invalid_body"], "a label of blanks only");
   }
+  for (const edge of [`Total distance${ch(0x3000)}`, `${ch(0xa0)}Total distance`]) {
+    const res = await post("/variables", W.caA.cookie, createBody({ label: edge }));
+    assert.deepEqual([res.status, res.body.error], [400, "invalid_body"], "a label that starts or ends with a blank");
+  }
 
   const v = await created(W.caA.cookie, { description: "Total" });
   const r2Requests = async () => (await one(k, `select count(*)::int as n from training_load.metric_variable_requests where metric_definition_id = $1 and operation <> 'variable_create'`, [v.id])).n;
@@ -1168,15 +1172,22 @@ test("17. Q10: every character group Q10 adds, and a text of blanks only, is ref
       const reason = await archive(who, v.id, { reason: `Gone ${ch(cp)}` });
       assert.deepEqual([reason.status, reason.body.error], [400, "invalid_body"], `archive reason ${cp.toString(16)}`);
     }
-    for (const blank of BLANKS_ONLY) {
-      assert.deepEqual([(await rename(who, v.id, { labelsToken: fresh.labelsToken, label: blank })).body.error], ["invalid_body"], "a rename to blanks only");
+    for (const blank of [...BLANKS_ONLY, `Total${ch(0x2003)}`]) {
+      assert.deepEqual([(await rename(who, v.id, { labelsToken: fresh.labelsToken, label: blank })).body.error], ["invalid_body"], "a rename to blanks only or to a trailing blank");
       assert.deepEqual([(await archive(who, v.id, { reason: blank })).body.error], ["invalid_body"], "a reason of blanks only");
     }
   }
   assert.deepEqual([(await changesOf(v.id)).length, await r2Requests()], [0, 0], "no refused rename or archive wrote a change or a request");
-  // The text rule applies inside the write: a caller without the right gets the identical 404, never the 400.
+  // The text rule applies inside the write, after the 409s (J3b.2 step 8): a caller without the right gets the
+  // identical 404, a reused key request_key_reused, a stale token variable_changed - never the 400.
   const outsider = await rename(W.coachB1, v.id, { labelsToken: "f".repeat(64), label: `Bad ${ch(0x3164)} name` });
   assert.deepEqual([outsider.status, outsider.body.error], [404, "notFound"]);
+  const usedKey = key();
+  const first = ok200(await post(`/variables/${v.id}/rename`, W.coachA1.cookie, { requestKey: usedKey, labelsToken: (await view(W.coachA1, v.id)).labelsToken, description: "Total again" }));
+  const reused = await post(`/variables/${v.id}/rename`, W.coachA1.cookie, { requestKey: usedKey, labelsToken: first.variable.labelsToken, label: `Bad ${ch(0x3164)} name` });
+  assert.deepEqual([reused.status, reused.body.error], [409, "request_key_reused"]);
+  const stale = await rename(W.coachA1, v.id, { labelsToken: "f".repeat(64), label: `Bad ${ch(0x3164)} name` });
+  assert.deepEqual([stale.status, stale.body.error], [409, "variable_changed"]);
 
   ok200(await archive(W.coachA1, v.id, { reason: "Paused" }));
   for (const cp of SAMPLES) {
@@ -1193,7 +1204,7 @@ test("17. Q10: every character group Q10 adds, and a text of blanks only, is ref
   const lv = await view(W.coachA1, v.id);
   const same = ok200(await rename(W.coachA1, v.id, { labelsToken: lv.labelsToken, label: legacyLabel, description: "New description" }));
   assert.deepEqual([(await defRow(v.id)).label, same.variable.description], [legacyLabel, "New description"]);
-  const [renamed] = (await changesOf(v.id)).filter((c) => c.kind === "rename");
+  const renamed = (await changesOf(v.id)).filter((c) => c.kind === "rename").at(-1);
   assert.deepEqual([renamed.old_label, renamed.new_label, renamed.new_description], [legacyLabel, legacyLabel, "New description"]);
   assert.deepEqual([(await rename(W.coachA1, v.id, { labelsToken: same.variable.labelsToken, label: legacyLabel })).body.error], ["rename_unchanged"]);
   const other = await rename(W.coachA1, v.id, { labelsToken: same.variable.labelsToken, label: `Other ${ch(0x3164)}` });

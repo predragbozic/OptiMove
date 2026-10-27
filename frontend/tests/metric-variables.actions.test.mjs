@@ -372,7 +372,7 @@ test("create: an event threshold carries its operator and seconds; empty optiona
   form.draft.label = String.fromCodePoint(0x3000, 0xa0, 0x2003);
   assert.equal(buildRequest(form).errors.label, "Required.", "a name of blanks only is empty");
   Object.assign(form.draft, { label: "Accelerations", unit: `m${String.fromCodePoint(0x3164)}` });
-  assert.equal(buildRequest(form).errors.unit, "No spaces, '|' or '='.", "a unit with a Hangul filler");
+  assert.equal(buildRequest(form).errors.unit, "No spaces, '|', '=' or hidden characters.", "a unit with a Hangul filler");
   form.draft.unit = "count";
   assert.deepEqual(buildRequest(form).errors, {});
 });

@@ -1976,7 +1976,9 @@ same-origin JSON and the M3-0 error envelope. Every write is idempotent by `requ
      so a refused caller never waits for the lock);
    - the definition `FOR UPDATE`;
    - **the rights again, `FOR SHARE` (J3b.5)**: lost means the identical 404, never a 409;
-7. the 409s of each route below.
+7. the 409s of each route below;
+8. rename only (Q10, J3b.9): `400 invalid_body` for a value that changes and breaks the text rule. A field's type
+   is still checked at step 5.
 
 **Reads, for a coach in a team workspace** (`GET /variables`, `GET /variables/:variableId`):
 - the owner is the team's club;
@@ -2515,21 +2517,33 @@ part with its own preflight block and rollback part (no v40); a rename checks on
 
   That is every default-ignorable code point, plus U+2800 and U+FFF9-FFFB. The text list grows from 96 to 4,245 code
   points, the unit list from 116 to 4,264 (U+2065 was in it already). The regular expressions carry the `u` flag.
-- **Blanks only.** A text made only of blanks (U+0020, U+00A0, U+1680, U+2000-200A, U+202F, U+205F, U+3000) is
-  refused like an empty one. A blank between visible characters stays allowed. A unit token refuses every blank
-  already.
+- **Blanks.** A text may not start or end with a blank: U+0020 (C41's rule) or another space separator (U+00A0,
+  U+1680, U+2000-200A, U+202F, U+205F, U+3000). So a text made only of blanks is refused too, and no label can look
+  like another by a hidden blank at its edge (the security review of PR #229). A blank between visible characters
+  stays allowed. A unit token refuses every blank already. v39's SQL twin must take the same edge rule, since
+  `btrim()` trims only U+0020.
 - **The frontend.** `frontend/metric-variables-data.js` carries copies of both lists. It needs no blank rule: its
   `oneLine()` removes every blank first, and an empty label is "Required.". The unit test compares the copies with
   the server's lists over every code point U+0000-U+10FFFF.
 - **A rename checks the values that change.** The rename body now checks only the type of a field. The text rule runs
   inside the write, after the 409s, on each value that differs from the stored one, and the database checks it once
   more. A field left out, or sent with its stored value, is exempt, as in v38's request guard.
-  - **The order of the answers moves for a bad text:** a caller without the right gets the identical 404, and a
-    stale token gets `409 variable_changed`, before the `400 invalid_body`. The codes and messages are unchanged.
+  - **The order of the answers moves for a bad text** (J3b.2, step 8): everything inside the write answers first.
+    That is a replay or `409 request_key_reused`, the identical 404, `409 try_again`, and the rename's 409s
+    (`variable_not_active`, `variable_changed`, `rename_unchanged`, `variable_pinned`). Only then comes the
+    `400 invalid_body`. The codes and messages are unchanged.
   - The archive's and the restore's reasons are new values, so they are still checked in the body (step 5).
 - **What a stored value keeps.** No stored label, reason or unit is rewritten. A legacy value with a character Q10 adds
   stays readable and can be kept by a rename. v39's preflight must count the rows that the database twins would
   refuse (expected 0).
+- **Known limits.**
+  - Create, archive and restore still check their texts in the body, before the request key's replay. So a request
+    that succeeded before the deploy with a character Q10 refuses answers 400 when it is repeated afterwards with the
+    same key. It is refused, never written twice, and only for the deploy window.
+  - The older catalog API (`trainingLoadMetricsCatalog.js`) only trims the labels of team- and user-owned
+    definitions. Club and system variables never pass through it (C98). A separate task records it.
+  - Phase 2c's rename form must check only the fields that change. The frontend's `TEXT_FORBIDDEN` would otherwise
+    block a stored legacy value that the server exempts.
 - **Tests and mutations.**
   - `backend/tests/metric-text-rules-q10.test.mjs` (unit, no database):
     - every added code point is refused in a text and in a unit;
@@ -2541,10 +2555,13 @@ part with its own preflight block and rollback part (no v40); a rename checks on
     blanks-only text. It covers create (each text field and the unit), the key suggestion, a rename that changes a
     value (both a coach and a club admin; no change or request row written), an archive's and a restore's reason, the
     outsider's 404, and the legacy label kept by a rename.
-  - The M2 suite's conversion-note list, the M2b suite's unit list and the frontend's form test gain samples.
-  - 56 mutations, all killed:
+  - The M2 suite's conversion note takes the same sample of every group. The M2b suite's unit list and the
+    frontend's form test gain samples.
+  - Test 17 also refuses a label that starts or ends with a non-ASCII blank, on create and on a rename.
+  - Test 17 also pins the order: a reused key, a stale token and an outsider each answer before the 400.
+  - 57 mutations, all killed:
     - each group removed from each of the four lists;
-    - the blank rule and a blank removed;
+    - the edge-blank rule removed, narrowed to a leading blank, or without one of its blanks;
     - the rename checking every sent value, checking none, checking in the body again;
     - the write without the JavaScript text rule.
 

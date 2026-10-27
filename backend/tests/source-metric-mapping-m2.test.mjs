@@ -570,6 +570,11 @@ test("8. POST versions: identity and non-identity conversions are server-derived
     const r = await post(`/mappings/${minMap.id}/versions`, W.pa.cookie, versionBody(W.fSec.revId, bad));
     assert.deepEqual([r.status, r.body.error], [400, "invalid_body"], JSON.stringify(bad));
   }
+  // Q10: a sample of every group it adds, in the conversion note.
+  for (const cp of [0x034f, 0x115f, 0x17b5, 0x180f, 0x2065, 0x2800, 0x3164, 0xfe0f, 0xffa0, 0xfffb, 0x1bca3, 0x1d17a, 0xe0041, 0xe0100]) {
+    const r = await post(`/mappings/${minMap.id}/versions`, W.pa.cookie, versionBody(W.fSec.revId, { conversionNote: `a${ch(cp)}b` }));
+    assert.deepEqual([r.status, r.body.error], [400, "invalid_body"], `conversionNote ${cp.toString(16)}`);
+  }
   // The revision.
   const otherField = await post(`/mappings/${minMap.id}/versions`, W.pa.cookie, versionBody(W.fZone.revId, { conversionNote: "x" }));
   assert.deepEqual([otherField.status, otherField.body.error], [409, "revision_not_usable"]);
