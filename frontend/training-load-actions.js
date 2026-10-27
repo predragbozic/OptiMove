@@ -1163,6 +1163,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const bucket = nav.data?.days.find((d) => d.date === nav.selectedDate);
     const item = bucket?.items.find((i) => i.kind === "activity" && i.activityId === nav.selectedActivityId);
     const a = state.trainingLoad.analysis;
+    resetAnalysisDashboardQuery();
     a.runtimeFilter.activityId = nav.selectedActivityId;
     a.runtimeFilter.componentId = "";
     a.selectedActivity = { id: nav.selectedActivityId, name: item?.name || "Activity", date: nav.selectedDate };

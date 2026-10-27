@@ -576,6 +576,83 @@ test("Analysis dashboard selection and runtime filters use the selected dashboar
   assert.equal(state.trainingLoad.analysis.runtimeFilter.componentId, componentId);
 });
 
+test("Analysis clears a failed context error when restoring cached values and accepting a refresh", async () => {
+  resetState();
+  const analysis = state.trainingLoad.analysis;
+  analysis.dashboard = dashboard();
+  analysis.selectedDashboardId = dashboardId;
+  analysis.widgets = [widget()];
+  analysis.period = { dateFrom: "2026-10-01", dateTo: "2026-10-07" };
+  let requests = 0;
+  installFetchMock(async call => {
+    requests += 1;
+    if (call.body.dateFrom === "2026-10-08") return { status: 500, body: { error: "unavailablePeriod" } };
+    return { status: 200, body: { widgets: [{ widgetId, series: [{ seriesId, status: "ok", data: { current: [{ athleteId: null, bucketKey: "all", unit: "AU", value: requests === 1 ? 42 : 84 }] } }] }] } };
+  });
+  await queryAnalysisDashboard(renderTrainingLoad);
+  analysis.period = { dateFrom: "2026-10-08", dateTo: "2026-10-14" };
+  await queryAnalysisDashboard(renderTrainingLoad);
+  assert.equal(analysis.queryError, "unavailablePeriod");
+  analysis.period = { dateFrom: "2026-10-01", dateTo: "2026-10-07" };
+  await queryAnalysisDashboard(renderTrainingLoad);
+  assert.equal(requests, 2);
+  assert.equal(analysis.queryError, "");
+  assert.match(renderTrainingLoadAnalysisHtml(), /42/);
+  analysis.queryError = "previous error";
+  await queryAnalysisDashboard(renderTrainingLoad, { force: true });
+  assert.equal(analysis.queryError, "");
+  assert.match(renderTrainingLoadAnalysisHtml(), /84/);
+});
+
+for (const oldOutcome of ["success", "error"]) {
+  test(`Analysis activity handoff clears prior values before metadata resolves and rejects late ${oldOutcome}`, async () => {
+    resetState();
+    const analysis = state.trainingLoad.analysis;
+    analysis.dashboard = dashboard();
+    analysis.selectedDashboardId = dashboardId;
+    analysis.widgets = [widget()];
+    analysis.period = { dateFrom: "2026-10-01", dateTo: "2026-10-07" };
+    analysis.runtimeFilter.activityId = activityId;
+    const result = value => ({ widgets: [{ widgetId, series: [{ seriesId, status: "ok", data: { current: [{ athleteId: null, bucketKey: "all", unit: "AU", value }] } }] }] });
+    analysis.queryResult = result(98765);
+    let finishOld;
+    let finishList;
+    installFetchMock(async call => {
+      if (call.url.endsWith("/query") && call.body.activityId === activityId) return await new Promise(resolve => { finishOld = resolve; });
+      if (call.url.endsWith("/query")) return { status: 200, body: result(42) };
+      if (call.url === "/api/training-load/dashboards?includeTemplates=true&includeArchived=true") return await new Promise(resolve => { finishList = resolve; });
+      if (call.url === "/api/training-load/dashboards/active") return { status: 200, body: { activeDashboard: { dashboard_id: dashboardId } } };
+      if (call.url === `/api/training-load/dashboards/${dashboardId}`) return { status: 200, body: detail() };
+      return { status: 404, body: { error: "unexpected" } };
+    });
+    const oldQuery = queryAnalysisDashboard(renderTrainingLoad, { force: true });
+    const calendar = state.trainingLoad.calendar;
+    calendar.selectedActivityId = secondWidgetId;
+    calendar.selectedDate = "2026-10-02";
+    calendar.activityDetail = { activityId: secondWidgetId, data: { components: [] }, loading: false, error: "" };
+    calendar.data = { days: [{ date: calendar.selectedDate, items: [{ kind: "activity", activityId: secondWidgetId, name: "Activity B" }] }] };
+    const handoff = handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-open-in-analysis" }), { renderTrainingLoad });
+    try {
+      assert.equal(typeof finishList, "function");
+      assert.equal(analysis.listLoading, true);
+      assert.equal(analysis.runtimeFilter.activityId, secondWidgetId);
+      assert.equal(analysis.queryResult, null);
+      assert.doesNotMatch(renderTrainingLoadAnalysisHtml(), /98765/);
+      finishOld(oldOutcome === "success" ? { status: 200, body: result(98765) } : { status: 500, body: { error: "oldActivityError" } });
+      await oldQuery;
+      assert.equal(analysis.queryResult, null);
+      assert.equal(analysis.queryError, "");
+    } finally {
+      finishOld?.({ status: 200, body: result(98765) });
+      finishList?.({ status: 200, body: { dashboards: [dashboard()] } });
+      await oldQuery;
+      await handoff;
+    }
+    assert.match(renderTrainingLoadAnalysisHtml(), /42/);
+    assert.doesNotMatch(renderTrainingLoadAnalysisHtml(), /98765|oldActivityError/);
+  });
+}
+
 async function verifyDashboardQueryTransition(kind, oldOutcome, settleAfterReturn = false) {
   resetState();
   const analysis = state.trainingLoad.analysis;
