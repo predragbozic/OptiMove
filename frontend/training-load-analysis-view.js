@@ -1,6 +1,7 @@
 import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { state } from "./state.js";
 import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
+import { renderDashboardChartPlots } from "./training-load-analysis-echarts-options.js";
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
 
 const WIDGET_TYPES = [
@@ -506,6 +507,7 @@ function renderChartHtml(model) {
   let max = 1;
   for (const row of rows) if (!row.status) max = Math.max(max, Math.abs(row.value));
   return `
+    ${renderDashboardChartPlots(model, seriesLabel, displayRowContext)}
     <div class="tl-analysis-chart ${model.widgetType === "line_chart" ? "is-line" : "is-bar"}">
       ${rows.map((row) => {
         if (row.status) return `<div class="tl-analysis-chart-row"><span class="tl-analysis-chart-label">${escapeHtml(row.label)}</span>${row.status}</div>`;
