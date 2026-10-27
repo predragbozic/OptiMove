@@ -192,6 +192,22 @@ async function tx(actor, fn, client = k) {
     return { ok: false, error };
   }
 }
+// A raw label or state change of a system or club definition, as a fixture:
+// since v38 the database records every such change with its acting user and
+// rolls it back at COMMIT without its request row (R2, J3b.4), so the
+// fixture writes it with v38's change trigger off, in one transaction.
+async function rawDefinitionUpdate(sql, params) {
+  await k.query("begin");
+  try {
+    await k.query(`alter table training_load.metric_definitions disable trigger metric_definitions_v38_record_change`);
+    await k.query(sql, params);
+    await k.query(`alter table training_load.metric_definitions enable trigger metric_definitions_v38_record_change`);
+    await k.query("commit");
+  } catch (error) {
+    await k.query("rollback").catch(() => {});
+    throw error;
+  }
+}
 function refusedWith(res, code, pattern) {
   assert.equal(res.ok, false, `expected a refusal (${pattern})`);
   assert.equal(res.error.code, code, res.error.message);
@@ -453,14 +469,19 @@ test("2. the request guard: no actor setting, a setting of an earlier transactio
   refusedWith(await tx(null, (c) => c.query(`truncate training_load.metric_variable_requests`)), "23514", APPEND);
 });
 
-test("3. who may call: no session is 401; a coach, an athlete, a platform admin in a team or private-coaching workspace, a revoked role and an archived club get the same 404 (no-store) on every variable route; an inactive user has no session; a platform admin (platform and club workspace) and a club's own admin get 200", async () => {
+test("3. who may call: no session is 401; a team's coach and a platform admin in that team's workspace read the variables (R2, C99) but get the same 404 (no-store) on every admin-only route; an athlete, a platform admin in a private-coaching workspace, a revoked role and an archived club get it on every variable route; an inactive user has no session; a platform admin (platform and club workspace) and a club's own admin get 200", async () => {
   const routes = ["/variables", "/variables/key-suggestion?label=Total%20distance", `/variables/${crypto.randomUUID()}`];
   for (const p of routes) assert.equal((await api(p)).status, 401, p);
   assert.equal((await post("/variables", null, vbody())).status, 401);
   for (const who of [W.coach, W.athlete, W.paTeam, W.paPrivate, W.caRevoked, W.caC]) {
+    // R2 (C99, J3b.3): a team's coach - a platform admin too, as that team's
+    // coach (Q6) - reads the club's variables in the team workspace; the
+    // key suggestion, an unknown id and the writes below stay the same 404.
+    const teamReader = who === W.coach || who === W.paTeam;
     for (const p of routes) {
       const res = await api(p, { cookie: who.cookie });
-      assert.deepEqual([res.status, res.body], [404, { error: "notFound" }], `${p}: ${res.text}`);
+      if (teamReader && p === "/variables") assert.equal(res.status, 200, `${p}: ${res.text}`);
+      else assert.deepEqual([res.status, res.body], [404, { error: "notFound" }], `${p}: ${res.text}`);
       assert.equal(res.headers.get("cache-control"), "no-store");
     }
     assert.deepEqual((await post("/variables", who.cookie, vbody())).body, { error: "notFound" });
@@ -577,7 +598,7 @@ test("6. create: one transaction writes the definition (owner from the workspace
   assert.equal(res.status, 201, res.text);
   assert.equal(res.body.replayed, false);
   const v = res.body.variable;
-  assert.deepEqual(Object.keys(v).sort(), ["createdAt", "currentVersion", "description", "editable", "id", "key", "label", "levels", "mappingTarget", "ownerScope", "shortLabel", "state", "truncated", "updatedAt"]);
+  assert.deepEqual(Object.keys(v).sort(), ["actions", "createdAt", "currentVersion", "description", "editable", "id", "key", "label", "labelsToken", "levels", "mappingTarget", "ownerScope", "shortLabel", "state", "truncated", "updatedAt"]);
   assert.deepEqual([v.ownerScope, v.state, v.editable, v.levels, v.truncated], ["system", "active", true, ["session", "drill"], false]);
   assert.deepEqual(v.currentVersion.condition, { kind: "zone", operator: ">=", value: "25.2", unit: "km/h" });
   assert.deepEqual([v.currentVersion.versionNumber, v.currentVersion.unit, v.currentVersion.valueType, v.currentVersion.minValue, v.currentVersion.maxValue], [1, "m", "numeric", "0", "100000.5"]);
@@ -662,7 +683,7 @@ test("8. a new version: expectedCurrentVersionId is a precondition (current_vers
   // longer archives a system or club variable - C98 - so the state is set
   // directly; no route archives a canonical variable yet.)
   const arch = await created(W.pa.cookie);
-  await k.query(`update training_load.metric_definitions set state = 'archived' where id = $1`, [arch.id]);
+  await rawDefinitionUpdate(`update training_load.metric_definitions set state = 'archived' where id = $1`, [arch.id]);
   const na = await post(`/variables/${arch.id}/versions`, W.pa.cookie, versionBody(arch, { unit: "km" }));
   assert.deepEqual([na.status, na.body.error], [409, "variable_not_active"]);
   // Another scope: a system variable from a club workspace, a club A variable from club B or the platform workspace, an unknown or malformed id.
@@ -863,7 +884,7 @@ test("13. reads: the workspace's own variables (active by default, archived, all
                  select 'page_' || g, 'Page ' || g, 'club', $1, $2, now() + (g || ' milliseconds')::interval from generate_series(1, 101) g`, [W.clubB, W.caB.id]);
   await k.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type) select id, 1, 'm', 'numeric' from training_load.metric_definitions where owner_club_id = $1 and key like 'page\\_%'`, [W.clubB]);
   await k.query(`update training_load.metric_definitions d set current_version_id = v.id from training_load.metric_definition_versions v where v.metric_definition_id = d.id and d.owner_club_id = $1 and d.key like 'page\\_%'`, [W.clubB]);
-  await k.query(`update training_load.metric_definitions set state = 'archived' where owner_club_id = $1 and key = 'page_7'`, [W.clubB]);
+  await rawDefinitionUpdate(`update training_load.metric_definitions set state = 'archived' where owner_club_id = $1 and key = 'page_7'`, [W.clubB]);
   const all = [];
   let cursor = null;
   let pages = 0;

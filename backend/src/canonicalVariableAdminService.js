@@ -31,7 +31,19 @@
 //
 // The older /api/training-load/metrics catalog API keeps its own contract and
 // callers (C82); this module neither calls nor changes it.
-import { adminWriteKit, canonicalDecimal, DECIMAL_INPUT, SourceMetricMappingError, TEXT_LIMITS } from "./sourceMetricMappingService.js";
+//
+// R2 (decision C99, section J3b; migration v38) adds a rename, an archive and
+// a restore of an existing variable, and a second audience for the reads and
+// for those three writes: an active coach of an active team of the variable's
+// club, in that team's workspace (club variables only; never a create, a new
+// version, the key suggestion or the M2 routes). A team workspace reads the
+// reduced view of Q7. Every write takes the definition FOR UPDATE, then the
+// rights FOR SHARE (a coach: the stronger bases probed, then the team, the
+// club and the role with the user), then its 409 checks; the database records
+// the change itself (metric_variable_changes, written by a trigger) and the
+// request row names that change.
+import { adminWriteKit, canonicalDecimal, DECIMAL_INPUT, resolveMappingAdmin, SourceMetricMappingError, TEXT_LIMITS } from "./sourceMetricMappingService.js";
+import { resolveActiveWorkspace } from "./workspace.js";
 
 const {
   runWrite, boundedRead, rightsStillHold, refusal, NOT_FOUND, MESSAGES, plainObject, uuidField, boundedText, boundedOut,
@@ -72,7 +84,16 @@ const TEXT = {
   variable_not_active: "The variable is not active.",
   variable_pinned: "An active mapping version uses the variable's current version; no new version can replace it now.",
   version_unchanged: "The new version is the same as the current version.",
+  rename_pinned: "An active mapping version uses this variable; only an administrator can rename it now.",
+  archive_pinned: "An active mapping version uses this variable; it cannot be archived or restored now.",
+  variable_changed: "The variable has changed since it was loaded. Load it again.",
+  rename_unchanged: "The new names are the same as the current ones.",
+  variable_active: "The variable is already active.",
+  restore_by_admin: "An administrator archived this variable; only an administrator can restore it.",
 };
+// A rename's precondition: the server's SHA-256 of the stored label, short
+// label, description and state (hex).
+const LABELS_TOKEN = /^[0-9a-f]{64}$/;
 
 // ---------------------------------------------------------------------------
 // The key a name suggests (C84), deterministic:
@@ -209,9 +230,17 @@ function semanticsKey(s) {
 const VARIABLE_COLUMNS = `d.id, d.key, d.label, d.short_label, d.description, d.owner_scope, d.owner_club_id, d.state, d.created_at, d.updated_at,
   ${CANONICAL_VERSION_COLUMNS}, v.daily_aggregation_method, trim_scale(v.min_value)::text as min_text, trim_scale(v.max_value)::text as max_text,
   v.created_at as version_created_at,
-  (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes`;
+  (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes,
+  exists (select 1 from training_load.source_metric_mapping_versions mv
+           where mv.metric_definition_id = d.id and mv.metric_definition_version_id = d.current_version_id and mv.status = 'active') as pinned,
+  lc.kind as last_change_kind, lc.basis as last_change_basis`;
+// The most recent change of a definition (the largest seq, v38) and the basis
+// of its request: Q8 lets a coach restore only an archive a coach made.
 const VARIABLE_FROM = `training_load.metric_definitions d
-  join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id`;
+  join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
+  left join lateral (select c.kind, r.basis from training_load.metric_variable_changes c
+                       left join training_load.metric_variable_requests r on r.metric_variable_change_id = c.id
+                      where c.metric_definition_id = d.id order by c.seq desc limit 1) lc on true`;
 const VERSION_ROW_COLUMNS = `${CANONICAL_VERSION_COLUMNS}, v.daily_aggregation_method, trim_scale(v.min_value)::text as min_text,
   trim_scale(v.max_value)::text as max_text, v.superseded_reason, v.created_at as version_created_at`;
 
@@ -241,6 +270,44 @@ function versionOut(row, { current }) {
   };
 }
 const isOwn = (row, ctx) => row.owner_scope === ctx.owner.scope && (row.owner_scope === "system" || String(row.owner_club_id) === ctx.owner.clubId);
+// A team workspace reads the reduced view (Q7), whoever the caller is.
+const isCoachView = (ctx) => ctx.view === "coach";
+// The rename precondition (J3b.2): computed from the stored row, never from
+// the bounded output, so a value the output cuts can still be renamed.
+const labelsTokenOf = (row) => hashOf([row.label, row.short_label ?? null, row.description ?? null, row.state]);
+// A restore by a coach (Q8): the definition's most recent change is an archive
+// whose request had the team_coach basis. An archive without a change row
+// (legacy) is no coach's.
+const coachArchived = (row) => row.last_change_kind === "archive" && row.last_change_basis === "team_coach";
+// What this caller may do now with this variable; empty when it is not theirs.
+function actionsOf(row, ctx, editable) {
+  if (!editable) return [];
+  const coach = ctx.basis === "team_coach";
+  const actions = [];
+  if (row.state === "active") {
+    if (!(coach && row.pinned)) actions.push("rename");
+    if (!row.pinned) actions.push("archive");
+    if (!isCoachView(ctx) && !row.pinned) actions.push("newVersion");
+  } else if (!row.pinned && !(coach && !coachArchived(row))) {
+    actions.push("restore");
+  }
+  return actions;
+}
+// The reduced view of a team workspace (Q7): never the versions, the levels,
+// the mapping readiness or the timestamps.
+function reducedOut(row, ctx) {
+  const editable = isOwn(row, ctx);
+  const key = boundedOut(row.key, TEXT_LIMITS.key);
+  const label = boundedOut(row.label, TEXT_LIMITS.label);
+  const shortLabel = boundedOut(row.short_label, TEXT_LIMITS.shortLabel);
+  const description = boundedOut(row.description, TEXT_LIMITS.description);
+  return {
+    id: row.id, key: key.text, label: label.text, shortLabel: shortLabel.text, description: description.text,
+    ownerScope: row.owner_scope, state: row.state, editable, actions: actionsOf(row, ctx, editable), labelsToken: labelsTokenOf(row),
+    truncated: key.cut || label.cut || shortLabel.cut || description.cut,
+  };
+}
+const viewOf = (row, ctx) => (isCoachView(ctx) ? reducedOut(row, ctx) : variableOut(row, ctx));
 function variableOut(row, ctx) {
   const editable = isOwn(row, ctx);
   const key = boundedOut(row.key, TEXT_LIMITS.key);
@@ -257,7 +324,7 @@ function variableOut(row, ctx) {
   }
   return {
     id: row.id, key: key.text, label: label.text, shortLabel: shortLabel.text, description: description.text,
-    ownerScope: row.owner_scope, state: row.state, editable,
+    ownerScope: row.owner_scope, state: row.state, editable, actions: actionsOf(row, ctx, editable), labelsToken: labelsTokenOf(row),
     levels: ["session", "drill"].filter((level) => (row.scopes ?? []).includes(LEVELS[level])),
     currentVersion: version.value, mappingTarget, createdAt: row.created_at, updatedAt: row.updated_at,
     truncated: key.cut || label.cut || shortLabel.cut || description.cut || version.cut,
@@ -342,13 +409,14 @@ export async function listVariables({ ctx, query }) {
     const nextCursor = rows.length > VARIABLE_PAGE_SIZES.variables
       ? encodeCursor({ v: 1, k: "variables", o: ownerKeyOf(ctx), sc: scope, st: state, t: last.cursor_at, i: last.id })
       : null;
-    return { variables: page.map((row) => variableOut(row, ctx)), nextCursor };
+    return { variables: page.map((row) => viewOf(row, ctx)), nextCursor };
   });
 }
 
 // GET /variables/key-suggestion?label=: the key the name suggests and whether
 // a variable of this workspace's owner already holds it (any state).
 export async function suggestKey({ ctx, query }) {
+  adminOnly(ctx);
   const q = singleQuery(query, ["label"]);
   if (!boundedText(q.label, TEXT_LIMITS.label)) throw refusal(400, "invalid_query", "label is one line of 1-80 visible characters without surrounding spaces.");
   const key = suggestVariableKey(q.label);
@@ -363,10 +431,20 @@ export async function suggestKey({ ctx, query }) {
 }
 
 // GET /variables/:id: the variable (own, or the system reference in a club
-// workspace) with one page of its versions, by number descending.
+// workspace) with one page of its versions, by number descending. A team
+// workspace reads the reduced view, without versions (and takes no cursor).
 export async function getVariable({ ctx, variableId, query }) {
   if (typeof variableId !== "string" || !UUID.test(variableId)) return null;
   const id = variableId.toLowerCase();
+  if (isCoachView(ctx)) {
+    singleQuery(query, []);
+    return boundedRead(async (client) => {
+      const params = [id];
+      const readable = readableSql(ctx, params);
+      const row = (await client.query(`select ${VARIABLE_COLUMNS} from ${VARIABLE_FROM} where d.id = $1 and ${readable}`, params)).rows[0];
+      return row ? { variable: reducedOut(row, ctx), nextCursor: null } : null;
+    });
+  }
   const q = singleQuery(query, ["cursor"]);
   let afterNumber = null;
   if (q.cursor !== undefined) {
@@ -424,6 +502,13 @@ export function classifyVariableError(error) {
   return null;
 }
 
+// The admin-only operations (create, a new version, the key suggestion) never
+// run for a team workspace: their routes resolve the admin context, which has
+// none; this repeats it here (defence in depth).
+function adminOnly(ctx) {
+  if (isCoachView(ctx) || ctx.basis === "team_coach") throw NOT_FOUND();
+}
+
 // A write's answer and a replay: the variable only when this workspace may
 // write it (the record's owner is the workspace's owner).
 async function writableVariable(executor, ctx, record) {
@@ -431,7 +516,7 @@ async function writableVariable(executor, ctx, record) {
   const params = [record.metric_definition_id];
   const owner = writableSql(ctx, params);
   const row = (await executor.query(`select ${VARIABLE_COLUMNS} from ${VARIABLE_FROM} where d.id = $1 and ${owner}`, params)).rows[0];
-  return row ? variableOut(row, ctx) : null;
+  return row ? viewOf(row, ctx) : null;
 }
 async function writtenVersion(executor, record) {
   const row = (await executor.query(
@@ -469,6 +554,7 @@ export function setVariableWriteHoldForTests(fn) { writeHold = fn ?? null; }
 // POST /variables - a canonical variable: the definition, its version 1 and
 // its levels, in the workspace's owner scope, in one transaction.
 export async function createVariable({ ctx, body }) {
+  adminOnly(ctx);
   plainObject(body,
     ["requestKey", "label", "shortLabel", "description", "key", "unit", "levels", "dailyAggregationMethod", "minValue", "maxValue", "condition"],
     ["requestKey", "label", "unit", "levels", "dailyAggregationMethod"]);
@@ -532,6 +618,7 @@ export async function createVariable({ ctx, body }) {
 // the caller saw (expectedCurrentVersionId, a precondition - not the request's
 // identity). Key, owner and levels never change here.
 export async function createVariableVersion({ ctx, variableId, body }) {
+  adminOnly(ctx);
   if (typeof variableId !== "string" || !UUID.test(variableId)) throw NOT_FOUND();
   plainObject(body,
     ["requestKey", "expectedCurrentVersionId", "unit", "dailyAggregationMethod", "minValue", "maxValue", "condition", "reason"],
@@ -594,5 +681,210 @@ export async function createVariableVersion({ ctx, variableId, body }) {
       await insertRequest(client, { ctx, requestKey, requestHash, operation: "variable_version_create", definitionId: id, versionId });
       return { operation: "variable_version_create", metric_definition_id: id, metric_definition_version_id: versionId, owner_scope: ctx.owner.scope, owner_club_id: ctx.owner.clubId };
     },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// R2 (C99, section J3b): who may change a variable, and the three writes.
+// ---------------------------------------------------------------------------
+// The context of the variable routes (the reads and the three writes). In the
+// platform workspace and a club workspace exactly resolveMappingAdmin(). In a
+// team workspace, from the database, never from the workspace list: the team
+// active with a club, the club active, the user's active team_coach role on
+// the team and the user active (Q6: an admin acts in a team workspace only as
+// that team's coach). The owner is the team's club; the basis is the
+// strongest the user holds for it - platform admin, then the club's admin,
+// then the team's coach -, the one the database derives (v38). The team is
+// named only for the team_coach basis.
+export async function resolveVariableEditor(req) {
+  if (!req?.user?.id || !req.authz) return null;
+  const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+  if (!workspace) return null;
+  if (workspace.type !== "team") {
+    const ctx = await resolveMappingAdmin(req, workspace);
+    return ctx ? { ...ctx, view: "admin" } : null;
+  }
+  const teamId = workspace.scopeId ? String(workspace.scopeId).toLowerCase() : null;
+  if (!teamId || !UUID.test(teamId)) return null;
+  const userId = String(req.user.id);
+  const row = (await boundedRead((client) => client.query(
+    `select t.club_id,
+            exists (select 1 from public.user_global_roles g
+                     where g.user_id = u.id and g.role = 'platform_admin' and g.is_active = true) as platform_admin,
+            exists (select 1 from public.user_club_roles a
+                     where a.user_id = u.id and a.club_id = t.club_id and a.role = 'club_admin' and a.is_active = true) as club_admin
+       from public.teams t
+       join public.clubs c on c.id = t.club_id
+       join public.user_team_roles r on r.team_id = t.id
+       join public.users u on u.id = r.user_id
+      where t.id = $1 and coalesce(t.is_active, true) and coalesce(c.is_active, true)
+        and r.user_id = $2 and r.role = 'team_coach' and r.is_active = true and u.is_active = true`,
+    [teamId, userId],
+  ))).rows[0];
+  if (!row) return null;
+  const basis = row.platform_admin ? "platform_admin" : row.club_admin ? "club_admin" : "team_coach";
+  return { userId, basis, owner: { scope: "club", clubId: String(row.club_id) }, view: "coach", ...(basis === "team_coach" ? { teamId } : {}) };
+}
+
+// v38's request guard derives the basis again when the request row is written.
+// A stronger role granted after the rights were checked makes it differ from
+// the basis this request writes: exactly that refusal is the request to repeat
+// (J3b.2, try_again); every other database refusal stays a sanitized 500.
+const BASIS_CHANGED = "metric variable request: the basis is not the acting user's own";
+function classifyChangeError(error) {
+  if (!(error instanceof SourceMetricMappingError) && error?.code === "42501" && error.message === BASIS_CHANGED) {
+    console.error("[metric-variables] try_again (basis changed)");
+    return refusal(409, "try_again", MESSAGES.try_again);
+  }
+  return classifyVariableError(error);
+}
+
+// One R2 write (J3b.5): the definition read unlocked first (not this caller's:
+// the identical 404, so a refused caller never waits for its lock), then FOR
+// UPDATE, then the rights FOR SHARE - lost: the identical 404, before any
+// answer that carries data -, then `check` (the route's 409s), the text rule
+// once more in the database, the UPDATE (the v38 trigger writes the change
+// row) and the request row naming that change.
+async function runChange({ ctx, variableId, operation, requestKey, requestHash, reason, check, update, texts }) {
+  const id = variableId.toLowerCase();
+  return runWrite({
+    ctx, where: operation, requestKey, requestHash, action: operation,
+    requests: VARIABLE_REQUESTS, classify: classifyChangeError, idsOf: variableIdsOf,
+    reread: async (executor, record) => {
+      const variable = await writableVariable(executor, ctx, record);
+      return variable ? { variable } : null;
+    },
+    body: async (client) => {
+      const params = [id];
+      const owner = writableSql(ctx, params);
+      const plain = (await client.query(`select d.id from training_load.metric_definitions d where d.id = $1 and ${owner}`, params)).rows[0];
+      if (!plain) throw NOT_FOUND();
+      const locked = (await client.query(
+        `select id, owner_scope, owner_club_id from training_load.metric_definitions where id = $1 for update`, [id],
+      )).rows[0];
+      if (!locked || !isOwn(locked, ctx)) throw NOT_FOUND();
+      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      const row = (await client.query(`select ${VARIABLE_COLUMNS} from ${VARIABLE_FROM} where d.id = $1`, [id])).rows[0];
+      if (!row) throw NOT_FOUND();
+      check(row);
+      for (const [value, max] of [...texts(row), [reason, TEXT_LIMITS.reason]]) {
+        if (value === null) continue;
+        const ok = (await client.query(`select training_load.source_metric_text_ok($1, $2) as ok`, [value, max])).rows[0].ok;
+        if (ok !== true) throw invalidBody("A text is not one line of visible characters within its limit.");
+      }
+      if (writeHold) await writeHold(client, operation);
+      const set = update(row);
+      await client.query(`update training_load.metric_definitions set ${set.sql}, updated_at = now() where id = $1`, [id, ...set.values]);
+      const changes = (await client.query(
+        `select id from training_load.metric_variable_changes where metric_definition_id = $1 and xact_id = pg_current_xact_id()`, [id],
+      )).rows;
+      if (changes.length !== 1) throw new Error("variable change: not exactly one change row");
+      await client.query(
+        `insert into training_load.metric_variable_requests
+           (request_key, requested_by_user_id, operation, request_hash, owner_scope, owner_club_id, basis, basis_team_id,
+            metric_definition_id, metric_variable_change_id, reason)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [requestKey, ctx.userId, operation, requestHash, ctx.owner.scope, ctx.owner.clubId, ctx.basis,
+          ctx.basis === "team_coach" ? ctx.teamId : null, id, changes[0].id, reason],
+      );
+      return { operation, metric_definition_id: id, owner_scope: ctx.owner.scope, owner_club_id: ctx.owner.clubId };
+    },
+  });
+}
+const variableIdOrNotFound = (variableId) => {
+  if (typeof variableId !== "string" || !UUID.test(variableId)) throw NOT_FOUND();
+  return variableId.toLowerCase();
+};
+// A rename field: absent (unchanged), or its new value; null clears an
+// optional one. Returns undefined for absent.
+function renameField(body, field, max, { nullable }) {
+  if (!Object.hasOwn(body, field)) return undefined;
+  const value = body[field];
+  if (value === null && nullable) return null;
+  if (!boundedText(value, max)) throw invalidBody(`${field} is one line of 1-${max} visible characters without surrounding spaces${nullable ? ", or null" : ""}.`);
+  return value;
+}
+
+// POST /variables/:id/rename - a new label, short label or description of an
+// active variable; labelsToken is the token of the stored names the caller saw.
+export async function renameVariable({ ctx, variableId, body }) {
+  const id = variableIdOrNotFound(variableId);
+  plainObject(body, ["requestKey", "labelsToken", "label", "shortLabel", "description"], ["requestKey", "labelsToken"]);
+  const requestKey = uuidField(body.requestKey);
+  if (typeof body.labelsToken !== "string" || !LABELS_TOKEN.test(body.labelsToken)) throw invalidBody("labelsToken is the token a read of the variable returned.");
+  const labelsToken = body.labelsToken;
+  const label = renameField(body, "label", TEXT_LIMITS.label, { nullable: false });
+  const shortLabel = renameField(body, "shortLabel", TEXT_LIMITS.shortLabel, { nullable: true });
+  const description = renameField(body, "description", TEXT_LIMITS.description, { nullable: true });
+  if (label === undefined && shortLabel === undefined && description === undefined) throw invalidBody("A rename names at least one of label, shortLabel and description.");
+  const sent = {
+    labelsToken,
+    ...(label === undefined ? {} : { label }), ...(shortLabel === undefined ? {} : { shortLabel }), ...(description === undefined ? {} : { description }),
+  };
+  const requestHash = hashOf({ contract: CONTRACT, operation: "variable_rename", variableId: id, body: sent });
+  const next = (row) => ({
+    label: label === undefined ? row.label : label,
+    shortLabel: shortLabel === undefined ? row.short_label : shortLabel,
+    description: description === undefined ? row.description : description,
+  });
+  return runChange({
+    ctx, variableId: id, operation: "variable_rename", requestKey, requestHash, reason: null,
+    check: (row) => {
+      if (row.state !== "active") throw refusal(409, "variable_not_active", TEXT.variable_not_active);
+      if (labelsTokenOf(row) !== labelsToken) throw refusal(409, "variable_changed", TEXT.variable_changed, { current: reducedOut(row, ctx) });
+      const n = next(row);
+      if (n.label === row.label && n.shortLabel === (row.short_label ?? null) && n.description === (row.description ?? null)) {
+        throw refusal(409, "rename_unchanged", TEXT.rename_unchanged);
+      }
+      if (ctx.basis === "team_coach" && row.pinned) throw refusal(409, "variable_pinned", TEXT.rename_pinned);
+    },
+    // Only the values this rename sets are checked; one it leaves is exempt.
+    texts: () => [
+      [label ?? null, TEXT_LIMITS.label], [shortLabel ?? null, TEXT_LIMITS.shortLabel], [description ?? null, TEXT_LIMITS.description],
+    ],
+    update: (row) => {
+      const n = next(row);
+      return { sql: "label = $2, short_label = $3, description = $4", values: [n.label, n.shortLabel, n.description] };
+    },
+  });
+}
+
+// POST /variables/:id/archive - an active variable becomes archived (Q3: a
+// reason is required). Decision 9 refuses a pinned one, for everyone.
+export async function archiveVariable({ ctx, variableId, body }) {
+  const id = variableIdOrNotFound(variableId);
+  plainObject(body, ["requestKey", "reason"], ["requestKey", "reason"]);
+  const requestKey = uuidField(body.requestKey);
+  if (!boundedText(body.reason, TEXT_LIMITS.reason)) throw invalidBody("reason is one line of 1-500 visible characters without surrounding spaces.");
+  const reason = body.reason;
+  const requestHash = hashOf({ contract: CONTRACT, operation: "variable_archive", variableId: id, body: { reason } });
+  return runChange({
+    ctx, variableId: id, operation: "variable_archive", requestKey, requestHash, reason,
+    check: (row) => {
+      if (row.state !== "active") throw refusal(409, "variable_not_active", TEXT.variable_not_active);
+      if (row.pinned) throw refusal(409, "variable_pinned", TEXT.archive_pinned);
+    },
+    texts: () => [],
+    update: () => ({ sql: "state = 'archived'", values: [] }),
+  });
+}
+
+// POST /variables/:id/restore - an archived variable becomes active again (Q3:
+// a reason is optional). A coach restores only what a coach archived (Q8).
+export async function restoreVariable({ ctx, variableId, body }) {
+  const id = variableIdOrNotFound(variableId);
+  plainObject(body, ["requestKey", "reason"], ["requestKey"]);
+  const requestKey = uuidField(body.requestKey);
+  const reason = optionalText(body, "reason", TEXT_LIMITS.reason);
+  const requestHash = hashOf({ contract: CONTRACT, operation: "variable_restore", variableId: id, body: { reason } });
+  return runChange({
+    ctx, variableId: id, operation: "variable_restore", requestKey, requestHash, reason,
+    check: (row) => {
+      if (row.state === "active") throw refusal(409, "variable_active", TEXT.variable_active);
+      if (ctx.basis === "team_coach" && !coachArchived(row)) throw refusal(409, "restore_by_admin", TEXT.restore_by_admin);
+      if (row.pinned) throw refusal(409, "variable_pinned", TEXT.archive_pinned);
+    },
+    texts: () => [],
+    update: () => ({ sql: "state = 'active'", values: [] }),
   });
 }

@@ -1,10 +1,12 @@
 // Source metric mapping administration (M2), the canonical-variable admin API
-// (M3-0) and the source-field evidence confirmation (M2b), mounted at
-// /api/training-load/sources/metrics behind requireAuth. The contracts are
-// sections J1, J3 and J4 of
+// (M3-0, with R2's rename, archive and restore) and the source-field evidence
+// confirmation (M2b), mounted at /api/training-load/sources/metrics behind
+// requireAuth. The contracts are sections J1, J3, J3b and J4 of
 // docs/ai/gpexe-metric-variable-mapping-discovery.md:
 // a platform admin (platform workspace: the system scope; a club workspace:
 // that club's scope) or a club's own active admin in that club's workspace;
+// for the variable reads and the three R2 writes also an active coach of an
+// active team of the club, in that team's workspace (club variables only);
 // everyone and everything else answers the same 404 (ADR-006). Stable codes
 // only: a database refusal the service does not know is a sanitized 500,
 // never its text. Same-origin JSON only; no body is logged.
@@ -77,6 +79,13 @@ async function adminContext(req, res) {
   if (!ctx) notFound(res);
   return ctx;
 }
+// The variable reads and the R2 writes (J3b.3): the admins as above, and a
+// team's coach in that team's workspace.
+async function editorContext(req, res) {
+  const ctx = await variables.resolveVariableEditor(req);
+  if (!ctx) notFound(res);
+  return ctx;
+}
 
 router.get("/fields", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
@@ -145,7 +154,7 @@ router.post("/mappings/:mappingId/versions/:versionId/submit", handle(async (req
 // variables of the active workspace's owner, with the same access, 404, error
 // and write discipline as the mapping routes above.
 router.get("/variables", handle(async (req, res) => {
-  const ctx = await adminContext(req, res);
+  const ctx = await editorContext(req, res);
   if (!ctx) return;
   // { variables, nextCursor }: one page; nextCursor is null on the last.
   res.json(await variables.listVariables({ ctx, query: req.query }));
@@ -159,7 +168,7 @@ router.get("/variables/key-suggestion", handle(async (req, res) => {
 }));
 
 router.get("/variables/:variableId", handle(async (req, res) => {
-  const ctx = await adminContext(req, res);
+  const ctx = await editorContext(req, res);
   if (!ctx) return;
   // { variable (with one page of versions), nextCursor }.
   const page = await variables.getVariable({ ctx, variableId: req.params.variableId, query: req.query });
@@ -179,6 +188,31 @@ router.post("/variables/:variableId/versions", handle(async (req, res) => {
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await variables.createVariableVersion({ ctx, variableId: req.params.variableId, body: req.body }), 201);
+}));
+
+// R2 (section J3b): rename, archive and restore of a variable. The answer is
+// 200 { variable } (a replay adds replayed: true). The order of the answers:
+// the identical 404 without the right, 415, a non-object body 400, a malformed
+// id the identical 404, a wrong body shape 400, then the write.
+router.post("/variables/:variableId/rename", handle(async (req, res) => {
+  const ctx = await editorContext(req, res);
+  if (!ctx) return;
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await variables.renameVariable({ ctx, variableId: req.params.variableId, body: req.body }), 200);
+}));
+
+router.post("/variables/:variableId/archive", handle(async (req, res) => {
+  const ctx = await editorContext(req, res);
+  if (!ctx) return;
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await variables.archiveVariable({ ctx, variableId: req.params.variableId, body: req.body }), 200);
+}));
+
+router.post("/variables/:variableId/restore", handle(async (req, res) => {
+  const ctx = await editorContext(req, res);
+  if (!ctx) return;
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await variables.restoreVariable({ ctx, variableId: req.params.variableId, body: req.body }), 200);
 }));
 
 // Source-field evidence confirmation (M2b, section J4): the field detail for

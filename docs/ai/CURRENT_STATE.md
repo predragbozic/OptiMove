@@ -9,7 +9,8 @@ recorded here yet. The entries for PR #214 and #215 (the GPEXE check) were added
 `306abd7` (merge of PR #215); nothing else in the Training Load / GPEXE / metrics record was re-derived then.
 The Metrics Core entries (M2b PR #164, C98 PR #219, the plan PR #221, M3a PR #218) were brought up to date on
 2026-10-26 at `6c7dfa4` (merge of PR #218), as phase 3 of `docs/ai/metrics-core-plan.md`; nothing else was
-re-derived then.
+re-derived then. The phase 2b (R2) entries were added on 2026-10-27 at `e8e2b0a` (merge of PR #224), by the R2
+implementation pull request; nothing else was re-derived then.
 
 ## Active phase
 
@@ -2107,6 +2108,16 @@ Technical details.
       version (POST, `{}`) answered 401.
     - Not checked on a physical device (iOS `datalist`, WebKit `select`). Neither the executor nor the
       *Rukovodilac* created a variable in production; the production database was not queried.
+  - **Phase 2b, R2: renaming, archiving and restoring a canonical variable, with a team coach for club
+    variables.** The owner's decision is C99 and the contract J3b of the discovery document.
+    - **The contract, PR #224** (docs only): merge commit `e8e2b0a` (parents `9001af5` and `0e4e373`) on
+      2026-10-27 at 07:16:18 UTC. `/api/health` served `e8e2b0a` with `ok: true` three times in a row (07:17:23,
+      07:17:33 and 07:17:43 UTC). Without a login the variable routes answered 401.
+    - **The implementation** (migration v38, the three routes, the team-workspace reads): built on the branch
+      `feature/r2-canonical-variables-v38` from `e8e2b0a`, in an open pull request. **Not merged, not deployed;
+      v38 is applied to no persistent database** (only to disposable `optimove_tests_gpexe_*` ones). Its merge
+      needs the owner's order naming v38, after the read-only preflight
+      `docs/runbooks/metric-variable-changes-v38-preflight.sql`.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2818,6 +2829,17 @@ pre-existing; pass/fail counts don't belong in this file
 - `frontend/tests/organization-panel-cache.test.mjs` — test "6. signOut clears the entire view
   cache before/alongside its hard reload" fails; reproduced identically on a clean detached
   `origin/main` worktree (`6382d25`) on 2026-10-05. Not fixed.
+- Reproduced identically on a clean detached `origin/main` worktree (`e8e2b0a`) on 2026-10-27, with
+  `node scripts/test-runner.mjs --project backend --kind disposable --file …` in the Claude Code cloud container (not fixed):
+  - `backend/tests/gpexe-backup-verify.test.mjs` — fails on one catalog difference after `pg_dump` /
+    `pg_restore` with PostgreSQL 16 (the container's): v32's CHECK `gpexe_athlete_identities_display_name` reads
+    back with its nested `AND`s flattened. Whether a dump of the production server (PostgreSQL 17) reads it back
+    differently too is not verified. If it does, the verifier reports a difference on every database that
+    carries v32, and the fix is to write that CHECK so a restore reads it back the same (a migration).
+  - `backend/tests/builder-copy-performance.test.mjs` — `column "video_source" of relation "plan_items" does not
+    exist` in the disposable schema.
+  - `backend/tests/media-storage-be1.test.mjs`, `media-upload-be2.test.mjs` — they need `MEDIA_TEST_DATABASE_URL`
+    and stop at once without it.
 - `backend/tests/training-load-metrics-builder-edit-draft.test.mjs` — refuses to start
   unless `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL` is set (deliberate guard, no database
   operation attempted), so a plain full backend run reports it as failed; same on

@@ -199,9 +199,11 @@ async function boundedRead(work, { locks = false } = {}) {
 // ---------------------------------------------------------------------------
 // Access: one context per request, from the active workspace.
 // ---------------------------------------------------------------------------
-export async function resolveMappingAdmin(req) {
+// `known` is the active workspace when the caller already resolved it (the
+// canonical-variable editor, R2), so it is not resolved twice.
+export async function resolveMappingAdmin(req, known = undefined) {
   if (!req?.user?.id || !req.authz) return null;
-  const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+  const workspace = known === undefined ? (await resolveActiveWorkspace(req.user.id, req.authz)).workspace : known;
   if (!workspace) return null;
   const userId = String(req.user.id);
   const scopeId = workspace.scopeId ? String(workspace.scopeId) : null;
@@ -226,6 +228,7 @@ const readableOwnerKeys = (ctx) => (ctx.owner.scope === "system" ? ["system"] : 
 // every registry row of the lock order).
 async function rightsStillHold(client, ctx) {
   if (rightsHold) await rightsHold(client);
+  if (ctx.basis === "team_coach") return coachRightsStillHold(client, ctx);
   if (ctx.basis === "club_admin") {
     // The database derives platform_admin for an active platform admin (v35,
     // C79): a club admin granted that role since this request began repeats
@@ -255,6 +258,42 @@ async function rightsStillHold(client, ctx) {
     if (club.rowCount === 0) return false;
   }
   return true;
+}
+// The team_coach basis (R2, section J3b.3; only the canonical-variable editor
+// sets it): an active coach of an active team of the variable's active club.
+// The stronger bases are probed first, as v38's
+// training_load.metric_variable_change_basis() derives them - each a joined
+// FOR SHARE, which locks only the rows it returns: found means the database
+// would derive another basis, so the request repeats (try_again). Then the
+// team, the club and the coach role with the user, FOR SHARE - v26's
+// lock_activity_decider order.
+async function coachRightsStillHold(client, ctx) {
+  const platform = await client.query(
+    `select 1 from public.user_global_roles g join public.users u on u.id = g.user_id
+      where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of g, u`,
+    [ctx.userId],
+  );
+  if (platform.rowCount > 0) throw refusal(409, "try_again", MESSAGES.try_again);
+  const clubAdmin = await client.query(
+    `select 1 from public.user_club_roles r join public.users u on u.id = r.user_id join public.clubs c on c.id = r.club_id
+      where r.user_id = $1 and r.club_id = $2 and r.role = 'club_admin' and r.is_active = true and u.is_active = true
+        and coalesce(c.is_active, true)
+        for share of r, u, c`,
+    [ctx.userId, ctx.owner.clubId],
+  );
+  if (clubAdmin.rowCount > 0) throw refusal(409, "try_again", MESSAGES.try_again);
+  const team = await client.query(
+    `select 1 from public.teams where id = $1 and club_id = $2 and coalesce(is_active, true) for share`, [ctx.teamId, ctx.owner.clubId],
+  );
+  if (team.rowCount === 0) return false;
+  const club = await client.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true) for share`, [ctx.owner.clubId]);
+  if (club.rowCount === 0) return false;
+  const role = await client.query(
+    `select 1 from public.user_team_roles r join public.users u on u.id = r.user_id
+      where r.user_id = $1 and r.team_id = $2 and r.role = 'team_coach' and r.is_active = true and u.is_active = true for share of r, u`,
+    [ctx.userId, ctx.teamId],
+  );
+  return role.rowCount > 0;
 }
 
 // ---------------------------------------------------------------------------
