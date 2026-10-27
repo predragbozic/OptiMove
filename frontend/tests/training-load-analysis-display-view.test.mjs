@@ -56,7 +56,7 @@ for (const type of ["kpi", "table", "line_chart", "bar_chart"]) {
     assert.doesNotMatch(conflict.textContent, /98765/);
     assert.equal(conflict.querySelector(".tl-analysis-chart-track"), null);
     setup(type, [], { resultStatus: "error" });
-    assert.match(rendered().querySelector(".tl-analysis-widget").textContent, /seriesQueryFailed/);
+    assert.match(rendered().querySelector(".tl-analysis-widget").textContent, /This series could not be loaded/);
   });
 
   test(`${type}: unsupported and invalid configurations are explicit and never silently rendered with defaults`, () => {

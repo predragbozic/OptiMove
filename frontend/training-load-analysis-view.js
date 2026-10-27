@@ -429,7 +429,7 @@ function displayStatusLabel(status, reasons = []) {
     const names = { conflict: "Conflict", unitConflict: "Unit conflict", typeConflict: "Type conflict", semanticConflict: "Semantic conflict" };
     return reasons.filter(reason => names[reason]).map(reason => names[reason]).join(" / ") || "Conflict";
   }
-  if (reasons.includes("seriesQueryFailed")) return "seriesQueryFailed";
+  if (reasons.includes("seriesQueryFailed")) return "This series could not be loaded. Try refreshing the dashboard.";
   if (reasons.includes("duplicateBucket")) return "Multiple values for this group. Use a table.";
   return "Invalid or unavailable result";
 }

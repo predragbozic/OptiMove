@@ -1133,7 +1133,7 @@ test("Analysis reloads stale revisions and renders explicit status states", asyn
   assert.match(html, /Choose a metric/);
   assert.match(html, /Conflict/);
   assert.match(html, /Unit conflict/);
-  assert.match(html, /seriesQueryFailed|Choose a metric/);
+  assert.match(html, /This series could not be loaded|Choose a metric/);
 });
 
 // ------------------------------------------------------------

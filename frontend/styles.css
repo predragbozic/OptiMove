@@ -15272,16 +15272,48 @@ button.tests-assignment-card {
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
 }
 
-.tl-analysis-chart {
-  display: grid;
-  gap: 8px;
+.tl-analysis-table caption {
+  padding: 8px 0;
+  color: var(--muted);
+  text-align: left;
+}
+
+.tl-analysis-table th {
+  background: var(--surface-alt, #f4f4f4);
+  font-weight: 600;
+}
+
+.tl-analysis-table td:nth-child(3) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.tl-analysis-kpi-context {
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.tl-analysis-chart-values summary {
+  min-height: 44px;
+  padding: 12px 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.tl-analysis-widget-body:focus-visible,
+.tl-analysis-table-wrap:focus-visible,
+.tl-analysis-chart-values summary:focus-visible {
+  outline: 2px solid var(--tl-accent, #0f62fe);
+  outline-offset: -2px;
 }
 
 .tl-analysis-plot {
   min-width: 0;
-  margin: 0;
+  margin: 0 0 16px;
 }
 
 .tl-analysis-plot figcaption {
@@ -15305,34 +15337,6 @@ optimove-dashboard-chart {
   display: none;
 }
 
-.tl-analysis-chart-row {
-  display: grid;
-  grid-template-columns: minmax(88px, 1fr) minmax(80px, 2fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  font-size: 13px;
-}
-
-.tl-analysis-chart-label,
-.tl-analysis-chart-value {
-  overflow-wrap: anywhere;
-}
-
-.tl-analysis-chart-track {
-  height: 9px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #e8ecef;
-}
-
-.tl-analysis-chart-track span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--tl-accent);
-}
-
 .tl-analysis-topbar .plain-button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -15352,11 +15356,6 @@ optimove-dashboard-chart {
   stroke: currentColor;
   stroke-width: 2.4;
   stroke-linecap: round;
-}
-
-.tl-analysis-chart.is-line .tl-analysis-chart-track span {
-  height: 3px;
-  margin-top: 3px;
 }
 
 .tl-analysis-modal {
@@ -16241,9 +16240,6 @@ optimove-dashboard-chart {
     order: var(--tl-mobile);
     grid-column: auto;
     min-height: 0;
-  }
-  .tl-analysis-chart-row {
-    grid-template-columns: minmax(0, 1fr);
   }
   /* No pointer drag/resize below this breakpoint (training-load-actions.js
      gates handleTrainingLoadAnalysisPointerDown the same way) - Move up/
