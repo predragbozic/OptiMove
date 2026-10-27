@@ -74,8 +74,11 @@ platform admin (`catalogVisibilitySql`, `trainingLoadMetricsAccess.js:116-134`).
 - It carries the team and its `club_id`, which may be null (`backend/src/workspace.js:60`).
 - The coach role is `public.user_team_roles` (`role = 'team_coach'`, `is_active`). `public.teams` has `club_id` and
   `is_active`.
-- The repository's only team-coach database lock, v25's `lock_activity_decider` (v25:265-298), locks in the order
-  team → role → user → club.
+- The repository's only team-coach database lock is `training.lock_activity_decider`, as redefined by v26
+  (`…_v26_activity_roster_decisions.sql:732-766`). It locks the team, then the club (`coalesce(is_active, true)`),
+  then the role and the user in one joined `FOR SHARE`.
+- A value entry for a definition takes it `FOR SHARE` (`trainingLoadMetricsMeasurements.js:178-181`), so an entry
+  and an archive (`FOR UPDATE`) serialize.
 
 ## 2. The owner decision to record (proposed C99)
 
@@ -124,11 +127,11 @@ History stays. An admin or a coach of the club can restore it.
 | # | Question | Recommendation |
 |---|---|---|
 | Q3 | Is a reason required for archive and restore? Archiving stops new values for the whole club. | **Required for archive** and optional for restore. At most 500 characters, kept in the audit. |
-| Q4 | May a pinned variable (an active mapping version uses it) be renamed? Labels are not versioned, so a coach would relabel a variable fed by active mappings, for the whole club. | **Only by an admin.** A coach gets `409 variable_pinned` for a rename of a pinned variable. Archiving a pinned variable stays refused for everyone (decision 9). |
+| Q4 | May a pinned variable (an active mapping version uses it) be renamed? Labels are not versioned, so a coach would relabel a variable fed by active mappings, for the whole club. | **Only by an admin.** A coach gets `409 variable_pinned` for a rename of a pinned variable; the R2 request guard refuses it for the `team_coach` basis too (§6.3). Archiving a pinned variable stays refused for everyone (decision 9). |
 | Q5 | May an archived variable be renamed? | No. An archived variable stays read-only (C88); restore it first. |
 | Q6 | Does a platform admin or a club admin get these actions in a team workspace too? | Only if they hold the coach role on that team. Otherwise they use their own workspace. The basis written is always the strongest the database derives (§6.2). |
-| Q7 | What does a coach read? Today a coach sees no club variable. | A **reduced view**: id, key, label, short label, description, state, owner scope, `truncated`, `actions` and the rename precondition token. No versions, no semantics, no reasons, no mapping readiness. The system reference uses the same reduced view. |
-| Q8 | May a coach restore a variable that an admin archived? | **No.** A coach restores only what a coach archived; an admin restores anything. The basis of the archive's request row decides. |
+| Q7 | What does a coach read? Today a coach sees no club variable. | A **reduced view**: id, key, label, short label, description, state, owner scope, `truncated`, `actions` and the rename precondition token. No versions, no semantics, no reasons, no mapping readiness. The system reference uses the same reduced view. **Every answer** that carries a variable to a coach uses it: the writes, a replay, `commitConfirmation`, and `409 variable_changed`. **Accepted disclosure:** `actions`, `409 variable_pinned` and `409 restore_by_admin` tell a coach that a mapping pins a variable, or that an admin archived it. |
+| Q8 | May a coach restore a variable that an admin archived? | **No.** A coach restores only what a coach archived; an admin restores anything. **The deciding row** is the request linked to the definition's most recent `archive` change row. When there is none (an archive by the older API before C98, by a migration or by raw SQL), the archive counts as an admin's: a coach gets `409 restore_by_admin`. The service checks this, and the R2 request guard checks it again for the `team_coach` basis (§6.3). |
 | Q9 | Who reads the change history (the audit)? | The club's admins and a platform admin, through a later read. R2 itself builds no history route. The rows are written from the first change. |
 | Q10 | The admin APIs' invisible-character list has a known gap (Separate tasks, LOW: U+3164, U+2800, U+115F/1160, U+FFA0, U+034F, variation selectors, tag characters). R2 lets every coach of the club write club-wide labels. | **Close it in R2:** extend the service rule and its database twin `training_load.source_metric_text_ok()` in v38, for every admin API. The M2 and M3-0 labels are covered too. |
 | Q11 | A write quota for coaches? | None, as for M2 (C68). The audit is append-only; abuse is visible to the admins. |
@@ -151,15 +154,16 @@ same-origin JSON and the M3-0 error envelope. Every write is idempotent by `requ
 **The order of the answers, for every R2 route:**
 1. the identical 404 when the caller has no right to this route in this workspace — before the body;
 2. `415 jsonRequired`;
-3. a malformed `variableId`: the identical 404;
-4. `400 invalid_body` (shape only);
-5. *inside the write:*
+3. a JSON body that is not an object: `400 invalid_body` (the router's `jsonObjectBody`, before the service);
+4. a malformed `variableId`: the identical 404;
+5. `400 invalid_body` for an object of the wrong shape;
+6. *inside the write:*
    - a replay of the same key answers here, before any precondition;
    - then the definition: not visible or not writable by this caller is the identical 404 (an unlocked read first,
      so a refused caller never waits for the lock);
    - the definition `FOR UPDATE`;
    - **the rights again, `FOR SHARE` (§7)**: lost means the identical 404, never a 409;
-6. the 409s of each route below.
+7. the 409s of each route below.
 
 **Reads, for a coach in a team workspace** (`GET /variables`, `GET /variables/:variableId`):
 - the owner is the team's club;
@@ -173,8 +177,9 @@ For the admins the reads are unchanged, except that they gain the same `actions`
 **Admin-only routes.** `GET /variables/key-suggestion`, `POST /variables`, `POST /variables/:id/versions` and the M2
 routes answer a coach the identical 404 (step 1).
 
-**The rename precondition token.** Every read of a variable carries `labelsToken`: an opaque digest the server
-computes over the **stored** label, short label, description and state. The client sends it back. The server never
+**The rename precondition token.** Every read of a variable carries `labelsToken`: the server's SHA-256 of the JSON
+array `[label, shortLabel, description, state]` of the **stored** row (a NULL is JSON `null`, never `""`). The server
+compares it only under the definition lock. The client sends it back. The server never
 compares the client's text with the stored text, so a stored value that the output cut (`truncated`), or that spans
 several lines, can still be renamed.
 
@@ -240,7 +245,9 @@ unchanged for the M2 routes.
   then the club's admin, then the team's coach.
 - `teamId` (and later `basis_team_id`) is recorded only when the basis is `team_coach`.
 - Under Q6, holding the coach role on the team is required to act in a team workspace at all. The database cannot
-  check that requirement when the basis is not `team_coach`, so it is the service's.
+  check that requirement when the basis is not `team_coach`, so it is the service's. Inside the write it is not
+  checked again for an admin basis, which is harmless: the admin could act from the club workspace.
+- An active team or club means `coalesce(is_active, true)`, as v26 and v35 do.
 
 **The shared rights check gets a `team_coach` branch.** `rightsStillHold()` is used by the write, the replay and the
 answer after a COMMIT; its existing branches stay as they are. The new branch:
@@ -249,8 +256,11 @@ answer after a COMMIT; its existing branches stay as they are. The new branch:
    - the club's admin role → the user → the club.
 
    Either found means `409 try_again`.
-2. then, in v25's order: the team → the coach role → the user → the club, each `FOR SHARE`, each its own statement.
-   The team must be active, with `club_id` equal to the owner club.
+2. then, in v26's order (`lock_activity_decider`): the team, then the club, then the coach role and the user in one
+   joined statement, all `FOR SHARE`. The team must be active, with `club_id` equal to the owner club.
+
+All these locks are `FOR SHARE`, and each writer that contends with them is a single-row UPDATE (a team or club
+archive, a role revoke). A deadlock therefore needs such a writer, and would surface as `40P01`, which is `try_again`.
 
 The same order is used by the database function of §6.2. The M2 routes never reach the new branch, because their
 resolver never returns `team_coach`.
@@ -290,6 +300,7 @@ route and the body:
 - New: `metric_variable_change_id` (unique, FK to §6.3): not null exactly for the three R2 operations.
 - New: `reason`, nullable and only for the R2 operations, checked by `training_load.source_metric_text_ok(reason, 500)`
   in the database.
+- A partial index on `basis_team_id where basis_team_id is not null`.
 
 **What stays as it is:**
 - The existing constraint names. The M3-0 tests snapshot them (`metric-variables-m3-0.test.mjs:325-333`).
@@ -321,22 +332,46 @@ A new append-only table, `training_load.metric_variable_changes`. Each row holds
 - the row's own xmin, checked as below;
 - `changed_at`.
 
-Indexes on the definition and on the acting user. A partial index on `basis_team_id where not null`.
+Indexes on the definition and on the acting user.
 
 **Who writes it.** An AFTER UPDATE row trigger on `metric_definitions` (`UPDATE OF label, short_label, description,
 state`) writes it.
-- It fires when OLD or NEW is `system` or `club`, and any of the four columns `IS DISTINCT FROM` its old value.
+- Its `WHEN` clause fires it only when OLD or NEW is `system` or `club`, and any of the four columns `IS DISTINCT
+  FROM` its old value. Because that is tested first, the older API's writes to team and user rows
+  (`trainingLoadMetricsCatalog.js:391, 430`) never reach the actor check.
 - The values come from `OLD` and `NEW`, never from the client.
 - It requires the v35 acting-user setting of this transaction, or it refuses with `42501`.
-- A BEFORE INSERT guard on the table admits a row only from that trigger (`pg_trigger_depth() > 0`).
 - `icon_url` is not audited; R2 does not change it.
 
-**Key and owner, in the database.** A BEFORE UPDATE trigger on `system` and `club` rows refuses a change of `key` or
-of the owner columns (`23514`). This holds whatever the path; v34's owner guard covers only mapped definitions. The
-levels stay a service rule: R2 never writes them, and C98 refuses them in the older API.
+**A BEFORE INSERT guard on the changes table** admits a row only when all of these hold:
+- the row is written from inside a trigger, at depth 2 or more (`pg_trigger_depth() > 1`, because the guard itself
+  is depth 1);
+- `xact_id = pg_current_xact_id()`;
+- the acting user is the v35 actor;
+- the definition's xmin equals `source_metric_current_xmin()`.
+
+This proves "some trigger in this transaction", not "that trigger", and the limits in §6.5 say so. A forged row is
+still caught by the request guard and by the COMMIT check below: it would need a definition updated in this
+transaction, exactly one change row, and its own request.
+
+**The key, in the database.** A BEFORE UPDATE OF `key` trigger refuses a change of the key when OLD or NEW is
+`system` or `club` (`23514`). Its name sorts after v34's `metric_definitions_source_metric_owner_guard`, so v34's
+messages keep winning wherever both fire.
+
+**The owner and the levels stay as they are:**
+- the owner is C51 for a mapped definition (v34) and a service rule otherwise;
+- the levels are a service rule;
+- R2 writes neither, and C98 refuses both in the older API.
+
+An owner freeze for unmapped canonical rows would change C51 and break its tested interleavings
+(`source-metric-mapping-m1.test.mjs` test 21), so it is not proposed.
 
 **The R2 request guard checks, at insert:**
-- the actor and the derived basis (`42501`);
+- the request names the acting user (`42501`);
+- the request's owner equals the definition's owner and the change row's owner, and the request's definition is the
+  change row's;
+- the basis is the one `metric_variable_change_basis()` derives from **the definition's** owner, with `basis_team_id`
+  for `team_coach` (`42501`);
 - that exactly one change row of this transaction exists for this definition;
 - that the request's `metric_variable_change_id` names that row;
 - that the change row was made by the actor;
@@ -346,7 +381,13 @@ levels stay a service rule: R2 never writes them, and C98 refuses them in the ol
 - that the kind matches the operation:
   - a rename changes label columns only, with the state `active`;
   - an archive is `active → archived`, with the labels unchanged;
-  - a restore is `archived → active`, with the labels unchanged.
+  - a restore is `archived → active`, with the labels unchanged;
+- for a rename, the new label (80), short label (20) and description (500) with `source_metric_text_ok()`; the old
+  values are exempt;
+- for the `team_coach` basis:
+  - Q4: no rename of a pinned variable;
+  - Q8: a restore only when the definition's most recent `archive` change row has a request with the `team_coach`
+    basis.
 
 Any of these fails with `23514`.
 
@@ -363,28 +404,47 @@ Any of these fails with `23514`.
   - refuses once any R2 request or change row exists, or a later migration is recorded;
   - otherwise drops the R2 objects explicitly, under a bounded `lock_timeout`;
   - restores v36's checks and recreates v36's trigger without `WHEN`;
+  - if Q10 is accepted, restores v34's exact body of `source_metric_text_ok()`;
   - is rehearsed: apply → rollback → the catalog identical to the one before v38 → re-apply.
 - A read-only production preflight and post-check, on the v36 pattern, cover:
   - v37 recorded and v38 absent (preflight);
   - the constraint definitions, the triggers enabled (`tgenabled = 'O'`) and their deferred flags;
   - the indexes valid;
   - no R2 or change row;
-  - no actor setting.
+  - no actor setting;
+  - if Q10 is accepted, the number of stored values that the stricter rule would refuse, expected 0, and the function
+    body after the migration (the rehearsal compares it too).
 
 ### 6.5 Limits, and what v38 changes for existing code
 
 **Limits, as v35 and v36.** The guards prove that the row, the actor and the right agree. They are no defence against
-whoever holds the shared owner credentials, or runs SQL through the application's pool and disables a trigger.
+whoever holds the shared owner credentials, or runs SQL through the application's pool and disables a trigger. The
+changes table's own guard can be satisfied by any other trigger of the same transaction (§6.3).
 
 **A future migration** that changes a canonical definition's label or state must set the acting user, or disable the
 trigger inside itself, and say so.
 
-**Existing test statements that v38 breaks.** Each one is rewritten to disable the trigger inside its own fixture, as
-the v37 suites did, and none changes what it asserts:
+**Existing test statements that v38 breaks.** Found by searching every raw update of the four columns. Each one is
+rewritten to disable the trigger inside its own fixture, as the v37 suites did, and none changes what it asserts:
 - `source-metric-mapping-m1.test.mjs:960` and `:1341` (raw renames);
 - `metric-variables-m3-0.test.mjs:665` and `:866` (`state = 'archived'` fixtures).
 
+**Not affected:**
+- `source-metric-mapping-m1.test.mjs:959` and `:1271`: decision 9 refuses them first, with the same message;
+- test 21 of the same file (owner changes): no key change and none of the four columns;
+- `metrics-core-canonical-guard.test.mjs:471` (user → system): the same reason;
+- if Q10 is accepted, test 4 of `source-metric-mapping-m1.test.mjs` (`:551-561`, the exact C53 list) gains the new
+  characters.
+
 No production writer is affected.
+
+**Q10, if accepted:**
+- the migration refuses to apply when a stored value fails the stricter rule;
+- the JavaScript rule gains the `u` flag for the astral tag characters (U+E0000–U+E007F), and the database class
+  `\U000E0000`;
+- a test compares the JavaScript and database rules over the code point ranges;
+- `metric_definitions` has no text check of its own (v10). The service and the R2 request guard check the new labels;
+  no constraint does.
 
 ## 7. Lock order, idempotency, outcome
 
@@ -402,10 +462,19 @@ A write follows M3-0's machinery:
 9. the request row;
 10. a bounded COMMIT, whose lost answer is verified by the request record on another connection.
 
+Step 5 before step 6 deliberately departs from M3-0, where the rights follow the 409s
+(`canonicalVariableAdminService.js:569-579`): `variable_changed` carries data. The same ordering in M3-0's
+version route is recorded as a follow-up; R2 does not change M3-0.
+
+The COMMIT bound and the verify window are M3-0's. After an unknown COMMIT, the connection is closed, never returned to
+the pool, and its locks end when the server ends the transaction.
+
 **Concurrent writes.**
 - Two writes on one variable serialize on the definition lock.
 - A rename and an M3-0 new version both lock the definition first, and neither changes what the other checks.
 - An archive and a mapping activation serialize through v34 (§1). R2 adds the two interleaving tests.
+- An archive and a value entry serialize on the definition row (§1). R2 tests both orders: an entry after the archive
+  is refused, and an archive after the entry leaves the entry stored.
 
 ## 8. Tests and mutations
 
@@ -420,11 +489,16 @@ covers the following.
   role, a private-coach or athlete workspace: a byte-identical 404;
 - a coach on the admin-only routes and on the M2 routes: 404.
 
-**The order of the answers** (§4): no right plus a bad body is 404; a coach with a non-JSON body is 415; a bad UUID
-plus a bad body is 404; a right revoked mid-request (the rights-hold seam) is 404, never a 409 with data.
+**The order of the answers** (§4):
+- no right plus a bad body is 404;
+- a coach with a non-JSON body is 415;
+- a non-object JSON body is 400;
+- a bad UUID plus an object body is 404;
+- a coach's right revoked mid-request (the rights-hold seam) is 404, never a 409 with data.
 
 **Reads:**
-- the coach's reduced view, a field allowlist on both reads and on the system reference (Q7);
+- the coach's reduced view (Q7): a field allowlist on both reads, the system reference, every write answer, a
+  replay, `commitConfirmation` and `409 variable_changed`;
 - `actions` and `editable` for each caller and state;
 - a truncated or multi-line stored value can still be renamed through `labelsToken`.
 
@@ -432,10 +506,14 @@ plus a bad body is 404; a right revoked mid-request (the rights-hold seam) is 40
 - success, with the change row's old and new values;
 - every 409 in its order;
 - Q4 (a coach on a pinned variable versus an admin);
-- Q8 (a coach restoring an admin's archive);
+- Q8:
+  - a coach restoring an admin's archive;
+  - a legacy archive with no change row (raw, trigger off): coach 409, admin 200;
+  - archive by a coach, restore by an admin, archive by an admin, then a coach's restore: 409;
 - a restore of a pinned archived row;
 - archive against activation in both orders (archive first: the activation refuses with `23514`; activation
-  first: `409 variable_pinned`).
+  first: `409 variable_pinned`);
+- archive against a value entry, in both orders.
 
 **Basis:**
 - a coach only (`team_coach`, `basis_team_id` set);
@@ -458,9 +536,11 @@ plus a bad body is 404; a right revoked mid-request (the rights-hold seam) is 40
 - no actor gives `42501`; a wrong basis; `team_coach` on system;
 - a change without its request row gives `23514` at COMMIT, even with an earlier request for the same definition;
 - a request without a change;
-- a change row inserted outside the trigger;
+- a change row inserted outside the trigger (a direct INSERT; the mutation `> 1 → > 0` is killed);
+- the request guard's identity checks (another owner, another definition, another user);
+- the Q4 and Q8 database checks for the `team_coach` basis;
 - a savepoint;
-- a key or owner change on a system or club row;
+- a key change on a system or club row (OLD or NEW); v34's owner messages unchanged;
 - append-only;
 - the text rule (Q10).
 
@@ -482,6 +562,7 @@ plus a bad body is 404; a right revoked mid-request (the rights-hold seam) is 40
 ## 9. Not in R2
 
 - Changing the key, the owner, the levels or the semantics. A new version stays the M3-0 route, for admins only.
+- Moving the rights check before the 409s in M3-0's version route (§7): a follow-up of its own.
 - A route that reads the change history (Q9).
 - Domains, categories and structure links.
 - The older API, which C98 keeps refused.
