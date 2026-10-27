@@ -532,7 +532,7 @@ function renderWidgetHtml(widget, position) {
           <h3>${escapeHtml(widget.title)}</h3>
         </div>
       </header>
-      ${renderWidgetBodyHtml(widget, results)}
+      <div class="tl-analysis-widget-body" role="region" aria-label="${escapeAttr(widget.title || "Metric")} content" tabindex="0">${renderWidgetBodyHtml(widget, results)}</div>
       ${renderWidgetToolbarHtml(widget, layout, position)}
       ${state.trainingLoad.analysis.editMode && canEdit() ? `<button type="button" class="tl-analysis-resize-handle" data-analysis-resize-handle aria-label="Resize widget" title="Resize widget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 20h12V8M13 20l7-7M18 20l2-2"/></svg></button>` : ""}
     </article>

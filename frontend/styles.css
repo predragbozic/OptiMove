@@ -14938,10 +14938,24 @@ button.tests-assignment-card {
   grid-row: calc(var(--tl-y) + 1) / span var(--tl-h);
   min-height: calc(var(--tl-h) * 46px);
   position: relative;
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   overflow: visible;
+  min-width: 0;
+}
+
+.tl-analysis-widget-head,
+.tl-analysis-widget-tools {
+  flex: none;
+}
+
+.tl-analysis-widget-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .tl-analysis-widget-move {
