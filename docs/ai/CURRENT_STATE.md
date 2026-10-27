@@ -2120,12 +2120,12 @@ Technical details.
         `ae92c2e`. GO on `ae92c2e` from the *Rukovodilac* and from the *Nezavisni revizor*; no BLOCKER, HIGH or
         MEDIUM. How the merge was authorized is recorded in PR #227's description.
       - The owner's read-only preflight `docs/runbooks/metric-variable-changes-v38-preflight.sql` (Supabase SQL
-        Editor, 2026-10-27 about 08:50 UTC) gave the expected value in all nine blocks: PostgreSQL `170006`,
+        Editor, 2026-10-27) gave the expected value in all nine blocks: PostgreSQL `170006`,
         v35–v37 recorded with their checksums, v38 absent, the last migration
         `202610191300_media_upload_lifecycle.sql`, one existing request row that passes the checks v38 adds.
       - The owner also checked that the Supabase Data API is switched off ("No schemas can be queried"; the role
-        `authenticator` carries no `pgrst.db_schemas`), so `training_load` is not exposed through it. The v36 and
-        v38 tables have no row-level security.
+        `authenticator` carries no `pgrst.db_schemas`). By that setting, `training_load` is not exposed through it.
+        The v36 and v38 tables have no row-level security.
       - Merge commit `e556d08` (parents `e8e2b0a` and `ae92c2e`) on 2026-10-27 at 09:51:13 UTC, made by the executor
         from exactly `ae92c2e`.
       - `/api/health` served `e8e2b0a` until 09:52:08 UTC and first served `e556d08` with `ok: true` at 09:52:18
@@ -2136,7 +2136,8 @@ Technical details.
         (`docs/runbooks/metric-variable-changes-v38-postcheck.sql`, eight blocks, Supabase SQL Editor). The owner
         reported every block as confirmed („sve potvrdjeno na post tetiranju”, 2026-10-27 11:39:15 UTC, in the
         *Rukovodilac*'s chat). The owner did not paste the values of the blocks, so they are not recorded here.
-      - No variable was renamed, archived or restored in production by the executor or a reviewer.
+      - The executor's smoke, and the *Rukovodilac*'s, sent requests without a login only; the executor renamed,
+        archived or restored no variable in production.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
