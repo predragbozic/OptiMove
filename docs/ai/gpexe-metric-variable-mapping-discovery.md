@@ -912,16 +912,19 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
 100. **The source-field revision lifecycle (C91) and Q10 part B: migrations v39 and v40** (the contract is J5,
     `docs/ai/v39-revision-lifecycle-contract.md`; not implemented yet).
     - **The owner's words** (in the *Rukovodilac*'s chat, owner turn `e59003dd`, 2026-10-27 14:33:31 UTC, checked by
-      the executor), verbatim, with its quotation marks as typed: „Odobravam merge PR #238.“ O1–O9 (dovoljno „sve po
-      preporuci“).”
+      the executor), verbatim, exactly as in the code span (every quotation mark in it is the owner's):
+      `Odobravam merge PR #238.“ O1–O9 (dovoljno „sve po preporuci“).`
     - **How they are read.** The message repeats the wording the *Rukovodilac* had proposed to the owner.
       - The *Rukovodilac* reads it as the owner's answer "everything as recommended" to all of O1–O9 (its message
         `c6f5ecb7`, 14:34:14 UTC). It asked the owner to name any question he meant otherwise (its message of
         14:34:25 UTC).
       - That reading is the *Rukovodilac*'s, not the owner's own words. The owner's own word on the merge of the pull
         request that records it confirms it (PR #240, in the executor's chat or by merging it himself).
-      - The message's first sentence does not approve PR #238's merge. A "Never by relay" merge is approved only in
-        the executor's chat, or by the owner merging it himself (plan, section 2).
+      - At 14:34 UTC the message's first sentence was not taken as approving PR #238's merge: under section 2 of the
+        plan as it then stood, a "Never by relay" merge was approved only in the executor's chat or by the owner
+        merging it himself. PR #238 was merged later the same day on this turn and on the owner's turn `58ef3d24`
+        (17:32:55 UTC), by the *Rukovodilac*'s decision `c9cb6a1a` (17:33:33 UTC): a one-off departure, recorded in
+        the plan, section 2 ("The owner's word in the *Rukovodilac*'s chat", "First use").
     - **The owner's answers** (J5.6), each the contract's proposal:
       - O1: an active platform admin in the platform workspace creates, activates, retires and replaces a revision;
         never a club admin.
@@ -962,7 +965,8 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
         owner no longer deploys it. The *Rukovodilac*'s condition (its message `55ca36ed`, 16:32:18 UTC): it stays
         inactive during and after the deploy of v39 and v40. If it shares the Supabase project, its older code may
         not run again against the migrated database without a new decision;
-      - gate 4, the plan naming both migrations: open, after PR #238 is merged.
+      - gate 4, the plan naming both migrations: met by PR #240 (phase 4's heading and lines, and section 6 of the
+        plan).
 
       The merge, its migrations v39 and v40 and their production pre- and post-checks each need the owner's order
       that names them.
