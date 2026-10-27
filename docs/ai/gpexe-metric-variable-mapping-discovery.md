@@ -10,8 +10,8 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 |---|---|
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
-| Last verified against commit | `e489eeb` (merge of PR #223, the phase 3 docs sync) — re-verified for the facts R2 builds on (J3b.1, C99); `6c7dfa4..e489eeb` changed only this document and `CURRENT_STATE.md` — before it `6c7dfa4` (merge of PR #218, M3a) — `deb2aa1..6c7dfa4` changed the older catalog's write guard (C98, PR #219, already verified against `deb2aa1` below), the plan documents (PR #221) and the M3a frontend (PR #218, section H); no migration, mapping, binding, importer or snapshot contract changed; re-verified for the status line, section H and the K note on the two `23514` guard refusals — before it `deb2aa1` (merge of PR #217; the base of the canonical-guard pull request, C98) — re-verified for the Metrics Core catalog only (`trainingLoadMetricsCatalog.js`, `trainingLoadMetricsAccess.js`, `routes/trainingLoadMetrics.js`, A6, C82, C98); the other sections were not re-derived — before it `60aadb9` (merge of PR #163, M3-0; the base of the M2b pull request) — its tree is the integrated M3-0 branch's own (`a9a6d5e`), so nothing documented changed — before it `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
-| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), merged and deployed (PR #163, `60aadb9`; v36 directly confirmed on production by the owner's read-only post-check); M2b, the source-field evidence confirmation and its database guards v37 (C89–C97, J4), merged (PR #164, `66c50d6`; its deploy and v37 on the production database not re-verified in this update), no production field confirmed; the older catalog's guard on the canonical variables (C98, no migration) merged and deployed (PR #219, `7a9e59d`); M3a, the Variables view of the M3 frontend (section H, C80) over the M3-0 API, merged and deployed (PR #218, `6c7dfa4`, no migration); R2, renaming, archiving and restoring a canonical variable with a team coach for club variables (C99, J3b), accepted by the owner on 2026-10-27, not implemented (migration v38); the revision lifecycle (C91), the rest of the M3 frontend and M4–M6 not started** |
+| Last verified against commit | `e8e2b0a` (merge of PR #224, the R2 contract; the base of the R2 implementation pull request) — `e489eeb..e8e2b0a` changed only the plan and this document; sections J3b and J3b.8 describe the R2 pull request as built — before it `e489eeb` (merge of PR #223, the phase 3 docs sync) — re-verified for the facts R2 builds on (J3b.1, C99); `6c7dfa4..e489eeb` changed only this document and `CURRENT_STATE.md` — before it `6c7dfa4` (merge of PR #218, M3a) — `deb2aa1..6c7dfa4` changed the older catalog's write guard (C98, PR #219, already verified against `deb2aa1` below), the plan documents (PR #221) and the M3a frontend (PR #218, section H); no migration, mapping, binding, importer or snapshot contract changed; re-verified for the status line, section H and the K note on the two `23514` guard refusals — before it `deb2aa1` (merge of PR #217; the base of the canonical-guard pull request, C98) — re-verified for the Metrics Core catalog only (`trainingLoadMetricsCatalog.js`, `trainingLoadMetricsAccess.js`, `routes/trainingLoadMetrics.js`, A6, C82, C98); the other sections were not re-derived — before it `60aadb9` (merge of PR #163, M3-0; the base of the M2b pull request) — its tree is the integrated M3-0 branch's own (`a9a6d5e`), so nothing documented changed — before it `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
+| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), merged and deployed (PR #163, `60aadb9`; v36 directly confirmed on production by the owner's read-only post-check); M2b, the source-field evidence confirmation and its database guards v37 (C89–C97, J4), merged (PR #164, `66c50d6`; its deploy and v37 on the production database not re-verified in this update), no production field confirmed; the older catalog's guard on the canonical variables (C98, no migration) merged and deployed (PR #219, `7a9e59d`); M3a, the Variables view of the M3 frontend (section H, C80) over the M3-0 API, merged and deployed (PR #218, `6c7dfa4`, no migration); R2, renaming, archiving and restoring a canonical variable with a team coach for club variables (C99, J3b), accepted by the owner on 2026-10-27 (PR #224, `e8e2b0a`) and implemented in an open pull request — not merged, not deployed, migration v38 applied to no persistent database (J3b.8); the revision lifecycle (C91), the rest of the M3 frontend and M4–M6 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
 **Which changes require a targeted re-verification of this document** (not a repeat of the whole
@@ -1869,7 +1869,7 @@ Access, `401`, the identical `404 {"error":"notFound"}`, `Cache-Control: no-stor
   version: `23514`; point-in-time, C82), and append-only triggers (`23514`). Fixed messages. Depends on the v35 functions; the v35 rollback refuses while v36 is recorded. No data
   change.
 
-### J3b. R2 — renaming, archiving and restoring a canonical variable (accepted 2026-10-27, not built)
+### J3b. R2 — renaming, archiving and restoring a canonical variable (accepted 2026-10-27; built in the R2 pull request, migration v38 — see J3b.8)
 
 The contract the owner accepted as C99 (PR #224 at `fcde740`; the reviews of `code-reviewer`, `security-reviewer`
 and `db-reviewer`, of the *Rukovodilac* and of the *Nezavisni revizor*; the latter's MEDIUM on the order of changes
@@ -2384,6 +2384,71 @@ covers the following.
 - Deleting a variable.
 - The phase 2c frontend.
 - Any production write. Merge, deploy and the migration need the owner's order that names v38.
+
+#### J3b.8 As built (the R2 pull request, from `e8e2b0a`)
+
+**Files.**
+- Migration `migrations_v2/202610271000_training_load_v38_metric_variable_changes.sql`. It sorts after
+  `202610191300_media_upload_lifecycle.sql`.
+- The rollback, read-only preflight and post-check: `docs/runbooks/metric-variable-changes-v38-{rollback,preflight,postcheck}.sql`.
+  The suite runs the preflight on v37 and the post-check on v38; the post-check carries the migration's checksum.
+- `backend/src/canonicalVariableAdminService.js`:
+  - `resolveVariableEditor()`;
+  - the three writes through one `runChange()`;
+  - the views with `actions` and `labelsToken`.
+- `backend/src/sourceMetricMappingService.js`:
+  - the `team_coach` branch of `rightsStillHold()`;
+  - `resolveMappingAdmin(req, known)`, which takes an already resolved workspace.
+- `backend/src/routes/sourceMetrics.js`:
+  - the two variable reads and the three POST routes use the editor context;
+  - every other route keeps the admin context.
+- Tests: `backend/tests/canonical-variables-r2.test.mjs` (disposable databases, T1 runner).
+
+**Where the build refines the text above.**
+- **Q8, the deciding row.** It is the definition's most recent change before the restore (the largest `seq`), and it
+  must be an archive whose request had the `team_coach` basis. That is C99's rule that "a legacy archive without a
+  change row counts as an admin's". Take a coach's archive and restore followed by a legacy archive (or one written
+  with the trigger off): the archive in force has no change row, so a coach is refused. The literal "most recent
+  `archive` row" would have found the coach's older archive. The service (`coachArchived()`) and the request guard
+  apply the same rule, and a test covers that sequence.
+- **J3b.3, the coach's locks.** These are three statements: the team, then the club, then the coach role with the
+  user, each `FOR SHARE` (v26's order). Both the service and `metric_variable_change_basis()` take them so. The
+  two probes for a stronger role come first, as the text says.
+- **The reduced view (Q7)** carries `editable` (J3b.2) besides Q7's list, so its fields are: `id`, `key`,
+  `label`, `shortLabel`, `description`, `ownerScope`, `state`, `editable`, `actions`, `labelsToken`, `truncated`.
+  - A team workspace reads it whoever the caller is, the basis deciding only `actions`.
+  - `GET /variables/:id` there returns no versions (`nextCursor: null`) and takes no query parameter: a `cursor`
+    is `400 invalid_query`.
+  - `newVersion` is named only outside a team workspace.
+- **The order of the answers.** It starts at the router. A body that is not JSON at all is refused by the
+  application's JSON parser before any route; that is the same for every route and unchanged by R2.
+  - A coach of another club has the route in its workspace. So a non-object body is `400` (step 3), and the
+    variable is the identical `404` after it (step 6).
+  - A platform admin whose stored workspace is a team it does not coach falls back to another workspace through
+    the workspace resolver. Such a team workspace is never offered, which is what Q6 needs.
+- **The text rule.** A value the rename leaves as it was is exempt, in the service and in the request guard alike
+  (a legacy label longer than 80 characters stays while the description changes). The reason of an archive or a
+  restore is checked by `source_metric_text_ok()` inside the write and by the table's own check.
+- **`409 variable_pinned`** keeps its code everywhere, with a message for the case: a coach's rename, or an archive
+  or restore.
+- **J3b.4.5, the fixtures.** Only the two `state = 'archived'` fixtures of `metric-variables-m3-0.test.mjs` were
+  rewritten, through a helper that turns the change trigger off in their own transaction. The M3-0 suite's test 3
+  now expects that a team's coach (and a platform admin as that team's coach) reads the variables; the key set of
+  test 6 gains `actions` and `labelsToken`.
+  - `source-metric-mapping-m1.test.mjs:960` and `:1341` are not affected: that suite's databases stop at v34.
+  - No other test or production code changes a canonical definition's names, state or key (searched).
+- **The dashboards.** R2 changes no dashboard code, and `trainingLoadDashboardQuery.js` never reads a definition's
+  state at query time (its header, lines 34–36). So "a bound series keeps reading after an archive" holds
+  unchanged. The R2 suite does not test it separately.
+- **The rollback** also locks `metric_definitions`, whose two v38 triggers it drops.
+- **A dump and restore reads v38 back the same** (what `backend/scripts/gpexe-backup-verify.mjs` compares). The
+  change trigger's `WHEN` compares the four columns one by one, not as a row, and `owner_scope::text`, not the varchar
+  column. PostgreSQL stores a row comparison as nested `OR`s and an `IN` list against varchar with casts, and a
+  restore rewrites both, so the restored trigger's text would differ. Test 15 dumps and restores the behaviour
+  database and compares every trigger, constraint and function v38 adds or gates.
+
+**Mutations.** The record is in the R2 pull request. Every guard of J3b.3 and J3b.4 has a mutation that a test kills,
+except the redundant checks named there: a check whose removal another guard of the same chain still catches.
 
 ### J4. M2b — the source-field evidence confirmation and its database guards v37 (as built)
 
