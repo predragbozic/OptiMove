@@ -1,4 +1,4 @@
-# Plan: Metrics Core and canonical variables, phases 0–10 and R1
+# Plan: Metrics Core and canonical variables, phases 0–12 and R1
 
 Status: **adopted by the owner on 2026-10-26**, in the executor's chat: „ok: plan v2 sa R1, zelena zona, revizori,
 prenete odluke za fazu 10 i R1; D1, D3–D5, D8–D12 ostaju preporuke.”
@@ -8,6 +8,8 @@ It covers:
 - the source-field lifecycle;
 - the rest of M2 and M4;
 - the manual corrections and estimates (phase 10);
+- the derived canonical variables (phase 11);
+- the domains and categories of canonical variables (phase 12);
 - the re-import of a session (R1).
 
 This file is a memory file (`.claude/rules/memory-maintenance.md`). A change of a phase, a gate or a decision
@@ -20,14 +22,18 @@ The same day the owner added three things to it:
 - the decisions recorded in section 5 and in `docs/ai/phase10-estimates-decisions.md`.
 
 Added after the adoption, the same day: R2 (phases 2b and 2c), the executor as the one who merges and the exception of
-PR #221 (section 1), and the standing merge order for PRs without a migration (section 2).
+PR #221 (section 1), and the standing merge order for PRs without a migration (section 2). Added on 2026-10-27: the
+working mode (section 1), phase 11, derived canonical variables, and phase 12, domains and categories of canonical
+variables (section 5).
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
 
 Last verified against commit: `deb2aa1` (`origin/main`, merge of PR #217). The references to
 `docs/ai/gpexe-metric-variable-mapping-discovery.md` (the *discovery document*) and to
-`docs/ai/phase5a-discovery-and-contract.md` are to that commit.
+`docs/ai/phase5a-discovery-and-contract.md` are to that commit. What was added on 2026-10-27 (the working mode, the
+Done entries of phases 2b and 2c, phases 11 and 12, the Q10 line of section 6) was checked against `fdc2c2e` (merge of PR
+#237).
 
 ## 1. Who does what
 
@@ -36,7 +42,7 @@ Last verified against commit: `deb2aa1` (`origin/main`, merge of PR #217). The r
 | Owner | — | Decides. Every red-zone step is the owner's, case by case (section 2). |
 | Executor | the main Claude session of `CLAUDE.md` | The only writer: code, migrations, documents, branches, Draft PRs. Runs the internal reviewers by the orchestration matrix of `CLAUDE.md`. Makes every merge into `main`, on the owner's order or under the standing merge order, after checking it (section 2). |
 | *Rukovodilac* (planning and review) | `session_01MCgqwiexBgNEBaMKskhbTZ` | Plans and leads the phases. Reviews every phase and gives GO or NO-GO on an exact head. It is the designated external reviewer for the five triggers of `CLAUDE.md` (owner: „… revizori …” in the adoption above). Relays the owner's words (section 2). |
-| *Nezavisni revizor* (independent reviewer) | `session_01YC2kSvwQcRiYteWE268sNf` | A third review of the ★★ phases (2b, 4, 7, 9, 10 and R1). Its packet carries no conclusion of the *Rukovodilac*. Disagreements between the two reviewers go to the owner. |
+| *Nezavisni revizor* (independent reviewer) | `session_01YC2kSvwQcRiYteWE268sNf` | A third review of the ★★ phases (2b, 4, 7, 9, 10, 11 and R1). Its packet carries no conclusion of the *Rukovodilac*. Disagreements between the two reviewers go to the owner. |
 
 The third reviewer is the owner's order of 2026-10-26, written in the *Rukovodilac*'s chat: „treći revizor za ★★
 faze to je ok. Otvori sesiju nezavisni revizor a svoj naziv promeni u rukovodilac”.
@@ -53,6 +59,24 @@ and no further one is made without a new owner decision:
   and its own withdrawal to the owner, with two ways to merge (its turn `e59be7a4`, 22:56:28 UTC). The owner answered
   in its chat: „Mozes li ti to da radiš umesto mene” (owner turn `08c126f2`, 22:59:10 UTC). The *Rukovodilac* took
   that answer as an order and merged the PR. Phase 0 records it.
+
+**Working mode from 2026-10-27.** The owner wrote it in both chats:
+- in the executor's chat (owner turn `368a1613`, 11:43:40 UTC): „Idemo dalje po fazama šta ti rukovodilac pošalje. Ne
+  zovi me u pomoc vec koriguj sam u saradnji sa Rukovodiocem, samo za krupne stvari me šalji da me rukovodilac
+  kontaktira. Izvršilac i revizor treba da radi po naređenju Rukovodioca”;
+- in the *Rukovodilac*'s chat (owner turn `d6d20626`, 11:43:52 UTC): „Idemo dalje po fazama svakako. Ne zovi me u
+  pomoc vec koriguj sam, samo za krupne stvari me kontaktiraj. Izvršilac i revizor treba da radi po naređenju
+  Rukovodioca. Poslao sam i izvršiocu ovako”.
+
+So:
+- the phases run in the order the *Rukovodilac* sets;
+- findings are corrected between the executor and the *Rukovodilac*;
+- the executor and the *Nezavisni revizor* take their tasks from the *Rukovodilac*. The *Nezavisni revizor*'s packet
+  still carries no conclusion of the *Rukovodilac* (the table above);
+- the owner is contacted through the *Rukovodilac*, for „krupne stvari” (the big things).
+
+No gate of this plan changes: the red zone of section 2, "Never by relay" (approvals given directly in the executor's
+chat) and the owner's short report after every phase stay as written.
 
 ## 2. Green zone, red zone and the owner's words
 
@@ -413,6 +437,14 @@ order covers is merged under it.
     - Whether the owner confirms the merge as the order for v38 is the owner's decision. The executor reported the
       gap to the *Rukovodilac* the same day.
     - How the merge was authorized is recorded in PR #227's description.
+  - **The owner's confirmation after the merge.** The *Rukovodilac* reported the gap to the owner and asked (its
+    message `184bc907`, 11:47:13 UTC): „Molim Vas za naknadnu potvrdu jednom rečenicom, na primer: „Potvrđujem merge
+    PR #227 sa migracijom v38; pregled revizora sam video.“”. The owner answered „Potvrđujem” (owner turn
+    `9bab5d28`, 11:47:53 UTC, in the *Rukovodilac*'s chat).
+    - It is recorded as the owner's confirmation, after the fact, of the sentence the question gave: the merge of
+      PR #227 with migration v38, the reviewers' review seen. The word itself names neither the PR nor v38.
+    - Since then, for every migration the *Rukovodilac* asks the owner for a sentence that names the PR, its head
+      and the migration. Without one, the *Rukovodilac* and the executor stop (section 2's minimum check).
   - Merge: `e556d08` (parents `e8e2b0a` and `ae92c2e`), 09:51:13 UTC, made by the executor from exactly
     `ae92c2e`. The record is in PR #227's description.
   - Smoke: `/api/health` served `e556d08` with `ok: true` three times in a row (09:52:18, 09:52:29 and 09:52:39
@@ -425,6 +457,32 @@ order covers is merged under it.
 - Rename, archive and restore in the Variables tab, for the rights of 2b.
 - **Reviewers:** `code-reviewer`, `mobile-qa`, `ux-design-reviewer`.
 - **Red zone:** merge, deploy, smoke.
+- **Done, 2026-10-27.**
+  - PR #237: frontend and docs only, no migration. As built: section H and J3b.10 of the discovery document.
+  - The *Rukovodilac*'s three remarks on the executor's screen plan (its message of 12:31:51 UTC) are built in:
+    - a team workspace gets the Variables view only;
+    - a saved name the form cannot show exactly is read only until the user replaces it;
+    - a `409 variable_changed` keeps the form open on the names saved now.
+
+    `ux-design-reviewer` accepted both form decisions.
+  - Reviews:
+    - `code-reviewer`, `ux-design-reviewer` and `mobile-qa` on `10ae177`, each READY WITH NON-BLOCKING NOTES;
+      their four MEDIUMs were fixed at `3569098`;
+    - narrow re-reviews on `3569098`, each READY WITH NON-BLOCKING NOTES; one new MEDIUM (`mobile-qa`, the action
+      grid at 456–760 px) and the LOWs were fixed at `3a3575f`.
+  - Evidence:
+    - 35 frontend mutations, all killed;
+    - the executor's integration and browser QA on a disposable database migrated through v38, 70/70;
+    - the *Rukovodilac*'s own browser integration, 22/22.
+
+    Not checked on a physical device.
+  - The *Rukovodilac*'s GO on `3a3575f` (its message `74585bb4`, 13:32:09 UTC), with no finding.
+  - Merge: `fdc2c2e` (parents `a1bb932` and `3a3575f`), 13:33:13 UTC, made by the executor under the standing
+    merge order. The record is in PR #237's description.
+  - Smoke:
+    - `/api/health` served `fdc2c2e` with `ok: true` three times in a row (13:34:05, 13:34:16 and 13:34:27 UTC);
+    - without a login the eight variable routes answered 401;
+    - the served bundle carries the phase 2c texts.
 
 ### Phase 3: docs sync, after #218 is deployed
 - **Green zone:**
@@ -544,6 +602,109 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
   - Before the implementation, both are written into section C of the discovery document (A3).
 - **Start:** after phase 9 is merged, with the contract approved by the owner (★★).
 
+### Phase 11 ★★: derived canonical variables, after phase 9 (may run in parallel with phase 10)
+- **Owner, 2026-10-27** (in the *Rukovodilac*'s chat):
+  - „Jedno kratko pitanje , da li si predvideo nekako da neke key variable treba da budu suma nekih varijabli”
+    (owner turn `55705005`, 11:48:20 UTC);
+  - „npr total acc&dec” (owner message `c77a90ab`, 11:48:28 UTC, sent while the *Rukovodilac*'s turn was running);
+  - „iz gpexe se uvoze posebno i mogu da se i kod nas ubacuju posebno npr ali mi trebaju i kao total” (owner turn
+    `7f53b09a`, 11:48:47 UTC).
+- **Who decided what:**
+  - The owner's words establish the need: a total of variables that are imported, or entered, separately.
+  - The place and the gate below are the *Rukovodilac*'s proposal. Its answer (its message `4731bb25`, 11:48:57
+    UTC) asked the owner to choose between this phase after phase 9 and an earlier step, right after phase 2c, as
+    sums and quotients for dashboards without storing values. The owner's third message reached the server before
+    that answer, and the owner did not answer the choice.
+  - The owner approves the place and the gate by approving the merge of the pull request that adds this phase
+    (section 2).
+- **Builds on:**
+  - the owner's decision of 2026-09-17: a value OptiMove computes is never stored as a value GPEXE delivered. Under
+    it, `m/min`, `Acc+Dec`, `Burst&brakes`, `HMLD ≥25 W/kg` and `EXPDist ≥60 W/kg` wait for a derived-metrics
+    feature with a formula and a formula version (`docs/ai/CURRENT_STATE.md`, the GPEXE pilot import);
+  - columns that exist:
+    - `training_load.metric_values.is_derived` and `computed_by_ref` (v13);
+    - `aggregation_role = 'derived_rollup'`, which requires both
+      (`migrations_v2/202609071200_training_activity_v3_metrics_core_extensions.sql`).
+
+    Nothing writes `is_derived = true`, a `computed_by_ref` or `derived_rollup` yet: the GPEXE writer stores
+    `is_derived = false` (`backend/src/gpexeImportWriter.js`);
+  - phase 10's rule that an estimate never produces a derived metric (`docs/ai/phase10-estimates-decisions.md`,
+    section 1).
+- **Scope (a draft for the contract, not a decision):**
+  - a canonical variable may carry a versioned formula over other canonical variables of the same owner scope: a
+    sum, a difference, a quotient, a value per minute;
+  - the value is computed at import or entry and stored as a derived value (`is_derived = true`, `computed_by_ref` =
+    the formula version, `aggregation_role = 'derived_rollup'`), never as a source value;
+  - it is computed again when a base value changes or a session is imported again (R1);
+  - the formula is shown in the Variables tab, and versioned like the rest of a variable's semantics;
+  - first targets, from the list of 2026-09-17: total Acc&Dec (acceleration and deceleration events),
+    Burst&brakes, m/min, HMLD and EXPDist.
+- **Open for the contract (owner decisions):**
+  - phase 10 (section 1 of its decisions) already says that an estimate never produces a derived metric. Whether
+    that also forbids a formula over estimated or manually entered base values, and how the provenance of such a
+    value is shown, is for the owner;
+  - the formulas of HMLD and EXPDist, and the units each formula needs (C97 for the base fields).
+- **Gate:** a discovery and contract docs PR first, like PR #224. Then the implementation, with a migration for the
+  formula versions and its database actor guards (C76).
+- **Reviewers:** `db-reviewer`, `security-reviewer`, `code-reviewer`, and the external review of the *Rukovodilac* and
+  the *Nezavisni revizor* (triggers 1, 2, 3 and 4).
+- **Red zone:**
+  - the contract's owner decisions;
+  - the production preflight;
+  - the merge (and so deploy and migration, by an order that names it);
+  - the production post-check.
+- **★★:** the owner approves the contract before any code and confirms the external review before the merge.
+- **Start:** after phase 9 is merged, with the contract approved by the owner (★★).
+
+### Phase 12 ★: domains and categories of canonical variables, after phase 4 and before phase 6 (may run in parallel with phase 5)
+- **Owner, 2026-10-27** (in the *Rukovodilac*'s chat, owner turn `655fc5c6`, 14:11:48 UTC): „imam jedan mali
+  potsetnik, nekada sam diskutovao u vezi toga. Trealo bi imati mogucnost da varijable povezemo sa kategorijama
+  varijabli ili domenima, takvu arhitekturu mi vec imamo u bazi samo bi trebalo da razmišljamo da to imamo mogucnost
+  da povezujemo. Zašto mislim da je to bitno, naime bitno je zato što ćemo sutra možda utreniranost definisati kao
+  utrenirasnost izdržljivosti, brzine i sl, a to će biti kategorije ili domeni. Da li razumeš možda”
+- **Who decided what:**
+  - The owner's words establish the need: variables can be linked with categories or domains, on the structure the
+    database already has, because fitness may later be defined per domain or category (endurance, speed and the like).
+  - The place, the gate and the ★ below are the *Rukovodilac*'s proposal (its message `796c28bf`, 14:12:57 UTC).
+  - The owner approves the place and the gate by approving the merge of the pull request that adds this phase
+    (section 2).
+- **Builds on:**
+  - v10 (`migrations_v2/202609041400_training_load_v10_metrics_catalog.sql`):
+    - `training_load.metric_domains` and `metric_categories`: a name, an owner scope (`system`, `club`, `team` or
+      `user`) and `is_active`;
+    - `metric_structure_links`: a domain, a category and / or a definition, an owner scope and
+      `temporal_smoothing_enabled`, unique per owner and triple;
+    - `link_scope_within_target`, which keeps a link's scope inside each target's;
+  - the older API `/api/training-load/metrics` (`backend/src/routes/trainingLoadMetrics.js`):
+    - `/domains` and `/categories` (GET, POST, `POST …/:id/archive`);
+    - `/structure-links` (GET, POST, DELETE).
+
+    C98 left creating them unchanged. Their archive and delete answer the identical 404 to a caller who may not manage
+    the row;
+  - R2 did not cover them (J3b.7 of the discovery document), and no M3-0 service reads or writes these tables: only
+    the older API's access, catalog and measurement modules do (`backend/src/trainingLoadMetrics{Access,Catalog,
+    Measurements}.js`). The new admin flow links no canonical variable with a domain or a category. Whether the older
+    API wrote such rows on the production database was not checked.
+- **Scope (a draft for the contract, not a decision):**
+  - in the M3-0 admin API and the Variables tab, domains and categories owned by the system or a club: create,
+    rename and archive;
+  - linking a variable with categories, and a category with a domain (structure links);
+  - showing them in the list and the detail, and filtering by domain or category;
+  - when the new flow arrives, the older API's three routes get C98's rule for the canonical owners (`system` and
+    `club`);
+  - every new admin write gets its database actor guard (C76), so a migration;
+  - a note for phase 11: a domain or a category as the basis of a derived "fitness per domain". That is decided in
+    phase 11's contract.
+- **Gate:** a discovery and contract docs PR first, then the implementation.
+- **Reviewers:** `db-reviewer`, `security-reviewer`, `code-reviewer`, and the *Rukovodilac* (triggers 1 and 2). The
+  Variables-tab part also gets `mobile-qa` and `ux-design-reviewer` (the matrix of `CLAUDE.md`). The *Nezavisni
+  revizor* only if the contract introduces a new owner scope or right.
+- **Red zone:**
+  - the contract's owner decisions;
+  - the migration, by an order that names it (with its production preflight, merge, deploy and post-check).
+- **★, not ★★:** independent of the GPEXE import; it continues the work on the Variables tab.
+- **Start:** after phase 4 is merged, with the contract's owner decisions.
+
 ### R1 ★★: "Overwrite with a new import" (re-import of a session)
 - **Owner, 2026-10-26** (in the *Rukovodilac*'s chat):
   - „Jednostavno mogu biti drugačije obradjeni podaci u gpexe aplikaciji pa želim novi uvoz koji prekopira stari”;
@@ -587,7 +748,11 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
 
 Each one is a plan change, so the owner schedules it:
 - `POST /events` takes its lock before the visibility check (`trainingLoadMetricsMeasurements.js`, LOW);
-- `TEXT_FORBIDDEN` and `source_metric_text_ok` (a migration);
+- Q10, `TEXT_FORBIDDEN` and `source_metric_text_ok`:
+  - part A, the services and the frontend, is done (PR #229, `a1bb932`, no migration);
+  - part B, the database twins `source_metric_text_ok` and `source_metric_unit_token_ok`, goes into v39 (phase 4)
+    as its own part. That is the *Rukovodilac*'s decision of 2026-10-27, recorded in J3b.9 of the discovery
+    document; the owner approves it with the phase 4 contract;
 - the v35 / v36 test hardening;
 - separate database roles.
 
