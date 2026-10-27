@@ -185,7 +185,7 @@ test("8. wiring: app.js starts the watch with the Training Load draft question; 
   const vite = readFileSync(new URL("../vite.config.js", import.meta.url), "utf8");
   assert.match(vite, /process\.env\.RENDER_GIT_COMMIT/);
   assert.match(vite, /transformIndexHtml: \(\) => \(\/\^\[0-9a-f\]\{7,40\}\$\/i\.test\(buildCommit\) \? \[\{ tag: "meta", attrs: \{ name: "optimove-build", content: buildCommit \}, injectTo: "head" \}\] : \[\]\)/);
-  assert.match(vite, /plugins: \[buildStamp\]/);
+  assert.match(vite, /plugins:\s*\[[^\]]*\bbuildStamp\b[^\]]*\]/);
   assert.doesNotMatch(vite, /define:/, "no stamp inside the bundles");
   const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const start = css.indexOf(".app-update-banner {");

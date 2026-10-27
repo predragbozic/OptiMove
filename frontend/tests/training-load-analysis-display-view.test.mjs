@@ -56,7 +56,7 @@ for (const type of ["kpi", "table", "line_chart", "bar_chart"]) {
     assert.doesNotMatch(conflict.textContent, /98765/);
     assert.equal(conflict.querySelector(".tl-analysis-chart-track"), null);
     setup(type, [], { resultStatus: "error" });
-    assert.match(rendered().querySelector(".tl-analysis-widget").textContent, /seriesQueryFailed/);
+    assert.match(rendered().querySelector(".tl-analysis-widget").textContent, /This series could not be loaded/);
   });
 
   test(`${type}: unsupported and invalid configurations are explicit and never silently rendered with defaults`, () => {
@@ -143,6 +143,21 @@ test("KPI shows actual identity context and tables expose keyboard-accessible re
     assert.equal(document.querySelector("caption").textContent, "Current period values");
     assert.deepEqual([...document.querySelectorAll("tbody tr")].map(entry => entry.children[2].textContent), ["-12", "0"]);
     if (type.includes("chart")) assert.equal(document.querySelector("details").open, true);
+  }
+});
+
+test("all reported source identity fields distinguish chart captions, tables and KPI context", () => {
+  for (const type of ["line_chart", "bar_chart", "table", "kpi"]) {
+    setup(type, [row(12, { sourceIdentityId: "identity-one", sourceSystem: "system-one", entryMethod: "api_import" })]);
+    const body = rendered().querySelector(".tl-analysis-widget");
+    for (const value of ["identity-one", "system-one", "api_import"]) assert.ok(body.textContent.includes(value));
+    if (type.includes("chart")) {
+      assert.match(body.querySelector("figcaption").textContent, /identity-one.*system-one.*api_import/);
+      setup(type, [row(12, { sourceIdentityId: "identity-one" }), row(12, { sourceIdentityId: "identity-two" })]);
+      const captions = [...rendered().querySelectorAll("figcaption")].map(caption => caption.textContent);
+      assert.equal(captions.length, 2);
+      assert.notEqual(captions[0], captions[1]);
+    }
   }
 });
 

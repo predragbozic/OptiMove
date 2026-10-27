@@ -429,7 +429,7 @@ function displayStatusLabel(status, reasons = []) {
     const names = { conflict: "Conflict", unitConflict: "Unit conflict", typeConflict: "Type conflict", semanticConflict: "Semantic conflict" };
     return reasons.filter(reason => names[reason]).map(reason => names[reason]).join(" / ") || "Conflict";
   }
-  if (reasons.includes("seriesQueryFailed")) return "seriesQueryFailed";
+  if (reasons.includes("seriesQueryFailed")) return "This series could not be loaded. Try refreshing the dashboard.";
   if (reasons.includes("duplicateBucket")) return "Multiple values for this group. Use a table.";
   return "Invalid or unavailable result";
 }
@@ -441,9 +441,10 @@ function renderDisplayStatusHtml(status, reasons) {
 function displayRowContext(row) {
   const identity = row.identity;
   const reported = identity.source.reported;
+  const connectionKeys = ["sourceConnectionId", "source_connection_id", "sourceId"];
+  const onlyConnection = Object.keys(reported).length === 1 && connectionKeys.includes(Object.keys(reported)[0]);
   const sourceId = reported.sourceConnectionId ?? reported.source_connection_id ?? reported.sourceId;
-  const provenance = Object.keys(reported).some(key => ["provenance", "sourceProvenance", "source"].includes(key));
-  const sourceLabel = provenance ? `Source provenance ${JSON.stringify(reported)}` : typeof sourceId === "string" ? `Source ${sourceId}` : "";
+  const sourceLabel = onlyConnection && typeof sourceId === "string" ? `Source ${sourceId}` : Object.keys(reported).length ? `Source provenance ${JSON.stringify(reported)}` : "";
   return [identity.athleteId ? `Athlete ${identity.athleteId}` : "", sourceLabel].filter(Boolean).join(" · ");
 }
 
@@ -532,7 +533,7 @@ function renderWidgetHtml(widget, position) {
           <h3>${escapeHtml(widget.title)}</h3>
         </div>
       </header>
-      ${renderWidgetBodyHtml(widget, results)}
+      <div class="tl-analysis-widget-body" role="region" aria-label="${escapeAttr(widget.title || "Metric")} content" tabindex="0">${renderWidgetBodyHtml(widget, results)}</div>
       ${renderWidgetToolbarHtml(widget, layout, position)}
       ${state.trainingLoad.analysis.editMode && canEdit() ? `<button type="button" class="tl-analysis-resize-handle" data-analysis-resize-handle aria-label="Resize widget" title="Resize widget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 20h12V8M13 20l7-7M18 20l2-2"/></svg></button>` : ""}
     </article>
