@@ -7,7 +7,7 @@ written into that document's section C, as R2's were (C99).
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-27, on the *Rukovodilac*'s order of that day; revised the same day after two rounds of internal reviews (`code-reviewer`, `db-reviewer`, `security-reviewer`) and the *Rukovodilac*'s R5 decision (two migration files). Not accepted. No code, migration or data change. |
+| Status | Proposed by the executor on 2026-10-27, on the *Rukovodilac*'s order of that day; revised the same day after two rounds of internal reviews (`code-reviewer`, `db-reviewer`, `security-reviewer`) and the *Rukovodilac*'s R5 decision (two migration files); then reviewed by the *Rukovodilac* and the *Nezavisni revizor* at `93f22d3` (no BLOCKER, HIGH or MEDIUM), with their notes and the *Rukovodilac*'s R decisions applied. O1–O8 are not answered. Not accepted. No code, migration or data change. |
 | Verified against commit | `fdc2c2e` (merge of PR #237). Every file and line reference below is to that commit. |
 | Decides | The owner: the questions marked **[OWNER]** (red zone). The *Rukovodilac*: the questions marked **[RUKOVODILAC]** (inside the plan). |
 | Reviewers of this document | The *Rukovodilac* and the *Nezavisni revizor* (★★), `code-reviewer`; `db-reviewer` for J5.2's transactions, J5.3 and J5.4; `security-reviewer` for the access, actor and cross-owner parts. |
@@ -15,7 +15,10 @@ written into that document's section C, as R2's were (C99).
 **Gates before the implementation** (plan, phase 4 "Input"):
 1. the owner's answers to O1–O8 (J5.6);
 2. the v37 production post-check passed (phase P; not recorded yet);
-3. the old Render service clarified: which database it uses (phase 1, b).
+3. the old Render service clarified: which database it uses (phase 1, b);
+4. the plan names both migrations: phase 4's gate line "migrations v39 and v40" and section 6 (part B in v40). In this
+   pull request, after PR #238 is merged (the *Rukovodilac*'s process of 2026-10-27), so the owner's order names
+   both.
 
 ---
 
@@ -257,12 +260,14 @@ Versions created on R+1 before L4 (allowed today: a draft revision with a proven
   - once any revision was written by the lifecycle (a `created_by_user_id`, an `activated_by_user_id` or a
     `retired_by_user_id`; v37 refuses all three today and the seeds carry none), or
   - while a v39 trigger or index is missing or a v39 trigger is disabled (v37's rollback pattern), or
-  - once a later migration is recorded. v40 (J5.4) is later, so it is rolled back first; its own rollback is always
-    allowed (it only loosens), so it never blocks v39's.
+  - once a later migration is recorded. v40 (J5.4) is later, so it is rolled back first. v40's rollback never
+    depends on v39's state (it only loosens), so it never blocks v39's.
 
   It is forward-only after that, as v37's rollback is after a verification.
 - **The tests** of the M1, M2, v35, M3-0 and M2b suites stop switching v37's T2b triggers off. They write their
-  revisions through the real lifecycle path (plan, phase 4).
+  revisions through the real lifecycle path (plan, phase 4). The M1 suite's databases stop at v34, so its test 4,
+  which expects U+2065 to pass `source_metric_text_ok` (`backend/tests/source-metric-mapping-m1.test.mjs:561`), is
+  not affected by v40.
 
 ---
 
@@ -280,9 +285,10 @@ v39 i v40“). The owner approves part B with this contract (O6).
     - v34's list plus Q10's groups (J3b.9);
     - `v = btrim(v)` is replaced by "no character of `TEXT_EDGE_BLANK` at either end": U+0020, U+00A0, U+1680,
       U+2000-U+200A, U+202F, U+205F, U+3000. A strict superset of the `btrim` rule;
-  - `source_metric_unit_token_ok(v)`: v34's list plus Q10's groups. `\s` is kept: PostgreSQL's `\s` depends on the
-    locale, but the explicit list already holds every JavaScript `\s` code point except U+0020, which every locale
-    matches. (Spelling `\s` out as U+0020 would make it deterministic; optional.)
+  - `source_metric_unit_token_ok(v)`: v34's list plus Q10's groups. `\s` is replaced by an explicit U+0020 (the
+    *Rukovodilac*'s NIT of 2026-10-27): PostgreSQL's `\s` depends on the locale, and the explicit list already holds
+    every other JavaScript `\s` code point, so the rule stays the same and the parity test no longer depends on the
+    locale.
 
   The lists use **only** PostgreSQL's fixed-width `\uXXXX` and `\UXXXXXXXX` escapes inside one bracket expression,
   never `\x` (variable length: it would swallow following hex digits). They are the same characters as
@@ -292,7 +298,10 @@ v39 i v40“). The owner approves part B with this contract (O6).
   refuse, column by column (the list below), and raises if any count is above 0. The runner applies each migration
   in its own transaction and stops at the first failure (`backend/src/migrate.js:780-800`), so the raise rolls back
   v40 only: v39 stays applied, the runner aborts, and the server does not start (`npm start` runs the migration step
-  first). That is why the preflight must show 0 before the merge. A count above 0 in an append-only column (T6, T8,
+  first). That is why the preflight must show 0 before the merge, and is run right before the merge and deploy
+  (not earlier in the day). If the `DO` block refuses anyway, the recovery is a commit that removes the v40 file
+  (never recorded, since it rolled back) and a redeploy; v39 stays applied, and the refused row is then an owner
+  decision as below. A count above 0 in an append-only column (T6, T8,
   `metric_variable_requests`) cannot be corrected by an update: it is a new owner decision (exempt that column, or
   loosen part B), never something the migration resolves. A CHECK is not re-validated when its function is
   replaced, so without the `DO` block a refused row would stay and could no longer be updated; a later `pg_dump`
@@ -321,8 +330,8 @@ v39 i v40“). The owner approves part B with this contract (O6).
   turns one into U+FFFD, which both layers accept. A later JavaScript change adds `\ud800-\udfff` to the lists
   (with the `u` flag it matches only a lone surrogate). LOW; no database change.
 - **The rollback** restores v34's two function bodies verbatim. The stricter rule only refuses, so no row depends
-  on it, and v34's lists are a subset of the new ones. It refuses once a later migration is recorded, and needs no
-  v39 state: it can run while the lifecycle has written revisions.
+  on it, and v34's lists are a subset of the new ones. Whatever v39's state, it can run, even after the lifecycle has
+  written revisions. Its only refusal is a migration later than v40.
 - **The services already apply the rule** (part A); after part B the database refuses the same text, whoever
   writes it.
 
@@ -435,29 +444,32 @@ v39 i v40“). The owner approves part B with this contract (O6).
     attributed.
   - *Alternative:* the activator (L3, L4) is neither the unit nor the meaning verifier of that revision.
 
-**[RUKOVODILAC] — inside the plan:**
-- **R1:** L4 as one route, or as two steps (activate and retire) with a pending state.
-  - *Proposed:* one route, one transaction, as D3 describes.
-- **R2:** the L1 body. Is a starting status `documented` or `observed` (with a reference) allowed at creation, or
-  always `unproven`?
-  - *Proposed:* allowed, as the seeds carry `observed`. Under O2 the starting status gates nothing; only `verified`
-    does, and the database derives it.
-- **R3:** the response shapes (J4's revision shape plus `disabledVersions`), the codes and their order. The order
-  follows J1 and J5.2: right, path, body keys, request record, locks, the right again, then the states.
-- **R4:** a future seeding migration. It stays v34's seed window, with no acting user; v39 restores v34's
-  behaviour with the exception of J5.3, which widens v37 (an authorization exception: `security-reviewer`
-  confirmed that predicate in round 2).
+**[RUKOVODILAC] — inside the plan.** Decided by the *Rukovodilac* on 2026-10-27 (its review `425977cd` of this
+contract): R1, R2, R3, R4, R6 and R7 as below; R5 as recorded. They go into section C with the owner's answers.
+- **R1 — decided:** L4 is one route and one transaction, as D3 describes (not two steps with a pending state).
+- **R2 — decided:** a starting status `documented` or `observed` with a reference is allowed at creation, as the
+  seeds carry `observed`; `unproven` is the default. Under O2 the starting status gates nothing; only `verified`
+  does, and the database derives it.
+- **R3 — decided as proposed:** the response shapes (J4's revision shape plus `disabledVersions`), the codes and
+  their order. The order follows J1 and J5.2: right, path, body keys, request record, locks, the right again, then
+  the states.
+- **R4 — decided as proposed:** a future seeding migration stays v34's seed window, with no acting user; v39 restores
+  v34's behaviour with the exception of J5.3, which widens v37 (an authorization exception: `security-reviewer`
+  confirmed that predicate in round 2). The exception is inert until a seeding migration replaces
+  `source_metric_require_seed_window`, and every migration needs the owner's order that names it (plan, section 2),
+  so no seed is written without the owner. The *Nezavisni revizor* (2026-10-27, LOW) asked whether R4, as a widening
+  of a database authorization guard, belongs to the owner instead; that is for the *Rukovodilac* to put to the owner
+  or not.
 - **R5 — decided (the *Rukovodilac*, 2026-10-27, replacing J3b.9's "no v40"):** two migration files in the phase 4
   pull request: v39 the lifecycle, v40 Q10 part B, each with its own rollback, preflight and post-check. The
   reason is `security-reviewer`'s, from round 1. With one file, once the lifecycle had written a revision the
   rollback would be refused, so part B could then only be loosened by a new forward migration. With two files, v40
   can always be rolled back on its own.
-- **R6:** the frontend of the lifecycle (Source fields tab) stays phase 6. v39 is backend only.
-- **R7:** the reads cap a field at 20 revisions (`LIST_CAPS.revisionsPerField`, `sourceMetricMappingService.js:78`):
-  with a 21st, `/fields` and `GET /fields/:fieldId` would answer `409 result_too_large`.
-  - *Proposed:* L1 refuses a 21st revision (`409 revision_limit`) until those reads are paged, as the mappings are
-    (C68).
-  - *Alternative:* page the revision reads in v39's pull request.
+- **R6 — decided:** the frontend of the lifecycle (Source fields tab) stays phase 6. v39 is backend only.
+- **R7 — decided:** the reads cap a field at 20 revisions (`LIST_CAPS.revisionsPerField`,
+  `sourceMetricMappingService.js:78`); with a 21st, `/fields` and `GET /fields/:fieldId` would answer
+  `409 result_too_large`. L1 refuses a 21st revision (`409 revision_limit`) until those reads are paged; paging is
+  a small separate pull request when it is needed, not part of v39.
 
 ---
 
