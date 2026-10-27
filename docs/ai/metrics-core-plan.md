@@ -69,10 +69,12 @@ and no further one is made without a new owner decision:
 So:
 - the phases run in the order the *Rukovodilac* sets;
 - findings are corrected between the executor and the *Rukovodilac*;
-- the executor and the *Nezavisni revizor* take their tasks from the *Rukovodilac*;
-- the owner is contacted only by the *Rukovodilac*, and only for the red zone of section 2.
+- the executor and the *Nezavisni revizor* take their tasks from the *Rukovodilac*. The *Nezavisni revizor*'s packet
+  still carries no conclusion of the *Rukovodilac* (the table above);
+- the owner is contacted through the *Rukovodilac*, for „krupne stvari” (the big things).
 
-No gate of this plan changes.
+No gate of this plan changes: the red zone of section 2, and the owner's short report after every phase, stay as
+written.
 
 ## 2. Green zone, red zone and the owner's words
 
@@ -455,7 +457,7 @@ order covers is merged under it.
 - **Red zone:** merge, deploy, smoke.
 - **Done, 2026-10-27.**
   - PR #237: frontend and docs only, no migration. As built: section H and J3b.10 of the discovery document.
-  - The *Rukovodilac*'s three remarks on the executor's screen plan (12:31 UTC) are built in:
+  - The *Rukovodilac*'s three remarks on the executor's screen plan (its message of 12:31:51 UTC) are built in:
     - a team workspace gets the Variables view only;
     - a saved name the form cannot show exactly is read only until the user replaces it;
     - a `409 variable_changed` keeps the form open on the names saved now.
@@ -472,7 +474,7 @@ order covers is merged under it.
     - the *Rukovodilac*'s own browser integration, 22/22.
 
     Not checked on a physical device.
-  - The *Rukovodilac*'s GO on `3a3575f` (13:32:09 UTC), with no finding.
+  - The *Rukovodilac*'s GO on `3a3575f` (its message `74585bb4`, 13:32:09 UTC), with no finding.
   - Merge: `fdc2c2e` (parents `a1bb932` and `3a3575f`), 13:33:13 UTC, made by the executor under the standing
     merge order. The record is in PR #237's description.
   - Smoke:
@@ -607,19 +609,23 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
     `7f53b09a`, 11:48:47 UTC).
 - **Who decided what:**
   - The owner's words establish the need: a total of variables that are imported, or entered, separately.
-  - The place and the gate below are the *Rukovodilac*'s proposal. Its answer of 11:48:57 UTC asked the owner to
-    choose between this phase after phase 9 and an earlier, smaller step. The owner's third message reached the
-    server before that answer, and the owner did not answer the choice.
+  - The place and the gate below are the *Rukovodilac*'s proposal. Its answer (its message `4731bb25`, 11:48:57
+    UTC) asked the owner to choose between this phase after phase 9 and an earlier step, right after phase 2c, as
+    sums and quotients for dashboards without storing values. The owner's third message reached the server before
+    that answer, and the owner did not answer the choice.
   - The owner approves the place and the gate by approving the merge of the pull request that adds this phase
     (section 2).
 - **Builds on:**
   - the owner's decision of 2026-09-17: a value OptiMove computes is never stored as a value GPEXE delivered. Under
     it, `m/min`, `Acc+Dec`, `Burst&brakes`, `HMLD ≥25 W/kg` and `EXPDist ≥60 W/kg` wait for a derived-metrics
     feature with a formula and a formula version (`docs/ai/CURRENT_STATE.md`, the GPEXE pilot import);
-  - columns that exist and that nothing writes yet:
+  - columns that exist:
     - `training_load.metric_values.is_derived` and `computed_by_ref` (v13);
     - `aggregation_role = 'derived_rollup'`, which requires both
-      (`migrations_v2/202609071200_training_activity_v3_metrics_core_extensions.sql`);
+      (`migrations_v2/202609071200_training_activity_v3_metrics_core_extensions.sql`).
+
+    Nothing writes `is_derived = true`, a `computed_by_ref` or `derived_rollup` yet: the GPEXE writer stores
+    `is_derived = false` (`backend/src/gpexeImportWriter.js`);
   - phase 10's rule that an estimate never produces a derived metric (`docs/ai/phase10-estimates-decisions.md`,
     section 1).
 - **Scope (a draft for the contract, not a decision):**
@@ -632,15 +638,21 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
   - first targets, from the list of 2026-09-17: total Acc&Dec (acceleration and deceleration events),
     Burst&brakes, m/min, HMLD and EXPDist.
 - **Open for the contract (owner decisions):**
-  - whether a derived value may be computed from estimated or manually entered base values (phase 10), and how its
-    provenance is shown;
+  - phase 10 (section 1 of its decisions) already says that an estimate never produces a derived metric. Whether
+    that also forbids a formula over estimated or manually entered base values, and how the provenance of such a
+    value is shown, is for the owner;
   - the formulas of HMLD and EXPDist, and the units each formula needs (C97 for the base fields).
-- **Gate:**
-  - a discovery and contract docs PR first, like PR #224;
-  - then the implementation, with a migration for the formula versions and its database actor guards (C76);
-  - the external review of the *Rukovodilac* and the *Nezavisni revizor* (★★; triggers 1 and 4);
-  - the migration only on the owner's order that names it.
-- **Red zone:** the contract's owner decisions, the migration's merge, deploy and post-check.
+- **Gate:** a discovery and contract docs PR first, like PR #224. Then the implementation, with a migration for the
+  formula versions and its database actor guards (C76).
+- **Reviewers:** `db-reviewer`, `security-reviewer`, `code-reviewer`, and the external review of the *Rukovodilac* and
+  the *Nezavisni revizor* (triggers 1, 2, 3 and 4).
+- **Red zone:**
+  - the contract's owner decisions;
+  - the production preflight;
+  - the merge (and so deploy and migration, by an order that names it);
+  - the production post-check.
+- **★★:** the owner approves the contract before any code and confirms the external review before the merge.
+- **Start:** after phase 9 is merged, with the contract approved by the owner (★★).
 
 ### R1 ★★: "Overwrite with a new import" (re-import of a session)
 - **Owner, 2026-10-26** (in the *Rukovodilac*'s chat):
@@ -688,7 +700,8 @@ Each one is a plan change, so the owner schedules it:
 - Q10, `TEXT_FORBIDDEN` and `source_metric_text_ok`:
   - part A, the services and the frontend, is done (PR #229, `a1bb932`, no migration);
   - part B, the database twins `source_metric_text_ok` and `source_metric_unit_token_ok`, goes into v39 (phase 4)
-    as its own part, by the *Rukovodilac*'s order of 2026-10-27;
+    as its own part. That is the *Rukovodilac*'s decision of 2026-10-27, recorded in J3b.9 of the discovery
+    document; the owner approves it with the phase 4 contract;
 - the v35 / v36 test hardening;
 - separate database roles.
 
