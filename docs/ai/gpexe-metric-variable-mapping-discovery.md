@@ -2497,7 +2497,10 @@ definition's xmin, and the value entry's first lock (above).
 
 The *Rukovodilac*'s decisions of 2026-10-27, following the executor's proposal: the unit token is in Q10; an emoji
 with the variation selector U+FE0F is refused (without it, it passes); the database twins go into v39 as a separate
-part with its own preflight block and rollback part (no v40); a rename checks only the values that change.
+part with its own preflight block and rollback part (no v40); a rename checks only the values that change. The
+*Rukovodilac*'s later decision of 2026-10-27, after the security review of the v39 contract (J5, R5), replaces "no
+v40": part B is its own migration, v40, in the same pull request as v39, with its own rollback, preflight and
+post-check.
 
 - **One module.** `backend/src/metricTextRules.js` holds the lists and the two checks, without a database:
   - `TEXT_FORBIDDEN` and `boundedText()` (labels, short labels, descriptions, reasons, M2's conversion note, the key
@@ -2747,7 +2750,7 @@ jsonRequired` only for a caller who may verify.
   inside the write, no actor left and no leak, the nine seeded revisions untouched; mutation evidence. The M2 and M3-0 suites write their revision fixtures with v37's
   T2b triggers off (the future lifecycle PR's writes, in one transaction; v34's guard stays on).
 
-### J5. v39 — the source-field revision lifecycle (C91) and Q10 part B (proposed, not accepted)
+### J5. v39 and v40 — the source-field revision lifecycle (C91) and Q10 part B (proposed, not accepted)
 
 The proposed contract is the separate document `docs/ai/v39-revision-lifecycle-contract.md` (phase 4 of
 `docs/ai/metrics-core-plan.md`). When the owner accepts it, its decisions are written into section C and this

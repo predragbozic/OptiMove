@@ -1,4 +1,4 @@
-# J5 — v39: the source-field revision lifecycle (C91) and Q10 part B
+# J5 — v39 and v40: the source-field revision lifecycle (C91) and Q10 part B
 
 **A proposed contract, not accepted.** This is phase 4's discovery delta of `docs/ai/metrics-core-plan.md` (★★):
 the owner approves the contract before any code. It extends `docs/ai/gpexe-metric-variable-mapping-discovery.md`
@@ -7,7 +7,7 @@ written into that document's section C, as R2's were (C99).
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-27, on the *Rukovodilac*'s order of that day; revised the same day after the internal reviews of the first draft (`code-reviewer`, `db-reviewer`, `security-reviewer`). Not accepted. No code, migration or data change. |
+| Status | Proposed by the executor on 2026-10-27, on the *Rukovodilac*'s order of that day; revised the same day after two rounds of internal reviews (`code-reviewer`, `db-reviewer`, `security-reviewer`) and the *Rukovodilac*'s R5 decision (two migration files). Not accepted. No code, migration or data change. |
 | Verified against commit | `fdc2c2e` (merge of PR #237). Every file and line reference below is to that commit. |
 | Decides | The owner: the questions marked **[OWNER]** (red zone). The *Rukovodilac*: the questions marked **[RUKOVODILAC]** (inside the plan). |
 | Reviewers of this document | The *Rukovodilac* and the *Nezavisni revizor* (★★), `code-reviewer`; `db-reviewer` for J5.2's transactions, J5.3 and J5.4; `security-reviewer` for the access, actor and cross-owner parts. |
@@ -63,9 +63,9 @@ shapes (targets `11000000`: the field and the revision):
   `platform_admin`) and `mapping_version_replaced` (`needs_review → active`, a reason).
 
 At most one T8 row of a user carries a given `request_key`, and one operation has at most one keyed row
-(`source_metric_audit_one_request_per_key`, `…_one_request_per_operation`, lines 1734-1738). v35 writes one
-`mapping_status` row per version and target status (v35, lines 272-286) but does not compare its `reason` with the
-version's `disable_reason`.
+(`source_metric_audit_one_request_per_key`, `…_one_request_per_operation`, lines 1734-1738). v35 requires one
+`mapping_status` row per version and target status and refuses a second (v35, lines 272-286), but does not compare its
+`reason` with the version's `disable_reason`.
 
 **T4, the mapping versions** (D6; v34 lines 756-1220):
 - statuses `draft → needs_review → active → disabled` (`disabled` from any of the other three);
@@ -130,8 +130,8 @@ exactly one):
   only when the key cannot be read back).
 
 **Answers** use M2b's revision shape (`revisionOut`, `sourceMetricMappingService.js:524-532`): no reason and no
-actor id. An answer and a `409` never name another owner's mapping, version or club; the pinned step below
-answers counts only.
+actor id. An answer and a `409` never name another owner's mapping or version, and name a club only as O7(ii)(a)
+proposes; the pinned step below answers counts only.
 
 **The order inside the transaction** (the global order of `sourceMetricMappingService.js:16-21`: T2a → T2b → T3 →
 T4 → the acting user's role, user and club rows):
@@ -146,26 +146,34 @@ T4 → the acting user's role, user and club rows):
    its own pre-check;
 6. the writes, **each its own statement**, in this order: the disables, the retirement, the activation. Never one
    CTE: v34's guards read the table and must see the earlier statements;
-7. the T8 rows, the keyed one last; the bounded COMMIT.
+7. the T8 rows, the keyed one last (the route table names it first only to say which it is); the bounded COMMIT.
+
+M2's own writers stay correct against this order. A version create re-reads the revision under `FOR SHARE`
+(`sourceMetricMappingService.js:1165-1166`) and a submit takes that lock before it decides (`:1243-1251`). So when an
+L-route holds the revision first, M2 waits and then answers `409 revision_not_usable`. A trigger refusal that slips
+past those pre-checks is mapped to the same `409` (`:401-403`), never a `500`.
 
 A `23505` on `source_metric_revisions_one_draft` is `409 draft_exists` and on `…_number_key` `try_again`, matched by
 the exact constraint name, as M2b's `RETRY_CONSTRAINTS` (`sourceFieldVerificationService.js:62`).
 
 **The pinned step** (L2, L4 and L5: every route that retires a revision R). For the mapping versions pinned to R:
 - locks: their T3 rows `FOR SHARE`, then the versions `FOR UPDATE`, ascending id (step 3);
-- `needs_review` → `disabled`, by O4 and O7: `disabled_by_user_id` the acting user, `disable_reason` the fixed text
-  "Source revision retired.", and one `mapping_status` row each whose `reason` is the same text;
+- `needs_review` → `disabled`, by O4 and O7: `disabled_by_user_id` the acting user, `disabled_at`,
+  `disabled_basis = 'platform_admin'` (the basis v35 derives) and `disable_reason` the fixed text "Source revision
+  retired." (v34 lines 871-872 tie the four together), and one `mapping_status` row each whose `reason` is the same
+  text;
 - `draft` stays as it is: it can never be submitted once R is retired (v34 lines 1156-1159; M2
   `409 revision_not_usable`), and v34 does not refuse the retirement for it. Disabling drafts too would make every
   archived club's draft block the field (O7);
 - `active`, or an open activation: `409 version_active` / `activation_open` (fail-closed). Neither can exist before
   phase 7 (O5);
-- a pinned `needs_review` version of an archived club: by O7, proposed `409 club_archived`;
+- a pinned `needs_review` version of an archived club: by O7, proposed `409 club_archived` with the ids of those
+  archived clubs (O7(ii)(a));
 - the answer counts the disabled versions only: `disabledVersions: { system: n, club: n }`.
 
 ### The routes
 
-| # | Route (under `/api/training-load/sources/metrics`) | What it does | T8 (the keyed row first) |
+| # | Route (under `/api/training-load/sources/metrics`) | What it does | T8 (the keyed row named first, written last) |
 |---|---|---|---|
 | L1 | `POST /fields/:fieldId/revisions` | creates revision R+1 as `draft` | `source_metric_revision_create` |
 | L2 | `POST /fields/:fieldId/revisions/:revisionId/retire` on a `draft` | retires an abandoned draft, with the pinned step | `source_metric_revision_retire`, `mapping_status` × n |
@@ -175,8 +183,8 @@ the exact constraint name, as M2b's `RETRY_CONSTRAINTS` (`sourceFieldVerificatio
 
 **L1, the body:** `requestKey`, `valueShape`, `parameterKind`, `supportsSession`, `supportsDrill`, and optional
 `expectedSourceUnit`, `expectedSourceBoundUnit`, `unitNote`, `evidenceStatus` and `evidenceRef` (R2). The server
-sets `revision_number` (the next number). It is refused while the field has a draft (`409 draft_exists`) or is not
-active (`409 field_not_active`). The shape rules are v34's (`400 invalid_body`, `invalid_unit`,
+sets `revision_number` (the next number). It is refused while the field has a draft (`409 draft_exists`), is not
+active (`409 field_not_active`), or already has 20 revisions (`409 revision_limit`, R7). The shape rules are v34's (`400 invalid_body`, `invalid_unit`,
 `invalid_evidence_ref`).
 
 **L2 and L5, the body:** `requestKey` and `reason` (`source_metric_text_ok(…, 500)`), the reason written to
@@ -203,7 +211,7 @@ Versions created on R+1 before L4 (allowed today: a draft revision with a proven
 
 ---
 
-## J5.3 The database part of v39 (proposed)
+## J5.3 Migration v39: the lifecycle's database part (proposed)
 
 - **T2b actor guard.** `source_metric_revisions_actor_guard()` is replaced (`create or replace`); its trigger keeps
   the name `source_metric_revisions_v37_actor_guard`, so it still fires after v34's
@@ -217,15 +225,20 @@ Versions created on R+1 before L4 (allowed today: a draft revision with a proven
   - `draft → active` with `activated_by_user_id` = the acting user;
   - `draft | active → retired` with `retired_by_user_id` = the acting user. v34 checks no actor for a
     retirement, so v39 adds it here;
+  - for the INSERT, the activation and the retirement alike, the acting user is an active platform admin
+    (`source_metric_actor_basis(actor, null) = 'platform_admin'`, `42501` otherwise). v35's T8 guard (line 230) is
+    only the backstop;
   - a state change writes only the state and its own facts: every other column, `evidence_status` included, is
     unchanged (v34 alone would let the status rise in the same update);
   - nothing else: a state change and an act are never one update (v34), and every other update stays refused
     (`23514`).
 - **T8 guard.** `source_metric_audit_revision_guard()` is replaced. A `source_metric_revision_create`, `…_activate`
   or `…_retire` row must follow its own write in the same transaction (`xmin`): it names the revision and its field,
-  `from_status` / `to_status` match the transition, `performed_by_user_id` is the acting user, and for `…_retire`
-  its `reason` equals the revision's `retired_reason` and `from_status = 'active'` exactly when the revision has an
-  `activated_at`. A seed writes no T8 row. The other actions keep their chains (v35, v37); actions without a writer
+  `from_status` / `to_status` match the transition, `performed_by_user_id` is the acting user, an active platform
+  admin, with `basis = 'platform_admin'` (every branch). For `…_retire` its `reason` equals the revision's
+  `retired_reason` and `from_status = 'active'` exactly when the revision has an `activated_at`. For `…_create` and
+  `…_activate` the `reason` is NULL; a `…_create` row's `evidence_ref` is NULL or the revision's own, and an
+  `…_activate` row's is NULL. A seed writes no T8 row. The other actions keep their chains (v35, v37); actions without a writer
   stay refused.
 - **One row per transition:** a new unique partial index `source_metric_audit_v39_revision_once` on
   `(source_metric_version_id, action)` where the action is one of the three revision actions (v37's
@@ -244,7 +257,8 @@ Versions created on R+1 before L4 (allowed today: a draft revision with a proven
   - once any revision was written by the lifecycle (a `created_by_user_id`, an `activated_by_user_id` or a
     `retired_by_user_id`; v37 refuses all three today and the seeds carry none), or
   - while a v39 trigger or index is missing or a v39 trigger is disabled (v37's rollback pattern), or
-  - once a later migration is recorded.
+  - once a later migration is recorded. v40 (J5.4) is later, so it is rolled back first; its own rollback is always
+    allowed (it only loosens), so it never blocks v39's.
 
   It is forward-only after that, as v37's rollback is after a verification.
 - **The tests** of the M1, M2, v35, M3-0 and M2b suites stop switching v37's T2b triggers off. They write their
@@ -252,10 +266,12 @@ Versions created on R+1 before L4 (allowed today: a draft revision with a proven
 
 ---
 
-## J5.4 Q10 part B: the database twins (a separate part of v39)
+## J5.4 Migration v40: Q10 part B, the database twins (proposed)
 
-Decided by the *Rukovodilac* on 2026-10-27 and recorded in J3b.9: part B goes into v39 as its own part, with its own
-preflight block and rollback part (no v40; see R5). The owner approves it with this contract (O6).
+The *Rukovodilac*'s decision of 2026-10-27, after the security review of this contract, replaces J3b.9's "no v40":
+part B is its own migration file, v40, in the same pull request as v39 (R5). Each has its own rollback, read-only
+preflight and post-check, so either can be rolled back alone; one owner order names both („merge PR #… sa migracijama
+v39 i v40“). The owner approves part B with this contract (O6).
 
 - **The functions:** `create or replace` with the same signatures, the same parameter names (`v`, `max_len`;
   PostgreSQL refuses a renamed parameter) and `language sql immutable`. The OID stays, so every CHECK stays
@@ -273,10 +289,14 @@ preflight block and rollback part (no v40; see R5). The owner approves it with t
   `backend/src/metricTextRules.js`. PostgreSQL's regular expressions have no Unicode properties, so the list is
   explicit. The migration asserts `server_encoding = 'UTF8'` first.
 - **Fail-closed inside the migration.** After the replacement, a `DO` block counts the rows the new functions
-  refuse, column by column (the list below), and raises if any count is above 0. The runner's transaction then
-  rolls back the whole of v39, the lifecycle part included. A CHECK is not re-validated when its function is
-  replaced, so without this a refused row would stay and could no longer be updated; a later `pg_dump` restore,
-  which does re-validate, would fail.
+  refuse, column by column (the list below), and raises if any count is above 0. The runner applies each migration
+  in its own transaction and stops at the first failure (`backend/src/migrate.js:780-800`), so the raise rolls back
+  v40 only: v39 stays applied, the runner aborts, and the server does not start (`npm start` runs the migration step
+  first). That is why the preflight must show 0 before the merge. A count above 0 in an append-only column (T6, T8,
+  `metric_variable_requests`) cannot be corrected by an update: it is a new owner decision (exempt that column, or
+  loosen part B), never something the migration resolves. A CHECK is not re-validated when its function is
+  replaced, so without the `DO` block a refused row would stay and could no longer be updated; a later `pg_dump`
+  restore, which does re-validate, would fail.
 - **The read-only preflight** counts the same rows before the migration, expected 0. A read-only transaction cannot
   create a function (not even in `pg_temp`), so the preflight carries an inline copy of the two new expressions:
   a third copy beside JavaScript and the migration, covered by the parity test. The columns:
@@ -289,18 +309,20 @@ preflight block and rollback part (no v40; see R5). The owner approves it with t
   - T5 `reason`, T6 `source_unit`, T8 `reason`;
   - `metric_variable_requests.reason` (v38);
   - and, as information only (v38 exempts an unchanged name, J3b.9; not part of the `DO` block): the names of
-    every `system` and `club` definition, the units of their current versions, and the `unit` of their
-    `condition_description` (checked when a mapping version pins it, v34 lines 973-974, and read by M2 at
-    `sourceMetricMappingService.js:583`).
+    every `system` and `club` definition, the units of their current versions (a mapping version's insert checks the
+    canonical unit with `source_metric_unit_token_ok`, v34 line 1092, C56), and the `unit` of their
+    `condition_description` (tied to the canonical parameters' unit, v34 line 1003, whose shape lines 973-974 check;
+    read by M2 at `sourceMetricMappingService.js:583`).
 - **Parity, by a test** on a disposable database: every code point U+0001-U+10FFFF except the surrogates (UTF-8
   cannot hold them; U+0000 PostgreSQL text cannot hold) is compared between the SQL functions, the preflight's
   inline expressions and `metricTextRules.js`, in batches; the edge set separately as `chr(i) || 'a'` and
   `'a' || chr(i)`; both lengths at the limit (code points, as `char_length`).
-- **Lone surrogates** (outside v39): the JavaScript lists do not refuse a lone surrogate, and the `pg` driver
+- **Lone surrogates** (outside v40): the JavaScript lists do not refuse a lone surrogate, and the `pg` driver
   turns one into U+FFFD, which both layers accept. A later JavaScript change adds `\ud800-\udfff` to the lists
   (with the `u` flag it matches only a lone surrogate). LOW; no database change.
 - **The rollback** restores v34's two function bodies verbatim. The stricter rule only refuses, so no row depends
-  on it, and v34's lists are a subset of the new ones. It refuses once a later migration is recorded.
+  on it, and v34's lists are a subset of the new ones. It refuses once a later migration is recorded, and needs no
+  v39 state: it can run while the lifecycle has written revisions.
 - **The services already apply the rule** (part A); after part B the database refuses the same text, whoever
   writes it.
 
@@ -308,15 +330,25 @@ preflight block and rollback part (no v40; see R5). The owner approves it with t
 
 ## J5.5 Acceptance (plan, phase 4, and Q10 part B)
 
-- The rollback is rehearsed: apply → rollback → an identical catalog → re-apply, for both parts.
-- Every guard has a mutation that the tests kill, the seed predicate's `created_by_user_id is null` term included.
+- The rollbacks are rehearsed, each alone: v39 and v40 applied → v40 rolled back → the v39 catalog → v40 re-applied;
+  and v40 rolled back → v39 rolled back → the v38 catalog → both re-applied. v40's rollback also runs after the
+  lifecycle has written a revision.
+- v40's `DO` block refuses a copy with a refused row: v40 rolls back, v39 stays applied, and the catalog is v39's
+  (the two text functions still v34's).
+- Every guard has a mutation that the tests kill. The seed predicate's `created_by_user_id is null` term is
+  redundant outside a window (v34's own guard refuses every marker first, v34 lines 506-507) and is covered by the
+  CHECK `source_metric_revisions_actor_or_seed` inside one. Its test therefore runs inside a simulated window
+  (`source_metric_require_seed_window` replaced on the disposable database) with a marker and a creator, and asserts
+  the v39 guard's own refusal, not the CHECK's.
 - **The seed exception:** inside a seed window an `active` revision with a marker and no actor COMMITs (no T8 row);
   after it, a marker with an acting user, a marker without one, and neither marker nor actor are each `42501`.
+- **The actor:** a club admin, or a platform admin no longer active, as the acting user of an INSERT, an activation
+  or a retirement is `42501` in the T2b guard itself (not only at the T8 row).
 - **The pinned step**, for L2, L4 and L5: a club admin's `needs_review` version pinned to R is disabled with the fixed
   reason in `disable_reason` and in its `mapping_status` row, and counted; a pinned draft stays a draft; an archived
   club's pinned version gives O7's answer; an L5 refusal never names the club.
 - **The COMMIT outcome of L4** through the real route: a refusal at COMMIT by a deferred link is a definite `23514`
-  (nothing written); a lost COMMIT answer is verified by the request key on another connection; the same key
+  (nothing written; a correct route never causes one, so the test uses a seam that leaves out an audit row); a lost COMMIT answer is verified by the request key on another connection; the same key
   repeats the same answer, a different body is `request_key_reused`, and a key used on L3 is `request_key_reused` on
   L4.
 - **The request record:** after an L4 with one disabled version there is exactly one keyed T8 row and three rows with
@@ -325,7 +357,10 @@ preflight block and rollback part (no v40; see R5). The owner approves it with t
   - L4 against an M2 version create on R and on R+1;
   - L4 against an M2 submit on R;
   - L4 against an M2b act on R and on R+1;
-  - L1 against L1 (`409 draft_exists`, never a `500`).
+  - L2 and L5 against an M2 version create or submit on the retired revision;
+  - L4 and L5 against the archive of a club whose `needs_review` version is pinned to R;
+  - L1 against L1 (`409 draft_exists`, never a `500`);
+  - the M2 side answers `409 revision_not_usable`, never a `500`.
 - None of the nine seeded fields changes: before and after v39 each has revision 1 `active`, `observed`, with no
   proof.
 - Access, the identical 404 and the request record are tested as in J1 and J4, for L1-L5: a club admin, a platform
@@ -365,11 +400,13 @@ preflight block and rollback part (no v40; see R5). The owner approves it with t
     disable route is added to v39 (more scope).
 - **O5, voiding a confirmation.**
   - *Proposed:* no separate "void" act. A wrong confirmation is corrected by R+1 (L4), or the field is stopped by
-    L5 (O3). The wrong proof stays in R's history, with the retirement's reason.
+    L5 (O3). The wrong proof stays in R's history, with the retirement's reason. `revisionOut` carries no reason, so
+    today that reason is readable in the database only; phase 6 may need a read of a retired revision's facts.
   - **L5 must never depend on phase 7's routes.** When phase 7 makes an `active` version or an open activation
     possible, it extends the pinned step of L2 and L5 in the same release (end the activations, disable the
-    versions, retire, in one transaction), so that a field can always be stopped.
-- **O6, Q10 part B in v39.** Approve J5.4: the database refuses what part A's services refuse, including an emoji
+    versions, retire, in one transaction), so that a field can always be stopped, except while O7(ii)(a) holds it
+    for an archived club.
+- **O6, Q10 part B in v40.** Approve J5.4: the database refuses what part A's services refuse, including an emoji
   with a variation selector (`❤️`) and blank-edged text. The preflight shows 0 before the migration, and the
   migration itself refuses if not.
 - **O7, other owners' versions and archived clubs.** The pinned step is the first write of club-owned rows from the
@@ -381,7 +418,10 @@ preflight block and rollback part (no v40; see R5). The owner approves it with t
       club's workspace through a T4 disable route (more scope; it keeps the owner-scope rule).
   - (ii) A pinned `needs_review` version of an **archived** club, which no one may write (J5.1):
     - (a) *proposed:* `409 club_archived` until the club is restored. The field is then stopped by restoring the
-      club, running L2 / L4 / L5, and archiving it again;
+      club, running L2 / L4 / L5, and archiving it again. The `409` names the ids of the blocking archived clubs to
+      this caller, an active platform admin who may already list every club. Without them the admin cannot tell
+      which club to restore, because an archived club's workspace cannot be opened (`resolveMappingAdmin`,
+      `sourceMetricMappingService.js:215-219`). It names no mapping or version;
     - (b) a narrow change of v35's T4 and T8 guards that lets a platform admin write only `→ disabled` with the
       fixed reason for an archived club;
     - (c) archiving a club is refused while it has a `needs_review` or `active` version (a change outside this
@@ -404,17 +444,24 @@ preflight block and rollback part (no v40; see R5). The owner approves it with t
     does, and the database derives it.
 - **R3:** the response shapes (J4's revision shape plus `disabledVersions`), the codes and their order. The order
   follows J1 and J5.2: right, path, body keys, request record, locks, the right again, then the states.
-- **R4:** a future seeding migration. It stays v34's seed window, with no acting user; v39 keeps the exception of
-  J5.3 (an authorization exception: `security-reviewer` found it safe with that predicate in round 1).
-- **R5 — decided (J3b.9):** one file, two parts, no v40. Raised again by `security-reviewer` in round 1, for the
-  *Rukovodilac* to keep or reopen: with one file, once the lifecycle has written a revision the v39 rollback is
-  refused, so part B can then only be loosened by a new forward migration, not rolled back on its own; two files
-  would keep the two rollbacks independent. Until the *Rukovodilac* reopens it, J3b.9 stands.
+- **R4:** a future seeding migration. It stays v34's seed window, with no acting user; v39 restores v34's
+  behaviour with the exception of J5.3, which widens v37 (an authorization exception: `security-reviewer`
+  confirmed that predicate in round 2).
+- **R5 — decided (the *Rukovodilac*, 2026-10-27, replacing J3b.9's "no v40"):** two migration files in the phase 4
+  pull request: v39 the lifecycle, v40 Q10 part B, each with its own rollback, preflight and post-check. The
+  reason is `security-reviewer`'s, from round 1. With one file, once the lifecycle had written a revision the
+  rollback would be refused, so part B could then only be loosened by a new forward migration. With two files, v40
+  can always be rolled back on its own.
 - **R6:** the frontend of the lifecycle (Source fields tab) stays phase 6. v39 is backend only.
+- **R7:** the reads cap a field at 20 revisions (`LIST_CAPS.revisionsPerField`, `sourceMetricMappingService.js:78`):
+  with a 21st, `/fields` and `GET /fields/:fieldId` would answer `409 result_too_large`.
+  - *Proposed:* L1 refuses a 21st revision (`409 revision_limit`) until those reads are paged, as the mappings are
+    (C68).
+  - *Alternative:* page the revision reads in v39's pull request.
 
 ---
 
-## J5.7 Not in v39
+## J5.7 Not in v39 or v40
 
 - A T4 version's activation or disable route, and T5 writers (phase 7). L4's D3 extension and the phase-7 extension
   of the pinned step (O5) also wait for phase 7.
