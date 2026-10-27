@@ -10,8 +10,8 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 |---|---|
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
-| Last verified against commit | `e556d08` (merge of PR #227, the R2 implementation) — `e8e2b0a..e556d08` is that pull request, as J3b.8 records it; only the status line, the J3b headings, J3b.8's mutation note and its Data API limit were updated — before it `e8e2b0a` (merge of PR #224, the R2 contract; the base of the R2 implementation pull request) — `e489eeb..e8e2b0a` changed only the plan and this document; sections J3b and J3b.8 describe the R2 pull request as built — before it `e489eeb` (merge of PR #223, the phase 3 docs sync) — re-verified for the facts R2 builds on (J3b.1, C99); `6c7dfa4..e489eeb` changed only this document and `CURRENT_STATE.md` — before it `6c7dfa4` (merge of PR #218, M3a) — `deb2aa1..6c7dfa4` changed the older catalog's write guard (C98, PR #219, already verified against `deb2aa1` below), the plan documents (PR #221) and the M3a frontend (PR #218, section H); no migration, mapping, binding, importer or snapshot contract changed; re-verified for the status line, section H and the K note on the two `23514` guard refusals — before it `deb2aa1` (merge of PR #217; the base of the canonical-guard pull request, C98) — re-verified for the Metrics Core catalog only (`trainingLoadMetricsCatalog.js`, `trainingLoadMetricsAccess.js`, `routes/trainingLoadMetrics.js`, A6, C82, C98); the other sections were not re-derived — before it `60aadb9` (merge of PR #163, M3-0; the base of the M2b pull request) — its tree is the integrated M3-0 branch's own (`a9a6d5e`), so nothing documented changed — before it `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
-| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), merged and deployed (PR #163, `60aadb9`; v36 directly confirmed on production by the owner's read-only post-check); M2b, the source-field evidence confirmation and its database guards v37 (C89–C97, J4), merged (PR #164, `66c50d6`; its deploy and v37 on the production database not re-verified in this update), no production field confirmed; the older catalog's guard on the canonical variables (C98, no migration) merged and deployed (PR #219, `7a9e59d`); M3a, the Variables view of the M3 frontend (section H, C80) over the M3-0 API, merged and deployed (PR #218, `6c7dfa4`, no migration); R2, renaming, archiving and restoring a canonical variable with a team coach for club variables (C99, J3b), accepted by the owner on 2026-10-27 (PR #224, `e8e2b0a`), merged and deployed (PR #227, `e556d08`; v38 confirmed on the production database by the owner's read-only post-check) (J3b.8); the revision lifecycle (C91), the rest of the M3 frontend and M4–M6 not started** |
+| Last verified against commit | `1900ed6` (merge of PR #228; the base of the Q10 part A pull request, PR #229) — `e556d08..1900ed6` changed only this document, the plan and `CURRENT_STATE.md`; J3b.9 describes PR #229 as built — before it `e556d08` (merge of PR #227, the R2 implementation) — `e8e2b0a..e556d08` is that pull request, as J3b.8 records it; only the status line, the J3b headings, J3b.8's mutation note and its Data API limit were updated — before it `e8e2b0a` (merge of PR #224, the R2 contract; the base of the R2 implementation pull request) — `e489eeb..e8e2b0a` changed only the plan and this document; sections J3b and J3b.8 describe the R2 pull request as built — before it `e489eeb` (merge of PR #223, the phase 3 docs sync) — re-verified for the facts R2 builds on (J3b.1, C99); `6c7dfa4..e489eeb` changed only this document and `CURRENT_STATE.md` — before it `6c7dfa4` (merge of PR #218, M3a) — `deb2aa1..6c7dfa4` changed the older catalog's write guard (C98, PR #219, already verified against `deb2aa1` below), the plan documents (PR #221) and the M3a frontend (PR #218, section H); no migration, mapping, binding, importer or snapshot contract changed; re-verified for the status line, section H and the K note on the two `23514` guard refusals — before it `deb2aa1` (merge of PR #217; the base of the canonical-guard pull request, C98) — re-verified for the Metrics Core catalog only (`trainingLoadMetricsCatalog.js`, `trainingLoadMetricsAccess.js`, `routes/trainingLoadMetrics.js`, A6, C82, C98); the other sections were not re-derived — before it `60aadb9` (merge of PR #163, M3-0; the base of the M2b pull request) — its tree is the integrated M3-0 branch's own (`a9a6d5e`), so nothing documented changed — before it `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
+| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), merged and deployed (PR #163, `60aadb9`; v36 directly confirmed on production by the owner's read-only post-check); M2b, the source-field evidence confirmation and its database guards v37 (C89–C97, J4), merged (PR #164, `66c50d6`; its deploy and v37 on the production database not re-verified in this update), no production field confirmed; the older catalog's guard on the canonical variables (C98, no migration) merged and deployed (PR #219, `7a9e59d`); M3a, the Variables view of the M3 frontend (section H, C80) over the M3-0 API, merged and deployed (PR #218, `6c7dfa4`, no migration); R2, renaming, archiving and restoring a canonical variable with a team coach for club variables (C99, J3b), accepted by the owner on 2026-10-27 (PR #224, `e8e2b0a`), merged and deployed (PR #227, `e556d08`; v38 confirmed on the production database by the owner's read-only post-check) (J3b.8); Q10 part A (the invisible characters in the services and the frontend, J3b.9) in an open pull request, PR #229, no migration; the revision lifecycle (C91), the rest of the M3 frontend and M4–M6 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
 **Which changes require a targeted re-verification of this document** (not a repeat of the whole
@@ -904,7 +904,9 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
         a legacy archive without a change row counts as an admin's.
       - Q9: the admins read the change history, through a later read; R2 writes it from the first change.
       - Q10: **not in R2.** The known gap of the invisible-character list is closed by a separate small PR
-        (the *Rukovodilac* recommends it before phase 2c); until then it is an accepted risk (J3b.4.5).
+        (the *Rukovodilac* recommends it before phase 2c); until then it is an accepted risk (J3b.4.5). Built in
+        two parts: part A, PR #229, closes it in the services and the frontend (J3b.9); part B, the database twins,
+        goes into v39.
       - Q11: no write quota for coaches (as C68).
     - **Numbering:** R2 is v38, the revision lifecycle v39 (recorded in the plan by PR #226).
 
@@ -1974,7 +1976,9 @@ same-origin JSON and the M3-0 error envelope. Every write is idempotent by `requ
      so a refused caller never waits for the lock);
    - the definition `FOR UPDATE`;
    - **the rights again, `FOR SHARE` (J3b.5)**: lost means the identical 404, never a 409;
-7. the 409s of each route below.
+7. the 409s of each route below;
+8. rename only (Q10, J3b.9): `400 invalid_body` for a value that changes and breaks the text rule. A field's type
+   is still checked at step 5.
 
 **Reads, for a coach in a team workspace** (`GET /variables`, `GET /variables/:variableId`):
 - the owner is the team's club;
@@ -2004,7 +2008,7 @@ several lines, can still be renamed.
 - At least one of the three fields is present.
 - A field that is left out stays unchanged. `null` clears the short label or the description.
 - The new values follow M3-0's text rules: one line of visible characters without surrounding spaces; at most 80
-  for the label, 20 for the short label and 500 for the description; C53.
+  for the label, 20 for the short label and 500 for the description; C53, widened by Q10 (J3b.9).
 
 The 409s, in this order:
 1. `409 variable_not_active`: archived (Q5);
@@ -2256,7 +2260,8 @@ No production writer is affected.
 U+FFA0, U+034F, the variation selectors, the tag characters). With R2, every coach of a club writes club-wide labels,
 so such a label can now come from a coach. The owner decided that the fix is a separate small PR, not R2 (Q10).
 `metric_definitions` has no text check of its own (v10): the service and the R2 request guard check the new labels,
-no constraint does.
+no constraint does. **Closed in the services and the frontend by PR #229 (Q10 part A, J3b.9); the database twins
+follow in v39 (part B).**
 
 #### J3b.5 Lock order, idempotency, outcome
 
@@ -2427,7 +2432,8 @@ covers the following.
   - A platform admin whose stored workspace is a team it does not coach falls back to another workspace through
     the workspace resolver. Such a team workspace is never offered, which is what Q6 needs.
 - **The text rule.** A value the rename leaves as it was is exempt, in the service and in the request guard alike
-  (a legacy label longer than 80 characters stays while the description changes). The reason of an archive or a
+  (a legacy label longer than 80 characters stays while the description changes). Since Q10 (J3b.9) a field sent with
+  its stored value is exempt too. The reason of an archive or a
   restore is checked by `source_metric_text_ok()` inside the write and by the table's own check.
 - **`409 variable_pinned`** keeps its code everywhere, with a message for the case: a coach's rename, or an archive
   or restore.
@@ -2482,6 +2488,82 @@ covers the following.
 has a mutation that a test kills, except redundant checks: a check whose removal another guard of the same chain still
 catches. These are the R2 guard's checks of the change row's owner, transaction, xmin and author and of the
 definition's xmin, and the value entry's first lock (above).
+
+#### J3b.9 Q10 part A as built (PR #229, from `1900ed6`; no migration)
+
+The *Rukovodilac*'s decisions of 2026-10-27, following the executor's proposal: the unit token is in Q10; an emoji
+with the variation selector U+FE0F is refused (without it, it passes); the database twins go into v39 as a separate
+part with its own preflight block and rollback part (no v40); a rename checks only the values that change.
+
+- **One module.** `backend/src/metricTextRules.js` holds the lists and the two checks, without a database:
+  - `TEXT_FORBIDDEN` and `boundedText()` (labels, short labels, descriptions, reasons, M2's conversion note, the key
+    suggestion's label);
+  - `UNIT_FORBIDDEN` and `unitTokenOk()` (M3-0's unit and condition unit, M2b's source units).
+
+  `sourceMetricMappingService.js` and `canonicalVariableAdminService.js` import them; the latter still exports
+  `unitTokenOk` for M2b.
+- **The characters.** The lists are explicit, since PostgreSQL's regular expressions have no Unicode properties, so
+  v39's SQL can carry the same list. Both lists add, beyond C53:
+  - U+034F;
+  - U+115F-1160, U+3164 and U+FFA0 (the Hangul fillers);
+  - U+17B4-17B5;
+  - U+180B-180D and U+180F (with C53's U+180E, U+180B-180F);
+  - U+2065 (with C53's ranges, U+2060-206F);
+  - U+2800 (the blank braille pattern);
+  - U+FE00-FE0F (the variation selectors);
+  - U+FFF0-FFFB;
+  - U+1BCA0-1BCA3 and U+1D173-1D17A;
+  - U+E0000-E0FFF (the tags and the variation selectors supplement).
+
+  That is every default-ignorable code point, plus U+2800 and U+FFF9-FFFB. The text list grows from 96 to 4,245 code
+  points, the unit list from 116 to 4,264 (U+2065 was in it already). The regular expressions carry the `u` flag.
+- **Blanks.** A text may not start or end with a blank: U+0020 (C41's rule) or another space separator (U+00A0,
+  U+1680, U+2000-200A, U+202F, U+205F, U+3000). So a text made only of blanks is refused too, and no label can look
+  like another by a hidden blank at its edge (the security review of PR #229). A blank between visible characters
+  stays allowed. A unit token refuses every blank already. v39's SQL twin must take the same edge rule, since
+  `btrim()` trims only U+0020.
+- **The frontend.** `frontend/metric-variables-data.js` carries copies of both lists. It needs no blank rule: its
+  `oneLine()` removes every blank first, and an empty label is "Required.". The unit test compares the copies with
+  the server's lists over every code point U+0000-U+10FFFF.
+- **A rename checks the values that change.** The rename body now checks only the type of a field. The text rule runs
+  inside the write, after the 409s, on each value that differs from the stored one, and the database checks it once
+  more. A field left out, or sent with its stored value, is exempt, as in v38's request guard.
+  - **The order of the answers moves for a bad text** (J3b.2, step 8): everything inside the write answers first.
+    That is a replay or `409 request_key_reused`, the identical 404, `409 try_again`, and the rename's 409s
+    (`variable_not_active`, `variable_changed`, `rename_unchanged`, `variable_pinned`). Only then comes the
+    `400 invalid_body`. The codes and messages are unchanged.
+  - The archive's and the restore's reasons are new values, so they are still checked in the body (step 5).
+- **What a stored value keeps.** No stored label, reason or unit is rewritten. A legacy value with a character Q10 adds
+  stays readable and can be kept by a rename. v39's preflight must count the rows that the database twins would
+  refuse (expected 0).
+- **Known limits.**
+  - Create, archive and restore still check their texts in the body, before the request key's replay. So a request
+    that succeeded before the deploy with a character Q10 refuses answers 400 when it is repeated afterwards with the
+    same key. It is refused, never written twice, and only for the deploy window.
+  - The older catalog API (`trainingLoadMetricsCatalog.js`) only trims the labels of team- and user-owned
+    definitions. Club and system variables never pass through it (C98). A separate task records it.
+  - Phase 2c's rename form must check only the fields that change. The frontend's `TEXT_FORBIDDEN` would otherwise
+    block a stored legacy value that the server exempts.
+- **Tests and mutations.**
+  - `backend/tests/metric-text-rules-q10.test.mjs` (unit, no database):
+    - every added code point is refused in a text and in a unit;
+    - the lists equal C53's plus Q10's groups, code point by code point;
+    - the frontend's copies are identical to the server's lists;
+    - the blank rule;
+    - ordinary names in several scripts, emoji without U+FE0F and a length counted in code points pass.
+  - `canonical-variables-r2.test.mjs` test 17 checks, through the real routes, a sample of every group and a
+    blanks-only text. It covers create (each text field and the unit), the key suggestion, a rename that changes a
+    value (both a coach and a club admin; no change or request row written), an archive's and a restore's reason, the
+    outsider's 404, and the legacy label kept by a rename.
+  - The M2 suite's conversion note takes the same sample of every group. The M2b suite's unit list and the
+    frontend's form test gain samples.
+  - Test 17 also refuses a label that starts or ends with a non-ASCII blank, on create and on a rename.
+  - Test 17 also pins the order: a reused key, a stale token and an outsider each answer before the 400.
+  - 57 mutations, all killed:
+    - each group removed from each of the four lists;
+    - the edge-blank rule removed, narrowed to a leading blank, or without one of its blanks;
+    - the rename checking every sent value, checking none, checking in the body again;
+    - the write without the JavaScript text rule.
 
 ### J4. M2b — the source-field evidence confirmation and its database guards v37 (as built)
 

@@ -44,8 +44,11 @@ export const LIMITS = Object.freeze({ label: 80, shortLabel: 20, description: 50
 // the problem at the field; the server checks them again.
 const DECIMAL = /^-?(0|[1-9][0-9]{0,11})(\.[0-9]{1,9})?$/;
 const KEY = /^[a-z][a-z0-9_]{0,62}$/;
-const UNIT_FORBIDDEN = /[\s|=\u0000-\u001f\u007f-\u009f\u00a0\u00ad\u061c\u1680\u180e\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\ufeff]/u;
-const TEXT_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/;
+// Copies of the server's lists (backend/src/metricTextRules.js, Q10); a
+// backend test checks they hold the same characters. A text made only of
+// blanks needs no list here: oneLine() removes every blank first.
+export const UNIT_FORBIDDEN = /[\s|=\u0000-\u001f\u007f-\u009f\u00a0\u00ad\u034f\u061c\u115f\u1160\u1680\u17b4\u17b5\u180b-\u180f\u2000-\u200f\u2028-\u202f\u205f-\u206f\u2800\u3000\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb\u{1bca0}-\u{1bca3}\u{1d173}-\u{1d17a}\u{e0000}-\u{e0fff}]/u;
+export const TEXT_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u2028-\u202e\u2060-\u206f\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb\u{1bca0}-\u{1bca3}\u{1d173}-\u{1d17a}\u{e0000}-\u{e0fff}]/u;
 
 export function emptyVariablesState() {
   return {
@@ -279,7 +282,7 @@ function textError(value, max, { required = false } = {}) {
 export function unitError(value) {
   if (!value) return "Required.";
   if ([...value].length > LIMITS.unit) return `At most ${LIMITS.unit} characters.`;
-  if (UNIT_FORBIDDEN.test(value)) return "No spaces, '|' or '='.";
+  if (UNIT_FORBIDDEN.test(value)) return "No spaces, '|', '=' or hidden characters.";
   return "";
 }
 function decimalError(value) {

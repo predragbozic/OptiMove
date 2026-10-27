@@ -39,6 +39,7 @@ import pg from "pg";
 import { pool } from "./db.js";
 import { isPlatformAdministrator, holdsClubAdminRole } from "./authz.js";
 import { resolveActiveWorkspace } from "./workspace.js";
+import { boundedText } from "./metricTextRules.js";
 
 export class SourceMetricMappingError extends Error {
   constructor(status, code, message, details = undefined) {
@@ -98,9 +99,6 @@ const API_FAMILIES = new Set(["api", "rest_v1"]);
 export const DECIMAL_INPUT = /^-?(0|[1-9][0-9]{0,11})(\.[0-9]{1,9})?$/;
 // A numeric as PostgreSQL prints it (::text of a finite numeric).
 const NUMERIC_TEXT = /^-?[0-9]+(\.[0-9]+)?$/;
-// C41 / C53: the characters a bounded free-text column refuses (NUL too:
-// a PostgreSQL text cannot hold it).
-const TEXT_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/;
 
 // ---------------------------------------------------------------------------
 // Test seams (never set by the application).
@@ -368,12 +366,6 @@ function plainObject(body, allowed, required) {
 function uuidField(value) {
   if (typeof value !== "string" || !UUID.test(value)) throw refusal(400, "invalid_body", "An id field must be a UUID.");
   return value.toLowerCase();
-}
-function boundedText(value, max) {
-  if (typeof value !== "string" || value.length === 0) return false;
-  if (value.startsWith(" ") || value.endsWith(" ")) return false;
-  if ([...value].length > max) return false;
-  return !TEXT_FORBIDDEN.test(value);
 }
 function decimalInput(value, { nonNegative = false } = {}) {
   if (typeof value !== "string" || !DECIMAL_INPUT.test(value)) throw refusal(400, "invalid_parameters", "A parameter value is a decimal string (at most 12 integer and 9 decimal digits, no exponent).");
