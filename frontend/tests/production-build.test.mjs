@@ -17,6 +17,7 @@ import { spawnSync } from "node:child_process";
 const frontendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(frontendDir, "dist");
 const distAssetsDir = path.join(distDir, "assets");
+const fixtureBuildCommit = "a".repeat(40);
 
 before(() => {
   // npm resolves to a .cmd shim on Windows, which node:child_process can
@@ -24,13 +25,28 @@ before(() => {
   // fixed, argument-free string (rather than shell:true + a separate args
   // array) sidesteps Node's "unescaped args with shell:true" deprecation
   // warning, since there is nothing here to escape (no interpolated input).
-  const result = spawnSync("npm run build", { cwd: frontendDir, shell: true, encoding: "utf8" });
+  const result = spawnSync("npm run build", { cwd: frontendDir, shell: true, encoding: "utf8", env: { ...process.env, RENDER_GIT_COMMIT: fixtureBuildCommit } });
   assert.equal(result.status, 0, `npm run build must exit 0 - stderr:\n${result.stderr}`);
 });
 
 test("1. production build succeeds and produces a dist directory", () => {
   assert.ok(existsSync(distDir), "frontend/dist must exist after npm run build");
   assert.ok(existsSync(distAssetsDir), "frontend/dist/assets must exist after npm run build");
+});
+
+test("ECharts distribution carries its complete upstream license and third-party notices", () => {
+  for (const notice of ["LICENSE", "NOTICE", "licenses/LICENSE-d3"]) {
+    assert.equal(readFileSync(path.join(distDir, "licenses/echarts", notice), "utf8"), readFileSync(path.join(frontendDir, "vendor/echarts", notice), "utf8"));
+  }
+});
+
+test("the production build retains the app update stamp in both HTML entries and outside JS bundles", () => {
+  for (const entry of ["index.html", "athlete.html"]) {
+    assert.ok(readFileSync(path.join(distDir, entry), "utf8").includes(`<meta name="optimove-build" content="${fixtureBuildCommit}">`));
+  }
+  for (const asset of readdirSync(distAssetsDir).filter(name => name.endsWith(".js"))) {
+    assert.equal(readFileSync(path.join(distAssetsDir, asset), "utf8").includes(fixtureBuildCommit), false);
+  }
 });
 
 test("2. every expected HTML entry point exists in dist", () => {

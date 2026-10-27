@@ -1,0 +1,75 @@
+{
+  "node": "v24.22.1",
+  "platform": "win32",
+  "arch": "x64",
+  "osRelease": "10.0.19045",
+  "mainSha": "fdc2c2efd0fb1c70e2241775f9af1132d0ceb550",
+  "codeSha": "dbf3383ebb2b1b0e9a06e5bf15303376d465ce5f",
+  "runnerProcedure": "node scripts/test-runner.mjs --project frontend --log-dir <isolated-output>",
+  "databasePolicy": "unit; DATABASE_URL unset; backend .env not read",
+  "runnerAndFailedTestFiles": [
+    {
+      "path": "scripts/test-runner.mjs",
+      "normalizedSha256": "4713f79c7cb5bb173030a383152542ce5e3a5e67487fe574e794dbddbebc92f4",
+      "identical": true
+    },
+    {
+      "path": "scripts/test-runner-reporter.mjs",
+      "normalizedSha256": "f5a814f0774ba7c3b3cf84106dbfa46340e9b179edf47aafbcb1a4be58568128",
+      "identical": true
+    },
+    {
+      "path": "frontend/tests/builder-create-form-fixes.test.mjs",
+      "normalizedSha256": "6dca1f5841a7ce36377befdf601e9c728c647278ea1484ac2ce665f1f4d50634",
+      "identical": true
+    },
+    {
+      "path": "frontend/tests/builder-performance-fixes.test.mjs",
+      "normalizedSha256": "4704acb8a1d2991ef0841c2fe131be7b92b0f5e6233affbc0ac3fec6454df5e5",
+      "identical": true
+    },
+    {
+      "path": "frontend/tests/exercise-ownership.test.mjs",
+      "normalizedSha256": "8da1a6932885717383c0227cba2249b94912d5bae8896334c324ddb9ee90b330",
+      "identical": true
+    },
+    {
+      "path": "frontend/tests/exercise-personalization.test.mjs",
+      "normalizedSha256": "ca3ce6ff1b8669830d2f843272c6f6ef40d5b907545fd79646bd134c968a27c9",
+      "identical": true
+    },
+    {
+      "path": "frontend/tests/builder-mobile-section-workflow.test.mjs",
+      "normalizedSha256": "4d5b7426fc746ba344713e7694d2f755ed6a6d078dadafdaa512b3ccd80fd425",
+      "identical": true
+    },
+    {
+      "path": "frontend/tests/organization-panel-cache.test.mjs",
+      "normalizedSha256": "a3ff44750864a49146c1c60461ff159f4617332855431f643d2f474d45387e4d",
+      "identical": true
+    },
+    {
+      "path": "frontend/tests/tests-schedule-management.actions.test.mjs",
+      "normalizedSha256": "53ea7e01aa39c003b1edd96988d537f9cf66b5d17ccf0e331d1b1e4f6ffa4f35",
+      "identical": true
+    },
+    {
+      "path": "frontend/tests/training-load.actions.test.mjs",
+      "normalizedSha256": "06cc2e8267f1051b7c0d2f4edb9746e151b60e8dbd950d2a7aa97f7f644e6139",
+      "identical": true
+    }
+  ],
+  "baselineLockVersions": {
+    "jsdom": "30.0.1",
+    "vite": "8.2.1",
+    "source-map-js": "1.2.1",
+    "undici": "8.10.0"
+  },
+  "integratedLockVersions": {
+    "jsdom": "30.0.1",
+    "vite": "8.3.5",
+    "source-map-js": "1.2.2",
+    "undici": "8.12.3"
+  },
+  "dependencyDifferenceExplanation": "Each ref uses its own unchanged committed lockfile. Candidate contains the reviewed security lock update; pristine main retains its original lock. Same machine, Node, npm install procedure and test runner. This difference is disclosed, not hidden."
+}

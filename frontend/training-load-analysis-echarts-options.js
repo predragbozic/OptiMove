@@ -18,7 +18,7 @@ export function dashboardChartPlots(model, labelForSeries, rowContext) {
         precision,
         option: {
           animation: false,
-          color: ["#0f62fe"],
+          color: ["#002d9c"],
           grid: { left: 12, right: 20, top: 48, bottom: 12, containLabel: true },
           legend: { show: model.config.effective.legend.visible, type: "scroll", left: 12, right: 12, top: 4 },
           tooltip: { trigger: "axis", renderMode: "richText", confine: true },
