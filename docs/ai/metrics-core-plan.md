@@ -382,7 +382,8 @@ order covers is merged under it.
     its insert guard).
 
   So R2 needs a migration: new operations, their database actor guards (C76), a rollback, and the read-only
-  preflight and post-check scripts. It is v38 or v39, depending on its order with phase 4.
+  preflight and post-check scripts. It is v38, and phase 4 is v39: the owner accepted that numbering with the R2
+  contract, „ok ugovor 2b, Q10 ne” (in the *Rukovodilac*'s chat, owner turn `bf9dce82`, 2026-10-27 06:34:26 UTC).
 - **Archiving a pinned variable:** the v34 guard (decision 9) already refuses it; the API answers it as
   `409 variable_pinned`, as for a new version.
 - **Decision record:** the coach as an administrator of club variables changes the audience of the M3-0 admin API
@@ -422,7 +423,7 @@ order covers is merged under it.
 - The evidence for the nine `rest_v1` fields (C97, the table of J4). The executor may only prepare the procedure; it
   sends no GPEXE request.
 
-### Phase 4 ★★: the revision lifecycle (C91), migration v38
+### Phase 4 ★★: the revision lifecycle (C91), migration v39
 - **Input (red zone, before any code):**
   - owner decisions on:
     - who may create revision R+1;
@@ -434,7 +435,7 @@ order covers is merged under it.
   - the old Render service clarified: which database it uses (phase 1, b).
 - **Green zone:**
   - a separate discovery delta document, as the proposed contract (J5);
-  - after the owner's decision, the implementation: v38 with database actor guards (C76), its rollback, and the
+  - after the owner's decision, the implementation: v39 with database actor guards (C76), its rollback, and the
     read-only preflight and post-check scripts;
   - the M1 / M2 / v35 / M3-0 / M2b suites no longer switch off the v37 T2b triggers but write the real way.
 - **Acceptance:**
@@ -444,7 +445,7 @@ order covers is merged under it.
   - none of the nine seeded fields changed;
   - tests on PostgreSQL 16 and, where possible, 17.
 - **Reviewers:** `db-reviewer`, `security-reviewer`, `code-reviewer`, and the external review (triggers 1, 2 and 4).
-- **Red zone:** the production preflight, merge (and so deploy and migration), and the production post-check of v38.
+- **Red zone:** the production preflight, merge (and so deploy and migration), and the production post-check of v39.
 - **★★:** the owner approves the contract (J5) before any code and confirms the external review before the merge.
 
 ### Phase 5: the zone model (C89)
