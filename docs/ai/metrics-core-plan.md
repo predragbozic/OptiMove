@@ -24,8 +24,8 @@ The same day the owner added three things to it:
 Added after the adoption, the same day: R2 (phases 2b and 2c), the executor as the one who merges and the exception of
 PR #221 (section 1), and the standing merge order for PRs without a migration (section 2). Added on 2026-10-27: the
 working mode (section 1), phase 11, derived canonical variables, and phase 12, domains and categories of canonical
-variables (section 5). Added later on 2026-10-27 (PR #240): the v39 / v40 contract accepted (phase 4, C100 of the
-discovery document), Q10 part B as its own migration v40 (section 6), and the record of PR #238's merge as a one-off
+variables (section 5). Added later on 2026-10-27 (PR #240): the v39 / v40 contract, accepted as the *Rukovodilac* reads the
+owner's words and confirmed by the owner's own merge of PR #240 (phase 4, C100 of the discovery document), Q10 part B as its own migration v40 (section 6), and the record of PR #238's merge as a one-off
 departure (section 2).
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
@@ -527,7 +527,8 @@ order covers is merged under it.
 
 ### Phase 4 ★★: the revision lifecycle (C91) and Q10 part B, migrations v39 and v40
 - **Input (red zone, before any code):**
-  - owner decisions on the following, answered on 2026-10-27 (C100):
+  - owner decisions on the following, answered on 2026-10-27 as the *Rukovodilac* reads the owner's words (C100),
+    confirmed by the owner's own merge of PR #240:
     - who may create revision R+1;
     - activating R+1;
     - retiring R;
@@ -537,7 +538,7 @@ order covers is merged under it.
   - the old Render service clarified (phase 1, b): closed (C100). It runs on Supabase, is inactive and is no longer
     deployed; it stays inactive during and after the deploy of v39 and v40.
 - **Green zone:**
-  - a separate discovery delta document, as the proposed contract (J5); accepted on 2026-10-27 (C100);
+  - a separate discovery delta document, as the proposed contract (J5); accepted on 2026-10-27 as the *Rukovodilac* reads the owner's words (C100), confirmed by the owner's own merge of PR #240;
   - after the owner's decision, the implementation: v39 with database actor guards (C76), its rollback, and the
     read-only preflight and post-check scripts; and v40, Q10 part B, as its own migration with its own rollback,
     preflight and post-check (R5 of C100);
@@ -551,8 +552,9 @@ order covers is merged under it.
 - **Reviewers:** `db-reviewer`, `security-reviewer`, `code-reviewer`, and the external review (triggers 1, 2 and 4).
 - **Red zone:** the production preflight, merge (and so deploy and migration), and the production post-check of v39
   and v40.
-- **★★:** the owner approves the contract (J5) before any code (accepted on 2026-10-27, C100) and confirms the external
-  review before the merge.
+- **★★:** the owner approves the contract (J5) before any code and confirms the external review before the merge.
+  The contract was accepted on 2026-10-27 as the *Rukovodilac* reads the owner's words (C100), confirmed by the
+  owner's own merge of PR #240.
 
 ### Phase 5: the zone model (C89)
 - An owner decision only; the executor prepares the variants.
