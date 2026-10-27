@@ -681,8 +681,10 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
 
     C98 left creating them unchanged. Their archive and delete answer the identical 404 to a caller who may not manage
     the row;
-  - M3-0 and R2 did not cover them (J3b.7 of the discovery document). The new admin flow links no canonical variable
-    with a domain or a category. Whether the older API wrote such rows on the production database was not checked.
+  - R2 did not cover them (J3b.7 of the discovery document), and no M3-0 service reads or writes these tables: only
+    the older API's access, catalog and measurement modules do (`backend/src/trainingLoadMetrics{Access,Catalog,
+    Measurements}.js`). The new admin flow links no canonical variable with a domain or a category. Whether the older
+    API wrote such rows on the production database was not checked.
 - **Scope (a draft for the contract, not a decision):**
   - in the M3-0 admin API and the Variables tab, domains and categories owned by the system or a club: create,
     rename and archive;
