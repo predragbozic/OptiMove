@@ -24,7 +24,9 @@ The same day the owner added three things to it:
 Added after the adoption, the same day: R2 (phases 2b and 2c), the executor as the one who merges and the exception of
 PR #221 (section 1), and the standing merge order for PRs without a migration (section 2). Added on 2026-10-27: the
 working mode (section 1), phase 11, derived canonical variables, and phase 12, domains and categories of canonical
-variables (section 5).
+variables (section 5). Added later on 2026-10-27 (PR #240): the v39 / v40 contract accepted (phase 4, C100 of the
+discovery document), Q10 part B as its own migration v40 (section 6), and the rule on the owner's words in the
+*Rukovodilac*'s chat (section 2).
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
@@ -33,7 +35,7 @@ Last verified against commit: `deb2aa1` (`origin/main`, merge of PR #217). The r
 `docs/ai/gpexe-metric-variable-mapping-discovery.md` (the *discovery document*) and to
 `docs/ai/phase5a-discovery-and-contract.md` are to that commit. What was added on 2026-10-27 (the working mode, the
 Done entries of phases 2b and 2c, phases 11 and 12, the Q10 line of section 6) was checked against `fdc2c2e` (merge of PR
-#237).
+#237); what PR #240 added, against `b358dae` (merge of PR #238).
 
 ## 1. Who does what
 
@@ -76,7 +78,8 @@ So:
 - the owner is contacted through the *Rukovodilac*, for „krupne stvari” (the big things).
 
 No gate of this plan changes: the red zone of section 2, "Never by relay" (approvals given directly in the executor's
-chat) and the owner's short report after every phase stay as written.
+chat) and the owner's short report after every phase stay as written. (Since PR #240, section 2's rule "The owner's
+word in the *Rukovodilac*'s chat" lets a checked owner turn there count as given directly.)
 
 ## 2. Green zone, red zone and the owner's words
 
@@ -206,7 +209,8 @@ Every other rule of those files applies as written.
   - A PR that changes sections 1 to 4 of this file, the marks and gate lines of section 5 ("Never by relay", below),
     `approval-channel.md`, `CLAUDE.md`, `.claude/**`, `.github/**`, a setting or a permission. It needs the owner's
     word naming the PR, given after the GO on its final head (a new commit voids it), and only directly in the
-    executor's chat; or the owner merges it personally.
+    executor's chat (or in the *Rukovodilac*'s chat under the rule "The owner's word in the *Rukovodilac*'s chat",
+    below); or the owner merges it personally.
   - An owner's instruction to write such a change authorizes writing it and opening its Draft PR only, never its
     merge.
   - A PR that changes `PROJECT_CONTEXT.md` or `docs/ai/CURRENT_STATE.md`, which `CLAUDE.md` imports, is covered only
@@ -262,7 +266,31 @@ proverava citat u njegovom transkriptu.”
 - **Never by relay:** a change to sections 1 to 4 of this file, to the ★ / ★★ marks and the "Input (red zone)",
   "Red zone" and "Start" lines of section 5, to `approval-channel.md`, to `CLAUDE.md`, `.claude/**`, `.github/**`, a
   setting or a permission, and the merge of a PR that makes such a change. These are approved only directly in the
-  executor's chat, or by the owner merging personally.
+  executor's chat, or by the owner merging personally, or by an owner turn in the *Rukovodilac*'s chat under the next
+  rule.
+- **The owner's word in the *Rukovodilac*'s chat** (the *Rukovodilac*'s rule of 2026-10-27, made on the owner's
+  explicit request; in force with the merge of PR #240). The owner writes in one chat. An owner turn typed in the
+  *Rukovodilac*'s chat counts as the owner's direct word, the "Never by relay" items included, when the executor has
+  itself checked the event with `get_event` on the *Rukovodilac*'s session (the session named in section 1):
+  - it is a `user` event that carries `client_platform`, whose content is plain text the owner typed: no
+    `tool_use_id`, and not a tool result, a notification or a message from another session;
+  - its server `created_at`;
+  - its verbatim text.
+
+  The text must also meet the minimal check above: it names the action and its object, comes after the frozen head
+  and the GO it approves, and is used once. A bare „Potvrđujem“ without a name does not count.
+  - **The record:** the event id and the verbatim text are recorded in the PR body.
+  - **Fail-closed:** if the event's format cannot be read clearly, the rule above applies.
+  - **The risk, accepted with this rule:** the check reads fields of another session's transcript, which are not a
+    documented contract. If they change, the executor falls back to the rule above.
+  - **First use, before the rule was merged:** the merge of PR #238 (`b358dae`, 2026-10-27).
+    - The owner's turns in the *Rukovodilac*'s chat, each checked by the executor with `get_event`:
+      - `e59003dd`, 14:33:31 UTC, `desktop_app`: „Odobravam merge PR #238.“ O1–O9 (dovoljno „sve po preporuci“).“
+      - `58ef3d24`, 17:32:55 UTC, `android`: „Odobravam, nema potrebe da me pitas“. It answers the
+        *Rukovodilac*'s message telling the owner the executor was waiting for the same sentence in its chat.
+    - That merge departed from the letter of "Never by relay" as it then stood. The departure was the
+      *Rukovodilac*'s decision (its message `c9cb6a1a`, 17:33:33 UTC), on the owner's explicit request.
+    - The full record is in PR #238's description.
 
 ## 3. How the model works
 
@@ -506,23 +534,28 @@ order covers is merged under it.
 ### Phase P: in parallel, the owner only (red zone, no code)
 - The read-only v37 post-check (`docs/runbooks/source-metric-revision-guards-v37-postcheck.sql`); the owner reports
   PASS or FAIL per block. It is a gate of phase 4.
+  - **Done, 2026-10-27:** passed, by the owner's statement (owner turn `38f0b6d6` in the *Rukovodilac*'s chat,
+    14:42:12 UTC, verbatim in C100 of the discovery document). It is recorded as a statement; no block values were
+    pasted.
 - The evidence for the nine `rest_v1` fields (C97, the table of J4). The executor may only prepare the procedure; it
   sends no GPEXE request.
 
-### Phase 4 ★★: the revision lifecycle (C91), migration v39
+### Phase 4 ★★: the revision lifecycle (C91) and Q10 part B, migrations v39 and v40
 - **Input (red zone, before any code):**
-  - owner decisions on:
+  - owner decisions on the following, answered on 2026-10-27 (C100):
     - who may create revision R+1;
     - activating R+1;
     - retiring R;
     - what happens to the T4 versions and T5 activations pinned to R (automatic or manual replacement);
     - whether a given confirmation is voided;
-  - the v37 post-check PASS (phase P);
-  - the old Render service clarified: which database it uses (phase 1, b).
+  - the v37 post-check PASS (phase P): closed, by the owner's statement (C100);
+  - the old Render service clarified (phase 1, b): closed (C100). It runs on Supabase, is inactive and is no longer
+    deployed; it stays inactive during and after the deploy of v39 and v40.
 - **Green zone:**
-  - a separate discovery delta document, as the proposed contract (J5);
+  - a separate discovery delta document, as the proposed contract (J5); accepted on 2026-10-27 (C100);
   - after the owner's decision, the implementation: v39 with database actor guards (C76), its rollback, and the
-    read-only preflight and post-check scripts;
+    read-only preflight and post-check scripts; and v40, Q10 part B, as its own migration with its own rollback,
+    preflight and post-check (R5 of C100);
   - the M1 / M2 / v35 / M3-0 / M2b suites no longer switch off the v37 T2b triggers but write the real way.
 - **Acceptance:**
   - the rollback is rehearsed (apply → rollback → identical catalog → re-apply);
@@ -531,8 +564,10 @@ order covers is merged under it.
   - none of the nine seeded fields changed;
   - tests on PostgreSQL 16 and, where possible, 17.
 - **Reviewers:** `db-reviewer`, `security-reviewer`, `code-reviewer`, and the external review (triggers 1, 2 and 4).
-- **Red zone:** the production preflight, merge (and so deploy and migration), and the production post-check of v39.
-- **★★:** the owner approves the contract (J5) before any code and confirms the external review before the merge.
+- **Red zone:** the production preflight, merge (and so deploy and migration), and the production post-check of v39
+  and v40.
+- **★★:** the owner approves the contract (J5) before any code (accepted on 2026-10-27, C100) and confirms the external
+  review before the merge.
 
 ### Phase 5: the zone model (C89)
 - An owner decision only; the executor prepares the variants.
@@ -750,9 +785,9 @@ Each one is a plan change, so the owner schedules it:
 - `POST /events` takes its lock before the visibility check (`trainingLoadMetricsMeasurements.js`, LOW);
 - Q10, `TEXT_FORBIDDEN` and `source_metric_text_ok`:
   - part A, the services and the frontend, is done (PR #229, `a1bb932`, no migration);
-  - part B, the database twins `source_metric_text_ok` and `source_metric_unit_token_ok`, goes into v39 (phase 4)
-    as its own part. That is the *Rukovodilac*'s decision of 2026-10-27, recorded in J3b.9 of the discovery
-    document; the owner approves it with the phase 4 contract;
+  - part B, the database twins `source_metric_text_ok` and `source_metric_unit_token_ok`, is its own migration, v40,
+    in the phase 4 pull request. The *Rukovodilac*'s R5 of 2026-10-27 replaced J3b.9's "no v40". The owner approved
+    it with the phase 4 contract (O6, C100);
 - the v35 / v36 test hardening;
 - separate database roles.
 
