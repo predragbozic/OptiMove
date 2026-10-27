@@ -1,19 +1,21 @@
 # J5 — v39 and v40: the source-field revision lifecycle (C91) and Q10 part B
 
-**A proposed contract, not accepted.** This is phase 4's discovery delta of `docs/ai/metrics-core-plan.md` (★★):
-the owner approves the contract before any code. It extends `docs/ai/gpexe-metric-variable-mapping-discovery.md`
-(the *discovery document*), whose sections D3, J1, J2 and J4 it builds on; when it is accepted, its decisions are
-written into that document's section C, as R2's were (C99).
+**Accepted on 2026-10-27 (C100 of the discovery document), not implemented.** This is phase 4's discovery delta of
+`docs/ai/metrics-core-plan.md` (★★): the owner approves the contract before any code. It extends
+`docs/ai/gpexe-metric-variable-mapping-discovery.md` (the *discovery document*), whose sections D3, J1, J2 and J4 it
+builds on; its decisions are written into that document's section C as C100, as R2's were (C99). The owner's answers
+to O1–O9 are the *Rukovodilac*'s reading of the owner's words (C100); the owner's own word on the merge of the pull
+request that records them confirms it.
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-27, on the *Rukovodilac*'s order of that day; revised the same day after two rounds of internal reviews (`code-reviewer`, `db-reviewer`, `security-reviewer`) and the *Rukovodilac*'s R5 decision (two migration files); then reviewed by the *Rukovodilac* and the *Nezavisni revizor* at `93f22d3` (no BLOCKER, HIGH or MEDIUM), with their notes and the *Rukovodilac*'s R decisions applied. O1–O8 are not answered. Not accepted. No code, migration or data change. |
+| Status | Proposed by the executor on 2026-10-27, on the *Rukovodilac*'s order of that day; revised the same day after two rounds of internal reviews (`code-reviewer`, `db-reviewer`, `security-reviewer`) and the *Rukovodilac*'s R5 decision (two migration files); then reviewed by the *Rukovodilac* and the *Nezavisni revizor* at `93f22d3` (no BLOCKER, HIGH or MEDIUM), with their notes and the *Rukovodilac*'s R decisions applied. Accepted on 2026-10-27: O1–O9 as proposed (C100, the *Rukovodilac*'s reading of the owner's words) and R1–R7 as decided. Not implemented: no code, migration or data change. |
 | Verified against commit | `fdc2c2e` (merge of PR #237). Every file and line reference below is to that commit. |
 | Decides | The owner: the questions marked **[OWNER]** (red zone). The *Rukovodilac*: the questions marked **[RUKOVODILAC]** (inside the plan). |
 | Reviewers of this document | The *Rukovodilac* and the *Nezavisni revizor* (★★), `code-reviewer`; `db-reviewer` for J5.2's transactions, J5.3 and J5.4; `security-reviewer` for the access, actor and cross-owner parts. |
 
 **Gates before the implementation** (plan, phase 4 "Input"):
-1. the owner's answers to O1–O8 (J5.6);
+1. the owner's answers to O1–O9 (J5.6): given on 2026-10-27, as the *Rukovodilac* reads them (C100);
 2. the v37 production post-check passed (phase P; not recorded yet);
 3. the old Render service clarified: which database it uses (phase 1, b);
 4. the plan names both migrations: phase 4's gate line "migrations v39 and v40" and section 6 (part B in v40). In this
@@ -221,7 +223,7 @@ Versions created on R+1 before L4 (allowed today: a draft revision with a proven
   `source_metric_revisions_guard`. Besides the two acts it allows exactly:
   - an INSERT of a `draft` whose `created_by_user_id` is the acting user (the v35 setting), an active platform admin
     (`42501` otherwise);
-  - **the seed exception (R4):** `tg_op = 'INSERT' and new.seed_migration is not null and new.created_by_user_id is
+  - **the seed exception (O9):** `tg_op = 'INSERT' and new.seed_migration is not null and new.created_by_user_id is
     null`. That branch reads no actor and leaves the row to v34's seed window, which refuses every marker once its
     migration is recorded. This **widens v37**, which refused a seed too; it restores v34's behaviour, not v37's.
     Today the branch is inert: v34's window refuses every marker;
@@ -299,9 +301,13 @@ v39 i v40“). The owner approves part B with this contract (O6).
   in its own transaction and stops at the first failure (`backend/src/migrate.js:780-800`), so the raise rolls back
   v40 only: v39 stays applied, the runner aborts, and the server does not start (`npm start` runs the migration step
   first). That is why the preflight must show 0 before the merge, and is run right before the merge and deploy
-  (not earlier in the day). If the `DO` block refuses anyway, the recovery is a commit that removes the v40 file
-  (never recorded, since it rolled back) and a redeploy; v39 stays applied, and the refused row is then an owner
-  decision as below. A count above 0 in an append-only column (T6, T8,
+  (the same day, after the last admin write). The v40 runbook states the rest:
+  - the runner stops at the first failure, and the server does not start while v40 keeps failing;
+  - the recovery if the `DO` block refuses anyway is either (a) a commit that removes the v40 file, then a redeploy:
+    v39 stays applied, and the column is decided afterwards; or (b) if the refused row is in a column that is not
+    append-only, the owner's order to correct that row, then a redeploy of the same code;
+  - v40's rollback script is only for a v40 that is recorded: a refused v40 is never recorded (its transaction rolls
+    back), so there is nothing to roll back. A count above 0 in an append-only column (T6, T8,
   `metric_variable_requests`) cannot be corrected by an update: it is a new owner decision (exempt that column, or
   loosen part B), never something the migration resolves. A CHECK is not re-validated when its function is
   replaced, so without the `DO` block a refused row would stay and could no longer be updated; a later `pg_dump`
@@ -375,7 +381,8 @@ v39 i v40“). The owner approves part B with this contract (O6).
 - Access, the identical 404 and the request record are tested as in J1 and J4, for L1-L5: a club admin, a platform
   admin in a club workspace, a coach, a user without a role and an anonymous request, each with valid JSON, a non-JSON
   body and a malformed id.
-- The SQL lists and the preflight's copy are tested for parity with `metricTextRules.js` on every code point.
+- The SQL lists and the preflight's copy are tested for parity with `metricTextRules.js` on every code point, in the
+  v40 suite (the M1 suite's databases stop at v34, so its test 4 never sees v40).
 - The preflight block is run on a disposable copy that holds a row of each listed column, and the migration's `DO`
   block refuses that copy.
 - The tests run on PostgreSQL 16 and, where possible, 17.
@@ -384,7 +391,9 @@ v39 i v40“). The owner approves part B with this contract (O6).
 
 ## J5.6 Questions
 
-**[OWNER] — red zone, before any code:**
+**[OWNER] — red zone, answered on 2026-10-27 (C100): every question as proposed.** That is the *Rukovodilac*'s
+reading of the owner's words (C100). So each *Proposed* below is the decision; no *Alternative* is taken. O7 is
+(i) yes, (ii)(a) and (iii) no notice in v39; O8 is "not required".
 - **O1, who.** Who may create, activate, retire and replace a revision.
   - *Proposed:* an active platform admin in the platform workspace, as for M2b's acts (C94). Never a club admin.
 - **O2, what R+1 needs to replace R (L4).**
@@ -443,23 +452,25 @@ v39 i v40“). The owner approves part B with this contract (O6).
   - *Proposed:* not required in v39: with one platform admin it would stop the lifecycle. Every act stays
     attributed.
   - *Alternative:* the activator (L3, L4) is neither the unit nor the meaning verifier of that revision.
+- **O9, the seed exception** (moved from R4 to the owner by the *Rukovodilac* on 2026-10-27, after the *Nezavisni
+  revizor*'s LOW-1: it widens a database authorization guard against v37).
+  - *Proposed:* the exception of J5.3 as written (a seed migration's INSERT, with no acting user, inside v34's seed
+    window). Every future seeding migration needs its own owner order that names it; this is the rule for every
+    migration (plan, section 2), stated here explicitly. The exception is inert until such a migration replaces
+    `source_metric_require_seed_window`. `security-reviewer` confirmed the predicate in round 2.
 
 **[RUKOVODILAC] — inside the plan.** Decided by the *Rukovodilac* on 2026-10-27 (its review `425977cd` of this
-contract): R1, R2, R3, R4, R6 and R7 as below; R5 as recorded. They go into section C with the owner's answers.
+contract): R1, R2, R3, R6 and R7 as below; R5 as recorded; R4 moved to the owner as O9. They are in C100 with the
+owner's answers.
 - **R1 — decided:** L4 is one route and one transaction, as D3 describes (not two steps with a pending state).
 - **R2 — decided:** a starting status `documented` or `observed` with a reference is allowed at creation, as the
-  seeds carry `observed`; `unproven` is the default. Under O2 the starting status gates nothing; only `verified`
+  seeds carry `observed`; the L1 route's default, for a body without `evidenceStatus`, is `unproven` (the column has
+  no default, v34 lines 402-404). Under O2 the starting status gates nothing; only `verified`
   does, and the database derives it.
 - **R3 — decided as proposed:** the response shapes (J4's revision shape plus `disabledVersions`), the codes and
   their order. The order follows J1 and J5.2: right, path, body keys, request record, locks, the right again, then
   the states.
-- **R4 — decided as proposed:** a future seeding migration stays v34's seed window, with no acting user; v39 restores
-  v34's behaviour with the exception of J5.3, which widens v37 (an authorization exception: `security-reviewer`
-  confirmed that predicate in round 2). The exception is inert until a seeding migration replaces
-  `source_metric_require_seed_window`, and every migration needs the owner's order that names it (plan, section 2),
-  so no seed is written without the owner. The *Nezavisni revizor* (2026-10-27, LOW) asked whether R4, as a widening
-  of a database authorization guard, belongs to the owner instead; that is for the *Rukovodilac* to put to the owner
-  or not.
+- **R4 — moved to the owner as O9** (the *Rukovodilac*, 2026-10-27).
 - **R5 — decided (the *Rukovodilac*, 2026-10-27, replacing J3b.9's "no v40"):** two migration files in the phase 4
   pull request: v39 the lifecycle, v40 Q10 part B, each with its own rollback, preflight and post-check. The
   reason is `security-reviewer`'s, from round 1. With one file, once the lifecycle had written a revision the

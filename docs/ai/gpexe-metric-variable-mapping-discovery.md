@@ -906,9 +906,60 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
       - Q10: **not in R2.** The known gap of the invisible-character list is closed by a separate small PR
         (the *Rukovodilac* recommends it before phase 2c); until then it is an accepted risk (J3b.4.5). Built in
         two parts: part A, PR #229, closes it in the services and the frontend (J3b.9); part B, the database twins,
-        goes into v39.
+        goes into v39 (its own migration, v40, since R5 of C100).
       - Q11: no write quota for coaches (as C68).
     - **Numbering:** R2 is v38, the revision lifecycle v39 (recorded in the plan by PR #226).
+100. **The source-field revision lifecycle (C91) and Q10 part B: migrations v39 and v40** (the contract is J5,
+    `docs/ai/v39-revision-lifecycle-contract.md`; not implemented yet).
+    - **The owner's words** (in the *Rukovodilac*'s chat, owner turn `e59003dd`, 2026-10-27 14:33:31 UTC, checked by
+      the executor), verbatim, with its quotation marks as typed: „Odobravam merge PR #238.“ O1–O9 (dovoljno „sve po
+      preporuci“).”
+    - **How they are read.** The message repeats the wording the *Rukovodilac* had proposed to the owner.
+      - The *Rukovodilac* reads it as the owner's answer "everything as recommended" to all of O1–O9 (its message
+        `c6f5ecb7`, 14:34:14 UTC). It asked the owner to name any question he meant otherwise (its message of
+        14:34:25 UTC).
+      - That reading is the *Rukovodilac*'s, not the owner's own words. The owner's own word on the merge of the pull
+        request that records it confirms it (PR #240, in the executor's chat or by merging it himself).
+      - The message's first sentence does not approve PR #238's merge. A "Never by relay" merge is approved only in
+        the executor's chat, or by the owner merging it himself (plan, section 2).
+    - **The owner's answers** (J5.6), each the contract's proposal:
+      - O1: an active platform admin in the platform workspace creates, activates, retires and replaces a revision;
+        never a club admin.
+      - O2: if the active revision R is `verified`, its replacement R+1 must be `verified` (L4); no other
+        comparison, a service rule only.
+      - O3: an active revision may be retired with no successor (L5), with a reason. L3 may then activate an
+        unverified revision, which is safe: no mapping version becomes `active` on a revision that is not
+        `verified`.
+      - O4: retiring a revision (L2, L4, L5) disables every `needs_review` mapping version pinned to it,
+        automatically, with a fixed reason. Drafts stay drafts. An `active` version or an open activation is refused
+        until phase 7.
+      - O5: no separate "void" act; a wrong confirmation is corrected by L4 or the field is stopped by L5. L5 never
+        depends on phase 7's routes: phase 7 extends the pinned step in the same release.
+      - O6: Q10 part B as migration v40 (J5.4).
+      - O7: (i) the automatic disable reaches club-owned `needs_review` versions, and the answers carry counts
+        only. (ii)(a) a pinned version of an archived club is `409 club_archived`, naming those clubs' ids to the
+        platform admin, until the club is restored. (iii) no notification to the club's admins in v39.
+      - O8: no separation-of-duties rule in v39; every act stays attributed.
+      - O9: the seed exception of J5.3 as written. Every future seeding migration needs its own owner order that
+        names it.
+    - **The *Rukovodilac*'s decisions** (J5.6; its review `425977cd` and its R5 decision):
+      - R1: L4 is one route and one transaction.
+      - R2: a starting status `documented` or `observed` with a reference is allowed; the L1 route's default is
+        `unproven`.
+      - R3: the response shapes, codes and order as proposed.
+      - R4: moved to the owner as O9.
+      - R5: two migration files in the phase 4 pull request, v39 (the lifecycle) and v40 (Q10 part B), each with its
+        own rollback, preflight and post-check (replacing J3b.9's "no v40").
+      - R6: the lifecycle's frontend stays phase 6.
+      - R7: L1 refuses a 21st revision of a field (`409 revision_limit`) until the revision reads are paged, in a
+        separate small pull request.
+    - **Still open before the implementation** (J5, gates 2–4):
+      - the v37 production post-check;
+      - which database the old Render service uses;
+      - the plan naming both migrations.
+
+      The merge, its migrations v39 and v40 and their production pre- and post-checks each need the owner's order
+      that names them.
 
 ---
 
