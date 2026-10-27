@@ -80,8 +80,23 @@ export function variablesContext(user = state.currentUser) {
   if (!ws) return null;
   if (ws.type === "platform") return { owner: "system", clubId: null, clubName: "", view: "admin" };
   if (ws.type === "club" && ws.scopeId) return { owner: "club", clubId: String(ws.scopeId), clubName: ws.label || "", view: "admin" };
-  if (ws.type === "team" && ws.scopeId && ws.clubId) return { owner: "club", clubId: String(ws.clubId), clubName: "", view: "coach", teamName: ws.label || "" };
+  if (ws.type === "team" && ws.scopeId && ws.clubId) {
+    const clubId = String(ws.clubId);
+    return { owner: "club", clubId, clubName: "", view: "coach", teamName: ws.label || "", basis: teamBasis(user, clubId) };
+  }
   return null;
+}
+// The basis the server writes for this user's changes in a team workspace
+// (J3b.3: the strongest role the user holds there - platform admin, then the
+// club's admin, then the team's coach), from the same facts /me gives: a
+// platform workspace, or this club's own workspace. It decides only what the
+// archive form promises about a later restore (Q8); null when /me does not say.
+function teamBasis(user, clubId) {
+  const available = user?.availableWorkspaces;
+  if (!Array.isArray(available)) return null;
+  if (available.some((w) => w?.type === "platform")) return "platform_admin";
+  if (available.some((w) => w?.type === "club" && String(w.scopeId || "") === clubId)) return "club_admin";
+  return "team_coach";
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +205,8 @@ const CODE_TEXT = {
 const MODE_TEXT = {
   rename: {
     variable_not_active: "This variable is archived now, so it cannot be renamed. Nothing was saved.",
-    variable_pinned: "An active mapping uses this variable, so only an administrator can rename it now. Nothing was saved.",
+    // Only a coach is refused this (J3b.2).
+    variable_pinned: "A data source is now mapped to this variable (an active mapping), so only an administrator of the club can rename it. Nothing was saved.",
   },
   archive: {
     variable_not_active: "This variable is already archived.",
@@ -282,14 +298,17 @@ export const CHANGE_MODES = Object.freeze(["rename", "archive", "restore"]);
 
 // The names a rename edits. A name the form cannot show exactly as it is saved
 // is "locked": read only, and never sent, until the coach chooses to replace
-// it. That is one the read cut at its limit ("cut": `truncated` says that some
-// text was cut, not which, so every name at its limit counts) or one that is
-// not a single line ("lines": legacy text a field would show changed).
+// it. Why, in this order: the read may have cut it at its limit ("cut":
+// `truncated` says that some text was cut, not which, so every name at its
+// limit counts), it holds a line break ("lines"), or spacing a field would tidy
+// ("spaces": a double space, a space at an end, a non-breaking space).
 export const NAME_FIELDS = Object.freeze(["label", "shortLabel", "description"]);
+const LINE_BREAK = /[\n\r\v\f\u0085\u2028\u2029]/;
 function nameLock(value, field, truncated) {
   if (!value) return false;
-  if (value !== oneLine(value)) return "lines";
-  return truncated && [...value].length >= LIMITS[field] ? "cut" : false;
+  if (truncated && [...value].length >= LIMITS[field]) return "cut";
+  if (LINE_BREAK.test(value)) return "lines";
+  return value !== oneLine(value) ? "spaces" : false;
 }
 function readNames(variable) {
   const names = {};
@@ -400,8 +419,9 @@ function buildChangeRequest(form) {
 // from the text shown, as one line; saving replaces the whole saved text.
 export function replaceName(form, field) {
   if (form?.mode !== "rename" || !form.locked?.[field]) return false;
+  // Why it was locked stays known, so the field can say what replacing loses.
+  form.replacing[field] = form.locked[field];
   form.locked[field] = false;
-  form.replacing[field] = true;
   form.draft[field] = oneLine(form.original[field]);
   return true;
 }
@@ -421,13 +441,15 @@ export function rebaseRename(form, current) {
     if (edited) {
       // The coach's text stays and replaces whatever is saved now.
       form.locked[field] = false;
-      form.replacing[field] = Boolean(read.locked[field]);
+      form.replacing[field] = read.locked[field] || false;
     } else {
       form.locked[field] = read.locked[field];
       form.replacing[field] = false;
       form.draft[field] = read.names[field];
     }
-    if (read.names[field] !== form.original[field]) conflict[field] = { now: read.names[field], edited };
+    if (read.names[field] !== form.original[field]) {
+      conflict[field] = { now: read.names[field], edited, same: edited && oneLine(form.draft[field]) === oneLine(read.names[field]) };
+    }
   }
   form.original = read.names;
   form.labelsToken = current.labelsToken;

@@ -112,7 +112,7 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 test("a team workspace of a club is offered the screen in the coach's view; a team without a club is not", () => {
   assert.ok(renderTrainingLoadCoachHtml().includes('data-section="variables"'));
-  assert.deepEqual(variablesContext(), { owner: "club", clubId: CLUB, clubName: "", view: "coach", teamName: "First team" });
+  assert.deepEqual(variablesContext(), { owner: "club", clubId: CLUB, clubName: "", view: "coach", teamName: "First team", basis: null });
   // C99: a team workspace is offered the Variables view only, never Source
   // fields or Mappings.
   const space = renderTrainingLoadCoachHtml();
@@ -128,10 +128,13 @@ test("a team workspace of a club is offered the screen in the coach's view; a te
 test("coach: the list says what a coach may do, offers This club and System (reference), and no New variable", async () => {
   await loadVariablesSection(render);
   assert.deepEqual(gets(), [`${BASE}?scope=own&state=active`]);
-  assert.match(text(), /Variables of this team's club\. As a coach of the team you can rename, archive and restore them/);
+  assert.match(text(), /Variables of this team's club, shared by all its teams\. As a coach of the team you can rename, archive and restore them/);
   assert.ok(!$('[data-action="metric-variables-create-open"]'), "a coach never creates");
   assert.equal(content.querySelectorAll('[data-action="metric-variables-scope"]').length, 2);
   assert.match(text(), /Total distance \(TotDist\)/);
+  assert.match(text(), /shared by all its teams\. As a coach of the team you can rename, archive and restore them; each change applies to every team of the club\./);
+  await click('[data-action="metric-variables-scope"][data-scope="system"]');
+  assert.match(text(), /System variables, for reference: shared by all clubs and changed only by a platform administrator\./);
   current = reduced();
   respond = (call) => (call.url.startsWith(`${BASE}?`) ? { status: 200, body: { variables: [], nextCursor: null } } : { status: 404, body: { error: "notFound" } });
   resetVariables();
@@ -154,10 +157,12 @@ test("coach: a variable reads in the reduced view - names and description, the a
 
 test("the buttons and their notes follow the server's actions only", async () => {
   const cases = [
-    [{ actions: [] }, [], /An active mapping uses this variable, so it cannot be archived or renamed here now\./],
-    [{ state: "archived", actions: ["restore"] }, ["Restore"], /Archived: kept with its values and its history/],
+    [{ actions: [] }, [], /A data source is mapped to this variable \(an active mapping\), so it cannot be archived now, and only an administrator of the club can rename it\./],
+    // A club admin working in a team workspace (basis club_admin) keeps Rename on a pinned variable.
+    [{ actions: ["rename"] }, ["Rename"], /A data source is mapped to this variable \(an active mapping\), so it cannot be archived now\.(?! and)/],
+    [{ state: "archived", actions: ["restore"] }, ["Restore"], /Archived: kept with its recorded values and its history; no new values can be entered for it until it is restored\./],
     [{ state: "archived", actions: [] }, [], /An administrator archived this variable, so only an administrator can restore it\./],
-    [{ ownerScope: "system", editable: false, actions: [] }, [], /Read only here: system variables are changed in the platform workspace\./],
+    [{ ownerScope: "system", editable: false, actions: [] }, [], /Read only: system variables are shared by all clubs and changed only by a platform administrator\./],
   ];
   for (const [over, expected, note] of cases) {
     resetVariables();
@@ -172,7 +177,7 @@ test("the buttons and their notes follow the server's actions only", async () =>
   current = full({ actions: ["rename"] });
   await openVariable();
   assert.deepEqual(buttons(), ["Rename"]);
-  assert.match(text(), /An active mapping uses this variable, so it cannot be archived now\./);
+  assert.match(text(), /An active mapping uses this variable, so it cannot get a new version or be archived now\./);
   resetVariables();
   current = full();
   await openVariable();
@@ -198,7 +203,7 @@ test("rename: the form starts from the names read; only a changed name is sent, 
   assert.equal($('[data-mv-field="label"]').value, "Total distance");
   assert.equal($('[data-mv-field="shortLabel"]').value, "TotDist");
   assert.equal($('[data-mv-field="description"]').value, "Whole session");
-  assert.match(text(), /Only the names change\. The key, how the variable is measured and every recorded value stay as they are\./);
+  assert.match(text(), /Only the names change, for every team of the club\. The key, how the variable is measured and every recorded value stay as they are\./);
   type("label", "  Total   running distance ");
   type("shortLabel", "");
   await submit();
@@ -245,7 +250,8 @@ test("rename: a name cut at its limit is read only and never sent until the coac
   await click('[data-action="metric-variables-rename-open"]');
   assert.ok(!$('[data-mv-field="description"]'), "no field for the cut description");
   assert.equal($("#mv-locked-description").textContent, `${longDescription}…`);
-  assert.match(text(), /The saved description is longer than the 500 characters shown here\. It stays as it is unless you replace it\./);
+  assert.match(text(), /The saved description may be longer than the 500 characters shown here\. It stays as it is unless you replace it\./);
+  assert.equal($('[data-action="metric-variables-name-replace"]').getAttribute("aria-describedby"), "mv-why-description", "Replace is described by why, never by the whole saved text");
   assert.ok($('[data-mv-field="label"]'), "a name below its limit stays editable");
   // An input event for the locked name (no such field is on the screen) changes nothing that is sent.
   const forged = document.createElement("input");
@@ -263,7 +269,7 @@ test("rename: a name cut at its limit is read only and never sent until the coac
   await click('[data-action="metric-variables-rename-open"]');
   await click('[data-action="metric-variables-name-replace"][data-mv-name="description"]');
   assert.equal($('[data-mv-field="description"]').value, longDescription, "Replace starts from the text shown");
-  assert.match(text(), /Saving replaces the whole saved description with what you type here\./);
+  assert.match(text(), /This field holds only the first 500 characters; the rest of the saved description is not in it\. Saving replaces the whole saved description, the hidden part too, with what you type here\./);
   assert.equal(variablesState().form.dirty, false, "choosing Replace alone changes nothing");
   await submit();
   assert.equal(posts().length, 0, "replaced but unchanged is still not sent");
@@ -304,6 +310,7 @@ test("rename: a saved name on several lines is shown, read only and never sent u
   await click('[data-action="metric-variables-rename-open"]');
   await click('[data-action="metric-variables-name-replace"][data-mv-name="description"]');
   assert.equal($('[data-mv-field="description"]').value, "Line one Line two");
+  assert.match(text(), /The lines are joined into one here\. Saving replaces the whole saved description with what you type here\./);
   assert.equal(content.ownerDocument.activeElement, $('[data-mv-field="description"]'), "the field gets the focus");
   await submit();
   assert.equal(posts().length, 0, "replaced but left as shown is not sent (the saved text stays on its lines)");
@@ -373,7 +380,19 @@ test("variable_changed: a name now saved cut or on several lines is locked again
   type("description", "Mine");
   await submit();
   assert.equal($('[data-mv-field="description"]').value, "Mine", "the coach's change stays editable");
-  assert.match(text(), /Saved now: "Two lines"\. Your text replaces it when you save\. Saving replaces the whole saved description with what you type here\./);
+  assert.match(text(), /Saved now: "Two lines"\. Your text replaces it when you save\. The lines are joined into one here\. Saving replaces the whole saved description with what you type here\./);
+});
+
+test("variable_changed: a name someone saved exactly as the coach typed says so; the explanation gets the focus", async () => {
+  serve((call) => (call.method === "POST" ? { status: 409, body: { error: "variable_changed", current: reduced({ label: "Total running distance", labelsToken: NEW_TOKEN }) } } : { status: 404, body: { error: "notFound" } }));
+  await openVariable();
+  await click('[data-action="metric-variables-rename-open"]');
+  type("label", "Total running  distance");
+  await submit();
+  assert.match(text(), /Saved now: the same as your text\./);
+  assert.doesNotMatch(text(), /Your text replaces it/);
+  assert.equal(content.ownerDocument.activeElement, $(".metric-variables-conflict"));
+  assert.equal($(".metric-variables-conflict").getAttribute("tabindex"), "-1");
 });
 
 test("variable_changed: when the user may no longer rename (no rename in `actions`) or the answer has no `current`, the form closes and the variable is read again", async () => {
@@ -391,6 +410,22 @@ test("variable_changed: when the user may no longer rename (no rename in `action
   }
 });
 
+test("variable_changed, then a lost answer: Close without checking still says the result was not checked", async () => {
+  let answer = { status: 409, body: { error: "variable_changed", current: reduced({ labelsToken: NEW_TOKEN }) } };
+  serve((call) => (call.method === "POST" ? answer : { status: 404, body: { error: "notFound" } }));
+  await openVariable();
+  await click('[data-action="metric-variables-rename-open"]');
+  type("label", "Another");
+  await submit();
+  answer = { throwNetworkError: true };
+  await submit();
+  assert.equal(variablesState().form.unconfirmed, true);
+  const before = gets().length;
+  await click('[data-action="metric-variables-cancel"]');
+  assert.match(text(), /The result was not checked\. The variable below is as it is saved now\./);
+  assert.equal(gets().length, before + 1);
+});
+
 test("variable_changed: Cancel after the conflict reads the variable again", async () => {
   serve((call) => (call.method === "POST" ? { status: 409, body: { error: "variable_changed", current: reduced({ shortLabel: "TD", labelsToken: NEW_TOKEN }) } } : { status: 404, body: { error: "notFound" } }));
   await openVariable();
@@ -406,6 +441,24 @@ test("variable_changed: Cancel after the conflict reads the variable again", asy
   assert.match(text(), /TD/);
 });
 
+test("rename: spacing a field would tidy locks a name with its own reason; a cut name on several lines keeps the ellipsis and the cut reason", async () => {
+  current = reduced({ description: "Two  spaces" });
+  await openVariable();
+  await click('[data-action="metric-variables-rename-open"]');
+  assert.doesNotMatch(text(), /on several lines/);
+  assert.match(text(), /The saved description has spacing the form cannot keep \(such as two spaces in a row\)\. It stays as it is unless you replace it\./);
+  assert.equal($("#mv-locked-description").textContent, "Two  spaces", "shown with its spacing");
+  await click('[data-action="metric-variables-name-replace"][data-mv-name="description"]');
+  assert.match(text(), /The spacing is tidied here\./);
+  resetVariables();
+  const cutLines = `${"x".repeat(250)}\n${"y".repeat(249)}`;
+  current = reduced({ truncated: true, description: cutLines });
+  await openVariable();
+  await click('[data-action="metric-variables-rename-open"]');
+  assert.ok($("#mv-locked-description").textContent.endsWith("…"), "a cut text says so even with a line break");
+  assert.match(text(), /may be longer than the 500 characters shown here/);
+});
+
 // ---------------------------------------------------------------------------
 // Archive and restore
 // ---------------------------------------------------------------------------
@@ -413,8 +466,9 @@ test("archive: a reason is required; the form says what stays and who can restor
   serve((call) => (call.url.endsWith("/archive") ? { status: 200, body: { variable: { ...current, state: "archived", actions: ["restore"] } } } : { status: 404, body: { error: "notFound" } }));
   await openVariable();
   await click('[data-action="metric-variables-archive-open"]');
-  assert.match(text(), /An archived variable gets no new version, and no new mapping can use it\. Its recorded values, its history and the dashboards that show it stay as they are\./);
-  assert.match(text(), /A coach of this club's teams or an administrator can restore it later\./);
+  assert.match(text(), /Archiving affects every team of the club: until it is restored, no new values can be entered for it and it cannot be added to a dashboard\. Values already recorded, its history and the dashboards that already show it stay as they are\./);
+  assert.doesNotMatch(text(), /It also gets no new version/, "the coach is not told about versions and mappings");
+  assert.match(text(), /Archived by a coach, it can be restored by a coach of this club's teams or an administrator; archived by an administrator of the club, only by an administrator\./, "roles unknown: both cases");
   await submit();
   assert.equal(posts().length, 0);
   assert.equal($('[data-mv-field="reason"]').getAttribute("aria-invalid"), "true");
@@ -431,6 +485,26 @@ test("archive: a reason is required; the form says what stays and who can restor
   await openVariable();
   await click('[data-action="metric-variables-archive-open"]');
   assert.match(text(), /Only an administrator can restore it later; a coach cannot\./);
+  assert.match(text(), /It also gets no new version, and no new mapping can use it\./);
+});
+
+test("archive: the restore promise follows the basis the server will write (Q8): a coach alone, the club's admin or a platform admin in a team workspace", async () => {
+  const promise = async (availableWorkspaces) => {
+    asCoach();
+    state.currentUser.availableWorkspaces = availableWorkspaces;
+    resetVariables();
+    await openVariable();
+    await click('[data-action="metric-variables-archive-open"]');
+    return text();
+  };
+  const team = { type: "team", scopeId: TEAM, clubId: CLUB, label: "First team", role: "team_coach" };
+  assert.match(await promise([team]), /A coach of this club's teams or an administrator can restore it later\./);
+  assert.match(await promise([team, { type: "club", scopeId: "33333333-0000-4000-8000-000000000001", label: "Other club", role: "club_admin" }]), /A coach of this club's teams or an administrator can restore it later\./, "another club's admin is a coach here");
+  for (const extra of [{ type: "club", scopeId: CLUB, label: "FK Borac", role: "club_admin" }, { type: "platform", scopeId: null, label: "Platform administration", role: "platform_admin" }]) {
+    const said = await promise([team, extra]);
+    assert.match(said, /Only an administrator can restore it later; a coach cannot\./, extra.type);
+    assert.doesNotMatch(said, /A coach of this club's teams or an administrator can restore it later/, extra.type);
+  }
 });
 
 test("restore: the reason is optional and left out when empty", async () => {
@@ -446,6 +520,7 @@ test("restore: the reason is optional and left out when empty", async () => {
   calls.length = 0;
   await openVariable();
   await click('[data-action="metric-variables-restore-open"]');
+  assert.match(text(), /The variable becomes active again for every team of the club: new values can be entered for it and it can be added to dashboards\./);
   type("reason", "Needed again");
   await submit();
   assert.equal(posts()[0].body.reason, "Needed again");
@@ -458,7 +533,7 @@ const REFUSALS = [
   // Without `current` (the server always sends it; the client does not rely on it).
   ["rename", { error: "variable_changed" }, "close", /Someone changed this variable in the meantime, so your change was not saved\./],
   ["rename", { error: "rename_unchanged" }, "stay", /Nothing changed: these names are the ones already saved\./],
-  ["rename", { error: "variable_pinned" }, "close", /An active mapping uses this variable, so only an administrator can rename it now\./],
+  ["rename", { error: "variable_pinned" }, "close", /A data source is now mapped to this variable \(an active mapping\), so only an administrator of the club can rename it\. Nothing was saved\./],
   ["rename", { error: "variable_not_active" }, "close", /This variable is archived now, so it cannot be renamed\./],
   ["archive", { error: "variable_pinned" }, "close", /An active mapping uses this variable, so it cannot be archived now\./],
   ["archive", { error: "variable_not_active" }, "close", /This variable is already archived\./],

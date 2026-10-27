@@ -168,12 +168,6 @@ export async function handleVariablesAction(action, { render }) {
   if (type === "metric-variables-cancel") {
     const form = s.form;
     if (!leaveForm()) return true;
-    // Someone saved other names meanwhile: the variable behind the form is
-    // read again, so it never shows the names that are no longer saved.
-    if (form?.conflict && form.variableId) {
-      await loadVariable(form.variableId, render);
-      return true;
-    }
     // A save left without a check may still have landed: the list (or the
     // variable) is read again, so the screen never shows it as missing.
     if (form?.unconfirmed) {
@@ -188,6 +182,12 @@ export async function handleVariablesAction(action, { render }) {
         s.list = { ...emptyVariablesState().list };
         await loadVariables(render);
       }
+      return true;
+    }
+    // Someone saved other names meanwhile: the variable behind the form is
+    // read again, so it never shows the names that are no longer saved.
+    if (form?.conflict && form.variableId) {
+      await loadVariable(form.variableId, render);
       return true;
     }
     render();
@@ -424,7 +424,11 @@ function refused(form, info, render, { check = false } = {}) {
   if (info.code === "variable_changed" && rebaseRename(form, info.current)) {
     form.dirty = true;
     render();
-    globalThis.document?.querySelector?.(".metric-variables-conflict")?.scrollIntoView?.({ block: "nearest" });
+    // The Save button that had the focus is gone: the focus goes to the
+    // explanation (not to a field, which would open a phone's keyboard).
+    const box = globalThis.document?.querySelector?.(".metric-variables-conflict");
+    box?.focus?.();
+    box?.scrollIntoView?.({ block: "nearest" });
     return;
   }
   if (info.code === "current_version_changed" || (CHANGE_MODES.includes(form.mode) && CLOSES_CHANGE.has(info.code))) {

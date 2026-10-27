@@ -256,7 +256,7 @@ test("opening a variable shows its facts, versions and Technical details; New ve
     await click('[data-action="metric-variables-open"]');
     assert.ok(!$('[data-action="metric-variables-version-open"]'), `no New version: ${JSON.stringify(over)}`);
   }
-  assert.match(text(), /Archived: kept with its values and its history/);
+  assert.match(text(), /Archived: kept with its recorded values and its history; until it is restored, no new values can be entered for it, it gets no new version and no new mapping can use it\./);
 });
 
 test("a variable that is not available reads as such, with Try again", async () => {

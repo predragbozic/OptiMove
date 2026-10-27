@@ -2584,15 +2584,22 @@ neither view yet. The server decides again on every request (J3b.3).
 
 **The coach's view (Q7).**
 - The list holds the club's variables (*This club* / *System (reference)*). It has no *New variable*.
+- Its texts say that the club's variables are shared by all its teams and that a coach's change applies to every
+  team of the club. The system variables read as shared by all clubs and changed only by a platform administrator.
 - One variable shows its names, description and state. The key, owner and id are under Technical details.
 - No facts and no versions are shown.
 
 **Buttons from the server.** Rename, New version, Archive and Restore are offered only when the variable's
 `actions` name them. A click on an action not in `actions` opens nothing. Where an action is missing, a note
 says why:
-- a system variable in a club workspace is read only;
-- an active mapping uses the variable, so it cannot be archived (or, for a coach, renamed) now;
+- a system variable is read only;
+- an active mapping uses the variable: an administrator reads that it cannot get a new version or be archived
+  now; a coach reads that a data source is mapped to it, so it cannot be archived now and only an administrator
+  of the club can rename it;
 - an administrator archived it, so only an administrator can restore it (Q8).
+
+On a desktop the actions sit at the right of the name; on a phone they fill a grid, and an odd last button takes
+the whole row.
 
 **Rename.**
 - The body is `{ requestKey, labelsToken, ...changed }`.
@@ -2602,27 +2609,45 @@ says why:
 - A saved name the server would refuse today (Q10) stays out of the body while it is untouched.
 
 **Locked names** (the *Rukovodilac*'s remark 2 on the 2c plan, 2026-10-27).
-- A name the form cannot show exactly as saved is read only, with a *Replace* button. That is a name the read
-  cut, or one that is not a single line. `truncated` is one flag for the whole variable, so while it is set
-  every name at its limit counts as cut.
-- A read-only name is never sent until the coach replaces it.
-- *Replace* starts the field from the text shown, as one line, and says that saving replaces the whole saved
-  text. A replaced name left as shown is still not sent.
+- A name the form cannot show exactly as saved is read only, with a *Replace* button and a reason. The reasons,
+  in this order:
+  - the read may have cut it: `truncated` is one flag for the whole variable, so while it is set every name at
+    its limit counts as cut, and the text says it *may* be longer, with a "…";
+  - it holds a line break;
+  - it holds spacing a field would tidy: a double space, a space at an end, a non-breaking space.
+- The saved text is shown with its lines and spacing. *Replace* is described by the reason, not by the whole
+  text.
+- A read-only name is never sent until the coach replaces it, even after an input event for a field that is not
+  on the screen.
+- *Replace* starts the field from the text shown, as one line. A note above the hint says what saving loses for
+  that reason, for a cut name "the hidden part too". A replaced name left as shown is still not sent.
+- The description field takes the whole row of the form.
 
 **`409 variable_changed`** (remark 3). The answer carries `current`: the reduced view with the new token. The
 form stays open on it:
-- a name the coach changed keeps the coach's text; when someone else changed the same name, the field says what
-  is saved now;
+- a name the coach changed keeps the coach's text. When someone else changed the same name, the field says what
+  is saved now, or that it is the same as the coach's text;
 - every other name shows the saved value, read only again when needed;
 - the new token and a new request key are used, and the coach saves again;
-- Cancel then reads the variable again.
+- the focus goes to the explanation (not to a field, so a phone's keyboard does not open);
+- Cancel then reads the variable again. An unconfirmed later save is said first: *Close without checking*
+  still says the result was not checked.
 
 The form closes only when `current` is missing or no longer offers `rename` (for example, a variable now pinned
 for a coach).
 
 **Archive and restore.**
 - An archive needs a reason (Q3); a restore's reason is optional.
-- The archive form says who can restore it. Its text differs for a coach and an administrator (Q8).
+- The archive form says what archiving does for every team of the club (for a system variable, every club),
+  from J3b.1's "What archiving does": no new values can be entered and it cannot be added to a dashboard until
+  it is restored. Values already recorded, its history and the dashboards that already show it stay. An
+  administrator also reads that it gets no new version and no new mapping. The restore form says the reverse.
+- The archive form says who can restore it later (Q8). That depends on the basis the server will write (J3b.3:
+  the strongest role the user holds), which the client reads from the workspaces `/me` lists:
+  - a platform workspace, or this club's workspace: "Only an administrator can restore it later; a coach
+    cannot.";
+  - neither: "A coach of this club's teams or an administrator can restore it later.";
+  - `/me` without that list: both cases are stated.
 
 **Refusals.**
 - `variable_not_active`, `variable_active`, `variable_pinned` and `restore_by_admin` close the form with the
@@ -2638,12 +2663,19 @@ action buttons sit in a grid of columns at least 140 px wide, and the form's but
 **Evidence (before review):**
 - `frontend/tests/metric-variables-r2.actions.test.mjs` (jsdom, a fake fetch) and the updated
   `metric-variables.actions.test.mjs`;
-- 22 frontend mutations, all killed;
+- 34 frontend mutations, all killed;
 - an integration run with the branch's real server in process and the real frontend in Chromium. It ran on a
-  disposable database migrated through v38: a club admin, a coach of one of the club's teams and a coach of
-  another club. It covered rename, archive and restore, Q8, a stale token, a cut and a multi-line description,
-  a Q10 legacy name, a lost answer with *Check result*, and isolation from the other club. It also checked
-  layout at 1280 / 390 / 375 / 360 px: no overflow, 44 px targets, 16 px fields.
+  disposable database migrated through v38. The users were a club admin, a coach of one of the club's teams, the
+  club's admin who also coaches that team (in the team's workspace), and a coach of another club. It covered:
+  - rename, archive and restore, and Q8;
+  - the dual-role user's archive: written with the basis `club_admin`, so the plain coach gets no Restore;
+  - a stale token;
+  - a cut and a multi-line description;
+  - a Q10 legacy name;
+  - a lost answer with *Check result*;
+  - isolation from the other club;
+  - layout at 1280 / 390 / 375 / 360 px: no overflow, 44 px targets, 16 px fields, the actions' placement and the
+    full-row description.
 
 The record is in the pull request. Not checked on a physical device.
 

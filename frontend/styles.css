@@ -18353,7 +18353,9 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 /* What this caller may do with one variable (R2): Rename, New version, Archive, Restore. */
 .metric-variables-head > .metric-variables-actions {
   display: flex;
+  flex: 0 1 auto;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 .metric-variables .plain-button {
@@ -18562,8 +18564,19 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   border: 1px dashed var(--line-strong);
   border-radius: var(--radius);
   background: var(--surface-soft);
-  white-space: pre-line;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+/* The description takes the whole row of the names grid. */
+.metric-variables-grid > .metric-variables-wide {
+  grid-column: 1 / -1;
+}
+/* What the coach must not miss under a field: what replacing loses, a name
+   saved meanwhile. Larger and plainer than the ordinary hint. */
+.metric-variables-form .search-field > span.metric-variables-field-note {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 400;
 }
 .metric-variables-locked > .plain-button {
   justify-self: start;
@@ -18606,6 +18619,10 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   .metric-variables-locked > .plain-button {
     width: 100%;
     justify-content: center;
+  }
+  /* An odd last action takes the whole row instead of half of it. */
+  .metric-variables-actions .plain-button:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
   }
   .metric-variables-grid,
   .metric-variables-facts {
