@@ -73,8 +73,8 @@ So:
   still carries no conclusion of the *Rukovodilac* (the table above);
 - the owner is contacted through the *Rukovodilac*, for „krupne stvari” (the big things).
 
-No gate of this plan changes: the red zone of section 2, and the owner's short report after every phase, stay as
-written.
+No gate of this plan changes: the red zone of section 2, "Never by relay" (approvals given directly in the executor's
+chat) and the owner's short report after every phase stay as written.
 
 ## 2. Green zone, red zone and the owner's words
 
