@@ -416,6 +416,7 @@ export async function listVariables({ ctx, query }) {
 // GET /variables/key-suggestion?label=: the key the name suggests and whether
 // a variable of this workspace's owner already holds it (any state).
 export async function suggestKey({ ctx, query }) {
+  adminOnly(ctx);
   const q = singleQuery(query, ["label"]);
   if (!boundedText(q.label, TEXT_LIMITS.label)) throw refusal(400, "invalid_query", "label is one line of 1-80 visible characters without surrounding spaces.");
   const key = suggestVariableKey(q.label);
@@ -501,6 +502,13 @@ export function classifyVariableError(error) {
   return null;
 }
 
+// The admin-only operations (create, a new version, the key suggestion) never
+// run for a team workspace: their routes resolve the admin context, which has
+// none; this repeats it here (defence in depth).
+function adminOnly(ctx) {
+  if (isCoachView(ctx) || ctx.basis === "team_coach") throw NOT_FOUND();
+}
+
 // A write's answer and a replay: the variable only when this workspace may
 // write it (the record's owner is the workspace's owner).
 async function writableVariable(executor, ctx, record) {
@@ -546,6 +554,7 @@ export function setVariableWriteHoldForTests(fn) { writeHold = fn ?? null; }
 // POST /variables - a canonical variable: the definition, its version 1 and
 // its levels, in the workspace's owner scope, in one transaction.
 export async function createVariable({ ctx, body }) {
+  adminOnly(ctx);
   plainObject(body,
     ["requestKey", "label", "shortLabel", "description", "key", "unit", "levels", "dailyAggregationMethod", "minValue", "maxValue", "condition"],
     ["requestKey", "label", "unit", "levels", "dailyAggregationMethod"]);
@@ -609,6 +618,7 @@ export async function createVariable({ ctx, body }) {
 // the caller saw (expectedCurrentVersionId, a precondition - not the request's
 // identity). Key, owner and levels never change here.
 export async function createVariableVersion({ ctx, variableId, body }) {
+  adminOnly(ctx);
   if (typeof variableId !== "string" || !UUID.test(variableId)) throw NOT_FOUND();
   plainObject(body,
     ["requestKey", "expectedCurrentVersionId", "unit", "dailyAggregationMethod", "minValue", "maxValue", "condition", "reason"],
@@ -716,6 +726,19 @@ export async function resolveVariableEditor(req) {
   return { userId, basis, owner: { scope: "club", clubId: String(row.club_id) }, view: "coach", ...(basis === "team_coach" ? { teamId } : {}) };
 }
 
+// v38's request guard derives the basis again when the request row is written.
+// A stronger role granted after the rights were checked makes it differ from
+// the basis this request writes: exactly that refusal is the request to repeat
+// (J3b.2, try_again); every other database refusal stays a sanitized 500.
+const BASIS_CHANGED = "metric variable request: the basis is not the acting user's own";
+function classifyChangeError(error) {
+  if (!(error instanceof SourceMetricMappingError) && error?.code === "42501" && error.message === BASIS_CHANGED) {
+    console.error("[metric-variables] try_again (basis changed)");
+    return refusal(409, "try_again", MESSAGES.try_again);
+  }
+  return classifyVariableError(error);
+}
+
 // One R2 write (J3b.5): the definition read unlocked first (not this caller's:
 // the identical 404, so a refused caller never waits for its lock), then FOR
 // UPDATE, then the rights FOR SHARE - lost: the identical 404, before any
@@ -726,7 +749,7 @@ async function runChange({ ctx, variableId, operation, requestKey, requestHash, 
   const id = variableId.toLowerCase();
   return runWrite({
     ctx, where: operation, requestKey, requestHash, action: operation,
-    requests: VARIABLE_REQUESTS, classify: classifyVariableError, idsOf: variableIdsOf,
+    requests: VARIABLE_REQUESTS, classify: classifyChangeError, idsOf: variableIdsOf,
     reread: async (executor, record) => {
       const variable = await writableVariable(executor, ctx, record);
       return variable ? { variable } : null;

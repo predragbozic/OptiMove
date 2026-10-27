@@ -2438,8 +2438,38 @@ covers the following.
   - `source-metric-mapping-m1.test.mjs:960` and `:1341` are not affected: that suite's databases stop at v34.
   - No other test or production code changes a canonical definition's names, state or key (searched).
 - **The dashboards.** R2 changes no dashboard code, and `trainingLoadDashboardQuery.js` never reads a definition's
-  state at query time (its header, lines 34–36). So "a bound series keeps reading after an archive" holds
-  unchanged. The R2 suite does not test it separately.
+  state at query time (its header, lines 34–36). Test 16 binds a series, enters a value, archives through R2 and
+  reads the same value again.
+- **An archive against a value entry.** Test 9 pauses a real `/events` entry after it locked the definition (another
+  session holds `metric_events`, which the entry writes next). The archive waits for the entry's COMMIT, and the
+  value stays. The entry locks the definition twice: `FOR SHARE` around its state check, then `FOR KEY SHARE`.
+  Either lock alone makes the archive wait in that test, so removing only the first one is not distinguishable
+  there. That would need a pause between the two statements, which no seam provides.
+- **Q3 in the database.** The CHECK `metric_variable_requests_archive_reason` requires an archive's reason, besides
+  the service.
+- **A stronger role granted after the rights check.** The service's probes lock only the rows they find. A grant
+  committed between the probes and the request row therefore makes the request guard derive the stronger basis,
+  and refuse (`42501`, "the basis is not the acting user's own"). The R2 writes answer exactly that refusal
+  `409 try_again`, as J3b.2 says (`classifyChangeError()`). M3-0's create and version keep v35's documented
+  sanitized `500` for the same window.
+- **A platform admin in a team workspace** (Q6). A platform admin who coaches team T writes club X's variables
+  through T's team workspace with the basis `platform_admin`. A platform admin is offered a club workspace only with
+  a `club_admin` role there, so "the admin could act from the club workspace" (J3b.3) is not literally true for
+  them. The effect is the same: the database derives `platform_admin` for any active club, a right they already
+  hold.
+- **The admin-only operations** (create, a new version, the key suggestion) refuse a team workspace's context in the
+  service too (`adminOnly()`), besides their routes' admin context.
+- **`seq` is `generated always as identity (cache 1)`.** The cache of 1 (the default, written out) keeps "a later
+  change has a larger `seq`" true across sessions.
+- **J3b.4.5's advice for a future migration is corrected.** A migration that changes a canonical definition's names
+  or state must disable `metric_definitions_v38_record_change` inside itself and enable it again. Setting the
+  acting user is not enough: the change row it would write has no request row, and the COMMIT refuses it.
+- **Known limits.**
+  - Both tables keep their free text for good (old and new names, a request's reason): nothing deletes or rewrites
+    a row.
+  - Coaches have no write quota (Q11).
+  - Like v36, the tables have no row-level security. That is sound while the `training_load` schema is not
+    exposed through Supabase's Data API, which this pull request does not verify.
 - **The rollback** also locks `metric_definitions`, whose two v38 triggers it drops.
 - **A dump and restore reads v38 back the same** (what `backend/scripts/gpexe-backup-verify.mjs` compares). The
   change trigger's `WHEN` compares the four columns one by one, not as a row, and `owner_scope::text`, not the varchar
@@ -2448,7 +2478,9 @@ covers the following.
   database and compares every trigger, constraint and function v38 adds or gates.
 
 **Mutations.** The record is in the R2 pull request. Every guard of J3b.3 and J3b.4 has a mutation that a test kills,
-except the redundant checks named there: a check whose removal another guard of the same chain still catches.
+except redundant checks: a check whose removal another guard of the same chain still catches. These are the R2
+guard's checks of the change row's owner, transaction, xmin and author and of the definition's xmin, and the value
+entry's first lock (above).
 
 ### J4. M2b — the source-field evidence confirmation and its database guards v37 (as built)
 

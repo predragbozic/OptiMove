@@ -11,11 +11,11 @@
 -- these tables; and the owner approved this database specifically
 -- (.claude/rules/database-safety.md).
 --
--- v38 adds one table (training_load.metric_variable_changes), four columns,
--- six constraints and one index of training_load.metric_variable_requests,
--- seven functions and eight triggers; it widens two checks of the request
--- table, makes its version column nullable and gates v36's insert trigger by
--- operation. It changes no data. This script reverses exactly that and
+-- v38 adds one table (training_load.metric_variable_changes), three columns,
+-- nine constraints (seven checks and uniques, two foreign keys) and one index
+-- of training_load.metric_variable_requests, seven functions and seven
+-- triggers; it widens two checks of the request table, makes its version
+-- column nullable and gates v36's insert trigger by operation. It changes no data. This script reverses exactly that and
 -- removes the v38 record. It refuses, changing nothing, when
 --   * v38 is not recorded on the database;
 --   * any migrations_v2 migration newer than v38 is recorded;
@@ -119,6 +119,7 @@ alter table training_load.metric_variable_requests
   drop constraint metric_variable_requests_team_iff,
   drop constraint metric_variable_requests_team_coach_shape,
   drop constraint metric_variable_requests_reason_check,
+  drop constraint metric_variable_requests_archive_reason,
   drop column reason,
   drop column metric_variable_change_id,
   drop column basis_team_id,

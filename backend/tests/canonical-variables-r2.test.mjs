@@ -400,7 +400,7 @@ test("1. migration v38 on v37: one table, four request columns (the version null
       post38.deferred_links, post38.v36_guard_gated, post38.r2_guard_gated, post38.missing_triggers, post38.v38_indexes, post38.v38_indexes_valid,
       post38.v36_names, post38.v38_names, post38.operation_widened, post38.basis_widened, post38.change_rows, post38.r2_request_rows, post38.coach_rows,
       post38.actor_defaults],
-    ["1", true, "0", V38_NAME, "1", true, 1, "3", "YES", "7", [], "8", "8", "1", true, true, [], "6", "6", "13", "8", true, true, "0", "0", "0", "0"],
+    ["1", true, "0", V38_NAME, "1", true, 1, "3", "YES", "7", [], "8", "8", "1", true, true, [], "6", "6", "13", "9", true, true, "0", "0", "0", "0"],
   );
   const after38 = await catalog(r);
   assert.ok(after38.migrations.includes(V38_NAME));
@@ -415,7 +415,7 @@ test("1. migration v38 on v37: one table, four request columns (the version null
     after38.columns.filter((x) => !["metric_variable_requests", "metric_variable_changes"].includes(x.table_name)), "no other column changed");
   const conKey = (x) => `${x.rel}.${x.conname}`;
   assert.deepEqual(added(after38.constraints, before37.constraints, conKey).filter((x) => x.rel.endsWith("metric_variable_requests")).map((x) => x.conname).sort(), [
-    "metric_variable_requests_basis_team_id_fkey", "metric_variable_requests_change_iff", "metric_variable_requests_metric_variable_change_id_fkey",
+    "metric_variable_requests_archive_reason", "metric_variable_requests_basis_team_id_fkey", "metric_variable_requests_change_iff", "metric_variable_requests_metric_variable_change_id_fkey",
     "metric_variable_requests_one_per_change", "metric_variable_requests_reason_check", "metric_variable_requests_team_coach_shape",
     "metric_variable_requests_team_iff", "metric_variable_requests_version_iff",
   ]);
@@ -523,6 +523,28 @@ test("2. who may do what: the platform admin on a system variable, the club's ad
   }
   // No session: 401.
   assert.equal((await post(`/variables/${clubVar.id}/rename`, null, { requestKey: key() })).status, 401);
+  // The resolver reads the team, club, role and user from the database, not
+  // from the request's authorization snapshot: a role or a user deactivated
+  // after the snapshot was loaded admits nothing.
+  const { loadAuthorizationContext } = await import("../src/authz.js");
+  const stale = await person("coach-stale", { coachOf: [W.teamA1], ws: ["team", W.teamA1] });
+  const staleUser = await one(k, `select * from public.users where id = $1`, [stale.id]);
+  const req = { user: staleUser, authz: await loadAuthorizationContext(staleUser) };
+  const live = await variables.resolveVariableEditor(req);
+  assert.deepEqual([live.basis, live.teamId, live.owner], ["team_coach", W.teamA1, { scope: "club", clubId: W.clubA }]);
+  await k.query(`update public.user_team_roles set is_active = false where user_id = $1`, [stale.id]);
+  assert.equal(await variables.resolveVariableEditor(req), null, "a role revoked after the snapshot");
+  await k.query(`update public.user_team_roles set is_active = true where user_id = $1`, [stale.id]);
+  await k.query(`update public.users set is_active = false where id = $1`, [stale.id]);
+  assert.equal(await variables.resolveVariableEditor(req), null, "a user deactivated after the snapshot");
+  // The admin-only operations refuse a team workspace's context themselves too.
+  const coachUser = await one(k, `select * from public.users where id = $1`, [W.coachA1.id]);
+  const coachCtx = await variables.resolveVariableEditor({ user: coachUser, authz: await loadAuthorizationContext(coachUser) });
+  for (const call of [
+    () => variables.createVariable({ ctx: coachCtx, body: {} }),
+    () => variables.createVariableVersion({ ctx: coachCtx, variableId: clubVar.id, body: {} }),
+    () => variables.suggestKey({ ctx: coachCtx, query: { label: "x" } }),
+  ]) await assert.rejects(call, (error) => error.status === 404);
 });
 
 test("3. the order of the answers: no right before the body (404 even for a bad body); 415 for a non-JSON body; 400 for a JSON body that is not an object; the identical 404 for a malformed id; 400 for an object of the wrong shape; a right lost during the request is 404, never a 409 that carries data", async () => {
@@ -743,14 +765,23 @@ test("9. concurrent writes: an archive against a mapping activation in both orde
     requestKey: `k-${uid()}`, occurredDate: "2026-09-08", scopeLevel: "session",
     participants: [{ athleteId, timezone: "UTC", values: [{ metricDefinitionId: v.id, metricDefinitionVersionId: v.currentVersion.id, value }] }],
   }, { base: "/api/training-load/metrics" });
+  // The archive after an entry: a real entry, paused after it took the
+  // definition FOR SHARE (another session holds metric_events, which it writes
+  // next); the archive waits for the entry's COMMIT, and the value stays.
   const c = await created(W.caA.cookie, { levels: ["session"] });
-  // The archive after the entry: the entry holds the definition FOR SHARE until its COMMIT.
   await k2.query("begin");
-  await k2.query(`select 1 from training_load.metric_definitions where id = $1 for share`, [c.id]);
-  const archivingC = archive(W.caA, c.id);
-  assert.ok(await someoneWaits(), "the archive waits for the entry's share lock");
+  await k2.query("lock table training_load.metric_events in share mode");
+  const order = [];
+  const entering = entry(c, 300).then((res) => { order.push("entry"); return res; });
+  assert.ok(await until(async () => (await one(k, `select count(*)::int as n from pg_locks l join pg_class t on t.oid = l.relation where t.relname = 'metric_events' and not l.granted`)).n > 0), "the entry waits on metric_events");
+  const archivingC = archive(W.caA, c.id).then((res) => { order.push("archive"); return res; });
+  assert.ok(await until(async () => (await one(k, `select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`)).n >= 2), "the archive waits for the entry's share lock");
   await k2.query("commit");
-  ok200(await archivingC);
+  const [entered, archivedC] = await Promise.all([entering, archivingC]);
+  assert.equal(entered.status, 201, entered.text);
+  ok200(archivedC);
+  assert.deepEqual(order, ["entry", "archive"], "the archive waited for the entry");
+  assert.equal((await one(k, `select count(*)::int as n from training_load.metric_values where metric_definition_id = $1`, [c.id])).n, 1, "the entry stays");
   // The entry after the archive is refused, nothing written; one entered before stays.
   const d = await created(W.caA.cookie, { levels: ["session"] });
   const stored = await entry(d, 100);
@@ -793,6 +824,17 @@ test("10. the basis is the strongest the database derives: a coach only writes t
   service.setMappingRightsHoldForTests(null);
   assert.deepEqual([promotedPlatform.status, promotedPlatform.body.error], [409, "try_again"]);
   assert.equal((await changesOf(v.id)).length, before);
+  // ... and one made the club's admin after the rights were checked, before
+  // the request row: the database derives the stronger basis, the request is
+  // refused there and answered try_again (never a 500), nothing written.
+  const coach3 = await person("coach-promoted-late", { coachOf: [W.teamA1], ws: ["team", W.teamA1] });
+  variables.setVariableWriteHoldForTests(async (_client, at) => {
+    if (at === "variable_archive") await k.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [coach3.id, W.clubA]);
+  });
+  const late = await archive(coach3, v.id);
+  variables.setVariableWriteHoldForTests(null);
+  assert.deepEqual([late.status, late.body.error, late.headers.get("retry-after")], [409, "try_again", "5"]);
+  assert.equal((await changesOf(v.id)).length, before);
 });
 
 test("11. idempotency and outcome through the real routes: a replay (also a coach's) answers the current state and writes nothing; after the role is revoked it is 404; a key reused for another operation or body is request_key_reused; two identical requests at once write once; a lost answer after a real COMMIT is verified; after a real rollback it is 503 outcome_unknown with exactly error, message and requestKey and the same key then writes once; a read that fails after the COMMIT keeps 200 with readError; a change without its request is refused at COMMIT (a sanitized 500, nothing written); a held definition is try_again", async () => {
@@ -805,7 +847,14 @@ test("11. idempotency and outcome through the real routes: a replay (also a coac
   assert.equal((await changesOf(v.id)).length, 1);
   assert.deepEqual([(await post(`/variables/${v.id}/archive`, coach.cookie, { requestKey: body.requestKey, reason: "x" })).body.error], ["request_key_reused"]);
   assert.deepEqual([(await post(`/variables/${v.id}/rename`, coach.cookie, { ...body, label: "Other" })).body.error], ["request_key_reused"]);
-  await k.query(`update public.user_team_roles set is_active = false where user_id = $1`, [coach.id]);
+  // The replay checks the right again itself: lost during the replay (after the
+  // resolver admitted the coach), it is the identical 404.
+  service.setMappingRightsHoldForTests(async () => {
+    await k.query(`update public.user_team_roles set is_active = false where user_id = $1`, [coach.id]);
+  });
+  const lostReplay = await post(`/variables/${v.id}/rename`, coach.cookie, body);
+  service.setMappingRightsHoldForTests(null);
+  assert.deepEqual([lostReplay.status, lostReplay.text], [404, '{"error":"notFound"}']);
   assert.deepEqual([(await post(`/variables/${v.id}/rename`, coach.cookie, body)).text], ['{"error":"notFound"}']);
   // Two identical requests at once: one write, one replay.
   const twin = { requestKey: key(), reason: "Twice" };
@@ -972,6 +1021,9 @@ test("12. the database guards: no acting user is 42501; the basis is the derived
   await rawDefinitionUpdate(`update training_load.metric_definitions set state = 'archived' where id = $1`, [later.id]);
   refusedWith(await tx(W.coachA1.id, (c) => rawChange(c, { defId: later.id, by: W.coachA1.id, operation: "variable_restore", set: "state = 'active'", basis: "team_coach", clubId: W.clubA, teamId: W.teamA1 })), "23514", COACH_RESTORE);
   okTx(await tx(W.caA.id, (c) => rawChange(c, { defId: later.id, by: W.caA.id, operation: "variable_restore", set: "state = 'active'", basis: "club_admin", clubId: W.clubA })));
+  // Q3 in the database: an archive's request carries its reason.
+  const noReason = refusedWith(await tx(W.caA.id, (c) => rawChange(c, { defId: v.id, by: W.caA.id, operation: "variable_archive", set: "state = 'archived'", basis: "club_admin", clubId: W.clubA, reason: null })), "23514");
+  assert.equal(noReason.constraint, "metric_variable_requests_archive_reason");
   // The shape checks of the request table.
   refusedWith(await tx(W.pa.id, (c) => c.query(
     `insert into training_load.metric_variable_requests (request_key, requested_by_user_id, operation, request_hash, owner_scope, basis, metric_definition_id, metric_definition_version_id, reason) values ($1,$2,'variable_version_create',$3,'system','platform_admin',$4,$5,'why')`,
@@ -1057,4 +1109,30 @@ test("15. v38 reads back the same after pg_dump and pg_restore (what gpexe-backu
     await target.drop();
     await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+test("16. an archive changes no history: a dashboard series bound to a variable before its archive keeps reading the variable's values", async () => {
+  const v = await created(W.caA.cookie, { levels: ["session"] });
+  const athleteUser = await user("athlete-dash");
+  const athleteId = (await one(k, `insert into public.athletes (user_id, full_name, display_name, device_timezone) values ($1,'Athlete D','Athlete D','UTC') returning id`, [athleteUser])).id;
+  await k.query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athleteId, W.clubA]);
+  const entered = await post("/events", W.caA.cookie, {
+    requestKey: `k-${uid()}`, occurredDate: "2026-09-08", scopeLevel: "session",
+    participants: [{ athleteId, timezone: "UTC", values: [{ metricDefinitionId: v.id, metricDefinitionVersionId: v.currentVersion.id, value: 4200 }] }],
+  }, { base: "/api/training-load/metrics" });
+  assert.equal(entered.status, 201, entered.text);
+  const D = "/api/training-load/dashboards";
+  const dashboard = (await post("", W.caA.cookie, { name: `R2 dash ${uid()}` }, { base: D })).body.dashboard;
+  const widget = await post(`/${dashboard.id}/widgets`, W.caA.cookie, { expectedDashboardRevision: dashboard.revision, widgetType: "table", title: "W", widgetOrder: 1, x: 0, y: 0, width: 6, height: 4, mobileOrder: 1 }, { base: D });
+  assert.ok(widget.status < 400, widget.text);
+  const series = await post(`/${dashboard.id}/widgets/${widget.body.widgetId}/series`, W.caA.cookie, { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId: v.id, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" }, { base: D });
+  assert.ok(series.status < 400, series.text);
+  const read = async () => {
+    const res = await post(`/${dashboard.id}/query`, W.caA.cookie, { dateFrom: "2026-09-08", dateTo: "2026-09-08" }, { base: D });
+    assert.equal(res.status, 200, res.text);
+    return Number(res.body.widgets.find((w) => w.widgetId === widget.body.widgetId).series[0].data.current[0].value);
+  };
+  assert.equal(await read(), 4200);
+  ok200(await archive(W.coachA1, v.id));
+  assert.equal(await read(), 4200, "the bound series keeps reading after the archive");
 });

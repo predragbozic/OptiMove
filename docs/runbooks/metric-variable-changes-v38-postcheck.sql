@@ -16,7 +16,7 @@
 --    v37_rows = 1, v37_checksum_ok = true.
 select
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202610271000_training_load_v38_metric_variable_changes.sql') as v38_rows,
-  (select bool_and(checksum = 'f9c460fadce4b1404b815f6dc01bddb12ba7f9d4482dd04f72e25a8274eca034') from public.schema_migrations
+  (select bool_and(checksum = '30ca41f33d3aa35f4fb9e7c1a652a2f572d9475a1666cfa3a5e593e0b6cc79cc') from public.schema_migrations
     where migration_name = 'migrations_v2/202610271000_training_load_v38_metric_variable_changes.sql') as v38_checksum_ok,
   (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%'
     and migration_name > 'migrations_v2/202610271000_training_load_v38_metric_variable_changes.sql') as later_rows,
@@ -90,8 +90,8 @@ select
     where n.nspname = 'training_load' and c.relname in (select name from expected) and i.indisvalid) as v38_indexes_valid;
 
 -- 6. The request table's constraints: v36's names kept (the operation and basis
---    checks widened), the eight v38 ones added.
---    Expected: v36_names = 13, v38_names = 8, operation_widened = true, basis_widened = true.
+--    checks widened), the nine v38 ones added.
+--    Expected: v36_names = 13, v38_names = 9, operation_widened = true, basis_widened = true.
 select
   (select count(*) from pg_constraint where conrelid = 'training_load.metric_variable_requests'::regclass and conname in (
     'metric_variable_requests_basis_check', 'metric_variable_requests_basis_shape', 'metric_variable_requests_hash_check',
@@ -102,7 +102,8 @@ select
   (select count(*) from pg_constraint where conrelid = 'training_load.metric_variable_requests'::regclass and conname in (
     'metric_variable_requests_basis_team_id_fkey', 'metric_variable_requests_metric_variable_change_id_fkey',
     'metric_variable_requests_one_per_change', 'metric_variable_requests_version_iff', 'metric_variable_requests_change_iff',
-    'metric_variable_requests_team_iff', 'metric_variable_requests_team_coach_shape', 'metric_variable_requests_reason_check')) as v38_names,
+    'metric_variable_requests_team_iff', 'metric_variable_requests_team_coach_shape', 'metric_variable_requests_reason_check',
+    'metric_variable_requests_archive_reason')) as v38_names,
   (select pg_get_constraintdef(oid) like '%variable_rename%variable_archive%variable_restore%' from pg_constraint
     where conrelid = 'training_load.metric_variable_requests'::regclass and conname = 'metric_variable_requests_operation_check') as operation_widened,
   (select pg_get_constraintdef(oid) like '%team_coach%' from pg_constraint

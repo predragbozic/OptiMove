@@ -2831,10 +2831,11 @@ pre-existing; pass/fail counts don't belong in this file
   `origin/main` worktree (`6382d25`) on 2026-10-05. Not fixed.
 - Reproduced identically on a clean detached `origin/main` worktree (`e8e2b0a`) on 2026-10-27, with
   `node scripts/test-runner.mjs --project backend --kind disposable --file …` in the Claude Code cloud container (not fixed):
-  - `backend/tests/gpexe-backup-verify.test.mjs` — four tests fail on one catalog difference after
-    `pg_dump` / `pg_restore`: v32's CHECK `gpexe_athlete_identities_display_name` reads back with its nested `AND`s
-    flattened. So the verifier reports a difference on every database that carries v32. The fix is to
-    write that CHECK so a restore reads it back the same (a migration).
+  - `backend/tests/gpexe-backup-verify.test.mjs` — fails on one catalog difference after `pg_dump` /
+    `pg_restore` with PostgreSQL 16 (the container's): v32's CHECK `gpexe_athlete_identities_display_name` reads
+    back with its nested `AND`s flattened. Whether a dump of the production server (PostgreSQL 17) reads it back
+    differently too is not verified. If it does, the verifier reports a difference on every database that
+    carries v32, and the fix is to write that CHECK so a restore reads it back the same (a migration).
   - `backend/tests/builder-copy-performance.test.mjs` — `column "video_source" of relation "plan_items" does not
     exist` in the disposable schema.
   - `backend/tests/media-storage-be1.test.mjs`, `media-upload-be2.test.mjs` — they need `MEDIA_TEST_DATABASE_URL`

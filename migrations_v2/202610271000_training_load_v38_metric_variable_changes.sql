@@ -57,8 +57,12 @@
 -- the definition's; a forged row still needs a definition updated by this
 -- transaction and its own request row. A write inside a savepoint is refused
 -- (its rows carry the subtransaction's id): fail closed. A future migration
--- that changes the label or state of a system or club definition must set
--- the acting user or disable the trigger inside itself, and say so.
+-- that changes the label or state of a system or club definition must disable
+-- metric_definitions_v38_record_change inside itself (and enable it again),
+-- and say so: setting the acting user is not enough, since the change row it
+-- would write has no request row and the COMMIT refuses it. Both tables keep
+-- their free text (old and new names, a request's reason) for good: nothing
+-- deletes or rewrites a row, by design.
 --
 -- Lock order: the service takes the definition FOR UPDATE, then the rights
 -- FOR SHARE (the stronger bases probed first - they lock rows only when
@@ -133,10 +137,14 @@ $$ language plpgsql;
 -- ---------------------------------------------------------------------------
 create table training_load.metric_variable_changes (
   id uuid primary key default gen_random_uuid(),
-  seq bigint generated always as identity,
+  -- The order of the changes (Q8): drawn by the AFTER trigger while the
+  -- UPDATE holds the definition's row lock. CACHE 1 (the default, written
+  -- out) keeps "a later change has a larger seq" true across sessions.
+  seq bigint generated always as identity (cache 1),
   metric_definition_id uuid not null references training_load.metric_definitions(id) on delete restrict,
   owner_scope text not null
     constraint metric_variable_changes_owner_scope_check check (owner_scope in ('system', 'club')),
+  -- No index of its own (as v36's owner_club_id): no code deletes a club.
   owner_club_id uuid references public.clubs(id) on delete restrict,
   kind text not null
     constraint metric_variable_changes_kind_check check (kind in ('rename', 'archive', 'restore')),
@@ -272,7 +280,9 @@ alter table training_load.metric_variable_requests
     basis <> 'team_coach' or (owner_scope = 'club' and operation in ('variable_rename', 'variable_archive', 'variable_restore'))),
   add constraint metric_variable_requests_reason_check check (
     reason is null or (operation in ('variable_rename', 'variable_archive', 'variable_restore')
-                       and training_load.source_metric_text_ok(reason, 500)));
+                       and training_load.source_metric_text_ok(reason, 500))),
+  -- Q3: an archive always carries its reason.
+  add constraint metric_variable_requests_archive_reason check (operation <> 'variable_archive' or reason is not null);
 
 create index metric_variable_requests_basis_team_idx
   on training_load.metric_variable_requests (basis_team_id) where basis_team_id is not null;
