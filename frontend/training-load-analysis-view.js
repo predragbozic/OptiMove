@@ -441,9 +441,10 @@ function renderDisplayStatusHtml(status, reasons) {
 function displayRowContext(row) {
   const identity = row.identity;
   const reported = identity.source.reported;
+  const connectionKeys = ["sourceConnectionId", "source_connection_id", "sourceId"];
+  const onlyConnection = Object.keys(reported).length === 1 && connectionKeys.includes(Object.keys(reported)[0]);
   const sourceId = reported.sourceConnectionId ?? reported.source_connection_id ?? reported.sourceId;
-  const provenance = Object.keys(reported).some(key => ["provenance", "sourceProvenance", "source"].includes(key));
-  const sourceLabel = provenance ? `Source provenance ${JSON.stringify(reported)}` : typeof sourceId === "string" ? `Source ${sourceId}` : "";
+  const sourceLabel = onlyConnection && typeof sourceId === "string" ? `Source ${sourceId}` : Object.keys(reported).length ? `Source provenance ${JSON.stringify(reported)}` : "";
   return [identity.athleteId ? `Athlete ${identity.athleteId}` : "", sourceLabel].filter(Boolean).join(" · ");
 }
 

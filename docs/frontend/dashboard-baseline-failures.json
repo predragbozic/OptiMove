@@ -1,0 +1,62 @@
+{
+  "matchedBaselineFailureEvents": 14,
+  "newFailureEvents": 0,
+  "failures": [
+    {
+      "file": "builder-create-form-fixes.test.mjs",
+      "test": "handleContentChange mirrors the create form's color-palette hidden input into state.builder.createColor"
+    },
+    {
+      "file": "builder-mobile-section-workflow.test.mjs",
+      "test": "16c. regression guard: the reorder arrows stay vertical (up/down) at every width - the stale mobile override that rotated them to left/right (a leftover from the old horizontal-scroll Added-list design, long since replaced by a vertical list) must not come back"
+    },
+    {
+      "file": "builder-performance-fixes.test.mjs",
+      "test": "handleContentChange routes update-item autosave through the shared scheduleBuilderItemAutosave helper, instead of saving on every single field's blur"
+    },
+    {
+      "file": "builder-performance-fixes.test.mjs",
+      "test": "other autosave forms (update-block, update-node, update-session, update-plan) are NOT debounced - only update-item has the sibling-field tabbing problem"
+    },
+    {
+      "file": "exercise-ownership.test.mjs",
+      "test": "explicit copying clears source media and code and saves only on confirmation"
+    },
+    {
+      "file": "exercise-personalization.test.mjs",
+      "test": "video-only effective media can be opened without requiring an image"
+    },
+    {
+      "file": "organization-panel-cache.test.mjs",
+      "test": "6. signOut clears the entire view cache before/alongside its hard reload"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "a plain click (mousedown, no drag) on an unselected day adds just that one date"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "a plain click on an ALREADY-selected day removes just that one date - single click toggles"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "mousedown on day 1, drag over to day 3, selects the whole inclusive range - Booking-style range select"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "dragging backward (toward the anchor) shrinks the range - days no longer covered are un-selected again, not left stranded"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "a drag that starts on an already-selected day REMOVES the whole dragged-over range, not just the anchor"
+    },
+    {
+      "file": "training-load.actions.test.mjs",
+      "test": "X5a. cross-section race, A resolves BEFORE B: Today ends up showing B's real fresh post-toggle content, never A's stale one, never data:null"
+    },
+    {
+      "file": "training-load.actions.test.mjs",
+      "test": "X5b. cross-section race, B resolves BEFORE A: Today ends up showing B's real fresh post-toggle content, A's later stale response never clobbers it, never data:null"
+    }
+  ]
+}
