@@ -3292,13 +3292,14 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
 1. **The Metrics Core plan** (`docs/ai/metrics-core-plan.md`) sets the order of the Metrics Core work. Its
    phases 0, 1, 2, 3, 2b and 2c are done, and so is Q10 part A (PR #229). Next by the plan:
    - a docs pull request: the working mode (section 1 of the plan), the owner's confirmation of v38 after the
-     merge, and phase 11, derived canonical variables; its merge needs the owner's word;
+     merge, phase 11, derived canonical variables, and phase 12, domains and categories of canonical variables; its
+     merge needs the owner's word;
    - the preparation of phase 4: the v39 discovery and contract as a docs pull request, with Q10 part B as its own
      part;
    - phase P, the owner only: the read-only v37 post-check, and the evidence for the nine `rest_v1` fields
      (C97);
    - phase 4, the revision lifecycle (C91), after the v37 post-check;
-   - phases 5–11 and R1, as the plan orders them.
+   - phases 5–12 and R1, as the plan orders them.
 
    No production field is confirmed through M2b before the revision lifecycle (C91) and the owner-run evidence
    (C97) exist. The import switch stays off throughout.

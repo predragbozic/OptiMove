@@ -1,4 +1,4 @@
-# Plan: Metrics Core and canonical variables, phases 0–11 and R1
+# Plan: Metrics Core and canonical variables, phases 0–12 and R1
 
 Status: **adopted by the owner on 2026-10-26**, in the executor's chat: „ok: plan v2 sa R1, zelena zona, revizori,
 prenete odluke za fazu 10 i R1; D1, D3–D5, D8–D12 ostaju preporuke.”
@@ -9,6 +9,7 @@ It covers:
 - the rest of M2 and M4;
 - the manual corrections and estimates (phase 10);
 - the derived canonical variables (phase 11);
+- the domains and categories of canonical variables (phase 12);
 - the re-import of a session (R1).
 
 This file is a memory file (`.claude/rules/memory-maintenance.md`). A change of a phase, a gate or a decision
@@ -22,7 +23,8 @@ The same day the owner added three things to it:
 
 Added after the adoption, the same day: R2 (phases 2b and 2c), the executor as the one who merges and the exception of
 PR #221 (section 1), and the standing merge order for PRs without a migration (section 2). Added on 2026-10-27: the
-working mode (section 1) and phase 11, derived canonical variables (section 5).
+working mode (section 1), phase 11, derived canonical variables, and phase 12, domains and categories of canonical
+variables (section 5).
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
@@ -30,7 +32,7 @@ order and names the rule (section 2).
 Last verified against commit: `deb2aa1` (`origin/main`, merge of PR #217). The references to
 `docs/ai/gpexe-metric-variable-mapping-discovery.md` (the *discovery document*) and to
 `docs/ai/phase5a-discovery-and-contract.md` are to that commit. What was added on 2026-10-27 (the working mode, the
-Done entries of phases 2b and 2c, phase 11, the Q10 line of section 6) was checked against `fdc2c2e` (merge of PR
+Done entries of phases 2b and 2c, phases 11 and 12, the Q10 line of section 6) was checked against `fdc2c2e` (merge of PR
 #237).
 
 ## 1. Who does what
@@ -653,6 +655,53 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
   - the production post-check.
 - **★★:** the owner approves the contract before any code and confirms the external review before the merge.
 - **Start:** after phase 9 is merged, with the contract approved by the owner (★★).
+
+### Phase 12 ★: domains and categories of canonical variables, after phase 4 and before phase 6 (may run in parallel with phase 5)
+- **Owner, 2026-10-27** (in the *Rukovodilac*'s chat, owner turn `655fc5c6`, 14:11:48 UTC): „imam jedan mali
+  potsetnik, nekada sam diskutovao u vezi toga. Trealo bi imati mogucnost da varijable povezemo sa kategorijama
+  varijabli ili domenima, takvu arhitekturu mi vec imamo u bazi samo bi trebalo da razmišljamo da to imamo mogucnost
+  da povezujemo. Zašto mislim da je to bitno, naime bitno je zato što ćemo sutra možda utreniranost definisati kao
+  utrenirasnost izdržljivosti, brzine i sl, a to će biti kategorije ili domeni. Da li razumeš možda”
+- **Who decided what:**
+  - The owner's words establish the need: variables can be linked with categories or domains, on the structure the
+    database already has, because fitness may later be defined per domain or category (endurance, speed and the like).
+  - The place, the gate and the ★ below are the *Rukovodilac*'s proposal (its message `796c28bf`, 14:12:57 UTC).
+  - The owner approves the place and the gate by approving the merge of the pull request that adds this phase
+    (section 2).
+- **Builds on:**
+  - v10 (`migrations_v2/202609041400_training_load_v10_metrics_catalog.sql`):
+    - `training_load.metric_domains` and `metric_categories`: a name, an owner scope (`system`, `club`, `team` or
+      `user`) and `is_active`;
+    - `metric_structure_links`: a domain, a category and / or a definition, an owner scope and
+      `temporal_smoothing_enabled`, unique per owner and triple;
+    - `link_scope_within_target`, which keeps a link's scope inside each target's;
+  - the older API `/api/training-load/metrics` (`backend/src/routes/trainingLoadMetrics.js`):
+    - `/domains` and `/categories` (GET, POST, `POST …/:id/archive`);
+    - `/structure-links` (GET, POST, DELETE).
+
+    C98 left creating them unchanged. Their archive and delete answer the identical 404 to a caller who may not manage
+    the row;
+  - M3-0 and R2 did not cover them (J3b.7 of the discovery document). The new admin flow links no canonical variable
+    with a domain or a category. Whether the older API wrote such rows on the production database was not checked.
+- **Scope (a draft for the contract, not a decision):**
+  - in the M3-0 admin API and the Variables tab, domains and categories owned by the system or a club: create,
+    rename and archive;
+  - linking a variable with categories, and a category with a domain (structure links);
+  - showing them in the list and the detail, and filtering by domain or category;
+  - when the new flow arrives, the older API's three routes get C98's rule for the canonical owners (`system` and
+    `club`);
+  - every new admin write gets its database actor guard (C76), so a migration;
+  - a note for phase 11: a domain or a category as the basis of a derived "fitness per domain". That is decided in
+    phase 11's contract.
+- **Gate:** a discovery and contract docs PR first, then the implementation.
+- **Reviewers:** `db-reviewer`, `security-reviewer`, `code-reviewer`, and the *Rukovodilac* (triggers 1 and 2). The
+  Variables-tab part also gets `mobile-qa` and `ux-design-reviewer` (the matrix of `CLAUDE.md`). The *Nezavisni
+  revizor* only if the contract introduces a new owner scope or right.
+- **Red zone:**
+  - the contract's owner decisions;
+  - the migration, by an order that names it (with its production preflight, merge, deploy and post-check).
+- **★, not ★★:** independent of the GPEXE import; it continues the work on the Variables tab.
+- **Start:** after phase 4 is merged, with the contract's owner decisions.
 
 ### R1 ★★: "Overwrite with a new import" (re-import of a session)
 - **Owner, 2026-10-26** (in the *Rukovodilac*'s chat):
