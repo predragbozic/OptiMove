@@ -1,5 +1,11 @@
 # Dashboard whole-chain integration review and controlled merge plan
 
+Latest owner-condition verification against advanced main fdc2c2e and confirmed
+Render deployment behavior: [dashboard-owner-gate.md](dashboard-owner-gate.md).
+The a1bb932 counts and unconfirmed-workspace statements below are retained as
+historical checkpoint evidence; use the owner-gate report and current JSON for
+the latest gate disposition.
+
 Review date: 2026-10-27. This continues the existing Work session and existing
 PR #220 → #230 → #231 → #232 → #233 → #234 → #235 → #236 chain. No new
 development branch or PR was opened for this review.

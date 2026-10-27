@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "observedDate": "2026-10-27",
+  "workspace": { "name": "My Workspace", "id": "tea-d8oih13bc2fs73en2ucg", "explicitlyConfirmedByOwner": true },
+  "readOnlyTools": ["list_workspaces", "list_services(includePreviews=true)", "get_service", "list_deploys"],
+  "repository": "https://github.com/predragbozic/OptiMove",
+  "services": [
+    {
+      "name": "OptiMove-eu", "id": "srv-db922ljrjlhs73duqbfg", "type": "web_service", "branch": "main",
+      "autoDeploy": "yes", "autoDeployTrigger": "commit", "previewGeneration": "off", "pullRequestPreviewsEnabled": "no",
+      "buildCommand": "npm run build", "startCommand": "npm start", "healthCheckPath": "/api/health",
+      "reportedLiveDeployId": "dep-dbgag70473hc73fjqu5g", "reportedLiveCommit": "fdc2c2efd0fb1c70e2241775f9af1132d0ceb550",
+      "reportedLiveDeployTrigger": "new_commit"
+    },
+    {
+      "name": "optimove-media-cleanup", "id": "crn-dbb22f5g1s2s73dvmd9g", "type": "cron_job", "branch": "main",
+      "autoDeploy": "yes", "autoDeployTrigger": "commit", "schedule": "0 * * * *",
+      "buildCommand": "npm --prefix backend ci", "startCommand": "npm --prefix backend run media:cleanup",
+      "reportedLiveDeployId": "dep-dbgag78473hc73fjqui0", "reportedLiveCommit": "fdc2c2efd0fb1c70e2241775f9af1132d0ceb550",
+      "reportedLiveDeployTrigger": "new_commit"
+    },
+    {
+      "name": "OptiMove", "id": "srv-d8oj30sm0tmc73cqnipg", "type": "web_service", "branch": "main",
+      "autoDeploy": "no", "autoDeployTrigger": "off", "previewGeneration": "off", "pullRequestPreviewsEnabled": "no"
+    }
+  ],
+  "gate": {
+    "mainMergeWouldTriggerBothActiveServices": true,
+    "featureBranchesNotTrackedByListedServices": true,
+    "ownerMergeApproval": false,
+    "ownerDeployApproval": false,
+    "ownerPauseAutomationApproval": false,
+    "settingsChanged": false,
+    "deploysTriggeredByThisSession": 0,
+    "productionAppOrDatabaseQueried": false,
+    "liveStatusLimit": "Render reported live; application health and production migration state were not independently tested."
+  },
+  "requiredDecisionBeforeMainMerge": "Explicit approval covering both automatic deployments, or separate explicit approval to pause both automations and verify they are off before merging."
+}
