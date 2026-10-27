@@ -369,7 +369,8 @@ const LOCK_WHY = {
   spaces: (noun) => `The saved ${noun} has spacing the form cannot keep (such as two spaces in a row). It stays as it is unless you replace it.`,
 };
 const REPLACE_NOTE = {
-  cut: (noun, max) => `This field holds only the first ${max} characters; the rest of the saved ${noun} is not in it. Saving replaces the whole saved ${noun}, the hidden part too, with what you type here.`,
+  cut: (noun, max) => `This field holds only the first ${max} characters; if the saved ${noun} is longer, the rest is not in it. Saving replaces the whole saved ${noun}, any hidden part too, with what you type here.`,
+  cut_lines: (noun, max) => `This field holds only the first ${max} characters; if the saved ${noun} is longer, the rest is not in it, and its lines are joined into one here. Saving replaces the whole saved ${noun}, any hidden part too, with what you type here.`,
   lines: (noun) => `The lines are joined into one here. Saving replaces the whole saved ${noun} with what you type here.`,
   spaces: (noun) => `The spacing is tidied here. Saving replaces the whole saved ${noun} with what you type here.`,
 };
@@ -388,7 +389,7 @@ function nameField(form, field, label, { max, required = false, hint = "", wide 
         <span id="mv-label-${field}">${escapeHtml(label)}${required ? "" : ` <span class="muted">(optional)</span>`}</span>
         <p class="metric-variables-locked-text" id="mv-locked-${field}">${escapeHtml(form.original[field])}${lock === "cut" ? "…" : ""}</p>
         ${conflictText ? `<span class="metric-variables-field-note">${escapeHtml(conflictText)}</span>` : ""}
-        <span class="muted" id="mv-why-${field}">${escapeHtml(LOCK_WHY[lock](noun, max))}</span>
+        <span class="metric-variables-field-note" id="mv-why-${field}">${escapeHtml(LOCK_WHY[lock](noun, max))}</span>
         <button class="plain-button ghost" type="button" data-action="metric-variables-name-replace" data-mv-name="${field}" aria-describedby="mv-why-${field}" ${off ? "disabled" : ""}>Replace ${noun}</button>
       </div>`;
   }
@@ -421,12 +422,12 @@ function renderChangeFormHtml(form, ctx) {
       </div></fieldset>`;
   } else if (form.mode === "archive") {
     body = `
-      <p class="muted">Archiving affects ${reach}: until it is restored, no new values can be entered for it and it cannot be added to a dashboard. Values already recorded, its history and the dashboards that already show it stay as they are.${coach ? "" : " It also gets no new version, and no new mapping can use it."}</p>
+      <p class="metric-variables-field-note">Archiving affects ${reach}: until it is restored, no new values can be entered for it and it cannot be added to a dashboard. Values already recorded, its history and the dashboards that already show it stay as they are.${coach ? "" : " It also gets no new version, and no new mapping can use it."}</p>
       <p class="muted">${restorePromise(ctx)}</p>
       ${textInput(form, "reason", "Reason", { max: LIMITS.reason, required: true, hint: "Saved with the change, for example: replaced by the drill variable." })}`;
   } else {
     body = `
-      <p class="muted">The variable becomes active again for ${reach}: new values can be entered for it and it can be added to dashboards.${coach ? "" : " It can get new versions and be used by mappings again."}</p>
+      <p class="metric-variables-field-note">The variable becomes active again for ${reach}: new values can be entered for it and it can be added to dashboards.${coach ? "" : " It can get new versions and be used by mappings again."}</p>
       ${textInput(form, "reason", "Reason", { max: LIMITS.reason })}`;
   }
   return `

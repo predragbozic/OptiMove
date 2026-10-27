@@ -18573,7 +18573,8 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 }
 /* What the coach must not miss under a field: what replacing loses, a name
    saved meanwhile. Larger and plainer than the ordinary hint. */
-.metric-variables-form .search-field > span.metric-variables-field-note {
+.metric-variables-form .search-field > span.metric-variables-field-note,
+.metric-variables-form p.metric-variables-field-note {
   color: var(--text);
   font-size: 14px;
   font-weight: 400;
@@ -18610,10 +18611,12 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
     width: 100%;
     justify-content: center;
   }
+  /* Two columns at every phone and small tablet width, so an odd last action
+     always takes exactly the second row. */
   .metric-variables-head > .metric-variables-actions {
     display: grid;
     flex: 1 1 100%;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .metric-variables-actions .plain-button,
   .metric-variables-locked > .plain-button {

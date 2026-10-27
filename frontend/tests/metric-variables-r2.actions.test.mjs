@@ -269,7 +269,7 @@ test("rename: a name cut at its limit is read only and never sent until the coac
   await click('[data-action="metric-variables-rename-open"]');
   await click('[data-action="metric-variables-name-replace"][data-mv-name="description"]');
   assert.equal($('[data-mv-field="description"]').value, longDescription, "Replace starts from the text shown");
-  assert.match(text(), /This field holds only the first 500 characters; the rest of the saved description is not in it\. Saving replaces the whole saved description, the hidden part too, with what you type here\./);
+  assert.match(text(), /This field holds only the first 500 characters; if the saved description is longer, the rest is not in it\. Saving replaces the whole saved description, any hidden part too, with what you type here\./);
   assert.equal(variablesState().form.dirty, false, "choosing Replace alone changes nothing");
   await submit();
   assert.equal(posts().length, 0, "replaced but unchanged is still not sent");
@@ -457,6 +457,8 @@ test("rename: spacing a field would tidy locks a name with its own reason; a cut
   await click('[data-action="metric-variables-rename-open"]');
   assert.ok($("#mv-locked-description").textContent.endsWith("…"), "a cut text says so even with a line break");
   assert.match(text(), /may be longer than the 500 characters shown here/);
+  await click('[data-action="metric-variables-name-replace"][data-mv-name="description"]');
+  assert.match(text(), /if the saved description is longer, the rest is not in it, and its lines are joined into one here\./, "Replace says the lines are joined too");
 });
 
 // ---------------------------------------------------------------------------
@@ -535,10 +537,11 @@ const REFUSALS = [
   ["rename", { error: "rename_unchanged" }, "stay", /Nothing changed: these names are the ones already saved\./],
   ["rename", { error: "variable_pinned" }, "close", /A data source is now mapped to this variable \(an active mapping\), so only an administrator of the club can rename it\. Nothing was saved\./],
   ["rename", { error: "variable_not_active" }, "close", /This variable is archived now, so it cannot be renamed\./],
-  ["archive", { error: "variable_pinned" }, "close", /An active mapping uses this variable, so it cannot be archived now\./],
+  ["archive", { error: "variable_pinned" }, "close", /A data source is now mapped to this variable \(an active mapping\), so it cannot be archived now\. Nothing was saved\./],
   ["archive", { error: "variable_not_active" }, "close", /This variable is already archived\./],
   ["restore", { error: "variable_active" }, "close", /This variable is active \(perhaps restored in the meantime\), so there is nothing to restore\./],
   ["restore", { error: "restore_by_admin" }, "close", /An administrator archived this variable, so only an administrator can restore it\./],
+  ["restore", { error: "variable_pinned" }, "close", /A data source is now mapped to this variable \(an active mapping\), so it cannot be restored now\. Nothing was saved\./],
   ["rename", { error: "invalid_body" }, "stay", /Not saved: the server refused a value\./],
   ["archive", { error: "try_again" }, "stay", /The server was busy\. Nothing was saved\. Try again\./],
 ];

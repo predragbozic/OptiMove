@@ -2598,8 +2598,8 @@ says why:
   of the club can rename it;
 - an administrator archived it, so only an administrator can restore it (Q8).
 
-On a desktop the actions sit at the right of the name; on a phone they fill a grid, and an odd last button takes
-the whole row.
+On a desktop the actions sit at the right of the name. Up to 760 px they fill two columns, and an odd last button
+takes the whole row.
 
 **Rename.**
 - The body is `{ requestKey, labelsToken, ...changed }`.
@@ -2620,7 +2620,8 @@ the whole row.
 - A read-only name is never sent until the coach replaces it, even after an input event for a field that is not
   on the screen.
 - *Replace* starts the field from the text shown, as one line. A note above the hint says what saving loses for
-  that reason, for a cut name "the hidden part too". A replaced name left as shown is still not sent.
+  that reason. For a name that may be cut it says "any hidden part too", and that its lines are joined when it
+  has any. A replaced name left as shown is still not sent.
 - The description field takes the whole row of the form.
 
 **`409 variable_changed`** (remark 3). The answer carries `current`: the reduced view with the new token. The
@@ -2651,7 +2652,8 @@ for a coach).
 
 **Refusals.**
 - `variable_not_active`, `variable_active`, `variable_pinned` and `restore_by_admin` close the form with the
-  sentence of its mode and read the variable again.
+  sentence of its mode and read the variable again. A `variable_pinned` says that a data source is now mapped to
+  the variable.
 - `rename_unchanged`, `invalid_body` and `try_again` keep the form.
 - A lost answer is *Result not confirmed* · *Check result*, which sends the same raw body. The R2 refusals
   settle the check (J3b.2, step 6). *Close without checking* reads the variable again.
@@ -2663,7 +2665,7 @@ action buttons sit in a grid of columns at least 140 px wide, and the form's but
 **Evidence (before review):**
 - `frontend/tests/metric-variables-r2.actions.test.mjs` (jsdom, a fake fetch) and the updated
   `metric-variables.actions.test.mjs`;
-- 34 frontend mutations, all killed;
+- 35 frontend mutations, all killed;
 - an integration run with the branch's real server in process and the real frontend in Chromium. It ran on a
   disposable database migrated through v38. The users were a club admin, a coach of one of the club's teams, the
   club's admin who also coaches that team (in the team's workspace), and a coach of another club. It covered:
@@ -2675,7 +2677,8 @@ action buttons sit in a grid of columns at least 140 px wide, and the form's but
   - a lost answer with *Check result*;
   - isolation from the other club;
   - layout at 1280 / 390 / 375 / 360 px: no overflow, 44 px targets, 16 px fields, the actions' placement and the
-    full-row description.
+    full-row description;
+  - the admin's three actions at 480 / 600 / 760 px.
 
 The record is in the pull request. Not checked on a physical device.
 

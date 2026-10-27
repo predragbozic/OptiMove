@@ -210,10 +210,10 @@ const MODE_TEXT = {
   },
   archive: {
     variable_not_active: "This variable is already archived.",
-    variable_pinned: "An active mapping uses this variable, so it cannot be archived now. Nothing was saved.",
+    variable_pinned: "A data source is now mapped to this variable (an active mapping), so it cannot be archived now. Nothing was saved.",
   },
   restore: {
-    variable_pinned: "An active mapping uses this variable, so it cannot be restored now. Nothing was saved.",
+    variable_pinned: "A data source is now mapped to this variable (an active mapping), so it cannot be restored now. Nothing was saved.",
   },
 };
 export function codeText(info, mode = "") {
@@ -417,10 +417,13 @@ function buildChangeRequest(form) {
 
 // "Replace": the coach chooses to type over a locked name. The field starts
 // from the text shown, as one line; saving replaces the whole saved text.
+// What replacing a locked name loses: its lock reason, and for a name that may
+// be cut, whether its line breaks are joined too ("cut_lines").
+const replaceReason = (lock, value) => (lock === "cut" && LINE_BREAK.test(value) ? "cut_lines" : lock);
 export function replaceName(form, field) {
   if (form?.mode !== "rename" || !form.locked?.[field]) return false;
   // Why it was locked stays known, so the field can say what replacing loses.
-  form.replacing[field] = form.locked[field];
+  form.replacing[field] = replaceReason(form.locked[field], form.original[field]);
   form.locked[field] = false;
   form.draft[field] = oneLine(form.original[field]);
   return true;
@@ -441,7 +444,7 @@ export function rebaseRename(form, current) {
     if (edited) {
       // The coach's text stays and replaces whatever is saved now.
       form.locked[field] = false;
-      form.replacing[field] = read.locked[field] || false;
+      form.replacing[field] = read.locked[field] ? replaceReason(read.locked[field], read.names[field]) : false;
     } else {
       form.locked[field] = read.locked[field];
       form.replacing[field] = false;

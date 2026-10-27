@@ -427,7 +427,7 @@ function refused(form, info, render, { check = false } = {}) {
     // The Save button that had the focus is gone: the focus goes to the
     // explanation (not to a field, which would open a phone's keyboard).
     const box = globalThis.document?.querySelector?.(".metric-variables-conflict");
-    box?.focus?.();
+    box?.focus?.({ preventScroll: true });
     box?.scrollIntoView?.({ block: "nearest" });
     return;
   }
