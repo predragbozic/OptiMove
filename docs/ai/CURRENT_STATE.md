@@ -10,7 +10,8 @@ recorded here yet. The entries for PR #214 and #215 (the GPEXE check) were added
 The Metrics Core entries (M2b PR #164, C98 PR #219, the plan PR #221, M3a PR #218) were brought up to date on
 2026-10-26 at `6c7dfa4` (merge of PR #218), as phase 3 of `docs/ai/metrics-core-plan.md`; nothing else was
 re-derived then. The phase 2b (R2) entries were added on 2026-10-27 at `e8e2b0a` (merge of PR #224), by the R2
-implementation pull request; nothing else was re-derived then.
+implementation pull request, and brought up to date the same day at `e556d08` (merge of PR #227, that pull request)
+after its merge, its deploy and the owner's read-only post-check; nothing else was re-derived then.
 
 ## Active phase
 
@@ -2113,11 +2114,29 @@ Technical details.
     - **The contract, PR #224** (docs only): merge commit `e8e2b0a` (parents `9001af5` and `0e4e373`) on
       2026-10-27 at 07:16:18 UTC. `/api/health` served `e8e2b0a` with `ok: true` three times in a row (07:17:23,
       07:17:33 and 07:17:43 UTC). Without a login the variable routes answered 401.
-    - **The implementation** (migration v38, the three routes, the team-workspace reads): built on the branch
-      `feature/r2-canonical-variables-v38` from `e8e2b0a`, in an open pull request. **Not merged, not deployed;
-      v38 is applied to no persistent database** (only to disposable `optimove_tests_gpexe_*` ones). Its merge
-      needs the owner's order naming v38, after the read-only preflight
-      `docs/runbooks/metric-variable-changes-v38-preflight.sql`.
+    - **The implementation, PR #227** (migration v38, the three routes, the team-workspace reads; section J3b.8
+      of the discovery document):
+      - Reviews: `db-reviewer`, `security-reviewer` and `code-reviewer` on `8f999b5`; their notes applied at
+        `ae92c2e`. GO on `ae92c2e` from the *Rukovodilac* and from the *Nezavisni revizor*; no BLOCKER, HIGH or
+        MEDIUM. How the merge was authorized is recorded in PR #227's description.
+      - The owner's read-only preflight `docs/runbooks/metric-variable-changes-v38-preflight.sql` (Supabase SQL
+        Editor, 2026-10-27 about 08:50 UTC) gave the expected value in all nine blocks: PostgreSQL `170006`,
+        v35–v37 recorded with their checksums, v38 absent, the last migration
+        `202610191300_media_upload_lifecycle.sql`, one existing request row that passes the checks v38 adds.
+      - The owner also checked that the Supabase Data API is switched off ("No schemas can be queried"; the role
+        `authenticator` carries no `pgrst.db_schemas`), so `training_load` is not exposed through it. The v36 and
+        v38 tables have no row-level security.
+      - Merge commit `e556d08` (parents `e8e2b0a` and `ae92c2e`) on 2026-10-27 at 09:51:13 UTC, made by the executor
+        from exactly `ae92c2e`.
+      - `/api/health` served `e8e2b0a` until 09:52:08 UTC and first served `e556d08` with `ok: true` at 09:52:18
+        UTC, then at 09:52:29 and 09:52:39 UTC. Without a login, the variables list, one variable and the key
+        suggestion (GET) and the create, new version, rename, archive and restore (POST, `{}`) answered 401;
+        `/api/auth/me` answered `{"user":null}`.
+      - **v38 on the deployed database is confirmed by the owner's read-only post-check**
+        (`docs/runbooks/metric-variable-changes-v38-postcheck.sql`, eight blocks, Supabase SQL Editor). The owner
+        reported every block as confirmed („sve potvrdjeno na post tetiranju”, 2026-10-27 11:39:15 UTC, in the
+        *Rukovodilac*'s chat). The owner did not paste the values of the blocks, so they are not recorded here.
+      - No variable was renamed, archived or restored in production by the executor or a reviewer.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2847,6 +2866,20 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
+- **A test for a team moved to another club in the middle of an R2 write** (the *Rukovodilac*'s LOW finding on
+  PR #227, 2026-10-27; a test only, no code change). Its mutation S13 removes the `club_id = $2` condition from
+  the team read of `coachRightsStillHold()` in `backend/src/sourceMetricMappingService.js`, and the R2 suite does
+  not catch it. That path is reachable only if a team moves to another club during a request, and no route moves a
+  team today; the database then refuses the write through `metric_variable_change_basis()` (a sanitized 500,
+  nothing written). The test moves the team (`update public.teams set club_id`) in the rights-hold seam of
+  `canonical-variables-r2.test.mjs` and expects the 404.
+- **v32's CHECK `gpexe_athlete_identities_display_name` does not read back the same after a dump and restore**
+  (found 2026-10-27 in the R2 work; a migration, not scheduled). With PostgreSQL 16, `pg_dump` / `pg_restore`
+  flattens its nested `AND`s, so `gpexe-backup-verify` reports a catalog difference on every database that
+  carries v32 (see "Known baseline/environment test issues"). Whether a dump of the production server
+  (PostgreSQL 17) behaves the same is not verified. The fix rewrites that CHECK so a restore reads it back the
+  same, as v38 did for its trigger `WHEN` clause (J3b.8). The trial restore of condition 1 under Separate tasks
+  depends on that verifier.
 - **The Imports screen stops following a running check after one failed status poll** (found 2026-10-22,
   frontend only, small; not scheduled). `pollGpexeCheck` (`frontend/gpexe-import-data.js`) polls every 2 s with no
   time limit, but one failed poll (a 503 `database_busy`, a 502 while Render restarts, a lost answer) sets
@@ -3219,11 +3252,11 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221) and M3a, the Variables view (PR #218) are merged and deployed; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224) and R2, renaming, archiving and restoring a canonical variable (PR #227, v38) are merged and deployed; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
 1. **The Metrics Core plan** (`docs/ai/metrics-core-plan.md`) sets the order of the Metrics Core work. Its
-   phases 0, 1 and 2 are done; phase 3 is this update. Next by the plan:
-   - phase 2b, R2: renaming, archiving and restoring a canonical variable, backend and a migration, ★★;
-     then 2c, its Variables-tab part;
+   phases 0, 1, 2, 3 and 2b are done. Next by the plan:
+   - phase 2c, R2 in the Variables tab (frontend); the Q10 pull request (the invisible characters, C99) is
+     separate;
    - phase P, the owner only: the read-only v37 post-check, and the evidence for the nine `rest_v1` fields
      (C97);
    - phase 4, the revision lifecycle (C91), after the v37 post-check;

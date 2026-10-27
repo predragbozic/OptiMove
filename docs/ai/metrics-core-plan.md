@@ -392,6 +392,25 @@ order covers is merged under it.
   and the *Nezavisni revizor* (triggers 1, 2 and 4).
 - **Red zone:** the production preflight, merge (and so deploy and migration, by an order that names it), the
   production post-check.
+- **Done, 2026-10-27.**
+  - The contract: PR #224, merge commit `e8e2b0a`, 07:16:18 UTC.
+  - The implementation: PR #227 (migration v38). `db-reviewer`, `security-reviewer` and `code-reviewer` reviewed
+    `8f999b5`, and their notes were applied at `ae92c2e`.
+  - The *Rukovodilac*'s GO on `ae92c2e` (08:37:30 UTC) and the *Nezavisni revizor*'s GO on the same head
+    (08:38:37 UTC). Neither found a BLOCKER, HIGH or MEDIUM.
+  - The owner's read-only preflight: all nine blocks as expected.
+  - The owner's order, in the *Rukovodilac*'s chat. The *Rukovodilac* asked at 09:48:32 UTC: „Ako ste saglasni,
+    napišite ovde ili izvršiocu, na primer: „Odobravam merge PR #227 sa migracijom v38.““ The owner answered „uvek
+    odobravam ako si procenio da je za merge” (owner turn `b4be10e9`, 09:49:00 UTC) and „i deploy” (owner turn
+    `ddaf4d1c`, 09:49:04 UTC). It was taken as the order for PR #227 and v38 only, not as a standing order for
+    later migrations.
+  - Merge: `e556d08` (parents `e8e2b0a` and `ae92c2e`), 09:51:13 UTC, made by the executor from exactly
+    `ae92c2e`. The record is in PR #227's description.
+  - Smoke: `/api/health` served `e556d08` with `ok: true` three times in a row (09:52:18, 09:52:29 and 09:52:39
+    UTC). Without a login the eight variable routes, rename, archive and restore among them, answered 401.
+  - Post-check: the owner ran `docs/runbooks/metric-variable-changes-v38-postcheck.sql` and reported „sve
+    potvrdjeno na post tetiranju” (owner turn `4a94e035`, 11:39:15 UTC, in the *Rukovodilac*'s chat). The values
+    of the eight blocks were not pasted.
 
 ### Phase 2c ★: R2 in the Variables tab (frontend), after 2b is merged
 - Rename, archive and restore in the Variables tab, for the rights of 2b.
