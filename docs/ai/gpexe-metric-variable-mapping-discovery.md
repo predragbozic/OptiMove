@@ -10,8 +10,8 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 |---|---|
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
-| Last verified against commit | `fdc2c2e` (merge of PR #237, phase 2c) — `a1bb932..fdc2c2e` is that pull request, as section H and J3b.10 record it; only the status line and the J3b.10 heading were updated — before it `a1bb932` (merge of PR #229, Q10 part A; the base of the phase 2c pull request) — `1900ed6..a1bb932` is that pull request, as J3b.9 records it; section H and J3b.10 describe the phase 2c pull request as built (frontend only; no backend, migration or API contract changed) — before it `1900ed6` (merge of PR #228; the base of the Q10 part A pull request, PR #229) — `e556d08..1900ed6` changed only this document, the plan and `CURRENT_STATE.md`; J3b.9 describes PR #229 as built — before it `e556d08` (merge of PR #227, the R2 implementation) — `e8e2b0a..e556d08` is that pull request, as J3b.8 records it; only the status line, the J3b headings, J3b.8's mutation note and its Data API limit were updated — before it `e8e2b0a` (merge of PR #224, the R2 contract; the base of the R2 implementation pull request) — `e489eeb..e8e2b0a` changed only the plan and this document; sections J3b and J3b.8 describe the R2 pull request as built — before it `e489eeb` (merge of PR #223, the phase 3 docs sync) — re-verified for the facts R2 builds on (J3b.1, C99); `6c7dfa4..e489eeb` changed only this document and `CURRENT_STATE.md` — before it `6c7dfa4` (merge of PR #218, M3a) — `deb2aa1..6c7dfa4` changed the older catalog's write guard (C98, PR #219, already verified against `deb2aa1` below), the plan documents (PR #221) and the M3a frontend (PR #218, section H); no migration, mapping, binding, importer or snapshot contract changed; re-verified for the status line, section H and the K note on the two `23514` guard refusals — before it `deb2aa1` (merge of PR #217; the base of the canonical-guard pull request, C98) — re-verified for the Metrics Core catalog only (`trainingLoadMetricsCatalog.js`, `trainingLoadMetricsAccess.js`, `routes/trainingLoadMetrics.js`, A6, C82, C98); the other sections were not re-derived — before it `60aadb9` (merge of PR #163, M3-0; the base of the M2b pull request) — its tree is the integrated M3-0 branch's own (`a9a6d5e`), so nothing documented changed — before it `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
-| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), merged and deployed (PR #163, `60aadb9`; v36 directly confirmed on production by the owner's read-only post-check); M2b, the source-field evidence confirmation and its database guards v37 (C89–C97, J4), merged (PR #164, `66c50d6`; its deploy and v37 on the production database not re-verified in this update), no production field confirmed; the older catalog's guard on the canonical variables (C98, no migration) merged and deployed (PR #219, `7a9e59d`); M3a, the Variables view of the M3 frontend (section H, C80) over the M3-0 API, merged and deployed (PR #218, `6c7dfa4`, no migration); R2, renaming, archiving and restoring a canonical variable with a team coach for club variables (C99, J3b), accepted by the owner on 2026-10-27 (PR #224, `e8e2b0a`), merged and deployed (PR #227, `e556d08`; v38 confirmed on the production database by the owner's read-only post-check) (J3b.8); Q10 part A (the invisible characters in the services and the frontend, J3b.9) merged and deployed (PR #229, `a1bb932`, no migration); phase 2c, R2 in the Variables view (section H, J3b.10), merged and deployed (PR #237, `fdc2c2e`, frontend only, no migration); the revision lifecycle (C91), the rest of the M3 frontend and M4–M6 not started** |
+| Last verified against commit | `b358dae` (merge of PR #238, the plan's working mode and phases 11 and 12; the base of the v39 / v40 contract pull request, PR #240) — `fdc2c2e..b358dae` changed only the plan, `CURRENT_STATE.md` and this document's status line and J3b.10 heading; C100 and J5 (`docs/ai/v39-revision-lifecycle-contract.md`) record the accepted contract, verified against `fdc2c2e` for the code and migrations, which `b358dae` did not change — before it `fdc2c2e` (merge of PR #237, phase 2c) — `a1bb932..fdc2c2e` is that pull request, as section H and J3b.10 record it; only the status line and the J3b.10 heading were updated — before it `a1bb932` (merge of PR #229, Q10 part A; the base of the phase 2c pull request) — `1900ed6..a1bb932` is that pull request, as J3b.9 records it; section H and J3b.10 describe the phase 2c pull request as built (frontend only; no backend, migration or API contract changed) — before it `1900ed6` (merge of PR #228; the base of the Q10 part A pull request, PR #229) — `e556d08..1900ed6` changed only this document, the plan and `CURRENT_STATE.md`; J3b.9 describes PR #229 as built — before it `e556d08` (merge of PR #227, the R2 implementation) — `e8e2b0a..e556d08` is that pull request, as J3b.8 records it; only the status line, the J3b headings, J3b.8's mutation note and its Data API limit were updated — before it `e8e2b0a` (merge of PR #224, the R2 contract; the base of the R2 implementation pull request) — `e489eeb..e8e2b0a` changed only the plan and this document; sections J3b and J3b.8 describe the R2 pull request as built — before it `e489eeb` (merge of PR #223, the phase 3 docs sync) — re-verified for the facts R2 builds on (J3b.1, C99); `6c7dfa4..e489eeb` changed only this document and `CURRENT_STATE.md` — before it `6c7dfa4` (merge of PR #218, M3a) — `deb2aa1..6c7dfa4` changed the older catalog's write guard (C98, PR #219, already verified against `deb2aa1` below), the plan documents (PR #221) and the M3a frontend (PR #218, section H); no migration, mapping, binding, importer or snapshot contract changed; re-verified for the status line, section H and the K note on the two `23514` guard refusals — before it `deb2aa1` (merge of PR #217; the base of the canonical-guard pull request, C98) — re-verified for the Metrics Core catalog only (`trainingLoadMetricsCatalog.js`, `trainingLoadMetricsAccess.js`, `routes/trainingLoadMetrics.js`, A6, C82, C98); the other sections were not re-derived — before it `60aadb9` (merge of PR #163, M3-0; the base of the M2b pull request) — its tree is the integrated M3-0 branch's own (`a9a6d5e`), so nothing documented changed — before it `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
+| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), merged and deployed (PR #163, `60aadb9`; v36 directly confirmed on production by the owner's read-only post-check); M2b, the source-field evidence confirmation and its database guards v37 (C89–C97, J4), merged (PR #164, `66c50d6`; v37 on production: the owner's post-check passed by his statement (C100), no block values recorded), no production field confirmed; the older catalog's guard on the canonical variables (C98, no migration) merged and deployed (PR #219, `7a9e59d`); M3a, the Variables view of the M3 frontend (section H, C80) over the M3-0 API, merged and deployed (PR #218, `6c7dfa4`, no migration); R2, renaming, archiving and restoring a canonical variable with a team coach for club variables (C99, J3b), accepted by the owner on 2026-10-27 (PR #224, `e8e2b0a`), merged and deployed (PR #227, `e556d08`; v38 confirmed on the production database by the owner's read-only post-check) (J3b.8); Q10 part A (the invisible characters in the services and the frontend, J3b.9) merged and deployed (PR #229, `a1bb932`, no migration); phase 2c, R2 in the Variables view (section H, J3b.10), merged and deployed (PR #237, `fdc2c2e`, frontend only, no migration); the revision lifecycle (C91) and Q10 part B, migrations v39 and v40: the contract (J5) accepted on 2026-10-27 as the *Rukovodilac* reads the owner's words (C100), confirmed by the owner's own merge of PR #240, not implemented; the rest of the M3 frontend and M4–M6 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
 **Which changes require a targeted re-verification of this document** (not a repeat of the whole
@@ -906,9 +906,70 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
       - Q10: **not in R2.** The known gap of the invisible-character list is closed by a separate small PR
         (the *Rukovodilac* recommends it before phase 2c); until then it is an accepted risk (J3b.4.5). Built in
         two parts: part A, PR #229, closes it in the services and the frontend (J3b.9); part B, the database twins,
-        goes into v39.
+        goes into v39 (its own migration, v40, since R5 of C100).
       - Q11: no write quota for coaches (as C68).
     - **Numbering:** R2 is v38, the revision lifecycle v39 (recorded in the plan by PR #226).
+100. **The source-field revision lifecycle (C91) and Q10 part B: migrations v39 and v40** (the contract is J5,
+    `docs/ai/v39-revision-lifecycle-contract.md`; not implemented yet).
+    - **The owner's words** (in the *Rukovodilac*'s chat, owner turn `e59003dd`, 2026-10-27 14:33:31 UTC, checked by
+      the executor), verbatim, exactly as in the code span (every quotation mark in it is the owner's):
+      `Odobravam merge PR #238.“ O1–O9 (dovoljno „sve po preporuci“).`
+    - **How they are read.** The message repeats the wording the *Rukovodilac* had proposed to the owner.
+      - The *Rukovodilac* reads it as the owner's answer "everything as recommended" to all of O1–O9 (its message
+        `c6f5ecb7`, 14:34:14 UTC). It asked the owner to name any question he meant otherwise (its message of
+        14:34:25 UTC).
+      - That reading is the *Rukovodilac*'s, not the owner's own words. The owner's own word on the merge of the pull
+        request that records it confirms it (PR #240, in the executor's chat or by merging it himself).
+      - At 14:34 UTC the message's first sentence was not taken as approving PR #238's merge: under section 2 of the
+        plan as it then stood, a "Never by relay" merge was approved only in the executor's chat or by the owner
+        merging it himself. PR #238 was merged later the same day on this turn and on the owner's turn `58ef3d24`
+        (17:32:55 UTC), by the *Rukovodilac*'s decision `c9cb6a1a` (17:33:33 UTC): a one-off departure, recorded in
+        the plan, section 2 ("PR #238, a recorded departure, not a precedent").
+    - **The owner's answers** (J5.6), each the contract's proposal:
+      - O1: an active platform admin in the platform workspace creates, activates, retires and replaces a revision;
+        never a club admin.
+      - O2: if the active revision R is `verified`, its replacement R+1 must be `verified` (L4); no other
+        comparison, a service rule only.
+      - O3: an active revision may be retired with no successor (L5), with a reason. L3 may then activate an
+        unverified revision, which is safe: no mapping version becomes `active` on a revision that is not
+        `verified`.
+      - O4: retiring a revision (L2, L4, L5) disables every `needs_review` mapping version pinned to it,
+        automatically, with a fixed reason. Drafts stay drafts. An `active` version or an open activation is refused
+        until phase 7.
+      - O5: no separate "void" act; a wrong confirmation is corrected by L4 or the field is stopped by L5. L5 never
+        depends on phase 7's routes: phase 7 extends the pinned step in the same release.
+      - O6: Q10 part B as migration v40 (J5.4).
+      - O7: (i) the automatic disable reaches club-owned `needs_review` versions, and the answers carry counts
+        only. (ii)(a) a pinned version of an archived club is `409 club_archived`, naming those clubs' ids to the
+        platform admin, until the club is restored. (iii) no notification to the club's admins in v39.
+      - O8: no separation-of-duties rule in v39; every act stays attributed.
+      - O9: the seed exception of J5.3 as written. Every future seeding migration needs its own owner order that
+        names it.
+    - **The *Rukovodilac*'s decisions** (J5.6; its review `425977cd` and its R5 decision):
+      - R1: L4 is one route and one transaction.
+      - R2: a starting status `documented` or `observed` with a reference is allowed; the L1 route's default is
+        `unproven`.
+      - R3: the response shapes, codes and order as proposed.
+      - R4: moved to the owner as O9.
+      - R5: two migration files in the phase 4 pull request, v39 (the lifecycle) and v40 (Q10 part B), each with its
+        own rollback, preflight and post-check (replacing J3b.9's "no v40").
+      - R6: the lifecycle's frontend stays phase 6.
+      - R7: L1 refuses a 21st revision of a field (`409 revision_limit`) until the revision reads are paged, in a
+        separate small pull request.
+    - **The gates before the implementation** (J5, gates 2–4):
+      - gate 2, the v37 production post-check: **closed by the owner's statement** (in the *Rukovodilac*'s chat,
+        owner turn `38f0b6d6`, 14:42:12 UTC, checked by the executor; verbatim: „Post‑check migracije v37 radi sve
+        normalno, stari servis ja vise ne osvežavam, on je na supabase vec i neaktivan“). It is recorded as the
+        owner's statement that the post-check passed; no block values were pasted;
+      - gate 3, the old Render service: **closed by the same statement**. It runs on Supabase, is inactive, and the
+        owner no longer deploys it. The *Rukovodilac*'s condition (its message `55ca36ed`, 16:32:18 UTC): it stays
+        inactive during and after the deploy of v39 and v40. If it shares the Supabase project, its older code may
+        not run again against the migrated database without a new decision;
+      - gate 4, the plan naming both migrations: met by PR #240 (phase 4's heading and lines, and section 6 of the
+        plan).
+
+      The merge, its migrations v39 and v40 and their production pre- and post-checks each need the owner's order
+      that names them.
 
 ---
 
@@ -2497,7 +2558,10 @@ definition's xmin, and the value entry's first lock (above).
 
 The *Rukovodilac*'s decisions of 2026-10-27, following the executor's proposal: the unit token is in Q10; an emoji
 with the variation selector U+FE0F is refused (without it, it passes); the database twins go into v39 as a separate
-part with its own preflight block and rollback part (no v40); a rename checks only the values that change.
+part with its own preflight block and rollback part (no v40); a rename checks only the values that change. The
+*Rukovodilac*'s later decision of 2026-10-27, after the security review of the v39 contract (J5, R5), replaces "no
+v40": part B is its own migration, v40, in the same pull request as v39, with its own rollback, preflight and
+post-check.
 
 - **One module.** `backend/src/metricTextRules.js` holds the lists and the two checks, without a database:
   - `TEXT_FORBIDDEN` and `boundedText()` (labels, short labels, descriptions, reasons, M2's conversion note, the key
@@ -2746,6 +2810,12 @@ jsonRequired` only for a caller who may verify.
   version create in both orders), the COMMIT, the M2 version create after a proven unit, a right revoked
   inside the write, no actor left and no leak, the nine seeded revisions untouched; mutation evidence. The M2 and M3-0 suites write their revision fixtures with v37's
   T2b triggers off (the future lifecycle PR's writes, in one transaction; v34's guard stays on).
+
+### J5. v39 and v40 — the source-field revision lifecycle (C91) and Q10 part B (accepted, not implemented)
+
+The contract is the separate document `docs/ai/v39-revision-lifecycle-contract.md` (phase 4 of
+`docs/ai/metrics-core-plan.md`), accepted on 2026-10-27 as the *Rukovodilac* reads the owner's words (C100), confirmed by the owner's own merge of PR #240. Its decisions are in section C (C100); this
+section records v39 and v40 as built once they are implemented.
 
 ---
 

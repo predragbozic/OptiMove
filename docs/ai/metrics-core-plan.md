@@ -24,7 +24,9 @@ The same day the owner added three things to it:
 Added after the adoption, the same day: R2 (phases 2b and 2c), the executor as the one who merges and the exception of
 PR #221 (section 1), and the standing merge order for PRs without a migration (section 2). Added on 2026-10-27: the
 working mode (section 1), phase 11, derived canonical variables, and phase 12, domains and categories of canonical
-variables (section 5).
+variables (section 5). Added later on 2026-10-27 (PR #240): the v39 / v40 contract, accepted as the *Rukovodilac*
+reads the owner's words and confirmed by the owner's own merge of PR #240 (phase 4, C100 of the discovery document),
+Q10 part B as its own migration v40 (section 6), and the record of PR #238's merge as a one-off departure (section 2).
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
@@ -33,7 +35,7 @@ Last verified against commit: `deb2aa1` (`origin/main`, merge of PR #217). The r
 `docs/ai/gpexe-metric-variable-mapping-discovery.md` (the *discovery document*) and to
 `docs/ai/phase5a-discovery-and-contract.md` are to that commit. What was added on 2026-10-27 (the working mode, the
 Done entries of phases 2b and 2c, phases 11 and 12, the Q10 line of section 6) was checked against `fdc2c2e` (merge of PR
-#237).
+#237); what PR #240 added, against `b358dae` (merge of PR #238).
 
 ## 1. Who does what
 
@@ -263,6 +265,17 @@ proverava citat u njegovom transkriptu.”
   "Red zone" and "Start" lines of section 5, to `approval-channel.md`, to `CLAUDE.md`, `.claude/**`, `.github/**`, a
   setting or a permission, and the merge of a PR that makes such a change. These are approved only directly in the
   executor's chat, or by the owner merging personally.
+- **PR #238, a recorded departure, not a precedent** (2026-10-27).
+  - PR #238 changed section 1 and section 5's gate lines. Under "Never by relay" above, its merge needed the owner's
+    word directly in the executor's chat, or the owner merging personally.
+  - It was merged (`b358dae`) on two owner turns in the *Rukovodilac*'s chat, each checked by the executor with
+    `get_event`:
+    - `e59003dd`, 14:33:31 UTC, `desktop_app`: `Odobravam merge PR #238.“ O1–O9 (dovoljno „sve po preporuci“).`
+    - `58ef3d24`, 17:32:55 UTC, `android`: `Odobravam, nema potrebe da me pitas`. It answers the *Rukovodilac*'s
+      message telling the owner the executor was waiting for the same sentence in its chat.
+  - The departure was the *Rukovodilac*'s decision (its message `c9cb6a1a`, 17:33:33 UTC), after that answer.
+  - It is a one-off and not a precedent: "Never by relay" above stands as written.
+  - The full record is in PR #238's description. Both event ids are in its merge commit message.
 
 ## 3. How the model works
 
@@ -501,28 +514,35 @@ order covers is merged under it.
     #223's description.
   - Smoke: `/api/health` served `e489eeb` with `ok: true` three times in a row (until 23:47:26 UTC); without a login
     the variable routes answered 401.
-  - The v37 post-check was not recorded; it stays with phase P.
+  - The v37 post-check was not recorded; it stays with phase P (recorded since: phase P, Done 2026-10-27).
 
 ### Phase P: in parallel, the owner only (red zone, no code)
 - The read-only v37 post-check (`docs/runbooks/source-metric-revision-guards-v37-postcheck.sql`); the owner reports
   PASS or FAIL per block. It is a gate of phase 4.
+  - **Done, 2026-10-27:** passed, by the owner's statement (owner turn `38f0b6d6` in the *Rukovodilac*'s chat,
+    14:42:12 UTC, verbatim in C100 of the discovery document). It is recorded as a statement; no block values were
+    pasted.
 - The evidence for the nine `rest_v1` fields (C97, the table of J4). The executor may only prepare the procedure; it
   sends no GPEXE request.
 
-### Phase 4 ★★: the revision lifecycle (C91), migration v39
+### Phase 4 ★★: the revision lifecycle (C91) and Q10 part B, migrations v39 and v40
 - **Input (red zone, before any code):**
-  - owner decisions on:
+  - owner decisions on the following, answered on 2026-10-27 as the *Rukovodilac* reads the owner's words (C100),
+    confirmed by the owner's own merge of PR #240:
     - who may create revision R+1;
     - activating R+1;
     - retiring R;
     - what happens to the T4 versions and T5 activations pinned to R (automatic or manual replacement);
     - whether a given confirmation is voided;
-  - the v37 post-check PASS (phase P);
-  - the old Render service clarified: which database it uses (phase 1, b).
+  - the v37 post-check PASS (phase P): closed, by the owner's statement (C100);
+  - the old Render service clarified (phase 1, b): closed (C100). It runs on Supabase, is inactive and is no longer
+    deployed; it stays inactive during and after the deploy of v39 and v40.
 - **Green zone:**
-  - a separate discovery delta document, as the proposed contract (J5);
+  - a separate discovery delta document, as the proposed contract (J5); accepted on 2026-10-27 as the *Rukovodilac*
+    reads the owner's words (C100), confirmed by the owner's own merge of PR #240;
   - after the owner's decision, the implementation: v39 with database actor guards (C76), its rollback, and the
-    read-only preflight and post-check scripts;
+    read-only preflight and post-check scripts; and v40, Q10 part B, as its own migration with its own rollback,
+    preflight and post-check (R5 of C100);
   - the M1 / M2 / v35 / M3-0 / M2b suites no longer switch off the v37 T2b triggers but write the real way.
 - **Acceptance:**
   - the rollback is rehearsed (apply → rollback → identical catalog → re-apply);
@@ -531,8 +551,11 @@ order covers is merged under it.
   - none of the nine seeded fields changed;
   - tests on PostgreSQL 16 and, where possible, 17.
 - **Reviewers:** `db-reviewer`, `security-reviewer`, `code-reviewer`, and the external review (triggers 1, 2 and 4).
-- **Red zone:** the production preflight, merge (and so deploy and migration), and the production post-check of v39.
+- **Red zone:** the production preflight, merge (and so deploy and migration), and the production post-check of v39
+  and v40.
 - **★★:** the owner approves the contract (J5) before any code and confirms the external review before the merge.
+  The contract was accepted on 2026-10-27 as the *Rukovodilac* reads the owner's words (C100), confirmed by the
+  owner's own merge of PR #240.
 
 ### Phase 5: the zone model (C89)
 - An owner decision only; the executor prepares the variants.
@@ -750,9 +773,9 @@ Each one is a plan change, so the owner schedules it:
 - `POST /events` takes its lock before the visibility check (`trainingLoadMetricsMeasurements.js`, LOW);
 - Q10, `TEXT_FORBIDDEN` and `source_metric_text_ok`:
   - part A, the services and the frontend, is done (PR #229, `a1bb932`, no migration);
-  - part B, the database twins `source_metric_text_ok` and `source_metric_unit_token_ok`, goes into v39 (phase 4)
-    as its own part. That is the *Rukovodilac*'s decision of 2026-10-27, recorded in J3b.9 of the discovery
-    document; the owner approves it with the phase 4 contract;
+  - part B, the database twins `source_metric_text_ok` and `source_metric_unit_token_ok`, is its own migration, v40,
+    in the phase 4 pull request. The *Rukovodilac*'s R5 of 2026-10-27 replaced J3b.9's "no v40". The owner approved
+    it with the phase 4 contract (O6, C100);
 - the v35 / v36 test hardening;
 - separate database roles.
 
