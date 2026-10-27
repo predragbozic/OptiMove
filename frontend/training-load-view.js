@@ -1574,8 +1574,10 @@ export function renderTrainingLoadCoachHtml() {
           <button type="button" class="training-load-tab ${space === "schedule" ? "is-active" : ""}" role="tab" aria-selected="${space === "schedule" ? "true" : "false"}" data-action="training-load-section" data-section="schedule">${renderTrainingLoadTabIcon("schedule")}<span>Schedule</span></button>
           <button type="button" class="training-load-tab ${space === "dataAnalysis" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataAnalysis" ? "true" : "false"}" data-action="training-load-section" data-section="${dataAnalysisTargetSection}">${renderTrainingLoadTabIcon("analysis")}<span>Data &amp; Analysis</span></button>
           ${variablesContext()
-            // C80: an administrator's item - the platform workspace or a club
-            // workspace only; the server answers anyone else with 404.
+            // C80: an administrator's item in the platform or a club workspace;
+            // R2 (C99): also a team workspace of a club, for its coach - the
+            // Variables view only, never Source fields or Mappings. The server
+            // answers anyone else with 404.
             ? `<button type="button" class="training-load-tab ${space === "dataConfig" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataConfig" ? "true" : "false"}" data-action="training-load-section" data-section="variables">${renderTrainingLoadTabIcon("dataConfig")}<span>Data configuration</span></button>`
             : ""}
         </div>

@@ -1,12 +1,13 @@
-// Training Load -> Data configuration -> Variables: loading, the form and the
-// two writes. One write at a time; a write whose answer is lost is shown as
-// "Result not confirmed" and checked by sending the very same request (the
-// same request key and body) again - the server replays a saved write and
-// never saves twice.
+// Training Load -> Data configuration -> Variables: loading, the forms and the
+// writes (create and new version, M3-0; rename, archive and restore, R2). One
+// write at a time; a write whose answer is lost is shown as "Result not
+// confirmed" and checked by sending the very same request (the same request
+// key and body) again - the server replays a saved write and never saves twice.
 import { state } from "./state.js";
 import {
-  buildRequest, checkNoteText, checkSettles, codeText, createVariable, createVersion, emptyVariablesState, errorInfo, fetchKeySuggestion,
-  fetchVariable, fetchVariables, newRequestKey, openForm, outcomeUnknown, variablesContext, variablesState,
+  CHANGE_MODES, archiveVariable, buildRequest, checkNoteText, checkSettles, codeText, createVariable, createVersion, emptyVariablesState,
+  errorInfo, fetchKeySuggestion, fetchVariable, fetchVariables, newRequestKey, openForm, outcomeUnknown, rebaseRename, renameVariable,
+  replaceName, restoreVariable, variablesContext, variablesState,
 } from "./metric-variables-data.js";
 
 export const KEY_SUGGESTION_DELAY_MS = 350;
@@ -98,9 +99,15 @@ export function variablesMayBeLeft() {
   if (!form) return true;
   if (form.busy) return confirmAsk("A variable is still being saved. Leave anyway? Its result will not be shown.");
   if (form.unconfirmed) return confirmAsk("The last save is not confirmed. Leave without checking? Look for it in the list later.");
-  if (form.dirty) return confirmAsk(form.mode === "version" ? "Discard the new version you have not saved?" : "Discard the variable you have not saved?");
+  if (form.dirty) return confirmAsk(DISCARD_QUESTION[form.mode] || "Discard the variable you have not saved?");
   return true;
 }
+const DISCARD_QUESTION = {
+  version: "Discard the new version you have not saved?",
+  rename: "Discard the new names you have not saved?",
+  archive: "Discard the archive you have not confirmed?",
+  restore: "Discard the restore you have not confirmed?",
+};
 // Closing or reloading the page while a save is in flight or not confirmed
 // loses the only view of its outcome; unsaved values are lost too.
 export function variablesUnloadShouldWarn() {
@@ -139,13 +146,41 @@ export async function handleVariablesAction(action, { render }) {
     focusFirstField();
     return true;
   }
+  // R2: offered only where the server's `actions` names it (J3b.2).
+  const change = { "metric-variables-rename-open": "rename", "metric-variables-archive-open": "archive", "metric-variables-restore-open": "restore" }[type];
+  if (change) {
+    const variable = s.detail.variable;
+    if (s.form || !variable || !(variable.actions || []).includes(change)) return true;
+    s.notice = "";
+    s.form = openForm(change, { variable });
+    render();
+    focusFirstField();
+    return true;
+  }
+  if (type === "metric-variables-name-replace") {
+    const form = s.form;
+    const field = action.dataset.mvName || "";
+    if (!form || form.busy || form.unconfirmed || !replaceName(form, field)) return true;
+    render();
+    globalThis.document?.querySelector?.(`.metric-variables-form [data-mv-field="${field}"]`)?.focus?.();
+    return true;
+  }
   if (type === "metric-variables-cancel") {
     const form = s.form;
     if (!leaveForm()) return true;
+    // Someone saved other names meanwhile: the variable behind the form is
+    // read again, so it never shows the names that are no longer saved.
+    if (form?.conflict && form.variableId) {
+      await loadVariable(form.variableId, render);
+      return true;
+    }
     // A save left without a check may still have landed: the list (or the
     // variable) is read again, so the screen never shows it as missing.
     if (form?.unconfirmed) {
-      if (form.mode === "version" && form.variableId) {
+      if (CHANGE_MODES.includes(form.mode) && form.variableId) {
+        s.notice = "The result was not checked. The variable below is as it is saved now.";
+        await loadVariable(form.variableId, render);
+      } else if (form.mode === "version" && form.variableId) {
         s.notice = "The result was not checked. If the new version was saved, it is in the versions below.";
         await loadVariable(form.variableId, render);
       } else {
@@ -312,9 +347,14 @@ export async function submitVariablesForm(_formElement, { render }) {
   const s = variablesState();
   const form = s.form;
   if (!form || form.busy || form.unconfirmed) return;
-  const { body, errors } = buildRequest(form);
+  const { body, errors, unchanged } = buildRequest(form);
   form.errors = errors;
   form.error = "";
+  if (unchanged) {
+    form.error = "Nothing changed: change a name, or Cancel.";
+    render();
+    return;
+  }
   if (!body) {
     form.error = "Check the marked fields.";
     render();
@@ -329,6 +369,14 @@ export async function submitVariablesForm(_formElement, { render }) {
   await send(render);
 }
 
+const WRITES = {
+  create: (form) => createVariable(form.sentBody),
+  version: (form) => createVersion(form.variableId, form.sentBody),
+  rename: (form) => renameVariable(form.variableId, form.sentBody),
+  archive: (form) => archiveVariable(form.variableId, form.sentBody),
+  restore: (form) => restoreVariable(form.variableId, form.sentBody),
+};
+
 async function send(render) {
   const s = variablesState();
   const form = s.form;
@@ -341,7 +389,7 @@ async function send(render) {
   render();
   let data;
   try {
-    data = form.mode === "create" ? await createVariable(form.sentBody) : await createVersion(form.variableId, form.sentBody);
+    data = await WRITES[form.mode](form);
   } catch (error) {
     if (variablesState().generation !== generation || s.form !== form) return;
     form.busy = false;
@@ -371,18 +419,28 @@ function refused(form, info, render, { check = false } = {}) {
     form.errors.key = codeText(info);
     form.keyHint = { ...form.keyHint, required: info.code === "key_required", taken: info.code === "key_taken" };
   } else if (info.code === "request_key_reused") form.requestKey = newRequestKey();
-  if (info.code === "current_version_changed") {
-    // The form was made from a version that is no longer current: it is
-    // closed and the variable read again, so the coach starts from it.
+  // Other names were saved meanwhile: the form stays open on them, with the
+  // coach's own changes kept, and asks to save again (J3b.2).
+  if (info.code === "variable_changed" && rebaseRename(form, info.current)) {
+    form.dirty = true;
+    render();
+    globalThis.document?.querySelector?.(".metric-variables-conflict")?.scrollIntoView?.({ block: "nearest" });
+    return;
+  }
+  if (info.code === "current_version_changed" || (CHANGE_MODES.includes(form.mode) && CLOSES_CHANGE.has(info.code))) {
+    // The form was made from a variable that changed (a newer version, other
+    // names, another state) or that this change no longer fits: it is closed
+    // and the variable read again, so the coach starts from how it is now.
     const id = form.variableId;
     s.form = null;
-    s.notice = codeText(info);
+    s.notice = codeText(info, form.mode);
     void loadVariable(id, render);
     return;
   }
-  form.error = codeText(info);
+  form.error = codeText(info, form.mode);
   render();
 }
+const CLOSES_CHANGE = new Set(["variable_changed", "variable_not_active", "variable_active", "variable_pinned", "restore_by_admin"]);
 
 async function saved(form, data, render) {
   const s = variablesState();
@@ -392,6 +450,9 @@ async function saved(form, data, render) {
   const id = variable?.id || data?.variableId || form.variableId;
   if (form.mode === "create") {
     s.notice = data?.readError ? "The variable was created, but it could not be read back. Open it from the list." : `The variable ${variable?.label || ""} was created.`;
+  } else if (CHANGE_MODES.includes(form.mode)) {
+    const done = { rename: "renamed", archive: "archived", restore: "restored" }[form.mode];
+    s.notice = data?.readError ? `The variable was ${done}, but it could not be read back. Open it again from the list.` : `The variable was ${done}.`;
   } else {
     const number = data?.version?.versionNumber ?? variable?.currentVersion?.versionNumber;
     s.notice = data?.readError ? "The new version was saved, but it could not be read back. Open the variable again." : `Version ${number ?? ""} was saved.`;

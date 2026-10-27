@@ -18350,6 +18350,12 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   min-width: 0;
   flex: 1 1 260px;
 }
+/* What this caller may do with one variable (R2): Rename, New version, Archive, Restore. */
+.metric-variables-head > .metric-variables-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .metric-variables .plain-button {
   min-height: 44px;
 }
@@ -18549,7 +18555,21 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 .metric-variables [aria-invalid="true"] {
   border-color: var(--danger);
 }
-/* Not a failure: an outcome not known yet (a caution, not an error). */
+/* A saved name the rename form cannot show exactly: read only until replaced. */
+.metric-variables-locked-text {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.metric-variables-locked > .plain-button {
+  justify-self: start;
+}
+/* A caution, not an error: an outcome not known yet, or names saved meanwhile. */
+.metric-variables-conflict,
 .metric-variables-unconfirmed {
   display: grid;
   gap: 8px;
@@ -18574,6 +18594,16 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   .metric-variables-head > .plain-button,
   .metric-variables-form .data-sources-form-actions .plain-button,
   .metric-variables > .plain-button {
+    width: 100%;
+    justify-content: center;
+  }
+  .metric-variables-head > .metric-variables-actions {
+    display: grid;
+    flex: 1 1 100%;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+  .metric-variables-actions .plain-button,
+  .metric-variables-locked > .plain-button {
     width: 100%;
     justify-content: center;
   }

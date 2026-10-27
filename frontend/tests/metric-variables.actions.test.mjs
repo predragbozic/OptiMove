@@ -42,7 +42,9 @@ const version = (over = {}) => ({ id: VER_ID, versionNumber: 1, unit: "m", value
 const variable = (over = {}) => ({
   id: VAR_ID, key: "total_distance", label: "Total distance", shortLabel: "TotDist", description: null, ownerScope: "system", state: "active", editable: true,
   levels: ["session", "drill"], currentVersion: version(), mappingTarget: { ready: true, notReadyCode: null },
-  createdAt: "2026-10-20T08:00:00.000Z", updatedAt: "2026-10-20T08:00:00.000Z", truncated: false, ...over,
+  createdAt: "2026-10-20T08:00:00.000Z", updatedAt: "2026-10-20T08:00:00.000Z", truncated: false,
+  // What the server says this caller may do now (R2, J3b.2).
+  actions: ["rename", "archive", "newVersion"], labelsToken: "a".repeat(64), ...over,
 });
 const detail = (over = {}, versions = null) => {
   const v = variable(over);
@@ -143,7 +145,7 @@ test("a workspace without the screen reads nothing and says where variables are"
   const { loadVariablesSection } = await import("../metric-variables-actions.js");
   await loadVariablesSection(render);
   assert.equal(calls.length, 0);
-  assert.match(text(), /available in the platform workspace and in a club workspace/);
+  assert.match(text(), /available in the platform workspace, in a club workspace and in a team workspace of a club/);
 });
 
 // ---------------------------------------------------------------------------
@@ -225,7 +227,7 @@ test("an answer for a workspace that was left is dropped", async () => {
 // ---------------------------------------------------------------------------
 // One variable
 // ---------------------------------------------------------------------------
-test("opening a variable shows its facts, versions and Technical details; New version only when editable and active", async () => {
+test("opening a variable shows its facts, versions and Technical details; New version only when the server's actions name it", async () => {
   respond = (call) => (call.url.includes("cursor=v-older")
     ? { status: 200, body: { variable: { ...variable(), versions: [{ ...version({ id: "old", versionNumber: 1 }), current: false, reason: null }] }, nextCursor: null } }
     : { status: 200, body: { ...detail({ currentVersion: version({ id: VER_2, versionNumber: 2, condition: { kind: "zone", operator: "between", lower: "19.8", upper: "25.2", unit: "km/h" } }) }, [{ ...version({ id: VER_2, versionNumber: 2 }), current: true, reason: "Zone corrected <now>" }]), nextCursor: "v-older" } });
@@ -247,14 +249,14 @@ test("opening a variable shows its facts, versions and Technical details; New ve
   assert.equal(gets().at(-1), `${BASE}/${VAR_ID}?cursor=v-older`);
   assert.equal(content.querySelectorAll(".metric-variables-version").length, 2);
 
-  for (const over of [{ editable: false }, { state: "archived" }]) {
+  for (const over of [{ editable: false, actions: [] }, { actions: ["rename"] }, { state: "archived", actions: ["restore"] }]) {
     resetVariables();
     respond = () => ({ status: 200, body: detail(over) });
     content.innerHTML = `<button data-action="metric-variables-open" data-variable-id="${VAR_ID}"></button>`;
     await click('[data-action="metric-variables-open"]');
     assert.ok(!$('[data-action="metric-variables-version-open"]'), `no New version: ${JSON.stringify(over)}`);
   }
-  assert.match(text(), /Archived: shown for its history/);
+  assert.match(text(), /Archived: kept with its values and its history/);
 });
 
 test("a variable that is not available reads as such, with Try again", async () => {
