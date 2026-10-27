@@ -924,7 +924,7 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
         plan as it then stood, a "Never by relay" merge was approved only in the executor's chat or by the owner
         merging it himself. PR #238 was merged later the same day on this turn and on the owner's turn `58ef3d24`
         (17:32:55 UTC), by the *Rukovodilac*'s decision `c9cb6a1a` (17:33:33 UTC): a one-off departure, recorded in
-        the plan, section 2 ("The owner's word in the *Rukovodilac*'s chat", "First use").
+        the plan, section 2 ("PR #238, a recorded departure, not a precedent").
     - **The owner's answers** (J5.6), each the contract's proposal:
       - O1: an active platform admin in the platform workspace creates, activates, retires and replaces a revision;
         never a club admin.
