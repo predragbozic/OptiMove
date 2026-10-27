@@ -874,8 +874,9 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
       - option 2 of the *Rukovodilac*'s proposal of 22:13:40 UTC: „Slažem se sa tobom idemo za sada tako pa
         ćemo menjati ako bude potrebe” (`92449c5f`, 22:16:26 UTC);
       - the contract and the answers below, 2026-10-27: „ok ugovor 2b, Q10 ne” (`bf9dce82`, 06:34:26 UTC),
-        accepting the contract of PR #224 at `fcde740` with the recommended answers, after the reviews of
-        the *Rukovodilac* and the *Nezavisni revizor* (both GO).
+        accepting the contract of PR #224 at `fcde740` with the recommended answers. The *Rukovodilac*'s
+        GO on `fcde740` came before it (06:26 UTC); the *Nezavisni revizor*'s GO on `fcde740` followed
+        (06:45 UTC), and its findings were folded into J3b without changing any of these answers.
     - **Who:** a system variable - an active platform admin in the platform workspace. A club variable - the
       club's active admin in its workspace, or a platform admin there, and **an active coach of an active
       team of that club, in that team's workspace** (the team's club from `public.teams.club_id`, never the
@@ -2069,8 +2070,9 @@ answer after a COMMIT; its existing branches stay as they are. The new branch:
 2. then the team, the club again, and the coach role with the user in one joined statement, all `FOR SHARE`. The
    team must be active, with `club_id` equal to the owner club.
 
-So the real order is: global role + user → club role + user + club → team → club → coach role + user. It differs from
-v26's `lock_activity_decider` (team → club), because the club-admin probe already holds the club.
+A joined `FOR SHARE` locks only the rows it returns. So the probes lock rows only when they find a stronger role, and
+then the answer is `try_again` anyway. For a coach without a stronger role, the order is v26's
+`lock_activity_decider` order: team → club → coach role + user.
 
 All these locks are `FOR SHARE`, and each writer that contends with them is a single-row UPDATE (a team or club
 archive, a role revoke). A deadlock therefore needs such a writer, and would surface as `40P01`, which is `try_again`.
