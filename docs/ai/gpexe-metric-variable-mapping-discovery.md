@@ -2747,6 +2747,12 @@ jsonRequired` only for a caller who may verify.
   inside the write, no actor left and no leak, the nine seeded revisions untouched; mutation evidence. The M2 and M3-0 suites write their revision fixtures with v37's
   T2b triggers off (the future lifecycle PR's writes, in one transaction; v34's guard stays on).
 
+### J5. v39 — the source-field revision lifecycle (C91) and Q10 part B (proposed, not accepted)
+
+The proposed contract is the separate document `docs/ai/v39-revision-lifecycle-contract.md` (phase 4 of
+`docs/ai/metrics-core-plan.md`). When the owner accepts it, its decisions are written into section C and this
+section records v39 as built.
+
 ---
 
 ## K. Open, but not blocking M1
