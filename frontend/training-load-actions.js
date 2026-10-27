@@ -471,6 +471,7 @@ function installAnalysisLayoutWindowListeners() {
 function analysisPointerTarget(event) {
   const explicitTarget = event.target.closest?.("[data-analysis-drag-handle], [data-analysis-resize-handle]");
   if (explicitTarget) return explicitTarget;
+  if (event.target.closest?.(".tl-analysis-widget-body")) return null;
   const widget = event.target.closest?.("[data-analysis-widget-id]");
   if (!widget) return null;
   const interactiveTarget = event.target.closest?.("button, input, select, textarea, a, [role='button'], [data-action], .tl-popover");
@@ -587,7 +588,7 @@ function analysisIsInteractiveTarget(target) {
   // .tl-popover: H2's widget "⋯" menu opens inside the widget, and its
   // non-button content (the "save or cancel first" note) must not start a
   // drag in layout mode.
-  return Boolean(target.closest?.("button, input, select, textarea, a, [role='button'], [data-action], .tl-popover"));
+  return Boolean(target.closest?.("button, input, select, textarea, a, [role='button'], [data-action], .tl-popover, .tl-analysis-widget-body"));
 }
 
 export function bindTrainingLoadAnalysisLayoutInteractions(root = document, renderTrainingLoad) {
@@ -1162,6 +1163,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const bucket = nav.data?.days.find((d) => d.date === nav.selectedDate);
     const item = bucket?.items.find((i) => i.kind === "activity" && i.activityId === nav.selectedActivityId);
     const a = state.trainingLoad.analysis;
+    resetAnalysisDashboardQuery();
     a.runtimeFilter.activityId = nav.selectedActivityId;
     a.runtimeFilter.componentId = "";
     a.selectedActivity = { id: nav.selectedActivityId, name: item?.name || "Activity", date: nav.selectedDate };

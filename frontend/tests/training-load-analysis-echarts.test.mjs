@@ -34,6 +34,15 @@ test("each athlete, actual source and unit retains its own plot and scale; dupli
   assert.equal(plots(model([row(null), row(false, "2026-10-02")])).length, 0);
 });
 
+test("bar widgets use an honest numeric axis for negatives and zero, with no stacking or aggregation", () => {
+  const display = model([row(-15), row(0, "2026-10-02"), row(7, "2026-10-03"), row(800, "2026-10-04", { unitConflict: true })], { type: "bar_chart" });
+  const [plot] = plots(display);
+  assert.equal(plot.option.series[0].type, "bar");
+  assert.equal(plot.option.yAxis.type, "value");
+  assert.equal(plot.option.series[0].stack, undefined);
+  assert.deepEqual(plot.option.series[0].data.map(point => point?.value ?? null), [-15, 0, 7, null]);
+});
+
 test("V1/absent defaults and V2 presentation settings preserve server values; unsupported versions do not draw", () => {
   for (const config of [null, { schemaVersion: 1 }, { schemaVersion: 2, legend: { visible: false }, valueLabels: { visible: true }, numberFormat: { maximumFractionDigits: 2 } }]) {
     const [plot] = plots(model([row(1.2345)], { config }));

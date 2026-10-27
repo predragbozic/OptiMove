@@ -13,5 +13,6 @@ frontend/tests/support/** text eol=lf
 # Vendored third-party bundle (Mediabunny): kept byte-exact so its SHA-256 matches VENDOR.md
 # on every checkout (no line-ending conversion); new files only, same reason as above.
 frontend/vendor/mediabunny/*.mjs -text
+frontend/vendor/echarts/** -text
 # Binary media fixtures of the backend tests.
 backend/tests/fixtures/media/*.mp4 binary

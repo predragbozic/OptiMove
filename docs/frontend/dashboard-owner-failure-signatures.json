@@ -1,0 +1,128 @@
+{
+  "mainSha": "fdc2c2efd0fb1c70e2241775f9af1132d0ceb550",
+  "comparedRuns": 3,
+  "matchedFailureSignatures": 14,
+  "newOrWorseFailureSignatures": 0,
+  "comparedFields": [
+    "file",
+    "test",
+    "failureType",
+    "message",
+    "actual/expected error detail hash"
+  ],
+  "normalization": "CRLF to LF; stack frame lines removed; no assertion content removed",
+  "signatures": [
+    {
+      "file": "builder-create-form-fixes.test.mjs",
+      "test": "handleContentChange mirrors the create form's color-palette hidden input into state.builder.createColor",
+      "failureType": "testCodeFailure",
+      "message": "The input did not match the regular expression /state\\.builder\\.createColor = createColorInput\\.value;/. Input:",
+      "detailSha256": "8d112139c3d539ebfcc927cff88a5779a99cf28424b1e66e400ffc3b92232720",
+      "detailExcerpt": "not ok: handleContentChange mirrors the create form's color-palette hidden input into state.builder.createColor\n    Error [ERR_TEST_FAILURE]: The input did not match the regular expression /state\\.builder\\.createColor = createColorInput\\.value;/. Input:\n    \n    'function handleContentChange(event) {\\r\\n' +\n      \"  // Exercise media (FE-2): the editor's hidden file input chose a file.\\r\\n\" +\n      '  if (handleExerciseEditorChange(state, exerciseEditorHandlers, event)) return;\\r\\n' +\n      '  if (await handleTestsContentChange(event)) return;\\r\\n' +\n      `  const trainingLoadControl = event.target.closest(\"[data-action^='training-load-']\");\\r\\n` +\n      '  if (trainingLoadControl && traini"
+    },
+    {
+      "file": "builder-mobile-section-workflow.test.mjs",
+      "test": "16c. regression guard: the reorder arrows stay vertical (up/down) at every width - the stale mobile override that rotated them to left/right (a leftover from the old horizontal-scroll Added-list design, long since replaced by a vertical list) must not come back",
+      "failureType": "testCodeFailure",
+      "message": "no rule anywhere should rotate the reorder arrows onto their side",
+      "detailSha256": "00551b8339f8f8e94d2078127ca8595273b844524dac906ba049a78b731c3be6",
+      "detailExcerpt": "not ok: 16c. regression guard: the reorder arrows stay vertical (up/down) at every width - the stale mobile override that rotated them to left/right (a leftover from the old horizontal-scroll Added-list design, long since replaced by a vertical list) must not come back\n    Error [ERR_TEST_FAILURE]: no rule anywhere should rotate the reorder arrows onto their side\n      caused by: AssertionError [ERR_ASSERTION]: no rule anywhere should rotate the reorder arrows onto their side"
+    },
+    {
+      "file": "builder-performance-fixes.test.mjs",
+      "test": "handleContentChange routes update-item autosave through the shared scheduleBuilderItemAutosave helper, instead of saving on every single field's blur",
+      "failureType": "testCodeFailure",
+      "message": "The input did not match the regular expression /if \\(form\\.dataset\\.builderForm === \"update-item\"\\) \\{\\s*scheduleBuilderItemAutosave\\(form\\);\\s*return;\\s*\\}/. Input:",
+      "detailSha256": "247a2c918fb833e506cb358c29217f1d96322f0551711654813b80eea47b2602",
+      "detailExcerpt": "not ok: handleContentChange routes update-item autosave through the shared scheduleBuilderItemAutosave helper, instead of saving on every single field's blur\n    Error [ERR_TEST_FAILURE]: The input did not match the regular expression /if \\(form\\.dataset\\.builderForm === \"update-item\"\\) \\{\\s*scheduleBuilderItemAutosave\\(form\\);\\s*return;\\s*\\}/. Input:\n    \n    'function handleContentChange(event) {\\r\\n' +\n      \"  // Exercise media (FE-2): the editor's hidden file input chose a file.\\r\\n\" +\n      '  if (handleExerciseEditorChange(state, exerciseEditorHandlers, event)) return;\\r\\n' +\n      '  if (await handleTestsContentChange(event)) return;\\r\\n' +\n      `  const trainingLoadControl = event."
+    },
+    {
+      "file": "builder-performance-fixes.test.mjs",
+      "test": "other autosave forms (update-block, update-node, update-session, update-plan) are NOT debounced - only update-item has the sibling-field tabbing problem",
+      "failureType": "testCodeFailure",
+      "message": "The input did not match the regular expression /return;\\s*\\}\\s*try \\{\\s*await submitBuilderFormAction\\(form,/. Input:",
+      "detailSha256": "77554f7b054380ca537870a334c11cc62b369117d4b6b1d94ba9c77756301664",
+      "detailExcerpt": "not ok: other autosave forms (update-block, update-node, update-session, update-plan) are NOT debounced - only update-item has the sibling-field tabbing problem\n    Error [ERR_TEST_FAILURE]: The input did not match the regular expression /return;\\s*\\}\\s*try \\{\\s*await submitBuilderFormAction\\(form,/. Input:\n    \n    'function handleContentChange(event) {\\r\\n' +\n      \"  // Exercise media (FE-2): the editor's hidden file input chose a file.\\r\\n\" +\n      '  if (handleExerciseEditorChange(state, exerciseEditorHandlers, event)) return;\\r\\n' +\n      '  if (await handleTestsContentChange(event)) return;\\r\\n' +\n      `  const trainingLoadControl = event.target.closest(\"[data-action^='training-load-"
+    },
+    {
+      "file": "exercise-ownership.test.mjs",
+      "test": "explicit copying clears source media and code and saves only on confirmation",
+      "failureType": "testCodeFailure",
+      "message": "Expected values to be strictly equal:",
+      "detailSha256": "648f3b957d3f92f20271007722aa8e9e5fc3c3115affbac5e44cb00418c469c3",
+      "detailExcerpt": "not ok: explicit copying clears source media and code and saves only on confirmation\n    Error [ERR_TEST_FAILURE]: Expected values to be strictly equal:\n    \n    2 !== 1\n    \n      caused by: AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n    \n    2 !== 1"
+    },
+    {
+      "file": "exercise-personalization.test.mjs",
+      "test": "video-only effective media can be opened without requiring an image",
+      "failureType": "testCodeFailure",
+      "message": "The input did not match the regular expression /media-fallback/. Input:",
+      "detailSha256": "6a90c86f06663f5090f4c8974a9a4646c409990f66c823c8ed8db238c449b0bc",
+      "detailExcerpt": "not ok: video-only effective media can be opened without requiring an image\n    Error [ERR_TEST_FAILURE]: The input did not match the regular expression /media-fallback/. Input:\n    \n    '\\n' +\n      '    <div class=\"library-results-head exercise-results-head\">\\n' +\n      '      <span class=\"muted exercise-results-count\">1 exercises shown</span>\\n' +\n      '      \\n' +\n      '      <div class=\"exercise-results-actions\">\\n' +\n      '        \\n' +\n      '        <button class=\"plain-button compact-button exercise-add-button\" type=\"button\" data-action=\"exercise-add-open\">+ Add exercise</button>\\n' +\n      '        \\n' +\n      '    <div class=\"exercise-browse-controls\">\\n' +\n      '      <button"
+    },
+    {
+      "file": "organization-panel-cache.test.mjs",
+      "test": "6. signOut clears the entire view cache before/alongside its hard reload",
+      "failureType": "testCodeFailure",
+      "message": "the cache must be cleared before (or at latest alongside) the redirect, never left for \"later\"",
+      "detailSha256": "e7a94794be99ac5b5b689ae22a5ce36bb187da7299d920cbc643b8f1e25e4139",
+      "detailExcerpt": "not ok: 6. signOut clears the entire view cache before/alongside its hard reload\n    Error [ERR_TEST_FAILURE]: the cache must be cleared before (or at latest alongside) the redirect, never left for \"later\"\n      caused by: AssertionError [ERR_ASSERTION]: the cache must be cleared before (or at latest alongside) the redirect, never left for \"later\""
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "a drag that starts on an already-selected day REMOVES the whole dragged-over range, not just the anchor",
+      "failureType": "testCodeFailure",
+      "message": "only the dragged range was removed - an unrelated already-selected date elsewhere is untouched",
+      "detailSha256": "4dd0b705d35648e39d485855286e72c7fdf688c5791be98ee97aa1a4eee2d46f",
+      "detailExcerpt": "not ok: a drag that starts on an already-selected day REMOVES the whole dragged-over range, not just the anchor\n    Error [ERR_TEST_FAILURE]: only the dragged range was removed - an unrelated already-selected date elsewhere is untouched\n    + actual - expected\n    \n      [\n    +   '2026-09-10',\n    +   '2026-09-11',\n    +   '2026-09-12',\n        '2026-09-20'\n      ]\n    \n      caused by: AssertionError [ERR_ASSERTION]: only the dragged range was removed - an unrelated already-selected date elsewhere is untouched\n    + actual - expected\n    \n      [\n    +   '2026-09-10',\n    +   '2026-09-11',\n    +   '2026-09-12',\n        '2026-09-20'\n      ]"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "a plain click (mousedown, no drag) on an unselected day adds just that one date",
+      "failureType": "testCodeFailure",
+      "message": "Expected values to be strictly deep-equal:",
+      "detailSha256": "7717c920f3dede526a19e61527256c4f08b1b613f4a8b0db011608c21e06b33b",
+      "detailExcerpt": "not ok: a plain click (mousedown, no drag) on an unselected day adds just that one date\n    Error [ERR_TEST_FAILURE]: Expected values to be strictly deep-equal:\n    + actual - expected\n    \n    + []\n    - [\n    -   '2026-09-05'\n    - ]\n    \n      caused by: AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n    + actual - expected\n    \n    + []\n    - [\n    -   '2026-09-05'\n    - ]"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "a plain click on an ALREADY-selected day removes just that one date - single click toggles",
+      "failureType": "testCodeFailure",
+      "message": "Expected values to be strictly deep-equal:",
+      "detailSha256": "f025cfaedc6067c20434aaac3d02c95749bdac8b3f73e58126451fbed75c38ae",
+      "detailExcerpt": "not ok: a plain click on an ALREADY-selected day removes just that one date - single click toggles\n    Error [ERR_TEST_FAILURE]: Expected values to be strictly deep-equal:\n    + actual - expected\n    \n      [\n    +   '2026-09-05',\n        '2026-09-06'\n      ]\n    \n      caused by: AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n    + actual - expected\n    \n      [\n    +   '2026-09-05',\n        '2026-09-06'\n      ]"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "dragging backward (toward the anchor) shrinks the range - days no longer covered are un-selected again, not left stranded",
+      "failureType": "testCodeFailure",
+      "message": "Expected values to be strictly deep-equal:",
+      "detailSha256": "3b9514c53be2e4faf27ef7826fe11db8cd78345a9b836095279340aa6fde56f5",
+      "detailExcerpt": "not ok: dragging backward (toward the anchor) shrinks the range - days no longer covered are un-selected again, not left stranded\n    Error [ERR_TEST_FAILURE]: Expected values to be strictly deep-equal:\n    + actual - expected\n    \n    + []\n    - [\n    -   '2026-09-10',\n    -   '2026-09-11'\n    - ]\n    \n      caused by: AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n    + actual - expected\n    \n    + []\n    - [\n    -   '2026-09-10',\n    -   '2026-09-11'\n    - ]"
+    },
+    {
+      "file": "tests-schedule-management.actions.test.mjs",
+      "test": "mousedown on day 1, drag over to day 3, selects the whole inclusive range - Booking-style range select",
+      "failureType": "testCodeFailure",
+      "message": "Expected values to be strictly deep-equal:",
+      "detailSha256": "57b8242a91282fe9aa22780a72ed2424fb1eaf52e2c857f5acfa49ca17373ce5",
+      "detailExcerpt": "not ok: mousedown on day 1, drag over to day 3, selects the whole inclusive range - Booking-style range select\n    Error [ERR_TEST_FAILURE]: Expected values to be strictly deep-equal:\n    + actual - expected\n    \n    + []\n    - [\n    -   '2026-09-10',\n    -   '2026-09-11',\n    -   '2026-09-12'\n    - ]\n    \n      caused by: AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n    + actual - expected\n    \n    + []\n    - [\n    -   '2026-09-10',\n    -   '2026-09-11',\n    -   '2026-09-12'\n    - ]"
+    },
+    {
+      "file": "training-load.actions.test.mjs",
+      "test": "X5a. cross-section race, A resolves BEFORE B: Today ends up showing B's real fresh post-toggle content, never A's stale one, never data:null",
+      "failureType": "testTimeoutFailure",
+      "message": "test timed out after 15000ms",
+      "detailSha256": "d4254987a84940b2d7a79e8e67e6b9b149dbd565204dfbb617df43564bfffa4f",
+      "detailExcerpt": "not ok: X5a. cross-section race, A resolves BEFORE B: Today ends up showing B's real fresh post-toggle content, never A's stale one, never data:null\n    Error [ERR_TEST_FAILURE]: test timed out after 15000ms"
+    },
+    {
+      "file": "training-load.actions.test.mjs",
+      "test": "X5b. cross-section race, B resolves BEFORE A: Today ends up showing B's real fresh post-toggle content, A's later stale response never clobbers it, never data:null",
+      "failureType": "testTimeoutFailure",
+      "message": "test timed out after 15000ms",
+      "detailSha256": "8f435d648e91ef63a3359dfa808c5150dd394bdfb9217ebe60a3dda856aaeb61",
+      "detailExcerpt": "not ok: X5b. cross-section race, B resolves BEFORE A: Today ends up showing B's real fresh post-toggle content, A's later stale response never clobbers it, never data:null\n    Error [ERR_TEST_FAILURE]: test timed out after 15000ms"
+    }
+  ]
+}

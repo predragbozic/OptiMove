@@ -305,6 +305,7 @@ export async function queryAnalysisDashboard(onPainted, { force = false } = {}) 
       if (generation !== queryGeneration || queryContextKey() !== contextKey) return;
       a.queryResult = data;
       a.queryLoading = false;
+      a.queryError = "";
       onPainted?.();
     },
     applyError: (error) => {

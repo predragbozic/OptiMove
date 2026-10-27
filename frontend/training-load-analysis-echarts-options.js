@@ -1,7 +1,7 @@
 import { escapeAttr, escapeHtml } from "./utils.js";
 
 export function dashboardChartPlots(model, labelForSeries, rowContext) {
-  if (model.status !== "ready" || model.widgetType !== "line_chart") return [];
+  if (model.status !== "ready" || !["line_chart", "bar_chart"].includes(model.widgetType)) return [];
   const plots = [];
   const precision = model.config.effective.numberFormat.maximumFractionDigits;
   for (const series of model.series) {
@@ -18,7 +18,7 @@ export function dashboardChartPlots(model, labelForSeries, rowContext) {
         precision,
         option: {
           animation: false,
-          color: ["#0f62fe"],
+          color: ["#002d9c"],
           grid: { left: 12, right: 20, top: 48, bottom: 12, containLabel: true },
           legend: { show: model.config.effective.legend.visible, type: "scroll", left: 12, right: 12, top: 4 },
           tooltip: { trigger: "axis", renderMode: "richText", confine: true },
@@ -26,10 +26,11 @@ export function dashboardChartPlots(model, labelForSeries, rowContext) {
           yAxis: { type: "value", name: unit, nameLocation: "middle", nameGap: 42 },
           series: [{
             name,
-            type: "line",
+            type: model.widgetType === "bar_chart" ? "bar" : "line",
             connectNulls: false,
             showSymbol: true,
             symbolSize: 7,
+            barMaxWidth: 48,
             label: { show: model.config.effective.valueLabels.visible, position: "top" },
             data: rows.map(row => row.chartStatus === "value" ? {
               value: row.value,

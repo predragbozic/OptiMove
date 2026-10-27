@@ -45,7 +45,7 @@ for (const type of ["kpi", "table", "line_chart", "bar_chart"]) {
     setup(type, [row(0)]);
     const zero = rendered().querySelector(".tl-analysis-widget");
     assert.match(zero.textContent, /\b0\b/);
-    if (type.includes("chart")) assert.match(zero.querySelector(".tl-analysis-chart-track span").getAttribute("style"), /width:0%/);
+    if (type.includes("chart")) assert.equal(zero.querySelector(".tl-analysis-table tbody tr").children[2].textContent, "0");
     setup(type, [row(null)]);
     const missing = rendered().querySelector(".tl-analysis-widget");
     assert.match(missing.textContent, /No data/);
@@ -56,7 +56,7 @@ for (const type of ["kpi", "table", "line_chart", "bar_chart"]) {
     assert.doesNotMatch(conflict.textContent, /98765/);
     assert.equal(conflict.querySelector(".tl-analysis-chart-track"), null);
     setup(type, [], { resultStatus: "error" });
-    assert.match(rendered().querySelector(".tl-analysis-widget").textContent, /seriesQueryFailed/);
+    assert.match(rendered().querySelector(".tl-analysis-widget").textContent, /This series could not be loaded/);
   });
 
   test(`${type}: unsupported and invalid configurations are explicit and never silently rendered with defaults`, () => {
@@ -114,7 +114,7 @@ for (const type of ["line_chart", "bar_chart"]) {
   test(`${type}: separate athlete/source points retain readable identity and escape source labels`, () => {
     setup(type, [row(10, { athleteId: "athlete-1", sourceConnectionId: "source-1" }), row(20, { athleteId: "athlete-2", sourceConnectionId: '<img src=x onerror="bad">' })]);
     const body = rendered().querySelector(".tl-analysis-widget");
-    assert.equal(body.querySelectorAll(".tl-analysis-chart-track").length, 2);
+    assert.equal(body.querySelectorAll(".tl-analysis-table tbody tr").length, 2);
     assert.match(body.textContent, /sRPE.*athlete-1.*source-1/);
     assert.match(body.textContent, /athlete-2/);
     assert.equal(body.querySelector("img"), null);
@@ -130,6 +130,34 @@ test("loading is not an empty result and malformed results do not crash any widg
     assert.match(rendered().querySelector(".tl-analysis-widget").textContent, /No data/);
     analysis.queryResult.widgets[0].series[0].data.current = "malformed";
     assert.match(rendered().querySelector(".tl-analysis-widget").textContent, /Invalid or unavailable result/);
+  }
+});
+
+test("KPI shows actual identity context and tables expose keyboard-accessible readable equivalents", () => {
+  setup("kpi", [row(12, { athleteId: "athlete-1", sourceConnectionId: "source-1" })]);
+  assert.match(rendered().querySelector(".tl-analysis-kpi-context").textContent, /Athlete athlete-1.*Source source-1/);
+  for (const type of ["table", "line_chart", "bar_chart"]) {
+    setup(type, [row(-12), row(0, { bucketKey: "2026-10-02" })]);
+    const document = rendered();
+    assert.equal(document.querySelector(".tl-analysis-table-wrap").getAttribute("tabindex"), "0");
+    assert.equal(document.querySelector("caption").textContent, "Current period values");
+    assert.deepEqual([...document.querySelectorAll("tbody tr")].map(entry => entry.children[2].textContent), ["-12", "0"]);
+    if (type.includes("chart")) assert.equal(document.querySelector("details").open, true);
+  }
+});
+
+test("all reported source identity fields distinguish chart captions, tables and KPI context", () => {
+  for (const type of ["line_chart", "bar_chart", "table", "kpi"]) {
+    setup(type, [row(12, { sourceIdentityId: "identity-one", sourceSystem: "system-one", entryMethod: "api_import" })]);
+    const body = rendered().querySelector(".tl-analysis-widget");
+    for (const value of ["identity-one", "system-one", "api_import"]) assert.ok(body.textContent.includes(value));
+    if (type.includes("chart")) {
+      assert.match(body.querySelector("figcaption").textContent, /identity-one.*system-one.*api_import/);
+      setup(type, [row(12, { sourceIdentityId: "identity-one" }), row(12, { sourceIdentityId: "identity-two" })]);
+      const captions = [...rendered().querySelectorAll("figcaption")].map(caption => caption.textContent);
+      assert.equal(captions.length, 2);
+      assert.notEqual(captions[0], captions[1]);
+    }
   }
 });
 
