@@ -1,6 +1,6 @@
 # J5 — v39 and v40: the source-field revision lifecycle (C91) and Q10 part B
 
-**Accepted on 2026-10-27 (C100 of the discovery document), not implemented.** This is phase 4's discovery delta of
+**Accepted on 2026-10-27 (C100 of the discovery document); implemented in the phase 4 pull request, not merged.** Section J5 of the discovery document records it as built. This is phase 4's discovery delta of
 `docs/ai/metrics-core-plan.md` (★★): the owner approves the contract before any code. It extends
 `docs/ai/gpexe-metric-variable-mapping-discovery.md` (the *discovery document*), whose sections D3, J1, J2 and J4 it
 builds on; its decisions are written into that document's section C as C100, as R2's were (C99). The owner's answers
@@ -9,7 +9,7 @@ request that records them confirms it.
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-27, on the *Rukovodilac*'s order of that day; revised the same day after two rounds of internal reviews (`code-reviewer`, `db-reviewer`, `security-reviewer`) and the *Rukovodilac*'s R5 decision (two migration files); then reviewed by the *Rukovodilac* and the *Nezavisni revizor* at `93f22d3` (no BLOCKER, HIGH or MEDIUM), with their notes and the *Rukovodilac*'s R decisions applied. Accepted on 2026-10-27: O1–O9 as proposed (C100, the *Rukovodilac*'s reading of the owner's words) and R1–R7 as decided. Not implemented: no code, migration or data change. |
+| Status | Proposed by the executor on 2026-10-27, on the *Rukovodilac*'s order of that day; revised the same day after two rounds of internal reviews (`code-reviewer`, `db-reviewer`, `security-reviewer`) and the *Rukovodilac*'s R5 decision (two migration files); then reviewed by the *Rukovodilac* and the *Nezavisni revizor* at `93f22d3` (no BLOCKER, HIGH or MEDIUM), with their notes and the *Rukovodilac*'s R decisions applied. Accepted on 2026-10-27: O1–O9 as proposed (C100, the *Rukovodilac*'s reading of the owner's words) and R1–R7 as decided; confirmed by the owner's merge of PR #240 (`0c7104c`). Implemented in the phase 4 pull request (branch `feature/metrics-revision-lifecycle-v39-v40`): not merged, not deployed, v39 and v40 applied to no persistent database. |
 | Verified against commit | `fdc2c2e` (merge of PR #237). Every file and line reference below is to that commit. |
 | Decides | The owner: the questions marked **[OWNER]** (red zone). The *Rukovodilac*: the questions marked **[RUKOVODILAC]** (inside the plan). |
 | Reviewers of this document | The *Rukovodilac* and the *Nezavisni revizor* (★★), `code-reviewer`; `db-reviewer` for J5.2's transactions, J5.3 and J5.4; `security-reviewer` for the access, actor and cross-owner parts. |
@@ -111,7 +111,7 @@ stricter (`backend/src/metricTextRules.js`, J3b.9); the database still accepts w
 
 ---
 
-## J5.2 The lifecycle (proposed)
+## J5.2 The lifecycle
 
 ### Common to L1-L5
 
@@ -217,7 +217,7 @@ Versions created on R+1 before L4 (allowed today: a draft revision with a proven
 
 ---
 
-## J5.3 Migration v39: the lifecycle's database part (proposed)
+## J5.3 Migration v39: the lifecycle's database part
 
 - **T2b actor guard.** `source_metric_revisions_actor_guard()` is replaced (`create or replace`); its trigger keeps
   the name `source_metric_revisions_v37_actor_guard`, so it still fires after v34's
@@ -274,7 +274,7 @@ Versions created on R+1 before L4 (allowed today: a draft revision with a proven
 
 ---
 
-## J5.4 Migration v40: Q10 part B, the database twins (proposed)
+## J5.4 Migration v40: Q10 part B, the database twins
 
 The *Rukovodilac*'s decision of 2026-10-27, after the security review of this contract, replaces J3b.9's "no v40":
 part B is its own migration file, v40, in the same pull request as v39 (R5). Each has its own rollback, read-only

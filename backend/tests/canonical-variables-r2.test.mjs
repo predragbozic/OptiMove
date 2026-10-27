@@ -19,6 +19,7 @@ import pg from "pg";
 import * as runner from "../src/migrate.js";
 import { execFileSync } from "node:child_process";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
+import { writeRevision } from "./support/source-revisions.mjs";
 import { createDisposableDatabase } from "./support/disposable-db.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -299,26 +300,14 @@ async function runScript(c, file) {
 }
 
 // A mapping version of a variable in needs_review (activate() makes it active
-// and so pins the variable's current version). The revision lifecycle has no
-// writer before its own pull request (C91): the revision is written with v37's
-// two T2b triggers off, as the M3-0 suite does.
+// and so pins the variable's current version). The revision is written through
+// the lifecycle's database path (v39; backend/tests/support/source-revisions.mjs),
+// as the M3-0 suite does.
 async function preparedMapping(variable, adminCookie) {
   const def = await one(k, `insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,'Test field',$2) returning id`, [`r2.test.f${uid()}`, W.pa.id]);
-  const V37 = ["source_metric_revisions_v37_actor_guard", "source_metric_revisions_v37_audit_link"];
-  let rev;
-  await k.query("begin");
-  try {
-    for (const t of V37) await k.query(`alter table training_load.source_metric_definition_versions disable trigger ${t}`);
-    rev = await one(k, `insert into training_load.source_metric_definition_versions (source_metric_definition_id, revision_number, value_shape, parameter_kind, supports_session, supports_drill, evidence_status, evidence_ref, created_by_user_id) values ($1,1,'number','none',true,true,'observed',$2,$3) returning id`, [def.id, COMPAT, W.pa.id]);
-    await k.query(`update training_load.source_metric_definition_versions set source_unit = 'm', unit_verified_by_user_id = $2, unit_verified_at = now(), unit_evidence_ref = $3 where id = $1`, [rev.id, W.pa.id, COMPAT]);
-    await k.query(`update training_load.source_metric_definition_versions set meaning_verified_by_user_id = $2, meaning_verified_at = now(), meaning_evidence_ref = $3, evidence_status = 'verified' where id = $1`, [rev.id, W.pa.id, COMPAT]);
-    await k.query(`update training_load.source_metric_definition_versions set state = 'active', activated_by_user_id = $2, activated_at = now() where id = $1`, [rev.id, W.pa.id]);
-    for (const t of V37) await k.query(`alter table training_load.source_metric_definition_versions enable trigger ${t}`);
-    await k.query("commit");
-  } catch (error) {
-    await k.query("rollback").catch(() => {});
-    throw error;
-  }
+  const rev = { id: await writeRevision(k, {
+    fieldId: def.id, by: W.pa.id, evidenceRef: COMPAT, unit: "m", unitRef: COMPAT, meaning: true, meaningRef: COMPAT,
+  }) };
   const mapping = await post("/mappings", adminCookie, { requestKey: key(), sourceMetricId: def.id, metricDefinitionId: variable.id });
   assert.equal(mapping.status, 201, mapping.text);
   const mv = await post(`/mappings/${mapping.body.mapping.id}/versions`, adminCookie, { requestKey: key(), sourceRevisionId: rev.id, appliesToSession: true, appliesToDrill: false });

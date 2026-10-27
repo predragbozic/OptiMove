@@ -2150,7 +2150,7 @@ Technical details.
       *Rukovodilac*'s smoke saw it three times in a row, until 12:30:51 UTC.
     - Without a login the variable routes (GET and POST) answered 401, and `/api/auth/me` answered
       `{"user":null}`.
-    - Part B, the database twins, goes into v39.
+    - Part B, the database twins, is its own migration, v40, in the phase 4 pull request (R5, C100).
   - **Phase 2c, R2 in the Variables view, PR #237** (frontend only, no migration; section H and J3b.10 of the
     discovery document):
     - rename, archive and restore in the Variables view;
@@ -2964,7 +2964,8 @@ pre-existing; pass/fail counts don't belong in this file
 - **The admin APIs' invisible-character list has gaps** (security review of M3-0, 2026-10-14, LOW). **Q10: part A,
   the services and the frontend, is merged and deployed (PR #229, `a1bb932`, no migration; J3b.9 of the discovery
   document); part B, the database
-  twins `source_metric_text_ok` and `source_metric_unit_token_ok`, goes into v39. The older catalog API
+  twins `source_metric_text_ok` and `source_metric_unit_token_ok`, is migration v40 in the phase 4 pull request (implemented, not
+  merged; J5 of the discovery document). The older catalog API
   (`backend/src/trainingLoadMetricsCatalog.js`) still only trims the labels of team- and user-owned definitions
   (club and system variables never pass through it, C98); whether it takes `boundedText()` too is a separate
   decision (security review of PR #229, LOW).** As found: `TEXT_FORBIDDEN` in `backend/src/sourceMetricMappingService.js` (the shared rule C53, used by M2 and
@@ -3289,15 +3290,19 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224), R2, renaming, archiving and restoring a canonical variable (PR #227, v38), Q10 part A (PR #229), phase 2c, R2 in the Variables view (PR #237) and the plan's working mode with phases 11 and 12 (PR #238, `b358dae`) are merged and deployed; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224), R2, renaming, archiving and restoring a canonical variable (PR #227, v38), Q10 part A (PR #229), phase 2c, R2 in the Variables view (PR #237), the plan's working mode with phases 11 and 12 (PR #238, `b358dae`) and the v39 / v40 contract J5 (PR #240, `0c7104c`) are merged and deployed; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
 1. **The Metrics Core plan** (`docs/ai/metrics-core-plan.md`) sets the order of the Metrics Core work. Its
    phases 0, 1, 2, 3, 2b and 2c are done, and so is Q10 part A (PR #229). Next by the plan:
-   - the v39 / v40 contract (J5, PR #240): accepted on 2026-10-27 as the *Rukovodilac* reads the owner's words (C100), confirmed by the owner's own merge of PR #240; its merge, with the plan
-     changes it carries, needs the owner's word;
+   - the v39 / v40 contract (J5, PR #240): accepted on 2026-10-27 as the *Rukovodilac* reads the owner's words (C100), confirmed by the owner's own merge of PR #240
+     (merge commit `0c7104c`, 2026-10-27 22:27:43 UTC, parents `b358dae` and `e780f4a`; `/api/health` served it with `ok: true` three
+     times in a row from 22:28:46 UTC; without a login the eight variable routes answered 401);
    - phase P, the owner only: the v37 post-check passed (the owner's statement, C100); the evidence for the nine
      `rest_v1` fields (C97) stays open;
-   - phase 4, the revision lifecycle (C91) and Q10 part B, migrations v39 and v40, after PR #240 is merged; each
-     migration needs the owner's order that names it;
+   - phase 4, the revision lifecycle (C91) and Q10 part B, migrations v39 and v40: implemented in the phase 4 pull
+     request (branch `feature/metrics-revision-lifecycle-v39-v40`; as built in J5 of the discovery document) - not
+     merged, not deployed, v39 and v40 applied to no persistent database. Its merge needs the owner's order that names
+     both migrations, after the *Rukovodilac*'s and the *Nezavisni revizor*'s review; the owner runs the read-only
+     preflights the same day and the post-checks after the deploy (`docs/runbooks/source-metric-lifecycle-v39-v40.md`);
    - phases 5–12 and R1, as the plan orders them.
 
    No production field is confirmed through M2b before the revision lifecycle (C91) and the owner-run evidence

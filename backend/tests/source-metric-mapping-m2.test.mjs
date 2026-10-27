@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import pg from "pg";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-disposable-db.mjs";
+import { activateRevisionRow, retireRevisionRow, verifyRevisionRow, writeRevision, zoneMeaningAsFutureDecision } from "./support/source-revisions.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -144,43 +145,27 @@ async function canonical({ scope = "system", clubId = null, teamId = null, userI
   return { id, versionId, key };
 }
 
-// The revision lifecycle of a source field (create, verify, activate, retire)
-// has no writer before its own pull request (C91), and v37 refuses every other
-// T2b write: these fixtures write it as that later pull request will, with
-// v37's two T2b triggers off for these statements only, in one transaction, on
-// the disposable database only (v34's own guard stays on). v37 itself is tested
-// in source-field-verification-m2b.test.mjs.
+// The revisions of a source field are written through the lifecycle's database
+// path (v39; backend/tests/support/source-revisions.mjs): the acting user set,
+// each write with its audit row, every guard on. A zone's meaning act stays
+// refused until the owner decides the zone model (C89), so the zone fixtures
+// write it as that decision might allow (zoneMeaningAsFutureDecision). v37's
+// trigger names stay for asFutureMigration below.
 const V37_REVISION_TRIGGERS = ["source_metric_revisions_v37_actor_guard", "source_metric_revisions_v37_audit_link"];
-async function asRevisionLifecycle(statements) {
-  await admin.query("begin");
-  try {
-    for (const t of V37_REVISION_TRIGGERS) await admin.query(`alter table training_load.source_metric_definition_versions disable trigger ${t}`);
-    const out = await statements();
-    for (const t of V37_REVISION_TRIGGERS) await admin.query(`alter table training_load.source_metric_definition_versions enable trigger ${t}`);
-    await admin.query("commit");
-    return out;
-  } catch (error) {
-    await admin.query("rollback").catch(() => {});
-    throw error;
-  }
-}
 
 // A source field of gpexe / rest_v1 with revision 1 (M1 SQL, an active platform admin as the actor).
 async function field({ kind = "none", unit = "s", boundUnit = null, operator = null, session = true, drill = true, verify = true, activate = true } = {}) {
   const by = W.pa.id;
   const def = await one(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,'Test field',$2) returning id`, [`m2.test.f${uid()}`, by]);
   const shape = kind === "zone_bounds" ? "zone_distance" : kind === "event_threshold" ? "event_count" : "number";
-  const rev = await asRevisionLifecycle(async () => {
-    const created = await one(`insert into training_load.source_metric_definition_versions (source_metric_definition_id, revision_number, value_shape, parameter_kind, supports_session, supports_drill, evidence_status, evidence_ref, created_by_user_id)
-                               values ($1,1,$2,$3,$4,$5,'observed',$6,$7) returning id`, [def.id, shape, kind, session, drill, COMPAT, by]);
-    if (verify) {
-      await q(`update training_load.source_metric_definition_versions set source_unit = $2, source_bound_unit = $3, unit_verified_by_user_id = $4, unit_verified_at = now(), unit_evidence_ref = $5 where id = $1`, [created.id, unit, boundUnit, by, COMPAT]);
-      await q(`update training_load.source_metric_definition_versions set bound_operator = $2, meaning_verified_by_user_id = $3, meaning_verified_at = now(), meaning_evidence_ref = $4, evidence_status = 'verified' where id = $1`, [created.id, operator, by, COMPAT]);
-    }
-    if (activate) await q(`update training_load.source_metric_definition_versions set state = 'active', activated_by_user_id = $2, activated_at = now() where id = $1`, [created.id, by]);
-    return created;
+  const zone = kind === "zone_bounds";
+  const revId = await writeRevision(admin, {
+    fieldId: def.id, by, valueShape: shape, parameterKind: kind, supportsSession: session, supportsDrill: drill, evidenceRef: COMPAT,
+    unit: verify ? unit : null, boundUnit: verify ? boundUnit : null, unitRef: COMPAT,
+    meaning: verify && !zone, operator, meaningRef: COMPAT, state: activate ? "active" : "draft",
   });
-  return { id: def.id, revId: rev.id };
+  if (verify && zone) await zoneMeaningAsFutureDecision(admin, { fieldId: def.id, revisionId: revId, by, operator, meaningRef: COMPAT });
+  return { id: def.id, revId };
 }
 async function conversion(from, to, scale, divisor = "1", offset = "0") {
   return (await one(`insert into training_load.unit_conversions (from_unit, to_unit, scale, scale_divisor, "offset", evidence_ref, created_by_user_id) values ($1,$2,$3,$4,$5,$6,$7) returning id`, [from, to, scale, divisor, offset, D5, W.pa.id])).id;
@@ -453,7 +438,7 @@ test("5. POST /mappings: the owner comes from the workspace only (platform: syst
   const exists = await post("/mappings", W.pa2.cookie, { requestKey: key(), sourceMetricId: W.fSec.id, metricDefinitionId: W.sysMin.id });
   assert.deepEqual([exists.status, exists.body.error, exists.body.current], [409, "mapping_exists", { mappingId: sys.body.mapping.id }]);
   const retired = await field({ unit: "s" });
-  await asRevisionLifecycle(() => q(`update training_load.source_metric_definition_versions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'Test retirement' where id = $1`, [retired.revId, W.pa.id]));
+  await retireRevisionRow(admin, { fieldId: retired.id, revisionId: retired.revId, by: W.pa.id });
   await q(`update training_load.source_metric_definitions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'Test retirement' where id = $1`, [retired.id, W.pa.id]);
   const gone = await post("/mappings", W.pa.cookie, { requestKey: key(), sourceMetricId: retired.id, metricDefinitionId: W.sysMin.id });
   assert.deepEqual([gone.status, gone.body.error], [409, "source_metric_retired"]);
@@ -583,7 +568,7 @@ test("8. POST versions: identity and non-identity conversions are server-derived
   const unproven = await post(`/mappings/${seedMap.id}/versions`, W.pa.cookie, versionBody(W.seedTime.rev_id, { conversionNote: "x" }));
   assert.deepEqual([unproven.status, unproven.body.error], [409, "unit_not_proven"]);
   const halfZone = await field({ kind: "zone_bounds", unit: "m", boundUnit: "m/s", operator: ">=", verify: false, activate: false });
-  await asRevisionLifecycle(() => q(`update training_load.source_metric_definition_versions set source_unit = 'm', source_bound_unit = 'm/s', unit_verified_by_user_id = $2, unit_verified_at = now(), unit_evidence_ref = $3 where id = $1`, [halfZone.revId, W.pa.id, COMPAT]));
+  await verifyRevisionRow(admin, { fieldId: halfZone.id, revisionId: halfZone.revId, by: W.pa.id, unit: "m", boundUnit: "m/s", unitRef: COMPAT });
   const halfMap = await mappingFor(W.pa, halfZone.id, W.sysZone.id);
   const noOperator = await post(`/mappings/${halfMap.id}/versions`, W.pa.cookie, versionBody(halfZone.revId, { sourceParameters: { lower: "7", upper: null } }));
   assert.deepEqual([noOperator.status, noOperator.body.error], [409, "parameters_not_proven"]);
@@ -718,7 +703,7 @@ test("12. submit: a replay answers the current state; a revision retired after t
   const g = await field({ unit: "s" });
   const gm = await mappingFor(W.pa, g.id, W.sysSec.id);
   const gv = (await post(`/mappings/${gm.id}/versions`, W.pa.cookie, versionBody(g.revId))).body.version;
-  await asRevisionLifecycle(() => q(`update training_load.source_metric_definition_versions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'Test retirement' where id = $1`, [g.revId, W.pa.id]));
+  await retireRevisionRow(admin, { fieldId: g.id, revisionId: g.revId, by: W.pa.id });
   const blocked = await post(`/mappings/${gm.id}/versions/${gv.id}/submit`, W.pa.cookie, { requestKey: key() });
   assert.deepEqual([blocked.status, blocked.body.error], [409, "revision_not_usable"]);
   assert.equal((await one(`select status from training_load.source_metric_mapping_versions where id = $1`, [gv.id])).status, "draft");
@@ -997,7 +982,7 @@ test("19. a mapping's versions are read in pages (number descending, an opaque c
   assert.deepEqual([detailAgain.status, detailAgain.body.mapping.versions[0].versionNumber], [200, count + 1]);
 });
 
-test("20. architecture: only the M2 service writes a mapping or a mapping version; the T8 audit is written by the M2 service and the M2b verification service, a T2b revision only by the M2b verification service; nothing in backend/src writes a T2a field, a T5 activation, a T6 value provenance or a unit conversion", async () => {
+test("20. architecture: only the M2 service writes a mapping; a mapping version only the M2 service and the revision lifecycle (its pinned step disables); the T8 audit is written by the M2 service, the M2b verification service and the revision lifecycle, a T2b revision only by the M2b verification service and the revision lifecycle; nothing in backend/src writes a T2a field, a T5 activation, a T6 value provenance or a unit conversion", async () => {
   const { readdirSync, readFileSync } = await import("node:fs");
   const { join, relative } = await import("node:path");
   const src = new URL("../src/", import.meta.url);
@@ -1013,11 +998,10 @@ test("20. architecture: only the M2 service writes a mapping or a mapping versio
   assert.ok(files.length > 20, "the scan found the backend sources");
   const writes = (table) => new RegExp(`(insert\\s+into|update|delete\\s+from)\\s+training_load\\.${table}\\b`, "i");
   const writers = (table) => files.filter((f) => writes(table).test(readFileSync(f, "utf8"))).map((f) => relative(root, f).replace(/\\/g, "/")).sort();
-  for (const table of ["source_metric_mappings", "source_metric_mapping_versions"]) {
-    assert.deepEqual(writers(table), ["sourceMetricMappingService.js"], table);
-  }
-  assert.deepEqual(writers("source_metric_audit"), ["sourceFieldVerificationService.js", "sourceMetricMappingService.js"]);
-  assert.deepEqual(writers("source_metric_definition_versions"), ["sourceFieldVerificationService.js"]);
+  assert.deepEqual(writers("source_metric_mappings"), ["sourceMetricMappingService.js"]);
+  assert.deepEqual(writers("source_metric_mapping_versions"), ["sourceMetricMappingService.js", "sourceRevisionLifecycleService.js"]);
+  assert.deepEqual(writers("source_metric_audit"), ["sourceFieldVerificationService.js", "sourceMetricMappingService.js", "sourceRevisionLifecycleService.js"]);
+  assert.deepEqual(writers("source_metric_definition_versions"), ["sourceFieldVerificationService.js", "sourceRevisionLifecycleService.js"]);
   for (const table of ["source_metric_mapping_activations", "metric_value_source_provenance", "source_metric_definitions", "unit_conversions"]) {
     assert.deepEqual(writers(table), [], table);
   }
@@ -1193,7 +1177,7 @@ test("23. /mappings is read in pages: a fixed page size, the stable order (syste
 test("24. a version's source revision facts are compared again under FOR SHARE: allowed T2b acts between the plain read and the lock (the meaning proof, the activation) keep the facts and the version is created; a retirement is revision_not_usable; a changed fact - a transition a later migration might allow, simulated with the v34 guard bypassed - is try_again with nothing written", async () => {
   async function draftWithUnit() {
     const f = await field({ unit: "s", verify: false, activate: false });
-    await asRevisionLifecycle(() => q(`update training_load.source_metric_definition_versions set source_unit = 's', unit_verified_by_user_id = $2, unit_verified_at = now(), unit_evidence_ref = $3 where id = $1`, [f.revId, W.pa.id, COMPAT]));
+    await verifyRevisionRow(admin, { fieldId: f.id, revisionId: f.revId, by: W.pa.id, unit: "s", unitRef: COMPAT });
     return f;
   }
   async function heldVersion(f, during) {
@@ -1210,13 +1194,13 @@ test("24. a version's source revision facts are compared again under FOR SHARE: 
     return { r, m };
   }
   const a = await draftWithUnit();
-  const allowed = await heldVersion(a, () => asRevisionLifecycle(async () => {
-    await q(`update training_load.source_metric_definition_versions set meaning_verified_by_user_id = $2, meaning_verified_at = now(), meaning_evidence_ref = $3, evidence_status = 'verified' where id = $1`, [a.revId, W.pa.id, COMPAT]);
-    await q(`update training_load.source_metric_definition_versions set state = 'active', activated_by_user_id = $2, activated_at = now() where id = $1`, [a.revId, W.pa.id]);
-  }));
+  const allowed = await heldVersion(a, async () => {
+    await verifyRevisionRow(admin, { fieldId: a.id, revisionId: a.revId, by: W.pa.id, meaning: true, meaningRef: COMPAT });
+    await activateRevisionRow(admin, { fieldId: a.id, revisionId: a.revId, by: W.pa.id });
+  });
   assert.deepEqual([allowed.r.status, allowed.r.body.version?.sourceUnit, allowed.r.body.version?.sourceRevisionId], [201, "s", a.revId], allowed.r.text);
   const b = await draftWithUnit();
-  const retired = await heldVersion(b, () => asRevisionLifecycle(() => q(`update training_load.source_metric_definition_versions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'Test retirement' where id = $1`, [b.revId, W.pa.id])));
+  const retired = await heldVersion(b, () => retireRevisionRow(admin, { fieldId: b.id, revisionId: b.revId, by: W.pa.id }));
   assert.deepEqual([retired.r.status, retired.r.body.error], [409, "revision_not_usable"]);
   assert.equal((await q(`select 1 from training_load.source_metric_mapping_versions where mapping_id = $1`, [retired.m.id])).length, 0);
   const c = await draftWithUnit();
@@ -1304,8 +1288,13 @@ test("26. nothing of M2 writes a T5 activation, a T6 fact, a T2a / T2b row or Me
   assert.equal((await one(`select count(*)::int as n from training_load.metric_value_source_provenance`)).n, 0);
   assert.equal((await one(`select count(*)::int as n from training_load.source_metric_mapping_versions where status not in ('draft', 'needs_review')`)).n, 0, "no activation or disabling");
   assert.deepEqual(await metricsDigest(), W.metricsDigest, "Metrics Core unchanged");
-  const actions = (await q(`select distinct action from training_load.source_metric_audit order by 1`)).map((r) => r.action);
+  // M2's request records; the other audit rows are this file's revision fixtures
+  // (backend/tests/support/source-revisions.mjs) and its raw database writes,
+  // none of them a request record.
+  const actions = (await q(`select distinct action from training_load.source_metric_audit where request_key is not null order by 1`)).map((r) => r.action);
   assert.deepEqual(actions, ["mapping_create", "mapping_status", "mapping_version_create"]);
+  const fixtureActions = (await q(`select distinct action from training_load.source_metric_audit where request_key is null order by 1`)).map((r) => r.action);
+  assert.ok(fixtureActions.every((a) => /^(source_metric_(revision_(create|activate|retire)|unit_verified|meaning_verified)|mapping_(create|version_create|status))$/.test(a)), fixtureActions.join(","));
   const userIds = [W.pa.id, W.pa2.id, W.paA.id, W.caA.id, W.caA2.id, W.caB.id];
   for (const text of responses) {
     assert.ok(!/source_metric_(mapping|audit|definition)|violates|syntax error|relation "/i.test(text), `no database text: ${text.slice(0, 160)}`);

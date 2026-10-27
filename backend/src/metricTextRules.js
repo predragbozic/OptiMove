@@ -4,7 +4,8 @@
 //
 // The lists are explicit, since PostgreSQL's regular expressions have no
 // Unicode properties: the database twins source_metric_text_ok() and
-// source_metric_unit_token_ok() (v34) take the same lists in v39 (Q10).
+// source_metric_unit_token_ok() (v34) take the same lists in v40 (Q10 part B;
+// the parity test of backend/tests/source-revision-lifecycle-v39.test.mjs).
 
 // C41 / C53, widened by Q10: the characters a bounded free-text value refuses
 // (NUL too: a PostgreSQL text cannot hold it). C53's controls, invisible and
