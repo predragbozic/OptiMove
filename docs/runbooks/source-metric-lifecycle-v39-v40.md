@@ -4,7 +4,7 @@ Contract: `docs/ai/v39-revision-lifecycle-contract.md` (J5); as built: section J
 `docs/ai/gpexe-metric-variable-mapping-discovery.md`. The two migrations come in one pull request:
 
 - **v39** (`migrations_v2/202610271100_training_load_v39_source_metric_revision_lifecycle.sql`): the database guards
-  of the revision lifecycle (routes L1–L5).
+  of the revision lifecycle (routes L1-L5).
 - **v40** (`migrations_v2/202610271200_training_load_v40_source_metric_text_rules.sql`): the database twins of the
   text rules (Q10 part B).
 
@@ -87,5 +87,13 @@ If one of those versions belongs to an archived club, the request is refused wit
 1. restore the club;
 2. repeat the request;
 3. archive the club again.
+
+While the club is restored, its workspace is open to its members again; keep that interval short.
+
+**Known limit:** retiring or replacing a revision disables its pinned versions in one transaction, with no cap on
+their number (M2 has no write quota, C68). Many submitted versions on one revision could keep that transaction past
+its 10 s statement bound, and every attempt would then answer `try_again`. This cannot happen today, because no
+production revision has a proven unit, so no mapping version exists. It needs a decision before the first production
+confirmation (M6): a cap on open versions, or batches (phase 7).
 
 The first production confirmation of a field waits for its evidence (C97, M6).

@@ -9,7 +9,7 @@ request that records them confirms it.
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-27, on the *Rukovodilac*'s order of that day; revised the same day after two rounds of internal reviews (`code-reviewer`, `db-reviewer`, `security-reviewer`) and the *Rukovodilac*'s R5 decision (two migration files); then reviewed by the *Rukovodilac* and the *Nezavisni revizor* at `93f22d3` (no BLOCKER, HIGH or MEDIUM), with their notes and the *Rukovodilac*'s R decisions applied. Accepted on 2026-10-27: O1–O9 as proposed (C100, the *Rukovodilac*'s reading of the owner's words) and R1–R7 as decided; confirmed by the owner's merge of PR #240 (`0c7104c`). Implemented in the phase 4 pull request (branch `feature/metrics-revision-lifecycle-v39-v40`): not merged, not deployed, v39 and v40 applied to no persistent database. |
+| Status | Proposed by the executor on 2026-10-27, on the *Rukovodilac*'s order of that day; revised the same day after two rounds of internal reviews (`code-reviewer`, `db-reviewer`, `security-reviewer`) and the *Rukovodilac*'s R5 decision (two migration files); then reviewed by the *Rukovodilac* and the *Nezavisni revizor* at `93f22d3` (no BLOCKER, HIGH or MEDIUM), with their notes and the *Rukovodilac*'s R decisions applied. Accepted on 2026-10-27: O1–O9 as proposed (C100, the *Rukovodilac*'s reading of the owner's words) and R1–R7 as decided; confirmed by the owner's merge of PR #240 (`0c7104c`). Implemented in the phase 4 pull request (branch `feature/metrics-revision-lifecycle-v39-v40`): not merged, not deployed, v39 and v40 applied to no persistent database. Amended there by one precondition of L2 and L5 (`expectedState`, after the `db-reviewer`'s MEDIUM), which the *Rukovodilac*'s GO on that pull request accepts or returns. |
 | Verified against commit | `fdc2c2e` (merge of PR #237). Every file and line reference below is to that commit. |
 | Decides | The owner: the questions marked **[OWNER]** (red zone). The *Rukovodilac*: the questions marked **[RUKOVODILAC]** (inside the plan). |
 | Reviewers of this document | The *Rukovodilac* and the *Nezavisni revizor* (★★), `code-reviewer`; `db-reviewer` for J5.2's transactions, J5.3 and J5.4; `security-reviewer` for the access, actor and cross-owner parts. |
@@ -193,8 +193,13 @@ sets `revision_number` (the next number). It is refused while the field has a dr
 active (`409 field_not_active`), or already has 20 revisions (`409 revision_limit`, R7). The shape rules are v34's (`400 invalid_body`, `invalid_unit`,
 `invalid_evidence_ref`).
 
-**L2 and L5, the body:** `requestKey` and `reason` (`source_metric_text_ok(…, 500)`), the reason written to
-`retired_reason` and to the `…_retire` row.
+**L2 and L5, the body:** `requestKey`, `reason` (`source_metric_text_ok(…, 500)`), the reason written to
+`retired_reason` and to the `…_retire` row, and `expectedState`: `draft` for L2, `active` for L5, the state the caller
+saw (anything else is `400 invalid_body`; it is part of the request hash). A revision in the other state is
+`409 revision_state_changed` naming its state (`current.state`), checked under the locks before the pinned step; a
+retired one stays `409 revision_retired`. *Amended in phase 4* after the `db-reviewer`'s MEDIUM: without it a stale L2
+could retire a draft that L3 or L4 activated meanwhile, as an active revision and with the pinned step (the same
+precondition as L4's `expectedActiveRevisionId`).
 
 **L3, the body:** `requestKey`. Refused unless the revision is a `draft` (`409 revision_not_draft`) and the field
 has no active revision (`409 revision_active_exists`). O2 does not apply to L3 (see O3).
@@ -244,7 +249,7 @@ Versions created on R+1 before L4 (allowed today: a draft revision with a proven
   admin, with `basis = 'platform_admin'` (every branch). For `…_retire` its `reason` equals the revision's
   `retired_reason` and `from_status = 'active'` exactly when the revision has an `activated_at`. For `…_create` and
   `…_activate` the `reason` is NULL; a `…_create` row's `evidence_ref` is NULL or the revision's own, and an
-  `…_activate` row's is NULL. A seed writes no T8 row. The other actions keep their chains (v35, v37); actions without a writer
+  `…_activate` or `…_retire` row's is NULL. A seed writes no T8 row. The other actions keep their chains (v35, v37); actions without a writer
   stay refused.
 - **One row per transition:** a new unique partial index `source_metric_audit_v39_revision_once` on
   `(source_metric_version_id, action)` where the action is one of the three revision actions (v37's
@@ -362,7 +367,8 @@ v39 i v40“). The owner approves part B with this contract (O6).
   or a retirement is `42501` in the T2b guard itself (not only at the T8 row).
 - **The pinned step**, for L2, L4 and L5: a club admin's `needs_review` version pinned to R is disabled with the fixed
   reason in `disable_reason` and in its `mapping_status` row, and counted; a pinned draft stays a draft; an archived
-  club's pinned version gives O7's answer; an L5 refusal never names the club.
+  club's pinned version gives O7's answer (`409 club_archived` naming only the archived clubs, O7(ii)(a)); the other
+  refusals of the pinned step (`version_active`, `activation_open`) name no club, mapping or version.
 - **The COMMIT outcome of L4** through the real route: a refusal at COMMIT by a deferred link is a definite `23514`
   (nothing written; a correct route never causes one, so the test uses a seam that leaves out an audit row); a lost COMMIT answer is verified by the request key on another connection; the same key
   repeats the same answer, a different body is `request_key_reused`, and a key used on L3 is `request_key_reused` on

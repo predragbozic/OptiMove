@@ -2840,18 +2840,24 @@ persistent database):
   - The answers: L1 `201 { revision }`; L2 and L5 `200 { revision, disabledVersions }`; L3 `200 { revision }`; L4
     `200 { revision, replaced, disabledVersions }`. A replay adds `replayed: true`.
   - The `409` details: `draft_exists` names the draft (`current.draftRevisionId`); `revision_active_exists` and
-    `revision_changed` name the active revision (`current.activeRevisionId`); `revision_not_draft` names the state;
+    `revision_changed` name the active revision (`current.activeRevisionId`); `revision_not_draft` and `revision_state_changed` name the state;
     `revision_limit` the limit; `club_archived` only the archived clubs (`clubIds`, O7(ii)(a)). The router passes
     `clubIds` and nothing else new.
-  - A create row carries the revision's own evidence reference.
+  - A create row carries the revision's own evidence reference; an activate or retire row carries none (v39's T8
+    guard requires NULL, one sentence stricter than J5.3 first said, now in the contract).
+  - **Amendment of J5.2:** L2 and L5 take `expectedState` (`draft` / `active`, the state the caller saw, in the request
+    hash); the other state is `409 revision_state_changed` naming it (`current.state`), checked under the locks before
+    the pinned step (`db-reviewer`, MEDIUM: a stale L2 could otherwise retire a draft activated meanwhile, with the
+    pinned step). The *Rukovodilac*'s GO on the pull request accepts it or returns it.
   - After the field's revisions are locked, the service reads them again by a new statement, so a draft that
     another L1 committed while this one waited is seen (L1 against L1 answers `draft_exists`).
-- **Tests:** `backend/tests/source-revision-lifecycle-v39.test.mjs` (15 tests) covers J5.5:
+- **Tests:** `backend/tests/source-revision-lifecycle-v39.test.mjs` (19 tests) covers J5.5:
   - the rehearsals, and the fail-closed block on a copy with a row in each of the 21 columns;
   - the preflights and post-checks, block by block, and the parity of every code point but the surrogates (four
     strings each);
   - the guards, the seed exception in a simulated window, access, L1–L5, the pinned step, the COMMIT outcome, the
-    concurrency list and a right lost during the write.
+    concurrency list in both orders, a right lost during the write, and the `23505` mapping by constraint name (a
+    field without any revision has nothing to lock, so two L1 meet at the unique index: one draft and `try_again`).
 
   Mutation evidence: 26 mutations, 25 killed. The survivor (the route in the request hash) is equivalent through the
   routes, since an L3 body and an L4 body are never equal; it stays as the contract's defence in depth.
@@ -2861,6 +2867,12 @@ persistent database):
   - M2's zone fixtures write a zone's meaning act, which the database refuses until the zone model is decided (C89),
     with v37's act guard and audit link off for that one statement (`zoneMeaningAsFutureDecision`);
   - the M2b suite's v37 rehearsal database stops at v37, so it keeps the old fixture there.
+- **Known limit** (`security-reviewer`, MEDIUM, phase 4): the pinned step disables every pinned `needs_review` version
+  in one transaction, with no cap on their number. M2 has no write quota (C68). Many submitted versions on one revision
+  could keep L2, L4 or L5 past the 10 s statement bound, and every attempt would then answer `try_again`; O5's "a
+  field can always be stopped" would not hold. It is not reachable today: no production revision has a proven unit,
+  so no mapping version exists. It needs an owner decision before the first production confirmation (M6): a cap on
+  open versions (against C68), or batches (phase 7).
 - **Not in it:** the frontend (R6, phase 6); any write to a persistent database.
 
 ---

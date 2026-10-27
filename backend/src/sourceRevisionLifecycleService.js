@@ -71,6 +71,8 @@ const TEXT = {
   draft_exists: "The source field already has a draft revision; activate it, replace with it or retire it first.",
   revision_limit: "The source field has the most revisions the reads return; no further revision is created yet.",
   revision_retired: "The revision is retired; it is never changed.",
+  revision_state_changed: "The revision is not in the state this request names; read the field again.",
+  invalid_expected_state: "expectedState is 'draft' or 'active': the state of the revision this request retires.",
   revision_not_draft: "Only a draft revision is activated or takes over from the active revision.",
   revision_active_exists: "The source field already has an active revision; replace it instead.",
   revision_not_active: "The source field has no active revision to replace.",
@@ -392,16 +394,20 @@ export async function createRevision({ ctx, fieldId: rawField, body }) {
 
 // ---------------------------------------------------------------------------
 // L2 / L5: POST /fields/:fieldId/revisions/:revisionId/retire - a draft (L2)
-// or the active revision with no successor (L5), with the pinned step.
+// or the active revision with no successor (L5), with the pinned step. The
+// body names the state the caller saw (expectedState), so a draft activated
+// meanwhile is never retired as an active revision by a stale request.
 // ---------------------------------------------------------------------------
 export async function retireRevision({ ctx, fieldId: rawField, revisionId: rawRevision, body }) {
   if (!mayChangeRevisions(ctx)) throw NOT_FOUND();
   const { fieldId, revisionId } = pathIds(rawField, rawRevision);
-  plainObject(body, ["requestKey", "reason"], ["requestKey", "reason"]);
+  plainObject(body, ["requestKey", "reason", "expectedState"], ["requestKey", "reason", "expectedState"]);
   const requestKey = uuidField(body.requestKey);
   const reason = reasonOf(body);
+  if (body.expectedState !== "draft" && body.expectedState !== "active") throw refusal(400, "invalid_body", TEXT.invalid_expected_state);
+  const expectedState = body.expectedState;
   const action = "source_metric_revision_retire";
-  const requestHash = hashOf({ contract: CONTRACT, route: "retire", fieldId, revisionId, body: { reason } });
+  const requestHash = hashOf({ contract: CONTRACT, route: "retire", fieldId, revisionId, body: { reason, expectedState } });
   return write({
     ctx, where: action, requestKey, requestHash, action,
     body: async (client, operationId) => {
@@ -411,6 +417,7 @@ export async function retireRevision({ ctx, fieldId: rawField, revisionId: rawRe
       const pinned = await lockPinned(client, revisionId);
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       if (target.state === "retired") throw refusal(409, "revision_retired", TEXT.revision_retired);
+      if (target.state !== expectedState) throw refusal(409, "revision_state_changed", TEXT.revision_state_changed, { current: { state: target.state } });
       const toDisable = await pinnedDecisions(client, pinned);
       await databaseAgrees(client, { texts: [[reason, REASON_MAX_LENGTH, "invalid_body", TEXT.invalid_reason]] });
       if (writeHold) await writeHold(client, "retire");

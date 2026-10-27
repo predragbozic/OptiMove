@@ -2973,6 +2973,10 @@ pre-existing; pass/fail counts don't belong in this file
   U+FE00-FE0F, the tag characters U+E0000-E007F and U+FFF9-FFFB, so a label made only of such a character passes.
   Metrics Core labels have no database-side text check. Fix in its own PR: extend the list or check
   `\p{Default_Ignorable_Code_Point}` plus at least one visible character, together with its database twin `training_load.source_metric_text_ok` (v34; a migration).
+- **The pinned step has no cap on its versions** (`security-reviewer`, phase 4, MEDIUM; J5 of the discovery document):
+  retiring or replacing a revision disables all its pinned `needs_review` versions in one transaction, and M2 has no
+  write quota (C68). Many versions could keep the lifecycle from stopping a field. Not reachable before a production
+  revision has a proven unit; an owner decision before M6 (a cap on open versions, or batches in phase 7).
 - **The revision lifecycle of a source field** (owner, 2026-10-15, C91; the next backend contract after
   M2b): a new revision R+1, its activation, the retirement of R and the replacement of the mapping versions
   pinned to it, each with its own database actor guard (C76). It must be finished before the first real

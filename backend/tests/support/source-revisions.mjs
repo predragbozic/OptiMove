@@ -8,7 +8,15 @@ import crypto from "node:crypto";
 
 const ACTOR_SQL = `select set_config('optimove.source_metric_actor', $1 || ':' || pg_current_xact_id()::text, true)`;
 
+// SAFETY: these fixtures write (and one switches triggers off) only on a
+// disposable optimove_tests_* database.
+async function assertDisposable(client) {
+  const name = (await client.query("select current_database() as d")).rows[0].d;
+  if (!/^optimove_tests_[a-z0-9_]+$/.test(name)) throw new Error("source-revisions fixtures run on a disposable optimove_tests_* database only");
+}
+
 async function inTransaction(client, actorId, work) {
+  await assertDisposable(client);
   await client.query("begin");
   try {
     await client.query(ACTOR_SQL, [String(actorId).toLowerCase()]);

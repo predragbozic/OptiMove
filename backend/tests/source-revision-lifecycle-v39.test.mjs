@@ -775,7 +775,7 @@ test("7. who may call L1-L5: no session is 401; a club admin, a platform admin i
   const revisionsBefore = (await one(k, `select count(*)::int as n from training_load.source_metric_definition_versions`)).n;
   const paths = (fid, rid) => [
     [`/fields/${fid}/revisions`, createBody()],
-    [`/fields/${fid}/revisions/${rid}/retire`, { requestKey: key(), reason: "Test retirement" }],
+    [`/fields/${fid}/revisions/${rid}/retire`, { requestKey: key(), expectedState: "active", reason: "Test retirement" }],
     [`/fields/${fid}/revisions/${rid}/activate`, { requestKey: key() }],
     [`/fields/${fid}/revisions/${rid}/replace`, { requestKey: key(), reason: "Test retirement", expectedActiveRevisionId: rid }],
   ];
@@ -797,7 +797,7 @@ test("7. who may call L1-L5: no session is 401; a club admin, a platform admin i
     assert.deepEqual([(await post(p, W.pa.cookie, body)).status], [404], p);
   }
   const other = await field();
-  assert.equal((await post(retirePath(f, other.revId), W.pa.cookie, { requestKey: key(), reason: "x" })).status, 404, "a revision of another field");
+  assert.equal((await post(retirePath(f, other.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "x" })).status, 404, "a revision of another field");
   assert.equal((await one(k, `select count(*)::int as n from training_load.source_metric_audit`)).n, auditBefore + 2, "only the second fixture's rows");
   assert.equal((await one(k, `select count(*)::int as n from training_load.source_metric_definition_versions`)).n, revisionsBefore + 1);
 });
@@ -864,7 +864,7 @@ test("9. L3 activates a draft while the field has no active revision (200, its k
   assert.deepEqual([busy.status, busy.body.error, busy.body.current], [409, "revision_active_exists", { activeRevisionId: f.revId }]);
   const notDraft = await post(activatePath(f, f.revId), W.pa.cookie, { requestKey: key() });
   assert.deepEqual([notDraft.status, notDraft.body.error, notDraft.body.current], [409, "revision_not_draft", { state: "active" }]);
-  const stop = await post(retirePath(f, f.revId), W.pa.cookie, { requestKey: key(), reason: "The proof turned out wrong." });
+  const stop = await post(retirePath(f, f.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "The proof turned out wrong." });
   assert.equal(stop.status, 200, stop.text);
   assert.deepEqual([stop.body.revision.state, stop.body.disabledVersions], ["retired", { system: 0, club: 0 }]);
   const k3 = key();
@@ -907,7 +907,7 @@ test("10. L4 replaces the active R by the draft R+1 in one transaction (200): R 
   // No active revision: L5 then L4.
   const g = await field();
   const g2 = await revisionOf(g, 2);
-  assert.equal((await post(retirePath(g, g.revId), W.pa.cookie, { requestKey: key(), reason: "Stopped." })).status, 200);
+  assert.equal((await post(retirePath(g, g.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "Stopped." })).status, 200);
   const none = await post(replacePath(g, g2), W.pa.cookie, { requestKey: key(), reason: "x", expectedActiveRevisionId: g.revId });
   assert.deepEqual([none.status, none.body.error], [409, "revision_not_active"]);
   // A key of L3 on L4 (both write a source_metric_revision_activate row).
@@ -932,7 +932,7 @@ test("11. the pinned step (L2, L4, L5; O4, O7): every needs_review version pinne
   const clubV = await pinnedVersion(f, f.revId, { owner: W.caA, variable: W.clubAVar });
   const clubDraft = await pinnedVersion(f, f.revId, { owner: W.caA, variable: W.clubAVar, submit: false });
   const k5 = key();
-  const res = await post(retirePath(f, f.revId), W.pa.cookie, { requestKey: k5, reason: "Stopped: wrong proof." });
+  const res = await post(retirePath(f, f.revId), W.pa.cookie, { requestKey: k5, expectedState: "active", reason: "Stopped: wrong proof." });
   assert.equal(res.status, 200, res.text);
   assert.deepEqual(res.body.disabledVersions, { system: 1, club: 1 });
   for (const v of [sys, clubV]) {
@@ -951,7 +951,7 @@ test("11. the pinned step (L2, L4, L5; O4, O7): every needs_review version pinne
   // L2 on a draft revision with a submitted version.
   const g = await field({ state: "draft", unit: "s" });
   const gv = await pinnedVersion(g, g.revId);
-  const l2 = await post(retirePath(g, g.revId), W.pa.cookie, { requestKey: key(), reason: "Abandoned draft." });
+  const l2 = await post(retirePath(g, g.revId), W.pa.cookie, { requestKey: key(), expectedState: "draft", reason: "Abandoned draft." });
   assert.deepEqual([l2.status, l2.body.revision.state, l2.body.disabledVersions], [200, "retired", { system: 1, club: 0 }]);
   assert.equal((await versionRow(gv.versionId)).status, "disabled");
   assert.equal((await auditOf(`source_metric_version_id = $1 and action = 'source_metric_revision_retire'`, [g.revId]))[0].from_status, "draft");
@@ -971,26 +971,32 @@ test("11. the pinned step (L2, L4, L5; O4, O7): every needs_review version pinne
   const sv = await pinnedVersion(a, a.revId);
   await k.query(`update public.clubs set is_active = false where id = $1`, [W.clubB]);
   try {
-    const refused = await post(retirePath(a, a.revId), W.pa.cookie, { requestKey: key(), reason: "x" });
+    const refused = await post(retirePath(a, a.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "x" });
     assert.deepEqual([refused.status, refused.body.error, refused.body.clubIds], [409, "club_archived", [W.clubB]]);
     for (const id of [bv.mappingId, bv.versionId, sv.versionId]) assert.ok(!refused.text.includes(id));
     assert.deepEqual([(await revisionRow(a.revId)).state, (await versionRow(bv.versionId)).status, (await versionRow(sv.versionId)).status], ["active", "needs_review", "needs_review"], "nothing written");
   } finally {
     await k.query(`update public.clubs set is_active = true where id = $1`, [W.clubB]);
   }
-  assert.deepEqual((await post(retirePath(a, a.revId), W.pa.cookie, { requestKey: key(), reason: "x" })).body.disabledVersions, { system: 1, club: 1 });
+  assert.deepEqual((await post(retirePath(a, a.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "x" })).body.disabledVersions, { system: 1, club: 1 });
   // An active pinned version and an open activation cannot exist before phase 7:
   // simulated here (a disposable database, triggers off for these statements only).
   const asPhase7 = async (sql, params) => {
+    assert.equal((await one(k, `select rolsuper from pg_roles where rolname = current_user`)).rolsuper, true, "this simulation needs a superuser on the disposable database");
     await k.query("begin");
-    await k.query("set local session_replication_role = replica");
-    await k.query(sql, params);
-    await k.query("commit");
+    try {
+      await k.query("set local session_replication_role = replica");
+      await k.query(sql, params);
+      await k.query("commit");
+    } catch (error) {
+      await k.query("rollback").catch(() => {});
+      throw error;
+    }
   };
   const b = await field({ unit: "s" });
   const bvA = await pinnedVersion(b, b.revId);
   await asPhase7(`update training_load.source_metric_mapping_versions set status = 'active', activated_by_user_id = $2, activated_at = now(), activated_basis = 'platform_admin' where id = $1`, [bvA.versionId, W.pa.id]);
-  const active = await post(retirePath(b, b.revId), W.pa.cookie, { requestKey: key(), reason: "x" });
+  const active = await post(retirePath(b, b.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "x" });
   assert.deepEqual([active.status, active.body.error, active.body.clubIds, active.body.current], [409, "version_active", undefined, undefined]);
   const c = await field({ unit: "s" });
   const cv = await pinnedVersion(c, c.revId);
@@ -1000,7 +1006,7 @@ test("11. the pinned step (L2, L4, L5; O4, O7): every needs_review version pinne
                      applies_to_session, applies_to_drill, requirement, activated_by_user_id, activated_basis, reason)
                    values ($1,$2,$3,$4,$5,$6,$6,true,true,'required',$7,'platform_admin','Phase 7 simulation')`,
     [cv.versionId, cv.mappingId, c.fieldId, W.sysVar.id, fp, binding, W.pa.id]);
-  const open = await post(retirePath(c, c.revId), W.pa.cookie, { requestKey: key(), reason: "x" });
+  const open = await post(retirePath(c, c.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "x" });
   assert.deepEqual([open.status, open.body.error], [409, "activation_open"]);
   assert.equal((await revisionRow(c.revId)).state, "active");
 });
@@ -1044,34 +1050,36 @@ test("12. the COMMIT of L4 through the real route: a refusal at COMMIT by a defe
   assert.deepEqual([again.status, again.body.replayed, again.body.revision.state, again.body.replaced.state], [200, true, "active", "retired"]);
 });
 
+// The concurrency helpers: a lifecycle write held after its locks while another
+// writer starts, or another writer held while the lifecycle starts.
+async function heldLifecycle(start, during) {
+  const { g, state } = holdLifecycle();
+  const running = start();
+  await until(() => state.entered, "the lifecycle write holds its locks");
+  const other = during();
+  assert.ok(await someoneWaits(), "the other writer waits for the lifecycle's locks");
+  g.open();
+  lifecycle.setRevisionWriteHoldForTests(null);
+  return [await running, await other];
+}
+async function heldOther(setHold, startOther, lifecycleCall) {
+  const g = gate();
+  let entered = false;
+  setHold(async () => { entered = true; await g.promise; });
+  const other = startOther();
+  await until(() => entered, "the other write holds its locks");
+  const running = lifecycleCall();
+  assert.ok(await someoneWaits(), "the lifecycle waits");
+  g.open();
+  setHold(null);
+  return [await running, await other];
+}
+const m2Hold = (fn) => service.setMappingWriteHoldForTests(fn);
+const m2bHold = (fn) => fieldsService.setFieldWriteHoldForTests(fn);
+const replaceCall = (f, next) => () => post(replacePath(f, next), W.pa.cookie, { requestKey: key(), reason: "Corrected.", expectedActiveRevisionId: f.revId });
+const mapping = async (f) => (await post("/mappings", W.pa.cookie, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: W.sysVar.id })).body.mapping.id;
+const createOn = (mappingId, revId) => () => post(`/mappings/${mappingId}/versions`, W.pa.cookie, { requestKey: key(), sourceRevisionId: revId, appliesToSession: true, appliesToDrill: true });
 test("13. concurrency, both orders (J5.5): L4 against an M2 version create on R and on R+1, an M2 submit on R and an M2b act on R and R+1; L5 against an M2 create on the retired revision; L5 against a club archive; L1 against L1 - the M2 side answers 409 revision_not_usable, never a 500", async () => {
-  async function heldLifecycle(start, during) {
-    const { g, state } = holdLifecycle();
-    const running = start();
-    await until(() => state.entered, "the lifecycle write holds its locks");
-    const other = during();
-    assert.ok(await someoneWaits(), "the other writer waits for the lifecycle's locks");
-    g.open();
-    lifecycle.setRevisionWriteHoldForTests(null);
-    return [await running, await other];
-  }
-  async function heldOther(setHold, startOther, lifecycleCall) {
-    const g = gate();
-    let entered = false;
-    setHold(async () => { entered = true; await g.promise; });
-    const other = startOther();
-    await until(() => entered, "the other write holds its locks");
-    const running = lifecycleCall();
-    assert.ok(await someoneWaits(), "the lifecycle waits");
-    g.open();
-    setHold(null);
-    return [await running, await other];
-  }
-  const m2Hold = (fn) => service.setMappingWriteHoldForTests(fn);
-  const m2bHold = (fn) => fieldsService.setFieldWriteHoldForTests(fn);
-  const replaceCall = (f, next) => () => post(replacePath(f, next), W.pa.cookie, { requestKey: key(), reason: "Corrected.", expectedActiveRevisionId: f.revId });
-  const mapping = async (f) => (await post("/mappings", W.pa.cookie, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: W.sysVar.id })).body.mapping.id;
-  const createOn = (mappingId, revId) => () => post(`/mappings/${mappingId}/versions`, W.pa.cookie, { requestKey: key(), sourceRevisionId: revId, appliesToSession: true, appliesToDrill: true });
   // L4 first, then an M2 create on R (retired meanwhile) and on R+1 (active meanwhile).
   {
     const f = await field({ unit: "s" });
@@ -1133,7 +1141,7 @@ test("13. concurrency, both orders (J5.5): L4 against an M2 version create on R 
   {
     const f = await field({ unit: "s" });
     const m = await mapping(f);
-    const [l5, onR] = await heldLifecycle(() => post(retirePath(f, f.revId), W.pa.cookie, { requestKey: key(), reason: "Stopped." }), createOn(m, f.revId));
+    const [l5, onR] = await heldLifecycle(() => post(retirePath(f, f.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "Stopped." }), createOn(m, f.revId));
     assert.deepEqual([l5.status, onR.status, onR.body.error], [200, 409, "revision_not_usable"]);
   }
   // L5 against a club archive, both orders.
@@ -1149,7 +1157,7 @@ test("13. concurrency, both orders (J5.5): L4 against an M2 version create on R 
     try {
       // L5 holds the club FOR SHARE: the archive waits, the version is disabled.
       const { g, state } = holdLifecycle();
-      const l5 = post(retirePath(f, f.revId), W.pa.cookie, { requestKey: key(), reason: "Stopped." });
+      const l5 = post(retirePath(f, f.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "Stopped." });
       await until(() => state.entered, "L5 holds its locks");
       const archived = archiving.query(`update public.clubs set is_active = false where id = $1`, [clubX]);
       assert.ok(await someoneWaits(), "the archive waits for L5");
@@ -1163,7 +1171,7 @@ test("13. concurrency, both orders (J5.5): L4 against an M2 version create on R 
       const v2 = await pinnedVersion(g2, g2.revId, { owner: caX, variable: varX });
       await archiving.query("begin");
       await archiving.query(`update public.clubs set is_active = false where id = $1`, [clubX]);
-      const waiting = post(retirePath(g2, g2.revId), W.pa.cookie, { requestKey: key(), reason: "Stopped." });
+      const waiting = post(retirePath(g2, g2.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "Stopped." });
       assert.ok(await someoneWaits(), "L5 waits for the archive");
       await archiving.query("commit");
       const refused = await waiting;
@@ -1210,10 +1218,10 @@ test("15. the right is checked again under FOR SHARE after the registry locks (J
     });
     const call = {
       create: () => post(createPath(f), pa.cookie, createBody()),
-      "retire-draft": () => post(retirePath(f, next), pa.cookie, { requestKey: key(), reason: "Abandoned." }),
+      "retire-draft": () => post(retirePath(f, next), pa.cookie, { requestKey: key(), expectedState: "draft", reason: "Abandoned." }),
       activate: () => post(activatePath(f, f.revId), pa.cookie, { requestKey: key() }),
       replace: () => post(replacePath(f, next), pa.cookie, { requestKey: key(), reason: "Corrected.", expectedActiveRevisionId: f.revId }),
-      "retire-active": () => post(retirePath(f, f.revId), pa.cookie, { requestKey: key(), reason: "Stopped." }),
+      "retire-active": () => post(retirePath(f, f.revId), pa.cookie, { requestKey: key(), expectedState: "active", reason: "Stopped." }),
     }[route];
     const res = await call();
     service.setMappingRightsHoldForTests(null);
@@ -1222,4 +1230,188 @@ test("15. the right is checked again under FOR SHARE after the registry locks (J
     assert.deepEqual(await rows(k, `select id, state from training_load.source_metric_definition_versions where source_metric_definition_id = $1 order by id`, [f.fieldId]), revisionsBefore, `${route}: nothing written`);
     assert.equal((await one(k, `select count(*)::int as n from training_load.source_metric_audit`)).n, auditBefore, `${route}: no audit row`);
   }
+});
+
+test("16. concurrency, the rest of J5.5's list in both orders: an M2 create on R+1 before L4; an M2b act that completes R's proof before L4 (O2 then sees R verified); L2 against an M2 create and an M2 submit on the draft it retires; L5 against an M2 submit and an M2 create first; L4 against a club archive - the M2 side answers 409 revision_not_usable, never a 500", async () => {
+  // An M2 create on R+1 first, then L4: the version stays a draft on the now active R+1.
+  {
+    const f = await field({ unit: "s" });
+    const n = await revisionOf(f, 2, { unit: "s" });
+    const m = await mapping(f);
+    const [l4, created] = await heldOther(m2Hold, createOn(m, n), replaceCall(f, n));
+    assert.deepEqual([created.status, l4.status], [201, 200]);
+    assert.equal((await versionRow(created.body.version.id)).status, "draft");
+  }
+  // An M2b act completing R's proof first, then L4 with an unverified R+1: O2 refuses.
+  {
+    const f = await field({ unit: "s" });
+    const n = await revisionOf(f, 2);
+    const meaning = () => post(`/fields/${f.fieldId}/revisions/${f.revId}/meaning-verification`, W.pa.cookie, { requestKey: key(), evidenceRef: MEANING_REF });
+    const [l4, act] = await heldOther(m2bHold, meaning, replaceCall(f, n));
+    assert.deepEqual([act.status, act.body.revision?.evidenceStatus, l4.status, l4.body.error], [201, "verified", 409, "successor_not_verified"]);
+    assert.deepEqual([(await revisionRow(f.revId)).state, (await revisionRow(n)).state], ["active", "draft"], "nothing written by L4");
+  }
+  // L2 first, then an M2 create on the retired draft.
+  {
+    const f = await field({ unit: "s" });
+    const d = await revisionOf(f, 2, { unit: "s" });
+    const m = await mapping(f);
+    const [l2, onD] = await heldLifecycle(() => post(retirePath(f, d), W.pa.cookie, { requestKey: key(), expectedState: "draft", reason: "Abandoned." }), createOn(m, d));
+    assert.deepEqual([l2.status, onD.status, onD.body.error], [200, 409, "revision_not_usable"]);
+  }
+  // An M2 submit on the draft revision first, then L2: the submitted version is disabled.
+  {
+    const f = await field({ unit: "s" });
+    const d = await revisionOf(f, 2, { unit: "s" });
+    const v = await pinnedVersion(f, d, { submit: false });
+    const submit = () => post(`/mappings/${v.mappingId}/versions/${v.versionId}/submit`, W.pa.cookie, { requestKey: key() });
+    const [l2, submitted] = await heldOther(m2Hold, submit, () => post(retirePath(f, d), W.pa.cookie, { requestKey: key(), expectedState: "draft", reason: "Abandoned." }));
+    assert.deepEqual([submitted.status, l2.status, l2.body.disabledVersions], [200, 200, { system: 1, club: 0 }]);
+    assert.equal((await versionRow(v.versionId)).status, "disabled");
+  }
+  // L2 first, then an M2 submit on the retired draft.
+  {
+    const f = await field({ unit: "s" });
+    const d = await revisionOf(f, 2, { unit: "s" });
+    const v = await pinnedVersion(f, d, { submit: false });
+    const submit = () => post(`/mappings/${v.mappingId}/versions/${v.versionId}/submit`, W.pa.cookie, { requestKey: key() });
+    const [l2, late] = await heldLifecycle(() => post(retirePath(f, d), W.pa.cookie, { requestKey: key(), expectedState: "draft", reason: "Abandoned." }), submit);
+    assert.deepEqual([l2.status, late.status, late.body.error], [200, 409, "revision_not_usable"]);
+  }
+  // L5 first, then an M2 submit on R; an M2 create on R first, then L5.
+  {
+    const f = await field({ unit: "s" });
+    const v = await pinnedVersion(f, f.revId, { submit: false });
+    const submit = () => post(`/mappings/${v.mappingId}/versions/${v.versionId}/submit`, W.pa.cookie, { requestKey: key() });
+    const [l5, late] = await heldLifecycle(() => post(retirePath(f, f.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "Stopped." }), submit);
+    assert.deepEqual([l5.status, late.status, late.body.error], [200, 409, "revision_not_usable"]);
+    const g = await field({ unit: "s" });
+    const m = await mapping(g);
+    const [l5b, created] = await heldOther(m2Hold, createOn(m, g.revId), () => post(retirePath(g, g.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "Stopped." }));
+    assert.deepEqual([created.status, l5b.status, l5b.body.disabledVersions], [201, 200, { system: 0, club: 0 }]);
+    assert.equal((await versionRow(created.body.version.id)).status, "draft");
+  }
+  // L4 against a club archive, both orders.
+  {
+    const clubY = await club("Club Y");
+    const caY = await clubAdmin(clubY);
+    const varY = await canonical({ scope: "club", clubId: clubY });
+    const archiving = new pg.Client({ connectionString: db.url });
+    await archiving.connect();
+    try {
+      const f = await field({ unit: "s" });
+      const n = await revisionOf(f, 2, { unit: "s" });
+      const v = await pinnedVersion(f, f.revId, { owner: caY, variable: varY });
+      const [l4, archived] = await heldLifecycle(replaceCall(f, n), () => archiving.query(`update public.clubs set is_active = false where id = $1`, [clubY]));
+      assert.deepEqual([l4.status, l4.body.disabledVersions, archived.rowCount], [200, { system: 0, club: 1 }, 1]);
+      assert.equal((await versionRow(v.versionId)).status, "disabled");
+      await archiving.query(`update public.clubs set is_active = true where id = $1`, [clubY]);
+      const g = await field({ unit: "s" });
+      const gn = await revisionOf(g, 2, { unit: "s" });
+      const gv = await pinnedVersion(g, g.revId, { owner: caY, variable: varY });
+      await archiving.query("begin");
+      await archiving.query(`update public.clubs set is_active = false where id = $1`, [clubY]);
+      const waiting = replaceCall(g, gn)();
+      assert.ok(await someoneWaits(), "L4 waits for the archive");
+      await archiving.query("commit");
+      const refused = await waiting;
+      assert.deepEqual([refused.status, refused.body.error, refused.body.clubIds], [409, "club_archived", [clubY]]);
+      assert.deepEqual([(await revisionRow(g.revId)).state, (await revisionRow(gn)).state, (await versionRow(gv.versionId)).status], ["active", "draft", "needs_review"]);
+    } finally {
+      await archiving.query("rollback").catch(() => {});
+      await archiving.end().catch(() => {});
+    }
+  }
+});
+
+test("17. the pinned step for L2 and L4 with a club's version: L4 disables a system and a club version (counted by scope, the fixed reason on each); L2 with an archived club's submitted version is 409 club_archived naming only that club, and succeeds once the club is restored", async () => {
+  const f = await field({ unit: "s" });
+  const n = await revisionOf(f, 2, { unit: "s" });
+  const sys = await pinnedVersion(f, f.revId);
+  const clubV = await pinnedVersion(f, f.revId, { owner: W.caA, variable: W.clubAVar });
+  const l4 = await post(replacePath(f, n), W.pa.cookie, { requestKey: key(), reason: "Corrected.", expectedActiveRevisionId: f.revId });
+  assert.deepEqual([l4.status, l4.body.disabledVersions], [200, { system: 1, club: 1 }]);
+  for (const v of [sys, clubV]) assert.deepEqual([(await versionRow(v.versionId)).status, (await versionRow(v.versionId)).disable_reason], ["disabled", PINNED_REASON]);
+  const g = await field({ unit: "s" });
+  const d = await revisionOf(g, 2, { unit: "s" });
+  const bv = await pinnedVersion(g, d, { owner: W.caB, variable: W.clubBVar });
+  await k.query(`update public.clubs set is_active = false where id = $1`, [W.clubB]);
+  try {
+    const refused = await post(retirePath(g, d), W.pa.cookie, { requestKey: key(), expectedState: "draft", reason: "Abandoned." });
+    assert.deepEqual([refused.status, refused.body.error, refused.body.clubIds], [409, "club_archived", [W.clubB]]);
+    for (const id of [bv.mappingId, bv.versionId]) assert.ok(!refused.text.includes(id));
+    assert.deepEqual([(await revisionRow(d)).state, (await versionRow(bv.versionId)).status], ["draft", "needs_review"]);
+  } finally {
+    await k.query(`update public.clubs set is_active = true where id = $1`, [W.clubB]);
+  }
+  const l2 = await post(retirePath(g, d), W.pa.cookie, { requestKey: key(), expectedState: "draft", reason: "Abandoned." });
+  assert.deepEqual([l2.status, l2.body.disabledVersions], [200, { system: 0, club: 1 }]);
+});
+
+test("18. the 23505 mapping by constraint name: a second draft of a field is source_metric_revisions_one_draft -> 409 draft_exists, a revision number taken is source_metric_revisions_number_key -> 409 try_again; through the route, two L1 on a field with no revision at all (nothing to lock) end with one draft and a try_again with Retry-After 5, never a 500", async () => {
+  const bare = async () => (await one(k, `insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,'Bare field',$2) returning id`,
+    [`v39.bare.f${uid()}`, W.pa.id])).id;
+  const f1 = await bare();
+  await writeRevision(k, { fieldId: f1, by: W.pa.id, revisionNumber: 1, evidenceRef: COMPAT, state: "draft" });
+  const draftErr = await writeRevision(k, { fieldId: f1, by: W.pa.id, revisionNumber: 2, evidenceRef: COMPAT, state: "draft" }).then(() => null, (e) => e);
+  assert.deepEqual([draftErr?.code, draftErr?.constraint], ["23505", "source_metric_revisions_one_draft"]);
+  assert.deepEqual([lifecycle.classifyRevisionError(draftErr)?.status, lifecycle.classifyRevisionError(draftErr)?.code], [409, "draft_exists"]);
+  const f2 = await bare();
+  await writeRevision(k, { fieldId: f2, by: W.pa.id, revisionNumber: 1, evidenceRef: COMPAT, state: "retired" });
+  const numberErr = await writeRevision(k, { fieldId: f2, by: W.pa.id, revisionNumber: 1, evidenceRef: COMPAT, state: "draft" }).then(() => null, (e) => e);
+  assert.deepEqual([numberErr?.code, numberErr?.constraint], ["23505", "source_metric_revisions_number_key"]);
+  assert.deepEqual([lifecycle.classifyRevisionError(numberErr)?.status, lifecycle.classifyRevisionError(numberErr)?.code], [409, "try_again"]);
+  // Through the route: the first L1 is held after its checks, the second commits, the first then hits the unique index.
+  const f3 = { fieldId: await bare() };
+  const g = gate();
+  let calls = 0;
+  let entered = false;
+  lifecycle.setRevisionWriteHoldForTests(async () => {
+    calls += 1;
+    if (calls === 1) { entered = true; await g.promise; }
+  });
+  const first = post(createPath(f3), W.pa.cookie, createBody());
+  await until(() => entered, "the first L1 holds");
+  const second = await post(createPath(f3), W.pa2.cookie, createBody());
+  g.open();
+  const late = await first;
+  lifecycle.setRevisionWriteHoldForTests(null);
+  assert.equal(second.status, 201, second.text);
+  assert.deepEqual([late.status, late.body.error, late.headers.get("retry-after")], [409, "try_again", "5"]);
+  assert.equal((await one(k, `select count(*)::int as n from training_load.source_metric_definition_versions where source_metric_definition_id = $1`, [f3.fieldId])).n, 1);
+  const again = await post(createPath(f3), W.pa.cookie, createBody());
+  assert.deepEqual([again.status, again.body.error], [409, "draft_exists"]);
+});
+
+test("19. L2 and L5 name the state the caller saw (expectedState): a draft activated meanwhile is not retired by a stale L2 (409 revision_state_changed naming the state, nothing written, its pinned version untouched), nor an active-only field by an L5 meant for a draft; expectedState is required and only draft or active; it is in the request hash; a retired revision stays revision_retired", async () => {
+  const f = await field({ unit: "s" });
+  const r2 = await revisionOf(f, 2, { unit: "s" });
+  const onR2 = await pinnedVersion(f, r2);
+  assert.equal((await versionRow(onR2.versionId)).status, "needs_review");
+  // Another admin replaces R by R+1 while this caller still sees R+1 as a draft.
+  assert.equal((await post(replacePath(f, r2), W.pa.cookie, { requestKey: key(), reason: "Corrected contract.", expectedActiveRevisionId: f.revId })).status, 200);
+  const staleKey = key();
+  const stale = await post(retirePath(f, r2), W.pa.cookie, { requestKey: staleKey, expectedState: "draft", reason: "Abandoned draft." });
+  assert.deepEqual([stale.status, stale.body.error, stale.body.current], [409, "revision_state_changed", { state: "active" }]);
+  assert.deepEqual([(await revisionRow(r2)).state, (await versionRow(onR2.versionId)).status], ["active", "needs_review"], "nothing written");
+  assert.equal((await auditOf(`request_key = $1`, [staleKey])).length, 0);
+  // The other direction: an L5 meant for an active revision on a draft.
+  const g = await field({ state: "draft", unit: "s" });
+  const wrong = await post(retirePath(g, g.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "Stopped." });
+  assert.deepEqual([wrong.status, wrong.body.error, wrong.body.current], [409, "revision_state_changed", { state: "draft" }]);
+  assert.equal((await revisionRow(g.revId)).state, "draft");
+  // The body.
+  for (const body of [{ requestKey: key(), reason: "x" }, { requestKey: key(), reason: "x", expectedState: "retired" }, { requestKey: key(), reason: "x", expectedState: "DRAFT" }, { requestKey: key(), reason: "x", expectedState: null }]) {
+    const res = await post(retirePath(f, r2), W.pa.cookie, body);
+    assert.deepEqual([res.status, res.body.error], [400, "invalid_body"], JSON.stringify(body));
+  }
+  // The hash covers expectedState; the retirement itself.
+  const k5 = key();
+  const done = await post(retirePath(f, r2), W.pa.cookie, { requestKey: k5, expectedState: "active", reason: "Stopped." });
+  assert.equal(done.status, 200, done.text);
+  assert.deepEqual([done.body.revision.state, done.body.disabledVersions], ["retired", { system: 1, club: 0 }]);
+  assert.equal((await post(retirePath(f, r2), W.pa.cookie, { requestKey: k5, expectedState: "draft", reason: "Stopped." })).body.error, "request_key_reused");
+  assert.equal((await post(retirePath(f, r2), W.pa.cookie, { requestKey: k5, expectedState: "active", reason: "Stopped." })).body.replayed, true);
+  const again = await post(retirePath(f, r2), W.pa.cookie, { requestKey: key(), expectedState: "draft", reason: "Stopped." });
+  assert.deepEqual([again.status, again.body.error], [409, "revision_retired"]);
 });
