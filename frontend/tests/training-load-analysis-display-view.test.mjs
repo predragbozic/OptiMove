@@ -45,7 +45,7 @@ for (const type of ["kpi", "table", "line_chart", "bar_chart"]) {
     setup(type, [row(0)]);
     const zero = rendered().querySelector(".tl-analysis-widget");
     assert.match(zero.textContent, /\b0\b/);
-    if (type.includes("chart")) assert.match(zero.querySelector(".tl-analysis-chart-track span").getAttribute("style"), /width:0%/);
+    if (type.includes("chart")) assert.equal(zero.querySelector(".tl-analysis-table tbody tr").children[2].textContent, "0");
     setup(type, [row(null)]);
     const missing = rendered().querySelector(".tl-analysis-widget");
     assert.match(missing.textContent, /No data/);
@@ -114,7 +114,7 @@ for (const type of ["line_chart", "bar_chart"]) {
   test(`${type}: separate athlete/source points retain readable identity and escape source labels`, () => {
     setup(type, [row(10, { athleteId: "athlete-1", sourceConnectionId: "source-1" }), row(20, { athleteId: "athlete-2", sourceConnectionId: '<img src=x onerror="bad">' })]);
     const body = rendered().querySelector(".tl-analysis-widget");
-    assert.equal(body.querySelectorAll(".tl-analysis-chart-track").length, 2);
+    assert.equal(body.querySelectorAll(".tl-analysis-table tbody tr").length, 2);
     assert.match(body.textContent, /sRPE.*athlete-1.*source-1/);
     assert.match(body.textContent, /athlete-2/);
     assert.equal(body.querySelector("img"), null);
@@ -130,6 +130,19 @@ test("loading is not an empty result and malformed results do not crash any widg
     assert.match(rendered().querySelector(".tl-analysis-widget").textContent, /No data/);
     analysis.queryResult.widgets[0].series[0].data.current = "malformed";
     assert.match(rendered().querySelector(".tl-analysis-widget").textContent, /Invalid or unavailable result/);
+  }
+});
+
+test("KPI shows actual identity context and tables expose keyboard-accessible readable equivalents", () => {
+  setup("kpi", [row(12, { athleteId: "athlete-1", sourceConnectionId: "source-1" })]);
+  assert.match(rendered().querySelector(".tl-analysis-kpi-context").textContent, /Athlete athlete-1.*Source source-1/);
+  for (const type of ["table", "line_chart", "bar_chart"]) {
+    setup(type, [row(-12), row(0, { bucketKey: "2026-10-02" })]);
+    const document = rendered();
+    assert.equal(document.querySelector(".tl-analysis-table-wrap").getAttribute("tabindex"), "0");
+    assert.equal(document.querySelector("caption").textContent, "Current period values");
+    assert.deepEqual([...document.querySelectorAll("tbody tr")].map(entry => entry.children[2].textContent), ["-12", "0"]);
+    if (type.includes("chart")) assert.equal(document.querySelector("details").open, true);
   }
 });
 
