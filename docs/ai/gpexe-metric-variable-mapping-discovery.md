@@ -953,10 +953,16 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
       - R6: the lifecycle's frontend stays phase 6.
       - R7: L1 refuses a 21st revision of a field (`409 revision_limit`) until the revision reads are paged, in a
         separate small pull request.
-    - **Still open before the implementation** (J5, gates 2–4):
-      - the v37 production post-check;
-      - which database the old Render service uses;
-      - the plan naming both migrations.
+    - **The gates before the implementation** (J5, gates 2–4):
+      - gate 2, the v37 production post-check: **closed by the owner's statement** (in the *Rukovodilac*'s chat,
+        owner turn `38f0b6d6`, 14:42:12 UTC, checked by the executor; verbatim: „Post‑check migracije v37 radi sve
+        normalno, stari servis ja vise ne osvežavam, on je na supabase vec i neaktivan“). It is recorded as the
+        owner's statement that the post-check passed; no block values were pasted;
+      - gate 3, the old Render service: **closed by the same statement**. It runs on Supabase, is inactive, and the
+        owner no longer deploys it. The *Rukovodilac*'s condition (its message `55ca36ed`, 16:32:18 UTC): it stays
+        inactive during and after the deploy of v39 and v40. If it shares the Supabase project, its older code may
+        not run again against the migrated database without a new decision;
+      - gate 4, the plan naming both migrations: open, after PR #238 is merged.
 
       The merge, its migrations v39 and v40 and their production pre- and post-checks each need the owner's order
       that names them.

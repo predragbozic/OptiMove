@@ -16,8 +16,9 @@ request that records them confirms it.
 
 **Gates before the implementation** (plan, phase 4 "Input"):
 1. the owner's answers to O1–O9 (J5.6): given on 2026-10-27, as the *Rukovodilac* reads them (C100);
-2. the v37 production post-check passed (phase P; not recorded yet);
-3. the old Render service clarified: which database it uses (phase 1, b);
+2. the v37 production post-check passed (phase P): **closed** by the owner's statement of 2026-10-27 (C100);
+3. the old Render service clarified (phase 1, b): **closed** by the same statement (C100). It runs on Supabase, is
+   inactive and no longer deployed, and stays inactive during and after the deploy of v39 and v40;
 4. the plan names both migrations: phase 4's gate line "migrations v39 and v40" and section 6 (part B in v40). In this
    pull request, after PR #238 is merged (the *Rukovodilac*'s process of 2026-10-27), so the owner's order names
    both.
