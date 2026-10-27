@@ -1,6 +1,7 @@
 import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { state } from "./state.js";
 import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
+import { renderDashboardChartPlots } from "./training-load-analysis-echarts-options.js";
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
 
 const WIDGET_TYPES = [
@@ -428,7 +429,7 @@ function displayStatusLabel(status, reasons = []) {
     const names = { conflict: "Conflict", unitConflict: "Unit conflict", typeConflict: "Type conflict", semanticConflict: "Semantic conflict" };
     return reasons.filter(reason => names[reason]).map(reason => names[reason]).join(" / ") || "Conflict";
   }
-  if (reasons.includes("seriesQueryFailed")) return "seriesQueryFailed";
+  if (reasons.includes("seriesQueryFailed")) return "This series could not be loaded. Try refreshing the dashboard.";
   if (reasons.includes("duplicateBucket")) return "Multiple values for this group. Use a table.";
   return "Invalid or unavailable result";
 }
@@ -440,9 +441,10 @@ function renderDisplayStatusHtml(status, reasons) {
 function displayRowContext(row) {
   const identity = row.identity;
   const reported = identity.source.reported;
+  const connectionKeys = ["sourceConnectionId", "source_connection_id", "sourceId"];
+  const onlyConnection = Object.keys(reported).length === 1 && connectionKeys.includes(Object.keys(reported)[0]);
   const sourceId = reported.sourceConnectionId ?? reported.source_connection_id ?? reported.sourceId;
-  const provenance = Object.keys(reported).some(key => ["provenance", "sourceProvenance", "source"].includes(key));
-  const sourceLabel = provenance ? `Source provenance ${JSON.stringify(reported)}` : typeof sourceId === "string" ? `Source ${sourceId}` : "";
+  const sourceLabel = onlyConnection && typeof sourceId === "string" ? `Source ${sourceId}` : Object.keys(reported).length ? `Source provenance ${JSON.stringify(reported)}` : "";
   return [identity.athleteId ? `Athlete ${identity.athleteId}` : "", sourceLabel].filter(Boolean).join(" · ");
 }
 
@@ -455,6 +457,7 @@ function renderKpiHtml(model) {
     <div class="tl-analysis-kpi">
       <span class="tl-analysis-kpi-value">${escapeHtml(formatValue(row.value, model))}</span>
       <span class="tl-analysis-kpi-label">${escapeHtml(seriesLabel(model.series[0].definition))}${row.identity.unit ? ` · ${escapeHtml(row.identity.unit)}` : ""}</span>
+      ${displayRowContext(row) ? `<span class="tl-analysis-kpi-context">${escapeHtml(displayRowContext(row))}</span>` : ""}
       ${kpi.comparison.status === "value" ? `<span class="tl-analysis-kpi-compare">Compare ${escapeHtml(formatValue(kpi.comparison.row.value, model))}</span>` : ""}
       ${["incompatible", "error"].includes(kpi.comparison.status) ? `<span class="tl-analysis-status is-unresolved">Comparison unavailable: results are not unambiguous and compatible.</span>` : ""}
     </div>
@@ -464,8 +467,9 @@ function renderKpiHtml(model) {
 function renderTableHtml(model) {
   if (!model.series.length) return `<p class="muted">Add series to build a table.</p>`;
   return `
-    <div class="tl-analysis-table-wrap">
+    <div class="tl-analysis-table-wrap" role="region" aria-label="${escapeAttr(model.title || "Metric")} values" tabindex="0">
       <table class="tl-analysis-table">
+        <caption>Current period values</caption>
         <thead><tr><th scope="col">Series</th><th scope="col">Bucket</th><th scope="col">Value</th><th scope="col">Unit</th><th scope="col">Status</th></tr></thead>
         <tbody>
           ${model.series.map((series) => {
@@ -491,35 +495,14 @@ function renderTableHtml(model) {
 
 function renderChartHtml(model) {
   if (!model.series.length) return `<p class="muted">Add a series to draw the chart.</p>`;
-  const rows = [];
-  for (const series of model.series) {
-    const label = seriesLabel(series.definition);
-    if (series.status !== "ready") {
-      rows.push({ label, status: renderDisplayStatusHtml(series.status, series.reasons) });
-      continue;
-    }
-    for (const point of series.current) {
-      const context = displayRowContext(point);
-      rows.push({ label: [label, point.identity.bucketKey, context].filter(Boolean).join(" · "), value: point.value, unit: point.identity.unit, status: point.chartStatus === "value" ? "" : renderDisplayStatusHtml(point.chartStatus, point.reasons) });
-    }
-  }
-  let max = 1;
-  for (const row of rows) if (!row.status) max = Math.max(max, Math.abs(row.value));
+  const diagnostics = model.series.flatMap(series => series.current.filter(row => row.chartStatus !== "value").map(row => renderDisplayStatusHtml(row.chartStatus, row.reasons)));
   return `
-    <div class="tl-analysis-chart ${model.widgetType === "line_chart" ? "is-line" : "is-bar"}">
-      ${rows.map((row) => {
-        if (row.status) return `<div class="tl-analysis-chart-row"><span class="tl-analysis-chart-label">${escapeHtml(row.label)}</span>${row.status}</div>`;
-        const pct = row.value === 0 ? 0 : Math.max(4, Math.min(100, Math.abs(row.value) / max * 100));
-        return `
-          <div class="tl-analysis-chart-row">
-            <span class="tl-analysis-chart-label">${escapeHtml(row.label)}</span>
-            <span class="tl-analysis-chart-track"><span style="width:${pct}%"></span></span>
-            <span class="tl-analysis-chart-value">${escapeHtml(formatValue(row.value, model))}${row.unit ? ` ${escapeHtml(row.unit)}` : ""}</span>
-          </div>
-        `;
-      }).join("")}
-      ${!rows.length ? `<p class="muted">No data for ${escapeHtml(formatDate(state.trainingLoad.analysis.period.dateFrom))} - ${escapeHtml(formatDate(state.trainingLoad.analysis.period.dateTo))}.</p>` : ""}
-    </div>
+    ${renderDashboardChartPlots(model, seriesLabel, displayRowContext)}
+    ${diagnostics.join("")}
+    <details class="tl-analysis-chart-values" open>
+      <summary>Values and status</summary>
+      ${renderTableHtml(model)}
+    </details>
   `;
 }
 
@@ -550,7 +533,7 @@ function renderWidgetHtml(widget, position) {
           <h3>${escapeHtml(widget.title)}</h3>
         </div>
       </header>
-      ${renderWidgetBodyHtml(widget, results)}
+      <div class="tl-analysis-widget-body" role="region" aria-label="${escapeAttr(widget.title || "Metric")} content" tabindex="0">${renderWidgetBodyHtml(widget, results)}</div>
       ${renderWidgetToolbarHtml(widget, layout, position)}
       ${state.trainingLoad.analysis.editMode && canEdit() ? `<button type="button" class="tl-analysis-resize-handle" data-analysis-resize-handle aria-label="Resize widget" title="Resize widget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 20h12V8M13 20l7-7M18 20l2-2"/></svg></button>` : ""}
     </article>
