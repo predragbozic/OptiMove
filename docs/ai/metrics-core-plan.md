@@ -351,6 +351,17 @@ order covers is merged under it.
   - the integration QA passes, with its record in the PR.
 - **Red zone:** merge, deploy, smoke.
 - **★:** trigger 4 (idempotency), external review.
+- **Done, 2026-10-26.**
+  - `main` brought in: merge commit `0442655` (parents `d167231`, `16ef080`). The *Rukovodilac* proposed it in its
+    chat at 22:13:40 UTC („merge main u granu #218; …”), and the owner accepted that proposal: „Slažem se sa tobom
+    idemo za sada tako pa ćemo menjati ako bude potrebe” (owner turn `92449c5f`, 22:16:26 UTC).
+  - Integration QA on the real API on disposable databases through v37: the executor's run and the
+    *Rukovodilac*'s own run passed on `6436461`; the record is in PR #218.
+  - Reviews: `code-reviewer` READY on `6436461`; the *Rukovodilac*'s GO on `6436461`, risk low.
+  - Merge: `6c7dfa4` (parents `16ef080` and `6436461`), 23:31:43 UTC, made by the executor after that GO; the record
+    is in PR #218's description.
+  - Smoke: `/api/health` served `6c7dfa4` with `ok: true` three times in a row (23:33:01, 23:33:11 and 23:33:22
+    UTC); without a login the five variable routes answered 401. No migration, no production write.
 
 ### Phase 2b ★★: R2, renaming and archiving canonical variables (backend), after #218 is merged
 - **Owner, 2026-10-26** (in the *Rukovodilac*'s chat):
@@ -396,6 +407,14 @@ order covers is merged under it.
     - `Last verified against commit`.
 - **Acceptance:** no claim without evidence; what is inferred is marked as inferred.
 - **Red zone:** merge.
+- **Done, 2026-10-26.**
+  - PR #223 (`CURRENT_STATE.md` and the discovery document; it also closed the *Rukovodilac*'s LOW-1 of #218).
+  - Reviews: `code-reviewer` READY on `df0a520`; the *Rukovodilac*'s GO on `df0a520`, risk low.
+  - Merge: `e489eeb` (parents `6c7dfa4` and `df0a520`), made by the executor after that GO; the record is in PR
+    #223's description.
+  - Smoke: `/api/health` served `e489eeb` with `ok: true` three times in a row (until 23:47:26 UTC); without a login
+    the variable routes answered 401.
+  - The v37 post-check was not recorded; it stays with phase P.
 
 ### Phase P: in parallel, the owner only (red zone, no code)
 - The read-only v37 post-check (`docs/runbooks/source-metric-revision-guards-v37-postcheck.sql`); the owner reports
