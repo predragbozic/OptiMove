@@ -12,8 +12,9 @@ The Metrics Core entries (M2b PR #164, C98 PR #219, the plan PR #221, M3a PR #21
 re-derived then. The phase 2b (R2) entries were added on 2026-10-27 at `e8e2b0a` (merge of PR #224), by the R2
 implementation pull request, and brought up to date the same day at `e556d08` (merge of PR #227, that pull request)
 after its merge, its deploy and the owner's read-only post-check; nothing else was re-derived then. The Q10 part A
-and phase 2c entries were added on 2026-10-27 at `a1bb932` (merge of PR #229), by the phase 2c pull request;
-nothing else was re-derived then.
+and phase 2c entries were added on 2026-10-27 at `a1bb932` (merge of PR #229), by the phase 2c pull request, and
+brought up to date at `fdc2c2e` (merge of PR #237, that pull request) after its merge and deploy; nothing else was
+re-derived then.
 
 ## Active phase
 
@@ -2149,12 +2150,24 @@ Technical details.
     - Without a login the variable routes (GET and POST) answered 401, and `/api/auth/me` answered
       `{"user":null}`.
     - Part B, the database twins, goes into v39.
-  - **Phase 2c, R2 in the Variables view** (frontend only; section H and J3b.10 of the discovery document). It is
-    in an open pull request, not merged:
+  - **Phase 2c, R2 in the Variables view, PR #237** (frontend only, no migration; section H and J3b.10 of the
+    discovery document):
     - rename, archive and restore in the Variables view;
     - a team coach's reduced view of the club's variables, with the buttons only from the server's `actions`;
-    - locked names (cut or on several lines) that are never sent until replaced;
-    - a `409 variable_changed` that keeps the form open on the names saved now.
+    - read-only names (cut, line breaks, spacing) that are never sent until replaced;
+    - a `409 variable_changed` that keeps the form open on the names saved now;
+    - the archive form's promise about a later restore follows the basis the server will write (Q8).
+
+    Reviews and the merge:
+    - `code-reviewer`, `ux-design-reviewer` and `mobile-qa`, each READY WITH NON-BLOCKING NOTES; every MEDIUM was
+      fixed, and the narrow re-reviews were done.
+    - The *Rukovodilac*'s GO on `3a3575f`, after its own browser integration.
+    - Merge commit `fdc2c2e` (parents `a1bb932` and `3a3575f`) on 2026-10-27 at 13:33:13 UTC, made by the executor
+      under the standing merge order.
+    - `/api/health` served `a1bb932` until 13:33:55 UTC and `fdc2c2e` with `ok: true` from 13:34:05, then at 13:34:16
+      and 13:34:27 UTC. Without a login the variable routes answered 401 and `/api/auth/me` `{"user":null}`.
+    - The served bundle carries the phase 2c texts.
+    - Not checked on a physical device. The executor renamed, archived or restored no variable in production.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -3275,15 +3288,18 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224) and R2, renaming, archiving and restoring a canonical variable (PR #227, v38) are merged and deployed; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224), R2, renaming, archiving and restoring a canonical variable (PR #227, v38), Q10 part A (PR #229) and phase 2c, R2 in the Variables view (PR #237) are merged and deployed; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
 1. **The Metrics Core plan** (`docs/ai/metrics-core-plan.md`) sets the order of the Metrics Core work. Its
-   phases 0, 1, 2, 3 and 2b are done. Next by the plan:
-   - phase 2c, R2 in the Variables tab (frontend), in an open pull request; Q10 part A (the invisible characters,
-     C99) is merged and deployed (PR #229);
+   phases 0, 1, 2, 3, 2b and 2c are done, and so is Q10 part A (PR #229). Next by the plan:
+   - a docs pull request: the working mode (section 1 of the plan), the owner's confirmation of v38 after the
+     merge, phase 11, derived canonical variables, and phase 12, domains and categories of canonical variables; its
+     merge needs the owner's word;
+   - the preparation of phase 4: the v39 discovery and contract as a docs pull request, with Q10 part B as its own
+     part;
    - phase P, the owner only: the read-only v37 post-check, and the evidence for the nine `rest_v1` fields
      (C97);
    - phase 4, the revision lifecycle (C91), after the v37 post-check;
-   - phases 5–10 and R1, as the plan orders them.
+   - phases 5–12 and R1, as the plan orders them.
 
    No production field is confirmed through M2b before the revision lifecycle (C91) and the owner-run evidence
    (C97) exist. The import switch stays off throughout.
