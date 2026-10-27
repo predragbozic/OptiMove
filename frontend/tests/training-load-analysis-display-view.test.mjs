@@ -146,6 +146,21 @@ test("KPI shows actual identity context and tables expose keyboard-accessible re
   }
 });
 
+test("all reported source identity fields distinguish chart captions, tables and KPI context", () => {
+  for (const type of ["line_chart", "bar_chart", "table", "kpi"]) {
+    setup(type, [row(12, { sourceIdentityId: "identity-one", sourceSystem: "system-one", entryMethod: "api_import" })]);
+    const body = rendered().querySelector(".tl-analysis-widget");
+    for (const value of ["identity-one", "system-one", "api_import"]) assert.ok(body.textContent.includes(value));
+    if (type.includes("chart")) {
+      assert.match(body.querySelector("figcaption").textContent, /identity-one.*system-one.*api_import/);
+      setup(type, [row(12, { sourceIdentityId: "identity-one" }), row(12, { sourceIdentityId: "identity-two" })]);
+      const captions = [...rendered().querySelectorAll("figcaption")].map(caption => caption.textContent);
+      assert.equal(captions.length, 2);
+      assert.notEqual(captions[0], captions[1]);
+    }
+  }
+});
+
 test("V2 number formatting changes presentation only; legacy scalar text and boolean KPI values remain supported", () => {
   const analysis = setup("kpi", [row(12.345)], { config: { schemaVersion: 2, numberFormat: { maximumFractionDigits: 2 } } });
   assert.equal(rendered().querySelector(".tl-analysis-kpi-value").textContent, "12.35");

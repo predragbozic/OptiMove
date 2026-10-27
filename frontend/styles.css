@@ -14742,6 +14742,8 @@ button.tests-assignment-card {
 /* Training Load 3B3 Analysis dashboard */
 .tl-analysis {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 14px;
 }
 
@@ -15262,6 +15264,7 @@ button.tests-assignment-card {
 
 .tl-analysis-table {
   width: 100%;
+  min-width: 480px;
   border-collapse: collapse;
   font-size: 13px;
 }
@@ -15284,6 +15287,11 @@ button.tests-assignment-card {
 .tl-analysis-table th {
   background: var(--surface-alt, #f4f4f4);
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.tl-analysis-table td:nth-child(2) {
+  max-width: 280px;
 }
 
 .tl-analysis-table td:nth-child(3) {

@@ -817,7 +817,7 @@ test("Analysis drag and resize also accept mouse fallback events without pointer
   assert.equal(state.trainingLoad.analysis.layoutDraft[0].height, 3);
 });
 
-test("Analysis drag can start from non-interactive widget body in edit mode", () => {
+test("Analysis drag can start from non-interactive card space in edit mode", () => {
   resetState();
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.editMode = true;
@@ -831,6 +831,24 @@ test("Analysis drag can start from non-interactive widget body in edit mode", ()
   handleTrainingLoadAnalysisPointerEnd({});
   assert.equal(state.trainingLoad.analysis.layoutDraft[0].x, 1);
   assert.equal(state.trainingLoad.analysis.layoutDraft[0].y, 1);
+});
+
+test("Analysis chart body controls never start a delegated or directly bound layout drag", () => {
+  resetState();
+  state.trainingLoad.section = "analysis";
+  state.trainingLoad.analysis.editMode = true;
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.widgets = [widget()];
+  const { widgetEl, listeners } = analysisElementStub(widgetId);
+  bindTrainingLoadAnalysisLayoutInteractions({ querySelectorAll: () => [widgetEl] }, renderTrainingLoad);
+  const event = widgetBodyMouseEvent(widgetId, 0, 0);
+  const originalClosest = event.target.closest;
+  event.target.closest = selector => selector.includes(".tl-analysis-widget-body") ? {} : originalClosest(selector);
+  event.preventDefault = () => { throw Error("Chart interaction must keep its default behavior"); };
+  assert.equal(handleTrainingLoadAnalysisPointerDown(event, renderTrainingLoad), false);
+  listeners.get("widget:mousedown")(event);
+  assert.equal(state.trainingLoad.analysis.layoutDraft, null);
 });
 
 test("Analysis direct widget bindings start drag from the rendered card but ignore buttons", () => {
