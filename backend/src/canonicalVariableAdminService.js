@@ -44,6 +44,9 @@
 // request row names that change.
 import { adminWriteKit, canonicalDecimal, DECIMAL_INPUT, resolveMappingAdmin, SourceMetricMappingError, TEXT_LIMITS } from "./sourceMetricMappingService.js";
 import { resolveActiveWorkspace } from "./workspace.js";
+import { unitTokenOk } from "./metricTextRules.js";
+
+export { unitTokenOk };
 
 const {
   runWrite, boundedRead, rightsStillHold, refusal, NOT_FOUND, MESSAGES, plainObject, uuidField, boundedText, boundedOut,
@@ -60,15 +63,6 @@ export const KEY_RULE = /^[a-z][a-z0-9_]{0,62}$/;
 const LEVELS = Object.freeze({ session: "session", drill: "component" });
 const AGGREGATIONS = new Set(["sum", "avg", "max", "last", "none"]);
 const ONE_SIDED = new Set([">=", ">", "<=", "<"]);
-// The JavaScript twin of training_load.source_metric_unit_token_ok() (v34):
-// 1-30 characters, no whitespace, no '|' or '=', no control, format or
-// invisible character. The database function decides again inside the write.
-const UNIT_FORBIDDEN = /[\s|=\u0000-\u001f\u007f-\u009f\u00a0\u00ad\u061c\u1680\u180e\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\ufeff]/u;
-export function unitTokenOk(value) {
-  if (typeof value !== "string") return false;
-  const length = [...value].length;
-  return length >= 1 && length <= 30 && !UNIT_FORBIDDEN.test(value);
-}
 // v34's guard on metric_definitions (decision 9), exactly: a new version of a
 // variable whose current version an active mapping version pins.
 const PIN_GUARD = "metric_definitions: an active mapping version pins the current version; disable it first";
@@ -743,6 +737,7 @@ function classifyChangeError(error) {
 // the identical 404, so a refused caller never waits for its lock), then FOR
 // UPDATE, then the rights FOR SHARE - lost: the identical 404, before any
 // answer that carries data -, then `check` (the route's 409s), the text rule
+// on every value that changes (`texts`: [value, max, field, nullable]) and
 // once more in the database, the UPDATE (the v38 trigger writes the change
 // row) and the request row naming that change.
 async function runChange({ ctx, variableId, operation, requestKey, requestHash, reason, check, update, texts }) {
@@ -767,8 +762,9 @@ async function runChange({ ctx, variableId, operation, requestKey, requestHash, 
       const row = (await client.query(`select ${VARIABLE_COLUMNS} from ${VARIABLE_FROM} where d.id = $1`, [id])).rows[0];
       if (!row) throw NOT_FOUND();
       check(row);
-      for (const [value, max] of [...texts(row), [reason, TEXT_LIMITS.reason]]) {
+      for (const [value, max, field = "reason", nullable = false] of [...texts(row), [reason, TEXT_LIMITS.reason]]) {
         if (value === null) continue;
+        if (!boundedText(value, max)) throw invalidBody(textRuleMessage(field, max, nullable));
         const ok = (await client.query(`select training_load.source_metric_text_ok($1, $2) as ok`, [value, max])).rows[0].ok;
         if (ok !== true) throw invalidBody("A text is not one line of visible characters within its limit.");
       }
@@ -795,13 +791,18 @@ const variableIdOrNotFound = (variableId) => {
   if (typeof variableId !== "string" || !UUID.test(variableId)) throw NOT_FOUND();
   return variableId.toLowerCase();
 };
+const textRuleMessage = (field, max, nullable) =>
+  `${field} is one line of 1-${max} visible characters without surrounding spaces${nullable ? ", or null" : ""}.`;
 // A rename field: absent (unchanged), or its new value; null clears an
-// optional one. Returns undefined for absent.
+// optional one. Returns undefined for absent. Here only its type is checked:
+// the text rule applies inside the write to a value that differs from the
+// stored one, so a field sent with its stored value is exempt, as in v38's
+// request guard (Q10).
 function renameField(body, field, max, { nullable }) {
   if (!Object.hasOwn(body, field)) return undefined;
   const value = body[field];
   if (value === null && nullable) return null;
-  if (!boundedText(value, max)) throw invalidBody(`${field} is one line of 1-${max} visible characters without surrounding spaces${nullable ? ", or null" : ""}.`);
+  if (typeof value !== "string") throw invalidBody(textRuleMessage(field, max, nullable));
   return value;
 }
 
@@ -838,10 +839,14 @@ export async function renameVariable({ ctx, variableId, body }) {
       }
       if (ctx.basis === "team_coach" && row.pinned) throw refusal(409, "variable_pinned", TEXT.rename_pinned);
     },
-    // Only the values this rename sets are checked; one it leaves is exempt.
-    texts: () => [
-      [label ?? null, TEXT_LIMITS.label], [shortLabel ?? null, TEXT_LIMITS.shortLabel], [description ?? null, TEXT_LIMITS.description],
-    ],
+    // Only the values this rename changes are checked; one it leaves out, or
+    // sends with its stored value, is exempt.
+    texts: (row) => [
+      [label, row.label, "label", TEXT_LIMITS.label, false],
+      [shortLabel, row.short_label ?? null, "shortLabel", TEXT_LIMITS.shortLabel, true],
+      [description, row.description ?? null, "description", TEXT_LIMITS.description, true],
+    ].filter(([value, stored]) => value !== undefined && value !== stored)
+      .map(([value, , field, max, nullable]) => [value, max, field, nullable]),
     update: (row) => {
       const n = next(row);
       return { sql: "label = $2, short_label = $3, description = $4", values: [n.label, n.shortLabel, n.description] };

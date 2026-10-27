@@ -363,6 +363,18 @@ test("create: an event threshold carries its operator and seconds; empty optiona
   assert.equal(buildRequest(form).errors.maxValue, "Not below the minimum.");
   Object.assign(form.draft, { minValue: "", maxValue: "", label: "Bad​name" });
   assert.ok(buildRequest(form).errors.label, "an invisible character is refused before sending");
+  // Q10: every group the server adds is refused here first (an astral tag
+  // character too); a name made only of blanks is an empty name.
+  for (const cp of [0x034f, 0x115f, 0x17b4, 0x180b, 0x2065, 0x2800, 0x3164, 0xfe0f, 0xffa0, 0xfff9, 0x1bca0, 0x1d173, 0xe0041]) {
+    form.draft.label = `Bad${String.fromCodePoint(cp)}name`;
+    assert.equal(buildRequest(form).errors.label, "Contains a character that cannot be saved.", cp.toString(16));
+  }
+  form.draft.label = String.fromCodePoint(0x3000, 0xa0, 0x2003);
+  assert.equal(buildRequest(form).errors.label, "Required.", "a name of blanks only is empty");
+  Object.assign(form.draft, { label: "Accelerations", unit: `m${String.fromCodePoint(0x3164)}` });
+  assert.equal(buildRequest(form).errors.unit, "No spaces, '|' or '='.", "a unit with a Hangul filler");
+  form.draft.unit = "count";
+  assert.deepEqual(buildRequest(form).errors, {});
 });
 
 test("create: the key is suggested from the name a moment after typing stops; a taken or impossible key opens Technical details", async () => {

@@ -566,7 +566,7 @@ test("4. the body: a JSON object only; an unknown or a server-derived field (act
     await bad(unitPath(f), body, "invalid_body");
   }
   await bad(unitPath(f), unitBody({ requestKey: "not-a-uuid" }), "invalid_body");
-  for (const unit of ["", "m s", "a|b", "a=b", "x".repeat(31), `m${String.fromCodePoint(0xa0)}`, `m${String.fromCodePoint(0x200b)}`, 5]) await bad(unitPath(f), unitBody({ sourceUnit: unit }), "invalid_unit");
+  for (const unit of ["", "m s", "a|b", "a=b", "x".repeat(31), `m${String.fromCodePoint(0xa0)}`, `m${String.fromCodePoint(0x200b)}`, `m${String.fromCodePoint(0x3164)}`, String.fromCodePoint(0x2800), `km${String.fromCodePoint(0xe0020)}`, 5]) await bad(unitPath(f), unitBody({ sourceUnit: unit }), "invalid_unit");
   await bad(unitPath(ev), unitBody({ sourceUnit: "count", sourceBoundUnit: "m s" }), "invalid_unit");
   const badRefs = ["https://example.com/a#b", "docs/a.md", "docs/a.md#", "/docs/a.md#x", "docs/../a.md#x", "docs//a.md#x", "src/a.md#x", "docs/a b.md#x", "docs/a.md#x#y", `docs/${"a".repeat(296)}#x`, 7];
   for (const ref of badRefs) await bad(unitPath(f), unitBody({ evidenceRef: ref }), "invalid_evidence_ref");

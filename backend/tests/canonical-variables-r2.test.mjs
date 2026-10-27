@@ -1136,3 +1136,66 @@ test("16. an archive changes no history: a dashboard series bound to a variable 
   ok200(await archive(W.coachA1, v.id));
   assert.equal(await read(), 4200, "the bound series keeps reading after the archive");
 });
+
+test("17. Q10: every character group Q10 adds, and a text of blanks only, is refused on create (label, short label, description, unit, the key suggestion), on a rename that changes a value (inside the write, after the rights: nothing written), and in an archive's or a restore's reason; a rename that sends a stored legacy value unchanged is exempt, as in v38's request guard", async () => {
+  const SAMPLES = [0x034f, 0x115f, 0x17b5, 0x180f, 0x2065, 0x2800, 0x3164, 0xfe0f, 0xffa0, 0xfffb, 0x1bca3, 0x1d17a, 0xe0041, 0xe0100];
+  const BLANKS_ONLY = [ch(0x3000), `${ch(0xa0)}${ch(0x2003)}`];
+  const createBody = (over) => ({ requestKey: key(), label: `Total ${uid()}`, unit: "m", levels: ["session"], dailyAggregationMethod: "sum", ...over });
+  for (const cp of SAMPLES) {
+    for (const over of [{ label: `Bad ${ch(cp)} name` }, { shortLabel: `S${ch(cp)}` }, { description: `D ${ch(cp)}` }]) {
+      const res = await post("/variables", W.caA.cookie, createBody(over));
+      assert.deepEqual([res.status, res.body.error], [400, "invalid_body"], `${cp.toString(16)} ${Object.keys(over)}`);
+    }
+    const unit = await post("/variables", W.caA.cookie, createBody({ unit: `m${ch(cp)}` }));
+    assert.deepEqual([unit.status, unit.body.error], [400, "invalid_unit"], `unit ${cp.toString(16)}`);
+    const suggestion = await api(`/variables/key-suggestion?label=${encodeURIComponent(`Bad ${ch(cp)} name`)}`, { cookie: W.caA.cookie });
+    assert.deepEqual([suggestion.status, suggestion.body.error], [400, "invalid_query"], `key suggestion ${cp.toString(16)}`);
+  }
+  for (const blank of BLANKS_ONLY) {
+    const res = await post("/variables", W.caA.cookie, createBody({ label: blank }));
+    assert.deepEqual([res.status, res.body.error], [400, "invalid_body"], "a label of blanks only");
+  }
+
+  const v = await created(W.caA.cookie, { description: "Total" });
+  const r2Requests = async () => (await one(k, `select count(*)::int as n from training_load.metric_variable_requests where metric_definition_id = $1 and operation <> 'variable_create'`, [v.id])).n;
+  for (const who of [W.coachA1, W.caA]) {
+    const fresh = await view(who, v.id);
+    for (const cp of SAMPLES) {
+      for (const body of [{ label: `Bad ${ch(cp)} name` }, { shortLabel: `S${ch(cp)}` }, { description: `D ${ch(cp)}` }]) {
+        const res = await rename(who, v.id, { labelsToken: fresh.labelsToken, ...body });
+        assert.deepEqual([res.status, res.body.error], [400, "invalid_body"], `rename ${cp.toString(16)} ${Object.keys(body)}`);
+      }
+      const reason = await archive(who, v.id, { reason: `Gone ${ch(cp)}` });
+      assert.deepEqual([reason.status, reason.body.error], [400, "invalid_body"], `archive reason ${cp.toString(16)}`);
+    }
+    for (const blank of BLANKS_ONLY) {
+      assert.deepEqual([(await rename(who, v.id, { labelsToken: fresh.labelsToken, label: blank })).body.error], ["invalid_body"], "a rename to blanks only");
+      assert.deepEqual([(await archive(who, v.id, { reason: blank })).body.error], ["invalid_body"], "a reason of blanks only");
+    }
+  }
+  assert.deepEqual([(await changesOf(v.id)).length, await r2Requests()], [0, 0], "no refused rename or archive wrote a change or a request");
+  // The text rule applies inside the write: a caller without the right gets the identical 404, never the 400.
+  const outsider = await rename(W.coachB1, v.id, { labelsToken: "f".repeat(64), label: `Bad ${ch(0x3164)} name` });
+  assert.deepEqual([outsider.status, outsider.body.error], [404, "notFound"]);
+
+  ok200(await archive(W.coachA1, v.id, { reason: "Paused" }));
+  for (const cp of SAMPLES) {
+    const res = await restore(W.coachA1, v.id, { reason: `Back ${ch(cp)}` });
+    assert.deepEqual([res.status, res.body.error], [400, "invalid_body"], `restore reason ${cp.toString(16)}`);
+  }
+  ok200(await restore(W.coachA1, v.id, { reason: "Back" }));
+
+  // A legacy label stored before Q10 with a character Q10 adds: sent unchanged it
+  // is exempt, and the other field's rename goes through; alone it is
+  // rename_unchanged; changed to another such value it is refused.
+  const legacyLabel = `Legacy ${ch(0x3164)} name`;
+  await rawDefinitionUpdate(`update training_load.metric_definitions set label = $2 where id = $1`, [v.id, legacyLabel]);
+  const lv = await view(W.coachA1, v.id);
+  const same = ok200(await rename(W.coachA1, v.id, { labelsToken: lv.labelsToken, label: legacyLabel, description: "New description" }));
+  assert.deepEqual([(await defRow(v.id)).label, same.variable.description], [legacyLabel, "New description"]);
+  const [renamed] = (await changesOf(v.id)).filter((c) => c.kind === "rename");
+  assert.deepEqual([renamed.old_label, renamed.new_label, renamed.new_description], [legacyLabel, legacyLabel, "New description"]);
+  assert.deepEqual([(await rename(W.coachA1, v.id, { labelsToken: same.variable.labelsToken, label: legacyLabel })).body.error], ["rename_unchanged"]);
+  const other = await rename(W.coachA1, v.id, { labelsToken: same.variable.labelsToken, label: `Other ${ch(0x3164)}` });
+  assert.deepEqual([other.status, other.body.error], [400, "invalid_body"]);
+});

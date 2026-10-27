@@ -564,7 +564,9 @@ test("8. POST versions: identity and non-identity conversions are server-derived
     const r = await post(`/mappings/${minMap.id}/versions`, W.pa.cookie, versionBody(W.fSec.revId, { conversionNote: "x", ...extra }));
     assert.deepEqual([r.status, r.body.error], [400, "invalid_body"], JSON.stringify(extra));
   }
-  for (const bad of [{ appliesToSession: false, appliesToDrill: false }, { appliesToSession: "yes" }, { conversionNote: " padded" }, { conversionNote: `two${ch(10)}lines` }, { conversionNote: `bidi${ch(0x202e)}x` }, { conversionNote: "x".repeat(501) }]) {
+  for (const bad of [{ appliesToSession: false, appliesToDrill: false }, { appliesToSession: "yes" }, { conversionNote: " padded" }, { conversionNote: `two${ch(10)}lines` }, { conversionNote: `bidi${ch(0x202e)}x` }, { conversionNote: "x".repeat(501) },
+    // Q10: a character it adds, an astral tag, a note of blanks only.
+    { conversionNote: `a${ch(0x3164)}b` }, { conversionNote: `x${ch(0xe0041)}` }, { conversionNote: `${ch(0x3000)}${ch(0xa0)}` }]) {
     const r = await post(`/mappings/${minMap.id}/versions`, W.pa.cookie, versionBody(W.fSec.revId, bad));
     assert.deepEqual([r.status, r.body.error], [400, "invalid_body"], JSON.stringify(bad));
   }
