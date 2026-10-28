@@ -16,8 +16,9 @@ and phase 2c entries were added on 2026-10-27 at `a1bb932` (merge of PR #229), b
 brought up to date at `fdc2c2e` (merge of PR #237, that pull request) after its merge and deploy; nothing else was
 re-derived then. The phase 4 entries (PR #241, migrations v39 and v40) were added on 2026-10-28 at `290b6cf` (merge of
 PR #241), after its merge, its deploy and the owner's read-only post-checks; nothing else was re-derived then.
-The phase 12 entries (the contract PR #244 and the 12b pull request, migration v41, not merged) were added on
-2026-10-28 at `a07fdd1` (merge of PR #244), by the 12b pull request; nothing else was re-derived then.
+The phase 12 entries (the contract PR #244 and the 12b pull request, migration v41) were added on 2026-10-28 at
+`a07fdd1` (merge of PR #244), by the 12b pull request, and brought up to date at `9361fff` (merge of PR #247) after its
+merge, its deploy and the owner's read-only post-check; nothing else was re-derived then.
 
 ## Active phase
 
@@ -2214,9 +2215,9 @@ Technical details.
       - The *Rukovodilac*'s smoke: `/api/health` served `a07fdd1` with `ok: true` three times in a row (12:48:34,
         12:48:55 and 12:49:16 UTC). Without a login five protected routes answered 401 and `/api/auth/me` answered
         `{"user":null}`.
-    - **12b, the backend and migration v41** (branch `feature/metrics-classification-12b-v41` from `a07fdd1`, on the
-      *Rukovodilac*'s order of 2026-10-28): **implemented in an open pull request — not merged, not deployed, v41
-      applied to no persistent database.** J6 of the discovery document records it as built:
+    - **12b, the backend and migration v41, PR #247** (branch `feature/metrics-classification-12b-v41` from
+      `a07fdd1`, on the *Rukovodilac*'s order of 2026-10-28): **merged and deployed; v41 confirmed on production by
+      the owner's read-only post-check, by the owner's statement.** J6 of the discovery document records it as built:
       - v41: the `key` and `description` columns, the change and request records, the actor guards of every `system`
         or `club` write (C76, O7's database twin), O3's one-domain-per-category index; it refuses to run while any
         canonical row exists;
@@ -2225,8 +2226,29 @@ Technical details.
       - runbook `docs/runbooks/metric-classification-v41.md`, with the read-only preflight and post-check and the
         rollback.
 
-      Its merge needs the owner's order naming the pull request and v41, after the preflight. 12c, the frontend,
-      follows.
+      - **Reviews:**
+        - `db-reviewer`, `security-reviewer` and `code-reviewer` reviewed `36cfb45`, and their notes were applied at
+          `840e873`. The one MEDIUM was a `TRUNCATE` of the links table that ran no guard; it is fixed. The narrow
+          re-reviews of the delta answered READY.
+        - The *Rukovodilac* gave GO on `840e873`, with no BLOCKER, HIGH or MEDIUM. It confirmed the four choices the
+          contract had left open (J6) and recorded two LOW (an index refusal's `409` carries no `current`; the older
+          reads' user ids, under Separate tasks).
+      - **The owner's order:** „Odobravam merge PR #247 sa migracijom v41” (14:34:18 UTC, in the *Rukovodilac*'s
+        chat).
+      - **The owner's preflight:** reported as expected, „sve očekivani rezultati” (14:35:11 UTC). The values were not
+        pasted, and block 7's numbers were not recorded. The executor checked both quotes in the *Rukovodilac*'s
+        transcript before the merge.
+      - **Merge commit** `9361fff` (parents `a07fdd1` and `840e873`) on 2026-10-28 at 14:36:08 UTC, made by the
+        executor from exactly `840e873`; its tree is identical to that head.
+      - **Deploy:** started by the owner by hand (autodeploy was off). `/api/health` served `a07fdd1` until 14:38:32
+        UTC and `9361fff` with `ok: true` from 14:38:53, three times in a row (the *Rukovodilac*'s smoke). Without a
+        login the variable, mapping, field, classification, revision and GPEXE status routes answered 401.
+      - **v41 on the deployed database is confirmed by the owner's read-only post-check.** The owner reported it as
+        „sve je tako” (14:39:44 UTC, in the *Rukovodilac*'s chat) and did not paste the values.
+      - **Not exercised:** only PostgreSQL 16 was run by the executor and the reviewers; the post-check ran on
+        production's 17.6. No domain, category or link was written in production by the executor.
+      - A rule the code review proposed (a table guarded row by row also gets a `BEFORE TRUNCATE` guard) went to the
+        owner as optional; it is not decided, so it is not written.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -3369,19 +3391,19 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224), R2, renaming, archiving and restoring a canonical variable (PR #227, v38), Q10 part A (PR #229), phase 2c, R2 in the Variables view (PR #237), the plan's working mode with phases 11 and 12 (PR #238, `b358dae`), the v39 / v40 contract J5 (PR #240, `0c7104c`) and phase 4, the revision lifecycle and Q10 part B (PR #241, v39 and v40, `290b6cf`) are merged and deployed; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224), R2, renaming, archiving and restoring a canonical variable (PR #227, v38), Q10 part A (PR #229), phase 2c, R2 in the Variables view (PR #237), the plan's working mode with phases 11 and 12 (PR #238, `b358dae`), the v39 / v40 contract J5 (PR #240, `0c7104c`), phase 4, the revision lifecycle and Q10 part B (PR #241, v39 and v40, `290b6cf`), the phase 12 contract (PR #244, `a07fdd1`) and 12b, domains and categories of canonical variables (PR #247, v41, `9361fff`) are merged and deployed; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
 1. **The Metrics Core plan** (`docs/ai/metrics-core-plan.md`) sets the order of the Metrics Core work. Its
-   phases 0, 1, 2, 3, 2b, 2c and 4 are done, and so is Q10: part A in PR #229, part B as v40 in PR #241. Phase 4
+   phases 0, 1, 2, 3, 2b, 2c, 4 and 12b are done, and so is Q10: part A in PR #229, part B as v40 in PR #241. Phase 4
    is the revision lifecycle (C91) with migrations v39 and v40, PR #241 (`290b6cf`), merged and deployed on
    2026-10-28 and confirmed by the owner's post-checks; see the active phase.
 
    Next by the plan:
    - phase 12, domains and categories of canonical variables (★): the contract J6
      (`docs/ai/phase12-domains-categories-contract.md`) was accepted on 2026-10-28 as the *Rukovodilac* reads the
-     owner's words (C101), and PR #244 (`a07fdd1`) records it. The owner's read-only count found no row in
-     `metric_domains`, `metric_categories` or `metric_structure_links` on production. 12b, the backend and migration
-     v41, is implemented in an open pull request: next are the *Rukovodilac*'s review, the owner's read-only
-     preflight and the owner's order naming the pull request and v41. Then 12c, the frontend;
+     owner's words (C101), and PR #244 (`a07fdd1`) records it. 12b, the backend and migration v41, is merged and
+     deployed (PR #247, `9361fff`), and v41 is confirmed by the owner's post-check. Next is 12c, the frontend (J6
+     3.4: the Domains & categories section of the Variables tab, the links in a variable's detail, the filter), with no
+     migration;
    - phase P, the owner only: the evidence for the nine `rest_v1` fields (C97) stays open;
    - phases 5–11 and R1, as the plan orders them.
 

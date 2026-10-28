@@ -1,8 +1,9 @@
 # J6 — phase 12: domains and categories of canonical variables (accepted contract, C101)
 
 **Accepted on 2026-10-28 (C101 of the discovery document), as the *Rukovodilac* reads the owner's words. 12b (the
-backend and migration v41) is implemented in an open pull request, not merged; section J6 of the discovery document
-records it as built. 12c (the frontend) is not started.** This is phase 12's discovery delta and contract (`docs/ai/metrics-core-plan.md`, phase 12 ★). It extends
+backend and migration v41) is merged and deployed (PR #247, `9361fff`, 2026-10-28; v41 confirmed on production by the
+owner's read-only post-check, by the owner's statement); section J6 of the discovery document records it as built. 12c
+(the frontend) is not started.** This is phase 12's discovery delta and contract (`docs/ai/metrics-core-plan.md`, phase 12 ★). It extends
 `docs/ai/gpexe-metric-variable-mapping-discovery.md` (the *discovery document*). The gate of phase 12 is this
 document first, then the implementation, after the owner's decisions below.
 

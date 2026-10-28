@@ -28,7 +28,7 @@ variables (section 5). Added later on 2026-10-27 (PR #240): the v39 / v40 contra
 reads the owner's words and confirmed by the owner's own merge of PR #240 (phase 4, C100 of the discovery document),
 Q10 part B as its own migration v40 (section 6), and the record of PR #238's merge as a one-off departure (section 2).
 Added on 2026-10-28: the Done entry of phase 4 (section 5) and the Q10 part B line of section 6 marked done; later the
-same day, phase 12's accepted contract (C101, section 5).
+same day, phase 12's accepted contract (C101, section 5) and the Done entry of 12b (section 5).
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
@@ -38,7 +38,8 @@ Last verified against commit: `deb2aa1` (`origin/main`, merge of PR #217). The r
 `docs/ai/phase5a-discovery-and-contract.md` are to that commit. What was added on 2026-10-27 (the working mode, the
 Done entries of phases 2b and 2c, phases 11 and 12, the Q10 line of section 6) was checked against `fdc2c2e` (merge of PR
 #237); what PR #240 added, against `b358dae` (merge of PR #238); the Done entry of phase 4, against `290b6cf` (merge of
-PR #241); phase 12's contract line, against `d96936c` (merge of PR #242).
+PR #241); phase 12's contract line, against `d96936c` (merge of PR #242); the Done entry of 12b, against `9361fff` (merge
+of PR #247).
 
 ## 1. Who does what
 
@@ -759,10 +760,39 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
   - The owner accepted O1–O9 as recommended (owner turns `bfb556e0` and `3d1bb779`, in the *Rukovodilac*'s chat), as
     the *Rukovodilac* reads them (C101 of the discovery document).
   - The owner's read-only count found no row in the three v10 tables.
-  - **12b, the backend and migration v41**, is implemented in an open pull request (branch
-    `feature/metrics-classification-12b-v41` from `a07fdd1`), on the *Rukovodilac*'s order of 2026-10-28; J6 of the
-    discovery document records it as built. Its merge needs the owner's order naming the pull request and v41, after
-    the read-only preflight. 12c, the frontend, follows.
+- **12b Done, 2026-10-28.**
+  - The implementation: PR #247 (migration v41, the routes C1–C5, the C6 filter and detail, the older API's O7
+    refusal; J6 of the discovery document as built), on the *Rukovodilac*'s order of 2026-10-28.
+  - Internal reviews:
+    - `db-reviewer`, `security-reviewer` and `code-reviewer` reviewed `36cfb45`. None found a BLOCKER or HIGH. The one
+      MEDIUM: a `TRUNCATE` of the links table ran no guard.
+    - Their notes were applied at `840e873`: the truncate guard, the lock before v41's count, the rollback's
+      key / description refusal, the owner in a create's request hash, `truncated` on the detail, `FOR NO KEY UPDATE`.
+    - The narrow re-reviews of the delta answered READY (`db-reviewer`, `code-reviewer`).
+  - The *Rukovodilac*'s review gave GO on `840e873` (its message queued at 14:31:52 UTC). It found no BLOCKER, HIGH or
+    MEDIUM.
+    - It confirmed the four choices the contract had left open: fail closed on every canonical row (so no "set the
+      key once" act); the removed link's change row written by the BEFORE DELETE branch; the older API's link `409`
+      before the target checks; the older reads returning `key` and `description`.
+    - It recorded two LOW: the `409` of an index refusal carries no `current`; the older reads return
+      `created_by_user_id` and `owner_club_id` (the follow-up with O8).
+  - The owner's order: „Odobravam merge PR #247 sa migracijom v41” (owner turn `9d9e38b7`, 14:34:18 UTC, in the
+    *Rukovodilac*'s chat). It names the PR and the migration.
+  - The owner's read-only preflight of v41 came back as expected: „sve očekivani rezultati” (owner turn `00192af8`,
+    14:35:11 UTC, in the *Rukovodilac*'s chat). The values were not pasted, and block 7's numbers were not recorded.
+    The executor checked both quotes in the *Rukovodilac*'s transcript before the merge.
+  - Merge: `9361fff` (parents `a07fdd1` and `840e873`), 14:36:08 UTC. The executor made it from exactly `840e873`,
+    and its tree is identical to that head.
+  - Deploy: started by the owner by hand (autodeploy was off).
+  - Smoke (the *Rukovodilac*): `/api/health` served `9361fff` with `ok: true` three times in a row (from 14:38:53 UTC;
+    `a07fdd1` until 14:38:32). Without a login these routes answered 401: the variable, mapping and field routes,
+    `/classification`, the revisions route and the GPEXE status.
+  - Post-check: the owner ran it and reported „sve je tako” (owner turn `0dcf68cc`, 14:39:44 UTC, in the
+    *Rukovodilac*'s chat). The values were not pasted, so v41 is confirmed by the owner's statement.
+  - Only PostgreSQL 16 was run by the executor and the reviewers; the owner's post-check ran on production's 17.6.
+  - A proposed rule from the code review (a table guarded row by row also gets a `BEFORE TRUNCATE` guard,
+    `.claude/rules/migrations.md`) went to the owner as optional. It is not decided, so it is not written.
+  - Next is 12c, the frontend (J6 3.4), with no migration.
 
 ### R1 ★★: "Overwrite with a new import" (re-import of a session)
 - **Owner, 2026-10-26** (in the *Rukovodilac*'s chat):
