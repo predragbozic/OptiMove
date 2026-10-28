@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | **Draft for the *Rukovodilac*'s review, then the owner's decision.** No code, no migration. |
+| Status | **Decided on 2026-10-28: option A, with Z2–Z4 as proposed (C102 of the discovery document), as the *Rukovodilac* reads the owner's words.** The *Rukovodilac* reviewed this document and gave GO on it at `d80ca8f` (merged as PR #250, `ae29b08`). Next is the ★★ contract of option A, a document for the owner's approval before any code. No code, no migration. |
 | Plan | `docs/ai/metrics-core-plan.md` §5, phase 5: "An owner decision only; the executor prepares the variants. Red zone: the decision. If it needs a schema, that is a separate ★★ phase on the pattern of phase 4." |
 | Verified against | `3532bc5` (merge of PR #249). Every fact below names its file and line. |
 
@@ -79,6 +79,10 @@ The speed field stays one field (`>=`), since it has only the open zone.
   - one GPEXE array becomes two OptiMove fields, a modelling convention that must be documented and kept in the
     extractor;
   - one seeded row.
+- **Nothing existing is rewritten.** The seeded power field and its revision 1 stay as they are; only their meaning act
+  gets `between`. The canonical variable of the `≥ 75` W/kg zone (today's team-owned
+  `gpexe_power_zone_75_plus_distance`) is mapped to the new `.open_top` field. (Added at the *Rukovodilac*'s LOW note
+  in its review of `d80ca8f`.)
 
 ### B. The zone operator moves from the revision to the mapping version
 
@@ -146,3 +150,10 @@ zone shape, lives where the source's shape is already read (the extractor).
 
 After the decision, the ★★ contract of the chosen option (its migration, F3's change and the phase 6 form) is written
 for the owner's approval before any code, following phase 4's pattern.
+
+**Decided on 2026-10-28 (C102 of the discovery document).** The *Rukovodilac* put Z1–Z4 to the owner with its
+recommendations: Z1 option A; Z2 the proposal above; Z3 `between` and `>=`, `>` only with evidence; Z4 the evidence per
+field as in C97, the first real confirmation a separate order. The owner answered in the *Rukovodilac*'s chat: „po
+preporuci neka ide, koji je last comit koji treba da uradim deploy” (owner turn `bfad63ba`, 16:15:39 UTC). The
+*Rukovodilac* reads it as Z1–Z4 accepted as recommended; that reading is the *Rukovodilac*'s, not the owner's own words.
+The executor checked the quote in the *Rukovodilac*'s transcript. Next is the ★★ contract of option A.

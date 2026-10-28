@@ -28,7 +28,9 @@ variables (section 5). Added later on 2026-10-27 (PR #240): the v39 / v40 contra
 reads the owner's words and confirmed by the owner's own merge of PR #240 (phase 4, C100 of the discovery document),
 Q10 part B as its own migration v40 (section 6), and the record of PR #238's merge as a one-off departure (section 2).
 Added on 2026-10-28: the Done entry of phase 4 (section 5) and the Q10 part B line of section 6 marked done; later the
-same day, phase 12's accepted contract (C101, section 5) and the Done entry of 12b (section 5).
+same day, phase 12's accepted contract (C101, section 5) and the Done entry of 12b (section 5); later still, the Done
+entries of 12c and phase 6, the owner's decision of phase 5 (C102, section 5), and the Data configuration visual polish
+task (section 6).
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
@@ -39,7 +41,7 @@ Last verified against commit: `deb2aa1` (`origin/main`, merge of PR #217). The r
 Done entries of phases 2b and 2c, phases 11 and 12, the Q10 line of section 6) was checked against `fdc2c2e` (merge of PR
 #237); what PR #240 added, against `b358dae` (merge of PR #238); the Done entry of phase 4, against `290b6cf` (merge of
 PR #241); phase 12's contract line, against `d96936c` (merge of PR #242); the Done entry of 12b, against `9361fff` (merge
-of PR #247).
+of PR #247); the Done entries of 12c and phase 6 and phase 5's decision, against `cf387f2` (merge of PR #251).
 
 ## 1. Who does what
 
@@ -588,6 +590,18 @@ order covers is merged under it.
 ### Phase 5: the zone model (C89)
 - An owner decision only; the executor prepares the variants.
 - **Red zone:** the decision. If it needs a schema, that is a separate ★★ phase on the pattern of phase 4.
+- **The variants:** `docs/ai/phase5-zone-model-options.md` (PR #250, merged as `ae29b08` under the standing order after
+  the *Rukovodilac*'s GO on `d80ca8f`, which added one LOW sentence for option A).
+- **Decided, 2026-10-28** (C102 of the discovery document):
+  - The owner's words: „po preporuci neka ide, koji je last comit koji treba da uradim deploy” (owner turn `bfad63ba`,
+    16:15:39 UTC, in the *Rukovodilac*'s chat). The executor checked the quote in the *Rukovodilac*'s transcript.
+  - The *Rukovodilac* reads them as Z1–Z4 accepted as recommended: option A (one source field per zone shape); the new
+    field `more.complementary_data.power.distance.open_top`, "Power zone distance (open top zone)"; a zone's meaning
+    act confirms `between` or `>=`, `>` only with evidence; each zone field needs owner-run evidence as in C97.
+  - Option A needs a schema, so it is a separate ★★ phase on the pattern of phase 4: its contract (the seeding
+    migration, v37's zone refusal replaced, F3's change, the zone operator in the phase 6 form, rollback, preflight,
+    post-check and tests) goes as a document to the *Rukovodilac* and the *Nezavisni revizor*, then to the owner for
+    approval before any code. Until its migration is merged and deployed, C89's refusal stands.
 
 ### Phase 6 ★: M3 Source fields tab, after phase 4 is merged
 - Reading the fields and their revisions; the F2 / F3 acts for a platform admin.
@@ -599,6 +613,32 @@ order covers is merged under it.
 - **Reviewers:** `code-reviewer`, `mobile-qa`, `ux-design-reviewer`.
 - **Red zone:** merge and deploy. The first real production confirmation of a field is a separate order, and only with
   the C97 evidence.
+- **Merged, 2026-10-28; not yet deployed.**
+  - PR #251: frontend only, no migration. As built: section H and J4 of the discovery document. The revision lifecycle
+    (L1–L5) has no UI in it, as the plan scopes phase 6; the *Rukovodilac* confirmed it.
+  - Reviews:
+    - `code-reviewer`, `ux-design-reviewer` and `mobile-qa` on `479489b`. The UX review found six MEDIUM: closing
+      refusals looked like a success; a `404`'s outcome; a stale field; the forms' context; no last question before
+      the write-once act; the evidence badges. `mobile-qa` found one MEDIUM: states not measured on phones;
+    - all were fixed at `ffce389`, with tests and browser evidence; the narrow re-reviews closed them (code READY, UX
+      READY WITH NON-BLOCKING NOTES, mobile LOW only).
+  - Evidence:
+    - 26 frontend tests and 13 mutations, all killed;
+    - the executor's integration and browser QA on a disposable database migrated through v41 with v34's nine seeded
+      fields, 82/82;
+    - the *Rukovodilac*'s own browser integration, 23/23, and its own 9 mutations, all killed.
+
+    Not checked on a physical device.
+  - The *Rukovodilac*'s GO on `ffce389` (its message queued at 16:17:18 UTC), with no BLOCKER, HIGH or MEDIUM and two
+    LOW:
+    - the first field's autofocus opens the phone's keyboard; it stays, as in the Variables forms;
+    - a field's current revision is its active one, otherwise the first the server lists; with exactly one active
+      revision per field today this has no effect, and the lifecycle UI must choose the newest explicitly.
+  - Merge: `cf387f2` (parents `ae29b08` and `ffce389`), 16:17:34 UTC, made by the executor under the standing merge
+    order from exactly `ffce389`.
+  - Deploy and smoke: with the owner's next manual deploy.
+  - For the owner (a choice, not blocking): the last question is a native `confirm()`, as Bind, Reconnect and Unbind
+    use; a review step inside the form is the alternative.
 
 ### Phase 7 ★★: the rest of M2, several PRs, each with its own guard migration (C76)
 - **Order:**
@@ -793,6 +833,34 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
   - A proposed rule from the code review (a table guarded row by row also gets a `BEFORE TRUNCATE` guard,
     `.claude/rules/migrations.md`) went to the owner as optional. It is not decided, so it is not written.
   - Next is 12c, the frontend (J6 3.4), with no migration.
+- **12c Done, 2026-10-28.**
+  - PR #249: frontend only, no migration, on the classification API of 12b. As built: J6 and section H of the discovery
+    document.
+  - Reviews:
+    - `code-reviewer`, `ux-design-reviewer` and `mobile-qa` on `41055a9`. The code review found two MEDIUM: a forged
+      Remove or Place click opening a form; "Nothing was saved" on a `404`. The UX review found four MEDIUM: the filter's
+      scope; dead ends; the removal wording; `key_taken` leading to a duplicate. `mobile-qa` found LOW and NIT only;
+    - all were fixed at `66d9173`, with tests; the narrow re-reviews answered READY (code, UX).
+  - Evidence:
+    - 32 frontend tests and 11 mutations, all killed;
+    - the executor's integration and browser QA on a disposable database migrated through v41, 71/71;
+    - the *Rukovodilac*'s own browser integration, 29/29.
+
+    Not checked on a physical device.
+  - The *Rukovodilac*'s GO on `66d9173` (its message queued at 15:31:52 UTC), with no BLOCKER, HIGH or MEDIUM and two
+    LOW:
+    - the list filter also offers archived domains and categories, marked "(archived)"; separating active and archived
+      in the picker's groups is a follow-up;
+    - the tree places a category under its first category → domain link; O3's unique index allows no second one, so
+      this is only a defence.
+  - Merge: `3532bc5` (parents `30a3e6b` and `66d9173`), 15:32:22 UTC, made by the executor under the standing merge
+    order from exactly `66d9173`.
+  - Deploy: by the owner by hand, together with PR #248 („zajedno sa 12c“) and PR #250, as `ae29b08`.
+  - Smoke (the *Rukovodilac*): `/api/health` served `ae29b08` with `ok: true` three times in a row (16:17:35, 16:17:56
+    and 16:18:16 UTC; `9361fff` until 16:16:13). Without a login six protected routes answered 401, and `/api/auth/me`
+    answered `{"user":null}`.
+- **Phase 12 is done.** Its follow-ups are recorded in J6 (12c) and in `docs/ai/CURRENT_STATE.md`: the older reads'
+  columns and O8, and 12c's LOW notes.
 
 ### R1 ★★: "Overwrite with a new import" (re-import of a session)
 - **Owner, 2026-10-26** (in the *Rukovodilac*'s chat):
@@ -843,7 +911,68 @@ Each one is a plan change, so the owner schedules it:
     v40, merged and deployed with PR #241 (`290b6cf`, phase 4). The *Rukovodilac*'s R5 of 2026-10-27 replaced J3b.9's
     "no v40". The owner approved it with the phase 4 contract (O6, C100);
 - the v35 / v36 test hardening;
-- separate database roles.
+- separate database roles;
+- **Data configuration: visual polish of Variables, Domains & categories and Source fields** (scheduled by the owner on
+  2026-10-28; see below).
+
+**Data configuration: visual polish.** The owner's words, in the *Rukovodilac*'s chat, verbatim. The executor checked
+each turn in the *Rukovodilac*'s transcript:
+- owner turn `555ad88f`, 16:25:13 UTC: „Sta se sada desava i da li mozemo malo ovaj deo data conficugarion da sredimo
+  vizuelno da bude prihvatljivije kasnije”;
+- owner turn `675388a1`, 16:28:13 UTC: „Prvo svaka varijabla bi trebalo da ima neku ikonicu, možda bi trebalo da imamo i
+  neku listu ili bazu ikonica koje mozemo izabrati ako je bi se mogle uklopiti u ovu nasu pricu. Osim toga bilo bi
+  dobro da ovaj deo bude vizuelno sličan i interaktivan kao na našoj homes strani ili već nekako drugačije. Varijable
+  bi se mogle prevlačiti u kategorije, posebno bi trebalo razdvojiti domene od kategorija i sl. Nisam baš najbolji za
+  ovo ali par ideja nije na odmet”; and `d2ed6e07`, 16:28:32 UTC: „home strana trenera”;
+- owner turn `18e6d722`, 16:33:49 UTC: „te ikonice mogu da stoje ngde u settingsu da ih imamo za različite potrebe posle
+  da koristimo”;
+- owner turn `3d4b9bac`, 16:34:13 UTC: „Inače varijable i domeni već u bazi imaju medij i kolonnu gde možemo da ubacimo
+  te stvari”;
+- owner turns `257366da`, 16:34:42 UTC: „Sopstvene takođe omogućiti da postoje”, and `4525f83f`, 16:34:55 UTC: „da može
+  neko da ima”;
+- owner turn `3b1894ff`, 16:35:49 UTC: „sve može kako ti je lakše. To sve može da se skladišti na R2 kao što skladišimo
+  vežbe”;
+- owner turn `0dbec26b`, 16:36:20 UTC: „mislim ako to ubacijumo kao privatno lice i ako je potrebno za to skladište”.
+
+How the *Rukovodilac* reads them (its messages to the executor, 2026-10-28): the owner scheduled this task and approved
+the order step 1, then step 2. Nothing else is approved by them: no migration, no contract and no variant. That reading
+is the *Rukovodilac*'s.
+- **First, a proposal** (a document only): `docs/ai/data-configuration-visual-proposal.md` and a static HTML mockup the
+  owner can open in a browser, with no app code changed. It covers:
+  - 2–3 layout variants in the visual language of the coach's Home, each at 1280 and 360 px;
+  - a clear separation of domains from categories, with archived ones apart;
+  - variable icons;
+  - dragging variables into categories;
+  - what changes where, the risks, and the test plan.
+
+  It goes to the *Rukovodilac*, then to the owner to choose. Code comes only after the owner's word.
+- **Step 1, no migration:**
+  - a built-in icon library with an open licence, as a shared resource: `frontend/icon-library.js` (key, inline SVG,
+    categories, search words);
+  - a **Settings → Icons** gallery;
+  - one shared icon picker. Variables use it through an optional `iconKey` in the M3-0 API, stored as `icon:<key>` in
+    the existing `metric_definitions.icon_url` column (v10). The Settings taxonomy presets and the coach's Home share the
+    library;
+  - the visual pass over Variables, Domains & categories and Source fields.
+
+  Then **PR-1** (the visual pass and the icons; frontend and a small backend part; `code-reviewer`,
+  `ux-design-reviewer`, `mobile-qa`, and `security-reviewer` for the new input) and **PR-2** (dragging variables into
+  categories on a computer, through the existing classification API and its rules; the picker stays the way on phones
+  and by keyboard). Browser QA at 360 / 375 / 390 / 1280 px. Each merges under the standing order after the
+  *Rukovodilac*'s GO.
+- **Not in step 1:** an icon on a domain or a category of variables. `metric_domains` and `metric_categories` have no
+  icon column (v10, v41), so it needs a migration, which is an owner's option.
+- **Step 2 ★★, scheduled by the owner: a club's or a person's own icons.**
+  - Owners: `system` (a platform admin), `club` (a club admin; seen in that club only) and `user` (a private coach; seen
+    by that user only).
+  - PNG and SVG, the SVG sanitized, or PNG only if sanitizing cannot be proven; a size limit.
+  - Stored on R2 through the exercise media infrastructure and its per-account quota (Settings → Storage, 0 B by
+    default).
+  - A new table, so a migration.
+  - The identical 404 for another owner's icon.
+
+  Its contract comes first (a document, to the *Rukovodilac*, the *Nezavisni revizor* and then the owner), and the
+  migration only on the owner's order that names it.
 
 PR #220 is not part of this plan. If it runs in parallel, it is merged in sequence with #218 (they share
 `frontend/training-load-actions.js`), and the training-load actions tests are run again.

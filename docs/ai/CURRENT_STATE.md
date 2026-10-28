@@ -18,7 +18,8 @@ re-derived then. The phase 4 entries (PR #241, migrations v39 and v40) were adde
 PR #241), after its merge, its deploy and the owner's read-only post-checks; nothing else was re-derived then.
 The phase 12 entries (the contract PR #244 and the 12b pull request, migration v41) were added on 2026-10-28 at
 `a07fdd1` (merge of PR #244), by the 12b pull request, and brought up to date at `9361fff` (merge of PR #247) after its
-merge, its deploy and the owner's read-only post-check; nothing else was re-derived then.
+merge, its deploy and the owner's read-only post-check; nothing else was re-derived then. The 12c, phase 5 and phase 6
+entries were added on 2026-10-28 at `cf387f2` (merge of PR #251); nothing else was re-derived then.
 
 ## Active phase
 
@@ -2249,6 +2250,42 @@ Technical details.
         production's 17.6. No domain, category or link was written in production by the executor.
       - A rule the code review proposed (a table guarded row by row also gets a `BEFORE TRUNCATE` guard) went to the
         owner as optional; it is not decided, so it is not written.
+    - **12c, the frontend, PR #249** (branch `feature/metrics-classification-12c-ui` from `9361fff`): **merged and
+      deployed; frontend only, no migration.** J6 of the discovery document records it as built: the Domains &
+      categories view of the Variables tab, a variable's categories and domains in its detail, and the list filter.
+      - **Reviews:** `code-reviewer`, `ux-design-reviewer` and `mobile-qa` on `41055a9`; every MEDIUM was fixed in
+        `66d9173`, and the narrow re-reviews answered READY. The *Rukovodilac* gave GO on `66d9173` with two LOW (J6;
+        follow-ups under Separate tasks).
+      - **Evidence:** 32 frontend tests and 11 mutations, all killed; the executor's browser integration QA on a
+        disposable database migrated through v41, 71/71; the *Rukovodilac*'s own, 29/29.
+      - **Merge commit** `3532bc5` (parents `30a3e6b` and `66d9173`) on 2026-10-28 at 15:32:22 UTC, made by the
+        executor under the standing merge order from exactly `66d9173`.
+      - **Deploy:** started by the owner by hand, with PR #248 and PR #250, as `ae29b08`. `/api/health` served
+        `9361fff` until 16:16:13 UTC and `ae29b08` with `ok: true` at 16:17:35, 16:17:56 and 16:18:16 UTC (the
+        *Rukovodilac*'s smoke). Without a login six protected routes answered 401, and `/api/auth/me` answered
+        `{"user":null}`.
+    - **Phase 12 is done.**
+  - **Phase 5, the zone model (C89):** the variants are `docs/ai/phase5-zone-model-options.md` (PR #250, `ae29b08`,
+    deployed with it). **Decided on 2026-10-28 as the *Rukovodilac* reads the owner's words (C102):** option A, one source
+    field per zone shape; the new field `more.complementary_data.power.distance.open_top`; a zone's meaning act confirms
+    `between` or `>=` (`>` only with evidence); owner-run evidence per zone field as in C97. Option A needs a schema, so
+    its ★★ contract comes next, a document for the owner's approval before any code. Until its migration is merged and
+    deployed, the zone meaning act stays refused (C89).
+  - **Phase 6, the Source fields view, PR #251** (branch `feature/metrics-source-fields-tab-6` from `3532bc5`):
+    **merged, not yet deployed; frontend only, no migration.** Section H and J4 of the discovery document record it as
+    built: a **Variables | Source fields** sub-navigation in the platform and a club workspace; the fields with their
+    units, meaning, levels and evidence; a field's revisions and confirmations; the unit and meaning acts F2 / F3 for a
+    platform admin in the platform workspace. No UI for the revision lifecycle (L1–L5) yet.
+    - **Reviews:** `code-reviewer`, `ux-design-reviewer` and `mobile-qa` on `479489b`; every MEDIUM was fixed in
+      `ffce389`, and the narrow re-reviews closed them. The *Rukovodilac* gave GO on `ffce389` with two LOW (J4;
+      follow-ups under Separate tasks).
+    - **Evidence:** 26 frontend tests and 13 mutations, all killed; the executor's browser integration QA on a
+      disposable database migrated through v41 with v34's nine seeded fields, 82/82; the *Rukovodilac*'s own, 23/23,
+      and its own 9 mutations, all killed.
+    - **Merge commit** `cf387f2` (parents `ae29b08` and `ffce389`) on 2026-10-28 at 16:17:34 UTC, made by the executor
+      under the standing merge order from exactly `ffce389`.
+    - **Deploy:** with the owner's next manual deploy. **No production field is confirmed**: the first real
+      confirmation is a separate order, and only with the C97 evidence.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -3082,8 +3119,38 @@ pre-existing; pass/fail counts don't belong in this file
 - **The owner-run evidence for the nine seeded `rest_v1` fields** (C97; M6, gate 2): what each field still
   needs is listed in section J4 of the discovery document. The main session prepares the procedure only and
   never sends a GPEXE request.
-- **The zone verification model** (C89): an owner decision on how closed and open zones are modelled
-  (separate fields or revisions, or a schema change) before any zone's meaning is confirmed.
+- **The zone verification model** (C89): **decided on 2026-10-28 (C102): option A**, one source field per zone shape.
+  Its ★★ contract (a seeding migration, v37's zone refusal replaced, F3's change, the zone operator in the Source fields
+  form) is the next Metrics Core document; no zone's meaning is confirmed before its migration is deployed and the C97
+  evidence exists.
+- **Data configuration: visual polish** (scheduled by the owner on 2026-10-28; `docs/ai/metrics-core-plan.md`, section
+  6, with the owner's words): a proposal document and mockup first. Then step 1, with no migration: a built-in icon
+  library, Settings → Icons, a shared picker, variable icons in the existing `icon_url` column, the visual pass, and
+  dragging variables into categories. Then step 2 ★★: own icons for system, club and private-coach owners on R2, with a
+  migration. Many of the 12c and phase 6 follow-ups below belong to it.
+- **Follow-ups of the 12c frontend** (the *Rukovodilac* and the reviews of PR #249, LOW; not scheduled):
+  - the list filter also offers archived domains and categories: whether to separate active and archived in the
+    picker's groups;
+  - the removal note of a variable from a category could be conditional for a category in no domain;
+  - the filter note and the empty list say "placed there" and "placed here";
+  - a button from the variable's "first create one" note straight to Domains & categories;
+  - on phones, the view switch and the scope switch are two look-alike segmented controls, one above the other;
+  - whether Place in a domain or New category should be the primary button;
+  - physical device checks: the iOS keyboard with the first field focused, native select pickers with groups, hardware
+    Back, a native `confirm()` in PWA mode.
+- **Follow-ups of the phase 6 Source fields view** (the *Rukovodilac* and the reviews of PR #251, LOW; not scheduled):
+  - the lifecycle UI must choose a field's newest revision explicitly; today the view takes the active one, otherwise
+    the first the server lists;
+  - the first field's autofocus opens the phone's keyboard (kept, as in the Variables forms);
+  - name the operator in the last question ("At least (>=)"); the summary line repeats the field's name; the legend's
+    punctuation;
+  - scroll to the section's start rather than its title, so "← All source fields" stays in view; a dead
+    `border-color` on the Verified badge;
+  - physical device checks: the iOS keyboard and the native select picker, a native `confirm()` with a long reference
+    (and whether a browser can suppress it), hardware Back, iOS earlier than 15.4 without `overflow-wrap: anywhere`, a
+    landscape phone;
+  - the owner's choice, not blocking: the last question stays a native `confirm()` (as Bind, Reconnect and Unbind) or
+    becomes a review step inside the form.
 - **`migration-backfill.test.mjs` isolation** (owner, 2026-10-14; a test-infrastructure task): it runs the
   legacy `migrations/20260730_backfill_club_admin_scope.sql` over the whole shared database, re-asserting
   `is_active` and `updated_at` on every matching real club-admin row. Fix: run its SQL inside
@@ -3391,21 +3458,20 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224), R2, renaming, archiving and restoring a canonical variable (PR #227, v38), Q10 part A (PR #229), phase 2c, R2 in the Variables view (PR #237), the plan's working mode with phases 11 and 12 (PR #238, `b358dae`), the v39 / v40 contract J5 (PR #240, `0c7104c`), phase 4, the revision lifecycle and Q10 part B (PR #241, v39 and v40, `290b6cf`), the phase 12 contract (PR #244, `a07fdd1`) and 12b, domains and categories of canonical variables (PR #247, v41, `9361fff`) are merged and deployed; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224), R2, renaming, archiving and restoring a canonical variable (PR #227, v38), Q10 part A (PR #229), phase 2c, R2 in the Variables view (PR #237), the plan's working mode with phases 11 and 12 (PR #238, `b358dae`), the v39 / v40 contract J5 (PR #240, `0c7104c`), phase 4, the revision lifecycle and Q10 part B (PR #241, v39 and v40, `290b6cf`), the phase 12 contract (PR #244, `a07fdd1`), 12b, domains and categories of canonical variables (PR #247, v41, `9361fff`), 12c, their frontend (PR #249, `3532bc5`), and the phase 5 options (PR #250) are merged and deployed (the last three with `ae29b08`); phase 6, the Source fields view (PR #251, `cf387f2`), is merged and waits for the owner's next deploy; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
 1. **The Metrics Core plan** (`docs/ai/metrics-core-plan.md`) sets the order of the Metrics Core work. Its
-   phases 0, 1, 2, 3, 2b, 2c, 4 and 12b are done, and so is Q10: part A in PR #229, part B as v40 in PR #241. Phase 4
-   is the revision lifecycle (C91) with migrations v39 and v40, PR #241 (`290b6cf`), merged and deployed on
-   2026-10-28 and confirmed by the owner's post-checks; see the active phase.
+   phases 0, 1, 2, 3, 2b, 2c, 4 and 12 are done, and so is Q10: part A in PR #229, part B as v40 in PR #241. Phase 6 is
+   merged and waits for its deploy, and phase 5 is decided. Phase 4 is the revision lifecycle (C91) with migrations v39
+   and v40, PR #241 (`290b6cf`), merged and deployed on 2026-10-28 and confirmed by the owner's post-checks; see the
+   active phase.
 
    Next by the plan:
-   - phase 12, domains and categories of canonical variables (★): the contract J6
-     (`docs/ai/phase12-domains-categories-contract.md`) was accepted on 2026-10-28 as the *Rukovodilac* reads the
-     owner's words (C101), and PR #244 (`a07fdd1`) records it. 12b, the backend and migration v41, is merged and
-     deployed (PR #247, `9361fff`), and v41 is confirmed by the owner's post-check. Next is 12c, the frontend (J6
-     3.4: the Domains & categories section of the Variables tab, the links in a variable's detail, the filter), with no
-     migration;
+   - the owner's next manual deploy, which carries phase 6 (PR #251), then the *Rukovodilac*'s smoke;
+   - phase 5, the zone model: decided as option A (C102). Next is its ★★ contract, a document for the *Rukovodilac*,
+     the *Nezavisni revizor* and then the owner's approval before any code; the migration it names needs the owner's
+     own order;
    - phase P, the owner only: the evidence for the nine `rest_v1` fields (C97) stays open;
-   - phases 5–11 and R1, as the plan orders them.
+   - phases 7–11 and R1, as the plan orders them.
 
    No production field is confirmed through M2b before the owner-run evidence (C97) exists. Before the first
    production confirmation (M6), the owner also decides the pinned step's cap (see Separate tasks). The import
