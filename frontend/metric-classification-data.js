@@ -1,4 +1,4 @@
-// Training Load -> Data configuration -> Variables -> Domains & categories
+// Training Load -> Data configuration -> Domains and Categories
 // (phase 12c; the contract is J6, docs/ai/phase12-domains-categories-contract.md,
 // the API is PR #247): the domains and categories of canonical variables and
 // their links, over /api/training-load/sources/metrics/classification. The
@@ -209,7 +209,7 @@ const SETTLED_ON_CHECK = new Set([
 export const checkSettles = (info) => SETTLED_ON_CHECK.has(info.code);
 export function checkNoteText(info) {
   if (outcomeUnknown(info)) return "No answer again. The result is still not confirmed.";
-  if (info.status === 401) return "The check could not be done: you are signed out. Sign in again in a new tab, then Check result here. If you sign in on this page, look in Domains & categories afterwards.";
+  if (info.status === 401) return "The check could not be done: you are signed out. Sign in again in a new tab, then Check result here. If you sign in on this page, look under Domains or Categories afterwards.";
   if (info.code === "request_key_reused") return "The check could not be done: a save under this request is already stored with other values. Close without checking and look at the list.";
   if (info.code === "notFound") return "The check could not be done: this workspace has no access to it now. The result is still not confirmed.";
   if (info.code === "try_again") return "The check could not be done: the server was busy. The result is still not confirmed; Check result again in a moment.";
@@ -237,7 +237,7 @@ const MODE_TEXT = {
   "node-archive": { node_not_active: () => "It is already archived." },
   // The likeliest cause is one created earlier (perhaps a save left without a
   // check): it is looked for first, since nothing is ever deleted.
-  "node-create": { key_taken: (form) => `A ${nounOf(form?.kind)} here already uses ${String(form?.draft?.key ?? "").trim() ? "this custom key" : "the key made from this name"}, perhaps one created earlier or an archived one. Look for it in Domains & categories first; to create a different one, change the name or the custom key under Technical details.` },
+  "node-create": { key_taken: (form) => `A ${nounOf(form?.kind)} here already uses ${String(form?.draft?.key ?? "").trim() ? "this custom key" : "the key made from this name"}, perhaps one created earlier or an archived one. Look for it under ${form?.kind === "domain" ? "Domains" : "Categories"} first; to create a different one, change the name or the custom key under Technical details.` },
 };
 export function classificationCodeText(info, mode = "", form = null) {
   if (info.code === "invalid_body") return "Not saved: the server refused a value. Check the fields and save again.";

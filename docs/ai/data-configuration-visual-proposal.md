@@ -6,7 +6,7 @@ Variables, Domains & categories and Source fields" (`docs/ai/metrics-core-plan.m
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. The *Rukovodilac* reviewed `c830050` (GO as a document, no BLOCKER, HIGH or MEDIUM; three LOW notes for PR-1, recorded in sections 3.4, 3.5 and 4) and decided R1–R3 (section 10). The owner's choices V1–V5 were made on 2026-10-28 (section 10). |
+| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. PR-1 is built (section 11). The *Rukovodilac* reviewed `c830050` (GO as a document, no BLOCKER, HIGH or MEDIUM; three LOW notes for PR-1, recorded in sections 3.4, 3.5 and 4) and decided R1–R3 (section 10). The owner's choices V1–V5 were made on 2026-10-28 (section 10). |
 | Mockup | `docs/ai/mockups/data-configuration-visual.html` — a static page, opened in any browser. It holds the three layouts at 1280 px (scaled) and 360 px, the icon picker, Settings → Icons, the variables list and the Source fields list. It talks to no server, and every name and number in it is invented. |
 | Verified against commit | `0b947ab` (merge of PR #252). File and line references are to that commit. |
 | Decides | The owner: V1–V5 (section 10). The *Rukovodilac*: R1–R3 (section 10), inside the plan. |
@@ -275,3 +275,86 @@ owner's own words. The executor checked the turn in the *Rukovodilac*'s transcri
   the migration.
 - **R2 — undo, not a confirmation, after a drop** (section 6).
 - **R3 — the settings tab is read-only and visible to everyone who sees Settings** (section 3.2).
+
+---
+
+## 11. PR-1 as built (from `f4abd7c`; no migration)
+
+PR-1 is step 1 without dragging (R1): the library, Settings → Icons, the picker, the icon at create, layout C and the
+visual pass. Where it differs from sections 3–6, this section says so.
+
+**The library (3.1):**
+- `scripts/icon-library/manifest.json` names 128 icons of Tabler Icons 3.50.0 (MIT): the 126 of eight categories, plus
+  `stack` and `folder`, which draw the domain and category tiles (section 5).
+- `scripts/icon-library/generate.mjs` reads the pinned package's `package.json` (the name and the version must be the
+  manifest's) and its `tabler-nodes-outline.json`. Of each icon it takes only `<path>` elements with a `d` of
+  path-data characters, and any other element, attribute or character stops the run. Its `--check` mode writes nothing
+  and fails when a committed file differs. It is a maintenance step, never part of a build.
+- The generator writes `frontend/icon-library.js`, which holds data only (about 37 KB, 9.5 KB compressed), and
+  `backend/src/iconKeys.js`. The licence is `frontend/icon-library-LICENSE.txt`.
+- The renderer is a separate, hand-written module, `frontend/icon-render.js`. It draws a key's paths as inline SVG and
+  any other `icon:` value as a placeholder, and it escapes every attribute.
+- **A rule:** a released key is never removed or renamed, because stored values name it.
+- The five old Builder codes resolve in the renderer (`dumbbell` through its alias). **Not switched:** the Builder and the
+  Tags & Presets screens still draw their old glyph characters. Moving them to the library is later (table 2.2).
+
+**The icon at create (3.4):** as J3 of the discovery document records it. The `iconKey` is a key of the current list,
+never an alias. A create without one hashes as before (LOW-1). Every read gives `icon`, the coach's reduced view
+included.
+
+**A finding while building it:** two older screens draw a metric definition's `icon_url` as an image: Activities'
+recorded metrics and the dashboards' metric pickers. A canonical variable with an icon would show a broken image
+there. They now go through `renderMetricIconHtml`, which draws a library icon for an `icon:` value and keeps the image
+for any other value. The pickers are otherwise unchanged (C80).
+
+**Settings → Icons (3.2):**
+- Read only, and offered to everyone who sees Settings.
+- It is a searchable list grouped by category.
+- Copy key copies the stored value (`icon:run`). When the browser cannot copy, it says the key.
+- A credit line names the source and the licence.
+
+**The picker (3.3):**
+- A dialog on a computer and a bottom sheet on a phone.
+- The grid scrolls, while the search, the chips, the choice and the actions stay in view.
+- Escape and Cancel close it without a choice, and the focus returns to the button that opened it.
+- The search and the chips narrow the grid in place, so the focus stays where it is.
+
+**Layout C (4):**
+- **Cards:** Data configuration opens on the cards Variables, Domains, Categories and, for an administrator, Source
+  fields. A team's coach gets three cards.
+- **Counts (LOW-3):** they come from the reads the screens already make: the variables list (its page of 100; "More
+  than 100" when it has more), the one read of the domains and categories, and for an administrator the source fields
+  list. There is no read of its own and no new API.
+  - The Variables count is shown only for the default list: this workspace's own active variables, with no filter.
+- **The old controls:** the sub-navigation and the Variables | Domains & categories switch are gone.
+- **Ways back:** every screen has "← Data configuration", Source fields' through Training Load's own section switch.
+- **Focus:** a new screen puts the focus on its title and scrolls to it.
+
+**Domains apart from categories (5):**
+- Two screens, each with one primary button (New domain, New category).
+- A domain is a filled tile and a category an outlined one, both in the club colour for a club's.
+- Archived items are a folded group of their own, and the list filter puts them in groups of their own.
+- "First create one" and "no active domain" now link to Categories and Domains.
+
+**Source fields (3.5):** each field has a tile by its kind of value. The legend is the four badges, each with its colour
+and its word.
+
+**Not in PR-1:**
+- dragging (PR-2);
+- changing an icon (PR-1b, I1);
+- icons on domains and categories (V4, later);
+- the Builder and the presets on the library;
+- own icons (step 2).
+
+**Tests:**
+- New frontend suites:
+  - `frontend/tests/icon-render.test.mjs`;
+  - `icon-picker.actions.test.mjs`;
+  - `icon-gallery.actions.test.mjs`;
+  - `data-config-home.actions.test.mjs`.
+- `backend/tests/icon-library.test.mjs`: the two key lists agree with each other and with the manifest, and the files
+  hold geometry only.
+- Test 18 of `metric-variables-m3-0.test.mjs`.
+- The Variables, classification and Source fields suites, updated for the start screen.
+- Mutations of the eight guards.
+- A browser run on a disposable database at 1280, 360, 375 and 390 px.

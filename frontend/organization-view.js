@@ -6,6 +6,7 @@ import { renderSourceConnectionsPanelHtml } from "./source-connections-view.js";
 import { renderImage } from "./media.js";
 import { athleteFilterAttrs, renderAthleteFilter, sortAthletes } from "./athlete-list-tools.js";
 import { renderSettingsNavHtml } from "./navigation.js";
+import { renderIconGalleryHtml } from "./icon-gallery.js";
 import { renderFilterableSelect } from "./organization-select.js";
 import { renderTaxonomyPanelHtml } from "./taxonomy-view.js";
 import { state } from "./state.js";
@@ -95,7 +96,7 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
       </section>
       ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
       ${renderSettingsNavHtml(data)}
-      ${state.organization.section === "dataSources" ? renderDataSourcesPanelHtml() : state.organization.section === "sourceConnections" ? renderSourceConnectionsPanelHtml() : state.organization.section === "storage" ? renderStorageAdminPanelHtml(data) : state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : state.organization.section === "joinLinks" ? `
+      ${state.organization.section === "dataSources" ? renderDataSourcesPanelHtml() : state.organization.section === "sourceConnections" ? renderSourceConnectionsPanelHtml() : state.organization.section === "storage" ? renderStorageAdminPanelHtml(data) : state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : state.organization.section === "icons" ? renderIconGalleryHtml() : state.organization.section === "joinLinks" ? `
         ${renderOrganizationActions(data)}
         ${renderJoinLinksSection(data)}
       ` : `

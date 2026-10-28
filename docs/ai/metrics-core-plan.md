@@ -960,6 +960,11 @@ is the *Rukovodilac*'s.
   categories on a computer, through the existing classification API and its rules; the picker stays the way on phones
   and by keyboard). Browser QA at 360 / 375 / 390 / 1280 px. Each merges under the standing order after the
   *Rukovodilac*'s GO.
+- **Decided (2026-10-28, `docs/ai/data-configuration-visual-proposal.md` section 10):** the owner's V1–V5 as
+  recommended (layout C, Tabler Icons, I1 as PR-1b, domain and category icons later, PNG first), as the *Rukovodilac*
+  reads the owner's words; the *Rukovodilac*'s R1–R3. **PR-1 is implemented in an open pull request** (no migration;
+  the proposal's section 11 records it as built). Next: PR-2 (dragging), and PR-1b only on the owner's order naming
+  its migration.
 - **Not in step 1:** an icon on a domain or a category of variables. `metric_domains` and `metric_categories` have no
   icon column (v10, v41), so it needs a migration, which is an owner's option.
 - **Step 2 ★★, scheduled by the owner: a club's or a person's own icons.**

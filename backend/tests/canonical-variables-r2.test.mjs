@@ -56,7 +56,7 @@ const CHANGES_APPEND = /^metric_variable_changes: change records are append-only
 const REQUESTS_APPEND = /^metric_variable_requests: request records are append-only$/;
 const KEY_FROZEN = /^metric_definitions: the key of a canonical variable never changes$/;
 const PIN_GUARD = /^metric_definitions: an active mapping version pins the current version; disable it first$/;
-const REDUCED = ["actions", "description", "editable", "id", "key", "label", "labelsToken", "ownerScope", "shortLabel", "state", "truncated"];
+const REDUCED = ["actions", "description", "editable", "icon", "id", "key", "label", "labelsToken", "ownerScope", "shortLabel", "state", "truncated"];
 
 let rdb, db, r, k, k2, server, apiBase, service, variables, appPool, createSession;
 const W = {};
