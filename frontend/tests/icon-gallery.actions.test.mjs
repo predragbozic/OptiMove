@@ -83,19 +83,39 @@ test("3. the search and a chip narrow the list in place; the focus stays", async
   assert.match($("[data-icon-gallery-list]").textContent, /No icon matches\./);
 });
 
-test("4. Copy key copies the stored value and says so where everyone sees it; when the browser cannot copy, it shows the key to select; an unknown key copies nothing", async () => {
-  await handleIconGalleryAction($('[data-action="icon-gallery-copy"][data-icon-key="run"]'));
+test("4. Copy key copies the stored value and says so on the pressed card (the button reads Copied, a screen reader hears it); when the browser cannot copy, that card shows the key to select; a search, a chip or coming back clears it; an unknown key copies nothing", async () => {
+  const { enterIconGallery } = await import("../icon-gallery.js");
+  const button = (key) => $(`[data-action="icon-gallery-copy"][data-icon-key="${key}"]`);
+  const status = () => $("[data-icon-gallery-status]");
+  button("run").focus();
+  await handleIconGalleryAction(button("run"));
   assert.deepEqual(copied, ["icon:run"]);
-  const status = $("[data-icon-gallery-status]");
-  assert.equal(status.textContent, "Copied icon:run.");
-  assert.equal(status.getAttribute("role"), "status");
-  assert.equal(status.closest(".visually-hidden"), null, "the line is visible, not only read out");
+  assert.equal(button("run").textContent, "Copied", "the pressed button says it");
+  assert.equal(document.activeElement, button("run"), "the focus stays on it");
+  assert.equal(status().textContent, "Copied icon:run.");
+  assert.equal(status().getAttribute("role"), "status");
   copyFails = true;
-  await handleIconGalleryAction($('[data-action="icon-gallery-copy"][data-icon-key="bike"]'));
-  assert.equal(status.textContent, "Could not copy. The key is icon:bike.");
-  assert.equal(status.querySelector("code.icon-gallery-key")?.textContent, "icon:bike", "the key as text to select");
+  await handleIconGalleryAction(button("bike"));
+  assert.equal(button("run").textContent, "Copy key", "the earlier result goes");
+  assert.equal(button("bike").textContent, "Copy key");
+  const refused = button("bike").closest(".icon-gallery-item").querySelector("[data-icon-gallery-refused]");
+  assert.equal(refused?.textContent, "Could not copy. The key is icon:bike.", "the card itself shows the key");
+  assert.equal(refused.querySelector("code.icon-gallery-key").textContent, "icon:bike");
+  assert.equal(content.querySelectorAll("[data-icon-gallery-refused]").length, 1);
+  assert.equal(status().textContent, "Could not copy. The key is icon:bike.");
   render();
-  assert.equal($("[data-icon-gallery-status]").textContent, "Could not copy. The key is icon:bike.", "a repaint keeps the line");
+  assert.equal(button("bike").closest(".icon-gallery-item").querySelector("[data-icon-gallery-refused]")?.textContent, "Could not copy. The key is icon:bike.", "a repaint keeps it");
+  // Coming back to Settings -> Icons shows no earlier result as new.
+  enterIconGallery();
+  render();
+  assert.equal(content.querySelectorAll("[data-icon-gallery-refused]").length, 0);
+  assert.equal(status().textContent, "");
+  // A search clears a result too.
+  await handleIconGalleryAction(button("bike"));
+  const search = $("[data-icon-gallery-search]");
+  search.value = "bik";
+  search.dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.equal(content.querySelectorAll("[data-icon-gallery-refused]").length, 0, "a search clears it");
   content.insertAdjacentHTML("beforeend", `<button id="forged" data-action="icon-gallery-copy" data-icon-key="&lt;b&gt;"></button>`);
   copyFails = false;
   await handleIconGalleryAction($("#forged"));

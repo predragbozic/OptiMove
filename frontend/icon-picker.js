@@ -50,14 +50,16 @@ export function renderIconPickerHtml() {
           <button class="plain-button ghost" type="button" data-action="icon-picker-cancel">Cancel</button>
         </div>
         <label class="search-field icon-picker-search"><span>Search icons</span>
-          <input type="search" data-icon-picker-search value="${escapeAttr(p.query)}" maxlength="${ICON_SEARCH_MAX}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" aria-controls="icon-picker-grid">
+          <input type="search" data-icon-picker-search value="${escapeAttr(p.query)}" placeholder="Search icons" maxlength="${ICON_SEARCH_MAX}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" aria-controls="icon-picker-grid">
         </label>
         <div class="icon-picker-chips" role="group" aria-label="Categories" data-icon-picker-chips>${chipsHtml(p)}</div>
         <div class="icon-picker-grid" id="icon-picker-grid" role="group" aria-label="Icons" data-icon-picker-grid>${gridHtml(p)}</div>
-        <p class="icon-picker-choice" data-icon-picker-choice aria-live="polite">${choiceHtml(p)}</p>
-        <div class="icon-picker-actions">
-          <button class="plain-button data-sources-primary" type="button" data-action="icon-picker-use" ${p.selected ? "" : "disabled"}>Use icon</button>
-          <button class="plain-button ghost" type="button" data-action="icon-picker-none">Use no icon</button>
+        <div class="icon-picker-foot">
+          <p class="icon-picker-choice" data-icon-picker-choice aria-live="polite">${choiceHtml(p)}</p>
+          <div class="icon-picker-actions">
+            <button class="plain-button data-sources-primary" type="button" data-action="icon-picker-use" ${p.selected ? "" : "disabled"}>Use icon</button>
+            <button class="plain-button ghost" type="button" data-action="icon-picker-none">Use no icon</button>
+          </div>
         </div>
       </section>
     </div>`;
