@@ -2038,7 +2038,9 @@ Access, `401`, the identical `404 {"error":"notFound"}`, `Cache-Control: no-stor
   hashes exactly as before the icon existed, so a replay of an older request keeps its answer; an icon joins the request
   hash only when one is sent. V5 takes no icon. Every read (V1, V3, the reduced view of J3b.8, a write's answer) gives
   `icon`: the key when `icon_url` is `icon:<key>` of a key of the current library, `null` for none and for any other
-  stored value (an older URL is never sent). Changing the icon of an existing variable is not in it: v38's change record
+  stored value - an older URL, an alias such as `icon:dumbbell`, an unknown key (an older URL is never sent; the
+  frontend's renderer would draw the alias, the reads never name it; test 4 of `canonical-variables-r2.test.mjs` for the
+  coach's view). A released key is never removed: `scripts/icon-library/released-keys.json`. Changing the icon of an existing variable is not in it: v38's change record
   covers the label, short label, description and state only, so that needs its own migration (the proposal's I1, the
   owner's V3: PR-1b, on the owner's order naming it). Test 18 of `metric-variables-m3-0.test.mjs`, with mutations.
 - **A variable:** `{id, key, label, shortLabel, description, icon, ownerScope, state, editable, levels, currentVersion:{id,

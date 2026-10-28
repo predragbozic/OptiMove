@@ -5,7 +5,8 @@
 // is named under the grid. The screen that opens it (its `host`) renders it and
 // receives the choice; the picker itself writes nothing and sends nothing.
 // Typing, a chip or a choice repaints only the picker's own parts, so the focus
-// stays where it was.
+// stays where it was. It is modal: the host renders its own form inert while
+// the picker is open, and Tab stays inside the dialog (trapIconPickerTab).
 import { state } from "./state.js";
 import { ICON_CATEGORIES, isLibraryKey, renderIconSvg, searchIcons, storedIconValue } from "./icon-render.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -45,7 +46,7 @@ export function renderIconPickerHtml() {
       <button class="icon-picker-backdrop" type="button" data-action="icon-picker-cancel" aria-label="Close without choosing" tabindex="-1"></button>
       <section class="panel icon-picker" role="dialog" aria-modal="true" aria-labelledby="icon-picker-title">
         <div class="icon-picker-head">
-          <h2 id="icon-picker-title">${escapeHtml(p.title)}</h2>
+          <h2 id="icon-picker-title" tabindex="-1">${escapeHtml(p.title)}</h2>
           <button class="plain-button ghost" type="button" data-action="icon-picker-cancel">Cancel</button>
         </div>
         <label class="search-field icon-picker-search"><span>Search icons</span>
@@ -56,7 +57,7 @@ export function renderIconPickerHtml() {
         <p class="icon-picker-choice" data-icon-picker-choice aria-live="polite">${choiceHtml(p)}</p>
         <div class="icon-picker-actions">
           <button class="plain-button data-sources-primary" type="button" data-action="icon-picker-use" ${p.selected ? "" : "disabled"}>Use icon</button>
-          <button class="plain-button ghost" type="button" data-action="icon-picker-none">No icon</button>
+          <button class="plain-button ghost" type="button" data-action="icon-picker-none">Use no icon</button>
         </div>
       </section>
     </div>`;
@@ -79,8 +80,36 @@ function paint(p, { grid = true } = {}) {
   if (use) use.disabled = !p.selected;
 }
 
+// On open: the search with a mouse or a keyboard; on a touch screen the title,
+// so the phone's keyboard does not open over the grid and Use icon.
 export function focusIconPicker() {
-  globalThis.document?.querySelector?.("[data-icon-picker-search]")?.focus?.();
+  const doc = globalThis.document;
+  const touch = Boolean(globalThis.matchMedia?.("(pointer: coarse)")?.matches);
+  doc?.querySelector?.(touch ? "#icon-picker-title" : "[data-icon-picker-search]")?.focus?.();
+}
+
+// Tab and Shift+Tab stay inside the open picker (it is aria-modal). True when
+// the key was handled here.
+export function trapIconPickerTab(event) {
+  if (!state.iconPicker || event?.key !== "Tab") return false;
+  const doc = globalThis.document;
+  const dialog = doc?.querySelector?.("[data-icon-picker] .icon-picker");
+  if (!dialog) return false;
+  const controls = Array.from(dialog.querySelectorAll("button:not(:disabled),input:not(:disabled)"));
+  if (!controls.length) return false;
+  const at = controls.indexOf(doc.activeElement);
+  const inside = dialog.contains(doc.activeElement);
+  if (event.shiftKey && (at <= 0)) {
+    event.preventDefault();
+    controls.at(-1).focus();
+    return true;
+  }
+  if (!event.shiftKey && (at === controls.length - 1 || !inside)) {
+    event.preventDefault();
+    controls[0].focus();
+    return true;
+  }
+  return false;
 }
 
 // A click inside the picker. `apply(key | null)` hands the choice to the screen

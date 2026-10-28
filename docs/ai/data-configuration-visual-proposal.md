@@ -295,7 +295,11 @@ visual pass. Where it differs from sections 3–6, this section says so.
 - The renderer is a separate, hand-written module, `frontend/icon-render.js`. It draws a key's paths as inline SVG and
   any other `icon:` value as a placeholder, and it escapes every attribute.
 - **A rule:** a released key is never removed or renamed, because stored values name it.
-- The five old Builder codes resolve in the renderer (`dumbbell` through its alias). **Not switched:** the Builder and the
+  `scripts/icon-library/released-keys.json` lists every released key and is only ever appended to; a test holds the
+  library to it (every released key is still a key, and every key is listed).
+- The five old Builder codes resolve in the renderer (`dumbbell` through its alias). The alias is the frontend's
+  tolerance only: the server never writes it, and its reads answer `icon: null` for `icon:dumbbell` written by hand,
+  while the renderer would draw it as the barbell. **Not switched:** the Builder and the
   Tags & Presets screens still draw their old glyph characters. Moving them to the library is later (table 2.2).
 
 **The icon at create (3.4):** as J3 of the discovery document records it. The `iconKey` is a key of the current list,
@@ -310,12 +314,19 @@ for any other value. The pickers are otherwise unchanged (C80).
 **Settings → Icons (3.2):**
 - Read only, and offered to everyone who sees Settings.
 - It is a searchable list grouped by category.
-- Copy key copies the stored value (`icon:run`). When the browser cannot copy, it says the key.
+- Copy key copies the stored value (`icon:run`) and says so in a line everyone sees. When the browser cannot copy, the
+  line shows the key as text to select.
 - A credit line names the source and the licence.
 
 **The picker (3.3):**
 - A dialog on a computer and a bottom sheet on a phone.
-- The grid scrolls, while the search, the chips, the choice and the actions stay in view.
+- It is modal: the form behind it is inert and is never sent while the picker is open, and Tab stays inside it.
+- The grid scrolls first. On a screen too short even for that, the dialog itself scrolls and its actions stay pinned to
+  its bottom, so Use icon is always on the screen (checked at 360×640, 375×667, 667×375 and 844×390). On a phone or a
+  short screen the chips are one row that scrolls sideways.
+- **A difference from 3.3:** with a mouse or a keyboard the focus opens in the search; on a touch screen it opens on
+  the dialog's title, so the phone's keyboard does not cover the grid and Use icon.
+- The buttons are Use icon, Use no icon and Cancel.
 - Escape and Cancel close it without a choice, and the focus returns to the button that opened it.
 - The search and the chips narrow the grid in place, so the focus stays where it is.
 
@@ -328,7 +339,8 @@ for any other value. The pickers are otherwise unchanged (C80).
   - The Variables count is shown only for the default list: this workspace's own active variables, with no filter.
 - **The old controls:** the sub-navigation and the Variables | Domains & categories switch are gone.
 - **Ways back:** every screen has "← Data configuration", Source fields' through Training Load's own section switch.
-- **Focus:** a new screen puts the focus on its title and scrolls to it.
+- **Focus:** a new screen puts the focus on its title and scrolls to it, a variable's detail and the way back from it
+  included. Source fields, opened through Training Load's section switch, does not yet (a follow-up).
 
 **Domains apart from categories (5):**
 - Two screens, each with one primary button (New domain, New category).
@@ -336,8 +348,10 @@ for any other value. The pickers are otherwise unchanged (C80).
 - Archived items are a folded group of their own, and the list filter puts them in groups of their own.
 - "First create one" and "no active domain" now link to Categories and Domains.
 
-**Source fields (3.5):** each field has a tile by its kind of value. The legend is the four badges, each with its colour
-and its word.
+**Source fields (3.5):** each field has a tile by its kind of value (a count of events by its unit `count` too). The
+legend is the four badges, each with its colour and its word, followed by its meaning.
+
+**A variable without an icon** shows a neutral dashed circle, never an icon of the library.
 
 **Not in PR-1:**
 - dragging (PR-2);
@@ -357,4 +371,13 @@ and its word.
 - Test 18 of `metric-variables-m3-0.test.mjs`.
 - The Variables, classification and Source fields suites, updated for the start screen.
 - Mutations of the eight guards.
-- A browser run on a disposable database at 1280, 360, 375 and 390 px.
+- A browser run on a disposable database at 1280, 360, 375 and 390 px, and as a touch screen at 360×640, 375×667,
+  390×844, 667×375 and 844×390.
+
+**Recorded follow-ups (the internal reviews, LOW; not in PR-1):**
+- the active Data configuration tab could return to the start screen;
+- a domain's row counts its archived categories, and a category in an archived domain is not marked;
+- an open domain without categories has no button to Categories;
+- the Variables card counts the club's own variables only, while the domain and category cards count the system's too;
+- the picker's choice line names the stored value (`icon:run`), a storage detail in the main flow;
+- Source fields does not move the focus to its title.

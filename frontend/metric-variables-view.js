@@ -133,7 +133,7 @@ function renderDetailHtml(s, ctx) {
       <div class="dc-title">
         ${variableTileHtml(item, { size: "lg" })}
         <div>
-          <h2 id="metric-variables-title">${cut(item, item.label)}</h2>
+          <h2 id="metric-variables-title" tabindex="-1">${cut(item, item.label)}</h2>
           ${item.shortLabel ? `<p class="muted">Short name: ${escapeHtml(item.shortLabel)}</p>` : ""}
         </div>
       </div>
@@ -293,7 +293,7 @@ function renderIconFieldHtml(form) {
         <button class="plain-button" type="button" data-action="metric-variables-icon-open" aria-describedby="mv-icon-choice mv-hint-iconKey" ${locked ? "disabled" : ""}>${key ? "Change icon" : "Choose icon"}</button>
         ${key ? `<button class="plain-button ghost" type="button" data-action="metric-variables-icon-clear" ${locked ? "disabled" : ""}>Remove icon</button>` : ""}
       </div>
-      <span class="muted" id="mv-hint-iconKey">Shown beside the variable in lists. For now it can be chosen only when the variable is created.</span>
+      <span class="muted" id="mv-hint-iconKey">Shown beside the variable in lists. Choose it now: after the variable is created its icon cannot be changed yet.</span>
       ${fieldError(form, "iconKey")}
     </fieldset>`;
 }
@@ -330,7 +330,7 @@ function renderFormHtml(s, ctx) {
   const keyLine = hint.loading ? "Making the key..." : hint.required ? "No key can be made from this name (a key uses only the letters a-z, digits and underscores): enter one below."
     : hint.key ? `Key: ${escapeHtml(hint.key)}${hint.taken ? " - already used here; enter another key below." : ""}` : "The key is made from the name.";
   return `
-    <form class="data-sources-form metric-variables-form" data-metric-variables-form="${create ? "create" : "version"}" novalidate autocomplete="off">
+    <form class="data-sources-form metric-variables-form" data-metric-variables-form="${create ? "create" : "version"}" novalidate autocomplete="off"${iconPickerOpenFor("metric-variables") ? " inert" : ""}>
       <h2 id="metric-variables-title">${title}</h2>
       ${create ? "" : `<p class="muted">A new version replaces how the variable is measured from now on; earlier values keep the version they were recorded with. Every field below is saved as shown. The name and Recorded for stay as they are.</p>`}
       <p class="muted">Do not enter athlete names, ids, dates of birth or measured values.</p>

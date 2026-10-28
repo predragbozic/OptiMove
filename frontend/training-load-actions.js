@@ -4,7 +4,7 @@ import {
   clearGpexeIdentities, importsUnloadShouldWarn, loadGpexeImports } from "./gpexe-import-data.js";
 import { handleActivityRosterAction, loadRosterForOpenActivity, rosterMayBeLeft, rosterUnloadShouldWarn } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
-import { loadVariablesSection, resetVariables, variablesMayBeLeft, variablesUnloadShouldWarn } from "./metric-variables-actions.js";
+import { dropVariablesForm, loadVariablesSection, resetVariables, variablesMayBeLeft, variablesUnloadShouldWarn } from "./metric-variables-actions.js";
 import { loadSourceFieldsSection, resetSourceFields, sourceFieldsMayBeLeft, sourceFieldsUnloadShouldWarn } from "./source-fields-actions.js";
 import { addDaysIso, addMonthsIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthStartIso, weekMondayIso } from "./utils.js";
 import {
@@ -232,7 +232,7 @@ export function confirmLeaveTrainingLoad(_nextTab, { discard = true } = {}) {
   if (!discard) return analysisEditorMayBeDiscarded() && analysisLayoutMayBeDiscarded();
   const left = releaseAnalysisEditorDraft() && releaseAnalysisLayoutDraft();
   // A variable form the coach agreed to leave is not shown again on return.
-  if (left && state.trainingLoad.variables) state.trainingLoad.variables.form = null;
+  if (left) dropVariablesForm();
   if (left && state.trainingLoad.sourceFields) state.trainingLoad.sourceFields.form = null;
   // Leaving Training Load drops the GPEXE names and dates of birth the
   // Imports view held (they live in the open view's memory only).
@@ -274,7 +274,7 @@ export function handleTrainingLoadBeforeUnload(event) {
 
 export function discardTrainingLoadLeaveDrafts() {
   if (state.activeTab !== "training-load") return;
-  if (state.trainingLoad.variables) state.trainingLoad.variables.form = null;
+  dropVariablesForm();
   if (state.trainingLoad.sourceFields) state.trainingLoad.sourceFields.form = null;
   discardAnalysisEditorDraft();
   discardAnalysisLayoutDraft();
@@ -919,7 +919,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
         renderTrainingLoad();
         return true;
       }
-      if (state.trainingLoad.variables) state.trainingLoad.variables.form = null;
+      dropVariablesForm();
     }
     // The same for a source-field confirmation (phase 6).
     if (state.trainingLoad.section === "source-fields" && action.dataset.section !== "source-fields") {

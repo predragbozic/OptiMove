@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 
 const {
-  ICONS, iconByKey, iconKeyOfStored, isLibraryKey, renderIconSvg, renderMetricIconHtml, renderStoredIconHtml, searchIcons, storedIconValue,
+  ICONS, iconByKey, isLibraryKey, renderIconSvg, renderMetricIconHtml, renderStoredIconHtml, searchIcons, storedIconValue,
 } = await import("../icon-render.js");
 
 const parse = (html) => new JSDOM(`<!doctype html><body>${html}</body>`).window.document.body;
@@ -47,10 +47,9 @@ test("3. a stored value draws only when it is icon:<key>; any other value draws 
   for (const value of ["", null, undefined, "run", "https://example.test/x.svg", "/assets/icons/metric-default.svg", "javascript:alert(1)"]) {
     assert.equal(renderStoredIconHtml(value), "", String(value));
   }
-  assert.equal(iconKeyOfStored("icon:run"), "run");
-  assert.equal(iconKeyOfStored("icon:dumbbell"), "barbell");
-  assert.equal(iconKeyOfStored("icon:gone"), null);
-  assert.equal(iconKeyOfStored("run"), null);
+  // An alias written by hand draws its icon here (the server's reads answer
+  // null for it: backend/tests/icon-library.test.mjs).
+  assert.equal(renderStoredIconHtml("icon:dumbbell"), renderStoredIconHtml("icon:barbell"));
 });
 
 test("4. the Builder's former glyph codes draw real icons; dumbbell is the barbell", () => {

@@ -2,8 +2,9 @@
 // uses it. Driven through the real handlers and the real markup in a DOM,
 // with a fake fetch: the picker opens on the form's own choice with nothing
 // preselected otherwise, the search and the chips narrow the grid in place
-// (the focus stays), a choice names its stored value, Use icon / No icon /
-// Cancel hand back exactly that, the focus returns to the button that opened
+// (the focus stays), a choice names its stored value, Use icon / Use no icon /
+// Cancel hand back exactly that, the picker is modal (the form inert, Tab kept
+// inside, a submit refused), the focus returns to the button that opened
 // it, a forged or locked click changes nothing, and the create body carries
 // iconKey only when one is chosen (a create without one is the same request
 // as before icons existed).
@@ -81,7 +82,7 @@ test("1. the create form offers an optional icon; the picker opens as a dialog w
   await openCreate();
   const field = $(".dc-icon-choice");
   assert.match(field.textContent.replace(/\s+/g, " "), /No icon Choose icon/);
-  assert.match($("#mv-hint-iconKey").textContent, /For now it can be chosen only when the variable is created\./);
+  assert.match($("#mv-hint-iconKey").textContent, /Choose it now: after the variable is created its icon cannot be changed yet\./);
   await click('[data-action="metric-variables-icon-open"]');
   const dialog = $('[data-icon-picker] [role="dialog"]');
   assert.ok(dialog);
@@ -212,5 +213,77 @@ test("7. leaving the form or the workspace closes the picker", async () => {
   await click('[data-action="icon-picker-cancel"]');
   await click('[data-action="metric-variables-cancel"]');
   assert.equal(state.iconPicker, null);
+  assert.equal(variablesState().form, null);
+});
+
+test("8. the picker is modal: the form behind it is inert, Enter never sends it, and Tab stays inside the dialog", async () => {
+  const { trapIconPickerTab } = await import("../icon-picker.js");
+  await openCreate();
+  await click('[data-action="metric-variables-icon-open"]');
+  await click('[data-action="icon-picker-choose"][data-icon-key="run"]');
+  const form = $("[data-metric-variables-form]");
+  assert.equal(form.hasAttribute("inert"), true, "the form is out of reach behind the picker");
+  calls.length = 0;
+  await submitVariablesForm(form, { render });
+  assert.equal(posts().length, 0, "a submit reached behind the picker sends nothing");
+  assert.equal(variablesState().form.busy, false);
+  // Tab from the last control comes back to the first; Shift+Tab from the
+  // first (or from the title) goes to the last; focus outside comes back in.
+  const dialog = $("[data-icon-picker] .icon-picker");
+  const controls = [...dialog.querySelectorAll("button:not(:disabled),input:not(:disabled)")];
+  const key = (shiftKey) => ({ key: "Tab", shiftKey, prevented: false, preventDefault() { this.prevented = true; } });
+  controls.at(-1).focus();
+  let event = key(false);
+  assert.equal(trapIconPickerTab(event), true);
+  assert.equal(event.prevented, true);
+  assert.equal(document.activeElement, controls[0]);
+  event = key(true);
+  assert.equal(trapIconPickerTab(event), true);
+  assert.equal(document.activeElement, controls.at(-1));
+  $("#icon-picker-title").focus();
+  assert.equal(trapIconPickerTab(key(true)), true);
+  assert.equal(document.activeElement, controls.at(-1));
+  document.body.focus();
+  assert.equal(trapIconPickerTab(key(false)), true);
+  assert.equal(document.activeElement, controls[0]);
+  controls[0].focus();
+  event = key(false);
+  assert.equal(trapIconPickerTab(event), false, "inside the dialog Tab moves on by itself");
+  assert.equal(event.prevented, false);
+  // Use icon puts the choice in the form; the form is reachable again and sends it.
+  await click('[data-action="icon-picker-use"]');
+  assert.equal($("[data-metric-variables-form]").hasAttribute("inert"), false);
+  assert.equal(trapIconPickerTab(key(false)), false, "no picker, no trap");
+});
+
+test("9. on a touch screen the picker opens with the focus on its title, so the keyboard does not cover it", async () => {
+  const before = window.matchMedia;
+  globalThis.matchMedia = (query) => ({ matches: query === "(pointer: coarse)" });
+  try {
+    await openCreate();
+    await click('[data-action="metric-variables-icon-open"]');
+    assert.equal(document.activeElement, $("#icon-picker-title"));
+  } finally {
+    delete globalThis.matchMedia;
+    window.matchMedia = before;
+  }
+});
+
+test("10. leaving Data configuration by a section switch or leaving Training Load closes the picker with the form", async () => {
+  const { confirmLeaveTrainingLoad, handleTrainingLoadAction } = await import("../training-load-actions.js");
+  await openCreate();
+  await click('[data-action="metric-variables-icon-open"]');
+  const tab = document.createElement("button");
+  tab.dataset.action = "training-load-section";
+  tab.dataset.section = "today";
+  await handleTrainingLoadAction(tab, { renderTrainingLoad: () => {}, openWeeklyPlanForAthleteOnDate: () => {} });
+  assert.equal(state.iconPicker, null, "the section switch closes it");
+  assert.equal(variablesState().form, null);
+  state.trainingLoad.section = "variables";
+  render();
+  await openCreate();
+  await click('[data-action="metric-variables-icon-open"]');
+  assert.equal(confirmLeaveTrainingLoad("calendar", { discard: true }), true);
+  assert.equal(state.iconPicker, null, "leaving Training Load closes it");
   assert.equal(variablesState().form, null);
 });

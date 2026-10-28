@@ -215,7 +215,7 @@ test("5. Source fields opens through Training Load's own section switch; its way
   assert.deepEqual([variablesState().view, variablesState().node], ["home", null], "the start screen, not the last screen");
 });
 
-test("6. a workspace switch starts again on the start screen; opening a variable from anywhere shows it on the Variables screen", async () => {
+test("6. a workspace switch starts again on the start screen; opening a variable from anywhere shows it on the Variables screen at its title, and back at the list's", async () => {
   await loadVariablesSection(render);
   await click('.dc-card[data-view="domains"]');
   resetVariables();
@@ -226,4 +226,9 @@ test("6. a workspace switch starts again on the start screen; opening a variable
   assert.equal(variablesState().view, "variables");
   assert.equal($("#metric-variables-title").textContent, "Total distance");
   assert.ok($(".dc-title .dc-tile-variable:not(.is-empty) svg"), "the variable's icon beside its name");
+  assert.equal(document.activeElement, $("#metric-variables-title"), "the focus is on the variable's title");
+  // Its way back lists the variables again at the list's title.
+  await click('[data-action="metric-variables-back"]');
+  assert.equal($("#metric-variables-title").textContent, "Variables");
+  assert.equal(document.activeElement, $("#metric-variables-title"), "the focus is on the list's title");
 });

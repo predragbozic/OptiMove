@@ -5,7 +5,7 @@
 // `icon:` value draws a neutral placeholder. The paths come from the generated
 // library and are written into attributes escaped all the same.
 import { ICON_ALIASES, ICON_CATEGORIES, ICONS } from "./icon-library.js";
-import { escapeAttr, escapeHtml } from "./utils.js";
+import { escapeAttr } from "./utils.js";
 
 export { ICON_CATEGORIES, ICONS };
 export const ICON_PREFIX = "icon:";
@@ -24,12 +24,6 @@ export function iconByKey(key) {
 export const isLibraryKey = (key) => typeof key === "string" && BY_KEY.has(key);
 export const storedIconValue = (key) => `${ICON_PREFIX}${key}`;
 export const isStoredIconValue = (value) => typeof value === "string" && value.startsWith(ICON_PREFIX);
-// The key a stored value names, when the library draws it (an alias resolves
-// to its icon's key); null otherwise.
-export function iconKeyOfStored(value) {
-  if (!isStoredIconValue(value)) return null;
-  return iconByKey(value.slice(ICON_PREFIX.length))?.key || null;
-}
 export const categoryLabel = (id) => ICON_CATEGORIES.find((c) => c.id === id)?.label || "";
 
 // An icon as inline SVG, drawn as 24 x 24 strokes in the text colour. Without
@@ -43,6 +37,10 @@ export function renderIconSvg(key, { size = 24, className = "", label = "" } = {
 }
 
 // A stored `icon:<key>` value as an icon; "" for an empty or any other value.
+// An older alias (`icon:dumbbell`) draws its icon here, while the server's
+// reads name only a key of the library and answer null for an alias
+// (backend/src/iconKeys.js): the server never writes one, so this is only the
+// tolerant side of drawing a value written by hand.
 export function renderStoredIconHtml(value, options = {}) {
   if (!isStoredIconValue(value)) return "";
   return renderIconSvg(value.slice(ICON_PREFIX.length), options);
@@ -68,6 +66,3 @@ export function searchIcons({ query = "", category = "" } = {}) {
     return words.every((word) => haystack.some((entry) => entry.startsWith(word)));
   });
 }
-
-// The words shown under an icon in the gallery and the picker.
-export const iconWordsText = (icon) => escapeHtml(icon.words.join(", "));

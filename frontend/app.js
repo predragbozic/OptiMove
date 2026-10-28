@@ -33,7 +33,7 @@ import { handleStorageAdminAction, submitStorageAdminForm } from "./media-storag
 import { enterStorageAdminSection, loadStorageAdmin, storageAdminContext, storageAdminNeedsLoad } from "./media-storage-admin-data.js";
 import { handleSourceConnectionsAction, handleSourceConnectionsBeforeUnload, submitSourceConnectionsForm } from "./source-connections-actions.js";
 import { handleVariablesAction, handleVariablesInput, submitVariablesForm } from "./metric-variables-actions.js";
-import { closeIconPicker, handleIconPickerInput } from "./icon-picker.js";
+import { closeIconPicker, handleIconPickerInput, trapIconPickerTab } from "./icon-picker.js";
 import { handleIconGalleryAction, handleIconGalleryInput } from "./icon-gallery.js";
 import { handleSourceFieldsAction, handleSourceFieldsInput, submitSourceFieldsForm } from "./source-fields-actions.js";
 import { enterSourceConnectionsSection, loadSourceConnections, sourceConnectionsNeedLoad } from "./source-connections-data.js";
@@ -595,6 +595,8 @@ function bindEvents() {
   });
   document.addEventListener("fullscreenchange", handleFullscreenChange);
   document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+  // The open icon picker is modal: Tab stays inside it.
+  document.addEventListener("keydown", (event) => { trapIconPickerTab(event); });
   window.addEventListener("popstate", handleBrowserBack);
   // Imports (phase 4b): a running batch import or an unconfirmed outcome
   // asks (the browser's own dialog) before a reload or close.

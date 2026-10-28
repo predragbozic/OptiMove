@@ -176,10 +176,10 @@ test("the list groups the fields by source, shows the unit (expected units marke
   assert.match(items[2], /Session Evidence: Observed/);
   // The legend: each kind of evidence as its own badge (colour and word) with what it means.
   assert.deepEqual([...content.querySelectorAll(".source-fields-legend li")].map((li) => li.textContent.replace(/\s+/g, " ").trim()), [
-    "Not proven no evidence yet.",
-    "Documented described in a document.",
-    "Observed seen in the source's answers; its unit and meaning are not confirmed.",
-    "Verified its unit and meaning are confirmed.",
+    "Not proven: no evidence yet.",
+    "Documented: described in a document.",
+    "Observed: seen in the source's answers; its unit and meaning are not confirmed.",
+    "Verified: its unit and meaning are confirmed.",
   ]);
   assert.deepEqual([...content.querySelectorAll(".source-fields-legend .source-fields-evidence")].map((b) => b.className.split(" ").at(-1)), ["is-unproven", "is-documented", "is-observed", "is-verified"]);
   // Each field has a tile for its kind of value: a time, a zone, a count of events.

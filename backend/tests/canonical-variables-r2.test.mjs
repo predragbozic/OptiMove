@@ -595,6 +595,17 @@ test("4. reads: a team workspace reads the reduced view (Q7) on the list, the de
   assert.deepEqual(detail.variable.classification, { categories: [], domains: [], truncated: false });
   assert.deepEqual([detail.variable.editable, detail.variable.actions, detail.variable.labelsToken], [true, ["rename", "archive"], tokenOf(v.label, null, null, "active")]);
   assert.deepEqual([(await api(`/variables/${v.id}?cursor=abc`, { cookie: W.coachA1.cookie })).body.error], ["invalid_query"]);
+  // The reduced view's icon (PR-1): a key of the library, and null for any
+  // other stored value - a URL, an alias, an unknown key - on the list and the
+  // detail alike (icon_url written by hand, as the older API could).
+  const coachIcon = async () => {
+    const listed = ok200(await api("/variables", { cookie: W.coachA1.cookie })).variables.find((x) => x.id === v.id);
+    return [listed.icon, ok200(await api(`/variables/${v.id}`, { cookie: W.coachA1.cookie })).variable.icon];
+  };
+  for (const [stored, icon] of [["/assets/x.svg", null], ["icon:dumbbell", null], ["icon:gone", null], ["icon:run", "run"], [null, null]]) {
+    await rawDefinitionUpdate(`update training_load.metric_definitions set icon_url = $2 where id = $1`, [v.id, stored]);
+    assert.deepEqual(await coachIcon(), [icon, icon], String(stored));
+  }
   // The admins: their view, with actions (newVersion only outside a team workspace) and the token.
   const admin = await view(W.caA, v.id);
   assert.deepEqual([admin.actions, admin.labelsToken, Array.isArray(admin.versions)], [["rename", "archive", "newVersion"], detail.variable.labelsToken, true]);

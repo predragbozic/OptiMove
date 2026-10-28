@@ -18908,6 +18908,13 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* In a screen's head the tile stays beside the title (the head's own
+   `> div` rule would stack them). */
+.metric-variables-head > .dc-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .dc-inline {
   display: flex;
   flex-wrap: wrap;
@@ -18927,7 +18934,7 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 .dc-home-grid {
   list-style: none;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
   gap: 12px;
   margin: 0;
   padding: 0;
@@ -18948,8 +18955,10 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   align-content: start;
   cursor: pointer;
 }
-.dc-card:hover {
-  border-color: var(--accent);
+@media (hover: hover) {
+  .dc-card:hover {
+    border-color: var(--accent);
+  }
 }
 .dc-card:focus-visible {
   outline: 2px solid var(--accent);
@@ -19024,6 +19033,11 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 .dc-archived[open] > summary::before {
   transform: rotate(45deg);
 }
+@media (prefers-reduced-motion: reduce) {
+  .dc-archived > summary::before {
+    transition: none;
+  }
+}
 .dc-archived[open] > summary {
   margin-bottom: 4px;
 }
@@ -19055,8 +19069,9 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   background: rgba(13, 27, 36, 0.46);
   cursor: default;
 }
-/* The head, the search, the chips, the choice and the actions stay in view;
-   only the grid scrolls, so Use icon is always on the screen. */
+/* The grid scrolls first and keeps everything else in view; on a screen too
+   short even for that, the dialog itself scrolls, and its actions stay pinned
+   to its bottom, so Use icon is always on the screen. */
 .icon-picker {
   position: relative;
   z-index: 1;
@@ -19064,8 +19079,10 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   flex-direction: column;
   gap: 12px;
   width: min(640px, 96vw);
+  max-height: min(760px, 88vh);
   max-height: min(760px, 88dvh);
-  overflow: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 16px;
   box-shadow: 0 22px 70px rgba(14, 28, 37, 0.28);
 }
@@ -19101,6 +19118,7 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 }
 .icon-picker-chips .icon-picker-chip {
   min-height: 44px;
+  min-width: 44px;
 }
 .icon-picker-chip.is-active {
   border-color: var(--accent);
@@ -19109,9 +19127,9 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 }
 .icon-picker > .icon-picker-grid {
   flex: 1 1 auto;
-  min-height: 120px;
+  min-height: 96px;
   overflow-y: auto;
-  padding: 2px;
+  padding: 4px;
 }
 .icon-picker-grid {
   display: grid;
@@ -19155,12 +19173,33 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   overflow-wrap: anywhere;
 }
 .icon-picker-actions {
+  position: sticky;
+  bottom: 0;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  padding-top: 4px;
+  background: var(--surface);
+  /* Covers the dialog's bottom padding too, so nothing scrolls into view
+     under the pinned actions. */
+  box-shadow: 0 24px 0 var(--surface);
 }
 .icon-picker-actions .plain-button {
   min-height: 44px;
+}
+/* A phone or a short screen: the picker's chips are one row that scrolls
+   sideways (the gallery's keep wrapping; its page scrolls). */
+@media (max-width: 760px), (max-height: 600px) {
+  .icon-picker .icon-picker-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 4px;
+    margin: -4px;
+    scrollbar-width: thin;
+  }
+  .icon-picker .icon-picker-chips .icon-picker-chip {
+    flex: 0 0 auto;
+  }
 }
 @media (max-width: 760px) {
   .icon-picker-overlay {
@@ -19169,6 +19208,7 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   }
   .icon-picker {
     width: 100%;
+    max-height: 88vh;
     max-height: 88dvh;
     border-radius: 16px 16px 0 0;
     padding: 16px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
@@ -19248,6 +19288,15 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 }
 .icon-gallery-credit {
   font-size: 13px;
+}
+/* What Copy key did, in a line everyone sees; the key of a refused copy is
+   selected whole by one tap. */
+.icon-gallery-status {
+  min-height: 1.4em;
+  overflow-wrap: anywhere;
+}
+.icon-gallery-status code {
+  user-select: all;
 }
 /* Source fields: the four kinds of evidence, each with its colour and its word. */
 .source-fields-legend {
