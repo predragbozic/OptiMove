@@ -11,9 +11,10 @@
 // - The meaning act writes the acting user, the time and the meaning evidence
 //   reference - and, for an event threshold, the bound operator, one-sided
 //   (>=, >, <=, <: an event threshold's parameters take no other). For a zone
-//   (parameter_kind zone_bounds) it is refused with 409
-//   verification_model_unresolved until the owner decides how closed and open
-//   zones share one bound operator (C89); no boundOperator gets past it.
+//   (parameter_kind zone_bounds) the operator of its shape (v42, C102, C103):
+//   between for a field of closed zones, >= for the open top zone; v42's guard
+//   refuses any other in the database too. (Until v42 a zone's meaning act was
+//   refused with 409 verification_model_unresolved, C89.)
 // - evidence_status is always derived by the server (C92): an act that
 //   completes the proof raises it to verified (as v34's CHECK demands),
 //   otherwise it stays as it was.
@@ -52,6 +53,9 @@ const CONTRACT = "source-fields/v1";
 // can ever use; v37 refuses it too).
 const OPERATORS = new Set(["between", ">=", ">", "<=", "<"]);
 const ONE_SIDED = new Set([">=", ">", "<=", "<"]);
+// The operators a zone takes (v42, Z3): between (a closed zone) or >= (the
+// open top zone). `>` would need its own evidence and a later migration (P1).
+const ZONE_OPERATORS = new Set(["between", ">="]);
 // The JavaScript twin of training_load.source_metric_evidence_ref_ok() (v34,
 // C40): a repository-relative docs/ path and one heading anchor, 1-300
 // characters. The database function decides again inside the write.
@@ -69,8 +73,9 @@ const TEXT = {
   bound_unit_required: "This revision has a bound: sourceBoundUnit is confirmed together with the unit.",
   bound_unit_not_allowed: "This revision has no bound: sourceBoundUnit is not taken.",
   operator_required: "This revision is an event threshold: boundOperator is confirmed together with the meaning.",
+  zone_operator_required: "This revision is a zone: boundOperator (between or >=) is confirmed together with the meaning.",
+  invalid_zone_operator: "A zone takes between (a closed zone) or >= (the open top zone).",
   operator_not_allowed: "This revision has no bound: boundOperator is not taken.",
-  verification_model_unresolved: "The meaning of a zone revision cannot be confirmed yet: how closed and open zones share one bound operator is not decided.",
   revision_retired: "The revision is retired; it is never changed.",
   unit_already_verified: "The unit of this revision is already confirmed; a correction is a new revision.",
   meaning_already_verified: "The meaning of this revision is already confirmed; a correction is a new revision.",
@@ -259,8 +264,8 @@ export async function verifyMeaning({ ctx, fieldId: rawField, revisionId: rawRev
   const { fieldId, revisionId } = pathIds(rawField, rawRevision);
   plainObject(body, ["requestKey", "boundOperator", "evidenceRef"], ["requestKey", "evidenceRef"]);
   const requestKey = uuidField(body.requestKey);
-  // The operator and the reference are checked inside the write, after the
-  // zone refusal (C89): whatever they name, a zone's meaning act is the 409.
+  // The operator and the reference are checked inside the write, by the
+  // revision's kind, after its state.
   const boundOperator = body.boundOperator ?? null;
   const evidenceRef = body.evidenceRef;
   const action = "source_metric_meaning_verified";
@@ -270,19 +275,22 @@ export async function verifyMeaning({ ctx, fieldId: rawField, revisionId: rawRev
     reread: (executor, record) => revisionAnswer(executor, record.source_metric_definition_id, record.source_metric_version_id),
     body: async (client, operationId) => {
       const rev = await lockedRevision(client, fieldId, revisionId);
-      // C89: a zone's meaning is never confirmed until its model is decided,
-      // whatever the body names - after the right (404: a caller who may not
-      // verify never learns that a zone exists), the path ids, the body's keys
-      // and requestKey, the request record and the revision's existence (404);
-      // before the state, the operator, the reference and the right's re-check.
-      if (rev.parameter_kind === "zone_bounds") throw refusal(409, "verification_model_unresolved", TEXT.verification_model_unresolved);
+      // After the right (404), the path ids, the body's keys and requestKey,
+      // the request record and the revision's existence (404): the state, then
+      // the operator by the revision's kind, then the reference and the
+      // right's re-check (J7, section 4).
       if (rev.state === "retired") throw refusal(409, "revision_retired", TEXT.revision_retired);
       if (rev.meaning_verified_at !== null) {
         throw refusal(409, "meaning_already_verified", TEXT.meaning_already_verified, {
           current: { boundOperator: rev.bound_operator, meaningEvidenceRef: rev.meaning_evidence_ref, meaningVerifiedAt: rev.meaning_verified_at },
         });
       }
-      if (boundOperator !== null && (typeof boundOperator !== "string" || !OPERATORS.has(boundOperator))) throw refusal(400, "invalid_operator", TEXT.invalid_operator);
+      const zone = rev.parameter_kind === "zone_bounds";
+      if (boundOperator !== null && (typeof boundOperator !== "string" || !OPERATORS.has(boundOperator))) {
+        throw refusal(400, "invalid_operator", zone ? TEXT.invalid_zone_operator : TEXT.invalid_operator);
+      }
+      if (zone && boundOperator === null) throw refusal(400, "operator_required", TEXT.zone_operator_required);
+      if (zone && !ZONE_OPERATORS.has(boundOperator)) throw refusal(400, "invalid_operator", TEXT.invalid_zone_operator);
       if (rev.parameter_kind === "event_threshold" && boundOperator === null) throw refusal(400, "operator_required", TEXT.operator_required);
       if (rev.parameter_kind === "none" && boundOperator !== null) throw refusal(400, "operator_not_allowed", TEXT.operator_not_allowed);
       if (rev.parameter_kind === "event_threshold" && !ONE_SIDED.has(boundOperator)) throw refusal(400, "invalid_operator", TEXT.invalid_threshold_operator);

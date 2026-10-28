@@ -349,7 +349,7 @@ async function world() {
   W.sysVar = await canonical();
   W.clubAVar = await canonical({ scope: "club", clubId: W.clubA });
   W.clubBVar = await canonical({ scope: "club", clubId: W.clubB });
-  W.seedBefore = await rows(k, `select * from training_load.source_metric_definition_versions where seed_migration is not null order by id`);
+  W.seedBefore = await rows(k, `select * from training_load.source_metric_definition_versions where seed_migration like 'migrations_v2/202610121000%' order by id`);
 }
 
 // ---------------------------------------------------------------------------
