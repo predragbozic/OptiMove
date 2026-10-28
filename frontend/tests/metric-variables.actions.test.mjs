@@ -60,7 +60,9 @@ const text = () => content.textContent.replace(/\s+/g, " ");
 // The value a fact of one variable (a <dt> / <dd> pair) shows.
 const fact = (name) => [...content.querySelectorAll(".metric-variables-facts dt")].find((dt) => dt.textContent === name)?.nextElementSibling?.textContent;
 const posts = () => calls.filter((call) => call.method === "POST");
-const gets = () => calls.filter((call) => call.method === "GET").map((call) => call.url);
+// The variables' own reads; the screen's read of the domains and categories
+// (phase 12c) is proved in metric-classification.actions.test.mjs.
+const gets = () => calls.filter((call) => call.method === "GET" && !call.url.includes("/metrics/classification")).map((call) => call.url);
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 async function click(selector) {

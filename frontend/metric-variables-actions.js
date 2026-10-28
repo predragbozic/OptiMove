@@ -4,6 +4,11 @@
 // confirmed" and checked by sending the very same request (the same request
 // key and body) again - the server replays a saved write and never saves twice.
 import { state } from "./state.js";
+import { isClassificationMode } from "./metric-classification-data.js";
+import {
+  afterUncheckedClose, ensureClassification, handleClassificationAction, handleClassificationInput, loadClassification, sendClassification,
+  submitClassificationForm,
+} from "./metric-classification-actions.js";
 import {
   CHANGE_MODES, archiveVariable, buildRequest, checkNoteText, checkSettles, codeText, createVariable, createVersion, emptyVariablesState,
   errorInfo, fetchKeySuggestion, fetchVariable, fetchVariables, newRequestKey, openForm, outcomeUnknown, rebaseRename, renameVariable,
@@ -30,12 +35,12 @@ export async function loadVariables(render, { more = false } = {}) {
   const list = s.list;
   if (more && (!list.nextCursor || list.loadingMore)) return;
   const generation = s.generation;
-  const query = { scope: s.scope, stateFilter: s.stateFilter, cursor: more ? list.nextCursor : null };
+  const query = { scope: s.scope, stateFilter: s.stateFilter, filter: s.filter, cursor: more ? list.nextCursor : null };
   if (more) list.loadingMore = true; else { list.loading = true; list.error = null; }
   render();
   try {
     const data = await fetchVariables(query);
-    if (variablesState().generation !== generation || s.scope !== query.scope || s.stateFilter !== query.stateFilter) return;
+    if (variablesState().generation !== generation || s.scope !== query.scope || s.stateFilter !== query.stateFilter || s.filter !== query.filter) return;
     list.items = more ? [...list.items, ...(data.variables || [])] : data.variables || [];
     list.nextCursor = data.nextCursor || null;
     list.loaded = true;
@@ -84,11 +89,16 @@ export async function loadVariable(id, render, { more = false } = {}) {
 export function loadVariablesSection(render) {
   const s = variablesState();
   if (!variablesContext()) { render(); return Promise.resolve(); }
-  if (s.detail.id && !s.form) return loadVariable(s.detail.id, render);
-  if (!s.list.loaded && !s.list.loading) return loadVariables(render);
+  if (s.view === "classification" && !s.form) return loadClassification(render);
+  // The domains and categories: the list's filter and a variable's links use them.
+  const tree = ensureClassification(render);
+  if (s.detail.id && !s.form) return Promise.all([tree, loadVariable(s.detail.id, render)]);
+  if (!s.list.loaded && !s.list.loading) return Promise.all([tree, loadVariables(render)]);
   render();
-  return Promise.resolve();
+  return tree;
 }
+// What the classification's handlers use of this module.
+const LOADERS = { list: (render) => loadVariables(render), variable: (id, render) => loadVariable(id, render) };
 
 // ---------------------------------------------------------------------------
 // Leaving: a save in flight, an unconfirmed result or unsaved form values are
@@ -97,12 +107,19 @@ export function loadVariablesSection(render) {
 export function variablesMayBeLeft() {
   const form = state.trainingLoad.variables?.form;
   if (!form) return true;
-  if (form.busy) return confirmAsk("A variable is still being saved. Leave anyway? Its result will not be shown.");
+  if (form.busy) return confirmAsk(`${isClassificationMode(form.mode) ? "A change" : "A variable"} is still being saved. Leave anyway? Its result will not be shown.`);
   if (form.unconfirmed) return confirmAsk("The last save is not confirmed. Leave without checking? Look for it in the list later.");
   if (form.dirty) return confirmAsk(DISCARD_QUESTION[form.mode] || "Discard the variable you have not saved?");
   return true;
 }
 const DISCARD_QUESTION = {
+  "node-create": "Discard the domain or category you have not saved?",
+  "node-rename": "Discard the new name you have not saved?",
+  "node-archive": "Discard the archive you have not confirmed?",
+  "node-restore": "Discard the restore you have not confirmed?",
+  "category-place": "Discard the placement you have not saved?",
+  "variable-link": "Discard the link you have not saved?",
+  "link-remove": "Discard the removal you have not confirmed?",
   version: "Discard the new version you have not saved?",
   rename: "Discard the new names you have not saved?",
   archive: "Discard the archive you have not confirmed?",
@@ -127,6 +144,7 @@ function leaveForm() {
 // ---------------------------------------------------------------------------
 export async function handleVariablesAction(action, { render }) {
   const type = action.dataset.action || "";
+  if (type.startsWith("metric-classification-")) return handleClassificationAction(action, { render, leaveForm, load: LOADERS });
   if (!type.startsWith("metric-variables-")) return false;
   const s = variablesState();
 
@@ -170,6 +188,10 @@ export async function handleVariablesAction(action, { render }) {
     if (!leaveForm()) return true;
     // A save left without a check may still have landed: the list (or the
     // variable) is read again, so the screen never shows it as missing.
+    if (form?.unconfirmed && isClassificationMode(form.mode)) {
+      await afterUncheckedClose(form, { render, load: LOADERS });
+      return true;
+    }
     if (form?.unconfirmed) {
       if (CHANGE_MODES.includes(form.mode) && form.variableId) {
         s.notice = "The result was not checked. The variable below is as it is saved now.";
@@ -204,7 +226,7 @@ export async function handleVariablesAction(action, { render }) {
     const id = action.dataset.variableId || "";
     if (!id || !leaveForm()) return true;
     s.notice = "";
-    await loadVariable(id, render);
+    await Promise.all([ensureClassification(render), loadVariable(id, render)]);
     return true;
   }
   if (type === "metric-variables-scope") {
@@ -230,7 +252,8 @@ export async function handleVariablesAction(action, { render }) {
     return true;
   }
   if (type === "metric-variables-check-result") {
-    await send(render);
+    if (s.form && isClassificationMode(s.form.mode)) await sendClassification({ render, load: LOADERS });
+    else await send(render);
     return true;
   }
   return true;
@@ -247,6 +270,18 @@ export function handleVariablesInput(target, { render }) {
   const s = state.trainingLoad.variables;
   if (!s) return false;
   const filter = target.closest?.("[data-metric-variables-filter]");
+  if (filter && filter.dataset.metricVariablesFilter === "classification") {
+    // C6: "d:<id>" a domain, "c:<id>" a category, "" all.
+    const [prefix, id] = String(filter.value || "").split(":");
+    const next = id && (prefix === "d" || prefix === "c") ? { kind: prefix === "d" ? "domain" : "category", id } : null;
+    const same = (next?.kind || "") === (s.filter?.kind || "") && (next?.id || "") === (s.filter?.id || "");
+    if (same) return true;
+    if (!leaveForm()) { filter.value = s.filter ? `${s.filter.kind === "domain" ? "d" : "c"}:${s.filter.id}` : ""; return true; }
+    s.filter = next;
+    s.list = { ...emptyVariablesState().list };
+    void loadVariables(render);
+    return true;
+  }
   if (filter) {
     if (filter.value === s.stateFilter) return true;
     if (!leaveForm()) { filter.value = s.stateFilter; return true; }
@@ -255,6 +290,7 @@ export function handleVariablesInput(target, { render }) {
     void loadVariables(render);
     return true;
   }
+  if (handleClassificationInput(target)) return true;
   const form = s.form;
   if (!form || form.busy || form.unconfirmed) return Boolean(target.closest?.(".metric-variables-form"));
   const level = target.closest?.("[data-mv-level]");
@@ -347,6 +383,10 @@ export async function submitVariablesForm(_formElement, { render }) {
   const s = variablesState();
   const form = s.form;
   if (!form || form.busy || form.unconfirmed) return;
+  if (isClassificationMode(form.mode)) {
+    await submitClassificationForm({ render, load: LOADERS });
+    return;
+  }
   const { body, errors, unchanged } = buildRequest(form);
   form.errors = errors;
   form.error = "";

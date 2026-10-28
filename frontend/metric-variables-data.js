@@ -56,6 +56,12 @@ export function emptyVariablesState() {
     generation: 0,
     scope: "own",
     stateFilter: "active",
+    // Variables or their domains and categories (phase 12c); the list's filter
+    // by one domain or category ({ kind, id }); the domain or category open.
+    view: "variables",
+    filter: null,
+    node: null,
+    classification: { tree: null, loaded: false, loading: false, error: null },
     list: { items: [], nextCursor: null, loaded: false, loading: false, loadingMore: false, error: null },
     detail: { id: null, variable: null, nextCursor: null, loading: false, loadingMore: false, error: null },
     form: null,
@@ -102,8 +108,10 @@ function teamBasis(user, clubId) {
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------
-export function listUrl({ scope, stateFilter, cursor = null }) {
+export function listUrl({ scope, stateFilter, filter = null, cursor = null }) {
   const params = new URLSearchParams({ scope, state: stateFilter });
+  // C6: at most one of a domain (directly or through its categories) and a category.
+  if (filter) params.set(filter.kind === "domain" ? "domainId" : "categoryId", filter.id);
   if (cursor) params.set("cursor", cursor);
   return `${BASE}?${params.toString()}`;
 }

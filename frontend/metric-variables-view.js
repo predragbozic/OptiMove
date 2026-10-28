@@ -6,6 +6,10 @@ import {
   aggregationLabel, conditionSummary, levelLabel, rangeSummary, readinessText, variablesContext, variablesState,
 } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
+import { isClassificationMode } from "./metric-classification-data.js";
+import {
+  renderClassificationFormHtml, renderClassificationHtml, renderFilterHtml, renderFilterNoteHtml, renderVariableClassificationHtml, renderViewSwitchHtml,
+} from "./metric-classification-view.js";
 
 const fmtDate = (iso) => {
   if (!iso) return "";
@@ -20,7 +24,9 @@ export function renderVariablesHtml() {
   const s = variablesState();
   return `
     <section class="metric-variables" aria-labelledby="metric-variables-title">
-      ${s.form ? renderFormHtml(s, ctx) : s.detail.id ? renderDetailHtml(s, ctx) : renderListHtml(s, ctx)}
+      ${s.form ? (isClassificationMode(s.form.mode) ? renderClassificationFormHtml(s, ctx) : renderFormHtml(s, ctx))
+        : s.view === "classification" ? renderClassificationHtml(s, ctx)
+        : s.detail.id ? renderDetailHtml(s, ctx) : renderListHtml(s, ctx)}
     </section>
   `;
 }
@@ -46,6 +52,7 @@ function renderListHtml(s, ctx) {
       </div>
       ${canCreate ? `<button class="plain-button data-sources-primary" type="button" data-action="metric-variables-create-open">New variable</button>` : ""}
     </div>
+    ${renderViewSwitchHtml(s)}
     ${s.notice ? `<p class="metric-variables-notice" role="status">${escapeHtml(s.notice)}</p>` : ""}
     <div class="metric-variables-controls">
       ${ctx.owner === "club" ? `
@@ -58,7 +65,9 @@ function renderListHtml(s, ctx) {
           ${[["active", "Active"], ["archived", "Archived"], ["all", "Active and archived"]].map(([value, label]) => `<option value="${value}" ${s.stateFilter === value ? "selected" : ""}>${label}</option>`).join("")}
         </select>
       </label>
+      ${renderFilterHtml(s)}
     </div>
+    ${renderFilterNoteHtml(s)}
     ${list.loading && !list.loaded ? `<p class="muted" role="status">Loading variables...</p>` : ""}
     ${list.error ? `<div class="error" role="alert"><p>${escapeHtml(list.error)}</p><button class="plain-button" type="button" data-action="metric-variables-reload">Try again</button></div>` : ""}
     ${list.loaded && !list.items.length && !list.error ? `<p class="empty">${emptyListText(s, ctx, canCreate)}</p>` : ""}
@@ -68,6 +77,7 @@ function renderListHtml(s, ctx) {
 }
 
 function emptyListText(s, ctx, canCreate) {
+  if (s.filter) return s.stateFilter === "archived" ? "No archived variables here." : "No variables here yet.";
   if (s.stateFilter === "archived") return "No archived variables.";
   if (ctx.owner === "club" && s.scope === "system") return "There are no system variables yet.";
   if (ctx.view === "coach") return "This club has no variables of its own yet. An administrator of the club creates them.";
@@ -122,7 +132,7 @@ function renderDetailHtml(s, ctx) {
       : "Archived: kept with its recorded values and its history; until it is restored, no new values can be entered for it, it gets no new version and no new mapping can use it."}</p>` : ""}
     ${actionsNoteHtml(item, actions, ctx)}
     ${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}
-    ${reduced ? renderReducedTechHtml(item) : `
+    ${reduced ? `${renderVariableClassificationHtml(item, ctx, s.classification.tree)}${renderReducedTechHtml(item)}` : `
     <dl class="metric-variables-facts">
       <div><dt>Unit</dt><dd>${escapeHtml(current.unit || "")}</dd></div>
       <div><dt>Recorded for</dt><dd>${(item.levels || []).map(levelLabel).map(escapeHtml).join(" and ")}</dd></div>
@@ -131,6 +141,7 @@ function renderDetailHtml(s, ctx) {
       <div><dt>Condition</dt><dd>${escapeHtml(conditionSummary(current.condition))}</dd></div>
       <div><dt>Mapping</dt><dd>${escapeHtml(readinessText(item.mappingTarget))}</dd></div>
     </dl>
+    ${renderVariableClassificationHtml(item, ctx, s.classification.tree)}
     ${d.error ? `<p class="error" role="alert">${escapeHtml(d.error)}</p>` : ""}
     <h3>Versions</h3>
     <ol class="metric-variables-versions">
