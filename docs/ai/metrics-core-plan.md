@@ -30,7 +30,7 @@ Q10 part B as its own migration v40 (section 6), and the record of PR #238's mer
 Added on 2026-10-28: the Done entry of phase 4 (section 5) and the Q10 part B line of section 6 marked done; later the
 same day, phase 12's accepted contract (C101, section 5) and the Done entry of 12b (section 5); later still, the Done
 entries of 12c and phase 6, the owner's decision of phase 5 (C102, section 5), and the Data configuration visual polish
-task (section 6).
+task (section 6); then phase 5b ★★ with its migration v42 (C103, section 5).
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
@@ -41,7 +41,8 @@ Last verified against commit: `deb2aa1` (`origin/main`, merge of PR #217). The r
 Done entries of phases 2b and 2c, phases 11 and 12, the Q10 line of section 6) was checked against `fdc2c2e` (merge of PR
 #237); what PR #240 added, against `b358dae` (merge of PR #238); the Done entry of phase 4, against `290b6cf` (merge of
 PR #241); phase 12's contract line, against `d96936c` (merge of PR #242); the Done entry of 12b, against `9361fff` (merge
-of PR #247); the Done entries of 12c and phase 6 and phase 5's decision, against `cf387f2` (merge of PR #251).
+of PR #247); the Done entries of 12c and phase 6 and phase 5's decision, against `cf387f2` (merge of PR #251); phase
+5b, against `0b947ab` (merge of PR #252).
 
 ## 1. Who does what
 
@@ -602,6 +603,32 @@ order covers is merged under it.
     migration, v37's zone refusal replaced, F3's change, the zone operator in the phase 6 form, rollback, preflight,
     post-check and tests) goes as a document to the *Rukovodilac* and the *Nezavisni revizor*, then to the owner for
     approval before any code. Until its migration is merged and deployed, C89's refusal stands.
+
+### Phase 5b ★★: the zone model, option A — migration v42
+- **The contract (J7):** `docs/ai/phase5-zone-model-contract.md`, accepted on 2026-10-28 (C103 of the discovery
+  document).
+  - The *Rukovodilac* and the *Nezavisni revizor* gave GO on `8c2b383`. The *Rukovodilac* decided P1–P6 inside the plan.
+  - The owner approved the contract as a whole: ⟦PENDING: the owner's gate 1 words, verbatim, with turn id and time⟧.
+  - The owner gave this phase its ★★ and its gate line by their own word in the executor's chat or by their own merge
+    of the pull request that adds them.
+- **Green zone:** after the acceptance, the implementation in one pull request:
+  - migration v42, its rollback, and the read-only preflight and post-check (J7 section 3);
+  - F3's change (J7 section 4);
+  - the zone operator choice in the phase 6 meaning form (J7 section 5);
+  - the documents, including the `.open_top` rows of J4 and C97.
+- **Acceptance:** J7 section 6, including:
+  - the rollback rehearsed (apply → rollback → identical v41 catalog with `obj_description` → re-apply);
+  - every guard with a mutation the tests kill;
+  - the end-to-end proof through M2;
+  - browser QA at 1280 / 390 / 375 / 360 px.
+- **Reviewers:** `db-reviewer`, `security-reviewer`, `code-reviewer`, `mobile-qa`, `ux-design-reviewer`, and the external
+  review (trigger 1).
+- **Red zone:** the production preflight, the merge (and so the deploy and the migration), and the production post-check
+  of v42.
+- **Gate line: migration v42.** Its merge needs the owner's own order naming the pull request and v42.
+- **★★:** the owner approved the contract (J7) before any code and confirms the external review before the merge.
+- **Not in it:** the owner-run evidence and the first real confirmation of a zone field (a separate order, C97); 7f's
+  rule "key → zone shape"; M4.
 
 ### Phase 6 ★: M3 Source fields tab, after phase 4 is merged
 - Reading the fields and their revisions; the F2 / F3 acts for a platform admin.

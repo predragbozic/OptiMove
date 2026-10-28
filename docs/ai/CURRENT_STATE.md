@@ -2268,9 +2268,11 @@ Technical details.
   - **Phase 5, the zone model (C89):** the variants are `docs/ai/phase5-zone-model-options.md` (PR #250, `ae29b08`,
     deployed with it). **Decided on 2026-10-28 as the *Rukovodilac* reads the owner's words (C102):** option A, one source
     field per zone shape; the new field `more.complementary_data.power.distance.open_top`; a zone's meaning act confirms
-    `between` or `>=` (`>` only with evidence); owner-run evidence per zone field as in C97. Option A needs a schema, so
-    its ★★ contract comes next, a document for the owner's approval before any code. Until its migration is merged and
-    deployed, the zone meaning act stays refused (C89).
+    `between` or `>=` (`>` only with evidence); owner-run evidence per zone field as in C97. Option A needs a schema.
+    **Its ★★ contract J7 (`docs/ai/phase5-zone-model-contract.md`) was accepted on 2026-10-28 (C103):** both reviewers
+    gave GO on `8c2b383`; the *Rukovodilac* decided P1–P6; the owner approved the contract (⟦PENDING: the owner's gate 1 words, verbatim, with turn id and time⟧) and the plan's phase 5b
+    ★★ with its gate line "migration v42". Not implemented: until v42 is merged and deployed, the zone meaning act stays
+    refused (C89).
   - **Phase 6, the Source fields view, PR #251** (branch `feature/metrics-source-fields-tab-6` from `3532bc5`):
     **merged, not yet deployed; frontend only, no migration.** Section H and J4 of the discovery document record it as
     built: a **Variables | Source fields** sub-navigation in the platform and a club workspace; the fields with their
@@ -3467,9 +3469,8 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
 
    Next by the plan:
    - the owner's next manual deploy, which carries phase 6 (PR #251), then the *Rukovodilac*'s smoke;
-   - phase 5, the zone model: decided as option A (C102). Next is its ★★ contract, a document for the *Rukovodilac*,
-     the *Nezavisni revizor* and then the owner's approval before any code; the migration it names needs the owner's
-     own order;
+   - phase 5b, the zone model (option A, C102): its contract J7 is accepted (C103). Next is its one ★★ pull request
+     (migration v42, F3, the meaning form, the documents); its merge needs the owner's own order naming it and v42;
    - phase P, the owner only: the evidence for the nine `rest_v1` fields (C97) stays open;
    - phases 7–11 and R1, as the plan orders them.
 
