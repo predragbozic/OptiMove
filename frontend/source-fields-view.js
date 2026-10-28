@@ -10,6 +10,7 @@ import {
 } from "./source-fields-data.js";
 import { LIMITS } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
+import { fieldTileHtml } from "./data-config-tiles.js";
 
 const fmtDate = (iso) => {
   if (!iso) return "";
@@ -28,7 +29,20 @@ const noticeHtml = (s) => (!s.notice ? ""
   : s.noticeKind === "warning" ? `<p class="metric-variables-notice is-warning" role="alert" tabindex="-1">${escapeHtml(s.notice)}</p>`
   : `<p class="metric-variables-notice" role="status" tabindex="-1">${escapeHtml(s.notice)}</p>`);
 const boundUnitLabel = (revision) => (revision.parameterKind === "zone_bounds" ? "Unit of the zone bounds" : "Unit of the threshold");
-const EVIDENCE_LEGEND = "Evidence: Not proven, no evidence yet · Documented, described in a document · Observed, seen in the source's answers, its unit and meaning not confirmed · Verified, its unit and meaning confirmed.";
+// The four kinds of evidence, each with its badge (its colour never says it
+// alone: every badge keeps its word).
+const EVIDENCE_LEGEND = [
+  ["unproven", "no evidence yet."],
+  ["documented", "described in a document."],
+  ["observed", "seen in the source's answers; its unit and meaning are not confirmed."],
+  ["verified", "its unit and meaning are confirmed."],
+];
+function legendHtml() {
+  return `
+    <ul class="source-fields-legend" aria-label="Evidence">
+      ${EVIDENCE_LEGEND.map(([status, text]) => `<li><span class="item-badge source-fields-evidence is-${status}">${escapeHtml(EVIDENCE_LABEL[status])}</span><span class="visually-hidden">:</span> <span class="muted">${escapeHtml(text)}</span></li>`).join("")}
+    </ul>`;
+}
 
 export function renderSourceFieldsHtml() {
   const ctx = sourceFieldsContext();
@@ -73,11 +87,12 @@ function renderListHtml(s, ctx) {
     groups.get(key).push(field);
   }
   return `
+    <button class="plain-button ghost metric-variables-back" type="button" data-action="training-load-section" data-section="variables" data-dc-home>← Data configuration</button>
     <div class="metric-variables-head">
       <div>
         <h2 id="source-fields-title">Source fields</h2>
         <p class="muted">${intro(ctx)}</p>
-        <p class="muted source-fields-legend">${escapeHtml(EVIDENCE_LEGEND)}</p>
+        ${legendHtml()}
       </div>
     </div>
     ${noticeHtml(s)}
@@ -92,7 +107,8 @@ function renderListHtml(s, ctx) {
             const revision = currentRevision(field);
             return `
             <li>
-              <button type="button" class="metric-variables-item" data-action="source-fields-open" data-field-id="${escapeAttr(field.id)}">
+              <button type="button" class="metric-variables-item dc-item" data-action="source-fields-open" data-field-id="${escapeAttr(field.id)}">
+                ${fieldTileHtml(revision)}
                 <span class="metric-variables-item-name">${fieldName(field)} ${field.state === "retired" ? `<span class="item-badge">Retired</span>` : ""}</span>
                 <span class="metric-variables-item-facts muted">${unitSummary(revision)} · ${revision ? `${meaningSummary(revision)} · ` : ""}${escapeHtml(levelsText(revision))}</span>
                 ${evidenceBadge(revision)}

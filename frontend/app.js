@@ -33,6 +33,8 @@ import { handleStorageAdminAction, submitStorageAdminForm } from "./media-storag
 import { enterStorageAdminSection, loadStorageAdmin, storageAdminContext, storageAdminNeedsLoad } from "./media-storage-admin-data.js";
 import { handleSourceConnectionsAction, handleSourceConnectionsBeforeUnload, submitSourceConnectionsForm } from "./source-connections-actions.js";
 import { handleVariablesAction, handleVariablesInput, submitVariablesForm } from "./metric-variables-actions.js";
+import { closeIconPicker, handleIconPickerInput, trapIconPickerTab } from "./icon-picker.js";
+import { enterIconGallery, handleIconGalleryAction, handleIconGalleryInput } from "./icon-gallery.js";
 import { handleSourceFieldsAction, handleSourceFieldsInput, submitSourceFieldsForm } from "./source-fields-actions.js";
 import { enterSourceConnectionsSection, loadSourceConnections, sourceConnectionsNeedLoad } from "./source-connections-data.js";
 import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
@@ -572,6 +574,14 @@ function bindEvents() {
       state.workspaceSwitcher.open = false;
       renderWorkspaceSwitcher();
     }
+    // The shared icon picker closes without choosing; the focus goes back
+    // to the button that opened it.
+    if (state.iconPicker) {
+      const closed = closeIconPicker();
+      if (closed?.host === "metric-variables" && state.activeTab === "training-load") renderTrainingLoad();
+      if (closed?.returnFocus) document.querySelector(closed.returnFocus)?.focus?.();
+      return;
+    }
     // Dashboards UX H1: picker/menus, the dashboard dialog and the metric
     // panel close on Escape (topmost first - see closeTrainingLoadAnalysisOverlay).
     if (state.activeTab === "training-load" && state.trainingLoad.section === "analysis" && closeTrainingLoadAnalysisOverlay()) {
@@ -585,6 +595,8 @@ function bindEvents() {
   });
   document.addEventListener("fullscreenchange", handleFullscreenChange);
   document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+  // The open icon picker is modal: Tab stays inside it.
+  document.addEventListener("keydown", (event) => { trapIconPickerTab(event); });
   window.addEventListener("popstate", handleBrowserBack);
   // Imports (phase 4b): a running batch import or an unconfirmed outcome
   // asks (the browser's own dialog) before a reload or close.
@@ -1211,6 +1223,9 @@ function handleContentInput(event) {
   // athlete-search box all carry their own data-action directly on the
   // input element itself (same convention as the WELLNESS slider above) -
   // handleTrainingLoadAction reads the live value straight off it.
+  // The shared icon picker and Settings -> Icons narrow their grids in place.
+  if (handleIconPickerInput(event.target)) return;
+  if (handleIconGalleryInput(event.target)) return;
   // Data configuration -> Variables: the form's values and the list filter.
   if (handleVariablesInput(event.target, { render: renderActiveTrainingLoadSurface })) return;
   // Data configuration -> Source fields: the confirmation form's values.
@@ -2151,6 +2166,7 @@ async function loadActiveTab() {
     if (state.organization.section === "dataSources") enterDataSourcesSection();
     if (state.organization.section === "sourceConnections") enterSourceConnectionsSection();
     if (state.organization.section === "storage") enterStorageAdminSection();
+    if (state.organization.section === "icons") enterIconGallery();
     return renderOrganizationPanel({ refresh: false });
   }
   if (state.activeTab === "coach-home") return loadCoachHome();
@@ -2821,6 +2837,7 @@ async function handleContentClick(event) {
     renderOrganizationPanel,
   })) return;
   if (await handleTaxonomyAction(action, { renderOrganizationPanel })) return;
+  if (await handleIconGalleryAction(action)) return;
   if (handleWeeklyAction(action, { moveWeek, renderWeeklyRoot })) return;
   if (await handleTestsAction(action, { renderTests: renderActiveTestsSurface })) return;
   if (await handleVariablesAction(action, { render: renderActiveTrainingLoadSurface })) return;

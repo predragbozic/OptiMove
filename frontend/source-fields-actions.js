@@ -75,6 +75,13 @@ export async function loadSourceField(id, render) {
   render();
 }
 
+// The list read once, for the Data configuration start screen's card.
+export function ensureSourceFieldsList(render) {
+  const s = sourceFieldsState();
+  if (!sourceFieldsContext() || s.list.loaded || s.list.loading) return Promise.resolve();
+  return loadSourceFields(render);
+}
+
 export function loadSourceFieldsSection(render) {
   const s = sourceFieldsState();
   if (!sourceFieldsContext()) { render(); return Promise.resolve(); }

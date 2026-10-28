@@ -9,6 +9,7 @@
 // answers everyone else with the same 404.
 import { api } from "./api.js";
 import { state } from "./state.js";
+import { isLibraryKey } from "./icon-render.js";
 
 const BASE = "/api/training-load/sources/metrics/variables";
 
@@ -56,9 +57,10 @@ export function emptyVariablesState() {
     generation: 0,
     scope: "own",
     stateFilter: "active",
-    // Variables or their domains and categories (phase 12c); the list's filter
-    // by one domain or category ({ kind, id }); the domain or category open.
-    view: "variables",
+    // The start screen and its screens (layout C, PR-1): "home", "variables",
+    // "domains", "categories"; the list's filter by one domain or category
+    // ({ kind, id }); the domain or category open.
+    view: "home",
     filter: null,
     node: null,
     classification: { tree: null, loaded: false, loading: false, error: null },
@@ -275,6 +277,8 @@ export function rangeSummary(version) {
 export function emptyDraft() {
   return {
     label: "", shortLabel: "", description: "", key: "",
+    // An icon of the built-in library (PR-1), chosen in the shared picker; "" for none.
+    iconKey: "",
     unit: "", levels: ["session"], dailyAggregationMethod: "",
     minValue: "", maxValue: "",
     conditionKind: "none", conditionOperator: ">=", conditionLower: "", conditionUpper: "", conditionValue: "", conditionDuration: "", conditionUnit: "",
@@ -493,6 +497,7 @@ export function buildRequest(form) {
     set("shortLabel", textError(shortLabel, LIMITS.shortLabel));
     set("description", textError(description, LIMITS.description));
     if (key && !KEY.test(key)) errors.key = "Lower-case letters, digits and underscores, starting with a letter, at most 63.";
+    if (d.iconKey && !isLibraryKey(d.iconKey)) errors.iconKey = "Choose the icon again.";
     if (!LEVELS.some((level) => d.levels.includes(level.value))) errors.levels = "Choose at least one.";
   } else {
     const message = textError(reason, LIMITS.reason);
@@ -548,6 +553,9 @@ export function buildRequest(form) {
         ...(shortLabel ? { shortLabel } : {}),
         ...(description ? { description } : {}),
         ...(key ? { key } : {}),
+        // Sent only when one is chosen: a create without an icon is the same
+        // request as before icons existed.
+        ...(d.iconKey ? { iconKey: d.iconKey } : {}),
         levels: LEVELS.map((level) => level.value).filter((level) => d.levels.includes(level)),
         ...semantics,
       },

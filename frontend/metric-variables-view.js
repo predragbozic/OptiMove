@@ -6,9 +6,12 @@ import {
   aggregationLabel, conditionSummary, levelLabel, rangeSummary, readinessText, variablesContext, variablesState,
 } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
+import { iconPickerOpenFor, renderIconPickerHtml } from "./icon-picker.js";
+import { HOME_BACK, variableTileHtml } from "./data-config-tiles.js";
+import { renderDataConfigHomeHtml } from "./data-config-home-view.js";
 import { isClassificationMode } from "./metric-classification-data.js";
 import {
-  renderClassificationFormHtml, renderClassificationHtml, renderFilterHtml, renderFilterNoteHtml, renderVariableClassificationHtml, renderViewSwitchHtml,
+  renderClassificationFormHtml, renderClassificationHtml, renderFilterHtml, renderFilterNoteHtml, renderVariableClassificationHtml,
 } from "./metric-classification-view.js";
 
 const fmtDate = (iso) => {
@@ -25,8 +28,10 @@ export function renderVariablesHtml() {
   return `
     <section class="metric-variables" aria-labelledby="metric-variables-title">
       ${s.form ? (isClassificationMode(s.form.mode) ? renderClassificationFormHtml(s, ctx) : renderFormHtml(s, ctx))
-        : s.view === "classification" ? renderClassificationHtml(s, ctx)
+        : s.view === "home" ? renderDataConfigHomeHtml(s, ctx)
+        : s.view === "domains" || s.view === "categories" ? renderClassificationHtml(s, ctx)
         : s.detail.id ? renderDetailHtml(s, ctx) : renderListHtml(s, ctx)}
+      ${iconPickerOpenFor("metric-variables") ? renderIconPickerHtml() : ""}
     </section>
   `;
 }
@@ -45,14 +50,14 @@ function renderListHtml(s, ctx) {
   const list = s.list;
   const canCreate = ctx.view !== "coach" && (ctx.owner === "system" || s.scope === "own");
   return `
+    ${HOME_BACK}
     <div class="metric-variables-head">
       <div>
-        <h2 id="metric-variables-title">Variables</h2>
+        <h2 id="metric-variables-title" tabindex="-1">Variables</h2>
         <p class="muted">${scopeIntro(s, ctx)}</p>
       </div>
       ${canCreate ? `<button class="plain-button data-sources-primary" type="button" data-action="metric-variables-create-open">New variable</button>` : ""}
     </div>
-    ${renderViewSwitchHtml(s)}
     ${s.notice ? `<p class="metric-variables-notice" role="status">${escapeHtml(s.notice)}</p>` : ""}
     <div class="metric-variables-controls">
       ${ctx.owner === "club" ? `
@@ -100,7 +105,8 @@ function renderListItemHtml(item) {
   ].filter(Boolean).join(" · ");
   return `
     <li>
-      <button type="button" class="metric-variables-item" data-action="metric-variables-open" data-variable-id="${escapeAttr(item.id)}">
+      <button type="button" class="metric-variables-item dc-item" data-action="metric-variables-open" data-variable-id="${escapeAttr(item.id)}">
+        ${variableTileHtml(item)}
         <span class="metric-variables-item-name">${cut(item, item.label)}${item.shortLabel ? ` <span class="muted">(${escapeHtml(item.shortLabel)})</span>` : ""}</span>
         <span class="metric-variables-item-facts muted">${facts}</span>
         ${item.state === "archived" ? `<span class="item-badge">Archived</span>` : ""}
@@ -124,9 +130,12 @@ function renderDetailHtml(s, ctx) {
   return `
     ${back}
     <div class="metric-variables-head">
-      <div>
-        <h2 id="metric-variables-title">${cut(item, item.label)}</h2>
-        ${item.shortLabel ? `<p class="muted">Short name: ${escapeHtml(item.shortLabel)}</p>` : ""}
+      <div class="dc-title">
+        ${variableTileHtml(item, { size: "lg" })}
+        <div>
+          <h2 id="metric-variables-title" tabindex="-1">${cut(item, item.label)}</h2>
+          ${item.shortLabel ? `<p class="muted">Short name: ${escapeHtml(item.shortLabel)}</p>` : ""}
+        </div>
       </div>
       ${renderActionsHtml(actions)}
     </div>
@@ -271,6 +280,24 @@ function selectInput(form, field, label, options, { placeholder = "", structural
   `;
 }
 
+// The icon of a new variable (PR-1): chosen in the shared picker, sent as
+// iconKey. For now an icon is chosen only here, at create.
+function renderIconFieldHtml(form) {
+  const locked = form.busy || form.unconfirmed;
+  const key = form.draft.iconKey;
+  return `
+    <fieldset class="metric-variables-fieldset"><legend>Icon <span class="muted">(optional)</span></legend>
+      <div class="dc-icon-choice">
+        ${variableTileHtml({ icon: key }, { size: "lg" })}
+        <span class="dc-icon-choice-text" id="mv-icon-choice">${key ? `Chosen: <strong>${escapeHtml(key)}</strong>` : "No icon"}</span>
+        <button class="plain-button" type="button" data-action="metric-variables-icon-open" aria-describedby="mv-icon-choice mv-hint-iconKey" ${locked ? "disabled" : ""}>${key ? "Change icon" : "Choose icon"}</button>
+        ${key ? `<button class="plain-button ghost" type="button" data-action="metric-variables-icon-clear" ${locked ? "disabled" : ""}>Remove icon</button>` : ""}
+      </div>
+      <span class="muted" id="mv-hint-iconKey">Shown beside the variable in lists. Choose it now: after the variable is created its icon cannot be changed yet.</span>
+      ${fieldError(form, "iconKey")}
+    </fieldset>`;
+}
+
 const CONDITION_HINT = {
   zone_between: "The variable measures what happens while the value is inside the zone, for example the distance run at 19.8-25.2 km/h.",
   zone_one_sided: "The variable measures what happens while the value is above (or below) the level, for example the distance run above 25.2 km/h.",
@@ -303,7 +330,7 @@ function renderFormHtml(s, ctx) {
   const keyLine = hint.loading ? "Making the key..." : hint.required ? "No key can be made from this name (a key uses only the letters a-z, digits and underscores): enter one below."
     : hint.key ? `Key: ${escapeHtml(hint.key)}${hint.taken ? " - already used here; enter another key below." : ""}` : "The key is made from the name.";
   return `
-    <form class="data-sources-form metric-variables-form" data-metric-variables-form="${create ? "create" : "version"}" novalidate autocomplete="off">
+    <form class="data-sources-form metric-variables-form" data-metric-variables-form="${create ? "create" : "version"}" novalidate autocomplete="off"${iconPickerOpenFor("metric-variables") ? " inert" : ""}>
       <h2 id="metric-variables-title">${title}</h2>
       ${create ? "" : `<p class="muted">A new version replaces how the variable is measured from now on; earlier values keep the version they were recorded with. Every field below is saved as shown. The name and Recorded for stay as they are.</p>`}
       <p class="muted">Do not enter athlete names, ids, dates of birth or measured values.</p>
@@ -313,7 +340,8 @@ function renderFormHtml(s, ctx) {
           ${textInput(form, "label", "Name", { max: LIMITS.label, required: true })}
           ${textInput(form, "shortLabel", "Short name", { max: LIMITS.shortLabel, hint: "Shown where space is short, for example TotDist." })}
           ${textInput(form, "description", "Description", { max: LIMITS.description })}
-        </div></fieldset>` : ""}
+        </div></fieldset>
+        ${renderIconFieldHtml(form)}` : ""}
       <fieldset class="metric-variables-fieldset"><legend>Measurement</legend><div class="metric-variables-grid">
         ${textInput(form, "unit", "Unit", { max: LIMITS.unit, required: true, list: "mv-unit-suggestions", token: true, hint: "A short unit without spaces, for example m, km/h or count." })}
         ${selectInput(form, "dailyAggregationMethod", "Combine a day's values", AGGREGATIONS, { placeholder: "Choose...", hint: "When an athlete has several values on one day: Sum for distance, time and counts; Highest for top speed." })}

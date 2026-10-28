@@ -140,6 +140,8 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
     ["users", "Users"],
     ["joinLinks", "Join links"],
     ["presets", "Tags & Presets"],
+    // The built-in icons (PR-1): read only, for everyone who sees Settings.
+    ["icons", "Icons"],
     // Administering a data source is a platform-admin job (F3b). Hiding the
     // tab is not the protection - every route behind it checks the active
     // platform_admin role again on the server.

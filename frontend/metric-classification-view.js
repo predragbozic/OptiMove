@@ -1,10 +1,11 @@
-// Training Load -> Data configuration -> Variables -> Domains & categories: the
-// markup (phase 12c, J6 3.4). Every text that came from the server or the coach
+// Training Load -> Data configuration -> Domains and Categories: the markup
+// (phase 12c, J6 3.4; two screens of their own since layout C, PR-1). Every text that came from the server or the coach
 // is escaped; ids live only in data- attributes and under Technical details.
 import {
   CLASS_LIMITS, categoryPlaceable, findNode, nounOf, ownActive, placeableDomains, removablePlacement, removableVariableLink, treeOf,
 } from "./metric-classification-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
+import { HOME_BACK, nodeTileHtml } from "./data-config-tiles.js";
 
 const cut = (node) => `${escapeHtml(node?.name || "")}${node?.truncated ? "…" : ""}`;
 const KIND_TITLE = { domain: "Domain", category: "Category" };
@@ -19,25 +20,26 @@ function badges(node, ctx) {
 }
 
 // ---------------------------------------------------------------------------
-// The switch between the variables and their domains and categories
+// The list's filter by a domain or a category (C6): every node of the read,
+// active ones apart from archived ones.
 // ---------------------------------------------------------------------------
-export function renderViewSwitchHtml(s) {
-  const tab = (view, label) => `<button type="button" class="plain-button compact-button ${s.view === view ? "is-active" : ""}" aria-pressed="${s.view === view}" data-action="metric-classification-view" data-view="${view}">${label}</button>`;
-  return `<div class="metric-variables-segmented metric-classification-switch" role="group" aria-label="What to show">${tab("variables", "Variables")}${tab("classification", "Domains &amp; categories")}</div>`;
-}
-
-// The list's filter by a domain or a category (C6): every node of the read.
 export function renderFilterHtml(s) {
   const t = s.classification.tree;
   if (!t || (!(t.domains || []).length && !(t.categories || []).length)) return "";
   const value = s.filter ? `${s.filter.kind === "domain" ? "d" : "c"}:${s.filter.id}` : "";
-  const option = (prefix, node) => `<option value="${prefix}:${escapeAttr(node.id)}" ${value === `${prefix}:${node.id}` ? "selected" : ""}>${escapeHtml(node.name || "")}${node.state === "archived" ? " (archived)" : ""}</option>`;
+  const option = (prefix, node) => `<option value="${prefix}:${escapeAttr(node.id)}" ${value === `${prefix}:${node.id}` ? "selected" : ""}>${escapeHtml(node.name || "")}</option>`;
+  const group = (label, prefix, nodes) => (nodes.length ? `<optgroup label="${label}">${nodes.map((n) => option(prefix, n)).join("")}</optgroup>` : "");
+  const domains = t.domains || [];
+  const categories = t.categories || [];
+  const active = (n) => n.state === "active";
   return `
     <label class="search-field metric-variables-state"><span>Domain or category</span>
       <select data-metric-variables-filter="classification">
         <option value="" ${value ? "" : "selected"}>All</option>
-        ${(t.domains || []).length ? `<optgroup label="Domains">${t.domains.map((n) => option("d", n)).join("")}</optgroup>` : ""}
-        ${(t.categories || []).length ? `<optgroup label="Categories">${t.categories.map((n) => option("c", n)).join("")}</optgroup>` : ""}
+        ${group("Domains", "d", domains.filter(active))}
+        ${group("Categories", "c", categories.filter(active))}
+        ${group("Archived domains", "d", domains.filter((n) => !active(n)))}
+        ${group("Archived categories", "c", categories.filter((n) => !active(n)))}
       </select>
     </label>`;
 }
@@ -56,69 +58,107 @@ export function renderFilterNoteHtml(s, ctx) {
 }
 
 // ---------------------------------------------------------------------------
-// The tree (C1)
+// Domains and Categories: two screens of their own (layout C, PR-1), each
+// with its own tiles - a domain filled, a category outlined - and its archived
+// items folded away in a group of their own.
 // ---------------------------------------------------------------------------
-function treeIntro(ctx) {
-  if (ctx.view === "coach") return "The domains and categories of this team's club and the system's, for reference. An administrator of the club creates them and places variables in them.";
-  if (ctx.owner === "system") return "System domains and categories group the system variables, for example Endurance or Speed. Each category sits in at most one domain.";
-  return `Domains and categories of ${escapeHtml(ctx.clubName || "this club")} group its variables and the system's. A category of this club can sit in one domain: this club's or a system one. System domains and categories are shown for reference.`;
+function domainsIntro(ctx) {
+  if (ctx.view === "coach") return "The domains of this team's club and the system's, for reference. An administrator of the club creates them.";
+  if (ctx.owner === "system") return "Domains are the broad groups of the system variables, for example Endurance or Speed. Each holds categories.";
+  return `Domains of ${escapeHtml(ctx.clubName || "this club")} group its categories and variables. System domains are shown for reference.`;
+}
+function categoriesIntro(ctx) {
+  if (ctx.view === "coach") return "The categories of this team's club and the system's, for reference. An administrator of the club creates them and places variables in them.";
+  if (ctx.owner === "system") return "Categories group the system variables, for example Aerobic capacity. Each category sits in at most one domain.";
+  return `Categories of ${escapeHtml(ctx.clubName || "this club")} group its variables and the system's. A category of this club can sit in one domain: this club's or a system one. System categories are shown for reference.`;
 }
 
 export function renderClassificationHtml(s, ctx) {
-  const c = s.classification;
   if (s.node) return renderNodeHtml(s, ctx);
+  const c = s.classification;
+  const domains = s.view === "domains";
   const canCreate = ctx.view !== "coach";
+  const kind = domains ? "domain" : "category";
   const t = c.tree ? treeOf(c.tree) : null;
   return `
+    ${HOME_BACK}
     <div class="metric-variables-head">
       <div>
-        <h2 id="metric-variables-title">Domains &amp; categories</h2>
-        <p class="muted">${treeIntro(ctx)}</p>
+        <h2 id="metric-variables-title" tabindex="-1">${domains ? "Domains" : "Categories"}</h2>
+        <p class="muted">${domains ? domainsIntro(ctx) : categoriesIntro(ctx)}</p>
       </div>
       ${canCreate ? `<div class="metric-variables-actions">
-        <button class="plain-button data-sources-primary" type="button" data-action="metric-classification-create-open" data-kind="domain">New domain</button>
-        <button class="plain-button data-sources-primary" type="button" data-action="metric-classification-create-open" data-kind="category">New category</button>
+        <button class="plain-button data-sources-primary" type="button" data-action="metric-classification-create-open" data-kind="${kind}">New ${kind}</button>
       </div>` : ""}
     </div>
-    ${renderViewSwitchHtml(s)}
     ${s.notice ? `<p class="metric-variables-notice" role="status">${escapeHtml(s.notice)}</p>` : ""}
-    ${c.loading && !c.loaded ? `<p class="muted" role="status">Loading domains and categories...</p>` : ""}
+    ${c.loading && !c.loaded ? `<p class="muted" role="status">Loading ${domains ? "domains" : "categories"}...</p>` : ""}
     ${c.error ? `<div class="error" role="alert"><p>${escapeHtml(c.error)}</p><button class="plain-button" type="button" data-action="metric-classification-reload">Try again</button></div>` : ""}
-    ${t ? renderTreeHtml(t, ctx, canCreate) : ""}
+    ${t ? (t.truncated ? `<p class="muted">Only the first 500 of each are shown.</p>` : "") : ""}
+    ${t ? (domains ? renderDomainsListHtml(c.tree, t, ctx, canCreate) : renderCategoriesListHtml(c.tree, t, ctx, canCreate)) : ""}
   `;
 }
 
 function nodeButton(kind, node, ctx, extra = "") {
   return `
-    <button type="button" class="metric-variables-item metric-classification-item" data-action="metric-classification-open" data-kind="${kind}" data-node-id="${escapeAttr(node.id)}">
+    <button type="button" class="metric-variables-item dc-item metric-classification-item" data-action="metric-classification-open" data-kind="${kind}" data-node-id="${escapeAttr(node.id)}">
+      ${nodeTileHtml(kind, node)}
       <span class="metric-variables-item-name">${cut(node)} ${badges(node, ctx)}</span>
       ${node.description ? `<span class="metric-variables-item-facts muted">${escapeHtml(node.description)}</span>` : ""}
       ${extra ? `<span class="metric-variables-item-facts muted">${extra}</span>` : ""}
     </button>`;
 }
-
-function renderTreeHtml(t, ctx, canCreate) {
-  if (!t.domains.length && !t.unplaced.length && !t.placedElsewhere.length) {
-    return `<p class="empty">${canCreate ? "No domains or categories yet. Create a domain (for example Endurance), then categories, and place the categories in it." : "There are no domains or categories yet."}</p>`;
-  }
-  const domains = t.domains.map(({ domain, categories }) => `
-    <li class="metric-classification-domain">
-      ${nodeButton("domain", domain, ctx, categories.length ? "" : "No categories in it yet.")}
-      ${categories.length ? `<ul class="metric-classification-categories" aria-label="Categories in ${escapeAttr(domain.name || "")}">${categories.map(({ category }) => `<li>${nodeButton("category", category, ctx)}</li>`).join("")}</ul>` : ""}
-    </li>`).join("");
-  const loose = [...t.unplaced, ...t.placedElsewhere];
+const listOf = (items) => `<ul class="metric-variables-list">${items.map((html) => `<li>${html}</li>`).join("")}</ul>`;
+function archivedGroup(items, noun) {
+  if (!items.length) return "";
   return `
-    ${t.truncated ? `<p class="muted">Only the first 500 of each are shown.</p>` : ""}
+    <details class="dc-archived">
+      <summary>Archived ${noun} <span class="muted">(${items.length})</span></summary>
+      ${listOf(items)}
+    </details>`;
+}
+
+function renderDomainsListHtml(tree, t, ctx, canCreate) {
+  const rows = t.domains.map(({ domain, categories }) => {
+    const names = categories.map(({ category }) => category.name || "").filter(Boolean);
+    const facts = names.length ? `${names.length === 1 ? "1 category" : `${names.length} categories`}: ${names.slice(0, 4).map(escapeHtml).join(", ")}${names.length > 4 ? ", …" : ""}` : "No categories in it yet.";
+    return { domain, html: nodeButton("domain", domain, ctx, facts) };
+  });
+  const active = rows.filter((r) => r.domain.state === "active").map((r) => r.html);
+  const archived = rows.filter((r) => r.domain.state !== "active").map((r) => r.html);
+  if (!rows.length) return `<p class="empty">${canCreate ? "No domains yet. Create the first one with New domain, for example Endurance." : "There are no domains yet."}</p>`;
+  return `
     <section class="metric-classification-section" aria-labelledby="mc-domains-title">
-      <h3 id="mc-domains-title">Domains</h3>
-      ${t.domains.length ? `<ul class="metric-variables-list metric-classification-tree">${domains}</ul>` : `<p class="muted">No domains yet.</p>`}
+      <h3 id="mc-domains-title" class="visually-hidden">Active domains</h3>
+      ${active.length ? listOf(active) : `<p class="muted">No active domains.</p>`}
+    </section>
+    ${archivedGroup(archived, "domains")}`;
+}
+
+function renderCategoriesListHtml(tree, t, ctx, canCreate) {
+  const domainName = (category) => {
+    const link = t.linkOf(category.id);
+    if (!link) return "";
+    const domain = findNode(tree, "domain", link.domainId);
+    return domain ? `In ${escapeHtml(domain.name || "")}` : "In a domain not shown here.";
+  };
+  const placed = t.domains.flatMap(({ categories }) => categories.map(({ category }) => category));
+  const all = [...placed, ...t.placedElsewhere, ...t.unplaced];
+  if (!all.length) return `<p class="empty">${canCreate ? "No categories yet. Create the first one with New category, for example Aerobic capacity." : "There are no categories yet."}</p>`;
+  const active = (category) => category.state === "active";
+  const inDomain = [...placed, ...t.placedElsewhere].filter(active);
+  const loose = t.unplaced.filter(active);
+  const archived = all.filter((category) => !active(category));
+  return `
+    <section class="metric-classification-section" aria-labelledby="mc-placed-title">
+      <h3 id="mc-placed-title">In a domain</h3>
+      ${inDomain.length ? listOf(inDomain.map((category) => nodeButton("category", category, ctx, domainName(category)))) : `<p class="muted">No active category is in a domain yet.</p>`}
     </section>
     <section class="metric-classification-section" aria-labelledby="mc-loose-title">
-      <h3 id="mc-loose-title">Categories in no domain</h3>
-      ${loose.length ? `<ul class="metric-variables-list">${loose.map((category) => `<li>${nodeButton("category", category, ctx, t.linkOf(category.id) ? "In a domain not shown here." : "")}</li>`).join("")}</ul>`
-        : `<p class="muted">${t.domains.some((d) => d.categories.length) ? "Every category is in a domain." : "No categories yet."}</p>`}
+      <h3 id="mc-loose-title">In no domain</h3>
+      ${loose.length ? listOf(loose.map((category) => nodeButton("category", category, ctx))) : `<p class="muted">Every active category is in a domain.</p>`}
     </section>
-  `;
+    ${archivedGroup(archived.map((category) => nodeButton("category", category, ctx, domainName(category))), "categories")}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,7 +171,8 @@ const NODE_ACTIONS = [
 ];
 function renderNodeHtml(s, ctx) {
   const { kind, id } = s.node;
-  const back = `<button class="plain-button ghost metric-variables-back" type="button" data-action="metric-classification-back">← Domains &amp; categories</button>`;
+  // Back to the screen it was opened from.
+  const back = `<button class="plain-button ghost metric-variables-back" type="button" data-action="metric-classification-back">← ${s.view === "domains" ? "Domains" : "Categories"}</button>`;
   const tree = s.classification.tree;
   const node = findNode(tree, kind, id);
   const notice = s.notice ? `<p class="metric-variables-notice" role="status">${escapeHtml(s.notice)}</p>` : "";
@@ -153,18 +194,18 @@ function renderNodeHtml(s, ctx) {
     place = `
       <div class="metric-classification-place">
         <h3>Domain</h3>
-        <p>${link ? (domain ? `${cut(domain)} ${badges(domain, ctx)}` : "A domain not shown here.") : "In no domain."}</p>
+        <p class="dc-inline">${link ? (domain ? `${nodeTileHtml("domain", domain, { size: "sm" })}<span>${cut(domain)} ${badges(domain, ctx)}</span>` : "A domain not shown here.") : "In no domain."}</p>
         ${removable ? `<button class="plain-button ghost" type="button" data-action="metric-classification-link-remove-open" data-link-id="${escapeAttr(link.id)}">Remove from the domain</button>` : ""}
         ${canPlace ? `<button class="plain-button" type="button" data-action="metric-classification-place-open" data-node-id="${escapeAttr(node.id)}">Place in a domain</button>` : ""}
-        ${placeable && !canPlace ? `<p class="muted">There is no active domain to place it in yet. Create a domain first (New domain).</p>` : ""}
+        ${placeable && !canPlace ? `<div class="metric-classification-add-note"><p class="muted">There is no active domain to place it in yet. Create one under Domains first.</p><button class="plain-button" type="button" data-action="metric-classification-view" data-view="domains">Open Domains</button></div>` : ""}
       </div>`;
   } else {
     const inside = (t.domains.find((x) => x.domain.id === node.id)?.categories || []).map(({ category }) => category);
     place = `
       <div class="metric-classification-place">
         <h3>Categories in it</h3>
-        ${inside.length ? `<ul class="metric-classification-names">${inside.map((category) => `<li>${cut(category)} ${badges(category, ctx)}</li>`).join("")}</ul>`
-          : `<p class="muted">${ctx.view === "coach" ? "No categories in it yet." : "No categories in it yet. Place a category in it from the category."}</p>`}
+        ${inside.length ? `<ul class="metric-classification-names dc-names">${inside.map((category) => `<li class="dc-inline">${nodeTileHtml("category", category, { size: "sm" })}<span>${cut(category)} ${badges(category, ctx)}</span></li>`).join("")}</ul>`
+          : `<p class="muted">${ctx.view === "coach" ? "No categories in it yet." : "No categories in it yet. Place a category in it from the category, under Categories."}</p>`}
       </div>`;
   }
   const readOnly = node.editable === false && ctx.view !== "coach"
@@ -172,9 +213,12 @@ function renderNodeHtml(s, ctx) {
   return `
     ${back}
     <div class="metric-variables-head">
-      <div>
-        <h2 id="metric-variables-title">${cut(node)}</h2>
-        <p class="muted">${KIND_TITLE[kind]} ${badges(node, ctx)}</p>
+      <div class="dc-title">
+        ${nodeTileHtml(kind, node, { size: "lg" })}
+        <div>
+          <h2 id="metric-variables-title" tabindex="-1">${cut(node)}</h2>
+          <p class="muted">${KIND_TITLE[kind]} ${badges(node, ctx)}</p>
+        </div>
       </div>
       ${buttons.length ? `<div class="metric-variables-actions">${buttons.join("")}</div>` : ""}
     </div>
@@ -214,7 +258,9 @@ export function renderVariableClassificationHtml(item, ctx, classification) {
   let addNote = "";
   if (admin && item.state === "active" && !canAdd("category") && !canAdd("domain")) {
     if (!tree && classification?.error) addNote = `<div class="metric-classification-add-note"><p class="muted">Domains and categories could not be loaded.</p><button class="plain-button" type="button" data-action="metric-classification-reload">Try again</button></div>`;
-    else if (tree && !ownActive(tree, "category", ctx).length && !ownActive(tree, "domain", ctx).length) addNote = `<p class="muted">To add it to a domain or category, first create one under Domains &amp; categories.</p>`;
+    else if (tree && !ownActive(tree, "category", ctx).length && !ownActive(tree, "domain", ctx).length) {
+      addNote = `<div class="metric-classification-add-note"><p class="muted">To add it to a domain or category, first create one.</p><button class="plain-button" type="button" data-action="metric-classification-view" data-view="categories">Open Categories</button></div>`;
+    }
   }
   return `
     <section class="metric-classification-variable" aria-labelledby="mc-variable-title">

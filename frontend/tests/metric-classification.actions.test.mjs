@@ -34,6 +34,7 @@ const { state } = await import("../state.js");
 
 const VB = "/api/training-load/sources/metrics/variables";
 const CB = "/api/training-load/sources/metrics/classification";
+const FB = "/api/training-load/sources/metrics/fields";
 const CLUB = "11111111-0000-4000-8000-000000000001";
 const TEAM = "22222222-0000-4000-8000-000000000001";
 const VAR_ID = "aaaaaaaa-1111-4000-8000-000000000001";
@@ -119,18 +120,34 @@ let listItems = [variable()];
 function serve(post = () => ({ status: 404, body: { error: "notFound" } })) {
   respond = (call) => {
     if (call.method === "GET" && call.url === CB) return { status: 200, body: tree };
+    // The start screen's Source fields card (an administrator's).
+    if (call.method === "GET" && call.url === FB) return { status: 200, body: { fields: [] } };
     if (call.method === "GET" && call.url.startsWith(`${VB}?`)) return { status: 200, body: { variables: listItems, nextCursor: null } };
     if (call.method === "GET" && call.url.startsWith(`${VB}/${VAR_ID}`)) return { status: 200, body: { variable: { ...current, versions: [{ ...current.currentVersion, current: true, reason: null }] }, nextCursor: null } };
     if (call.method === "POST") return post(call);
     return { status: 404, body: { error: "notFound" } };
   };
 }
-async function openTree() {
+// The Domains (or Categories) screen, opened from the start screen's card.
+async function openTree(view = "domains") {
   await loadVariablesSection(render);
-  await click('[data-action="metric-classification-view"][data-view="classification"]');
+  await click(`[data-action="metric-classification-view"][data-view="${view}"]`);
 }
+// A domain opens from Domains, a category from Categories (layout C): the
+// screen is switched first when the other one is shown.
 async function openNode(kind, id) {
+  const view = kind === "domain" ? "domains" : "categories";
+  if (variablesState().view !== view) {
+    if (variablesState().node) await click('[data-action="metric-classification-back"]');
+    await click('[data-action="metric-classification-view"][data-view="home"]');
+    await click(`[data-action="metric-classification-view"][data-view="${view}"]`);
+  }
   await click(`[data-action="metric-classification-open"][data-kind="${kind}"][data-node-id="${id}"]`);
+}
+// The variables list, as opened from the start screen.
+async function openList() {
+  variablesState().view = "variables";
+  await loadVariablesSection(render);
 }
 async function openVariable() {
   await loadVariablesSection(render);
@@ -156,29 +173,57 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 // The tree (C1)
 // ---------------------------------------------------------------------------
-test("the screen reads the domains and categories once with the list; the switch shows the tree, read again; back to the variables reads nothing", async () => {
+test("the start screen reads the domains and categories, the list and the source fields once; Domains and Categories are screens of their own, each reading the tree again; back to the start screen reads nothing", async () => {
   await loadVariablesSection(render);
-  assert.deepEqual(gets(), [CB, `${VB}?scope=own&state=active`], "one read of the tree beside the list");
-  assert.equal($('[data-view="variables"]').getAttribute("aria-pressed"), "true");
-  await click('[data-action="metric-classification-view"][data-view="classification"]');
-  assert.equal(treeReads(), 2, "opening the tree reads it again");
-  assert.equal($('[data-view="classification"]').getAttribute("aria-pressed"), "true");
-  assert.match(text(), /System domains and categories group the system variables/);
-  const domains = [...content.querySelectorAll(".metric-classification-domain")];
-  assert.equal(domains.length, 2);
-  assert.match(domains[0].textContent, /Endurance/);
-  assert.match(domains[0].querySelector(".metric-classification-categories").textContent, /Aerobic capacity/, "a placed category sits under its domain");
-  assert.match(domains[1].textContent.replace(/\s+/g, " "), /Speed Archived/);
-  assert.match(domains[1].textContent, /No categories in it yet\./);
+  assert.deepEqual(gets(), [CB, `${VB}?scope=own&state=active`, FB], "one read each: the tree, the list, the source fields");
+  const cards = [...content.querySelectorAll(".dc-card")].map((card) => [
+    card.querySelector(".dc-card-title strong").textContent,
+    card.querySelector(".dc-card-title .muted").textContent,
+    [...card.querySelectorAll(".dc-card-row")].map((row) => row.textContent.trim()),
+  ]);
+  assert.deepEqual(cards, [
+    ["Variables", "1 active variable", ["Total distance"]],
+    ["Domains", "1 domain · 1 archived", ["Endurance"]],
+    ["Categories", "2 categories", ["Aerobic capacity", "Sprint <b>"]],
+    ["Source fields", "No source fields yet", []],
+  ]);
+  assert.ok(content.innerHTML.includes("Sprint &lt;b&gt;"), "a name on a card is escaped");
+  assert.ok(!$(".metric-variables-segmented") && !$('[data-view="classification"]'), "no switch any more: the start screen replaces it");
+
+  await click('[data-action="metric-classification-view"][data-view="domains"]');
+  assert.equal(treeReads(), 2, "opening Domains reads the tree again");
+  assert.equal($("#metric-variables-title").textContent, "Domains");
+  assert.match(text(), /Domains are the broad groups of the system variables/);
+  const active = [...content.querySelectorAll('[aria-labelledby="mc-domains-title"] .metric-classification-item')];
+  assert.equal(active.length, 1);
+  assert.match(active[0].textContent.replace(/\s+/g, " "), /Endurance .*1 category: Aerobic capacity/);
+  assert.ok(active[0].querySelector(".dc-tile-domain"), "a domain is a filled tile");
+  const archived = $("details.dc-archived");
+  assert.ok(archived && !archived.open, "archived domains are folded away");
+  assert.match(archived.querySelector("summary").textContent.replace(/\s+/g, " "), /Archived domains \(1\)/);
+  assert.match(archived.textContent.replace(/\s+/g, " "), /Speed Archived/);
+  assert.ok($('[data-action="metric-classification-create-open"][data-kind="domain"]'));
+  assert.ok(!$('[data-action="metric-classification-create-open"][data-kind="category"]'), "one primary action per screen");
+
+  const before = calls.length;
+  await click('[data-action="metric-classification-view"][data-view="home"]');
+  assert.equal(calls.length, before, "the start screen shows what was read");
+  await click('[data-action="metric-classification-view"][data-view="categories"]');
+  assert.equal(treeReads(), 3, "opening Categories reads the tree again");
+  assert.equal($("#metric-variables-title").textContent, "Categories");
+  const placed = $('[aria-labelledby="mc-placed-title"]');
+  assert.match(placed.textContent.replace(/\s+/g, " "), /Aerobic capacity .*In Endurance/);
+  assert.ok(placed.querySelector(".dc-tile-category"), "a category is an outlined tile");
   const loose = $('[aria-labelledby="mc-loose-title"]');
   assert.match(loose.textContent, /Sprint <b>/);
-  assert.ok(content.innerHTML.includes("Sprint &lt;b&gt;"), "a name is escaped");
   assert.ok(content.innerHTML.includes("Long &lt;i&gt;steady&lt;/i&gt; work"), "a description is escaped");
-  assert.ok($('[data-action="metric-classification-create-open"][data-kind="domain"]'));
   assert.ok($('[data-action="metric-classification-create-open"][data-kind="category"]'));
-  const before = calls.length;
+  assert.ok(!$('[data-action="metric-classification-create-open"][data-kind="domain"]'));
+
+  const beforeList = calls.length;
+  await click('[data-action="metric-classification-view"][data-view="home"]');
   await click('[data-action="metric-classification-view"][data-view="variables"]');
-  assert.equal(calls.length, before, "the loaded list is shown without a read");
+  assert.equal(calls.length, beforeList, "the loaded list is shown without a read");
   assert.match(text(), /Total distance/);
 });
 
@@ -210,7 +255,10 @@ test("a tree that cannot be read offers Try again; a 404 says the workspace has 
   tree = { domains: [], categories: [], categoryDomains: [], truncated: false };
   serve();
   await click('[data-action="metric-classification-reload"]');
-  assert.match(text(), /No domains or categories yet\. Create a domain \(for example Endurance\), then categories, and place the categories in it\./);
+  assert.match(text(), /No domains yet\. Create the first one with New domain, for example Endurance\./);
+  await click('[data-action="metric-classification-view"][data-view="home"]');
+  await click('[data-action="metric-classification-view"][data-view="categories"]');
+  assert.match(text(), /No categories yet\. Create the first one with New category, for example Aerobic capacity\./);
 });
 
 test("an answer for a workspace that was left is dropped", async () => {
@@ -310,7 +358,7 @@ test("create a domain: the fields are checked before anything is sent; the body 
 test("create: key_taken keeps the form with the key's error; a category without a key sends none", async () => {
   let answer = { status: 409, body: { error: "key_taken" } };
   serve(() => answer);
-  await openTree();
+  await openTree("categories");
   await click('[data-action="metric-classification-create-open"][data-kind="category"]');
   assert.equal($("#metric-variables-title").textContent, "New system category");
   type("name", "Sprint");
@@ -320,7 +368,7 @@ test("create: key_taken keeps the form with the key's error; a category without 
   assert.ok(variablesState().form, "the form stays");
   assert.ok($("details.data-sources-tech").open);
   assert.equal($("#mc-err-key").textContent, "This key is already used here.");
-  assert.match($(".metric-classification-form > .error").textContent, /^A category here already uses the key made from this name, perhaps one created earlier or an archived one\. Look for it in Domains & categories first;/);
+  assert.match($(".metric-classification-form > .error").textContent, /^A category here already uses the key made from this name, perhaps one created earlier or an archived one\. Look for it under Categories first;/);
   answer = { status: 409, body: { error: "key_taken" } };
   type("key", "sprint");
   await submit();
@@ -508,7 +556,8 @@ test("a category with no active domain to go to says to create one; place and li
   await openTree();
   await openNode("category", C2);
   assert.ok(!$('[data-action="metric-classification-place-open"]'));
-  assert.match(text(), /There is no active domain to place it in yet\. Create a domain first \(New domain\)\./);
+  assert.match(text(), /There is no active domain to place it in yet\. Create one under Domains first\./);
+  assert.ok($('.metric-classification-place [data-action="metric-classification-view"][data-view="domains"]'), "the way to Domains is right there");
   await click('[data-action="metric-classification-back"]');
   assert.match($('[aria-labelledby="mc-loose-title"]').textContent, /Aerobic capacity/);
   tree = platformTree();
@@ -525,7 +574,10 @@ test("a category with no active domain to go to says to create one; place and li
 test("the tree's empty and archived texts fit the kind; a domain-only tree says there are no categories", async () => {
   tree = { domains: [node()], categories: [], categoryDomains: [], truncated: false };
   await openTree();
-  assert.match($('[aria-labelledby="mc-loose-title"]').textContent, /No categories yet\./);
+  assert.match(text(), /Endurance .*No categories in it yet\./);
+  await click('[data-action="metric-classification-view"][data-view="home"]');
+  await click('[data-action="metric-classification-view"][data-view="categories"]');
+  assert.match(text(), /No categories yet\. Create the first one with New category/);
   resetVariables();
   tree = platformTree();
   tree.categories[1] = node({ id: C2, name: "Sprint", state: "archived", actions: ["restore"] });
@@ -596,6 +648,9 @@ test("a check answered by a refusal from the body settles it; Close without chec
 
   serve(() => ({ throwNetworkError: true }));
   await click('[data-action="metric-variables-cancel"]');
+  await click('[data-action="metric-classification-view"][data-view="home"]');
+  serve(() => ({ throwNetworkError: true }));
+  await click('[data-action="metric-classification-view"][data-view="categories"]');
   await click('[data-action="metric-classification-create-open"][data-kind="category"]');
   type("name", "Sprint 2");
   await submit();
@@ -676,11 +731,12 @@ test("an archived variable, or one in every container, is offered no Add; variab
 // The list's filter (C6)
 // ---------------------------------------------------------------------------
 test("the filter reads the list for one domain or category; the note says which; Show all reads all again", async () => {
-  await loadVariablesSection(render);
+  await openList();
   const select = $('[data-metric-variables-filter="classification"]');
   assert.ok(select, "the filter is offered once the tree is read");
-  assert.deepEqual([...select.querySelectorAll("optgroup")].map((g) => g.label), ["Domains", "Categories"]);
-  assert.match(select.textContent, /Speed \(archived\)/);
+  assert.deepEqual([...select.querySelectorAll("optgroup")].map((g) => g.label), ["Domains", "Categories", "Archived domains"], "archived ones apart from active ones");
+  assert.match(select.querySelector('optgroup[label="Archived domains"]').textContent, /Speed/);
+  assert.doesNotMatch(select.querySelector('optgroup[label="Domains"]').textContent, /Speed/);
   select.value = `d:${D1}`;
   select.dispatchEvent(new window.Event("input", { bubbles: true }));
   select.dispatchEvent(new window.Event("change", { bubbles: true }));
@@ -705,7 +761,7 @@ test("club: the filter note and an empty filtered list say which scope is shown 
   state.currentUser = { id: "u1", activeWorkspace: { type: "club", scopeId: CLUB, label: "FK Borac", role: "club_admin" } };
   tree = { ...platformTree(), domains: [node({ ownerScope: "club" })] };
   listItems = [];
-  await loadVariablesSection(render);
+  await openList();
   const select = $('[data-metric-variables-filter="classification"]');
   select.value = `d:${D1}`;
   select.dispatchEvent(new window.Event("change", { bubbles: true }));
@@ -723,7 +779,8 @@ test("an admin's variable says what to do when there is nothing to add it to, or
   current = variable({ classification: { categories: [], domains: [], truncated: false } });
   await openVariable();
   assert.match(text(), /In no domain or category yet\./);
-  assert.match(text(), /To add it to a domain or category, first create one under Domains & categories\./);
+  assert.match(text(), /To add it to a domain or category, first create one\./);
+  assert.ok($('.metric-classification-add-note [data-action="metric-classification-view"][data-view="categories"]'), "Open Categories: no dead end");
   resetVariables();
   serve();
   const ok = respond;
@@ -758,9 +815,13 @@ test("coach: the tree, a node and a variable's links read only; no create, chang
   };
   current = variable({ ownerScope: "club", actions: [] });
   await openTree();
-  assert.match(text(), /The domains and categories of this team's club and the system's, for reference\./);
+  assert.match(text(), /The domains of this team's club and the system's, for reference\./);
   assert.ok(!$('[data-action="metric-classification-create-open"]'));
-  assert.match(text(), /Aerobic capacity System/, "a system category is marked in a club's tree");
+  await click('[data-action="metric-classification-view"][data-view="home"]');
+  await click('[data-action="metric-classification-view"][data-view="categories"]');
+  assert.match(text(), /The categories of this team's club and the system's, for reference\./);
+  assert.ok(!$('[data-action="metric-classification-create-open"]'));
+  assert.match(text(), /Aerobic capacity System/, "a system category is marked in a club's list");
   await openNode("category", C2);
   assert.equal(content.querySelectorAll(".metric-variables-actions button").length, 0);
   assert.ok(!$('[data-action="metric-classification-place-open"]'));

@@ -3139,6 +3139,14 @@ pre-existing; pass/fail counts don't belong in this file
   library, Settings → Icons, a shared picker, variable icons in the existing `icon_url` column, the visual pass, and
   dragging variables into categories. Then step 2 ★★: own icons for system, club and private-coach owners on R2, with a
   migration. Many of the 12c and phase 6 follow-ups below belong to it.
+  - The proposal is merged (PR #254, `f4abd7c`); the owner's V1–V5 were decided as recommended (its section 10).
+  - **PR-1 is implemented in an open pull request** (no migration): the icon library (Tabler Icons 3.50.0, MIT, 128
+    icons, generated), Settings → Icons, the shared picker, an optional icon at create (J3), the start screen of layout
+    C with separate Domains and Categories screens, and the visual pass. It closes these follow-ups below: the two
+    look-alike controls, archived and active items in separate groups of the list filter, the dead end after "first
+    create one", one primary button per screen, the Source fields legend, and scrolling to the start of a screen.
+  - Next: PR-2 (dragging variables into categories); PR-1b (changing an icon, I1) only on the owner's order naming
+    its migration.
 - **Follow-ups of the 12c frontend** (the *Rukovodilac* and the reviews of PR #249, LOW; not scheduled):
   - the list filter also offers archived domains and categories: whether to separate active and archived in the
     picker's groups;

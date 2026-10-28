@@ -3,6 +3,7 @@ import { state } from "./state.js";
 import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
 import { renderDashboardChartPlots } from "./training-load-analysis-echarts-options.js";
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
+import { renderMetricIconHtml } from "./icon-render.js";
 
 const WIDGET_TYPES = [
   { key: "kpi", label: "KPI", hint: "One number" },
@@ -644,7 +645,7 @@ function renderPanelMetricListHtml(panel) {
         <div class="tl-analysis-metric-group">
           <p class="eyebrow">${escapeHtml(group)}</p>
           ${rows.map((d) => `<button type="button" class="tl-analysis-metric-option ${isSelected({ kind: "metric", id: d.id }) ? "is-selected" : ""}" aria-pressed="${isSelected({ kind: "metric", id: d.id }) ? "true" : "false"}" data-action="training-load-analysis-panel-pick-metric" data-metric-id="${escapeAttr(d.id)}">
-            ${d.iconUrl ? `<img src="${escapeAttr(d.iconUrl)}" alt="">` : `<span class="tl-metric-icon-fallback">${escapeHtml((d.shortLabel || d.label || "?").slice(0, 1))}</span>`}
+            ${renderMetricIconHtml(d.iconUrl, { fallback: `<span class="tl-metric-icon-fallback">${escapeHtml((d.shortLabel || d.label || "?").slice(0, 1))}</span>` })}
             <span><strong>${escapeHtml(d.label)}</strong><small>${escapeHtml([d.unit, d.valueType, d.categoryLabel].filter(Boolean).join(" · "))}</small></span>
           </button>`).join("")}
         </div>
@@ -769,7 +770,7 @@ function renderMetricPickerHtml(entry) {
         <div class="tl-analysis-metric-group">
           <p class="eyebrow">${escapeHtml(group)}</p>
           ${rows.map((d) => `<button type="button" class="tl-analysis-metric-option ${isMetric(d.id) ? "is-active" : ""}" aria-pressed="${isMetric(d.id) ? "true" : "false"}" data-action="training-load-analysis-series-bind-metric" data-series-key="${escapeAttr(entry.key)}" data-metric-id="${escapeAttr(d.id)}">
-            ${d.iconUrl ? `<img src="${escapeAttr(d.iconUrl)}" alt="">` : `<span class="tl-metric-icon-fallback">${escapeHtml((d.shortLabel || d.label || "?").slice(0, 1))}</span>`}
+            ${renderMetricIconHtml(d.iconUrl, { fallback: `<span class="tl-metric-icon-fallback">${escapeHtml((d.shortLabel || d.label || "?").slice(0, 1))}</span>` })}
             <span><strong>${escapeHtml(d.label)}</strong><small>${escapeHtml([d.unit, d.valueType, d.domainLabel, d.categoryLabel, (d.scopeCapabilities || []).join("/")].filter(Boolean).join(" · "))}</small></span>
           </button>`).join("")}
         </div>

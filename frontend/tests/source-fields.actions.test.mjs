@@ -127,7 +127,7 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 // Who is offered the screen (C80, C94, C99)
 // ---------------------------------------------------------------------------
-test("Source fields is a Data configuration view for the platform and a club workspace; a team workspace gets Variables only", () => {
+test("Source fields is a Data configuration screen for the platform and a club workspace, opened from the start screen's card; a team workspace gets no card", () => {
   assert.equal(trainingLoadTopLevelSpace("source-fields"), "dataConfig");
   for (const [workspace, offered, mayVerify] of [
     [{ type: "platform", scopeId: null, label: "Platform" }, true, true],
@@ -146,9 +146,11 @@ test("Source fields is a Data configuration view for the platform and a club wor
   asPlatform();
   state.trainingLoad.section = "source-fields";
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /aria-label="Data configuration views"/);
-  assert.match(html, /data-section="source-fields">Source fields</);
-  assert.match(html, /class="training-load-subnav-tab is-active" role="tab" aria-selected="true" data-action="training-load-section" data-section="source-fields"/);
+  // Layout C (PR-1): no sub-navigation any more; the screen has its way back
+  // to the start screen, and the space tab stays Data configuration.
+  assert.doesNotMatch(html, /aria-label="Data configuration views"/);
+  assert.match(html, /data-action="training-load-section" data-section="variables" data-dc-home>← Data configuration</);
+  assert.match(html, /class="training-load-tab is-active" role="tab" aria-selected="true" data-action="training-load-section" data-section="source-fields">/);
 });
 
 test("a workspace without the screen reads nothing and says where it is", async () => {
@@ -172,7 +174,16 @@ test("the list groups the fields by source, shows the unit (expected units marke
   assert.match(items[1], /Expected unit m \(not proven\)/);
   assert.match(items[1], /Meaning waits for the zone decision/);
   assert.match(items[2], /Session Evidence: Observed/);
-  assert.match(text(), /Evidence: Not proven, no evidence yet · Documented, described in a document · Observed, seen in the source's answers, its unit and meaning not confirmed · Verified, its unit and meaning confirmed\./);
+  // The legend: each kind of evidence as its own badge (colour and word) with what it means.
+  assert.deepEqual([...content.querySelectorAll(".source-fields-legend li")].map((li) => li.textContent.replace(/\s+/g, " ").trim()), [
+    "Not proven: no evidence yet.",
+    "Documented: described in a document.",
+    "Observed: seen in the source's answers; its unit and meaning are not confirmed.",
+    "Verified: its unit and meaning are confirmed.",
+  ]);
+  assert.deepEqual([...content.querySelectorAll(".source-fields-legend .source-fields-evidence")].map((b) => b.className.split(" ").at(-1)), ["is-unproven", "is-documented", "is-observed", "is-verified"]);
+  // Each field has a tile for its kind of value: a time, a zone, a count of events.
+  assert.deepEqual([...content.querySelectorAll(".metric-variables-item .dc-tile-field svg")].length, 3);
   assert.ok(content.innerHTML.includes("Power zone &lt;distance&gt;"), "a label is escaped");
   assert.ok(content.innerHTML.includes("Unit s&lt;b&gt;"), "a unit is escaped");
   assert.ok(!content.querySelector("a"), "nothing is a link");
