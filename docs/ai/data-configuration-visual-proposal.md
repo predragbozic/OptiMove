@@ -6,7 +6,7 @@ Variables, Domains & categories and Source fields" (`docs/ai/metrics-core-plan.m
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. PR-1 is built (section 11). The *Rukovodilac* reviewed `c830050` (GO as a document, no BLOCKER, HIGH or MEDIUM; three LOW notes for PR-1, recorded in sections 3.4, 3.5 and 4) and decided R1–R3 (section 10). The owner's choices V1–V5 were made on 2026-10-28 (section 10). |
+| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. PR-1 is built (section 11) and merged (PR #256, `0e38ae9`, 2026-10-28). The *Rukovodilac* reviewed `c830050` (GO as a document, no BLOCKER, HIGH or MEDIUM; three LOW notes for PR-1, recorded in sections 3.4, 3.5 and 4) and decided R1–R3 (section 10). The owner's choices V1–V5 were made on 2026-10-28 (section 10). |
 | Mockup | `docs/ai/mockups/data-configuration-visual.html` — a static page, opened in any browser. It holds the three layouts at 1280 px (scaled) and 360 px, the icon picker, Settings → Icons, the variables list and the Source fields list. It talks to no server, and every name and number in it is invented. |
 | Verified against commit | `0b947ab` (merge of PR #252). File and line references are to that commit. |
 | Decides | The owner: V1–V5 (section 10). The *Rukovodilac*: R1–R3 (section 10), inside the plan. |
