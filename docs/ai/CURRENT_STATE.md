@@ -3347,8 +3347,11 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
    2026-10-28 and confirmed by the owner's post-checks; see the active phase.
 
    Next by the plan:
-   - phase 12, domains and categories of canonical variables (★): first its contract proposal, a document only,
-     for the *Rukovodilac*'s review (the *Rukovodilac*'s order of 2026-10-28);
+   - phase 12, domains and categories of canonical variables (★): the contract J6
+     (`docs/ai/phase12-domains-categories-contract.md`) was accepted on 2026-10-28 as the *Rukovodilac* reads the
+     owner's words (C101). The owner's read-only count found no row in `metric_domains`, `metric_categories` or
+     `metric_structure_links` on production. Next is 12b, the backend and migration v41 (the merge and v41 need the
+     owner's order that names it), then 12c, the frontend;
    - phase P, the owner only: the evidence for the nine `rest_v1` fields (C97) stays open;
    - phases 5–11 and R1, as the plan orders them.
 

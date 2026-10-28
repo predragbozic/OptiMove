@@ -27,7 +27,8 @@ working mode (section 1), phase 11, derived canonical variables, and phase 12, d
 variables (section 5). Added later on 2026-10-27 (PR #240): the v39 / v40 contract, accepted as the *Rukovodilac*
 reads the owner's words and confirmed by the owner's own merge of PR #240 (phase 4, C100 of the discovery document),
 Q10 part B as its own migration v40 (section 6), and the record of PR #238's merge as a one-off departure (section 2).
-Added on 2026-10-28: the Done entry of phase 4 (section 5) and the Q10 part B line of section 6 marked done.
+Added on 2026-10-28: the Done entry of phase 4 (section 5) and the Q10 part B line of section 6 marked done; later the
+same day, phase 12's accepted contract (C101, section 5).
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
@@ -37,7 +38,7 @@ Last verified against commit: `deb2aa1` (`origin/main`, merge of PR #217). The r
 `docs/ai/phase5a-discovery-and-contract.md` are to that commit. What was added on 2026-10-27 (the working mode, the
 Done entries of phases 2b and 2c, phases 11 and 12, the Q10 line of section 6) was checked against `fdc2c2e` (merge of PR
 #237); what PR #240 added, against `b358dae` (merge of PR #238); the Done entry of phase 4, against `290b6cf` (merge of
-PR #241).
+PR #241); phase 12's contract line, against `d96936c` (merge of PR #242).
 
 ## 1. Who does what
 
@@ -753,6 +754,12 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
   - the migration, by an order that names it (with its production preflight, merge, deploy and post-check).
 - **★, not ★★:** independent of the GPEXE import; it continues the work on the Variables tab.
 - **Start:** after phase 4 is merged, with the contract's owner decisions.
+- **The contract (12a), accepted on 2026-10-28:** `docs/ai/phase12-domains-categories-contract.md` (J6).
+  - The *Rukovodilac* reviewed it and gave GO on the proposal at `5b9ee9d`.
+  - The owner accepted O1–O9 as recommended (owner turns `bfb556e0` and `3d1bb779`, in the *Rukovodilac*'s chat), as
+    the *Rukovodilac* reads them (C101 of the discovery document).
+  - The owner's read-only count found no row in the three v10 tables.
+  - Next is 12b, the backend and migration v41, which needs its own order naming v41. 12c, the frontend, follows.
 
 ### R1 ★★: "Overwrite with a new import" (re-import of a session)
 - **Owner, 2026-10-26** (in the *Rukovodilac*'s chat):
