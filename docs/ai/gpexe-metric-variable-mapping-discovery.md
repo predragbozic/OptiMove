@@ -10,8 +10,8 @@ decided (section C), and the accepted design that is **not yet implemented** (se
 |---|---|
 | Discovery date | 2026-10-11 |
 | Existing state verified against commit | `af11338` (merge of PR #155, `feature/test-infrastructure-t1` → `main`; the full 40-character id is in that PR's merge record — this repository's documents keep the short form, because the secret scans in `backend/tests/source-hosts-server3.test.mjs` treat a 40-hex value as the shape of a REST token) |
-| Last verified against commit | `9361fff` (merge of PR #247, 12b; the base of the docs pull request that records it) — `a07fdd1..9361fff` is PR #247, which J6 below records as built — before it `a07fdd1` (merge of PR #244, the phase 12 contract; the base of the 12b pull request) — `d96936c..a07fdd1` changed only documents; J6 below records the 12b pull request as built (migration v41, `canonicalClassificationService.js`, the C6 changes of `canonicalVariableAdminService.js`, the routes and the older catalog's O7 refusal) — before it `d96936c` (merge of PR #242, the phase 4 docs; the base of the phase 12 contract pull request) — `290b6cf..d96936c` changed only documents (the plan, `CURRENT_STATE.md`, this document and the v39 contract); C101 and J6 (`docs/ai/phase12-domains-categories-contract.md`) record the accepted phase 12 contract, verified against `290b6cf` for the code and migrations, which `d96936c` did not change — before it `290b6cf` (merge of PR #241, phase 4: v39, v40 and the routes L1-L5; the base of the docs pull request that records it) — `0c7104c..290b6cf` is PR #241, which J5 below records as built — before it `0c7104c` (merge of PR #240, the v39 / v40 contract J5; the base of the phase 4 pull request, which implements it) — `b358dae..0c7104c` changed only the plan, `CURRENT_STATE.md`, this document (C100, the J5 pointer) and the new contract document; J5 below records the phase 4 pull request as built — before it `b358dae` (merge of PR #238, the plan's working mode and phases 11 and 12; the base of the v39 / v40 contract pull request, PR #240) — `fdc2c2e..b358dae` changed only the plan, `CURRENT_STATE.md` and this document's status line and J3b.10 heading; C100 and J5 (`docs/ai/v39-revision-lifecycle-contract.md`) record the accepted contract, verified against `fdc2c2e` for the code and migrations, which `b358dae` did not change — before it `fdc2c2e` (merge of PR #237, phase 2c) — `a1bb932..fdc2c2e` is that pull request, as section H and J3b.10 record it; only the status line and the J3b.10 heading were updated — before it `a1bb932` (merge of PR #229, Q10 part A; the base of the phase 2c pull request) — `1900ed6..a1bb932` is that pull request, as J3b.9 records it; section H and J3b.10 describe the phase 2c pull request as built (frontend only; no backend, migration or API contract changed) — before it `1900ed6` (merge of PR #228; the base of the Q10 part A pull request, PR #229) — `e556d08..1900ed6` changed only this document, the plan and `CURRENT_STATE.md`; J3b.9 describes PR #229 as built — before it `e556d08` (merge of PR #227, the R2 implementation) — `e8e2b0a..e556d08` is that pull request, as J3b.8 records it; only the status line, the J3b headings, J3b.8's mutation note and its Data API limit were updated — before it `e8e2b0a` (merge of PR #224, the R2 contract; the base of the R2 implementation pull request) — `e489eeb..e8e2b0a` changed only the plan and this document; sections J3b and J3b.8 describe the R2 pull request as built — before it `e489eeb` (merge of PR #223, the phase 3 docs sync) — re-verified for the facts R2 builds on (J3b.1, C99); `6c7dfa4..e489eeb` changed only this document and `CURRENT_STATE.md` — before it `6c7dfa4` (merge of PR #218, M3a) — `deb2aa1..6c7dfa4` changed the older catalog's write guard (C98, PR #219, already verified against `deb2aa1` below), the plan documents (PR #221) and the M3a frontend (PR #218, section H); no migration, mapping, binding, importer or snapshot contract changed; re-verified for the status line, section H and the K note on the two `23514` guard refusals — before it `deb2aa1` (merge of PR #217; the base of the canonical-guard pull request, C98) — re-verified for the Metrics Core catalog only (`trainingLoadMetricsCatalog.js`, `trainingLoadMetricsAccess.js`, `routes/trainingLoadMetrics.js`, A6, C82, C98); the other sections were not re-derived — before it `60aadb9` (merge of PR #163, M3-0; the base of the M2b pull request) — its tree is the integrated M3-0 branch's own (`a9a6d5e`), so nothing documented changed — before it `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
-| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), merged and deployed (PR #163, `60aadb9`; v36 directly confirmed on production by the owner's read-only post-check); M2b, the source-field evidence confirmation and its database guards v37 (C89–C97, J4), merged (PR #164, `66c50d6`; v37 on production: the owner's post-check passed by his statement (C100), no block values recorded), no production field confirmed; the older catalog's guard on the canonical variables (C98, no migration) merged and deployed (PR #219, `7a9e59d`); M3a, the Variables view of the M3 frontend (section H, C80) over the M3-0 API, merged and deployed (PR #218, `6c7dfa4`, no migration); R2, renaming, archiving and restoring a canonical variable with a team coach for club variables (C99, J3b), accepted by the owner on 2026-10-27 (PR #224, `e8e2b0a`), merged and deployed (PR #227, `e556d08`; v38 confirmed on the production database by the owner's read-only post-check) (J3b.8); Q10 part A (the invisible characters in the services and the frontend, J3b.9) merged and deployed (PR #229, `a1bb932`, no migration); phase 2c, R2 in the Variables view (section H, J3b.10), merged and deployed (PR #237, `fdc2c2e`, frontend only, no migration); the revision lifecycle (C91) and Q10 part B, migrations v39 and v40: the contract (J5) accepted on 2026-10-27 as the *Rukovodilac* reads the owner's words (C100), confirmed by the owner's own merge of PR #240 (`0c7104c`); merged and deployed with PR #241 (`290b6cf`, 2026-10-28; J5 below), v39 and v40 confirmed on production by the owner's read-only post-checks (the owner's statement); domains and categories of canonical variables (phase 12): the contract J6 accepted on 2026-10-28 as the *Rukovodilac* reads the owner's words (C101); 12b, the backend and migration v41, merged and deployed (PR #247, `9361fff`; v41 confirmed on production by the owner's read-only post-check, by the owner's statement) (J6); 12c, the frontend, not started; the rest of the M3 frontend and M4–M6 not started** |
+| Last verified against commit | `cf387f2` (merge of PR #251, phase 6; the base of the docs pull request that records 12c, phase 6 and C102) — `9361fff..cf387f2` is PR #248 (documents), PR #249 (12c), PR #250 (the phase 5 options document) and PR #251 (phase 6); it changed the frontend and the documents only, no backend, migration or API contract; section H, J4 and J6 record the two frontends as built, and C102 the zone decision — before it `9361fff` (merge of PR #247, 12b; the base of the docs pull request that records it) — `a07fdd1..9361fff` is PR #247, which J6 below records as built — before it `a07fdd1` (merge of PR #244, the phase 12 contract; the base of the 12b pull request) — `d96936c..a07fdd1` changed only documents; J6 below records the 12b pull request as built (migration v41, `canonicalClassificationService.js`, the C6 changes of `canonicalVariableAdminService.js`, the routes and the older catalog's O7 refusal) — before it `d96936c` (merge of PR #242, the phase 4 docs; the base of the phase 12 contract pull request) — `290b6cf..d96936c` changed only documents (the plan, `CURRENT_STATE.md`, this document and the v39 contract); C101 and J6 (`docs/ai/phase12-domains-categories-contract.md`) record the accepted phase 12 contract, verified against `290b6cf` for the code and migrations, which `d96936c` did not change — before it `290b6cf` (merge of PR #241, phase 4: v39, v40 and the routes L1-L5; the base of the docs pull request that records it) — `0c7104c..290b6cf` is PR #241, which J5 below records as built — before it `0c7104c` (merge of PR #240, the v39 / v40 contract J5; the base of the phase 4 pull request, which implements it) — `b358dae..0c7104c` changed only the plan, `CURRENT_STATE.md`, this document (C100, the J5 pointer) and the new contract document; J5 below records the phase 4 pull request as built — before it `b358dae` (merge of PR #238, the plan's working mode and phases 11 and 12; the base of the v39 / v40 contract pull request, PR #240) — `fdc2c2e..b358dae` changed only the plan, `CURRENT_STATE.md` and this document's status line and J3b.10 heading; C100 and J5 (`docs/ai/v39-revision-lifecycle-contract.md`) record the accepted contract, verified against `fdc2c2e` for the code and migrations, which `b358dae` did not change — before it `fdc2c2e` (merge of PR #237, phase 2c) — `a1bb932..fdc2c2e` is that pull request, as section H and J3b.10 record it; only the status line and the J3b.10 heading were updated — before it `a1bb932` (merge of PR #229, Q10 part A; the base of the phase 2c pull request) — `1900ed6..a1bb932` is that pull request, as J3b.9 records it; section H and J3b.10 describe the phase 2c pull request as built (frontend only; no backend, migration or API contract changed) — before it `1900ed6` (merge of PR #228; the base of the Q10 part A pull request, PR #229) — `e556d08..1900ed6` changed only this document, the plan and `CURRENT_STATE.md`; J3b.9 describes PR #229 as built — before it `e556d08` (merge of PR #227, the R2 implementation) — `e8e2b0a..e556d08` is that pull request, as J3b.8 records it; only the status line, the J3b headings, J3b.8's mutation note and its Data API limit were updated — before it `e8e2b0a` (merge of PR #224, the R2 contract; the base of the R2 implementation pull request) — `e489eeb..e8e2b0a` changed only the plan and this document; sections J3b and J3b.8 describe the R2 pull request as built — before it `e489eeb` (merge of PR #223, the phase 3 docs sync) — re-verified for the facts R2 builds on (J3b.1, C99); `6c7dfa4..e489eeb` changed only this document and `CURRENT_STATE.md` — before it `6c7dfa4` (merge of PR #218, M3a) — `deb2aa1..6c7dfa4` changed the older catalog's write guard (C98, PR #219, already verified against `deb2aa1` below), the plan documents (PR #221) and the M3a frontend (PR #218, section H); no migration, mapping, binding, importer or snapshot contract changed; re-verified for the status line, section H and the K note on the two `23514` guard refusals — before it `deb2aa1` (merge of PR #217; the base of the canonical-guard pull request, C98) — re-verified for the Metrics Core catalog only (`trainingLoadMetricsCatalog.js`, `trainingLoadMetricsAccess.js`, `routes/trainingLoadMetrics.js`, A6, C82, C98); the other sections were not re-derived — before it `60aadb9` (merge of PR #163, M3-0; the base of the M2b pull request) — its tree is the integrated M3-0 branch's own (`a9a6d5e`), so nothing documented changed — before it `9e4dfb5` (merge of PR #162, the GPEXE check timing line, integrated into the M3-0 pull request) — `ed13f8a..9e4dfb5` changed `gpexeImportService.js`, `gpexeRestV1Adapter.js` and `sourceImportCredentialResolver.js` for the timing line only: no mapping, metric, binding or snapshot contract changed, and the three line references into `gpexeImportService.js` moved and were updated — before it `ed13f8a` (merge of PR #161, v35; the base of the M3-0 pull request) — `1164041..ed13f8a` changed only the v35 files (its migration, rollback and runbooks, the M2 service's actor setting and COMMIT rule, the tests, these documents), so sections A and B stand — before it `1164041` (merge of PR #160, the first M2 PR; the base of the v35 pull request) — before it `15efd7a` (merge of PR #159, M1; the base of the first M2 pull request, whose head commit is named in its description) — `e6bc885..15efd7a` changed only the M1 files (v34, its rollback, the undo script, the GPEXE test migrations, the M1 suite, these documents and rules), so sections A and B stand; sections C, D and J describe the merged M1 schema, and C59–C73 and J1 the first M2 pull request |
+| Status | **Accepted architecture; M1 (the schema, migration v34) merged and deployed (PR #159, `15efd7a`; v34 directly confirmed on the production database by the owner's read-only post-check); the first M2 PR (read API, T3 create, T4 draft, submit) merged and deployed (PR #160, `1164041`, no migration); v35, the database actor guards (C74–C79, J2), merged and deployed (PR #161, `ed13f8a`; confirmed on production by the owner's read-only post-check); M3-0, the canonical-variable admin API and its request record v36 (C80–C88, J3), merged and deployed (PR #163, `60aadb9`; v36 directly confirmed on production by the owner's read-only post-check); M2b, the source-field evidence confirmation and its database guards v37 (C89–C97, J4), merged (PR #164, `66c50d6`; v37 on production: the owner's post-check passed by his statement (C100), no block values recorded), no production field confirmed; the older catalog's guard on the canonical variables (C98, no migration) merged and deployed (PR #219, `7a9e59d`); M3a, the Variables view of the M3 frontend (section H, C80) over the M3-0 API, merged and deployed (PR #218, `6c7dfa4`, no migration); R2, renaming, archiving and restoring a canonical variable with a team coach for club variables (C99, J3b), accepted by the owner on 2026-10-27 (PR #224, `e8e2b0a`), merged and deployed (PR #227, `e556d08`; v38 confirmed on the production database by the owner's read-only post-check) (J3b.8); Q10 part A (the invisible characters in the services and the frontend, J3b.9) merged and deployed (PR #229, `a1bb932`, no migration); phase 2c, R2 in the Variables view (section H, J3b.10), merged and deployed (PR #237, `fdc2c2e`, frontend only, no migration); the revision lifecycle (C91) and Q10 part B, migrations v39 and v40: the contract (J5) accepted on 2026-10-27 as the *Rukovodilac* reads the owner's words (C100), confirmed by the owner's own merge of PR #240 (`0c7104c`); merged and deployed with PR #241 (`290b6cf`, 2026-10-28; J5 below), v39 and v40 confirmed on production by the owner's read-only post-checks (the owner's statement); domains and categories of canonical variables (phase 12): the contract J6 accepted on 2026-10-28 as the *Rukovodilac* reads the owner's words (C101); 12b, the backend and migration v41, merged and deployed (PR #247, `9361fff`; v41 confirmed on production by the owner's read-only post-check, by the owner's statement) (J6); 12c, the frontend, merged and deployed (PR #249, `3532bc5`, deployed with `ae29b08`; no migration) (J6); the zone model decided on 2026-10-28 as the *Rukovodilac* reads the owner's words (C102: option A; its ★★ contract not written yet, so C89's refusal stands); phase 6, the Source fields view (section H, J4), merged (PR #251, `cf387f2`; no migration), not yet deployed; the rest of the M3 frontend and M4–M6 not started** |
 | Owner acceptance | 2026-10-11, in three rounds (direction B; the corrected contract; the final consolidation), all recorded in section C; 2026-10-12, the owner's external review of PR #156 decided the eight review-raised points (C32–C39; review history in K2) |
 
 **Which changes require a targeted re-verification of this document** (not a repeat of the whole
@@ -781,6 +781,8 @@ discovery; as built in section J4):**
     `<`): v34's parameter shape of an event threshold takes no other, so `between` would leave a write-once
     proof no mapping version could ever use - it is `400 invalid_operator`, and `23514` in the database
     (internal review of M2b, 2026-10-15).
+    *Decided on 2026-10-28 (C102): option A, one source field per zone shape. Until its migration is merged and
+    deployed, the refusal above stands.*
 90. **Fail closed (O2):** v37 refuses every T2b write but the two acts (a new revision, a state change,
     any other update: `23514`) and every T8 row whose chain is not built (every source metric, revision,
     activation, unit conversion and source instance action but the two verifications; the mapping actions
@@ -971,7 +973,8 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
       The merge, its migrations v39 and v40 and their production pre- and post-checks each need the owner's order
       that names them.
 101. **Domains and categories of canonical variables (phase 12)** (the contract is J6,
-    `docs/ai/phase12-domains-categories-contract.md`; not implemented).
+    `docs/ai/phase12-domains-categories-contract.md`; 12b and 12c are merged and deployed, and J6 records them as
+    built).
     - **The owner's words**, in the *Rukovodilac*'s chat. The executor checked both turns. They are verbatim, exactly as
       in the code spans; each line of the second message is its own span:
       - owner turn `bfb556e0`, 2026-10-28 12:39:04 UTC: `O2 oblici veze: varijabla→kategorija, varijabla→domen,
@@ -1019,6 +1022,42 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
         *Rukovodilac*. The *Nezavisni revizor* is not needed: no decision gives a new right.
       - The merge, v41 and its production pre- and post-checks each need the owner's order that names them.
       - 12c, the frontend, comes after 12b.
+102. **The zone model (phase 5; lifts C89 once it is built)** (the options are
+    `docs/ai/phase5-zone-model-options.md`, PR #250; the contract of option A is not written yet).
+    - **The owner's words**, in the *Rukovodilac*'s chat. The executor checked the turn; it is verbatim, exactly as in
+      the code span:
+      - owner turn `bfad63ba`, 2026-10-28 16:15:39 UTC: `po preporuci neka ide, koji je last comit koji treba da uradim
+        deploy`.
+    - **How they are read.**
+      - The *Rukovodilac* had put Z1–Z4 to the owner with its recommendations. After the owner's question „ništa mi nije
+        jasno…” (16:13 UTC) it explained them more simply and asked for "A" or "po preporuci" (by the recommendation).
+      - The *Rukovodilac* reads the answer as Z1–Z4 accepted as recommended (its message to the executor, queued at
+        16:16:22 UTC).
+      - That reading is the *Rukovodilac*'s, not the owner's own words. The second half of the turn asks which commit to
+        deploy and decides nothing about zones.
+    - **The owner's answers** (section 6 of the options document), each the recommendation:
+      - Z1: option A, one source field per zone shape. The seeded `more.complementary_data.power.distance` keeps the
+        closed zones (`between`). A new T2a field holds the open top zone (`>=`). The speed field stays one field (`>=`).
+        The seeded power field and its revision 1 are not rewritten: only their meaning act gets `between`.
+      - Z2: the new field's key is `more.complementary_data.power.distance.open_top`, and its label is "Power zone
+        distance (open top zone)".
+      - Z3: a zone's meaning act confirms `between` or `>=`. `>` only if the evidence shows that GPEXE's top zone
+        excludes its lower bound.
+      - Z4: each zone field needs owner-run evidence of its operator, the inclusivity of its bounds and its bound unit,
+        as in C97. The first real confirmation stays a separate order.
+    - **Unchanged:** v34's CHECKs, the T4 trigger with its operator equality (C38), the parameter fingerprint and the
+      mapping contract (D6, D7).
+    - **What follows.**
+      - The ★★ contract of option A, a document first:
+        - a seeding migration for the new T2a field and its revision 1, through v39's seed path (O9 of J5);
+        - v37's zone refusal replaced by Z3's rule;
+        - F3's change;
+        - a zone operator choice in the phase 6 meaning form;
+        - rollback, read-only preflight and post-check, and the tests.
+
+        It goes to the *Rukovodilac* and the *Nezavisni revizor*, then to the owner for approval before any code.
+      - The migration, its merge and its production pre- and post-checks each need the owner's order that names them.
+      - The extractor's selection rule (by the zone's upper extreme) belongs to phase 7f and M4.
 
 ---
 
@@ -1778,7 +1817,8 @@ Three administrator views - since C80 in **Training Load → Data configuration 
   (platform, or a club workspace); the server still decides on every request. It sends only the J3 bodies
   (never an owner, actor or basis), checks the J3 input rules before sending, keeps one write at a time,
   and shows a lost answer as *Result not confirmed* · *Check result*, which sends the same request key and
-  body again. The Source fields and Mappings views are not built yet, so the tab shows Variables alone.
+  body again. At M3a the Source fields and Mappings views were not built, so the tab showed Variables alone (Source
+  fields since phase 6, below).
   Tested with a fake fetch (jsdom) and in Chromium at 1280 / 390 / 375 / 360 px against an in-page fake
   of the M3-0 routes. **The integration with the real API is confirmed** (2026-10-26, on disposable
   databases migrated through v37; the branch's real server in process and the real frontend in Chromium;
@@ -1790,9 +1830,20 @@ Three administrator views - since C80 in **Training Load → Data configuration 
   of a club, to its coach, in the reduced view (Q7): the club's variables, renamed, archived and restored,
   never created or versioned. A team workspace gets the Variables view only, never Source fields or Mappings
   (C99). Rename, Archive, Restore and New version are offered only as the server's `actions` name them.
+  *As built (12c, domains and categories, PR #249; frontend only; J6):* a switch between the variables and **Domains &
+  categories**, a tree of domains with their categories, the domain or category filter of the list, and a variable's
+  categories and domains in its detail. Every act is offered only as the server's `actions` name it; a coach reads.
 - **Source metrics** — source system and API family, field key and label, revisions with expected
   and proven units, value shape, session / drill scope, evidence status and references, unit and
   meaning confirmation.
+  *As built (phase 6, PR #251, merged as `cf387f2`, not yet deployed; frontend only, over J4):* the **Source fields**
+  view (`frontend/source-fields-{data,view,actions}.js`) behind a **Variables | Source fields** sub-navigation, offered
+  in the platform workspace and a club workspace, never in a team workspace (C94, C99). It lists the fields by source
+  and API family with their unit (confirmed, or the expected unit marked as not proven), the meaning, the levels and the
+  evidence status, with a legend of the four statuses. A field's detail shows its revisions, their evidence references,
+  the history of its confirmations and, under Technical details, the ids. A platform admin in the platform workspace
+  gets the two acts F2 and F3; a club admin reads. A zone's meaning act is shown as not possible yet
+  (`verification_model_unresolved`, C89). The revision lifecycle (L1–L5 of J5) has no UI yet.
 - **Mappings / activations** — choose an existing OptiMove variable, show the source and canonical
   units, scale / offset, parameters for zones and thresholds, scope, Draft / Needs review / Active /
   Disabled, activation per binding with `required` / `optional` (platform admin only, section G), the
@@ -2842,6 +2893,34 @@ jsonRequired` only for a caller who may verify.
 - **For the M3 frontend:** a unit token may hold characters such as `<` (only whitespace, `|`, `=`,
   control and invisible characters are refused), so every unit and evidence reference is rendered as
   escaped text - never into `innerHTML` or as an `href` (security review of M2b, 2026-10-15).
+- **The M3 frontend as built (phase 6, PR #251):** the Source fields view of section H. Branch
+  `feature/metrics-source-fields-tab-6` from `3532bc5`, head `ffce389`; merge commit `cf387f2` on 2026-10-28 at
+  16:17:34 UTC, under the standing order after the *Rukovodilac*'s GO. Not yet deployed: it goes with the owner's next
+  manual deploy.
+  - It renders every unit and evidence reference as escaped code text, never as a link.
+  - It sends only J4's bodies: `requestKey`, `sourceUnit`, `sourceBoundUnit` only for a zone or an event threshold, a
+    one-sided `boundOperator` only for an event threshold, and `evidenceRef`. It never sends an owner, an actor or a
+    basis.
+  - It checks the reference's shape (`docs/...#anchor`) before sending.
+  - It asks a last question naming the field, the value and the evidence before the write-once act.
+  - It offers F2 only while the unit is not proven, and F3 only for a non-zone revision whose meaning is not proven. A
+    retired field or revision, or a field it could not read again, offers neither.
+  - It shows a lost answer as *Result not confirmed*. *Check result* sends the identical request (the same
+    `requestKey`).
+  - A refusal that closes the form is a warning ("Not saved: …"), never shown like a saved confirmation.
+  - A `404` to an act says the outcome is not known, because the right is checked again after the COMMIT.
+  - **Tests:** `frontend/tests/source-fields.actions.test.mjs` (26 tests), mutation evidence (13 of 13 killed). The
+    browser integration QA ran 82 checks: the branch's real server in process on a disposable database migrated through
+    v41 with v34's nine seeded fields (dropped afterwards), the real frontend in Chromium. They covered both acts with
+    their exact bodies and one audit row each, a lost answer checked with the identical body, a zone (the meaning
+    button disabled, the API's own `409`, the unit saved with its bound unit), an event threshold, the club admin's
+    identical `404`, the coach without the view, and 390 / 375 / 360 px.
+  - **Reviews:** `code-reviewer`, `ux-design-reviewer` and `mobile-qa` on `479489b`; every MEDIUM was fixed in
+    `ffce389`, and the narrow re-reviews closed them. The *Rukovodilac* found no BLOCKER, HIGH or MEDIUM and recorded
+    two LOW:
+    - the first field's autofocus opens the phone's keyboard; it stays, as in the Variables forms;
+    - a field's current revision is its active one, otherwise the first the server lists. Today every field has
+      exactly one active revision, so this has no effect; the lifecycle UI must choose the newest explicitly.
 - **What the nine seeded `rest_v1` fields still need (C97; none is confirmed, and none may be before C91):**
 
   | Field | The unit act needs | The meaning act needs |
@@ -2927,7 +3006,7 @@ are confirmed on production by the owner's statement.
   open versions (against C68), or batches (phase 7).
 - **Not in it:** the frontend (R6, phase 6); any write to a persistent database.
 
-### J6. Domains and categories of canonical variables — phase 12 (accepted; 12b merged and deployed with PR #247)
+### J6. Domains and categories of canonical variables — phase 12 (accepted; 12b and 12c merged and deployed, PR #247 and PR #249)
 
 The contract is the separate document `docs/ai/phase12-domains-categories-contract.md` (phase 12 of
 `docs/ai/metrics-core-plan.md`). It was accepted on 2026-10-28 as the *Rukovodilac* reads the owner's words (C101).
@@ -3030,6 +3109,49 @@ an index refusal carries no `current`, and the older reads' user ids (below).
 - **O8, a follow-up:** the older reads show a club's domains and categories to its club admins only, so a team coach's
   picker keeps grouping a club variable under "Other".
 - **Not in it:** the frontend (12c); any write to a persistent database.
+
+**12c as built** (PR #249, branch `feature/metrics-classification-12c-ui` from `9361fff`, head `66d9173`; merge commit
+`3532bc5` on 2026-10-28 at 15:32:22 UTC, under the standing order after the *Rukovodilac*'s GO). Frontend only: no
+backend, API contract or migration changed. The owner deployed it by hand with `ae29b08`. The *Rukovodilac*'s smoke:
+`/api/health` served `ae29b08` with `ok: true` three times in a row (16:17:35, 16:17:56 and 16:18:16 UTC; `9361fff` until
+16:16:13 UTC); without a login six protected routes answered 401 and `/api/auth/me` answered `{"user":null}`.
+- **Where:** Training Load → Data configuration → Variables (C80), in `frontend/metric-classification-{data,view,actions}.js`
+  and the Variables view (`frontend/metric-variables-{data,view,actions}.js`).
+- **What it shows and offers** (J6 3.4):
+  - a switch between **Variables** and **Domains & categories**;
+  - a tree of domains with their categories, then the categories in no domain;
+  - a domain's or category's panel with rename, archive (with a reason) and restore, **Place in a domain** and
+    **Remove from the domain** for a category, and **Show its variables**;
+  - in a variable's detail, its categories and domains (a domain reached through a category marked as such), with
+    **Add to a category**, **Add to a domain** and **Remove**;
+  - the list filter by one domain or one category (C6), with a note on the scope shown in a club workspace.
+
+  A system domain or category is marked and read-only in a club workspace. A coach sees all of it and changes nothing.
+- **Every act is offered only as the server's `editable` and `actions` name it.** The handlers use the view's own
+  helpers, so a forged click opens nothing the server would refuse. The bodies are C2–C5's and never name an owner, an
+  actor or a basis.
+- **Outcomes:** the forms share the Variables form slot, so one write runs at a time, and the leave guards cover them. A
+  lost answer is *Result not confirmed*; *Check result* sends the identical request (the same `requestKey`). A `404` to
+  a write never says "Nothing was saved", because the right is checked again after the COMMIT.
+- **Tests:** `frontend/tests/metric-classification.actions.test.mjs` (32 tests), mutation evidence (11 of 11 killed).
+  The browser integration QA ran 71 checks: the branch's real server in process on a disposable database migrated
+  through v41 (dropped afterwards), the real frontend in Chromium, and a club admin's, a platform admin's and a coach's
+  flows, a lost answer and 1280 / 390 / 375 / 360 px.
+- **Reviews:** `code-reviewer`, `ux-design-reviewer` and `mobile-qa` on `41055a9`; every MEDIUM was fixed in `66d9173`,
+  and the narrow re-reviews answered READY. The *Rukovodilac* found no BLOCKER, HIGH or MEDIUM and recorded two LOW:
+  - the list filter also offers archived domains and categories, marked "(archived)". Acceptable, because archived
+    links stay; whether to separate active and archived in the picker's groups is a follow-up;
+  - the tree places a category under its first category → domain link. O3's unique index allows no second one, so
+    this is only a defence.
+- **Follow-ups (LOW, not built):**
+  - the removal note of a variable from a category could be conditional for a category in no domain;
+  - the filter note and the empty list say "placed there" and "placed here";
+  - a button from the variable's "first create one" note straight to Domains & categories;
+  - on phones, the two segmented controls (view and scope) look alike, one above the other;
+  - whether Place in a domain or New category should be the primary button;
+  - physical device checks: the iOS keyboard with the first field focused, native select pickers with groups,
+    hardware Back, a native `confirm()` in PWA mode.
+- **O8 stays a follow-up:** the older reads show a club's domains and categories to its club admins only.
 
 ---
 
