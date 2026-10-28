@@ -9,13 +9,13 @@ before any code.
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. |
+| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. Revised the same day after the *Rukovodilac*'s review of `d783a3f` (GO WITH CHANGES: one MEDIUM and four LOW, applied in this text; its decisions on P1–P6 are recorded in section 7). The *Nezavisni revizor*'s review is pending. |
 | Verified against commit | `cf387f2` (merge of PR #251). Every file and line reference below is to that commit. |
-| Decides | The owner: the questions marked **[OWNER]** (red zone). The *Rukovodilac*: the questions marked **[RUKOVODILAC]** (inside the plan). |
+| Decides | The owner: the contract as a whole (gate 1) and the plan's ★ and gate line (gate 2). The *Rukovodilac*: P1–P6, inside the plan (section 7). |
 | Reviewers of this document | The *Rukovodilac* and the *Nezavisni revizor* (★★). The implementation adds `db-reviewer` (section 3), `security-reviewer` (the replaced actor guard), `code-reviewer`, and `mobile-qa` and `ux-design-reviewer` (section 5). |
 
 **Gates before the implementation:**
-1. The owner approves this contract and answers P1–P6 (section 7).
+1. The owner approves this contract as a whole. P1–P6 are decided inside the plan by the *Rukovodilac* (section 7).
 2. The plan names the phase and its migration. The pull request that records the acceptance adds phase 5b ★★ to the
    plan with the gate line "migration v42". A ★ mark and a gate line are never set by relay: that pull request needs
    the owner's own word in the executor's chat, or the owner's own merge (as with PR #240).
@@ -101,18 +101,25 @@ before any code.
 - **Nothing existing is rewritten.** The two seeded zone fields and their revision 1 stay as they are; their meaning
   act gets an operator, as any meaning act does.
 - **The operator is the revision's proven fact**, written once with the meaning by a platform admin, on evidence
-  (Z4, C97). A zone's meaning act takes `between` or `>=` (Z3; P1 for `>`).
+  (Z4, C97). A zone's meaning act takes `between` or `>=` (Z3; `>` follows Z3 too, P1).
 - **No binding of a field to its operator in the database** (P4). The database cannot tell a closed-zone field from
-  an open one without a new column. A wrong choice is caught where it matters: the mapping version's operator must
-  equal the revision's (v34 line 983), so a `>=` on the power field can never map a closed zone, and a `between` on
-  `.open_top` can never map the open zone. The correction is a new revision (C91, phase 4). The form explains this
-  (section 5).
+  an open one without a new column.
+  - **What the operator equality catches:** the mapping version's operator must equal the revision's (v34 line 983).
+    So a `>=` on the power field can never map a closed zone, and a `between` on `.open_top` can never map the open
+    zone.
+  - **What it does not catch (the residual):** a `>=` wrongly confirmed on the power field can still be mapped to a
+    canonical variable of the open shape, for example ≥ 25 W/kg. The operator equality passes and M2 accepts it.
+    Nothing refuses it until the extractor registry (7f) reads the power key by its zone shape (below). Until M4 no
+    fact is written, so today this changes no data.
+  - The correction of a wrong proof is a new revision (C91, phase 4). The form explains the choice (section 5).
 - **Unchanged:** v34's CHECKs and parameter shape, the T4 trigger and its operator equality (C38), the parameter
   fingerprint, the mapping contract (D6, D7), M2, F1 and F2.
 - **For later phases (not built here):**
-  - **7f, the extractor registry:** for the power key it reads only the zones whose upper extreme is set; for the
-    `.open_top` key, exactly the zone whose upper extreme is null. More than one such zone, or a zone of the wrong
-    shape, is a refusal, never a guess. The speed key reads its zone as today.
+  - **7f, the extractor registry — an obligation of its contract, with its own test:** the rule "key → zone shape".
+    For the power key it reads only the zones whose upper extreme is set; for the `.open_top` key, exactly the zone
+    whose upper extreme is null. More than one such zone, or a zone of the wrong shape, is a refusal, never a guess.
+    The speed key reads its open zone. A mapping version whose operator does not fit its key's shape (the residual
+    above) is refused there.
   - **M4, the importer:** the current GPEXE mapper (`GPEXE_METRIC_SPECS`) is unchanged until M4.
   - **A closed speed zone**, if one is ever wanted, gets its own field by a later seeding migration, on the same
     convention.
@@ -128,7 +135,8 @@ sorts after v41 (`202610281000`). It is one transaction (the runner's), under th
 ### 3.2 What it does, in order
 1. **Fail closed.**
    - It locks T2a and T2b `SHARE ROW EXCLUSIVE`, so no revision or field is written between its checks and its
-     seed. Those writes are F2 / F3 and L1–L5, all short.
+     seed. Those writes are F2 / F3 and L1–L5, all short. If a lock is not granted within the runner's lock timeout,
+     the migration fails, nothing of it is written, and it runs again on the next start.
    - It refuses (`23514`, a fixed message) when a T2a row with the new key already exists, or when any `zone_bounds`
      revision already carries a meaning proof or an operator.
 2. **The seed window.** It replaces `source_metric_require_seed_window(p_marker)`: v42's own marker passes while v42
@@ -165,16 +173,17 @@ sorts after v41 (`202610281000`). It is one transaction (the runner's), under th
     would forbid it);
   - the `.open_top` field is not exactly its seed: another revision, a proof, a retirement, a changed label, or any
     T3, T4, T5, T6 or T8 row naming the field or its revision.
-- **Then, in one transaction:**
-  - it disables the two v34 guards that refuse a DELETE (`source_metric_revisions_guard`,
-    `source_metric_definitions_guard`) for this transaction only;
+  - any trigger of T2a or T2b is already disabled when it starts (fail closed on the state it finds).
+- **Then, in one transaction** (run as `psql --single-transaction` in a quiet moment):
+  - it disables exactly the two v34 guards that refuse a DELETE, by name (`alter table … disable trigger
+    source_metric_revisions_guard` and `… source_metric_definitions_guard`), for this transaction only;
   - it deletes the seeded revision, then the field;
-  - it enables both again and checks that every trigger of the two tables is enabled before COMMIT;
+  - it enables both again and checks `tgenabled` of every trigger of the two tables before COMMIT;
   - it restores v39's body of `source_metric_revisions_actor_guard()` and v34's body of
     `source_metric_require_seed_window()`;
   - it deletes v42's record.
 - **After it, v41's catalog and data come back exactly**, so v42 can be applied again. This is rehearsed in the tests.
-- The alternative of a forward-only v42 is P5.
+- A restoring rollback was decided by the *Rukovodilac* (P5).
 
 ### 3.5 Preflight and post-check (read-only, in the Supabase SQL Editor)
 - **Preflight** (`…-v42-preflight.sql`):
@@ -217,7 +226,7 @@ refuses it too until v42 commits. No mixed state can save a zone operator outsid
 | A zone's meaning act | `409 verification_model_unresolved`, whatever the body | needs `boundOperator`: `between` or `>=` |
 | A zone without `boundOperator` | the `409` | `400 operator_required`, with a zone text |
 | A zone with `>`, `<=` or `<` | the `409` | `400 invalid_operator`, with a zone text: "A zone takes between (a closed zone) or >= (the open top zone)." |
-| An unknown operator | `400 invalid_operator` | unchanged |
+| An unknown operator | `400 invalid_operator` for a plain field and an event threshold; for a zone, the `409` | `400 invalid_operator` for every kind |
 | An event threshold, a plain field | as J4 | unchanged |
 
 - **Order of the checks:**
@@ -289,9 +298,16 @@ refuses it too until v42 commits. No mixed state can save a zone operator outsid
   - the zone form, its operator choice and request body, the last question and the texts;
   - the existing phase 6 tests that expect the zone block, updated;
   - a browser integration run on a disposable database through v42 at 1280 / 390 / 375 / 360 px.
-- **Existing suites** whose expectations change with v42 are updated in the same pull request, each named in it. For
-  example, M2b's C89 test now meets the v42 rule when it runs through v42. A suite migrated only through an earlier
-  version is unchanged.
+- **Existing tests** whose expectations change with v42 are updated in the same pull request, each named in it. Known
+  today:
+  - `backend/tests/source-field-verification-m2b.test.mjs` expects `verification_model_unresolved` in four places:
+    test 3 (line 562) and test 7 (its title at line 651, and lines 660 and 667);
+  - `frontend/tests/source-fields.actions.test.mjs` expects the zone block in its offered-acts test (line 226, and
+    "Meaning waits for the zone decision" at line 173).
+
+  A suite migrated only through an earlier version is unchanged.
+- **Documents updated in the implementation pull request:** J4's table of what the seeded fields still need (discovery
+  document, section J4) and the C97 list each gain a row for `.open_top`; C89 is marked as lifted by v42.
 - **Mutations:** the zone set in the database and in F3, the seed window's marker, the rollback's refusals, and the
   form's offer and body.
 - **Acceptance:** all of the above; internal reviews; the *Rukovodilac*'s and the *Nezavisni revizor*'s reviews
@@ -300,35 +316,29 @@ refuses it too until v42 commits. No mixed state can save a zone operator outsid
 
 ---
 
-## 7. Questions
+## 7. Questions and their decisions
 
-- **P1 [OWNER] — `>` for a zone.** Z3 allows `>` only with evidence that GPEXE's top zone excludes its lower bound.
-  - **Proposal:** v42 accepts `between` and `>=` only. If the evidence ever shows `>`, a later migration adds it, by
-    the owner's own order.
-  - **Why:** there is no such evidence today. A `>` revision could also map only a canonical variable whose condition
-    is `>` (the operator equality), so it would bring a canonical change with it.
-  - **The other way:** v42 accepts `>` now, and the form offers it with a warning.
-- **P2 [OWNER] — the new field's evidence at seed.**
-  - **Proposal:** `observed`, with the parent's reference `docs/ai/gpexe-rest-v1-compatibility.md#2-the-table`. The
-    open top zone is an element of the same observed `/more/` array.
-  - **The other way:** `unproven` with no reference. The field then shows "Not proven" until an act.
-- **P3 [OWNER] — the new revision's unit note.**
-  - **Proposal:** "Expected unit is a hypothesis from the e03 pilot; not proven on server3. The open top zone of the
-    power zone list: the zone whose upper extreme is null."
-- **P4 [RUKOVODILAC] — no database binding of a field to its operator** (section 2).
-  - **Proposal:** none. The operator equality of T4 makes a wrong proof unusable, and the correction is a new
-    revision (C91).
-  - **The other way:** a check keyed on the field's key, such as `.open_top` → `>=`. This puts a naming convention
-    into the database, and it is not proposed.
-- **P5 [RUKOVODILAC] — the rollback.**
-  - **Proposal:** a restoring rollback. It deletes the seed with the two guards disabled for its own transaction only,
-    and checks that they are enabled again before COMMIT, as the GPEXE undo does (section 3.4).
-  - **The other way:** forward-only. The rollback would then refuse once v42 is recorded, and a correction would
-    need a new migration.
-- **P6 [OWNER] — one pull request.**
-  - **Proposal:** migration v42, F3, the frontend form and the documents in one ★★ pull request, as phase 4 was.
-  - **Why:** the database rule, the API and the form change one contract together. A separate frontend pull request
-    would leave a deployed API whose form still says "waits for a decision".
+The *Rukovodilac* decided P1–P6 in its review of `d783a3f` (2026-10-28), inside the plan. What stays the owner's is
+gate 1 (approving this contract as a whole) and gate 2 (the ★ and the gate line, by the owner's own word or merge).
+- **P1 — `>` for a zone: follows Z3, not a new question.** v42 accepts `between` and `>=` only. If the evidence ever
+  shows that GPEXE's top zone excludes its lower bound, a later migration adds `>`, by the owner's own order. There is
+  no such evidence today, and a `>` revision could map only a canonical variable whose condition is `>` (the operator
+  equality), so it would bring a canonical change with it.
+- **P2 [RUKOVODILAC] — the new field's evidence at seed: decided as proposed.** `observed`, with the parent's
+  reference `docs/ai/gpexe-rest-v1-compatibility.md#2-the-table`, as v34 seeded the parent. The open top zone is an
+  element of the same observed `/more/` array.
+- **P3 [RUKOVODILAC] — the new revision's unit note: decided as proposed.** "Expected unit is a hypothesis from the e03
+  pilot; not proven on server3. The open top zone of the power zone list: the zone whose upper extreme is null." Its
+  first sentence is the parent's note.
+- **P4 [RUKOVODILAC] — no database binding of a field to its operator: decided.** The residual of section 2 is
+  recorded, and the rule "key → zone shape" is an obligation of 7f's contract, with its own test. A check keyed on
+  the field's key would put a naming convention into the database.
+- **P5 [RUKOVODILAC] — a restoring rollback: decided**, with the conditions of section 3.4 (a trigger already disabled
+  is a refusal; exactly the two named guards; `psql --single-transaction` in a quiet moment; `tgenabled` checked
+  before COMMIT).
+- **P6 [RUKOVODILAC] — one ★★ pull request: decided.** Migration v42, F3, the frontend form and the documents together,
+  as phase 4 was. A separate frontend pull request would leave a deployed API whose form still says "waits for a
+  decision". The owner's order for the migration names the pull request and v42.
 
 Decided already, so not asked again:
 - the key and the label of the new field (Z2);
@@ -343,5 +353,5 @@ Decided already, so not asked again:
 - The extractor registry (7f), the importer (M4) and the Mappings tab (phase 8).
 - A closed speed zone field (section 2).
 - Any change to a seeded field's label, key or revision.
-- `>` for a zone (P1).
+- `>` for a zone (P1, following Z3).
 - Any write to a persistent database by the executor.
