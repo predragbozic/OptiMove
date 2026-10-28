@@ -17,6 +17,7 @@ import * as service from "../sourceMetricMappingService.js";
 import * as variables from "../canonicalVariableAdminService.js";
 import * as fields from "../sourceFieldVerificationService.js";
 import * as revisions from "../sourceRevisionLifecycleService.js";
+import * as classification from "../canonicalClassificationService.js";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 
 const router = Router();
@@ -218,6 +219,48 @@ router.post("/variables/:variableId/restore", handle(async (req, res) => {
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await variables.restoreVariable({ ctx, variableId: req.params.variableId, body: req.body }), 200);
 }));
+
+// Domains and categories of canonical variables (phase 12b, J6): the
+// classification for the variable editor's audience (a team workspace reads it,
+// O1); every write for the M3-0 admins only - everyone else the identical 404,
+// before the body is looked at. A create answers 201, a change 200; a replay
+// adds replayed: true. /classification/links is matched before the generic
+// /classification/:kind.
+router.get("/classification", handle(async (req, res) => {
+  const ctx = await editorContext(req, res);
+  if (!ctx) return;
+  res.json(await classification.getClassification({ ctx, query: req.query }));
+}));
+
+router.post("/classification/links", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await classification.createLink({ ctx, body: req.body }), 201);
+}));
+
+router.post("/classification/links/:linkId/remove", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await classification.removeLink({ ctx, linkId: req.params.linkId, body: req.body }), 200);
+}));
+
+router.post("/classification/:kind", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await classification.createNode({ ctx, kind: req.params.kind, body: req.body }), 201);
+}));
+
+for (const [act, fn] of [["rename", "renameNode"], ["archive", "archiveNode"], ["restore", "restoreNode"]]) {
+  router.post(`/classification/:kind/:nodeId/${act}`, handle(async (req, res) => {
+    const ctx = await adminContext(req, res);
+    if (!ctx) return;
+    if (!jsonObjectBody(req, res)) return;
+    writeAnswer(res, await classification[fn]({ ctx, kind: req.params.kind, nodeId: req.params.nodeId, body: req.body }), 200);
+  }));
+}
 
 // Source-field evidence confirmation (M2b, section J4): the field detail for
 // the same audience as /fields; the two acts for an active platform admin in

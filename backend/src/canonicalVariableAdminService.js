@@ -43,6 +43,7 @@
 // the change itself (metric_variable_changes, written by a trigger) and the
 // request row names that change.
 import { adminWriteKit, canonicalDecimal, DECIMAL_INPUT, resolveMappingAdmin, SourceMetricMappingError, TEXT_LIMITS } from "./sourceMetricMappingService.js";
+import { classificationFilterSql, variableClassification } from "./canonicalClassificationService.js";
 import { resolveActiveWorkspace } from "./workspace.js";
 import { unitTokenOk } from "./metricTextRules.js";
 
@@ -365,15 +366,27 @@ function singleQuery(query, allowed) {
 // Keyset on (created_at, id), a fixed page of 100, an opaque cursor bound to
 // the workspace's owner key, the scope and the state.
 export async function listVariables({ ctx, query }) {
-  const q = singleQuery(query, ["scope", "state", "cursor"]);
+  const q = singleQuery(query, ["scope", "state", "cursor", "domainId", "categoryId"]);
   const scope = q.scope ?? "own";
   const state = q.state ?? "active";
   if (!["own", "system"].includes(scope)) throw refusal(400, "invalid_query", "scope is own or system.");
   if (!["active", "archived", "all"].includes(state)) throw refusal(400, "invalid_query", "state is active, archived or all.");
+  // C6 (J6): at most one classification filter - a category, or a domain
+  // (directly or through its categories).
+  if (q.domainId !== undefined && q.categoryId !== undefined) throw refusal(400, "invalid_query", "domainId and categoryId are not combined.");
+  let filter = null;
+  for (const field of ["domainId", "categoryId"]) {
+    if (q[field] === undefined) continue;
+    if (!UUID.test(q[field])) throw refusal(400, "invalid_query", `${field} is a uuid.`);
+    filter = { [field]: q[field].toLowerCase() };
+  }
+  const filterKey = filter ? (filter.domainId ? `d:${filter.domainId}` : `c:${filter.categoryId}`) : null;
   let after = null;
   if (q.cursor !== undefined) {
-    const p = decodeCursor(q.cursor, "i,k,o,sc,st,t,v");
-    if (p.k !== "variables" || p.o !== ownerKeyOf(ctx) || p.sc !== scope || p.st !== state) throw invalidCursor();
+    // A filtered list's cursor carries its filter (f); an unfiltered one keeps
+    // the earlier form.
+    const p = decodeCursor(q.cursor, filterKey ? "f,i,k,o,sc,st,t,v" : "i,k,o,sc,st,t,v");
+    if (p.k !== "variables" || p.o !== ownerKeyOf(ctx) || p.sc !== scope || p.st !== state || (filterKey && p.f !== filterKey)) throw invalidCursor();
     if (typeof p.t !== "string" || !CURSOR_AT.test(p.t)) throw invalidCursor();
     const instant = new Date(`${p.t.slice(0, 23)}Z`);
     if (Number.isNaN(instant.getTime()) || instant.toISOString().slice(0, 23) !== p.t.slice(0, 23) || instant.getUTCFullYear() < 2000) throw invalidCursor();
@@ -385,6 +398,7 @@ export async function listVariables({ ctx, query }) {
     const owner = ownerFilter(ctx, scope, params);
     params.push(state === "all" ? null : state);
     const stateIdx = params.length;
+    const classified = filter ? `and ${classificationFilterSql(ctx, filter, params)}` : "";
     params.push(after ? after.at : null, after ? after.id : null);
     const atIdx = params.length - 1;
     params.push(VARIABLE_PAGE_SIZES.variables + 1);
@@ -393,6 +407,7 @@ export async function listVariables({ ctx, query }) {
          from ${VARIABLE_FROM}
         where ${owner}
           and ($${stateIdx}::text is null or d.state = $${stateIdx}::text)
+          ${classified}
           and ($${atIdx}::timestamp is null or (d.created_at, d.id) > (($${atIdx}::timestamp at time zone 'UTC'), $${atIdx + 1}::uuid))
         order by d.created_at, d.id
         limit $${params.length}`,
@@ -401,7 +416,7 @@ export async function listVariables({ ctx, query }) {
     const page = rows.slice(0, VARIABLE_PAGE_SIZES.variables);
     const last = page[page.length - 1];
     const nextCursor = rows.length > VARIABLE_PAGE_SIZES.variables
-      ? encodeCursor({ v: 1, k: "variables", o: ownerKeyOf(ctx), sc: scope, st: state, t: last.cursor_at, i: last.id })
+      ? encodeCursor({ v: 1, k: "variables", o: ownerKeyOf(ctx), sc: scope, st: state, t: last.cursor_at, i: last.id, ...(filterKey ? { f: filterKey } : {}) })
       : null;
     return { variables: page.map((row) => viewOf(row, ctx)), nextCursor };
   });
@@ -436,7 +451,8 @@ export async function getVariable({ ctx, variableId, query }) {
       const params = [id];
       const readable = readableSql(ctx, params);
       const row = (await client.query(`select ${VARIABLE_COLUMNS} from ${VARIABLE_FROM} where d.id = $1 and ${readable}`, params)).rows[0];
-      return row ? { variable: reducedOut(row, ctx), nextCursor: null } : null;
+      if (!row) return null;
+      return { variable: { ...reducedOut(row, ctx), classification: await variableClassification(client, ctx, id) }, nextCursor: null };
     });
   }
   const q = singleQuery(query, ["cursor"]);
@@ -465,7 +481,8 @@ export async function getVariable({ ctx, variableId, query }) {
     const versions = page.map((v) => versionOut(v, { current: v.version_id === row.version_id }));
     const variable = variableOut(row, ctx);
     if (versions.some((v) => v.cut)) variable.truncated = true;
-    return { variable: { ...variable, versions: versions.map((v) => v.value) }, nextCursor };
+    const classification = await variableClassification(client, ctx, id);
+    return { variable: { ...variable, versions: versions.map((v) => v.value), classification }, nextCursor };
   });
 }
 

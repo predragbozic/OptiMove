@@ -31,6 +31,18 @@ export const CANONICAL_VARIABLE_READ_ONLY = Object.freeze({
   code: "canonical_variable_read_only",
 });
 export const isCanonicalOwnerScope = (ownerScope) => ownerScope === "system" || ownerScope === "club";
+// O7 of the phase 12 contract (J6, C101): a system or club domain, category or
+// link is canonical classification. It is created, renamed, archived, restored,
+// linked and removed only through the canonical-classification admin API
+// (canonicalClassificationService.js); migration v41 refuses it in the
+// database too. Answered only to a caller already authorized for the row (or,
+// for a create, for the scope) - everyone else keeps the identical 404 / the
+// existing 403 - and nothing is written. Team and user rows are unchanged.
+export const CANONICAL_CLASSIFICATION_READ_ONLY = Object.freeze({
+  error: "System and club domains, categories and links can only be changed in Training Load > Data configuration.",
+  status: 409,
+  code: "canonical_classification_read_only",
+});
 
 // The refusal of a write on an existing definition row, or null when the
 // caller may write it: the identical 404 first, the 409 only after it.
@@ -79,6 +91,7 @@ async function createNode(req, table, body) {
   if (!name) return { error: "Name is required.", status: 400 };
   const owner = resolveCatalogOwnerScope(req, body);
   if (owner.error) return owner;
+  if (isCanonicalOwnerScope(owner.ownerScope)) return { ...CANONICAL_CLASSIFICATION_READ_ONLY };
   const result = await query(
     `insert into training_load.${table} (name, owner_scope, owner_user_id, owner_club_id, owner_team_id, created_by_user_id)
      values ($1,$2,$3,$4,$5,$6) returning *`,
@@ -91,6 +104,7 @@ async function archiveNode(req, table, id) {
   const existing = await query(`select * from training_load.${table} where id = $1`, [id]);
   const row = existing.rows[0];
   if (!row || !canManageCatalogRow(req, row)) return { ...NODE_NOT_FOUND };
+  if (isCanonicalOwnerScope(row.owner_scope)) return { ...CANONICAL_CLASSIFICATION_READ_ONLY };
   const result = await query(`update training_load.${table} set is_active = false, updated_at = now() where id = $1 returning *`, [id]);
   return { row: result.rows[0] };
 }
@@ -580,6 +594,7 @@ export async function createStructureLink(req, body) {
   }
   const owner = resolveCatalogOwnerScope(req, body);
   if (owner.error) return owner;
+  if (isCanonicalOwnerScope(owner.ownerScope)) return { ...CANONICAL_CLASSIFICATION_READ_ONLY };
   // Visibility check on each requested target — creating a link requires
   // only READ visibility of the target (classification, not a security
   // boundary), never manage rights over it. The DB's own write-time
@@ -617,6 +632,7 @@ export async function deleteStructureLink(req, id) {
   const existing = await query(`select * from training_load.metric_structure_links where id = $1`, [id]);
   const row = existing.rows[0];
   if (!row || !canManageCatalogRow(req, row)) return { ...NODE_NOT_FOUND };
+  if (isCanonicalOwnerScope(row.owner_scope)) return { ...CANONICAL_CLASSIFICATION_READ_ONLY };
   await query(`delete from training_load.metric_structure_links where id = $1`, [id]);
   return { deleted: true };
 }

@@ -16,6 +16,8 @@ and phase 2c entries were added on 2026-10-27 at `a1bb932` (merge of PR #229), b
 brought up to date at `fdc2c2e` (merge of PR #237, that pull request) after its merge and deploy; nothing else was
 re-derived then. The phase 4 entries (PR #241, migrations v39 and v40) were added on 2026-10-28 at `290b6cf` (merge of
 PR #241), after its merge, its deploy and the owner's read-only post-checks; nothing else was re-derived then.
+The phase 12 entries (the contract PR #244 and the 12b pull request, migration v41, not merged) were added on
+2026-10-28 at `a07fdd1` (merge of PR #244), by the 12b pull request; nothing else was re-derived then.
 
 ## Active phase
 
@@ -2203,6 +2205,28 @@ Technical details.
     - **Not exercised:** only PostgreSQL 16 was run by the executor and the reviewers; the post-checks ran on
       production's 17.6. That no revision was created, activated or retired in production and none of the nine
       seeded fields changed is block 6 of the v39 post-check, known by the owner's statement.
+  - **Phase 12, domains and categories of canonical variables** (★; contract
+    `docs/ai/phase12-domains-categories-contract.md`, J6 of the discovery document):
+    - **The contract (12a)** was accepted on 2026-10-28 as the *Rukovodilac* reads the owner's words (C101). PR #244
+      (`a07fdd1`, docs only) records it; PR #243 was closed as superseded. The owner's read-only count found no row in
+      `metric_domains`, `metric_categories` or `metric_structure_links` on production.
+      - PR #244 was merged on 2026-10-28 (merge commit `a07fdd1`, parents `d96936c` and `abce630`).
+      - The *Rukovodilac*'s smoke: `/api/health` served `a07fdd1` with `ok: true` three times in a row (12:48:34,
+        12:48:55 and 12:49:16 UTC). Without a login five protected routes answered 401 and `/api/auth/me` answered
+        `{"user":null}`.
+    - **12b, the backend and migration v41** (branch `feature/metrics-classification-12b-v41` from `a07fdd1`, on the
+      *Rukovodilac*'s order of 2026-10-28): **implemented in an open pull request — not merged, not deployed, v41
+      applied to no persistent database.** J6 of the discovery document records it as built:
+      - v41: the `key` and `description` columns, the change and request records, the actor guards of every `system`
+        or `club` write (C76, O7's database twin), O3's one-domain-per-category index; it refuses to run while any
+        canonical row exists;
+      - the routes C1–C5 under `/api/training-load/sources/metrics/classification` and the C6 filter and detail of the
+        variable reads; the older API answers `409 canonical_classification_read_only` for canonical rows (O7);
+      - runbook `docs/runbooks/metric-classification-v41.md`, with the read-only preflight and post-check and the
+        rollback.
+
+      Its merge needs the owner's order naming the pull request and v41, after the preflight. 12c, the frontend,
+      follows.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2987,6 +3011,11 @@ pre-existing; pass/fail counts don't belong in this file
   A runtime role without ownership or DDL (and the migrations under an owner role) would make the v35
   guards hold against the application's own credentials too. Needs Supabase roles, the Render
   environment and `backend/src/migrate.js` to use the owner role.
+- **The older Metrics Core reads return user ids** (`security-reviewer`, LOW, the 12b review; not scheduled; recorded with
+  O8 of the phase 12 contract): `GET /api/training-load/metrics/domains`, `/categories` and `/structure-links` select
+  `n.*` and are reachable by any signed-in account, an athlete included. Since 12b they return a canonical row's
+  `created_by_user_id` (a platform admin for a system row) and `owner_club_id`, as they already did for system
+  definitions. Fix with O8: an explicit column list for the older reads.
 - **Database actor guards for the other M2 writers** (owner, 2026-10-13, C76): v35 covers T3, T4 and
   T8 only. Every future route that writes T2a, T2b, `unit_conversions` or T5 gets its own database
   actor guard (the v35 pattern) before it is released. The T2b confirmations and their guards are M2b,
@@ -3349,9 +3378,10 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
    Next by the plan:
    - phase 12, domains and categories of canonical variables (★): the contract J6
      (`docs/ai/phase12-domains-categories-contract.md`) was accepted on 2026-10-28 as the *Rukovodilac* reads the
-     owner's words (C101). The owner's read-only count found no row in `metric_domains`, `metric_categories` or
-     `metric_structure_links` on production. Next is 12b, the backend and migration v41 (the merge and v41 need the
-     owner's order that names it), then 12c, the frontend;
+     owner's words (C101), and PR #244 (`a07fdd1`) records it. The owner's read-only count found no row in
+     `metric_domains`, `metric_categories` or `metric_structure_links` on production. 12b, the backend and migration
+     v41, is implemented in an open pull request: next are the *Rukovodilac*'s review, the owner's read-only
+     preflight and the owner's order naming the pull request and v41. Then 12c, the frontend;
    - phase P, the owner only: the evidence for the nine `rest_v1` fields (C97) stays open;
    - phases 5–11 and R1, as the plan orders them.
 

@@ -281,9 +281,19 @@ test("3b. the two writers that take a body (levels, a new version): the right is
 });
 
 
-test("4. ADR-006 across the catalog: archiving a domain or category and deleting a structure link the caller may not manage - not visible, or visible but not theirs - answer exactly like a missing or malformed id and change nothing; the owner still can", async () => {
+test("4. ADR-006 across the catalog: archiving a domain or category and deleting a structure link the caller may not manage - not visible, or visible but not theirs - answer exactly like a missing or malformed id and change nothing; the owner of a canonical row (system or club) gets 409 canonical_classification_read_only (phase 12, O7) and nothing changes; a team or user row's owner still can", async () => {
   const TABLE = { domain: "metric_domains", category: "metric_categories", "structure link": "metric_structure_links" };
-  const make = async (who, owner) => {
+  const CLASSIFICATION_READ_ONLY = { error: "System and club domains, categories and links can only be changed in Training Load > Data configuration.", code: "canonical_classification_read_only" };
+  // Canonical rows come only from the canonical-classification admin API (J6).
+  const makeCanonical = async (who) => {
+    const domain = await api("/classification/domains", { method: "POST", who, prefix: NEW, body: { requestKey: crypto.randomUUID(), name: `Domain ${uid()}` } });
+    const category = await api("/classification/categories", { method: "POST", who, prefix: NEW, body: { requestKey: crypto.randomUUID(), name: `Category ${uid()}` } });
+    for (const res of [domain, category]) assert.equal(res.status, 201, res.text);
+    const link = await api("/classification/links", { method: "POST", who, prefix: NEW, body: { requestKey: crypto.randomUUID(), variableId: W.system, categoryId: category.body.category.id } });
+    assert.equal(link.status, 201, link.text);
+    return [["domain", domain.body.domain.id], ["category", category.body.category.id], ["structure link", link.body.link.id]];
+  };
+  const makeOld = async (who, owner) => {
     const domain = await api("/domains", { method: "POST", who, body: { name: `Domain ${uid()}`, ...owner } });
     const category = await api("/categories", { method: "POST", who, body: { name: `Category ${uid()}`, ...owner } });
     const link = await api("/structure-links", { method: "POST", who, body: { metricDefinitionId: W.system, ...owner } });
@@ -292,12 +302,14 @@ test("4. ADR-006 across the catalog: archiving a domain or category and deleting
   };
   const groups = [
     // Another club's rows: not visible to the caller at all.
-    [W.caA, { ownerScope: "club", ownerClubId: W.clubA }, [W.caB], "another club's"],
+    [W.caA, await makeCanonical(W.caA), [W.caB], "another club's", true],
     // System rows: every caller sees them, only a platform admin manages them.
-    [W.pa, { ownerScope: "system" }, [W.coach, W.caB, W.privateCoach], "a visible system"],
+    [W.pa, await makeCanonical(W.pa), [W.coach, W.caB, W.privateCoach], "a visible system", true],
+    // A private coach's own rows: the older API keeps them.
+    [W.privateCoach, await makeOld(W.privateCoach, { ownerScope: "user" }), [W.caB, W.coach], "a private coach's", false],
   ];
-  for (const [owner, ownerBody, refused, label] of groups) {
-    for (const [kind, id] of await make(owner, ownerBody)) {
+  for (const [owner, rows, refused, label, canonical] of groups) {
+    for (const [kind, id] of rows) {
       const path = kind === "domain" ? (x) => `/domains/${x}/archive` : kind === "category" ? (x) => `/categories/${x}/archive` : (x) => `/structure-links/${x}`;
       const method = kind === "structure link" ? "DELETE" : "POST";
       const call = (target, who) => api(path(target), { method, who, body: method === "POST" ? {} : undefined });
@@ -314,12 +326,30 @@ test("4. ADR-006 across the catalog: archiving a domain or category and deleting
         assert.deepEqual(await one(`select * from training_load.${TABLE[kind]} where id = $1`, [id]), before_, `${label} ${kind}: a refused call changed nothing`);
       }
       const own = await call(id, owner);
-      assert.equal(own.status, 200, `${label} ${kind}: the owner still can (${own.text})`);
       const afterOwn = await one(`select * from training_load.${TABLE[kind]} where id = $1`, [id]);
-      if (kind === "structure link") assert.equal(afterOwn, undefined, `${label} link: deleted by its owner`);
-      else assert.equal(afterOwn.is_active, false, `${label} ${kind}: archived by its owner`);
+      if (canonical) {
+        assert.deepEqual([own.status, own.body], [409, CLASSIFICATION_READ_ONLY], `${label} ${kind}: read-only in the older API (${own.text})`);
+        assert.deepEqual(afterOwn, before_, `${label} ${kind}: nothing changed`);
+      } else {
+        assert.equal(own.status, 200, `${label} ${kind}: the owner still can (${own.text})`);
+        if (kind === "structure link") assert.equal(afterOwn, undefined, `${label} link: deleted by its owner`);
+        else assert.equal(afterOwn.is_active, false, `${label} ${kind}: archived by its owner`);
+      }
     }
   }
+  // Creating canonical classification through the older API: 409 after the
+  // scope's own right (403 for a scope the caller may not use), nothing written.
+  for (const [who, owner] of [[W.pa, { ownerScope: "system" }], [W.caA, { ownerScope: "club", ownerClubId: W.clubA }]]) {
+    for (const route of ["/domains", "/categories"]) {
+      const name = `Refused ${uid()}`;
+      const res = await api(route, { method: "POST", who, body: { name, ...owner } });
+      assert.deepEqual([res.status, res.body], [409, CLASSIFICATION_READ_ONLY], `${route} ${owner.ownerScope}`);
+      assert.equal(await one(`select 1 as x from training_load.${route === "/domains" ? "metric_domains" : "metric_categories"} where name = $1`, [name]), undefined);
+    }
+    const link = await api("/structure-links", { method: "POST", who, body: { metricDefinitionId: W.system, ...owner } });
+    assert.deepEqual([link.status, link.body], [409, CLASSIFICATION_READ_ONLY], `link ${owner.ownerScope}`);
+  }
+  assert.equal((await api("/domains", { method: "POST", who: W.caB, body: { name: "x", ownerScope: "club", ownerClubId: W.clubA } })).status, 403, "another club's scope stays 403");
 });
 
 test("5. team and user definitions keep every older capability: create, cosmetic edit, levels, a new version and an archive, for their own managers and for a platform admin", async () => {

@@ -697,20 +697,33 @@ test("7b. a private domain never leaks through a club-scoped structure link, but
 
   // Someone else (a club coach with no rights over the private domain)
   // must not be able to publish a club-scoped link referencing it.
+  // Since phase 12 (O7) a club-scoped link is canonical classification and the
+  // older API refuses it for any target (409, nothing written); the private
+  // domain stays hidden from a link of the coach's own scope (404).
   const illegalLink = await api("/api/training-load/metrics/structure-links", {
     method: "POST", cookie: otherClub.coachCookie,
     body: { domainId: domainRes.body.row.id, ownerScope: "club", ownerClubId: otherClub.clubId },
   });
-  assert.equal(illegalLink.status, 404, JSON.stringify(illegalLink.body));
+  assert.deepEqual([illegalLink.status, illegalLink.body.code], [409, "canonical_classification_read_only"], JSON.stringify(illegalLink.body));
+  const hiddenTarget = await api("/api/training-load/metrics/structure-links", {
+    method: "POST", cookie: otherClub.coachCookie,
+    body: { domainId: domainRes.body.row.id, ownerScope: "user" },
+  });
+  assert.equal(hiddenTarget.status, 404, JSON.stringify(hiddenTarget.body));
+  assert.equal((await query(`select 1 from training_load.metric_structure_links where domain_id = $1`, [domainRes.body.row.id])).rowCount, 0);
 
   // A domain-only link (no metricDefinitionId) to a visible SYSTEM domain
   // must remain reachable — proves visibility isn't accidentally requiring
   // metric_definition_id to be set.
-  const sysDomain = await api("/api/training-load/metrics/domains", { method: "POST", cookie: sysAdminCookie, body: { name: "Volume", ownerScope: "system" } });
-  assert.equal(sysDomain.status, 201);
-  const domainOnlyLink = await api("/api/training-load/metrics/structure-links", { method: "POST", cookie: otherClub.coachCookie, body: { domainId: sysDomain.body.row.id, ownerScope: "user" } });
+  // A system domain is canonical classification, created only through the
+  // canonical-classification admin API since phase 12 (O7); this harness
+  // stops at v14, so the row is written directly.
+  const sysDomainId = (await query(
+    `insert into training_load.metric_domains (name, owner_scope, created_by_user_id) values ('Volume', 'system', $1) returning id`, [sysAdminId],
+  )).rows[0].id;
+  const domainOnlyLink = await api("/api/training-load/metrics/structure-links", { method: "POST", cookie: otherClub.coachCookie, body: { domainId: sysDomainId, ownerScope: "user" } });
   assert.equal(domainOnlyLink.status, 201, JSON.stringify(domainOnlyLink.body));
-  const listed = await api(`/api/training-load/metrics/structure-links?domainId=${sysDomain.body.row.id}`, { cookie: otherClub.coachCookie });
+  const listed = await api(`/api/training-load/metrics/structure-links?domainId=${sysDomainId}`, { cookie: otherClub.coachCookie });
   assert.ok(listed.body.rows.some((r) => r.id === domainOnlyLink.body.row.id));
 });
 
@@ -977,9 +990,11 @@ test("15. a session with RPE explicitly disabled still accepts other metric meas
 // =========================================================================
 // 16. Platform administrator across a coach's workspace
 // =========================================================================
-test("16. a platform administrator can manage the system catalog regardless of any club/team workspace", async () => {
-  const res = await api("/api/training-load/metrics/domains", { method: "POST", cookie: sysAdminCookie, body: { name: `Platform Domain ${uid()}`, ownerScope: "system" } });
-  assert.equal(res.status, 201, JSON.stringify(res.body));
+test("16. a platform administrator no longer creates system classification through the older API (phase 12, O7): 409 canonical_classification_read_only, nothing written", async () => {
+  const name = `Platform Domain ${uid()}`;
+  const res = await api("/api/training-load/metrics/domains", { method: "POST", cookie: sysAdminCookie, body: { name, ownerScope: "system" } });
+  assert.deepEqual([res.status, res.body.code], [409, "canonical_classification_read_only"], JSON.stringify(res.body));
+  assert.equal((await query(`select 1 from training_load.metric_domains where name = $1`, [name])).rowCount, 0);
 });
 
 test("16b. a non-admin coach cannot create system-scoped catalog content", async () => {
