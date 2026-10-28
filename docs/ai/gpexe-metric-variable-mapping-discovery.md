@@ -2940,8 +2940,9 @@ The contract is the separate document `docs/ai/phase12-domains-categories-contra
 applied to no persistent database, only to disposable `optimove_tests_gpexe_*` databases):
 - **v41** (`migrations_v2/202610281000_training_load_v41_metric_classification.sql`): J6 3.3 as written. Where the
   contract left a choice or was silent:
-  - **Fail closed first.** v41's first statement refuses while any `system` or `club` row exists in the three tables
-    (counts only, `23514`). The contract asked for a count over the new columns at the end; refusing every canonical
+  - **Fail closed first.** v41 locks the three tables (`SHARE ROW EXCLUSIVE`, under the runner's lock timeout) and then
+    refuses while any `system` or `club` row exists in them (counts only, `23514`), so nothing is written between the
+    count and the guards. The contract asked for a count over the new columns at the end; refusing every canonical
     row is stronger, and it matches the owner's count (1.4). So O5's act "set the key once" is not built: no canonical
     row can lack a key (`*_canonical_key`, and the guard refuses it first), and O9's legacy branch stays empty. Adopting
     a legacy row would be a new decision.
@@ -2959,6 +2960,9 @@ applied to no persistent database, only to disposable `optimove_tests_gpexe_*` d
     a no-op, a rename only while active), and never deleted; its identity columns never change. A canonical link
     names exactly two targets, has no temporal smoothing, stays inside its owner (O4), never points at an archived
     domain, category or variable, and is never updated. The guards lock the targets `FOR SHARE` in the service's order.
+    A `TRUNCATE` of the links is refused while a canonical link exists (no foreign key references the links table, so
+    no row trigger would see it); the domains and categories cannot be truncated without the change table, whose
+    `TRUNCATE` is refused.
   - **The text rule** applies to a new canonical row's name (80) and description (500), and on an UPDATE only to a value
     that changes (the v38 pattern).
   - **The change and request guards:** a change row only from a v41 trigger of this transaction, by the acting user,
@@ -2982,11 +2986,14 @@ applied to no persistent database, only to disposable `optimove_tests_gpexe_*` d
   - Every write is an admin's (`adminContext`): a team workspace gets the identical `404` before the body is read. The
     read C1 has the variable editor's audience (`editorContext`): a team coach reads the club's and the system's
     classification, read-only.
-  - The request hash names the contract `metric-classification/v1`, the operation, the id and the body.
+  - The request hash names the contract `metric-classification/v1`, the operation, the id and the body; a create's
+    hash names the owner too, so the same key in another workspace is `request_key_reused`. A rename, archive or
+    restore locks its node `FOR NO KEY UPDATE`.
   - **C6:** `GET /variables` takes one of `domainId` and `categoryId`. A domain filter includes the variables linked to
     the domain directly and through one of its categories. Only links of the workspace's readable owners count. A
     filtered list's cursor carries its filter (`f`); an unfiltered cursor keeps its earlier form. The detail (admin and
-    coach view) carries `classification: { categories, domains }`, a domain through a category with `viaCategoryId`.
+    coach view) carries `classification: { categories, domains, truncated }` (at most 500 links), a domain through a
+    category with `viaCategoryId`.
 - **The older API (O7)** (`backend/src/trainingLoadMetricsCatalog.js`): create, archive and delete of a `system` or
   `club` domain, category or link answer `409 canonical_classification_read_only` after the existing right check and
   the identical `404`. A link's create answers it before the target checks: the answer does not depend on the target.
@@ -3001,17 +3008,19 @@ applied to no persistent database, only to disposable `optimove_tests_gpexe_*` d
   API and expect the older API's `409` for them. The service has one test seam,
   `setClassificationWriteHoldForTests` (right before the request row), never set by the application.
 
-  Mutation evidence: 76 mutations (v41, the service and the older API's O7), 70 killed. The six survivors are second
-  layers that no real path reaches alone:
-  - the change guard's comparison of a link's content: a change row is written only by v41's own triggers, from the
-    row itself, and a direct insert is refused by the trigger-depth check first;
+  Mutation evidence: 81 mutations (v41, its rollback, the service and the older API's O7), 77 killed. The four
+  survivors are second layers that no real path reaches alone:
   - the request guard's check of the change's transaction, its comparison with the node's current values and its
     check of the link's presence: each is covered by the rule of exactly one change of the object in the transaction;
-  - the service's early check of an archive reason: its database twin inside the write answers the same `400`;
   - the service's `adminOnly`: every write route resolves `adminContext` first.
 - **Known limits** (as v35, v36 and v38): the guards prove that the row, the acting user and the right agree, not that
   the code which set the acting user was entitled to; they are no defence against the shared owner credentials. A future
-  migration that writes a canonical row must switch the guards off inside itself and say so.
+  migration that writes a canonical row must switch the guards off inside itself and say so. The two record tables are
+  append-only, so the names, descriptions and reasons they hold stay for good. A data-only restore into a schema that
+  already carries v41 needs `--disable-triggers`.
+- **The older reads** (`select n.*`, also reachable by an athlete) return a canonical row's `created_by_user_id` and
+  `owner_club_id`, as they already do for system definitions (`security-reviewer`, LOW). Recorded as a follow-up with
+  O8: an explicit column list for the older reads.
 - **O8, a follow-up:** the older reads show a club's domains and categories to its club admins only, so a team coach's
   picker keeps grouping a club variable under "Other".
 - **Not in it:** the frontend (12c); any write to a persistent database.

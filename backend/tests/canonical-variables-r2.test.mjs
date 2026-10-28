@@ -592,7 +592,7 @@ test("4. reads: a team workspace reads the reduced view (Q7) on the list, the de
   const detail = ok200(await api(`/variables/${v.id}`, { cookie: W.coachA1.cookie }));
   // The detail also carries the variable's domains and categories (phase 12b, J6 C6).
   assert.deepEqual([Object.keys(detail).sort(), Object.keys(detail.variable).sort(), detail.nextCursor], [["nextCursor", "variable"], [...REDUCED, "classification"].sort(), null]);
-  assert.deepEqual(detail.variable.classification, { categories: [], domains: [] });
+  assert.deepEqual(detail.variable.classification, { categories: [], domains: [], truncated: false });
   assert.deepEqual([detail.variable.editable, detail.variable.actions, detail.variable.labelsToken], [true, ["rename", "archive"], tokenOf(v.label, null, null, "active")]);
   assert.deepEqual([(await api(`/variables/${v.id}?cursor=abc`, { cookie: W.coachA1.cookie })).body.error], ["invalid_query"]);
   // The admins: their view, with actions (newVersion only outside a team workspace) and the token.

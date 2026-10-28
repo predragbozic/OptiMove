@@ -12,7 +12,7 @@
 // canonical one (O7, trainingLoadMetricsCatalog.js).
 //
 // Lock order of a write: the per-user advisory lock and the request record
-// (runWrite); then the node row FOR UPDATE (rename, archive, restore), or a
+// (runWrite); then the node row FOR NO KEY UPDATE (rename, archive, restore), or a
 // new link's targets FOR SHARE in the order domain, category, variable, or a
 // removed link's row FOR UPDATE; then the rights FOR SHARE (rightsStillHold:
 // user, club). The v41 guards lock the same targets again, already held.
@@ -77,6 +77,9 @@ function ownSql(ctx, alias, params) {
 }
 const invalidBody = (message) => refusal(400, "invalid_body", message);
 const namesTokenOf = (row) => hashOf([row.name, row.description ?? null, row.is_active]);
+// A create's request hash names the owner too, so a key reused in another
+// workspace is request_key_reused, not a replay of another owner's write.
+const ownerKeyOf = (ctx) => (ctx.owner.scope === "system" ? "system" : ctx.owner.clubId);
 
 // ---------------------------------------------------------------------------
 // Output
@@ -146,7 +149,7 @@ export async function getClassification({ ctx, query }) {
 // A variable's classification (C6): its links of the readable owners - the
 // categories and domains it sits under directly, and the domains of those
 // categories (O2: a variable's domain follows from variable -> category ->
-// domain).
+// domain). At most CLASSIFICATION_CAP links; `truncated` says that more exist.
 export async function variableClassification(client, ctx, variableId) {
   const params = [variableId];
   const linkReadable = readableSql(ctx, "l", params);
@@ -159,9 +162,11 @@ export async function variableClassification(client, ctx, variableId) {
        left join training_load.metric_domains d on d.id = l.domain_id
       where l.metric_definition_id = $1 and ${linkReadable}
       order by l.created_at, l.id
-      limit ${CLASSIFICATION_CAP}`,
+      limit ${CLASSIFICATION_CAP + 1}`,
     params,
   )).rows;
+  const truncated = rows.length > CLASSIFICATION_CAP;
+  rows.length = Math.min(rows.length, CLASSIFICATION_CAP);
   const categoryIds = rows.filter((r) => r.category_id).map((r) => r.category_id);
   let via = [];
   if (categoryIds.length) {
@@ -190,6 +195,7 @@ export async function variableClassification(client, ctx, variableId) {
         viaCategoryId: r.category_id,
       })),
     ],
+    truncated,
   };
 }
 
@@ -348,7 +354,7 @@ export async function createNode({ ctx, kind: rawKind, body }) {
     if (key === null) throw refusal(400, "key_required", TEXT.key_required);
   }
   const operation = `${kind}_create`;
-  const requestHash = hashOf({ contract: CONTRACT, operation, body: { name, description, key } });
+  const requestHash = hashOf({ contract: CONTRACT, operation, owner: ownerKeyOf(ctx), body: { name, description, key } });
   return write({
     ctx, operation, requestKey, requestHash,
     body: async (client) => {
@@ -374,7 +380,7 @@ async function changeNode({ ctx, kind, id, operation, requestKey, requestHash, r
       const own = ownSql(ctx, "n", params);
       const plain = (await client.query(`select n.id from ${KINDS[kind].table} n where n.id = $1 and ${own}`, params)).rows[0];
       if (!plain) throw NOT_FOUND();
-      const locked = (await client.query(`select ${NODE_COLUMNS} from ${KINDS[kind].table} n where n.id = $1 for update`, [id])).rows[0];
+      const locked = (await client.query(`select ${NODE_COLUMNS} from ${KINDS[kind].table} n where n.id = $1 for no key update`, [id])).rows[0];
       if (!locked || !isOwn(locked, ctx)) throw NOT_FOUND();
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       check(locked);
@@ -492,7 +498,7 @@ export async function createLink({ ctx, body }) {
   }
   if (Object.keys(ids).length !== 2) throw invalidBody(TEXT.link_shape);
   const operation = "link_create";
-  const requestHash = hashOf({ contract: CONTRACT, operation, body: ids });
+  const requestHash = hashOf({ contract: CONTRACT, operation, owner: ownerKeyOf(ctx), body: ids });
   return write({
     ctx, operation, requestKey, requestHash,
     body: async (client) => {

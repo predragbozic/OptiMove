@@ -14,7 +14,7 @@
 -- v41 adds two tables (training_load.metric_classification_changes and
 -- metric_classification_requests), two columns and two checks on each of
 -- metric_domains and metric_categories, three indexes on the v10 tables,
--- eight functions and fifteen triggers. It changes no data. This script
+-- nine functions and sixteen triggers. It changes no data. This script
 -- reverses exactly that and removes the v41 record. It refuses, changing
 -- nothing, when
 --   * v41 is not recorded on the database;
@@ -23,6 +23,8 @@
 --     category or link exists - they are the record and the result of the
 --     canonical-classification writes; once one exists the way forward is a
 --     new migration, never this script;
+--   * any team or user domain or category carries a key or a description
+--     (dropping the two columns would lose it);
 --   * the v41 objects are not exactly the ones v41 created (one is missing,
 --     or a trigger is disabled).
 --
@@ -73,11 +75,18 @@ begin
      or exists (select 1 from training_load.metric_structure_links where owner_scope in ('system', 'club')) then
     reasons := array_append(reasons, 'canonical classification rows exist');
   end if;
+  if exists (select 1 from training_load.metric_domains
+              where owner_scope in ('team', 'user') and (key is not null or description is not null))
+     or exists (select 1 from training_load.metric_categories
+                 where owner_scope in ('team', 'user') and (key is not null or description is not null)) then
+    reasons := array_append(reasons, 'a team or user domain or category carries a key or a description');
+  end if;
   select string_agg(f.name, ', ' order by f.name) into missing
     from unnest(array['metric_classification_node_guard', 'metric_classification_record_node_change',
                       'metric_classification_link_guard', 'metric_classification_record_link',
                       'metric_classification_changes_insert_guard', 'metric_classification_requests_guard',
-                      'metric_classification_changes_request_link', 'metric_classification_append_only']) as f(name)
+                      'metric_classification_changes_request_link', 'metric_classification_append_only',
+                      'metric_classification_links_no_truncate']) as f(name)
    where not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
                       where n.nspname = 'training_load' and p.proname = f.name);
   if missing is not null then
@@ -92,6 +101,7 @@ begin
                  ('metric_categories', 'metric_categories_v41_record_change'),
                  ('metric_structure_links', 'metric_structure_links_v41_guard'),
                  ('metric_structure_links', 'metric_structure_links_v41_record_link'),
+                 ('metric_structure_links', 'metric_structure_links_v41_no_truncate'),
                  ('metric_classification_changes', 'metric_classification_changes_insert_guard'),
                  ('metric_classification_changes', 'metric_classification_changes_request_link'),
                  ('metric_classification_changes', 'metric_classification_changes_no_update_delete'),
@@ -134,6 +144,7 @@ drop trigger metric_categories_v41_record_create on training_load.metric_categor
 drop trigger metric_categories_v41_record_change on training_load.metric_categories;
 drop trigger metric_structure_links_v41_guard on training_load.metric_structure_links;
 drop trigger metric_structure_links_v41_record_link on training_load.metric_structure_links;
+drop trigger metric_structure_links_v41_no_truncate on training_load.metric_structure_links;
 drop index training_load.metric_domains_canonical_key_unique;
 drop index training_load.metric_categories_canonical_key_unique;
 drop index training_load.metric_structure_links_one_domain_per_category;
@@ -158,6 +169,7 @@ drop function training_load.metric_classification_record_link();
 drop function training_load.metric_classification_link_guard();
 drop function training_load.metric_classification_record_node_change();
 drop function training_load.metric_classification_node_guard();
+drop function training_load.metric_classification_links_no_truncate();
 
 delete from public.schema_migrations
  where migration_name = 'migrations_v2/202610281000_training_load_v41_metric_classification.sql';

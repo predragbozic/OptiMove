@@ -64,6 +64,7 @@ const REQUEST_MAY_NOT = /^metric classification request: the acting user may not
 const BASIS = /^metric classification request: the basis is not the acting user's own$/;
 const FOLLOW = /^metric_classification_requests: the request must follow its own change in the same transaction$/;
 const APPEND = /^metric classification: change and request records are append-only$/;
+const NO_TRUNCATE = /^metric classification: a canonical link is removed one at a time, never truncated$/;
 const READ_ONLY = { error: "System and club domains, categories and links can only be changed in Training Load > Data configuration.", code: "canonical_classification_read_only" };
 
 let rdb, db, r, k, k2, server, apiBase, service, classification, appPool, createSession;
@@ -360,7 +361,7 @@ async function world() {
 }
 
 // ---------------------------------------------------------------------------
-test("1. migration v41 on v40: two tables, two columns and two checks on each node table, three indexes, eight functions and fifteen triggers, nothing else changed; the read-only preflight and post-check; v41 refuses (changing nothing) while a system or club row exists, team and user rows do not stop it; the rollback refuses without v41, under a later migration, with a trigger or index missing or a trigger disabled, and once a change or canonical row exists; it returns the identical v40 catalog and v41 applies again identically; the v40 and v39 rollbacks refuse while v41 is recorded", async () => {
+test("1. migration v41 on v40: two tables, two columns and two checks on each node table, three indexes, nine functions and sixteen triggers, nothing else changed; the read-only preflight and post-check; v41 refuses (changing nothing) while a system or club row exists, team and user rows do not stop it; the rollback refuses without v41, under a later migration, with a trigger or index missing or a trigger disabled, while a team row carries a key or description, and once a change or canonical row exists; it returns the identical v40 catalog and v41 applies again identically; the v40 and v39 rollbacks refuse while v41 is recorded", async () => {
   assert.match((await runScript(r, ROLLBACK_PATH))?.message ?? "", /^v41 rollback refused: v41 is not recorded on this database$/);
   const pre = await runbook(r, PREFLIGHT_PATH);
   assert.deepEqual(
@@ -394,7 +395,7 @@ test("1. migration v41 on v40: two tables, two columns and two checks on each no
     [post41.v41_rows, post41.v41_checksum_ok, post41.later_rows, post41.last_migration, post41.v40_rows, post41.v41_tables, post41.v41_columns,
       post41.v41_checks_validated, post41.v41_indexes_valid, post41.v41_functions, post41.v41_triggers_enabled, post41.deferred_triggers,
       post41.changes, post41.requests, post41.canonical_domains, post41.canonical_categories, post41.canonical_links, post41.locks_on_v41_tables, post41.idle_in_transaction],
-    ["1", true, "0", V41_NAME, "1", "2", "4", "4", "3", "8", "15", "1", "0", "0", "0", "0", "0", "0", "0"],
+    ["1", true, "0", V41_NAME, "1", "2", "4", "4", "3", "9", "16", "1", "0", "0", "0", "0", "0", "0", "0"],
   );
   const after41 = await catalog(r);
   const added = (list, base, keyOf) => list.filter((x) => !base.some((y) => keyOf(y) === keyOf(x)));
@@ -419,7 +420,7 @@ test("1. migration v41 on v40: two tables, two columns and two checks on each no
   assert.deepEqual(changed(after41.indexes, before40.indexes, (x) => x.indexname), [], "no existing index changed");
   assert.deepEqual(added(after41.functions, before40.functions, (x) => x.proname).map((x) => x.proname).sort(), [
     "metric_classification_append_only", "metric_classification_changes_insert_guard", "metric_classification_changes_request_link",
-    "metric_classification_link_guard", "metric_classification_node_guard", "metric_classification_record_link",
+    "metric_classification_link_guard", "metric_classification_links_no_truncate", "metric_classification_node_guard", "metric_classification_record_link",
     "metric_classification_record_node_change", "metric_classification_requests_guard",
   ]);
   assert.deepEqual(changed(after41.functions, before40.functions, (x) => `${x.proname}(${x.args})`), [], "no existing function changed (v35's and v40's included)");
@@ -432,7 +433,8 @@ test("1. migration v41 on v40: two tables, two columns and two checks on each no
     "metric_classification_requests.metric_classification_requests_guard", "metric_classification_requests.metric_classification_requests_no_truncate",
     "metric_classification_requests.metric_classification_requests_no_update_delete",
     "metric_domains.metric_domains_v41_guard", "metric_domains.metric_domains_v41_record_change", "metric_domains.metric_domains_v41_record_create",
-    "metric_structure_links.metric_structure_links_v41_guard", "metric_structure_links.metric_structure_links_v41_record_link",
+    "metric_structure_links.metric_structure_links_v41_guard", "metric_structure_links.metric_structure_links_v41_no_truncate",
+    "metric_structure_links.metric_structure_links_v41_record_link",
   ]);
   for (const t of newTriggers) assert.equal(t.tgenabled, "O", t.tgname);
   assert.deepEqual(newTriggers.filter((t) => t.tgdeferrable).map((t) => [t.tgname, t.tginitdeferred]), [["metric_classification_changes_request_link", true]]);
@@ -459,6 +461,9 @@ test("1. migration v41 on v40: two tables, two columns and two checks on each no
   await r.query(`drop index training_load.metric_structure_links_one_domain_per_category`);
   assert.match((await runScript(r, ROLLBACK_PATH))?.message ?? "", /^v41 rollback refused: the v41 indexes are not all present$/);
   await r.query(indexDef);
+  await r.query(`update training_load.metric_domains set key = 'team_key' where id = $1`, [teamRow]);
+  assert.match((await runScript(r, ROLLBACK_PATH))?.message ?? "", /^v41 rollback refused: a team or user domain or category carries a key or a description$/);
+  await r.query(`update training_load.metric_domains set key = null where id = $1`, [teamRow]);
   assert.deepEqual(await catalog(r), after41, "every refusal changed nothing");
   // The rehearsal: rollback -> the identical v40 catalog -> re-apply -> identical.
   assert.equal(await runScript(r, ROLLBACK_PATH), null);
@@ -665,7 +670,10 @@ test("5. C3, rename, archive and restore: a rename names the token it read and c
   }
   // Archive and restore.
   assert.deepEqual([(await post(`/classification/domains/${d.id}/archive`, W.caA.cookie, { requestKey: key() })).body.error], ["invalid_body"], "archive takes a reason");
-  assert.deepEqual([(await act(W.caA, "domains", d.id, "archive", { reason: " padded" })).body.error], ["invalid_body"]);
+  for (const reason of [" padded", null, 7, ""]) {
+    const res = await act(W.caA, "domains", d.id, "archive", { reason });
+    assert.deepEqual([res.status, res.body.error], [400, "invalid_body"], JSON.stringify(reason));
+  }
   const archived = ok(await act(W.caA, "domains", d.id, "archive", { reason: "Merged into speed" })).domain;
   assert.deepEqual([archived.state, archived.actions, archived.editable], ["archived", ["restore"], true]);
   assert.deepEqual([(await act(W.caA, "domains", d.id, "archive")).body.error], ["node_not_active"]);
@@ -889,10 +897,26 @@ test("8. C6: the variable list filtered by a category, or by a domain (directly 
   const res = await api(`/variables?categoryId=${many.id}&cursor=${unfiltered.body.nextCursor}`, { cookie: W.caA.cookie });
   assert.deepEqual([res.status, res.body.message], [400, "The cursor is not valid for this list."], "an unfiltered cursor is not a filtered list's");
   assert.equal((await api(`/variables?cursor=${unfiltered.body.nextCursor}`, { cookie: W.caA.cookie })).status, 200, "the unfiltered cursor keeps its form");
+  // More than 500: C1 and the detail say they are cut (a club of its own).
+  const clubX = await club("Club X");
+  const caX = await person("club-admin-x", { clubAdminOf: [clubX], ws: ["club", clubX] });
+  const crowded = await variable(caX);
+  okTx(await tx(caX.id, async (cx) => {
+    for (let i = 0; i < 501; i += 1) {
+      const cat = await rawCreate(cx, { kind: "category", by: caX.id, scope: "club", clubId: clubX, basis: "club_admin" });
+      const l = await rawLink(cx, { by: caX.id, scope: "club", clubId: clubX, variableId: crowded.id, categoryId: cat });
+      await rawRequest(cx, { by: caX.id, operation: "link_create", scope: "club", clubId: clubX, basis: "club_admin", changeId: await changeHere(cx, "link_id", l) });
+    }
+  }));
+  const crowdedTree = await tree(caX);
+  assert.deepEqual([crowdedTree.truncated, crowdedTree.categories.length], [true, 500]);
+  const crowdedDetail = (await variableDetail(caX, crowded.id)).classification;
+  assert.deepEqual([crowdedDetail.truncated, crowdedDetail.categories.length], [true, 500]);
   // The detail.
   const detailA = await variableDetail(W.caA, a.id);
   assert.deepEqual(detailA.classification.categories.map((x) => [x.id, x.key, x.name, x.state, x.ownerScope, typeof x.linkId]), [[ownC.id, ownC.key, ownC.name, "active", "club", "string"]]);
   assert.deepEqual(detailA.classification.domains.map((x) => [x.id, x.linkId, x.viaCategoryId, x.ownerScope]), [[sysD.id, null, ownC.id, "system"]]);
+  assert.equal(detailA.classification.truncated, false);
   const detailB = await variableDetail(W.caA, b.id);
   assert.deepEqual(detailB.classification.domains.map((x) => [x.id, x.viaCategoryId]), [[ownD.id, null]]);
   const coachView = await variableDetail(W.coachA1, a.id);
@@ -929,12 +953,19 @@ test("9. idempotency and outcome through the real routes: a replay answers the c
   const bothBody = { requestKey: key(), name: `Both ${uid()}` };
   ok(await post("/classification/domains", both.cookie, bothBody), 201);
   const bothLink = { requestKey: key(), variableId: W.clubVarA.id, categoryId: (await categoryOf(W.caA)).id };
-  ok(await post("/classification/links", both.cookie, bothLink), 201);
+  const bothMade = ok(await post("/classification/links", both.cookie, bothLink), 201).link;
+  const bothRemove = { requestKey: key(), reason: "Moved" };
+  ok(await post(`/classification/links/${bothMade.id}/remove`, both.cookie, bothRemove));
   await workspace(both.id, "club", W.clubB);
+  // A create names its owner in the request hash: the same key in another
+  // workspace is request_key_reused; a removal replayed there is the identical
+  // 404 and never names club A's link.
   for (const [p, b] of [["/classification/domains", bothBody], ["/classification/links", bothLink]]) {
     const elsewhere = await post(p, both.cookie, b);
-    assert.deepEqual([elsewhere.status, elsewhere.text], [404, NOT_FOUND], p);
+    assert.deepEqual([elsewhere.status, elsewhere.body.error], [409, "request_key_reused"], p);
   }
+  const removedElsewhere = await post(`/classification/links/${bothMade.id}/remove`, both.cookie, bothRemove);
+  assert.deepEqual([removedElsewhere.status, removedElsewhere.text], [404, NOT_FOUND]);
   // Two identical requests at once: one write, one replay.
   const twin = { requestKey: key(), name: `Twin ${uid()}` };
   const [x, y] = await Promise.all([post("/classification/domains", W.caA.cookie, twin), post("/classification/domains", W.caA.cookie, twin)]);
@@ -1146,6 +1177,27 @@ test("10. the database guards (C76, O7's twin): without the acting user every ca
     await c.query(`update training_load.metric_domains set name = $2 where id = $1`, [sysD.id, `Two ${uid()}`]);
     await rawRequest(c, { by: W.pa.id, operation: "domain_rename", scope: "system", basis: "platform_admin", changeId: await changeHere(c, "domain_id", sysD.id) });
   }), "23514", FOLLOW);
+  // TRUNCATE: the links refuse while a canonical one exists; the domains and
+  // categories cannot go without the change table, whose TRUNCATE is refused.
+  refusedWith(await tx(null, (c) => c.query(`truncate training_load.metric_structure_links`)), "23514", NO_TRUNCATE);
+  refusedWith(await tx(null, (c) => c.query(`truncate training_load.metric_domains`)), "0A000");
+  refusedWith(await tx(null, (c) => c.query(`truncate training_load.metric_categories cascade`)), "23514", /^metric classification: (change and request records are append-only|a canonical link is removed one at a time, never truncated)$/);
+  // A change row a trigger forges with another link's content (at the depth a
+  // real trigger writes), for a new link and for a removal.
+  const forgedOn = await linked(W.caA, { variableId: W.sysVar.id, domainId: ownD.id });
+  const forge = (timing, row) => async (c) => {
+    await c.query(`create function training_load.p12b_forge() returns trigger as $f$
+      begin
+        insert into training_load.metric_classification_changes (object_kind, kind, domain_id, metric_definition_id, link_id, owner_scope, owner_club_id, changed_by_user_id, xact_id)
+        values ('link', tg_argv[0], tg_argv[1]::uuid, ${row}.metric_definition_id, ${row}.id, ${row}.owner_scope, ${row}.owner_club_id, training_load.source_metric_context_actor(), pg_current_xact_id());
+        return ${row};
+      end $f$ language plpgsql`);
+    await c.query(`create trigger p12b_forge ${timing} on training_load.metric_structure_links for each row execute function training_load.p12b_forge('${timing.includes("insert") ? "link" : "remove"}', '${sysD.id}')`);
+    if (timing.includes("insert")) await rawLink(c, { by: W.caA.id, scope: "club", clubId: W.clubA, variableId: W.clubVarA.id, domainId: ownD.id });
+    else await c.query(`delete from training_load.metric_structure_links where id = $1`, [forgedOn.id]);
+  };
+  refusedWith(await tx(W.caA.id, forge("after insert", "new")), "23514", CHANGE_ONLY);
+  refusedWith(await tx(W.caA.id, forge("before delete", "old")), "23514", CHANGE_ONLY);
   // Append-only.
   for (const table of ["metric_classification_changes", "metric_classification_requests"]) {
     const column = table.endsWith("changes") ? "changed_at" : "created_at";
@@ -1308,7 +1360,7 @@ test("15. v41 reads back the same after pg_dump and pg_restore (what gpexe-backu
         where n.nspname = 'training_load' and p.proname like 'metric\\_classification\\_%' order by 1`),
     });
     const source = await objects(k);
-    assert.deepEqual([source.triggers.length, source.functions.length, source.indexes.length], [15, 8, 15]);
+    assert.deepEqual([source.triggers.length, source.functions.length, source.indexes.length], [16, 9, 15]);
     assert.deepEqual(await objects(restored), source);
   } finally {
     await restored.end().catch(() => {});

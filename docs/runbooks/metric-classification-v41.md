@@ -27,6 +27,10 @@ The same day as the merge and deploy:
 
 The merge needs the owner's order naming the pull request and v41.
 
+**Every other persistent database** (the local OPTIMOVE, a shared development or staging database) gets block 5 of the
+preflight before it first receives v41: the owner's count of 2026-10-28 covered production only, and a `system` or
+`club` row written there through the older API makes v41 refuse at that database's first start.
+
 ## After the deploy
 
 1. `/api/health` serves the merge commit with `ok: true`.
@@ -69,6 +73,7 @@ Run `docs/runbooks/metric-classification-v41-rollback.sql` as one script that st
 - without v41, or under a later migration;
 - once any change or request row, or any `system` or `club` domain, category or link exists. After that the way
   forward is a new migration;
+- while a team or user domain or category carries a key or a description (dropping the columns would lose it);
 - while a v41 function, trigger or index is missing, or a v41 trigger is disabled.
 
 ## Using the classification
@@ -85,11 +90,16 @@ domain, category or link (O7). Its team and user rows are unchanged.
 **What the database refuses** (whoever writes, SQL included):
 - a `system` or `club` write without the acting user of the transaction, or by a user without the right;
 - deleting a canonical domain or category (it is archived), or changing its key, owner or creator;
-- updating a canonical link (it is removed and created again);
+- updating a canonical link (it is removed and created again), or truncating the links table while a canonical link
+  exists;
 - a canonical category under a second domain;
 - a change without its request row (at COMMIT).
 
 A future migration that writes a canonical row must switch these guards off inside itself and say so.
+
+**Records and restores:** the change and request records are append-only, so the names, descriptions and reasons they
+hold stay for good. A restore of schema and data (as `backend/scripts/gpexe-backup-verify.mjs` does) loads the rows
+before the triggers exist; a data-only restore into a schema that already carries v41 needs `--disable-triggers`.
 
 **O8, recorded as a follow-up:** the older reads (and so the Activities and dashboard pickers) show a club's domains
 and categories to its club admins only. A team coach's picker keeps grouping a club variable under "Other" until that

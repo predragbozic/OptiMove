@@ -41,7 +41,12 @@
 --     or the transaction rolls back (23514).
 --   * O3: a canonical category sits under at most one domain, whoever owns
 --     the domain (a partial unique index).
---   * Both new tables are append-only.
+--   * Both new tables are append-only, so the names, descriptions and
+--     reasons they record stay for good (as v38's).
+--   * TRUNCATE: the links table is referenced by no foreign key, so it gets
+--     its own guard (refused while a canonical link exists); the domains and
+--     categories cannot be truncated without the change table, whose TRUNCATE
+--     is refused.
 --
 -- Known limits (as v35, v36 and v38): the guards prove that the row, the
 -- acting user and the user's right agree, not that the code which set the
@@ -49,10 +54,13 @@
 -- shared owner credentials or runs SQL through the application's pool and
 -- disables a trigger. A write inside a savepoint is refused (its rows carry
 -- the subtransaction's id): fail closed. A future migration that writes a
--- canonical row must switch these guards off inside itself and say so.
+-- canonical row must switch these guards off inside itself and say so. A
+-- data-only restore into a schema that already carries v41 needs
+-- --disable-triggers (the guards need the acting user); a restore of schema
+-- and data, as gpexe-backup-verify does, loads the rows before the triggers.
 --
 -- Lock order (the service): the per-user advisory lock and the request record;
--- then the node row FOR UPDATE (rename, archive, restore), or the link's
+-- then the node row FOR NO KEY UPDATE (rename, archive, restore), or the link's
 -- targets FOR SHARE in the order domain, category, variable (a new link), or
 -- the link row FOR UPDATE (a removal); then the rights FOR SHARE (user, club;
 -- v35's order). The guards lock the same targets again, already held.
@@ -61,8 +69,13 @@
 -- source_metric_current_xmin(). Fixed messages: no id, name, value or SQL.
 
 -- ---------------------------------------------------------------------------
--- 0. Fail closed: no canonical row exists yet.
+-- 0. Fail closed: no canonical row exists yet. The three tables are locked
+--    first, so no writer adds one between the count and the guards (the
+--    runner's lock_timeout bounds the wait).
 -- ---------------------------------------------------------------------------
+lock table training_load.metric_domains, training_load.metric_categories, training_load.metric_structure_links
+  in share row exclusive mode;
+
 do $$
 declare
   d bigint;
@@ -460,6 +473,21 @@ create trigger metric_structure_links_v41_record_link
   after insert on training_load.metric_structure_links
   for each row when (new.owner_scope::text in ('system', 'club'))
   execute function training_load.metric_classification_record_link();
+
+-- A TRUNCATE fires no row trigger, and no foreign key references the links:
+-- refused while any canonical link exists (team and user links alone may go).
+create function training_load.metric_classification_links_no_truncate() returns trigger as $$
+begin
+  if exists (select 1 from training_load.metric_structure_links where owner_scope in ('system', 'club')) then
+    raise exception 'metric classification: a canonical link is removed one at a time, never truncated' using errcode = '23514';
+  end if;
+  return null;
+end;
+$$ language plpgsql;
+
+create trigger metric_structure_links_v41_no_truncate
+  before truncate on training_load.metric_structure_links
+  for each statement execute function training_load.metric_classification_links_no_truncate();
 
 -- ---------------------------------------------------------------------------
 -- 6. A change row only from inside a trigger of this transaction, by the

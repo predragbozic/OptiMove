@@ -3011,6 +3011,11 @@ pre-existing; pass/fail counts don't belong in this file
   A runtime role without ownership or DDL (and the migrations under an owner role) would make the v35
   guards hold against the application's own credentials too. Needs Supabase roles, the Render
   environment and `backend/src/migrate.js` to use the owner role.
+- **The older Metrics Core reads return user ids** (`security-reviewer`, LOW, the 12b review; not scheduled; recorded with
+  O8 of the phase 12 contract): `GET /api/training-load/metrics/domains`, `/categories` and `/structure-links` select
+  `n.*` and are reachable by any signed-in account, an athlete included. Since 12b they return a canonical row's
+  `created_by_user_id` (a platform admin for a system row) and `owner_club_id`, as they already did for system
+  definitions. Fix with O8: an explicit column list for the older reads.
 - **Database actor guards for the other M2 writers** (owner, 2026-10-13, C76): v35 covers T3, T4 and
   T8 only. Every future route that writes T2a, T2b, `unit_conversions` or T5 gets its own database
   actor guard (the v35 pattern) before it is released. The T2b confirmations and their guards are M2b,

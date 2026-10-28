@@ -15,7 +15,7 @@
 --    v40_rows = 1.
 select
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202610281000_training_load_v41_metric_classification.sql') as v41_rows,
-  (select bool_and(checksum = 'accb72abce740b34ff5461071e87503343e1df2537972cae3a19a98924f8a1de') from public.schema_migrations
+  (select bool_and(checksum = '600be1a964ac92cf55486f2cc4bf41bbf488539073e83e6de610778831f4d89d') from public.schema_migrations
     where migration_name = 'migrations_v2/202610281000_training_load_v41_metric_classification.sql') as v41_checksum_ok,
   (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%'
     and migration_name > 'migrations_v2/202610281000_training_load_v41_metric_classification.sql') as later_rows,
@@ -24,9 +24,9 @@ select
 
 -- 2. The objects: the two tables; the key and description columns with their
 --    four checks, validated; the three indexes on the v10 tables, valid; the
---    eight functions; the fifteen triggers, all enabled, one of them deferred.
+--    nine functions; the sixteen triggers, all enabled, one of them deferred.
 --    Expected: v41_tables = 2, v41_columns = 4, v41_checks_validated = 4,
---    v41_indexes_valid = 3, v41_functions = 8, v41_triggers_enabled = 15,
+--    v41_indexes_valid = 3, v41_functions = 9, v41_triggers_enabled = 16,
 --    deferred_triggers = 1.
 select
   (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
