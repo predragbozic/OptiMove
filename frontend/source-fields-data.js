@@ -78,6 +78,19 @@ export const EVIDENCE_LABEL = {
 };
 export const OPERATORS = Object.freeze([">=", ">", "<=", "<"]);
 export const OPERATOR_LABEL = { ">=": "At least (>=)", ">": "More than (>)", "<=": "At most (<=)", "<": "Less than (<)" };
+// A zone's operator (v42, C102, C103): the closed zones of a field take
+// between, the open top zone >=; a field holds one shape of zone.
+export const ZONE_OPERATORS = Object.freeze(["between", ">="]);
+export const ZONE_OPERATOR_LABEL = {
+  between: "Between its lower and upper bound — a closed zone (between)",
+  ">=": "At least its lower bound — the open top zone (>=)",
+};
+// A confirmed or chosen operator in the words of its choice, by the
+// revision's kind (the detail and the last question say it the same way).
+export function operatorWords(parameterKind, operator) {
+  const label = parameterKind === "zone_bounds" ? ZONE_OPERATOR_LABEL[operator] : OPERATOR_LABEL[operator];
+  return label || String(operator ?? "");
+}
 export const hasBound = (revision) => revision?.parameterKind === "zone_bounds" || revision?.parameterKind === "event_threshold";
 export const levelsText = (revision) => [revision?.supportsSession ? "Session" : "", revision?.supportsDrill ? "Drill" : ""].filter(Boolean).join(" and ") || "None";
 
@@ -88,16 +101,12 @@ export function currentRevision(field) {
 }
 
 // What a platform administrator may do with a revision now. The server checks
-// it all again; a zone's meaning is never offered (C89, verification_model_unresolved).
+// it all again.
 export function unitActOffered(ctx, field, revision) {
   return Boolean(ctx?.mayVerify && field?.state === "active" && revision && revision.state !== "retired" && !revision.unitVerifiedAt);
 }
 export function meaningActOffered(ctx, field, revision) {
-  return Boolean(ctx?.mayVerify && field?.state === "active" && revision && revision.state !== "retired" && !revision.meaningVerifiedAt && revision.parameterKind !== "zone_bounds");
-}
-// A zone revision's meaning waits for the zone model (phase 5).
-export function meaningBlockedByZoneModel(ctx, field, revision) {
-  return Boolean(ctx?.mayVerify && field?.state === "active" && revision && revision.state !== "retired" && !revision.meaningVerifiedAt && revision.parameterKind === "zone_bounds");
+  return Boolean(ctx?.mayVerify && field?.state === "active" && revision && revision.state !== "retired" && !revision.meaningVerifiedAt);
 }
 
 // ---------------------------------------------------------------------------
@@ -167,9 +176,11 @@ export function buildSourceFieldRequest(form) {
     return { errors, body: { requestKey: form.requestKey, sourceUnit, ...(bound ? { sourceBoundUnit } : {}), evidenceRef } };
   }
   const threshold = form.parameterKind === "event_threshold";
+  const zone = form.parameterKind === "zone_bounds";
   if (threshold && !OPERATORS.includes(d.boundOperator)) errors.boundOperator = "Choose one.";
+  if (zone && !ZONE_OPERATORS.includes(d.boundOperator)) errors.boundOperator = "Choose what this field's evidence shows.";
   if (Object.keys(errors).length) return { body: null, errors };
-  return { errors, body: { requestKey: form.requestKey, ...(threshold ? { boundOperator: d.boundOperator } : {}), evidenceRef } };
+  return { errors, body: { requestKey: form.requestKey, ...(threshold || zone ? { boundOperator: d.boundOperator } : {}), evidenceRef } };
 }
 
 // ---------------------------------------------------------------------------
@@ -180,8 +191,7 @@ export function buildSourceFieldRequest(form) {
 // server's request record showed that nothing was saved under the key).
 const SETTLED_ON_CHECK = new Set([
   "invalid_body", "invalid_unit", "invalid_evidence_ref", "bound_unit_required", "bound_unit_not_allowed", "invalid_operator",
-  "operator_required", "operator_not_allowed", "verification_model_unresolved", "unit_already_verified", "meaning_already_verified",
-  "revision_retired",
+  "operator_required", "operator_not_allowed", "unit_already_verified", "meaning_already_verified", "revision_retired",
 ]);
 export const checkSettles = (info) => SETTLED_ON_CHECK.has(info.code);
 export function checkNoteText(info) {
@@ -206,7 +216,6 @@ const CODE_TEXT = {
   invalid_operator: "Not saved: an event threshold takes a one-sided operator (>=, >, <=, <).",
   operator_required: "Not saved: this revision is an event threshold, so its operator is confirmed together with the meaning. The revision is read again.",
   operator_not_allowed: "Not saved: this revision has no bound. The revision is read again.",
-  verification_model_unresolved: "Not saved: the meaning of a zone cannot be confirmed yet; how closed and open zones share one bound operator is not decided.",
   unit_already_verified: "Not saved: this unit was already confirmed, perhaps by someone else in the meantime. Check the confirmed unit below; if it is wrong, the correction is a new revision.",
   meaning_already_verified: "Not saved: this meaning was already confirmed, perhaps by someone else in the meantime. Check it below; if it is wrong, the correction is a new revision.",
   revision_retired: "Not saved: this revision is retired and is never changed.",
@@ -214,14 +223,20 @@ const CODE_TEXT = {
   internal_error: "The server could not save it. Nothing was saved. Try again.",
   request_key_reused: "An earlier save of this form may already be stored. Cancel and look at the revision before saving again.",
 };
-export function sourceFieldCodeText(info) {
+// The two operator texts of a zone revision (the form's kind; v42).
+const ZONE_CODE_TEXT = {
+  invalid_operator: "Not saved: a zone takes between (a closed zone) or >= (the open top zone).",
+  operator_required: "Not saved: this revision is a zone, so its operator is confirmed together with the meaning. The revision is read again.",
+};
+export function sourceFieldCodeText(info, form = null) {
+  if (form?.parameterKind === "zone_bounds" && ZONE_CODE_TEXT[info.code]) return ZONE_CODE_TEXT[info.code];
   return CODE_TEXT[info.code] || (info.status ? "Something went wrong. Nothing was saved." : "No answer from the server.");
 }
 // The refusals after which the form no longer fits what is saved: it is closed
 // and the field read again.
 export const CLOSES_FORM = new Set([
   "notFound", "bound_unit_required", "bound_unit_not_allowed", "operator_required", "operator_not_allowed",
-  "verification_model_unresolved", "unit_already_verified", "meaning_already_verified", "revision_retired",
+  "unit_already_verified", "meaning_already_verified", "revision_retired",
 ]);
 // The last question before a write-once act (OptiMove asks before every act
 // it cannot take back: Bind, Reconnect, Unbind).
@@ -229,7 +244,7 @@ export function confirmQuestion(form, body) {
   const what = `${form.fieldName} (revision ${form.revisionNumber})`;
   const value = form.act === "unit"
     ? `as "${body.sourceUnit}"${body.sourceBoundUnit ? ` with bounds in "${body.sourceBoundUnit}"` : ""}`
-    : body.boundOperator ? `with the operator ${body.boundOperator}` : "";
+    : body.boundOperator ? `with the operator "${operatorWords(form.parameterKind, body.boundOperator)}"` : "";
   return `Confirm the ${form.act === "unit" ? "unit" : "meaning"} of ${what}${value ? ` ${value}` : ""}, with the evidence ${body.evidenceRef}? It is saved once and never changed; a correction is a new revision.`;
 }
 
