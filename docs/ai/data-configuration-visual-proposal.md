@@ -6,7 +6,7 @@ Variables, Domains & categories and Source fields" (`docs/ai/metrics-core-plan.m
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. The *Rukovodilac* reviewed `c830050` (GO as a document, no BLOCKER, HIGH or MEDIUM; three LOW notes for PR-1, recorded in sections 3.4, 3.5 and 4) and decided R1–R3 (section 10). The owner's choices V1–V5 are pending. |
+| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. The *Rukovodilac* reviewed `c830050` (GO as a document, no BLOCKER, HIGH or MEDIUM; three LOW notes for PR-1, recorded in sections 3.4, 3.5 and 4) and decided R1–R3 (section 10). The owner's choices V1–V5 were made on 2026-10-28 (section 10). |
 | Mockup | `docs/ai/mockups/data-configuration-visual.html` — a static page, opened in any browser. It holds the three layouts at 1280 px (scaled) and 360 px, the icon picker, Settings → Icons, the variables list and the Source fields list. It talks to no server, and every name and number in it is invented. |
 | Verified against commit | `0b947ab` (merge of PR #252). File and line references are to that commit. |
 | Decides | The owner: V1–V5 (section 10). The *Rukovodilac*: R1–R3 (section 10), inside the plan. |
@@ -251,7 +251,11 @@ is as natural as in A.
 
 ## 10. Decisions
 
-**For the owner:**
+**For the owner — decided on 2026-10-28, as recommended.** The owner's words, in the *Rukovodilac*'s chat: „Slažem se
+po preporuci idi” (owner turn `cfeac86e`, 21:58:15 UTC). They answer the *Rukovodilac*'s message that offered „po
+preporuci” for V1–V5. The *Rukovodilac* reads them as V1–V5 accepted as recommended: C, Tabler, I1 (its own PR-1b,
+whose migration needs the owner's order naming it), later, and PNG first. That reading is the *Rukovodilac*'s, not the
+owner's own words. The executor checked the turn in the *Rukovodilac*'s transcript.
 - **V1 — the layout:** A, B or C. Recommended: **C**.
 - **V2 — the icon set:** Tabler (MIT) or Lucide (ISC). Recommended: **Tabler**.
 - **V3 — changing a variable's icon later:** I1 (a small audited migration), I2 (only at create) or I3. Recommended:
