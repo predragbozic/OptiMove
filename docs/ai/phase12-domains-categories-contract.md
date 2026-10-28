@@ -7,7 +7,7 @@ document first, then the implementation, after the owner's decisions below.
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day, for the *Rukovodilac*'s review. No code, no migration. The owner decides O1–O9 (section 4); the *Rukovodilac* proposes how each reaches the owner. |
+| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day; revised the same day after the *Rukovodilac*'s review of `565a954` (two MEDIUM, four LOW, applied in this text). No code, no migration. The owner decides O1–O9 (section 4); the *Rukovodilac* carries them to the owner. |
 | Last verified against commit | `290b6cf` (merge of PR #241), for every file named in section 1. |
 | Owner's words | 2026-10-27, owner turn `655fc5c6` in the *Rukovodilac*'s chat (quoted in the plan, phase 12): variables should be linkable with categories or domains, on the structure the database already has, because fitness may later be defined per domain or category (endurance, speed and the like). |
 
@@ -76,6 +76,11 @@ document first, then the implementation, after the owner's decisions below.
 So a link written today shows up in the pickers' grouping at once, for every viewer who may see both the link and
 its target. The pickers stay unchanged as code (C80). Their grouping is data.
 
+Both pickers group a variable under its **first** visible link only: each skips every later link of the same
+definition (`frontend/training-load-calendar-data.js:368`, `frontend/training-load-analysis-data.js:1546`). So a variable in several categories or domains
+(O3) still shows under one group in the pickers. The other links are kept and used by the Variables tab and by
+`/results`. This is a property of the data, not a code change; the owner should know it before deciding O3.
+
 ### 1.4 What is not known
 - **Whether the older API wrote any `system` or `club` domain, category or link on production.** The owner's
   read-only check of 2026-10-26 counted only `system` / `club` *definitions* (0, C98). The read-only count in
@@ -115,12 +120,15 @@ The goal implies three things:
 ### 3.2 Routes (proposed; under `/api/training-load/sources/metrics`, the M3-0 prefix and its access)
 | # | Route | What it does |
 |---|---|---|
-| C1 | `GET /classification` | the domains and categories of the workspace's owner (in a club workspace also the `system` ones, read-only), with their state and the category → domain links |
-| C2 | `POST /domains`, `POST /categories` | create (`requestKey`, `name`, optional `description`, `key` or the suggested key) |
-| C3 | `POST /domains/:id/rename`, `…/archive`, `…/restore` and the same for categories | as R2's three acts on a variable (J3b), with `reason` for archive |
-| C4 | `POST /links` | create one link of the three shapes (`requestKey`, two of `variableId`, `categoryId`, `domainId`) |
-| C5 | `POST /links/:id/remove` | remove one link (`requestKey`, optional `reason`) |
+| C1 | `GET /classification` | the root: the domains and categories of the workspace's owner (in a club workspace also the `system` ones, read-only), with their state and the category → domain links |
+| C2 | `POST /classification/domains`, `POST /classification/categories` | create (`requestKey`, `name`, optional `description`, `key` or the suggested key) |
+| C3 | `POST /classification/domains/:id/rename`, `…/archive`, `…/restore` and the same for categories | as R2's three acts on a variable (J3b), with `reason` for archive |
+| C4 | `POST /classification/links` | create one link of the three shapes (`requestKey`, two of `variableId`, `categoryId`, `domainId`) |
+| C5 | `POST /classification/links/:id/remove` | remove one link (`requestKey`, optional `reason`) |
 | C6 | `GET /variables?domainId=…&categoryId=…` and the variable detail | the existing list filtered by a domain or a category, and a variable's links in its detail |
+
+Everything new sits under `/classification`, beside `/mappings`, `/fields` and `/variables`; only C6 extends the
+existing variable reads.
 
 - **Access, the identical `404` and the request record** follow the M3-0 / R2 contract (J3, J3b):
   - the owner always comes from the active workspace;
@@ -144,8 +152,27 @@ The goal implies three things:
 
   This is also C98's database twin for classification: the older API, which sets no acting user, can no longer
   write a canonical row (O7). `team` and `user` rows stay outside the guard.
-- **Text rule:** the v40 twin `source_metric_text_ok()` on the new name and description of the new flow's rows, as
-  CHECKs scoped to the canonical owners, so a legacy row is not refused (O9).
+- **Removing a link: the order of writes.** A DELETE leaves no row behind for a deferred check to read. So the
+  change row that carries the removed link's full content (its ids, owner and `temporal_smoothing_enabled`) is
+  written **before** the DELETE, in the same transaction. The DELETE's guard then requires that change row: same
+  link id, kind `link_remove`, the same acting user, this transaction (`xmin`). The request row follows, keyed, last.
+  12b builds exactly this order.
+- **Text rule (the v38 pattern, not a CHECK).** A CHECK added by v41 would be validated against every existing row,
+  so a legacy `system` / `club` name the rule refuses would make v41 fail. `NOT VALID` would only half solve it.
+  Instead, the guard trigger applies `source_metric_text_ok()`:
+  - on an INSERT, to the name (80) and the description (500);
+  - on a rename, only to a value that changes. A value left as it was is exempt, as in v38 (a legacy name stays
+    until it is renamed).
+
+  The new `key` and `description` columns are empty when v41 adds them. v41 still ends with a fail-closed count, as
+  v40 does, over those columns of the canonical rows, in case anything wrote them between the preflight and the
+  migration.
+- **One domain per canonical category (O3).** A partial unique index on `category_id` where
+  `metric_definition_id is null and domain_id is not null and owner_scope in ('system', 'club')`. It allows at most one
+  domain per category whoever owns the domain, so a club category under a `system` domain (O4) counts. `team` and
+  `user` links stay outside the index. If the count of section 6 finds a canonical category with two or more domains
+  already, the index cannot be created: the owner decides which link stays before v41, and v41's preflight refuses
+  until then.
 - **Owner breadth:** v10's trigger stays as it is, and O4 decides the cross-owner shapes.
 - **Rollback, read-only preflight and post-check**, as for v38 and v39.
 
@@ -181,8 +208,10 @@ unchanged.
   - Proposal:
     - a variable may sit under several categories and several domains (the owner's example: one variable can serve
       endurance and speed);
-    - a category sits under at most one domain of the same owner, so the canonical classification is a tree (domain →
-      category). The database gets this as a partial unique index on category → domain links per owner (v41).
+    - a canonical category sits under at most one domain, whoever owns the domain (a club category under a `system`
+      domain counts, O4), so the canonical classification is a tree (domain → category). The database gets this as
+      the partial unique index of 3.3 (v41).
+    - The pickers still group a variable under its first link only (1.3).
   - Alternative: several domains per category (no index).
 - **O4, across owners.**
   - Proposal, all allowed by v10's breadth trigger:
@@ -217,9 +246,12 @@ unchanged.
   - Proposal: before the contract is accepted, the owner's read-only count (section 6) shows what exists.
   - If `system` or `club` rows exist:
     - they stay readable and become the new API's rows, with a NULL key (O5);
-    - their names are not re-checked by the text rule until renamed;
-    - the CHECKs of 3.3 are scoped so that a legacy row is not refused, as v38 / v40 did.
-  - If the count shows a name the text rule refuses, the owner decides before v41.
+    - their names are not re-checked by the text rule until renamed (the trigger of 3.3, the v38 pattern), so a
+      legacy name never makes v41 fail;
+    - a canonical category with two or more domains blocks the index of 3.3: the owner decides which link stays
+      before v41.
+  - A legacy name the text rule would refuse is shown by v41's preflight as information; it is corrected only by a
+    rename.
 
 ## 5. Out of scope
 - Phase 11 (derived variables, fitness per domain or category). This contract only gives it a stable key (O5).
@@ -241,9 +273,21 @@ select l.owner_scope as link_owner, d.owner_scope as variable_owner, count(*)
   from training_load.metric_structure_links l
   join training_load.metric_definitions d on d.id = l.metric_definition_id
  group by 1, 2 order by 1, 2;
+-- Canonical categories with more than one domain (they would block the index of 3.3, O3).
+select count(*) as categories_with_several_domains
+  from (select category_id from training_load.metric_structure_links
+         where metric_definition_id is null and domain_id is not null and category_id is not null
+           and owner_scope in ('system', 'club')
+         group by category_id having count(*) > 1) x;
+-- Canonical links that name all three ids (O2).
+select count(*) as canonical_triples
+  from training_load.metric_structure_links
+ where domain_id is not null and category_id is not null and metric_definition_id is not null
+   and owner_scope in ('system', 'club');
 rollback;
 ```
-It returns counts only, no names. Expected: no `system` or `club` rows, if the older API was never used for them.
+It returns counts only, no names. Expected: no `system` or `club` rows, if the older API was never used for them; so
+the last two counts are 0.
 
 ## 7. Split and gates (proposed)
 - **12a:** this contract (docs only). It needs the *Rukovodilac*'s review, the owner's decisions O1–O9 and the count
