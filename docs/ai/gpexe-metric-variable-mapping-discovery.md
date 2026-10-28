@@ -2897,7 +2897,7 @@ jsonRequired` only for a caller who may verify.
 |---|---|---|---|---|---|
 | F1 | `GET /fields/:fieldId` | as `GET /fields` (C94) | — | `200 {field:{id, sourceSystem, apiFamily, key, label, state, revisions:[revision]}, verifications:[{revisionId, act, at, evidenceRef}]}` (`act` `unit` or `meaning`; never who) | `404`, `400 invalid_query`, `409 result_too_large` |
 | F2 | `POST /fields/:fieldId/revisions/:revisionId/unit-verification` | an active platform admin in the platform workspace (C94) | `requestKey`*, `sourceUnit`* (a unit token), `sourceBoundUnit` (exactly for a zone or an event threshold), `evidenceRef`* | `201 {revision, replayed:false}`; replay or verified COMMIT `200` | `400 invalid_body`, `invalid_unit`, `invalid_evidence_ref`, `bound_unit_required`, `bound_unit_not_allowed`; `404`; `409 unit_already_verified` (+`current`), `revision_retired`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` |
-| F3 | `POST /fields/:fieldId/revisions/:revisionId/meaning-verification` | the same | `requestKey`*, `boundOperator` (exactly for an event threshold, one-sided: `>=`, `>`, `<=`, `<`), `evidenceRef`* | as F2 | `400 invalid_body`, `invalid_evidence_ref`, `invalid_operator` (also `between` on an event threshold), `operator_required`, `operator_not_allowed`; `404`; `409 verification_model_unresolved` (every zone revision, C89: after the right (`404`), the path ids, the body's keys and `requestKey`, the request record and the revision's existence (`404`); before the state, the operator, the reference and the right's re-check), `meaning_already_verified` (+`current`), `revision_retired`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` |
+| F3 | `POST /fields/:fieldId/revisions/:revisionId/meaning-verification` | the same | `requestKey`*, `boundOperator` (exactly for an event threshold, one-sided: `>=`, `>`, `<=`, `<`), `evidenceRef`* | as F2 | `400 invalid_body`, `invalid_evidence_ref`, `invalid_operator` (also `between` on an event threshold), `operator_required`, `operator_not_allowed`; `404`; `409 verification_model_unresolved` (until v42: every zone revision, C89; since v42 a zone's meaning act takes `between` or `>=`, otherwise `400 operator_required` or `invalid_operator` with the zone's text, after the state and before the reference, J7), `meaning_already_verified` (+`current`), `revision_retired`, `request_key_reused`, `try_again`; `503 outcome_unknown`; `500 internal_error` |
 
 - **A revision:** `{id, fieldId (in F2 / F3), revisionNumber, state, valueShape, parameterKind, supportsSession,
   supportsDrill, expectedSourceUnit, sourceUnit, expectedSourceBoundUnit, sourceBoundUnit, boundOperator,
@@ -2922,7 +2922,7 @@ jsonRequired` only for a caller who may verify.
   lookup `source_metric_audit_v37_revision_idx` and the unique `source_metric_audit_v37_verification_once`,
   one verification row per revision and act); no table, column or data. The acting user (the v35 setting)
   is an active platform admin (`42501`) and the user the act names (`42501`); everything else is `23514`:
-  a write that is not exactly one act (C90), a zone's meaning act (C89), an event threshold's meaning act
+  a write that is not exactly one act (C90), a zone's meaning act (C89; since v42 only one without `between` or `>=`, J7), an event threshold's meaning act
   without a one-sided operator (C89), a first `evidence_ref` other than the completing act's reference
   (C92); a savepoint fails closed. Depends on the v35 functions; the v35 and v36 rollbacks refuse while v37
   is recorded.
@@ -2957,12 +2957,14 @@ jsonRequired` only for a caller who may verify.
     - the first field's autofocus opens the phone's keyboard; it stays, as in the Variables forms;
     - a field's current revision is its active one, otherwise the first the server lists. Today every field has
       exactly one active revision, so this has no effect; the lifecycle UI must choose the newest explicitly.
-- **What the nine seeded `rest_v1` fields still need (C97; none is confirmed, and none may be before C91):**
+- **What the seeded `rest_v1` fields still need (C97; none is confirmed, and none may be before C91): the nine of v34 and the
+  open top zone field of v42 (J7)**
 
   | Field | The unit act needs | The meaning act needs |
   |---|---|---|
   | `athlete_session.total_time`, `total_distance`, `max_v` | the server3 raw value against the GPEXE UI for the same field, session and athlete (the expected factors 60 for minutes, 1, 3.6 for km/h are hypotheses) | the field's definition from GPEXE documentation or support |
-  | `more.complementary_data.power.distance`, `speed.distance` | the distance unit (the UI zone table) and the bound unit from the server3 threshold set against the team's settings in the UI (W/kg, m/s) | blocked until the zone model is decided (C89) |
+  | `more.complementary_data.power.distance`, `speed.distance` | the distance unit (the UI zone table) and the bound unit from the server3 threshold set against the team's settings in the UI (W/kg, m/s) | the operator of the field's shape - `between` for the power field's closed zones, `>=` for the speed field's one open zone (Z3) - and the inclusivity of the bounds, from documentation or support (Z4, J7) |
+  | `more.complementary_data.power.distance.open_top` (v42) | as the power field: the distance unit and the bound unit (W/kg) | `>=` for the open top zone (the zone whose upper extreme is null) and the inclusivity of its lower bound, from documentation or support (Z4, J7) |
   | `more.events.acceleration_events_count`, `deceleration_events_count` | `count` and the threshold's unit (the seed carries no hypothesis for it) | the operator (`>=` or `>`, `<=` or `<`) and the meaning from documentation or support |
   | `details.players.tot_burst_events`, `tot_brake_events` | `{unit: "number"}` is a shape, not a unit | the meaning, which GPEXE support must confirm |
 - **Tests:** the migration and the rehearsed rollback, the database guards (no actor, another user, a
@@ -3031,8 +3033,9 @@ are confirmed on production by the owner's statement.
 - **The other suites:** the M2, M3-0, M2b and R2 suites write their revisions through
   `backend/tests/support/source-revisions.mjs` (the lifecycle's database path, every guard on). Two exceptions, neither
   a lifecycle write:
-  - M2's zone fixtures write a zone's meaning act, which the database refuses until the zone model is decided (C89),
-    with v37's act guard and audit link off for that one statement (`zoneMeaningAsFutureDecision`);
+  - M2's zone fixtures write a zone's meaning act, which the database refused until the zone model was decided (C89),
+    with v37's act guard and audit link off for that one statement (`zoneMeaningAsFutureDecision`); v42 lifts that
+    refusal for `between` and `>=` (J7), and the fixture is left as it is (it still passes);
   - the M2b suite's v37 rehearsal database stops at v37, so it keeps the old fixture there.
 - **Known limit** (`security-reviewer`, MEDIUM, phase 4): the pinned step disables every pinned `needs_review` version
   in one transaction, with no cap on their number. M2 has no write quota (C68). Many submitted versions on one revision
@@ -3189,7 +3192,7 @@ backend, API contract or migration changed. The owner deployed it by hand with `
     hardware Back, a native `confirm()` in PWA mode.
 - **O8 stays a follow-up:** the older reads show a club's domains and categories to its club admins only.
 
-### J7. The zone model, option A — phase 5b (accepted; not implemented)
+### J7. The zone model, option A — phase 5b (accepted; implemented in an open pull request)
 
 The contract is the separate document `docs/ai/phase5-zone-model-contract.md` (phase 5b of
 `docs/ai/metrics-core-plan.md`). It was accepted on 2026-10-28 (C103). In short:
@@ -3201,7 +3204,45 @@ The contract is the separate document `docs/ai/phase5-zone-model-contract.md` (p
   answered.
 - **The phase 6 meaning form:** a required operator choice for a zone.
 
-The implementation records what it built here, as J5 and J6 do.
+**As built** (phase 5b pull request; base `82fbb3c`, rebased in content onto the merge of PR-1 before review):
+- **Migration v42** (`migrations_v2/202610282300_training_load_v42_source_metric_zone_model.sql`), in order:
+  - `share row exclusive` on T2a and T2b, then the two fail-closed refusals (`23514`, fixed messages): the field
+    `.open_top` already exists; a `zone_bounds` revision already carries a meaning proof or an operator;
+  - `source_metric_require_seed_window()` replaced: v42's own marker while v42 is not recorded, every other marker
+    `42501` (v34's body with v42's marker);
+  - the seed: the T2a row (`gpexe` / `rest_v1` / `.open_top`, "Power zone distance (open top zone)") and its revision 1
+    (`zone_distance` / `zone_bounds`, session and drill, expected `m` and `W/kg`, P3's unit note, `observed` with P2's
+    reference, `active`, no proof, no actor, no T8 row);
+  - `source_metric_revisions_actor_guard()` replaced by v39's body with the zone branch only changed: a zone's meaning
+    act needs `bound_operator` in (`between`, `>=`), else `23514` "a zone takes the operator between or >=" (a NULL
+    operator included); every other branch byte for byte v39's (the test compares the two bodies);
+  - comments on both functions naming v42, C102 and C103. No table, column, constraint, index or trigger.
+- **F3** (`backend/src/sourceFieldVerificationService.js`): after the state and `meaning_already_verified`, a zone
+  without `boundOperator` is `400 operator_required` and any other operator than `between` or `>=` is
+  `400 invalid_operator`, each with the zone's text ("A zone takes between (a closed zone) or >= (the open top
+  zone)."); an unknown operator is `400 invalid_operator` for every kind; the request hash keeps `source-fields/v1`;
+  `verification_model_unresolved` is no longer answered (the frontend's code table keeps its sentence for an older
+  server during a deploy).
+- **Scripts:** `docs/runbooks/source-metric-zone-model-v42-rollback.sql` (section 3.4: the refusals, exactly the two
+  v34 delete guards off for its own transaction, `tgenabled` checked before the COMMIT, v39's and v34's bodies
+  restored verbatim, their comments cleared), `…-preflight.sql` (nine blocks; the two bodies proven by their md5),
+  `…-postcheck.sql` (seven blocks) and the runbook `source-metric-zone-model-v42.md` (the deploy order and the
+  recovery after a lock timeout).
+- **Tests:** `backend/tests/source-metric-zone-model-v42.test.mjs` (disposable; a rehearsal database through v41 and a
+  behaviour database through v42): the preflight's every value; the rollback without v42; both fail-closed refusals
+  (nothing left); v42 through the runner (only the two bodies change, the guard equal to v39's but for the zone
+  branch, the exact seed, the post-check's every value, the seed window closed for every marker); each rollback
+  refusal (nothing changed); the rollback back to v41's exact catalog, comments and content, and v42 again to the same
+  catalog and seed; the database rule (`between` and `>=` saved, `>`, `<=`, `<` and NULL `23514`, the event threshold
+  and a plain field unchanged, no actor and a club admin `42501`, the seed path closed); F3 through the real route on
+  the three seeded zone fields (each refusal with the zone's text, nothing written; `verified` after both acts with
+  one T8 row per act; the replay and `request_key_reused`; the identical `404` for a club admin and a platform admin
+  in a club workspace); M2 end to end (a closed zone of 25–60 W/kg on the power field and an open zone of ≥ 75 W/kg on
+  `.open_top` created; the other operator `409 parameters_not_equivalent`, and forced past the route `23514` from
+  T4); a dump and restore. Ten mutations of the migration, F3 and the rollback, all killed by the test that names the
+  rule. Updated for v42 (the full test migration list now ends at v42): M2b's database guard (test 2), its zone route
+  test (test 3's operator and test 7) and its seed count (test 15); the v39 suite's seed snapshot (tests 6 and 14);
+  the 12b suite's check that v41 was the last test migration.
 
 ---
 
@@ -3219,7 +3260,7 @@ Decisions that may safely wait, with the PR that takes them:
 - which activations are `required` in the pilot (M6);
 - the evidence that closes `unit_evidence_ref` and `meaning_evidence_ref` for server3 (M6, gate 2) - its
   standard is decided (C97), what each seeded field still needs is listed in J4, and the owner collects it;
-- the revision lifecycle (C91), before the first real production confirmation, and the zone model (C89);
+- the revision lifecycle (C91), before the first real production confirmation, and the zone model (C89; v42, J7);
 - the throttle of the M2 routes (M2); their read and write bounds are decided (C70, J1);
 - the test-runner kind of the M1 suites — `disposable`, through the T1 runner (as built);
 - whether a system-owned zone or threshold mapping may show one team's bounds to every club admin,
