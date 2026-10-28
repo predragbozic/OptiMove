@@ -30,7 +30,9 @@ Q10 part B as its own migration v40 (section 6), and the record of PR #238's mer
 Added on 2026-10-28: the Done entry of phase 4 (section 5) and the Q10 part B line of section 6 marked done; later the
 same day, phase 12's accepted contract (C101, section 5) and the Done entry of 12b (section 5); later still, the Done
 entries of 12c and phase 6, the owner's decision of phase 5 (C102, section 5), and the Data configuration visual polish
-task (section 6); then phase 5b ★★ with its migration v42 (C103, section 5).
+task (section 6); then phase 5b ★★ with its migration v42 (C103, section 5); later still, the owner's guidance for the
+Data configuration screens and on sources and users (section 6), its line in phases 8 and 11 (section 5), the future item
+of a private coach's own source and variables (section 6), and PR-1's merge (section 6).
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
@@ -42,7 +44,8 @@ Done entries of phases 2b and 2c, phases 11 and 12, the Q10 line of section 6) w
 #237); what PR #240 added, against `b358dae` (merge of PR #238); the Done entry of phase 4, against `290b6cf` (merge of
 PR #241); phase 12's contract line, against `d96936c` (merge of PR #242); the Done entry of 12b, against `9361fff` (merge
 of PR #247); the Done entries of 12c and phase 6 and phase 5's decision, against `cf387f2` (merge of PR #251); phase
-5b, against `0b947ab` (merge of PR #252).
+5b, against `0b947ab` (merge of PR #252); the owner's guidance of 2026-10-28 and PR-1's merge, against `0e38ae9` (merge of
+PR #256).
 
 ## 1. Who does what
 
@@ -688,6 +691,13 @@ order covers is merged under it.
 
 ### Phase 8 ★: M3 Mappings tab, after 7b and 7d
 - **Acceptance:** an activation's confirmation names the source, the mapping version, the team and the binding.
+- **The owner's guidance** (owner turn `d9a0b800`, 2026-10-28, section 6): „Stim sto ovo mora biti mnogo jednostavnijeg
+  za korisnika”.
+  - As the *Rukovodilac* reads it, this phase's contract holds a guided flow in three steps: choose the field, choose
+    the variable, then confirm the unit or the conversion. Where the units are the same, the screen suggests the match.
+  - `ux-design-reviewer` gets the owner's sentence as an acceptance criterion.
+  - The API stays as it is, and a mapping still needs a confirmed unit: the simplicity is in the guidance, never in
+    fewer checks.
 
 ### Phase 9 ★★: M4, the importer integration
 - Triggers 1, 3 and 4; the five-point rule for transactions; the import switch stays off.
@@ -729,6 +739,13 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
   - „npr total acc&dec” (owner message `c77a90ab`, 11:48:28 UTC, sent while the *Rukovodilac*'s turn was running);
   - „iz gpexe se uvoze posebno i mogu da se i kod nas ubacuju posebno npr ali mi trebaju i kao total” (owner turn
     `7f53b09a`, 11:48:47 UTC).
+- **Owner, 2026-10-28** (in the *Rukovodilac*'s chat, owner turn `269910e0`, sent at 23:27:25 UTC; section 6): „Takodje
+  mi u budućnosti možemo imati više sources. A različiti korisnici različite sources tako da ce svako sebi to povezivati
+  i praviti nove varijable izvedene varijable ako im to treba npr acc i dec total...”.
+  - The *Rukovodilac* reads it as the same need this phase records. The place and the order of the phases do not
+    change.
+  - Its reading also names two things for this phase's contract: provenance in the style of T6, and a screen in the
+    coach's language (the owner's guidance in section 6).
 - **Who decided what:**
   - The owner's words establish the need: a total of variables that are imported, or entered, separately.
   - The place and the gate below are the *Rukovodilac*'s proposal. Its answer (its message `4731bb25`, 11:48:57
@@ -942,7 +959,9 @@ Each one is a plan change, so the owner schedules it:
 - the v35 / v36 test hardening;
 - separate database roles;
 - **Data configuration: visual polish of Variables, Domains & categories and Source fields** (scheduled by the owner on
-  2026-10-28; see below).
+  2026-10-28; see below);
+- **a private coach's own source and own variables** (recorded on 2026-10-28, not scheduled; see "Sources and users"
+  below).
 
 **Data configuration: visual polish.** The owner's words, in the *Rukovodilac*'s chat, verbatim. The executor checked
 each turn in the *Rukovodilac*'s transcript:
@@ -991,8 +1010,8 @@ is the *Rukovodilac*'s.
   *Rukovodilac*'s GO.
 - **Decided (2026-10-28, `docs/ai/data-configuration-visual-proposal.md` section 10):** the owner's V1–V5 as
   recommended (layout C, Tabler Icons, I1 as PR-1b, domain and category icons later, PNG first), as the *Rukovodilac*
-  reads the owner's words; the *Rukovodilac*'s R1–R3. **PR-1 is implemented in an open pull request** (no migration;
-  the proposal's section 11 records it as built). Next: PR-2 (dragging), and PR-1b only on the owner's order naming
+  reads the owner's words; the *Rukovodilac*'s R1–R3. **PR-1 is merged** (PR #256, `0e38ae9`, 2026-10-28; no migration;
+  not deployed yet; the proposal's section 11 records it as built). Next: PR-2 (dragging), and PR-1b only on the owner's order naming
   its migration.
 - **Not in step 1:** an icon on a domain or a category of variables. `metric_domains` and `metric_categories` have no
   icon column (v10, v41), so it needs a migration, which is an owner's option.
@@ -1007,6 +1026,67 @@ is the *Rukovodilac*'s.
 
   Its contract comes first (a document, to the *Rukovodilac*, the *Nezavisni revizor* and then the owner), and the
   migration only on the owner's order that names it.
+
+**The owner's guidance for these screens** (2026-10-28, in the *Rukovodilac*'s chat, verbatim). The executor checked
+each turn in the *Rukovodilac*'s transcript with `get_event`:
+- owner turn `981ef233`, 23:24:21 UTC: „Neka ide kako si zamislio”. By the *Rukovodilac*'s account it answered the
+  order the *Rukovodilac* had described: PR-1, then phase 5b (v42), then PR-2 (dragging), then the Mappings screen
+  (phase 8). That context is the *Rukovodilac*'s;
+- owner turn `d9a0b800`, 23:24:46 UTC: „Stim sto ovo mora biti mnogo jednostavnijeg za korisnika”. By the
+  *Rukovodilac*'s account the owner had looked at the deployed Source fields screen in a club workspace and asked
+  whether source fields could already be linked to canonical variables.
+
+How the *Rukovodilac* reads it (its message queued at 23:25:14 UTC; its reading, not the owner's words):
+1. In the visual pass, Source fields and Variables speak the coach's language, not an engineer's:
+   - introductions of one sentence;
+   - the evidence legend as a chip that explains itself on a tap;
+   - technical keys, codes and ids only under Technical details;
+   - one primary action per screen;
+   - empty states that name the next step, for example "Confirm the unit first" with a link;
+   - no abbreviations such as T2b, F3 or C97 in the screens' text.
+2. The Mappings screen (phase 8) is a guided flow of three steps, with a suggestion where the units are the same.
+   `ux-design-reviewer` gets the owner's sentence as an acceptance criterion (phase 8).
+3. No API changes, and a mapping still needs a confirmed unit: the simplicity is in the guidance, not in fewer checks.
+
+What of point 1 PR-1 already holds (checked against `0e38ae9`):
+
+| Item | In PR-1 | Left for |
+|---|---|---|
+| One primary action per screen | Yes: the start screen's cards; Domains and Categories, each with one primary button | — |
+| Empty states that name the next step | Partly: Domains and Categories name the step and link to it ("Create the first one with New domain", "Open Domains") | Source fields: with phase 8, when a field's next step is a mapping |
+| No abbreviations such as T2b, F3 or C97 | Yes: none in these screens' text (only in code comments) | — |
+| Introductions of one sentence | No: Source fields' has two sentences and names `docs/` | the language pass below |
+| The evidence legend as a chip that explains itself on a tap | No: PR-1 made it four badges, each followed by its meaning | the language pass below |
+| Keys, codes and ids only under Technical details | Variables, Domains and Categories: yes. Source fields: no, a field's key and codes stand in its detail line and its forms | the language pass below |
+
+**The language pass** is a small frontend pull request of its own, with or after PR-2, as the *Rukovodilac* orders. It
+changes no API.
+
+**Sources and users: the owner's word of 2026-10-28.** Owner turn `269910e0` in the *Rukovodilac*'s chat, sent at
+23:27:25 UTC; it reached the *Rukovodilac*'s conversation at 23:40:09 UTC. The executor checked it in the transcript with
+`get_event`: „Takodje mi u budućnosti možemo imati više sources. A različiti korisnici različite sources tako da ce
+svako sebi to povezivati i praviti nove varijable izvedene varijable ako im to treba npr acc i dec total...”. The order of
+the phases does not change.
+
+How the *Rukovodilac* reads it (its message queued at 23:40:44 UTC; its reading), with the executor's check of the code
+at `0e38ae9`:
+- **More sources.** This is already the architecture, so nothing is new:
+  - the Imports track is source-neutral, with one Source card per source;
+  - a source field is identified by its source system and API family (T2a, v34);
+  - a mapping is activated per team binding (T5).
+- **Different users with different sources, each linking their own.** Today:
+  - a source connection belongs to a club and is managed by the club's admin or a platform admin (F3c2e).
+    `backend/src/sourceConnectionService.js` writes `owner_scope = 'club'` only, although v27 also allows `team`;
+  - the canonical-variable API writes system and club variables only: the owner comes from a platform or a club
+    workspace. `metric_definitions.owner_scope` also allows `team` and `user` (v10);
+  - so a private coach (the `private_coach` workspace) has no way to a connection or to variables of their own.
+
+  Recorded as a future item, not scheduled and without a date: **a private coach's own source and own variables**
+  (`owner_scope = 'user'`), on the pattern of ADR-002. The *Rukovodilac* reads it as ★★. The owner decides when it
+  comes up.
+- **Derived variables** (for example a total of accelerations and decelerations): phase 11 (section 5), under the
+  decision of 2026-09-17 that a value OptiMove computes is never stored as a value the source delivered. The
+  *Rukovodilac*'s reading of its place, after M4 and M6, fits phase 11's start after phase 9 (M4).
 
 PR #220 is not part of this plan. If it runs in parallel, it is merged in sequence with #218 (they share
 `frontend/training-load-actions.js`), and the training-load actions tests are run again.
