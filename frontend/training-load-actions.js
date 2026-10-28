@@ -5,6 +5,7 @@ import {
 import { handleActivityRosterAction, loadRosterForOpenActivity, rosterMayBeLeft, rosterUnloadShouldWarn } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
 import { loadVariablesSection, resetVariables, variablesMayBeLeft, variablesUnloadShouldWarn } from "./metric-variables-actions.js";
+import { loadSourceFieldsSection, resetSourceFields, sourceFieldsMayBeLeft, sourceFieldsUnloadShouldWarn } from "./source-fields-actions.js";
 import { addDaysIso, addMonthsIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthStartIso, weekMondayIso } from "./utils.js";
 import {
   captureTrainingLoadAthleteWeeklyMutationContext,
@@ -121,6 +122,7 @@ export function loadTrainingLoadSectionData(section, render) {
   if (section === "analysis") return loadTrainingLoadAnalysis(render);
   if (section === "imports") return loadGpexeImports(render);
   if (section === "variables") return loadVariablesSection(render);
+  if (section === "source-fields") return loadSourceFieldsSection(render);
   return loadTrainingLoadWeekly(section, render);
 }
 
@@ -225,10 +227,12 @@ export function confirmLeaveTrainingLoad(_nextTab, { discard = true } = {}) {
   // form not saved is asked about; the reset of a workspace switch or the
   // leave below drops it.
   if (state.trainingLoad.section === "variables" && !variablesMayBeLeft()) return false;
+  if (state.trainingLoad.section === "source-fields" && !sourceFieldsMayBeLeft()) return false;
   if (!discard) return analysisEditorMayBeDiscarded() && analysisLayoutMayBeDiscarded();
   const left = releaseAnalysisEditorDraft() && releaseAnalysisLayoutDraft();
   // A variable form the coach agreed to leave is not shown again on return.
   if (left && state.trainingLoad.variables) state.trainingLoad.variables.form = null;
+  if (left && state.trainingLoad.sourceFields) state.trainingLoad.sourceFields.form = null;
   // Leaving Training Load drops the GPEXE names and dates of birth the
   // Imports view held (they live in the open view's memory only).
   if (left && _nextTab !== "training-load") clearGpexeIdentities();
@@ -260,7 +264,7 @@ function importsBatchMayBeLeft(nextTab) {
 // browser's own (a custom one would not be shown). Otherwise nothing is
 // blocked. Returns whether it asked.
 export function handleTrainingLoadBeforeUnload(event) {
-  if (!importsUnloadShouldWarn() && !rosterUnloadShouldWarn() && !variablesUnloadShouldWarn()) return false;
+  if (!importsUnloadShouldWarn() && !rosterUnloadShouldWarn() && !variablesUnloadShouldWarn() && !sourceFieldsUnloadShouldWarn()) return false;
   event.preventDefault();
   // Legacy browsers read the flag from returnValue; the string is not shown.
   event.returnValue = "An import is still running or its result is not confirmed.";
@@ -270,6 +274,7 @@ export function handleTrainingLoadBeforeUnload(event) {
 export function discardTrainingLoadLeaveDrafts() {
   if (state.activeTab !== "training-load") return;
   if (state.trainingLoad.variables) state.trainingLoad.variables.form = null;
+  if (state.trainingLoad.sourceFields) state.trainingLoad.sourceFields.form = null;
   discardAnalysisEditorDraft();
   discardAnalysisLayoutDraft();
   clearGpexeIdentities();
@@ -913,6 +918,14 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
         return true;
       }
       if (state.trainingLoad.variables) state.trainingLoad.variables.form = null;
+    }
+    // The same for a source-field confirmation (phase 6).
+    if (state.trainingLoad.section === "source-fields" && action.dataset.section !== "source-fields") {
+      if (!sourceFieldsMayBeLeft()) {
+        renderTrainingLoad();
+        return true;
+      }
+      if (state.trainingLoad.sourceFields) state.trainingLoad.sourceFields.form = null;
     }
     setTrainingLoadSection(action.dataset.section);
     // perf: the tab strip itself (and whatever this section's own
@@ -2727,7 +2740,8 @@ export function resetTrainingLoadForWorkspaceChange() {
   // show in the new one; the screen itself is left, since the new workspace
   // may not offer it.
   resetVariables();
-  if (state.trainingLoad.section === "variables") setTrainingLoadSection(state.trainingLoad.lastDataAnalysisSection || "today");
+  resetSourceFields();
+  if (state.trainingLoad.section === "variables" || state.trainingLoad.section === "source-fields") setTrainingLoadSection(state.trainingLoad.lastDataAnalysisSection || "today");
   // GPEXE imports: the old object's generation is bumped first, so a check
   // still being polled for the OLD workspace's team stops by itself.
   state.trainingLoad.gpexe.generation += 1;

@@ -292,7 +292,9 @@ export function handleVariablesInput(target, { render }) {
   }
   if (handleClassificationInput(target)) return true;
   const form = s.form;
-  if (!form || form.busy || form.unconfirmed) return Boolean(target.closest?.(".metric-variables-form"));
+  // Only the Variables screen's own forms (data-metric-variables-form): another
+  // form that shares their look (Source fields) handles its own typing.
+  if (!form || form.busy || form.unconfirmed) return Boolean(target.closest?.("[data-metric-variables-form]"));
   const level = target.closest?.("[data-mv-level]");
   if (level) {
     const value = level.dataset.mvLevel;

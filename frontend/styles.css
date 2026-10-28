@@ -18719,3 +18719,48 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
     padding-left: 10px;
   }
 }
+/* Source fields of a data source (phase 6): a unit or an evidence reference is
+   shown as escaped code text and may be long (a docs/ path), so it wraps; the
+   revision's head and its two acts wrap on a narrow screen. */
+.source-fields-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Never below 12 px, also inside a muted line: a unit is what is confirmed. */
+  font-size: max(0.9em, 12px);
+  overflow-wrap: anywhere;
+}
+/* A refusal or an unchecked result is a warning, never the saved notice. */
+.metric-variables-notice.is-warning {
+  border-left-color: var(--tlc-warning-border, #f0d6a0);
+  background: var(--tlc-warning-soft, #fff4e0);
+  color: var(--tlc-warning, #8a5a00);
+}
+.source-fields-evidence.is-verified {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* A long docs/ reference takes the whole row of the facts. */
+.metric-variables-facts > .source-fields-wide {
+  grid-column: 1 / -1;
+}
+.source-fields-revision-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.source-fields-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+@media (max-width: 760px) {
+  .source-fields-acts {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .source-fields-acts .plain-button {
+    width: 100%;
+    justify-content: center;
+  }
+}

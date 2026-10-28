@@ -6,6 +6,8 @@ import { renderTrainingLoadCalendarHtml } from "./training-load-calendar-view.js
 import { renderGpexeImportsHtml } from "./gpexe-import-view.js";
 import { variablesContext } from "./metric-variables-data.js";
 import { renderVariablesHtml } from "./metric-variables-view.js";
+import { sourceFieldsContext } from "./source-fields-data.js";
+import { renderSourceFieldsHtml } from "./source-fields-view.js";
 
 // Training load (RPE/sRPE), first complete phase. Deliberately its own
 // visual language - white surfaces, neutral gray borders, dark text, muted
@@ -1451,7 +1453,7 @@ function trainingLoadFilterCount() {
 // Pure, exported so both the render side and tests can assert space
 // membership directly instead of re-deriving it from markup.
 export function trainingLoadTopLevelSpace(section) {
-  if (section === "variables") return "dataConfig";
+  if (section === "variables" || section === "source-fields") return "dataConfig";
   return section === "schedule" ? "schedule" : "dataAnalysis";
 }
 
@@ -1548,6 +1550,24 @@ const DATA_ANALYSIS_SUBVIEWS = [
   { section: "imports", label: "Imports" },
 ];
 
+// Data configuration (C80): Variables, and Source fields for an administrator
+// in the platform or a club workspace (phase 6). A team workspace gets the
+// Variables view only (C99), so it has no sub-navigation.
+const DATA_CONFIG_SUBVIEWS = [
+  { section: "variables", label: "Variables" },
+  { section: "source-fields", label: "Source fields" },
+];
+function renderDataConfigSubNavHtml(section) {
+  if (!sourceFieldsContext()) return "";
+  return `
+    <div class="training-load-subnav" role="tablist" aria-label="Data configuration views">
+      ${DATA_CONFIG_SUBVIEWS.map((v) => `
+        <button type="button" class="training-load-subnav-tab ${section === v.section ? "is-active" : ""}" role="tab" aria-selected="${section === v.section ? "true" : "false"}" data-action="training-load-section" data-section="${v.section}">${v.label}</button>
+      `).join("")}
+    </div>
+  `;
+}
+
 function renderDataAnalysisSubNavHtml(section) {
   return `
     <div class="training-load-subnav" role="tablist" aria-label="Data & Analysis views">
@@ -1578,7 +1598,7 @@ export function renderTrainingLoadCoachHtml() {
             // R2 (C99): also a team workspace of a club, for its coach - the
             // Variables view only, never Source fields or Mappings. The server
             // answers anyone else with 404.
-            ? `<button type="button" class="training-load-tab ${space === "dataConfig" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataConfig" ? "true" : "false"}" data-action="training-load-section" data-section="variables">${renderTrainingLoadTabIcon("dataConfig")}<span>Data configuration</span></button>`
+            ? `<button type="button" class="training-load-tab ${space === "dataConfig" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataConfig" ? "true" : "false"}" data-action="training-load-section" data-section="${space === "dataConfig" ? section : "variables"}">${renderTrainingLoadTabIcon("dataConfig")}<span>Data configuration</span></button>`
             : ""}
         </div>
         ${space === "dataConfig" ? ""
@@ -1597,6 +1617,7 @@ export function renderTrainingLoadCoachHtml() {
       ${section === "analysis" ? `<p id="training-load-filter-note" class="muted training-load-filter-note">Club, team and athlete filters are not available for Dashboards yet.</p>` : ""}
       ${section === "imports" ? `<p id="training-load-filter-note" class="muted training-load-filter-note">Club, team and athlete filters do not apply to Imports.</p>` : ""}
       ${space === "dataAnalysis" ? renderDataAnalysisSubNavHtml(section) : ""}
+      ${space === "dataConfig" ? renderDataConfigSubNavHtml(section) : ""}
       ${section === "overview" ? renderTrainingLoadOverviewHtml() : ""}
       ${section === "today" ? renderTrainingLoadCalendarHtml() : ""}
       ${section === "schedule" ? renderTrainingLoadScheduleHtml() : ""}
@@ -1604,6 +1625,7 @@ export function renderTrainingLoadCoachHtml() {
       ${section === "analysis" ? renderTrainingLoadAnalysisHtml() : ""}
       ${section === "imports" ? renderGpexeImportsHtml() : ""}
       ${section === "variables" ? renderVariablesHtml() : ""}
+      ${section === "source-fields" ? renderSourceFieldsHtml() : ""}
       ${state.trainingLoad.filterPicker.open ? renderTrainingLoadFilterPickerHtml() : ""}
     </div>
   `;
