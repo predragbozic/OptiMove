@@ -6,7 +6,7 @@ Variables, Domains & categories and Source fields" (`docs/ai/metrics-core-plan.m
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. |
+| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. The *Rukovodilac* reviewed `c830050` (GO as a document, no BLOCKER, HIGH or MEDIUM; three LOW notes for PR-1, recorded in sections 3.4, 3.5 and 4) and decided R1–R3 (section 10). The owner's choices V1–V5 are pending. |
 | Mockup | `docs/ai/mockups/data-configuration-visual.html` — a static page, opened in any browser. It holds the three layouts at 1280 px (scaled) and 360 px, the icon picker, Settings → Icons, the variables list and the Source fields list. It talks to no server, and every name and number in it is invented. |
 | Verified against commit | `0b947ab` (merge of PR #252). File and line references are to that commit. |
 | Decides | The owner: V1–V5 (section 10). The *Rukovodilac*: R1–R3 (section 10), inside the plan. |
@@ -98,6 +98,8 @@ The order is approved: step 1, then step 2. Nothing else is approved yet (plan, 
   library's key list (`backend/src/iconKeys.js`, written by the same generator; a test proves the two lists agree)
   and stores `icon:<key>`. The key is covered by the request hash as part of the body. v36's guard does not read the
   column, so it needs no change.
+  - **For PR-1 (the *Rukovodilac*'s LOW-1):** a request without `iconKey` must hash exactly as before, so a replay of an
+    older create keeps its answer. The body is canonicalized without absent keys, and a test proves it.
 - **A finding — changing the icon later needs a migration.** v38's audited change record of a canonical variable covers
   the label, short label, description and state only (`migrations_v2/202610271000_training_load_v38_metric_variable_changes.sql`,
   the trigger `AFTER UPDATE OF label, short_label, description, state`, and the change table's `old_*` / `new_*`
@@ -119,7 +121,7 @@ The order is approved: step 1, then step 2. Nothing else is approved yet (plan, 
 - Each source field gets a fixed icon by its value shape (distance, time, speed, zone, events), drawn from the
   library. This is frontend only: no column and no API change.
 - The evidence badges get the four colours of the legend: Not proven grey, Documented blue, Observed amber, Verified
-  green.
+  green. Colour is never the only carrier: every badge keeps its word (the *Rukovodilac*'s LOW-2).
 
 ### 3.6 Domains and categories of variables (V4, not in step 1)
 - An icon on a domain or a category needs a migration: one nullable column per table, with the same value rule and
@@ -157,6 +159,9 @@ colour, bold titles, a muted second line, a chevron for "opens another screen", 
   - For: the most like Home and the easiest on a phone (one column). It also replaces the two look-alike segmented
     controls with one start screen.
   - Against: one more step to reach a list, and a new start screen to keep up to date.
+  - **For PR-1 (the *Rukovodilac*'s LOW-3):** the start screen's counts and first rows must not cost four separate
+    reads. They come from one read: the existing lists with a small limit, or one summary read if that is needed. No
+    new API contract is added where the existing reads suffice.
 
 **Recommendation: C**, because the owner asked for Home's look and feel, and separate Domains and Categories screens
 answer "razdvojiti domene od kategorija" most directly. Its Categories screen takes A's tray and drop zones, so dragging
@@ -255,7 +260,7 @@ is as natural as in A.
   Recommended: **later**; the filled and outlined tiles separate them in the meantime.
 - **V5 — own icons (step 2), PNG only first:** yes, or PNG and SVG together. Recommended: **PNG first**.
 
-**For the *Rukovodilac* (inside the plan):**
+**For the *Rukovodilac* (inside the plan) — decided on 2026-10-28, as proposed:**
 - **R1 — the pull requests:**
   - PR-1: the library, Settings → Icons, the picker, the icon at create (`iconKey`), the chosen layout and the visual
     pass, with no migration;
