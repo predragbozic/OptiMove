@@ -1068,7 +1068,7 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
         is an obligation of 7f's contract, with its own test;
       - P5: a rollback that restores the earlier state, forward-only after the first zone confirmation;
       - P6: one ★★ pull request.
-    - **The owner's words (gate 1):** ⟦PENDING: the owner's gate 1 words, verbatim, with turn id and time⟧.
+    - **The owner's words (gate 1):** „Slažem se po preporuci idi” (owner turn `cfeac86e`, 2026-10-28 21:58:15 UTC, in the *Rukovodilac*'s chat; the *Rukovodilac* reads it as the approval of the contract as a whole, which is its reading, not the owner's own words).
     - **Gate 2:** phase 5b ★★ and its gate line "migration v42" in the plan, by the owner's own word in the executor's
       chat or the owner's own merge of the pull request that adds them.
     - **What follows:** the implementation pull request (J7). Its merge, v42 and its production pre- and post-checks

@@ -2270,7 +2270,7 @@ Technical details.
     field per zone shape; the new field `more.complementary_data.power.distance.open_top`; a zone's meaning act confirms
     `between` or `>=` (`>` only with evidence); owner-run evidence per zone field as in C97. Option A needs a schema.
     **Its ★★ contract J7 (`docs/ai/phase5-zone-model-contract.md`) was accepted on 2026-10-28 (C103):** both reviewers
-    gave GO on `8c2b383`; the *Rukovodilac* decided P1–P6; the owner approved the contract (⟦PENDING: the owner's gate 1 words, verbatim, with turn id and time⟧) and the plan's phase 5b
+    gave GO on `8c2b383`; the *Rukovodilac* decided P1–P6; the owner approved the contract („Slažem se po preporuci idi” (owner turn `cfeac86e`, 2026-10-28 21:58:15 UTC, in the *Rukovodilac*'s chat; the *Rukovodilac* reads it as the approval of the contract as a whole, which is its reading, not the owner's own words)) and the plan's phase 5b
     ★★ with its gate line "migration v42". Not implemented: until v42 is merged and deployed, the zone meaning act stays
     refused (C89).
   - **Phase 6, the Source fields view, PR #251** (branch `feature/metrics-source-fields-tab-6` from `3532bc5`):

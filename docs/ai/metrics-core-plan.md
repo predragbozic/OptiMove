@@ -608,7 +608,7 @@ order covers is merged under it.
 - **The contract (J7):** `docs/ai/phase5-zone-model-contract.md`, accepted on 2026-10-28 (C103 of the discovery
   document).
   - The *Rukovodilac* and the *Nezavisni revizor* gave GO on `8c2b383`. The *Rukovodilac* decided P1–P6 inside the plan.
-  - The owner approved the contract as a whole: ⟦PENDING: the owner's gate 1 words, verbatim, with turn id and time⟧.
+  - The owner approved the contract as a whole: „Slažem se po preporuci idi” (owner turn `cfeac86e`, 2026-10-28 21:58:15 UTC, in the *Rukovodilac*'s chat; the *Rukovodilac* reads it as the approval of the contract as a whole, which is its reading, not the owner's own words).
   - The owner gave this phase its ★★ and its gate line by their own word in the executor's chat or by their own merge
     of the pull request that adds them.
 - **Green zone:** after the acceptance, the implementation in one pull request:
