@@ -57,7 +57,9 @@ content.addEventListener("input", (event) => handleVariablesInput(event.target, 
 const $ = (selector) => content.querySelector(selector);
 const text = () => content.textContent.replace(/\s+/g, " ");
 const posts = () => calls.filter((call) => call.method === "POST");
-const gets = () => calls.filter((call) => call.method === "GET").map((call) => call.url);
+// The variables' own reads; the screen's read of the domains and categories
+// (phase 12c) is proved in metric-classification.actions.test.mjs.
+const gets = () => calls.filter((call) => call.method === "GET" && !call.url.includes("/metrics/classification")).map((call) => call.url);
 const buttons = () => [...content.querySelectorAll(".metric-variables-actions button")].map((b) => b.textContent.trim());
 
 async function click(selector) {

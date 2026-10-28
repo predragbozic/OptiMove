@@ -18632,3 +18632,90 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
     grid-template-columns: minmax(0, 1fr);
   }
 }
+/* Domains & categories of canonical variables (phase 12c): the switch beside
+   the variables, the tree (a domain with its categories under it), one
+   domain or category, and a variable's links in its detail. */
+.metric-classification-switch {
+  justify-self: start;
+}
+.metric-classification-filter-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.metric-classification-section,
+.metric-classification-domain,
+.metric-classification-place,
+.metric-classification-variable {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.metric-classification-categories {
+  list-style: none;
+  display: grid;
+  gap: 6px;
+  margin: 0 0 0 10px;
+  padding: 0 0 0 14px;
+  border-left: 2px solid var(--line);
+}
+.metric-classification-place > .plain-button,
+.metric-classification-show {
+  justify-self: start;
+}
+.metric-classification-add-note {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+.metric-classification-names {
+  margin: 0;
+  padding-left: 18px;
+}
+.metric-classification-links {
+  list-style: none;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}
+.metric-classification-links > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.metric-classification-links > li > span {
+  min-width: 0;
+}
+.metric-classification-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 760px) {
+  .metric-classification-switch {
+    justify-self: stretch;
+  }
+  .metric-classification-add {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .metric-classification-add .plain-button,
+  .metric-classification-add-note .plain-button,
+  .metric-classification-place > .plain-button,
+  .metric-classification-links .plain-button {
+    width: 100%;
+    justify-content: center;
+  }
+  .metric-classification-categories {
+    margin-left: 4px;
+    padding-left: 10px;
+  }
+}
