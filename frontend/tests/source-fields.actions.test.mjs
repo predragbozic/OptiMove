@@ -168,9 +168,11 @@ test("the list groups the fields by source, shows the unit (expected units marke
   assert.match(text(), /GPEXE · REST v1/);
   const items = [...content.querySelectorAll(".metric-variables-item")].map((b) => b.textContent.replace(/\s+/g, " ").trim());
   assert.equal(items.length, 3);
-  assert.match(items[0], /Total time Unit s<b> · Session and Drill Observed/);
+  assert.match(items[0], /Total time Unit s<b> \(confirmed\) · Meaning not confirmed · Session and Drill Evidence: Observed/);
   assert.match(items[1], /Expected unit m \(not proven\)/);
-  assert.match(items[2], /Session Observed/);
+  assert.match(items[1], /Meaning waits for the zone decision/);
+  assert.match(items[2], /Session Evidence: Observed/);
+  assert.match(text(), /Evidence: Not proven, no evidence yet · Documented, described in a document · Observed, seen in the source's answers, its unit and meaning not confirmed · Verified, its unit and meaning confirmed\./);
   assert.ok(content.innerHTML.includes("Power zone &lt;distance&gt;"), "a label is escaped");
   assert.ok(content.innerHTML.includes("Unit s&lt;b&gt;"), "a unit is escaped");
   assert.ok(!content.querySelector("a"), "nothing is a link");
@@ -199,7 +201,7 @@ test("one field: its revisions with facts, expected units marked not proven, con
   assert.equal($("#source-fields-title").textContent, "Total time");
   const revisions = [...content.querySelectorAll(".source-fields-revision")];
   assert.equal(revisions.length, 2);
-  assert.match(revisions[0].textContent.replace(/\s+/g, " "), /Revision 2 Active Observed/);
+  assert.match(revisions[0].textContent.replace(/\s+/g, " "), /Revision 2 Active Evidence: Observed/);
   assert.equal(fact(revisions[0], "Unit"), "s confirmed 20.10.2026");
   assert.equal(fact(revisions[0], "Unit evidence"), "docs/ai/evidence.md#total-time");
   assert.equal(fact(revisions[0], "Recorded for"), "Session and Drill");
@@ -282,7 +284,55 @@ test("confirm a unit: the fields are checked before anything is sent; the body i
   assert.deepEqual(body, { requestKey: body.requestKey, sourceUnit: "s", evidenceRef: "docs/ai/evidence.md#total-time" }, "no owner, actor or basis");
   assert.equal(sourceFieldsState().form, null);
   assert.match(text(), /The unit was confirmed\./);
+  assert.equal($(".metric-variables-notice").getAttribute("role"), "status");
+  assert.ok(!$(".metric-variables-notice").classList.contains("is-warning"));
   assert.equal(fact($(".source-fields-revision"), "Unit"), "s confirmed 28.10.2026");
+  assert.deepEqual(confirmQuestions.slice(-1), ['Confirm the unit of Total time (revision 1) as "s", with the evidence docs/ai/evidence.md#total-time? It is saved once and never changed; a correction is a new revision.']);
+});
+
+test("a declined last question sends nothing and keeps the form with its values", async () => {
+  serve(() => ({ status: 201, body: { revision: revision() } }));
+  await openField(F1);
+  await click('[data-action="source-fields-act-open"][data-act="unit"]');
+  assert.match($(".source-fields-summary").textContent.replace(/\s+/g, " "), /Total time · athlete_session\.total_time · GPEXE · REST v1 · A number · Session and Drill · Parameter: None/);
+  type("sourceUnit", "s");
+  type("evidenceRef", "docs/ai/evidence.md#total-time");
+  confirmAnswer = false;
+  await submit();
+  assert.equal(posts().length, 0);
+  assert.ok(sourceFieldsState().form);
+  assert.equal($('[data-sf-field="sourceUnit"]').value, "s");
+  confirmAnswer = true;
+  await submit();
+  assert.equal(posts().length, 1);
+});
+
+test("a field whose re-read failed may be out of date: it says so, offers Try again and no act", async () => {
+  await openField(F1);
+  respond = () => ({ status: 500, body: { error: "internal_error" } });
+  const { loadSourceField } = await import("../source-fields-actions.js");
+  await loadSourceField(F1, render);
+  assert.match(text(), /The field could not be loaded\. The field below may be out of date\./);
+  assert.ok($('[data-action="source-fields-detail-reload"]'));
+  assert.equal(content.querySelectorAll('[data-action="source-fields-act-open"]').length, 0, "no act on a field that may be out of date");
+  content.insertAdjacentHTML("beforeend", `<button id="forged" data-action="source-fields-act-open" data-act="unit" data-revision-id="${R1}"></button>`);
+  await handleSourceFieldsAction($("#forged"), { render });
+  assert.equal(sourceFieldsState().form, null, "the handler refuses it too");
+  serve();
+  await click('[data-action="source-fields-detail-reload"]');
+  assert.ok($('[data-action="source-fields-act-open"]'), "after Try again the acts are back");
+});
+
+test("a club admin sees why a zone's meaning is not confirmed; the detail names the bound and operator as the forms do", async () => {
+  asClub();
+  fields[2].revisions = [revision({ id: R3, valueShape: "event_count", parameterKind: "event_threshold", boundOperator: ">=", meaningVerifiedAt: "2026-10-20T08:00:00.000Z", sourceBoundUnit: "m/s2", sourceUnit: "count", unitVerifiedAt: "2026-10-20T08:00:00.000Z" })];
+  await openField(F2);
+  assert.equal(fact($(".source-fields-revision"), "Meaning"), "Not confirmed yet: waits for a decision on zones");
+  assert.equal(fact($(".source-fields-revision"), "Unit of the zone bounds"), "Not confirmed (expected W/kg, not proven)");
+  await click('[data-action="source-fields-back"]');
+  await click(`[data-action="source-fields-open"][data-field-id="${F3}"]`);
+  assert.equal(fact($(".source-fields-revision"), "Operator"), "At least (>=)");
+  assert.equal(fact($(".source-fields-revision"), "Unit of the threshold"), "m/s2");
 });
 
 test("confirm a unit with a bound: a zone or an event threshold sends the bound unit too", async () => {
@@ -346,10 +396,10 @@ test("the request builder: a 301-character reference and a unit of 31 characters
 });
 
 for (const [code, sentence] of [
-  ["unit_already_verified", /Its unit is already confirmed \(perhaps in the meantime\)\. A correction is a new revision\./],
-  ["revision_retired", /This revision is retired, so it is never changed\./],
-  ["bound_unit_required", /This revision has a bound, so its unit is confirmed together with the unit\./],
-  ["notFound", /It is not available in this workspace now, or it is no longer there\./],
+  ["unit_already_verified", /Not saved: this unit was already confirmed, perhaps by someone else in the meantime\. Check the confirmed unit below; if it is wrong, the correction is a new revision\./],
+  ["revision_retired", /Not saved: this revision is retired and is never changed\./],
+  ["bound_unit_required", /Not saved: this revision has a bound, so the bound's unit is confirmed together with the unit\./],
+  ["notFound", /It is not available in this workspace now\. Whether the confirmation was saved is not known: open the field from the platform workspace to see\./],
 ]) {
   test(`${code}: the form closes, the field is read again and the screen says why`, async () => {
     serve(() => ({ status: code === "notFound" ? 404 : 409, body: { error: code } }));
@@ -362,6 +412,9 @@ for (const [code, sentence] of [
     assert.equal(sourceFieldsState().form, null);
     assert.match(text(), sentence);
     assert.doesNotMatch(text(), /Nothing was saved/, "a refusal after a possible COMMIT never says nothing was saved");
+    const notice = $(".metric-variables-notice");
+    assert.ok(notice.classList.contains("is-warning"), "a refusal is a warning, never the saved notice");
+    assert.equal(notice.getAttribute("role"), "alert");
     assert.equal(gets().filter((url) => url === `${FB}/${F1}`).length, reads + 1);
   });
 }
@@ -425,7 +478,7 @@ test("a check answered by a refusal from the body settles it; Close without chec
   await submit();
   await click('[data-action="source-fields-check-result"]');
   assert.equal(sourceFieldsState().form, null, "unit_already_verified settles the check and closes the form");
-  assert.match(text(), /Its unit is already confirmed/);
+  assert.match(text(), /Not saved: this unit was already confirmed/);
 
   serve(() => ({ throwNetworkError: true }));
   await click('[data-action="source-fields-act-open"][data-act="meaning"]');
@@ -433,7 +486,7 @@ test("a check answered by a refusal from the body settles it; Close without chec
   await submit();
   confirmAnswer = false;
   await click('[data-action="source-fields-cancel"]');
-  assert.deepEqual(confirmQuestions.slice(-1), ["The last confirmation is not confirmed. Leave without checking? Look at the revision later."]);
+  assert.deepEqual(confirmQuestions.slice(-1), ["The result of the last confirmation is not known. Leave without checking? Open the field later to see whether it was saved."]);
   assert.ok(sourceFieldsState().form, "declined: the form stays");
   confirmAnswer = true;
   const reads = gets().filter((url) => url === `${FB}/${F1}`).length;

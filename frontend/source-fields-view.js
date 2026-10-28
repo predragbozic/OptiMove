@@ -4,7 +4,7 @@
 // escaped text, never markup and never a link (security review of M2b). Ids
 // live only in data- attributes and under Technical details.
 import {
-  EVIDENCE_LABEL, EVIDENCE_REF_MAX, OPERATORS, OPERATOR_LABEL, PARAMETER_KIND_LABEL, STATE_LABEL, VALUE_SHAPE_LABEL,
+  EVIDENCE_EXAMPLE, EVIDENCE_LABEL, EVIDENCE_REF_MAX, OPERATORS, OPERATOR_LABEL, PARAMETER_KIND_LABEL, STATE_LABEL, VALUE_SHAPE_LABEL,
   currentRevision, hasBound, levelsText, meaningActOffered, meaningBlockedByZoneModel, sourceFieldsContext, sourceFieldsState,
   unitActOffered,
 } from "./source-fields-data.js";
@@ -22,6 +22,13 @@ const sourceName = (field) => `${escapeHtml(SOURCE_LABEL[field.sourceSystem] || 
 const fieldName = (field) => escapeHtml(field.label || field.key || "");
 // A unit or a reference: escaped text in a code element, never a link.
 const code = (value) => `<code class="source-fields-code">${escapeHtml(value)}</code>`;
+// What was saved is a status; a refusal or an unchecked result is a warning,
+// never shown like a saved confirmation.
+const noticeHtml = (s) => (!s.notice ? ""
+  : s.noticeKind === "warning" ? `<p class="metric-variables-notice is-warning" role="alert" tabindex="-1">${escapeHtml(s.notice)}</p>`
+  : `<p class="metric-variables-notice" role="status" tabindex="-1">${escapeHtml(s.notice)}</p>`);
+const boundUnitLabel = (revision) => (revision.parameterKind === "zone_bounds" ? "Unit of the zone bounds" : "Unit of the threshold");
+const EVIDENCE_LEGEND = "Evidence: Not proven, no evidence yet · Documented, described in a document · Observed, seen in the source's answers, its unit and meaning not confirmed · Verified, its unit and meaning confirmed.";
 
 export function renderSourceFieldsHtml() {
   const ctx = sourceFieldsContext();
@@ -42,15 +49,19 @@ function intro(ctx) {
     ? "The fields a data source delivers, with the evidence behind each one. Confirm a field's unit or meaning only with a document under docs/ that proves it."
     : "The fields a data source delivers, with the evidence behind each one. A platform administrator confirms their units and meanings in the platform workspace.";
 }
+function meaningSummary(revision) {
+  if (revision.meaningVerifiedAt) return "Meaning confirmed";
+  return revision.parameterKind === "zone_bounds" ? "Meaning waits for the zone decision" : "Meaning not confirmed";
+}
 function unitSummary(revision) {
   if (!revision) return "No revision";
-  if (revision.sourceUnit) return `Unit ${escapeHtml(revision.sourceUnit)}`;
+  if (revision.sourceUnit) return `Unit ${escapeHtml(revision.sourceUnit)} (confirmed)`;
   if (revision.expectedSourceUnit) return `Expected unit ${escapeHtml(revision.expectedSourceUnit)} (not proven)`;
   return "Unit not known yet";
 }
 function evidenceBadge(revision) {
   if (!revision) return "";
-  return `<span class="item-badge source-fields-evidence is-${escapeAttr(revision.evidenceStatus || "")}">${escapeHtml(EVIDENCE_LABEL[revision.evidenceStatus] || revision.evidenceStatus || "")}</span>`;
+  return `<span class="item-badge source-fields-evidence is-${escapeAttr(revision.evidenceStatus || "")}">Evidence: ${escapeHtml(EVIDENCE_LABEL[revision.evidenceStatus] || revision.evidenceStatus || "")}</span>`;
 }
 
 function renderListHtml(s, ctx) {
@@ -66,9 +77,10 @@ function renderListHtml(s, ctx) {
       <div>
         <h2 id="source-fields-title">Source fields</h2>
         <p class="muted">${intro(ctx)}</p>
+        <p class="muted source-fields-legend">${escapeHtml(EVIDENCE_LEGEND)}</p>
       </div>
     </div>
-    ${s.notice ? `<p class="metric-variables-notice" role="status">${escapeHtml(s.notice)}</p>` : ""}
+    ${noticeHtml(s)}
     ${list.loading && !list.loaded ? `<p class="muted" role="status">Loading source fields...</p>` : ""}
     ${list.error ? `<div class="error" role="alert"><p>${escapeHtml(list.error)}</p><button class="plain-button" type="button" data-action="source-fields-reload">Try again</button></div>` : ""}
     ${list.loaded && !list.items.length && !list.error ? `<p class="empty">No source fields yet.</p>` : ""}
@@ -82,7 +94,7 @@ function renderListHtml(s, ctx) {
             <li>
               <button type="button" class="metric-variables-item" data-action="source-fields-open" data-field-id="${escapeAttr(field.id)}">
                 <span class="metric-variables-item-name">${fieldName(field)} ${field.state === "retired" ? `<span class="item-badge">Retired</span>` : ""}</span>
-                <span class="metric-variables-item-facts muted">${unitSummary(revision)} · ${escapeHtml(levelsText(revision))}</span>
+                <span class="metric-variables-item-facts muted">${unitSummary(revision)} · ${revision ? `${meaningSummary(revision)} · ` : ""}${escapeHtml(levelsText(revision))}</span>
                 ${evidenceBadge(revision)}
               </button>
             </li>`;
@@ -107,25 +119,28 @@ function boundUnitText(revision) {
 }
 function meaningText(revision) {
   if (revision.meaningVerifiedAt) return `Confirmed <span class="muted">${escapeHtml(fmtDate(revision.meaningVerifiedAt))}</span>`;
-  return "Not confirmed";
+  return revision.parameterKind === "zone_bounds" ? "Not confirmed yet: waits for a decision on zones" : "Not confirmed";
 }
 
-function renderRevisionHtml(revision, field, ctx) {
+// `stale`: the field on the screen may be out of date (a read failed or runs),
+// so no act is offered on it.
+function renderRevisionHtml(revision, field, ctx, stale) {
   const facts = [
     ["Value", escapeHtml(VALUE_SHAPE_LABEL[revision.valueShape] || revision.valueShape || "")],
     ["Recorded for", escapeHtml(levelsText(revision))],
     ["Parameter", escapeHtml(PARAMETER_KIND_LABEL[revision.parameterKind] || revision.parameterKind || "")],
     ["Unit", unitText(revision)],
-    ...(hasBound(revision) ? [["Bound unit", boundUnitText(revision)]] : []),
-    ...(revision.parameterKind === "event_threshold" ? [["Operator", revision.boundOperator ? code(revision.boundOperator) : "Not confirmed"]] : []),
+    ...(hasBound(revision) ? [[boundUnitLabel(revision), boundUnitText(revision)]] : []),
+    ...(revision.parameterKind === "event_threshold" ? [["Operator", revision.boundOperator ? escapeHtml(OPERATOR_LABEL[revision.boundOperator] || revision.boundOperator) : "Not confirmed"]] : []),
     ["Meaning", meaningText(revision)],
-    ...(revision.unitEvidenceRef ? [["Unit evidence", code(revision.unitEvidenceRef)]] : []),
-    ...(revision.meaningEvidenceRef ? [["Meaning evidence", code(revision.meaningEvidenceRef)]] : []),
-    ...(revision.evidenceRef && revision.evidenceRef !== revision.unitEvidenceRef && revision.evidenceRef !== revision.meaningEvidenceRef ? [["Evidence", code(revision.evidenceRef)]] : []),
+    // References are long docs/ paths: each takes the whole row.
+    ...(revision.unitEvidenceRef ? [["Unit evidence", code(revision.unitEvidenceRef), true]] : []),
+    ...(revision.meaningEvidenceRef ? [["Meaning evidence", code(revision.meaningEvidenceRef), true]] : []),
+    ...(revision.evidenceRef && revision.evidenceRef !== revision.unitEvidenceRef && revision.evidenceRef !== revision.meaningEvidenceRef ? [["First evidence", code(revision.evidenceRef), true]] : []),
   ];
-  const unitOffered = unitActOffered(ctx, field, revision);
-  const meaningOffered = meaningActOffered(ctx, field, revision);
-  const zoneBlocked = meaningBlockedByZoneModel(ctx, field, revision);
+  const unitOffered = !stale && unitActOffered(ctx, field, revision);
+  const meaningOffered = !stale && meaningActOffered(ctx, field, revision);
+  const zoneBlocked = !stale && meaningBlockedByZoneModel(ctx, field, revision);
   return `
     <li class="metric-variables-version source-fields-revision">
       <div class="source-fields-revision-head">
@@ -134,7 +149,7 @@ function renderRevisionHtml(revision, field, ctx) {
         ${evidenceBadge(revision)}
       </div>
       <dl class="metric-variables-facts">
-        ${facts.map(([name, value]) => `<div><dt>${name}</dt><dd>${value}</dd></div>`).join("")}
+        ${facts.map(([name, value, wide]) => `<div${wide ? ` class="source-fields-wide"` : ""}><dt>${name}</dt><dd>${value}</dd></div>`).join("")}
       </dl>
       ${unitOffered || meaningOffered || zoneBlocked ? `<div class="metric-variables-actions source-fields-acts">
         ${unitOffered ? `<button class="plain-button" type="button" data-action="source-fields-act-open" data-act="unit" data-revision-id="${escapeAttr(revision.id)}">Confirm the unit</button>` : ""}
@@ -150,10 +165,11 @@ function renderDetailHtml(s, ctx) {
   const back = `<button class="plain-button ghost metric-variables-back" type="button" data-action="source-fields-back">← All source fields</button>`;
   if (!d.field) {
     if (d.loading) return `${back}<p class="muted" role="status">Loading the field...</p>`;
-    return `${back}${s.notice ? `<p class="metric-variables-notice" role="status">${escapeHtml(s.notice)}</p>` : ""}
+    return `${back}${noticeHtml(s)}
       ${d.error ? `<div class="error" role="alert"><p>${escapeHtml(d.error)}</p><button class="plain-button" type="button" data-action="source-fields-detail-reload">Try again</button></div>` : `<p class="empty">This field is not available.</p>`}`;
   }
   const field = d.field;
+  const stale = Boolean(d.error) || d.loading;
   const revisionNumber = new Map((field.revisions || []).map((r) => [r.id, r.revisionNumber]));
   return `
     ${back}
@@ -163,11 +179,12 @@ function renderDetailHtml(s, ctx) {
         <p class="muted">${sourceName(field)} · ${code(field.key || "")} ${field.state === "retired" ? `<span class="item-badge">Retired</span>` : ""}</p>
       </div>
     </div>
-    ${s.notice ? `<p class="metric-variables-notice" role="status">${escapeHtml(s.notice)}</p>` : ""}
-    ${d.error ? `<p class="error" role="alert">${escapeHtml(d.error)}</p>` : ""}
+    ${noticeHtml(s)}
+    ${d.loading ? `<p class="muted" role="status">Loading the field...</p>` : ""}
+    ${d.error ? `<div class="error" role="alert"><p>${escapeHtml(d.error)} The field below may be out of date.</p><button class="plain-button" type="button" data-action="source-fields-detail-reload">Try again</button></div>` : ""}
     ${ctx.mayVerify ? "" : `<p class="muted">Read only here: a platform administrator confirms units and meanings in the platform workspace.</p>`}
     <h3>Revisions</h3>
-    ${(field.revisions || []).length ? `<ol class="metric-variables-versions">${field.revisions.map((r) => renderRevisionHtml(r, field, ctx)).join("")}</ol>` : `<p class="muted">No revisions.</p>`}
+    ${(field.revisions || []).length ? `<ol class="metric-variables-versions">${field.revisions.map((r) => renderRevisionHtml(r, field, ctx, stale)).join("")}</ol>` : `<p class="muted">No revisions.</p>`}
     <h3>Confirmations</h3>
     ${d.verifications.length ? `<ul class="metric-variables-versions source-fields-history">${d.verifications.map((v) => `
       <li class="metric-variables-version">
@@ -203,7 +220,7 @@ function textInput(form, field, label, { max, hint = "" } = {}) {
 function unconfirmedHtml(form) {
   return `
     <div class="metric-variables-unconfirmed" role="alert">
-      <p><strong>Result not confirmed.</strong> No confirmation arrived, so it is not known whether it was saved. Check result sends the same request again: it is never saved twice.</p>
+      <p><strong>Result not confirmed.</strong> No answer arrived, so it is not known whether the confirmation was saved. Check result sends the same request again: it is never saved twice.</p>
       ${form.checkNote ? `<p>${escapeHtml(form.checkNote)}</p>` : ""}
       <div class="data-sources-form-actions">
         <button class="plain-button data-sources-primary" type="button" data-action="source-fields-check-result" ${form.busy ? "disabled" : ""}>${form.busy ? "Checking..." : "Check result"}</button>
@@ -211,7 +228,8 @@ function unconfirmedHtml(form) {
       </div>
     </div>`;
 }
-const EVIDENCE_HINT = "A path under docs/ with one heading anchor, for example docs/ai/gpexe-evidence.md#total-distance. The document must already be merged.";
+const EVIDENCE_HINT = `A path under docs/ with one heading anchor, for example ${EVIDENCE_EXAMPLE}. The document must already be merged.`;
+const SOURCE_NAME_TEXT = (form) => `${SOURCE_LABEL[form.sourceSystem] || form.sourceSystem} · ${FAMILY_LABEL[form.apiFamily] || form.apiFamily}`;
 
 function renderFormHtml(s) {
   const form = s.form;
@@ -229,12 +247,14 @@ function renderFormHtml(s) {
   } else {
     const threshold = form.parameterKind === "event_threshold";
     body = `
+      <p class="metric-variables-field-note">The meaning itself is kept in the evidence document. Confirm only when that document holds this field's definition from GPEXE documentation or written GPEXE support.</p>
       ${threshold ? `
-      <label class="search-field"><span>Operator of the threshold</span>
-        <select data-sf-field="boundOperator" ${locked ? "disabled" : ""}${described(form, "boundOperator", "")}${invalid(form, "boundOperator")}>
+      <label class="search-field"><span>When does GPEXE count an event?</span>
+        <select data-sf-field="boundOperator" ${locked ? "disabled" : ""}${described(form, "boundOperator", "hint")}${invalid(form, "boundOperator")}>
           <option value="" ${form.draft.boundOperator ? "" : "selected"}>Choose...</option>
           ${OPERATORS.map((op) => `<option value="${escapeAttr(op)}" ${form.draft.boundOperator === op ? "selected" : ""}>${escapeHtml(OPERATOR_LABEL[op])}</option>`).join("")}
         </select>
+        <span class="muted" id="sf-hint-boundOperator">As GPEXE's documentation or written support states.</span>
         ${fieldError(form, "boundOperator")}
       </label>` : ""}
       ${textInput(form, "evidenceRef", "Evidence (a document under docs/)", { max: EVIDENCE_REF_MAX, hint: EVIDENCE_HINT })}`;
@@ -243,6 +263,7 @@ function renderFormHtml(s) {
   return `
     <form class="data-sources-form metric-variables-form source-fields-form" data-source-fields-form="${form.act}" novalidate autocomplete="off">
       <h2 id="source-fields-title">${form.act === "unit" ? "Confirm the unit of" : "Confirm the meaning of"} ${name}</h2>
+      <p class="muted source-fields-summary">${escapeHtml(form.fieldName)} · ${code(form.fieldKey)} · ${escapeHtml(SOURCE_NAME_TEXT(form))} · ${escapeHtml(VALUE_SHAPE_LABEL[form.valueShape] || form.valueShape || "")} · ${escapeHtml(form.levels)} · Parameter: ${escapeHtml(PARAMETER_KIND_LABEL[form.parameterKind] || form.parameterKind || "")}</p>
       <p class="metric-variables-field-note">A confirmation is saved once and never changed: a correction is a new revision. Confirm only what the evidence document proves.</p>
       <p class="muted">Do not enter athlete names, ids, dates of birth or measured values.</p>
       ${body}

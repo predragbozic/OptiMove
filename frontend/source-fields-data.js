@@ -36,6 +36,8 @@ export function emptySourceFieldsState() {
     detail: { id: null, field: null, verifications: [], loading: false, error: null },
     form: null,
     notice: "",
+    // "" for what was saved; "warning" for a refusal or an unchecked result.
+    noticeKind: "",
   };
 }
 export function sourceFieldsState() {
@@ -105,6 +107,7 @@ export function meaningBlockedByZoneModel(ctx, field, revision) {
 // C40): a repository-relative docs/ path with one heading anchor, 1-300.
 const EVIDENCE_REF = /^docs(\/[A-Za-z0-9_-][A-Za-z0-9_.-]*)+#[A-Za-z0-9_-]+$/;
 export const EVIDENCE_REF_MAX = 300;
+export const EVIDENCE_EXAMPLE = "docs/ai/gpexe-evidence.md#total-distance";
 export const evidenceRefOk = (value) => typeof value === "string" && value.length >= 1 && value.length <= EVIDENCE_REF_MAX && EVIDENCE_REF.test(value);
 
 export function openSourceFieldForm(act, { field, revision }) {
@@ -119,8 +122,13 @@ export function openSourceFieldForm(act, { field, revision }) {
     error: "",
     fieldId: field.id,
     fieldName: field.label || field.key || "",
+    fieldKey: field.key || "",
+    sourceSystem: field.sourceSystem || "",
+    apiFamily: field.apiFamily || "",
     revisionId: revision.id,
     revisionNumber: revision.revisionNumber,
+    valueShape: revision.valueShape,
+    levels: levelsText(revision),
     parameterKind: revision.parameterKind,
     expectedSourceUnit: revision.expectedSourceUnit || "",
     expectedSourceBoundUnit: revision.expectedSourceBoundUnit || "",
@@ -137,7 +145,7 @@ function unitFieldError(value) {
 function evidenceError(value) {
   if (!value) return "Required.";
   if (value.length > EVIDENCE_REF_MAX) return `At most ${EVIDENCE_REF_MAX} characters.`;
-  return evidenceRefOk(value) ? "" : "A path under docs/ with one heading anchor, for example docs/ai/evidence.md#total-distance.";
+  return evidenceRefOk(value) ? "" : `A path under docs/ with one heading anchor, for example ${EVIDENCE_EXAMPLE}.`;
 }
 
 // The request of the form and its field errors; `body` is null while a field
@@ -178,7 +186,7 @@ const SETTLED_ON_CHECK = new Set([
 export const checkSettles = (info) => SETTLED_ON_CHECK.has(info.code);
 export function checkNoteText(info) {
   if (outcomeUnknown(info)) return "No answer again. The result is still not confirmed.";
-  if (info.status === 401) return "The check could not be done: you are signed out. Sign in again in a new tab, then Check result here. If you sign in on this page, look at the revision afterwards.";
+  if (info.status === 401) return "The check could not be done: you are signed out. Sign in again in a new tab, then Check result here. If you sign in on this page, open the field afterwards to see whether it was saved.";
   if (info.code === "request_key_reused") return "The check could not be done: a save under this request is already stored with other values. Close without checking and look at the revision.";
   if (info.code === "notFound") return "The check could not be done: this workspace has no access to it now. The result is still not confirmed.";
   if (info.code === "try_again") return "The check could not be done: the server was busy. The result is still not confirmed; Check result again in a moment.";
@@ -187,20 +195,21 @@ export function checkNoteText(info) {
 
 const CODE_TEXT = {
   // A 404 to a write can come after a confirmed COMMIT (the right lost
-  // meanwhile): it never says that nothing was saved.
-  notFound: "It is not available in this workspace now, or it is no longer there.",
+  // meanwhile): it never says that nothing was saved, and says the outcome is
+  // not known.
+  notFound: "It is not available in this workspace now. Whether the confirmation was saved is not known: open the field from the platform workspace to see.",
   invalid_body: "Not saved: the server refused a value. Check the fields and save again.",
   invalid_unit: "Not saved: the server does not take this unit. A unit is 1-30 characters, without spaces, '|' or '='.",
   invalid_evidence_ref: "Not saved: the reference must be a path under docs/ with one heading anchor (docs/...#anchor), at most 300 characters.",
-  bound_unit_required: "This revision has a bound, so its unit is confirmed together with the unit. The revision is read again.",
-  bound_unit_not_allowed: "This revision has no bound. The revision is read again.",
+  bound_unit_required: "Not saved: this revision has a bound, so the bound's unit is confirmed together with the unit. The revision is read again.",
+  bound_unit_not_allowed: "Not saved: this revision has no bound. The revision is read again.",
   invalid_operator: "Not saved: an event threshold takes a one-sided operator (>=, >, <=, <).",
-  operator_required: "This revision is an event threshold, so its operator is confirmed together with the meaning. The revision is read again.",
-  operator_not_allowed: "This revision has no bound. The revision is read again.",
-  verification_model_unresolved: "The meaning of a zone cannot be confirmed yet: how closed and open zones share one bound operator is not decided.",
-  unit_already_verified: "Its unit is already confirmed (perhaps in the meantime). A correction is a new revision.",
-  meaning_already_verified: "Its meaning is already confirmed (perhaps in the meantime). A correction is a new revision.",
-  revision_retired: "This revision is retired, so it is never changed.",
+  operator_required: "Not saved: this revision is an event threshold, so its operator is confirmed together with the meaning. The revision is read again.",
+  operator_not_allowed: "Not saved: this revision has no bound. The revision is read again.",
+  verification_model_unresolved: "Not saved: the meaning of a zone cannot be confirmed yet; how closed and open zones share one bound operator is not decided.",
+  unit_already_verified: "Not saved: this unit was already confirmed, perhaps by someone else in the meantime. Check the confirmed unit below; if it is wrong, the correction is a new revision.",
+  meaning_already_verified: "Not saved: this meaning was already confirmed, perhaps by someone else in the meantime. Check it below; if it is wrong, the correction is a new revision.",
+  revision_retired: "Not saved: this revision is retired and is never changed.",
   try_again: "The server was busy. Nothing was saved. Try again.",
   internal_error: "The server could not save it. Nothing was saved. Try again.",
   request_key_reused: "An earlier save of this form may already be stored. Cancel and look at the revision before saving again.",
@@ -214,5 +223,15 @@ export const CLOSES_FORM = new Set([
   "notFound", "bound_unit_required", "bound_unit_not_allowed", "operator_required", "operator_not_allowed",
   "verification_model_unresolved", "unit_already_verified", "meaning_already_verified", "revision_retired",
 ]);
+// The last question before a write-once act (OptiMove asks before every act
+// it cannot take back: Bind, Reconnect, Unbind).
+export function confirmQuestion(form, body) {
+  const what = `${form.fieldName} (revision ${form.revisionNumber})`;
+  const value = form.act === "unit"
+    ? `as "${body.sourceUnit}"${body.sourceBoundUnit ? ` with bounds in "${body.sourceBoundUnit}"` : ""}`
+    : body.boundOperator ? `with the operator ${body.boundOperator}` : "";
+  return `Confirm the ${form.act === "unit" ? "unit" : "meaning"} of ${what}${value ? ` ${value}` : ""}, with the evidence ${body.evidenceRef}? It is saved once and never changed; a correction is a new revision.`;
+}
+
 // A refusal that names a field of the form.
 export const FIELD_OF_CODE = { invalid_unit: "sourceUnit", invalid_evidence_ref: "evidenceRef", invalid_operator: "boundOperator" };

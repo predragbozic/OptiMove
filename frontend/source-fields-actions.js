@@ -6,12 +6,15 @@
 // server replays a saved act and never saves twice.
 import { state } from "./state.js";
 import {
-  CLOSES_FORM, FIELD_OF_CODE, buildSourceFieldRequest, checkNoteText, checkSettles, emptySourceFieldsState, errorInfo, fetchField,
+  CLOSES_FORM, FIELD_OF_CODE, buildSourceFieldRequest, checkNoteText, checkSettles, confirmQuestion, emptySourceFieldsState, errorInfo, fetchField,
   fetchFields, meaningActOffered, newRequestKey, openSourceFieldForm, outcomeUnknown, sourceFieldCodeText, sourceFieldsContext,
   sourceFieldsState, unitActOffered, verifyMeaning, verifyUnit,
 } from "./source-fields-data.js";
 
 const confirmAsk = (question) => Boolean(globalThis.window?.confirm?.(question));
+// After a field opens or closes, its title is at the top of the screen (a
+// long list on a phone would otherwise leave the new view scrolled).
+const toTitle = () => globalThis.document?.getElementById?.("source-fields-title")?.scrollIntoView?.({ block: "start" });
 const focus = (selector) => globalThis.document?.querySelector?.(selector)?.focus?.();
 
 export function resetSourceFields() {
@@ -88,7 +91,7 @@ export function sourceFieldsMayBeLeft() {
   const form = state.trainingLoad.sourceFields?.form;
   if (!form) return true;
   if (form.busy) return confirmAsk("A confirmation is still being saved. Leave anyway? Its result will not be shown.");
-  if (form.unconfirmed) return confirmAsk("The last confirmation is not confirmed. Leave without checking? Look at the revision later.");
+  if (form.unconfirmed) return confirmAsk("The result of the last confirmation is not known. Leave without checking? Open the field later to see whether it was saved.");
   if (form.dirty) return confirmAsk("Discard the confirmation you have not saved?");
   return true;
 }
@@ -126,6 +129,7 @@ export async function handleSourceFieldsAction(action, { render }) {
     if (!id || !leaveForm()) return true;
     s.notice = "";
     await loadSourceField(id, render);
+    toTitle();
     return true;
   }
   if (type === "source-fields-back") {
@@ -133,6 +137,7 @@ export async function handleSourceFieldsAction(action, { render }) {
     s.detail = { ...emptySourceFieldsState().detail };
     s.notice = "";
     if (!s.list.loaded) await loadSourceFields(render); else render();
+    toTitle();
     return true;
   }
   if (type === "source-fields-cancel") {
@@ -141,12 +146,15 @@ export async function handleSourceFieldsAction(action, { render }) {
     if (form?.unconfirmed) {
       // A confirmation left without a check may still have landed: the field
       // is read again, so the screen never shows it as missing.
-      s.notice = "The result was not checked. The field below is as it is saved now.";
+      setNotice(s, "The result was not checked. The field below is as it is saved now.", "warning");
       s.list = { ...emptySourceFieldsState().list };
       await loadSourceField(form.fieldId, render);
+      focusNotice();
       return true;
     }
     render();
+    // Back where the form was opened from.
+    if (form) focus(`[data-action="source-fields-act-open"][data-act="${form.act}"][data-revision-id="${form.revisionId}"]`);
     return true;
   }
   if (type === "source-fields-check-result") {
@@ -156,7 +164,8 @@ export async function handleSourceFieldsAction(action, { render }) {
   if (type === "source-fields-act-open") {
     // Only what the view offers: the same helpers decide both, so a forged
     // click opens nothing the server would not take.
-    if (s.form) return true;
+    // Not while the field on the screen may be out of date.
+    if (s.form || s.detail.loading || s.detail.error) return true;
     const field = s.detail.field;
     const revision = (field?.revisions || []).find((r) => r.id === action.dataset.revisionId) || null;
     const act = action.dataset.act === "meaning" ? "meaning" : "unit";
@@ -210,6 +219,8 @@ export async function submitSourceFieldsForm({ render }) {
     focus('.source-fields-form [aria-invalid="true"]');
     return;
   }
+  // A write-once act: the last question names what is saved for good.
+  if (!confirmAsk(confirmQuestion(form, body))) return;
   form.sentBody = body;
   await send(render);
 }
@@ -235,11 +246,19 @@ async function send(render) {
   }
   if (sourceFieldsState().generation !== generation || s.form !== form) return;
   s.form = null;
-  s.notice = form.act === "unit" ? "The unit was confirmed." : "The meaning was confirmed.";
-  if (data?.readError) s.notice += " It could not be read back; the field below is read again.";
+  setNotice(s, `${form.act === "unit" ? "The unit was confirmed." : "The meaning was confirmed."}${data?.readError ? " It could not be read back; the field below is read again." : ""}`, "");
   s.list = { ...emptySourceFieldsState().list };
   await loadSourceField(form.fieldId, render);
+  focusNotice();
 }
+
+// A notice says what happened; a refusal or an unchecked result is a warning,
+// never shown like a saved confirmation.
+function setNotice(s, text, kind) {
+  s.notice = text;
+  s.noticeKind = kind;
+}
+const focusNotice = () => focus(".source-fields .metric-variables-notice");
 
 async function refused(form, info, { render, check }) {
   const s = sourceFieldsState();
@@ -258,9 +277,10 @@ async function refused(form, info, { render, check }) {
     // The form was made from a revision that changed: it is closed and the
     // field read again, so the screen shows it as it is now.
     s.form = null;
-    s.notice = sourceFieldCodeText(info);
+    setNotice(s, sourceFieldCodeText(info), "warning");
     s.list = { ...emptySourceFieldsState().list };
     await loadSourceField(form.fieldId, render);
+    focusNotice();
     return;
   }
   const field = FIELD_OF_CODE[info.code];
