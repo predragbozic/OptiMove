@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { enterDataSourcesSection } from "./data-sources-data.js";
+import { enterIconGallery } from "./icon-gallery.js";
 import { openExerciseBlockGrants, USER_SELECTION_LIMIT } from "./exercise-block-grants.js";
 import { emptyAccountStorage, enterStorageAdminSection, loadManageAccountStorage, storageAdminContext } from "./media-storage-admin-data.js";
 import { userCanReceiveBlocks, viewerManagesBlocks, visibleOrganizationUsers } from "./organization-view.js";
@@ -282,6 +283,8 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     if (state.organization.section === "sourceConnections") enterSourceConnectionsSection();
     // Storage (PR 5) reads everything again on entry for the same reason.
     if (state.organization.section === "storage") enterStorageAdminSection();
+    // Icons shows no earlier Copy key result as if it had just happened.
+    if (state.organization.section === "icons") enterIconGallery();
     void renderOrganizationPanel({ refresh: false });
     return true;
   }

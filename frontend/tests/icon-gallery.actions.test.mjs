@@ -105,11 +105,22 @@ test("4. Copy key copies the stored value and says so on the pressed card (the b
   assert.equal(status().textContent, "Could not copy. The key is icon:bike.");
   render();
   assert.equal(button("bike").closest(".icon-gallery-item").querySelector("[data-icon-gallery-refused]")?.textContent, "Could not copy. The key is icon:bike.", "a repaint keeps it");
-  // Coming back to Settings -> Icons shows no earlier result as new.
+  // Coming back to Settings -> Icons shows no earlier result as new: through
+  // the Settings sub-tab (Icons -> Overview -> Icons) and on entering Settings.
+  const { handleOrganizationAction } = await import("../organization-actions.js");
+  for (const section of ["overview", "icons"]) {
+    const tab = document.createElement("button");
+    tab.dataset.action = "organization-section";
+    tab.dataset.section = section;
+    assert.equal(await handleOrganizationAction(tab, { renderOrganizationPanel: async () => {}, loadAthletes: async () => {}, refreshOrganizationData: async () => {}, renderAfterOrganizationAccessChange: () => {} }), true);
+  }
+  render();
+  assert.equal(content.querySelectorAll("[data-icon-gallery-refused]").length, 0, "the sub-tab clears it");
+  assert.equal(status().textContent, "");
+  await handleIconGalleryAction(button("bike"));
   enterIconGallery();
   render();
-  assert.equal(content.querySelectorAll("[data-icon-gallery-refused]").length, 0);
-  assert.equal(status().textContent, "");
+  assert.equal(content.querySelectorAll("[data-icon-gallery-refused]").length, 0, "entering Settings clears it");
   // A search clears a result too.
   await handleIconGalleryAction(button("bike"));
   const search = $("[data-icon-gallery-search]");
