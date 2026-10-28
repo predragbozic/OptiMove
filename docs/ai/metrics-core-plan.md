@@ -759,7 +759,10 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
   - The owner accepted O1–O9 as recommended (owner turns `bfb556e0` and `3d1bb779`, in the *Rukovodilac*'s chat), as
     the *Rukovodilac* reads them (C101 of the discovery document).
   - The owner's read-only count found no row in the three v10 tables.
-  - Next is 12b, the backend and migration v41, which needs its own order naming v41. 12c, the frontend, follows.
+  - **12b, the backend and migration v41**, is implemented in an open pull request (branch
+    `feature/metrics-classification-12b-v41` from `a07fdd1`), on the *Rukovodilac*'s order of 2026-10-28; J6 of the
+    discovery document records it as built. Its merge needs the owner's order naming the pull request and v41, after
+    the read-only preflight. 12c, the frontend, follows.
 
 ### R1 ★★: "Overwrite with a new import" (re-import of a session)
 - **Owner, 2026-10-26** (in the *Rukovodilac*'s chat):
