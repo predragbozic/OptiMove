@@ -4,8 +4,8 @@
 // the screen sends and what it shows are proved: who is offered it, the list
 // and one field with its revisions and confirmations, units and references
 // always escaped text, the exact act bodies (never an owner, actor or basis),
-// the checks before anything is sent, a zone's meaning shown as not yet
-// possible (C89), the refusals, a lost answer checked by the very same
+// the checks before anything is sent, a zone's meaning with the operator of
+// its shape (v42), the refusals, a lost answer checked by the very same
 // request, a club administrator's read-only view and the guards on leaving.
 import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
@@ -172,7 +172,8 @@ test("the list groups the fields by source, shows the unit (expected units marke
   assert.equal(items.length, 3);
   assert.match(items[0], /Total time Unit s<b> \(confirmed\) · Meaning not confirmed · Session and Drill Evidence: Observed/);
   assert.match(items[1], /Expected unit m \(not proven\)/);
-  assert.match(items[1], /Meaning waits for the zone decision/);
+  assert.match(items[1], /Meaning not confirmed/);
+  assert.doesNotMatch(text(), /zone decision|decision on zones/);
   assert.match(items[2], /Session Evidence: Observed/);
   // The legend: each kind of evidence as its own badge (colour and word) with what it means.
   assert.deepEqual([...content.querySelectorAll(".source-fields-legend li")].map((li) => li.textContent.replace(/\s+/g, " ").trim()), [
@@ -225,20 +226,14 @@ test("one field: its revisions with facts, expected units marked not proven, con
   assert.ok(!content.querySelector("a"), "an evidence reference is never a link");
 });
 
-test("the acts the platform admin is offered follow the revision: a confirmed unit, a retired revision and a zone's meaning are not offered", async () => {
+test("the acts the platform admin is offered follow the revision: a zone's meaning is offered as any other (v42); a confirmed unit and a retired revision are not", async () => {
   await openField(F1);
   assert.deepEqual([...content.querySelectorAll('[data-action="source-fields-act-open"]')].map((b) => b.dataset.act), ["unit", "meaning"]);
   await click('[data-action="source-fields-back"]');
   await click(`[data-action="source-fields-open"][data-field-id="${F2}"]`);
-  assert.deepEqual([...content.querySelectorAll('[data-action="source-fields-act-open"]')].map((b) => b.dataset.act), ["unit"], "a zone: the unit only");
-  const blocked = [...content.querySelectorAll(".source-fields-acts button[disabled]")];
-  assert.equal(blocked.length, 1);
-  assert.equal(blocked[0].textContent, "Confirm the meaning");
-  assert.match(text(), /The meaning of a zone cannot be confirmed yet: how closed and open zones share one bound operator is not decided\. Code: verification_model_unresolved/);
-  // A forged click for a zone's meaning, a retired revision or a confirmed unit opens nothing.
-  content.insertAdjacentHTML("beforeend", `<button id="forged" data-action="source-fields-act-open" data-act="meaning" data-revision-id="${R2}"></button>`);
-  await handleSourceFieldsAction($("#forged"), { render });
-  assert.equal(sourceFieldsState().form, null);
+  assert.deepEqual([...content.querySelectorAll('[data-action="source-fields-act-open"]')].map((b) => b.dataset.act), ["unit", "meaning"], "a zone: both acts");
+  assert.equal(content.querySelectorAll(".source-fields-acts button[disabled]").length, 0);
+  assert.doesNotMatch(text(), /verification_model_unresolved|cannot be confirmed yet/);
   resetSourceFields();
   fields[0].revisions = [revision({ sourceUnit: "s", unitVerifiedAt: "2026-10-20T08:00:00.000Z" }), revision({ id: R0, revisionNumber: 0, state: "retired" })];
   await openField(F1);
@@ -334,12 +329,19 @@ test("a field whose re-read failed may be out of date: it says so, offers Try ag
   assert.ok($('[data-action="source-fields-act-open"]'), "after Try again the acts are back");
 });
 
-test("a club admin sees why a zone's meaning is not confirmed; the detail names the bound and operator as the forms do", async () => {
+test("a club admin reads a zone's meaning and operator as the forms name them; the detail names the bound and operator of an event threshold too", async () => {
   asClub();
   fields[2].revisions = [revision({ id: R3, valueShape: "event_count", parameterKind: "event_threshold", boundOperator: ">=", meaningVerifiedAt: "2026-10-20T08:00:00.000Z", sourceBoundUnit: "m/s2", sourceUnit: "count", unitVerifiedAt: "2026-10-20T08:00:00.000Z" })];
   await openField(F2);
-  assert.equal(fact($(".source-fields-revision"), "Meaning"), "Not confirmed yet: waits for a decision on zones");
+  assert.equal(fact($(".source-fields-revision"), "Meaning"), "Not confirmed");
+  assert.equal(fact($(".source-fields-revision"), "Operator"), "Not confirmed");
   assert.equal(fact($(".source-fields-revision"), "Unit of the zone bounds"), "Not confirmed (expected W/kg, not proven)");
+  assert.equal(content.querySelectorAll('[data-action="source-fields-act-open"]').length, 0, "a club admin is offered no act");
+  // A confirmed zone operator, in the words of its choice.
+  resetSourceFields();
+  fields[1].revisions = [revision({ id: R2, valueShape: "zone_distance", parameterKind: "zone_bounds", boundOperator: ">=", meaningVerifiedAt: "2026-10-21T08:00:00.000Z" })];
+  await openField(F2);
+  assert.equal(fact($(".source-fields-revision"), "Operator"), "At least its lower bound — the open top zone (>=)");
   await click('[data-action="source-fields-back"]');
   await click(`[data-action="source-fields-open"][data-field-id="${F3}"]`);
   assert.equal(fact($(".source-fields-revision"), "Operator"), "At least (>=)");
@@ -382,6 +384,43 @@ test("confirm a meaning: an event threshold needs its one-sided operator; a plai
   type("evidenceRef", "docs/ai/evidence.md#total-time");
   await submit();
   assert.deepEqual(posts()[1].body, { requestKey: posts()[1].body.requestKey, evidenceRef: "docs/ai/evidence.md#total-time" });
+});
+
+test("confirm a zone's meaning (v42): the operator of its shape is required with nothing preselected - between (a closed zone) or >= (the open top zone); the last question names it in words; the body carries it; the zone's refusals read as the zone's", async () => {
+  serve(() => ({ status: 201, body: { revision: revision({ id: R2, valueShape: "zone_distance", parameterKind: "zone_bounds" }) } }));
+  await openField(F2);
+  await click('[data-action="source-fields-act-open"][data-act="meaning"]');
+  const radios = [...content.querySelectorAll('input[type="radio"][data-sf-field="boundOperator"]')];
+  assert.deepEqual(radios.map((r) => r.value), ["between", ">="], "the two shapes only");
+  assert.equal(radios.filter((r) => r.checked).length, 0, "nothing preselected");
+  assert.deepEqual([...content.querySelectorAll(".source-fields-choice")].map((l) => l.textContent.replace(/\s+/g, " ").trim()),
+    ["Between its lower and upper bound — a closed zone (between)", "At least its lower bound — the open top zone (>=)"]);
+  assert.match(text(), /A closed zone and the open top zone are separate source fields\. Choose what this field's evidence shows\. It is saved for good; a wrong choice cannot be mapped, and the correction is a new revision\./);
+  type("evidenceRef", "docs/ai/evidence.md#power-zones");
+  await submit();
+  assert.equal(posts().length, 0, "nothing sent without a choice");
+  assert.match($("#sf-err-boundOperator").textContent, /Choose what this field's evidence shows\./);
+  assert.equal($('[role="radiogroup"]').getAttribute("aria-invalid"), "true");
+  const top = $('input[type="radio"][value=">="]');
+  top.checked = true;
+  top.dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.equal($('[role="radiogroup"]').getAttribute("aria-invalid"), null, "the mark goes with the choice");
+  await submit();
+  assert.match(confirmQuestions.at(-1), /with the operator "At least its lower bound — the open top zone \(>=\)"/);
+  assert.equal(posts()[0].url, `${FB}/${F2}/revisions/${R2}/meaning-verification`);
+  assert.deepEqual(posts()[0].body, { requestKey: posts()[0].body.requestKey, boundOperator: ">=", evidenceRef: "docs/ai/evidence.md#power-zones" });
+  // The zone's own refusal texts.
+  resetSourceFields();
+  serve(() => ({ status: 400, body: { error: "invalid_operator", message: "A zone takes between (a closed zone) or >= (the open top zone)." } }));
+  await openField(F2);
+  await click('[data-action="source-fields-act-open"][data-act="meaning"]');
+  const between = $('input[type="radio"][value="between"]');
+  between.checked = true;
+  between.dispatchEvent(new window.Event("input", { bubbles: true }));
+  type("evidenceRef", "docs/ai/evidence.md#power-zones");
+  await submit();
+  assert.match(text(), /Not saved: a zone takes between \(a closed zone\) or >= \(the open top zone\)\./);
+  assert.doesNotMatch(text(), /one-sided/);
 });
 
 test("typing in a Source fields form is never swallowed by the Variables screen's input handler (app.js asks it first)", async () => {

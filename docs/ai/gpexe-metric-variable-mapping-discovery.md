@@ -1857,8 +1857,9 @@ Three administrator views - since C80 in **Training Load → Data configuration 
   and API family with their unit (confirmed, or the expected unit marked as not proven), the meaning, the levels and the
   evidence status, with a legend of the four statuses. A field's detail shows its revisions, their evidence references,
   the history of its confirmations and, under Technical details, the ids. A platform admin in the platform workspace
-  gets the two acts F2 and F3; a club admin reads. A zone's meaning act is shown as not possible yet
-  (`verification_model_unresolved`, C89). The revision lifecycle (L1–L5 of J5) has no UI yet.
+  gets the two acts F2 and F3; a club admin reads. A zone's meaning act was shown as not possible
+  (`verification_model_unresolved`, C89) until phase 5b; since v42 it is offered as any other, with a required choice of
+  the zone's operator (J7). The revision lifecycle (L1–L5 of J5) has no UI yet.
   *Since PR-1 (Data configuration visual polish, layout C; frontend only besides J3's icon):* the sub-navigation and the
   Variables | Domains & categories switch are gone. Data configuration opens on a **start screen** of cards like the
   coach's Home - Variables, Domains, Categories and, for an administrator, Source fields - each with its count and its
@@ -3221,8 +3222,15 @@ The contract is the separate document `docs/ai/phase5-zone-model-contract.md` (p
   without `boundOperator` is `400 operator_required` and any other operator than `between` or `>=` is
   `400 invalid_operator`, each with the zone's text ("A zone takes between (a closed zone) or >= (the open top
   zone)."); an unknown operator is `400 invalid_operator` for every kind; the request hash keeps `source-fields/v1`;
-  `verification_model_unresolved` is no longer answered (the frontend's code table keeps its sentence for an older
-  server during a deploy).
+  `verification_model_unresolved` is no longer answered.
+- **The meaning form** (`frontend/source-fields-{data,view,actions}.js`; contract section 5): *Confirm the meaning* is
+  offered for a zone on the same terms as any other act (`meaningBlockedByZoneModel` and the "waits for a decision on
+  zones" texts are gone, and so is the code's sentence). A zone's form asks "Which zone does this field hold?" with two
+  radio choices and nothing preselected - "Between its lower and upper bound — a closed zone (between)" and "At least
+  its lower bound — the open top zone (>=)" - and the contract's sentence on separate fields and a choice saved for
+  good. The body carries `boundOperator` for a zone as for an event threshold. The last question names the operator in
+  the words of its choice for both kinds (phase 6's LOW note), the detail shows a confirmed operator the same way, and
+  `invalid_operator` / `operator_required` read as the zone's own when the form is a zone's.
 - **Scripts:** `docs/runbooks/source-metric-zone-model-v42-rollback.sql` (section 3.4: the refusals, exactly the two
   v34 delete guards off for its own transaction, `tgenabled` checked before the COMMIT, v39's and v34's bodies
   restored verbatim, their comments cleared), `…-preflight.sql` (nine blocks; the two bodies proven by their md5),

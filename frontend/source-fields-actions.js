@@ -206,6 +206,7 @@ export function handleSourceFieldsInput(target) {
   if (form.errors[name]) {
     delete form.errors[name];
     field.removeAttribute?.("aria-invalid");
+    field.closest?.('[role="radiogroup"]')?.removeAttribute?.("aria-invalid");
     globalThis.document?.getElementById?.(`sf-err-${name}`)?.remove?.();
   }
   return true;
@@ -284,7 +285,7 @@ async function refused(form, info, { render, check }) {
     // The form was made from a revision that changed: it is closed and the
     // field read again, so the screen shows it as it is now.
     s.form = null;
-    setNotice(s, sourceFieldCodeText(info), "warning");
+    setNotice(s, sourceFieldCodeText(info, form), "warning");
     s.list = { ...emptySourceFieldsState().list };
     await loadSourceField(form.fieldId, render);
     focusNotice();
@@ -292,6 +293,6 @@ async function refused(form, info, { render, check }) {
   }
   const field = FIELD_OF_CODE[info.code];
   if (field) form.errors[field] = "The server refused this value.";
-  form.error = sourceFieldCodeText(info);
+  form.error = sourceFieldCodeText(info, form);
   render();
 }
