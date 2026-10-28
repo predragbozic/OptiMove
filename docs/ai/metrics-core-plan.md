@@ -29,7 +29,8 @@ reads the owner's words and confirmed by the owner's own merge of PR #240 (phase
 Q10 part B as its own migration v40 (section 6), and the record of PR #238's merge as a one-off departure (section 2).
 Added on 2026-10-28: the Done entry of phase 4 (section 5) and the Q10 part B line of section 6 marked done; later the
 same day, phase 12's accepted contract (C101, section 5) and the Done entry of 12b (section 5); later still, the Done
-entries of 12c and phase 6 and the owner's decision of phase 5 (C102, section 5).
+entries of 12c and phase 6, the owner's decision of phase 5 (C102, section 5), and the Data configuration visual polish
+task (section 6).
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
@@ -614,7 +615,7 @@ order covers is merged under it.
   the C97 evidence.
 - **Merged, 2026-10-28; not yet deployed.**
   - PR #251: frontend only, no migration. As built: section H and J4 of the discovery document. The revision lifecycle
-    (L1–L5) has no UI in it, by the *Rukovodilac*'s order.
+    (L1–L5) has no UI in it, as the plan scopes phase 6; the *Rukovodilac* confirmed it.
   - Reviews:
     - `code-reviewer`, `ux-design-reviewer` and `mobile-qa` on `479489b`. The UX review found six MEDIUM: closing
       refusals looked like a success; a `404`'s outcome; a stale field; the forms' context; no last question before
@@ -910,7 +911,68 @@ Each one is a plan change, so the owner schedules it:
     v40, merged and deployed with PR #241 (`290b6cf`, phase 4). The *Rukovodilac*'s R5 of 2026-10-27 replaced J3b.9's
     "no v40". The owner approved it with the phase 4 contract (O6, C100);
 - the v35 / v36 test hardening;
-- separate database roles.
+- separate database roles;
+- **Data configuration: visual polish of Variables, Domains & categories and Source fields** (scheduled by the owner on
+  2026-10-28; see below).
+
+**Data configuration: visual polish.** The owner's words, in the *Rukovodilac*'s chat, verbatim. The executor checked
+each turn in the *Rukovodilac*'s transcript:
+- owner turn `555ad88f`, 16:25:13 UTC: „Sta se sada desava i da li mozemo malo ovaj deo data conficugarion da sredimo
+  vizuelno da bude prihvatljivije kasnije”;
+- owner turn `675388a1`, 16:28:13 UTC: „Prvo svaka varijabla bi trebalo da ima neku ikonicu, možda bi trebalo da imamo i
+  neku listu ili bazu ikonica koje mozemo izabrati ako je bi se mogle uklopiti u ovu nasu pricu. Osim toga bilo bi
+  dobro da ovaj deo bude vizuelno sličan i interaktivan kao na našoj homes strani ili već nekako drugačije. Varijable
+  bi se mogle prevlačiti u kategorije, posebno bi trebalo razdvojiti domene od kategorija i sl. Nisam baš najbolji za
+  ovo ali par ideja nije na odmet”; and `d2ed6e07`, 16:28:32 UTC: „home strana trenera”;
+- owner turn `18e6d722`, 16:33:49 UTC: „te ikonice mogu da stoje ngde u settingsu da ih imamo za različite potrebe posle
+  da koristimo”;
+- owner turn `3d4b9bac`, 16:34:13 UTC: „Inače varijable i domeni već u bazi imaju medij i kolonnu gde možemo da ubacimo
+  te stvari”;
+- owner turns `257366da`, 16:34:42 UTC: „Sopstvene takođe omogućiti da postoje”, and `4525f83f`, 16:34:55 UTC: „da može
+  neko da ima”;
+- owner turn `3b1894ff`, 16:35:49 UTC: „sve može kako ti je lakše. To sve može da se skladišti na R2 kao što skladišimo
+  vežbe”;
+- owner turn `0dbec26b`, 16:36:20 UTC: „mislim ako to ubacijumo kao privatno lice i ako je potrebno za to skladište”.
+
+How the *Rukovodilac* reads them (its messages to the executor, 2026-10-28): the owner scheduled this task and approved
+the order step 1, then step 2. Nothing else is approved by them: no migration, no contract and no variant. That reading
+is the *Rukovodilac*'s.
+- **First, a proposal** (a document only): `docs/ai/data-configuration-visual-proposal.md` and a static HTML mockup the
+  owner can open in a browser, with no app code changed. It covers:
+  - 2–3 layout variants in the visual language of the coach's Home, each at 1280 and 360 px;
+  - a clear separation of domains from categories, with archived ones apart;
+  - variable icons;
+  - dragging variables into categories;
+  - what changes where, the risks, and the test plan.
+
+  It goes to the *Rukovodilac*, then to the owner to choose. Code comes only after the owner's word.
+- **Step 1, no migration:**
+  - a built-in icon library with an open licence, as a shared resource: `frontend/icon-library.js` (key, inline SVG,
+    categories, search words);
+  - a **Settings → Icons** gallery;
+  - one shared icon picker. Variables use it through an optional `iconKey` in the M3-0 API, stored as `icon:<key>` in
+    the existing `metric_definitions.icon_url` column (v10). The Settings taxonomy presets and the coach's Home share the
+    library;
+  - the visual pass over Variables, Domains & categories and Source fields.
+
+  Then **PR-1** (the visual pass and the icons; frontend and a small backend part; `code-reviewer`,
+  `ux-design-reviewer`, `mobile-qa`, and `security-reviewer` for the new input) and **PR-2** (dragging variables into
+  categories on a computer, through the existing classification API and its rules; the picker stays the way on phones
+  and by keyboard). Browser QA at 360 / 375 / 390 / 1280 px. Each merges under the standing order after the
+  *Rukovodilac*'s GO.
+- **Not in step 1:** an icon on a domain or a category of variables. `metric_domains` and `metric_categories` have no
+  icon column (v10, v41), so it needs a migration, which is an owner's option.
+- **Step 2 ★★, scheduled by the owner: a club's or a person's own icons.**
+  - Owners: `system` (a platform admin), `club` (a club admin; seen in that club only) and `user` (a private coach; seen
+    by that user only).
+  - PNG and SVG, the SVG sanitized, or PNG only if sanitizing cannot be proven; a size limit.
+  - Stored on R2 through the exercise media infrastructure and its per-account quota (Settings → Storage, 0 B by
+    default).
+  - A new table, so a migration.
+  - The identical 404 for another owner's icon.
+
+  Its contract comes first (a document, to the *Rukovodilac*, the *Nezavisni revizor* and then the owner), and the
+  migration only on the owner's order that names it.
 
 PR #220 is not part of this plan. If it runs in parallel, it is merged in sequence with #218 (they share
 `frontend/training-load-actions.js`), and the training-load actions tests are run again.

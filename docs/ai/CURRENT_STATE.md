@@ -3123,6 +3123,11 @@ pre-existing; pass/fail counts don't belong in this file
   Its ★★ contract (a seeding migration, v37's zone refusal replaced, F3's change, the zone operator in the Source fields
   form) is the next Metrics Core document; no zone's meaning is confirmed before its migration is deployed and the C97
   evidence exists.
+- **Data configuration: visual polish** (scheduled by the owner on 2026-10-28; `docs/ai/metrics-core-plan.md`, section
+  6, with the owner's words): a proposal document and mockup first. Then step 1, with no migration: a built-in icon
+  library, Settings → Icons, a shared picker, variable icons in the existing `icon_url` column, the visual pass, and
+  dragging variables into categories. Then step 2 ★★: own icons for system, club and private-coach owners on R2, with a
+  migration. Many of the 12c and phase 6 follow-ups below belong to it.
 - **Follow-ups of the 12c frontend** (the *Rukovodilac* and the reviews of PR #249, LOW; not scheduled):
   - the list filter also offers archived domains and categories: whether to separate active and archived in the
     picker's groups;
