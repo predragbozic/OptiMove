@@ -13,7 +13,9 @@ const { pool } = await import("../src/db.js");
 // before a malformed/oversized body has been refused.
 let server, port, databaseAttempts = 0;
 const originalQuery = pool.query;
+const originalConnect = pool.connect;
 pool.query = async () => { databaseAttempts++; throw new Error("Unexpected database access in parser test"); };
+pool.connect = async () => { databaseAttempts++; throw new Error("Unexpected database checkout in parser test"); };
 const { app } = await import("../src/server.js");
 const originalError = console.error;
 const diagnostics = [];
@@ -31,12 +33,13 @@ after(async () => {
     assert.ok(!diagnostics.join("\n").includes(marker), "request contents must not be logged");
   } finally {
     pool.query = originalQuery;
+    pool.connect = originalConnect;
     console.error = originalError;
     await pool.end();
     delete process.env.DATABASE_URL;
   }
 });
-function request(body, headers = {}, route = "/api/training-load/dashboards/not-an-id/query") {
+function request(body, headers = {}, route = "/api/training-load/dashboards/not-an-id/query", splitAt = null) {
   return new Promise((resolve, reject) => {
     const req = http.request({ host: "127.0.0.1", port, path: route, method: "POST", headers: { "content-type": "application/json", "content-length": body.length, ...headers } }, (res) => {
       const chunks = [];
@@ -45,7 +48,10 @@ function request(body, headers = {}, route = "/api/training-load/dashboards/not-
     });
     req.setTimeout(3000, () => req.destroy(new Error("Loopback parser request timed out")));
     req.on("error", reject);
-    req.end(body);
+    if (splitAt !== null) {
+      req.write(body.subarray(0, splitAt));
+      setTimeout(() => req.end(body.subarray(splitAt)), 25);
+    } else req.end(body);
   });
 }
 const session = { cookie: "optimove_session=fixture-no-database-access" };
@@ -87,12 +93,15 @@ test("unsupported content encoding and charset are refused before session lookup
 });
 test("trailing bytes after a compressed frame cannot crash the process or bypass authentication", async () => {
   for (let i = 0; i < 4; i++) {
-    const body = Buffer.concat([gzipSync(json), Buffer.from(marker)]);
-    const result = await request(body, { "content-encoding": "gzip" });
+    const frame = gzipSync(json);
+    const body = Buffer.concat([frame, Buffer.from(marker)]);
+    const result = await request(body, { "content-encoding": "gzip" }, undefined, i % 2 ? frame.length : null);
     // Decoder timing may reject at400 or complete the valid frame at401;
     // neither outcome may reach a protected route or crash on a later error.
     assert.ok([400, 401].includes(result.status));
-    await new Promise(setImmediate);
+    // Include late bytes after the valid frame was already decoded: the
+    // advisory concerns errors emitted after the parser has finished.
+    await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal((await request(json)).status, 401);
   }
 });
