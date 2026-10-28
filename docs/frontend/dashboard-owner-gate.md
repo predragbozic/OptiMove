@@ -1,5 +1,10 @@
 # Dashboard final owner conditions and deployment gate
 
+Feature consolidation is now complete. The latest result, actual consolidated
+HEAD validation and GO/NO-GO disposition are in
+[dashboard-consolidation-final.md](dashboard-consolidation-final.md). Approval
+requirements below describe the pre-consolidation checkpoint and remain history.
+
 2026-10-27. Same Work session and existing #220/#230–#236 chain. This report
 supersedes the earlier a1bb932 integration checkpoint. Application code is
 unchanged from reviewed `dbf3383`; this update contains evidence only.
