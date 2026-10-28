@@ -565,7 +565,7 @@ order covers is merged under it.
   - Applying them added one change to the accepted contract: L2 and L5 take `expectedState` (the `db-reviewer`'s
     MEDIUM). The *Rukovodilac* accepted it with its GO.
   - Both reviews were on `d0282d4`, and neither found a BLOCKER, HIGH or MEDIUM:
-    - the *Rukovodilac* gave GO (about 00:00 UTC, 2026-10-28);
+    - the *Rukovodilac* gave GO (23:57 UTC, 2026-10-27);
     - the *Nezavisni revizor* answered READY WITH NON-BLOCKING NOTES (23:58 UTC, 2026-10-27).
   - The owner's read-only preflights of v39 and v40 came back as expected. The owner reported them as „Sve ocekiano”
     (owner turn `5ce31b89`, 08:35:10 UTC, in the *Rukovodilac*'s chat); the values were not pasted.
