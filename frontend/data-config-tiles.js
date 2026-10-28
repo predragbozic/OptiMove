@@ -1,7 +1,8 @@
 // Data configuration's tiles (PR-1; proposal sections 4 and 5): the square
 // before a name that says what it is at a glance, in the coach Home's visual
 // language. A domain is a filled tile, a category an outlined one, a variable
-// a soft one with its own icon (a neutral one without), a source field a
+// a soft one with its own icon (the neutral dashed circle without, never an
+// icon of the library), a source field a
 // neutral tile with an icon for its kind of value. A club's domain or category
 // takes the club colour, as Home does for club things. Decoration only: the
 // name and the badges beside it carry the meaning.
@@ -10,7 +11,7 @@ import { renderIconSvg } from "./icon-render.js";
 const sized = (size) => (size ? ` dc-tile-${size}` : "");
 
 export function variableTileHtml(item, { size = "" } = {}) {
-  return `<span class="dc-tile dc-tile-variable${item?.icon ? "" : " is-empty"}${sized(size)}" aria-hidden="true">${renderIconSvg(item?.icon || "activity")}</span>`;
+  return `<span class="dc-tile dc-tile-variable${item?.icon ? "" : " is-empty"}${sized(size)}" aria-hidden="true">${renderIconSvg(item?.icon || "")}</span>`;
 }
 
 export function nodeTileHtml(kind, node, { size = "" } = {}) {
@@ -27,8 +28,8 @@ const SPEED_UNITS = new Set(["km/h", "m/s"]);
 export function fieldShapeIcon(revision) {
   if (!revision) return "number";
   if (revision.valueShape === "zone_distance" || revision.parameterKind === "zone_bounds") return "chart-bar";
-  if (revision.valueShape === "event_count" || revision.parameterKind === "event_threshold") return "bolt";
   const unit = revision.sourceUnit || revision.expectedSourceUnit || "";
+  if (revision.valueShape === "event_count" || revision.parameterKind === "event_threshold" || unit === "count") return "bolt";
   if (DISTANCE_UNITS.has(unit)) return "distance";
   if (TIME_UNITS.has(unit)) return "stopwatch";
   if (SPEED_UNITS.has(unit)) return "speed";

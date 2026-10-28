@@ -79,3 +79,11 @@ test("7. the licence text sits beside the library", () => {
   assert.match(licence, /^MIT License/);
   assert.match(licence, /Copyright \(c\) 2020-2026 Paweł Kuna/);
 });
+
+test("8. a released key is never removed or renamed: scripts/icon-library/released-keys.json holds every key ever released, and the library holds every one of them; every key of the library is listed there", () => {
+  const released = JSON.parse(readFileSync(path.join(root, "scripts", "icon-library", "released-keys.json"), "utf8"));
+  assert.deepEqual(Object.keys(released).sort(), ["_comment", "keys"]);
+  assert.equal(new Set(released.keys).size, released.keys.length, "each key once");
+  for (const key of released.keys) assert.ok(isIconKey(key), `released key ${key} is still in the library`);
+  for (const key of ICON_KEYS) assert.ok(released.keys.includes(key), `${key} is listed as released`);
+});

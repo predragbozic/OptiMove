@@ -9,7 +9,7 @@ import { isLibraryKey } from "./icon-render.js";
 import { isClassificationMode } from "./metric-classification-data.js";
 import {
   afterUncheckedClose, ensureClassification, handleClassificationAction, handleClassificationInput, loadClassification, sendClassification,
-  submitClassificationForm,
+  submitClassificationForm, toTitle,
 } from "./metric-classification-actions.js";
 import {
   CHANGE_MODES, archiveVariable, buildRequest, checkNoteText, checkSettles, codeText, createVariable, createVersion, emptyVariablesState,
@@ -153,10 +153,15 @@ export function variablesUnloadShouldWarn() {
 }
 function leaveForm() {
   if (!variablesMayBeLeft()) return false;
+  dropVariablesForm();
+  return true;
+}
+// The form dropped once the coach agreed to leave it (here, a section switch,
+// leaving Training Load): the icon picker it opened goes with it.
+export function dropVariablesForm() {
   clearTimeout(keyTimer);
   if (iconPickerOpenFor("metric-variables")) closeIconPicker();
-  variablesState().form = null;
-  return true;
+  if (state.trainingLoad.variables) state.trainingLoad.variables.form = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +268,7 @@ export async function handleVariablesAction(action, { render }) {
     s.detail = { ...emptyVariablesState().detail };
     s.notice = "";
     if (!s.list.loaded) await loadVariables(render); else render();
+    toTitle();
     return true;
   }
   if (type === "metric-variables-open") {
@@ -272,6 +278,7 @@ export async function handleVariablesAction(action, { render }) {
     s.node = null;
     s.notice = "";
     await Promise.all([ensureClassification(render), loadVariable(id, render)]);
+    toTitle();
     return true;
   }
   if (type === "metric-variables-scope") {
@@ -443,6 +450,8 @@ export async function submitVariablesForm(_formElement, { render }) {
   const s = variablesState();
   const form = s.form;
   if (!form || form.busy || form.unconfirmed) return;
+  // The form is inert behind the open icon picker; Enter never sends it.
+  if (iconPickerOpenFor("metric-variables")) return;
   if (isClassificationMode(form.mode)) {
     await submitClassificationForm({ render, load: LOADERS });
     return;

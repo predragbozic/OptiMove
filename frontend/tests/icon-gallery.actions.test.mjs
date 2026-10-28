@@ -16,7 +16,7 @@ globalThis.localStorage = { getItem: () => null, setItem: () => {}, removeItem: 
 const calls = installFetchMock(() => ({ status: 404, body: {} }));
 after(() => restoreFetch());
 
-const { handleIconGalleryAction, handleIconGalleryInput, renderIconGalleryHtml, resetIconGallery } = await import("../icon-gallery.js");
+const { handleIconGalleryAction, handleIconGalleryInput, renderIconGalleryHtml } = await import("../icon-gallery.js");
 const { renderSettingsNavHtml } = await import("../navigation.js");
 const { ICONS, ICON_CATEGORIES } = await import("../icon-render.js");
 const { state } = await import("../state.js");
@@ -30,7 +30,7 @@ let copied = [];
 let copyFails = false;
 
 beforeEach(() => {
-  resetIconGallery();
+  state.iconGallery = null;
   calls.length = 0;
   copied = [];
   copyFails = false;
@@ -83,13 +83,19 @@ test("3. the search and a chip narrow the list in place; the focus stays", async
   assert.match($("[data-icon-gallery-list]").textContent, /No icon matches\./);
 });
 
-test("4. Copy key copies the stored value and says so; when the browser cannot copy, it says the key; an unknown key copies nothing", async () => {
+test("4. Copy key copies the stored value and says so where everyone sees it; when the browser cannot copy, it shows the key to select; an unknown key copies nothing", async () => {
   await handleIconGalleryAction($('[data-action="icon-gallery-copy"][data-icon-key="run"]'));
   assert.deepEqual(copied, ["icon:run"]);
-  assert.equal($("[data-icon-gallery-status]").textContent, "Copied icon:run.");
+  const status = $("[data-icon-gallery-status]");
+  assert.equal(status.textContent, "Copied icon:run.");
+  assert.equal(status.getAttribute("role"), "status");
+  assert.equal(status.closest(".visually-hidden"), null, "the line is visible, not only read out");
   copyFails = true;
   await handleIconGalleryAction($('[data-action="icon-gallery-copy"][data-icon-key="bike"]'));
-  assert.equal($("[data-icon-gallery-status]").textContent, "Could not copy. The key is icon:bike.");
+  assert.equal(status.textContent, "Could not copy. The key is icon:bike.");
+  assert.equal(status.querySelector("code.icon-gallery-key")?.textContent, "icon:bike", "the key as text to select");
+  render();
+  assert.equal($("[data-icon-gallery-status]").textContent, "Could not copy. The key is icon:bike.", "a repaint keeps the line");
   content.insertAdjacentHTML("beforeend", `<button id="forged" data-action="icon-gallery-copy" data-icon-key="&lt;b&gt;"></button>`);
   copyFails = false;
   await handleIconGalleryAction($("#forged"));

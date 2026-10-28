@@ -40,7 +40,7 @@ const EVIDENCE_LEGEND = [
 function legendHtml() {
   return `
     <ul class="source-fields-legend" aria-label="Evidence">
-      ${EVIDENCE_LEGEND.map(([status, text]) => `<li><span class="item-badge source-fields-evidence is-${status}">${escapeHtml(EVIDENCE_LABEL[status])}</span> <span class="muted">${escapeHtml(text)}</span></li>`).join("")}
+      ${EVIDENCE_LEGEND.map(([status, text]) => `<li><span class="item-badge source-fields-evidence is-${status}">${escapeHtml(EVIDENCE_LABEL[status])}</span><span class="visually-hidden">:</span> <span class="muted">${escapeHtml(text)}</span></li>`).join("")}
     </ul>`;
 }
 

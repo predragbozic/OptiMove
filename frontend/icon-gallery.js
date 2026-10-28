@@ -3,19 +3,19 @@
 // with its key, its search words and Copy key. Read only, and shown to everyone
 // who sees Settings: nothing in it is private and nothing in it changes
 // anything. Typing and a chip repaint only the gallery's list, so the focus
-// stays where it was.
+// stays where it was. Copy key says what it did in a line everyone sees; when
+// the browser refuses the clipboard, that line shows the key to select.
 import { state } from "./state.js";
 import { ICON_LIBRARY } from "./icon-library.js";
 import { ICON_CATEGORIES, categoryLabel, isLibraryKey, renderIconSvg, searchIcons, storedIconValue } from "./icon-render.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import { ICON_SEARCH_MAX } from "./icon-picker.js";
 
+// A sign-out reloads the page, so nothing here outlives it; the gallery
+// holds nothing private either way.
 function gallery() {
-  if (!state.iconGallery) state.iconGallery = { query: "", category: "", status: "" };
+  if (!state.iconGallery) state.iconGallery = { query: "", category: "", status: null };
   return state.iconGallery;
-}
-export function resetIconGallery() {
-  state.iconGallery = null;
 }
 
 const countText = (n) => `${n} ${n === 1 ? "icon" : "icons"}`;
@@ -51,15 +51,15 @@ export function renderIconGalleryHtml() {
     <section class="panel icon-gallery" aria-labelledby="icon-gallery-title" data-icon-gallery>
       <div class="icon-gallery-head">
         <h2 id="icon-gallery-title">Icons</h2>
-        <p class="muted">The icons OptiMove offers wherever an icon is chosen, for example for a variable. Search them and copy a key; nothing here can be changed.</p>
+        <p class="muted">The built-in icons. Today you choose one for a new variable (Training Load → Data configuration → Variables → New variable); more places will use them later. Copy key copies the stored value, for example icon:run, for reference. Nothing here can be changed.</p>
       </div>
       <label class="search-field icon-gallery-search"><span>Search icons</span>
         <input type="search" data-icon-gallery-search value="${escapeAttr(g.query)}" maxlength="${ICON_SEARCH_MAX}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="icon-gallery-count">
       </label>
       <div class="icon-picker-chips" role="group" aria-label="Categories" data-icon-gallery-chips>${chipsHtml(g)}</div>
       <p class="muted" id="icon-gallery-count" data-icon-gallery-count>${escapeHtml(countText(shown))}${g.category ? ` in ${escapeHtml(categoryLabel(g.category))}` : ""}</p>
+      <p class="icon-gallery-status" role="status" data-icon-gallery-status>${statusHtml(g)}</p>
       <div data-icon-gallery-list>${listHtml(g)}</div>
-      <p class="visually-hidden" role="status" data-icon-gallery-status>${escapeHtml(g.status)}</p>
       <p class="muted icon-gallery-credit">Icons from Tabler Icons ${escapeHtml(ICON_LIBRARY.version)}, ${escapeHtml(ICON_LIBRARY.license)} licence.</p>
     </section>`;
 }
@@ -75,10 +75,16 @@ function paint(g) {
   const count = root.querySelector("[data-icon-gallery-count]");
   if (count) count.textContent = `${countText(shown)}${g.category ? ` in ${categoryLabel(g.category)}` : ""}`;
 }
-function say(g, text) {
-  g.status = text;
+// The value is a stored value of a library key (checked before it gets here).
+function statusHtml(g) {
+  if (!g.status) return "";
+  const value = escapeHtml(g.status.value);
+  return g.status.copied ? `Copied <code>${value}</code>.` : `Could not copy. The key is <code class="icon-gallery-key">${value}</code>.`;
+}
+function say(g, status) {
+  g.status = status;
   const node = globalThis.document?.querySelector?.("[data-icon-gallery-status]");
-  if (node) node.textContent = text;
+  if (node) node.innerHTML = statusHtml(g);
 }
 
 export async function handleIconGalleryAction(action) {
@@ -99,9 +105,9 @@ export async function handleIconGalleryAction(action) {
     const value = storedIconValue(key);
     try {
       await globalThis.navigator.clipboard.writeText(value);
-      say(g, `Copied ${value}.`);
+      say(g, { copied: true, value });
     } catch {
-      say(g, `Could not copy. The key is ${value}.`);
+      say(g, { copied: false, value });
     }
     return true;
   }

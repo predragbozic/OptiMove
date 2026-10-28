@@ -23,7 +23,8 @@
 //
 // A key, once released, is never removed or renamed: stored values
 // (`icon:<key>`) name it, and the server takes only a key of the current list.
-// An icon may be redrawn, and new icons may be added.
+// An icon may be redrawn, and new icons may be added; a new key is appended to
+// scripts/icon-library/released-keys.json, which a test holds the library to.
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
