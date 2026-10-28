@@ -2757,11 +2757,24 @@ nothing imported is visible in the app.
 - PR #251 (phase 6, merge commit `cf387f2`) and PR #252 (documents, merge commit `0b947ab`, 2026-10-28 18:34:08 UTC) are
   deployed with `0b947ab`, by the owner by hand: `/api/health` first served `0b947ab` with `ok: true` at 20:44:24 UTC, then five more times in a row until 20:45:34 UTC (`ae29b08` before) (the *Rukovodilac*'s smoke); without a login six
   protected routes answered 401 and `/api/auth/me` answered `{"user":null}`. No migration.
-- **Merged outside this plan, not deployed:** PR #245 (backend dependency hardening, merge commit `527c296`, 18:49:07
-  UTC) and PR #220 (the Dashboard display model with ECharts, merge commit `1659988`, 18:52:37 UTC) were merged from the
-  owner's account through another workflow, not this plan's. Neither adds a migration. Their descriptions record the
-  deploy as on hold until a separate owner approval. Production serves `0b947ab`, which contains neither. The
-  executor checked only the git history and the two pull requests' descriptions.
+- **PR #245 and PR #220 are deployed** with `1659988`, by the owner by hand: `/api/health` served `1659988` with
+  `ok: true` from 22:22:26 UTC, three times in a row until 22:22:44 UTC (`0b947ab` before) (the *Rukovodilac*'s
+  smoke).
+  - They were merged outside this plan from the owner's account: PR #245 (backend dependency hardening, merge commit
+    `527c296`, 18:49:07 UTC) and PR #220 (the Dashboard display model with ECharts, merge commit `1659988`, 18:52:37
+    UTC). Neither adds a migration.
+  - The *Rukovodilac*'s smoke was basic, with no functional check of those changes:
+    - six protected routes answered 401, and `/api/auth/me` answered `{"user":null}`;
+    - the served bundle carries ECharts and Source fields;
+    - an invalid JSON body to `/api/auth/login` answered 400.
+- PR #254 (the Data configuration visual proposal, merge commit `f4abd7c`, 22:02:19 UTC) and PR #255 (the phase 5b
+  acceptance, merge commit `82fbb3c`, 22:24:25 UTC) are documents only and not deployed.
+- **The owner's words on merges** (2026-10-28, in the *Rukovodilac*'s chat; the executor checked both turns, verbatim):
+  turn `727a680c` at 22:25:11 UTC, „Molim te nemoj me vise citati za merge. Uradio sam sada”, and turn `33a7447c` at
+  22:25:31 UTC, „Ne cimaj me vise za merge poslove”. They are recorded as facts only. By the *Rukovodilac*'s decision the
+  plan (`docs/ai/metrics-core-plan.md`, section 2) stays as written: a pull request without a migration and without a ★
+  or gate-line change is merged under the owner's standing order after the *Rukovodilac*'s GO, and the next pull request
+  that adds a ★★ and a gate line goes to the owner together with the order for its migration.
 - PR #158 (merge commit `0293b39`, merged 2026-10-12 16:12:25 UTC exactly from head `77ae78f`; the
   agent-efficiency rule, docs / rules only) is deployed: `/api/health` first served `0293b39` with
   `ok: true` at 16:13:15 UTC, then three times in a row (16:13:26, 16:13:36 and 16:13:46 UTC); without a
