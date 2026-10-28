@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
 
 // perf/frontend-production-build: production-only build config. This file
 // is never loaded by `node --test` (the existing frontend suite imports
@@ -32,10 +33,19 @@ const buildStamp = {
   transformIndexHtml: () => (/^[0-9a-f]{7,40}$/i.test(buildCommit) ? [{ tag: "meta", attrs: { name: "optimove-build", content: buildCommit }, injectTo: "head" }] : []),
 };
 
+const echartsNotices = {
+  name: "echarts-license-notices",
+  generateBundle() {
+    for (const notice of ["LICENSE", "NOTICE", "licenses/LICENSE-d3"]) {
+      this.emitFile({ type: "asset", fileName: `licenses/echarts/${notice}`, source: readFileSync(resolve(rootDir, "vendor/echarts", notice)) });
+    }
+  },
+};
+
 export default defineConfig({
   root: rootDir,
   base: "/",
-  plugins: [buildStamp],
+  plugins: [buildStamp, echartsNotices],
   build: {
     outDir: "dist",
     emptyOutDir: true,

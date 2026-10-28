@@ -1,0 +1,132 @@
+{
+  "results": [
+    {
+      "viewport": 1440,
+      "overflow": false,
+      "plots": 4,
+      "image": false,
+      "table": 3,
+      "apiCalls": 0,
+      "bounds": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "inputs": [
+        16,
+        16
+      ]
+    },
+    {
+      "viewport": 360,
+      "overflow": false,
+      "plots": 4,
+      "image": false,
+      "table": 3,
+      "apiCalls": 0,
+      "bounds": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "inputs": [
+        16,
+        16
+      ]
+    },
+    {
+      "viewport": 375,
+      "overflow": false,
+      "plots": 4,
+      "image": false,
+      "table": 3,
+      "apiCalls": 0,
+      "bounds": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "inputs": [
+        16,
+        16
+      ]
+    },
+    {
+      "viewport": 390,
+      "overflow": false,
+      "plots": 4,
+      "image": false,
+      "table": 3,
+      "apiCalls": 0,
+      "bounds": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "inputs": [
+        16,
+        16
+      ]
+    },
+    {
+      "keyboardDisclosure": "pass",
+      "realEChartsValues": "pass"
+    },
+    {
+      "editModeDisclosureAndLegendDoNotDrag": "pass"
+    },
+    {
+      "pointerResize": "pass",
+      "chartContainerResize": "pass"
+    },
+    {
+      "mobileReorder": "pass",
+      "mobileHandleHidden": "pass"
+    },
+    {
+      "scenario": "loading",
+      "status": "pass"
+    },
+    {
+      "scenario": "template",
+      "status": "pass"
+    },
+    {
+      "scenario": "archived",
+      "status": "pass"
+    },
+    {
+      "scenario": "unresolved",
+      "status": "pass"
+    },
+    {
+      "scenario": "unsupported",
+      "status": "pass"
+    },
+    {
+      "scenario": "malformed",
+      "status": "pass"
+    },
+    {
+      "scenario": "query-error",
+      "status": "pass"
+    },
+    {
+      "scenario": "duplicates",
+      "status": "pass"
+    },
+    {
+      "navigationDisposal": "pass"
+    },
+    {
+      "libraryFailureFallback": "pass"
+    }
+  ],
+  "errors": [],
+  "apiRequests": 0,
+  "browser": "155.0.8059.85"
+}

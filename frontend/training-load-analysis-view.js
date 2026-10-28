@@ -1,5 +1,7 @@
 import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { state } from "./state.js";
+import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
+import { renderDashboardChartPlots } from "./training-load-analysis-echarts-options.js";
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
 
 const WIDGET_TYPES = [
@@ -410,69 +412,78 @@ function seriesLabel(series) {
   return hint?.key || "Choose a metric";
 }
 
-function formatValue(value) {
-  if (value === null || value === undefined || value === "") return "-";
-  if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(1);
+function formatValue(value, model) {
+  if (Array.isArray(value)) return JSON.stringify(value);
+  if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(model.config.effective.numberFormat.maximumFractionDigits);
   return String(value);
 }
 
-function renderSeriesStatusHtml(series, result) {
-  if (series.resolution_status === "unresolved") return `<div class="tl-analysis-status is-unresolved">Choose a metric</div>`;
-  if (series.resolution_status === "ambiguous") {
-    const candidates = series.template_resolution_candidates || [];
-    return `<div class="tl-analysis-status is-ambiguous">Ambiguous metric${candidates.length ? `: ${escapeHtml(String(candidates.length))} candidates` : ""}</div>`;
+function displayStatusLabel(status, reasons = []) {
+  if (status === "loading") return "Loading...";
+  if (status === "unresolved") return "Choose a metric";
+  if (status === "ambiguous") return "Ambiguous metric";
+  if (status === "multipleGroups") return "Multiple groups — narrow the selection or use a table.";
+  if (status === "missing" || status === "empty") return "No data";
+  if (status === "unsupported") return "This result is not a single numeric value. Use a table.";
+  if (status === "conflict") {
+    const names = { conflict: "Conflict", unitConflict: "Unit conflict", typeConflict: "Type conflict", semanticConflict: "Semantic conflict" };
+    return reasons.filter(reason => names[reason]).map(reason => names[reason]).join(" / ") || "Conflict";
   }
-  if (result?.status === "error") return `<div class="tl-analysis-status is-error">seriesQueryFailed</div>`;
-  return "";
+  if (reasons.includes("seriesQueryFailed")) return "This series could not be loaded. Try refreshing the dashboard.";
+  if (reasons.includes("duplicateBucket")) return "Multiple values for this group. Use a table.";
+  return "Invalid or unavailable result";
 }
 
-function flattenSeriesRows(result) {
-  const current = result?.data?.current || [];
-  const comparison = result?.data?.comparison || [];
-  return { current, comparison };
+function renderDisplayStatusHtml(status, reasons) {
+  return `<div class="tl-analysis-status is-${status === "error" ? "error" : status === "conflict" ? "conflict" : "unresolved"}" role="status">${escapeHtml(displayStatusLabel(status, reasons))}</div>`;
 }
 
-function renderKpiHtml(widget, results) {
-  const series = widget.series?.[0];
-  if (!series) return `<p class="muted">Add a series to show this KPI.</p>`;
-  const result = results?.series?.find((r) => r.seriesId === series.id);
-  const status = renderSeriesStatusHtml(series, result);
-  if (status) return status;
-  const { current, comparison } = flattenSeriesRows(result);
-  const first = current[0];
-  const comp = comparison[0];
+function displayRowContext(row) {
+  const identity = row.identity;
+  const reported = identity.source.reported;
+  const connectionKeys = ["sourceConnectionId", "source_connection_id", "sourceId"];
+  const onlyConnection = Object.keys(reported).length === 1 && connectionKeys.includes(Object.keys(reported)[0]);
+  const sourceId = reported.sourceConnectionId ?? reported.source_connection_id ?? reported.sourceId;
+  const sourceLabel = onlyConnection && typeof sourceId === "string" ? `Source ${sourceId}` : Object.keys(reported).length ? `Source provenance ${JSON.stringify(reported)}` : "";
+  return [identity.athleteId ? `Athlete ${identity.athleteId}` : "", sourceLabel].filter(Boolean).join(" · ");
+}
+
+function renderKpiHtml(model) {
+  if (!model.series.length) return `<p class="muted">Add a series to show this KPI.</p>`;
+  const kpi = model.kpi;
+  if (kpi.status !== "value") return renderDisplayStatusHtml(kpi.status, kpi.row?.reasons || kpi.reasons);
+  const row = kpi.row;
   return `
     <div class="tl-analysis-kpi">
-      <span class="tl-analysis-kpi-value">${escapeHtml(formatValue(first?.value))}</span>
-      <span class="tl-analysis-kpi-label">${escapeHtml(seriesLabel(series))}${first?.unit ? ` · ${escapeHtml(first.unit)}` : ""}</span>
-      ${comp ? `<span class="tl-analysis-kpi-compare">Compare ${escapeHtml(formatValue(comp.value))}</span>` : ""}
-      ${first?.conflict ? `<span class="tl-analysis-status is-conflict">Conflict</span>` : ""}
-      ${first?.unitConflict ? `<span class="tl-analysis-status is-conflict">Unit conflict</span>` : ""}
+      <span class="tl-analysis-kpi-value">${escapeHtml(formatValue(row.value, model))}</span>
+      <span class="tl-analysis-kpi-label">${escapeHtml(seriesLabel(model.series[0].definition))}${row.identity.unit ? ` · ${escapeHtml(row.identity.unit)}` : ""}</span>
+      ${displayRowContext(row) ? `<span class="tl-analysis-kpi-context">${escapeHtml(displayRowContext(row))}</span>` : ""}
+      ${kpi.comparison.status === "value" ? `<span class="tl-analysis-kpi-compare">Compare ${escapeHtml(formatValue(kpi.comparison.row.value, model))}</span>` : ""}
+      ${["incompatible", "error"].includes(kpi.comparison.status) ? `<span class="tl-analysis-status is-unresolved">Comparison unavailable: results are not unambiguous and compatible.</span>` : ""}
     </div>
   `;
 }
 
-function renderTableHtml(widget, results) {
-  const seriesResults = results?.series || [];
-  if (!(widget.series || []).length) return `<p class="muted">Add series to build a table.</p>`;
+function renderTableHtml(model) {
+  if (!model.series.length) return `<p class="muted">Add series to build a table.</p>`;
   return `
-    <div class="tl-analysis-table-wrap">
+    <div class="tl-analysis-table-wrap" role="region" aria-label="${escapeAttr(model.title || "Metric")} values" tabindex="0">
       <table class="tl-analysis-table">
+        <caption>Current period values</caption>
         <thead><tr><th scope="col">Series</th><th scope="col">Bucket</th><th scope="col">Value</th><th scope="col">Unit</th><th scope="col">Status</th></tr></thead>
         <tbody>
-          ${(widget.series || []).map((series) => {
-            const result = seriesResults.find((r) => r.seriesId === series.id);
-            const status = renderSeriesStatusHtml(series, result);
-            if (status) return `<tr><td>${escapeHtml(seriesLabel(series))}</td><td colspan="4">${status}</td></tr>`;
-            const rows = result?.data?.current || [];
-            if (!rows.length) return `<tr><td>${escapeHtml(seriesLabel(series))}</td><td colspan="4" class="muted">No data</td></tr>`;
+          ${model.series.map((series) => {
+            const label = seriesLabel(series.definition);
+            if (series.status !== "ready") return `<tr><td>${escapeHtml(label)}</td><td colspan="4">${renderDisplayStatusHtml(series.status, series.reasons)}</td></tr>`;
+            const rows = series.current;
+            if (!rows.length) return `<tr><td>${escapeHtml(label)}</td><td colspan="4" class="muted">No data</td></tr>`;
             return rows.map((row) => `
               <tr>
-                <td>${escapeHtml(seriesLabel(series))}</td>
-                <td>${escapeHtml(row.bucketKey || row.athleteId || "")}</td>
-                <td>${escapeHtml(formatValue(row.value))}</td>
-                <td>${escapeHtml(row.unit || "")}</td>
-                <td>${[row.conflict ? "Conflict" : "", row.unitConflict ? "Unit conflict" : ""].filter(Boolean).join(" / ")}</td>
+                <td>${escapeHtml(label)}</td>
+                <td>${escapeHtml([row.identity.bucketKey, displayRowContext(row)].filter(Boolean).join(" · "))}</td>
+                <td>${row.status === "value" ? escapeHtml(formatValue(row.value, model)) : "-"}</td>
+                <td>${escapeHtml(row.identity.unit || "")}</td>
+                <td>${row.status === "value" ? "" : escapeHtml(displayStatusLabel(row.status, row.reasons))}</td>
               </tr>
             `).join("");
           }).join("")}
@@ -482,46 +493,30 @@ function renderTableHtml(widget, results) {
   `;
 }
 
-function renderChartHtml(widget, results, kind) {
-  const series = widget.series || [];
-  if (!series.length) return `<p class="muted">Add a series to draw the chart.</p>`;
-  const rows = [];
-  for (const s of series) {
-    const result = results?.series?.find((r) => r.seriesId === s.id);
-    if (s.resolution_status !== "resolved" || result?.status === "error") {
-      rows.push({ label: seriesLabel(s), status: renderSeriesStatusHtml(s, result) });
-      continue;
-    }
-    for (const point of result?.data?.current || []) {
-      rows.push({ label: seriesLabel(s), bucket: point.bucketKey || "", value: Number(point.value), conflict: point.conflict || point.unitConflict });
-    }
-  }
-  const numeric = rows.filter((r) => Number.isFinite(r.value));
-  const max = Math.max(1, ...numeric.map((r) => Math.abs(r.value)));
+function renderChartHtml(model) {
+  if (!model.series.length) return `<p class="muted">Add a series to draw the chart.</p>`;
+  const diagnostics = model.series.flatMap(series => series.current.filter(row => row.chartStatus !== "value").map(row => renderDisplayStatusHtml(row.chartStatus, row.reasons)));
   return `
-    <div class="tl-analysis-chart ${kind === "line_chart" ? "is-line" : "is-bar"}">
-      ${rows.map((row, index) => {
-        if (row.status) return `<div class="tl-analysis-chart-row">${row.status}</div>`;
-        const pct = Math.max(4, Math.min(100, Math.abs(row.value) / max * 100));
-        return `
-          <div class="tl-analysis-chart-row">
-            <span class="tl-analysis-chart-label">${escapeHtml(row.bucket || row.label)}</span>
-            <span class="tl-analysis-chart-track"><span style="width:${pct}%"></span></span>
-            <span class="tl-analysis-chart-value">${escapeHtml(formatValue(row.value))}${row.conflict ? " !" : ""}</span>
-          </div>
-        `;
-      }).join("")}
-      ${!rows.length ? `<p class="muted">No data for ${escapeHtml(formatDate(state.trainingLoad.analysis.period.dateFrom))} - ${escapeHtml(formatDate(state.trainingLoad.analysis.period.dateTo))}.</p>` : ""}
-    </div>
+    ${renderDashboardChartPlots(model, seriesLabel, displayRowContext)}
+    ${diagnostics.join("")}
+    <details class="tl-analysis-chart-values" open>
+      <summary>Values and status</summary>
+      ${renderTableHtml(model)}
+    </details>
   `;
 }
 
 function renderWidgetBodyHtml(widget, results) {
-  if (state.trainingLoad.analysis.queryLoading && !results) return `<p class="muted tl-analysis-loading" aria-live="polite">Loading...</p>`;
-  if (state.trainingLoad.analysis.queryError) return `<p class="builder-error" role="alert">${escapeHtml(state.trainingLoad.analysis.queryError)}</p>`;
-  if (widget.widget_type === "kpi") return renderKpiHtml(widget, results);
-  if (widget.widget_type === "table") return renderTableHtml(widget, results);
-  return renderChartHtml(widget, results, widget.widget_type);
+  const analysis = state.trainingLoad.analysis;
+  const querySkipped = analysis.queryResult === null && (analysis.dashboard?.is_template || analysis.dashboard?.status === "archived");
+  const model = buildDashboardWidgetDisplayModel(widget, results, { loading: analysis.queryLoading, querySkipped, error: analysis.queryError, period: analysis.period });
+  if (model.status === "unsupported") return `<p class="builder-error" role="alert">Unsupported display configuration version.</p>`;
+  if (model.config.status !== "ready") return `<p class="builder-error" role="alert">Invalid display configuration.</p>`;
+  if (model.status === "loading") return `<p class="muted tl-analysis-loading" aria-live="polite">Loading...</p>`;
+  if (model.status === "error") return renderDisplayStatusHtml("error", model.reasons);
+  if (widget.widget_type === "kpi") return renderKpiHtml(model);
+  if (widget.widget_type === "table") return renderTableHtml(model);
+  return renderChartHtml(model);
 }
 
 function renderWidgetHtml(widget, position) {
@@ -538,7 +533,7 @@ function renderWidgetHtml(widget, position) {
           <h3>${escapeHtml(widget.title)}</h3>
         </div>
       </header>
-      ${renderWidgetBodyHtml(widget, results)}
+      <div class="tl-analysis-widget-body" role="region" aria-label="${escapeAttr(widget.title || "Metric")} content" tabindex="0">${renderWidgetBodyHtml(widget, results)}</div>
       ${renderWidgetToolbarHtml(widget, layout, position)}
       ${state.trainingLoad.analysis.editMode && canEdit() ? `<button type="button" class="tl-analysis-resize-handle" data-analysis-resize-handle aria-label="Resize widget" title="Resize widget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 20h12V8M13 20l7-7M18 20l2-2"/></svg></button>` : ""}
     </article>

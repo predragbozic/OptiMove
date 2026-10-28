@@ -164,13 +164,25 @@ export function invalidateTrainingLoadAnalysis() {
   invalidateCacheNamespace(DASHBOARD_QUERY_NAMESPACE);
 }
 
+export function resetAnalysisDashboardQuery() {
+  queryGeneration += 1;
+  invalidateCacheEntry(DASHBOARD_QUERY_NAMESPACE, queryContextKey());
+  const analysis = state.trainingLoad.analysis;
+  analysis.queryResult = null;
+  analysis.queryLoading = false;
+  analysis.queryError = "";
+}
+
 function applyDashboardDetail(detail) {
   const analysis = state.trainingLoad.analysis;
   // H2: layout editing belongs to one dashboard - a detail for a DIFFERENT
   // dashboard (create, clone, fallback after a delete) never opens in
   // layout mode. A reload of the same dashboard (save, stale revision)
   // keeps the mode; its draft is dropped either way, as before.
-  if (analysis.dashboard?.id !== detail.dashboard?.id) analysis.editMode = false;
+  if (analysis.dashboard?.id !== detail.dashboard?.id) {
+    resetAnalysisDashboardQuery();
+    analysis.editMode = false;
+  }
   analysis.dashboard = detail.dashboard;
   analysis.widgets = detail.widgets || [];
   analysis.selectedDashboardId = detail.dashboard?.id || "";
@@ -293,6 +305,7 @@ export async function queryAnalysisDashboard(onPainted, { force = false } = {}) 
       if (generation !== queryGeneration || queryContextKey() !== contextKey) return;
       a.queryResult = data;
       a.queryLoading = false;
+      a.queryError = "";
       onPainted?.();
     },
     applyError: (error) => {

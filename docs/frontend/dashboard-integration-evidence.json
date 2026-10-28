@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "reviewDate": "2026-10-28",
+  "status": "NO_GO_BACKEND_SECURITY_DECISION_REQUIRED",
+  "canonicalPullRequest": 220,
+  "finalConsolidationReport": "dashboard-post241-validation.md",
+  "historicalConsolidationReport": "dashboard-consolidation-final.md",
+  "validatedConsolidationHead": "ecd1ceafebc2598af9bfb08c5ad8a05f9ff512f3",
+  "runtimeValidatedDashboardHead": "c10842ea1369094aa5e207179396caa6708e9386",
+  "publicationHeadSource": "Exact final evidence-only HEAD pinned in canonical PR220 comment",
+  "mainSha": "a07fdd12ff9d45147193709c2c20e029185759f0",
+  "latestMainSha": "a07fdd12ff9d45147193709c2c20e029185759f0",
+  "mainRuntimeEquivalentSha": "d96936ce5b2033be0f32a0bb076e3341ac80eda0",
+  "currentMainPatchApplication": "clean",
+  "integrationMethod": "current-main source plus complete PR diff; no published merge commit",
+  "sourceIntegrity": {
+    "detachedHead": "a07fdd12ff9d45147193709c2c20e029185759f0",
+    "trackedStatusClean": true,
+    "comparedMainFiles": 1052,
+    "preservedBackendMigrationScriptFiles": 336,
+    "sourceNormalization": "CRLF to LF only"
+  },
+  "finalFailureEvidence": "dashboard-post241-failures.json",
+  "testEvidence": "dashboard-post241-test-results.json",
+  "renderEvidenceFile": "dashboard-render-gate.json",
+  "baselineTrackingIssue": 239,
+  "focusedTests": {
+    "files": 11,
+    "passed": 274,
+    "failed": 0,
+    "skipped": 0,
+    "actualProductionBuildChecks": 9
+  },
+  "fullFrontendTests": {
+    "files": 149,
+    "passed": 2140,
+    "failed": 14,
+    "total": 2154,
+    "result": "FAILED",
+    "matchedPristineMainFailureEvents": 14,
+    "newOrWorseFailureEvents": 0,
+    "previouslyAcceptedSignatureSetMatches": true
+  },
+  "backendUnitTests": {
+    "files": 18,
+    "passed": 339,
+    "failed": 1,
+    "total": 340,
+    "identicalOnPristineMain": true,
+    "newOrWorseFailureEvents": 0,
+    "ownerAcceptedAsDebt": false
+  },
+  "audit": {
+    "developmentDependenciesIncluded": true,
+    "frontend": {
+      "total": 0,
+      "evidence": "dashboard-post241-frontend-audit.json"
+    },
+    "backend": {
+      "info": 0,
+      "low": 0,
+      "moderate": 1,
+      "high": 2,
+      "critical": 1,
+      "total": 4,
+      "evidence": "dashboard-post241-backend-audit.json",
+      "lockIdenticalToMain": true,
+      "reachableHigh": "body-parser default decompression before authentication",
+      "dependencyFixDecisionRequired": true
+    },
+    "applicationWideZeroVulnerabilityClaim": false
+  },
+  "independentReview": {
+    "compatibility": "No new Dashboard/API contract regression found by read-only reviewer Ohm",
+    "security": "Leibniz: hold production for reachable body-parser HIGH; Nodemailer remediation/exception needs review",
+    "evidence": "Ohm independently verified all five signature pairs, unchanged current-main source, shared installed dependency trees and focused274/274; no P1/P2 evidence corrections. Leibniz closed DB/security wording review with no findings. Both read-only.",
+    "unresolvedDashboardCodeHighBlocker": 0,
+    "unresolvedBackendSecurityGate": true
+  },
+  "ownerBaselineConditions": {
+    "identicalReproductionOnUnmodifiedMain": true,
+    "noNewOrWorseDashboardFailures": true,
+    "all274FocusedChecksPassed": true,
+    "fiveUnmarkedCasesTrackedWithoutSkips": true,
+    "independentAttributionReview": true,
+    "initialConcurrentTimingFailureNotAutomaticallyAccepted": true,
+    "additionalBackendFailureNotAutomaticallyAccepted": true
+  },
+  "cleanProductionInstallBuild": "PASS",
+  "databaseIntegrationCoverage": "NOT_EXECUTED_NO_MIGRATION_AUTHORIZATION",
+  "claudeMetricsCoreGpexeImportUnchanged": true,
+  "mainMerged": false,
+  "deployTriggered": false,
+  "migrationExecuted": false,
+  "productionWrite": false,
+  "mergeApproval": false,
+  "deployApproval": false
+}

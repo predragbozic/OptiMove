@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "mainSha": "a07fdd12ff9d45147193709c2c20e029185759f0",
+  "runtimeValidatedDashboardHead": "c10842ea1369094aa5e207179396caa6708e9386",
+  "node": "v24.22.1",
+  "platform": "win32",
+  "focused": {
+    "files": 11,
+    "pass": 11,
+    "xfail": 0,
+    "fail": 0,
+    "timeout": 0,
+    "crash": 0,
+    "noExit": 0,
+    "skipped": 0,
+    "tests": 274,
+    "testsPassed": 274,
+    "testsFailed": 0,
+    "durationMs": 11468
+  },
+  "candidateFrontend": {
+    "files": 149,
+    "pass": 141,
+    "xfail": 4,
+    "fail": 4,
+    "timeout": 0,
+    "crash": 0,
+    "noExit": 0,
+    "skipped": 0,
+    "tests": 2154,
+    "testsPassed": 2140,
+    "testsFailed": 14,
+    "durationMs": 158217
+  },
+  "pristineMainFrontend": {
+    "files": 146,
+    "pass": 138,
+    "xfail": 4,
+    "fail": 4,
+    "timeout": 0,
+    "crash": 0,
+    "noExit": 0,
+    "skipped": 0,
+    "tests": 2066,
+    "testsPassed": 2052,
+    "testsFailed": 14,
+    "durationMs": 146157
+  },
+  "pristineMainBackend": {
+    "files": 18,
+    "pass": 17,
+    "xfail": 0,
+    "fail": 1,
+    "timeout": 0,
+    "crash": 0,
+    "noExit": 0,
+    "skipped": 0,
+    "tests": 340,
+    "testsPassed": 339,
+    "testsFailed": 1,
+    "durationMs": 6976
+  },
+  "candidateBackend": {
+    "files": 18,
+    "tests": 340,
+    "testsPassed": 339,
+    "testsFailed": 1
+  },
+  "noDatabaseOrMigrationExecution": true,
+  "cleanProductionConfigBuild": "PASS",
+  "normalizationAndDependencyTreeProof": "dashboard-post241-failures.json",
+  "commands": {
+    "frontend": "node scripts/test-runner.mjs --project frontend --log-dir <separate-run-dir> --json <report>",
+    "backend": "node scripts/test-runner.mjs --project backend --kind unit --log-dir <separate-run-dir>",
+    "build": "node scripts/verify-render-build.mjs",
+    "audit": "node <npm-cli.js> audit --json (frontend and backend separately)"
+  },
+  "initialConcurrentRuns": {
+    "candidate": {
+      "passed": 2139,
+      "unsuccessful": 15
+    },
+    "main": {
+      "passed": 2051,
+      "unsuccessful": 15
+    },
+    "bothReproducedExtraThumbnailTimingAssertion": true,
+    "subsequentIsolatedCandidateThumbnail": {
+      "passed": 14,
+      "failed": 0
+    },
+    "sequentialFullThumbnailOnBoth": {
+      "passed": 14,
+      "failed": 0
+    },
+    "initialFailureSignaturesRetained": true
+  }
+}

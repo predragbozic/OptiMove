@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "observedDate": "2026-10-28",
+  "workspace": {
+    "id": "tea-d8oih13bc2fs73en2ucg",
+    "name": "My Workspace",
+    "explicitlyConfirmedByOwner": true
+  },
+  "services": [
+    {
+      "name": "OptiMove-eu",
+      "id": "srv-db922ljrjlhs73duqbfg",
+      "type": "web_service",
+      "branch": "main",
+      "autoDeploy": "yes",
+      "autoDeployTrigger": "commit",
+      "reportedLiveCommit": "a07fdd12ff9d45147193709c2c20e029185759f0",
+      "reportedLiveDeployId": "dep-dbgutrqvcj2c73dt0250",
+      "reportedStatus": "live",
+      "health": {
+        "ok": true,
+        "commit": "a07fdd12ff9d45147193709c2c20e029185759f0",
+        "dbTime": "2026-10-28T12:52:40.349Z"
+      },
+      "healthCheckPath": "/api/health",
+      "observedInstances": 1
+    },
+    {
+      "name": "optimove-media-cleanup",
+      "id": "crn-dbb22f5g1s2s73dvmd9g",
+      "type": "cron_job",
+      "branch": "main",
+      "autoDeploy": "yes",
+      "autoDeployTrigger": "commit",
+      "reportedLiveCommit": "a07fdd12ff9d45147193709c2c20e029185759f0",
+      "reportedLiveDeployId": "dep-dbguts2vcj2c73dt03h0",
+      "reportedStatus": "live",
+      "schedule": "0 * * * *",
+      "lastSuccessfulRunAt": "2026-10-28T13:02:10Z",
+      "jobOutputIndependentlyVerified": false
+    },
+    {
+      "name": "OptiMove",
+      "id": "srv-d8oj30sm0tmc73cqnipg",
+      "autoDeploy": "no",
+      "autoDeployTrigger": "off",
+      "suspended": "not_suspended",
+      "fullInactivityProven": false
+    }
+  ],
+  "migrationEvidence": {
+    "source": "read-only Render app startup logs on a07fdd1",
+    "v39": {
+      "at": "2026-10-28T12:48:18.223297946Z",
+      "message": "skip (already applied, checksum matches)"
+    },
+    "v40": {
+      "at": "2026-10-28T12:48:18.246734017Z",
+      "message": "skip (already applied, checksum matches)"
+    },
+    "allMigrationsUpToDateAt": "2026-10-28T12:48:18.270789104Z",
+    "independentSqlPostcheckExecuted": false,
+    "ownerPostcheckSource": "PR242 explicitly records owner statements without raw SQL values"
+  },
+  "gate": {
+    "mainMergeWouldTriggerBothActiveServices": true,
+    "settingsChanged": false,
+    "deploysTriggeredByThisSession": 0,
+    "migrationsExecuted": 0,
+    "productionWrites": 0,
+    "productionHealthRead": true,
+    "mergeApproval": false,
+    "deployApproval": false,
+    "productionStatus": "NO_GO_BACKEND_SECURITY_DECISION_REQUIRED"
+  }
+}
