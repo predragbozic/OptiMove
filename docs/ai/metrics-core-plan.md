@@ -640,7 +640,7 @@ order covers is merged under it.
 - **Reviewers:** `code-reviewer`, `mobile-qa`, `ux-design-reviewer`.
 - **Red zone:** merge and deploy. The first real production confirmation of a field is a separate order, and only with
   the C97 evidence.
-- **Merged, 2026-10-28; not yet deployed.**
+- **Done, 2026-10-28.**
   - PR #251: frontend only, no migration. As built: section H and J4 of the discovery document. The revision lifecycle
     (L1–L5) has no UI in it, as the plan scopes phase 6; the *Rukovodilac* confirmed it.
   - Reviews:
@@ -663,7 +663,9 @@ order covers is merged under it.
       revision per field today this has no effect, and the lifecycle UI must choose the newest explicitly.
   - Merge: `cf387f2` (parents `ae29b08` and `ffce389`), 16:17:34 UTC, made by the executor under the standing merge
     order from exactly `ffce389`.
-  - Deploy and smoke: with the owner's next manual deploy.
+  - Deploy: by the owner by hand, as `0b947ab` (with PR #252).
+  - Smoke (the *Rukovodilac*): `/api/health` first served `0b947ab` with `ok: true` at 20:44:24 UTC, then five more times in a row until 20:45:34 UTC (`ae29b08` before). Without a login six protected routes answered 401, and
+    `/api/auth/me` answered `{"user":null}`. The served bundle carries the Source fields screen.
   - For the owner (a choice, not blocking): the last question is a native `confirm()`, as Bind, Reconnect and Unbind
     use; a review step inside the form is the alternative.
 

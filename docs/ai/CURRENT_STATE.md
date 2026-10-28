@@ -2274,7 +2274,7 @@ Technical details.
     ★★ with its gate line "migration v42". Not implemented: until v42 is merged and deployed, the zone meaning act stays
     refused (C89).
   - **Phase 6, the Source fields view, PR #251** (branch `feature/metrics-source-fields-tab-6` from `3532bc5`):
-    **merged, not yet deployed; frontend only, no migration.** Section H and J4 of the discovery document record it as
+    **merged and deployed; frontend only, no migration.** Section H and J4 of the discovery document record it as
     built: a **Variables | Source fields** sub-navigation in the platform and a club workspace; the fields with their
     units, meaning, levels and evidence; a field's revisions and confirmations; the unit and meaning acts F2 / F3 for a
     platform admin in the platform workspace. No UI for the revision lifecycle (L1–L5) yet.
@@ -2286,8 +2286,9 @@ Technical details.
       and its own 9 mutations, all killed.
     - **Merge commit** `cf387f2` (parents `ae29b08` and `ffce389`) on 2026-10-28 at 16:17:34 UTC, made by the executor
       under the standing merge order from exactly `ffce389`.
-    - **Deploy:** with the owner's next manual deploy. **No production field is confirmed**: the first real
-      confirmation is a separate order, and only with the C97 evidence.
+    - **Deploy:** by the owner by hand, as `0b947ab` (with PR #252). The *Rukovodilac*'s smoke: `/api/health` first served `0b947ab` with `ok: true` at 20:44:24 UTC, then five more times in a row until 20:45:34 UTC (`ae29b08` before);
+      without a login six protected routes answered 401, and `/api/auth/me` answered `{"user":null}`. **No production
+      field is confirmed**: the first real confirmation is a separate order, and only with the C97 evidence.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2753,6 +2754,14 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #251 (phase 6, merge commit `cf387f2`) and PR #252 (documents, merge commit `0b947ab`, 2026-10-28 18:34:08 UTC) are
+  deployed with `0b947ab`, by the owner by hand: `/api/health` first served `0b947ab` with `ok: true` at 20:44:24 UTC, then five more times in a row until 20:45:34 UTC (`ae29b08` before) (the *Rukovodilac*'s smoke); without a login six
+  protected routes answered 401 and `/api/auth/me` answered `{"user":null}`. No migration.
+- **Merged outside this plan, not deployed:** PR #245 (backend dependency hardening, merge commit `527c296`, 18:49:07
+  UTC) and PR #220 (the Dashboard display model with ECharts, merge commit `1659988`, 18:52:37 UTC) were merged from the
+  owner's account through another workflow, not this plan's. Neither adds a migration. Their descriptions record the
+  deploy as on hold until a separate owner approval. Production serves `0b947ab`, which contains neither. The
+  executor checked only the git history and the two pull requests' descriptions.
 - PR #158 (merge commit `0293b39`, merged 2026-10-12 16:12:25 UTC exactly from head `77ae78f`; the
   agent-efficiency rule, docs / rules only) is deployed: `/api/health` first served `0293b39` with
   `ok: true` at 16:13:15 UTC, then three times in a row (16:13:26, 16:13:36 and 16:13:46 UTC); without a
@@ -3462,13 +3471,12 @@ PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the ident
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
 window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224), R2, renaming, archiving and restoring a canonical variable (PR #227, v38), Q10 part A (PR #229), phase 2c, R2 in the Variables view (PR #237), the plan's working mode with phases 11 and 12 (PR #238, `b358dae`), the v39 / v40 contract J5 (PR #240, `0c7104c`), phase 4, the revision lifecycle and Q10 part B (PR #241, v39 and v40, `290b6cf`), the phase 12 contract (PR #244, `a07fdd1`), 12b, domains and categories of canonical variables (PR #247, v41, `9361fff`), 12c, their frontend (PR #249, `3532bc5`), and the phase 5 options (PR #250) are merged and deployed (the last three with `ae29b08`); phase 6, the Source fields view (PR #251, `cf387f2`), is merged and waits for the owner's next deploy; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
 1. **The Metrics Core plan** (`docs/ai/metrics-core-plan.md`) sets the order of the Metrics Core work. Its
-   phases 0, 1, 2, 3, 2b, 2c, 4 and 12 are done, and so is Q10: part A in PR #229, part B as v40 in PR #241. Phase 6 is
-   merged and waits for its deploy, and phase 5 is decided. Phase 4 is the revision lifecycle (C91) with migrations v39
+   phases 0, 1, 2, 3, 2b, 2c, 4, 6 and 12 are done, and so is Q10: part A in PR #229, part B as v40 in PR #241. Phase 5
+   is decided. Phase 4 is the revision lifecycle (C91) with migrations v39
    and v40, PR #241 (`290b6cf`), merged and deployed on 2026-10-28 and confirmed by the owner's post-checks; see the
    active phase.
 
    Next by the plan:
-   - the owner's next manual deploy, which carries phase 6 (PR #251), then the *Rukovodilac*'s smoke;
    - phase 5b, the zone model (option A, C102): its contract J7 is accepted (C103). Next is its one ★★ pull request
      (migration v42, F3, the meaning form, the documents); its merge needs the owner's own order naming it and v42;
    - phase P, the owner only: the evidence for the nine `rest_v1` fields (C97) stays open;
