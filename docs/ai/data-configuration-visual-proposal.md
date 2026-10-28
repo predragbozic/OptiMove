@@ -314,16 +314,20 @@ for any other value. The pickers are otherwise unchanged (C80).
 **Settings → Icons (3.2):**
 - Read only, and offered to everyone who sees Settings.
 - It is a searchable list grouped by category.
-- Copy key copies the stored value (`icon:run`) and says so in a line everyone sees. When the browser cannot copy, the
-  line shows the key as text to select.
+- Copy key copies the stored value (`icon:run`) and says so where it was pressed: the button reads "Copied" for a
+  moment. When the browser cannot copy, that icon's own card shows the key as text to select. A status line tells a
+  screen reader the same, and coming back to Settings → Icons, a search or a chip clears the result.
 - A credit line names the source and the licence.
 
 **The picker (3.3):**
 - A dialog on a computer and a bottom sheet on a phone.
 - It is modal: the form behind it is inert and is never sent while the picker is open, and Tab stays inside it.
-- The grid scrolls first. On a screen too short even for that, the dialog itself scrolls and its actions stay pinned to
-  its bottom, so Use icon is always on the screen (checked at 360×640, 375×667, 667×375 and 844×390). On a phone or a
-  short screen the chips are one row that scrolls sideways.
+- The grid scrolls first. On a screen too short even for that, the dialog itself scrolls and its foot - the choice line
+  and the actions - stays pinned to its bottom, so Use icon is always on the screen, and a control reached by the
+  keyboard is scrolled clear of the foot. On a phone or a short screen the chips are one row that scrolls sideways; on
+  a short screen (a phone on its side) the dialog is compact (the actions side by side, the search's label for screen
+  readers only), so a full row of icons shows when it opens. Checked at 360×640, 375×667, 390×844, 667×375 and
+  844×390.
 - **A difference from 3.3:** with a mouse or a keyboard the focus opens in the search; on a touch screen it opens on
   the dialog's title, so the phone's keyboard does not cover the grid and Use icon.
 - The buttons are Use icon, Use no icon and Cancel.

@@ -34,7 +34,7 @@ import { enterStorageAdminSection, loadStorageAdmin, storageAdminContext, storag
 import { handleSourceConnectionsAction, handleSourceConnectionsBeforeUnload, submitSourceConnectionsForm } from "./source-connections-actions.js";
 import { handleVariablesAction, handleVariablesInput, submitVariablesForm } from "./metric-variables-actions.js";
 import { closeIconPicker, handleIconPickerInput, trapIconPickerTab } from "./icon-picker.js";
-import { handleIconGalleryAction, handleIconGalleryInput } from "./icon-gallery.js";
+import { enterIconGallery, handleIconGalleryAction, handleIconGalleryInput } from "./icon-gallery.js";
 import { handleSourceFieldsAction, handleSourceFieldsInput, submitSourceFieldsForm } from "./source-fields-actions.js";
 import { enterSourceConnectionsSection, loadSourceConnections, sourceConnectionsNeedLoad } from "./source-connections-data.js";
 import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
@@ -2166,6 +2166,7 @@ async function loadActiveTab() {
     if (state.organization.section === "dataSources") enterDataSourcesSection();
     if (state.organization.section === "sourceConnections") enterSourceConnectionsSection();
     if (state.organization.section === "storage") enterStorageAdminSection();
+    if (state.organization.section === "icons") enterIconGallery();
     return renderOrganizationPanel({ refresh: false });
   }
   if (state.activeTab === "coach-home") return loadCoachHome();

@@ -19070,8 +19070,9 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   cursor: default;
 }
 /* The grid scrolls first and keeps everything else in view; on a screen too
-   short even for that, the dialog itself scrolls, and its actions stay pinned
-   to its bottom, so Use icon is always on the screen. */
+   short even for that, the dialog itself scrolls, and its foot (the choice and
+   the actions) stays pinned to its bottom, so Use icon is always on the
+   screen; a control reached by the keyboard is scrolled clear of the foot. */
 .icon-picker {
   position: relative;
   z-index: 1;
@@ -19083,6 +19084,7 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   max-height: min(760px, 88dvh);
   overflow-y: auto;
   overscroll-behavior: contain;
+  scroll-padding-bottom: 104px;
   padding: 16px;
   box-shadow: 0 22px 70px rgba(14, 28, 37, 0.28);
 }
@@ -19172,17 +19174,21 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   margin: 0;
   overflow-wrap: anywhere;
 }
-.icon-picker-actions {
+.icon-picker-foot {
   position: sticky;
   bottom: 0;
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 8px;
   padding-top: 4px;
   background: var(--surface);
   /* Covers the dialog's bottom padding too, so nothing scrolls into view
-     under the pinned actions. */
+     under the pinned foot. */
   box-shadow: 0 24px 0 var(--surface);
+}
+.icon-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .icon-picker-actions .plain-button {
   min-height: 44px;
@@ -19221,8 +19227,43 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
     width: 100%;
     justify-content: center;
   }
+  .icon-picker {
+    scroll-padding-bottom: 156px;
+  }
   .dc-home-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* A short screen (a phone on its side): a compact dialog - the actions side by
+   side, the search's label for screen readers only, a smaller title - so at
+   least one row of icons shows between the chips and the foot. */
+@media (max-height: 500px) {
+  .icon-picker {
+    gap: 6px;
+    padding: 12px;
+    scroll-padding-bottom: 96px;
+  }
+  .icon-picker-head h2 {
+    font-size: 16px;
+  }
+  .icon-picker-search > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .icon-picker > .icon-picker-grid {
+    min-height: 56px;
+  }
+  .icon-picker-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .icon-picker-actions .plain-button {
+    width: 100%;
+    justify-content: center;
   }
 }
 /* Settings -> Icons: a read-only, searchable gallery. */
@@ -19289,13 +19330,14 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 .icon-gallery-credit {
   font-size: 13px;
 }
-/* What Copy key did, in a line everyone sees; the key of a refused copy is
-   selected whole by one tap. */
-.icon-gallery-status {
-  min-height: 1.4em;
+/* A refused Copy key shows the key on its own card, selected whole by one
+   tap. */
+.icon-gallery-refused {
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
-.icon-gallery-status code {
+.icon-gallery-refused code {
+  -webkit-user-select: all;
   user-select: all;
 }
 /* Source fields: the four kinds of evidence, each with its colour and its word. */
