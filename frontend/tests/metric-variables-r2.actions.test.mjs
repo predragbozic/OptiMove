@@ -28,6 +28,10 @@ const { variablesContext, variablesState } = await import("../metric-variables-d
 const { renderVariablesHtml } = await import("../metric-variables-view.js");
 const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
 const { state } = await import("../state.js");
+// These tests work on the variables list, as opened from the Data
+// configuration start screen (layout C); the start screen itself is proved in
+// data-config-home.actions.test.mjs.
+const resetToList = () => { resetVariables(); variablesState().view = "variables"; };
 
 const BASE = "/api/training-load/sources/metrics/variables";
 const CLUB = "11111111-0000-4000-8000-000000000001";
@@ -97,7 +101,7 @@ async function openVariable() {
 }
 
 beforeEach(() => {
-  resetVariables();
+  resetToList();
   calls.length = 0;
   confirmQuestions.length = 0;
   confirmAnswer = true;
@@ -139,7 +143,7 @@ test("coach: the list says what a coach may do, offers This club and System (ref
   assert.match(text(), /System variables, for reference: shared by all clubs and changed only by a platform administrator\./);
   current = reduced();
   respond = (call) => (call.url.startsWith(`${BASE}?`) ? { status: 200, body: { variables: [], nextCursor: null } } : { status: 404, body: { error: "notFound" } });
-  resetVariables();
+  resetToList();
   await loadVariablesSection(render);
   assert.match(text(), /This club has no variables of its own yet\. An administrator of the club creates them\./);
 });
@@ -167,7 +171,7 @@ test("the buttons and their notes follow the server's actions only", async () =>
     [{ ownerScope: "system", editable: false, actions: [] }, [], /Read only: system variables are shared by all clubs and changed only by a platform administrator\./],
   ];
   for (const [over, expected, note] of cases) {
-    resetVariables();
+    resetToList();
     current = reduced(over);
     await openVariable();
     assert.deepEqual(buttons(), expected, JSON.stringify(over));
@@ -175,19 +179,19 @@ test("the buttons and their notes follow the server's actions only", async () =>
   }
   // An admin on a pinned variable: Rename stays, Archive does not.
   asClub();
-  resetVariables();
+  resetToList();
   current = full({ actions: ["rename"] });
   await openVariable();
   assert.deepEqual(buttons(), ["Rename"]);
   assert.match(text(), /An active mapping uses this variable, so it cannot get a new version or be archived now\./);
-  resetVariables();
+  resetToList();
   current = full();
   await openVariable();
   assert.deepEqual(buttons(), ["Rename", "New version", "Archive"], "an admin's full set, Archive last");
   assert.ok($('[data-action="metric-variables-rename-open"]').classList.contains("data-sources-primary"));
   assert.ok($('[data-action="metric-variables-archive-open"]').classList.contains("ghost"), "Archive is never the primary button");
   // A form the server does not offer never opens.
-  resetVariables();
+  resetToList();
   current = reduced({ actions: [] });
   await openVariable();
   content.insertAdjacentHTML("beforeend", `<button data-action="metric-variables-rename-open" id="forged"></button>`);
@@ -265,7 +269,7 @@ test("rename: a name cut at its limit is read only and never sent until the coac
   await submit();
   assert.deepEqual(Object.keys(posts()[0].body).sort(), ["labelsToken", "requestKey", "shortLabel"], "the cut description is not sent");
 
-  resetVariables();
+  resetToList();
   calls.length = 0;
   await openVariable();
   await click('[data-action="metric-variables-rename-open"]');
@@ -287,7 +291,7 @@ test("rename: a name or short name exactly at its limit while the read says trun
   await click('[data-action="metric-variables-rename-open"]');
   assert.deepEqual([!!$('[data-mv-field="label"]'), !!$('[data-mv-field="shortLabel"]'), !!$('[data-mv-field="description"]')], [false, false, true]);
   assert.equal(content.querySelectorAll('[data-action="metric-variables-name-replace"]').length, 2);
-  resetVariables();
+  resetToList();
   current = reduced({ truncated: false, label: "L".repeat(80) });
   await openVariable();
   await click('[data-action="metric-variables-rename-open"]');
@@ -306,7 +310,7 @@ test("rename: a saved name on several lines is shown, read only and never sent u
   await submit();
   assert.deepEqual(Object.keys(posts()[0].body).sort(), ["label", "labelsToken", "requestKey"], "the multi-line description is not sent");
 
-  resetVariables();
+  resetToList();
   calls.length = 0;
   await openVariable();
   await click('[data-action="metric-variables-rename-open"]');
@@ -375,7 +379,7 @@ test("variable_changed: a name now saved cut or on several lines is locked again
   await submit();
   assert.ok(!$('[data-mv-field="description"]'), "the untouched description is locked");
   assert.match(text(), /The saved description is on several lines\./);
-  resetVariables();
+  resetToList();
   calls.length = 0;
   await openVariable();
   await click('[data-action="metric-variables-rename-open"]');
@@ -399,7 +403,7 @@ test("variable_changed: a name someone saved exactly as the coach typed says so;
 
 test("variable_changed: when the user may no longer rename (no rename in `actions`) or the answer has no `current`, the form closes and the variable is read again", async () => {
   for (const body of [{ error: "variable_changed", current: reduced({ labelsToken: NEW_TOKEN, actions: [] }) }, { error: "variable_changed" }]) {
-    resetVariables();
+    resetToList();
     calls.length = 0;
     serve((call) => (call.method === "POST" ? { status: 409, body } : { status: 404, body: { error: "notFound" } }));
     await openVariable();
@@ -452,7 +456,7 @@ test("rename: spacing a field would tidy locks a name with its own reason; a cut
   assert.equal($("#mv-locked-description").textContent, "Two  spaces", "shown with its spacing");
   await click('[data-action="metric-variables-name-replace"][data-mv-name="description"]');
   assert.match(text(), /The spacing is tidied here\./);
-  resetVariables();
+  resetToList();
   const cutLines = `${"x".repeat(250)}\n${"y".repeat(249)}`;
   current = reduced({ truncated: true, description: cutLines });
   await openVariable();
@@ -484,7 +488,7 @@ test("archive: a reason is required; the form says what stays and who can restor
   assert.match(text(), /The variable was archived\./);
 
   asClub();
-  resetVariables();
+  resetToList();
   current = full();
   await openVariable();
   await click('[data-action="metric-variables-archive-open"]');
@@ -496,7 +500,7 @@ test("archive: the restore promise follows the basis the server will write (Q8):
   const promise = async (availableWorkspaces) => {
     asCoach();
     state.currentUser.availableWorkspaces = availableWorkspaces;
-    resetVariables();
+    resetToList();
     await openVariable();
     await click('[data-action="metric-variables-archive-open"]');
     return text();
@@ -520,7 +524,7 @@ test("restore: the reason is optional and left out when empty", async () => {
   assert.equal(posts()[0].url, `${BASE}/${VAR_ID}/restore`);
   assert.deepEqual(Object.keys(posts()[0].body), ["requestKey"]);
   assert.match(text(), /The variable was restored\./);
-  resetVariables();
+  resetToList();
   calls.length = 0;
   await openVariable();
   await click('[data-action="metric-variables-restore-open"]');
@@ -609,7 +613,7 @@ test("a check that finds the saved write answers it as saved; Close without chec
   await click('[data-action="metric-variables-check-result"]');
   assert.match(text(), /The variable was archived\./);
 
-  resetVariables();
+  resetToList();
   answer = { throwNetworkError: true };
   await openVariable();
   await click('[data-action="metric-variables-archive-open"]');
@@ -645,7 +649,7 @@ test("every text from the server is escaped in the coach's view and the forms", 
   await click('[data-action="metric-variables-rename-open"]');
   assert.ok(!content.querySelector("img, b, script"));
   assert.equal($('[data-mv-field="label"]').value, "<img src=x onerror=alert(1)>");
-  resetVariables();
+  resetToList();
   current = reduced({ description: "<img src=x onerror=alert(1)>\n<b>two</b>" });
   await openVariable();
   await click('[data-action="metric-variables-rename-open"]');

@@ -4,6 +4,8 @@
 // confirmed" and checked by sending the very same request (the same request
 // key and body) again - the server replays a saved write and never saves twice.
 import { state } from "./state.js";
+import { closeIconPicker, focusIconPicker, handleIconPickerAction, iconPickerOpenFor, openIconPicker } from "./icon-picker.js";
+import { isLibraryKey } from "./icon-render.js";
 import { isClassificationMode } from "./metric-classification-data.js";
 import {
   afterUncheckedClose, ensureClassification, handleClassificationAction, handleClassificationInput, loadClassification, sendClassification,
@@ -14,6 +16,8 @@ import {
   errorInfo, fetchKeySuggestion, fetchVariable, fetchVariables, newRequestKey, openForm, outcomeUnknown, rebaseRename, renameVariable,
   replaceName, restoreVariable, variablesContext, variablesState,
 } from "./metric-variables-data.js";
+import { ensureSourceFieldsList } from "./source-fields-actions.js";
+import { sourceFieldsContext } from "./source-fields-data.js";
 
 export const KEY_SUGGESTION_DELAY_MS = 350;
 let keyTimer = null;
@@ -25,6 +29,7 @@ const confirmAsk = (question) => Boolean(globalThis.window?.confirm?.(question))
 export function resetVariables() {
   const generation = (state.trainingLoad.variables?.generation || 0) + 1;
   clearTimeout(keyTimer);
+  if (iconPickerOpenFor("metric-variables")) closeIconPicker();
   state.trainingLoad.variables = { ...emptyVariablesState(), generation };
 }
 
@@ -85,11 +90,25 @@ export async function loadVariable(id, render, { more = false } = {}) {
   render();
 }
 
+// The start screen (layout C): its counts come from the reads the screens
+// already make - the domains and categories, the variables list, and for an
+// administrator the source fields - each read once, never a read of its own.
+export function loadDataConfigHome(render) {
+  const s = variablesState();
+  if (!variablesContext()) { render(); return Promise.resolve(); }
+  const reads = [ensureClassification(render)];
+  if (!s.list.loaded && !s.list.loading) reads.push(loadVariables(render));
+  if (sourceFieldsContext()) reads.push(ensureSourceFieldsList(render));
+  render();
+  return Promise.all(reads);
+}
+
 // Entering the screen: the list is read when it is not there yet.
 export function loadVariablesSection(render) {
   const s = variablesState();
   if (!variablesContext()) { render(); return Promise.resolve(); }
-  if (s.view === "classification" && !s.form) return loadClassification(render);
+  if (s.view === "home" && !s.form) return loadDataConfigHome(render);
+  if ((s.view === "domains" || s.view === "categories") && !s.form) return loadClassification(render);
   // The domains and categories: the list's filter and a variable's links use them.
   const tree = ensureClassification(render);
   if (s.detail.id && !s.form) return Promise.all([tree, loadVariable(s.detail.id, render)]);
@@ -98,7 +117,7 @@ export function loadVariablesSection(render) {
   return tree;
 }
 // What the classification's handlers use of this module.
-const LOADERS = { list: (render) => loadVariables(render), variable: (id, render) => loadVariable(id, render) };
+const LOADERS = { list: (render) => loadVariables(render), variable: (id, render) => loadVariable(id, render), home: (render) => loadDataConfigHome(render) };
 
 // ---------------------------------------------------------------------------
 // Leaving: a save in flight, an unconfirmed result or unsaved form values are
@@ -135,6 +154,7 @@ export function variablesUnloadShouldWarn() {
 function leaveForm() {
   if (!variablesMayBeLeft()) return false;
   clearTimeout(keyTimer);
+  if (iconPickerOpenFor("metric-variables")) closeIconPicker();
   variablesState().form = null;
   return true;
 }
@@ -145,8 +165,31 @@ function leaveForm() {
 export async function handleVariablesAction(action, { render }) {
   const type = action.dataset.action || "";
   if (type.startsWith("metric-classification-")) return handleClassificationAction(action, { render, leaveForm, load: LOADERS });
+  // The shared icon picker, while this screen's create form has it open.
+  if (type.startsWith("icon-picker-")) {
+    if (!iconPickerOpenFor("metric-variables")) return false;
+    return handleIconPickerAction(action, { render, apply: applyIcon });
+  }
   if (!type.startsWith("metric-variables-")) return false;
   const s = variablesState();
+
+  // The icon of a new variable: the picker opens on the current choice.
+  if (type === "metric-variables-icon-open") {
+    const form = s.form;
+    if (form?.mode !== "create" || form.busy || form.unconfirmed) return true;
+    openIconPicker({ host: "metric-variables", title: "Choose an icon for the variable", current: form.draft.iconKey, returnFocus: '[data-action="metric-variables-icon-open"]' });
+    render();
+    focusIconPicker();
+    return true;
+  }
+  if (type === "metric-variables-icon-clear") {
+    const form = s.form;
+    if (form?.mode !== "create" || form.busy || form.unconfirmed || !form.draft.iconKey) return true;
+    applyIcon(null);
+    render();
+    globalThis.document?.querySelector?.('[data-action="metric-variables-icon-open"]')?.focus?.();
+    return true;
+  }
 
   if (type === "metric-variables-create-open") {
     if (s.form) return true;
@@ -225,6 +268,8 @@ export async function handleVariablesAction(action, { render }) {
   if (type === "metric-variables-open") {
     const id = action.dataset.variableId || "";
     if (!id || !leaveForm()) return true;
+    s.view = "variables";
+    s.node = null;
     s.notice = "";
     await Promise.all([ensureClassification(render), loadVariable(id, render)]);
     return true;
@@ -257,6 +302,19 @@ export async function handleVariablesAction(action, { render }) {
     return true;
   }
   return true;
+}
+
+// The picker's choice lands in the open create form only (never one that was
+// sent: its body is fixed until its result is known).
+function applyIcon(key) {
+  const form = variablesState().form;
+  if (form?.mode !== "create" || form.busy || form.unconfirmed) return;
+  const next = key && isLibraryKey(key) ? key : "";
+  if (next === form.draft.iconKey) return;
+  form.draft.iconKey = next;
+  form.dirty = true;
+  delete form.errors.iconKey;
+  form.error = "";
 }
 
 function focusFirstField() {

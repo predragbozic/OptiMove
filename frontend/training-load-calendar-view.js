@@ -1,5 +1,6 @@
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatDate, formatWeekday, monthLabel } from "./utils.js";
+import { renderMetricIconHtml } from "./icon-render.js";
 import { buildWeeklyCalendarMonth } from "./weekly-plan.js";
 import { formatSrpe } from "./training-load-view.js";
 import { renderActivityRosterHtml, rosterTabLabel } from "./activity-roster-view.js";
@@ -526,7 +527,7 @@ function renderResultsTableHtml(nav, detail, athleteNamesById) {
             ${showRpe ? `<th scope="col"><button type="button" class="tl-sort-button" data-action="training-load-calendar-sort" data-column="rpe">RPE${sortIndicator(nav, "rpe")}</button></th>` : ""}
             ${showRpe ? `<th scope="col"><button type="button" class="tl-sort-button" data-action="training-load-calendar-sort" data-column="srpe">sRPE${sortIndicator(nav, "srpe")}</button></th>` : ""}
             ${showRpe ? `<th scope="col"><button type="button" class="tl-sort-button" data-action="training-load-calendar-sort" data-column="duration">Duration${sortIndicator(nav, "duration")}</button></th>` : ""}
-            ${columns.map((c) => `<th scope="col"><button type="button" class="tl-sort-button" data-action="training-load-calendar-sort" data-column="${escapeAttr(c.id)}">${c.iconUrl ? `<img src="${escapeAttr(c.iconUrl)}" alt="" class="tl-metric-icon" />` : ""}${escapeHtml(c.shortLabel || c.label)}${c.unit ? ` <span class="tl-col-unit">(${escapeHtml(c.unit)})</span>` : ""}${sortIndicator(nav, c.id)}</button></th>`).join("")}
+            ${columns.map((c) => `<th scope="col"><button type="button" class="tl-sort-button" data-action="training-load-calendar-sort" data-column="${escapeAttr(c.id)}">${renderMetricIconHtml(c.iconUrl, { className: "tl-metric-icon" })}${escapeHtml(c.shortLabel || c.label)}${c.unit ? ` <span class="tl-col-unit">(${escapeHtml(c.unit)})</span>` : ""}${sortIndicator(nav, c.id)}</button></th>`).join("")}
           </tr>
         </thead>
         <tbody>
@@ -585,7 +586,7 @@ function renderMetricPickerHtml(nav) {
               ${defs.map((d) => `
                 <label class="tl-metric-picker-option">
                   <input type="checkbox" data-action="training-load-calendar-metric-toggle" data-metric-id="${escapeAttr(d.id)}" ${selected.has(d.id) ? "checked" : ""}>
-                  ${d.iconUrl ? `<img src="${escapeAttr(d.iconUrl)}" alt="" class="tl-metric-icon" />` : `<span class="tl-metric-icon-fallback" aria-hidden="true">&#9679;</span>`}
+                  ${renderMetricIconHtml(d.iconUrl, { className: "tl-metric-icon", fallback: `<span class="tl-metric-icon-fallback" aria-hidden="true">&#9679;</span>` })}
                   <span class="tl-metric-picker-option-label">${escapeHtml(d.label)}</span>
                   ${d.unit ? `<span class="tl-metric-picker-option-unit">${escapeHtml(d.unit)}</span>` : ""}
                 </label>

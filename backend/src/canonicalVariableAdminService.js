@@ -46,6 +46,7 @@ import { adminWriteKit, canonicalDecimal, DECIMAL_INPUT, resolveMappingAdmin, So
 import { classificationFilterSql, variableClassification } from "./canonicalClassificationService.js";
 import { resolveActiveWorkspace } from "./workspace.js";
 import { unitTokenOk } from "./metricTextRules.js";
+import { isIconKey } from "./iconKeys.js";
 
 export { unitTokenOk };
 
@@ -222,7 +223,7 @@ function semanticsKey(s) {
 // ---------------------------------------------------------------------------
 // Output
 // ---------------------------------------------------------------------------
-const VARIABLE_COLUMNS = `d.id, d.key, d.label, d.short_label, d.description, d.owner_scope, d.owner_club_id, d.state, d.created_at, d.updated_at,
+const VARIABLE_COLUMNS = `d.id, d.key, d.label, d.short_label, d.description, d.icon_url, d.owner_scope, d.owner_club_id, d.state, d.created_at, d.updated_at,
   ${CANONICAL_VERSION_COLUMNS}, v.daily_aggregation_method, trim_scale(v.min_value)::text as min_text, trim_scale(v.max_value)::text as max_text,
   v.created_at as version_created_at,
   (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes,
@@ -274,6 +275,15 @@ const labelsTokenOf = (row) => hashOf([row.label, row.short_label ?? null, row.d
 // whose request had the team_coach basis. An archive without a change row
 // (legacy) is no coach's.
 const coachArchived = (row) => row.last_change_kind === "archive" && row.last_change_basis === "team_coach";
+// A variable's icon (Data configuration visual polish, PR-1): the key of the
+// built-in library its icon_url names as `icon:<key>`; null for none and for
+// any other stored value (an older URL is never sent to this screen).
+const ICON_PREFIX = "icon:";
+function iconOut(iconUrl) {
+  if (typeof iconUrl !== "string" || !iconUrl.startsWith(ICON_PREFIX)) return null;
+  const key = iconUrl.slice(ICON_PREFIX.length);
+  return isIconKey(key) ? key : null;
+}
 // What this caller may do now with this variable; empty when it is not theirs.
 function actionsOf(row, ctx, editable) {
   if (!editable) return [];
@@ -297,7 +307,7 @@ function reducedOut(row, ctx) {
   const shortLabel = boundedOut(row.short_label, TEXT_LIMITS.shortLabel);
   const description = boundedOut(row.description, TEXT_LIMITS.description);
   return {
-    id: row.id, key: key.text, label: label.text, shortLabel: shortLabel.text, description: description.text,
+    id: row.id, key: key.text, label: label.text, shortLabel: shortLabel.text, description: description.text, icon: iconOut(row.icon_url),
     ownerScope: row.owner_scope, state: row.state, editable, actions: actionsOf(row, ctx, editable), labelsToken: labelsTokenOf(row),
     truncated: key.cut || label.cut || shortLabel.cut || description.cut,
   };
@@ -318,7 +328,7 @@ function variableOut(row, ctx) {
     mappingTarget = { ready: notReadyCode === null, notReadyCode };
   }
   return {
-    id: row.id, key: key.text, label: label.text, shortLabel: shortLabel.text, description: description.text,
+    id: row.id, key: key.text, label: label.text, shortLabel: shortLabel.text, description: description.text, icon: iconOut(row.icon_url),
     ownerScope: row.owner_scope, state: row.state, editable, actions: actionsOf(row, ctx, editable), labelsToken: labelsTokenOf(row),
     levels: ["session", "drill"].filter((level) => (row.scopes ?? []).includes(LEVELS[level])),
     currentVersion: version.value, mappingTarget, createdAt: row.created_at, updatedAt: row.updated_at,
@@ -567,7 +577,7 @@ export function setVariableWriteHoldForTests(fn) { writeHold = fn ?? null; }
 export async function createVariable({ ctx, body }) {
   adminOnly(ctx);
   plainObject(body,
-    ["requestKey", "label", "shortLabel", "description", "key", "unit", "levels", "dailyAggregationMethod", "minValue", "maxValue", "condition"],
+    ["requestKey", "label", "shortLabel", "description", "key", "iconKey", "unit", "levels", "dailyAggregationMethod", "minValue", "maxValue", "condition"],
     ["requestKey", "label", "unit", "levels", "dailyAggregationMethod"]);
   const requestKey = uuidField(body.requestKey);
   if (!boundedText(body.label, TEXT_LIMITS.label)) throw invalidBody("label is one line of 1-80 visible characters without surrounding spaces.");
@@ -579,15 +589,26 @@ export async function createVariable({ ctx, body }) {
     if (typeof body.key !== "string" || !KEY_RULE.test(body.key)) throw invalidBody("key is lower-case letters, digits and underscores, a letter first, at most 63 characters.");
     sentKey = body.key;
   }
+  // An icon of the built-in library (PR-1): only a key of its current list,
+  // stored as `icon:<key>`; never a URL, an alias or markup.
+  let iconKey = null;
+  if (body.iconKey !== undefined && body.iconKey !== null) {
+    if (!isIconKey(body.iconKey)) throw invalidBody("iconKey is a key of the icon library.");
+    iconKey = body.iconKey;
+  }
   const levels = levelsInput(body.levels);
   const semantics = semanticsInput(body);
   const key = sentKey ?? suggestVariableKey(label);
   if (key === null) throw refusal(400, "key_required", TEXT.key_required);
+  // A create without an icon hashes exactly as before the icon existed, so a
+  // replay of an older request keeps its answer; an icon joins the hash only
+  // when one is sent.
   const requestHash = hashOf({
     contract: CONTRACT, operation: "variable_create",
     body: {
       label, shortLabel, description, key: sentKey, unit: semantics.unit, levels, dailyAggregationMethod: semantics.dailyAggregationMethod,
       minValue: semantics.minValue, maxValue: semantics.maxValue, condition: semantics.condition,
+      ...(iconKey === null ? {} : { iconKey }),
     },
   });
   return runWrite({
@@ -603,9 +624,9 @@ export async function createVariable({ ctx, body }) {
       if (!(await unitsAgree(client, units))) throw refusal(400, "invalid_unit", TEXT.invalid_unit);
       if (writeHold) await writeHold(client, "variable_create");
       const definitionId = (await client.query(
-        `insert into training_load.metric_definitions (key, label, short_label, description, owner_scope, owner_club_id, created_by_user_id)
-         values ($1, $2, $3, $4, $5, $6, $7) returning id`,
-        [key, label, shortLabel, description, ctx.owner.scope, ctx.owner.clubId, ctx.userId],
+        `insert into training_load.metric_definitions (key, label, short_label, description, icon_url, owner_scope, owner_club_id, created_by_user_id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8) returning id`,
+        [key, label, shortLabel, description, iconKey === null ? null : `${ICON_PREFIX}${iconKey}`, ctx.owner.scope, ctx.owner.clubId, ctx.userId],
       )).rows[0].id;
       const versionId = (await client.query(
         `insert into training_load.metric_definition_versions

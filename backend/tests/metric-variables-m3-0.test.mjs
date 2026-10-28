@@ -599,7 +599,8 @@ test("6. create: one transaction writes the definition (owner from the workspace
   assert.equal(res.status, 201, res.text);
   assert.equal(res.body.replayed, false);
   const v = res.body.variable;
-  assert.deepEqual(Object.keys(v).sort(), ["actions", "createdAt", "currentVersion", "description", "editable", "id", "key", "label", "labelsToken", "levels", "mappingTarget", "ownerScope", "shortLabel", "state", "truncated", "updatedAt"]);
+  assert.deepEqual(Object.keys(v).sort(), ["actions", "createdAt", "currentVersion", "description", "editable", "icon", "id", "key", "label", "labelsToken", "levels", "mappingTarget", "ownerScope", "shortLabel", "state", "truncated", "updatedAt"]);
+  assert.equal(v.icon, null, "no icon was chosen");
   assert.deepEqual([v.ownerScope, v.state, v.editable, v.levels, v.truncated], ["system", "active", true, ["session", "drill"], false]);
   assert.deepEqual(v.currentVersion.condition, { kind: "zone", operator: ">=", value: "25.2", unit: "km/h" });
   assert.deepEqual([v.currentVersion.versionNumber, v.currentVersion.unit, v.currentVersion.valueType, v.currentVersion.minValue, v.currentVersion.maxValue], [1, "m", "numeric", "0", "100000.5"]);
@@ -1011,4 +1012,72 @@ test("17. no answer and no log line carries SQL, a trigger's or the database's t
   }
   assert.ok(!logLines.some((l) => l.includes(marker)), "no log line carries a body's label");
   for (const l of logLines) for (const id of [W.pa.id, W.caA.id]) assert.ok(!l.includes(id), "no log line carries an acting user's id");
+});
+
+test("18. iconKey at create (Data configuration visual polish, PR-1): only a key of the icon library, stored as icon:<key>; no alias, stored value, URL or other type (invalid_body, nothing written); a create without it hashes exactly as before (the replay of an older request keeps its answer); an icon joins the hash only when sent; the reads give the key, and nothing for any other stored value", async () => {
+  // The request hash of a create as it was before the icon existed (C87): the
+  // same contract, operation and body fields, in the same order.
+  const oldHash = (b) => crypto.createHash("sha256").update(JSON.stringify({
+    contract: "metric-variables/v1", operation: "variable_create",
+    body: {
+      label: b.label, shortLabel: b.shortLabel ?? null, description: b.description ?? null, key: b.key ?? null, unit: b.unit,
+      levels: ["session", "drill"].filter((l) => b.levels.includes(l)), dailyAggregationMethod: b.dailyAggregationMethod,
+      minValue: null, maxValue: null, condition: null,
+    },
+  }), "utf8").digest("hex");
+  const hashOfVariable = async (id) => (await one(k, `select request_hash from training_load.metric_variable_requests where metric_definition_id = $1`, [id])).request_hash;
+  const counts = async () => one(k, `select (select count(*) from training_load.metric_definitions)::int as d, (select count(*) from training_load.metric_variable_requests)::int as r`);
+
+  // Without an icon (absent or null): the old hash, no icon stored, icon null.
+  const plainBody = vbody({ shortLabel: "Dist" });
+  const plain = await post("/variables", W.pa.cookie, plainBody);
+  assert.equal(plain.status, 201, plain.text);
+  assert.equal(await hashOfVariable(plain.body.variable.id), oldHash(plainBody));
+  assert.equal(plain.body.variable.icon, null);
+  assert.equal((await one(k, `select icon_url from training_load.metric_definitions where id = $1`, [plain.body.variable.id])).icon_url, null);
+  const nullBody = vbody({ iconKey: null });
+  const withNull = await post("/variables", W.pa.cookie, nullBody);
+  assert.equal(withNull.status, 201, withNull.text);
+  assert.equal(await hashOfVariable(withNull.body.variable.id), oldHash(nullBody));
+  // The very request replays with its answer.
+  const replay = await post("/variables", W.pa.cookie, plainBody);
+  assert.deepEqual([replay.status, replay.body.replayed, replay.body.variable.id], [200, true, plain.body.variable.id]);
+
+  // With an icon: stored as icon:<key>, given back as the key, and in the hash.
+  const iconBody = vbody({ iconKey: "run" });
+  const withIcon = await post("/variables", W.pa.cookie, iconBody);
+  assert.equal(withIcon.status, 201, withIcon.text);
+  assert.equal(withIcon.body.variable.icon, "run");
+  assert.equal((await one(k, `select icon_url from training_load.metric_definitions where id = $1`, [withIcon.body.variable.id])).icon_url, "icon:run");
+  assert.notEqual(await hashOfVariable(withIcon.body.variable.id), oldHash(iconBody), "the icon is part of the hash");
+  assert.deepEqual([(await post("/variables", W.pa.cookie, iconBody)).status], [200], "the same request replays");
+  const other = await post("/variables", W.pa.cookie, { ...iconBody, iconKey: "bike" });
+  assert.deepEqual([other.status, other.body.error], [409, "request_key_reused"], "another icon under the same key is another request");
+  const without = await post("/variables", W.pa.cookie, { ...iconBody, iconKey: undefined });
+  assert.deepEqual([without.status, without.body.error], [409, "request_key_reused"], "dropping the icon is another request too");
+  // A club admin's create takes an icon as well.
+  assert.equal((await created(W.caA.cookie, { iconKey: "heart-rate" })).icon, "heart-rate");
+
+  // Anything but a key of the library: invalid_body, nothing written.
+  const before = await counts();
+  for (const iconKey of ["dumbbell", "icon:run", "RUN", " run", "run ", "no-such-icon", "", "constructor", "__proto__", "toString", "https://example.test/i.svg", `<svg onload="x">`, 5, true, ["run"], { key: "run" }]) {
+    const res = await post("/variables", W.pa.cookie, vbody({ iconKey }));
+    assert.deepEqual([res.status, res.body.error], [400, "invalid_body"], JSON.stringify(iconKey));
+  }
+  assert.deepEqual(await counts(), before, "nothing written");
+  // A new version takes no icon.
+  const nv = await post(`/variables/${withIcon.body.variable.id}/versions`, W.pa.cookie, versionBody(withIcon.body.variable, { unit: "km", iconKey: "bike" }));
+  assert.deepEqual([nv.status, nv.body.error], [400, "invalid_body"]);
+
+  // The reads: the list and the detail give the key; any other stored value
+  // (an older URL, an alias, an unknown key, a value without the prefix) gives null.
+  const list = (await api("/variables?state=all", { cookie: W.pa.cookie })).body.variables;
+  assert.equal(list.find((x) => x.id === withIcon.body.variable.id).icon, "run");
+  assert.equal((await api(`/variables/${withIcon.body.variable.id}`, { cookie: W.pa.cookie })).body.variable.icon, "run");
+  for (const stored of ["/assets/icons/metric-default.svg", "icon:dumbbell", "icon:no-such-icon", "run", "icon:", "icon:run "]) {
+    await k.query(`update training_load.metric_definitions set icon_url = $1 where id = $2`, [stored, plain.body.variable.id]);
+    const read = (await api(`/variables/${plain.body.variable.id}`, { cookie: W.pa.cookie })).body.variable;
+    assert.equal(read.icon, null, stored);
+    assert.ok(!JSON.stringify(read).includes(stored === "run" ? "\"run\"" : stored), `the stored ${stored} is never sent`);
+  }
 });

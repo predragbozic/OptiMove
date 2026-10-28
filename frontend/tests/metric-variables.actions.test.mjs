@@ -30,6 +30,10 @@ const { renderVariablesHtml } = await import("../metric-variables-view.js");
 const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
 const { confirmLeaveTrainingLoad, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, resetTrainingLoadForWorkspaceChange } = await import("../training-load-actions.js");
 const { state } = await import("../state.js");
+// These tests work on the variables list, as opened from the Data
+// configuration start screen (layout C); the start screen itself is proved in
+// data-config-home.actions.test.mjs.
+const resetToList = () => { resetVariables(); variablesState().view = "variables"; };
 
 const BASE = "/api/training-load/sources/metrics/variables";
 const CLUB = "11111111-0000-4000-8000-000000000001";
@@ -99,7 +103,7 @@ function asClub() {
 }
 
 beforeEach(() => {
-  resetVariables();
+  resetToList();
   calls.length = 0;
   confirmQuestions.length = 0;
   confirmAnswer = true;
@@ -220,7 +224,7 @@ test("an answer for a workspace that was left is dropped", async () => {
   respond = () => new Promise((resolve) => { release = () => resolve({ status: 200, body: { variables: [variable({ label: "Old workspace" })], nextCursor: null } }); });
   const { loadVariables } = await import("../metric-variables-actions.js");
   const pending = loadVariables(render);
-  resetVariables();
+  resetToList();
   release();
   await pending;
   assert.deepEqual(variablesState().list.items, [], "nothing of the old answer is kept");
@@ -252,7 +256,7 @@ test("opening a variable shows its facts, versions and Technical details; New ve
   assert.equal(content.querySelectorAll(".metric-variables-version").length, 2);
 
   for (const over of [{ editable: false, actions: [] }, { actions: ["rename"] }, { state: "archived", actions: ["restore"] }]) {
-    resetVariables();
+    resetToList();
     respond = () => ({ status: 200, body: detail(over) });
     content.innerHTML = `<button data-action="metric-variables-open" data-variable-id="${VAR_ID}"></button>`;
     await click('[data-action="metric-variables-open"]');
@@ -439,7 +443,7 @@ test("create: once the form is sent, no key suggestion is read or shown (a lost 
   assert.ok(!/already used here/.test($("[data-mv-key-hint]")?.textContent || ""));
 
   // A read already in flight when the form is sent is not shown when it answers.
-  resetVariables();
+  resetToList();
   calls.length = 0;
   let answerSuggestion;
   await openCreateFilled();
@@ -563,7 +567,7 @@ test("each refusal reads as a sentence at its field or the form, and the form st
     ["key_required", 400, "key", /No key can be made from this name/],
   ];
   for (const [code, status, field, sentence] of cases) {
-    resetVariables();
+    resetToList();
     calls.length = 0;
     await openCreateFilled();
     respond = (call) => (call.method === "POST" ? { status, body: { error: code } } : listing([])(call));
@@ -580,7 +584,7 @@ test("each refusal reads as a sentence at its field or the form, and the form st
     ["variable_pinned", 409, /An active mapping uses the current version/],
     ["invalid_body", 400, /Not saved: the server refused a value\. Check the fields and save again\./],
   ]) {
-    resetVariables();
+    resetToList();
     await openCreateFilled();
     respond = (call) => (call.method === "POST" ? { status, body: { error: code, message: code === "invalid_body" ? "label is one line of 1-80 visible characters." : undefined } } : listing([])(call));
     await submit();

@@ -15430,6 +15430,7 @@ optimove-dashboard-chart {
 }
 
 .tl-analysis-metric-option img,
+.tl-analysis-metric-option svg.om-icon,
 .tl-analysis-metric-option .tl-metric-icon-fallback {
   width: 22px;
   height: 22px;
@@ -18807,4 +18808,477 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
     width: 100%;
     justify-content: center;
   }
+}
+
+/* Data configuration visual polish (PR-1): the built-in icons, the tiles that
+   say what a thing is (a domain filled, a category outlined, a variable soft,
+   a source field neutral; a club's in the club colour, as on Home), the start
+   screen's cards, the shared icon picker and Settings -> Icons. */
+.om-icon {
+  display: inline-block;
+  flex: 0 0 auto;
+  vertical-align: middle;
+}
+.dc-tile {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  color: var(--accent);
+  background: var(--surface-soft);
+  border: 1.5px solid transparent;
+}
+.dc-tile .om-icon {
+  width: 22px;
+  height: 22px;
+}
+.dc-tile-sm {
+  flex-basis: 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+.dc-tile-sm .om-icon {
+  width: 17px;
+  height: 17px;
+}
+.dc-tile-lg {
+  flex-basis: 48px;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+}
+.dc-tile-lg .om-icon {
+  width: 26px;
+  height: 26px;
+}
+.dc-tile-domain {
+  background: var(--accent);
+  color: #fff;
+}
+.dc-tile-domain.is-club {
+  background: #934c65;
+}
+.dc-tile-category {
+  background: var(--surface);
+  border-color: var(--accent);
+}
+.dc-tile-category.is-club {
+  border-color: #934c65;
+  color: #934c65;
+}
+.dc-tile-variable {
+  background: var(--accent-soft);
+}
+.dc-tile-variable.is-empty {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+.dc-tile-field {
+  background: var(--surface-soft);
+  border-color: var(--line);
+  color: var(--text);
+}
+/* A list row with a tile: the tile in its own column, the texts beside it. */
+.metric-variables-item.dc-item {
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: center;
+}
+.metric-variables-item.dc-item > .dc-tile {
+  grid-row: 1 / span 3;
+  align-self: start;
+}
+.metric-variables-item.dc-item > :not(.dc-tile) {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dc-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.dc-title > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dc-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.metric-classification-names .dc-inline {
+  margin-bottom: 6px;
+}
+.metric-classification-names.dc-names {
+  list-style: none;
+  padding-left: 0;
+}
+/* The start screen: cards like the coach's Home. */
+.dc-home-grid {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+}
+.dc-card {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  min-height: 44px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  align-content: start;
+  cursor: pointer;
+}
+.dc-card:hover {
+  border-color: var(--accent);
+}
+.dc-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.dc-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.dc-card-title {
+  display: grid;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.dc-card-title strong {
+  font-size: 17px;
+  font-weight: 750;
+}
+.dc-chevron {
+  flex: 0 0 20px;
+  color: var(--muted);
+}
+.dc-card-rows {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.dc-card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.dc-card-row > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Archived domains or categories: a folded group of their own. */
+.dc-archived {
+  display: grid;
+  gap: 8px;
+}
+.dc-archived > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+.dc-archived > summary::-webkit-details-marker {
+  display: none;
+}
+/* The fold's own marker, as the summary is a flex row. */
+.dc-archived > summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin: 0 4px 0 2px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+.dc-archived[open] > summary::before {
+  transform: rotate(45deg);
+}
+.dc-archived[open] > summary {
+  margin-bottom: 4px;
+}
+/* The icon of a new variable in its form. */
+.dc-icon-choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+.dc-icon-choice-text {
+  flex: 1 1 140px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* The shared icon picker: a dialog on a computer, a bottom sheet on a phone. */
+.icon-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.icon-picker-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(13, 27, 36, 0.46);
+  cursor: default;
+}
+/* The head, the search, the chips, the choice and the actions stay in view;
+   only the grid scrolls, so Use icon is always on the screen. */
+.icon-picker {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(640px, 96vw);
+  max-height: min(760px, 88dvh);
+  overflow: hidden;
+  padding: 16px;
+  box-shadow: 0 22px 70px rgba(14, 28, 37, 0.28);
+}
+.icon-picker > * {
+  flex: 0 0 auto;
+}
+.icon-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.icon-picker-head h2 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 18px;
+}
+.icon-picker-head .plain-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.icon-picker input[type="search"],
+.icon-gallery input[type="search"] {
+  width: 100%;
+  min-height: 44px;
+  font-size: 16px;
+}
+.icon-picker-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.icon-picker-chips .icon-picker-chip {
+  min-height: 44px;
+}
+.icon-picker-chip.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.icon-picker > .icon-picker-grid {
+  flex: 1 1 auto;
+  min-height: 120px;
+  overflow-y: auto;
+  padding: 2px;
+}
+.icon-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+  grid-auto-rows: 52px;
+  gap: 8px;
+}
+.icon-picker-option {
+  display: grid;
+  place-items: center;
+  min-height: 52px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.icon-picker-option:hover {
+  border-color: var(--accent);
+}
+.icon-picker-option.is-selected {
+  border: 2px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.icon-picker-option:focus-visible,
+.icon-picker-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.icon-picker-empty {
+  grid-column: 1 / -1;
+}
+.icon-picker-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.icon-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.icon-picker-actions .plain-button {
+  min-height: 44px;
+}
+@media (max-width: 760px) {
+  .icon-picker-overlay {
+    align-items: end;
+    padding: 0;
+  }
+  .icon-picker {
+    width: 100%;
+    max-height: 88dvh;
+    border-radius: 16px 16px 0 0;
+    padding: 16px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  }
+  .icon-picker-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .icon-picker-actions .plain-button {
+    width: 100%;
+    justify-content: center;
+  }
+  .dc-home-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* Settings -> Icons: a read-only, searchable gallery. */
+.icon-gallery {
+  display: grid;
+  gap: 12px;
+}
+.icon-gallery h2,
+.icon-gallery h3,
+.icon-gallery p {
+  margin: 0;
+}
+.icon-gallery-head {
+  display: grid;
+  gap: 4px;
+}
+.icon-gallery-group {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+.icon-gallery-group h3 {
+  font-size: 15px;
+}
+.icon-gallery-grid {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+.icon-gallery-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.icon-gallery-glyph {
+  display: grid;
+  place-items: center;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.icon-gallery-text {
+  display: grid;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.icon-gallery-item .plain-button {
+  flex: 0 0 auto;
+  min-height: 44px;
+}
+.icon-gallery-credit {
+  font-size: 13px;
+}
+/* Source fields: the four kinds of evidence, each with its colour and its word. */
+.source-fields-legend {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.source-fields-legend > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.source-fields-evidence.is-unproven {
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+.source-fields-evidence.is-documented {
+  border-color: #9cb7d9;
+  background: #eef4fb;
+  color: #24508a;
+}
+.source-fields-evidence.is-observed {
+  border-color: #f0d6a0;
+  background: #fff4e0;
+  color: #8a5a00;
+}
+.source-fields-evidence.is-verified {
+  background: var(--accent-soft);
 }

@@ -44,6 +44,23 @@ export function ensureClassification(render) {
 }
 
 const focusFirstField = () => globalThis.document?.querySelector?.(".metric-classification-form [data-mc-field]:not([disabled])")?.focus?.();
+// The screens of the start screen (layout C).
+const VIEWS = ["home", "variables", "domains", "categories"];
+// A new screen starts at its title: the focus goes there and it is scrolled
+// to the top (a long list on a phone would otherwise stay scrolled).
+export function toTitle() {
+  const title = globalThis.document?.getElementById?.("metric-variables-title");
+  title?.focus?.({ preventScroll: true });
+  title?.scrollIntoView?.({ block: "start" });
+}
+// After a read repainted the screen, the focus that went down with the old
+// markup comes back to the title (never taken from where the coach moved it).
+function keepTitle() {
+  const doc = globalThis.document;
+  const active = doc?.activeElement;
+  if (active && active !== doc.body) return;
+  doc?.getElementById?.("metric-variables-title")?.focus?.({ preventScroll: true });
+}
 const nodeOf = (action) => findNode(variablesState().classification.tree, action.dataset.kind, action.dataset.nodeId || "");
 
 // ---------------------------------------------------------------------------
@@ -57,17 +74,24 @@ export async function handleClassificationAction(action, { render, leaveForm, lo
   if (!ctx) return true;
   const admin = ctx.view !== "coach";
 
+  // The start screen and its screens (layout C, PR-1): Variables, Domains,
+  // Categories. Each opens at its start: no variable or node left open.
   if (type === "metric-classification-view") {
-    const view = action.dataset.view === "classification" ? "classification" : "variables";
-    if (view === s.view || !leaveForm()) return true;
+    const view = VIEWS.includes(action.dataset.view) ? action.dataset.view : "home";
+    if (view === s.view && !s.node && !(view === "variables" && s.detail.id)) return true;
+    if (!leaveForm()) return true;
     s.view = view;
     s.node = null;
     s.notice = "";
-    if (view === "classification") await loadClassification(render);
-    else {
-      s.detail = { ...s.detail, id: null, variable: null };
-      if (!s.list.loaded) await load.list(render); else render();
-    }
+    s.detail = { ...s.detail, id: null, variable: null };
+    let read = null;
+    if (view === "domains" || view === "categories") read = loadClassification(render);
+    else if (view === "home") read = load.home(render);
+    else if (s.list.loaded) render();
+    else read = load.list(render);
+    toTitle();
+    await read;
+    keepTitle();
     return true;
   }
   if (type === "metric-classification-reload") {
@@ -80,6 +104,7 @@ export async function handleClassificationAction(action, { render, leaveForm, lo
     s.node = { kind: action.dataset.kind, id: node.id };
     s.notice = "";
     render();
+    toTitle();
     return true;
   }
   if (type === "metric-classification-back") {
@@ -87,6 +112,7 @@ export async function handleClassificationAction(action, { render, leaveForm, lo
     s.node = null;
     s.notice = "";
     render();
+    toTitle();
     return true;
   }
   if (type === "metric-classification-show-variables") {

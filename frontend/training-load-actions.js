@@ -929,6 +929,11 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       }
       if (state.trainingLoad.sourceFields) state.trainingLoad.sourceFields.form = null;
     }
+    // Source fields' way back opens the Data configuration start screen.
+    if (action.dataset.section === "variables" && action.dataset.dcHome !== undefined && state.trainingLoad.variables) {
+      state.trainingLoad.variables.view = "home";
+      state.trainingLoad.variables.node = null;
+    }
     setTrainingLoadSection(action.dataset.section);
     // perf: the tab strip itself (and whatever this section's own
     // nav.data already holds - real data from an earlier visit this
