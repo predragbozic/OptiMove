@@ -18661,8 +18661,13 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   border-left: 2px solid var(--line);
 }
 .metric-classification-place > .plain-button,
-.metric-classification-variable > .plain-button {
+.metric-classification-show {
   justify-self: start;
+}
+.metric-classification-add-note {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
 }
 .metric-classification-names {
   margin: 0;
@@ -18703,6 +18708,7 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
     grid-template-columns: minmax(0, 1fr);
   }
   .metric-classification-add .plain-button,
+  .metric-classification-add-note .plain-button,
   .metric-classification-place > .plain-button,
   .metric-classification-links .plain-button {
     width: 100%;

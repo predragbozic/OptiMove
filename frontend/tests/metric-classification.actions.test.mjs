@@ -319,7 +319,12 @@ test("create: key_taken keeps the form with the key's error; a category without 
   assert.equal(posts()[0].url, `${CB}/categories`);
   assert.ok(variablesState().form, "the form stays");
   assert.ok($("details.data-sources-tech").open);
-  assert.match($("#mc-err-key").textContent, /Another one here already uses this key/);
+  assert.equal($("#mc-err-key").textContent, "This key is already used here.");
+  assert.match($(".metric-classification-form > .error").textContent, /^A category here already uses the key made from this name, perhaps one created earlier or an archived one\. Look for it in Domains & categories first;/);
+  answer = { status: 409, body: { error: "key_taken" } };
+  type("key", "sprint");
+  await submit();
+  assert.match($(".metric-classification-form > .error").textContent, /^A category here already uses this custom key,/, "a typed key is named as such");
   answer = { status: 409, body: { error: "try_again" } };
   type("key", "sprint_2");
   await submit();
@@ -438,11 +443,98 @@ test("remove a category from its domain: the link's own route, an optional reaso
   await openNode("category", C1);
   await click('[data-action="metric-classification-link-remove-open"]');
   assert.equal($("#metric-variables-title").textContent, "Remove Aerobic capacity from Endurance");
+  assert.match(text(), /Aerobic capacity leaves Endurance\. Its variables no longer count in Endurance through it \(unless they are in Endurance directly\)\./);
+  assert.equal($('.metric-classification-form button[type="submit"]').textContent, "Remove from the domain");
   type("reason", "Moved");
   await submit();
   assert.equal(posts()[0].url, `${CB}/links/${L1}/remove`);
   assert.deepEqual(posts()[0].body, { requestKey: posts()[0].body.requestKey, reason: "Moved" });
-  assert.match(text(), /The link was removed\./);
+  assert.match(text(), /Aerobic capacity was removed from Endurance\./);
+});
+
+test("an admin's forged Remove or Place for what the server does not offer opens nothing", async () => {
+  tree.categoryDomains[0] = { ...tree.categoryDomains[0], editable: false, actions: [] };
+  tree.categories[1] = node({ id: C2, name: "Sprint", state: "archived", actions: ["restore"] });
+  await openTree();
+  for (const forged of [
+    `<button data-action="metric-classification-link-remove-open" data-link-id="${L1}"></button>`,
+    `<button data-action="metric-classification-link-remove-open" data-link-id="${LV}" data-variable-id="${VAR_ID}"></button>`,
+    `<button data-action="metric-classification-place-open" data-node-id="${C1}"></button>`,
+    `<button data-action="metric-classification-place-open" data-node-id="${C2}"></button>`,
+  ]) {
+    content.innerHTML = forged;
+    await handleVariablesAction(content.firstElementChild, { render });
+    assert.equal(variablesState().form, null, forged);
+  }
+  assert.equal(posts().length, 0);
+});
+
+test("club admin: a system link on a variable has no Remove, and a forged one opens nothing; the club's own link does", async () => {
+  state.currentUser = { id: "u1", activeWorkspace: { type: "club", scopeId: CLUB, label: "FK Borac", role: "club_admin" } };
+  const CC = "cccccccc-0000-4000-8000-0000000000cc";
+  tree = { ...platformTree(), categories: [...platformTree().categories, node({ id: CC, name: "Club work", ownerScope: "club" })] };
+  current = variable({ ownerScope: "club", classification: {
+    categories: [
+      { linkId: LV, id: C1, name: "Aerobic capacity", state: "active", ownerScope: "system" },
+      { linkId: "eeeeeeee-0000-4000-8000-0000000000cc", id: CC, name: "Club work", state: "active", ownerScope: "club" },
+    ],
+    domains: [], truncated: false,
+  } });
+  await openVariable();
+  const removes = [...content.querySelectorAll('[data-action="metric-classification-link-remove-open"]')].map((b) => b.dataset.linkId);
+  assert.deepEqual(removes, ["eeeeeeee-0000-4000-8000-0000000000cc"], "only the club's own link");
+  content.insertAdjacentHTML("beforeend", `<button id="forged" data-action="metric-classification-link-remove-open" data-link-id="${LV}" data-variable-id="${VAR_ID}"></button>`);
+  await handleVariablesAction($("#forged"), { render });
+  assert.equal(variablesState().form, null, "a system link is not the club's to remove");
+  await click('[data-action="metric-classification-link-remove-open"]');
+  assert.equal(variablesState().form.shape, "variable-category");
+  assert.equal($("#metric-variables-title").textContent, "Remove Total distance from Club work");
+});
+
+test("a write answered 404 never claims that nothing was saved (the right may be lost after the COMMIT)", async () => {
+  serve(() => ({ status: 404, body: { error: "notFound" } }));
+  await openTree();
+  await click('[data-action="metric-classification-create-open"][data-kind="domain"]');
+  type("name", "Endurance");
+  await submit();
+  assert.equal(variablesState().form, null);
+  assert.doesNotMatch(text(), /Nothing was saved/);
+  assert.match(text(), /It is not available in this workspace now, or it is no longer there\./);
+});
+
+test("a category with no active domain to go to says to create one; place and link forms carry no personal-data note", async () => {
+  tree.domains = [node({ id: D2, key: "speed", name: "Speed", state: "archived", actions: ["restore"] })];
+  tree.categoryDomains = [];
+  await openTree();
+  await openNode("category", C2);
+  assert.ok(!$('[data-action="metric-classification-place-open"]'));
+  assert.match(text(), /There is no active domain to place it in yet\. Create a domain first \(New domain\)\./);
+  await click('[data-action="metric-classification-back"]');
+  assert.match($('[aria-labelledby="mc-loose-title"]').textContent, /Aerobic capacity/);
+  tree = platformTree();
+  resetVariables();
+  await openTree();
+  await openNode("category", C2);
+  await click('[data-action="metric-classification-place-open"]');
+  assert.doesNotMatch(text(), /Do not enter athlete names/, "a form with only a choice has nothing to type");
+  await click('[data-action="metric-variables-cancel"]');
+  await click('[data-action="metric-classification-rename-open"]');
+  assert.match(text(), /Do not enter athlete names/);
+});
+
+test("the tree's empty and archived texts fit the kind; a domain-only tree says there are no categories", async () => {
+  tree = { domains: [node()], categories: [], categoryDomains: [], truncated: false };
+  await openTree();
+  assert.match($('[aria-labelledby="mc-loose-title"]').textContent, /No categories yet\./);
+  resetVariables();
+  tree = platformTree();
+  tree.categories[1] = node({ id: C2, name: "Sprint", state: "archived", actions: ["restore"] });
+  await openTree();
+  await openNode("category", C2);
+  assert.match(text(), /Archived: its links stay as they are, and no new variable can be placed in it until it is restored\./);
+  await click('[data-action="metric-classification-back"]');
+  await openNode("domain", D2);
+  assert.match(text(), /no new variable or category can be placed in it/);
 });
 
 // ---------------------------------------------------------------------------
@@ -499,7 +591,8 @@ test("a check answered by a refusal from the body settles it; Close without chec
   await submit();
   await click('[data-action="metric-variables-check-result"]');
   assert.equal(variablesState().form.unconfirmed, false, "key_taken comes from the body itself");
-  assert.match($("#mc-err-key").textContent, /Another one here already uses this key/);
+  assert.equal($("#mc-err-key").textContent, "This key is already used here.");
+  assert.match(text(), /A domain here already uses the key made from this name, perhaps one created earlier/);
 
   serve(() => ({ throwNetworkError: true }));
   await click('[data-action="metric-variables-cancel"]');
@@ -548,8 +641,11 @@ test("a variable's detail lists its categories and domains, a domain reached thr
   await submit();
   assert.deepEqual(posts()[1].body, { requestKey: posts()[1].body.requestKey, variableId: VAR_ID, domainId: D1 });
 
+  assert.equal($('[data-action="metric-classification-link-remove-open"]').getAttribute("aria-label"), "Remove from Aerobic capacity");
   await click('[data-action="metric-classification-link-remove-open"]');
   assert.equal($("#metric-variables-title").textContent, "Remove Total distance from Aerobic capacity");
+  assert.match(text(), /Total distance leaves Aerobic capacity, and no longer counts in that category's domain through it\./);
+  assert.equal($('.metric-classification-form button[type="submit"]').textContent, "Remove from the category");
   await submit();
   assert.equal(posts()[2].url, `${CB}/links/${LV}/remove`);
   assert.deepEqual(posts()[2].body, { requestKey: posts()[2].body.requestKey });
@@ -603,6 +699,41 @@ test("the filter reads the list for one domain or category; the note says which;
   await click('[data-action="metric-classification-filter-clear"]');
   assert.equal(gets().at(-1), `${VB}?scope=own&state=active`);
   assert.equal(variablesState().filter, null);
+});
+
+test("club: the filter note and an empty filtered list say which scope is shown and where the system's are", async () => {
+  state.currentUser = { id: "u1", activeWorkspace: { type: "club", scopeId: CLUB, label: "FK Borac", role: "club_admin" } };
+  tree = { ...platformTree(), domains: [node({ ownerScope: "club" })] };
+  listItems = [];
+  await loadVariablesSection(render);
+  const select = $('[data-metric-variables-filter="classification"]');
+  select.value = `d:${D1}`;
+  select.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await settle();
+  assert.match(text(), /Showing this club's variables in the domain Endurance, directly or through one of its categories\. System variables placed there are under System \(reference\)\./);
+  assert.match(text(), /No variables of this club here\. System variables placed here are under System \(reference\)\./);
+  await click('[data-scope="system"]');
+  assert.equal(gets().at(-1), `${VB}?scope=system&state=active&domainId=${D1}`, "the filter stays with the scope");
+  assert.match(text(), /Showing the system variables in the domain Endurance/);
+  assert.match(text(), /No system variables here\./);
+});
+
+test("an admin's variable says what to do when there is nothing to add it to, or when the tree could not be read", async () => {
+  tree = { domains: [], categories: [], categoryDomains: [], truncated: false };
+  current = variable({ classification: { categories: [], domains: [], truncated: false } });
+  await openVariable();
+  assert.match(text(), /In no domain or category yet\./);
+  assert.match(text(), /To add it to a domain or category, first create one under Domains & categories\./);
+  resetVariables();
+  serve();
+  const ok = respond;
+  respond = (call) => (call.method === "GET" && call.url === CB ? { status: 500, body: { error: "internal_error" } } : ok(call));
+  await openVariable();
+  assert.match(text(), /Domains and categories could not be loaded\./);
+  tree = platformTree();
+  respond = ok;
+  await click('.metric-classification-add-note [data-action="metric-classification-reload"]');
+  assert.ok($('[data-action="metric-classification-variable-link-open"]'), "after Try again the Add buttons are back");
 });
 
 test("Show its variables on a node switches to the list filtered by it", async () => {

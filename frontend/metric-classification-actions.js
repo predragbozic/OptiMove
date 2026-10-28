@@ -7,8 +7,9 @@
 // variables' loaders come in from metric-variables-actions.js (`load`).
 import { variablesContext, variablesState } from "./metric-variables-data.js";
 import {
-  CLOSES_FORM, buildClassificationRequest, changeNode, checkNoteText, checkSettles, classificationCodeText, createLink, createNode,
-  errorInfo, fetchClassification, findNode, nounOf, openClassificationForm, outcomeUnknown, removeLink,
+  CLOSES_FORM, KEY_FIELD_TEXT, buildClassificationRequest, categoryPlaceable, changeNode, checkNoteText, checkSettles, classificationCodeText,
+  createLink, createNode, errorInfo, fetchClassification, findNode, nounOf, openClassificationForm, outcomeUnknown, placeableDomains, removeLink,
+  removablePlacement, removableVariableLink,
 } from "./metric-classification-data.js";
 import { newRequestKey } from "./metric-variables-data.js";
 
@@ -128,9 +129,12 @@ export async function handleClassificationAction(action, { render, leaveForm, lo
     focusFirstField();
     return true;
   }
+  // Place and Remove open only for what the view offers: the same helpers
+  // decide both, so a forged click opens nothing the server did not offer.
   if (type === "metric-classification-place-open") {
-    const category = findNode(s.classification.tree, "category", action.dataset.nodeId || "");
-    if (!category || !category.editable) return true;
+    const tree = s.classification.tree;
+    const category = findNode(tree, "category", action.dataset.nodeId || "");
+    if (!categoryPlaceable(category, tree, ctx) || !placeableDomains(tree).length) return true;
     s.notice = "";
     s.form = openClassificationForm("category-place", { category });
     render();
@@ -148,10 +152,22 @@ export async function handleClassificationAction(action, { render, leaveForm, lo
   }
   if (type === "metric-classification-link-remove-open") {
     const linkId = action.dataset.linkId || "";
-    if (!linkId) return true;
-    s.notice = "";
     const variableId = action.dataset.variableId || null;
-    s.form = openClassificationForm("link-remove", { linkId, what: action.dataset.what || "", variableId, returnTo: variableId ? "variable" : "classification" });
+    let params = null;
+    if (variableId) {
+      // A variable's own link, from the variable on the screen.
+      const variable = s.detail.variable;
+      const found = variable?.id === variableId ? removableVariableLink(variable, linkId, ctx) : null;
+      if (found) params = { shape: `variable-${found.kind}`, subject: variable.label || "", target: found.entry.name || "", variableId, returnTo: "variable" };
+    } else {
+      // A category's placement, from the tree.
+      const tree = s.classification.tree;
+      const link = removablePlacement(tree, linkId, ctx);
+      if (link) params = { shape: "category-domain", subject: findNode(tree, "category", link.categoryId)?.name || "", target: findNode(tree, "domain", link.domainId)?.name || "", returnTo: "classification" };
+    }
+    if (!params) return true;
+    s.notice = "";
+    s.form = openClassificationForm("link-remove", { linkId, ...params });
     render();
     focusFirstField();
     return true;
@@ -252,17 +268,17 @@ async function refused(form, info, { render, load, check }) {
   }
   form.unconfirmed = false;
   form.checkNote = "";
-  if (info.code === "key_required" || info.code === "key_taken") form.errors.key = classificationCodeText(info);
+  if (info.code === "key_required" || info.code === "key_taken") form.errors.key = KEY_FIELD_TEXT[info.code];
   else if (info.code === "request_key_reused") form.requestKey = newRequestKey();
   if (CLOSES_FORM.has(info.code)) {
     // The form was made from a state that changed: it is closed and the
     // screen read again, so the coach starts from how it is now.
     s.form = null;
-    s.notice = classificationCodeText(info, form.mode);
+    s.notice = classificationCodeText(info, form.mode, form);
     await reloadAfter(form, { render, load });
     return;
   }
-  form.error = classificationCodeText(info, form.mode);
+  form.error = classificationCodeText(info, form.mode, form);
   render();
 }
 
@@ -285,7 +301,7 @@ const DONE = {
   "node-restore": (form) => `The ${nounOf(form.kind)} was restored.`,
   "category-place": () => "The category was placed in the domain.",
   "variable-link": (form) => `The variable was added to the ${nounOf(form.linkKind)}.`,
-  "link-remove": () => "The link was removed.",
+  "link-remove": (form) => (form.subject && form.target ? `${form.subject} was removed from ${form.target}.` : `It was removed from the ${form.shape === "variable-category" ? "category" : "domain"}.`),
 };
 async function saved(form, data, { render, load }) {
   const s = variablesState();

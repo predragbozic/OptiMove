@@ -67,7 +67,7 @@ function renderListHtml(s, ctx) {
       </label>
       ${renderFilterHtml(s)}
     </div>
-    ${renderFilterNoteHtml(s)}
+    ${renderFilterNoteHtml(s, ctx)}
     ${list.loading && !list.loaded ? `<p class="muted" role="status">Loading variables...</p>` : ""}
     ${list.error ? `<div class="error" role="alert"><p>${escapeHtml(list.error)}</p><button class="plain-button" type="button" data-action="metric-variables-reload">Try again</button></div>` : ""}
     ${list.loaded && !list.items.length && !list.error ? `<p class="empty">${emptyListText(s, ctx, canCreate)}</p>` : ""}
@@ -77,7 +77,11 @@ function renderListHtml(s, ctx) {
 }
 
 function emptyListText(s, ctx, canCreate) {
-  if (s.filter) return s.stateFilter === "archived" ? "No archived variables here." : "No variables here yet.";
+  if (s.filter) {
+    if (s.stateFilter === "archived") return "No archived variables here.";
+    if (ctx.owner === "club" && s.scope === "own") return "No variables of this club here. System variables placed here are under System (reference).";
+    return ctx.owner === "club" ? "No system variables here." : "No variables here yet.";
+  }
   if (s.stateFilter === "archived") return "No archived variables.";
   if (ctx.owner === "club" && s.scope === "system") return "There are no system variables yet.";
   if (ctx.view === "coach") return "This club has no variables of its own yet. An administrator of the club creates them.";
@@ -132,7 +136,7 @@ function renderDetailHtml(s, ctx) {
       : "Archived: kept with its recorded values and its history; until it is restored, no new values can be entered for it, it gets no new version and no new mapping can use it."}</p>` : ""}
     ${actionsNoteHtml(item, actions, ctx)}
     ${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}
-    ${reduced ? `${renderVariableClassificationHtml(item, ctx, s.classification.tree)}${renderReducedTechHtml(item)}` : `
+    ${reduced ? `${renderVariableClassificationHtml(item, ctx, s.classification)}${renderReducedTechHtml(item)}` : `
     <dl class="metric-variables-facts">
       <div><dt>Unit</dt><dd>${escapeHtml(current.unit || "")}</dd></div>
       <div><dt>Recorded for</dt><dd>${(item.levels || []).map(levelLabel).map(escapeHtml).join(" and ")}</dd></div>
@@ -141,7 +145,7 @@ function renderDetailHtml(s, ctx) {
       <div><dt>Condition</dt><dd>${escapeHtml(conditionSummary(current.condition))}</dd></div>
       <div><dt>Mapping</dt><dd>${escapeHtml(readinessText(item.mappingTarget))}</dd></div>
     </dl>
-    ${renderVariableClassificationHtml(item, ctx, s.classification.tree)}
+    ${renderVariableClassificationHtml(item, ctx, s.classification)}
     ${d.error ? `<p class="error" role="alert">${escapeHtml(d.error)}</p>` : ""}
     <h3>Versions</h3>
     <ol class="metric-variables-versions">

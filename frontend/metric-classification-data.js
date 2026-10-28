@@ -79,6 +79,33 @@ export function ownActive(classification, kind, ctx) {
 export function placeableDomains(classification) {
   return (classification?.domains || []).filter((n) => n.state === "active");
 }
+// The category's placement (its category -> domain link), if any.
+export const placementOf = (classification, categoryId) => treeOf(classification).linkOf(categoryId);
+// Whether an admin may place this category in a domain now: the server lets
+// change it, it is active and in no domain. `placeableDomains` says whether
+// there is a domain to choose.
+export function categoryPlaceable(category, classification, ctx) {
+  return Boolean(category && ctx?.view !== "coach" && category.editable === true && category.state === "active" && !placementOf(classification, category.id));
+}
+// A category -> domain link the server lets remove (`editable`, `actions`).
+export function removablePlacement(classification, linkId, ctx) {
+  if (!linkId || ctx?.view === "coach") return null;
+  const link = (classification?.categoryDomains || []).find((l) => l.id === linkId) || null;
+  return link && link.editable === true && (link.actions || []).includes("remove") ? link : null;
+}
+// A variable's own link the admin may remove: the detail carries no
+// `editable`, so a link of this workspace's own owner (O4: a link stays
+// inside its owner) to a domain or category, never one reached through a
+// category.
+export function removableVariableLink(variable, linkId, ctx) {
+  const c = variable?.classification;
+  if (!c || !linkId || ctx?.view === "coach") return null;
+  const own = (entry) => entry.ownerScope === ctx.owner && entry.linkId === linkId;
+  const category = (c.categories || []).find(own);
+  if (category) return { kind: "category", entry: category };
+  const domain = (c.domains || []).find((entry) => !entry.viaCategoryId && own(entry));
+  return domain ? { kind: "domain", entry: domain } : null;
+}
 
 // ---------------------------------------------------------------------------
 // The forms
@@ -111,7 +138,7 @@ export function openClassificationForm(mode, params = {}) {
   }
   if (mode === "category-place") return { ...base, categoryId: params.category?.id || null, nodeName: params.category?.name || "", draft: { targetId: "" } };
   if (mode === "variable-link") return { ...base, linkKind: params.linkKind, variableLabel: params.variableLabel || "", draft: { targetId: "" } };
-  if (mode === "link-remove") return { ...base, linkId: params.linkId, what: params.what || "", draft: { reason: "" } };
+  if (mode === "link-remove") return { ...base, linkId: params.linkId, shape: params.shape, subject: params.subject || "", target: params.target || "", draft: { reason: "" } };
   return { ...base, draft: {} };
 }
 
@@ -182,7 +209,7 @@ const SETTLED_ON_CHECK = new Set([
 export const checkSettles = (info) => SETTLED_ON_CHECK.has(info.code);
 export function checkNoteText(info) {
   if (outcomeUnknown(info)) return "No answer again. The result is still not confirmed.";
-  if (info.status === 401) return "The check could not be done: you are signed out. Sign in again in a new tab, then Check result here.";
+  if (info.status === 401) return "The check could not be done: you are signed out. Sign in again in a new tab, then Check result here. If you sign in on this page, look in Domains & categories afterwards.";
   if (info.code === "request_key_reused") return "The check could not be done: a save under this request is already stored with other values. Close without checking and look at the list.";
   if (info.code === "notFound") return "The check could not be done: this workspace has no access to it now. The result is still not confirmed.";
   if (info.code === "try_again") return "The check could not be done: the server was busy. The result is still not confirmed; Check result again in a moment.";
@@ -190,7 +217,7 @@ export function checkNoteText(info) {
 }
 
 const CODE_TEXT = {
-  notFound: "It is not available in this workspace, or it is no longer there. Nothing was saved.",
+  notFound: "It is not available in this workspace now, or it is no longer there.",
   key_required: "No key can be made from this name (a key uses only the letters a-z, digits and underscores). Enter a custom key under Technical details, starting with a letter.",
   key_taken: "Another one here already uses this key (an archived one counts too). Change the key under Technical details, or the name.",
   node_changed: "Someone changed it in the meantime, so your change was not saved. This is how it is now; make your change again if it is still needed.",
@@ -204,15 +231,21 @@ const CODE_TEXT = {
   link_exists: "This link already exists. Nothing was saved.",
   try_again: "The server was busy. Nothing was saved. Try again.",
   internal_error: "The server could not save it. Nothing was saved. Try again.",
-  request_key_reused: "An earlier save of this form may already be stored. Cancel and check before saving again.",
+  request_key_reused: "An earlier save of this form may already be stored. Cancel and look at what is saved now before saving again.",
 };
 const MODE_TEXT = {
-  "node-archive": { node_not_active: "It is already archived." },
+  "node-archive": { node_not_active: () => "It is already archived." },
+  // The likeliest cause is one created earlier (perhaps a save left without a
+  // check): it is looked for first, since nothing is ever deleted.
+  "node-create": { key_taken: (form) => `A ${nounOf(form?.kind)} here already uses ${String(form?.draft?.key ?? "").trim() ? "this custom key" : "the key made from this name"}, perhaps one created earlier or an archived one. Look for it in Domains & categories first; to create a different one, change the name or the custom key under Technical details.` },
 };
-export function classificationCodeText(info, mode = "") {
+export function classificationCodeText(info, mode = "", form = null) {
   if (info.code === "invalid_body") return "Not saved: the server refused a value. Check the fields and save again.";
-  return MODE_TEXT[mode]?.[info.code] || CODE_TEXT[info.code] || (info.status ? "Something went wrong. Nothing was saved." : "No answer from the server.");
+  const special = MODE_TEXT[mode]?.[info.code];
+  return special ? special(form) : CODE_TEXT[info.code] || (info.status ? "Something went wrong. Nothing was saved." : "No answer from the server.");
 }
+// The short note under the key field; the sentence above the buttons says more.
+export const KEY_FIELD_TEXT = { key_required: "Enter a custom key.", key_taken: "This key is already used here." };
 // The refusals after which the form no longer fits what is saved: it is closed
 // and the screen read again.
 export const CLOSES_FORM = new Set([
