@@ -27,6 +27,7 @@ working mode (section 1), phase 11, derived canonical variables, and phase 12, d
 variables (section 5). Added later on 2026-10-27 (PR #240): the v39 / v40 contract, accepted as the *Rukovodilac*
 reads the owner's words and confirmed by the owner's own merge of PR #240 (phase 4, C100 of the discovery document),
 Q10 part B as its own migration v40 (section 6), and the record of PR #238's merge as a one-off departure (section 2).
+Added on 2026-10-28: the Done entry of phase 4 (section 5) and the Q10 part B line of section 6 marked done.
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
@@ -35,7 +36,8 @@ Last verified against commit: `deb2aa1` (`origin/main`, merge of PR #217). The r
 `docs/ai/gpexe-metric-variable-mapping-discovery.md` (the *discovery document*) and to
 `docs/ai/phase5a-discovery-and-contract.md` are to that commit. What was added on 2026-10-27 (the working mode, the
 Done entries of phases 2b and 2c, phases 11 and 12, the Q10 line of section 6) was checked against `fdc2c2e` (merge of PR
-#237); what PR #240 added, against `b358dae` (merge of PR #238).
+#237); what PR #240 added, against `b358dae` (merge of PR #238); the Done entry of phase 4, against `290b6cf` (merge of
+PR #241).
 
 ## 1. Who does what
 
@@ -556,6 +558,30 @@ order covers is merged under it.
 - **★★:** the owner approves the contract (J5) before any code and confirms the external review before the merge.
   The contract was accepted on 2026-10-27 as the *Rukovodilac* reads the owner's words (C100), confirmed by the
   owner's own merge of PR #240.
+- **Done, 2026-10-28.**
+  - The implementation: PR #241 (migrations v39 and v40, routes L1-L5; J5 of the discovery document as built).
+    `code-reviewer`, `security-reviewer` and `db-reviewer` reviewed `ac9a02d`. Their notes were applied at `d0282d4`,
+    with one exception: the pinned step's missing cap stays a known limit, for an owner decision before M6.
+  - Applying them added one change to the accepted contract: L2 and L5 take `expectedState` (the `db-reviewer`'s
+    MEDIUM). The *Rukovodilac* accepted it with its GO.
+  - Both reviews were on `d0282d4`, and neither found a BLOCKER, HIGH or MEDIUM:
+    - the *Rukovodilac* gave GO (23:57 UTC, 2026-10-27);
+    - the *Nezavisni revizor* answered READY WITH NON-BLOCKING NOTES (23:58 UTC, 2026-10-27).
+  - The owner's read-only preflights of v39 and v40 came back as expected. The owner reported them as „Sve ocekiano”
+    (owner turn `5ce31b89`, 08:35:10 UTC, in the *Rukovodilac*'s chat); the values were not pasted.
+  - The owner's order: „Odobravam merge PR #241 sa migracijama v39 i v40.” (owner turn `131af6a6`, 08:40:05 UTC,
+    in the *Rukovodilac*'s chat; the same sentence with a typo at 08:39:53 UTC). It names the PR and both
+    migrations. The executor checked the quote in the *Rukovodilac*'s transcript before the merge.
+  - Merge: `290b6cf` (parents `0c7104c` and `d0282d4`), 08:41:38 UTC. The executor made it from exactly `d0282d4`,
+    and its tree is identical to that head.
+  - Smoke (the *Rukovodilac*): `/api/health` served `290b6cf` with `ok: true` three times in a row (08:42:44, 08:43:05
+    and 08:43:25 UTC). Without a login the variable, mapping, field and revision routes answered 401, and
+    `/api/auth/me` answered `{"user":null}`.
+  - Post-check: the owner ran both post-check scripts and reported „Sve ocekivano” (owner turn `90c9d21f`, 08:54:13
+    UTC, in the *Rukovodilac*'s chat). The values were not pasted, so v39 and v40 are confirmed by the owner's
+    statement.
+  - Acceptance "tests on PostgreSQL 16 and, where possible, 17": only 16 was run. The owner's post-checks are the
+    check on production's 17.6.
 
 ### Phase 5: the zone model (C89)
 - An owner decision only; the executor prepares the variants.
@@ -773,9 +799,9 @@ Each one is a plan change, so the owner schedules it:
 - `POST /events` takes its lock before the visibility check (`trainingLoadMetricsMeasurements.js`, LOW);
 - Q10, `TEXT_FORBIDDEN` and `source_metric_text_ok`:
   - part A, the services and the frontend, is done (PR #229, `a1bb932`, no migration);
-  - part B, the database twins `source_metric_text_ok` and `source_metric_unit_token_ok`, is its own migration, v40,
-    in the phase 4 pull request. The *Rukovodilac*'s R5 of 2026-10-27 replaced J3b.9's "no v40". The owner approved
-    it with the phase 4 contract (O6, C100);
+  - part B, the database twins `source_metric_text_ok` and `source_metric_unit_token_ok`, is done: its own migration,
+    v40, merged and deployed with PR #241 (`290b6cf`, phase 4). The *Rukovodilac*'s R5 of 2026-10-27 replaced J3b.9's
+    "no v40". The owner approved it with the phase 4 contract (O6, C100);
 - the v35 / v36 test hardening;
 - separate database roles.
 

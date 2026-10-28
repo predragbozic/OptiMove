@@ -14,7 +14,8 @@ implementation pull request, and brought up to date the same day at `e556d08` (m
 after its merge, its deploy and the owner's read-only post-check; nothing else was re-derived then. The Q10 part A
 and phase 2c entries were added on 2026-10-27 at `a1bb932` (merge of PR #229), by the phase 2c pull request, and
 brought up to date at `fdc2c2e` (merge of PR #237, that pull request) after its merge and deploy; nothing else was
-re-derived then.
+re-derived then. The phase 4 entries (PR #241, migrations v39 and v40) were added on 2026-10-28 at `290b6cf` (merge of
+PR #241), after its merge, its deploy and the owner's read-only post-checks; nothing else was re-derived then.
 
 ## Active phase
 
@@ -2150,7 +2151,8 @@ Technical details.
       *Rukovodilac*'s smoke saw it three times in a row, until 12:30:51 UTC.
     - Without a login the variable routes (GET and POST) answered 401, and `/api/auth/me` answered
       `{"user":null}`.
-    - Part B, the database twins, is its own migration, v40, in the phase 4 pull request (R5, C100).
+    - Part B, the database twins, is its own migration, v40 (R5, C100), merged and deployed with PR #241 (phase 4,
+      below).
   - **Phase 2c, R2 in the Variables view, PR #237** (frontend only, no migration; section H and J3b.10 of the
     discovery document):
     - rename, archive and restore in the Variables view;
@@ -2169,6 +2171,38 @@ Technical details.
       and 13:34:27 UTC. Without a login the variable routes answered 401 and `/api/auth/me` `{"user":null}`.
     - The served bundle carries the phase 2c texts.
     - Not checked on a physical device. The executor renamed, archived or restored no variable in production.
+  - **Phase 4, the source-field revision lifecycle (C91) and Q10 part B, PR #241** (migrations v39 and v40, the
+    routes L1-L5 for an active platform admin in the platform workspace; J5 of the discovery document as built,
+    contract `docs/ai/v39-revision-lifecycle-contract.md`, runbook `docs/runbooks/source-metric-lifecycle-v39-v40.md`):
+    - **What it adds:**
+      - v39 guards every revision write with the acting user and its audit row;
+      - v40 makes the database twins of the text rules match `backend/src/metricTextRules.js`, with a fail-closed
+        block over 21 CHECK columns;
+      - retiring or replacing a revision disables its pinned `needs_review` mapping versions (O4). An archived club's
+        version answers `409 club_archived`.
+    - **The contract amendment:** L2 and L5 take `expectedState`, and a revision in the other state answers
+      `409 revision_state_changed`. It came from the `db-reviewer`'s MEDIUM and the *Rukovodilac* accepted it with its
+      GO.
+    - **Reviews:**
+      - `code-reviewer`, `security-reviewer` and `db-reviewer` reviewed `ac9a02d`, and their notes were applied at
+        `d0282d4`;
+      - the *Rukovodilac* gave GO on `d0282d4`, and the *Nezavisni revizor* answered READY WITH NON-BLOCKING NOTES
+        there. Neither found a BLOCKER, HIGH or MEDIUM.
+    - **The owner's preflights:** both read-only preflights were reported as expected (2026-10-28 08:35:10 UTC, in
+      the *Rukovodilac*'s chat). The values were not pasted.
+    - **The owner's order:** „Odobravam merge PR #241 sa migracijama v39 i v40.” (08:40:05 UTC). The executor checked
+      the quote in the *Rukovodilac*'s transcript.
+    - **Merge commit** `290b6cf` (parents `0c7104c` and `d0282d4`) on 2026-10-28 at 08:41:38 UTC, made by the
+      executor from exactly `d0282d4`.
+    - **Deploy:** `/api/health` served `0c7104c` until 08:42:23 UTC and `290b6cf` with `ok: true` from 08:42:44, then
+      at 08:43:05 and 08:43:25 UTC (the *Rukovodilac*'s smoke). Without a login the variable, mapping, field and
+      revision routes answered 401, and `/api/auth/me` answered `{"user":null}`.
+    - **v39 and v40 on the deployed database are confirmed by the owner's read-only post-checks.** The owner
+      reported them as expected („Sve ocekivano”, 08:54:13 UTC, in the *Rukovodilac*'s chat) and did not paste the
+      values, so they are not recorded here.
+    - **Not exercised:** only PostgreSQL 16 was run by the executor and the reviewers; the post-checks ran on
+      production's 17.6. That no revision was created, activated or retired in production and none of the nine
+      seeded fields changed is block 6 of the v39 post-check, known by the owner's statement.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2895,6 +2929,16 @@ pre-existing; pass/fail counts don't belong in this file
   unless `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL` is set (deliberate guard, no database
   operation attempted), so a plain full backend run reports it as failed; same on
   `3ef6033`.
+- `backend/tests/production-static-serving.test.mjs` fails in a worktree that has no built `frontend/dist`.
+  - The *Nezavisni revizor* saw it fail on `d0282d4` and on a clean detached `0c7104c` (2026-10-27).
+  - It passed in a worktree with `frontend/dist`, on the same tree (the executor, 2026-10-28).
+  - This is the environment; see also "`test:backend:shared` in a fresh worktree" under Separate tasks.
+- `backend/tests/training-load-external-scheduling-routes.test.mjs`, test K5 "custom reminder offset" ("10 minutes
+  out is still before the custom 5-minute offset window"), depends on the time of day.
+  - It failed at about 23:57 UTC on 2026-10-27, on `d0282d4` and on a clean detached `0c7104c` (the *Nezavisni
+    revizor*, twice).
+  - It passed at 08:56 UTC on 2026-10-28 on the same tree (the executor).
+  - The cause is not established; a run near midnight UTC is the candidate. Not fixed; a separate task.
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
@@ -2964,8 +3008,8 @@ pre-existing; pass/fail counts don't belong in this file
 - **The admin APIs' invisible-character list has gaps** (security review of M3-0, 2026-10-14, LOW). **Q10: part A,
   the services and the frontend, is merged and deployed (PR #229, `a1bb932`, no migration; J3b.9 of the discovery
   document); part B, the database
-  twins `source_metric_text_ok` and `source_metric_unit_token_ok`, is migration v40 in the phase 4 pull request (implemented, not
-  merged; J5 of the discovery document). The older catalog API
+  twins `source_metric_text_ok` and `source_metric_unit_token_ok`, is migration v40, merged and deployed with PR #241
+  (`290b6cf`, 2026-10-28) and confirmed by the owner's post-check (J5 of the discovery document). The older catalog API
   (`backend/src/trainingLoadMetricsCatalog.js`) still only trims the labels of team- and user-owned definitions
   (club and system variables never pass through it, C98); whether it takes `boundedText()` too is a separate
   decision (security review of PR #229, LOW).** As found: `TEXT_FORBIDDEN` in `backend/src/sourceMetricMappingService.js` (the shared rule C53, used by M2 and
@@ -2977,11 +3021,13 @@ pre-existing; pass/fail counts don't belong in this file
   retiring or replacing a revision disables all its pinned `needs_review` versions in one transaction, and M2 has no
   write quota (C68). Many versions could keep the lifecycle from stopping a field. Not reachable before a production
   revision has a proven unit; an owner decision before M6 (a cap on open versions, or batches in phase 7).
-- **The revision lifecycle of a source field** (owner, 2026-10-15, C91; the next backend contract after
-  M2b): a new revision R+1, its activation, the retirement of R and the replacement of the mapping versions
-  pinned to it, each with its own database actor guard (C76). It must be finished before the first real
-  production confirmation through M2b. v37 refuses every new revision and state change, so that pull
-  request (and any later seeding migration) replaces v37's T2b guard or adds its own exception.
+- **The revision lifecycle of a source field** (C91): **done**, PR #241 (`290b6cf`, v39), merged and deployed on
+  2026-10-28 (see the active phase).
+- **Two LOW notes of the *Rukovodilac*'s review of PR #241** (record only, no code change asked):
+  - without an acting user, the v39 refusal of a seed marker with a creator carries the generic 42501 text ("may not
+    change a source revision"), not the seed-marker text;
+  - a `23505` on `source_metric_revisions_one_draft` (a race the pre-check under the locks did not see) answers
+    `409 draft_exists` without `current.draftRevisionId`.
 - **The owner-run evidence for the nine seeded `rest_v1` fields** (C97; M6, gate 2): what each field still
   needs is listed in section J4 of the discovery document. The main session prepares the procedure only and
   never sends a GPEXE request.
@@ -3294,23 +3340,21 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224), R2, renaming, archiving and restoring a canonical variable (PR #227, v38), Q10 part A (PR #229), phase 2c, R2 in the Variables view (PR #237), the plan's working mode with phases 11 and 12 (PR #238, `b358dae`) and the v39 / v40 contract J5 (PR #240, `0c7104c`) are merged and deployed; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224), R2, renaming, archiving and restoring a canonical variable (PR #227, v38), Q10 part A (PR #229), phase 2c, R2 in the Variables view (PR #237), the plan's working mode with phases 11 and 12 (PR #238, `b358dae`), the v39 / v40 contract J5 (PR #240, `0c7104c`) and phase 4, the revision lifecycle and Q10 part B (PR #241, v39 and v40, `290b6cf`) are merged and deployed; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
 1. **The Metrics Core plan** (`docs/ai/metrics-core-plan.md`) sets the order of the Metrics Core work. Its
-   phases 0, 1, 2, 3, 2b and 2c are done, and so is Q10 part A (PR #229). Next by the plan:
-   - the v39 / v40 contract (J5, PR #240): accepted on 2026-10-27 as the *Rukovodilac* reads the owner's words (C100), confirmed by the owner's own merge of PR #240
-     (merge commit `0c7104c`, 2026-10-27 22:27:43 UTC, parents `b358dae` and `e780f4a`; `/api/health` served it with `ok: true` three
-     times in a row from 22:28:46 UTC; without a login the eight variable routes answered 401);
-   - phase P, the owner only: the v37 post-check passed (the owner's statement, C100); the evidence for the nine
-     `rest_v1` fields (C97) stays open;
-   - phase 4, the revision lifecycle (C91) and Q10 part B, migrations v39 and v40: implemented in the phase 4 pull
-     request (branch `feature/metrics-revision-lifecycle-v39-v40`; as built in J5 of the discovery document) - not
-     merged, not deployed, v39 and v40 applied to no persistent database. Its merge needs the owner's order that names
-     both migrations, after the *Rukovodilac*'s and the *Nezavisni revizor*'s review; the owner runs the read-only
-     preflights the same day and the post-checks after the deploy (`docs/runbooks/source-metric-lifecycle-v39-v40.md`);
-   - phases 5–12 and R1, as the plan orders them.
+   phases 0, 1, 2, 3, 2b, 2c and 4 are done, and so is Q10: part A in PR #229, part B as v40 in PR #241. Phase 4
+   is the revision lifecycle (C91) with migrations v39 and v40, PR #241 (`290b6cf`), merged and deployed on
+   2026-10-28 and confirmed by the owner's post-checks; see the active phase.
 
-   No production field is confirmed through M2b before the revision lifecycle (C91) and the owner-run evidence
-   (C97) exist. The import switch stays off throughout.
+   Next by the plan:
+   - phase 12, domains and categories of canonical variables (★): first its contract proposal, a document only,
+     for the *Rukovodilac*'s review (the *Rukovodilac*'s order of 2026-10-28);
+   - phase P, the owner only: the evidence for the nine `rest_v1` fields (C97) stays open;
+   - phases 5–11 and R1, as the plan orders them.
+
+   No production field is confirmed through M2b before the owner-run evidence (C97) exists. Before the first
+   production confirmation (M6), the owner also decides the pinned step's cap (see Separate tasks). The import
+   switch stays off throughout.
 2. The owner states the state of the production-use gate and of the two gates before a link (an identity
    load and one link were run after PR #146; the owner's check after PR #154 reports every athlete of the
    three sessions of 05.10–06.10.2026 linked; when the remaining links were made and whether those gates
