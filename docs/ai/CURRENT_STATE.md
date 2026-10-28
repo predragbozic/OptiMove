@@ -2233,10 +2233,11 @@ Technical details.
         - The *Rukovodilac* gave GO on `840e873`, with no BLOCKER, HIGH or MEDIUM. It confirmed the four choices the
           contract had left open (J6) and recorded two LOW (an index refusal's `409` carries no `current`; the older
           reads' user ids, under Separate tasks).
-      - **The owner's preflight:** reported as expected, „sve očekivani rezultati” (14:35:11 UTC, in the
-        *Rukovodilac*'s chat). The values were not pasted, and block 7's numbers were not recorded.
-      - **The owner's order:** „Odobravam merge PR #247 sa migracijom v41” (14:34:18 UTC). The executor checked both
-        quotes in the *Rukovodilac*'s transcript.
+      - **The owner's order:** „Odobravam merge PR #247 sa migracijom v41” (14:34:18 UTC, in the *Rukovodilac*'s
+        chat).
+      - **The owner's preflight:** reported as expected, „sve očekivani rezultati” (14:35:11 UTC). The values were not
+        pasted, and block 7's numbers were not recorded. The executor checked both quotes in the *Rukovodilac*'s
+        transcript before the merge.
       - **Merge commit** `9361fff` (parents `a07fdd1` and `840e873`) on 2026-10-28 at 14:36:08 UTC, made by the
         executor from exactly `840e873`; its tree is identical to that head.
       - **Deploy:** started by the owner by hand (autodeploy was off). `/api/health` served `a07fdd1` until 14:38:32
@@ -3390,7 +3391,7 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224), R2, renaming, archiving and restoring a canonical variable (PR #227, v38), Q10 part A (PR #229), phase 2c, R2 in the Variables view (PR #237), the plan's working mode with phases 11 and 12 (PR #238, `b358dae`), the v39 / v40 contract J5 (PR #240, `0c7104c`) phase 4, the revision lifecycle and Q10 part B (PR #241, v39 and v40, `290b6cf`), the phase 12 contract (PR #244, `a07fdd1`) and 12b, domains and categories of canonical variables (PR #247, v41, `9361fff`) are merged and deployed; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224), R2, renaming, archiving and restoring a canonical variable (PR #227, v38), Q10 part A (PR #229), phase 2c, R2 in the Variables view (PR #237), the plan's working mode with phases 11 and 12 (PR #238, `b358dae`), the v39 / v40 contract J5 (PR #240, `0c7104c`), phase 4, the revision lifecycle and Q10 part B (PR #241, v39 and v40, `290b6cf`), the phase 12 contract (PR #244, `a07fdd1`) and 12b, domains and categories of canonical variables (PR #247, v41, `9361fff`) are merged and deployed; M2b (PR #164, v37) is merged and its deploy is inferred. PR #142 is closed as superseded. Next steps, in order:
 1. **The Metrics Core plan** (`docs/ai/metrics-core-plan.md`) sets the order of the Metrics Core work. Its
    phases 0, 1, 2, 3, 2b, 2c, 4 and 12b are done, and so is Q10: part A in PR #229, part B as v40 in PR #241. Phase 4
    is the revision lifecycle (C91) with migrations v39 and v40, PR #241 (`290b6cf`), merged and deployed on

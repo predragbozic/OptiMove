@@ -776,11 +776,11 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
       before the target checks; the older reads returning `key` and `description`.
     - It recorded two LOW: the `409` of an index refusal carries no `current`; the older reads return
       `created_by_user_id` and `owner_club_id` (the follow-up with O8).
+  - The owner's order: „Odobravam merge PR #247 sa migracijom v41” (owner turn `9d9e38b7`, 14:34:18 UTC, in the
+    *Rukovodilac*'s chat). It names the PR and the migration.
   - The owner's read-only preflight of v41 came back as expected: „sve očekivani rezultati” (owner turn `00192af8`,
     14:35:11 UTC, in the *Rukovodilac*'s chat). The values were not pasted, and block 7's numbers were not recorded.
-  - The owner's order: „Odobravam merge PR #247 sa migracijom v41” (owner turn `9d9e38b7`, 14:34:18 UTC, in the
-    *Rukovodilac*'s chat). It names the PR and the migration. The executor checked both quotes in the *Rukovodilac*'s
-    transcript before the merge.
+    The executor checked both quotes in the *Rukovodilac*'s transcript before the merge.
   - Merge: `9361fff` (parents `a07fdd1` and `840e873`), 14:36:08 UTC. The executor made it from exactly `840e873`,
     and its tree is identical to that head.
   - Deploy: started by the owner by hand (autodeploy was off).

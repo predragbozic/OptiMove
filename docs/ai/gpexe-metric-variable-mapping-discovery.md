@@ -2937,8 +2937,8 @@ The contract is the separate document `docs/ai/phase12-domains-categories-contra
   as J5 does.
 
 **12b as built** (PR #247, branch `feature/metrics-classification-12b-v41` from `a07fdd1`, head `840e873`; merge commit
-`9361fff` on 2026-10-28 at 14:36:08 UTC, on the owner's order naming PR #247 and v41, after the owner's read-only
-preflight). The owner started the deploy by hand; `/api/health` served `9361fff` with `ok: true` from 14:38:53 UTC (the
+`9361fff` on 2026-10-28 at 14:36:08 UTC, after the owner's order naming PR #247 and v41 (14:34:18 UTC) and the owner's
+report of the read-only preflight (14:35:11 UTC)). The owner started the deploy by hand; `/api/health` served `9361fff` with `ok: true` from 14:38:53 UTC (the
 *Rukovodilac*'s smoke). The owner ran the read-only post-check and reported it as expected; the values were not pasted.
 So v41 is confirmed on production by the owner's statement. The *Rukovodilac*'s review (GO on `840e873`) confirmed the
 four choices below where the contract was open (fail closed first; the removed link's change row; the older API's link
