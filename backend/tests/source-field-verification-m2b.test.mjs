@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
+import { writeRevision } from "./support/source-revisions.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -36,7 +37,12 @@ const MEANING_REF = "docs/ai/test-evidence.md#meaning-of-the-field";
 const CTX = `select set_config('optimove.source_metric_actor', $1 || ':' || pg_current_xact_id()::text, true)`;
 const V37_REVISION_TRIGGERS = ["source_metric_revisions_v37_actor_guard", "source_metric_revisions_v37_audit_link"];
 const NO_ACTOR = /no acting user is set for this transaction/;
-const NO_CREATE = /^source_metric_definition_versions: no writer creates a revision yet$/;
+// v39 (the revision lifecycle) on the behaviour database: a revision INSERT or a state
+// change without its lifecycle audit row is refused at COMMIT; a lifecycle audit row
+// that does not follow its own change is refused at once.
+const NO_CREATE_ROW = /^source_metric_definition_versions: a revision is written with its source_metric_revision_create audit row$/;
+const NO_STATE_ROW = /^source_metric_definition_versions: a state change is written with its source_metric_revision_activate or _retire audit row$/;
+const LIFECYCLE_FOLLOW = /^source_metric_audit: the audit row must follow its own revision change in the same transaction$/;
 const ONE_ACT = /^source_metric_definition_versions: a revision is changed only by one unit or meaning verification$/;
 const OTHER_USER = /^source metric verification: the row names another user than the acting user$/;
 const MAY_NOT = /^source metric verification: the acting user may not verify a source metric$/;
@@ -203,22 +209,28 @@ function refusedWith(res, code, pattern) {
 }
 const okTx = (res) => { assert.equal(res.ok, true, res.error ? `${res.error.code}: ${res.error.message}` : ""); return res.value; };
 
-// A test source field of gpexe / rest_v1 with revision 1. The revision lifecycle
-// (create, activate, retire) has no writer before its own pull request (C91) and
-// v37 refuses it, so a fixture writes it as that later pull request will: with
-// v37's two T2b triggers off for these statements only, in one transaction (v34's
-// own guard stays on).
-async function fixture({ kind = "none", state = "active", status = "observed", c = k } = {}) {
-  const fieldId = (await one(c, `insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,'Test field',$2) returning id`,
+// A test source field of gpexe / rest_v1 with revision 1, written through the
+// revision lifecycle's database path (v39; backend/tests/support/source-revisions.mjs):
+// the acting user set, each write with its audit row, every guard on.
+async function fixture({ kind = "none", state = "active", status = "observed" } = {}) {
+  const fieldId = (await one(k, `insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,'Test field',$2) returning id`,
     [`m2b.test.f${uid()}`, W.pa.id])).id;
   const shape = kind === "zone_bounds" ? "zone_distance" : kind === "event_threshold" ? "event_count" : "number";
+  const revId = await writeRevision(k, { fieldId, by: W.pa.id, valueShape: shape, parameterKind: kind, evidenceStatus: status, evidenceRef: COMPAT, state });
+  return { fieldId, revId };
+}
+// The same field on the v37 rehearsal database, which stops at v37 and so has no
+// revision lifecycle: written with v37's two T2b triggers off for these statements
+// only, in one transaction (v34's own guard stays on).
+async function fixtureOnV37(c, by) {
+  const fieldId = (await one(c, `insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,'Test field',$2) returning id`,
+    [`m2b.test.f${uid()}`, by])).id;
   await c.query("begin");
   try {
     for (const t of V37_REVISION_TRIGGERS) await c.query(`alter table training_load.source_metric_definition_versions disable trigger ${t}`);
     const revId = (await one(c, `insert into training_load.source_metric_definition_versions (source_metric_definition_id, revision_number, value_shape, parameter_kind, supports_session, supports_drill, evidence_status, evidence_ref, created_by_user_id)
-                                 values ($1,1,$2,$3,true,true,$4,$5,$6) returning id`, [fieldId, shape, kind, status, status === "unproven" ? null : COMPAT, W.pa.id])).id;
-    if (state !== "draft") await c.query(`update training_load.source_metric_definition_versions set state = 'active', activated_by_user_id = $2, activated_at = now() where id = $1`, [revId, W.pa.id]);
-    if (state === "retired") await c.query(`update training_load.source_metric_definition_versions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'Test retirement' where id = $1`, [revId, W.pa.id]);
+                                 values ($1,1,'number','none',true,true,'observed',$2,$3) returning id`, [fieldId, COMPAT, by])).id;
+    await c.query(`update training_load.source_metric_definition_versions set state = 'active', activated_by_user_id = $2, activated_at = now() where id = $1`, [revId, by]);
     for (const t of V37_REVISION_TRIGGERS) await c.query(`alter table training_load.source_metric_definition_versions enable trigger ${t}`);
     await c.query("commit");
     return { fieldId, revId };
@@ -242,7 +254,8 @@ const auditRow = (c, { action, f, by, ref }) => c.query(
   `insert into training_load.source_metric_audit (action, source_metric_definition_id, source_metric_version_id, evidence_ref, performed_by_user_id, basis, operation_id)
    values ($1,$2,$3,$4,$5,'platform_admin',$6)`, [action, f.fieldId, f.revId, ref, by, crypto.randomUUID()]);
 const revisionRow = (f) => one(k, `select * from training_load.source_metric_definition_versions where id = $1`, [f.revId]);
-const auditCount = (f) => one(k, `select count(*)::int as n from training_load.source_metric_audit where source_metric_version_id = $1`, [f.revId]).then((x) => x.n);
+// The verification audit rows of a revision (its lifecycle rows are the fixture's own).
+const auditCount = (f) => one(k, `select count(*)::int as n from training_load.source_metric_audit where source_metric_version_id = $1 and action in ('source_metric_unit_verified', 'source_metric_meaning_verified')`, [f.revId]).then((x) => x.n);
 
 async function catalog(c) {
   const S = "('training_load', 'public', 'training')";
@@ -373,11 +386,7 @@ test("1. migration v37 on v36: three functions, two T2b triggers (one deferred),
   // Once a verification exists the rollback refuses (C96).
   const by = (await one(r, `insert into public.users (email, full_name, display_name, is_active) values ($1,'pa','pa',true) returning id`, [`v37rb-${uid()}@test.local`])).id;
   await r.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true)`, [by]);
-  const f = await (async () => {
-    const W0 = W.pa;
-    W.pa = { id: by };
-    try { return await fixture({ c: r }); } finally { W.pa = W0; }
-  })();
+  const f = await fixtureOnV37(r, by);
   okTx(await tx(by, async (c) => {
     await unitAct(c, { revId: f.revId, by });
     await auditRow(c, { action: "source_metric_unit_verified", f, by, ref: UNIT_REF });
@@ -387,14 +396,15 @@ test("1. migration v37 on v36: three functions, two T2b triggers (one deferred),
   assert.deepEqual(await catalog(r), withAct, "the refusal changed nothing");
 });
 
-test("2. the database guards: no T2b revision is created and no state, status or other column changes outside the two acts or together with one (23514); an act without the acting user, in another user's name, by a non-platform-admin or a revoked one is 42501; both acts in one update and a zone's meaning act are 23514; at COMMIT an act needs its audit row; an audit row must follow its own act (this transaction, its verifier, its reference), once; an action without a built chain is refused; a savepoint and an earlier transaction's setting fail closed; an event threshold's meaning is one-sided; the first evidence_ref is the completing act's own; one verification row per act, physically", async () => {
+test("2. the database guards: a T2b revision INSERT or a state change without its lifecycle audit row is refused at COMMIT (v39), and no status or other column changes outside the two acts or together with one (23514); an act without the acting user, in another user's name, by a non-platform-admin or a revoked one is 42501; both acts in one update and a zone's meaning act are 23514; at COMMIT an act needs its audit row; an audit row must follow its own act (this transaction, its verifier, its reference), once; an action without a built chain is refused; a savepoint and an earlier transaction's setting fail closed; an event threshold's meaning is one-sided; the first evidence_ref is the completing act's own; one verification row per act, physically", async () => {
   const f = await fixture();
   const draft = await fixture({ state: "draft" });
-  // No new revision, whoever writes it.
-  refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_definition_versions (source_metric_definition_id, revision_number, value_shape, parameter_kind, supports_session, supports_drill, evidence_status, created_by_user_id) values ($1,2,'number','none',true,true,'unproven',$2)`, [f.fieldId, W.pa.id])), "23514", NO_CREATE);
-  // No state change, no other update - with or without an acting user.
-  refusedWith(await tx(W.pa.id, (c) => c.query(`update training_load.source_metric_definition_versions set state = 'active', activated_by_user_id = $2, activated_at = now() where id = $1`, [draft.revId, W.pa.id])), "23514", ONE_ACT);
-  refusedWith(await tx(W.pa.id, (c) => c.query(`update training_load.source_metric_definition_versions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'x' where id = $1`, [f.revId, W.pa.id])), "23514", ONE_ACT);
+  // No new revision and no state change without its lifecycle audit row (v39; the
+  // lifecycle itself is tested in source-revision-lifecycle-v39.test.mjs).
+  refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_definition_versions (source_metric_definition_id, revision_number, value_shape, parameter_kind, supports_session, supports_drill, evidence_status, created_by_user_id) values ($1,2,'number','none',true,true,'unproven',$2)`, [f.fieldId, W.pa.id])), "23514", NO_CREATE_ROW);
+  refusedWith(await tx(W.pa.id, (c) => c.query(`update training_load.source_metric_definition_versions set state = 'active', activated_by_user_id = $2, activated_at = now() where id = $1`, [draft.revId, W.pa.id])), "23514", NO_STATE_ROW);
+  refusedWith(await tx(W.pa.id, (c) => c.query(`update training_load.source_metric_definition_versions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'x' where id = $1`, [f.revId, W.pa.id])), "23514", NO_STATE_ROW);
+  // No other update - with or without an acting user.
   refusedWith(await tx(null, (c) => c.query(`update training_load.source_metric_definition_versions set state = state where id = $1`, [f.revId])), "23514", ONE_ACT);
   // Both acts in one update.
   refusedWith(await tx(W.pa.id, (c) => c.query(
@@ -508,7 +518,8 @@ test("2. the database guards: no T2b revision is created and no state, status or
   // An action whose chain is not built is refused, even by a platform admin.
   const conv = (await one(k, `select id from training_load.unit_conversions limit 1`)).id;
   refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, performed_by_user_id, basis, operation_id, from_status, to_status) values ('source_metric_create',$1,$2,'platform_admin',$3,null,'active')`, [f.fieldId, W.pa.id, crypto.randomUUID()])), "23514", NO_WRITER);
-  refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, source_metric_version_id, performed_by_user_id, basis, operation_id, from_status, to_status) values ('source_metric_revision_activate',$1,$2,$3,'platform_admin',$4,'draft','active')`, [draft.fieldId, draft.revId, W.pa.id, crypto.randomUUID()])), "23514", NO_WRITER);
+  // A lifecycle row has its chain since v39: without its own change it is refused.
+  refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, source_metric_version_id, performed_by_user_id, basis, operation_id, from_status, to_status) values ('source_metric_revision_activate',$1,$2,$3,'platform_admin',$4,'draft','active')`, [draft.fieldId, draft.revId, W.pa.id, crypto.randomUUID()])), "23514", LIFECYCLE_FOLLOW);
   refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, unit_conversion_id, evidence_ref, performed_by_user_id, basis, operation_id, from_status, to_status) values ('unit_conversion_create',$1,$2,$3,'platform_admin',$4,null,'active')`, [conv, COMPAT, W.pa.id, crypto.randomUUID()])), "23514", NO_WRITER);
 });
 

@@ -1,8 +1,10 @@
 // Source metric mapping administration (M2), the canonical-variable admin API
 // (M3-0, with R2's rename, archive and restore) and the source-field evidence
 // confirmation (M2b), mounted at /api/training-load/sources/metrics behind
-// requireAuth. The contracts are sections J1, J3, J3b and J4 of
-// docs/ai/gpexe-metric-variable-mapping-discovery.md:
+// requireAuth, and the source-field revision lifecycle (L1-L5). The contracts
+// are sections J1, J3, J3b and J4 of
+// docs/ai/gpexe-metric-variable-mapping-discovery.md and J5
+// (docs/ai/v39-revision-lifecycle-contract.md):
 // a platform admin (platform workspace: the system scope; a club workspace:
 // that club's scope) or a club's own active admin in that club's workspace;
 // for the variable reads and the three R2 writes also an active coach of an
@@ -14,6 +16,7 @@ import { Router } from "express";
 import * as service from "../sourceMetricMappingService.js";
 import * as variables from "../canonicalVariableAdminService.js";
 import * as fields from "../sourceFieldVerificationService.js";
+import * as revisions from "../sourceRevisionLifecycleService.js";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 
 const router = Router();
@@ -50,10 +53,11 @@ function handle(fn) {
         if (error.status === 404) return notFound(res);
         if (error.code === "try_again") res.setHeader("Retry-After", "5");
         // Only known detail fields; never a body field back.
-        const { current, limit, requestKey } = error.details || {};
+        const { current, limit, requestKey, clubIds } = error.details || {};
         return res.status(error.status).json({
           error: error.code, message: error.message,
           ...(current ? { current } : {}), ...(limit ? { limit } : {}), ...(requestKey ? { requestKey } : {}),
+          ...(clubIds ? { clubIds } : {}),
         });
       }
       console.error(`[source-metric-mappings] internal_error: ${req.method} ${String(req.baseUrl || "")}${String(req.route?.path || "")} (${error?.code ?? error?.name ?? "error"})`);
@@ -241,6 +245,44 @@ router.post("/fields/:fieldId/revisions/:revisionId/meaning-verification", handl
   if (!fields.mayVerify(ctx)) return notFound(res);
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await fields.verifyMeaning({ ctx, fieldId: req.params.fieldId, revisionId: req.params.revisionId, body: req.body }), 201);
+}));
+
+// The source-field revision lifecycle (J5): L1 creates a draft revision (201);
+// L2 / L5 retire a draft or the active revision, L3 activates a draft and L4
+// replaces the active revision by a draft (200). An active platform admin in
+// the platform workspace only (O1) - everyone else the same 404, before the
+// body is looked at; then 415, a non-object body 400, a malformed id the
+// identical 404, a wrong body shape 400, then the write.
+router.post("/fields/:fieldId/revisions", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!revisions.mayChangeRevisions(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await revisions.createRevision({ ctx, fieldId: req.params.fieldId, body: req.body }), 201);
+}));
+
+router.post("/fields/:fieldId/revisions/:revisionId/retire", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!revisions.mayChangeRevisions(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await revisions.retireRevision({ ctx, fieldId: req.params.fieldId, revisionId: req.params.revisionId, body: req.body }), 200);
+}));
+
+router.post("/fields/:fieldId/revisions/:revisionId/activate", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!revisions.mayChangeRevisions(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await revisions.activateRevision({ ctx, fieldId: req.params.fieldId, revisionId: req.params.revisionId, body: req.body }), 200);
+}));
+
+router.post("/fields/:fieldId/revisions/:revisionId/replace", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!revisions.mayChangeRevisions(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await revisions.replaceRevision({ ctx, fieldId: req.params.fieldId, revisionId: req.params.revisionId, body: req.body }), 200);
 }));
 
 // Anything else under this prefix is the same 404.
