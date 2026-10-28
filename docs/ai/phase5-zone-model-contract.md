@@ -9,7 +9,7 @@ before any code.
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. Revised the same day after the *Rukovodilac*'s review of `d783a3f` (GO WITH CHANGES: one MEDIUM and four LOW, applied in this text; its decisions on P1–P6 are recorded in section 7). The *Nezavisni revizor*'s review is pending. |
+| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. Revised the same day after the *Rukovodilac*'s review of `d783a3f` (GO WITH CHANGES: one MEDIUM and four LOW, applied in this text; its decisions on P1–P6 are recorded in section 7). The *Nezavisni revizor* reviewed `d783a3f` and `1b1fb8a` (GO, READY WITH NON-BLOCKING NOTES); its LOW notes (the rollback's comments, forward-only after the first zone confirmation, the recovery after a lock timeout) are applied too. |
 | Verified against commit | `cf387f2` (merge of PR #251). Every file and line reference below is to that commit. |
 | Decides | The owner: the contract as a whole (gate 1) and the plan's ★ and gate line (gate 2). The *Rukovodilac*: P1–P6, inside the plan (section 7). |
 | Reviewers of this document | The *Rukovodilac* and the *Nezavisni revizor* (★★). The implementation adds `db-reviewer` (section 3), `security-reviewer` (the replaced actor guard), `code-reviewer`, and `mobile-qa` and `ux-design-reviewer` (section 5). |
@@ -180,9 +180,13 @@ sorts after v41 (`202610281000`). It is one transaction (the runner's), under th
   - it deletes the seeded revision, then the field;
   - it enables both again and checks `tgenabled` of every trigger of the two tables before COMMIT;
   - it restores v39's body of `source_metric_revisions_actor_guard()` and v34's body of
-    `source_metric_require_seed_window()`;
+    `source_metric_require_seed_window()`, and their comments as v41 has them (none: `comment on function … is null`
+    for both), since `create or replace` keeps a comment;
   - it deletes v42's record.
 - **After it, v41's catalog and data come back exactly**, so v42 can be applied again. This is rehearsed in the tests.
+- **v42 is forward-only once any zone revision carries a meaning proof**, the seeded power and speed fields included,
+  which is the normal path after the first real confirmation of a zone: the rollback refuses, and a correction is a
+  later migration (as v37 after a verification and v39 after a lifecycle write).
 - A restoring rollback was decided by the *Rukovodilac* (P5).
 
 ### 3.5 Preflight and post-check (read-only, in the Supabase SQL Editor)
@@ -216,6 +220,13 @@ sorts after v41 (`202610281000`). It is one transaction (the runner's), under th
 
 While the old server still serves during the deploy, it refuses a zone's meaning act (`409`), and its database
 refuses it too until v42 commits. No mixed state can save a zone operator outside Z3.
+
+**Recovery when v42 fails on the lock timeout during the deploy** (in the runbook, as for v40). The new server does not
+start until the migration passes (`npm start` is the migration and then the server), nothing of v42 is written (one
+transaction), and the old server keeps serving.
+1. Check that no session holds a lock on T2a or T2b (the preflight's block 9).
+2. Run the deploy again in a quiet moment.
+3. If it fails the same way again, report to the owner. No manual change in the database.
 
 ---
 
@@ -273,8 +284,8 @@ refuses it too until v42 commits. No mixed state can save a zone operator outsid
   - v42 applies: the seed row and revision exactly;
   - after COMMIT the seed window refuses v42's marker and every other;
   - the post-check passes;
-  - each rollback refusal; the rollback itself, after which v41's catalog (the two function bodies included) and the
-    T2a / T2b content digests match exactly;
+  - each rollback refusal; the rollback itself, after which v41's catalog (the two function bodies and their
+    `obj_description` included) and the T2a / T2b content digests match exactly;
   - v42 re-applies;
   - a dump and restore of a v42 database.
 - **The database rule:**
