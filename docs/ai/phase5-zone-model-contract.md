@@ -4,8 +4,7 @@
 the plan names phase 5b ★★ with its migration v42 (gate 2). Not implemented: no code, no migration yet.** This is the ★★ contract of option A, which the owner chose on
 2026-10-28 (C102 of the discovery document, as the *Rukovodilac* reads the owner's words; the variants are
 `docs/ai/phase5-zone-model-options.md`). It extends `docs/ai/gpexe-metric-variable-mapping-discovery.md` (the
-*discovery document*), sections D3, J1, J4 and J5. Once accepted, it becomes section J7 there and its decisions become
-C103. It follows phase 4's pattern (`docs/ai/v39-revision-lifecycle-contract.md`): the owner approves the contract
+*discovery document*), sections D3, J1, J4 and J5. It is section J7 there, and its decisions are C103. It follows phase 4's pattern (`docs/ai/v39-revision-lifecycle-contract.md`): the owner approves the contract
 before any code.
 
 | | |
