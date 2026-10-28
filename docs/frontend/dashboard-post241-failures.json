@@ -1,0 +1,395 @@
+{
+  "mainSha": "a07fdd12ff9d45147193709c2c20e029185759f0",
+  "runtimeMainSha": "d96936ce5b2033be0f32a0bb076e3341ac80eda0",
+  "dashboardHead": "c10842ea1369094aa5e207179396caa6708e9386",
+  "comparison": "file, test title, failure type, message, complete assertion-detail SHA256; CRLF normalized and stack frames removed only",
+  "pairs": [
+    {
+      "name": "initial concurrent frontend",
+      "baseline": "post241-baseline-full",
+      "candidate": "post241-candidate-full",
+      "identicalFailures": 15,
+      "newOrWorseFailures": 0,
+      "signatures": [
+        {
+          "file": "builder-create-form-fixes.test.mjs",
+          "test": "handleContentChange mirrors the create form's color-palette hidden input into state.builder.createColor",
+          "failureType": "testCodeFailure",
+          "message": "The input did not match the regular expression /state\\.builder\\.createColor = createColorInput\\.value;/. Input:",
+          "detailSha256": "8d112139c3d539ebfcc927cff88a5779a99cf28424b1e66e400ffc3b92232720"
+        },
+        {
+          "file": "builder-mobile-section-workflow.test.mjs",
+          "test": "16c. regression guard: the reorder arrows stay vertical (up/down) at every width - the stale mobile override that rotated them to left/right (a leftover from the old horizontal-scroll Added-list design, long since replaced by a vertical list) must not come back",
+          "failureType": "testCodeFailure",
+          "message": "no rule anywhere should rotate the reorder arrows onto their side",
+          "detailSha256": "00551b8339f8f8e94d2078127ca8595273b844524dac906ba049a78b731c3be6"
+        },
+        {
+          "file": "builder-performance-fixes.test.mjs",
+          "test": "handleContentChange routes update-item autosave through the shared scheduleBuilderItemAutosave helper, instead of saving on every single field's blur",
+          "failureType": "testCodeFailure",
+          "message": "The input did not match the regular expression /if \\(form\\.dataset\\.builderForm === \"update-item\"\\) \\{\\s*scheduleBuilderItemAutosave\\(form\\);\\s*return;\\s*\\}/. Input:",
+          "detailSha256": "247a2c918fb833e506cb358c29217f1d96322f0551711654813b80eea47b2602"
+        },
+        {
+          "file": "builder-performance-fixes.test.mjs",
+          "test": "other autosave forms (update-block, update-node, update-session, update-plan) are NOT debounced - only update-item has the sibling-field tabbing problem",
+          "failureType": "testCodeFailure",
+          "message": "The input did not match the regular expression /return;\\s*\\}\\s*try \\{\\s*await submitBuilderFormAction\\(form,/. Input:",
+          "detailSha256": "77554f7b054380ca537870a334c11cc62b369117d4b6b1d94ba9c77756301664"
+        },
+        {
+          "file": "exercise-editor-thumbnail.test.mjs",
+          "test": "13. the automatic attempt has one deadline for the whole of it: past it the attempt is stopped and the picture field says why; closing the editor or changing the video stops it too",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly equal:",
+          "detailSha256": "2c149e11fb2cef7631acef5e49567565205d5635c4bc03242fc0378a6a21346c"
+        },
+        {
+          "file": "exercise-ownership.test.mjs",
+          "test": "explicit copying clears source media and code and saves only on confirmation",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly equal:",
+          "detailSha256": "648f3b957d3f92f20271007722aa8e9e5fc3c3115affbac5e44cb00418c469c3"
+        },
+        {
+          "file": "exercise-personalization.test.mjs",
+          "test": "video-only effective media can be opened without requiring an image",
+          "failureType": "testCodeFailure",
+          "message": "The input did not match the regular expression /media-fallback/. Input:",
+          "detailSha256": "6a90c86f06663f5090f4c8974a9a4646c409990f66c823c8ed8db238c449b0bc"
+        },
+        {
+          "file": "organization-panel-cache.test.mjs",
+          "test": "6. signOut clears the entire view cache before/alongside its hard reload",
+          "failureType": "testCodeFailure",
+          "message": "the cache must be cleared before (or at latest alongside) the redirect, never left for \"later\"",
+          "detailSha256": "e7a94794be99ac5b5b689ae22a5ce36bb187da7299d920cbc643b8f1e25e4139"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "a drag that starts on an already-selected day REMOVES the whole dragged-over range, not just the anchor",
+          "failureType": "testCodeFailure",
+          "message": "only the dragged range was removed - an unrelated already-selected date elsewhere is untouched",
+          "detailSha256": "4dd0b705d35648e39d485855286e72c7fdf688c5791be98ee97aa1a4eee2d46f"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "a plain click (mousedown, no drag) on an unselected day adds just that one date",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly deep-equal:",
+          "detailSha256": "7717c920f3dede526a19e61527256c4f08b1b613f4a8b0db011608c21e06b33b"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "a plain click on an ALREADY-selected day removes just that one date - single click toggles",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly deep-equal:",
+          "detailSha256": "f025cfaedc6067c20434aaac3d02c95749bdac8b3f73e58126451fbed75c38ae"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "dragging backward (toward the anchor) shrinks the range - days no longer covered are un-selected again, not left stranded",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly deep-equal:",
+          "detailSha256": "3b9514c53be2e4faf27ef7826fe11db8cd78345a9b836095279340aa6fde56f5"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "mousedown on day 1, drag over to day 3, selects the whole inclusive range - Booking-style range select",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly deep-equal:",
+          "detailSha256": "57b8242a91282fe9aa22780a72ed2424fb1eaf52e2c857f5acfa49ca17373ce5"
+        },
+        {
+          "file": "training-load.actions.test.mjs",
+          "test": "X5a. cross-section race, A resolves BEFORE B: Today ends up showing B's real fresh post-toggle content, never A's stale one, never data:null",
+          "failureType": "testTimeoutFailure",
+          "message": "test timed out after 15000ms",
+          "detailSha256": "d4254987a84940b2d7a79e8e67e6b9b149dbd565204dfbb617df43564bfffa4f"
+        },
+        {
+          "file": "training-load.actions.test.mjs",
+          "test": "X5b. cross-section race, B resolves BEFORE A: Today ends up showing B's real fresh post-toggle content, A's later stale response never clobbers it, never data:null",
+          "failureType": "testTimeoutFailure",
+          "message": "test timed out after 15000ms",
+          "detailSha256": "8f435d648e91ef63a3359dfa808c5150dd394bdfb9217ebe60a3dda856aaeb61"
+        }
+      ]
+    },
+    {
+      "name": "sequential frontend",
+      "baseline": "post241-baseline-sequential",
+      "candidate": "post241-candidate-sequential",
+      "identicalFailures": 14,
+      "newOrWorseFailures": 0,
+      "signatures": [
+        {
+          "file": "builder-create-form-fixes.test.mjs",
+          "test": "handleContentChange mirrors the create form's color-palette hidden input into state.builder.createColor",
+          "failureType": "testCodeFailure",
+          "message": "The input did not match the regular expression /state\\.builder\\.createColor = createColorInput\\.value;/. Input:",
+          "detailSha256": "8d112139c3d539ebfcc927cff88a5779a99cf28424b1e66e400ffc3b92232720"
+        },
+        {
+          "file": "builder-mobile-section-workflow.test.mjs",
+          "test": "16c. regression guard: the reorder arrows stay vertical (up/down) at every width - the stale mobile override that rotated them to left/right (a leftover from the old horizontal-scroll Added-list design, long since replaced by a vertical list) must not come back",
+          "failureType": "testCodeFailure",
+          "message": "no rule anywhere should rotate the reorder arrows onto their side",
+          "detailSha256": "00551b8339f8f8e94d2078127ca8595273b844524dac906ba049a78b731c3be6"
+        },
+        {
+          "file": "builder-performance-fixes.test.mjs",
+          "test": "handleContentChange routes update-item autosave through the shared scheduleBuilderItemAutosave helper, instead of saving on every single field's blur",
+          "failureType": "testCodeFailure",
+          "message": "The input did not match the regular expression /if \\(form\\.dataset\\.builderForm === \"update-item\"\\) \\{\\s*scheduleBuilderItemAutosave\\(form\\);\\s*return;\\s*\\}/. Input:",
+          "detailSha256": "247a2c918fb833e506cb358c29217f1d96322f0551711654813b80eea47b2602"
+        },
+        {
+          "file": "builder-performance-fixes.test.mjs",
+          "test": "other autosave forms (update-block, update-node, update-session, update-plan) are NOT debounced - only update-item has the sibling-field tabbing problem",
+          "failureType": "testCodeFailure",
+          "message": "The input did not match the regular expression /return;\\s*\\}\\s*try \\{\\s*await submitBuilderFormAction\\(form,/. Input:",
+          "detailSha256": "77554f7b054380ca537870a334c11cc62b369117d4b6b1d94ba9c77756301664"
+        },
+        {
+          "file": "exercise-ownership.test.mjs",
+          "test": "explicit copying clears source media and code and saves only on confirmation",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly equal:",
+          "detailSha256": "648f3b957d3f92f20271007722aa8e9e5fc3c3115affbac5e44cb00418c469c3"
+        },
+        {
+          "file": "exercise-personalization.test.mjs",
+          "test": "video-only effective media can be opened without requiring an image",
+          "failureType": "testCodeFailure",
+          "message": "The input did not match the regular expression /media-fallback/. Input:",
+          "detailSha256": "6a90c86f06663f5090f4c8974a9a4646c409990f66c823c8ed8db238c449b0bc"
+        },
+        {
+          "file": "organization-panel-cache.test.mjs",
+          "test": "6. signOut clears the entire view cache before/alongside its hard reload",
+          "failureType": "testCodeFailure",
+          "message": "the cache must be cleared before (or at latest alongside) the redirect, never left for \"later\"",
+          "detailSha256": "e7a94794be99ac5b5b689ae22a5ce36bb187da7299d920cbc643b8f1e25e4139"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "a drag that starts on an already-selected day REMOVES the whole dragged-over range, not just the anchor",
+          "failureType": "testCodeFailure",
+          "message": "only the dragged range was removed - an unrelated already-selected date elsewhere is untouched",
+          "detailSha256": "4dd0b705d35648e39d485855286e72c7fdf688c5791be98ee97aa1a4eee2d46f"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "a plain click (mousedown, no drag) on an unselected day adds just that one date",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly deep-equal:",
+          "detailSha256": "7717c920f3dede526a19e61527256c4f08b1b613f4a8b0db011608c21e06b33b"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "a plain click on an ALREADY-selected day removes just that one date - single click toggles",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly deep-equal:",
+          "detailSha256": "f025cfaedc6067c20434aaac3d02c95749bdac8b3f73e58126451fbed75c38ae"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "dragging backward (toward the anchor) shrinks the range - days no longer covered are un-selected again, not left stranded",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly deep-equal:",
+          "detailSha256": "3b9514c53be2e4faf27ef7826fe11db8cd78345a9b836095279340aa6fde56f5"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "mousedown on day 1, drag over to day 3, selects the whole inclusive range - Booking-style range select",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly deep-equal:",
+          "detailSha256": "57b8242a91282fe9aa22780a72ed2424fb1eaf52e2c857f5acfa49ca17373ce5"
+        },
+        {
+          "file": "training-load.actions.test.mjs",
+          "test": "X5a. cross-section race, A resolves BEFORE B: Today ends up showing B's real fresh post-toggle content, never A's stale one, never data:null",
+          "failureType": "testTimeoutFailure",
+          "message": "test timed out after 15000ms",
+          "detailSha256": "d4254987a84940b2d7a79e8e67e6b9b149dbd565204dfbb617df43564bfffa4f"
+        },
+        {
+          "file": "training-load.actions.test.mjs",
+          "test": "X5b. cross-section race, B resolves BEFORE A: Today ends up showing B's real fresh post-toggle content, A's later stale response never clobbers it, never data:null",
+          "failureType": "testTimeoutFailure",
+          "message": "test timed out after 15000ms",
+          "detailSha256": "8f435d648e91ef63a3359dfa808c5150dd394bdfb9217ebe60a3dda856aaeb61"
+        }
+      ]
+    },
+    {
+      "name": "backend unit",
+      "baseline": "post241-backend-baseline",
+      "candidate": "post241-backend-unit",
+      "identicalFailures": 1,
+      "newOrWorseFailures": 0,
+      "signatures": [
+        {
+          "file": "builder-tree-batch.test.mjs",
+          "test": "large copies chunk inserts without losing parent mapping or exercise doses",
+          "failureType": "testCodeFailure",
+          "message": "batch must stay below PostgreSQL parameter limits",
+          "detailSha256": "2caf760420f6562890b576ea71366705079e2d6a2d5a71e1009914b1c99f60dd"
+        }
+      ]
+    },
+    {
+      "name": "detached main frontend",
+      "baseline": "post241-worktree-frontend",
+      "candidate": "post241-candidate-sequential",
+      "identicalFailures": 14,
+      "newOrWorseFailures": 0,
+      "signatures": [
+        {
+          "file": "builder-create-form-fixes.test.mjs",
+          "test": "handleContentChange mirrors the create form's color-palette hidden input into state.builder.createColor",
+          "failureType": "testCodeFailure",
+          "message": "The input did not match the regular expression /state\\.builder\\.createColor = createColorInput\\.value;/. Input:",
+          "detailSha256": "8d112139c3d539ebfcc927cff88a5779a99cf28424b1e66e400ffc3b92232720"
+        },
+        {
+          "file": "builder-mobile-section-workflow.test.mjs",
+          "test": "16c. regression guard: the reorder arrows stay vertical (up/down) at every width - the stale mobile override that rotated them to left/right (a leftover from the old horizontal-scroll Added-list design, long since replaced by a vertical list) must not come back",
+          "failureType": "testCodeFailure",
+          "message": "no rule anywhere should rotate the reorder arrows onto their side",
+          "detailSha256": "00551b8339f8f8e94d2078127ca8595273b844524dac906ba049a78b731c3be6"
+        },
+        {
+          "file": "builder-performance-fixes.test.mjs",
+          "test": "handleContentChange routes update-item autosave through the shared scheduleBuilderItemAutosave helper, instead of saving on every single field's blur",
+          "failureType": "testCodeFailure",
+          "message": "The input did not match the regular expression /if \\(form\\.dataset\\.builderForm === \"update-item\"\\) \\{\\s*scheduleBuilderItemAutosave\\(form\\);\\s*return;\\s*\\}/. Input:",
+          "detailSha256": "247a2c918fb833e506cb358c29217f1d96322f0551711654813b80eea47b2602"
+        },
+        {
+          "file": "builder-performance-fixes.test.mjs",
+          "test": "other autosave forms (update-block, update-node, update-session, update-plan) are NOT debounced - only update-item has the sibling-field tabbing problem",
+          "failureType": "testCodeFailure",
+          "message": "The input did not match the regular expression /return;\\s*\\}\\s*try \\{\\s*await submitBuilderFormAction\\(form,/. Input:",
+          "detailSha256": "77554f7b054380ca537870a334c11cc62b369117d4b6b1d94ba9c77756301664"
+        },
+        {
+          "file": "exercise-ownership.test.mjs",
+          "test": "explicit copying clears source media and code and saves only on confirmation",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly equal:",
+          "detailSha256": "648f3b957d3f92f20271007722aa8e9e5fc3c3115affbac5e44cb00418c469c3"
+        },
+        {
+          "file": "exercise-personalization.test.mjs",
+          "test": "video-only effective media can be opened without requiring an image",
+          "failureType": "testCodeFailure",
+          "message": "The input did not match the regular expression /media-fallback/. Input:",
+          "detailSha256": "6a90c86f06663f5090f4c8974a9a4646c409990f66c823c8ed8db238c449b0bc"
+        },
+        {
+          "file": "organization-panel-cache.test.mjs",
+          "test": "6. signOut clears the entire view cache before/alongside its hard reload",
+          "failureType": "testCodeFailure",
+          "message": "the cache must be cleared before (or at latest alongside) the redirect, never left for \"later\"",
+          "detailSha256": "e7a94794be99ac5b5b689ae22a5ce36bb187da7299d920cbc643b8f1e25e4139"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "a drag that starts on an already-selected day REMOVES the whole dragged-over range, not just the anchor",
+          "failureType": "testCodeFailure",
+          "message": "only the dragged range was removed - an unrelated already-selected date elsewhere is untouched",
+          "detailSha256": "4dd0b705d35648e39d485855286e72c7fdf688c5791be98ee97aa1a4eee2d46f"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "a plain click (mousedown, no drag) on an unselected day adds just that one date",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly deep-equal:",
+          "detailSha256": "7717c920f3dede526a19e61527256c4f08b1b613f4a8b0db011608c21e06b33b"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "a plain click on an ALREADY-selected day removes just that one date - single click toggles",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly deep-equal:",
+          "detailSha256": "f025cfaedc6067c20434aaac3d02c95749bdac8b3f73e58126451fbed75c38ae"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "dragging backward (toward the anchor) shrinks the range - days no longer covered are un-selected again, not left stranded",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly deep-equal:",
+          "detailSha256": "3b9514c53be2e4faf27ef7826fe11db8cd78345a9b836095279340aa6fde56f5"
+        },
+        {
+          "file": "tests-schedule-management.actions.test.mjs",
+          "test": "mousedown on day 1, drag over to day 3, selects the whole inclusive range - Booking-style range select",
+          "failureType": "testCodeFailure",
+          "message": "Expected values to be strictly deep-equal:",
+          "detailSha256": "57b8242a91282fe9aa22780a72ed2424fb1eaf52e2c857f5acfa49ca17373ce5"
+        },
+        {
+          "file": "training-load.actions.test.mjs",
+          "test": "X5a. cross-section race, A resolves BEFORE B: Today ends up showing B's real fresh post-toggle content, never A's stale one, never data:null",
+          "failureType": "testTimeoutFailure",
+          "message": "test timed out after 15000ms",
+          "detailSha256": "d4254987a84940b2d7a79e8e67e6b9b149dbd565204dfbb617df43564bfffa4f"
+        },
+        {
+          "file": "training-load.actions.test.mjs",
+          "test": "X5b. cross-section race, B resolves BEFORE A: Today ends up showing B's real fresh post-toggle content, A's later stale response never clobbers it, never data:null",
+          "failureType": "testTimeoutFailure",
+          "message": "test timed out after 15000ms",
+          "detailSha256": "8f435d648e91ef63a3359dfa808c5150dd394bdfb9217ebe60a3dda856aaeb61"
+        }
+      ]
+    },
+    {
+      "name": "detached main backend",
+      "baseline": "post241-worktree-backend",
+      "candidate": "post241-backend-unit",
+      "identicalFailures": 1,
+      "newOrWorseFailures": 0,
+      "signatures": [
+        {
+          "file": "builder-tree-batch.test.mjs",
+          "test": "large copies chunk inserts without losing parent mapping or exercise doses",
+          "failureType": "testCodeFailure",
+          "message": "batch must stay below PostgreSQL parameter limits",
+          "detailSha256": "2caf760420f6562890b576ea71366705079e2d6a2d5a71e1009914b1c99f60dd"
+        }
+      ]
+    }
+  ],
+  "environment": {
+    "node": "v24.22.1",
+    "platform": "win32",
+    "dependencyTrees": {
+      "frontend": {
+        "identicalRealPath": true,
+        "installedLockSha256": "e1998a08f2c62da3dfcefb68af14a4724d3f84a8aab925d60862e4fa89deb8a8"
+      },
+      "backend": {
+        "identicalRealPath": true,
+        "installedLockSha256": "7c1cb639bb75b6016e6fc60a1b40ecce06b5408d43c10945b64a6a200f18dd66"
+      }
+    },
+    "sourceHashes": {
+      "scripts/test-runner.mjs": "4713f79c7cb5bb173030a383152542ce5e3a5e67487fe574e794dbddbebc92f4",
+      "scripts/test-runner-reporter.mjs": "f5a814f0774ba7c3b3cf84106dbfa46340e9b179edf47aafbcb1a4be58568128",
+      "backend/package.json": "7d6bdbb06b04cf7ef06228f18abd43720ca2b5afec0e9461db30cd14373e5c08",
+      "backend/package-lock.json": "16c057f93947ffeaf32ee91512e43c883c41b108d1ebf63098177357d28dbf1b"
+    },
+    "mainSourceVerification": {
+      "detachedHead": "a07fdd12ff9d45147193709c2c20e029185759f0",
+      "trackedStatusClean": true,
+      "comparedMainFiles": 1052,
+      "preservedBackendMigrationScriptFiles": 336,
+      "sourceNormalization": "CRLF to LF only"
+    }
+  }
+}

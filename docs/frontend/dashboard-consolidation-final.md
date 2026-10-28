@@ -1,5 +1,7 @@
 # Dashboard PR #220 — consolidation and final validation
 
+> Superseded for current-main readiness by [post-PR241 validation](dashboard-post241-validation.md). Feature consolidation history below remains valid. Current production decision: NO-GO pending inherited backend security remediation/decision.
+
 **GO to request final production approval. NO-GO to execute main merge or deploy
 without that separate explicit approval.** Feature consolidation is complete.
 
