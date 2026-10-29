@@ -12,6 +12,7 @@ import {
   removablePlacement, removableVariableLink,
 } from "./metric-classification-data.js";
 import { newRequestKey } from "./metric-variables-data.js";
+import { checkDrop, dismissDrop, ensureTray, loadTray, undoDrop } from "./metric-classification-drag.js";
 
 // The domains and categories the workspace reads (C1).
 export async function loadClassification(render) {
@@ -85,7 +86,12 @@ export async function handleClassificationAction(action, { render, leaveForm, lo
     s.notice = "";
     s.detail = { ...s.detail, id: null, variable: null };
     let read = null;
-    if (view === "domains" || view === "categories") read = loadClassification(render);
+    if (view === "domains") read = loadClassification(render);
+    else if (view === "categories") {
+      // The tray of variables (PR-2) is read again each time the screen opens.
+      s.tray = null;
+      read = Promise.all([loadClassification(render), ensureTray(render)]);
+    }
     else if (view === "home") read = load.home(render);
     else if (s.list.loaded) render();
     else read = load.list(render);
@@ -96,6 +102,24 @@ export async function handleClassificationAction(action, { render, leaveForm, lo
   }
   if (type === "metric-classification-reload") {
     await loadClassification(render);
+    return true;
+  }
+  // Dragging a variable onto a category (PR-2): the tray's read, and the last
+  // drop's Undo, Check result and Close without checking.
+  if (type === "metric-classification-tray-reload") {
+    await loadTray(render);
+    return true;
+  }
+  if (type === "metric-classification-drop-undo") {
+    await undoDrop({ render });
+    return true;
+  }
+  if (type === "metric-classification-drop-check") {
+    await checkDrop({ render });
+    return true;
+  }
+  if (type === "metric-classification-drop-dismiss") {
+    dismissDrop({ render });
     return true;
   }
   if (type === "metric-classification-open") {

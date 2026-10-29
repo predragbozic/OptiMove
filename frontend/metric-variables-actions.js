@@ -7,6 +7,7 @@ import { state } from "./state.js";
 import { closeIconPicker, focusIconPicker, handleIconPickerAction, iconPickerOpenFor, openIconPicker } from "./icon-picker.js";
 import { isLibraryKey } from "./icon-render.js";
 import { isClassificationMode } from "./metric-classification-data.js";
+import { discardDrop, dropLeaveQuestion, dropNeedsAsk, ensureTray } from "./metric-classification-drag.js";
 import {
   afterUncheckedClose, ensureClassification, handleClassificationAction, handleClassificationInput, loadClassification, sendClassification,
   submitClassificationForm, toTitle,
@@ -30,6 +31,7 @@ export function resetVariables() {
   const generation = (state.trainingLoad.variables?.generation || 0) + 1;
   clearTimeout(keyTimer);
   if (iconPickerOpenFor("metric-variables")) closeIconPicker();
+  if (state.trainingLoad.variables) discardDrop();
   state.trainingLoad.variables = { ...emptyVariablesState(), generation };
 }
 
@@ -108,7 +110,8 @@ export function loadVariablesSection(render) {
   const s = variablesState();
   if (!variablesContext()) { render(); return Promise.resolve(); }
   if (s.view === "home" && !s.form) return loadDataConfigHome(render);
-  if ((s.view === "domains" || s.view === "categories") && !s.form) return loadClassification(render);
+  if (s.view === "domains" && !s.form) return loadClassification(render);
+  if (s.view === "categories" && !s.form) return Promise.all([loadClassification(render), ensureTray(render)]);
   // The domains and categories: the list's filter and a variable's links use them.
   const tree = ensureClassification(render);
   if (s.detail.id && !s.form) return Promise.all([tree, loadVariable(s.detail.id, render)]);
@@ -125,6 +128,8 @@ const LOADERS = { list: (render) => loadVariables(render), variable: (id, render
 // ---------------------------------------------------------------------------
 export function variablesMayBeLeft() {
   const form = state.trainingLoad.variables?.form;
+  // A drop on the Categories screen (PR-2) in flight or not confirmed.
+  if (!form && dropNeedsAsk()) return confirmAsk(dropLeaveQuestion());
   if (!form) return true;
   if (form.busy) return confirmAsk(`${isClassificationMode(form.mode) ? "A change" : "A variable"} is still being saved. Leave anyway? Its result will not be shown.`);
   if (form.unconfirmed) return confirmAsk("The last save is not confirmed. Leave without checking? Look for it in the list later.");
@@ -149,7 +154,7 @@ const DISCARD_QUESTION = {
 export function variablesUnloadShouldWarn() {
   if (state.activeTab !== "training-load" || state.trainingLoad.section !== "variables") return false;
   const form = state.trainingLoad.variables?.form;
-  return Boolean(form && (form.busy || form.unconfirmed || form.dirty));
+  return Boolean((form && (form.busy || form.unconfirmed || form.dirty)) || (state.trainingLoad.variables && dropNeedsAsk()));
 }
 function leaveForm() {
   if (!variablesMayBeLeft()) return false;
@@ -161,7 +166,10 @@ function leaveForm() {
 export function dropVariablesForm() {
   clearTimeout(keyTimer);
   if (iconPickerOpenFor("metric-variables")) closeIconPicker();
-  if (state.trainingLoad.variables) state.trainingLoad.variables.form = null;
+  if (state.trainingLoad.variables) {
+    state.trainingLoad.variables.form = null;
+    discardDrop();
+  }
 }
 
 // ---------------------------------------------------------------------------
