@@ -77,6 +77,7 @@ the authoritative final write protection.
 | Archive/template/workspace parent guards | Capability reader negatives before catalog access | Not executed |
 | Filter athlete/activity/component membership | Authorized server context, negative membership/parent cases | Not executed |
 | Presentation and rule shape/unit compatibility | Strict contracts and constant/reference capability negatives | No DB sidecar backstop exists yet; belongs to S2c |
+| Retained widget size on type change | Destination catalog min/max width/height checks; incompatible size => invalid without resizing | Not executed; narrow unit cases added |
 | Layout/order overlap, ownership immutability, write locks, revisions | No writer/layout mutation exists in S2a | Existing DB regression required before integration; not claimed by unit tests |
 
 Full real parity must cover non-racing valid/invalid create **and** update, known
@@ -122,3 +123,37 @@ not new product behavior or relaxed authorization.
 - `git diff --check`: clean. No existing production file/route, dependency declaration, migration or original S1.1 document is modified.
 
 Internal static code/security review completed. The one MEDIUM finding (missing server evaluatedAt escaping the relative compiler as an exception) was corrected to stable invalid/serverTimeRequired with a focused regression; narrow re-review follows on that delta. No actionable security finding was raised. This does not replace the owner-requested external technical/security review or missing DB parity evidence.
+
+### Arendt correction delta against `4b46ca8`
+
+Three confirmed findings received narrow corrections against the pinned S1.1 contract:
+
+- Retained width/height are checked against the destination widget type's loaded
+  `min_width`, `max_width`, `min_height`, `max_height`; incompatible dimensions return
+  `invalid` / `widgetSizeBounds` at `$.view.type` without changing layout. Missing or
+  invalid bounds for retained dimensions return `invalidCatalogMetadata`. The v18
+  seed defines KPI 2–4 × 2–3, Table 3–12 × 3–12 and charts 3–12 × 3–8; the v16
+  `dashboard_widgets_validate_layout` trigger enforces destination bounds on type
+  updates. Fixtures now carry these real bounds. Boundary, incompatible-size,
+  loaded-catalog and input-preservation cases were added.
+- Authorized component-only filters accept absent or explicitly cleared effective
+  activity. Parent equality is required only when an effective activity is selected,
+  matching `buildRangeContext`; conflicting selected or inherited activity still
+  fails without reparenting. Added absent/clear, filter-layer and authorization cases.
+- Time-zone validation explicitly rejects signed offset identifiers even on Node 24,
+  whose Intl implementation accepts them. Named zones, UTC and named `Etc/GMT+1`
+  remain supported. Added fixed/relative, context, draft and envelope regressions.
+
+The coordinator executed the corrected S2a suites on Windows / Node v24.12.0:
+**119 pass, 0 fail** (80 contract, 29 compiler, 10 capabilities). The backend unit
+regression produced **481 pass, 1 baseline fail** with the same Builder assertion;
+the approved-base reproduction produced 10 pass and that same 1 fail. The unchanged
+seven frontend regression suites passed **164/164** on the pinned original HEAD.
+These results supplement, rather than replace, the original delivery measurements
+above. The disposable Dashboard suite again refused before connection because
+`DATABASE_URL` is unset. This host has PostgreSQL binaries, but no isolated test
+connection was configured; no environment settings were changed. No DB parity,
+DB access or S2b/S2c work was performed. The independent reviewer closed all three
+findings after 93 additional focused in-memory cases: 21 layout, 48 component,
+24 timezone. No residual issue was found within the correction delta. This narrow
+recheck does not establish actual SQL, DB/API or concurrency parity.

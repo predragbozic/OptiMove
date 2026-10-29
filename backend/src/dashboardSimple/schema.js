@@ -42,7 +42,7 @@ Object.values(schemas).forEach(freezeTree);
 const plain = v => v !== null && typeof v === 'object' && !Array.isArray(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v));
 export const isUuid = v => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 export function isDate(v) { if (typeof v !== 'string' || !/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(v)) return false; const n = Date.parse(`${v}T00:00:00Z`); return Number.isFinite(n) && new Date(n).toISOString().slice(0, 10) === v; }
-function format(v, f) { if (f === 'uuid') return isUuid(v); if (f === 'date') return isDate(v); try { new Intl.DateTimeFormat('en', { timeZone: v }).format(); return true; } catch { return false; } }
+function format(v, f) { if (f === 'uuid') return isUuid(v); if (f === 'date') return isDate(v); if (f === 'time-zone' && /^[+-]/.test(v)) return false; try { new Intl.DateTimeFormat('en', { timeZone: v }).format(); return true; } catch { return false; } }
 // JSON-only, bounded input: do not coerce types, evaluate user code or recurse forever.
 function jsonSafe(v, seen = new Set(), depth = 0) {
   if (depth > 25) return false;

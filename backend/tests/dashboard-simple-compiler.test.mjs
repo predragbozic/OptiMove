@@ -38,6 +38,32 @@ test('filters respect inheritance/clear/allAuthorized and foreign athlete denial
 test('component parent and foreign activity are checked, not auto-reparented', () => {
   const d = draft(), c = context();d.advancedFilter = { activity: { mode: 'selected', id: id(11) }, component: { mode: 'selected', id: id(12) } };has(compile(d), 'notFound');c.authorizedFilterIds = { activityId: [id(11)], componentId: [id(12)] };c.componentActivityId = id(13);has(compile(d, snapshot(), c), 'componentActivityMismatch');c.componentActivityId = id(11);assert.equal(compile(d, snapshot(), c).status, 'valid');
 });
+
+test('authorized component-only filters allow absent or cleared effective activity', () => {
+  for (const clear of [false, true]) {
+    const d = draft(), c = context();
+    d.advancedFilter = { activity: { mode: clear ? 'clear' : 'inherit' }, component: { mode: 'selected', id: id(12) } };
+    c.authorizedFilterIds = { componentId: [id(12)] };c.componentActivityId = id(11);
+    if (clear) c.defaultFilter = { activityId: id(13) };
+    const before = structuredClone({ d, c }), r = compile(d, snapshot(), c);
+    assert.equal(r.status, 'valid');assert.equal(r.effectiveFilter.componentId, id(12));
+    assert.equal(r.effectiveFilter.activityId, clear ? null : undefined);
+    assert.deepEqual({ d, c }, before);
+    c.authorizedFilterIds.componentId = [];has(compile(d, snapshot(), c), 'notFound');
+  }
+});
+
+test('component parent checks follow effective activity across filter layers without reparenting', () => {
+  for (const layer of ['defaultFilter', 'pageDefaultFilter', 'runtimeFilter']) {
+    const d = draft(), c = context();d.advancedFilter.component = { mode: 'selected', id: id(12) };
+    c.authorizedFilterIds = { activityId: [id(11), id(13)], componentId: [id(12)] };c.componentActivityId = id(11);
+    c[layer] = { activityId: id(13) };
+    const before = structuredClone({ d, c }), r = compile(d, snapshot(), c);
+    assert.equal(r.status, 'invalid');has(r, 'componentActivityMismatch');assert.equal(r.widget, undefined);assert.deepEqual({ d, c }, before);
+    c[layer].activityId = id(11);assert.equal(compile(d, snapshot(), c).status, 'valid');
+    c.runtimeFilter = { activityId: null };assert.equal(compile(d, snapshot(), c).status, 'valid');
+  }
+});
 test('unit:null is explicit, never wildcard; reference capabilities stay disabled', () => {
   const d = draft(), s = snapshot();d.metricRef.key = 'rpe';s.metricRef = d.metricRef;s.metric = builtins()[0];d.view.type = 'table';d.view.analyticalAggregation = 'avg';const p = presentation();p.tableFormatting.rules[0].threshold.unit = null;d.presentation = { mode: 'replace', value: p };assert.equal(compile(d, s).status, 'valid');p.tableFormatting.rules[0].threshold.unit = 'AU';has(compile(d, s), 'unitMismatch');p.tableFormatting.rules[0] = { ...rule(), operand: 'referenceDifference', threshold: { value: 2, unit: null }, reference: { kind: 'backendReference', id: 'opaque', semanticsVersion: '1' } };has(compile(d, s), 'unsupportedCapability');
 });
@@ -71,6 +97,33 @@ test('preserve maintains existing unrelated content and layout', () => {
   const e = { ...compile().widget, x: 3, y: 9, width: 6, height: 4, state: 'collapsed', revision: 8 };
   const d = { ...draft(), title: 'New title', display: { mode: 'preserve' }, presentation: { mode: 'preserve' } };const r = compile(d, snapshot(), context(), e);
   assert.equal(r.status, 'valid');for (const k of ['x', 'y', 'width', 'height', 'state', 'revision']) assert.equal(r.widget[k], e[k]);
+});
+
+test('updates reject incompatible retained dimensions and preserve compatible boundary sizes', () => {
+  const seedDraft = draft();seedDraft.view.type = 'table';
+  const seed = { ...compile(seedDraft).widget, x: 0, y: 9, width: 6, height: 4, revision: 8 };
+  for (const [sourceType, type, width, height, expected] of [
+    ['table', 'kpi', 6, 4, 'invalid'], ['table', 'kpi', 5, 3, 'invalid'], ['table', 'kpi', 4, 4, 'invalid'],
+    ['kpi', 'table', 2, 3, 'invalid'], ['kpi', 'table', 3, 2, 'invalid'],
+    ['kpi', 'kpi', 2, 2, 'valid'], ['table', 'kpi', 4, 3, 'valid'],
+    ['table', 'line_chart', 3, 3, 'valid'], ['table', 'line_chart', 12, 8, 'valid'], ['table', 'line_chart', 6, 9, 'invalid'],
+  ]) {
+    const d = draft();d.view.type = type;d.display = { mode: 'preserve' };d.presentation = { mode: 'clear' };
+    const e = { ...seed, widget_type: sourceType, width, height }, before = structuredClone({ d, e });
+    const r = compile(d, snapshot(), context(), e);assert.equal(r.status, expected, JSON.stringify({ type, width, height, r }));
+    assert.deepEqual({ d, e }, before);
+    if (expected === 'invalid') { has(r, 'widgetSizeBounds');assert.equal(r.widget, undefined); }
+    else { assert.equal(r.widget.widget_type, type);for (const k of ['x', 'y', 'width', 'height', 'revision']) assert.equal(r.widget[k], e[k]); }
+  }
+});
+
+test('retained size validation uses loaded destination bounds and fails closed on missing bounds', () => {
+  const d = draft();d.view.type = 'table';const e = { ...compile(d).widget, width: 6, height: 4 };
+  d.view.type = 'line_chart';d.display = { mode: 'preserve' };d.presentation = { mode: 'clear' };
+  const s = snapshot(), type = s.widgetTypes.find(t => t.key === 'line_chart');
+  type.max_width = 5;has(compile(d, s, context(), e), 'widgetSizeBounds');
+  type.max_width = 6;assert.equal(compile(d, s, context(), e).status, 'valid');
+  delete type.min_height;const r = compile(d, s, context(), e);assert.equal(r.status, 'invalid');has(r, 'invalidCatalogMetadata');assert.equal(r.widget, undefined);
 });
 test('unsupported grouping never silently opts into athletes-v1 composition', () => {
   const d = draft();d.view.groupBy = 'session';const r = compile(d);assert.equal(r.status, 'valid');assert.equal(r.chartPlan, null);assert.equal(r.widget.presentation_config.chartComposition, undefined);

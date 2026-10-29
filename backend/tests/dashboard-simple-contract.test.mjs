@@ -34,6 +34,24 @@ test('actual calendar dates, IANA zones and inclusive 400-day bounds', () => {
   const p = { schemaVersion: 1, mode: 'fixed', dateFrom: '2025-01-01', dateTo: '2026-02-04', timeZone: 'UTC' };valid('periodConfig', p);
   for (const bad of [{ dateTo: '2026-02-05' }, { dateTo: '2024-02-30' }, { dateTo: '0000-01-01' }, { timeZone: 'Mars/Olympus' }, { dateTo: '2024-12-31' }]) invalid('periodConfig', { ...p, ...bad });
 });
+
+test('period contracts require named time zones and reject fixed-offset identifiers', () => {
+  for (const [expected, zones] of [[true, ['UTC', 'Europe/Belgrade', 'America/New_York', 'Etc/GMT+1']], [false, ['+01:00', '-05:30', '+0100', '-0530', '+01', '-00:00']]]) for (const timeZone of zones) {
+    const fixed = { schemaVersion: 1, mode: 'fixed', dateFrom: '2026-01-01', dateTo: '2026-01-02', timeZone };
+    const relative = { schemaVersion: 1, mode: 'relative', preset: 'today', timeZone };
+    const period = { dateFrom: fixed.dateFrom, dateTo: fixed.dateTo, timeZone };
+    for (const [name, value] of [
+      ['periodConfig', fixed], ['periodConfig', relative],
+      ['context', { kind: 'legacyDashboard', period }],
+      ['context', { kind: 'page', pageId: id(8), period }],
+      ['editorDraft', { ...draft(), periodIntent: { mode: 'replacePageRuntime', periodConfig: relative } }],
+      ['envelope', { ...samples.envelope[0], context: { kind: 'legacyDashboard', period } }],
+    ]) {
+      const r = validateContract(name, value);assert.equal(r.valid, expected, JSON.stringify({ name, timeZone, r }));
+      if (!expected) assert.ok(r.issues.some(i => i.code === 'invalidFormat' && i.path.endsWith('.timeZone')), JSON.stringify(r));
+    }
+  }
+});
 test('finite bounds, strict booleans and V2-only replace', () => {
   invalid('yAxis', { mode: 'fixed', min: 1, max: 1 });invalid('yAxis', { mode: 'auto', min: 0 });invalid('yAxis', { mode: 'fixed', min: 0, max: Infinity });
   invalid('displayV2', { schemaVersion: 2, legend: { visible: 1 } });invalid('displayV2', { schemaVersion: 2, numberFormat: { maximumFractionDigits: 7 } });invalid('displayMode', { mode: 'replace', value: { schemaVersion: 1 } });

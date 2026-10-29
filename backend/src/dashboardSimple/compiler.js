@@ -85,7 +85,7 @@ export function compileSimpleDraft(draft, snapshot, context = {}, existing = nul
     effectiveFilter.athleteIds = [id];
   } else effectiveFilter.athleteIds = athleteIds;
   for (const field of ['activityId', 'componentId']) if (effectiveFilter[field] != null && !context.authorizedFilterIds?.[field]?.includes(effectiveFilter[field])) issue('notFound', `$.advancedFilter.${field}`);
-  if (effectiveFilter.componentId && context.componentActivityId !== effectiveFilter.activityId) issue('componentActivityMismatch', '$.advancedFilter.component');
+  if (effectiveFilter.componentId && effectiveFilter.activityId && context.componentActivityId !== effectiveFilter.activityId) issue('componentActivityMismatch', '$.advancedFilter.component');
   const sourcePolicy = builtin ? previous?.source_policy ?? 'not_applicable' : previous?.source_policy ?? 'all_with_conflicts';
   const connectionId = previous?.source_connection_id ?? null;
   if (!sourcePolicies.includes(sourcePolicy) || builtin && sourcePolicy !== 'not_applicable' || !builtin && sourcePolicy === 'not_applicable') issue('sourcePolicy', '$.metricRef');
@@ -96,6 +96,11 @@ export function compileSimpleDraft(draft, snapshot, context = {}, existing = nul
   if (!['standalone_only', 'standalone_and_source_rollup', 'all_including_derived'].includes(rolePolicy)) issue('aggregationRolePolicy', '$.metricRef');
   if (!['complete_only', 'complete_and_partial', 'any'].includes(coveragePolicy)) issue('coveragePolicy', '$.metricRef');
   const type = snapshot.widgetTypes?.find(t => t.key === view.type);
+  if (existing && type) for (const dimension of ['width', 'height']) if (own(existing, dimension)) {
+    const min = type[`min_${dimension}`], max = type[`max_${dimension}`];
+    if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max) || min < 1 || min > max) issue('invalidCatalogMetadata', '$.view.type');
+    else if (!Number.isSafeInteger(existing[dimension]) || existing[dimension] < min || existing[dimension] > max) issue('widgetSizeBounds', '$.view.type');
+  }
   if (previous?.comparison_period && (!type?.supports_comparison_period || !['previous_period', 'previous_year'].includes(previous.comparison_period))) issue('comparisonPeriod', '$.view.type');
   if (previous?.axis && !['primary', 'secondary'].includes(previous.axis)) issue('axis', '$.metricRef');
   if (draft.display?.mode === 'preserve' && existing.display_config != null && existing.display_config.schemaVersion !== 1 && !validateContract('displayV2', existing.display_config).valid) return { status: 'advancedRequired', issues: [{ code: 'unsupportedDisplay', path: '$.display' }] };
