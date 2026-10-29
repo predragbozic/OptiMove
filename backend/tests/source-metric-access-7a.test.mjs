@@ -25,7 +25,8 @@ function sources(dir = SRC, prefix = "") {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isDirectory()) for (const [k, v] of sources(path.join(dir, entry.name), rel)) out.set(k, v);
-    else if (entry.name.endsWith(".js")) out.set(rel, fs.readFileSync(path.join(dir, entry.name), "utf8"));
+    // Line endings normalised, so a checkout with CRLF reads the same.
+    else if (entry.name.endsWith(".js")) out.set(rel, fs.readFileSync(path.join(dir, entry.name), "utf8").replace(/\r\n/g, "\n"));
   }
   return out;
 }
@@ -62,6 +63,12 @@ test("3. the M2 service binds the context resolver to its bounded read and takes
     "rightsStillHold", "setRightsHoldForTests",
   ]);
   assert.match(service, /export \{ SourceMetricMappingError \};/);
+  // Only the service calls the resolver with a read, so every other caller goes
+  // through its bounded read (service.resolveMappingAdmin); and only the service
+  // takes the right check's test seam.
+  const callers = (pattern) => [...files].filter(([, text]) => pattern.test(text)).map(([file]) => file).sort();
+  assert.deepEqual(callers(/resolveMappingAdminWith\(/), [ACCESS, SERVICE]);
+  assert.deepEqual(callers(/\bsetRightsHoldForTests\b/), [ACCESS, SERVICE]);
   assert.match(service, /export function setMappingRightsHoldForTests\(fn\) \{ setRightsHoldForTests\(fn\); \}/);
   assert.match(service, /try_again: TRY_AGAIN_TEXT,/);
   const kit = service.match(/export const adminWriteKit = Object\.freeze\(\{([\s\S]*?)\}\);/);
@@ -80,8 +87,10 @@ test("4. no access decision is made in the M2 service; the module makes them and
   }
 });
 
-test("5. the metric admin services take the right check and the owner key from the M2 kit, never from a copy", () => {
-  for (const file of ["canonicalVariableAdminService.js", "canonicalClassificationService.js", "sourceFieldVerificationService.js", "sourceRevisionLifecycleService.js"]) {
+test("5. every service that uses the M2 kit takes the right check from it, never from a copy", () => {
+  const kitUsers = [...files].filter(([file, text]) => file !== SERVICE && /\badminWriteKit\b/.test(text)).map(([file]) => file).sort();
+  assert.deepEqual(kitUsers, ["canonicalClassificationService.js", "canonicalVariableAdminService.js", "sourceFieldVerificationService.js", "sourceRevisionLifecycleService.js"]);
+  for (const file of kitUsers) {
     const text = files.get(file);
     const kit = text.match(/const \{([\s\S]*?)\} = adminWriteKit;/);
     assert.ok(kit && /\brightsStillHold\b/.test(kit[1]), `${file} takes rightsStillHold from the kit`);
