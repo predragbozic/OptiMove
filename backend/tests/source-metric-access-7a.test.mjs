@@ -37,7 +37,7 @@ const definers = (name) => [...files]
   .sort();
 
 test("1. the access helpers and the shared error are defined in sourceMetricAccess.js only", () => {
-  for (const name of ["resolveMappingAdminWith", "coachRightsStillHold", "ownerKeyOf", "readableOwnerKeys", "SourceMetricMappingError", "TRY_AGAIN_TEXT", "setRightsHoldForTests"]) {
+  for (const name of ["resolveMappingAdminWith", "coachRightsStillHold", "ownerKeyOf", "readableOwnerKeys", "SourceMetricMappingError", "TRY_AGAIN_TEXT", "setRightsHoldForTests", "mayTransitionMappings"]) {
     assert.deepEqual(definers(name), [ACCESS], name);
   }
 });
@@ -59,10 +59,10 @@ test("3. the M2 service binds the context resolver to its bounded read and takes
   assert.ok(imported, "the service imports the module");
   const names = imported[1].split(",").map((n) => n.trim()).filter(Boolean).sort();
   assert.deepEqual(names, [
-    "SourceMetricMappingError", "TRY_AGAIN_TEXT", "UUID", "ownerKeyOf", "readableOwnerKeys", "refusal", "resolveMappingAdminWith",
-    "rightsStillHold", "setRightsHoldForTests",
+    "SourceMetricMappingError", "TRY_AGAIN_TEXT", "UUID", "mayTransitionMappings", "ownerKeyOf", "readableOwnerKeys", "refusal",
+    "resolveMappingAdminWith", "rightsStillHold", "setRightsHoldForTests",
   ]);
-  assert.match(service, /export \{ SourceMetricMappingError \};/);
+  assert.match(service, /export \{ SourceMetricMappingError, mayTransitionMappings \};/);
   // Only the service calls the resolver with a read, so every other caller goes
   // through its bounded read (service.resolveMappingAdmin); and only the service
   // takes the right check's test seam.

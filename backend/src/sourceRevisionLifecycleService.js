@@ -11,14 +11,15 @@
 // - A correction of a field's contract is a new revision; the old revision
 //   keeps its facts and its history (C91). R+1 inherits nothing, and a
 //   verification stays its own act (M2b).
-// - The pinned step (L2, L4, L5; O4, O7): retiring a revision disables every
-//   mapping version pinned to it that is needs_review - a club's included -,
-//   with the fixed reason "Source revision retired." and one mapping_status
-//   audit row each; a pinned draft stays a draft (it can no longer be
-//   submitted). An active pinned version or an open activation cannot exist
-//   before phase 7 and is refused (fail closed); a needs_review version of an
-//   archived club, which no one may write, is 409 club_archived naming those
-//   clubs (O7(ii)(a)). Answers count the disabled versions only, never a
+// - The pinned step (L2, L4, L5; O4, O5, O7; phase 7b, J8 Q5 and Q7):
+//   retiring a revision disables every mapping version pinned to it that is
+//   needs_review or active - a club's included -, with the fixed reason
+//   "Source revision retired." and one mapping_status audit row each, from
+//   the version's own status; a pinned draft stays a draft (it can no longer
+//   be submitted). An open activation cannot exist before phase 7d and is
+//   refused (fail closed); a needs_review or active version of an archived
+//   club, which no one may write, is 409 club_archived naming those clubs
+//   (O7(ii)(a); Q1 (a)). Answers count the disabled versions only, never a
 //   mapping, a version or a club of another owner.
 // - O2 (L4): a verified revision is replaced only by a verified one.
 //
@@ -78,9 +79,8 @@ const TEXT = {
   revision_not_active: "The source field has no active revision to replace.",
   revision_changed: "The active revision of the source field is not the one this request names; read the field again.",
   successor_not_verified: "A verified revision is replaced only by a verified revision: confirm the draft's unit and meaning first.",
-  version_active: "A mapping version pinned to this revision is active; it is not retired before the mapping is moved.",
   activation_open: "A mapping version pinned to this revision has an open activation; it is not retired before the activation ends.",
-  club_archived: "A submitted mapping version pinned to this revision belongs to an archived club; restore the club, then repeat this request.",
+  club_archived: "A submitted or active mapping version pinned to this revision belongs to an archived club, whose versions no one may change; the revision is not retired while the club is archived.",
 };
 
 // O1 (as M2b's acts, C94): writes are a platform admin's in the platform
@@ -225,11 +225,12 @@ async function archivedPinnedClubs(client, toDisable) {
   return clubs.filter((c) => !c.active).map((c) => c.id).sort();
 }
 
-// The pinned step's 409 decisions, after every lock and the right (J5.2, step 5).
+// The pinned step's 409 decisions, after every lock and the right (J5.2, step
+// 5). From phase 7b an active pinned version is disabled like a submitted one
+// (O5: "a field can always be stopped"; J8 Q5 and Q7).
 async function pinnedDecisions(client, pinned) {
-  if (pinned.versions.some((v) => v.status === "active")) throw refusal(409, "version_active", TEXT.version_active);
   if (pinned.openActivations > 0) throw refusal(409, "activation_open", TEXT.activation_open);
-  const toDisable = pinned.versions.filter((v) => v.status === "needs_review");
+  const toDisable = pinned.versions.filter((v) => v.status === "needs_review" || v.status === "active");
   const archived = await archivedPinnedClubs(client, toDisable);
   // O7(ii)(a): the caller, an active platform admin, learns which archived
   // clubs to restore - never a mapping or a version.
@@ -237,24 +238,27 @@ async function pinnedDecisions(client, pinned) {
   return toDisable;
 }
 
-// The pinned step's writes: one statement for the disables, before the
-// retirement (v34 refuses a retirement while a pinned version is needs_review).
+// The pinned step's writes: one statement for the disables of both statuses,
+// before the retirement (v34 refuses a retirement while a pinned version is
+// needs_review or active).
 async function disablePinned(client, ctx, toDisable) {
   if (toDisable.length === 0) return;
   await client.query(
     `update training_load.source_metric_mapping_versions
         set status = 'disabled', disabled_by_user_id = $2, disabled_at = clock_timestamp(), disabled_basis = 'platform_admin', disable_reason = $3
-      where id = any($1::uuid[]) and status = 'needs_review'`,
+      where id = any($1::uuid[]) and status in ('needs_review', 'active')`,
     [toDisable.map((v) => v.id), ctx.userId, PINNED_DISABLE_REASON],
   );
 }
+// Each row with its version's own from_status, as lockPinned read it under
+// FOR UPDATE (v35's deferred link needs the transition's real from status).
 async function disabledAuditRows(client, ctx, toDisable, operationId) {
   for (const v of toDisable) {
     await client.query(
       `insert into training_load.source_metric_audit
          (action, mapping_id, mapping_version_id, from_status, to_status, reason, performed_by_user_id, basis, operation_id)
-       values ('mapping_status', $1, $2, 'needs_review', 'disabled', $3, $4, 'platform_admin', $5)`,
-      [v.mapping_id, v.id, PINNED_DISABLE_REASON, ctx.userId, operationId],
+       values ('mapping_status', $1, $2, $3, 'disabled', $4, $5, 'platform_admin', $6)`,
+      [v.mapping_id, v.id, v.status, PINNED_DISABLE_REASON, ctx.userId, operationId],
     );
   }
 }

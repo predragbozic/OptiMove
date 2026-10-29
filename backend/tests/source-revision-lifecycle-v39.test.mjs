@@ -925,7 +925,7 @@ test("10. L4 replaces the active R by the draft R+1 in one transaction (200): R 
   // The seeds are observed, so any R+1 may replace one (not done here: the nine seeded fields are never touched).
 });
 
-test("11. the pinned step (L2, L4, L5; O4, O7): every needs_review version pinned to the retired revision - a club's included - is disabled by the acting platform admin with the fixed reason and one mapping_status row each, counted by owner scope; a pinned draft stays a draft and can no longer be submitted; after an L4 with one disabled version there is one keyed audit row and three rows of its operation; an archived club's version is 409 club_archived naming only that club; an active version and an open activation are refused (fail closed) and name nothing", async () => {
+test("11. the pinned step (L2, L4, L5; O4, O7): every needs_review version pinned to the retired revision - a club's included - is disabled by the acting platform admin with the fixed reason and one mapping_status row each, counted by owner scope; a pinned draft stays a draft and can no longer be submitted; after an L4 with one disabled version there is one keyed audit row and three rows of its operation; an archived club's version is 409 club_archived naming only that club; from phase 7b (J8 Q5, Q7) an active pinned version is disabled too, its row from active; an open activation is refused (fail closed) and names nothing", async () => {
   // L5 with a system and a club version submitted, and a club draft.
   const f = await field({ unit: "s" });
   const sys = await pinnedVersion(f, f.revId);
@@ -979,8 +979,9 @@ test("11. the pinned step (L2, L4, L5; O4, O7): every needs_review version pinne
     await k.query(`update public.clubs set is_active = true where id = $1`, [W.clubB]);
   }
   assert.deepEqual((await post(retirePath(a, a.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "x" })).body.disabledVersions, { system: 1, club: 1 });
-  // An active pinned version and an open activation cannot exist before phase 7:
-  // simulated here (a disposable database, triggers off for these statements only).
+  // An active pinned version (written here directly, as phase 7b's A1 would)
+  // and an open activation, which cannot exist before phase 7d (a disposable
+  // database, triggers off for these statements only).
   const asPhase7 = async (sql, params) => {
     assert.equal((await one(k, `select rolsuper from pg_roles where rolname = current_user`)).rolsuper, true, "this simulation needs a superuser on the disposable database");
     await k.query("begin");
@@ -996,8 +997,15 @@ test("11. the pinned step (L2, L4, L5; O4, O7): every needs_review version pinne
   const b = await field({ unit: "s" });
   const bvA = await pinnedVersion(b, b.revId);
   await asPhase7(`update training_load.source_metric_mapping_versions set status = 'active', activated_by_user_id = $2, activated_at = now(), activated_basis = 'platform_admin' where id = $1`, [bvA.versionId, W.pa.id]);
-  const active = await post(retirePath(b, b.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "x" });
-  assert.deepEqual([active.status, active.body.error, active.body.clubIds, active.body.current], [409, "version_active", undefined, undefined]);
+  const kActive = key();
+  const active = await post(retirePath(b, b.revId), W.pa.cookie, { requestKey: kActive, expectedState: "active", reason: "x" });
+  assert.deepEqual([active.status, active.body.revision?.state, active.body.disabledVersions], [200, "retired", { system: 1, club: 0 }], active.text);
+  const disabledActive = await versionRow(bvA.versionId);
+  assert.deepEqual([disabledActive.status, disabledActive.disable_reason, disabledActive.disabled_by_user_id], ["disabled", PINNED_REASON, W.pa.id]);
+  const activeOp = (await auditOf(`request_key = $1`, [kActive]))[0].operation_id;
+  assert.deepEqual((await auditOf(`operation_id = $1 and action = 'mapping_status'`, [activeOp])).map((a) => [a.mapping_version_id, a.from_status, a.to_status, a.reason]),
+    [[bvA.versionId, "active", "disabled", PINNED_REASON]], "the row carries the version's real from_status");
+  assert.ok(!active.text.includes(bvA.versionId) && !active.text.includes(bvA.mappingId), "counts only");
   const c = await field({ unit: "s" });
   const cv = await pinnedVersion(c, c.revId);
   const binding = crypto.randomUUID();
