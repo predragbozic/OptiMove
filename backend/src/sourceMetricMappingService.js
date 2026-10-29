@@ -37,20 +37,13 @@
 import crypto from "node:crypto";
 import pg from "pg";
 import { pool } from "./db.js";
-import { isPlatformAdministrator, holdsClubAdminRole } from "./authz.js";
-import { resolveActiveWorkspace } from "./workspace.js";
 import { boundedText } from "./metricTextRules.js";
+import {
+  SourceMetricMappingError, refusal, TRY_AGAIN_TEXT, UUID, resolveMappingAdminWith, rightsStillHold, ownerKeyOf, readableOwnerKeys,
+  setRightsHoldForTests,
+} from "./sourceMetricAccess.js";
 
-export class SourceMetricMappingError extends Error {
-  constructor(status, code, message, details = undefined) {
-    super(message);
-    this.name = "SourceMetricMappingError";
-    this.status = status;
-    this.code = code;
-    if (details) this.details = details;
-  }
-}
-const refusal = (status, code, message, details) => new SourceMetricMappingError(status, code, message, details);
+export { SourceMetricMappingError };
 const { DatabaseError } = pg;
 // v35: the acting user of a write transaction, bound to that transaction's id
 // (a session-level setting or one from another transaction is refused).
@@ -91,7 +84,6 @@ export const COMMIT_ANSWER_TIMEOUT_MS = 15_000;
 export const UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS = 5_000;
 export const CONVERSION_NOTE_MAX_LENGTH = 500;
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SOURCE_SYSTEM = /^[a-z][a-z0-9_]{1,30}$/;
 const API_FAMILIES = new Set(["api", "rest_v1"]);
 // A parameter value (owner decision 2026-10-13): a JSON string in plain
@@ -106,7 +98,6 @@ const NUMERIC_TEXT = /^-?[0-9]+(\.[0-9]+)?$/;
 let commitFault = null;
 let uncertainCheckFault = null;
 let writeHold = null;
-let rightsHold = null;
 let rereadFault = null;
 let readFault = null;
 let beforeLocksHold = null;
@@ -123,7 +114,7 @@ export function setMappingCommitForTests({ fault = null, timeoutMs = COMMIT_ANSW
 export function setMappingWriteHoldForTests(fn) { writeHold = fn ?? null; }
 // Runs inside a write's transaction right before the caller's right is
 // checked again under FOR SHARE (after every registry lock).
-export function setMappingRightsHoldForTests(fn) { rightsHold = fn ?? null; }
+export function setMappingRightsHoldForTests(fn) { setRightsHoldForTests(fn); }
 // Runs in the read after a confirmed COMMIT, once the right is confirmed
 // again (to make that read fail or stall), with the read's client.
 export function setMappingRereadFaultForTests(fn) { rereadFault = fn ?? null; }
@@ -195,103 +186,12 @@ async function boundedRead(work, { locks = false } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Access: one context per request, from the active workspace.
+// Access (sourceMetricAccess.js, phase 7a): the context resolver bound to
+// this service's bounded read. rightsStillHold, ownerKeyOf and
+// readableOwnerKeys come from there too.
 // ---------------------------------------------------------------------------
-// `known` is the active workspace when the caller already resolved it (the
-// canonical-variable editor, R2), so it is not resolved twice.
-export async function resolveMappingAdmin(req, known = undefined) {
-  if (!req?.user?.id || !req.authz) return null;
-  const workspace = known === undefined ? (await resolveActiveWorkspace(req.user.id, req.authz)).workspace : known;
-  if (!workspace) return null;
-  const userId = String(req.user.id);
-  const scopeId = workspace.scopeId ? String(workspace.scopeId) : null;
-  let ctx = null;
-  if (isPlatformAdministrator(req.authz)) {
-    if (workspace.type === "platform") return { userId, basis: "platform_admin", owner: { scope: "system", clubId: null } };
-    if (workspace.type === "club" && scopeId) ctx = { userId, basis: "platform_admin", owner: { scope: "club", clubId: scopeId } };
-  } else if (workspace.type === "club" && scopeId && holdsClubAdminRole(req.authz, scopeId)) {
-    ctx = { userId, basis: "club_admin", owner: { scope: "club", clubId: scopeId } };
-  }
-  if (!ctx || !UUID.test(scopeId)) return null;
-  // A club scope needs an active club (fail-closed, whatever the workspace
-  // list admitted); writes check it again under FOR SHARE.
-  const club = await boundedRead((client) => client.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true)`, [scopeId]));
-  return club.rowCount === 1 ? ctx : null;
-}
-const ownerKeyOf = (ctx) => (ctx.owner.scope === "system" ? "system" : ctx.owner.clubId);
-// Readable: the system scope always; a club's own scope in its workspace.
-const readableOwnerKeys = (ctx) => (ctx.owner.scope === "system" ? ["system"] : ["system", ctx.owner.clubId]);
-
-// The caller's right and, for a club scope, the club, under FOR SHARE (after
-// every registry row of the lock order).
-async function rightsStillHold(client, ctx) {
-  if (rightsHold) await rightsHold(client);
-  if (ctx.basis === "team_coach") return coachRightsStillHold(client, ctx);
-  if (ctx.basis === "club_admin") {
-    // The database derives platform_admin for an active platform admin (v35,
-    // C79): a club admin granted that role since this request began repeats
-    // it (try_again), so the basis it writes is the one the database derives.
-    // The same rows, in the same order, as the v35 basis check.
-    const promoted = await client.query(
-      `select 1 from public.user_global_roles g join public.users u on u.id = g.user_id
-        where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of g, u`,
-      [ctx.userId],
-    );
-    if (promoted.rowCount > 0) throw refusal(409, "try_again", MESSAGES.try_again);
-  }
-  const right = ctx.basis === "platform_admin"
-    ? await client.query(
-      `select 1 from public.user_global_roles g join public.users u on u.id = g.user_id
-        where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of g, u`,
-      [ctx.userId],
-    )
-    : await client.query(
-      `select 1 from public.user_club_roles r join public.users u on u.id = r.user_id
-        where r.user_id = $1 and r.club_id = $2 and r.role = 'club_admin' and r.is_active = true and u.is_active = true for share of r, u`,
-      [ctx.userId, ctx.owner.clubId],
-    );
-  if (right.rowCount === 0) return false;
-  if (ctx.owner.scope === "club") {
-    const club = await client.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true) for share`, [ctx.owner.clubId]);
-    if (club.rowCount === 0) return false;
-  }
-  return true;
-}
-// The team_coach basis (R2, section J3b.3; only the canonical-variable editor
-// sets it): an active coach of an active team of the variable's active club.
-// The stronger bases are probed first, as v38's
-// training_load.metric_variable_change_basis() derives them - each a joined
-// FOR SHARE, which locks only the rows it returns: found means the database
-// would derive another basis, so the request repeats (try_again). Then the
-// team, the club and the coach role with the user, FOR SHARE - v26's
-// lock_activity_decider order.
-async function coachRightsStillHold(client, ctx) {
-  const platform = await client.query(
-    `select 1 from public.user_global_roles g join public.users u on u.id = g.user_id
-      where g.user_id = $1 and g.role = 'platform_admin' and g.is_active = true and u.is_active = true for share of g, u`,
-    [ctx.userId],
-  );
-  if (platform.rowCount > 0) throw refusal(409, "try_again", MESSAGES.try_again);
-  const clubAdmin = await client.query(
-    `select 1 from public.user_club_roles r join public.users u on u.id = r.user_id join public.clubs c on c.id = r.club_id
-      where r.user_id = $1 and r.club_id = $2 and r.role = 'club_admin' and r.is_active = true and u.is_active = true
-        and coalesce(c.is_active, true)
-        for share of r, u, c`,
-    [ctx.userId, ctx.owner.clubId],
-  );
-  if (clubAdmin.rowCount > 0) throw refusal(409, "try_again", MESSAGES.try_again);
-  const team = await client.query(
-    `select 1 from public.teams where id = $1 and club_id = $2 and coalesce(is_active, true) for share`, [ctx.teamId, ctx.owner.clubId],
-  );
-  if (team.rowCount === 0) return false;
-  const club = await client.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true) for share`, [ctx.owner.clubId]);
-  if (club.rowCount === 0) return false;
-  const role = await client.query(
-    `select 1 from public.user_team_roles r join public.users u on u.id = r.user_id
-      where r.user_id = $1 and r.team_id = $2 and r.role = 'team_coach' and r.is_active = true and u.is_active = true for share of r, u`,
-    [ctx.userId, ctx.teamId],
-  );
-  return role.rowCount > 0;
+export function resolveMappingAdmin(req, known = undefined) {
+  return resolveMappingAdminWith(boundedRead, req, known);
 }
 
 // ---------------------------------------------------------------------------
@@ -420,7 +320,7 @@ const ACTOR_REFUSALS = new Set([
   "source metric mapping: the acting user may not submit this mapping version",
 ]);
 const MESSAGES = {
-  try_again: "Another change is running. Nothing was changed; try again in a moment.",
+  try_again: TRY_AGAIN_TEXT,
   target_not_active: "The canonical definition is not active.",
   target_scope_mismatch: "This canonical definition is not of the owner scope of this workspace.",
   revision_not_usable: "The source revision is not a draft or active revision of this mapping's source metric.",
