@@ -244,27 +244,49 @@ export async function reloadExerciseLibrarySurface(handlers) {
   await loadExercises(handlers);
 }
 
-export async function searchExercises(term, handlers, { forceRefresh = false } = {}) {
+// Every library search counts up: a further page restores what it emptied
+// only when no newer search has started since.
+let exerciseSearchGeneration = 0;
+
+// `more`: a further page for "Load more" (loadMoreExercises) - the list stays
+// on screen while it loads and is drawn again with the cards already shown
+// kept (renderExercises' keepShown), and a failure is said under the list
+// instead of in its place. Returns loadCachedView's outcome.
+export async function searchExercises(term, handlers, { forceRefresh = false, more = false } = {}) {
   if (state.exerciseSearch.surface === "blocks") {
     const { refreshExerciseBlocks } = await import("./exercise-blocks.js");
     await refreshExerciseBlocks();
     return;
   }
+  const generation = ++exerciseSearchGeneration;
   const query = term.trim();
   state.exerciseSearch.term = query;
   const { limit, filters } = state.exerciseSearch;
   const contextKey = exercisesContextKey(query, limit, filters);
+  const lockedPreviewsShown = state.exerciseSearch.lockedPreviews;
   state.exerciseSearch.lockedPreviews = [];
   let visibleMarkedIds = [];
   try { visibleMarkedIds = await loadMarkedExerciseVisibility(filters); }
-  catch { handlers.renderExercises([]); return; }
-  await loadCachedView({
+  catch {
+    if (more) {
+      state.exerciseSearch.lockedPreviews = lockedPreviewsShown;
+      return { outcome: "error" };
+    }
+    handlers.renderExercises([]);
+    return;
+  }
+  let drawn = false;
+  const result = await loadCachedView({
     namespace: EXERCISES_CACHE_NAMESPACE,
     contextKey,
     forceRefresh,
     fetcher: () => api(exerciseSearchUrl(query, limit, filters, { lockedPreviews: true })),
-    showLoading: () => handlers.setLoading(query ? "Searching exercises..." : "Loading exercises..."),
+    showLoading: more ? undefined : () => handlers.setLoading(query ? "Searching exercises..." : "Loading exercises..."),
     applyData: (data) => {
+      // The coach left the library while the page was loading: nothing is
+      // drawn over the screen they went to.
+      if (more && state.activeTab !== "exercises") return;
+      drawn = true;
       state.exerciseSearch.hasMore = Boolean(data.hasMore);
       state.exerciseSearch.lockedPreviews = state.exerciseSearch.filters.marked ? [] : data.lockedPreviews || [];
       // Marked is a client-side filter: no previews under it, and so no
@@ -276,9 +298,10 @@ export async function searchExercises(term, handlers, { forceRefresh = false } =
       // it may have changed since this fetch was dispatched even though the
       // rest of the context hasn't; the render must reflect its current
       // value, not a stale one from dispatch time.
-      handlers.renderExercises(applyClientExerciseFilters(data.exercises || [], state.exerciseSearch.filters, visibleMarkedIds));
+      handlers.renderExercises(applyClientExerciseFilters(data.exercises || [], state.exerciseSearch.filters, visibleMarkedIds), { keepShown: more });
     },
     applyError: (error) => {
+      if (more) return;
       // Without this, a failed fetch leaves the "Loading/Searching
       // exercises..." placeholder from setLoading above on screen forever -
       // handlers only carries setLoading/renderExercises, neither of which is
@@ -288,6 +311,124 @@ export async function searchExercises(term, handlers, { forceRefresh = false } =
     },
     getCurrentContextKey: () => exercisesContextKey(state.exerciseSearch.term, state.exerciseSearch.limit, state.exerciseSearch.filters),
   });
+  // A further page that was not drawn (a failure, an invalidation meanwhile)
+  // leaves the locked matches shown as they were - unless a newer search
+  // started since, even one with the same key, whose own are never overwritten.
+  if (more && !drawn && generation === exerciseSearchGeneration) {
+    state.exerciseSearch.lockedPreviews = lockedPreviewsShown;
+  }
+  return result;
+}
+
+// "Load more" in the library list: the next 30 come in under the exercises
+// shown, and the page stays where the coach is. Nothing replaces the list
+// while it loads (a "Loading exercises..." screen in its place used to throw
+// the page back to its top), the button says it is loading and a second
+// press sends nothing, and a failed load leaves the list as it was, says so
+// under it and keeps the button to try again.
+let exerciseLoadMoreInFlight = false;
+const SHOWN_OUTCOMES = new Set(["loaded", "fresh-cache", "background-refreshed", "background-refresh-failed"]);
+
+async function loadMoreExercises(handlers) {
+  if (exerciseLoadMoreInFlight) return;
+  const search = state.exerciseSearch;
+  const nextLimit = search.limit + 30;
+  const previousLimit = search.limit;
+  exerciseLoadMoreInFlight = true;
+  showExerciseLoadMoreState({ busy: true });
+  search.limit = nextLimit;
+  let outcome = "";
+  try {
+    outcome = (await searchExercises(search.term, handlers, { more: true }))?.outcome || "";
+  } finally {
+    exerciseLoadMoreInFlight = false;
+    // A page that was not shown is asked for again by the next press.
+    if (!SHOWN_OUTCOMES.has(outcome) && search.limit === nextLimit) search.limit = previousLimit;
+    showExerciseLoadMoreState({ failed: outcome === "error" });
+  }
+}
+
+function showExerciseLoadMoreState({ busy = false, failed = false } = {}) {
+  const button = els.content.querySelector('[data-action="exercise-load-more"]');
+  if (!button) return;
+  // aria-disabled, not disabled: a disabled button loses the keyboard focus,
+  // which then has nowhere to go on to.
+  button.textContent = busy ? "Loading..." : "Load more";
+  if (busy) button.setAttribute("aria-disabled", "true");
+  else button.removeAttribute("aria-disabled");
+  button.parentElement.querySelector(".load-more-error")?.remove();
+  if (failed) button.insertAdjacentHTML("afterend", `<p class="load-more-error" role="alert">More exercises could not be loaded. Try again.</p>`);
+}
+
+// The parts of the library after its list that a further page can change.
+const AFTER_EXERCISE_LIST = [".exercise-locked-results", ".load-more-row", ".exercise-selection-bar"];
+
+function exerciseListOf(elements) {
+  return [...elements].find((element) => element.matches(".exercise-grid, .exercise-view-grid")) || null;
+}
+
+// How many of the exercises shown (state.lastExerciseResults, drawn with
+// shownItemIds) the further page begins with, in the same order: all of
+// them, or none when the library changed meanwhile.
+export function keptExerciseCount(shown, next, shownItemIds) {
+  if (!shown.length || shownItemIds.length !== shown.length || next.length < shown.length) return 0;
+  return shown.every((exercise, index) => String(exercise.id) === String(next[index]?.id)) ? shown.length : 0;
+}
+
+// The item ids of the library drawn again after "Load more" (app.js'
+// renderExercises): the exercises kept keep their ids, each now pointing at
+// its fresh row (`refresh`), and the new ones get new ids (`register`).
+export function keptExerciseItemIds(shown, next, shownItemIds, { register, refresh }) {
+  const kept = keptExerciseCount(shown, next, shownItemIds);
+  shownItemIds.slice(0, kept).forEach((id, index) => refresh(id, next[index]));
+  return { kept, itemIds: [...shownItemIds.slice(0, kept), ...register(next.slice(kept))] };
+}
+
+// The library drawn again after "Load more" (renderExercises' keepShown). The
+// cards already shown stay as they are - their pictures, a menu open on one -
+// and the new cards are added under them; the count, the locked matches, the
+// Load more row and the selection bar come from the fresh markup. When the
+// list no longer begins with the cards shown, the whole library is drawn
+// again, still without a loading screen, so the page keeps its place. The
+// keyboard focus goes on to the first new exercise, never back to the top of
+// the page, when it was on Load more (or was lost with it).
+export function showMoreExercises(content, html, { kept, shownCount }) {
+  const doc = content.ownerDocument;
+  const active = doc.activeElement;
+  const refocus = !active || active === doc.body || Boolean(active.closest?.(".load-more-row"));
+  const template = doc.createElement("template");
+  template.innerHTML = html;
+  const fresh = [...template.content.children];
+  const list = exerciseListOf(content.children);
+  const freshList = exerciseListOf(fresh);
+  let firstNew = null;
+  if (kept && kept === shownCount && list && freshList && list.className === freshList.className && list.children.length === kept) {
+    const added = [...freshList.children].slice(kept);
+    firstNew = added[0] || null;
+    list.append(...added);
+    const count = content.querySelector(".exercise-results-count");
+    const freshCount = template.content.querySelector(".exercise-results-count");
+    if (count && freshCount) count.textContent = freshCount.textContent;
+    const isAfterList = (element) => AFTER_EXERCISE_LIST.some((selector) => element.matches(selector));
+    [...content.children].filter(isAfterList).forEach((element) => element.remove());
+    // An exercise opened over the list meanwhile keeps everything under it inert.
+    const inert = list.hasAttribute("inert");
+    let anchor = list;
+    for (const part of fresh.filter(isAfterList)) {
+      if (inert) {
+        part.setAttribute("inert", "");
+        part.setAttribute("aria-hidden", "true");
+      }
+      anchor.after(part);
+      anchor = part;
+    }
+  } else {
+    content.innerHTML = html;
+    firstNew = exerciseListOf(content.children)?.children[shownCount] || null;
+  }
+  if (!refocus) return;
+  const target = firstNew?.querySelector('[data-action="open-exercise"]') || content.querySelector('[data-action="exercise-load-more"]');
+  target?.focus({ preventScroll: true });
 }
 
 export async function submitExerciseTagForm(form, handlers) {
@@ -351,8 +492,7 @@ export async function handleExerciseLibraryAction(action, handlers) {
     return true;
   }
   if (type === "exercise-load-more") {
-    state.exerciseSearch.limit += 30;
-    searchExercises(state.exerciseSearch.term, handlers);
+    await loadMoreExercises(handlers);
     return true;
   }
   if (type === "exercise-library-view") {

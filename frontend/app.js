@@ -89,9 +89,11 @@ import {
   handleExerciseDetailAction,
   handleExerciseLibraryAction,
   invalidateExercisesCache,
+  keptExerciseItemIds,
   resetExercisesForWorkspaceChange,
   loadExercises,
   reloadExerciseLibrarySurface,
+  showMoreExercises,
   submitExerciseTagForm as submitExerciseTagFormAction,
 } from "./exercise-actions.js";
 import {
@@ -264,8 +266,13 @@ import { renderUserControls } from "./user-controls.js";
 import { startRealtimeInbox, stopRealtimeInbox } from "./realtime.js";
 import { closeWorkspaceSwitcherIfOutside, handleWorkspaceAction, renderWorkspaceSwitcher } from "./workspace-actions.js";
 import { buildContextKey, clearAllViewCache, dedupeRequest, loadCachedView, setCacheData, setCacheError } from "./view-cache.js";
+import { createContentSwipe } from "./content-swipe.js";
+import { installExerciseHeaderReveal } from "./exercise-header-reveal.js";
 
 let inboxPollId = null;
+// The Exercise Library's top bar and search row brought back by a pull up
+// (exercise-header-reveal.js); kept in step with the screen by renderTabs().
+let exerciseHeaderReveal = null;
 let coachHomeRows = [];
 let coachHomePicker = { mode: "", query: "" };
 let workspaceRosterGeneration = 0;
@@ -506,8 +513,10 @@ function bindEvents() {
   // per-render - see handleMessagesPanelInput's own comment in messages.js.
   els.messagePanel?.addEventListener("input", handleMessagesPanelInput);
   els.content.addEventListener("focusin", handleContentFocusIn);
-  els.content.addEventListener("touchstart", handleSwipeStart, { passive: true });
-  els.content.addEventListener("touchend", handleSwipeEnd, { passive: true });
+  const contentSwipe = createContentSwipe({ content: els.content, onSwipe: handleHorizontalSwipe, isMediaOpen: () => !els.mediaModal?.hidden });
+  els.content.addEventListener("touchstart", contentSwipe.start, { passive: true });
+  els.content.addEventListener("touchend", contentSwipe.end, { passive: true });
+  exerciseHeaderReveal = installExerciseHeaderReveal({ isActive: () => state.activeTab === "exercises" && !isAthleteMode() });
   // Specific-dates calendar click-and-drag (Phase 2.5): Pointer Events, not
   // separate mouse/touch listeners - one code path drives mouse AND touch
   // drags identically (see handleContentPointerMove's own comment for why
@@ -1880,37 +1889,8 @@ async function handleGlobalSubmit(event) {
   await submitMessageForm(messageForm);
 }
 
-function handleSwipeStart(event) {
-  if (!isSwipeContext(event.target)) return;
-  const touch = event.changedTouches?.[0];
-  if (!touch) return;
-  state.touch = { startX: touch.clientX, startY: touch.clientY, startTime: Date.now() };
-}
-
-function handleSwipeEnd(event) {
-  if (!isSwipeContext(event.target)) return;
-  const touch = event.changedTouches?.[0];
-  if (!touch) return;
-  const deltaX = touch.clientX - state.touch.startX;
-  const deltaY = touch.clientY - state.touch.startY;
-  const elapsed = Math.max(1, Date.now() - state.touch.startTime);
-  const velocityX = Math.abs(deltaX) / elapsed;
-  const velocityY = Math.abs(deltaY) / elapsed;
-  if (els.content.querySelector(".exercise-detail") && Math.abs(deltaY) >= 72 && velocityY >= 0.22 && Math.abs(deltaY) > Math.abs(deltaX) * 1.35) {
-    moveExerciseDetail(deltaY < 0 ? 1 : -1);
-    return;
-  }
-  const velocity = velocityX;
-  if (Math.abs(deltaX) < 86 || velocity < 0.28 || Math.abs(deltaX) < Math.abs(deltaY) * 1.8) return;
-  handleHorizontalSwipe(deltaX < 0 ? 1 : -1);
-}
-
-function isSwipeContext(target) {
-  if (!els.mediaModal?.hidden) return false;
-  if (target.closest(".calendar-grid, .week-selector, .week-calendar-picker, .program-day-grid, .exercise-list, .tests-calendar")) return false;
-  return Boolean(target.closest(".exercise-detail, .panel, .node-grid"));
-}
-
+// Which swipes count, and where, is content-swipe.js's (an exercise's detail
+// has its own, stricter rule; the tree and the weeks keep theirs).
 function handleHorizontalSwipe(direction) {
   if (els.content.querySelector(".exercise-detail")) {
     const ids = state.exerciseDetail.ids || [];
@@ -2901,6 +2881,9 @@ function renderTabs() {
     state.specificProgramOverlayOpen = false;
     document.body.classList.remove("specific-program-open");
   }
+  // The same choke point puts the Exercise Library's pinned header back in
+  // its place once another screen opens.
+  exerciseHeaderReveal?.sync();
 }
 
 function renderAthleteListState() {
@@ -3719,13 +3702,19 @@ function renderBuilderError(error) {
   els.content.insertAdjacentHTML("afterbegin", `<p class="builder-error builder-page-error" role="alert">${escapeHtml(message)}</p>`);
 }
 
-function renderExercises(exercises) {
+// keepShown: a further page after "Load more" (exercise-actions.js,
+// showMoreExercises) - the exercises already shown keep their cards and item
+// ids, and an exercise opened over the list stays open.
+function renderExercises(exercises, { keepShown = false } = {}) {
+  const shownCount = keepShown ? (state.lastExerciseResults || []).length : 0;
+  const { kept, itemIds } = keepShown
+    ? keptExerciseItemIds(state.lastExerciseResults || [], exercises, state.exerciseDetail.ids || [], { register: registerItems, refresh: (id, item) => itemRegistry.set(id, item) })
+    : { kept: 0, itemIds: registerItems(exercises) };
   state.lastExerciseResults = exercises;
   els.context.textContent = "Exercise library";
   els.title.textContent = "Exercise Library";
-  const itemIds = registerItems(exercises);
-  state.exerciseDetail = { ids: itemIds, currentId: null };
-  els.content.innerHTML = renderExerciseLibraryHtml({
+  state.exerciseDetail = { ids: itemIds, currentId: kept ? state.exerciseDetail.currentId : null };
+  const html = renderExerciseLibraryHtml({
     exercises,
     itemIds,
     markedExerciseIds: state.markedExerciseIds,
@@ -3733,6 +3722,8 @@ function renderExercises(exercises) {
     selection: state.exerciseSelection,
     tagEditor: state.tagEditor,
   });
+  if (keepShown) showMoreExercises(els.content, html, { kept, shownCount });
+  else els.content.innerHTML = html;
 }
 
 function renderExerciseList(items) {
