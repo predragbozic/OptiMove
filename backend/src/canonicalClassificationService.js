@@ -21,7 +21,7 @@ import { KEY_RULE, suggestVariableKey } from "./canonicalVariableAdminService.js
 
 const {
   runWrite, boundedRead, rightsStillHold, refusal, NOT_FOUND, MESSAGES, plainObject, uuidField, boundedText, boundedOut,
-  hashOf, UUID,
+  hashOf, UUID, ownerKeyOf,
 } = adminWriteKit;
 
 const CONTRACT = "metric-classification/v1";
@@ -77,9 +77,9 @@ function ownSql(ctx, alias, params) {
 }
 const invalidBody = (message) => refusal(400, "invalid_body", message);
 const namesTokenOf = (row) => hashOf([row.name, row.description ?? null, row.is_active]);
-// A create's request hash names the owner too, so a key reused in another
-// workspace is request_key_reused, not a replay of another owner's write.
-const ownerKeyOf = (ctx) => (ctx.owner.scope === "system" ? "system" : ctx.owner.clubId);
+// A create's request hash names the owner too (ownerKeyOf, the shared one of
+// sourceMetricAccess.js), so a key reused in another workspace is
+// request_key_reused, not a replay of another owner's write.
 
 // ---------------------------------------------------------------------------
 // Output

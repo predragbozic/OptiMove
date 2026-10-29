@@ -3325,7 +3325,10 @@ Decisions that may safely wait, with the PR that takes them:
   `resolveActiveWorkspace`) use the general pool without a statement bound (the pool checkout is
   bounded): an app-wide matter, outside the M2 routes;
 - the access helpers of the M2 service (`resolveMappingAdmin`, `rightsStillHold`) move to their own
-  module before T5 reuses them (M2);
+  module before T5 reuses them (M2) — *done in phase 7a:* `backend/src/sourceMetricAccess.js` holds the context
+  resolver (`resolveMappingAdminWith`, which the M2 service binds to its bounded read as `resolveMappingAdmin`), the
+  right check `rightsStillHold` with the team-coach basis, the owner keys, the shared error and its `try_again` text,
+  unchanged in behaviour; `backend/tests/source-metric-access-7a.test.mjs` holds the module to one source;
 - whether a later conversion that the M1 normal form cannot represent (a factor whose value and
   reciprocal both do not terminate, or a non-terminating offset such as °F → °C) is ever needed;
   widening the representation is then a separate owner decision (not needed by the pilot).
