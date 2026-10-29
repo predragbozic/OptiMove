@@ -724,6 +724,53 @@ test("returning to Data configuration on the Categories screen reads the tray ag
   assert.ok(chip(V1));
 });
 
+test("back from a category on the Categories screen reads the tray when a return to Data configuration left it unread", async () => {
+  await openCategories();
+  await click(`[data-action="metric-classification-open"][data-kind="category"][data-node-id="${C2}"]`);
+  // Away to another section and back, with the category still open.
+  dropVariablesForm();
+  await loadVariablesSection(render);
+  calls.length = 0;
+  await click('[data-action="metric-classification-back"]');
+  assert.ok(gets().includes(TRAY), "the tray is read");
+  assert.ok(chip(V1), "and its variables are there to drag");
+  assert.doesNotMatch(text(), /Loading variables/);
+  // An ordinary back, with the tray already read, reads nothing again.
+  await click(`[data-action="metric-classification-open"][data-kind="category"][data-node-id="${C2}"]`);
+  calls.length = 0;
+  await click('[data-action="metric-classification-back"]');
+  assert.ok(!gets().includes(TRAY));
+  assert.ok(chip(V1));
+});
+
+test("Cancel of New category keeps the last drop's line and its Undo", async () => {
+  serve(() => created());
+  await openCategories();
+  await drag(V1, C2);
+  await click('[data-action="metric-classification-create-open"][data-kind="category"]');
+  assert.ok(variablesState().form);
+  await click('[data-action="metric-variables-cancel"]');
+  assert.equal(variablesState().form, null);
+  assert.match(text(), /Total distance was added to Sprint <b>\./);
+  assert.ok($('[data-action="metric-classification-drop-undo"]'), "Undo is still offered");
+});
+
+test("a drop naming a variable that is not in the tray, or a category that takes nothing, sends nothing", async () => {
+  serve(() => created());
+  await openCategories();
+  await dropVariableOnCategory("aaaaaaaa-1111-4000-8000-000000000099", C2, { render });
+  await dropVariableOnCategory(V1, C3, { render });
+  await dropVariableOnCategory(V1, "cccccccc-0000-4000-8000-000000000099", { render });
+  // A drag of this type from elsewhere (another tab of the app) with a foreign id.
+  const transfer = newTransfer();
+  transfer.setData(VARIABLE_DRAG_TYPE, "aaaaaaaa-1111-4000-8000-000000000099");
+  fire("dragover", categoryButton(C2), transfer);
+  fire("drop", categoryButton(C2), transfer);
+  await lastDrop;
+  assert.equal(posts().length, 0);
+  assert.equal(variablesState().drop, null);
+});
+
 test("a saved drop asks nothing on leaving, and leaving ends its Undo", async () => {
   serve(() => created());
   await openCategories();

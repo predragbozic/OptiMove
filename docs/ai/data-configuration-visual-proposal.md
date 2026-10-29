@@ -407,7 +407,8 @@ changes no backend file. Where it differs from section 6, this section says so.
     added from its detail under *System (reference)* with *Add to a category*. On the platform it is titled
     *Variables*. Whether a club's tray should also offer the system variables (the server allows that link) is left
     open for a later decision.
-  - It is read again each time the screen is shown, a return to Data configuration included.
+  - It is read again each time the screen is shown, a return to Data configuration included, and on Back from a
+    category when that return left it unread (the *Rukovodilac*'s review of `8c7a0048`, MEDIUM).
   - When the list has more, the tray says so and points to *Add to a category*.
   - The tray names the way without a mouse: under Variables, open a variable and choose *Add to a category*.
 - **Drop targets:** this workspace's own active categories. An archived category and a system category in a club
@@ -426,6 +427,10 @@ changes no backend file. Where it differs from section 6, this section says so.
 - A refusal is a warning that names the drop ("*X* was not added to *Y*." and the screen's own sentence), and nothing
   else changes. A refused Undo says "Undo did not go through." and where to look.
 - A name the server shortened keeps its mark (…) in the tray and in the line, as in the lists.
+- A form's own Cancel (for example New category) returns to the same screen with the line and its Undo kept; leaving
+  the screen ends them.
+- A drop naming a variable that is not in the tray, or a category that takes nothing (a drag of this type from
+  another tab, for example), sends nothing.
 - **Different from section 6, "already there":** every drop is sent. The read of the domains and categories carries no
   variable's links, so the screen cannot know beforehand that a variable is already in a category. The server answers
   `link_exists`, and the line says "*X* is already in *Y*. Nothing was changed.", with no warning and no Undo.
@@ -455,6 +460,22 @@ changes no backend file. Where it differs from section 6, this section says so.
   may have been saved, the list is read again.
 - A late answer to a drop left behind changes nothing on the screen in use.
 
+**Recorded, not done** (the *Rukovodilac*'s review of `8c7a0048`, LOW, and the reviews):
+- At 500 × 700 with *Result not confirmed* open, the stacked tray reaches 55% of the window and its list falls below its
+  visible bottom (the chips are locked then, Check result and Close are in view); a shorter hint or a lower cap below
+  960 px would help.
+- An Undo refused with `try_again` says "Nothing was saved. Try again." while Undo is no longer offered; it could keep
+  the saved line and its Undo while the 10 seconds last.
+- The tray's text: two paragraphs on the platform, up to three in a club, before the first chip, and an empty club tray
+  repeats the same instruction; a candidate for a later language pass.
+- Undo as a ghost button is quiet; the refusal sentences shared with the forms ("It is not available…") do not say
+  whether the variable or the category is meant; chips stay draggable when no category takes a drop; `dragleave`
+  relies on `relatedTarget` (the Builder uses the target's box), so the outline may flicker.
+- A touch laptop or an iPad with a trackpad passes `pointer: fine` and `hover: hover` and is offered the tray, where a
+  long press may start the browser's drag; `any-pointer: coarse` in the gate or `touch-action: pan-y` on a chip are
+  candidates, after a check on a real device.
+- More than 100 variables: the tray shows the first 100 with no filter; a filter or search is a later decision.
+
 **Not in PR-2:**
 - dragging a category onto a domain (section 6);
 - dragging a variable from one category to another;
@@ -462,15 +483,16 @@ changes no backend file. Where it differs from section 6, this section says so.
 - touch dragging.
 
 **Tests:**
-- `frontend/tests/metric-classification-drag.actions.test.mjs`: 38 tests through the real handlers, the real drag
+- `frontend/tests/metric-classification-drag.actions.test.mjs`: 41 tests through the real handlers, the real drag
   handlers and the real markup with a fake fetch and a fake drag. They cover:
   - the offer per workspace and device, the club tray's texts, the targets, the drag's own data type and the body;
   - two fast drops sending one request, "already there", four refusals;
   - Undo, its 10 seconds and the end of Undo under a drag, under a form and after a chip was drawn again;
   - the tray first in the page, and its list's scroll kept through a drop, an Undo and the end of Undo;
   - the three kinds of lost answer with *Check result*, *New category* and the form both ways, the leave guards, the
-    tray read again on a return, and a late answer.
-- Mutations of 45 guards, all killed.
+    tray read again on a return and on Back after one, Cancel keeping the line, a drop with an unknown variable or
+    category, and a late answer.
+- Mutations of 48 guards, all killed.
 - A browser run on a disposable database with the real backend and the built frontend in Chromium, with a real HTML5
   drag by the mouse (62 checks):
   - the database holds exactly the links the screen reports, Undo removes only its own, and a lost answer that the

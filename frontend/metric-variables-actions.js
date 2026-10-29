@@ -162,19 +162,21 @@ export function variablesUnloadShouldWarn() {
   const form = state.trainingLoad.variables?.form;
   return Boolean((form && (form.busy || form.unconfirmed || form.dirty)) || (state.trainingLoad.variables && dropNeedsAsk()));
 }
-function leaveForm() {
+function leaveForm({ keepDrop = false } = {}) {
   if (!variablesMayBeLeft()) return false;
-  dropVariablesForm();
+  dropVariablesForm({ keepDrop });
   return true;
 }
 // The form dropped once the coach agreed to leave it (here, a section switch,
-// leaving Training Load): the icon picker it opened goes with it.
-export function dropVariablesForm() {
+// leaving Training Load): the icon picker it opened goes with it, and so does
+// the last drop's line (PR-2) - except on a form's own Cancel, which returns to
+// the same screen, where the line and its Undo stay.
+export function dropVariablesForm({ keepDrop = false } = {}) {
   clearTimeout(keyTimer);
   if (iconPickerOpenFor("metric-variables")) closeIconPicker();
   if (state.trainingLoad.variables) {
     state.trainingLoad.variables.form = null;
-    discardDrop();
+    if (!keepDrop) discardDrop();
   }
 }
 
@@ -247,7 +249,7 @@ export async function handleVariablesAction(action, { render }) {
   }
   if (type === "metric-variables-cancel") {
     const form = s.form;
-    if (!leaveForm()) return true;
+    if (!leaveForm({ keepDrop: true })) return true;
     // A save left without a check may still have landed: the list (or the
     // variable) is read again, so the screen never shows it as missing.
     if (form?.unconfirmed && isClassificationMode(form.mode)) {

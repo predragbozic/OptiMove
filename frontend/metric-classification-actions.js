@@ -135,8 +135,15 @@ export async function handleClassificationAction(action, { render, leaveForm, lo
     if (!leaveForm()) return true;
     s.node = null;
     s.notice = "";
+    // Back on the Categories screen (PR-2): the tray is read if it is not yet
+    // (a return to Data configuration with a category open leaves it unread).
+    const read = s.view === "categories" ? ensureTray(render) : null;
     render();
     toTitle();
+    if (read) {
+      await read;
+      keepTitle();
+    }
     return true;
   }
   if (type === "metric-classification-show-variables") {
