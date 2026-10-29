@@ -248,8 +248,8 @@ function zoneOperatorHtml(form, locked) {
   const errorId = form.errors.boundOperator ? " sf-err-boundOperator" : "";
   return `
       <fieldset class="metric-variables-fieldset source-fields-zone-operator">
-        <legend>Which zone does this field hold?</legend>
-        <div role="radiogroup" aria-describedby="sf-hint-boundOperator${errorId}"${invalid(form, "boundOperator")}>
+        <legend id="sf-legend-boundOperator">Which zone does this field hold?</legend>
+        <div role="radiogroup" aria-labelledby="sf-legend-boundOperator" aria-describedby="sf-hint-boundOperator${errorId}"${invalid(form, "boundOperator")}>
           ${ZONE_OPERATORS.map((op) => `
           <label class="source-fields-choice">
             <input type="radio" name="sf-zone-operator" data-sf-field="boundOperator" value="${escapeAttr(op)}" ${form.draft.boundOperator === op ? "checked" : ""} ${locked ? "disabled" : ""}>

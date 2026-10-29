@@ -224,7 +224,8 @@ export async function submitSourceFieldsForm({ render }) {
   if (!body) {
     form.error = "Check the marked fields.";
     render();
-    focus('.source-fields-form [aria-invalid="true"]');
+    // The first marked control: a field, or a zone's first choice (a radiogroup itself takes no focus).
+    focus('.source-fields-form input[aria-invalid="true"], .source-fields-form select[aria-invalid="true"], .source-fields-form textarea[aria-invalid="true"], .source-fields-form [role="radiogroup"][aria-invalid="true"] input');
     return;
   }
   // A write-once act: the last question names what is saved for good.

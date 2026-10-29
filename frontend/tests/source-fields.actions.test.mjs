@@ -399,14 +399,16 @@ test("confirm a zone's meaning (v42): the operator of its shape is required with
   type("evidenceRef", "docs/ai/evidence.md#power-zones");
   await submit();
   assert.equal(posts().length, 0, "nothing sent without a choice");
-  assert.match($("#sf-err-boundOperator").textContent, /Choose what this field's evidence shows\./);
+  assert.match($("#sf-err-boundOperator").textContent, /Choose one of the two\./);
   assert.equal($('[role="radiogroup"]').getAttribute("aria-invalid"), "true");
+  assert.equal($('[role="radiogroup"]').getAttribute("aria-labelledby"), "sf-legend-boundOperator", "the group is named by its legend");
+  assert.equal(window.document.activeElement, $('input[type="radio"][value="between"]'), "the focus goes to the first choice");
   const top = $('input[type="radio"][value=">="]');
   top.checked = true;
   top.dispatchEvent(new window.Event("input", { bubbles: true }));
   assert.equal($('[role="radiogroup"]').getAttribute("aria-invalid"), null, "the mark goes with the choice");
   await submit();
-  assert.match(confirmQuestions.at(-1), /with the operator "At least its lower bound — the open top zone \(>=\)"/);
+  assert.match(confirmQuestions.at(-1), /\(revision 1\) as "At least its lower bound — the open top zone \(>=\)", with the evidence/);
   assert.equal(posts()[0].url, `${FB}/${F2}/revisions/${R2}/meaning-verification`);
   assert.deepEqual(posts()[0].body, { requestKey: posts()[0].body.requestKey, boundOperator: ">=", evidenceRef: "docs/ai/evidence.md#power-zones" });
   // The zone's own refusal texts.
