@@ -16,7 +16,7 @@ import { clearAllViewCache } from "../view-cache.js";
 const initialDom = new JSDOM("<body></body>");
 globalThis.document = initialDom.window.document;
 globalThis.window = initialDom.window;
-const { handleExerciseLibraryAction, keptExerciseCount, keptExerciseItemIds, loadExercises, searchExercises, showMoreExercises } = await import("../exercise-actions.js");
+const { handleExerciseLibraryAction, invalidateExercisesCache, keptExerciseCount, keptExerciseItemIds, loadExercises, searchExercises, showMoreExercises } = await import("../exercise-actions.js");
 const { els } = await import("../dom.js");
 initialDom.window.close();
 
@@ -244,6 +244,18 @@ test("A3: a page that was not drawn keeps the locked matches shown; a newer sear
   hold.resolve();
   await pending;
   assert.deepEqual(state.exerciseSearch.lockedPreviews, [locked("newer locked")]);
+  // The same, with the newer search on the very same key: the library read
+  // again after an invalidation while the further page was on its way.
+  const holdAgain = deferred();
+  globalThis.fetch = async (path) => { await holdAgain.promise; return answer("old")(path); };
+  const again = loadMore(handlers);
+  await settle();
+  invalidateExercisesCache();
+  globalThis.fetch = answer("same key");
+  await searchExercises("Squat", handlers);
+  holdAgain.resolve();
+  await again;
+  assert.deepEqual(state.exerciseSearch.lockedPreviews, [locked("same key locked")]);
   dom.window.close();
 });
 

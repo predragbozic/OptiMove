@@ -244,6 +244,10 @@ export async function reloadExerciseLibrarySurface(handlers) {
   await loadExercises(handlers);
 }
 
+// Every library search counts up: a further page restores what it emptied
+// only when no newer search has started since.
+let exerciseSearchGeneration = 0;
+
 // `more`: a further page for "Load more" (loadMoreExercises) - the list stays
 // on screen while it loads and is drawn again with the cards already shown
 // kept (renderExercises' keepShown), and a failure is said under the list
@@ -254,6 +258,7 @@ export async function searchExercises(term, handlers, { forceRefresh = false, mo
     await refreshExerciseBlocks();
     return;
   }
+  const generation = ++exerciseSearchGeneration;
   const query = term.trim();
   state.exerciseSearch.term = query;
   const { limit, filters } = state.exerciseSearch;
@@ -307,9 +312,9 @@ export async function searchExercises(term, handlers, { forceRefresh = false, mo
     getCurrentContextKey: () => exercisesContextKey(state.exerciseSearch.term, state.exerciseSearch.limit, state.exerciseSearch.filters),
   });
   // A further page that was not drawn (a failure, an invalidation meanwhile)
-  // leaves the locked matches shown as they were - unless a newer search has
-  // taken this one's place, whose own matches are never overwritten.
-  if (more && !drawn && exercisesContextKey(state.exerciseSearch.term, state.exerciseSearch.limit, state.exerciseSearch.filters) === contextKey) {
+  // leaves the locked matches shown as they were - unless a newer search
+  // started since, even one with the same key, whose own are never overwritten.
+  if (more && !drawn && generation === exerciseSearchGeneration) {
     state.exerciseSearch.lockedPreviews = lockedPreviewsShown;
   }
   return result;

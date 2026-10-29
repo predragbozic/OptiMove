@@ -18,8 +18,9 @@ export const HEADER_REVEAL_DISTANCE = 16;
 export const HEADER_HIDE_DISTANCE = 8;
 // Pinned, the header may take at most two thirds of the visible height, so a
 // third of the screen always stays for the list. On a phone held upright it
-// takes about half (355 px at 360 x 740); on a phone held sideways it would
-// take nearly all of it (246 px of 360) and stays in the page, as before.
+// takes about half (355 px at 360 x 740) and pins. Held sideways it is 246 px
+// (measured at 740 x 360): it stays in the page, as before, while less than
+// about 369 px is visible, and pins over two thirds of a taller screen.
 export const HEADER_MAX_SCREEN_SHARE = 2 / 3;
 // The slide in styles.css (180 ms), then the header goes back to its place.
 const HIDE_SETTLE_MS = 200;
