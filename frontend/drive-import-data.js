@@ -53,8 +53,9 @@ const SHA256 = /^[0-9a-f]{64}$/;
 
 // The run stops (nothing new starts) on these: none of them gets better by repeating.
 export const STOP_CODES = Object.freeze(["authentication_required", "operation_not_allowed", "media_storage_disabled", "storage_quota_exceeded"]);
-// Repeated after a delay with the same key.
-const TRANSIENT_CODES = new Set(["network", "timeout", "media_storage_busy", "media_storage_unavailable", "media_inspection_busy", "import_outcome_unknown"]);
+// Repeated after a delay with the same key. verification_outcome_unknown: the
+// server lost the answer to its own claim COMMIT, so the copy may still land.
+const TRANSIENT_CODES = new Set(["network", "timeout", "media_storage_busy", "media_storage_unavailable", "media_inspection_busy", "import_outcome_unknown", "verification_outcome_unknown"]);
 // Refusals a repeat cannot change: the file needs preparing again (or is not used any more).
 const FINAL_FAILURES = new Set(["file_changed", "file_missing", "unsupported_media", "video_too_long", "file_too_large", "media_verification_failed", "resource_not_found"]);
 const ACTIVE = new Set(["checking", "starting", "uploading", "completing"]);

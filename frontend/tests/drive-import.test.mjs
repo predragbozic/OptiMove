@@ -573,6 +573,26 @@ test("16. a transient failure that never clears: the file is 'not confirmed', ne
   assert.equal(server.uploads.size, 1);
 });
 
+test("27. the server's 'verification outcome unknown' (a lost claim COMMIT, #203) is 'not confirmed', never 'not copied'; Continue completes the same import with the same key", async () => {
+  reset();resetPuts();
+  let unknown = true;
+  const server = fakeServer({ status: statusFor([1]), on: { complete: () => (unknown ? refusal(503, "verification_outcome_unknown", true) : null) } });
+  await chooseFolder(folder({ videos: [1] }));
+  await data.runDriveImport(render, { sleep: instant });
+  const [item] = state.driveImport.items;
+  assert.equal(item.state, "unconfirmed", item.error);
+  assert.equal(completions(server).length, data.IMPORT_RETRY_DELAYS_MS.length + 1, "asked again with the same session before giving up");
+  assert.match(visibleText(), /Not confirmed/);
+  assert.doesNotMatch(visibleText(), /Not copied/);
+  const key = item.key;
+  unknown = false;
+  await click("drive-import-start");
+  await until(() => !state.driveImport.running, "the run ends");
+  assert.equal(item.state, "copied");
+  assert.equal(imports(server).at(-1).key, key, "the same import");
+  assert.equal(server.uploads.size, 1, "one import, never two");
+});
+
 test("17. a running import never paints the rest of the tab: progress is patched in place (same Pause button, open <details> stay open), a change of state replaces the card alone and waits for a pointer, nothing is painted off screen, and an open limit form survives the end of the run", async () => {
   reset();resetPuts(["hold", "hold", "hold", "hold"]);
   fakeServer({ status: statusFor([1, 2, 3, 4]) });
