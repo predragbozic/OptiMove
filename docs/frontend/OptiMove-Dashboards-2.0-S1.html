@@ -629,7 +629,7 @@
     &quot;contractVersion&quot;: 1,
     &quot;context&quot;: {
       &quot;kind&quot;: &quot;legacyDashboard&quot;,
-        &quot;runtimeFilter&quot;: {
+      &quot;runtimeFilter&quot;: {
         &quot;athleteIds&quot;: [
           &quot;44444444-4444-4444-8444-444444444444&quot;
         ]
@@ -686,6 +686,7 @@
         &quot;mode&quot;: &quot;replace&quot;,
         &quot;value&quot;: {
           &quot;schemaVersion&quot;: 1,
+          &quot;chartComposition&quot;: &quot;athletes-v1&quot;,
           &quot;chartInteractions&quot;: {
             &quot;tooltip&quot;: {
               &quot;mode&quot;: &quot;exact&quot;
@@ -716,7 +717,7 @@
 <p>Nova sanctioned kompozitna funkcija pravi widget i tačno jednu seriju ili menja postojeći widget/seriju i presentation config. Koristi zajednički JS validator/compiler i postojeće DB trigere/constraints kao konačni backstop (§7.1.1), limits, visibility i archive guards; raw multitable write iz HTTP rute nije dozvoljen. Type promena koja bi ranije zahtevala više koraka izvršava se u istoj transakciji u trigger-kompatibilnom redosledu. Ako je potreban novi series ID, obavezno se vraća mapping i prevode rule target-i. Svaki problem rollback-uje ceo zahtev, uključujući staged Page defaults i idempotency success receipt. Nema stanja „widget dodat, metrika nije”.</p>
 <p>Position/order za create određuje server iz slobodnog prostora aktivne Page, u postojećoj 12-column mreži i kataloškim granicama. Nema optimistic proizvoljnog overlap položaja. Save ne snima drag/layout draft druge operacije. Existing ID/config/filter/series polja koje Simple ne menja ostaju isti. Ako widget nije potpuno predstavljiv Simple modelom, vraća <code>advancedRequired</code>, bez destruktivnog svođenja. Advanced stari writer nastavlja sa svojim postojećim poštenim partial-save ugovorom; ovaj PR ga ne proglašava atomskim.</p>
 <p>Save response vraća requestId, operation=<code>created|updated|unchanged</code>, widgetId/seriesId mapping, nove revisions i konkretan period/runtime update koji frontend primenjuje samo ako je originalni kontekst još aktivan. Uspeh koji stigne posle promene workspace-a ne vraća korisnika na stari Dashboard; invalidira se odgovarajući cache. Fresh result i annotations dolaze običnim query-em, ne iz starih preview brojeva.</p>
-<p>Za odobreni novi KPI širine 6, predlog je proširiti samo catalog max_width na 6 u S2c; postojeći catalog default_width=3 i stari saved layout-i ostaju isti. Novi Simple create može eksplicitno postaviti 6 kada feature capability to potvrđuje. Novi frontend layout limit mora odgovarati katalogu. Pre prvog takvog upisa server uvodi legacy layout guard za dashboard koji sadrži KPI širi od 4: stari flat layout writer bez novog contract capability-ja dobija <code>editorClientRequired</code>, jer stari otvoreni tab clamp-uje KPI na 4 i može ga nenamerno suziti. Staro čitanje i bezbedni metadata-only upisi ostaju kompatibilni. Novi layout zahtev nosi <code>X-OptiMove-Dashboard-Contract: simple-editor-1</code>; server ga prepoznaje samo kao compatibility signal, nikada kao autorizaciju, i i dalje proverava pun layout/reviziju/prava. Stari tab bez tog signala dobija kontrolisanu poruku da osveži aplikaciju. Ovaj guard je odvojen od kasnijeg multi-page guard-a i oba se moraju testirati. Ako proširenje nije odobreno, implementacija ne menja UX samostalno nego ostaje na ovom otvorenom tehničkom gate-u.</p>
+<p>Za odobreni novi KPI širine 6, predlog je proširiti samo catalog max_width na 6 u zasebnom S2d; postojeći catalog default_width=3 i stari saved layout-i ostaju isti. Novi Simple create može eksplicitno postaviti 6 kada feature capability to potvrđuje. Novi frontend layout limit mora odgovarati katalogu. Pre prvog takvog upisa server uvodi legacy layout guard za dashboard koji sadrži KPI širi od 4: stari flat layout writer bez novog contract capability-ja dobija <code>editorClientRequired</code>, jer stari otvoreni tab clamp-uje KPI na 4 i može ga nenamerno suziti. Staro čitanje i bezbedni metadata-only upisi ostaju kompatibilni. Novi layout zahtev nosi <code>X-OptiMove-Dashboard-Contract: simple-editor-1</code>; server ga prepoznaje samo kao compatibility signal, nikada kao autorizaciju, i i dalje proverava pun layout/reviziju/prava. Stari tab bez tog signala dobija kontrolisanu poruku da osveži aplikaciju. Ovaj guard je odvojen od kasnijeg multi-page guard-a i oba se moraju testirati. Ako proširenje nije odobreno, implementacija ne menja UX samostalno nego ostaje na ovom otvorenom tehničkom gate-u.</p>
 <h3>7.5 Idempotency i nepoznat ishod</h3>
 <p>Predlog ledger-a: unique (initiatorUserId, requestId), uz vezani workspace/dashboard/Page/widget, operation, canonical payload hash, requestIssuedAt, status i minimalni receipt. Isti ključ ne može biti upotrebljen za drugi target čak ni kada isti korisnik upravlja oba. Ne skladištiti merne rezultate u ledger-u.</p>
 <p>Canonical hash uključuje finalni sadržaj, target i relevantne očekivane revizije/fingerprint, unit-aware pravila, periodIntent, tokenom potvrđeni resolvedPeriod/timeZone i originalni server requestIssuedAt; object keys deterministični, set-like athlete ID-ovi sortirani, pravila sortirana po eksplicitnom priority. Isključiti transport-only previewToken, trace ID i vreme ponovnog slanja. <code>requestIssuedAt</code> je isti za sve pokušaje; vrednosti i njihove tipove ne zaokruživati. Preview token se validira pre prvog izvršenja; autorizovani replay završenog identičnog zahteva vraća receipt i kad je token istekao ili originalna revision sada stale. Promena payload-a/efektivnog perioda zahteva novi preview i novi requestId tek nakon razrešenja prethodnog ishoda; ne koristi se novi ključ da se zaobiđe nepoznat prethodni COMMIT.</p>
@@ -1320,7 +1321,7 @@
 <tr>
 <td>Srednji</td>
 <td>Široke KPI kartice iz UX-a nisu dozvoljene sadašnjim katalogom</td>
-<td>Predlog max_width=6 u S2c, stari default=3 i saved koordinate nepromenjeni; legacy layout guard pre prvog width=6 upisa</td>
+<td>Predlog max_width=6 u zasebnom S2d, stari default=3 i saved koordinate nepromenjeni; legacy layout guard pre prvog width=6 upisa</td>
 </tr>
 <tr>
 <td>Srednji</td>

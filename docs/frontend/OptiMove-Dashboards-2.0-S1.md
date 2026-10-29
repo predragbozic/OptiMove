@@ -512,7 +512,7 @@ Save šalje isti envelope, previewToken i identifikaciju zahteva:
     "contractVersion": 1,
     "context": {
       "kind": "legacyDashboard",
-        "runtimeFilter": {
+      "runtimeFilter": {
         "athleteIds": [
           "44444444-4444-4444-8444-444444444444"
         ]
@@ -569,6 +569,7 @@ Save šalje isti envelope, previewToken i identifikaciju zahteva:
         "mode": "replace",
         "value": {
           "schemaVersion": 1,
+          "chartComposition": "athletes-v1",
           "chartInteractions": {
             "tooltip": {
               "mode": "exact"
@@ -605,7 +606,7 @@ Position/order za create određuje server iz slobodnog prostora aktivne Page, u 
 
 Save response vraća requestId, operation=`created|updated|unchanged`, widgetId/seriesId mapping, nove revisions i konkretan period/runtime update koji frontend primenjuje samo ako je originalni kontekst još aktivan. Uspeh koji stigne posle promene workspace-a ne vraća korisnika na stari Dashboard; invalidira se odgovarajući cache. Fresh result i annotations dolaze običnim query-em, ne iz starih preview brojeva.
 
-Za odobreni novi KPI širine 6, predlog je proširiti samo catalog max_width na 6 u S2c; postojeći catalog default_width=3 i stari saved layout-i ostaju isti. Novi Simple create može eksplicitno postaviti 6 kada feature capability to potvrđuje. Novi frontend layout limit mora odgovarati katalogu. Pre prvog takvog upisa server uvodi legacy layout guard za dashboard koji sadrži KPI širi od 4: stari flat layout writer bez novog contract capability-ja dobija `editorClientRequired`, jer stari otvoreni tab clamp-uje KPI na 4 i može ga nenamerno suziti. Staro čitanje i bezbedni metadata-only upisi ostaju kompatibilni. Novi layout zahtev nosi `X-OptiMove-Dashboard-Contract: simple-editor-1`; server ga prepoznaje samo kao compatibility signal, nikada kao autorizaciju, i i dalje proverava pun layout/reviziju/prava. Stari tab bez tog signala dobija kontrolisanu poruku da osveži aplikaciju. Ovaj guard je odvojen od kasnijeg multi-page guard-a i oba se moraju testirati. Ako proširenje nije odobreno, implementacija ne menja UX samostalno nego ostaje na ovom otvorenom tehničkom gate-u.
+Za odobreni novi KPI širine 6, predlog je proširiti samo catalog max_width na 6 u zasebnom S2d; postojeći catalog default_width=3 i stari saved layout-i ostaju isti. Novi Simple create može eksplicitno postaviti 6 kada feature capability to potvrđuje. Novi frontend layout limit mora odgovarati katalogu. Pre prvog takvog upisa server uvodi legacy layout guard za dashboard koji sadrži KPI širi od 4: stari flat layout writer bez novog contract capability-ja dobija `editorClientRequired`, jer stari otvoreni tab clamp-uje KPI na 4 i može ga nenamerno suziti. Staro čitanje i bezbedni metadata-only upisi ostaju kompatibilni. Novi layout zahtev nosi `X-OptiMove-Dashboard-Contract: simple-editor-1`; server ga prepoznaje samo kao compatibility signal, nikada kao autorizaciju, i i dalje proverava pun layout/reviziju/prava. Stari tab bez tog signala dobija kontrolisanu poruku da osveži aplikaciju. Ovaj guard je odvojen od kasnijeg multi-page guard-a i oba se moraju testirati. Ako proširenje nije odobreno, implementacija ne menja UX samostalno nego ostaje na ovom otvorenom tehničkom gate-u.
 
 ### 7.5 Idempotency i nepoznat ishod
 
@@ -801,7 +802,7 @@ Za vizuelne izmene izvršiti stvarni browser QA i Vite production build sa vendo
 | Visok | Retry pravi dupli widget ili lost update | Atomic receipt + payload hash + revision guards; bounded status/replay |
 | Visok | Reference/percent daju lažnu ocenu | Explicit resolver/formula capability i testovi; bez fallback proseka/nule |
 | Visok | Stari flat client menja drugu Page | Server legacy guard pre multi-page capability |
-| Srednji | Široke KPI kartice iz UX-a nisu dozvoljene sadašnjim katalogom | Predlog max_width=6 u S2c, stari default=3 i saved koordinate nepromenjeni; legacy layout guard pre prvog width=6 upisa |
+| Srednji | Široke KPI kartice iz UX-a nisu dozvoljene sadašnjim katalogom | Predlog max_width=6 u zasebnom S2d, stari default=3 i saved koordinate nepromenjeni; legacy layout guard pre prvog width=6 upisa |
 | Srednji | Tooltip ili click pogrešno pripišu vrednost drugom izvoru | Plot/row identity mapping; ne koristiti nazive ili sortirani HTML index kao ID |
 | Srednji | Pravilo na jednoj jedinici preneto na drugu metriku | Revalidate/remap uz novi preview; nikakav silent threshold conversion |
 | Srednji | Legend/zoom nestaje na svakom app repaint-u | Lokalni InteractionState po context fingerprint-u, dispose bez leak-a |
