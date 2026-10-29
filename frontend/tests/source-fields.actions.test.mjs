@@ -277,6 +277,12 @@ test("a source with two data families names the family in each group's heading",
   fields = [...allFields(), field({ id: "ffffffff-0000-4000-8000-000000000009", apiFamily: "api", key: "legacy.total_time", label: "Total time (legacy)" })];
   await loadSourceFieldsSection(render);
   assert.deepEqual([...content.querySelectorAll(".metric-classification-section h3")].map((h) => h.textContent), ["GPEXE · REST v1", "GPEXE · API"]);
+  // Two fields of one label: the detail and the form of each name its family
+  // before a confirmation that is saved once.
+  await click('[data-action="source-fields-open"][data-field-id="ffffffff-0000-4000-8000-000000000009"]');
+  assert.equal($("#source-fields-title + p.muted").textContent.trim(), "GPEXE · API");
+  await click('[data-action="source-fields-act-open"][data-act="unit"]');
+  assert.match($(".source-fields-summary").textContent.replace(/\s+/g, " "), /Total time \(legacy\) · GPEXE · API · /);
 });
 
 // ---------------------------------------------------------------------------

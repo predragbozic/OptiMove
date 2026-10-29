@@ -23,8 +23,11 @@ const SOURCE_LABEL = { gpexe: "GPEXE" };
 const FAMILY_LABEL = { rest_v1: "REST v1", api: "API" };
 const sourceLabel = (field) => escapeHtml(SOURCE_LABEL[field.sourceSystem] || field.sourceSystem || "");
 const familyLabel = (field) => escapeHtml(FAMILY_LABEL[field.apiFamily] || field.apiFamily || "");
-// The source by its name; its data family only where one source has two.
+// The source by its name; its data family only where the loaded list holds
+// two families of that source (then the list, the detail and the forms name it,
+// so two fields of one label are never told apart only under Technical details).
 const sourceName = (field, withFamily = false) => (withFamily ? `${sourceLabel(field)} · ${familyLabel(field)}` : sourceLabel(field));
+const twoFamilies = (s, sourceSystem) => new Set((s.list.items || []).filter((f) => f.sourceSystem === sourceSystem).map((f) => f.apiFamily)).size > 1;
 const fieldName = (field) => escapeHtml(field.label || field.key || "");
 // A unit or a reference: escaped text in a code element, never a link.
 const code = (value) => `<code class="source-fields-code">${escapeHtml(value)}</code>`;
@@ -90,15 +93,11 @@ function evidenceBadge(revision) {
 function renderListHtml(s, ctx) {
   const list = s.list;
   const groups = new Map();
-  const families = new Map();
   for (const field of list.items) {
     const key = `${field.sourceSystem} ${field.apiFamily}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(field);
-    if (!families.has(field.sourceSystem)) families.set(field.sourceSystem, new Set());
-    families.get(field.sourceSystem).add(field.apiFamily);
   }
-  const twoFamilies = (field) => families.get(field.sourceSystem).size > 1;
   return `
     <button class="plain-button ghost metric-variables-back" type="button" data-action="training-load-section" data-section="variables" data-dc-home>← Data configuration</button>
     <div class="metric-variables-head">
@@ -114,7 +113,7 @@ function renderListHtml(s, ctx) {
     ${list.loaded && !list.items.length && !list.error ? `<p class="empty">No source fields yet.</p>` : ""}
     ${[...groups.values()].map((fields) => `
       <section class="metric-classification-section" aria-labelledby="sf-group-${escapeAttr(`${fields[0].sourceSystem}-${fields[0].apiFamily}`)}">
-        <h3 id="sf-group-${escapeAttr(`${fields[0].sourceSystem}-${fields[0].apiFamily}`)}">${sourceName(fields[0], twoFamilies(fields[0]))}</h3>
+        <h3 id="sf-group-${escapeAttr(`${fields[0].sourceSystem}-${fields[0].apiFamily}`)}">${sourceName(fields[0], twoFamilies(s, fields[0].sourceSystem))}</h3>
         <ul class="metric-variables-list">
           ${fields.map((field) => {
             const revision = currentRevision(field);
@@ -204,7 +203,7 @@ function renderDetailHtml(s, ctx) {
     <div class="metric-variables-head">
       <div>
         <h2 id="source-fields-title">${fieldName(field)}</h2>
-        <p class="muted">${sourceName(field)} ${field.state === "retired" ? `<span class="item-badge">Retired</span>` : ""}</p>
+        <p class="muted">${sourceName(field, twoFamilies(s, field.sourceSystem))} ${field.state === "retired" ? `<span class="item-badge">Retired</span>` : ""}</p>
       </div>
     </div>
     ${noticeHtml(s)}
@@ -276,7 +275,7 @@ function zoneOperatorHtml(form, locked) {
       </fieldset>`;
 }
 const EVIDENCE_HINT = `A path under docs/ with one heading anchor, for example ${EVIDENCE_EXAMPLE}. The document must already be merged.`;
-const SOURCE_NAME_TEXT = (form) => `${SOURCE_LABEL[form.sourceSystem] || form.sourceSystem}`;
+const SOURCE_NAME_TEXT = (form, withFamily) => `${SOURCE_LABEL[form.sourceSystem] || form.sourceSystem}${withFamily ? ` · ${FAMILY_LABEL[form.apiFamily] || form.apiFamily}` : ""}`;
 
 function renderFormHtml(s) {
   const form = s.form;
@@ -312,7 +311,7 @@ function renderFormHtml(s) {
   return `
     <form class="data-sources-form metric-variables-form source-fields-form" data-source-fields-form="${form.act}" novalidate autocomplete="off">
       <h2 id="source-fields-title">${form.act === "unit" ? "Confirm the unit of" : "Confirm the meaning of"} ${name}</h2>
-      <p class="muted source-fields-summary">${escapeHtml(form.fieldName)} · ${escapeHtml(SOURCE_NAME_TEXT(form))} · ${escapeHtml(VALUE_SHAPE_LABEL[form.valueShape] || form.valueShape || "")} · ${escapeHtml(form.levels)} · Parameter: ${escapeHtml(PARAMETER_KIND_LABEL[form.parameterKind] || form.parameterKind || "")}</p>
+      <p class="muted source-fields-summary">${escapeHtml(form.fieldName)} · ${escapeHtml(SOURCE_NAME_TEXT(form, twoFamilies(s, form.sourceSystem)))} · ${escapeHtml(VALUE_SHAPE_LABEL[form.valueShape] || form.valueShape || "")} · ${escapeHtml(form.levels)} · Parameter: ${escapeHtml(PARAMETER_KIND_LABEL[form.parameterKind] || form.parameterKind || "")}</p>
       <p class="metric-variables-field-note">A confirmation is saved once and never changed: a correction is a new revision. Confirm only what the evidence document proves.</p>
       <p class="muted">Do not enter athlete names, ids, dates of birth or measured values.</p>
       ${body}
