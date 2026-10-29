@@ -98,6 +98,22 @@ for(const order of [[l1,drive],[drive,l1]])test('integration '+order.join(' then
     assert.equal((await env.pool.query('select media.l1_drive_file_id($1) as id',[value])).rows[0].id,driveFileIdOf(value));
    }
   });
+  await context.test('the backend reads a link with blanks at its edges exactly as the SQL does: spaces stripped, any other blank keeps it on Drive',async()=>{
+   const forms=[urlOf(seededId).replace('/view',''),urlOf(seededId),'https://drive.google.com/open?id='+seededId,'https://lh3.googleusercontent.com/d/'+seededId];
+   const blanks=['',' ','  ','\n','\t','\r\n','\u00a0','\u2003','\u3000','\ufeff',' \n','\n ','\t ',' \u00a0'];
+   const values=[...forms.flatMap(form=>[...blanks.map(blank=>form+blank),...blanks.filter(Boolean).map(blank=>blank+form)]),'',' ','\n','\u00a0',null];
+   const differ=[];
+   for(const value of values) {
+    const sql=(await env.pool.query('select media.l1_drive_file_id($1) as id',[value])).rows[0].id;
+    if(sql!==driveFileIdOf(value))differ.push(JSON.stringify(value));
+   }
+   assert.deepEqual(differ,[],'every link reads the same in JavaScript and in the bridge');
+   assert.ok(values.length>=110,'the matrix ran');
+   // The two readings that matter: spaces never change the file, a line break after the id names none.
+   assert.equal(driveFileIdOf(urlOf(seededId).replace('/view','')+'  '),seededId);
+   assert.equal(driveFileIdOf(urlOf(seededId).replace('/view','')+'\n'),null);
+   assert.equal(driveFileIdOf(urlOf(seededId).replace('/view','')+'\u00a0'),null);
+  });
   await context.test('new import captures eligible legacy plans, never an unconditional import hold',async()=>{
    const id=fileId(),assigned=await env.plan(id),draft=await env.plan(id,false),upload=await env.begin(id);await env.service.complete(env.req,upload.uploadId);
    const manifests=await env.holds(upload.mediaId);assert.equal(manifests.length,1);assert.equal(manifests[0].plan_item_id,assigned.item);

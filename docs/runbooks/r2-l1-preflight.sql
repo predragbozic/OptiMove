@@ -95,6 +95,41 @@ select count(*) as r2_plans,coalesce(sum(slots),0) as item_media_slots,
  coalesce(sum(bases),0) as expected_holds,coalesce(sum(slots*bases),0) as expected_manifest_members,
  coalesce(max(slots*bases),0) as largest_plan_manifest from bases;
 
+-- Legacy Drive links with a blank other than a space at an edge (tab, line break,
+-- no-break space, other Unicode blanks). The bridge (btrim: spaces only) and the
+-- backend (driveFileIdOf, the same rule) read the file id of such a link as no
+-- file when the blank follows the id: the link is never copied or served as a
+-- copy and keeps playing from Drive. edge_blank_links counts every such link;
+-- stays_on_drive counts the ones whose id the blank hides (a reader that strips
+-- every blank would find a file). Fix the link in the row to have it copied.
+-- Aggregate only: no ids, URLs or user data. Parser inlined, valid before the migrations;
+-- the copy columns are read through to_jsonb so the query runs on any schema version.
+with links as (
+ select case when to_jsonb(e)->>'source_exercise_id' is not null or to_jsonb(e)->>'copy_parent_id' is not null then 'exercise_copy' else 'exercise' end as source,
+  v.kind,btrim(v.url) as spaced,
+  regexp_replace(v.url,'^[ \t\n\v\f\r\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+|[ \t\n\v\f\r\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+$','','g') as stripped
+ from library.exercises e cross join lateral (values ('video',e.video_source,e.video_url),('image',e.image_source,e.image_url)) v(kind,slot_source,url)
+ where coalesce(v.slot_source,'legacy')='legacy' and v.url ~ '(drive\.google\.com|googleusercontent\.com)'
+ union all
+ select 'plan_item',v.kind,btrim(v.url),
+  regexp_replace(v.url,'^[ \t\n\v\f\r\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+|[ \t\n\v\f\r\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+$','','g')
+ from plans.plan_items i cross join lateral (values ('video',i.video_source,i.video_url),('image',i.image_source,i.image_url)) v(kind,slot_source,url)
+ where coalesce(v.slot_source,'legacy')='legacy' and v.url ~ '(drive\.google\.com|googleusercontent\.com)'
+), parsed as (
+ select source,kind,spaced<>stripped as edge_blank,
+  coalesce((regexp_match(spaced,'drive\.google\.com/file/d/([^/?#]+)'))[1],
+   case when spaced ~ 'drive\.google\.com' then (regexp_match(spaced,'[?&]id=([^&#]+)'))[1] end,
+   (regexp_match(spaced,'lh3\.googleusercontent\.com/d/([^/?#=]+)'))[1]) ~ '^[A-Za-z0-9_-]{10,200}$' as spaced_names_file,
+  coalesce((regexp_match(stripped,'drive\.google\.com/file/d/([^/?#]+)'))[1],
+   case when stripped ~ 'drive\.google\.com' then (regexp_match(stripped,'[?&]id=([^&#]+)'))[1] end,
+   (regexp_match(stripped,'lh3\.googleusercontent\.com/d/([^/?#=]+)'))[1]) ~ '^[A-Za-z0-9_-]{10,200}$' as stripped_names_file
+ from links
+)
+select source,kind,count(*) as drive_form_links,
+ count(*) filter(where edge_blank) as edge_blank_links,
+ count(*) filter(where not coalesce(spaced_names_file,false) and coalesce(stripped_names_file,false)) as stays_on_drive
+from parsed group by source,kind order by source,kind;
+
 -- Advisory runner serialization does not prevent locks held by normal app traffic.
 -- Do not kill sessions here and do not output raw query text (may contain data).
 select pid,usename,state,xact_start,wait_event_type,wait_event,pg_blocking_pids(pid) as blockers

@@ -238,12 +238,14 @@ const live = (generation) => state.driveImport.generation === generation;
 
 // One request with the transient repeats: the same request (same key or
 // upload id) again after a delay; anything else is thrown with its code.
-async function repeating(work, { sleep, generation }) {
+// `onUndecided` hears every answer that decided nothing before it is repeated.
+async function repeating(work, { sleep, generation, onUndecided }) {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await work();
     } catch (error) {
       const code = importErrorCode(error);
+      if (TRANSIENT_CODES.has(code)) onUndecided?.();
       if (!TRANSIENT_CODES.has(code) || attempt >= IMPORT_RETRY_DELAYS_MS.length || !live(generation)) throw coded(code);
       await sleep(IMPORT_RETRY_DELAYS_MS[attempt]);
     }
@@ -281,6 +283,10 @@ async function importItem(item, { render, renderProgress, sleep, generation, put
   if (!matches) return fail(item, "file_changed", render);
   const body = JSON.stringify({ kind: item.kind, driveFileId: item.driveFileId, file: { name: String(item.file.name || item.driveFileId), sizeBytes: String(item.bytes), mimeType: item.mimeType } });
   let restarts = 0;
+  // Once a completion answer decided nothing (an unknown outcome, a lost
+  // answer, "still verifying"), the copy may have landed: a later stop of this
+  // file (signed out, rights lost) leaves it "not confirmed", never "not copied".
+  let undecided = false;
   for (;;) {
     // 2. The import session, with the file's own key: a repeat is the same import.
     step("starting");
@@ -326,16 +332,18 @@ async function importItem(item, { render, renderProgress, sleep, generation, put
     for (let poll = 0; ; poll += 1) {
       let result;
       try {
-        result = await repeating(() => call(`${DRIVE_IMPORT_ROUTE}/uploads/${encodeURIComponent(item.uploadId)}/complete`, { method: "POST", body: "{}" }, IMPORT_COMPLETE_BOUND_MS), { sleep, generation });
+        result = await repeating(() => call(`${DRIVE_IMPORT_ROUTE}/uploads/${encodeURIComponent(item.uploadId)}/complete`, { method: "POST", body: "{}" }, IMPORT_COMPLETE_BOUND_MS), { sleep, generation, onUndecided: () => { undecided = true; } });
       } catch (error) {
         if (error.code === "already_copied") return done(item, "already", render);
         if (error.code === "upload_not_present" && restarts < 1) { restarts += 1; break; }
         if (["upload_expired", "state_conflict"].includes(error.code) && restarts < 1) { forgetKey(item); restarts += 1; break; }
         if (TRANSIENT_CODES.has(error.code)) return unconfirmed(item, "unconfirmed", render);
+        if (undecided) error.undecided = true;
         throw error;
       }
       if (result?.status === "completed" || result?.media) { item.mediaId = String(result.mediaId || result.media?.mediaId || item.mediaId); return done(item, "copied", render); }
       // 202: still being verified (another request holds the claim).
+      undecided = true;
       if (poll >= IMPORT_VERIFY_DELAYS_MS.length) return unconfirmed(item, "unconfirmed", render);
       await sleep(IMPORT_VERIFY_DELAYS_MS[poll]);
     }
@@ -409,7 +417,10 @@ export async function runDriveImport(render, { concurrency = IMPORT_DEFAULT_CONC
           item.state = item.waits > IMPORT_IN_PROGRESS_RETRIES ? "unconfirmed" : "waiting";
           item.error = code;
         } else if (STOP_CODES.includes(code)) {
-          fail(item, code, render);
+          // The run stops either way; a file whose completion had an answer
+          // that decided nothing may be copied, so it is not confirmed.
+          if (error.undecided) unconfirmed(item, code, render);
+          else fail(item, code, render);
           if (live(generation)) imp.stopCode = code;
         } else if (TRANSIENT_CODES.has(code) || !error?.code) {
           // No refusal from the server decided it (an uncoded failure here is this screen's own).

@@ -11,8 +11,13 @@ const kinds=['video','image'];
 
 // The Drive file a link names, in the forms the frontend reads (media.js
 // getDriveId): /file/d/<id>, ?id=<id> on drive.google.com, lh3 /d/<id>.
+// The same reading as the bridge's media.l1_drive_file_id(), which decides the
+// retention holds and the import's plan locks: its btrim(text) strips spaces
+// (U+0020) only, so only spaces are stripped here. A link whose id is followed
+// by a tab, a line break or a no-break space names no file on either side and
+// keeps playing from Drive; it is never served as a copy without its hold.
 export function driveFileIdOf(url) {
-  const raw=typeof url==='string'?url.trim():'';
+  const raw=typeof url==='string'?url.replace(/^ +| +$/g,''):'';
   if(!raw)return null;
   const id=(raw.match(/drive\.google\.com\/file\/d\/([^/?#]+)/) || [])[1]
     || (/drive\.google\.com/.test(raw) && (raw.match(/[?&]id=([^&#]+)/) || [])[1])

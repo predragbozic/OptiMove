@@ -593,6 +593,40 @@ test("27. the server's 'verification outcome unknown' (a lost claim COMMIT, #203
   assert.equal(server.uploads.size, 1, "one import, never two");
 });
 
+test("28. a completion that first decided nothing (unknown outcome, still verifying), then stopped by sign-out or lost rights: the file is 'not confirmed', never 'not copied'; the run stops with its sentence and Continue finishes the same import", async () => {
+  const cases = [
+    ["503 import_outcome_unknown, then 401", () => refusal(503, "import_outcome_unknown", true), () => refusal(401, "authentication_required"), "authentication_required", /You were signed out/],
+    ["503 import_outcome_unknown, then 403", () => refusal(503, "import_outcome_unknown", true), () => refusal(403, "operation_not_allowed"), "operation_not_allowed", /platform administrator access/],
+    ["202 still verifying, then 401", () => ({ ok: true, status: 202, statusText: "", json: async () => ({ uploadId: "up-1", status: "verifying" }) }), () => refusal(401, "authentication_required"), "authentication_required", /You were signed out/],
+  ];
+  for (const [name, first, then, code, sentence] of cases) {
+    reset();resetPuts();
+    let answers = 0, blocked = true;
+    const server = fakeServer({ status: statusFor([1]), on: { complete: () => {
+      if (!blocked) return null;
+      answers += 1;
+      return answers === 1 ? first() : then();
+    } } });
+    await chooseFolder(folder({ videos: [1] }));
+    await data.runDriveImport(render, { sleep: instant });
+    const [item] = state.driveImport.items;
+    assert.equal(item.state, "unconfirmed", `${name}: not confirmed, not '${item.state}'`);
+    assert.equal(item.error, code, `${name}: the reason is the stop's`);
+    assert.equal(state.driveImport.stopCode, code, `${name}: the run stops`);
+    assert.match(visibleText(), /Not confirmed/, name);
+    assert.doesNotMatch(visibleText(), /Not copied/, name);
+    assert.match(visibleText(), sentence, name);
+    assert.ok(item.key, `${name}: the key is kept for Continue`);
+    const key = item.key;
+    blocked = false;
+    await click("drive-import-start");
+    await until(() => !state.driveImport.running, "the run ends");
+    assert.equal(item.state, "copied", `${name}: Continue finishes it`);
+    assert.equal(imports(server).at(-1).key, key, `${name}: the same import`);
+    assert.equal(server.uploads.size, 1, `${name}: one import, never two`);
+  }
+});
+
 test("17. a running import never paints the rest of the tab: progress is patched in place (same Pause button, open <details> stay open), a change of state replaces the card alone and waits for a pointer, nothing is painted off screen, and an open limit form survives the end of the run", async () => {
   reset();resetPuts(["hold", "hold", "hold", "hold"]);
   fakeServer({ status: statusFor([1, 2, 3, 4]) });
