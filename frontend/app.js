@@ -527,7 +527,7 @@ function bindEvents() {
   els.content.addEventListener("dragleave", leaveVariableDrag);
   els.content.addEventListener("drop", (event) => {
     dropVariableDrag(event, {
-      onDrop: (variableId, categoryId) => { void dropVariableOnCategory(variableId, categoryId, { render: renderTrainingLoad }); },
+      onDrop: (variableId, categoryId) => { void dropVariableOnCategory(variableId, categoryId, { render: renderActiveTrainingLoadSurface }); },
     });
   });
   els.content.addEventListener("dragend", endVariableDrag);

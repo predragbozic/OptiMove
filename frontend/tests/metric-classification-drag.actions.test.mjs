@@ -36,6 +36,7 @@ after(() => restoreFetch());
 
 const { dropVariablesForm, handleVariablesAction, loadVariablesSection, resetVariables, variablesMayBeLeft, variablesUnloadShouldWarn } = await import("../metric-variables-actions.js");
 const { variablesState } = await import("../metric-variables-data.js");
+const { openClassificationForm } = await import("../metric-classification-data.js");
 const { renderVariablesHtml } = await import("../metric-variables-view.js");
 const { VARIABLE_DRAG_TYPE, dropVariableDrag, endVariableDrag, leaveVariableDrag, overVariableDrag, startVariableDrag } = await import("../data-config-drag.js");
 const { UNDO_MS, dropBlocked, dropVariableOnCategory } = await import("../metric-classification-drag.js");
@@ -195,7 +196,7 @@ test("on a computer the Categories screen reads the tray once beside the tree; t
   const tray = $(".dc-tray");
   assert.ok(tray, "the tray is beside the categories");
   assert.equal(tray.querySelector("h3").textContent, "Variables");
-  assert.match(tray.textContent.replace(/\s+/g, " "), /Drag a variable onto a category to add it there\. It stays in its other categories\. With a keyboard, open a variable and choose Add to a category\./);
+  assert.match(tray.textContent.replace(/\s+/g, " "), /Drag a variable onto a category to add it there\. Adding never moves it: it stays in any category it is already in\. Without a mouse: under Variables, open a variable and choose Add to a category\./);
   assert.equal(chip(V1).getAttribute("draggable"), "true");
   assert.equal(chip(V2).querySelector(".dc-chip-label").textContent, "Max <i>speed</i>");
   assert.ok(content.innerHTML.includes("Max &lt;i&gt;speed&lt;/i&gt;"), "a variable's label is escaped");
@@ -209,6 +210,9 @@ test("in a club workspace only the club's own active categories take a drop, nev
   tree.categories.push(node({ id: C4, key: "club_work", name: "Club work", ownerScope: "club" }));
   await openCategories();
   assert.deepEqual(targetIds(), [C4]);
+  // The tray says it holds the club's own variables, and how a system one is added.
+  assert.equal($(".dc-tray h3").textContent, "This club's variables");
+  assert.match($(".dc-tray").textContent.replace(/\s+/g, " "), /System variables are not listed here: to add one, open it under Variables, in System \(reference\), and choose Add to a category\. That is also the way without a mouse\./);
   const { over } = await drag(V1, C1);
   assert.equal(over.defaultPrevented, false, "a system category refuses the drag");
   assert.equal(posts().length, 0, "and nothing is sent");
@@ -233,6 +237,12 @@ test("the tray says when it is empty, when only the first 100 are shown, and a f
   trayItems = [];
   await openCategories();
   assert.match($(".dc-tray").textContent, /There are no active variables here yet\. Create one under Variables\./);
+  resetVariables();
+  asClub();
+  tree.categories.push(node({ id: C4, key: "club_work", name: "Club work", ownerScope: "club" }));
+  await openCategories();
+  assert.match($(".dc-tray").textContent.replace(/\s+/g, " "), /This club has no variables of its own yet\. To add a system variable to a category, open it under Variables, in System \(reference\), and choose Add to a category\./);
+  asPlatform();
   resetVariables();
   trayItems = [variable()];
   trayCursor = "next";
@@ -374,6 +384,7 @@ for (const [code, status, sentence] of [
     await openCategories();
     await drag(V1, C1);
     assert.match(text(), sentence);
+    assert.match(text(), /Total distance was not added to Aerobic capacity\./, "the line names the drop that failed");
     assert.ok($(".dc-drop-status.is-warning[role=alert]"));
     assert.ok(!$('[data-action="metric-classification-drop-undo"]'));
     assert.equal(dropBlocked(), false);
@@ -410,9 +421,10 @@ test("after 10 seconds Undo is gone and an Undo that arrives late sends nothing"
     assert.ok(undoButton);
     mock.timers.tick(UNDO_MS - 1);
     assert.ok($('[data-action="metric-classification-drop-undo"]'), "still offered just before the end");
+    assert.match(text(), /Total distance was added to Sprint <b>\. Undo You can undo it for 10 seconds\./);
     mock.timers.tick(1);
     assert.ok(!$('[data-action="metric-classification-drop-undo"]'), "the screen is drawn again without it");
-    assert.match(text(), /Total distance was added to Sprint <b>\./);
+    assert.match(text(), /Total distance was added to Sprint <b>\. To take it out, open Total distance under Variables and choose Remove next to Sprint <b>\./);
     await handleVariablesAction(undoButton, { render });
     assert.equal(posts().length, 1, "no remove after the 10 seconds");
   } finally {
@@ -420,12 +432,83 @@ test("after 10 seconds Undo is gone and an Undo that arrives late sends nothing"
   }
 });
 
+test("the end of Undo does not redraw the screen under a drag of the next variable; it does once the drag is over", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    serve(() => created());
+    await openCategories();
+    await drag(V1, C2);
+    const transfer = newTransfer();
+    fire("dragstart", chip(V2), transfer);
+    fire("dragover", categoryButton(C1), transfer);
+    const board = $(".dc-drag-board");
+    mock.timers.tick(UNDO_MS);
+    assert.equal($(".dc-drag-board"), board, "not drawn again mid-drag");
+    assert.ok(board.classList.contains("is-dragging") && $(`[data-category-id="${C1}"]`).classList.contains("is-drop-target"));
+    await handleVariablesAction($('[data-action="metric-classification-drop-undo"]'), { render });
+    assert.equal(posts().length, 1, "Undo is over even while the button is still drawn");
+    fire("dragend", chip(V2), transfer);
+    mock.timers.tick(500);
+    assert.ok(!$('[data-action="metric-classification-drop-undo"]'), "drawn again once the drag is over");
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("the last drop's line sits at the top of the tray, which stays on the screen", async () => {
+  serve(() => created());
+  await openCategories();
+  await drag(V1, C2);
+  const status = $(".dc-drop-status");
+  assert.ok(status && status.closest(".dc-tray"), "inside the tray");
+  assert.equal($(".dc-tray").firstElementChild, status, "first in it");
+});
+
+test("the end of Undo never draws the screen over a form being typed in", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    serve(() => created());
+    await openCategories();
+    await drag(V1, C2);
+    await click('[data-action="metric-classification-create-open"][data-kind="category"]');
+    const field = $('[data-mc-field="name"]');
+    assert.ok(field, "New category opens once the drop is saved");
+    mock.timers.tick(UNDO_MS);
+    assert.equal($('[data-mc-field="name"]'), field, "the form is not drawn again");
+    assert.equal(variablesState().drop.undoUntil, 0, "Undo is over all the same");
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("a name the server shortened keeps its mark in the tray and in the line", async () => {
+  trayItems = [variable({ label: "A very long variable name", truncated: true })];
+  tree.categories[1] = node({ id: C2, key: "sprint", name: "Sprint work of a very long name", truncated: true });
+  serve(() => created());
+  await openCategories();
+  assert.equal(chip(V1).querySelector(".dc-chip-label").textContent, "A very long variable name…");
+  await drag(V1, C2);
+  assert.match(text(), /A very long variable name… was added to Sprint work of a very long name…\./);
+});
+
+test("a new drop clears an earlier notice", async () => {
+  const answers = [{ throwNetworkError: true }, created()];
+  serve(() => answers.shift());
+  await openCategories();
+  await drag(V1, C2);
+  await click('[data-action="metric-classification-drop-dismiss"]');
+  assert.match(text(), /The result was not checked/);
+  await drag(V2, C1);
+  assert.doesNotMatch(text(), /The result was not checked/);
+  assert.match(text(), /Max <i>speed<\/i> was added to Aerobic capacity\./);
+});
+
 test("an Undo the server refuses is a warning with the remove's sentence", async () => {
   serve((call) => (call.url === LINKS ? created() : { status: 404, body: { error: "notFound" } }));
   await openCategories();
   await drag(V1, C2);
   await click('[data-action="metric-classification-drop-undo"]');
-  assert.match(text(), /It is not available in this workspace now, or it is no longer there\./);
+  assert.match(text(), /Undo did not go through\. It is not available in this workspace now, or it is no longer there\. Open Total distance under Variables to see its categories\./);
   assert.ok($(".dc-drop-status.is-warning"));
 });
 
@@ -494,7 +577,7 @@ test("Close without checking ends the status, says the result was not checked an
   await drag(V1, C2);
   await click('[data-action="metric-classification-drop-dismiss"]');
   assert.equal(variablesState().drop, null);
-  assert.match(text(), /The result was not checked\. Open the variable to see its categories as they are saved now\./);
+  assert.match(text(), /The result was not checked\. To see whether Total distance is in Sprint <b>, open Total distance under Variables\./);
   assert.equal(variablesState().list.loaded, false);
   assert.equal(dropBlocked(), false);
 });
@@ -514,12 +597,12 @@ test("a drop in flight or not confirmed asks before leaving and before the page 
   assert.equal(variablesUnloadShouldWarn(), true);
   confirmAnswer = false;
   assert.equal(variablesMayBeLeft(), false);
-  assert.deepEqual(confirmQuestions, ["A change is still being saved. Leave anyway? Its result will not be shown."]);
+  assert.deepEqual(confirmQuestions, ["Total distance is still being added to Sprint <b>. Leave anyway? You will not see whether it was added."]);
   release({ throwNetworkError: true });
   await lastDrop;
   assert.match(text(), /Result not confirmed\./);
   assert.equal(variablesMayBeLeft(), false);
-  assert.equal(confirmQuestions[1], "The last change is not confirmed. Leave without checking? Open the variable later to see its categories.");
+  assert.equal(confirmQuestions[1], "It is not confirmed whether Total distance was added to Sprint <b>. Leave without checking? Open Total distance under Variables later to see its categories.");
   // Within the screen: going back to the start asks the same, and stays when declined.
   await click('[data-action="metric-classification-view"][data-view="home"]');
   assert.equal(variablesState().view, "categories");
@@ -544,6 +627,56 @@ test("going back to the start screen with a drop not confirmed asks first; agree
   assert.equal(variablesState().view, "home");
   assert.equal(variablesState().drop, null);
   assert.equal(variablesUnloadShouldWarn(), false);
+});
+
+test("a drop not confirmed keeps New category closed, and an open form never discards it without asking", async () => {
+  serve(() => ({ throwNetworkError: true }));
+  await openCategories();
+  await drag(V1, C2);
+  const create = '[data-action="metric-classification-create-open"][data-kind="category"]';
+  assert.equal($(create).disabled, true, "New category waits for the result");
+  await click(create);
+  assert.equal(variablesState().form, null, "and a click that reaches the handler opens nothing");
+  assert.ok($('[data-action="metric-classification-drop-check"]'), "Check result stays on the screen");
+  // Whatever form is open, leaving asks about the drop first.
+  variablesState().form = openClassificationForm("node-create", { kind: "category" });
+  confirmAnswer = false;
+  assert.equal(variablesMayBeLeft(), false);
+  assert.deepEqual(confirmQuestions, ["It is not confirmed whether Total distance was added to Sprint <b>. Leave without checking? Open Total distance under Variables later to see its categories."]);
+  assert.ok(variablesState().drop?.unconfirmed, "declined, the drop is kept");
+});
+
+test("while a drop is being saved New category opens nothing: two writes never run at once", async () => {
+  let release;
+  serve(() => new Promise((resolve) => { release = resolve; }));
+  await openCategories();
+  const transfer = newTransfer();
+  fire("dragstart", chip(V1), transfer);
+  fire("dragover", categoryButton(C2), transfer);
+  fire("drop", categoryButton(C2), transfer);
+  await click('[data-action="metric-classification-create-open"][data-kind="category"]');
+  assert.equal(variablesState().form, null);
+  release(created());
+  await lastDrop;
+  assert.equal($('[data-action="metric-classification-create-open"][data-kind="category"]').disabled, false, "free again once saved");
+});
+
+test("an open form blocks a drop: nothing is sent", async () => {
+  serve(() => created());
+  await openCategories();
+  variablesState().form = openClassificationForm("node-create", { kind: "category" });
+  assert.equal(dropBlocked(), true);
+  await dropVariableOnCategory(V1, C2, { render });
+  assert.equal(posts().length, 0);
+});
+
+test("returning to Data configuration on the Categories screen reads the tray again", async () => {
+  await openCategories();
+  dropVariablesForm();
+  calls.length = 0;
+  await loadVariablesSection(render);
+  assert.ok(gets().includes(TRAY), "the tray is read again");
+  assert.ok(chip(V1));
 });
 
 test("a saved drop asks nothing on leaving, and leaving ends its Undo", async () => {

@@ -398,20 +398,31 @@ changes no backend file. Where it differs from section 6, this section says so.
   `frontend/data-config-drag.js`, the pattern of `frontend/builder-library-drag.js`).
 - Only for the administrator of the workspace: a platform admin, or a club's admin in that club's workspace. A team's
   coach and a phone get the screen as before, with no tray and no target.
-- **The tray:** a panel beside the categories (under them below 960 px), titled *Variables*. It holds this workspace's
-  own active variables, the first page of the default list (100), with each variable's icon tile.
-  - It is read again each time the screen opens.
+- **The tray:** a panel beside the categories that stays on the screen while they scroll. Below 960 px it sits above
+  them, still at the top, at most half the window tall. It holds this workspace's own active variables, the first page
+  of the default list (100), with each variable's icon tile.
+  - In a club workspace it is titled *This club's variables* and says that system variables are not listed: one is
+    added from its detail under *System (reference)* with *Add to a category*. On the platform it is titled
+    *Variables*. Whether a club's tray should also offer the system variables (the server allows that link) is left
+    open for a later decision.
+  - It is read again each time the screen is shown, a return to Data configuration included.
   - When the list has more, the tray says so and points to *Add to a category*.
-  - The tray names the keyboard way: open a variable and choose *Add to a category*.
+  - The tray names the way without a mouse: under Variables, open a variable and choose *Add to a category*.
 - **Drop targets:** this workspace's own active categories. An archived category and a system category in a club
   workspace take no drop, as in section 6.
 
 **What a drop does:**
 - It sends the existing link create (C4) with its own `requestKey` and the body `{ requestKey, variableId, categoryId }`.
   This is the body *Add to a category* sends.
-- The line under the title says "*X* was added to *Y*." with *Undo* for 10 seconds (R2). *Undo* sends the existing link
-  remove (C5) with a new `requestKey` and no reason.
-- A refusal is a warning with the screen's own sentence, and nothing else changes.
+- The last drop's line sits at the top of the tray, so it stays in reach however long the list of categories is. It says
+  "*X* was added to *Y*." with *Undo* and "You can undo it for 10 seconds." (R2). *Undo* sends the existing link remove
+  (C5) with a new `requestKey` and no reason. Once the 10 seconds are over, the line says how to take the variable out:
+  open it under Variables and choose *Remove* next to the category.
+- The end of Undo draws the screen again only while the board is shown. It never redraws under an open form or another
+  tab, and never during a drag of the next variable: then it waits until the drag ends.
+- A refusal is a warning that names the drop ("*X* was not added to *Y*." and the screen's own sentence), and nothing
+  else changes. A refused Undo says "Undo did not go through." and where to look.
+- A name the server shortened keeps its mark (…) in the tray and in the line, as in the lists.
 - **Different from section 6, "already there":** every drop is sent. The read of the domains and categories carries no
   variable's links, so the screen cannot know beforehand that a variable is already in a category. The server answers
   `link_exists`, and the line says "*X* is already in *Y*. Nothing was changed.", with no warning and no Undo.
@@ -429,12 +440,14 @@ changes no backend file. Where it differs from section 6, this section says so.
 
 **One write at a time:**
 - While a drop is being saved, or its result is not confirmed, the tray is locked (nothing is draggable), and so is
-  every other drop. The screen's forms share the rule.
+  every other drop. The screen's forms share the rule both ways: *New category* waits (disabled, and its handler opens
+  nothing) until the drop is settled, and an open form blocks a drop.
 - A lost answer (no answer, `503 outcome_unknown`, an uncoded 5xx) shows *Result not confirmed*. *Check result* sends
   the identical request (the same `requestKey`), and only an answer the server gives after reading its request record
   settles it. *Close without checking* says the result was not checked, and the list is read again when it is next shown.
-- **Leaving:** leaving with a drop in flight or not confirmed asks first. This covers the screen's own ways back, the
-  section switch, leaving Training Load and closing the page. Leaving ends the drop's line and its Undo. When the drop
+- **Leaving:** leaving with a drop in flight or not confirmed asks first, naming the variable and the category, and
+  before any question about a form. This covers the screen's own ways back, the section switch, leaving Training Load
+  and closing the page. Leaving ends the drop's line and its Undo. When the drop
   may have been saved, the list is read again.
 - A late answer to a drop left behind changes nothing on the screen in use.
 
@@ -445,15 +458,24 @@ changes no backend file. Where it differs from section 6, this section says so.
 - touch dragging.
 
 **Tests:**
-- `frontend/tests/metric-classification-drag.actions.test.mjs`: 26 tests through the real handlers, the real drag
-  handlers and the real markup with a fake fetch and a fake drag. They cover the offer per workspace and device, the
-  targets, the drag's own data type, the body, two fast drops sending one request, "already there", four refusals, Undo
-  and its 10 seconds, the three kinds of lost answer with *Check result*, the leave guards and a late answer.
-- Mutations of 23 guards, all killed.
+- `frontend/tests/metric-classification-drag.actions.test.mjs`: 35 tests through the real handlers, the real drag
+  handlers and the real markup with a fake fetch and a fake drag. They cover:
+  - the offer per workspace and device, the club tray's texts, the targets, the drag's own data type and the body;
+  - two fast drops sending one request, "already there", four refusals;
+  - Undo, its 10 seconds and the end of Undo under a drag and under a form;
+  - the three kinds of lost answer with *Check result*, *New category* and the form both ways, the leave guards, the
+    tray read again on a return, and a late answer.
+- Mutations of 36 guards, all killed.
 - A browser run on a disposable database with the real backend and the built frontend in Chromium, with a real HTML5
-  drag:
+  drag by the mouse (54 checks):
   - the database holds exactly the links the screen reports, Undo removes only its own, and a lost answer that the
     server saved is settled by *Check result* with one link;
-  - the tray beside the categories at 1280 px and under them at 900 px;
+  - with 16 categories, a drop on the last one far down the page leaves the line and Undo in view, and Undo works;
+  - typing in *New category* across the end of Undo keeps the focus and the text; a drag held across it keeps its
+    marks and lands;
+  - the tray beside the categories at 1280 px; above them, sticky and at most half the window, at 960, 900 and 500 px
+    with a mouse;
   - no tray at 360, 375 and 390 px as a touch screen, or for a coach;
   - 44 px targets and no overflow.
+- Not checked on a physical device: a touch laptop (a fine pointer with touch) and an iPad with a trackpad. *Add to a
+  category* stays the way there.

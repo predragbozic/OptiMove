@@ -6,7 +6,7 @@ import {
 } from "./metric-classification-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import { HOME_BACK, nodeTileHtml, variableTileHtml } from "./data-config-tiles.js";
-import { dragOffered, dropBlocked, dropTargets } from "./metric-classification-drag.js";
+import { dragOffered, dropBlocked, dropNeedsAsk, dropTargets } from "./metric-classification-drag.js";
 
 const cut = (node) => `${escapeHtml(node?.name || "")}${node?.truncated ? "…" : ""}`;
 const KIND_TITLE = { domain: "Domain", category: "Category" };
@@ -89,7 +89,7 @@ export function renderClassificationHtml(s, ctx) {
         <p class="muted">${domains ? domainsIntro(ctx) : categoriesIntro(ctx)}</p>
       </div>
       ${canCreate ? `<div class="metric-variables-actions">
-        <button class="plain-button data-sources-primary" type="button" data-action="metric-classification-create-open" data-kind="${kind}">New ${kind}</button>
+        <button class="plain-button data-sources-primary" type="button" data-action="metric-classification-create-open" data-kind="${kind}" ${dropNeedsAsk() ? "disabled" : ""}>New ${kind}</button>
       </div>` : ""}
     </div>
     ${s.notice ? `<p class="metric-variables-notice" role="status">${escapeHtml(s.notice)}</p>` : ""}
@@ -110,32 +110,45 @@ function renderCategoriesScreenHtml(s, tree, t, ctx, canCreate) {
   const targets = new Set(dropTargets(tree, ctx).map((node) => node.id));
   const locked = dropBlocked();
   return `
-    ${dropStatusHtml(s.drop, locked)}
     <div class="dc-drag-board${locked ? " is-locked" : ""}">
       <div class="dc-drag-categories">${renderCategoriesListHtml(tree, t, ctx, canCreate, targets)}</div>
-      ${trayHtml(s.tray, targets, locked)}
+      ${trayHtml(s.tray, targets, locked, ctx, dropStatusHtml(s.drop, locked))}
     </div>`;
 }
 
-function trayHtml(tray, targets, locked) {
+// A club's tray holds only the club's own variables; a system variable is added
+// to a club's category from its detail (the way without a mouse too). The last
+// drop's line sits at the top of the tray, which stays on the screen, so Undo
+// and Check result are in reach however long the list of categories is.
+function trayHtml(tray, targets, locked, ctx, status) {
+  const club = ctx.owner === "club";
   let body = "";
   if (!tray || (tray.loading && !tray.loaded)) body = `<p class="muted" role="status">Loading variables...</p>`;
   else if (tray.error) body = `<div class="error" role="alert"><p>${escapeHtml(tray.error)}</p><button class="plain-button" type="button" data-action="metric-classification-tray-reload">Try again</button></div>`;
-  else if (!tray.items.length) body = `<p class="muted">There are no active variables here yet. Create one under Variables.</p>`;
+  else if (!tray.items.length) {
+    body = `<p class="muted">${club
+      ? "This club has no variables of its own yet. To add a system variable to a category, open it under Variables, in System (reference), and choose Add to a category."
+      : "There are no active variables here yet. Create one under Variables."}</p>`;
+  }
   else {
     body = `<ul class="dc-tray-list">${tray.items.map((item) => `
       <li class="dc-chip" draggable="${locked ? "false" : "true"}" data-dc-drag-variable data-variable-id="${escapeAttr(item.id)}">
-        ${variableTileHtml(item, { size: "sm" })}<span class="dc-chip-label">${escapeHtml(item.label || "")}</span>
+        ${variableTileHtml(item, { size: "sm" })}<span class="dc-chip-label">${escapeHtml(item.label || "")}${item.truncated ? "…" : ""}</span>
       </li>`).join("")}</ul>
       ${tray.more ? `<p class="muted">The first 100 are shown. To add another one, open it under Variables and choose Add to a category.</p>` : ""}`;
   }
   const hint = targets.size
-    ? "Drag a variable onto a category to add it there. It stays in its other categories."
+    ? "Drag a variable onto a category to add it there. Adding never moves it: it stays in any category it is already in."
     : "Create a category first, then drag variables onto it.";
+  const other = club
+    ? "System variables are not listed here: to add one, open it under Variables, in System (reference), and choose Add to a category. That is also the way without a mouse."
+    : "Without a mouse: under Variables, open a variable and choose Add to a category.";
   return `
     <aside class="dc-tray" aria-labelledby="dc-tray-title">
-      <h3 id="dc-tray-title">Variables</h3>
-      <p class="muted">${hint} With a keyboard, open a variable and choose Add to a category.</p>
+      ${status}
+      <h3 id="dc-tray-title">${club ? "This club's variables" : "Variables"}</h3>
+      <p class="muted">${hint}</p>
+      <p class="muted">${other}</p>
       ${body}
     </aside>`;
 }
@@ -159,12 +172,17 @@ function dropStatusHtml(drop, locked) {
       </div>`;
   }
   const line = (text, { role = "status", warning = false, undo = false } = {}) => `
-    <p class="metric-variables-notice dc-drop-status${warning ? " is-warning" : ""}" role="${role}">${text}${undo ? ` <button class="plain-button ghost compact-button" type="button" data-action="metric-classification-drop-undo">Undo</button>` : ""}</p>`;
+    <p class="metric-variables-notice dc-drop-status${warning ? " is-warning" : ""}" role="${role}">${text}${undo ? ` <button class="plain-button ghost compact-button" type="button" data-action="metric-classification-drop-undo">Undo</button> <span class="muted">You can undo it for 10 seconds.</span>` : ""}</p>`;
   if (drop.busy) return line(drop.phase === "undo" ? `Removing ${x} from ${y}...` : `Adding ${x} to ${y}...`);
-  if (drop.phase === "done") return line(`${x} was added to ${y}.`, { undo: Boolean(drop.linkId) && Date.now() < drop.undoUntil && !locked });
+  if (drop.phase === "done") {
+    const undo = Boolean(drop.linkId) && Date.now() < drop.undoUntil && !locked;
+    // Once Undo is gone, the line says how to take the variable out.
+    return line(undo ? `${x} was added to ${y}.` : `${x} was added to ${y}. To take it out, open ${x} under Variables and choose Remove next to ${y}.`, { undo });
+  }
   if (drop.phase === "already") return line(`${x} is already in ${y}. Nothing was changed.`);
   if (drop.phase === "undone") return line(`${x} is no longer in ${y}.`);
-  if (drop.phase === "refused" || drop.phase === "undo-refused") return line(escapeHtml(drop.text || ""), { role: "alert", warning: true });
+  if (drop.phase === "refused") return line(`${x} was not added to ${y}. ${escapeHtml(drop.text || "")}`, { role: "alert", warning: true });
+  if (drop.phase === "undo-refused") return line(`Undo did not go through. ${escapeHtml(drop.text || "")} Open ${x} under Variables to see its categories.`, { role: "alert", warning: true });
   return "";
 }
 

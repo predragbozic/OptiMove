@@ -13,9 +13,10 @@
 // drop is sent: the server answers link_exists for a variable already in that
 // category, and the screen says so ("Nothing was changed"). Nothing is
 // remembered locally, so a link removed elsewhere is never taken for present.
-import { variableDragAvailable } from "./data-config-drag.js";
+import { variableDragAvailable, variableDragInProgress } from "./data-config-drag.js";
 import { checkNoteText, checkSettles, classificationCodeText, createLink, ownActive, removeLink } from "./metric-classification-data.js";
 import { errorInfo, fetchVariables, newRequestKey, outcomeUnknown, variablesContext, variablesState } from "./metric-variables-data.js";
+import { state } from "./state.js";
 
 export const UNDO_MS = 10_000;
 let undoTimer = null;
@@ -98,8 +99,14 @@ export async function dropVariableOnCategory(variableId, categoryId, { render })
   const category = dropTargets(s.classification.tree, ctx).find((node) => node.id === categoryId);
   if (!variable || !category) return;
   clearUndoTimer();
-  const names = { variableId, categoryId, variableLabel: variable.label || "", categoryName: category.name || "" };
+  // A name the server shortened keeps its mark, as in the lists.
+  const names = {
+    variableId, categoryId,
+    variableLabel: `${variable.label || ""}${variable.truncated ? "…" : ""}`,
+    categoryName: `${category.name || ""}${category.truncated ? "…" : ""}`,
+  };
   const requestKey = newRequestKey();
+  s.notice = "";
   s.drop = { ...names, phase: "link", body: { requestKey, variableId, categoryId }, busy: true, unconfirmed: false };
   render();
   await sendDrop({ render });
@@ -134,7 +141,7 @@ export function dismissDrop({ render }) {
   clearUndoTimer();
   if (drop.unconfirmed) {
     listStale(s);
-    s.notice = "The result was not checked. Open the variable to see its categories as they are saved now.";
+    s.notice = `The result was not checked. To see whether ${drop.variableLabel} is in ${drop.categoryName}, open ${drop.variableLabel} under Variables.`;
   }
   s.drop = null;
   render();
@@ -171,16 +178,22 @@ function savedDrop(s, drop, data) {
     variableId: drop.variableId, categoryId: drop.categoryId, variableLabel: drop.variableLabel, categoryName: drop.categoryName,
     phase: "done", linkId, undoUntil: Date.now() + UNDO_MS,
   };
-  // Undo is offered only while it lasts; the screen is drawn again when it ends.
+  // Undo is offered only while it lasts; the screen is drawn again when it ends,
+  // but not under a drag of the next variable (that would take its marks away):
+  // then once the drag is over. Undo itself is refused from the 10 seconds on.
   if (linkId) {
-    undoTimer = setTimeout(() => {
+    const expire = () => {
       undoTimer = null;
       const now = variablesState().drop;
-      if (now?.phase === "done" && now.linkId === linkId) {
-        now.undoUntil = 0;
-        dropRender?.();
+      if (now?.phase !== "done" || now.linkId !== linkId) return;
+      now.undoUntil = 0;
+      if (variableDragInProgress()) {
+        undoTimer = setTimeout(expire, 500);
+        return;
       }
-    }, UNDO_MS);
+      if (boardShown()) dropRender?.();
+    };
+    undoTimer = setTimeout(expire, UNDO_MS);
   }
 }
 
@@ -203,6 +216,13 @@ function refusedDrop(s, drop, info, { check }) {
   s.drop = { ...drop, phase: undo ? "undo-refused" : "refused", body: null, text: classificationCodeText(info, undo ? "link-remove" : "variable-link") };
 }
 
+// Whether the board is what the screen shows now: the end of Undo draws the
+// screen again only then, never over a form being typed in or another tab.
+function boardShown() {
+  const s = variablesState();
+  return state.activeTab === "training-load" && state.trainingLoad.section === "variables" && !s.form && dragOffered(s, variablesContext());
+}
+
 // The render the undo timer uses: set by the screen when it draws the tray.
 let dropRender = null;
 export function setDropRender(render) {
@@ -219,9 +239,16 @@ export function dropNeedsAsk() {
   return Boolean(drop && (drop.busy || drop.unconfirmed));
 }
 export function dropLeaveQuestion() {
-  const drop = variablesState().drop;
-  if (drop?.busy) return "A change is still being saved. Leave anyway? Its result will not be shown.";
-  return "The last change is not confirmed. Leave without checking? Open the variable later to see its categories.";
+  const drop = variablesState().drop || {};
+  const x = drop.variableLabel || "The variable";
+  const y = drop.categoryName || "the category";
+  const undo = drop.phase === "undo";
+  if (drop.busy) {
+    return undo
+      ? `${x} is still being removed from ${y}. Leave anyway? You will not see whether it was removed.`
+      : `${x} is still being added to ${y}. Leave anyway? You will not see whether it was added.`;
+  }
+  return `It is not confirmed whether ${x} was ${undo ? "removed from" : "added to"} ${y}. Leave without checking? Open ${x} under Variables later to see its categories.`;
 }
 // Leaving the screen ends the drop's status and its undo. A drop left in
 // flight or not confirmed may have been saved: the list is read again.

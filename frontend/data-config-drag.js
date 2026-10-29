@@ -25,6 +25,10 @@ export function variableDragAvailable() {
   return globalThis.matchMedia("(pointer: fine)").matches && globalThis.matchMedia("(hover: hover)").matches;
 }
 
+// Whether a variable is being dragged right now (the screen waits with a
+// redraw until it is dropped or let go).
+export const variableDragInProgress = () => Boolean(draggedVariableId);
+
 function isVariableDrag(event) {
   return [...(event.dataTransfer?.types || [])].includes(VARIABLE_DRAG_TYPE);
 }
