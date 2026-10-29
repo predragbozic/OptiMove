@@ -231,7 +231,7 @@ before(async () => {
   await client.query("alter table library.exercises add column owner_club_id uuid,add column place_id uuid,add column complexity_level_id uuid,add column starting_position_id uuid,add column attractor_id uuid");
   await client.query(EXERCISE_COLLECTIONS_FIXTURE_SQL);
   await client.query("create table public.clubs(id uuid primary key)");
-  for(const name of ['202610191100_media_storage_foundation.sql','202610191300_media_upload_lifecycle.sql','202610211000_media_drive_copies.sql',...(process.env.MEDIA_L1_TEST==='true'?['202610201100_media_reference_protection.sql','202610211200_media_drive_reference_bridge.sql']:[])])await client.query(await readFile(new URL('../../migrations_v2/'+name,import.meta.url),'utf8'));
+  for(const name of ['202610191100_media_storage_foundation.sql','202610191300_media_upload_lifecycle.sql','202610291100_media_drive_copies.sql',...(process.env.MEDIA_L1_TEST==='true'?['202610291000_media_reference_protection.sql','202610291200_media_drive_reference_bridge.sql']:[])])await client.query(await readFile(new URL('../../migrations_v2/'+name,import.meta.url),'utf8'));
   process.env.MEDIA_STORAGE_ENABLED='true';
   await client.query("insert into public.user_global_roles (user_id,role,is_active) values ($1,'platform_admin',true)", [otherCoachId]);
   for (const [key, ownerScope, ownerId, active] of [
@@ -625,7 +625,7 @@ test('Drive import previews recheck platform role, uploader and mapping independ
  await assert.rejects(accessService.access(revoked,body),error=>error.code==='resource_not_found');
 });
 
-// ---- Drive copies (migration 202610211000) ------------------------------------
+// ---- Drive copies (migration 202610291100) ------------------------------------
 // A legacy Drive link whose file has a ready copy in the platform account reads
 // and plays as that asset (exercise, private copy, plan item); nothing is rewritten.
 const DRIVE_VIDEO='https://drive.google.com/file/d/1DriveVideoFile0000000000AB/view?usp=sharing';

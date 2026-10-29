@@ -40,7 +40,7 @@ before(async()=>{
  for(const file of ['202610191100_media_storage_foundation.sql','202610191300_media_upload_lifecycle.sql'])await transaction(async c=>c.query(await fs.readFile(new URL('../../migrations_v2/'+file,import.meta.url),'utf8')));
  account=(await pool.query('insert into media.storage_accounts(owner_user_id) values($1) returning id',[owner])).rows[0].id;
  seededAsset=await asset();seededPlan=await plan();await item(seededPlan,seededAsset);await grant(seededPlan,'purchased');
- migration=await fs.readFile(new URL('../../migrations_v2/202610201100_media_reference_protection.sql',import.meta.url),'utf8');
+ migration=await fs.readFile(new URL('../../migrations_v2/202610291000_media_reference_protection.sql',import.meta.url),'utf8');
  process.env.DATABASE_URL=dbUrl.toString();const {assertNoTransactionControl}=await import('../src/migrate.js');assertNoTransactionControl(migration);
  // Rehearse runner-style failure rollback, including seeded rows/DDL.
  const c=await pool.connect();try{await c.query('begin');await c.query(migration);assert.equal((await c.query('select count(*) from media.retention_holds')).rows[0].count,'1');await c.query('rollback');assert.equal((await c.query("select to_regclass('media.retention_holds') as name")).rows[0].name,null);}finally{c.release();}

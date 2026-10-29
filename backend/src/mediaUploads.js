@@ -7,7 +7,7 @@ import { copyKind, driveFileId, driveFileInUse, withReadOnly } from './driveCopi
 const fail=(status,code,retryable=false)=>{const e=new MediaStorageError(status,code);e.retryable=retryable;throw e;};
 const sourcePurposes=new Set(['video_frame','automatic_thumbnail']);
 const terminal=new Set(['completed','cancelled','failed']);
-// A Drive import (migration 202610211000): a platform administrator copies a
+// A Drive import (migration 202610291100): a platform administrator copies a
 // Drive file that exercises or plan items name into the platform account.
 const importPurposes={video:'drive_import_video',image:'drive_import_image'};
 const importMimeTypes={video:['video/mp4'],image:['image/jpeg','image/png','image/webp']};

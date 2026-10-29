@@ -10,7 +10,9 @@ Local implementation only. No push, PR, merge, deploy, persistent database migra
 
 ## Smallest safe bridge
 
-The two source migrations remain byte-identical. New migration `202610211200_media_drive_reference_bridge.sql` depends on both. Normal runner order is foundation, lifecycle, L1, Drive, bridge. Disposable tests also apply Drive before L1, then the same bridge; this checks upgrades in either prior deployment order, not renaming historical migrations.
+The two source migrations remain byte-identical. New migration `202610291200_media_drive_reference_bridge.sql` depends on both. Normal runner order is foundation, lifecycle, L1, Drive, bridge. Disposable tests also apply Drive before L1, then the same bridge; this checks upgrades in either prior deployment order, not renaming historical migrations.
+
+Renamed on 2026-10-29 (owner decision, before any of them was applied anywhere persistent): the three files now sort after `202610282300_training_load_v42_source_metric_zone_model.sql`, as `202610291000_media_reference_protection.sql` (L1), `202610291100_media_drive_copies.sql` (Drive) and `202610291200_media_drive_reference_bridge.sql` (bridge). Their relative order and their SQL are unchanged (the SHA-256 values in `r2-l1-deployment-preflight.md` are the same), so the runner applies them after v42 in name order, and a v38–v42 rollback's "a later migration is recorded" guard sees them as later.
 
 `media.l1_item_assets` resolves each plan item's own snapshot: explicit asset, mapped legacy Drive file of the same kind, or no asset. It does not consult today's exercise URL and does not rewrite a snapshot. Inherited exercise links continue to follow the existing authorized personalization logic; Builder snapshots their effective legacy URLs as before.
 

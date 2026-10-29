@@ -9,7 +9,7 @@ import {createMediaUploadService} from '../src/mediaUploads.js';
 import {createDriveCopyService,driveFileIdOf} from '../src/driveCopies.js';
 import {inspectMedia,validateVideoTracks,DRIVE_IMPORT_MAX_VIDEO_SECONDS} from '../src/mediaInspection.js';
 
-// The Drive import (migration 202610211000): a platform administrator copies a
+// The Drive import (migration 202610291100): a platform administrator copies a
 // Google Drive file that exercises or plan items name in a legacy slot into the
 // platform storage account; the copy row commits with its asset or not at all.
 const input=process.env.MEDIA_TEST_DATABASE_URL;
@@ -55,7 +55,7 @@ before(async()=>{
  await dbAdmin.connect();await dbAdmin.query(`create role ${roleName} nologin nosuperuser nocreatedb nocreaterole noinherit`);roleCreated=true;await dbAdmin.query(`grant ${roleName} to current_user`);await dbAdmin.query(`create database ${dbName} owner ${roleName}`);created=true;
  pool=new pg.Pool({connectionString:testUrl.toString(),options:'-c role='+roleName,max:12});await pool.query(fixture);
  await pool.query('insert into public.users values($1),($2)',[adminId,coachId]);await pool.query("insert into public.user_global_roles values($1,'platform_admin',true)",[adminId]);
- for(const name of ['202610191100_media_storage_foundation.sql','202610191300_media_upload_lifecycle.sql','202610201100_media_reference_protection.sql','202610211000_media_drive_copies.sql','202610211200_media_drive_reference_bridge.sql']){const sql=await fs.readFile(new URL('../../migrations_v2/'+name,import.meta.url),'utf8');const c=await pool.connect();try{await c.query('begin');await c.query(sql);await c.query('commit');}catch(e){await c.query('rollback');throw e;}finally{c.release();}}
+ for(const name of ['202610191100_media_storage_foundation.sql','202610191300_media_upload_lifecycle.sql','202610291000_media_reference_protection.sql','202610291100_media_drive_copies.sql','202610291200_media_drive_reference_bridge.sql']){const sql=await fs.readFile(new URL('../../migrations_v2/'+name,import.meta.url),'utf8');const c=await pool.connect();try{await c.query('begin');await c.query(sql);await c.query('commit');}catch(e){await c.query('rollback');throw e;}finally{c.release();}}
  storage=createMediaStorageService(pool);await storage.updatePolicy(adminId,{expectedRevision:1,reason:'test allocation',changes:{defaultLimitBytes:'1000000',maxParallelUploads:2}});
  process.env.DATABASE_URL=testUrl.toString();const {createMediaStorageRouter}=await import('../src/routes/mediaStorage.js');
  const app=express();app.use(express.json());app.use((r,_s,next)=>{Object.assign(r,{admin:adminReq,coach:coachReq,athlete:{user:{id:coachId},authz:{capabilities:{coachWorkspace:false},platformRoles:[]}}}[r.headers['x-test-actor']]||{});next();});

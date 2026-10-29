@@ -4,13 +4,13 @@ This is an unexecuted production procedure. No production SQL, deploy, configura
 
 ## Exact package
 
-Baseline BE-1 `202610191100_media_storage_foundation.sql` and BE-2 `202610191300_media_upload_lifecycle.sql` must already match the ledger. New migrations, in runner order:
+Baseline BE-1 `202610191100_media_storage_foundation.sql` and BE-2 `202610191300_media_upload_lifecycle.sql` must already match the ledger. New migrations, in runner order, all after `202610282300_training_load_v42_source_metric_zone_model.sql` (renamed on 2026-10-29 with their SQL unchanged; see `r2-l1-drive-integration.md`):
 
 | Migration | SHA-256 |
 | --- | --- |
-| `202610201100_media_reference_protection.sql` (L1) | `a969eae0d3ef6c5ec45907db124e7250515feeea97c3309430bec292e06750c8` |
-| `202610211000_media_drive_copies.sql` (Drive) | `e13159397c59d5c9235781754df2fc8b32b00d95afe95bbb2c665af837b9fd91` |
-| `202610211200_media_drive_reference_bridge.sql` (bridge) | `3841c051c9fd217be8e32d4af33878c3ffaace669815f4286d4e749ae6432367` |
+| `202610291000_media_reference_protection.sql` (L1) | `a969eae0d3ef6c5ec45907db124e7250515feeea97c3309430bec292e06750c8` |
+| `202610291100_media_drive_copies.sql` (Drive) | `e13159397c59d5c9235781754df2fc8b32b00d95afe95bbb2c665af837b9fd91` |
+| `202610291200_media_drive_reference_bridge.sql` (bridge) | `3841c051c9fd217be8e32d4af33878c3ffaace669815f4286d4e749ae6432367` |
 
 Each migration and its ledger entry commit in a separate transaction. The package is NOT atomic. Compare the entire ledger with the release inventory; stop for an unexpected pending migration, checksum mismatch, non-prefix state or unledgered partial objects. Never edit applied SQL or the ledger.
 

@@ -1,7 +1,7 @@
 # Drive media import into R2 — plan
 
 Status: **approved by the owner on 2026-10-21**: a platform account of 15 GB; exercise images from R2 too, a slower
-first load accepted. PR 1 (backend, migration `202610211000_media_drive_copies.sql`) is implemented on branch
+first load accepted. PR 1 (backend, migration `202610291100_media_drive_copies.sql`) is implemented on branch
 `feature/drive-media-import`. It is not merged and not applied to any persistent database. PR 2 (the import screen)
 has not started.
 
@@ -90,7 +90,7 @@ Instead:
 
 ### PR 1: backend (migration, import routes, mapping-aware reads)
 
-**Migration** `202610211000_media_drive_copies.sql` (db-reviewer):
+**Migration** `202610291100_media_drive_copies.sql` (db-reviewer):
 
 - **Platform owner.** `media.storage_accounts` gains a platform owner: a nullable `owner_platform boolean`, which may
   be only true or null. The check becomes exactly one of user, club or platform, and a unique partial index allows

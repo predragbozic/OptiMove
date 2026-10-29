@@ -101,7 +101,7 @@ export function createMediaStorageService(pool) {
   }
   async function ensureAccount(owner) {
     object(owner);
-    // The one platform account (migration 202610211000): Drive copies, never a coach's quota.
+    // The one platform account (migration 202610291100): Drive copies, never a coach's quota.
     if (owner.type === 'platform') {
       await pool.query('insert into media.storage_accounts (owner_platform) values (true) on conflict (owner_platform) where owner_platform do nothing');
       return (await pool.query('select id from media.storage_accounts where owner_platform')).rows[0].id;

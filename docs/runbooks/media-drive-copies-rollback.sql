@@ -1,4 +1,4 @@
--- Rollback of migrations_v2/202610211000_media_drive_copies.sql, together with
+-- Rollback of migrations_v2/202610291100_media_drive_copies.sql, together with
 -- a revert of the code that reads media.drive_copies (an older application on
 -- this schema ignores the copies and plays the Drive links again).
 -- Usable only before the platform storage account exists: it is created by
@@ -19,7 +19,7 @@ set local lock_timeout = '5s';
 do $$
 begin
   if not exists (select 1 from public.schema_migrations
-                  where migration_name = 'migrations_v2/202610211000_media_drive_copies.sql') then
+                  where migration_name = 'migrations_v2/202610291100_media_drive_copies.sql') then
     raise exception 'drive copies rollback refused: the migration is not recorded on this database';
   end if;
 end $$;
@@ -30,7 +30,7 @@ do $$
 begin
   if exists (select 1 from public.schema_migrations
              where migration_name like 'migrations_v2/%'
-               and migration_name > 'migrations_v2/202610211000_media_drive_copies.sql') then
+               and migration_name > 'migrations_v2/202610291100_media_drive_copies.sql') then
     raise exception 'drive copies rollback refused: a later migration is recorded';
   end if;
   if exists (select 1 from media.drive_copies)
@@ -56,5 +56,5 @@ alter table media.storage_accounts drop constraint storage_accounts_one_owner;
 alter table media.storage_accounts drop column owner_platform;
 alter table media.storage_accounts add constraint storage_accounts_check
   check (num_nonnulls(owner_user_id, owner_club_id) = 1);
-delete from public.schema_migrations where migration_name = 'migrations_v2/202610211000_media_drive_copies.sql';
+delete from public.schema_migrations where migration_name = 'migrations_v2/202610291100_media_drive_copies.sql';
 commit;

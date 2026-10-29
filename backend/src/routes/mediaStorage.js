@@ -27,7 +27,7 @@ export function createMediaStorageRouter({ service, uploads, access, driveCopies
     router.get('/storage-accounts/:id',handle(async (req,res) => res.json(await service.getAccount(uuid(req.params.id)))));
     router.patch('/storage-accounts/:id/limit',handle(async (req,res) => res.json(await service.updateLimit(req.user.id,uuid(req.params.id),req.body))));
     router.get('/storage-limit-audit',handle(async (req,res) => res.json(await service.listAudit(req.query))));
-    // Drive import (migration 202610211000): copies of the Drive files that
+    // Drive import (migration 202610291100): copies of the Drive files that
     // exercises and plan items name, charged to the platform account.
     if (uploads && driveCopies) {
       router.get('/drive-import/status',handle(async (_req,res) => res.json(await driveCopies.status())));

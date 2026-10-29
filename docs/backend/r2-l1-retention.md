@@ -4,7 +4,7 @@ Integrated PR candidate. Base: origin/main a585af8e61bbd5c950f61e0ddc060f415a624
 
 ## Scope and data model
 
-Migration: migrations_v2/202610201100_media_reference_protection.sql. Depends on deployed BE-1/BE-2 tables and existing Builder/program_access schema. No frontend, upload transport, codec, playback authorization or ownership API changes. BE-3 binding changes only its transaction lock order. This migration is still unpublished/local, so the original L1 migration is corrected in place; it is not an upgrade script for a database that applied commit 232692a.
+Migration: migrations_v2/202610291000_media_reference_protection.sql. Depends on deployed BE-1/BE-2 tables and existing Builder/program_access schema. No frontend, upload transport, codec, playback authorization or ownership API changes. BE-3 binding changes only its transaction lock order. This migration is still unpublished/local, so the original L1 migration is corrected in place; it is not an upgrade script for a database that applied commit 232692a.
 
 | Object | Purpose |
 | --- | --- |

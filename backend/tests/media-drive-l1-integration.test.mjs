@@ -9,7 +9,7 @@ import {createMediaUploadService} from '../src/mediaUploads.js';
 import {createDriveCopyService,driveFileIdOf} from '../src/driveCopies.js';
 
 const source=process.env.MEDIA_TEST_DATABASE_URL;
-const l1='202610201100_media_reference_protection.sql',drive='202610211000_media_drive_copies.sql',bridge='202610211200_media_drive_reference_bridge.sql';
+const l1='202610291000_media_reference_protection.sql',drive='202610291100_media_drive_copies.sql',bridge='202610291200_media_drive_reference_bridge.sql';
 const fixture=`create schema library;create schema plans;
 create table public.users(id uuid primary key);
 create table public.clubs(id uuid primary key);
