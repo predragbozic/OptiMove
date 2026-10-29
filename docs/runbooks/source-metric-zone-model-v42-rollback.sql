@@ -25,7 +25,10 @@
 --     proof, a retirement, an actor, a changed label, unit, note or reference,
 --     or any T3, T4, T5, T6 or T8 row naming the field or its revision;
 --   * any trigger of training_load.source_metric_definitions or
---     source_metric_definition_versions is disabled when it starts.
+--     source_metric_definition_versions is disabled when it starts;
+--   * the migrator is running (it holds the advisory lock 822026 of
+--     backend/src/migrate.js; this script takes the same lock for its own
+--     transaction, without waiting).
 --
 -- One transaction: everything or nothing. Run it at a quiet moment as
 --   psql -v ON_ERROR_STOP=1 --single-transaction -f source-metric-zone-model-v42-rollback.sql
@@ -36,6 +39,15 @@
 -- enabled again before the COMMIT.
 begin;
 set local lock_timeout = '5s';
+
+-- The migrator's lock (MIGRATION_LOCK_KEY in backend/src/migrate.js), for this
+-- transaction: no deploy can apply or record a migration while v42 is undone.
+do $$
+begin
+  if not pg_try_advisory_xact_lock(822026) then
+    raise exception 'v42 rollback refused: the migrator is running';
+  end if;
+end $$;
 
 do $$
 begin

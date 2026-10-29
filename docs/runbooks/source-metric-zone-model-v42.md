@@ -49,7 +49,8 @@ it too until v42 commits. No mixed state can save a zone operator outside the zo
 ## After the deploy
 
 1. `/api/health` serves the merge commit with `ok: true`.
-2. Run `docs/runbooks/source-metric-zone-model-v42-postcheck.sql` one block at a time:
+2. Before any zone field is confirmed (blocks 4 and 6 expect no proof and no audit row on the new field), run
+   `docs/runbooks/source-metric-zone-model-v42-postcheck.sql` one block at a time:
    - block 1 compares the recorded checksum with the one in the file;
    - block 4 shows ten fields, the new one exactly as seeded;
    - block 6 shows no audit row for the new field.
@@ -84,7 +85,11 @@ first error (`psql -v ON_ERROR_STOP=1 --single-transaction -f`). It refuses, cha
   of a zone. v42 is forward-only from then on, and a correction is a later migration;
 - while the field `.open_top` is not exactly its seed: another revision, a proof, a retirement, an actor, a changed
   label, or any mapping, mapping version, activation, value provenance or audit row naming it;
-- while any trigger of the two tables is disabled when it starts.
+- while any trigger of the two tables is disabled when it starts;
+- while the migrator is running: it takes the migrator's advisory lock for its own transaction, without waiting.
+
+Run it from a checkout with LF line endings (`.gitattributes` pins the v42 runbook SQL to LF): the restored bodies must
+be byte for byte v39's and v34's, which preflight block 3 checks by their md5.
 
 It disables exactly the two v34 guards that refuse a DELETE, for its own transaction, deletes the seed, enables them
 again and checks every trigger of the two tables before the COMMIT. It restores v39's actor guard and v34's seed window
@@ -98,5 +103,8 @@ discovery document). The unit act is as before. The meaning act of a zone takes 
 - the power field (`more.complementary_data.power.distance`): its closed zones, `between`;
 - the open top zone (`.open_top`) and the speed field (`more.complementary_data.speed.distance`, one open zone): `>=`.
 
-The operator is saved for good; a wrong choice cannot be mapped (the mapping version's operator equality, v34), and the
-correction is a new revision.
+The operator is saved for good, and the correction is a new revision. The database accepts either operator on any zone
+field: it does not tie a field to its shape (P4). The mapping version's operator equality (v34) catches a pairing of a
+closed zone with `>=` or of the open top zone with `between`. It does not catch a `>=` wrongly confirmed on the power
+field and then mapped to a variable of the open shape (J7 section 2); the field-to-shape rule is the extractor
+registry's (7f).
