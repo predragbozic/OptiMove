@@ -336,6 +336,24 @@ test("a drop sends one link create with exactly the request key, the variable an
   assert.notEqual(posts()[1].body.requestKey, call.body.requestKey, "a new drop is a new request");
 });
 
+test("two fast drops on the same category send exactly one request: the second waits for the first and is not sent", async () => {
+  let release;
+  serve(() => new Promise((resolve) => { release = resolve; }));
+  await openCategories();
+  for (let i = 0; i < 2; i += 1) {
+    const transfer = newTransfer();
+    fire("dragstart", chip(V1), transfer);
+    fire("dragover", categoryButton(C2), transfer);
+    fire("drop", categoryButton(C2), transfer);
+  }
+  assert.equal(posts().length, 1, "the second drop, while the first is being saved, sends nothing");
+  release(created());
+  await lastDrop;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(posts().length, 1);
+  assert.match(text(), /Total distance was added to Sprint <b>\./);
+});
+
 test("a variable already in the category: the server's link_exists reads as already there, nothing changed, no Undo", async () => {
   serve(() => ({ status: 409, body: { error: "link_exists" } }));
   await openCategories();
