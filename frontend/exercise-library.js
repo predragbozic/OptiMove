@@ -162,8 +162,8 @@ export function renderExerciseLibraryHtml(data) {
     `}
     ${search.lockedPreviews?.length ? `<section class="exercise-locked-results"><h3>Locked exercises — name matches</h3><p class="muted">Contact your administrator to request access. Previews cannot be added, copied or played.</p><div class="exercise-block-grid">${search.lockedPreviews.map((exercise) => `<article class="panel exercise-block-card is-locked"><div class="exercise-block-card-body"><span class="exercise-block-lock">🔒 Access required</span><h4>${escapeHtml(exercise.name)}</h4><p>${escapeHtml(exercise.blockName)}</p></div></article>`).join("")}</div></section>` : ""}
     ${search.hasMore || search.moreLockedPreviews ? `
-      <div class="load-more-row">
-        <button class="plain-button" data-action="exercise-load-more">Load more</button>
+      <div class="load-more-row exercise-load-more-row">
+        <button class="plain-button" type="button" data-action="exercise-load-more">Load more</button>
       </div>
     ` : ""}
     ${selection ? renderExerciseSelectionBar(selection, exercises) : ""}

@@ -19373,3 +19373,56 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 .source-fields-evidence.is-verified {
   background: var(--accent-soft);
 }
+
+/* Exercise Library "Load more" (exercise-actions.js, loadMoreExercises): a
+   failed further page is said under the button, the list stays as it was. */
+.exercise-load-more-row {
+  flex-wrap: wrap;
+}
+.exercise-load-more-row .plain-button {
+  min-height: 44px;
+}
+.exercise-load-more-row [aria-disabled="true"] {
+  cursor: progress;
+  opacity: 0.7;
+}
+.load-more-error {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--danger);
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* Exercise Library: the app's top bar and the library's search and filters,
+   brought back over the list by a short pull up (exercise-header-reveal.js).
+   Sticky, never fixed: both keep their place in the page, so the list never
+   moves when they come or go. Slid by `top`, never by a transform - a
+   transform would make the fixed Messages panel inside the top bar take the
+   bar for its screen. The top bar sits above the search row (31 over 30) so
+   its menus open over it; both stay under the menu, the app update notice,
+   every overlay and the athletes drawer's shade (39 and up). */
+body.exercise-header-pinned .workspace > .topbar,
+body.exercise-header-pinned #viewToolbar {
+  position: sticky;
+  background: var(--bg);
+  transition: top 180ms ease-out;
+}
+body.exercise-header-pinned .workspace > .topbar {
+  top: var(--exercise-header-shift, 0px);
+  z-index: 31;
+  /* Fills the gap down to the search row, so the list never shows through. */
+  box-shadow: 0 var(--exercise-header-gap, 0px) 0 0 var(--bg);
+}
+body.exercise-header-pinned #viewToolbar {
+  top: calc(var(--exercise-header-shift, 0px) + var(--exercise-header-toolbar-top, 0px));
+  z-index: 30;
+  box-shadow: 0 12px 14px -14px rgba(16, 24, 32, 0.5);
+}
+@media (prefers-reduced-motion: reduce) {
+  body.exercise-header-pinned .workspace > .topbar,
+  body.exercise-header-pinned #viewToolbar {
+    transition: none;
+  }
+}

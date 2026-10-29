@@ -1080,7 +1080,6 @@ export const createInitialState = () => ({
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
   exerciseLayout: "horizontal",
-  touch: { startX: 0, startY: 0, startTime: 0 },
   appHistoryDepth: 0,
   backGuardReady: false,
   allowBrowserExit: false,
