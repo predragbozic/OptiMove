@@ -178,7 +178,7 @@ export function buildSourceFieldRequest(form) {
   const threshold = form.parameterKind === "event_threshold";
   const zone = form.parameterKind === "zone_bounds";
   if (threshold && !OPERATORS.includes(d.boundOperator)) errors.boundOperator = "Choose one.";
-  if (zone && !ZONE_OPERATORS.includes(d.boundOperator)) errors.boundOperator = "Choose what this field's evidence shows.";
+  if (zone && !ZONE_OPERATORS.includes(d.boundOperator)) errors.boundOperator = "Choose one of the two.";
   if (Object.keys(errors).length) return { body: null, errors };
   return { errors, body: { requestKey: form.requestKey, ...(threshold || zone ? { boundOperator: d.boundOperator } : {}), evidenceRef } };
 }
@@ -244,7 +244,9 @@ export function confirmQuestion(form, body) {
   const what = `${form.fieldName} (revision ${form.revisionNumber})`;
   const value = form.act === "unit"
     ? `as "${body.sourceUnit}"${body.sourceBoundUnit ? ` with bounds in "${body.sourceBoundUnit}"` : ""}`
-    : body.boundOperator ? `with the operator "${operatorWords(form.parameterKind, body.boundOperator)}"` : "";
+    : !body.boundOperator ? ""
+    : form.parameterKind === "zone_bounds" ? `as "${operatorWords(form.parameterKind, body.boundOperator)}"`
+    : `with the operator "${operatorWords(form.parameterKind, body.boundOperator)}"`;
   return `Confirm the ${form.act === "unit" ? "unit" : "meaning"} of ${what}${value ? ` ${value}` : ""}, with the evidence ${body.evidenceRef}? It is saved once and never changed; a correction is a new revision.`;
 }
 
