@@ -2757,11 +2757,24 @@ nothing imported is visible in the app.
 - PR #251 (phase 6, merge commit `cf387f2`) and PR #252 (documents, merge commit `0b947ab`, 2026-10-28 18:34:08 UTC) are
   deployed with `0b947ab`, by the owner by hand: `/api/health` first served `0b947ab` with `ok: true` at 20:44:24 UTC, then five more times in a row until 20:45:34 UTC (`ae29b08` before) (the *Rukovodilac*'s smoke); without a login six
   protected routes answered 401 and `/api/auth/me` answered `{"user":null}`. No migration.
-- **Merged outside this plan, not deployed:** PR #245 (backend dependency hardening, merge commit `527c296`, 18:49:07
-  UTC) and PR #220 (the Dashboard display model with ECharts, merge commit `1659988`, 18:52:37 UTC) were merged from the
-  owner's account through another workflow, not this plan's. Neither adds a migration. Their descriptions record the
-  deploy as on hold until a separate owner approval. Production serves `0b947ab`, which contains neither. The
-  executor checked only the git history and the two pull requests' descriptions.
+- **PR #245 and PR #220 are deployed** with `1659988`, by the owner by hand: `/api/health` served `1659988` with
+  `ok: true` from 22:22:26 UTC, three times in a row until 22:22:44 UTC (`0b947ab` before) (the *Rukovodilac*'s
+  smoke).
+  - They were merged outside this plan from the owner's account: PR #245 (backend dependency hardening, merge commit
+    `527c296`, 18:49:07 UTC) and PR #220 (the Dashboard display model with ECharts, merge commit `1659988`, 18:52:37
+    UTC). Neither adds a migration.
+  - The *Rukovodilac*'s smoke was basic, with no functional check of those changes:
+    - six protected routes answered 401, and `/api/auth/me` answered `{"user":null}`;
+    - the served bundle carries ECharts and Source fields;
+    - an invalid JSON body to `/api/auth/login` answered 400.
+- PR #254 (the Data configuration visual proposal, documents only, merge commit `f4abd7c`, 22:02:19 UTC) is deployed
+  with `f4abd7c`: at 23:50:34 – 23:50:37 UTC `/api/health` served `f4abd7c` with `ok: true` three times in a row (the
+  executor's read; when that deploy started is not recorded here).
+- **Merged, not deployed by 23:50:37 UTC** (production then served `f4abd7c`):
+  - PR #255 (the phase 5b acceptance, documents only, merge commit `82fbb3c`, 22:24:25 UTC);
+  - PR #256 (Data configuration PR-1, no migration, merge commit `0e38ae9`, parents `82fbb3c` and `d0afe79`, 2026-10-28
+    23:50:21 UTC). The executor merged it under the standing merge order, from exactly `d0afe79`, after the
+    *Rukovodilac*'s GO on that head (its message queued at 23:40:01 UTC: no BLOCKER, HIGH or MEDIUM; two LOW).
 - PR #158 (merge commit `0293b39`, merged 2026-10-12 16:12:25 UTC exactly from head `77ae78f`; the
   agent-efficiency rule, docs / rules only) is deployed: `/api/health` first served `0293b39` with
   `ok: true` at 16:13:15 UTC, then three times in a row (16:13:26, 16:13:36 and 16:13:46 UTC); without a
@@ -3140,7 +3153,8 @@ pre-existing; pass/fail counts don't belong in this file
   dragging variables into categories. Then step 2 ★★: own icons for system, club and private-coach owners on R2, with a
   migration. Many of the 12c and phase 6 follow-ups below belong to it.
   - The proposal is merged (PR #254, `f4abd7c`); the owner's V1–V5 were decided as recommended (its section 10).
-  - **PR-1 is implemented in an open pull request** (no migration): the icon library (Tabler Icons 3.50.0, MIT, 128
+  - **PR-1 is merged** (PR #256, merge commit `0e38ae9`, 2026-10-28 23:50:21 UTC; no migration; not deployed yet, see
+    "Implemented ≠ deployed"): the icon library (Tabler Icons 3.50.0, MIT, 128
     icons, generated), Settings → Icons, the shared picker, an optional icon at create (J3), the start screen of layout
     C with separate Domains and Categories screens, and the visual pass. It closes these follow-ups below: the two
     look-alike controls, archived and active items in separate groups of the list filter, the dead end after "first
