@@ -12,7 +12,7 @@ import {
   removablePlacement, removableVariableLink,
 } from "./metric-classification-data.js";
 import { newRequestKey } from "./metric-variables-data.js";
-import { checkDrop, dismissDrop, ensureTray, loadTray, undoDrop } from "./metric-classification-drag.js";
+import { checkDrop, dismissDrop, dropNeedsAsk, ensureTray, loadTray, undoDrop } from "./metric-classification-drag.js";
 
 // The domains and categories the workspace reads (C1).
 export async function loadClassification(render) {
@@ -159,8 +159,10 @@ export async function handleClassificationAction(action, { render, leaveForm, lo
     return true;
   }
 
-  // The forms: only an admin's, and only what the server's answer offers.
-  if (!admin || s.form) return true;
+  // The forms: only an admin's, and only what the server's answer offers. One
+  // write at a time: none opens while a drop (PR-2) is being saved or is not
+  // confirmed, so its result and Check result stay on the screen.
+  if (!admin || s.form || dropNeedsAsk()) return true;
   if (type === "metric-classification-create-open") {
     const kind = action.dataset.kind === "category" ? "category" : "domain";
     s.notice = "";

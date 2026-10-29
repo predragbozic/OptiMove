@@ -111,7 +111,12 @@ export function loadVariablesSection(render) {
   if (!variablesContext()) { render(); return Promise.resolve(); }
   if (s.view === "home" && !s.form) return loadDataConfigHome(render);
   if (s.view === "domains" && !s.form) return loadClassification(render);
-  if (s.view === "categories" && !s.form) return Promise.all([loadClassification(render), ensureTray(render)]);
+  if (s.view === "categories" && !s.form) {
+    // The tray (PR-2) is read again each time the screen is shown, a return
+    // to Data configuration included.
+    s.tray = null;
+    return Promise.all([loadClassification(render), ensureTray(render)]);
+  }
   // The domains and categories: the list's filter and a variable's links use them.
   const tree = ensureClassification(render);
   if (s.detail.id && !s.form) return Promise.all([tree, loadVariable(s.detail.id, render)]);
@@ -128,8 +133,9 @@ const LOADERS = { list: (render) => loadVariables(render), variable: (id, render
 // ---------------------------------------------------------------------------
 export function variablesMayBeLeft() {
   const form = state.trainingLoad.variables?.form;
-  // A drop on the Categories screen (PR-2) in flight or not confirmed.
-  if (!form && dropNeedsAsk()) return confirmAsk(dropLeaveQuestion());
+  // A drop on the Categories screen (PR-2) in flight or not confirmed: asked
+  // first, whether a form is open or not.
+  if (dropNeedsAsk() && !confirmAsk(dropLeaveQuestion())) return false;
   if (!form) return true;
   if (form.busy) return confirmAsk(`${isClassificationMode(form.mode) ? "A change" : "A variable"} is still being saved. Leave anyway? Its result will not be shown.`);
   if (form.unconfirmed) return confirmAsk("The last save is not confirmed. Leave without checking? Look for it in the list later.");

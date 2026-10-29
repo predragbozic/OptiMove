@@ -19532,7 +19532,7 @@ body.exercise-header-pinned #viewToolbar {
 /* While a variable is dragged, the categories that take it are outlined, and
    the one under the pointer is marked. */
 .dc-drag-board.is-dragging .dc-drop-category > .metric-variables-item {
-  outline: 2px dashed var(--line);
+  outline: 2px dashed var(--line-strong);
   outline-offset: 2px;
 }
 .dc-drop-category.is-drop-target > .metric-variables-item {
@@ -19540,12 +19540,20 @@ body.exercise-header-pinned #viewToolbar {
   outline-offset: 2px;
   background: var(--accent-soft);
 }
+.dc-tray .dc-drop-status {
+  margin: 0;
+}
+/* A narrow window with a mouse: the tray goes above the categories and stays
+   at the top while they scroll under it, at most half the window tall. */
 @media (max-width: 960px) {
   .dc-drag-board {
     grid-template-columns: minmax(0, 1fr);
   }
   .dc-tray {
-    position: static;
-    max-height: none;
+    order: -1;
+    top: 8px;
+    z-index: 2;
+    max-height: 45vh;
+    box-shadow: var(--shadow);
   }
 }
