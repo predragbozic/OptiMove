@@ -2089,10 +2089,6 @@ Technical details.
   `docs/ai/metrics-core-plan.md` (phases 0–10, R1 and R2), with the phase 10 decisions in
   `docs/ai/phase10-estimates-decisions.md`. Its roles, reviewers and rules of work are in that file only;
   this file records what was merged and deployed.
-  - **The owner's words on merges** (2026-10-28, in the *Rukovodilac*'s chat; the executor checked both turns in its
-    transcript, verbatim): turn `727a680c` at 22:25:11 UTC, „Molim te nemoj me vise citati za merge. Uradio sam sada”,
-    and turn `33a7447c` at 22:25:31 UTC, „Ne cimaj me vise za merge poslove”. The *Rukovodilac* decided that the plan
-    stays as written (its message queued at 22:46:59 UTC); that decision is its own, not the owner's words.
   - **Phase 0, PR #221** (docs only): merge commit `16ef080` (parents `7a9e59d` and `5ef3334`) on 2026-10-26 at
     22:59:53 UTC, made by the *Rukovodilac*; how it was authorized is recorded in PR #222 (not merged when this
     was written). `/api/health` served `16ef080` with `ok: true` three times in a row (23:01:37, 23:01:47 and
