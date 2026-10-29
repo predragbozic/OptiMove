@@ -16,8 +16,16 @@ const kinds=['video','image'];
 // (U+0020) only, so only spaces are stripped here. A link whose id is followed
 // by a tab, a line break or a no-break space names no file on either side and
 // keeps playing from Drive; it is never served as a copy without its hold.
+// A loop, not / +$/: that regex backtracks quadratically over a long inner run
+// of spaces, and a link is any text a coach saves, read on every request.
+function trimSpaces(text) {
+  let start=0,end=text.length;
+  while(start<end && text.charCodeAt(start)===32)start++;
+  while(end>start && text.charCodeAt(end-1)===32)end--;
+  return text.slice(start,end);
+}
 export function driveFileIdOf(url) {
-  const raw=typeof url==='string'?url.replace(/^ +| +$/g,''):'';
+  const raw=typeof url==='string'?trimSpaces(url):'';
   if(!raw)return null;
   const id=(raw.match(/drive\.google\.com\/file\/d\/([^/?#]+)/) || [])[1]
     || (/drive\.google\.com/.test(raw) && (raw.match(/[?&]id=([^&#]+)/) || [])[1])

@@ -110,6 +110,12 @@ for(const order of [[l1,drive],[drive,l1]])test('integration '+order.join(' then
    assert.deepEqual(differ,[],'every link reads the same in JavaScript and in the bridge');
    assert.ok(values.length>=110,'the matrix ran');
    // The two readings that matter: spaces never change the file, a line break after the id names none.
+   // A long run of spaces inside a link a coach saved: read in linear time, still as the SQL reads it.
+   for(const value of ['a'+' '.repeat(100000)+'x',urlOf(seededId).replace('/view','')+' '.repeat(100000)+'x',urlOf(seededId).replace('/view','')+' '.repeat(100000)]) {
+    const started=performance.now(),id=driveFileIdOf(value),took=performance.now()-started;
+    assert.ok(took<200,`read in ${took.toFixed(0)} ms`);
+    assert.equal(id,(await env.pool.query('select media.l1_drive_file_id($1) as id',[value])).rows[0].id);
+   }
    assert.equal(driveFileIdOf(urlOf(seededId).replace('/view','')+'  '),seededId);
    assert.equal(driveFileIdOf(urlOf(seededId).replace('/view','')+'\n'),null);
    assert.equal(driveFileIdOf(urlOf(seededId).replace('/view','')+'\u00a0'),null);
