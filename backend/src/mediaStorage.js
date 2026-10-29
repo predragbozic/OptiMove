@@ -38,7 +38,7 @@ function policyDto(p) {
 function usageDto(a, p) {
   const limit = a.override_limit_bytes ?? p.default_limit_bytes;
   const available = BigInt(limit) - BigInt(a.used_bytes) - BigInt(a.reserved_bytes);
-  return { storageAccountId: a.id, owner: { type: a.owner_user_id ? 'user' : 'club', id: a.owner_user_id || a.owner_club_id },
+  return { storageAccountId: a.id, owner: a.owner_platform ? { type: 'platform', id: null } : { type: a.owner_user_id ? 'user' : 'club', id: a.owner_user_id || a.owner_club_id },
     usedBytes: a.used_bytes, reservedBytes: a.reserved_bytes, limitBytes: limit,
     availableBytes: (available > 0n ? available : 0n).toString(), limitSource: a.override_limit_bytes === null ? 'default' : 'override',
     overLimit: BigInt(a.used_bytes) + BigInt(a.reserved_bytes) > BigInt(limit), activeUploads: Number(a.active_uploads || 0),
@@ -62,12 +62,26 @@ const cursorEncode = value => Buffer.from(JSON.stringify(value)).toString('base6
 // Internal service. Callers MUST resolve/authorize content ownership first.
 // BE-1 exposes no reservation/commit/release HTTP endpoint or R2 permission.
 export function createMediaStorageService(pool) {
-  async function tx(work) {
+  // commitBoundMs: the COMMIT's answer is awaited that long at most. On an
+  // error or no answer the connection is discarded and the outcome is not
+  // known here: 503 commit_outcome_unknown, which the caller resolves by
+  // reading the row again on another connection (a Drive import completion).
+  async function tx(work, { commitBoundMs = 0 } = {}) {
     const c = await pool.connect();
+    let discard = false;
     try { await c.query('begin'); await c.query("set local lock_timeout='5s'"); await c.query("set local statement_timeout='15s'");
-      const result = await work(c); await c.query('commit'); return result;
-    } catch (e) { await c.query('rollback').catch(() => {}); throw e; }
-    finally { c.release(); }
+      const result = await work(c);
+      if (!commitBoundMs) { await c.query('commit'); return result; }
+      let timer;
+      try {
+        await Promise.race([c.query('commit'), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('commit_timeout')), commitBoundMs); })]);
+      } catch {
+        discard = true;
+        throw Object.assign(new MediaStorageError(503, 'commit_outcome_unknown'), { retryable: true });
+      } finally { clearTimeout(timer); }
+      return result;
+    } catch (e) { if (!discard) await c.query('rollback').catch(() => {}); throw e; }
+    finally { c.release(discard || undefined); }
   }
   const policy = async c => (await c.query('select * from media.storage_policy where id=true')).rows[0];
   const lockPolicy = async c => (await c.query('select * from media.storage_policy where id=true for share')).rows[0];
@@ -86,7 +100,13 @@ export function createMediaStorageService(pool) {
       [accountId, uuid(actorId), JSON.stringify(oldValues), JSON.stringify(newValues), reason(why)]);
   }
   async function ensureAccount(owner) {
-    object(owner); uuid(owner.id);
+    object(owner);
+    // The one platform account (migration 202610291100): Drive copies, never a coach's quota.
+    if (owner.type === 'platform') {
+      await pool.query('insert into media.storage_accounts (owner_platform) values (true) on conflict (owner_platform) where owner_platform do nothing');
+      return (await pool.query('select id from media.storage_accounts where owner_platform')).rows[0].id;
+    }
+    uuid(owner.id);
     if (!['user', 'club'].includes(owner.type)) fail(400, 'invalid_request');
     const col = owner.type === 'user' ? 'owner_user_id' : 'owner_club_id';
     // No overwrite of ownership or limit; concurrent first use is harmless.
@@ -158,8 +178,10 @@ export function createMediaStorageService(pool) {
     async reserveUpload(input) {
       object(input); const accountId = uuid(input.storageAccountId); const actorId = uuid(input.uploadedByUserId); const key = uuid(input.idempotencyKey);
       const size = bytes(input.sizeBytes,{positive:true}); object(input.context);
-      const purposes = {exercise_video:'video',exercise_image:'image',video_frame:'image',automatic_thumbnail:'image'};
+      const purposes = {exercise_video:'video',exercise_image:'image',video_frame:'image',automatic_thumbnail:'image',drive_import_video:'video',drive_import_image:'image'};
       if (!Object.hasOwn(purposes,input.purpose) || purposes[input.purpose] !== input.kind || !MIME_TYPES.includes(input.mimeType) || !input.mimeType.startsWith(input.kind+'/')) fail(415,'unsupported_media');
+      // An import purpose only with an import context, and the reverse (also a database check).
+      if (input.purpose.startsWith('drive_import_') !== (input.context.type === 'drive_import')) fail(400,'invalid_request');
       if (!Number.isInteger(input.ttlSeconds) || input.ttlSeconds<1 || input.ttlSeconds>3600) fail(400,'invalid_request');
       const request = canonical({accountId,actorId,size,mimeType:input.mimeType,kind:input.kind,purpose:input.purpose,context:input.context});
       const serialized = JSON.stringify(request); if (serialized.length>8192) fail(400,'invalid_request');
@@ -168,6 +190,8 @@ export function createMediaStorageService(pool) {
         await c.query('select pg_advisory_xact_lock(hashtextextended($1,0))',[actorId+':'+key]);
         const existing = (await c.query('select * from media.uploads where uploaded_by_user_id=$1 and idempotency_key=$2',[actorId,key])).rows[0];
         if (existing) { if (existing.request_fingerprint !== fingerprint) fail(409,'idempotency_conflict'); return existing; }
+        // A caller's own refusal rule, in this transaction before anything is reserved.
+        if (input.precheck) await input.precheck(c);
         const p = await lockPolicy(c); const a = await lockAccount(c,accountId);
         if (!p.allowed_mime_types.includes(input.mimeType)) fail(415,'unsupported_media');
         const max = input.kind==='video' ? p.max_video_bytes : p.max_image_bytes;
@@ -187,10 +211,13 @@ export function createMediaStorageService(pool) {
     },
     // Internal BE-2 hook, only AFTER verification of the immutable create-only object.
     // This does not itself verify an R2 object and is deliberately not routable.
-    async commitVerifiedUpload(uploadId, verified) {
+    // onCommit(c, upload) runs in the same transaction, after the asset is ready:
+    // a Drive import's copy row commits with its asset or not at all.
+    async commitVerifiedUpload(uploadId, verified, { beforeCommit = null, onCommit = null, commitBoundMs = 0 } = {}) {
       uuid(uploadId); object(verified); bytes(verified.sizeBytes,{positive:true}); object(verified.metadata);
       if (JSON.stringify(verified.metadata).length>16384) fail(400,'invalid_request');
       return tx(async c => {
+        if (beforeCommit) await beforeCommit(c);
         const found = (await c.query('select storage_account_id from media.uploads where id=$1',[uploadId])).rows[0];
         if (!found) fail(404,'resource_not_found');
         await lockAccount(c,found.storage_account_id);
@@ -204,9 +231,10 @@ export function createMediaStorageService(pool) {
           [u.asset_id,verified.sizeBytes,verified.mimeType,JSON.stringify(verified.metadata),verified.objectKey || null,verified.metadata.sourceVideoMediaId || null]);
         await c.query('update media.storage_accounts set reserved_bytes=reserved_bytes-$2,used_bytes=used_bytes+$3,updated_at=now() where id=$1',
           [u.storage_account_id,u.reserved_bytes,verified.sizeBytes]);
+        if (onCommit) await onCommit(c, u);
         if (u.verification_token) await c.query("insert into media.upload_events(upload_id,performed_by_user_id,event) values($1,$2,'completed')",[uploadId,u.uploaded_by_user_id]);
         return (await c.query("update media.uploads set status='completed',updated_at=now() where id=$1 returning *",[uploadId])).rows[0];
-      });
+      }, { commitBoundMs });
     },
     // Internal BE-2 hook: caller must first stop/expire every write capability
     // and verify pending/final objects were removed. Expiry alone is NOT proof.

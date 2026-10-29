@@ -23,7 +23,7 @@ try {
     metadata={width:m.width,height:m.height};
   } else {
     info=await mediaInfoFactory({format:'object',chunkSize:65536});
-    metadata=validateVideoTracks(await info.analyzeData(workerData.size,read),mime);
+    metadata=validateVideoTracks(await info.analyzeData(workerData.size,read),mime,{maxSeconds:workerData.maxVideoSeconds});
   }
   parentPort.postMessage({result:metadata});
 } catch(e) {parentPort.postMessage({error:['unsupported_media','video_too_long'].includes(e.code)?e.code:'media_verification_failed',status:e.status===415?415:422});}

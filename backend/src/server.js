@@ -1,3 +1,4 @@
+import { mediaRetentionDatabaseError } from './mediaReferences.js';
 import "dotenv/config";
 import express from "express";
 // Before any router is used: an async route handler's rejection reaches the
@@ -40,6 +41,7 @@ import { assertEmailConfigValid } from "./email.js";
 import { MediaStorageError, createMediaStorageService } from './mediaStorage.js';
 import { createMediaAccessService } from './exerciseMedia.js';
 import { createMediaUploadService } from './mediaUploads.js';
+import { createDriveCopyService } from './driveCopies.js';
 import { createR2UploadStore } from './r2UploadStore.js';
 import { createMediaStorageRouter } from './routes/mediaStorage.js';
 
@@ -81,9 +83,10 @@ app.get("/api/health", async (_req, res, next) => {
 });
 
 const mediaStorage = createMediaStorageService(pool);
-const mediaUploads = createMediaUploadService({pool,storage:mediaStorage,store:createR2UploadStore()});
+const driveCopies = createDriveCopyService({pool});
+const mediaUploads = createMediaUploadService({pool,storage:mediaStorage,store:createR2UploadStore(),driveCopies});
 app.use('/api/media', createMediaStorageRouter({ service: mediaStorage, uploads: mediaUploads, access: createMediaAccessService({pool,store:createR2UploadStore()}) }));
-app.use('/api/admin/media', createMediaStorageRouter({ service: mediaStorage, admin: true }));
+app.use('/api/admin/media', createMediaStorageRouter({ service: mediaStorage, admin: true, uploads: mediaUploads, driveCopies }));
 
 app.use("/api/auth", authRouter);
 app.use("/api/athletes", requireAuth, athletesRouter);
@@ -221,6 +224,7 @@ app.use((error, req, res, next) => {
     const tooLarge = error.type === "entity.too.large";
     return res.status(status).json({ error: tooLarge ? "body_too_large" : "invalid_json", message: tooLarge ? "The request body is larger than this server accepts." : "The request body could not be read as JSON." });
   }
+  error = mediaRetentionDatabaseError(error) || error;
   if (error instanceof MediaStorageError) return res.status(error.status).json({error:error.code,code:error.code,retryable:Boolean(error.retryable),details:error.details});
   console.error(error);
   const status = Number(error.status || error.statusCode || 500);
