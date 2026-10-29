@@ -1,7 +1,9 @@
 # J7 — phase 5: the zone model, option A (accepted ★★ contract, C103)
 
 **Accepted on 2026-10-28 (C103 of the discovery document): the owner approved the contract as a whole (gate 1), and
-the plan names phase 5b ★★ with its migration v42 (gate 2). Not implemented: no code, no migration yet.** This is the ★★ contract of option A, which the owner chose on
+the plan names phase 5b ★★ with its migration v42 (gate 2). Implemented by PR #259, merged as `ed86ca8` on 2026-10-29
+and deployed with `d9a02ad8`; v42 is directly confirmed on the production database by the owner's read-only
+post-check. J7 "As built" in the discovery document records it.** This is the ★★ contract of option A, which the owner chose on
 2026-10-28 (C102 of the discovery document, as the *Rukovodilac* reads the owner's words; the variants are
 `docs/ai/phase5-zone-model-options.md`). It extends `docs/ai/gpexe-metric-variable-mapping-discovery.md` (the
 *discovery document*), sections D3, J1, J4 and J5. It is section J7 there, and its decisions are C103. It follows phase 4's pattern (`docs/ai/v39-revision-lifecycle-contract.md`): the owner approves the contract

@@ -32,7 +32,9 @@ same day, phase 12's accepted contract (C101, section 5) and the Done entry of 1
 entries of 12c and phase 6, the owner's decision of phase 5 (C102, section 5), and the Data configuration visual polish
 task (section 6); then phase 5b ★★ with its migration v42 (C103, section 5); later still, the owner's guidance for the
 Data configuration screens and on sources and users (section 6), its line in phases 8 and 11 (section 5), the future item
-of a private coach's own source and variables (section 6), and PR-1's merge (section 6).
+of a private coach's own source and variables (section 6), and PR-1's merge (section 6). Added on 2026-10-29: the Done
+entry of phase 5b with its deploy facts (section 5), and the merges of PR-2 and the language pass with PR-1's deploy
+(section 6).
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
@@ -45,7 +47,7 @@ Done entries of phases 2b and 2c, phases 11 and 12, the Q10 line of section 6) w
 PR #241); phase 12's contract line, against `d96936c` (merge of PR #242); the Done entry of 12b, against `9361fff` (merge
 of PR #247); the Done entries of 12c and phase 6 and phase 5's decision, against `cf387f2` (merge of PR #251); phase
 5b, against `0b947ab` (merge of PR #252); the owner's guidance of 2026-10-28 and PR-1's merge, against `0e38ae9` (merge of
-PR #256).
+PR #256); phase 5b's Done entry and the merges of PR-2 and the language pass, against `00b3958` (merge of PR #263).
 
 ## 1. Who does what
 
@@ -629,8 +631,31 @@ order covers is merged under it.
 - **Red zone:** the production preflight, the merge (and so the deploy and the migration), and the production post-check
   of v42.
 - **Gate line: migration v42.** Its merge needs the owner's own order naming the pull request and v42.
-- **Status (2026-10-29):** implemented in an open pull request (branch `feature/phase5b-zone-model-v42`, from `0eb7e10`);
-  not merged, and v42 is applied to no persistent database. J7 "As built" in the discovery document records it.
+- **Done, 2026-10-29.**
+  - PR #259 (branch `feature/phase5b-zone-model-v42`, from `0eb7e10`): migration v42 is exactly
+    `migrations_v2/202610282300_training_load_v42_source_metric_zone_model.sql`, sha256
+    `042445620eade972e9940667c4777469a5e9d22f3d9b551d1d4b64bbdb610af1`. J7 "As built" in the discovery document
+    records it.
+  - Reviews: the five internal reviews READY after their fixes; the *Rukovodilac*'s GO ★★ on `9c6c6f0` (its message
+    queued at 09:03:38 UTC) and the *Nezavisni revizor*'s GO on `9c6c6f0` (09:24:22 UTC), with no BLOCKER, HIGH or
+    MEDIUM. The record is in PR #259.
+  - The owner's words, in the *Rukovodilac*'s chat; the executor checked each turn in the *Rukovodilac*'s transcript:
+    - the preflight, the same day: „sve je očekivao, blok 7 su nule” (owner turn `da2c6b11`, 09:52:58 UTC): all nine
+      blocks as expected, block 7 zeros, and `v34_fingerprint` recorded for the post-check;
+    - the order: „Odobravam PR #258 i naređujem merge PR #259 sa migracijom
+      202610282300_training_load_v42_source_metric_zone_model.sql.” (owner turn `3caae47b`, 09:53:47 UTC);
+    - the post-check: „sve ocekivano” (owner turn `62bfdb8e`, 12:31:48 UTC). As the *Rukovodilac* reports it: all
+      seven blocks as expected, and `v34_fingerprint` equal to the preflight's.
+  - Merge: `ed86ca8` (parents `0eb7e10` and `9c6c6f0`), 09:59:59 UTC, made by the executor exactly from `9c6c6f0`.
+  - Deploy: by the owner by hand. Production got `d9a02ad8` (the merge of PR #262, which holds `ed86ca8` and PR #258's
+    `9101971`); a deploy of `9101971` as such never existed.
+  - Smoke (the *Rukovodilac*): production was first seen on `d9a02ad8` at 11:09:48 UTC, and `/api/health` answered
+    `ok: true` on it three times (11:10:11, 11:10:11 and 11:10:12 UTC). Without a login `/api/auth/me` answered
+    `{"user":null}`, and the metrics variables, classification, fields and mappings reads, the GPEXE team status,
+    the GPEXE source connections and `POST …/classification/links` with `{}` answered 401. The served bundle carries the
+    v42 zone texts.
+  - **v42 is directly confirmed on the production database** by the owner's post-check. The local OPTIMOVE database
+    is untouched.
 - **★★:** the owner approved the contract (J7) before any code and confirms the external review before the merge.
 - **Not in it:** the owner-run evidence and the first real confirmation of a zone field (a separate order, C97); 7f's
   rule "key → zone shape"; M4.
@@ -1013,9 +1038,16 @@ is the *Rukovodilac*'s.
   *Rukovodilac*'s GO.
 - **Decided (2026-10-28, `docs/ai/data-configuration-visual-proposal.md` section 10):** the owner's V1–V5 as
   recommended (layout C, Tabler Icons, I1 as PR-1b, domain and category icons later, PNG first), as the *Rukovodilac*
-  reads the owner's words; the *Rukovodilac*'s R1–R3. **PR-1 is merged** (PR #256, `0e38ae9`, 2026-10-28; no migration;
-  not deployed yet; the proposal's section 11 records it as built). Next: PR-2 (dragging), and PR-1b only on the owner's order naming
-  its migration.
+  reads the owner's words; the *Rukovodilac*'s R1–R3.
+  - **PR-1 is merged and deployed** (PR #256, `0e38ae9`, 2026-10-28; no migration; deployed with `d9a02ad8` on
+    2026-10-29; the proposal's section 11 records it as built).
+  - **PR-2 is done** (PR #263, merge commit `00b3958`, 2026-10-29 11:20:05 UTC; frontend only, no migration; the
+    proposal's section 12 records it as built). The executor merged it under the standing merge order from exactly
+    `54bbaaf`, after the *Rukovodilac*'s GO on that head (its message queued at 11:19:22 UTC), which followed a NO-GO on
+    `8c7a0048` whose MEDIUM was fixed. It replaces PR #260, closed as superseded after PR #262 conflicted with it in
+    `frontend/styles.css`. Not deployed yet. Its LOW follow-ups (LOW-2, LOW-4, a touch laptop or an iPad, more than 100
+    variables) are recorded in that section, not scheduled.
+  - Next: PR-1b only on the owner's order naming its migration.
 - **Not in step 1:** an icon on a domain or a category of variables. `metric_domains` and `metric_categories` have no
   icon column (v10, v41), so it needs a migration, which is an owner's option.
 - **Step 2 ★★, scheduled by the owner: a club's or a person's own icons.**
@@ -1058,12 +1090,15 @@ What of point 1 PR-1 already holds (checked against `0e38ae9`):
 | One primary action per screen | Yes: the start screen's cards; Domains and Categories, each with one primary button | — |
 | Empty states that name the next step | Partly: Domains and Categories name the step and link to it ("Create the first one with New domain", "Open Domains") | Source fields: with phase 8, when a field's next step is a mapping |
 | No abbreviations such as T2b, F3 or C97 | Yes: none in these screens' text (only in code comments) | — |
-| Introductions of one sentence | No: Source fields' has two sentences and names `docs/` | the language pass below |
-| The evidence legend as a chip that explains itself on a tap | No: PR-1 made it four badges, each followed by its meaning | the language pass below |
-| Keys, codes and ids only under Technical details | Variables, Domains and Categories: yes. Source fields: no, a field's key and codes stand in its detail line and its forms | the language pass below |
+| Introductions of one sentence | No: Source fields' has two sentences and names `docs/` | the language pass below (done) |
+| The evidence legend as a chip that explains itself on a tap | No: PR-1 made it four badges, each followed by its meaning | the language pass below (done) |
+| Keys, codes and ids only under Technical details | Variables, Domains and Categories: yes. Source fields: no, a field's key and codes stand in its detail line and its forms | the language pass below (done) |
 
 **The language pass** is a small frontend pull request of its own, with or after PR-2, as the *Rukovodilac* orders. It
 changes no API.
+- **Done, 2026-10-29:** PR #261, merge commit `d29776f`, 11:17:54 UTC; frontend only, no migration. The executor merged
+  it under the standing merge order from exactly `0141df9`, after the *Rukovodilac*'s GO on that head (its message
+  queued at 11:11:20 UTC). The proposal's section 13 records it as built. Not deployed yet.
 
 **Sources and users: the owner's word of 2026-10-28.** Owner turn `269910e0` in the *Rukovodilac*'s chat, received by
 the server at 23:27:25 UTC; it reached the *Rukovodilac*'s conversation at 23:40:09 UTC (the time its own transcript

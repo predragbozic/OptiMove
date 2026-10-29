@@ -6,9 +6,9 @@ Variables, Domains & categories and Source fields" (`docs/ai/metrics-core-plan.m
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. PR-1 is built (section 11) and merged (PR #256, `0e38ae9`, 2026-10-28). PR-2 is built (section 12) in an open pull request. The *Rukovodilac* reviewed `c830050` (GO as a document, no BLOCKER, HIGH or MEDIUM; three LOW notes for PR-1, recorded in sections 3.4, 3.5 and 4) and decided R1–R3 (section 10). The owner's choices V1–V5 were made on 2026-10-28 (section 10). |
+| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. PR-1 is built (section 11), merged (PR #256, `0e38ae9`, 2026-10-28) and deployed (with `d9a02ad8`, 2026-10-29). PR-2 is built (section 12) and merged (PR #263, `00b3958`, 2026-10-29). The Source fields language pass is built (section 13) and merged (PR #261, `d29776f`, 2026-10-29). PR-2 and the language pass are not deployed yet. The *Rukovodilac* reviewed `c830050` (GO as a document, no BLOCKER, HIGH or MEDIUM; three LOW notes for PR-1, recorded in sections 3.4, 3.5 and 4) and decided R1–R3 (section 10). The owner's choices V1–V5 were made on 2026-10-28 (section 10). |
 | Mockup | `docs/ai/mockups/data-configuration-visual.html` — a static page, opened in any browser. It holds the three layouts at 1280 px (scaled) and 360 px, the icon picker, Settings → Icons, the variables list and the Source fields list. It talks to no server, and every name and number in it is invented. |
-| Verified against commit | `0b947ab` (merge of PR #252). File and line references are to that commit. |
+| Verified against commit | `0b947ab` (merge of PR #252). File and line references are to that commit. Sections 12 and 13 are verified against `00b3958` (merge of PR #263). |
 | Decides | The owner: V1–V5 (section 10). The *Rukovodilac*: R1–R3 (section 10), inside the plan. |
 
 ---
@@ -388,10 +388,15 @@ legend is the four badges, each with its colour and its word, followed by its me
 
 ---
 
-## 12. PR-2 as built (from `0eb7e10`; frontend only, no migration)
+## 12. PR-2 as built (from `0eb7e10`, rebuilt on `d9a02ad8`; frontend only, no migration)
 
 PR-2 is section 6: dragging a variable onto a category on a computer. It uses the existing classification API and
 changes no backend file. Where it differs from section 6, this section says so.
+
+**Merged** as PR #263 (merge commit `00b3958`, 2026-10-29 11:20:05 UTC), by the executor under the standing merge order
+from exactly `54bbaaf`, after the *Rukovodilac*'s GO on that head. It was first PR #260; PR #262 then appended a block
+to the same end of `frontend/styles.css`, so PR #260's five commits were cherry-picked onto `d9a02ad8` with both blocks
+kept, and PR #260 was closed as superseded. Not deployed yet (production serves `d9a02ad8`).
 
 **Where it is offered:**
 - Only on the Categories screen, and only with a mouse or trackpad (`pointer: fine` and `hover: hover`;
@@ -461,16 +466,17 @@ changes no backend file. Where it differs from section 6, this section says so.
 - A late answer to a drop left behind changes nothing on the screen in use.
 
 **Recorded, not done** (the *Rukovodilac*'s review of `8c7a0048`, LOW, and the reviews):
-- At 500 × 700 with *Result not confirmed* open, the stacked tray reaches 55% of the window and its list falls below its
-  visible bottom (the chips are locked then, Check result and Close are in view); a shorter hint or a lower cap below
-  960 px would help.
-- An Undo refused with `try_again` says "Nothing was saved. Try again." while Undo is no longer offered; it could keep
-  the saved line and its Undo while the 10 seconds last.
-- The tray's text: two paragraphs on the platform, up to three in a club, before the first chip, and an empty club tray
-  repeats the same instruction; a candidate for a later language pass.
-- Undo as a ghost button is quiet; the refusal sentences shared with the forms ("It is not available…") do not say
-  whether the variable or the category is meant; chips stay draggable when no category takes a drop; `dragleave`
-  relies on `relatedTarget` (the Builder uses the target's box), so the outline may flicker.
+- LOW-2: at 500 × 700 with *Result not confirmed* open, the stacked tray reaches 55% of the window and its list falls
+  below its visible bottom (the chips are locked then, Check result and Close are in view); a shorter hint or a lower
+  cap below 960 px would help.
+- LOW-4, smaller points:
+  - an Undo refused with `try_again` says "Nothing was saved. Try again." while Undo is no longer offered; it could
+    keep the saved line and its Undo while the 10 seconds last;
+  - the tray's text: two paragraphs on the platform, up to three in a club, before the first chip, and an empty club
+    tray repeats the same instruction; a candidate for a later language pass;
+  - Undo as a ghost button is quiet; the refusal sentences shared with the forms ("It is not available…") do not say
+    whether the variable or the category is meant; chips stay draggable when no category takes a drop; `dragleave`
+    relies on `relatedTarget` (the Builder uses the target's box), so the outline may flicker.
 - A touch laptop or an iPad with a trackpad passes `pointer: fine` and `hover: hover` and is offered the tray, where a
   long press may start the browser's drag; `any-pointer: coarse` in the gate or `touch-action: pan-y` on a chip are
   candidates, after a check on a real device.
@@ -508,3 +514,46 @@ changes no backend file. Where it differs from section 6, this section says so.
   - 44 px targets and no overflow.
 - Not checked: a touch laptop (a fine pointer with touch), an iPad with a trackpad, and the sticky tray in Firefox and
   Safari (the stacked layout is a flex column for that reason). *Add to a category* stays the way on all of them.
+
+---
+
+## 13. The Source fields language pass as built (from `9101971`; frontend only, no migration)
+
+The language pass of `docs/ai/metrics-core-plan.md` section 6: the items of its table that PR-1 left for Source fields,
+after the owner's guidance of 2026-10-28 that these screens speak the coach's language. **Merged** as PR #261 (merge
+commit `d29776f`, 2026-10-29 11:17:54 UTC), by the executor under the standing merge order from exactly `0141df9`,
+after the *Rukovodilac*'s GO on that head. Not deployed yet (production serves `d9a02ad8`). It changes
+`frontend/source-fields-view.js`, `frontend/styles.css` and the Source fields tests, and no API.
+
+**What it changes (Source fields only):**
+- **A one-sentence introduction** that names no repository path. How to confirm stays in the forms.
+  - An administrator: "The fields each data source delivers, and how far each one's unit and meaning are proven."
+  - A reader: "The fields each data source delivers; a platform administrator confirms their units and meanings."
+- **The evidence legend as one chip** that explains itself on a tap: a `details` element reading *What the evidence
+  badges mean*, closed by default. Its summary is 44 px tall, with an arrow that flips, `touch-action: manipulation`
+  and a focus ring. Inside, the four meanings, each badge on its own row with its colour and word.
+- **A field's key and its source's data family only under Technical details**, in the field's detail and in the unit
+  and meaning forms.
+  - A group of the list is headed by the source's name.
+  - Where the loaded list holds two families of one source, the heading, the detail and the forms name the family, so
+    two fields with one label are never told apart only under Technical details before a write-once confirmation.
+
+**Unchanged:** the v42 zone question and its choices; the evidence field's label "Evidence (a document under docs/)",
+which describes the input for a platform admin; the escaping; the flows of both acts.
+
+**Recorded, not done** (`mobile-qa`, LOW): an open chip closes when the list is drawn again, for example while it
+loads; the Technical details disclosures behave the same way.
+
+**Not in it:** the Variables, Domains and Categories screens (the plan's table found them done in PR-1); the empty
+states of phase 8; any API change.
+
+**Tests:**
+- `frontend/tests/source-fields.actions.test.mjs`: the two introductions, the closed chip and its meanings, no key or
+  family in the visible list, detail or form summary, Key and Data family under Technical details, and two families
+  named in the headings, the detail and the form.
+- Mutations of 11 guards, all killed.
+- A browser run on a disposable database through v42 with the real backend and the built frontend in Chromium, as a
+  platform admin, at 1280 px and at 360, 375 and 390 px as a touch screen: the introduction; the closed chip, 44 px,
+  which a tap opens to four meanings; the heading *GPEXE*; the key and the family only under Technical details; 44 px
+  targets, 16 px fields, no overflow, no page error.
+- Not checked on a physical device.
