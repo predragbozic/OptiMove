@@ -55,13 +55,13 @@ const SEED_WINDOW = /^source metric mapping: a seed marker is accepted only from
 let rdb, db, r, k, server, apiBase, dbModule, appPool, createSession;
 const W = {};
 
-async function migrate(url, files) {
+async function migrate(url, files, using = runner) {
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "optimove-v42-migrations-"));
   const dir = path.join(tempRoot, "migrations_v2");
   await fsp.mkdir(dir);
   try {
     for (const f of files) await fsp.copyFile(path.resolve(ROOT, "migrations_v2", f), path.join(dir, f));
-    await runner.runMigrations({ databaseUrl: url, migrationsRoot: dir });
+    await using.runMigrations({ databaseUrl: url, migrationsRoot: dir });
   } finally {
     await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
   }
@@ -386,6 +386,58 @@ test("3. the rollback refuses, changing nothing, under a later migration, once a
   }, /^v42 rollback refused: a mapping, an activation, a value or an audit row names the open top zone field$/);
   await refuses((c) => c.query(`alter table training_load.source_metric_definition_versions disable trigger source_metric_revisions_no_truncate`),
     /^v42 rollback refused: a trigger of the two tables is disabled$/);
+  // The lock taken before the checks closes a race: a zone proof that another
+  // session writes before the rollback starts and commits while the rollback
+  // waits is seen by the checks, and refused. (Without the lock the checks run
+  // first, pass, and the rollback commits over the proof.)
+  const writer = new pg.Client({ connectionString: rdb.url });
+  await writer.connect();
+  let raceUser = null;
+  try {
+    await writer.query("begin");
+    raceUser = (await writer.query(`insert into public.users (email, full_name, display_name, is_active) values ($1,'race','race',true) returning id`, [`race-${uid()}@test.local`])).rows[0].id;
+    const power = await seeded(writer, POWER);
+    await withTriggersOff(writer, "source_metric_definition_versions", () => writer.query(
+      `update training_load.source_metric_definition_versions set bound_operator = 'between', meaning_verified_by_user_id = $2, meaning_verified_at = now(), meaning_evidence_ref = $3 where id = $1`,
+      [power.revId, raceUser, MEANING_REF]));
+    const pending = inRolledBack(r, null, ROLLBACK);
+    const deadline = Date.now() + 4_000;
+    while (!(await writer.query(`select exists (select 1 from pg_locks where pid = $1 and not granted) as waits`, [r.processID])).rows[0].waits) {
+      assert.ok(Date.now() < deadline, "the rollback waits for the writer's lock");
+      await new Promise((res) => setTimeout(res, 50));
+    }
+    await writer.query("commit");
+    const error = await pending;
+    assert.match(error?.message ?? "", /^v42 rollback refused: a zone revision carries a meaning proof or an operator$/);
+  } finally {
+    await writer.query("rollback").catch(() => {});
+    if (raceUser) {
+      const power = await seeded(writer, POWER);
+      await writer.query("begin");
+      await withTriggersOff(writer, "source_metric_definition_versions", () => writer.query(
+        `update training_load.source_metric_definition_versions set bound_operator = null, meaning_verified_by_user_id = null, meaning_verified_at = null, meaning_evidence_ref = null where id = $1`, [power.revId]));
+      await writer.query(`delete from public.users where id = $1`, [raceUser]);
+      await writer.query("commit");
+    }
+    await writer.end();
+  }
+  assert.deepEqual(await snapshot(r), W.after42, "the race left nothing behind");
+  // A deploy's migrator holds the advisory lock: the rollback refuses at once.
+  // The key is the migrator's own (backend/src/migrate.js).
+  assert.match(await fsp.readFile(path.join(ROOT, "backend", "src", "migrate.js"), "utf8"), /export const MIGRATION_LOCK_KEY = 822026n;/);
+  const migrator = new pg.Client({ connectionString: rdb.url });
+  await migrator.connect();
+  try {
+    await migrator.query("select pg_advisory_lock(822026)");
+    await refuses(null, /^v42 rollback refused: the migrator is running$/);
+  } finally {
+    await migrator.query("select pg_advisory_unlock(822026)").catch(() => {});
+    await migrator.end();
+  }
+  // The restored bodies must be byte for byte v39's and v34's: no carriage return.
+  for (const file of [ROLLBACK, PREFLIGHT, POSTCHECK]) {
+    assert.ok(!(await fsp.readFile(file, "utf8")).includes("\r"), `${path.basename(file)} has LF line endings`);
+  }
 });
 
 test("4. the rollback returns v41's catalog (both function bodies and their comments) and the content of the source fields and their revisions exactly; v42 then applies again to the same catalog and the same seed", async () => {
@@ -393,6 +445,24 @@ test("4. the rollback returns v41's catalog (both function bodies and their comm
   // inRolledBack's final rollback is a no-op after the script's own COMMIT.
   assert.equal(error, null, error?.message);
   assert.deepEqual(await snapshot(r), W.before41, "v41's catalog and data again");
+  // v42 takes SHARE ROW EXCLUSIVE before its checks: a writer that holds a
+  // revision write makes it fail on the runner's lock timeout, writing nothing.
+  const blocker = new pg.Client({ connectionString: rdb.url });
+  await blocker.connect();
+  const previous = process.env.MIGRATION_LOCK_TIMEOUT_MS;
+  try {
+    process.env.MIGRATION_LOCK_TIMEOUT_MS = "1500";
+    const shortRunner = await import(`../src/migrate.js?lock=${uid()}`);
+    await blocker.query("begin");
+    await blocker.query("lock table training_load.source_metric_definition_versions in row exclusive mode");
+    await assert.rejects(migrate(rdb.url, [...UP_TO_V41, V42], shortRunner), (e) => e.cause?.code === "55P03");
+    await blocker.query("rollback");
+  } finally {
+    if (previous === undefined) delete process.env.MIGRATION_LOCK_TIMEOUT_MS; else process.env.MIGRATION_LOCK_TIMEOUT_MS = previous;
+    await blocker.query("rollback").catch(() => {});
+    await blocker.end();
+  }
+  assert.deepEqual(await snapshot(r), W.before41, "the timed-out v42 wrote nothing");
   await migrate(rdb.url, [...UP_TO_V41, V42]);
   const again = await snapshot(r);
   assert.deepEqual(again.catalog, W.after42.catalog, "the same catalog");
