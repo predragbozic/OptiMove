@@ -418,6 +418,14 @@ changes no backend file. Where it differs from section 6, this section says so.
   - An earlier build kept the links it had seen in memory and sent nothing for those. It was removed before the pull
     request, because a link removed elsewhere (in the variable's detail, or by another administrator) would then have
     been reported as present.
+- **The *Rukovodilac*'s acceptance (2026-10-29):** the differences above were accepted with three conditions, all
+  held:
+  - `link_exists` is shown as a notice, not an error;
+  - an archived category, and a system category in a club workspace, is not a target, and nothing is sent;
+  - two fast drops on the same category send exactly one request, because the second comes while the first is being
+    saved.
+
+  The acceptance also named the local memory, which was removed afterwards for the reason above.
 
 **One write at a time:**
 - While a drop is being saved, or its result is not confirmed, the tray is locked (nothing is draggable), and so is
@@ -437,11 +445,11 @@ changes no backend file. Where it differs from section 6, this section says so.
 - touch dragging.
 
 **Tests:**
-- `frontend/tests/metric-classification-drag.actions.test.mjs`: 25 tests through the real handlers, the real drag
+- `frontend/tests/metric-classification-drag.actions.test.mjs`: 26 tests through the real handlers, the real drag
   handlers and the real markup with a fake fetch and a fake drag. They cover the offer per workspace and device, the
-  targets, the drag's own data type, the body, "already there", four refusals, Undo and its 10 seconds, the three kinds
-  of lost answer with *Check result*, the leave guards and a late answer.
-- Mutations of 22 guards, all killed.
+  targets, the drag's own data type, the body, two fast drops sending one request, "already there", four refusals, Undo
+  and its 10 seconds, the three kinds of lost answer with *Check result*, the leave guards and a late answer.
+- Mutations of 23 guards, all killed.
 - A browser run on a disposable database with the real backend and the built frontend in Chromium, with a real HTML5
   drag:
   - the database holds exactly the links the screen reports, Undo removes only its own, and a lost answer that the
