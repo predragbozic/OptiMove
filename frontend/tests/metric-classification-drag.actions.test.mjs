@@ -212,7 +212,7 @@ test("in a club workspace only the club's own active categories take a drop, nev
   assert.deepEqual(targetIds(), [C4]);
   // The tray says it holds the club's own variables, and how a system one is added.
   assert.equal($(".dc-tray h3").textContent, "This club's variables");
-  assert.match($(".dc-tray").textContent.replace(/\s+/g, " "), /System variables are not listed here: to add one, open it under Variables, in System \(reference\), and choose Add to a category\. That is also the way without a mouse\./);
+  assert.match($(".dc-tray").textContent.replace(/\s+/g, " "), /System variables are not listed here: to add one, open it under Variables, in System \(reference\), and choose Add to a category\. Without a mouse, open any variable under Variables and choose Add to a category\./);
   const { over } = await drag(V1, C1);
   assert.equal(over.defaultPrevented, false, "a system category refuses the drag");
   assert.equal(posts().length, 0, "and nothing is sent");
@@ -464,6 +464,25 @@ test("the last drop's line sits at the top of the tray, which stays on the scree
   assert.equal($(".dc-tray").firstElementChild, status, "first in it");
 });
 
+test("the tray comes first in the page, and its list keeps where it was scrolled through a drop, its Undo and the end of Undo", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    serve((call) => (call.url === LINKS ? created() : removed()));
+    await openCategories();
+    assert.equal($(".dc-drag-board").firstElementChild, $(".dc-tray"), "the tray first, so its buttons come first in the tab order");
+    $(".dc-tray-list").scrollTop = 120;
+    await drag(V1, C2);
+    assert.equal($(".dc-tray-list").scrollTop, 120, "after the drop");
+    mock.timers.tick(UNDO_MS);
+    assert.equal($(".dc-tray-list").scrollTop, 120, "after the end of Undo");
+    await drag(V2, C1);
+    await click('[data-action="metric-classification-drop-undo"]');
+    assert.equal($(".dc-tray-list").scrollTop, 120, "after an Undo");
+  } finally {
+    mock.timers.reset();
+  }
+});
+
 test("the end of Undo never draws the screen over a form being typed in", async () => {
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
@@ -491,7 +510,32 @@ test("a name the server shortened keeps its mark in the tray and in the line", a
   assert.match(text(), /A very long variable name… was added to Sprint work of a very long name…\./);
 });
 
-test("a new drop clears an earlier notice", async () => {
+test("a drag whose chip was drawn again does not hold back the end of Undo", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    serve(() => created());
+    await openCategories();
+    await drag(V1, C2);
+    fire("dragstart", chip(V2), newTransfer());
+    render();
+    mock.timers.tick(UNDO_MS);
+    assert.ok(!$('[data-action="metric-classification-drop-undo"]'), "the screen is drawn without Undo");
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("a new drop clears an earlier notice of the screen", async () => {
+  serve(() => created());
+  await openCategories();
+  variablesState().notice = "An earlier notice.";
+  render();
+  assert.match(text(), /An earlier notice\./);
+  await drag(V1, C2);
+  assert.doesNotMatch(text(), /An earlier notice\./);
+});
+
+test("a new drop replaces the line of an unchecked one", async () => {
   const answers = [{ throwNetworkError: true }, created()];
   serve(() => answers.shift());
   await openCategories();
@@ -576,8 +620,9 @@ test("Close without checking ends the status, says the result was not checked an
   variablesState().list = { ...variablesState().list, loaded: true };
   await drag(V1, C2);
   await click('[data-action="metric-classification-drop-dismiss"]');
-  assert.equal(variablesState().drop, null);
-  assert.match(text(), /The result was not checked\. To see whether Total distance is in Sprint <b>, open Total distance under Variables\./);
+  assert.equal(variablesState().drop.phase, "unchecked", "nothing is pending any more");
+  assert.match($(".dc-tray .dc-drop-status").textContent.replace(/\s+/g, " "), /The result was not checked\. To see whether Total distance is in Sprint <b>, open Total distance under Variables\./, "said in the tray, where the box was");
+  assert.equal(variablesUnloadShouldWarn(), false);
   assert.equal(variablesState().list.loaded, false);
   assert.equal(dropBlocked(), false);
 });

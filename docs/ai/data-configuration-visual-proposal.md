@@ -399,8 +399,10 @@ changes no backend file. Where it differs from section 6, this section says so.
 - Only for the administrator of the workspace: a platform admin, or a club's admin in that club's workspace. A team's
   coach and a phone get the screen as before, with no tray and no target.
 - **The tray:** a panel beside the categories that stays on the screen while they scroll. Below 960 px it sits above
-  them, still at the top, at most half the window tall. It holds this workspace's own active variables, the first page
-  of the default list (100), with each variable's icon tile.
+  them, still at the top, at most 55% of the window tall. Its top part (the last drop's line, the title, the hints)
+  stays put, and only its list of variables scrolls; that list keeps where it was scrolled through a drop, its Undo
+  and the end of Undo. The tray comes first in the page, so its buttons come first in the tab order. It holds this
+  workspace's own active variables, the first page of the default list (100), with each variable's icon tile.
   - In a club workspace it is titled *This club's variables* and says that system variables are not listed: one is
     added from its detail under *System (reference)* with *Add to a category*. On the platform it is titled
     *Variables*. Whether a club's tray should also offer the system variables (the server allows that link) is left
@@ -419,7 +421,8 @@ changes no backend file. Where it differs from section 6, this section says so.
   (C5) with a new `requestKey` and no reason. Once the 10 seconds are over, the line says how to take the variable out:
   open it under Variables and choose *Remove* next to the category.
 - The end of Undo draws the screen again only while the board is shown. It never redraws under an open form or another
-  tab, and never during a drag of the next variable: then it waits until the drag ends.
+  tab, and never during a drag of the next variable: then it waits until the drag ends. A drag whose chip was drawn
+  again (its end never reaches the page) does not hold it back.
 - A refusal is a warning that names the drop ("*X* was not added to *Y*." and the screen's own sentence), and nothing
   else changes. A refused Undo says "Undo did not go through." and where to look.
 - A name the server shortened keeps its mark (…) in the tray and in the line, as in the lists.
@@ -444,7 +447,8 @@ changes no backend file. Where it differs from section 6, this section says so.
   nothing) until the drop is settled, and an open form blocks a drop.
 - A lost answer (no answer, `503 outcome_unknown`, an uncoded 5xx) shows *Result not confirmed*. *Check result* sends
   the identical request (the same `requestKey`), and only an answer the server gives after reading its request record
-  settles it. *Close without checking* says the result was not checked, and the list is read again when it is next shown.
+  settles it. *Close without checking* says in the same place, the tray, that the result was not checked and where to look, and the
+  list is read again when it is next shown.
 - **Leaving:** leaving with a drop in flight or not confirmed asks first, naming the variable and the category, and
   before any question about a form. This covers the screen's own ways back, the section switch, leaving Training Load
   and closing the page. Leaving ends the drop's line and its Undo. When the drop
@@ -458,24 +462,27 @@ changes no backend file. Where it differs from section 6, this section says so.
 - touch dragging.
 
 **Tests:**
-- `frontend/tests/metric-classification-drag.actions.test.mjs`: 35 tests through the real handlers, the real drag
+- `frontend/tests/metric-classification-drag.actions.test.mjs`: 38 tests through the real handlers, the real drag
   handlers and the real markup with a fake fetch and a fake drag. They cover:
   - the offer per workspace and device, the club tray's texts, the targets, the drag's own data type and the body;
   - two fast drops sending one request, "already there", four refusals;
-  - Undo, its 10 seconds and the end of Undo under a drag and under a form;
+  - Undo, its 10 seconds and the end of Undo under a drag, under a form and after a chip was drawn again;
+  - the tray first in the page, and its list's scroll kept through a drop, an Undo and the end of Undo;
   - the three kinds of lost answer with *Check result*, *New category* and the form both ways, the leave guards, the
     tray read again on a return, and a late answer.
-- Mutations of 36 guards, all killed.
+- Mutations of 45 guards, all killed.
 - A browser run on a disposable database with the real backend and the built frontend in Chromium, with a real HTML5
-  drag by the mouse (54 checks):
+  drag by the mouse (62 checks):
   - the database holds exactly the links the screen reports, Undo removes only its own, and a lost answer that the
     server saved is settled by *Check result* with one link;
   - with 16 categories, a drop on the last one far down the page leaves the line and Undo in view, and Undo works;
   - typing in *New category* across the end of Undo keeps the focus and the text; a drag held across it keeps its
     marks and lands;
-  - the tray beside the categories at 1280 px; above them, sticky and at most half the window, at 960, 900 and 500 px
-    with a mouse;
+  - the tray beside the categories at 1280 px; above them, sticky and at most 55% of the window, at 960, 900 and
+    500 px with a mouse;
+  - with 28 variables at 1280×900 and 900×700, the tray's own list scrolls, keeps its place through a drop of its last
+    variable, and the line stays in view;
   - no tray at 360, 375 and 390 px as a touch screen, or for a coach;
   - 44 px targets and no overflow.
-- Not checked on a physical device: a touch laptop (a fine pointer with touch) and an iPad with a trackpad. *Add to a
-  category* stays the way there.
+- Not checked: a touch laptop (a fine pointer with touch), an iPad with a trackpad, and the sticky tray in Firefox and
+  Safari (the stacked layout is a flex column for that reason). *Add to a category* stays the way on all of them.

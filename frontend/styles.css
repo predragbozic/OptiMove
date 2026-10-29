@@ -19477,16 +19477,26 @@ body.exercise-header-pinned #viewToolbar {
    this workspace's variables beside the categories; a variable dragged onto a
    category adds it there (docs/ai/data-configuration-visual-proposal.md,
    section 6). Phones and the keyboard keep Add to a category. */
+/* The tray comes first in the page (and in the tab order); on a wide screen it
+   is placed in the right column. Its top part (the last drop's line, the title,
+   the hints) stays put and only the list of variables scrolls inside it. */
 .dc-drag-board {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
   gap: 16px;
   align-items: start;
 }
+.dc-drag-categories {
+  grid-column: 1;
+  grid-row: 1;
+}
 .dc-tray {
+  grid-column: 2;
+  grid-row: 1;
   position: sticky;
   top: 16px;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
   max-height: calc(100vh - 32px);
   overflow-y: auto;
@@ -19494,6 +19504,14 @@ body.exercise-header-pinned #viewToolbar {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
+}
+.dc-tray > * {
+  flex: 0 0 auto;
+}
+.dc-tray > .dc-tray-list {
+  flex: 1 1 auto;
+  min-height: 88px;
+  overflow-y: auto;
 }
 .dc-tray h3 {
   margin: 0;
@@ -19543,17 +19561,19 @@ body.exercise-header-pinned #viewToolbar {
 .dc-tray .dc-drop-status {
   margin: 0;
 }
-/* A narrow window with a mouse: the tray goes above the categories and stays
-   at the top while they scroll under it, at most half the window tall. */
+/* A narrow window with a mouse: the tray sits above the categories and stays
+   at the top while they scroll under it. A flex column (not a grid row) holds
+   it, so it stays at the top in every browser. */
 @media (max-width: 960px) {
   .dc-drag-board {
-    grid-template-columns: minmax(0, 1fr);
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
   }
   .dc-tray {
-    order: -1;
-    top: 8px;
+    top: 0;
     z-index: 2;
-    max-height: 45vh;
-    box-shadow: var(--shadow);
+    max-height: 55vh;
+    box-shadow: 0 4px 12px rgba(22, 34, 45, 0.12);
   }
 }
