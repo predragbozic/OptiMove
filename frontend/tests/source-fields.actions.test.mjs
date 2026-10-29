@@ -341,7 +341,7 @@ test("a club admin reads a zone's meaning and operator as the forms name them; t
   resetSourceFields();
   fields[1].revisions = [revision({ id: R2, valueShape: "zone_distance", parameterKind: "zone_bounds", boundOperator: ">=", meaningVerifiedAt: "2026-10-21T08:00:00.000Z" })];
   await openField(F2);
-  assert.equal(fact($(".source-fields-revision"), "Operator"), "At least its lower bound — the open top zone (>=)");
+  assert.equal(fact($(".source-fields-revision"), "Operator"), "Has no upper limit — the open top zone (>=)");
   await click('[data-action="source-fields-back"]');
   await click(`[data-action="source-fields-open"][data-field-id="${F3}"]`);
   assert.equal(fact($(".source-fields-revision"), "Operator"), "At least (>=)");
@@ -394,8 +394,10 @@ test("confirm a zone's meaning (v42): the operator of its shape is required with
   assert.deepEqual(radios.map((r) => r.value), ["between", ">="], "the two shapes only");
   assert.equal(radios.filter((r) => r.checked).length, 0, "nothing preselected");
   assert.deepEqual([...content.querySelectorAll(".source-fields-choice")].map((l) => l.textContent.replace(/\s+/g, " ").trim()),
-    ["Between its lower and upper bound — a closed zone (between)", "At least its lower bound — the open top zone (>=)"]);
-  assert.match(text(), /A closed zone and the open top zone are separate source fields\. Choose what this field's evidence shows\. It is saved for good; a wrong choice cannot be mapped, and the correction is a new revision\./);
+    ["Has an upper limit — a closed zone (between)", "Has no upper limit — the open top zone (>=)"]);
+  assert.match(text(), /What kind of zone does this field hold\?/);
+  assert.match(text(), /Closed zones and the open top zone are separate source fields\. Choose what the evidence document shows\./);
+  assert.doesNotMatch(text(), /cannot be mapped/, "the form never promises that a wrong choice is caught");
   type("evidenceRef", "docs/ai/evidence.md#power-zones");
   await submit();
   assert.equal(posts().length, 0, "nothing sent without a choice");
@@ -408,12 +410,12 @@ test("confirm a zone's meaning (v42): the operator of its shape is required with
   top.dispatchEvent(new window.Event("input", { bubbles: true }));
   assert.equal($('[role="radiogroup"]').getAttribute("aria-invalid"), null, "the mark goes with the choice");
   await submit();
-  assert.match(confirmQuestions.at(-1), /\(revision 1\) as "At least its lower bound — the open top zone \(>=\)", with the evidence/);
+  assert.match(confirmQuestions.at(-1), /\(revision 1\) as "Has no upper limit — the open top zone \(>=\)", with the evidence/);
   assert.equal(posts()[0].url, `${FB}/${F2}/revisions/${R2}/meaning-verification`);
   assert.deepEqual(posts()[0].body, { requestKey: posts()[0].body.requestKey, boundOperator: ">=", evidenceRef: "docs/ai/evidence.md#power-zones" });
   // The zone's own refusal texts.
   resetSourceFields();
-  serve(() => ({ status: 400, body: { error: "invalid_operator", message: "A zone takes between (a closed zone) or >= (the open top zone)." } }));
+  serve(() => ({ status: 400, body: { error: "invalid_operator", message: "A zone is either a closed zone (between) or the open top zone (>=)." } }));
   await openField(F2);
   await click('[data-action="source-fields-act-open"][data-act="meaning"]');
   const between = $('input[type="radio"][value="between"]');
@@ -421,7 +423,7 @@ test("confirm a zone's meaning (v42): the operator of its shape is required with
   between.dispatchEvent(new window.Event("input", { bubbles: true }));
   type("evidenceRef", "docs/ai/evidence.md#power-zones");
   await submit();
-  assert.match(text(), /Not saved: a zone takes between \(a closed zone\) or >= \(the open top zone\)\./);
+  assert.match(text(), /Not saved: a zone is either a closed zone \(between\) or the open top zone \(>=\)\./);
   assert.doesNotMatch(text(), /one-sided/);
 });
 

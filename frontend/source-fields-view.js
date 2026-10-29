@@ -248,7 +248,7 @@ function zoneOperatorHtml(form, locked) {
   const errorId = form.errors.boundOperator ? " sf-err-boundOperator" : "";
   return `
       <fieldset class="metric-variables-fieldset source-fields-zone-operator">
-        <legend id="sf-legend-boundOperator">Which zone does this field hold?</legend>
+        <legend id="sf-legend-boundOperator">What kind of zone does this field hold?</legend>
         <div role="radiogroup" aria-labelledby="sf-legend-boundOperator" aria-describedby="sf-hint-boundOperator${errorId}"${invalid(form, "boundOperator")}>
           ${ZONE_OPERATORS.map((op) => `
           <label class="source-fields-choice">
@@ -256,7 +256,7 @@ function zoneOperatorHtml(form, locked) {
             <span>${escapeHtml(ZONE_OPERATOR_LABEL[op])}</span>
           </label>`).join("")}
         </div>
-        <span class="muted" id="sf-hint-boundOperator">A closed zone and the open top zone are separate source fields. Choose what this field's evidence shows. It is saved for good; a wrong choice cannot be mapped, and the correction is a new revision.</span>
+        <span class="muted" id="sf-hint-boundOperator">Closed zones and the open top zone are separate source fields. Choose what the evidence document shows.</span>
         ${fieldError(form, "boundOperator")}
       </fieldset>`;
 }

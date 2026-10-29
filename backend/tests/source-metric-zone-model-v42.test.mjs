@@ -444,7 +444,9 @@ test("6. F3 through the real route on the seeded zone fields: the power field (c
   for (const [extra, code] of [[{}, "operator_required"], [{ boundOperator: ">" }, "invalid_operator"], [{ boundOperator: "<=" }, "invalid_operator"], [{ boundOperator: "<" }, "invalid_operator"], [{ boundOperator: "==" }, "invalid_operator"]]) {
     const res = await meaning(W.power, extra);
     assert.deepEqual([res.status, res.body.error], [400, code], res.text);
-    assert.match(res.body.message, /zone/);
+    assert.equal(res.body.message, code === "operator_required"
+      ? "This revision is a zone: boundOperator (between or >=) is confirmed together with the meaning."
+      : "A zone is either a closed zone (between) or the open top zone (>=).", "the zone's own text (J7 section 4)");
   }
   assert.equal((await one(k, `select meaning_verified_at from training_load.source_metric_definition_versions where id = $1`, [W.power.revId])).meaning_verified_at, null, "nothing written");
   for (const who of [W.caA, W.paA]) {
