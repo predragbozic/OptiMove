@@ -3366,7 +3366,8 @@ file and its sha256, with the production preflight the same day:
   triggers and functions dropped, the record removed; no row changed), `…-preflight.sql` (nine blocks; block 4 the hard
   assertion `safe_to_merge`; block 9's `advisory_locks` information only), `…-postcheck.sql` (six blocks; block 3 also
   proves each trigger calls its v43 function with its `WHEN`; block 4 hard only for no active version and no
-  activation, the other counts may rise with ordinary M2 writes) and the runbook
+  activation; `mappings`, `versions_total` and `mapping_audit_rows` never below the preflight's; the per-status counts
+  information only, since a submission or a disable moves them) and the runbook
   `source-metric-mapping-transitions-v43.md`. G2 accepts only the database's clock: a future writer uses
   `clock_timestamp()` and the column default, and a backfill of historical transition rows would switch the T8 triggers
   off for its own transaction, as for v35.

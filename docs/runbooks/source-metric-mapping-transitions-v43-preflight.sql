@@ -55,10 +55,13 @@ select
     and (select count(*) from training_load.source_metric_mapping_activations) = 0 as safe_to_merge;
 
 -- 5. Informational - record the numbers; the post-check (block 4) shows them
---    again, unchanged (v43 writes no row).
+--    again. v43 writes no row; mappings, versions_total and mapping_audit_rows
+--    can only stay or rise between the two checks, while the per-status counts
+--    may move either way with ordinary writes (a submission, a disable).
 --    Expected: any value.
 select
   (select count(*) from training_load.source_metric_mappings) as mappings,
+  (select count(*) from training_load.source_metric_mapping_versions) as versions_total,
   (select count(*) from training_load.source_metric_mapping_versions where status = 'draft') as versions_draft,
   (select count(*) from training_load.source_metric_mapping_versions where status = 'needs_review') as versions_needs_review,
   (select count(*) from training_load.source_metric_mapping_versions where status = 'active') as versions_active,

@@ -310,6 +310,13 @@ async function blocks(c, file) {
   for (const part of text.split(/^(?=-- \d+\. )/m).slice(1)) out[Number(part.match(/^-- (\d+)\./)[1])] = (await c.query(part)).rows;
   return out;
 }
+// The runbook's rule for post-check block 4 against preflight block 5: no active version
+// and no activation; mappings, versions_total and mapping_audit_rows never below the
+// preflight's (nothing removes one); the per-status counts are information only.
+function postcheckBlock4Holds(pre5, post4) {
+  const atLeast = (k) => Number(post4[k]) >= Number(pre5[k]);
+  return post4.versions_active === "0" && post4.activations === "0" && ["mappings", "versions_total", "mapping_audit_rows"].every(atLeast);
+}
 // A script run on `c` after `plant` wrote, all of it inside one transaction that is
 // rolled back: what the script refused with (or null).
 async function inRolledBack(c, plant, sqlFile) {
@@ -413,7 +420,7 @@ test("1. on v42: every expected value of the read-only preflight (block 4's hard
   assert.deepEqual(pre[2][0], { v42_rows: "1", v42_checksum_ok: true, v43_rows: "0", at_or_after_v43: "0", last_migration: V42_NAME });
   assert.deepEqual(pre[3][0], { v43_functions: "0", v43_triggers: "0", actor_basis_is_v35: true });
   assert.deepEqual(pre[4][0], { active_versions: "0", activations: "0", safe_to_merge: true });
-  assert.deepEqual(Object.keys(pre[5][0]), ["mappings", "versions_draft", "versions_needs_review", "versions_active", "versions_disabled", "mapping_audit_rows"]);
+  assert.deepEqual(Object.keys(pre[5][0]), ["mappings", "versions_total", "versions_draft", "versions_needs_review", "versions_active", "versions_disabled", "mapping_audit_rows"]);
   W.pre5 = pre[5][0];
   assert.deepEqual(pre[6][0], { schema_create: true, owns_audit: true, disabled_triggers: "0" });
   assert.deepEqual(pre[7][0], { actor_defaults: "0" });
@@ -474,6 +481,28 @@ test("2. v43 through the runner on v42 adds exactly its two functions (with thei
   const { activations, ...post4 } = post[4][0];
   assert.deepEqual(post4, W.pre5, "the numbers of preflight block 5, unchanged");
   assert.equal(activations, "0");
+  assert.equal(postcheckBlock4Holds(W.pre5, post[4][0]), true);
+  // An ordinary submission between the two checks lowers versions_draft: block 4 still
+  // holds, while a rule asking every count to stay or rise would stop the owner for nothing
+  // (rows planted with triggers off, rolled back).
+  await r.query("begin");
+  try {
+    await r.query("set local session_replication_role = replica");
+    const id = crypto.randomUUID();
+    await r.query(`insert into training_load.source_metric_mapping_versions (id, mapping_id, source_metric_definition_id, metric_definition_id, owner_key, source_metric_version_id, version_number,
+                     metric_definition_version_id, conversion_kind, scale, scale_divisor, "offset", source_unit, target_unit, parameter_kind, source_parameters, canonical_parameters,
+                     parameter_fingerprint, parameter_scale, parameter_scale_divisor, parameter_offset, applies_to_session, applies_to_drill, status, created_by_user_id)
+                   values ($1,$1,$1,$1,'system',$1,1,$1,'numeric_linear',1,1,0,'s','s','none','{}','{}','',1,1,0,true,true,'draft',$1)`, [id]);
+    const pre5 = (await blocks(r, PREFLIGHT))[5][0];
+    await r.query(`update training_load.source_metric_mapping_versions set status = 'needs_review', submitted_by_user_id = $1, submitted_at = now(), submitted_basis = 'platform_admin' where id = $1`, [id]);
+    const after4 = (await blocks(r, POSTCHECK))[4][0];
+    assert.ok(Number(after4.versions_draft) < Number(pre5.versions_draft), "the submission lowered versions_draft");
+    assert.equal(postcheckBlock4Holds(pre5, after4), true, "block 4 holds after an ordinary submission");
+    const { activations: _a, ...after4counts } = after4;
+    assert.equal(Object.keys(pre5).every((k) => Number(after4counts[k]) >= Number(pre5[k])), false, "every-count-rises would be a false stop");
+  } finally {
+    await r.query("rollback");
+  }
   assert.deepEqual(post[5][0], { actor_defaults: "0", disabled_triggers: "0" });
   assert.deepEqual(post[6][0], { table_locks: "0" });
   // The checksum the post-check carries is the file's own.

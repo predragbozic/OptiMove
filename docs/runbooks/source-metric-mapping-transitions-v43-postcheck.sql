@@ -61,12 +61,18 @@ select t.tgname, t.tgtype, t.tgdeferrable, t.tginitdeferred, t.tgenabled, t.tgco
 
 -- 4. Still no active version and no activation (the hard values), and the
 --    numbers of preflight block 5 for comparison. v43 writes no row, but the
---    M2 routes stay live between the two checks, so the other counts may rise
---    with ordinary writes (a mapping, a version, a submission); they never fall.
---    Expected: versions_active = 0, activations = 0; every other value equal
---    to or above the preflight's block 5.
+--    M2 routes stay live between the two checks: a mapping, a version or an
+--    audit row can be added, and none is ever removed, so mappings,
+--    versions_total and mapping_audit_rows never fall. The per-status counts
+--    move with ordinary writes - a submission moves a draft to needs_review, a
+--    disable or a revision's retirement moves a version to disabled - so they
+--    are information only and may be below the preflight's.
+--    Expected: versions_active = 0, activations = 0; mappings, versions_total
+--    and mapping_audit_rows equal to or above the preflight's block 5;
+--    versions_draft, versions_needs_review and versions_disabled any value.
 select
   (select count(*) from training_load.source_metric_mappings) as mappings,
+  (select count(*) from training_load.source_metric_mapping_versions) as versions_total,
   (select count(*) from training_load.source_metric_mapping_versions where status = 'draft') as versions_draft,
   (select count(*) from training_load.source_metric_mapping_versions where status = 'needs_review') as versions_needs_review,
   (select count(*) from training_load.source_metric_mapping_versions where status = 'active') as versions_active,

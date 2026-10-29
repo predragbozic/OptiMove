@@ -73,7 +73,8 @@ active pinned version - which cannot exist, since nothing can activate one befor
    - block 1 compares the recorded checksum with the one in the file;
    - block 2 compares both function bodies and `source_metric_actor_basis` by md5;
    - block 3 shows both triggers, enabled, of the specified kind, each calling its v43 function with its WHEN clause;
-   - block 4: no active version and no activation (hard); the other counts equal to or above preflight block 5;
+   - block 4: no active version and no activation (hard); `mappings`, `versions_total` and `mapping_audit_rows` equal
+     to or above preflight block 5; the per-status counts are information only (a submission or a disable moves them);
    - block 5 shows no actor default and every trigger of T3, T4 and T8 enabled;
    - block 6 shows no lock left on T3, T4 or T8.
 
@@ -98,8 +99,10 @@ transaction, as for v35.
 - **Block 1 or 2:** the recorded file or a function is not the repository's. Stop and report; change nothing.
 - **Block 3:** a trigger is missing, disabled or of another kind. Stop and report; change nothing. Do not enable or
   create a trigger by hand.
-- **Block 4:** an active version or an activation exists, or a count is below the preflight's. Stop and report which.
-  A count above the preflight's is an ordinary M2 write between the two checks (a mapping, a version, a submission).
+- **Block 4:** an active version or an activation exists, or `mappings`, `versions_total` or `mapping_audit_rows` is
+  below the preflight's. Stop and report which. A value above the preflight's is an ordinary M2 write between the two
+  checks (a mapping, a version, a submission). A per-status count below the preflight's is not a reason to stop: a
+  submission moves a draft to `needs_review`, and a disable or a revision's retirement moves a version to `disabled`.
 
 ## Rollback
 
