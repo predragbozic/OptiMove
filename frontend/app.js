@@ -109,6 +109,8 @@ import {
 import { closeExerciseViewMenus, replaceExerciseThumbWithInitials } from "./exercise-view-modes.js";
 import { startBuilderItemDrag } from "./builder-item-drag.js";
 import { dropBuilderLibraryDrag, endBuilderLibraryDrag, endStaleBuilderLibraryDrag, leaveBuilderLibraryDrag, overBuilderLibraryDrag, startBuilderLibraryDrag } from "./builder-library-drag.js";
+import { dropVariableDrag, endVariableDrag, leaveVariableDrag, overVariableDrag, startVariableDrag } from "./data-config-drag.js";
+import { dropBlocked, dropVariableOnCategory } from "./metric-classification-drag.js";
 import { AUTOGROW_SELECTOR, autosizeTextarea } from "./textarea-autosize.js";
 import { toggleClampedTitle } from "./title-clamp.js";
 import { openExerciseCollections } from "./exercise-collections.js";
@@ -527,6 +529,17 @@ function bindEvents() {
   // not #content, since the pointer can be released/cancelled anywhere -
   // always end it. See tests-actions.js's start/extend/endTestsCalendarDrag.
   els.content.addEventListener("pointerdown", handleContentPointerDown);
+  // Data configuration's Categories screen on a computer: drag a variable onto
+  // a category (PR-2). Each handler leaves alone a drag that is not its own.
+  els.content.addEventListener("dragstart", (event) => { startVariableDrag(event, { isBlocked: dropBlocked }); });
+  els.content.addEventListener("dragover", overVariableDrag);
+  els.content.addEventListener("dragleave", leaveVariableDrag);
+  els.content.addEventListener("drop", (event) => {
+    dropVariableDrag(event, {
+      onDrop: (variableId, categoryId) => { void dropVariableOnCategory(variableId, categoryId, { render: renderActiveTrainingLoadSurface }); },
+    });
+  });
+  els.content.addEventListener("dragend", endVariableDrag);
   // Builder section on a computer: drag a library exercise onto the Added list.
   els.content.addEventListener("dragstart", (event) => { startBuilderLibraryDrag(event, { isBlocked: builderLibraryDropBlocked }); });
   els.content.addEventListener("dragover", overBuilderLibraryDrag);

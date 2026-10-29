@@ -7,6 +7,7 @@ import { state } from "./state.js";
 import { closeIconPicker, focusIconPicker, handleIconPickerAction, iconPickerOpenFor, openIconPicker } from "./icon-picker.js";
 import { isLibraryKey } from "./icon-render.js";
 import { isClassificationMode } from "./metric-classification-data.js";
+import { discardDrop, dropLeaveQuestion, dropNeedsAsk, ensureTray } from "./metric-classification-drag.js";
 import {
   afterUncheckedClose, ensureClassification, handleClassificationAction, handleClassificationInput, loadClassification, sendClassification,
   submitClassificationForm, toTitle,
@@ -30,6 +31,7 @@ export function resetVariables() {
   const generation = (state.trainingLoad.variables?.generation || 0) + 1;
   clearTimeout(keyTimer);
   if (iconPickerOpenFor("metric-variables")) closeIconPicker();
+  if (state.trainingLoad.variables) discardDrop();
   state.trainingLoad.variables = { ...emptyVariablesState(), generation };
 }
 
@@ -108,7 +110,13 @@ export function loadVariablesSection(render) {
   const s = variablesState();
   if (!variablesContext()) { render(); return Promise.resolve(); }
   if (s.view === "home" && !s.form) return loadDataConfigHome(render);
-  if ((s.view === "domains" || s.view === "categories") && !s.form) return loadClassification(render);
+  if (s.view === "domains" && !s.form) return loadClassification(render);
+  if (s.view === "categories" && !s.form) {
+    // The tray (PR-2) is read again each time the screen is shown, a return
+    // to Data configuration included.
+    s.tray = null;
+    return Promise.all([loadClassification(render), ensureTray(render)]);
+  }
   // The domains and categories: the list's filter and a variable's links use them.
   const tree = ensureClassification(render);
   if (s.detail.id && !s.form) return Promise.all([tree, loadVariable(s.detail.id, render)]);
@@ -125,6 +133,9 @@ const LOADERS = { list: (render) => loadVariables(render), variable: (id, render
 // ---------------------------------------------------------------------------
 export function variablesMayBeLeft() {
   const form = state.trainingLoad.variables?.form;
+  // A drop on the Categories screen (PR-2) in flight or not confirmed: asked
+  // first, whether a form is open or not.
+  if (dropNeedsAsk() && !confirmAsk(dropLeaveQuestion())) return false;
   if (!form) return true;
   if (form.busy) return confirmAsk(`${isClassificationMode(form.mode) ? "A change" : "A variable"} is still being saved. Leave anyway? Its result will not be shown.`);
   if (form.unconfirmed) return confirmAsk("The last save is not confirmed. Leave without checking? Look for it in the list later.");
@@ -149,19 +160,24 @@ const DISCARD_QUESTION = {
 export function variablesUnloadShouldWarn() {
   if (state.activeTab !== "training-load" || state.trainingLoad.section !== "variables") return false;
   const form = state.trainingLoad.variables?.form;
-  return Boolean(form && (form.busy || form.unconfirmed || form.dirty));
+  return Boolean((form && (form.busy || form.unconfirmed || form.dirty)) || (state.trainingLoad.variables && dropNeedsAsk()));
 }
-function leaveForm() {
+function leaveForm({ keepDrop = false } = {}) {
   if (!variablesMayBeLeft()) return false;
-  dropVariablesForm();
+  dropVariablesForm({ keepDrop });
   return true;
 }
 // The form dropped once the coach agreed to leave it (here, a section switch,
-// leaving Training Load): the icon picker it opened goes with it.
-export function dropVariablesForm() {
+// leaving Training Load): the icon picker it opened goes with it, and so does
+// the last drop's line (PR-2) - except on a form's own Cancel, which returns to
+// the same screen, where the line and its Undo stay.
+export function dropVariablesForm({ keepDrop = false } = {}) {
   clearTimeout(keyTimer);
   if (iconPickerOpenFor("metric-variables")) closeIconPicker();
-  if (state.trainingLoad.variables) state.trainingLoad.variables.form = null;
+  if (state.trainingLoad.variables) {
+    state.trainingLoad.variables.form = null;
+    if (!keepDrop) discardDrop();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -233,7 +249,7 @@ export async function handleVariablesAction(action, { render }) {
   }
   if (type === "metric-variables-cancel") {
     const form = s.form;
-    if (!leaveForm()) return true;
+    if (!leaveForm({ keepDrop: true })) return true;
     // A save left without a check may still have landed: the list (or the
     // variable) is read again, so the screen never shows it as missing.
     if (form?.unconfirmed && isClassificationMode(form.mode)) {

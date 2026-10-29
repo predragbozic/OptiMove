@@ -6,7 +6,7 @@ Variables, Domains & categories and Source fields" (`docs/ai/metrics-core-plan.m
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. PR-1 is built (section 11) and merged (PR #256, `0e38ae9`, 2026-10-28). The *Rukovodilac* reviewed `c830050` (GO as a document, no BLOCKER, HIGH or MEDIUM; three LOW notes for PR-1, recorded in sections 3.4, 3.5 and 4) and decided R1–R3 (section 10). The owner's choices V1–V5 were made on 2026-10-28 (section 10). |
+| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. PR-1 is built (section 11) and merged (PR #256, `0e38ae9`, 2026-10-28). PR-2 is built (section 12) in an open pull request. The *Rukovodilac* reviewed `c830050` (GO as a document, no BLOCKER, HIGH or MEDIUM; three LOW notes for PR-1, recorded in sections 3.4, 3.5 and 4) and decided R1–R3 (section 10). The owner's choices V1–V5 were made on 2026-10-28 (section 10). |
 | Mockup | `docs/ai/mockups/data-configuration-visual.html` — a static page, opened in any browser. It holds the three layouts at 1280 px (scaled) and 360 px, the icon picker, Settings → Icons, the variables list and the Source fields list. It talks to no server, and every name and number in it is invented. |
 | Verified against commit | `0b947ab` (merge of PR #252). File and line references are to that commit. |
 | Decides | The owner: V1–V5 (section 10). The *Rukovodilac*: R1–R3 (section 10), inside the plan. |
@@ -385,3 +385,126 @@ legend is the four badges, each with its colour and its word, followed by its me
 - the Variables card counts the club's own variables only, while the domain and category cards count the system's too;
 - the picker's choice line names the stored value (`icon:run`), a storage detail in the main flow;
 - Source fields does not move the focus to its title.
+
+---
+
+## 12. PR-2 as built (from `0eb7e10`; frontend only, no migration)
+
+PR-2 is section 6: dragging a variable onto a category on a computer. It uses the existing classification API and
+changes no backend file. Where it differs from section 6, this section says so.
+
+**Where it is offered:**
+- Only on the Categories screen, and only with a mouse or trackpad (`pointer: fine` and `hover: hover`;
+  `frontend/data-config-drag.js`, the pattern of `frontend/builder-library-drag.js`).
+- Only for the administrator of the workspace: a platform admin, or a club's admin in that club's workspace. A team's
+  coach and a phone get the screen as before, with no tray and no target.
+- **The tray:** a panel beside the categories that stays on the screen while they scroll. Below 960 px it sits above
+  them, still at the top, at most 55% of the window tall. Its top part (the last drop's line, the title, the hints)
+  stays put, and only its list of variables scrolls; that list keeps where it was scrolled through a drop, its Undo
+  and the end of Undo. The tray comes first in the page, so its buttons come first in the tab order. It holds this
+  workspace's own active variables, the first page of the default list (100), with each variable's icon tile.
+  - In a club workspace it is titled *This club's variables* and says that system variables are not listed: one is
+    added from its detail under *System (reference)* with *Add to a category*. On the platform it is titled
+    *Variables*. Whether a club's tray should also offer the system variables (the server allows that link) is left
+    open for a later decision.
+  - It is read again each time the screen is shown, a return to Data configuration included, and on Back from a
+    category when that return left it unread (the *Rukovodilac*'s review of `8c7a0048`, MEDIUM).
+  - When the list has more, the tray says so and points to *Add to a category*.
+  - The tray names the way without a mouse: under Variables, open a variable and choose *Add to a category*.
+- **Drop targets:** this workspace's own active categories. An archived category and a system category in a club
+  workspace take no drop, as in section 6.
+
+**What a drop does:**
+- It sends the existing link create (C4) with its own `requestKey` and the body `{ requestKey, variableId, categoryId }`.
+  This is the body *Add to a category* sends.
+- The last drop's line sits at the top of the tray, so it stays in reach however long the list of categories is. It says
+  "*X* was added to *Y*." with *Undo* and "You can undo it for 10 seconds." (R2). *Undo* sends the existing link remove
+  (C5) with a new `requestKey` and no reason. Once the 10 seconds are over, the line says how to take the variable out:
+  open it under Variables and choose *Remove* next to the category.
+- The end of Undo draws the screen again only while the board is shown. It never redraws under an open form or another
+  tab, and never during a drag of the next variable: then it waits until the drag ends. A drag whose chip was drawn
+  again (its end never reaches the page) does not hold it back.
+- A refusal is a warning that names the drop ("*X* was not added to *Y*." and the screen's own sentence), and nothing
+  else changes. A refused Undo says "Undo did not go through." and where to look.
+- A name the server shortened keeps its mark (…) in the tray and in the line, as in the lists.
+- A form's own Cancel (for example New category) returns to the same screen with the line and its Undo kept; leaving
+  the screen ends them.
+- A drop naming a variable that is not in the tray, or a category that takes nothing (a drag of this type from
+  another tab, for example), sends nothing.
+- **Different from section 6, "already there":** every drop is sent. The read of the domains and categories carries no
+  variable's links, so the screen cannot know beforehand that a variable is already in a category. The server answers
+  `link_exists`, and the line says "*X* is already in *Y*. Nothing was changed.", with no warning and no Undo.
+  - An earlier build kept the links it had seen in memory and sent nothing for those. It was removed before the pull
+    request, because a link removed elsewhere (in the variable's detail, or by another administrator) would then have
+    been reported as present.
+- **The *Rukovodilac*'s acceptance (2026-10-29):** the differences above were accepted with three conditions, all
+  held:
+  - `link_exists` is shown as a notice, not an error;
+  - an archived category, and a system category in a club workspace, is not a target, and nothing is sent;
+  - two fast drops on the same category send exactly one request, because the second comes while the first is being
+    saved.
+
+  The acceptance also named the local memory, which was removed afterwards for the reason above.
+
+**One write at a time:**
+- While a drop is being saved, or its result is not confirmed, the tray is locked (nothing is draggable), and so is
+  every other drop. The screen's forms share the rule both ways: *New category* waits (disabled, and its handler opens
+  nothing) until the drop is settled, and an open form blocks a drop.
+- A lost answer (no answer, `503 outcome_unknown`, an uncoded 5xx) shows *Result not confirmed*. *Check result* sends
+  the identical request (the same `requestKey`), and only an answer the server gives after reading its request record
+  settles it. *Close without checking* says in the same place, the tray, that the result was not checked and where to look, and the
+  list is read again when it is next shown.
+- **Leaving:** leaving with a drop in flight or not confirmed asks first, naming the variable and the category, and
+  before any question about a form. This covers the screen's own ways back, the section switch, leaving Training Load
+  and closing the page. Leaving ends the drop's line and its Undo. When the drop
+  may have been saved, the list is read again.
+- A late answer to a drop left behind changes nothing on the screen in use.
+
+**Recorded, not done** (the *Rukovodilac*'s review of `8c7a0048`, LOW, and the reviews):
+- At 500 × 700 with *Result not confirmed* open, the stacked tray reaches 55% of the window and its list falls below its
+  visible bottom (the chips are locked then, Check result and Close are in view); a shorter hint or a lower cap below
+  960 px would help.
+- An Undo refused with `try_again` says "Nothing was saved. Try again." while Undo is no longer offered; it could keep
+  the saved line and its Undo while the 10 seconds last.
+- The tray's text: two paragraphs on the platform, up to three in a club, before the first chip, and an empty club tray
+  repeats the same instruction; a candidate for a later language pass.
+- Undo as a ghost button is quiet; the refusal sentences shared with the forms ("It is not available…") do not say
+  whether the variable or the category is meant; chips stay draggable when no category takes a drop; `dragleave`
+  relies on `relatedTarget` (the Builder uses the target's box), so the outline may flicker.
+- A touch laptop or an iPad with a trackpad passes `pointer: fine` and `hover: hover` and is offered the tray, where a
+  long press may start the browser's drag; `any-pointer: coarse` in the gate or `touch-action: pan-y` on a chip are
+  candidates, after a check on a real device.
+- More than 100 variables: the tray shows the first 100 with no filter; a filter or search is a later decision.
+
+**Not in PR-2:**
+- dragging a category onto a domain (section 6);
+- dragging a variable from one category to another;
+- a variable's own categories on the Categories screen (the read has none);
+- touch dragging.
+
+**Tests:**
+- `frontend/tests/metric-classification-drag.actions.test.mjs`: 41 tests through the real handlers, the real drag
+  handlers and the real markup with a fake fetch and a fake drag. They cover:
+  - the offer per workspace and device, the club tray's texts, the targets, the drag's own data type and the body;
+  - two fast drops sending one request, "already there", four refusals;
+  - Undo, its 10 seconds and the end of Undo under a drag, under a form and after a chip was drawn again;
+  - the tray first in the page, and its list's scroll kept through a drop, an Undo and the end of Undo;
+  - the three kinds of lost answer with *Check result*, *New category* and the form both ways, the leave guards, the
+    tray read again on a return and on Back after one, Cancel keeping the line, a drop with an unknown variable or
+    category, and a late answer.
+- Mutations of 48 guards, all killed.
+- A browser run on a disposable database with the real backend and the built frontend in Chromium, with a real HTML5
+  drag by the mouse (62 checks):
+  - the database holds exactly the links the screen reports, Undo removes only its own, and a lost answer that the
+    server saved is settled by *Check result* with one link;
+  - with 16 categories, a drop on the last one far down the page leaves the line and Undo in view, and Undo works;
+  - typing in *New category* across the end of Undo keeps the focus and the text; a drag held across it keeps its
+    marks and lands;
+  - the tray beside the categories at 1280 px; above them, sticky and at most 55% of the window, at 960, 900 and
+    500 px with a mouse;
+  - with 28 variables at 1280×900 and 900×700, the tray's own list scrolls, keeps its place through a drop of its last
+    variable, and the line stays in view;
+  - no tray at 360, 375 and 390 px as a touch screen, or for a coach;
+  - 44 px targets and no overflow.
+- Not checked: a touch laptop (a fine pointer with touch), an iPad with a trackpad, and the sticky tray in Firefox and
+  Safari (the stacked layout is a flex column for that reason). *Add to a category* stays the way on all of them.

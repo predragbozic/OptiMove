@@ -3163,8 +3163,9 @@ pre-existing; pass/fail counts don't belong in this file
     C with separate Domains and Categories screens, and the visual pass. It closes these follow-ups below: the two
     look-alike controls, archived and active items in separate groups of the list filter, the dead end after "first
     create one", one primary button per screen, the Source fields legend, and scrolling to the start of a screen.
-  - Next: PR-2 (dragging variables into categories); PR-1b (changing an icon, I1) only on the owner's order naming
-    its migration.
+  - **PR-2 is implemented in an open pull request** (dragging variables into categories on a computer; frontend only,
+    no migration; the proposal's section 12 records it as built). PR-1b (changing an icon, I1) only on the owner's
+    order naming its migration.
 - **Follow-ups of the 12c frontend** (the *Rukovodilac* and the reviews of PR #249, LOW; not scheduled):
   - the list filter also offers archived domains and categories: whether to separate active and archived in the
     picker's groups;
