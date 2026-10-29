@@ -6,7 +6,7 @@ Variables, Domains & categories and Source fields" (`docs/ai/metrics-core-plan.m
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. PR-1 is built (section 11) and merged (PR #256, `0e38ae9`, 2026-10-28). The *Rukovodilac* reviewed `c830050` (GO as a document, no BLOCKER, HIGH or MEDIUM; three LOW notes for PR-1, recorded in sections 3.4, 3.5 and 4) and decided R1–R3 (section 10). The owner's choices V1–V5 were made on 2026-10-28 (section 10). |
+| Status | Proposed by the executor on 2026-10-28, on the *Rukovodilac*'s order of that day. PR-1 is built (section 11) and merged (PR #256, `0e38ae9`, 2026-10-28). PR-2 is built (section 12) in an open pull request. The *Rukovodilac* reviewed `c830050` (GO as a document, no BLOCKER, HIGH or MEDIUM; three LOW notes for PR-1, recorded in sections 3.4, 3.5 and 4) and decided R1–R3 (section 10). The owner's choices V1–V5 were made on 2026-10-28 (section 10). |
 | Mockup | `docs/ai/mockups/data-configuration-visual.html` — a static page, opened in any browser. It holds the three layouts at 1280 px (scaled) and 360 px, the icon picker, Settings → Icons, the variables list and the Source fields list. It talks to no server, and every name and number in it is invented. |
 | Verified against commit | `0b947ab` (merge of PR #252). File and line references are to that commit. |
 | Decides | The owner: V1–V5 (section 10). The *Rukovodilac*: R1–R3 (section 10), inside the plan. |
@@ -385,3 +385,67 @@ legend is the four badges, each with its colour and its word, followed by its me
 - the Variables card counts the club's own variables only, while the domain and category cards count the system's too;
 - the picker's choice line names the stored value (`icon:run`), a storage detail in the main flow;
 - Source fields does not move the focus to its title.
+
+---
+
+## 12. PR-2 as built (from `0eb7e10`; frontend only, no migration)
+
+PR-2 is section 6: dragging a variable onto a category on a computer. It uses the existing classification API and
+changes no backend file. Where it differs from section 6, this section says so.
+
+**Where it is offered:**
+- Only on the Categories screen, and only with a mouse or trackpad (`pointer: fine` and `hover: hover`;
+  `frontend/data-config-drag.js`, the pattern of `frontend/builder-library-drag.js`).
+- Only for the administrator of the workspace: a platform admin, or a club's admin in that club's workspace. A team's
+  coach and a phone get the screen as before, with no tray and no target.
+- **The tray:** a panel beside the categories (under them below 960 px), titled *Variables*. It holds this workspace's
+  own active variables, the first page of the default list (100), with each variable's icon tile.
+  - It is read again each time the screen opens.
+  - When the list has more, the tray says so and points to *Add to a category*.
+  - The tray names the keyboard way: open a variable and choose *Add to a category*.
+- **Drop targets:** this workspace's own active categories. An archived category and a system category in a club
+  workspace take no drop, as in section 6.
+
+**What a drop does:**
+- It sends the existing link create (C4) with its own `requestKey` and the body `{ requestKey, variableId, categoryId }`.
+  This is the body *Add to a category* sends.
+- The line under the title says "*X* was added to *Y*." with *Undo* for 10 seconds (R2). *Undo* sends the existing link
+  remove (C5) with a new `requestKey` and no reason.
+- A refusal is a warning with the screen's own sentence, and nothing else changes.
+- **Different from section 6, "already there":** every drop is sent. The read of the domains and categories carries no
+  variable's links, so the screen cannot know beforehand that a variable is already in a category. The server answers
+  `link_exists`, and the line says "*X* is already in *Y*. Nothing was changed.", with no warning and no Undo.
+  - An earlier build kept the links it had seen in memory and sent nothing for those. It was removed before the pull
+    request, because a link removed elsewhere (in the variable's detail, or by another administrator) would then have
+    been reported as present.
+
+**One write at a time:**
+- While a drop is being saved, or its result is not confirmed, the tray is locked (nothing is draggable), and so is
+  every other drop. The screen's forms share the rule.
+- A lost answer (no answer, `503 outcome_unknown`, an uncoded 5xx) shows *Result not confirmed*. *Check result* sends
+  the identical request (the same `requestKey`), and only an answer the server gives after reading its request record
+  settles it. *Close without checking* says the result was not checked, and the list is read again when it is next shown.
+- **Leaving:** leaving with a drop in flight or not confirmed asks first. This covers the screen's own ways back, the
+  section switch, leaving Training Load and closing the page. Leaving ends the drop's line and its Undo. When the drop
+  may have been saved, the list is read again.
+- A late answer to a drop left behind changes nothing on the screen in use.
+
+**Not in PR-2:**
+- dragging a category onto a domain (section 6);
+- dragging a variable from one category to another;
+- a variable's own categories on the Categories screen (the read has none);
+- touch dragging.
+
+**Tests:**
+- `frontend/tests/metric-classification-drag.actions.test.mjs`: 25 tests through the real handlers, the real drag
+  handlers and the real markup with a fake fetch and a fake drag. They cover the offer per workspace and device, the
+  targets, the drag's own data type, the body, "already there", four refusals, Undo and its 10 seconds, the three kinds
+  of lost answer with *Check result*, the leave guards and a late answer.
+- Mutations of 22 guards, all killed.
+- A browser run on a disposable database with the real backend and the built frontend in Chromium, with a real HTML5
+  drag:
+  - the database holds exactly the links the screen reports, Undo removes only its own, and a lost answer that the
+    server saved is settled by *Check result* with one link;
+  - the tray beside the categories at 1280 px and under them at 900 px;
+  - no tray at 360, 375 and 390 px as a touch screen, or for a coach;
+  - 44 px targets and no overflow.
