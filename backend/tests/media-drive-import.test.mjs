@@ -435,3 +435,37 @@ test('26. authorization is rechecked after recovering a committed claim',async()
  assert.equal(inspected,false);
  assert.equal((await pool.query('select count(*)::int n from media.drive_copies where asset_id=$1',[u.mediaId])).rows[0].n,0);
 });
+
+test('27. a lost COMMIT over the real route: written is 200 verifiedAfterCommitError; an answer that never comes is 503 media_storage_unavailable, retryable, and the next POST completes it once; an unreadable claim is 503 verification_outcome_unknown, retryable, then 202 while its lease lives',async()=>{
+ const {createMediaStorageRouter}=await import('../src/routes/mediaStorage.js');
+ for(const kind of ['lands','hangs','claim-unknown']) {
+  await pool.query('delete from media.drive_copies');await pool.query("update media.uploads set status='cancelled' where status in ('reserved','verifying','cancelling')");
+  // lands / hangs: the completion's final COMMIT (test 12); claim-unknown: the claim COMMIT lands and its outcome cannot be read (test 21).
+  const mode=kind==='claim-unknown'?{kind:'lands',unreadable:true}:{kind,armed:false};
+  const service=kind==='claim-unknown'?claimService(mode):createMediaUploadService({pool,storage:trappedStorage(mode),store,driveCopies,inspect:async()=>({durationSeconds:2,width:320,height:240,videoCodec:'h264',audioCodec:null}),commitBoundMs:200});
+  const app=express();app.use(express.json());app.use((r,_s,next)=>{Object.assign(r,adminReq);next();});
+  app.use('/api/admin/media',createMediaStorageRouter({service:storage,admin:true,uploads:service,driveCopies,enabled:()=>true}));
+  const routeServer=app.listen(0,'127.0.0.1');await new Promise(r=>routeServer.once('listening',r));
+  const base=`http://127.0.0.1:${routeServer.address().port}/api/admin/media/drive-import/uploads`;
+  const post=(path,headers={})=>fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:path?'{}':JSON.stringify(importBody())});
+  try {
+   const started=await post('',{'Idempotency-Key':randomUUID()});assert.equal(started.status,201,kind);
+   const u=await started.json();await put(u);
+   mode.armed=true;
+   const first=await post(`/${u.uploadId}/complete`),body=await first.json();
+   if(kind==='lands') {
+    assert.equal(first.status,200,'written');assert.equal(body.verifiedAfterCommitError,true);
+   } else if(kind==='hangs') {
+    assert.equal(first.status,503,'no answer');assert.equal(body.error,'media_storage_unavailable');assert.equal(body.retryable,true);
+    assert.equal((await pool.query('select count(*)::int as n from media.drive_copies')).rows[0].n,0,'nothing written');
+    const second=await post(`/${u.uploadId}/complete`);assert.equal(second.status,200,'completed on the next POST');
+   } else {
+    assert.equal(first.status,503,'outcome unknown');assert.equal(body.error,'verification_outcome_unknown');assert.equal(body.retryable,true);
+    const held=await post(`/${u.uploadId}/complete`);assert.equal(held.status,202,'the live claim is not stolen');assert.equal((await held.json()).status,'verifying');
+    await pool.query("update media.uploads set verification_until=now()-interval '1 second' where id=$1",[u.uploadId]);
+    const second=await post(`/${u.uploadId}/complete`);assert.equal(second.status,200,'completed once the lease ended');
+   }
+   assert.equal((await pool.query('select count(*)::int as n from media.drive_copies where asset_id=$1',[u.mediaId])).rows[0].n,1,`${kind}: exactly one copy`);
+  } finally {routeServer.closeAllConnections();await new Promise(r=>routeServer.close(r));}
+ }
+});

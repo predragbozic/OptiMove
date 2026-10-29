@@ -824,6 +824,12 @@ test("23. a failed read of the system storage account says so and offers Try aga
   const server = fakeServer({ status: statusFor([1]), accounts: [], on: { account: () => (failing ? refusal(503, "media_storage_unavailable", true) : null) } });
   await chooseFolder(folder({ videos: [1] }));
   assert.match(content.textContent, /OptiMove system storage could not be read\./);
+  const tryAgain = Array.from(content.querySelectorAll('[data-action="drive-import-status"]')).find((b) => b.textContent.trim() === "Try again");
+  assert.ok(tryAgain, "Try again is offered");
+  assert.ok(tryAgain.parentElement.classList.contains("storage-admin-actions"), "in the action row that gives it a 44 px target, not inline in the sentence");
+  assert.equal(tryAgain.closest("p"), null, "not inside the paragraph");
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.storage-admin-actions \.plain-button, \.storage-admin-actions \.text-action \{ min-height: 44px; min-width: 44px; \}/);
   const reads = () => server.calls.filter((call) => call.path.endsWith("/storage-accounts/acc-p")).length;
   assert.equal(reads(), 1);
   actions.ensureDriveImportStatus(render);

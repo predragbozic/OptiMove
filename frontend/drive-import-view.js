@@ -129,7 +129,7 @@ function renderPlatformLine() {
   }
   if (!account) {
     return imp.accountError
-      ? `<p>OptiMove system storage could not be read. <button class="text-action" type="button" data-action="drive-import-status">Try again</button></p>`
+      ? `<p>OptiMove system storage could not be read.</p><div class="storage-admin-actions"><button class="text-action" type="button" data-action="drive-import-status">Try again</button></div>`
       : `<p class="muted">Reading OptiMove system storage...</p>`;
   }
   const free = BigInt(account.availableBytes || "0");
