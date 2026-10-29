@@ -693,11 +693,12 @@ order covers is merged under it.
 - **Acceptance:** an activation's confirmation names the source, the mapping version, the team and the binding.
 - **The owner's guidance** (owner turn `d9a0b800`, 2026-10-28, section 6): „Stim sto ovo mora biti mnogo jednostavnijeg
   za korisnika”.
-  - As the *Rukovodilac* reads it, this phase's contract holds a guided flow in three steps: choose the field, choose
-    the variable, then confirm the unit or the conversion. Where the units are the same, the screen suggests the match.
-  - `ux-design-reviewer` gets the owner's sentence as an acceptance criterion.
-  - The API stays as it is, and a mapping still needs a confirmed unit: the simplicity is in the guidance, never in
-    fewer checks.
+  - As the *Rukovodilac* reads it (its reading, section 6):
+    - this phase's contract holds a guided flow in three steps: choose the field, choose the variable, then confirm
+      the unit or the conversion. Where the units are the same, the screen suggests the match;
+    - `ux-design-reviewer` gets the owner's sentence as an acceptance criterion;
+    - the API stays as it is, and a mapping still needs a confirmed unit: the simplicity is in the guidance, never in
+      fewer checks.
 
 ### Phase 9 ★★: M4, the importer integration
 - Triggers 1, 3 and 4; the five-point rule for transactions; the import switch stays off.
@@ -739,9 +740,9 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
   - „npr total acc&dec” (owner message `c77a90ab`, 11:48:28 UTC, sent while the *Rukovodilac*'s turn was running);
   - „iz gpexe se uvoze posebno i mogu da se i kod nas ubacuju posebno npr ali mi trebaju i kao total” (owner turn
     `7f53b09a`, 11:48:47 UTC).
-- **Owner, 2026-10-28** (in the *Rukovodilac*'s chat, owner turn `269910e0`, sent at 23:27:25 UTC; section 6): „Takodje
-  mi u budućnosti možemo imati više sources. A različiti korisnici različite sources tako da ce svako sebi to povezivati
-  i praviti nove varijable izvedene varijable ako im to treba npr acc i dec total...”.
+- **Owner, 2026-10-28** (in the *Rukovodilac*'s chat, owner turn `269910e0`, received by the server at 23:27:25 UTC;
+  section 6): „Takodje mi u budućnosti možemo imati više sources. A različiti korisnici različite sources tako da ce
+  svako sebi to povezivati i praviti nove varijable izvedene varijable ako im to treba npr acc i dec total...”.
   - The *Rukovodilac* reads it as the same need this phase records. The place and the order of the phases do not
     change.
   - Its reading also names two things for this phase's contract: provenance in the style of T6, and a screen in the
@@ -1031,7 +1032,7 @@ is the *Rukovodilac*'s.
 each turn in the *Rukovodilac*'s transcript with `get_event`:
 - owner turn `981ef233`, 23:24:21 UTC: „Neka ide kako si zamislio”. By the *Rukovodilac*'s account it answered the
   order the *Rukovodilac* had described: PR-1, then phase 5b (v42), then PR-2 (dragging), then the Mappings screen
-  (phase 8). That context is the *Rukovodilac*'s;
+  (phase 8). That context is the *Rukovodilac*'s. The order and the gates of the phases do not change;
 - owner turn `d9a0b800`, 23:24:46 UTC: „Stim sto ovo mora biti mnogo jednostavnijeg za korisnika”. By the
   *Rukovodilac*'s account the owner had looked at the deployed Source fields screen in a club workspace and asked
   whether source fields could already be linked to canonical variables.
@@ -1062,8 +1063,9 @@ What of point 1 PR-1 already holds (checked against `0e38ae9`):
 **The language pass** is a small frontend pull request of its own, with or after PR-2, as the *Rukovodilac* orders. It
 changes no API.
 
-**Sources and users: the owner's word of 2026-10-28.** Owner turn `269910e0` in the *Rukovodilac*'s chat, sent at
-23:27:25 UTC; it reached the *Rukovodilac*'s conversation at 23:40:09 UTC. The executor checked it in the transcript with
+**Sources and users: the owner's word of 2026-10-28.** Owner turn `269910e0` in the *Rukovodilac*'s chat, received by
+the server at 23:27:25 UTC; it reached the *Rukovodilac*'s conversation at 23:40:09 UTC (the time its own transcript
+shows). The executor checked it in the transcript with
 `get_event`: „Takodje mi u budućnosti možemo imati više sources. A različiti korisnici različite sources tako da ce
 svako sebi to povezivati i praviti nove varijable izvedene varijable ako im to treba npr acc i dec total...”. The order of
 the phases does not change.
@@ -1072,7 +1074,7 @@ How the *Rukovodilac* reads it (its message queued at 23:40:44 UTC; its reading)
 at `0e38ae9`:
 - **More sources.** This is already the architecture, so nothing is new:
   - the Imports track is source-neutral, with one Source card per source;
-  - a source field is identified by its source system and API family (T2a, v34);
+  - a source field is identified by its source system, its API family and its source key (T2a, v34);
   - a mapping is activated per team binding (T5).
 - **Different users with different sources, each linking their own.** Today:
   - a source connection belongs to a club and is managed by the club's admin or a platform admin (F3c2e).
@@ -1085,8 +1087,8 @@ at `0e38ae9`:
   (`owner_scope = 'user'`), on the pattern of ADR-002. The *Rukovodilac* reads it as ★★. The owner decides when it
   comes up.
 - **Derived variables** (for example a total of accelerations and decelerations): phase 11 (section 5), under the
-  decision of 2026-09-17 that a value OptiMove computes is never stored as a value the source delivered. The
-  *Rukovodilac*'s reading of its place, after M4 and M6, fits phase 11's start after phase 9 (M4).
+  decision of 2026-09-17 that a value OptiMove computes is never stored as a value the source delivered. The plan's gate
+  stays "after phase 9" (M4); the *Rukovodilac*'s reading would also wait for M6.
 
 PR #220 is not part of this plan. If it runs in parallel, it is merged in sequence with #218 (they share
 `frontend/training-load-actions.js`), and the training-load actions tests are run again.
