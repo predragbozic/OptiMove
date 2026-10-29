@@ -393,6 +393,7 @@ test("3. the rollback refuses, changing nothing, under a later migration, once a
   const writer = new pg.Client({ connectionString: rdb.url });
   await writer.connect();
   let raceUser = null;
+  let pending = null;
   try {
     await writer.query("begin");
     raceUser = (await writer.query(`insert into public.users (email, full_name, display_name, is_active) values ($1,'race','race',true) returning id`, [`race-${uid()}@test.local`])).rows[0].id;
@@ -400,7 +401,7 @@ test("3. the rollback refuses, changing nothing, under a later migration, once a
     await withTriggersOff(writer, "source_metric_definition_versions", () => writer.query(
       `update training_load.source_metric_definition_versions set bound_operator = 'between', meaning_verified_by_user_id = $2, meaning_verified_at = now(), meaning_evidence_ref = $3 where id = $1`,
       [power.revId, raceUser, MEANING_REF]));
-    const pending = inRolledBack(r, null, ROLLBACK);
+    pending = inRolledBack(r, null, ROLLBACK);
     const deadline = Date.now() + 4_000;
     while (!(await writer.query(`select exists (select 1 from pg_locks where pid = $1 and not granted) as waits`, [r.processID])).rows[0].waits) {
       assert.ok(Date.now() < deadline, "the rollback waits for the writer's lock");
@@ -411,6 +412,7 @@ test("3. the rollback refuses, changing nothing, under a later migration, once a
     assert.match(error?.message ?? "", /^v42 rollback refused: a zone revision carries a meaning proof or an operator$/);
   } finally {
     await writer.query("rollback").catch(() => {});
+    await pending?.catch(() => {});
     if (raceUser) {
       const power = await seeded(writer, POWER);
       await writer.query("begin");

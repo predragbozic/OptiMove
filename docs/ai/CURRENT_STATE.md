@@ -2272,7 +2272,7 @@ Technical details.
     **Its ★★ contract J7 (`docs/ai/phase5-zone-model-contract.md`) was accepted on 2026-10-28 (C103):** both reviewers
     gave GO on `8c2b383`; the *Rukovodilac* decided P1–P6; the owner approved the contract („Slažem se po preporuci idi” (owner turn `cfeac86e`, 2026-10-28 21:58:15 UTC, in the *Rukovodilac*'s chat; the *Rukovodilac* reads it as the approval of the contract as a whole, which is its reading, not the owner's own words)) and the plan's phase 5b
     ★★ with its gate line "migration v42". **Phase 5b is implemented in an open pull request** (branch
-    `feature/phase5b-v42`: migration v42 with its rollback, preflight and post-check, F3's zone operator, the meaning
+    `feature/phase5b-zone-model-v42`: migration v42 with its rollback, preflight and post-check, F3's zone operator, the meaning
     form, the documents; J7 "As built" in the discovery document). It is not merged, and v42 is applied to no
     persistent database. Until v42 is merged and deployed, the zone meaning act stays refused in production (C89). Its
     merge needs the owner's own order naming the pull request and v42.
@@ -2757,7 +2757,7 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
-- Phase 5b (migration v42, branch `feature/phase5b-v42`) is **not merged and not deployed, and v42 is applied to no
+- Phase 5b (migration v42, branch `feature/phase5b-zone-model-v42`) is **not merged and not deployed, and v42 is applied to no
   persistent database**; it ran only on disposable `optimove_tests_gpexe_*` databases.
 - PR #251 (phase 6, merge commit `cf387f2`) and PR #252 (documents, merge commit `0b947ab`, 2026-10-28 18:34:08 UTC) are
   deployed with `0b947ab`, by the owner by hand: `/api/health` first served `0b947ab` with `ok: true` at 20:44:24 UTC, then five more times in a row until 20:45:34 UTC (`ae29b08` before) (the *Rukovodilac*'s smoke); without a login six
