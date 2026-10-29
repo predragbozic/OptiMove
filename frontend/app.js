@@ -30,6 +30,8 @@ import { renderCheckInContent, renderCheckInPage as renderCheckInPageAction, sub
 import { handleDataSourcesAction, submitDataSourcesForm } from "./data-sources-actions.js";
 import { enterDataSourcesSection, loadDataSources } from "./data-sources-data.js";
 import { handleStorageAdminAction, submitStorageAdminForm } from "./media-storage-admin-actions.js";
+import { ensureDriveImportStatus, handleDriveImportAction, handleDriveImportBeforeUnload, handleDriveImportChange, handleDriveImportPointer, handleDriveImportToggle } from "./drive-import-actions.js";
+import { resetDriveImportForWorkspaceChange } from "./drive-import-data.js";
 import { enterStorageAdminSection, loadStorageAdmin, storageAdminContext, storageAdminNeedsLoad } from "./media-storage-admin-data.js";
 import { handleSourceConnectionsAction, handleSourceConnectionsBeforeUnload, submitSourceConnectionsForm } from "./source-connections-actions.js";
 import { handleVariablesAction, handleVariablesInput, submitVariablesForm } from "./metric-variables-actions.js";
@@ -628,6 +630,16 @@ function bindEvents() {
   window.addEventListener("beforeunload", handleSourceConnectionsBeforeUnload);
   // Exercise media (FE-2): an upload in flight asks the same way.
   window.addEventListener("beforeunload", (event) => handleExerciseMediaBeforeUnload(event, state));
+  // Import from Google Drive: files on their way ask the same way.
+  window.addEventListener("beforeunload", handleDriveImportBeforeUnload);
+  // Import from Google Drive: an opened <details> of its card survives the
+  // repaints of a running import (toggle does not bubble: caught on the way
+  // down), and a repaint of its card waits while a pointer is down, then
+  // comes right after.
+  document.addEventListener("toggle", handleDriveImportToggle, true);
+  document.addEventListener("pointerdown", handleDriveImportPointer, true);
+  document.addEventListener("pointerup", handleDriveImportPointer, true);
+  document.addEventListener("pointercancel", handleDriveImportPointer, true);
 }
 
 async function loadSession() {
@@ -1325,6 +1337,8 @@ async function handleContentChange(event) {
   // Manage account -> Application blocks: Grant block waits for a chosen block.
   const grantSelect = event.target.closest('[data-manage-account-add="block"] select');
   if (grantSelect) { syncGrantBlockButton(grantSelect); return; }
+  // Settings -> Storage -> Import from Google Drive: the prepared folder.
+  if (await handleDriveImportChange(event, { render: renderDataSourcesSurface })) return;
 
   const athleteAccessInput = event.target.closest("[data-athlete-access-key]");
   if (athleteAccessInput) {
@@ -2823,6 +2837,7 @@ async function handleContentClick(event) {
   if (await handleDataSourcesAction(action, { render: renderDataSourcesSurface })) return;
   if (await handleSourceConnectionsAction(action, { render: renderDataSourcesSurface, openDataSources: openDataSourcesFromSourceConnections })) return;
   if (await handleStorageAdminAction(action, { render: renderDataSourcesSurface })) return;
+  if (await handleDriveImportAction(action, { render: renderDataSourcesSurface })) return;
   if (await handleOrganizationAction(action, {
     loadAthletes,
     refreshOrganizationData,
@@ -2966,6 +2981,8 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     if (state.organization.section === "storage" && storageAdminContext(state.organization.data) && storageAdminNeedsLoad()) {
       void loadStorageAdmin(renderDataSourcesSurface);
     }
+    // Import from Google Drive: what is already copied, read once.
+    if (state.organization.section === "storage") ensureDriveImportStatus(renderDataSourcesSurface);
     const data = state.organization.data || { clubs: [], teams: [], athletes: [], users: [], canCreateClub: false, canCreateTeam: false, canCreateAthlete: true, canCreateUser: true };
     normalizeOrganizationSelection(data);
     const role = roleLabel();
@@ -3011,6 +3028,7 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
 // is re-verified against the server rather than trusted purely from cache.
 async function onWorkspaceChanged() {
   resetExercisesForWorkspaceChange();
+  resetDriveImportForWorkspaceChange();
   state.organizationUserSelection = { active: false, ids: new Map(), note: "" };
   clearAthleteFilters();
   const generation = ++workspaceRosterGeneration;

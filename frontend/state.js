@@ -1035,6 +1035,15 @@ export const createInitialState = () => ({
     policy: null, revision: 0, accounts: [], nextCursor: null, loadingMore: false,
     policyEdit: null, limitEdit: null, history: {}, busy: false, notice: "",
   },
+  // Settings -> Storage -> Import from Google Drive (platform admin only): the
+  // prepared folder's plan and the running import (drive-import-data.js). The
+  // files stay in memory; only each file's Idempotency-Key is kept in this
+  // browser, so a repeat after a reload is the same import.
+  driveImport: {
+    folderName: "", folder: null, reading: false, readError: "", status: null, statusError: "", loadingStatus: false,
+    items: [], report: null, running: false, paused: false, stopCode: "", notice: "", generation: 0,
+    open: {}, creating: false, accountNotice: "", accountGeneration: -1, accountError: false, statusGeneration: 0,
+  },
   organizationUserManage: { open: false, userId: "", pending: false, error: "" },
   // The block administrator's selection of accounts in Settings -> Users
   // (id -> name), to grant them application blocks at once; never stored.
