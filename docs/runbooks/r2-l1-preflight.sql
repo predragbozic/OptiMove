@@ -77,13 +77,17 @@ select count(*) as selections,count(distinct r.id) as distinct_assets,
 from refs r left join media.assets a on a.id=r.id;
 
 -- Logical backfill scale. Matches L1's eligible CURRENT basis rules, not billing.
+-- A hold has one member per asset and slot (unique hold_id,asset_id,slot), so the
+-- expected members count each plan's DISTINCT assets per slot, not its item slots:
+-- the same R2 video in two items is one member per hold.
 with slots as (
  select d.plan_id,count(*) filter(where i.video_asset_id is not null)
-  +count(*) filter(where i.image_asset_id is not null) as slots
+  +count(*) filter(where i.image_asset_id is not null) as slots,
+  count(distinct i.video_asset_id)+count(distinct i.image_asset_id) as members
  from plans.plan_items i join plans.plan_sessions s on s.id=i.plan_session_id
  join plans.plan_days d on d.id=s.plan_day_id group by d.plan_id
 ), bases as (
- select p.id,s.slots,
+ select p.id,s.slots,s.members,
  (case when p.athlete_id is not null and not coalesce(p.is_template,false)
    and p.status='active' and coalesce(p.is_active,true) then 1 else 0 end)
  + (select count(*) from library.program_access g where g.plan_id=p.id
@@ -92,8 +96,8 @@ with slots as (
  from plans.plans p join slots s on s.plan_id=p.id where s.slots>0
 )
 select count(*) as r2_plans,coalesce(sum(slots),0) as item_media_slots,
- coalesce(sum(bases),0) as expected_holds,coalesce(sum(slots*bases),0) as expected_manifest_members,
- coalesce(max(slots*bases),0) as largest_plan_manifest from bases;
+ coalesce(sum(bases),0) as expected_holds,coalesce(sum(members*bases),0) as expected_manifest_members,
+ coalesce(max(members*bases),0) as largest_plan_manifest from bases;
 
 -- Legacy Drive links with a blank other than a space at an edge (tab, line break,
 -- no-break space, other Unicode blanks). The bridge (btrim: spaces only) and the
