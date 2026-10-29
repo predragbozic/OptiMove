@@ -2271,8 +2271,11 @@ Technical details.
     `between` or `>=` (`>` only with evidence); owner-run evidence per zone field as in C97. Option A needs a schema.
     **Its ★★ contract J7 (`docs/ai/phase5-zone-model-contract.md`) was accepted on 2026-10-28 (C103):** both reviewers
     gave GO on `8c2b383`; the *Rukovodilac* decided P1–P6; the owner approved the contract („Slažem se po preporuci idi” (owner turn `cfeac86e`, 2026-10-28 21:58:15 UTC, in the *Rukovodilac*'s chat; the *Rukovodilac* reads it as the approval of the contract as a whole, which is its reading, not the owner's own words)) and the plan's phase 5b
-    ★★ with its gate line "migration v42". Not implemented: until v42 is merged and deployed, the zone meaning act stays
-    refused (C89).
+    ★★ with its gate line "migration v42". **Phase 5b is implemented in an open pull request** (branch
+    `feature/phase5b-v42`: migration v42 with its rollback, preflight and post-check, F3's zone operator, the meaning
+    form, the documents; J7 "As built" in the discovery document). It is not merged, and v42 is applied to no
+    persistent database. Until v42 is merged and deployed, the zone meaning act stays refused in production (C89). Its
+    merge needs the owner's own order naming the pull request and v42.
   - **Phase 6, the Source fields view, PR #251** (branch `feature/metrics-source-fields-tab-6` from `3532bc5`):
     **merged and deployed; frontend only, no migration.** Section H and J4 of the discovery document record it as
     built: a **Variables | Source fields** sub-navigation in the platform and a club workspace; the fields with their
@@ -2754,6 +2757,8 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- Phase 5b (migration v42, branch `feature/phase5b-v42`) is **not merged and not deployed, and v42 is applied to no
+  persistent database**; it ran only on disposable `optimove_tests_gpexe_*` databases.
 - PR #251 (phase 6, merge commit `cf387f2`) and PR #252 (documents, merge commit `0b947ab`, 2026-10-28 18:34:08 UTC) are
   deployed with `0b947ab`, by the owner by hand: `/api/health` first served `0b947ab` with `ok: true` at 20:44:24 UTC, then five more times in a row until 20:45:34 UTC (`ae29b08` before) (the *Rukovodilac*'s smoke); without a login six
   protected routes answered 401 and `/api/auth/me` answered `{"user":null}`. No migration.
@@ -3131,9 +3136,8 @@ pre-existing; pass/fail counts don't belong in this file
   needs is listed in section J4 of the discovery document. The main session prepares the procedure only and
   never sends a GPEXE request.
 - **The zone verification model** (C89): **decided on 2026-10-28 (C102): option A**, one source field per zone shape.
-  Its ★★ contract (a seeding migration, v37's zone refusal replaced, F3's change, the zone operator in the Source fields
-  form) is the next Metrics Core document; no zone's meaning is confirmed before its migration is deployed and the C97
-  evidence exists.
+  Its ★★ contract J7 is accepted (C103), and phase 5b (migration v42) is implemented in an open pull request; no zone's
+  meaning is confirmed before v42 is deployed and the C97 evidence exists.
 - **Data configuration: visual polish** (scheduled by the owner on 2026-10-28; `docs/ai/metrics-core-plan.md`, section
   6, with the owner's words): a proposal document and mockup first. Then step 1, with no migration: a built-in icon
   library, Settings → Icons, a shared picker, variable icons in the existing `icon_url` column, the visual pass, and
@@ -3485,8 +3489,10 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
    active phase.
 
    Next by the plan:
-   - phase 5b, the zone model (option A, C102): its contract J7 is accepted (C103). Next is its one ★★ pull request
-     (migration v42, F3, the meaning form, the documents); its merge needs the owner's own order naming it and v42;
+   - phase 5b, the zone model (option A, C102): its contract J7 is accepted (C103), and its one ★★ pull request
+     (migration v42, F3, the meaning form, the documents) is implemented and open. Next are its reviews, the internal
+     ones and the external review of the *Rukovodilac* and the *Nezavisni revizor*; its merge needs the owner's own
+     order naming it and v42;
    - phase P, the owner only: the evidence for the nine `rest_v1` fields (C97) stays open;
    - phases 7–11 and R1, as the plan orders them.
 
