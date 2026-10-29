@@ -1,6 +1,8 @@
-# J8 — phase 7b: activating, disabling and replacing a mapping version (proposed ★★ contract)
+# J8 — phase 7b: activating, disabling and replacing a mapping version (accepted ★★ contract, C104)
 
-**A proposal only: no code and no migration file.** It is the contract of phase 7b of `docs/ai/metrics-core-plan.md`
+**Accepted on 2026-10-29 (C104 of the discovery document): the owner accepted the contract as a whole and answered
+Q1, Q2, Q3, Q5, Q6 and Q7 as recommended. Not implemented yet: no code, and no migration file.** It is the contract of
+phase 7b of `docs/ai/metrics-core-plan.md`
 (section 5, phase 7: "7b: T4 activate, disable and replacement"). It extends
 `docs/ai/gpexe-metric-variable-mapping-discovery.md` (the *discovery document*): sections D6, D10, J1, J2 and J5, and
 the open points of section K. It follows phase 4's pattern (`docs/ai/v39-revision-lifecycle-contract.md`):
@@ -10,10 +12,11 @@ the open points of section K. It follows phase 4's pattern (`docs/ai/v39-revisio
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-29, on the *Rukovodilac*'s order of that day (phase 7, package 2). Revised the same day after the internal reviews of `484553c` (section 12). Not accepted. |
+| Status | Proposed by the executor on 2026-10-29, on the *Rukovodilac*'s order of that day (phase 7, package 2). Revised the same day after the internal reviews of `484553c` (section 12). Merged as a proposal (PR #266, `69d824f`) after the GO of the *Rukovodilac* and the *Nezavisni revizor* on `f9f6bec`. **Accepted on 2026-10-29 (C104).** This revision adds the decisions and the external reviewers' LOW notes (section 12). |
 | Verified against commit | `311d9e4` (merge of PR #264). Every file and line reference below is to that commit. |
-| Decides | The owner: the contract as a whole and Q1, Q2, Q3, Q5, Q6, Q7 (section 9). The *Rukovodilac*: R1–R8 (section 10), inside the plan. |
-| Migration | **v43**, proposed name `migrations_v2/202610301000_training_load_v43_source_metric_mapping_transitions.sql`. The file is not created until the owner's order names it. |
+| Decides | The owner: the contract as a whole and Q1, Q2, Q3, Q5, Q6, Q7 (section 9), decided (C104). The *Rukovodilac*: R1–R8 (section 10), inside the plan, accepted as written. |
+| Accepted | 2026-10-29 (C104). The owner's words: „A1 DA, I SVE PO PREPORUKAMA” (owner turn `f505ec21`, 2026-10-29 13:32:57 UTC, in the *Rukovodilac*'s chat; the executor checked it in the transcript). The *Rukovodilac* reads „sve po preporukama” as the acceptance of the contract as a whole and of every question as recommended, as C103 did for J7; that reading is the *Rukovodilac*'s, not the owner's own words. |
+| Migration | **v43**, name `migrations_v2/202610301000_training_load_v43_source_metric_mapping_transitions.sql` (no other file carries the label v43 at `311d9e4`). The file is written in the implementation pull request; its merge needs the owner's order naming the pull request, the exact file name and its sha256, with the preflight the same day. |
 
 ---
 
@@ -30,13 +33,12 @@ the open points of section K. It follows phase 4's pattern (`docs/ai/v39-revisio
   - v35 checks the acting user, the basis and the audit row at COMMIT.
 - **v43 is small.**
   - It always makes the audit tell the truth about a replacement (G1).
-  - If the owner chooses it (Q2), it also checks a transition's audit row against the version's own reason and time
-    (G2).
-  - A third guard (G3, a platform admin's disable of an archived club's version) is described only as option (b) of
-    Q1, and is not recommended.
+  - It also checks a transition's audit row against the version's own reason and time (G2; the owner's Q2, C104).
+  - A third guard (G3, a platform admin's disable of an archived club's version) was option (b) of Q1 and was not
+    chosen (C104).
 - **The revision lifecycle changes in the same release.** As soon as a version can be active, the pinned step of L2,
   L4 and L5 must disable an active pinned version too (O5 of J5: "a field can always be stopped"). For a club's active
-  version this widens O7(i), so it is put to the owner as Q7.
+  version this widens O7(i); the owner decided it as Q7 (C104).
 - **Nothing reads an active version yet.** T5 (7d) and the importer (M4) come later, so in 7b an activation changes no
   imported value.
 
@@ -206,8 +208,8 @@ Both routes are mounted in `backend/src/routes/sourceMetrics.js` with M2's conve
 **The database allowlist** (C66, C72: by exact constraint name or exact message, never by prefix):
 - `23505` `source_metric_mapping_versions_one_active_target_per_owner` → `source_metric_target_taken`. Two mappings of
   one owner lock different T3 rows, so the index decides between two concurrent activations of the same field and
-  parameters: the second waits on the first's row, and answers `try_again` if its lock bound ends first, or
-  `source_metric_target_taken` after the first commits.
+  parameters: the second waits for the first's transaction (its `transactionid` lock, not a row), and answers
+  `try_again` if its lock bound ends first, or `source_metric_target_taken` after the first commits.
 - `23505` `source_metric_mapping_versions_one_active_per_mapping` → `active_version_changed`. It cannot race behind
   the T3 lock; it is mapped as a backstop. Its `current.activeVersionId` is read by a bounded read after the rollback,
   as `createMapping` reads the existing mapping for `mapping_exists` (`sourceMetricMappingService.js:993-999`).
@@ -225,6 +227,9 @@ Both routes are mounted in `backend/src/routes/sourceMetrics.js` with M2's conve
 - The `version` shape of J1 row 5, with `activatedAt` and `disabledAt` added (R2). It never carries the reason or an
   acting user (C63).
 - `replaced` names N on a replacement; N is a version of the same mapping, which the caller may read.
+- **For phase 8 (the Mappings screen):** A1 refuses a `reason` without a replacement (`400 invalid_body`). The screen
+  asks for a reason only when the mapping has an active version, which the activation then replaces (the
+  *Rukovodilac*'s L3).
 - The answer after a COMMIT follows C69: the right is checked again first; then the version is read through the
   owner-filtered `writableVersion` (`sourceMetricMappingService.js:757`); otherwise `readError`.
 
@@ -257,17 +262,19 @@ Both routes are mounted in `backend/src/routes/sourceMetrics.js` with M2's conve
 - **The pinned step** (O5; Q5 and Q7):
   - the code changes:
     - `pinnedDecisions` no longer refuses an `active` pinned version;
-    - `disablePinned` disables `needs_review` and `active` versions;
-    - `disabledAuditRows` writes each row with its version's real `from_status`. v35's deferred link requires it.
+    - `disablePinned`'s one UPDATE covers `needs_review` and `active` versions (today it is filtered on
+      `status = 'needs_review'`);
+    - `disabledAuditRows` writes each row with its version's real `from_status`, taken from the versions the step read
+      under their `FOR UPDATE` lock (today it is fixed to `needs_review`). v35's deferred link requires it.
   - L2 and L5 disable a pinned `active` version as they disable a pinned `needs_review` one, in the same transaction,
     before the retirement (v34 refuses the retirement before, lines 572-575);
   - L4 does the same; D3's prepared replacement waits for 7d (Q5);
   - a club's active version is disabled from the platform workspace too (Q7);
   - the answers keep counts only (`disabledVersions` by owner scope), never a club, mapping or version id;
-  - `club_archived` (O7(ii)(a)) covers an active club version too, unless Q1 is answered otherwise. Its sentence
-    changes, since no route restores a club (Q1);
+  - `club_archived` (O7(ii)(a)) covers an active club version too (Q1 (a), C104). Its sentence changes, since no
+    route restores a club (R8);
   - `activation_open` stays a refusal until 7d;
-  - `version_active` and its sentence are removed, unless the alternative of Q5 or Q7 is chosen.
+  - `version_active` and its sentence are removed (Q5 and Q7 decided as recommended, C104).
 - **Decision 9 stays as it is.** An active version keeps its canonical variable from getting a new version or being
   archived (`variable_pinned`) until the mapping version is disabled. That is the explicit order of D6: disable → new
   canonical version → new mapping version → activate.
@@ -352,7 +359,7 @@ T4 `FOR UPDATE` → the acting user's rows → the pinned clubs.
 
 ---
 
-## 7. Migration v43 (specification; the file waits for the owner's order)
+## 7. Migration v43 (specification; the file is written in the implementation pull request)
 
 **What it adds:** functions and triggers only: no table, column, index or data. No existing function is changed;
 `source_metric_actor_basis` stays byte-identical. The two triggers are named `source_metric_audit_v43_*`, so they sort
@@ -361,13 +368,13 @@ after every earlier T8 trigger (`…_v35_actor_guard`, `…_v37_revision_guard`)
 | Guard | Trigger | Rule | Refusal | When |
 |---|---|---|---|---|
 | **G1, a replacement's label is true** | `source_metric_audit_v43_replacement_link`: AFTER INSERT on T8, `deferrable initially deferred`, for `mapping_status` and `mapping_version_replaced` rows only | A `mapping_version_replaced` row is accepted only when its operation (the same `operation_id`) holds a `mapping_status` row `active → disabled` of **another** version of the same mapping, by the same user, whose version is `disabled` with `disable_reason` equal to the replaced row's `reason`. A `mapping_status` row `needs_review → active` is accepted only when its operation disabled no active version of that mapping. Checked at COMMIT, so the order of the two rows does not matter. | `23514` (fixed text) | always (R6) |
-| **G2, a row agrees with its version** | `source_metric_audit_v43_transition_facts`: BEFORE INSERT on T8, for `mapping_status` and `mapping_version_replaced` rows only | It compares the row only with its own T4 row, which the transition already wrote: a `→ disabled` row carries exactly the version's `disable_reason`; `performed_at = now()`; the transition's `*_at` (`submitted_at`, `activated_at` or `disabled_at`) lies within `[now(), clock_timestamp()]`, both bounds included, so it is neither before this transaction nor in the future. | `23514` (fixed text) | if Q2 is answered "the database" |
+| **G2, a row agrees with its version** | `source_metric_audit_v43_transition_facts`: BEFORE INSERT on T8, for `mapping_status` and `mapping_version_replaced` rows only | It compares the row only with its own T4 row, which the transition already wrote: a `→ disabled` row carries exactly the version's `disable_reason`; `performed_at = now()`; the transition's `*_at` (`submitted_at`, `activated_at` or `disabled_at`) lies within `[now(), clock_timestamp()]`, both bounds included, so it is neither before this transaction nor in the future. | `23514` (fixed text) | in v43 (Q2, C104) |
 
 - **What G1 and G2 are, and are not** (as J2 says of v35): a backstop against an accidental or unintended write that
   bypasses the service. They prove that the rows agree with each other and with the version, not that the writer was
   honest. A direct-SQL writer with the owner credentials can still split one operation into two `operation_id`s, or
   switch the triggers off (C74).
-- **G3, not recommended (Q1 option (b)):**
+- **G3, not chosen (Q1 option (b); C104 chose (a), with (c) as a separate task before M6). Kept for the record:**
   - a new function, for example `source_metric_actor_may_disable_archived(p_actor, p_club)`, that is true only for
     an active platform admin and an archived club;
   - called only from the `disabled` branch of v35's T4 actor guard and the `to_status = 'disabled'` branch of v35's
@@ -415,10 +422,11 @@ after every earlier T8 trigger (`…_v35_actor_guard`, `…_v37_revision_guard`)
   5. no actor default;
   6. no lock.
 - **Runbook** `docs/runbooks/source-metric-mapping-transitions-v43.md`: the order (preflight → merge → deploy → smoke →
-  post-check), what to do when a block differs, and the rollback.
+  post-check), what to do when a block differs, and the rollback. It also says that a rollback of v43 needs no revert
+  of the 7b code, and the reverse (the *Nezavisni revizor*'s LOW-2): the code writes rows that satisfy G1 and G2, and
+  without them its routes work unchanged, since G1 and G2 are backstops only.
 
-If the owner answers Q2 "the route", v43 holds G1 only. Without G1 (if the *Rukovodilac* decides R6 otherwise), 7b
-would need no migration.
+With Q2 and R6 decided (C104), v43 holds G1 and G2, and no G3.
 
 ---
 
@@ -447,6 +455,10 @@ through the T1 runner, on PostgreSQL 16 and, where possible, 17.
   - an activation against a disable;
   - an activation against a canonical new version (M3-0) and an archive (R2);
   - an activation against a conversion retirement, by direct SQL until 7c;
+  - an activation against a level removal through the older Metrics API (`trainingLoadMetricsCatalog.js:372`:
+    `metric_definitions` `FOR UPDATE`, then the scope capability row, under v34's guard
+    `source_metric_guard_scope_capability`, line 1265). Both take the definition, then its capabilities (the
+    *Nezavisni revizor*'s LOW-1);
   - an activation against L2, L4 and L5 on the same revision.
 - **The pinned step:**
   - L2, L4 and L5 disable an active pinned version (system, and club as Q7 answers), each audit row with its real
@@ -491,12 +503,15 @@ platform-admin-only rule, the pinned step across workspaces), `code-reviewer`, t
 
 ---
 
-## 9. Questions for the owner (red zone)
+## 9. Questions for the owner (red zone; decided, C104)
 
-Each question has one recommendation and its consequence.
+Each question has one recommendation and its consequence. The owner decided all six as recommended on 2026-10-29
+(C104); the decision is marked under each.
 
 - **Q1. A version of an archived club** (K, J2, O7(ii)). While a club is archived no one may write its mappings (v35),
   and no route restores a club (section 1.2).
+  - **Decided (C104): (a) for 7b; (c) scheduled as a separate task before M6 (recorded in `docs/ai/CURRENT_STATE.md`,
+    Separate tasks); not (b).**
   - *Recommended (a), for 7b:* no change. A2 cannot reach an archived club (no admin context), and the pinned step
     answers `club_archived` naming the club to a platform admin, as today.
     - *Consequence:* the only way to stop such a version, or to retire a revision it pins, is a direct database write
@@ -510,17 +525,20 @@ Each question has one recommendation and its consequence.
     longer arises for a club archived after the change. This changes `DELETE /clubs/:id`
     (`backend/src/routes/organization.js`), outside this track. A club archived before it stays as under (a).
 - **Q2. The audit row's reason and time against the version's columns** (K, from the v35 reviews).
+  - **Decided (C104): the database checks them (G2 in v43).**
   - *Recommended:* the database checks them (G2 in v43): the reason of a disable, and the time of every transition
     within its own transaction.
   - *Consequence:* v43 carries G2, with its tests and mutations. A direct-SQL write cannot record one reason on the
     version and another in its audit row, or a transition time outside its transaction.
   - *Alternative:* the route writes both from one value, and nothing in the database compares them.
 - **Q3. Replacing the active version.** D6 already decides that activating N+1 disables N in the same transaction.
+  - **Decided (C104): D6 confirmed, with `expectedActiveVersionId` and a required reason.**
   - *Recommended:* confirm D6, with the caller naming the version it replaces (`expectedActiveVersionId`) and a
     required reason. There is no separate replace route, and no replacement of a version the caller did not see.
   - *Consequence:* a stale screen cannot replace a version another admin activated meanwhile
     (`active_version_changed`).
 - **Q5. L4 when a version pinned to R is active.**
+  - **Decided (C104): L4 disables it like L2 and L5; D3's prepared replacement comes with 7d.**
   - *Recommended:* in 7b, L4 disables it like L2 and L5 (the pinned step, the fixed reason). D3's prepared replacement
     (versions on R+1 activated in the same transaction, T5 moved) comes with 7d, when T5 exists.
   - *Consequence:* after L4 the mapping has no active version until an admin activates a version on R+1. Before 7d and
@@ -534,11 +552,13 @@ Each question has one recommendation and its consequence.
   - activate the version.
 
   The columns are separate, so a rule such as "the activator is not the submitter" is cheap to add.
+  - **Decided (C104): no rule in 7b.**
   - *Recommended:* no rule in 7b, as O8 decided for revisions. With one platform admin the rule would stop the work,
     and every act stays attributed.
   - *Alternative:* the activator is not the submitter (a service rule, and a check in v43).
 - **Q7. The pinned step and a club's active version** (O5 against O7(i)). O7(i) accepted that a revision's retirement
   from the platform workspace disables a club's `needs_review` versions. 7b makes active versions possible.
+  - **Decided (C104): as recommended. Showing the fixed reason to the club stays a separate future decision.**
   - *Recommended:* the pinned step disables a club's `active` pinned version too, as O5's "a field can always be
     stopped" requires.
   - *Consequence:*
@@ -587,6 +607,10 @@ Each question has one recommendation and its consequence.
 ## 11. Not in 7b
 
 - T5 activations and their actor guard (7d), D6's T5 steps, and D3's prepared replacement in L4 (7d).
+  - **An obligation for 7d** (the *Rukovodilac*'s L1): G1 accepts a `mapping_status` row `needs_review → active`
+    only when its operation disabled no active version of that mapping. So D3's prepared replacement in L4 must
+    write `mapping_version_replaced` for each version it activates, with the replaced version's `mapping_status`
+    row in the same operation. Otherwise 7d would need a change of G1 (a v44).
 - Q4, the ownership of zone and threshold mappings (7d, 7e).
 - `unit_conversions` maintenance (7c), the aggregate preview (7e), the extractor registry (7f), and ending a held
   instance (7g).
@@ -620,3 +644,21 @@ WITH NON-BLOCKING NOTES; every earlier finding closed. Their notes, applied in t
   - the gate is a new helper, not `mayChangeRevisions`;
   - G3 locks the club row in v35's order;
   - the J8 pointer in the discovery document.
+
+The external review of `f9f6bec` (2026-10-29, ★★): GO from both, without a BLOCKER, HIGH or MEDIUM. The proposal was
+merged as PR #266 (`69d824f`). Their LOW notes, applied in this revision:
+- the *Rukovodilac* (its message queued at 13:27:22 UTC; R1–R8 accepted as written):
+  - L1: G1's obligation for 7d's D3 prepared replacement (section 11);
+  - L2: the pinned step's one UPDATE over both statuses, with the real `from_status` (section 3);
+  - L3: the note for phase 8 on the reason (section 2);
+  - L4: Q1 (c) recorded as a separate task before M6;
+- the *Nezavisni revizor* (13:29:52 UTC):
+  - LOW-1: the race of an activation against a level removal through the older Metrics API (section 8);
+  - LOW-2: a rollback of v43 and a revert of the 7b code are independent (section 7, runbook);
+  - LOW-3: the per-owner index wait is on the first's transaction (section 2);
+  - INFO: the order of the build PR names the exact v43 file and its sha256 (header). Whether the existing suites
+    pass under G2 is shown by running them in the build PR.
+
+**Accepted on 2026-10-29 (C104):** the owner's „A1 DA, I SVE PO PREPORUKAMA” (owner turn `f505ec21`, 13:32:57 UTC, in
+the *Rukovodilac*'s chat), read by the *Rukovodilac* as the acceptance of the contract and of Q1, Q2, Q3, Q5, Q6 and
+Q7 as recommended.

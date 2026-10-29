@@ -22,7 +22,8 @@ merge, its deploy and the owner's read-only post-check; nothing else was re-deri
 entries were added on 2026-10-28 at `cf387f2` (merge of PR #251); nothing else was re-derived then. The phase 5b
 (migration v42), Data configuration PR-2 and Source fields language pass entries and the deploy of `d9a02ad8` were
 brought up to date on 2026-10-29 at `00b3958` (merge of PR #263), after the owner's read-only v42 post-check; nothing
-else was re-derived then.
+else was re-derived then. The deploy of `00b3958`, PR #264 and PR #266, and the acceptance of phase 7b's contract J8
+(C104) were added later the same day at `69d824f` (merge of PR #266); nothing else was re-derived then.
 
 ## Active phase
 
@@ -2795,13 +2796,26 @@ nothing imported is visible in the app.
       plan did not review it;**
     - the earlier PR #255, PR #256 (Data configuration PR-1) and PR #257 (documents), merged but not deployed by
       23:50:37 UTC on 2026-10-28 (below).
-- **Merged, not deployed yet** (production serves `d9a02ad8`; frontend only, no migration):
+- **Deployed with `00b3958`** (`00b3958d2365749c6acd62c111db36fc06e42f77`, the merge of PR #263), started by the owner
+  by hand on 2026-10-29 (frontend only, no migration):
   - PR #261 (the Source fields language pass, merge commit `d29776f`, 2026-10-29 11:17:54 UTC), made by the executor
     under the standing merge order from exactly `0141df9`, after the *Rukovodilac*'s GO on that head;
   - PR #263 (Data configuration PR-2, dragging a variable onto a category on a computer, merge commit `00b3958`, 11:20:05
     UTC), made by the executor under the standing merge order from exactly `54bbaaf`, after the *Rukovodilac*'s GO on
     that head. Its tree is the one simulated before the merge (`54bbaaf` plus PR #261's change). It replaces PR #260,
-    closed as superseded after PR #262 conflicted with it in `frontend/styles.css`.
+    closed as superseded after PR #262 conflicted with it in `frontend/styles.css`;
+  - smoke (the *Rukovodilac*'s), 12:42:41 – 12:42:42 UTC: `/api/health` answered `ok: true` on `00b3958` three times;
+    without a login `GET /api/auth/me` answered `{"user":null}`, and the variables, classification, fields and mappings
+    reads under `/api/training-load/sources/metrics`, the GPEXE team status (zero UUID),
+    `/api/training-load/sources/gpexe/connections` and `POST …/classification/links` with `{}` answered 401;
+  - the served bundle `/assets/app-YVlaZODq.js` with `/assets/app-BeZZsh8D.css` carries the texts of PR #261 and PR
+    #263 and the v42 zone text. No sign-in, no write, no GPEXE request.
+- **Merged, not deployed yet** (production serves `00b3958`; documents only):
+  - PR #264 (the facts of v42, the deploy of `d9a02ad8`, PR-2 and the language pass; merge commit `311d9e4`, 12:41:58
+    UTC), made by the executor under the standing merge order from exactly `dec33ffc`;
+  - PR #266 (phase 7b's proposed contract J8; merge commit `69d824f`, 13:30:22 UTC), made by the executor under the
+    standing merge order from exactly `f9f6bec`, after the GO of the *Rukovodilac* and the *Nezavisni revizor*. The
+    owner then accepted the contract (C104, below).
 - The local OPTIMOVE database is untouched by all of these; v42 ran only on production and on disposable
   `optimove_tests_gpexe_*` databases.
 - PR #251 (phase 6, merge commit `cf387f2`) and PR #252 (documents, merge commit `0b947ab`, 2026-10-28 18:34:08 UTC) are
@@ -3185,6 +3199,11 @@ pre-existing; pass/fail counts don't belong in this file
   revision has a proven unit; an owner decision before M6 (a cap on open versions, or batches in phase 7).
 - **The revision lifecycle of a source field** (C91): **done**, PR #241 (`290b6cf`, v39), merged and deployed on
   2026-10-28 (see the active phase).
+- **Refuse to archive a club that holds a mapping version** (the owner's Q1 (c) of J8, C104; scheduled before M6):
+  `DELETE /clubs/:id` (`backend/src/routes/organization.js`) is refused while the club holds a `needs_review` or
+  `active` source-metric mapping version. Until then no one can write an archived club's mappings, no route restores a
+  club, and the only way to stop such a version is a direct database write on the owner's confirmation. A club
+  archived before the change stays as it is.
 - **Two LOW notes of the *Rukovodilac*'s review of PR #241** (record only, no code change asked):
   - without an acting user, the v39 refusal of a seed marker with a creator carries the generic 42501 text ("may not
     change a source revision"), not the seed-marker text;
@@ -3209,11 +3228,13 @@ pre-existing; pass/fail counts don't belong in this file
     C with separate Domains and Categories screens, and the visual pass. It closes these follow-ups below: the two
     look-alike controls, archived and active items in separate groups of the list filter, the dead end after "first
     create one", one primary button per screen, the Source fields legend, and scrolling to the start of a screen.
-  - **PR-2 is merged** (PR #263, merge commit `00b3958`, 2026-10-29 11:20:05 UTC; dragging variables into categories
-    on a computer; frontend only, no migration; not deployed yet; the proposal's section 12 records it as built). It
+  - **PR-2 is merged and deployed** (PR #263, merge commit `00b3958`, 2026-10-29 11:20:05 UTC; dragging variables into
+    categories on a computer; frontend only, no migration; deployed with `00b3958`; the proposal's section 12 records it
+    as built). It
     replaces PR #260, closed as superseded.
-  - **The language pass of Source fields is merged** (PR #261, merge commit `d29776f`, 2026-10-29 11:17:54 UTC;
-    frontend only, no migration; not deployed yet; the proposal's section 13 records it as built): a one-sentence
+  - **The language pass of Source fields is merged and deployed** (PR #261, merge commit `d29776f`, 2026-10-29 11:17:54
+    UTC; frontend only, no migration; deployed with `00b3958`; the proposal's section 13 records it as built): a
+    one-sentence
     introduction, the evidence legend as a chip, keys and data families only under Technical details.
   - PR-1b (changing an icon, I1) only on the owner's order naming its migration.
 - **Follow-ups of Data configuration PR-2 and the language pass** (the *Rukovodilac*'s review of PR #260 at
@@ -3565,8 +3586,11 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
    Next by the plan:
    - phase 5b, the zone model (option A, C102), is done: PR #259 merged (`ed86ca8`) and deployed with `d9a02ad8`, v42
      directly confirmed by the owner's post-check. Its first real zone confirmation waits for the C97 evidence;
-   - Data configuration: PR-2 (PR #263) and the language pass (PR #261) are merged and wait for the owner's next
-     deploy;
+   - Data configuration: PR-2 (PR #263) and the language pass (PR #261) are merged and deployed (with `00b3958`);
+   - phase 7, the rest of M2: 7a (the access helpers in their own module, no behaviour change, no migration) may come
+     before the contract of 7b by the owner's A1 (C104). Phase 7b's ★★ contract J8 (activating, disabling and
+     replacing a mapping version; migration v43) is accepted (C104) and comes next; its merge, v43 and the production
+     pre- and post-checks each need the owner's order;
    - phase P, the owner only: the evidence for the nine `rest_v1` fields (C97) stays open;
    - phases 7–11 and R1, as the plan orders them.
 
