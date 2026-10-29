@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { JSDOM } from "jsdom";
-import { HEADER_HIDE_DISTANCE, HEADER_REVEAL_DISTANCE, installExerciseHeaderReveal } from "../exercise-header-reveal.js";
+import { HEADER_HIDE_DISTANCE, HEADER_MAX_SCREEN_SHARE, HEADER_REVEAL_DISTANCE, installExerciseHeaderReveal } from "../exercise-header-reveal.js";
 
 // Exercise Library (owner, 2026-10-29): the header scrolls away with the list
 // as before, and one short pull up brings it back pinned over the list;
@@ -14,7 +14,7 @@ const TOPBAR = { top: 10, bottom: 139 };
 const TOOLBAR = { top: 147, bottom: 365 };
 const settleHide = () => new Promise((resolve) => setTimeout(resolve, 260));
 
-function page({ reducedMotion = false, active = true } = {}) {
+function page({ reducedMotion = false, active = true, height = 812, width = 375, topbar = TOPBAR, toolbar = TOOLBAR } = {}) {
   const dom = new JSDOM(`<body>
     <main class="workspace">
       <header class="topbar"><button class="mobile-nav-toggle" type="button">Menu</button><div class="notification-panel" hidden></div><div class="workspace-panel" hidden></div></header>
@@ -26,14 +26,16 @@ function page({ reducedMotion = false, active = true } = {}) {
   let y = 0;
   Object.defineProperty(view, "scrollY", { configurable: true, get: () => y });
   Object.defineProperty(doc.documentElement, "scrollHeight", { configurable: true, get: () => 10000 });
-  Object.defineProperty(view, "innerHeight", { configurable: true, get: () => 812 });
+  const screen = { height, width };
+  Object.defineProperty(view, "innerHeight", { configurable: true, get: () => screen.height });
+  Object.defineProperty(view, "innerWidth", { configurable: true, get: () => screen.width });
   view.matchMedia = (query) => ({ matches: reducedMotion && query.includes("reduce") });
   const scrolledTo = [];
   view.scrollTo = (x, top) => { scrolledTo.push(top); y = top; };
   // Measured only while the header is in its place (the module reads it then).
   const rect = ({ top, bottom }) => () => ({ top: top - y, bottom: bottom - y, height: bottom - top });
-  doc.querySelector(".topbar").getBoundingClientRect = rect(TOPBAR);
-  doc.querySelector("#viewToolbar").getBoundingClientRect = rect(TOOLBAR);
+  doc.querySelector(".topbar").getBoundingClientRect = rect(topbar);
+  doc.querySelector("#viewToolbar").getBoundingClientRect = rect(toolbar);
   const state = { active };
   const shifts = [];
   const setProperty = doc.body.style.setProperty.bind(doc.body.style);
@@ -45,7 +47,7 @@ function page({ reducedMotion = false, active = true } = {}) {
   const scrollTo = (top) => { y = top; view.dispatchEvent(new view.Event("scroll")); };
   const scrollBy = (delta, steps = 1) => { for (let index = 0; index < steps; index += 1) scrollTo(y + delta / steps); };
   return {
-    dom, doc, view, reveal, state, shifts, scrolledTo, scrollTo, scrollBy,
+    dom, doc, view, reveal, state, shifts, scrolledTo, scrollTo, scrollBy, screen,
     pinned: () => doc.body.classList.contains("exercise-header-pinned"),
     cssVar: (name) => doc.body.style.getPropertyValue(name),
   };
@@ -114,6 +116,45 @@ test("B2: at the very top everything is as before", () => {
   assert.equal(p.pinned(), true, "a pull up near the top still counts");
   p.scrollTo(-40);
   assert.equal(p.pinned(), false, "the bounce over the top too");
+  p.dom.window.close();
+});
+
+test("B2: never pinned over more than two thirds of the screen - a phone held sideways keeps the header in the page", () => {
+  assert.equal(HEADER_MAX_SCREEN_SHARE, 2 / 3);
+  // 740 x 360, measured in the browser: the top bar 10-86 px, the search row 94-256 px (68 %).
+  const sideways = page({ height: 360, width: 740, topbar: { top: 10, bottom: 86 }, toolbar: { top: 94, bottom: 256 } });
+  sideways.scrollTo(3000);
+  sideways.scrollBy(-40, 4);
+  assert.equal(sideways.pinned(), false);
+  sideways.dom.window.close();
+  // 360 x 740 upright: 355 px is 48 %.
+  const upright = page({ height: 740, width: 360 });
+  upright.scrollTo(3000);
+  upright.scrollBy(-16);
+  assert.equal(upright.pinned(), true);
+  upright.dom.window.close();
+  // 355 px: pinned on a 533 px screen (two thirds is 355.3), not on 532 (354.7).
+  for (const [height, pinned] of [[533, true], [532, false]]) {
+    const edge = page({ height });
+    edge.scrollTo(3000);
+    edge.scrollBy(-16);
+    assert.equal(edge.pinned(), pinned, `${height} px`);
+    edge.dom.window.close();
+  }
+});
+
+test("B3: turning the phone while it is pinned puts it back in the page; the browser's bars or the keyboard do not", () => {
+  const p = page();
+  p.scrollTo(3000);
+  p.scrollBy(-20);
+  p.screen.height = 600;
+  p.view.dispatchEvent(new p.view.Event("resize"));
+  assert.equal(p.pinned(), true, "a change of height alone");
+  p.screen.width = 812;
+  p.screen.height = 375;
+  p.view.dispatchEvent(new p.view.Event("resize"));
+  assert.equal(p.pinned(), false, "turned");
+  assert.equal(p.doc.body.getAttribute("style") || "", "");
   p.dom.window.close();
 });
 

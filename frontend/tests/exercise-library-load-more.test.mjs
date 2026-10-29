@@ -16,7 +16,7 @@ import { clearAllViewCache } from "../view-cache.js";
 const initialDom = new JSDOM("<body></body>");
 globalThis.document = initialDom.window.document;
 globalThis.window = initialDom.window;
-const { handleExerciseLibraryAction, keptExerciseCount, loadExercises, searchExercises, showMoreExercises } = await import("../exercise-actions.js");
+const { handleExerciseLibraryAction, keptExerciseCount, keptExerciseItemIds, loadExercises, searchExercises, showMoreExercises } = await import("../exercise-actions.js");
 const { els } = await import("../dom.js");
 initialDom.window.close();
 
@@ -44,20 +44,27 @@ function deferred() {
   return { promise, resolve };
 }
 
-// app.js's renderExercises, with its item registry reduced to a counter: the
-// same keepShown branch (keptExerciseCount, then showMoreExercises).
+// app.js's renderExercises around the same exported steps it calls
+// (keptExerciseItemIds, then showMoreExercises), with its item registry as a Map.
+const registry = new Map();
 function appHandlers() {
   let nextId = 0;
   const calls = { loading: [], renders: 0 };
+  const registerItems = (rows) => rows.map((row) => {
+    const id = `item-${nextId++}`;
+    registry.set(id, row);
+    return id;
+  });
   return {
     calls,
     setLoading(text) { calls.loading.push(text); els.content.innerHTML = `<div class="empty">${text}</div>`; },
     renderExercises(exercises, { keepShown = false } = {}) {
       calls.renders += 1;
       const shownCount = keepShown ? (state.lastExerciseResults || []).length : 0;
-      const kept = keepShown ? keptExerciseCount(state.lastExerciseResults || [], exercises, state.exerciseDetail.ids || []) : 0;
+      const { kept, itemIds } = keepShown
+        ? keptExerciseItemIds(state.lastExerciseResults || [], exercises, state.exerciseDetail.ids || [], { register: registerItems, refresh: (id, item) => registry.set(id, item) })
+        : { kept: 0, itemIds: registerItems(exercises) };
       state.lastExerciseResults = exercises;
-      const itemIds = [...state.exerciseDetail.ids.slice(0, kept), ...exercises.slice(kept).map(() => `item-${nextId++}`)];
       state.exerciseDetail = { ids: itemIds, currentId: kept ? state.exerciseDetail.currentId : null };
       const html = renderExerciseLibraryHtml({ exercises, itemIds, markedExerciseIds: new Set(), search: state.exerciseSearch, selection: state.exerciseSelection, tagEditor: { open: false } });
       if (keepShown) showMoreExercises(els.content, html, { kept, shownCount });
@@ -109,10 +116,12 @@ for (const view of ["details", "tile", "big", "list"]) {
     assert.equal(els.content.querySelector(".exercise-results-count").textContent, "60 exercises shown");
     assert.equal(state.exerciseSearch.limit, 60);
     assert.equal(calls.at(-1).searchParams.get("limit"), "60");
-    // Opening an exercise reaches every card, the new ones included.
+    // Opening an exercise reaches every card, the new ones included, and a
+    // kept card opens its fresh row.
     assert.equal(state.exerciseDetail.ids.length, 60);
     assert.equal(new Set(state.exerciseDetail.ids).size, 60);
     assert.equal(now[0].dataset.itemId, state.exerciseDetail.ids[0]);
+    assert.ok(state.exerciseDetail.ids.every((id, index) => registry.get(id) === state.lastExerciseResults[index]));
     dom.window.close();
   });
 }
@@ -208,6 +217,36 @@ test("A3: a failed load keeps every exercise shown, says so under the list, and 
   dom.window.close();
 });
 
+test("A3: a page that was not drawn keeps the locked matches shown; a newer search's own are never overwritten", async () => {
+  const locked = (name) => ({ name, blockName: "Coach block" });
+  const answer = (term) => async (path) => {
+    const url = new URL(path, "https://test.local");
+    if (url.pathname === "/api/exercises/options") return { ok: true, json: async () => ({}) };
+    const limit = Number(url.searchParams.get("limit"));
+    return { ok: true, json: async () => ({ exercises: all.slice(0, limit), hasMore: true, lockedPreviews: [locked(`${term} locked`)] }) };
+  };
+  globalThis.fetch = answer("first");
+  const { dom, handlers } = await openLibrary();
+  assert.deepEqual(state.exerciseSearch.lockedPreviews, [locked("first locked")]);
+  server({ fail: (url) => url.pathname === "/api/exercises" });
+  await loadMore(handlers);
+  assert.deepEqual(state.exerciseSearch.lockedPreviews, [locked("first locked")], "after a failure");
+  handlers.renderExercises(state.lastExerciseResults);
+  assert.match(els.content.querySelector(".exercise-locked-results").textContent, /first locked/, "a later redraw still shows them");
+  // A newer search lands while the further page is still on its way.
+  const hold = deferred();
+  globalThis.fetch = async (path) => { await hold.promise; return answer("old")(path); };
+  const pending = loadMore(handlers);
+  await settle();
+  globalThis.fetch = answer("newer");
+  state.exerciseSearch.limit = 30;
+  await searchExercises("Squat", handlers);
+  hold.resolve();
+  await pending;
+  assert.deepEqual(state.exerciseSearch.lockedPreviews, [locked("newer locked")]);
+  dom.window.close();
+});
+
 test("A3: a failed check of the marked exercises keeps the list too", async () => {
   server();
   const { dom, handlers } = await openLibrary();
@@ -262,10 +301,27 @@ test("keptExerciseCount keeps all shown or none", () => {
   assert.equal(keptExerciseCount([], all, []), 0);
 });
 
+test("keptExerciseItemIds keeps the shown ids pointing at the fresh rows and registers only the new ones", () => {
+  const shown = all.slice(0, 2);
+  const next = [{ ...all[0], name: "Renamed" }, { ...all[1] }, all[2]];
+  const refreshed = [];
+  const registered = [];
+  const result = keptExerciseItemIds(shown, next, ["a", "b"], {
+    register: (rows) => { registered.push(...rows); return rows.map((row) => `new-${row.id}`); },
+    refresh: (id, row) => refreshed.push([id, row]),
+  });
+  assert.deepEqual(result, { kept: 2, itemIds: ["a", "b", "new-ex-3"] });
+  assert.deepEqual(refreshed, [["a", next[0]], ["b", next[1]]]);
+  assert.deepEqual(registered, [all[2]]);
+  const changed = keptExerciseItemIds(shown, [all[1], all[0]], ["a", "b"], { register: (rows) => rows.map(() => "fresh"), refresh: () => assert.fail("nothing is kept") });
+  assert.deepEqual(changed, { kept: 0, itemIds: ["fresh", "fresh"] });
+});
+
 test("app.js renders a further page through keepShown and keeps an opened exercise", async () => {
   const app = (await readFile(new URL("../app.js", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
   const body = app.match(/function renderExercises\(exercises, \{ keepShown = false \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "";
-  assert.match(body, /keptExerciseCount\(state\.lastExerciseResults \|\| \[\], exercises, state\.exerciseDetail\.ids \|\| \[\]\)/);
+  assert.match(body, /keptExerciseItemIds\(state\.lastExerciseResults \|\| \[\], exercises, state\.exerciseDetail\.ids \|\| \[\], \{ register: registerItems, refresh: \(id, item\) => itemRegistry\.set\(id, item\) \}\)/);
+  assert.match(body, /: \{ kept: 0, itemIds: registerItems\(exercises\) \};/);
   assert.match(body, /currentId: kept \? state\.exerciseDetail\.currentId : null/);
   assert.match(body, /if \(keepShown\) showMoreExercises\(els\.content, html, \{ kept, shownCount \}\);\n  else els\.content\.innerHTML = html;/);
 });

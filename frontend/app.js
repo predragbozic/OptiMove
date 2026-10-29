@@ -89,7 +89,7 @@ import {
   handleExerciseDetailAction,
   handleExerciseLibraryAction,
   invalidateExercisesCache,
-  keptExerciseCount,
+  keptExerciseItemIds,
   resetExercisesForWorkspaceChange,
   loadExercises,
   reloadExerciseLibrarySurface,
@@ -3707,12 +3707,12 @@ function renderBuilderError(error) {
 // ids, and an exercise opened over the list stays open.
 function renderExercises(exercises, { keepShown = false } = {}) {
   const shownCount = keepShown ? (state.lastExerciseResults || []).length : 0;
-  const kept = keepShown ? keptExerciseCount(state.lastExerciseResults || [], exercises, state.exerciseDetail.ids || []) : 0;
+  const { kept, itemIds } = keepShown
+    ? keptExerciseItemIds(state.lastExerciseResults || [], exercises, state.exerciseDetail.ids || [], { register: registerItems, refresh: (id, item) => itemRegistry.set(id, item) })
+    : { kept: 0, itemIds: registerItems(exercises) };
   state.lastExerciseResults = exercises;
   els.context.textContent = "Exercise library";
   els.title.textContent = "Exercise Library";
-  const itemIds = [...state.exerciseDetail.ids.slice(0, kept), ...registerItems(exercises.slice(kept))];
-  itemIds.slice(0, kept).forEach((id, index) => itemRegistry.set(id, exercises[index]));
   state.exerciseDetail = { ids: itemIds, currentId: kept ? state.exerciseDetail.currentId : null };
   const html = renderExerciseLibraryHtml({
     exercises,

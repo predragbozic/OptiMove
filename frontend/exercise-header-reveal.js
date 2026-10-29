@@ -16,6 +16,11 @@ export const HEADER_REVEAL_DISTANCE = 16;
 // Going on down hides it again; a smaller distance, so reading on is never
 // held up, and still above the jitter of a finger resting on the screen.
 export const HEADER_HIDE_DISTANCE = 8;
+// Pinned, the header may take at most two thirds of the visible height, so a
+// third of the screen always stays for the list. On a phone held upright it
+// takes about half (355 px at 360 x 740); on a phone held sideways it would
+// take nearly all of it (246 px of 360) and stays in the page, as before.
+export const HEADER_MAX_SCREEN_SHARE = 2 / 3;
 // The slide in styles.css (180 ms), then the header goes back to its place.
 const HIDE_SETTLE_MS = 200;
 
@@ -70,11 +75,15 @@ export function installExerciseHeaderReveal({ view = window, isActive }) {
   function reveal() {
     const { topbar, toolbar } = parts();
     if (!topbar || !toolbar) return;
-    clearTimeout(hideTimer);
     if (!pinned) {
       const top = topbar.getBoundingClientRect();
       const bar = toolbar.getBoundingClientRect();
-      slot = { pageTop: top.top + scrollY(), height: bar.bottom - top.top };
+      const visible = Math.min(view.innerHeight, view.visualViewport?.height || view.innerHeight);
+      if (bar.bottom - top.top > visible * HEADER_MAX_SCREEN_SHARE) {
+        upRun = 0;
+        return;
+      }
+      slot = { pageTop: top.top + scrollY(), height: bar.bottom - top.top, width: view.innerWidth };
       setVar("--exercise-header-toolbar-top", bar.top - top.top);
       setVar("--exercise-header-gap", Math.max(0, bar.top - top.bottom));
       // It starts where it is: in its own place while part of it is still in
@@ -85,6 +94,7 @@ export function installExerciseHeaderReveal({ view = window, isActive }) {
       // The start position is applied before the slide begins.
       topbar.getBoundingClientRect();
     }
+    clearTimeout(hideTimer);
     shown = true;
     setVar("--exercise-header-shift", 0);
   }
@@ -163,7 +173,15 @@ export function installExerciseHeaderReveal({ view = window, isActive }) {
     upRun = downRun = 0;
   }
 
+  // A turn of the phone re-flows the header, and the place it was pinned by
+  // no longer fits it: it goes back into the page until the next pull up.
+  // A change of height alone (the browser's bars, the keyboard) keeps it.
+  function onResize() {
+    if (pinned && slot && view.innerWidth !== slot.width) unpin();
+  }
+
   view.addEventListener("scroll", onScroll, { passive: true });
+  view.addEventListener("resize", onResize);
   doc.addEventListener("focusin", onFocusIn);
   doc.addEventListener("toggle", onToggle, true);
 
@@ -178,6 +196,7 @@ export function installExerciseHeaderReveal({ view = window, isActive }) {
     destroy() {
       unpin();
       view.removeEventListener("scroll", onScroll);
+      view.removeEventListener("resize", onResize);
       doc.removeEventListener("focusin", onFocusIn);
       doc.removeEventListener("toggle", onToggle, true);
     },

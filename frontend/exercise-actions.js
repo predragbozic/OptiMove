@@ -270,7 +270,8 @@ export async function searchExercises(term, handlers, { forceRefresh = false, mo
     handlers.renderExercises([]);
     return;
   }
-  return loadCachedView({
+  let drawn = false;
+  const result = await loadCachedView({
     namespace: EXERCISES_CACHE_NAMESPACE,
     contextKey,
     forceRefresh,
@@ -280,6 +281,7 @@ export async function searchExercises(term, handlers, { forceRefresh = false, mo
       // The coach left the library while the page was loading: nothing is
       // drawn over the screen they went to.
       if (more && state.activeTab !== "exercises") return;
+      drawn = true;
       state.exerciseSearch.hasMore = Boolean(data.hasMore);
       state.exerciseSearch.lockedPreviews = state.exerciseSearch.filters.marked ? [] : data.lockedPreviews || [];
       // Marked is a client-side filter: no previews under it, and so no
@@ -294,10 +296,7 @@ export async function searchExercises(term, handlers, { forceRefresh = false, mo
       handlers.renderExercises(applyClientExerciseFilters(data.exercises || [], state.exerciseSearch.filters, visibleMarkedIds), { keepShown: more });
     },
     applyError: (error) => {
-      if (more) {
-        state.exerciseSearch.lockedPreviews = lockedPreviewsShown;
-        return;
-      }
+      if (more) return;
       // Without this, a failed fetch leaves the "Loading/Searching
       // exercises..." placeholder from setLoading above on screen forever -
       // handlers only carries setLoading/renderExercises, neither of which is
@@ -307,6 +306,13 @@ export async function searchExercises(term, handlers, { forceRefresh = false, mo
     },
     getCurrentContextKey: () => exercisesContextKey(state.exerciseSearch.term, state.exerciseSearch.limit, state.exerciseSearch.filters),
   });
+  // A further page that was not drawn (a failure, an invalidation meanwhile)
+  // leaves the locked matches shown as they were - unless a newer search has
+  // taken this one's place, whose own matches are never overwritten.
+  if (more && !drawn && exercisesContextKey(state.exerciseSearch.term, state.exerciseSearch.limit, state.exerciseSearch.filters) === contextKey) {
+    state.exerciseSearch.lockedPreviews = lockedPreviewsShown;
+  }
+  return result;
 }
 
 // "Load more" in the library list: the next 30 come in under the exercises
@@ -362,6 +368,15 @@ function exerciseListOf(elements) {
 export function keptExerciseCount(shown, next, shownItemIds) {
   if (!shown.length || shownItemIds.length !== shown.length || next.length < shown.length) return 0;
   return shown.every((exercise, index) => String(exercise.id) === String(next[index]?.id)) ? shown.length : 0;
+}
+
+// The item ids of the library drawn again after "Load more" (app.js'
+// renderExercises): the exercises kept keep their ids, each now pointing at
+// its fresh row (`refresh`), and the new ones get new ids (`register`).
+export function keptExerciseItemIds(shown, next, shownItemIds, { register, refresh }) {
+  const kept = keptExerciseCount(shown, next, shownItemIds);
+  shownItemIds.slice(0, kept).forEach((id, index) => refresh(id, next[index]));
+  return { kept, itemIds: [...shownItemIds.slice(0, kept), ...register(next.slice(kept))] };
 }
 
 // The library drawn again after "Load more" (renderExercises' keepShown). The
