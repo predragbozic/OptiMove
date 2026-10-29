@@ -28,7 +28,7 @@ default* or *OPEN* is not an owner decision:
 - **D7** (Q3) A private coach schedules joint activities for their athletes or groups of them and opens their weekly plans. The group model is a K2 proposal: present both options — the existing Tags (check how they are owned) and a new group table — and give a recommendation.
 - **D8** (Q4) The club SEES its teams' activities, in the active club workspace only. The same rule applies to TL Activities and to the activity detail, so a calendar click never ends in a 404. The O2 precedent belongs here. In K1 this needs security-reviewer plus external review (trigger 2).
 - **D9** (Q5) The club adds its own event types. Proposal: each type maps to one base kind from D2, and the kind decides what is expected (attendance, RPE).
-- **D10** (Q6) Club absence reasons are allowed. The six shared reasons stay (v25 contract), the club adds its own and may hide the shared ones. This is a later phase, with db-reviewer.
+- **D10** (Q6) Club absence reasons are allowed: the club adds its own. The six shared reasons stay (v25 contract). This is a later phase, with db-reviewer. Proposal, not in the owner's answer: the club may hide a shared reason.
 - **D11** (Q7) The club picks team colours; an automatic palette is used until then.
 - **D12** (Q8) No year view: month with arrows, week and day.
 - **D13** (Q9) Two modes. The default is a simple list ordered by slot (AM/PM, then Before/Training/After, then order, exactly as the weekly plan sorts). The time grid is the second mode. Replace "Team lanes" in the mock with the list mode.
@@ -64,7 +64,7 @@ default* or *OPEN* is not an owner decision:
    In a **club workspace the Training Load calendar and the activity detail hide activities owned by the
    club's own teams** (every GPEXE import and every RPE activity of a plan made in a team workspace is
    team-owned), and their planned rows disappear once linked (`trainingLoad.js:1641-1644`,
-   `backend/src/trainingActivityResults.js:7-11, 26-36`) — so past trainings vanish athlete by athlete. Yet
+   `backend/src/trainingActivityResults.js:16-22, 45-46`) — so past trainings vanish athlete by athlete. Yet
    owner decision **O2** (2026-09-25) already lets that club admin read and decide the **roster** of those same
    team-owned activities (`backend/src/activityRoster.js:8-18`). D8 aligns the calendar, TL Activities and
    the detail with O2.
@@ -78,9 +78,10 @@ default* or *OPEN* is not an owner decision:
    training" is computable. Roster states and completion exist **only for team-owned activities**
    (`training.activity_roster()` reads `owner_scope = 'team'`, `…v25_activity_roster_foundation.sql:231-238`;
    `activity_completions.owner_team_id not null`, `:524-526`). The roster is the whole team on that day
-   (`:240-262`), so a **one-athlete RPE activity owned by a team** would list every teammate as *Needs a
-   state* (`training.activity_roster_needs_state()`, `…v26_activity_roster_decisions.sql:119-140`) — read from
-   the code, not observed in a database; an existing behaviour outside K0, reported as a follow-up. Event
+   (`:240-262`), so a **one-athlete RPE activity owned by a team** would list every team member as *Needs a
+   state* — including the athlete who gave the RPE, because only `api_import` / `csv_import` values count as
+   measured (`training.activity_roster_needs_state()`, `…v26_activity_roster_decisions.sql:119-140`) — read
+   from the code, not observed in a database; an existing behaviour outside K0, reported as a follow-up. Event
    types, locations and absence reasons exist only as global, code-owned catalogs; per-club catalogs
    (D9–D11) are new schema.
 
@@ -116,7 +117,7 @@ default* or *OPEN* is not an owner decision:
 | Files | `frontend/training-load-calendar-view.js`, `training-load-calendar-data.js` |
 | Endpoint | `GET /api/training-load/calendar?dateFrom&dateTo[&clubIds&teamIds&athleteIds]` (`backend/src/routes/trainingLoad.js:1488-1746`), at most 62 days (`:1482`) |
 | Data | Kind `activity`: `training.activities` (not superseded) with participants, RPE requested/rated, metric coverage, conflicts, open match suggestions (five LATERAL subqueries, `:1570-1627`). Kind `planned`: `plans.plan_sessions` with `training_load_enabled = true` and no confirmed activity link, **one row per athlete** (`:1629-1648`). Kind `external`: external assignments with no confirmed link, one row per athlete (`:1650-1668`) |
-| Access | Athlete workspace → own rows. Coach: activities by owner scope of the active workspace (`trainingActivityAccess.js:63-78`: club → `owner_scope = 'club'` only, team → `'team'` only, private coach → `'user'`, platform → all); planned/external by roster membership (`trainingLoad.js:1006-1032`), narrowed by the filter as a union across kinds (`:1055-1070`). The activity detail applies the same owner rule (`trainingActivityResults.js:7-11, 26-36`) |
+| Access | Athlete workspace → own rows. Coach: activities by owner scope of the active workspace (`trainingActivityAccess.js:63-78`: club → `owner_scope = 'club'` only, team → `'team'` only, private coach → `'user'`, platform → all); planned/external by roster membership (`trainingLoad.js:1006-1032`), narrowed by the filter as a union across kinds (`:1055-1070`). The activity detail applies the same owner rule (`trainingActivityResults.js:16-22, 45-46`) |
 | Side effect | Generates current external occurrences before reading (`:1557`, `trainingLoadOccurrenceService.js:153-174`); the only other generator is the CLI worker (`backend/package.json:12`, `trainingLoadNotificationWorker.js:60`) |
 | Views | Week strip and month grid toggle, a day agenda, an activity detail with Overview / Athletes / Components / Sources / Roster tabs, a results table, an athlete drawer, *Analyze this activity* (`training-load-calendar-view.js:46-813`) |
 | Good at | Plan against done, data completeness, drill-in to the activity and the athlete; already merges three kinds |
@@ -178,9 +179,9 @@ Every place that depends on the tab key `weekly` (none may break):
   (`frontend/builder-structure.js:153, 392`) — plus `am_pm`, `bta` and `session_order`. **No duration or end
   time.** How many real sessions have a time is **not verified**: the legacy seed files hold none
   (`migrations/20260818_seed_multi_athlete_03_*.sql:308`), and the databases were not queried.
-- **Which planned sessions ask for RPE.** Only a session with `training_load_enabled` (default **off**, v14)
-  **and** `rpe_enabled` (default on, v3), under the workspace's planned-RPE setting
-  (`trainingLoad.js:401-417`).
+- **Which planned sessions ask for RPE.** Only a session with `training_load_enabled` **and** `rpe_enabled`,
+  under the workspace's planned-RPE setting (`trainingLoad.js:401-417`). Both columns default to **off** since
+  v14 (`…v14_session_tracking_and_rpe_defaults.sql:54, 75`); Builder sets both explicitly.
 - **RPE and duration.** `training_load.session_feedback`: `rpe`, `duration_minutes`, generated `srpe`
   (`…v1_session_feedback.sql:79-82`), keyed by `logical_session_id` (planned) or `external_assignment_id`.
 - **Activities from RPE.** Each RPE submit materializes a one-participant activity, owned by the plan's
@@ -227,7 +228,7 @@ Every place that depends on the tab key `weekly` (none may break):
 | Copy events / copy week, make trainings from plans | Plan duplicate, day copy-into; materialize routes without UI | Group commands — K2 or later |
 | Event types per club (D4, D9) | Three global, code-owned catalogs | Club types mapped to a base kind — K2 |
 | Match: opponent, home/away, result | None | Match fields on an event — K2 |
-| Absence reasons (D10) | Global `training.participation_reasons`, keys never removed (`…v25…sql:350-351`) | Club reasons beside them, hide the shared ones — later phase |
+| Absence reasons (D10) | Global `training.participation_reasons`, keys never removed (`…v25…sql:350-351`) | Club reasons beside them — later phase; hiding a shared one is a proposal |
 | Team colours (D11) | None | A palette in K1, a stored colour in K2 |
 | Views (D12, D13) | Week and month (TL), week (weekly plan, Tests) | Day / Week (list and time grid) / Month — K1; no Year |
 | Groups of a private coach (D7) | None | K2 |
@@ -363,17 +364,19 @@ for the event ↔ activity link):
     "Goalkeepers").
 - **Team colours (D11).** A club-chosen colour per team (a column or a settings row); the automatic palette
   until then.
-- **The athlete's events (D5).** Events targeted to the athlete's teams, groups or to the athlete: name, time,
-  place only — never roster, attendance or RPE of others. Shown in the athlete's Weekly plan and Home, not as a
-  new menu.
+- **The athlete's events (D5).** The athlete sees general events (D5). *Manager default:* events targeted to the
+  athlete's teams, groups or to the athlete, with name, time and place only — never roster, attendance or RPE of
+  others. *Open:* where the athlete sees them. D5 keeps the Weekly plan unchanged, so *proposal:* a short list
+  on the athlete's Home, not a new menu (Q-B).
 - **Who edits.** The club admin of the active club workspace for the whole club (D4, D6); the team coach of the
   active team workspace for the own team (D6); the private coach for own athletes (D7). *Proposal, not an owner
   decision:* a platform admin for support.
 - **Settings → Calendar.** Event types, Locations, Team colours. No card metrics (D14).
 - **Commands (later than the tables).** New event, Copy events, Make trainings from plans.
 
-**Later phase (D10).** Club absence reasons beside the six shared ones (v25 contract unchanged; the club may hide
-a shared one). It touches the roster decisions, so `db-reviewer` and trigger 1.
+**Later phase (D10).** Club absence reasons beside the six shared ones (v25 contract unchanged). *Proposal, not
+in the owner's answer:* the club may hide a shared one. It touches the roster decisions, so `db-reviewer` and
+trigger 1.
 
 ## 9. What K0 delivers
 
@@ -384,13 +387,15 @@ a shared one). It touches the roster decisions, so `db-reviewer` and trigger 1.
   athlete, Settings → Calendar (types, locations, team colours, absence reasons), a *View as* switch (club
   admin, U17 coach, an athlete), and a phone layout. A switch previews **K1** (only what OptiMove stores today:
   start times only, no durations, RPE groups) against **K2** (with events). The grouping in K1 is shown as K1
-  logic, not as stored data. Published as a private Artifact
+  logic, not as stored data; in K1 a GPEXE team activity is its own card beside the planned training, because
+  the GPEXE import creates no session links (in K2 the event links both). Published as a private Artifact
   (<https://claude.ai/artifact/GCq2rA2Eb4vjzruE4L4KQi>); not in the repository.
 
 ## 10. Open questions for the owner
 
 - **Q-B (D5).** Confirm the manager's default: an athlete sees only events of the own teams, groups or
-  addressed to them (name, time, place), never teammates' data.
+  addressed to them (name, time, place), never teammates' data. And where: a short list on the athlete's Home
+  (recommended), since the Weekly plan does not change?
 - **Q-C (D7).** Groups of athletes: a new group table (recommended) or athlete tags?
 - **Q-D.** Should the club calendar show plans that another coach (for example a private coach) made for a club
   athlete? Recommendation: no — only plans owned by the club or its teams; Training Load and Coach Home show
