@@ -2,7 +2,8 @@
 // J4). Every text that came from the server or the user is escaped; a unit or
 // an evidence reference may hold characters such as `<`, so it is always
 // escaped text, never markup and never a link (security review of M2b). Ids
-// live only in data- attributes and under Technical details.
+// live only in data- attributes and under Technical details, and so do a
+// field's key and the source's data family (the language pass after PR-2).
 import {
   EVIDENCE_EXAMPLE, EVIDENCE_LABEL, EVIDENCE_REF_MAX, OPERATORS, OPERATOR_LABEL, PARAMETER_KIND_LABEL, STATE_LABEL, VALUE_SHAPE_LABEL,
   ZONE_OPERATORS, ZONE_OPERATOR_LABEL,
@@ -20,7 +21,10 @@ const fmtDate = (iso) => {
 };
 const SOURCE_LABEL = { gpexe: "GPEXE" };
 const FAMILY_LABEL = { rest_v1: "REST v1", api: "API" };
-const sourceName = (field) => `${escapeHtml(SOURCE_LABEL[field.sourceSystem] || field.sourceSystem || "")} · ${escapeHtml(FAMILY_LABEL[field.apiFamily] || field.apiFamily || "")}`;
+const sourceLabel = (field) => escapeHtml(SOURCE_LABEL[field.sourceSystem] || field.sourceSystem || "");
+const familyLabel = (field) => escapeHtml(FAMILY_LABEL[field.apiFamily] || field.apiFamily || "");
+// The source by its name; its data family only where one source has two.
+const sourceName = (field, withFamily = false) => (withFamily ? `${sourceLabel(field)} · ${familyLabel(field)}` : sourceLabel(field));
 const fieldName = (field) => escapeHtml(field.label || field.key || "");
 // A unit or a reference: escaped text in a code element, never a link.
 const code = (value) => `<code class="source-fields-code">${escapeHtml(value)}</code>`;
@@ -38,11 +42,15 @@ const EVIDENCE_LEGEND = [
   ["observed", "seen in the source's answers; its unit and meaning are not confirmed."],
   ["verified", "its unit and meaning are confirmed."],
 ];
+// One chip that opens the four meanings on a tap (the language pass).
 function legendHtml() {
   return `
-    <ul class="source-fields-legend" aria-label="Evidence">
-      ${EVIDENCE_LEGEND.map(([status, text]) => `<li><span class="item-badge source-fields-evidence is-${status}">${escapeHtml(EVIDENCE_LABEL[status])}</span><span class="visually-hidden">:</span> <span class="muted">${escapeHtml(text)}</span></li>`).join("")}
-    </ul>`;
+    <details class="source-fields-legend-chip">
+      <summary>What the evidence badges mean</summary>
+      <ul class="source-fields-legend" aria-label="Evidence">
+        ${EVIDENCE_LEGEND.map(([status, text]) => `<li><span class="item-badge source-fields-evidence is-${status}">${escapeHtml(EVIDENCE_LABEL[status])}</span><span class="visually-hidden">:</span> <span class="muted">${escapeHtml(text)}</span></li>`).join("")}
+      </ul>
+    </details>`;
 }
 
 export function renderSourceFieldsHtml() {
@@ -59,10 +67,11 @@ export function renderSourceFieldsHtml() {
 // ---------------------------------------------------------------------------
 // The list
 // ---------------------------------------------------------------------------
+// One sentence (the language pass): how to confirm is said in the forms.
 function intro(ctx) {
   return ctx.mayVerify
-    ? "The fields a data source delivers, with the evidence behind each one. Confirm a field's unit or meaning only with a document under docs/ that proves it."
-    : "The fields a data source delivers, with the evidence behind each one. A platform administrator confirms their units and meanings in the platform workspace.";
+    ? "The fields each data source delivers, and how far each one's unit and meaning are proven."
+    : "The fields each data source delivers; a platform administrator confirms their units and meanings.";
 }
 function meaningSummary(revision) {
   return revision.meaningVerifiedAt ? "Meaning confirmed" : "Meaning not confirmed";
@@ -81,11 +90,15 @@ function evidenceBadge(revision) {
 function renderListHtml(s, ctx) {
   const list = s.list;
   const groups = new Map();
+  const families = new Map();
   for (const field of list.items) {
     const key = `${field.sourceSystem} ${field.apiFamily}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(field);
+    if (!families.has(field.sourceSystem)) families.set(field.sourceSystem, new Set());
+    families.get(field.sourceSystem).add(field.apiFamily);
   }
+  const twoFamilies = (field) => families.get(field.sourceSystem).size > 1;
   return `
     <button class="plain-button ghost metric-variables-back" type="button" data-action="training-load-section" data-section="variables" data-dc-home>← Data configuration</button>
     <div class="metric-variables-head">
@@ -100,8 +113,8 @@ function renderListHtml(s, ctx) {
     ${list.error ? `<div class="error" role="alert"><p>${escapeHtml(list.error)}</p><button class="plain-button" type="button" data-action="source-fields-reload">Try again</button></div>` : ""}
     ${list.loaded && !list.items.length && !list.error ? `<p class="empty">No source fields yet.</p>` : ""}
     ${[...groups.values()].map((fields) => `
-      <section class="metric-classification-section" aria-label="${escapeAttr(`${SOURCE_LABEL[fields[0].sourceSystem] || fields[0].sourceSystem} ${FAMILY_LABEL[fields[0].apiFamily] || fields[0].apiFamily}`)}">
-        <h3>${sourceName(fields[0])}</h3>
+      <section class="metric-classification-section" aria-labelledby="sf-group-${escapeAttr(`${fields[0].sourceSystem}-${fields[0].apiFamily}`)}">
+        <h3 id="sf-group-${escapeAttr(`${fields[0].sourceSystem}-${fields[0].apiFamily}`)}">${sourceName(fields[0], twoFamilies(fields[0]))}</h3>
         <ul class="metric-variables-list">
           ${fields.map((field) => {
             const revision = currentRevision(field);
@@ -191,7 +204,7 @@ function renderDetailHtml(s, ctx) {
     <div class="metric-variables-head">
       <div>
         <h2 id="source-fields-title">${fieldName(field)}</h2>
-        <p class="muted">${sourceName(field)} · ${code(field.key || "")} ${field.state === "retired" ? `<span class="item-badge">Retired</span>` : ""}</p>
+        <p class="muted">${sourceName(field)} ${field.state === "retired" ? `<span class="item-badge">Retired</span>` : ""}</p>
       </div>
     </div>
     ${noticeHtml(s)}
@@ -207,6 +220,8 @@ function renderDetailHtml(s, ctx) {
         ${v.evidenceRef ? `<span class="muted">Evidence ${code(v.evidenceRef)}</span>` : ""}
       </li>`).join("")}</ul>` : `<p class="muted">Nothing confirmed yet.</p>`}
     <details class="data-sources-tech"><summary>Technical details</summary><dl>
+      <div><dt>Key</dt><dd>${escapeHtml(field.key || "")}</dd></div>
+      <div><dt>Data family</dt><dd>${familyLabel(field)}</dd></div>
       <div><dt>Field id</dt><dd>${escapeHtml(field.id)}</dd></div>
       ${(field.revisions || []).map((r) => `<div><dt>Revision ${escapeHtml(String(r.revisionNumber ?? ""))} id</dt><dd>${escapeHtml(r.id)}</dd></div>`).join("")}
     </dl></details>
@@ -261,7 +276,7 @@ function zoneOperatorHtml(form, locked) {
       </fieldset>`;
 }
 const EVIDENCE_HINT = `A path under docs/ with one heading anchor, for example ${EVIDENCE_EXAMPLE}. The document must already be merged.`;
-const SOURCE_NAME_TEXT = (form) => `${SOURCE_LABEL[form.sourceSystem] || form.sourceSystem} · ${FAMILY_LABEL[form.apiFamily] || form.apiFamily}`;
+const SOURCE_NAME_TEXT = (form) => `${SOURCE_LABEL[form.sourceSystem] || form.sourceSystem}`;
 
 function renderFormHtml(s) {
   const form = s.form;
@@ -297,10 +312,14 @@ function renderFormHtml(s) {
   return `
     <form class="data-sources-form metric-variables-form source-fields-form" data-source-fields-form="${form.act}" novalidate autocomplete="off">
       <h2 id="source-fields-title">${form.act === "unit" ? "Confirm the unit of" : "Confirm the meaning of"} ${name}</h2>
-      <p class="muted source-fields-summary">${escapeHtml(form.fieldName)} · ${code(form.fieldKey)} · ${escapeHtml(SOURCE_NAME_TEXT(form))} · ${escapeHtml(VALUE_SHAPE_LABEL[form.valueShape] || form.valueShape || "")} · ${escapeHtml(form.levels)} · Parameter: ${escapeHtml(PARAMETER_KIND_LABEL[form.parameterKind] || form.parameterKind || "")}</p>
+      <p class="muted source-fields-summary">${escapeHtml(form.fieldName)} · ${escapeHtml(SOURCE_NAME_TEXT(form))} · ${escapeHtml(VALUE_SHAPE_LABEL[form.valueShape] || form.valueShape || "")} · ${escapeHtml(form.levels)} · Parameter: ${escapeHtml(PARAMETER_KIND_LABEL[form.parameterKind] || form.parameterKind || "")}</p>
       <p class="metric-variables-field-note">A confirmation is saved once and never changed: a correction is a new revision. Confirm only what the evidence document proves.</p>
       <p class="muted">Do not enter athlete names, ids, dates of birth or measured values.</p>
       ${body}
+      <details class="data-sources-tech"><summary>Technical details</summary><dl>
+        <div><dt>Key</dt><dd>${escapeHtml(form.fieldKey || "")}</dd></div>
+        <div><dt>Data family</dt><dd>${escapeHtml(FAMILY_LABEL[form.apiFamily] || form.apiFamily || "")}</dd></div>
+      </dl></details>
       ${form.error ? `<p class="error" role="alert">${escapeHtml(form.error)}</p>` : ""}
       ${form.unconfirmed ? unconfirmedHtml(form) : `
       <div class="data-sources-form-actions">

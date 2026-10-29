@@ -66,6 +66,8 @@ const text = () => content.textContent.replace(/\s+/g, " ");
 const posts = () => calls.filter((call) => call.method === "POST");
 // The value one fact of a revision (a <dt> / <dd> pair) shows.
 const fact = (root, name) => [...root.querySelectorAll(".metric-variables-facts dt")].find((dt) => dt.textContent === name)?.nextElementSibling?.textContent.replace(/\s+/g, " ").trim();
+// A row of Technical details.
+const techFact = (root, name) => [...root.querySelectorAll("dt")].find((dt) => dt.textContent === name)?.nextElementSibling?.textContent.trim();
 const gets = () => calls.filter((call) => call.method === "GET").map((call) => call.url);
 
 async function click(selector) {
@@ -167,7 +169,12 @@ test("the list groups the fields by source, shows the unit (expected units marke
   fields[0].revisions = [revision({ sourceUnit: "s<b>", unitVerifiedAt: "2026-10-20T08:00:00.000Z", evidenceStatus: "observed" })];
   await loadSourceFieldsSection(render);
   assert.deepEqual(gets(), [FB]);
-  assert.match(text(), /GPEXE · REST v1/);
+  // The language pass: the group is the source by its name; its data family
+  // stays under Technical details while the source has only one.
+  assert.equal($(".metric-classification-section h3").textContent, "GPEXE");
+  assert.doesNotMatch(text(), /REST v1|athlete_session\./, "no data family and no key on the list");
+  // One sentence of introduction, naming no repository path.
+  assert.equal($(".metric-variables-head p.muted").textContent, "The fields each data source delivers, and how far each one's unit and meaning are proven.");
   const items = [...content.querySelectorAll(".metric-variables-item")].map((b) => b.textContent.replace(/\s+/g, " ").trim());
   assert.equal(items.length, 3);
   assert.match(items[0], /Total time Unit s<b> \(confirmed\) · Meaning not confirmed · Session and Drill Evidence: Observed/);
@@ -175,7 +182,12 @@ test("the list groups the fields by source, shows the unit (expected units marke
   assert.match(items[1], /Meaning not confirmed/);
   assert.doesNotMatch(text(), /zone decision|decision on zones/);
   assert.match(items[2], /Session Evidence: Observed/);
-  // The legend: each kind of evidence as its own badge (colour and word) with what it means.
+  // The legend: one chip, closed, that opens each kind of evidence as its own
+  // badge (colour and word) with what it means.
+  const chip = $("details.source-fields-legend-chip");
+  assert.ok(chip && !chip.open, "closed until tapped");
+  assert.equal(chip.querySelector("summary").textContent, "What the evidence badges mean");
+  assert.ok(chip.querySelector(".source-fields-legend"), "the meanings are inside the chip");
   assert.deepEqual([...content.querySelectorAll(".source-fields-legend li")].map((li) => li.textContent.replace(/\s+/g, " ").trim()), [
     "Not proven: no evidence yet.",
     "Documented: described in a document.",
@@ -222,7 +234,11 @@ test("one field: its revisions with facts, expected units marked not proven, con
   assert.match(text(), /Revision 2 · Unit confirmed · 20\.10\.2026 Evidence docs\/ai\/evidence\.md#total-time/);
   const visible = [...content.querySelector("section.source-fields").children].filter((n) => !n.classList.contains("data-sources-tech")).map((n) => n.textContent).join(" ");
   assert.ok(!visible.includes(F1) && !visible.includes(R1), "no id in the visible text");
+  assert.ok(!visible.includes("athlete_session.total_time") && !visible.includes("REST v1"), "no key and no data family in the visible text");
+  assert.equal($("#source-fields-title + p.muted").textContent.trim(), "GPEXE");
   assert.ok($(".data-sources-tech").textContent.includes(R1));
+  assert.equal(techFact($(".data-sources-tech"), "Key"), "athlete_session.total_time");
+  assert.equal(techFact($(".data-sources-tech"), "Data family"), "REST v1");
   assert.ok(!content.querySelector("a"), "an evidence reference is never a link");
 });
 
@@ -254,7 +270,13 @@ test("club admin: reads the fields and revisions, is offered no act, and a forge
   await handleSourceFieldsAction($("#forged"), { render });
   assert.equal(sourceFieldsState().form, null);
   await click('[data-action="source-fields-back"]');
-  assert.match(text(), /A platform administrator confirms their units and meanings in the platform workspace\./);
+  assert.equal($(".metric-variables-head p.muted").textContent, "The fields each data source delivers; a platform administrator confirms their units and meanings.");
+});
+
+test("a source with two data families names the family in each group's heading", async () => {
+  fields = [...allFields(), field({ id: "ffffffff-0000-4000-8000-000000000009", apiFamily: "api", key: "legacy.total_time", label: "Total time (legacy)" })];
+  await loadSourceFieldsSection(render);
+  assert.deepEqual([...content.querySelectorAll(".metric-classification-section h3")].map((h) => h.textContent), ["GPEXE · REST v1", "GPEXE · API"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -300,7 +322,9 @@ test("a declined last question sends nothing and keeps the form with its values"
   serve(() => ({ status: 201, body: { revision: revision() } }));
   await openField(F1);
   await click('[data-action="source-fields-act-open"][data-act="unit"]');
-  assert.match($(".source-fields-summary").textContent.replace(/\s+/g, " "), /Total time · athlete_session\.total_time · GPEXE · REST v1 · A number · Session and Drill · Parameter: None/);
+  assert.match($(".source-fields-summary").textContent.replace(/\s+/g, " "), /Total time · GPEXE · A number · Session and Drill · Parameter: None/);
+  assert.doesNotMatch($(".source-fields-summary").textContent, /athlete_session|REST v1/, "the key and the data family are under Technical details");
+  assert.equal(techFact($("form .data-sources-tech"), "Key"), "athlete_session.total_time");
   type("sourceUnit", "s");
   type("evidenceRef", "docs/ai/evidence.md#total-time");
   confirmAnswer = false;

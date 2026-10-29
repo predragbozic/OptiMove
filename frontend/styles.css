@@ -19386,7 +19386,40 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   -webkit-user-select: all;
   user-select: all;
 }
-/* Source fields: the four kinds of evidence, each with its colour and its word. */
+/* Source fields: the four kinds of evidence, each with its colour and its word,
+   behind one chip that opens them on a tap (the language pass). */
+.source-fields-legend-chip {
+  margin-top: 6px;
+}
+.source-fields-legend-chip > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 14px;
+  cursor: pointer;
+}
+.source-fields-legend-chip > summary::-webkit-details-marker {
+  display: none;
+}
+/* An arrow says the chip opens; the summary's own state is read aloud. */
+.source-fields-legend-chip > summary::after {
+  content: "▾" / "";
+  margin-left: 8px;
+  color: var(--muted);
+}
+.source-fields-legend-chip[open] > summary::after {
+  content: "▴" / "";
+}
+.source-fields-legend-chip[open] > summary {
+  border-color: var(--accent);
+}
+.source-fields-legend-chip > .source-fields-legend {
+  margin-top: 8px;
+}
 .source-fields-legend {
   list-style: none;
   display: flex;
