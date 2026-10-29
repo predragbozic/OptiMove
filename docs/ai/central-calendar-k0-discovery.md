@@ -24,7 +24,7 @@ The owner's answers to Q1–Q10 (2026-10-29), recorded as written; a line marked
 default* or *OPEN* is not an owner decision:
 
 - **D5** (Q1) The athlete's weekly plan does not change. The central calendar opens an athlete's weekly plan on the day (`openWeeklyPlanOnDate`). The athlete sees general events such as a match (K2). Manager default: only events of the athlete's own teams or addressed to the athlete (name, time, place), never teammates' data, RPE or attendance.
-- **D6** (Q2) A team coach sees the team's activities and opens their athletes' weekly plans. OPEN, asked to the owner: may a team coach create events for the team? (The manager and the executor both recommend yes.)
+- **D6** (Q2) A team coach sees the team's activities and opens their athletes' weekly plans. A team coach creates events for their own team; the club admin creates events for the whole club (owner, 2026-10-29).
 - **D7** (Q3) A private coach schedules joint activities for their athletes or groups of them and opens their weekly plans. The group model is a K2 proposal: present both options — the existing Tags (check how they are owned) and a new group table — and give a recommendation.
 - **D8** (Q4) The club SEES its teams' activities, in the active club workspace only. The same rule applies to TL Activities and to the activity detail, so a calendar click never ends in a 404. The O2 precedent belongs here. In K1 this needs security-reviewer plus external review (trigger 2).
 - **D9** (Q5) The club adds its own event types. Proposal: each type maps to one base kind from D2, and the kind decides what is expected (attendance, RPE).
@@ -333,8 +333,8 @@ unless an index is added.
 Not decided. Tables in a new `calendar` schema, one migration, ★★ (external review; triggers 1 and 2, and 3
 for the event ↔ activity link):
 
-- **Owners.** `owner_scope` + owner ids (ADR-002): `club` (D4), `user` for a private coach (D7), and `team` only
-  if D6 allows a team coach to create events.
+- **Owners.** `owner_scope` + owner ids (ADR-002): `club` (D4), `team` for a team coach's events (D6), `user`
+  for a private coach (D7).
 - `calendar.event_types` — `owner_*`, `key`, `label`, `kind` (one of the D2 kinds; the kind decides what is
   expected, D9), `default_duration_minutes`, `all_day`, `is_match` (adds opponent, home/away, result),
   `icon_key` (the icon library, `frontend/icon-library.js`), `sort_order`, `seed_key`, `archived_at`, audit
@@ -348,8 +348,8 @@ for the event ↔ activity link):
   status (scheduled | cancelled), cancelled_reason, note, opponent, home_away, result, created_by,
   request_key`; targets in `calendar.event_targets (event_id, team_id | athlete_id | group_id)`.
   - **Target invariant (LOW-6).** A target team belongs to the owning club; a target athlete is an active
-    member of the owning club (or one of the private coach's own athletes); checked by the database, with the
-    same 404 for a foreign id.
+    member of the owning club (or one of the private coach's own athletes); a team-owned event targets only
+    that team or its members (D6); checked by the database, with the same 404 for a foreign id.
 - `calendar.event_activity_links` — an event ↔ the canonical activities that recorded it, followed forward on a
   supersede (ADR-001). An event never stores RPE or results (ADR-004).
 - **Groups of athletes (D7).** Two options:
@@ -366,8 +366,9 @@ for the event ↔ activity link):
 - **The athlete's events (D5).** Events targeted to the athlete's teams, groups or to the athlete: name, time,
   place only — never roster, attendance or RPE of others. Shown in the athlete's Weekly plan and Home, not as a
   new menu.
-- **Who edits.** The club admin of the active club workspace (D4); the private coach for own athletes (D7); a
-  team coach for the team only if D6 says so. *Proposal, not an owner decision:* a platform admin for support.
+- **Who edits.** The club admin of the active club workspace for the whole club (D4, D6); the team coach of the
+  active team workspace for the own team (D6); the private coach for own athletes (D7). *Proposal, not an owner
+  decision:* a platform admin for support.
 - **Settings → Calendar.** Event types, Locations, Team colours. No card metrics (D14).
 - **Commands (later than the tables).** New event, Copy events, Make trainings from plans.
 
@@ -388,7 +389,6 @@ a shared one). It touches the roster decisions, so `db-reviewer` and trigger 1.
 
 ## 10. Open questions for the owner
 
-- **Q-A (D6).** May a team coach create events for the team? Recommendation: yes, for the own team only.
 - **Q-B (D5).** Confirm the manager's default: an athlete sees only events of the own teams, groups or
   addressed to them (name, time, place), never teammates' data.
 - **Q-C (D7).** Groups of athletes: a new group table (recommended) or athlete tags?
