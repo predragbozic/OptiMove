@@ -27,6 +27,7 @@ The same day as the merge and deploy:
 1. Run `docs/runbooks/source-metric-zone-model-v42-preflight.sql` one block at a time. Every value must be the expected
    one:
    - block 3 proves the two functions are exactly v34's and v39's;
+   - block 4: record `v34_fingerprint`; the post-check shows it again;
    - block 5 must show no zone revision with a meaning proof or an operator;
    - block 7 is information only: record its numbers;
    - block 9 must show a quiet moment.
@@ -52,7 +53,7 @@ it too until v42 commits. No mixed state can save a zone operator outside the zo
 2. Before any zone field is confirmed (blocks 4 and 6 expect no proof and no audit row on the new field), run
    `docs/runbooks/source-metric-zone-model-v42-postcheck.sql` one block at a time:
    - block 1 compares the recorded checksum with the one in the file;
-   - block 4 shows ten fields, the new one exactly as seeded;
+   - block 4 shows ten fields, the new one exactly as seeded, and `v34_fingerprint` equal to the preflight's;
    - block 6 shows no audit row for the new field.
 
 ## If v42 refuses at deploy
@@ -79,7 +80,8 @@ On the owner's approval only, for the database the owner names (`.claude/rules/d
 - with the deployed commit no longer carrying the v42 file or the F3 change.
 
 Run `docs/runbooks/source-metric-zone-model-v42-rollback.sql` in a quiet moment as one transaction that stops at the
-first error (`psql -v ON_ERROR_STOP=1 --single-transaction -f`). It refuses, changing nothing:
+first error (`psql -v ON_ERROR_STOP=1 -f`; the script carries its own `BEGIN` and `COMMIT`). It refuses, changing
+nothing:
 - without v42, or under a later migration;
 - once any zone revision carries a meaning proof or an operator - the normal path after the first real confirmation
   of a zone. v42 is forward-only from then on, and a correction is a later migration;

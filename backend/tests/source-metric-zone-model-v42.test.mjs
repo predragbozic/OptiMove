@@ -273,7 +273,10 @@ test("1. on v41: every expected value of the read-only preflight; the rollback r
   assert.equal(pre[1][0].pg15_or_later, true);
   assert.deepEqual(pre[2][0], { v41_rows: "1", v41_checksum_ok: true, v42_rows: "0", at_or_after_v42: "0", last_migration: V41_NAME });
   assert.deepEqual(pre[3][0], { seed_window_is_v34: true, actor_guard_is_v39: true, seed_window_comment: null, actor_guard_comment: null });
-  assert.deepEqual(pre[4][0], { fields: "9", v34_fields: "9", open_top_rows: "0" });
+  const { v34_fingerprint: preFingerprint, ...pre4 } = pre[4][0];
+  assert.deepEqual(pre4, { fields: "9", v34_fields: "9", open_top_rows: "0" });
+  assert.match(preFingerprint, /^[0-9a-f]{32}$/);
+  W.v34Fingerprint = preFingerprint;
   assert.deepEqual(pre[5][0], { zone_revisions: "2", zones_with_meaning_or_operator: "0" });
   assert.deepEqual(pre[6][0], { owns_fields: true, owns_revisions: true, owns_functions: true, disabled_triggers: "0" });
   assert.deepEqual(Object.keys(pre[7][0]), ["mappings", "mapping_versions", "activations", "provenance_rows", "audit_rows"]);
@@ -342,7 +345,19 @@ test("2. v42 through the runner on v41: the two function bodies change (v39's ac
   assert.deepEqual(post[1][0], { v42_rows: "1", v42_checksum_ok: true, later_rows: "0", last_migration: V42_NAME, v41_rows: "1" });
   assert.deepEqual(post[2][0], { seed_window_is_v42: true, actor_guard_is_v42: true, zone_rule: true, comments_name_v42: true });
   assert.deepEqual(post[3][0], { names_only_v42: true, v42_recorded: true });
-  assert.deepEqual(post[4][0], { fields: "10", v34_fields: "9", open_top_seed: "1", open_top_revisions: "1", zones_with_meaning_or_operator: "0" });
+  const { v34_fingerprint: postFingerprint, ...post4 } = post[4][0];
+  assert.deepEqual(post4, { fields: "10", v34_fields: "9", open_top_seed: "1", open_top_revisions: "1", zones_with_meaning_or_operator: "0" });
+  assert.equal(postFingerprint, W.v34Fingerprint, "the nine v34 fields and their revisions are unchanged (preflight block 4)");
+  // Any change to them changes the fingerprint (a rolled-back edit of one note).
+  await r.query("begin");
+  try {
+    await withTriggersOff(r, "source_metric_definition_versions", () => r.query(
+      `update training_load.source_metric_definition_versions set unit_note = coalesce(unit_note, '') || ' changed'
+        where id = (select v.id from training_load.source_metric_definition_versions v where v.seed_migration = $1 order by v.id limit 1)`, [V34_NAME]));
+    assert.notEqual((await blocks(r, POSTCHECK))[4][0].v34_fingerprint, W.v34Fingerprint, "a changed v34 revision changes the fingerprint");
+  } finally {
+    await r.query("rollback");
+  }
   assert.deepEqual(post[5][0], { disabled_triggers: "0" });
   assert.deepEqual(post[6][0], { open_top_audit_rows: "0" });
   assert.deepEqual(post[7][0], { actor_defaults: "0", conflicting_locks: "0" });
@@ -570,7 +585,8 @@ test("7. end to end through M2: with both proofs, a version of a closed zone (25
       JSON.stringify({ operator: "between", lower: 75, upper: 100, unit: "W/kg" }), JSON.stringify({ operator: ">=", lower: 75, upper: null, unit: "W/kg" }), W.pa.id]));
   assert.equal(forced.ok, false);
   assert.equal(forced.error.code, "23514", forced.error.message);
-  assert.match(forced.error.message, /^source_metric_mapping_versions: /);
+  // v34's operator equality itself, not any other refusal of the table.
+  assert.equal(forced.error.message, "source_metric_mapping_versions: the operator must be the revision's proven operator");
 });
 
 test("8. a v42 database reads back the same after pg_dump and pg_restore: both function bodies and comments, every trigger of the two tables, and the seeds", async () => {

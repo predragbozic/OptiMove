@@ -57,7 +57,9 @@ select
 --    actor); the nine v34 revisions still without any proof of a zone's
 --    meaning or operator.
 --    Expected: fields = 10, v34_fields = 9, open_top_seed = 1, open_top_revisions = 1,
---    zones_with_meaning_or_operator = 0.
+--    zones_with_meaning_or_operator = 0, and v34_fingerprint equal to the value
+--    preflight block 4 recorded (the nine v34 fields and their revisions are
+--    unchanged, every column). Run it before any zone field is confirmed.
 select
   (select count(*) from training_load.source_metric_definitions) as fields,
   (select count(*) from training_load.source_metric_definitions
@@ -79,7 +81,11 @@ select
      join training_load.source_metric_definitions d on d.id = r.source_metric_definition_id
     where d.source_metric_key = 'more.complementary_data.power.distance.open_top') as open_top_revisions,
   (select count(*) from training_load.source_metric_definition_versions
-    where parameter_kind = 'zone_bounds' and (meaning_verified_at is not null or bound_operator is not null)) as zones_with_meaning_or_operator;
+    where parameter_kind = 'zone_bounds' and (meaning_verified_at is not null or bound_operator is not null)) as zones_with_meaning_or_operator,
+  (select md5(string_agg(row_to_json(d)::text || row_to_json(r)::text, '|' order by d.source_metric_key, r.revision_number))
+     from training_load.source_metric_definitions d
+     join training_load.source_metric_definition_versions r on r.source_metric_definition_id = d.id
+    where d.seed_migration = 'migrations_v2/202610121000_training_load_v34_source_metric_mapping.sql') as v34_fingerprint;
 
 -- 5. Every trigger of the source fields and their revisions is enabled.
 --    Expected: disabled_triggers = 0.

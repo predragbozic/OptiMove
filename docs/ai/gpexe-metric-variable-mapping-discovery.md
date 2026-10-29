@@ -766,7 +766,9 @@ draft mappings (M3c).
 **M2b - the source-field evidence confirmation (owner's decisions of 2026-10-15, after the M2b delta
 discovery; as built in section J4):**
 
-89. **Zones (O1):** how closed and open zones share one `bound_operator` per revision is unresolved: M2's
+89. **Zones (O1)** - **lifted by v42** (phase 5b, C102 / C103, J7 "As built"): a zone's meaning act takes `between`
+    (a closed zone) or `>=` (the open top zone), in F3 and in the database; the text below is the rule until v42.
+    How closed and open zones share one `bound_operator` per revision is unresolved: M2's
     version create takes an upper bound exactly for `between`, so one revision cannot carry a closed zone
     and the open top zone (`[7, ∞)` m/s, ≥ 75 W/kg) alike. Until the owner decides, a zone revision's unit
     may be confirmed (with its bound unit, on valid evidence), but its meaning act answers
@@ -1023,7 +1025,8 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
       - The merge, v41 and its production pre- and post-checks each need the owner's order that names them.
       - 12c, the frontend, comes after 12b.
 102. **The zone model (phase 5; lifts C89 once it is built)** (the options are
-    `docs/ai/phase5-zone-model-options.md`, PR #250; the contract of option A is not written yet).
+    `docs/ai/phase5-zone-model-options.md`, PR #250; the contract of option A is J7, accepted as C103, and built in
+    the phase 5b pull request).
     - **The owner's words**, in the *Rukovodilac*'s chat. The executor checked the turn; it is verbatim, exactly as in
       the code span:
       - owner turn `bfad63ba`, 2026-10-28 16:15:39 UTC: `po preporuci neka ide, koji je last comit koji treba da uradim
@@ -3205,7 +3208,7 @@ The contract is the separate document `docs/ai/phase5-zone-model-contract.md` (p
   answered.
 - **The phase 6 meaning form:** a required operator choice for a zone.
 
-**As built** (phase 5b pull request; base `82fbb3c`, rebased in content onto the merge of PR-1 before review):
+**As built** (phase 5b pull request #259; base `0eb7e10`):
 - **Migration v42** (`migrations_v2/202610282300_training_load_v42_source_metric_zone_model.sql`), in order:
   - `share row exclusive` on T2a and T2b, then the two fail-closed refusals (`23514`, fixed messages): the field
     `.open_top` already exists; a `zone_bounds` revision already carries a meaning proof or an operator;

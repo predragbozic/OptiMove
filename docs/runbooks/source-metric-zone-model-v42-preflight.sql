@@ -46,13 +46,21 @@ select
   obj_description('training_load.source_metric_revisions_actor_guard()'::regprocedure, 'pg_proc') as actor_guard_comment;
 
 -- 4. The source fields are the nine of v34 and no other; none has the new key.
---    Expected: fields = 9, v34_fields = 9, open_top_rows = 0.
+--    v34_fingerprint is a digest of the nine v34 fields and all their
+--    revisions, every column.
+--    Expected: fields = 9, v34_fields = 9, open_top_rows = 0; v34_fingerprint
+--    is information: record it, post-check block 4 shows it again (run both in
+--    the same tool, the Supabase SQL Editor, so dates print the same way).
 select
   (select count(*) from training_load.source_metric_definitions) as fields,
   (select count(*) from training_load.source_metric_definitions
     where seed_migration = 'migrations_v2/202610121000_training_load_v34_source_metric_mapping.sql') as v34_fields,
   (select count(*) from training_load.source_metric_definitions
-    where source_metric_key = 'more.complementary_data.power.distance.open_top') as open_top_rows;
+    where source_metric_key = 'more.complementary_data.power.distance.open_top') as open_top_rows,
+  (select md5(string_agg(row_to_json(d)::text || row_to_json(r)::text, '|' order by d.source_metric_key, r.revision_number))
+     from training_load.source_metric_definitions d
+     join training_load.source_metric_definition_versions r on r.source_metric_definition_id = d.id
+    where d.seed_migration = 'migrations_v2/202610121000_training_load_v34_source_metric_mapping.sql') as v34_fingerprint;
 
 -- 5. No zone revision carries a meaning proof or an operator (until v42 the
 --    database refuses both, so a non-zero value here is a stop).

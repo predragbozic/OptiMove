@@ -31,7 +31,8 @@
 --     transaction, without waiting).
 --
 -- One transaction: everything or nothing. Run it at a quiet moment as
---   psql -v ON_ERROR_STOP=1 --single-transaction -f source-metric-zone-model-v42-rollback.sql
+--   psql -v ON_ERROR_STOP=1 -f source-metric-zone-model-v42-rollback.sql
+-- (the script carries its own BEGIN and COMMIT, so no --single-transaction).
 -- After a refusal the transaction is aborted and nothing is changed. Waits are
 -- bounded: a transaction that holds one of the two tables makes this script
 -- fail after 5 s. The two v34 guards that refuse a DELETE are disabled by name
