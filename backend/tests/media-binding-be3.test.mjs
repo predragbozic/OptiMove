@@ -528,7 +528,9 @@ if(process.env.MEDIA_L1_TEST==='true') {
  });
  test('L1 HTTP: block copy, day paste and session paste preserve R2 snapshots after target plan locking',async()=>{
  for(const mode of ['block','day','session']){const source=await assignedSection(),media=await h1AssetExercise();await addExercise(media.id,{},source.node);const src=(await client.query('select s.id as session,d.id as day from plans.plan_nodes n join plans.plan_sessions s on s.id=n.plan_session_id join plans.plan_days d on d.id=s.plan_day_id where n.id=$1',[source.node])).rows[0];
- if(mode==='block'){const r=await request('/api/builder/blocks/'+src.day+'/copy',{});assert.equal(r.status,201,JSON.stringify(r.body));assert.equal(await evidence(source.plan),'4');}
+ // A copy inside the same assigned plan adds no member: membership is one row per hold, asset and slot
+ // (owner decision, MEDIUM-2), and the 2 existing members keep the asset protected.
+ if(mode==='block'){const r=await request('/api/builder/blocks/'+src.day+'/copy',{});assert.equal(r.status,201,JSON.stringify(r.body));assert.equal(await evidence(source.plan),'2');}
  else{const target=await assignedSection();await client.query("update plans.plans set plan_type='weekly' where id=$1",[target.plan]);const targetDay=(await client.query('select d.id from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id where s.id=(select plan_session_id from plans.plan_nodes where id=$1)',[target.node])).rows[0].id;
  const path=mode==='day'?'/api/builder/blocks/'+src.day+'/copy-into/'+targetDay:'/api/builder/sessions/'+src.session+'/copy-into/'+targetDay,r=await request(path,{confirmOverwrite:true});assert.equal(r.status,200,JSON.stringify(r.body));assert.ok(await assetItem(target.plan,media.video.id));assert.equal(await evidence(target.plan),'2');}}
  });

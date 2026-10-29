@@ -37,11 +37,15 @@ create table media.hold_assets (
   id uuid primary key default gen_random_uuid(),
   hold_id uuid not null references media.retention_holds(id) on delete restrict,
   asset_id uuid not null references media.assets(id) on delete restrict,
-  -- Snapshot provenance survives ordinary item replacement/deletion.
+  -- Provenance only: the plan item that FIRST captured this asset and slot for
+  -- the hold. It survives ordinary item replacement/deletion; a later item with
+  -- the same asset (a Builder Submit re-inserts every item) adds no row.
   plan_item_id uuid not null,
   slot text not null check (slot in ('video','image')),
   created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
-  unique(hold_id,asset_id,plan_item_id,slot)
+  -- One member per hold, asset and slot: protection is per asset, so a repeated
+  -- capture of the same asset for the same hold never grows these tables.
+  unique(hold_id,asset_id,slot)
 );
 create index hold_assets_asset on media.hold_assets(asset_id);
 create table media.retention_events (
@@ -157,6 +161,8 @@ create trigger media_l1_derivation_event after insert or update of source_video_
 
 -- A retention manifest is NOT playback authorization or proof of payment.
 -- Insert only missing members: ON CONFLICT alone still runs BEFORE INSERT guards.
+-- A member is the hold, asset and slot; the item only records who captured it
+-- first, so the event below is written once per member, never per item.
 create function media.l1_capture_members(p_hold uuid,p_item uuid,p_video uuid,p_image uuid) returns void language plpgsql as $$
 declare inserted record;
 begin
@@ -164,8 +170,8 @@ begin
     insert into media.hold_assets(hold_id,asset_id,plan_item_id,slot)
       select p_hold,v.asset,p_item,v.slot from (values(p_video,'video'),(p_image,'image')) v(asset,slot)
       where v.asset is not null and not exists(select 1 from media.hold_assets h
-        where h.hold_id=p_hold and h.asset_id=v.asset and h.plan_item_id=p_item and h.slot=v.slot)
-      order by v.asset,v.slot on conflict(hold_id,asset_id,plan_item_id,slot) do nothing returning asset_id,slot
+        where h.hold_id=p_hold and h.asset_id=v.asset and h.slot=v.slot)
+      order by v.asset,v.slot on conflict(hold_id,asset_id,slot) do nothing returning asset_id,slot
   loop
     insert into media.retention_events(asset_id,hold_id,event,source_table,source_id,reason,details)
       values(inserted.asset_id,p_hold,'manifest_asset_captured','plans.plan_items',p_item,

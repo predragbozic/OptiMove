@@ -8,7 +8,7 @@ Baseline BE-1 `202610191100_media_storage_foundation.sql` and BE-2 `202610191300
 
 | Migration | SHA-256 |
 | --- | --- |
-| `202610291000_media_reference_protection.sql` (L1) | `a969eae0d3ef6c5ec45907db124e7250515feeea97c3309430bec292e06750c8` |
+| `202610291000_media_reference_protection.sql` (L1) | `7f313c93453bdb81175a13ac99ee5b17e5bfcd7e86867979607a4ee21763ef6d` |
 | `202610291100_media_drive_copies.sql` (Drive) | `e13159397c59d5c9235781754df2fc8b32b00d95afe95bbb2c665af837b9fd91` |
 | `202610291200_media_drive_reference_bridge.sql` (bridge) | `3841c051c9fd217be8e32d4af33878c3ffaace669815f4286d4e749ae6432367` |
 
@@ -23,7 +23,7 @@ Each migration and its ledger entry commit in a separate transaction. The packag
 | Privileges | CREATE/USAGE on media; source relation ownership (ALTER and replacing triggers/views), SELECT/UPDATE/TRIGGER/REFERENCES, audit-guard EXECUTE. Include storage_accounts, uploads, assets, users, exercises, program_access, plan hierarchy, and every already-present L1/Drive relation. Runtime must inherit private owner rights; security-invoker bridge functions/views require source visibility. No public grant workaround. |
 | Ledger / objects | Checksums above plus all baseline files match; relation, column, constraint, trigger, function and index inventory agrees with the committed prefix. Check valid/ready indexes, not just their names. |
 | References / Drive | Zero missing, non-ready or wrong-kind explicit assets and mapped copies. No duplicate active imports per file/kind, inconsistent purpose/context, duplicate mappings/assets or unexplained created/removed history. Existing mapping/history alone must not be treated as acquired playback rights. |
-| Scale | Source counts, mapped legacy slots, eligible assignment/grant fan-out, largest plan, existing holds/members and growth. Bridge estimate must include mapped legacy snapshots, not merely explicit asset columns. Future not-yet-imported mappings are a separate forecast, not today's backfill. |
+| Scale | Source counts, mapped legacy slots, eligible assignment/grant fan-out, largest plan, existing holds/members and growth. Bridge estimate must include mapped legacy snapshots, not merely explicit asset columns. Future not-yet-imported mappings are a separate forecast, not today's backfill. Membership is one row per hold, asset and slot, so a repeated Builder Submit adds no member and no capture event. For items with an explicit R2 asset, every Submit still writes `reference_removed` + `reference_added` per item: an append-only audit of the real delete and insert, which grows with editing activity, not with the Drive mapping (mapped Drive items write none). |
 | Locks | No uncontrolled writers, long transactions, active imports or unresolved blockers; include BOTH web services, cron, previews and any manual importer. Observe only; never lock rows, terminate sessions or acquire advisory locks during preflight. |
 | Budgets | Actual role/DB timeouts, migration environment overrides, connection acquisition/pooler/session behavior, app startup/health-check deadline and cron runner command must be confirmed separately. Repository defaults are NOT proof of deployment settings. |
 

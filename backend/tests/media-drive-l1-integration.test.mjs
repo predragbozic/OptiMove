@@ -138,6 +138,67 @@ for(const order of [[l1,drive],[drive,l1]])test('integration '+order.join(' then
    const assigned=await env.plan(seededId,false);await env.pool.query("update plans.plans set athlete_id=$2,is_template=false,status='active' where id=$1",[assigned.id,randomUUID()]);
    assert.ok((await env.holds(seededAsset)).some(row=>row.plan_item_id===assigned.item));
   });
+  await context.test('a repeated Builder Submit (every item deleted and inserted again) adds no hold, member or capture event; a new asset adds one; delete and replace keep the protection',async()=>{
+   const driveId=fileId(),mapped=await env.asset(),r2=await env.asset();await env.map(driveId,mapped);
+   const p=await env.plan(driveId);
+   await env.tx(client=>client.query("insert into plans.plan_items(plan_session_id,video_source,video_asset_id) values($1,'asset',$2)",[p.session,r2]));
+   const q=async(sql,args=[p.id])=>Number((await env.pool.query(sql,args)).rows[0].n);
+   const count=async()=>({
+    holds:await q('select count(*) as n from media.retention_holds where source_plan_id=$1'),
+    members:await q('select count(*) as n from media.hold_assets m join media.retention_holds h on h.id=m.hold_id where h.source_plan_id=$1'),
+    holdEvents:await q('select count(*) as n from media.retention_events e join media.retention_holds h on h.id=e.hold_id where h.source_plan_id=$1'),
+    captured:await q("select count(*) as n from media.retention_events e join media.retention_holds h on h.id=e.hold_id where h.source_plan_id=$1 and e.event='manifest_asset_captured'"),
+    mappedEvents:await q('select count(*) as n from media.retention_events where asset_id=$1',[mapped]),
+    r2Audit:await q("select count(*) as n from media.retention_events where asset_id=$1 and event in ('reference_added','reference_removed')",[r2])});
+   const lasting=c=>({holds:c.holds,members:c.members,holdEvents:c.holdEvents,captured:c.captured,mappedEvents:c.mappedEvents});
+   // What Builder Submit does to an assigned plan: every item deleted, then inserted again with a new id.
+   const resubmit=(session,extra)=>env.tx(async client=>{
+    const rows=(await client.query('delete from plans.plan_items where plan_session_id=$1 returning video_source,video_asset_id,video_url,image_source,image_asset_id,image_url',[session])).rows;
+    for(const r of [...rows,...(extra||[])])await client.query('insert into plans.plan_items(plan_session_id,video_source,video_asset_id,video_url,image_source,image_asset_id,image_url) values($1,$2,$3,$4,$5,$6,$7)',
+     [session,r.video_source,r.video_asset_id||null,r.video_url||null,r.image_source||'legacy',r.image_asset_id||null,r.image_url||null]);
+   });
+   const submit=extra=>resubmit(p.session,extra);
+   const first=await count();
+   assert.deepEqual({holds:first.holds,members:first.members,captured:first.captured},{holds:1,members:2,captured:2},'the assigned plan captured both assets once');
+   for(const round of [1,2]) {
+    await submit();
+    const now=await count();
+    assert.deepEqual(lasting(now),lasting(first),`Submit ${round}: no hold, member or capture event added`);
+    // The item-level audit of the explicit R2 selection records each new item (removed + added).
+    assert.equal(now.r2Audit,first.r2Audit+2*round,`Submit ${round}: the item audit`);
+   }
+   const provenance=(await env.pool.query('select m.plan_item_id from media.hold_assets m join media.retention_holds h on h.id=m.hold_id where h.source_plan_id=$1 and m.asset_id=$2',[p.id,mapped])).rows;
+   assert.deepEqual(provenance.map(r=>r.plan_item_id),[p.item],'the first capturing item stays the provenance');
+   // A repeated full capture adds nothing and never waits on a member's asset row.
+   const holder=await env.pool.connect();
+   try {
+    await holder.query('begin');await holder.query('select id from media.assets where id=$1 for update',[mapped]);
+    await env.tx(async client=>{await client.query("set local lock_timeout='500ms'");await client.query("update plans.plans set status='active' where id=$1",[p.id]);});
+   } finally {await holder.query('rollback');holder.release();}
+   assert.deepEqual(lasting(await count()),lasting(first),'the full re-capture added nothing');
+   // A Submit that adds one new mapped asset adds exactly one member and one capture event.
+   const secondId=fileId(),second=await env.asset();await env.map(secondId,second);
+   const beforeNew=await count();
+   await submit([{video_source:'legacy',video_url:urlOf(secondId)}]);
+   const afterNew=await count();
+   assert.deepEqual({holds:afterNew.holds,members:afterNew.members,captured:afterNew.captured},{holds:beforeNew.holds,members:beforeNew.members+1,captured:beforeNew.captured+1});
+   // Delete and replace: the hold keeps covering the asset, and the replacement adds nothing.
+   const member=()=>q('select count(*) as n from media.hold_assets m join media.retention_holds h on h.id=m.hold_id where h.source_plan_id=$1 and m.asset_id=$2',[p.id,mapped]);
+   await env.tx(client=>client.query('delete from plans.plan_items where plan_session_id=$1 and video_url=$2',[p.session,urlOf(driveId)]));
+   assert.equal(await member(),1,'deleting the item releases nothing');
+   await env.tx(client=>client.query('insert into plans.plan_items(plan_session_id,video_url) values($1,$2)',[p.session,urlOf(driveId)]));
+   const replaced=await count();
+   assert.equal(await member(),1);assert.deepEqual(lasting(replaced),lasting(afterNew),'the replacement added nothing');
+   // A plan whose items are only mapped Drive links: a repeated Submit writes no event at all (no item carries an explicit asset id).
+   const driveOnly=await env.plan(driveId);
+   await env.tx(client=>client.query('insert into plans.plan_items(plan_session_id,video_url) values($1,$2)',[driveOnly.session,urlOf(secondId)]));
+   const total=async()=>({events:await q('select count(*) as n from media.retention_events',[]),members:await q('select count(*) as n from media.hold_assets',[]),
+    holds:await q('select count(*) as n from media.retention_holds',[]),planMembers:await q('select count(*) as n from media.hold_assets m join media.retention_holds h on h.id=m.hold_id where h.source_plan_id=$1',[driveOnly.id])});
+   const driveBefore=await total();
+   assert.equal(driveBefore.planMembers,2,'both mapped assets captured once');
+   await resubmit(driveOnly.session);await resubmit(driveOnly.session);
+   assert.deepEqual(await total(),driveBefore,'two Submits of a Drive-only plan wrote no event, member or hold');
+  });
   await context.test('mapping rollback preserves legitimate manifests; orphan history creates none',async()=>{
    await env.copies.remove(env.actor,'video',seededId,'integration rollback');
    await env.pool.query('delete from plans.plans where id=$1',[seeded.id]);assert.ok((await env.holds(seededAsset)).some(row=>row.plan_item_id===seeded.item));
