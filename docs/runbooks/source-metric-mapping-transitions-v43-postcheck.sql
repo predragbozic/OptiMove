@@ -42,23 +42,29 @@ select
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'training_load' and p.proname = 'source_metric_actor_basis') as actor_basis_is_v35;
 
--- 3. Both v43 triggers on the audit table, enabled, of the kind v43 specifies:
---    the replacement link an AFTER INSERT ROW constraint trigger, deferrable
---    and initially deferred (tgtype 5); the transition facts a BEFORE INSERT
---    ROW trigger, not deferrable (tgtype 7).
---    Expected: two rows -
---    source_metric_audit_v43_replacement_link | 5 | true | true | O | true
---    source_metric_audit_v43_transition_facts | 7 | false | false | O | false
-select t.tgname, t.tgtype, t.tgdeferrable, t.tginitdeferred, t.tgenabled, t.tgconstraint <> 0 as is_constraint_trigger
+-- 3. Both v43 triggers on the audit table, enabled, of the kind v43 specifies,
+--    each calling its own v43 function with a WHEN clause: the replacement link
+--    an AFTER INSERT ROW constraint trigger, deferrable and initially deferred
+--    (tgtype 5); the transition facts a BEFORE INSERT ROW trigger, not
+--    deferrable (tgtype 7).
+--    Expected: two rows (tgname | tgtype | tgdeferrable | tginitdeferred |
+--    tgenabled | is_constraint_trigger | calls_v43_function | has_when) -
+--    source_metric_audit_v43_replacement_link | 5 | true | true | O | true | true | true
+--    source_metric_audit_v43_transition_facts | 7 | false | false | O | false | true | true
+select t.tgname, t.tgtype, t.tgdeferrable, t.tginitdeferred, t.tgenabled, t.tgconstraint <> 0 as is_constraint_trigger,
+       t.tgfoid = (case t.tgname when 'source_metric_audit_v43_replacement_link' then 'training_load.source_metric_audit_replacement_link()'::regprocedure
+                                 else 'training_load.source_metric_audit_transition_facts()'::regprocedure end) as calls_v43_function,
+       t.tgqual is not null as has_when
   from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace
  where n.nspname = 'training_load' and c.relname = 'source_metric_audit' and t.tgname like 'source_metric_audit_v43_%'
  order by t.tgname;
 
--- 4. The numbers of preflight block 5, unchanged (v43 writes no row; no
---    request reached the new routes between the two checks), and still no
---    active version and no activation.
---    Expected: each value equal to the preflight's block 5;
---    versions_active = 0, activations = 0.
+-- 4. Still no active version and no activation (the hard values), and the
+--    numbers of preflight block 5 for comparison. v43 writes no row, but the
+--    M2 routes stay live between the two checks, so the other counts may rise
+--    with ordinary writes (a mapping, a version, a submission); they never fall.
+--    Expected: versions_active = 0, activations = 0; every other value equal
+--    to or above the preflight's block 5.
 select
   (select count(*) from training_load.source_metric_mappings) as mappings,
   (select count(*) from training_load.source_metric_mapping_versions where status = 'draft') as versions_draft,

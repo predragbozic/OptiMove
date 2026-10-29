@@ -65,7 +65,7 @@ async function migrate(url, files) {
 }
 
 before(async () => {
-  assert.equal(GPEXE_TEST_MIGRATIONS.at(-1), V43, "v43 is the last test migration");
+  assert.ok(GPEXE_TEST_MIGRATIONS.includes(V43), "v43 is a test migration");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v43rb", migrations: UP_TO_V42 }),
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v43" }),
@@ -152,10 +152,16 @@ async function api(p, { method = "GET", body, cookie, contentType = "application
 const post = (p, cookie, body) => api(p, { method: "POST", cookie, body });
 const actPath = (v) => `/mappings/${v.mappingId}/versions/${v.versionId}/activate`;
 const disPath = (v) => `/mappings/${v.mappingId}/versions/${v.versionId}/disable`;
-const activate = (v, cookie, { expected = null, reason, requestKey = key() } = {}) =>
-  post(actPath(v), cookie, { requestKey, expectedActiveVersionId: expected, ...(reason === undefined ? {} : { reason }) });
-const disable = (v, cookie, { expectedStatus, reason = "Wrong mapping.", requestKey = key() } = {}) =>
-  post(disPath(v), cookie, { requestKey, expectedStatus, reason });
+// Every reason sent through these two helpers; test 17 scans every answer and log line for them.
+const sentReasons = new Set();
+const activate = (v, cookie, { expected = null, reason, requestKey = key() } = {}) => {
+  if (typeof reason === "string") sentReasons.add(reason);
+  return post(actPath(v), cookie, { requestKey, expectedActiveVersionId: expected, ...(reason === undefined ? {} : { reason }) });
+};
+const disable = (v, cookie, { expectedStatus, reason = "Wrong mapping.", requestKey = key() } = {}) => {
+  sentReasons.add(reason);
+  return post(disPath(v), cookie, { requestKey, expectedStatus, reason });
+};
 
 async function user(label, { active = true } = {}) {
   return (await one(k, `insert into public.users (email, full_name, display_name, is_active) values ($1,$2,$2,$3) returning id`, [`${label}-${uid()}@test.local`, label, active])).id;
@@ -178,9 +184,10 @@ async function clubAdmin(clubId) {
   await workspace(id, "club", clubId);
   return { id, cookie: await cookieFor(id) };
 }
-async function teamCoach(clubId) {
+async function teamCoach(clubId, { platformAdmin: alsoPlatformAdmin = false } = {}) {
   const teamId = (await one(k, `insert into public.teams (club_id, name) values ($1,$2) returning id`, [clubId, `Team ${uid()}`])).id;
   const id = await user("coach");
+  if (alsoPlatformAdmin) await k.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true)`, [id]);
   await k.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [id, teamId]);
   await workspace(id, "team", teamId);
   return { id, cookie: await cookieFor(id) };
@@ -318,6 +325,23 @@ async function inRolledBack(c, plant, sqlFile) {
   await c.query("rollback").catch(() => {});
   return error;
 }
+// The lock types another session of this database waits on, once one waits. Two
+// requests of one user serialize on runWrite's per-user advisory lock before any
+// registry lock, so a concurrency test sends its second request as another user
+// and asserts that the wait is not on an advisory lock.
+async function waitsOnRows(timeoutMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const types = (await rows(k, `select distinct l.locktype from pg_locks l join pg_stat_activity a on a.pid = l.pid
+                                   where not l.granted and a.datname = current_database() and l.pid <> pg_backend_pid() order by 1`)).map((x) => x.locktype);
+    if (types.length > 0) {
+      assert.ok(!types.includes("advisory"), `the wait is on a row or a transaction, not the per-user lock (${types})`);
+      return types;
+    }
+    await new Promise((res) => setTimeout(res, 20));
+  }
+  return null;
+}
 async function someoneWaits(timeoutMs = 5000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -369,6 +393,7 @@ async function world() {
   W.clubA = await club("Club A");
   W.clubB = await club("Club B");
   W.pa = await platformAdmin();
+  W.pa2 = await platformAdmin();
   W.paA = await platformAdmin(["club", W.clubA]);
   W.paB = await platformAdmin(["club", W.clubB]);
   W.caA = await clubAdmin(W.clubA);
@@ -387,13 +412,15 @@ test("1. on v42: every expected value of the read-only preflight (block 4's hard
   assert.equal(pre[1][0].pg15_or_later, true);
   assert.deepEqual(pre[2][0], { v42_rows: "1", v42_checksum_ok: true, v43_rows: "0", at_or_after_v43: "0", last_migration: V42_NAME });
   assert.deepEqual(pre[3][0], { v43_functions: "0", v43_triggers: "0", actor_basis_is_v35: true });
-  assert.deepEqual(pre[4][0], { active_versions: "0", activations: "0" });
+  assert.deepEqual(pre[4][0], { active_versions: "0", activations: "0", safe_to_merge: true });
   assert.deepEqual(Object.keys(pre[5][0]), ["mappings", "versions_draft", "versions_needs_review", "versions_active", "versions_disabled", "mapping_audit_rows"]);
   W.pre5 = pre[5][0];
   assert.deepEqual(pre[6][0], { schema_create: true, owns_audit: true, disabled_triggers: "0" });
   assert.deepEqual(pre[7][0], { actor_defaults: "0" });
   assert.deepEqual(pre[8][0], { table_locks: "0", idle_in_transaction: "0" });
-  assert.deepEqual(pre[9][0], { advisory_locks: "0", running_checks: "0", running_identity_loads: "0" });
+  const { advisory_locks: advisoryLocks, ...pre9 } = pre[9][0];
+  assert.deepEqual(pre9, { running_checks: "0", running_identity_loads: "0" });
+  assert.match(advisoryLocks, /^[0-9]+$/, "advisory_locks is information only");
   // Block 4 counts what it must stop on (rows planted with triggers off, rolled back).
   await r.query("begin");
   try {
@@ -407,7 +434,7 @@ test("1. on v42: every expected value of the read-only preflight (block 4's hard
     await r.query(`insert into training_load.source_metric_mapping_activations (mapping_version_id, mapping_id, source_metric_definition_id, metric_definition_id, parameter_fingerprint, source_team_binding_id, team_id,
                      applies_to_session, applies_to_drill, requirement, activated_by_user_id, activated_basis, reason)
                    values ($1,$1,$1,$1,'',$1,$1,true,true,'required',$1,'platform_admin','x')`, [id]);
-    assert.deepEqual((await blocks(r, PREFLIGHT))[4][0], { active_versions: "1", activations: "1" });
+    assert.deepEqual((await blocks(r, PREFLIGHT))[4][0], { active_versions: "1", activations: "1", safe_to_merge: false });
   } finally {
     await r.query("rollback");
   }
@@ -441,8 +468,8 @@ test("2. v43 through the runner on v42 adds exactly its two functions (with thei
   assert.deepEqual(post[1][0], { v43_rows: "1", v43_checksum_ok: true, later_rows: "0", last_migration: V43_NAME, v42_rows: "1" });
   assert.deepEqual(post[2][0], { replacement_link_is_v43: true, transition_facts_is_v43: true, comments_name_v43: true, actor_basis_is_v35: true });
   assert.deepEqual(post[3], [
-    { tgname: "source_metric_audit_v43_replacement_link", tgtype: 5, tgdeferrable: true, tginitdeferred: true, tgenabled: "O", is_constraint_trigger: true },
-    { tgname: "source_metric_audit_v43_transition_facts", tgtype: 7, tgdeferrable: false, tginitdeferred: false, tgenabled: "O", is_constraint_trigger: false },
+    { tgname: "source_metric_audit_v43_replacement_link", tgtype: 5, tgdeferrable: true, tginitdeferred: true, tgenabled: "O", is_constraint_trigger: true, calls_v43_function: true, has_when: true },
+    { tgname: "source_metric_audit_v43_transition_facts", tgtype: 7, tgdeferrable: false, tginitdeferred: false, tgenabled: "O", is_constraint_trigger: false, calls_v43_function: true, has_when: true },
   ]);
   const { activations, ...post4 } = post[4][0];
   assert.deepEqual(post4, W.pre5, "the numbers of preflight block 5, unchanged");
@@ -546,9 +573,10 @@ test("6. A1, a replacement: naming the active version N with a reason disables N
     ["mapping_status", n.versionId, "active", "disabled", reason, true],
     ["mapping_version_replaced", n1.versionId, "needs_review", "active", reason, false],
   ].sort());
-  // The keyed row is written last (its heap position follows N's row: T8 is append-only).
-  const order = await rows(k, `select request_key is not null as keyed, (ctid::text::point)[0] as page, (ctid::text::point)[1] as item
-                                 from training_load.source_metric_audit where operation_id = $1 order by 2, 3`, [keyed.operation_id]);
+  // The keyed row is written last: cmin is the command id of the INSERT within its
+  // transaction (never updated or deleted: T8 is append-only), so it orders the inserts.
+  const order = await rows(k, `select request_key is not null as keyed, cmin::text::int as command
+                                 from training_load.source_metric_audit where operation_id = $1 order by 2`, [keyed.operation_id]);
   assert.deepEqual(order.map((x) => x.keyed), [false, true], "N's row first, the request record last");
   const again = ok200(await activate(n1, W.pa.cookie, { requestKey: k1, expected: n.versionId, reason }));
   assert.deepEqual([again.replayed, again.replaced, again.version.status], [true, n.versionId, "active"]);
@@ -581,9 +609,14 @@ test("7. A2 disables a draft, a needs_review and an active version with a reason
   assert.equal(await statusOf(moved), "needs_review", "nothing written");
 });
 
-test("8. the order of the answers: a club admin gets the identical 404 before the body is looked at (no body, a wrong content type, a bad body); a platform admin gets 415, then 400 for a non-object body, the identical 404 for a malformed id, then 400 for each body rule; a refusal is no request record (the key works afterwards)", async () => {
+test("8. the order of the answers: without a session the router's 401; a club admin gets the identical 404 before the body is looked at (no body, a wrong content type, a bad body); a platform admin gets 415, then 400 for a non-object body, the identical 404 for a malformed id, then 400 for each body rule; a refusal is no request record (the key works afterwards)", async () => {
   const f = await field({ verified: true });
   const clubV = await version(f, { owner: W.caA, target: W.clubAVar });
+  // No session: the router's 401, with and without a body.
+  for (const p of [actPath(clubV), disPath(clubV)]) {
+    assert.equal((await api(p, { method: "POST" })).status, 401, p);
+    assert.equal((await post(p, null, { requestKey: key(), expectedActiveVersionId: null, expectedStatus: "draft", reason: "x" })).status, 401, p);
+  }
   for (const p of [actPath(clubV), disPath(clubV)]) {
     isNotFound(await api(p, { method: "POST", cookie: W.caA.cookie }), "no body");
     isNotFound(await api(p, { method: "POST", cookie: W.caA.cookie, body: "x", contentType: "text/plain" }), "text");
@@ -625,7 +658,7 @@ test("8. the order of the answers: a club admin gets the identical 404 before th
   ok200(await activate(v, W.pa.cookie, { requestKey: k1 }));
 });
 
-test("9. information hiding: a club admin (own and other club), a team coach, a platform admin in another owner's workspace, an archived club's workspace, a revoked role, a foreign mapping id and a version of another mapping each answer the identical 404 and write nothing; a replay from another workspace is the identical 404", async () => {
+test("9. information hiding: a club admin (own and other club), a team coach, a platform admin in another owner's workspace or in a team workspace, an archived club's workspace, a revoked role, a foreign mapping id and a version of another mapping each answer the identical 404 and write nothing (an inactive user has no session: 401); the replay of an activation, a replacement and a disable from another workspace is the identical 404", async () => {
   const f = await field();
   const sysV = await version(f);
   const g = await field();
@@ -651,6 +684,15 @@ test("9. information hiding: a club admin (own and other club), a team coach, a 
   } finally {
     await k.query(`update public.clubs set is_active = true where id = $1`, [W.clubA]);
   }
+  // A platform admin whose active workspace is a team: no admin context.
+  const coachAdmin = await teamCoach(W.clubA, { platformAdmin: true });
+  isNotFound(await activate(clubV, coachAdmin.cookie), "platform admin in a team workspace");
+  isNotFound(await disable(sysV, coachAdmin.cookie, { expectedStatus: "needs_review" }), "platform admin in a team workspace");
+  // An inactive user has no session: the router's 401.
+  const inactive = await platformAdmin();
+  await k.query(`update public.users set is_active = false where id = $1`, [inactive.id]);
+  assert.equal((await activate(sysV, inactive.cookie)).status, 401);
+  assert.equal((await disable(sysV, inactive.cookie, { expectedStatus: "needs_review" })).status, 401);
   // A revoked platform admin.
   const revoked = await platformAdmin();
   await k.query(`update public.user_global_roles set is_active = false where user_id = $1`, [revoked.id]);
@@ -667,6 +709,22 @@ test("9. information hiding: a club admin (own and other club), a team coach, a 
   }
   assert.equal(ok200(await activate(clubV, W.paA.cookie, { requestKey: k1 })).replayed, true);
   assert.equal((await versionRow(clubV.versionId)).activated_basis, "platform_admin");
+  // A replacement and a disable of the club's versions, each replayed from the platform workspace.
+  const clubN1 = await version(g, { owner: W.caA, target: W.clubAVar });
+  const k2 = key();
+  ok200(await activate(clubN1, W.paA.cookie, { requestKey: k2, expected: clubV.versionId, reason: "Club replacement." }));
+  const clubDraft = await version(g, { owner: W.caA, target: W.clubAVar, submit: false });
+  const k3 = key();
+  ok200(await disable(clubDraft, W.paA.cookie, { requestKey: k3, expectedStatus: "draft", reason: "Club disable." }));
+  await workspace(W.paA.id, "platform", null);
+  try {
+    isNotFound(await activate(clubN1, W.paA.cookie, { requestKey: k2, expected: clubV.versionId, reason: "Club replacement." }), "a replacement's replay from another workspace");
+    isNotFound(await disable(clubDraft, W.paA.cookie, { requestKey: k3, expectedStatus: "draft", reason: "Club disable." }), "a disable's replay from another workspace");
+  } finally {
+    await workspace(W.paA.id, "club", W.clubA);
+  }
+  assert.equal(ok200(await activate(clubN1, W.paA.cookie, { requestKey: k2, expected: clubV.versionId, reason: "Club replacement." })).replaced, clubV.versionId);
+  assert.equal(ok200(await disable(clubDraft, W.paA.cookie, { requestKey: k3, expectedStatus: "draft", reason: "Club disable." })).replayed, true);
 });
 
 test("10. A1's refusals, each writing nothing: version_not_submitted, active_version_changed (null while one is active, a wrong id, a name while none is), revision_not_verified, target_not_active, canonical_version_changed, conversion_unavailable, bound_conversion_unavailable, level_not_allowed, source_metric_target_taken (a system and a club mapping of the same pair are both allowed), activation_open (A1 and A2)", async () => {
@@ -758,7 +816,7 @@ test("11. decision 9: an active version keeps its canonical variable from a new 
   assert.equal((await post(`/variables/${pinnedVar.id}/versions`, W.pa.cookie, { requestKey: key(), expectedCurrentVersionId: pinnedVar.currentVersionId, unit: "s", dailyAggregationMethod: "avg" })).status, 201);
 });
 
-test("12. the database allowlist: both 23505 index names and the three v34 transition texts map to their codes, and nothing else does; two activations of one field and parameters on two mappings of one owner at once - the second waits for the first's transaction and answers source_metric_target_taken (or try_again, and its retry source_metric_target_taken)", async () => {
+test("12. the database allowlist: both 23505 index names and the three v34 transition texts map to their codes, and nothing else does; two activations of one field and parameters on two mappings of one owner by two admins at once - the second passes the plain pre-read, waits for the first's transaction on the per-owner index and answers source_metric_target_taken through the 23505 mapping (or try_again, and its retry source_metric_target_taken)", async () => {
   const classify = service.classifyDatabaseError;
   assert.equal(classify({ code: "23505", constraint: "source_metric_mapping_versions_one_active_target_per_owner" }).code, "source_metric_target_taken");
   assert.equal(classify({ code: "23505", constraint: "source_metric_mapping_versions_one_active_per_mapping" }).code, "active_version_changed");
@@ -780,17 +838,18 @@ test("12. the database allowlist: both 23505 index names and the three v34 trans
   service.setMappingCommitForTests({ fault: async (client) => { calls += 1; if (calls === 1) await g.promise; return client.query("commit"); } });
   const first = activate(a, W.pa.cookie);
   await until(() => calls === 1, "the first activation reached its COMMIT");
-  const second = activate(b, W.pa.cookie);
-  assert.ok(await someoneWaits(), "the second waits for the first's transaction");
+  const second = activate(b, W.pa2.cookie);
+  const waitedOn = await waitsOnRows();
+  assert.ok(waitedOn?.includes("transactionid"), `the second waits for the first's transaction on the index (${waitedOn})`);
   g.open();
   ok200(await first);
   const res = await second;
   assert.ok(["source_metric_target_taken", "try_again"].includes(res.body.error), res.text);
-  refused(await activate(b, W.pa.cookie), 409, "source_metric_target_taken");
+  refused(await activate(b, W.pa2.cookie), 409, "source_metric_target_taken");
   assert.deepEqual([await statusOf(a), await statusOf(b)], ["active", "needs_review"]);
 });
 
-test("13. concurrency, in both orders: two activations of one mapping; an activation and a disable of one version; an activation against a canonical new version (M3-0) and an archive (R2); an activation against a conversion retirement; an activation against a level removal as the older Metrics catalog writes it (its route refuses a canonical variable, 409 canonical_variable_read_only, without waiting); an activation against L2, L4 and L5 on the same revision", async () => {
+test("13. concurrency, in both orders, the second request always by another admin (so it waits on a row or a transaction, never on the per-user advisory lock): two activations of one mapping; an activation and a disable of one version; an activation against a canonical new version (M3-0) and an archive (R2); an activation against a conversion retirement; an activation against a level removal as the older Metrics catalog writes it (its route refuses a canonical variable, 409 canonical_variable_read_only, without waiting); an activation against L2, L4 (both orders) and L5 (both orders) on the same revision", async () => {
   // Two activations of two versions of one mapping (T3 serializes them).
   for (const order of [0, 1]) {
     const f = await field();
@@ -798,8 +857,8 @@ test("13. concurrency, in both orders: two activations of one mapping; an activa
     const held = holdM2("mapping_version_activate");
     const first = activate(v[order], W.pa.cookie);
     await until(() => held.state.entered, "the first activation holds its locks");
-    const second = activate(v[1 - order], W.pa.cookie);
-    assert.ok(await someoneWaits(), "the second waits on the mapping");
+    const second = activate(v[1 - order], W.pa2.cookie);
+    assert.ok(await waitsOnRows(), "the second waits on the mapping");
     held.g.open();
     ok200(await first);
     assert.deepEqual(refused(await second, 409, "active_version_changed").current, { activeVersionId: v[order].versionId });
@@ -810,8 +869,8 @@ test("13. concurrency, in both orders: two activations of one mapping; an activa
     const held = holdM2("mapping_version_activate");
     const act = activate(v, W.pa.cookie);
     await until(() => held.state.entered, "held");
-    const dis = disable(v, W.pa.cookie, { expectedStatus: "needs_review" });
-    assert.ok(await someoneWaits());
+    const dis = disable(v, W.pa2.cookie, { expectedStatus: "needs_review" });
+    assert.ok(await waitsOnRows());
     held.g.open();
     ok200(await act);
     assert.deepEqual(refused(await dis, 409, "version_status_changed").current, { status: "active" });
@@ -821,8 +880,8 @@ test("13. concurrency, in both orders: two activations of one mapping; an activa
     const held = holdM2("mapping_version_disable");
     const dis = disable(v, W.pa.cookie, { expectedStatus: "needs_review" });
     await until(() => held.state.entered, "held");
-    const act = activate(v, W.pa.cookie);
-    assert.ok(await someoneWaits());
+    const act = activate(v, W.pa2.cookie);
+    assert.ok(await waitsOnRows());
     held.g.open();
     ok200(await dis);
     assert.deepEqual(refused(await act, 409, "version_not_submitted").current, { status: "disabled" });
@@ -832,13 +891,13 @@ test("13. concurrency, in both orders: two activations of one mapping; an activa
     const cVar = await variable(W.pa);
     const v = await version(await field(), { target: cVar });
     const send = () => (write === "version"
-      ? post(`/variables/${cVar.id}/versions`, W.pa.cookie, { requestKey: key(), expectedCurrentVersionId: cVar.currentVersionId, unit: "s", dailyAggregationMethod: "avg" })
-      : post(`/variables/${cVar.id}/archive`, W.pa.cookie, { requestKey: key(), reason: "Retire." }));
+      ? post(`/variables/${cVar.id}/versions`, W.pa2.cookie, { requestKey: key(), expectedCurrentVersionId: cVar.currentVersionId, unit: "s", dailyAggregationMethod: "avg" })
+      : post(`/variables/${cVar.id}/archive`, W.pa2.cookie, { requestKey: key(), reason: "Retire." }));
     const held = holdM2("mapping_version_activate");
     const act = activate(v, W.pa.cookie);
     await until(() => held.state.entered, "held");
     const change = send();
-    assert.ok(await someoneWaits(), `the ${write} waits on the definition`);
+    assert.ok(await waitsOnRows(), `the ${write} waits on the definition`);
     held.g.open();
     ok200(await act);
     refused(await change, 409, "variable_pinned");
@@ -850,8 +909,8 @@ test("13. concurrency, in both orders: two activations of one mapping; an activa
       ? post(`/variables/${cVar2.id}/versions`, W.pa.cookie, { requestKey: key(), expectedCurrentVersionId: cVar2.currentVersionId, unit: "s", dailyAggregationMethod: "avg" })
       : post(`/variables/${cVar2.id}/archive`, W.pa.cookie, { requestKey: key(), reason: "Retire." });
     await until(() => heldVar.state.entered, "the change holds its locks");
-    const act2 = activate(v2, W.pa.cookie);
-    assert.ok(await someoneWaits(), "the activation waits on the definition");
+    const act2 = activate(v2, W.pa2.cookie);
+    assert.ok(await waitsOnRows(), "the activation waits on the definition");
     heldVar.g.open();
     assert.ok([200, 201].includes((await change2).status));
     refused(await act2, 409, write === "version" ? "canonical_version_changed" : "target_not_active");
@@ -868,7 +927,7 @@ test("13. concurrency, in both orders: two activations of one mapping; an activa
     try {
       const sMin = await conversion("s", "min");
       const retiring = retireConversion(retirer, sMin.id, W.pa.id);
-      assert.ok(await someoneWaits(), "the retirement waits for the activation's FOR SHARE");
+      assert.ok(await waitsOnRows(), "the retirement waits for the activation's FOR SHARE");
       held.g.open();
       ok200(await act);
       await retiring;
@@ -883,7 +942,7 @@ test("13. concurrency, in both orders: two activations of one mapping; an activa
       await writer.query("begin");
       await retireConversion(writer, (await conversion("s", "min")).id, W.pa.id);
       const act2 = activate(v2, W.pa.cookie);
-      assert.ok(await someoneWaits(), "the activation waits for the retirement");
+      assert.ok(await waitsOnRows(), "the activation waits for the retirement");
       await writer.query("commit");
       refused(await act2, 409, "conversion_unavailable");
     } finally {
@@ -913,7 +972,7 @@ test("13. concurrency, in both orders: two activations of one mapping; an activa
         await remover.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 and scope_level = 'component'`, [lVar.id]);
         await remover.query("commit");
       })().then(() => null, (error) => error);
-      assert.ok(await someoneWaits(), "the removal waits for the activation");
+      assert.ok(await waitsOnRows(), "the removal waits for the activation");
       held.g.open();
       ok200(await act);
       assert.match((await removed)?.message ?? "", /an active mapping version applies to this level; disable it first/);
@@ -930,7 +989,7 @@ test("13. concurrency, in both orders: two activations of one mapping; an activa
       await remover2.query(`select 1 from training_load.metric_definitions where id = $1 for update`, [lVar2.id]);
       await remover2.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 and scope_level = 'component'`, [lVar2.id]);
       const act2 = activate(v2, W.pa.cookie);
-      assert.ok(await someoneWaits(), "the activation waits for the removal");
+      assert.ok(await waitsOnRows(), "the activation waits for the removal");
       await remover2.query("commit");
       refused(await act2, 409, "level_not_allowed");
     } finally {
@@ -945,8 +1004,8 @@ test("13. concurrency, in both orders: two activations of one mapping; an activa
     const held = holdM2("mapping_version_activate");
     const act = activate(v, W.pa.cookie);
     await until(() => held.state.entered, "held");
-    const l5 = post(`/fields/${f.fieldId}/revisions/${f.revId}/retire`, W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "Stopped." });
-    assert.ok(await someoneWaits(), "L5 waits for the activation");
+    const l5 = post(`/fields/${f.fieldId}/revisions/${f.revId}/retire`, W.pa2.cookie, { requestKey: key(), expectedState: "active", reason: "Stopped." });
+    assert.ok(await waitsOnRows(), "L5 waits for the activation");
     held.g.open();
     ok200(await act);
     assert.deepEqual(ok200(await l5).disabledVersions, { system: 1, club: 0 }, "L5 disables the version the activation made active");
@@ -958,8 +1017,8 @@ test("13. concurrency, in both orders: two activations of one mapping; an activa
     const heldL = holdLifecycle();
     const l5 = post(`/fields/${f.fieldId}/revisions/${f.revId}/retire`, W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "Stopped." });
     await until(() => heldL.state.entered, "L5 holds its locks");
-    const act = activate(v, W.pa.cookie);
-    assert.ok(await someoneWaits(), "the activation waits for L5");
+    const act = activate(v, W.pa2.cookie);
+    assert.ok(await waitsOnRows(), "the activation waits for L5");
     heldL.g.open();
     ok200(await l5);
     assert.deepEqual(refused(await act, 409, "version_not_submitted").current, { status: "disabled" });
@@ -971,12 +1030,25 @@ test("13. concurrency, in both orders: two activations of one mapping; an activa
     const held = holdM2("mapping_version_activate");
     const act = activate(v, W.pa.cookie);
     await until(() => held.state.entered, "held");
-    const l4 = post(`/fields/${f.fieldId}/revisions/${r2}/replace`, W.pa.cookie, { requestKey: key(), reason: "Corrected.", expectedActiveRevisionId: f.revId });
-    assert.ok(await someoneWaits(), "L4 waits for the activation");
+    const l4 = post(`/fields/${f.fieldId}/revisions/${r2}/replace`, W.pa2.cookie, { requestKey: key(), reason: "Corrected.", expectedActiveRevisionId: f.revId });
+    assert.ok(await waitsOnRows(), "L4 waits for the activation");
     held.g.open();
     ok200(await act);
     assert.deepEqual(ok200(await l4).disabledVersions, { system: 1, club: 0 });
     assert.equal(await statusOf(v), "disabled");
+  }
+  {
+    const f = await field();
+    const r2 = await revisionOf(f, 2);
+    const v = await version(f);
+    const heldL = holdLifecycle();
+    const l4 = post(`/fields/${f.fieldId}/revisions/${r2}/replace`, W.pa.cookie, { requestKey: key(), reason: "Corrected.", expectedActiveRevisionId: f.revId });
+    await until(() => heldL.state.entered, "L4 holds its locks");
+    const act = activate(v, W.pa2.cookie);
+    assert.ok(await waitsOnRows(), "the activation waits for L4");
+    heldL.g.open();
+    assert.deepEqual(ok200(await l4).disabledVersions, { system: 1, club: 0 });
+    assert.deepEqual(refused(await act, 409, "version_not_submitted").current, { status: "disabled" });
   }
   // L2 on a draft revision: a version pinned to it is never activated (revision_not_verified).
   {
@@ -985,8 +1057,8 @@ test("13. concurrency, in both orders: two activations of one mapping; an activa
     const heldL = holdLifecycle();
     const l2 = post(`/fields/${f.fieldId}/revisions/${f.revId}/retire`, W.pa.cookie, { requestKey: key(), expectedState: "draft", reason: "Abandoned." });
     await until(() => heldL.state.entered, "L2 holds its locks");
-    const act = activate(v, W.pa.cookie);
-    assert.ok(await someoneWaits(), "the activation waits for L2");
+    const act = activate(v, W.pa2.cookie);
+    assert.ok(await waitsOnRows(), "the activation waits for L2");
     heldL.g.open();
     ok200(await l2);
     assert.deepEqual(refused(await act, 409, "version_not_submitted").current, { status: "disabled" });
@@ -1031,7 +1103,7 @@ test("14. the pinned step (Q5, Q7): L4 and L5 disable an active pinned version -
   assert.equal(lifecycle.PINNED_DISABLE_REASON, PINNED_REASON);
 });
 
-test("15. the COMMIT through A1's replacement: a lost answer is verified by the request key (200, verified_after_commit_error, N named); an unverifiable one is 503 outcome_unknown and the same key then answers the committed state; a definite refusal at COMMIT by v43's G1 (a seam splits the operation) is the sanitized 500 with nothing written and the key free; a right lost during the write is the identical 404 with nothing written", async () => {
+test("15. the COMMIT through A1's replacement: a lost answer is verified by the request key (200, verified_after_commit_error, N named); an unverifiable one is 503 outcome_unknown and the same key then answers the committed state; a definite refusal at COMMIT by v43's G1 (a seam splits the operation) is the sanitized 500 with nothing written and the key free; a right lost during A1 or A2, and the club archived during A1 or A2, is the identical 404 with nothing written", async () => {
   const f = await field();
   const n = await activeVersion(f);
   const n1 = await version(f);
@@ -1090,6 +1162,41 @@ test("15. the COMMIT through A1's replacement: a lost answer is verified by the 
   });
   isNotFound(await activate(dv, lost2.cookie), "a lost right before a state refusal");
   service.setMappingRightsHoldForTests(null);
+  // A2: a right lost during the write is the identical 404, nothing written, the key free.
+  const lost3 = await platformAdmin();
+  const ev = await activeVersion(await field());
+  const kLost = key();
+  service.setMappingRightsHoldForTests(async () => {
+    const other = new pg.Client({ connectionString: db.url });
+    await other.connect();
+    await other.query(`update public.user_global_roles set is_active = false where user_id = $1`, [lost3.id]);
+    await other.end();
+  });
+  isNotFound(await disable(ev, lost3.cookie, { requestKey: kLost, expectedStatus: "active" }), "A2: a right lost during the write");
+  service.setMappingRightsHoldForTests(null);
+  assert.equal(await statusOf(ev), "active");
+  assert.equal((await auditOf(`request_key = $1`, [kLost])).length, 0);
+  assert.equal(ok200(await disable(ev, W.pa.cookie, { requestKey: kLost, expectedStatus: "active" })).replayed, false, "the key is free");
+  // The club archived during A1 and A2 on its version: the identical 404, nothing written.
+  const cf = await field();
+  const cv = await version(cf, { owner: W.caA, target: await variable(W.caA) });
+  const archiveClubMidWrite = async () => {
+    const other = new pg.Client({ connectionString: db.url });
+    await other.connect();
+    await other.query(`update public.clubs set is_active = false where id = $1`, [W.clubA]);
+    await other.end();
+  };
+  try {
+    service.setMappingRightsHoldForTests(archiveClubMidWrite);
+    isNotFound(await activate(cv, W.paA.cookie), "A1: the club archived during the write");
+    await k.query(`update public.clubs set is_active = true where id = $1`, [W.clubA]);
+    isNotFound(await disable(cv, W.paA.cookie, { expectedStatus: "needs_review" }), "A2: the club archived during the write");
+  } finally {
+    service.setMappingRightsHoldForTests(null);
+    await k.query(`update public.clubs set is_active = true where id = $1`, [W.clubA]);
+  }
+  assert.equal(await statusOf(cv), "needs_review", "nothing written");
+  assert.equal((await auditOf(`mapping_version_id = $1 and to_status in ('active', 'disabled')`, [cv.versionId])).length, 0);
 });
 
 test("16. v43 by direct SQL, each with its fixed text: G1 refuses a replacement row without the replaced version's row in its operation (none, in another operation, with another reason) and an activation row whose operation disabled the mapping's active version; G2 refuses a disable row with another reason, a performed_at that is not now(), and a transition time in the future or before the transaction; the rows the service writes pass", async () => {
@@ -1153,7 +1260,9 @@ test("16. v43 by direct SQL, each with its fixed text: G1 refuses a replacement 
 });
 
 test("17. no answer of this file carries a disable reason, a trigger text or SQL; the log carries no reason and no trigger text", async () => {
-  const reasons = ["Replaced by the corrected factor.", "Stopped from draft.", "Stopped from needs_review.", "Stopped from active.", "Replace again."];
+  // Reasons of at least eight characters: a one-letter reason ("x") occurs in any text.
+  const reasons = [...sentReasons].filter((reason) => reason.length >= 8);
+  assert.ok(reasons.length >= 8, `the helpers sent the suite's reasons (${reasons.length})`);
   for (const text of responses) {
     for (const reason of reasons) assert.ok(!text.includes(reason), `an answer carries a reason: ${text.slice(0, 120)}`);
     assert.ok(!/source_metric_audit:|source_metric_mapping_versions:|select |insert into/i.test(text), `an answer carries database text: ${text.slice(0, 120)}`);

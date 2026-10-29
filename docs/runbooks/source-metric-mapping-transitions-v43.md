@@ -36,12 +36,17 @@ The same day as the merge and deploy:
 
 1. Run `docs/runbooks/source-metric-mapping-transitions-v43-preflight.sql` one block at a time. Every value must be the
    expected one:
+   - block 1 shows PostgreSQL 15 or later;
    - block 2 shows v42 as the last migration, with its checksum;
    - block 3 shows no v43 object and v35's `source_metric_actor_basis`;
-   - **block 4 is a hard assertion: no active mapping version and no activation.** Anything else: stop, do not merge,
-     report;
+   - **block 4 is a hard assertion: `safe_to_merge = true` (no active mapping version and no activation).** Anything
+     else: stop, do not merge, report;
    - block 5 is information only: record its numbers; the post-check shows them again;
-   - blocks 8 and 9 must show a quiet moment.
+   - block 6 shows the migrator's role may create the two functions and the two triggers, and every trigger of T3, T4
+     and T8 enabled;
+   - block 7 shows no actor default;
+   - block 8 must show a quiet moment on T3, T4 and T8; block 9 no running GPEXE check or identity load
+     (`advisory_locks` is information only).
 2. Stop and report on any other value.
 
 The merge needs the owner's order naming the pull request, the exact file
@@ -67,8 +72,10 @@ active pinned version - which cannot exist, since nothing can activate one befor
    at a time:
    - block 1 compares the recorded checksum with the one in the file;
    - block 2 compares both function bodies and `source_metric_actor_basis` by md5;
-   - block 3 shows both triggers, enabled, of the specified kind;
-   - block 4 shows the numbers of preflight block 5 again, with no active version and no activation.
+   - block 3 shows both triggers, enabled, of the specified kind, each calling its v43 function with its WHEN clause;
+   - block 4: no active version and no activation (hard); the other counts equal to or above preflight block 5;
+   - block 5 shows no actor default and every trigger of T3, T4 and T8 enabled;
+   - block 6 shows no lock left on T3, T4 or T8.
 
 ## If v43 refuses at deploy
 
@@ -81,13 +88,18 @@ the old server keeps serving.
 
 v43 has no fail-closed data check: it adds checks of rows written after it, and changes no row.
 
+**Only the database's clock.** G2 refuses a transition's audit row whose `performed_at` is not `now()` or whose
+version's `*_at` lies outside its own transaction. Every writer uses `clock_timestamp()` and the column default; a
+future writer must too, and a backfill of historical transition rows would switch the T8 triggers off for its own
+transaction, as for v35.
+
 ## When a block of the post-check differs
 
 - **Block 1 or 2:** the recorded file or a function is not the repository's. Stop and report; change nothing.
 - **Block 3:** a trigger is missing, disabled or of another kind. Stop and report; change nothing. Do not enable or
   create a trigger by hand.
-- **Block 4:** a number differs from the preflight. Stop and report which; v43 writes no row, so a difference means a
-  write happened between the two checks.
+- **Block 4:** an active version or an activation exists, or a count is below the preflight's. Stop and report which.
+  A count above the preflight's is an ordinary M2 write between the two checks (a mapping, a version, a submission).
 
 ## Rollback
 

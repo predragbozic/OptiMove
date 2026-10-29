@@ -45,12 +45,14 @@ select
     where n.nspname = 'training_load' and p.proname = 'source_metric_actor_basis') as actor_basis_is_v35;
 
 -- 4. HARD ASSERTIONS: no mapping version is active and no activation (T5)
---    exists - nothing before phase 7b could write either. If either value is
---    not 0: STOP, do not merge, report the value.
---    Expected: active_versions = 0, activations = 0.
+--    exists - nothing before phase 7b could write either. If safe_to_merge is
+--    not true: STOP, do not merge, report the values.
+--    Expected: active_versions = 0, activations = 0, safe_to_merge = true.
 select
   (select count(*) from training_load.source_metric_mapping_versions where status = 'active') as active_versions,
-  (select count(*) from training_load.source_metric_mapping_activations) as activations;
+  (select count(*) from training_load.source_metric_mapping_activations) as activations,
+  (select count(*) from training_load.source_metric_mapping_versions where status = 'active') = 0
+    and (select count(*) from training_load.source_metric_mapping_activations) = 0 as safe_to_merge;
 
 -- 5. Informational - record the numbers; the post-check (block 4) shows them
 --    again, unchanged (v43 writes no row).
@@ -101,13 +103,12 @@ select
                          'training_load.source_metric_audit'::regclass)) as table_locks,
   (select count(*) from pg_stat_activity where datname = current_database() and state like 'idle in transaction%' and pid <> pg_backend_pid()) as idle_in_transaction;
 
--- 9. No M2 write is running: every source-metric administration write holds a
---    per-user advisory lock for its transaction (and the migrator its own), so
---    no other session holds an advisory lock in this database; no GPEXE check
---    and no identity load is running either.
---    Expected: advisory_locks = 0, running_checks = 0, running_identity_loads = 0.
---    A non-zero advisory_locks that is gone a few seconds later was a short
---    write, not a blocker.
+-- 9. No GPEXE check and no identity load is running. advisory_locks is
+--    information only: every source-metric write and many other requests hold
+--    a transaction-level advisory lock for a moment, and v43 does not wait on
+--    one (block 8 is the lock that matters).
+--    Expected: running_checks = 0, running_identity_loads = 0; advisory_locks
+--    any value (record it).
 select
   (select count(*) from pg_locks l
     where l.pid <> pg_backend_pid() and l.locktype = 'advisory'

@@ -387,6 +387,9 @@ after every earlier T8 trigger (`…_v35_actor_guard`, `…_v37_revision_guard`)
   - the rollback would restore both v35 bodies, and the post-check would compare their md5;
   - its tests: an archived club still refuses a mapping create, a version create, a submit and an activation by direct
     SQL, and v36 and v41 writes too.
+- **As built, the database's clock only:** G2 makes an application-supplied timestamp, or an explicit `performed_at`,
+  a refusal at the audit insert. Every writer uses `clock_timestamp()` and the column default; a backfill of historical
+  transition rows would switch the T8 triggers off for its own transaction, as for v35.
 - **What v43 does not change:**
   - v34's forward-only status machine: "a future back to draft needs a new rule" (K);
   - v34's checks of an activation;

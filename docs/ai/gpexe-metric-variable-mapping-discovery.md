@@ -3361,34 +3361,51 @@ file and its sha256, with the production preflight the same day:
   `club_archived` covers an active club version and says "A submitted or active mapping version pinned to this
   revision belongs to an archived club, whose versions no one may change; the revision is not retired while the club
   is archived."; `activation_open` stays a refusal.
-- **Scripts:** `docs/runbooks/source-metric-mapping-transitions-v43-rollback.sql` (the refusals of section 7, the T8
-  lock before its checks, the two triggers and functions dropped, the record removed; no row changed),
-  `…-preflight.sql` (nine blocks; block 4 is the hard assertion), `…-postcheck.sql` (six blocks) and the runbook
-  `source-metric-mapping-transitions-v43.md`.
+- **Scripts:** `docs/runbooks/source-metric-mapping-transitions-v43-rollback.sql` (the refusals of section 7; the T8
+  lock in `ACCESS EXCLUSIVE` before its checks, the mode its `DROP TRIGGER`s need, so no lock is upgraded; the two
+  triggers and functions dropped, the record removed; no row changed), `…-preflight.sql` (nine blocks; block 4 the hard
+  assertion `safe_to_merge`; block 9's `advisory_locks` information only), `…-postcheck.sql` (six blocks; block 3 also
+  proves each trigger calls its v43 function with its `WHEN`; block 4 hard only for no active version and no
+  activation, the other counts may rise with ordinary M2 writes) and the runbook
+  `source-metric-mapping-transitions-v43.md`. G2 accepts only the database's clock: a future writer uses
+  `clock_timestamp()` and the column default, and a backfill of historical transition rows would switch the T8 triggers
+  off for its own transaction, as for v35.
 - **Tests:** `backend/tests/source-metric-mapping-transitions-7b.test.mjs` (disposable; a rehearsal database through
   v42 and a behaviour database through v43; 17 tests): the preflight's every value and block 4 counting what it must
   stop on; v43 through the runner (exactly its two functions, two triggers and the constraint trigger's row; the
   post-check's every value); each rollback refusal; the rollback back to v42's exact catalog and v43 again; A1 plain,
-  A1 replacement (N's row before the keyed row, by heap position) and A2 from each status, with replays and
-  `request_key_reused`; the answer order and every body rule; the information hiding of section 6; every A1 refusal;
-  decision 9; the allowlist and the per-owner race on the index; concurrency in both orders (two activations of one
-  mapping; activation and disable; activation against M3-0's new version and R2's archive; against a conversion
-  retirement by direct SQL; against a level removal; against L2, L4 and L5); the pinned step for active versions,
-  `club_archived` and `activation_open`; the COMMIT (verified, `outcome_unknown` then replayed, a definite refusal by
-  G1 through a seam - the sanitized `500`, nothing written, the key free - and a right lost during the write, before a
-  state refusal too); G1 and G2 by direct SQL with their fixed texts; no reason or database text in any answer or log
-  line. Updated: the v39 suite's pinned-step test (an active pinned version is now disabled, its row from `active`),
-  the v42 suite's check that v42 was the last test migration, the 7a architecture test (the gate's import), the M2
-  architecture test's title, and the test migration list (v43 last). **Mutations:** 34, each killed by the test that
-  names its rule - the gate and its place before the body (both routes), the gate admitting a club admin, the owner
-  filter, `expectedActiveVersionId`, `expectedStatus`, a reason without a replacement, A2's reason, the replacement
-  order, the keyed row last, the replay deriving `replaced`, both open-activation refusals, the right checked again
-  and the state refusal after it, both `23505` mappings, the pinned step's active disable, its real `from_status`, its
-  UPDATE's statuses and `club_archived` for an active version, each v43 branch (G1's replacement and activation
-  branches, its reason and its operation; G2's reason, `performed_at`, and the lower and the upper time bound
-  separately) and the five rollback refusals. Two of G1's conditions are not mutated, because no write can reach
-  them: "another version of the same mapping" (v35 allows one row per version and target status) and "by the same
-  user" (v35 makes every row's user the transaction's acting user, who must be the disabled version's own).
+  A1 replacement (N's row before the keyed row, by the INSERTs' command ids, `cmin`) and A2 from each status, with
+  replays and `request_key_reused`; the router's `401` without a session; the answer order and every body rule; the
+  information hiding of section 6 (a platform admin in a team workspace included; an inactive user has no session,
+  `401`; the replay of an activation, a replacement and a disable from another workspace); every A1 refusal;
+  decision 9; the allowlist; concurrency in both orders, **the second request always by another platform admin**, so
+  it waits on a row or a transaction and never on `runWrite`'s per-user advisory lock (the test asserts the waiter's
+  `pg_locks.locktype` is not `advisory`): the per-owner index race (the second activation passes the plain pre-read,
+  waits on the first's `transactionid` and answers `source_metric_target_taken` through the `23505` mapping), two
+  activations of one mapping, activation and disable, activation against M3-0's new version and R2's archive, against
+  a conversion retirement by direct SQL, against a level removal, against L2, L4 and L5 (L4 and L5 in both orders);
+  the pinned step for active versions, `club_archived` and `activation_open`; the COMMIT (verified, `outcome_unknown`
+  then replayed, a definite refusal by G1 through a seam - the sanitized `500`, nothing written, the key free); a
+  right lost during A1 (before a state refusal too) and during A2, and the club archived during A1 and A2 - the
+  identical `404`, nothing written; G1 and G2 by direct SQL with their fixed texts; no reason sent by the suite's
+  helpers, and no database text, in any answer or log line. Updated: the v39 suite's pinned-step test (an active
+  pinned version is now disabled, its row from `active`), the v42 suite's check that v42 was the last test migration,
+  the 7a architecture test (the gate's import), the M2 architecture test's title, and the test migration list (v43
+  last).
+- **Mutations:** 39 run, 38 killed by the test that names their rule - the gate and its place before the body (both
+  routes), the gate admitting a club admin, the owner filter, `expectedActiveVersionId`, `expectedStatus`, a reason
+  without a replacement, A2's reason, the replacement order, the keyed row last, the replay deriving `replaced`, both
+  open-activation refusals, the right checked again in A1 and in A2, the state refusal after the right, the right
+  check's archived club, both `23505` mappings, A1's T3 lock (without it two activations of one mapping no longer
+  serialize) and A1's revision lock (without it an activation against L4 / L5 deadlocks: the v34 trigger then locks
+  the revision after T3), the pinned step's active disable, its real `from_status`, its UPDATE's statuses and
+  `club_archived` for an active version, each v43 branch (G1's replacement and activation branches, its reason and
+  its operation; G2's reason, `performed_at`, and the lower and the upper time bound separately) and the five rollback
+  refusals. **One survives as equivalent:** without the plain pre-read for `source_metric_target_taken`, the
+  per-owner index answers the same code through the `23505` mapping (the pre-read is an optimization, the index the
+  guarantee). Two of G1's conditions are not mutated, because no write can reach them: "another version of the same
+  mapping" (v35 allows one row per version and target status) and "by the same user" (v35 makes every row's user the
+  transaction's acting user, who must be the disabled version's own).
 - **The level removal through the older Metrics API** (the *Nezavisni revizor*'s LOW-1): that API refuses every write
   to a canonical variable (C98, `409 canonical_variable_read_only`) before it takes any lock, and every mapping target
   is a system or club variable, so it can never remove a level of a mapping target. The race is tested as that

@@ -32,8 +32,8 @@
 --   psql -v ON_ERROR_STOP=1 -f source-metric-mapping-transitions-v43-rollback.sql
 -- (the script carries its own BEGIN and COMMIT, so no --single-transaction).
 -- After a refusal the transaction is aborted and nothing is changed. Waits are
--- bounded: a transaction that holds the audit table makes this script fail
--- after 5 s.
+-- bounded: a transaction that holds the audit table (a read included) makes
+-- this script fail after 5 s.
 begin;
 set local lock_timeout = '5s';
 
@@ -54,9 +54,10 @@ begin
   end if;
 end $$;
 
--- The table lock before the checks: no audit row is written, and no trigger of
--- T8 changes, until the COMMIT.
-lock table training_load.source_metric_audit in share row exclusive mode;
+-- The table lock before the checks, in the mode the two DROP TRIGGERs need
+-- (ACCESS EXCLUSIVE), so no lock is upgraded later: no audit row is read or
+-- written, and no trigger of T8 changes, until the COMMIT.
+lock table training_load.source_metric_audit in access exclusive mode;
 
 do $$
 declare
