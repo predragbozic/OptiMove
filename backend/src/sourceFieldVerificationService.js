@@ -74,7 +74,7 @@ const TEXT = {
   bound_unit_not_allowed: "This revision has no bound: sourceBoundUnit is not taken.",
   operator_required: "This revision is an event threshold: boundOperator is confirmed together with the meaning.",
   zone_operator_required: "This revision is a zone: boundOperator (between or >=) is confirmed together with the meaning.",
-  invalid_zone_operator: "A zone takes between (a closed zone) or >= (the open top zone).",
+  invalid_zone_operator: "A zone is either a closed zone (between) or the open top zone (>=).",
   operator_not_allowed: "This revision has no bound: boundOperator is not taken.",
   revision_retired: "The revision is retired; it is never changed.",
   unit_already_verified: "The unit of this revision is already confirmed; a correction is a new revision.",

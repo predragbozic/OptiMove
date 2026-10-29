@@ -82,8 +82,8 @@ export const OPERATOR_LABEL = { ">=": "At least (>=)", ">": "More than (>)", "<=
 // between, the open top zone >=; a field holds one shape of zone.
 export const ZONE_OPERATORS = Object.freeze(["between", ">="]);
 export const ZONE_OPERATOR_LABEL = {
-  between: "Between its lower and upper bound — a closed zone (between)",
-  ">=": "At least its lower bound — the open top zone (>=)",
+  between: "Has an upper limit — a closed zone (between)",
+  ">=": "Has no upper limit — the open top zone (>=)",
 };
 // A confirmed or chosen operator in the words of its choice, by the
 // revision's kind (the detail and the last question say it the same way).
@@ -225,7 +225,7 @@ const CODE_TEXT = {
 };
 // The two operator texts of a zone revision (the form's kind; v42).
 const ZONE_CODE_TEXT = {
-  invalid_operator: "Not saved: a zone takes between (a closed zone) or >= (the open top zone).",
+  invalid_operator: "Not saved: a zone is either a closed zone (between) or the open top zone (>=).",
   operator_required: "Not saved: this revision is a zone, so its operator is confirmed together with the meaning. The revision is read again.",
 };
 export function sourceFieldCodeText(info, form = null) {

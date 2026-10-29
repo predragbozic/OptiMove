@@ -3220,15 +3220,15 @@ The contract is the separate document `docs/ai/phase5-zone-model-contract.md` (p
   - comments on both functions naming v42, C102 and C103. No table, column, constraint, index or trigger.
 - **F3** (`backend/src/sourceFieldVerificationService.js`): after the state and `meaning_already_verified`, a zone
   without `boundOperator` is `400 operator_required` and any other operator than `between` or `>=` is
-  `400 invalid_operator`, each with the zone's text ("A zone takes between (a closed zone) or >= (the open top
-  zone)."); an unknown operator is `400 invalid_operator` for every kind; the request hash keeps `source-fields/v1`;
+  `400 invalid_operator`, each with the zone's text ("A zone is either a closed zone (between) or the open top zone
+  (>=)."); an unknown operator is `400 invalid_operator` for every kind; the request hash keeps `source-fields/v1`;
   `verification_model_unresolved` is no longer answered.
 - **The meaning form** (`frontend/source-fields-{data,view,actions}.js`; contract section 5): *Confirm the meaning* is
   offered for a zone on the same terms as any other act (`meaningBlockedByZoneModel` and the "waits for a decision on
-  zones" texts are gone, and so is the code's sentence). A zone's form asks "Which zone does this field hold?" with two
-  radio choices and nothing preselected - "Between its lower and upper bound — a closed zone (between)" and "At least
-  its lower bound — the open top zone (>=)" - and the contract's sentence on separate fields and a choice saved for
-  good. The body carries `boundOperator` for a zone as for an event threshold. The last question names the operator in
+  zones" texts are gone, and so is the code's sentence). A zone's form asks "What kind of zone does this field hold?" with two
+  radio choices and nothing preselected - "Has an upper limit — a closed zone (between)" and "Has no upper limit — the
+  open top zone (>=)" - and the contract's sentence on separate fields (the wording of J7 sections 4 and 5 was amended
+  on the *Rukovodilac*'s word after the UX review of `0093afba`; the rule is unchanged). The body carries `boundOperator` for a zone as for an event threshold. The last question names the operator in
   the words of its choice for both kinds (phase 6's LOW note), the detail shows a confirmed operator the same way, and
   `invalid_operator` / `operator_required` read as the zone's own when the form is a zone's.
 - **Scripts:** `docs/runbooks/source-metric-zone-model-v42-rollback.sql` (section 3.4: the refusals, exactly the two
