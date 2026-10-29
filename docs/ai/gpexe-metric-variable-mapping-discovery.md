@@ -3273,9 +3273,9 @@ preflight's; the local OPTIMOVE database is untouched):
 The proposed ★★ contract is the separate document `docs/ai/phase7b-mapping-transitions-contract.md` (phase 7b of
 `docs/ai/metrics-core-plan.md`): the routes A1 (activate; with the version it names, the replacement of D6) and A2
 (disable), for an active platform admin in the mapping owner's workspace; the extension of the lifecycle's pinned step
-to an active version that O5 requires; and migration v43, whose guards (G1 always, G2 and G3 by the owner's answers)
-make the audit of a transition tell the truth. The owner's questions are Q1–Q6 of its section 9. Nothing of it is
-built.
+to an active version that O5 requires (for a club's active version, the owner's Q7); and migration v43, whose guards
+make the audit of a transition tell the truth (G1 always, G2 by Q2; G3 only as Q1's option (b), not recommended). The
+owner's questions are Q1, Q2, Q3, Q5, Q6 and Q7 of its section 9. Nothing of it is built.
 
 ---
 

@@ -172,12 +172,17 @@ Both routes are mounted in `backend/src/routes/sourceMetrics.js` with M2's conve
 **The order of the answers** (R3; the lifecycle routes' order):
 1. no session: the router's `401`;
 2. no admin context for the active workspace, or a caller who is not an active platform admin (a club admin, a team
-   coach, anyone else): the identical `404 {"error":"notFound"}`, **before the body is looked at**;
+   coach, anyone else): the identical `404 {"error":"notFound"}`, **before the body is looked at**. The gate is a new
+   helper (for example `mayTransitionMappings(ctx)`: basis `platform_admin`, in the platform or a club workspace), not
+   the lifecycle's `mayChangeRevisions`, which admits the platform workspace only (O1);
 3. a request without a JSON body: `415 jsonRequired`; a body that is not an object: `400 invalid_body`;
 4. a path id that is not a uuid: the identical `404`; then the body's shape: `400 invalid_body`;
 5. the request record (`409 request_key_reused`, or a replay);
 6. the locks, the version and its mapping (a version of another mapping, or a mapping of another owner than the
-   workspace's: the identical `404`), the right again (lost: the identical `404`), then the states below.
+   workspace's: the identical `404`);
+7. the states below are compared under the locks, but a state refusal is answered only after the right is confirmed
+   again (lost: the identical `404`), so a caller whose right was revoked meanwhile never sees `current`. This differs
+   on purpose from `submitVersion` (`sourceMetricMappingService.js:1250-1252`), which answers its state refusal first.
 
 | Code | When |
 |---|---|
@@ -204,9 +209,16 @@ Both routes are mounted in `backend/src/routes/sourceMetrics.js` with M2's conve
   parameters: the second waits on the first's row, and answers `try_again` if its lock bound ends first, or
   `source_metric_target_taken` after the first commits.
 - `23505` `source_metric_mapping_versions_one_active_per_mapping` → `active_version_changed`. It cannot race behind
-  the T3 lock; it is mapped as a backstop.
-- `23514` with exactly one of v34's transition texts → its code (each of the activation's refusals above, and "a
-  mapping version with an open activation is not disabled" → `activation_open`).
+  the T3 lock; it is mapped as a backstop. Its `current.activeVersionId` is read by a bounded read after the rollback,
+  as `createMapping` reads the existing mapping for `mapping_exists` (`sourceMetricMappingService.js:993-999`).
+- `23514` with exactly one of v34's transition texts → one code each:
+  - "the source revision must be active and verified" (line 1176) → `revision_not_verified`;
+  - "the canonical definition must be active with the pinned version current" (line 1181) → `canonical_version_changed`.
+    The one text covers both states; the service's own checks under the locks keep `target_not_active` and
+    `canonical_version_changed` apart, so the trigger is only the backstop;
+  - "a mapping version with an open activation is not disabled" (line 1202) → `activation_open`;
+  - the conversion, parameter and level texts of v34's shared check functions → the codes the version create already
+    maps them to (J1 row 7).
 - Every other database error is the sanitized `500`.
 
 **Answers:**
@@ -255,7 +267,7 @@ Both routes are mounted in `backend/src/routes/sourceMetrics.js` with M2's conve
   - `club_archived` (O7(ii)(a)) covers an active club version too, unless Q1 is answered otherwise. Its sentence
     changes, since no route restores a club (Q1);
   - `activation_open` stays a refusal until 7d;
-  - `version_active` and its sentence are removed.
+  - `version_active` and its sentence are removed, unless the alternative of Q5 or Q7 is chosen.
 - **Decision 9 stays as it is.** An active version keeps its canonical variable from getting a new version or being
   archived (`variable_pinned`) until the mapping version is disabled. That is the explicit order of D6: disable → new
   canonical version → new mapping version → activate.
@@ -359,7 +371,9 @@ after every earlier T8 trigger (`…_v35_actor_guard`, `…_v37_revision_guard`)
   - a new function, for example `source_metric_actor_may_disable_archived(p_actor, p_club)`, that is true only for
     an active platform admin and an archived club;
   - called only from the `disabled` branch of v35's T4 actor guard and the `to_status = 'disabled'` branch of v35's
-    T8 actor guard. So v43 would replace those two v35 function bodies, with no change to `source_metric_actor_basis`;
+    T8 actor guard. So v43 would replace those two v35 function bodies, with no change to `source_metric_actor_basis`.
+    It takes the acting user's role and user rows and the club row `FOR SHARE` in v35's order, so a change of the
+    club's state cannot race it;
   - its only caller would be the pinned step in the platform workspace. A2 cannot reach an archived club, because the
     club's workspace has no admin context; reaching it would need a service change and a C60 exception;
   - the rollback would restore both v35 bodies, and the post-check would compare their md5;
@@ -492,8 +506,9 @@ Each question has one recommendation and its consequence.
       can hold real data. Before 7d and M4 nothing reads it.
   - *(b):* G3 (section 7): a platform admin may disable an archived club's version from the pinned step only. v43 then
     replaces two v35 guard bodies.
-  - *(c):* archiving a club is refused while it holds a `needs_review` or `active` mapping version, so the case never
-    arises. This changes `DELETE /clubs/:id` (`backend/src/routes/organization.js`), outside this track.
+  - *(c):* archiving a club is refused while it holds a `needs_review` or `active` mapping version, so the case no
+    longer arises for a club archived after the change. This changes `DELETE /clubs/:id`
+    (`backend/src/routes/organization.js`), outside this track. A club archived before it stays as under (a).
 - **Q2. The audit row's reason and time against the version's columns** (K, from the v35 reviews).
   - *Recommended:* the database checks them (G2 in v43): the reason of a disable, and the time of every transition
     within its own transaction.
@@ -528,11 +543,12 @@ Each question has one recommendation and its consequence.
     stopped" requires.
   - *Consequence:*
     - a platform admin stops a club's live mapping without the club's admins acting;
-    - the club is not told (O7(iii) stays); its Mappings screen (phase 8) shows the version `disabled` with the fixed
-      reason;
+    - the club is not told (O7(iii) stays). Its Mappings screen (phase 8) shows the version `disabled` and when, not
+      why: the reason stays out of every answer (C63, R2). O7(iii)'s "with the fixed reason" does not hold under C63;
+      showing the fixed reason to the club would be a separate owner decision;
     - the answer carries counts only;
-    - after 7d and M4, the club's imports through that mapping stop until its admin, or a platform admin in the
-      club's workspace, activates a version on the new revision.
+    - after 7d and M4, the club's imports through that mapping stop until a platform admin, in the club's workspace,
+      activates a version on the new revision. The club's admin can only create and submit one (D6, R3).
   - *Alternative:* the pinned step refuses while a club's version is active (`version_active` with a count). A
     platform admin first disables it with A2 in the club's workspace, then retires the revision. A field could then be
     stopped only club by club.
@@ -559,10 +575,12 @@ Each question has one recommendation and its consequence.
   `target_not_active`, `conversion_unavailable`, `bound_conversion_unavailable`, `level_not_allowed` and
   `parameters_not_equivalent` keep their meaning.
 - **R6:** G1 is always in v43. It is the audit's own truth, independent of Q1 and Q2.
-- **R7:** what the request hash covers (section 5), and the two extensions of M2's machinery (section 1.3):
-  `insertRequestRecord` takes a `reason`, and the request lookup returns `operation_id`.
-- **R8:** the lifecycle's sentences: `version_active` is removed, and `club_archived` no longer says "restore the
-  club", since no route does.
+- **R7:** what the request hash covers (section 5), and the extensions of M2's machinery (section 1.3):
+  `insertRequestRecord` takes a `reason`; the request lookup returns `operation_id`; and N's audit row in a replacement,
+  which carries no `request_key` or `request_hash` (the constraint `source_metric_audit_request_pair`), has its own
+  insert, as the lifecycle's `disabledAuditRows` does.
+- **R8:** the lifecycle's sentences: `version_active` is removed (unless Q5's or Q7's alternative keeps it), and
+  `club_archived` no longer says "restore the club", since no route does.
 
 ---
 
@@ -588,4 +606,17 @@ The internal reviews of `484553c` (2026-10-29), all applied in this revision:
 | `security-reviewer` | NOT READY | HIGH F1: G3 would widen every guard that uses `source_metric_actor_basis` (v35, v36, v41) → as above, not recommended, with its tests. MEDIUM F2: no route restores a club → stated in 1.2 and Q1, with option (c). MEDIUM F3: the pinned step's widening to a club's active versions → Q7. LOW: the answer order (section 2), the replay through `writableVersion` and `operation_id` (section 5), the `23505` race, G1's limit, the `PIN_GUARD` line. |
 | `db-reviewer` | NOT READY | HIGH: Q7, as above. MEDIUM: G3 not implementable as stated → as above. MEDIUM: the conversion lock is one statement `order by id` → section 4. MEDIUM: G1 and G2 timing → G1 deferred holds the replaced-row check, G2 BEFORE compares only with the version, both triggers named. MEDIUM: the route test of a definite COMMIT refusal → section 8. LOW: `publicVersion` line; the `23505` mapping by index name; the lifecycle's code changes (section 3); the 404 before the body; the preflight's hard assertions; the post-check's trigger kind; the rollback's refusal of missing objects; Q4 moved out of the questions. |
 
-A narrow re-review of the changed sections (2, 3, 4, 5, 7, 8, 9) follows.
+The narrow re-reviews of `9639b27` (2026-10-29): `code-reviewer`, `db-reviewer` and `security-reviewer` each READY
+WITH NON-BLOCKING NOTES; every earlier finding closed. Their notes, applied in the next revision:
+- MEDIUM (security, N1): Q7's consequence named the club's admin as able to activate, and the reason as shown to the
+  club. Corrected;
+- LOW:
+  - the shared v34 text at line 1181 maps to one code;
+  - the backstop's `current` is read after the rollback;
+  - a state refusal comes after the right is confirmed (section 2, item 7);
+  - N's unkeyed audit row has its own insert (R7);
+  - Q1(c) covers future archives only;
+  - `version_active` stays if an alternative is chosen;
+  - the gate is a new helper, not `mayChangeRevisions`;
+  - G3 locks the club row in v35's order;
+  - the J8 pointer in the discovery document.
