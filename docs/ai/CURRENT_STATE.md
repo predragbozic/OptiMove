@@ -2770,15 +2770,11 @@ nothing imported is visible in the app.
 - PR #254 (the Data configuration visual proposal, documents only, merge commit `f4abd7c`, 22:02:19 UTC) is deployed
   with `f4abd7c`: at 23:50:34 – 23:50:37 UTC `/api/health` served `f4abd7c` with `ok: true` three times in a row (the
   executor's read; when that deploy started is not recorded here).
-- **Merged, not deployed yet** (production serves `f4abd7c`; the deploy is the owner's, by hand):
+- **Merged, not deployed by 23:50:37 UTC** (production then served `f4abd7c`):
   - PR #255 (the phase 5b acceptance, documents only, merge commit `82fbb3c`, 22:24:25 UTC);
   - PR #256 (Data configuration PR-1, no migration, merge commit `0e38ae9`, parents `82fbb3c` and `d0afe79`, 2026-10-28
     23:50:21 UTC). The executor merged it under the standing merge order, from exactly `d0afe79`, after the
     *Rukovodilac*'s GO on that head (its message queued at 23:40:01 UTC: no BLOCKER, HIGH or MEDIUM; two LOW).
-- **The owner's words on merges** (2026-10-28, in the *Rukovodilac*'s chat; the executor checked both turns, verbatim):
-  turn `727a680c` at 22:25:11 UTC, „Molim te nemoj me vise citati za merge. Uradio sam sada”, and turn `33a7447c` at
-  22:25:31 UTC, „Ne cimaj me vise za merge poslove”. They are recorded as facts only; the plan
-  (`docs/ai/metrics-core-plan.md`) is unchanged by them.
 - PR #158 (merge commit `0293b39`, merged 2026-10-12 16:12:25 UTC exactly from head `77ae78f`; the
   agent-efficiency rule, docs / rules only) is deployed: `/api/health` first served `0293b39` with
   `ok: true` at 16:13:15 UTC, then three times in a row (16:13:26, 16:13:36 and 16:13:46 UTC); without a
