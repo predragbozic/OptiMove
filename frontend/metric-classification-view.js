@@ -111,8 +111,8 @@ function renderCategoriesScreenHtml(s, tree, t, ctx, canCreate) {
   const locked = dropBlocked();
   return `
     <div class="dc-drag-board${locked ? " is-locked" : ""}">
-      <div class="dc-drag-categories">${renderCategoriesListHtml(tree, t, ctx, canCreate, targets)}</div>
       ${trayHtml(s.tray, targets, locked, ctx, dropStatusHtml(s.drop, locked))}
+      <div class="dc-drag-categories">${renderCategoriesListHtml(tree, t, ctx, canCreate, targets)}</div>
     </div>`;
 }
 
@@ -141,7 +141,7 @@ function trayHtml(tray, targets, locked, ctx, status) {
     ? "Drag a variable onto a category to add it there. Adding never moves it: it stays in any category it is already in."
     : "Create a category first, then drag variables onto it.";
   const other = club
-    ? "System variables are not listed here: to add one, open it under Variables, in System (reference), and choose Add to a category. That is also the way without a mouse."
+    ? "System variables are not listed here: to add one, open it under Variables, in System (reference), and choose Add to a category. Without a mouse, open any variable under Variables and choose Add to a category."
     : "Without a mouse: under Variables, open a variable and choose Add to a category.";
   return `
     <aside class="dc-tray" aria-labelledby="dc-tray-title">
@@ -181,6 +181,7 @@ function dropStatusHtml(drop, locked) {
   }
   if (drop.phase === "already") return line(`${x} is already in ${y}. Nothing was changed.`);
   if (drop.phase === "undone") return line(`${x} is no longer in ${y}.`);
+  if (drop.phase === "unchecked") return line(`The result was not checked. To see whether ${x} is in ${y}, open ${x} under Variables.`);
   if (drop.phase === "refused") return line(`${x} was not added to ${y}. ${escapeHtml(drop.text || "")}`, { role: "alert", warning: true });
   if (drop.phase === "undo-refused") return line(`Undo did not go through. ${escapeHtml(drop.text || "")} Open ${x} under Variables to see its categories.`, { role: "alert", warning: true });
   return "";

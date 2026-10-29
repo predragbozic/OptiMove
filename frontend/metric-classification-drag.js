@@ -91,7 +91,19 @@ function listStale(s) {
 // ---------------------------------------------------------------------------
 // The drop
 // ---------------------------------------------------------------------------
-export async function dropVariableOnCategory(variableId, categoryId, { render }) {
+// The screen is drawn anew on every step of a drop; the list of variables in
+// the tray keeps where it was scrolled, so the next variable stays in reach.
+function keepingTrayScroll(render) {
+  return () => {
+    const top = globalThis.document?.querySelector?.(".dc-tray-list")?.scrollTop || 0;
+    render();
+    const list = globalThis.document?.querySelector?.(".dc-tray-list");
+    if (list && top) list.scrollTop = top;
+  };
+}
+
+export async function dropVariableOnCategory(variableId, categoryId, { render: draw }) {
+  const render = keepingTrayScroll(draw);
   const s = variablesState();
   const ctx = variablesContext();
   if (!dragOffered(s, ctx) || dropBlocked()) return;
@@ -113,7 +125,8 @@ export async function dropVariableOnCategory(variableId, categoryId, { render })
 }
 
 // The undo of the last saved drop, while its 10 seconds last.
-export async function undoDrop({ render }) {
+export async function undoDrop({ render: draw }) {
+  const render = keepingTrayScroll(draw);
   const s = variablesState();
   const drop = s.drop;
   if (!drop || drop.phase !== "done" || !drop.linkId || Date.now() > drop.undoUntil || dropBlocked()) return;
@@ -124,7 +137,8 @@ export async function undoDrop({ render }) {
 }
 
 // Check result: the very same request again.
-export async function checkDrop({ render }) {
+export async function checkDrop({ render: draw }) {
+  const render = keepingTrayScroll(draw);
   const drop = variablesState().drop;
   if (!drop?.unconfirmed || drop.busy) return;
   drop.busy = true;
@@ -133,17 +147,20 @@ export async function checkDrop({ render }) {
 }
 
 // Closing a result that was not checked: what the screen shows is read again
-// where it can change (the list), and the result is named as unknown.
-export function dismissDrop({ render }) {
+// where it can change (the list), and the line in the tray names the result as
+// unknown (phase "unchecked"; nothing is pending any more).
+export function dismissDrop({ render: draw }) {
+  const render = keepingTrayScroll(draw);
   const s = variablesState();
   const drop = s.drop;
   if (!drop || drop.busy) return;
   clearUndoTimer();
   if (drop.unconfirmed) {
     listStale(s);
-    s.notice = `The result was not checked. To see whether ${drop.variableLabel} is in ${drop.categoryName}, open ${drop.variableLabel} under Variables.`;
+    s.drop = { variableId: drop.variableId, categoryId: drop.categoryId, variableLabel: drop.variableLabel, categoryName: drop.categoryName, phase: "unchecked" };
+  } else {
+    s.drop = null;
   }
-  s.drop = null;
   render();
 }
 
@@ -191,7 +208,7 @@ function savedDrop(s, drop, data) {
         undoTimer = setTimeout(expire, 500);
         return;
       }
-      if (boardShown()) dropRender?.();
+      if (boardShown() && dropRender) keepingTrayScroll(dropRender)();
     };
     undoTimer = setTimeout(expire, UNDO_MS);
   }

@@ -26,8 +26,15 @@ export function variableDragAvailable() {
 }
 
 // Whether a variable is being dragged right now (the screen waits with a
-// redraw until it is dropped or let go).
-export const variableDragInProgress = () => Boolean(draggedVariableId);
+// redraw until it is dropped or let go). Only a chip still marked on the page
+// counts: a chip drawn again during its drag never sends its dragend here, so
+// a drag left behind that way is forgotten.
+export function variableDragInProgress() {
+  if (!draggedVariableId) return false;
+  if (globalThis.document?.querySelector?.(`${CHIP_SELECTOR}.is-dragging`)) return true;
+  draggedVariableId = "";
+  return false;
+}
 
 function isVariableDrag(event) {
   return [...(event.dataTransfer?.types || [])].includes(VARIABLE_DRAG_TYPE);
