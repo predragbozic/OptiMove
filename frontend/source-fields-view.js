@@ -5,7 +5,8 @@
 // live only in data- attributes and under Technical details.
 import {
   EVIDENCE_EXAMPLE, EVIDENCE_LABEL, EVIDENCE_REF_MAX, OPERATORS, OPERATOR_LABEL, PARAMETER_KIND_LABEL, STATE_LABEL, VALUE_SHAPE_LABEL,
-  currentRevision, hasBound, levelsText, meaningActOffered, meaningBlockedByZoneModel, sourceFieldsContext, sourceFieldsState,
+  ZONE_OPERATORS, ZONE_OPERATOR_LABEL,
+  currentRevision, hasBound, levelsText, meaningActOffered, operatorWords, sourceFieldsContext, sourceFieldsState,
   unitActOffered,
 } from "./source-fields-data.js";
 import { LIMITS } from "./metric-variables-data.js";
@@ -64,8 +65,7 @@ function intro(ctx) {
     : "The fields a data source delivers, with the evidence behind each one. A platform administrator confirms their units and meanings in the platform workspace.";
 }
 function meaningSummary(revision) {
-  if (revision.meaningVerifiedAt) return "Meaning confirmed";
-  return revision.parameterKind === "zone_bounds" ? "Meaning waits for the zone decision" : "Meaning not confirmed";
+  return revision.meaningVerifiedAt ? "Meaning confirmed" : "Meaning not confirmed";
 }
 function unitSummary(revision) {
   if (!revision) return "No revision";
@@ -135,8 +135,10 @@ function boundUnitText(revision) {
 }
 function meaningText(revision) {
   if (revision.meaningVerifiedAt) return `Confirmed <span class="muted">${escapeHtml(fmtDate(revision.meaningVerifiedAt))}</span>`;
-  return revision.parameterKind === "zone_bounds" ? "Not confirmed yet: waits for a decision on zones" : "Not confirmed";
+  return "Not confirmed";
 }
+// The confirmed operator of a zone or an event threshold, in the words of its choice.
+const operatorText = (revision) => (revision.boundOperator ? escapeHtml(operatorWords(revision.parameterKind, revision.boundOperator)) : "Not confirmed");
 
 // `stale`: the field on the screen may be out of date (a read failed or runs),
 // so no act is offered on it.
@@ -147,7 +149,7 @@ function renderRevisionHtml(revision, field, ctx, stale) {
     ["Parameter", escapeHtml(PARAMETER_KIND_LABEL[revision.parameterKind] || revision.parameterKind || "")],
     ["Unit", unitText(revision)],
     ...(hasBound(revision) ? [[boundUnitLabel(revision), boundUnitText(revision)]] : []),
-    ...(revision.parameterKind === "event_threshold" ? [["Operator", revision.boundOperator ? escapeHtml(OPERATOR_LABEL[revision.boundOperator] || revision.boundOperator) : "Not confirmed"]] : []),
+    ...(hasBound(revision) ? [["Operator", operatorText(revision)]] : []),
     ["Meaning", meaningText(revision)],
     // References are long docs/ paths: each takes the whole row.
     ...(revision.unitEvidenceRef ? [["Unit evidence", code(revision.unitEvidenceRef), true]] : []),
@@ -156,7 +158,6 @@ function renderRevisionHtml(revision, field, ctx, stale) {
   ];
   const unitOffered = !stale && unitActOffered(ctx, field, revision);
   const meaningOffered = !stale && meaningActOffered(ctx, field, revision);
-  const zoneBlocked = !stale && meaningBlockedByZoneModel(ctx, field, revision);
   return `
     <li class="metric-variables-version source-fields-revision">
       <div class="source-fields-revision-head">
@@ -167,12 +168,10 @@ function renderRevisionHtml(revision, field, ctx, stale) {
       <dl class="metric-variables-facts">
         ${facts.map(([name, value, wide]) => `<div${wide ? ` class="source-fields-wide"` : ""}><dt>${name}</dt><dd>${value}</dd></div>`).join("")}
       </dl>
-      ${unitOffered || meaningOffered || zoneBlocked ? `<div class="metric-variables-actions source-fields-acts">
+      ${unitOffered || meaningOffered ? `<div class="metric-variables-actions source-fields-acts">
         ${unitOffered ? `<button class="plain-button" type="button" data-action="source-fields-act-open" data-act="unit" data-revision-id="${escapeAttr(revision.id)}">Confirm the unit</button>` : ""}
         ${meaningOffered ? `<button class="plain-button" type="button" data-action="source-fields-act-open" data-act="meaning" data-revision-id="${escapeAttr(revision.id)}">Confirm the meaning</button>` : ""}
-        ${zoneBlocked ? `<button class="plain-button" type="button" disabled aria-describedby="sf-zone-${escapeAttr(revision.id)}">Confirm the meaning</button>` : ""}
       </div>` : ""}
-      ${zoneBlocked ? `<p class="muted" id="sf-zone-${escapeAttr(revision.id)}">The meaning of a zone cannot be confirmed yet: how closed and open zones share one bound operator is not decided. <span class="source-fields-code-label">Code: ${code("verification_model_unresolved")}</span></p>` : ""}
     </li>`;
 }
 
@@ -244,6 +243,23 @@ function unconfirmedHtml(form) {
       </div>
     </div>`;
 }
+// A zone's operator (v42): required, nothing preselected; one of two shapes.
+function zoneOperatorHtml(form, locked) {
+  const errorId = form.errors.boundOperator ? " sf-err-boundOperator" : "";
+  return `
+      <fieldset class="metric-variables-fieldset source-fields-zone-operator">
+        <legend id="sf-legend-boundOperator">What kind of zone does this field hold?</legend>
+        <div role="radiogroup" aria-labelledby="sf-legend-boundOperator" aria-describedby="sf-hint-boundOperator${errorId}"${invalid(form, "boundOperator")}>
+          ${ZONE_OPERATORS.map((op) => `
+          <label class="source-fields-choice">
+            <input type="radio" name="sf-zone-operator" data-sf-field="boundOperator" value="${escapeAttr(op)}" ${form.draft.boundOperator === op ? "checked" : ""} ${locked ? "disabled" : ""}>
+            <span>${escapeHtml(ZONE_OPERATOR_LABEL[op])}</span>
+          </label>`).join("")}
+        </div>
+        <span class="muted" id="sf-hint-boundOperator">Closed zones and the open top zone are separate source fields. Choose what the evidence document shows.</span>
+        ${fieldError(form, "boundOperator")}
+      </fieldset>`;
+}
 const EVIDENCE_HINT = `A path under docs/ with one heading anchor, for example ${EVIDENCE_EXAMPLE}. The document must already be merged.`;
 const SOURCE_NAME_TEXT = (form) => `${SOURCE_LABEL[form.sourceSystem] || form.sourceSystem} · ${FAMILY_LABEL[form.apiFamily] || form.apiFamily}`;
 
@@ -262,8 +278,10 @@ function renderFormHtml(s) {
     submit = ["Confirm the unit", "Confirming..."];
   } else {
     const threshold = form.parameterKind === "event_threshold";
+    const zone = form.parameterKind === "zone_bounds";
     body = `
       <p class="metric-variables-field-note">The meaning itself is kept in the evidence document. Confirm only when that document holds this field's definition from GPEXE documentation or written GPEXE support.</p>
+      ${zone ? zoneOperatorHtml(form, locked) : ""}
       ${threshold ? `
       <label class="search-field"><span>When does GPEXE count an event?</span>
         <select data-sf-field="boundOperator" ${locked ? "disabled" : ""}${described(form, "boundOperator", "hint")}${invalid(form, "boundOperator")}>

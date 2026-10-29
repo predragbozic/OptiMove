@@ -46,7 +46,7 @@ const LIFECYCLE_FOLLOW = /^source_metric_audit: the audit row must follow its ow
 const ONE_ACT = /^source_metric_definition_versions: a revision is changed only by one unit or meaning verification$/;
 const OTHER_USER = /^source metric verification: the row names another user than the acting user$/;
 const MAY_NOT = /^source metric verification: the acting user may not verify a source metric$/;
-const ZONE = /^source_metric_definition_versions: the verification model of a zone is unresolved$/;
+const ZONE = /^source_metric_definition_versions: a zone takes the operator between or >=$/;
 const EVENT_OP = /^source_metric_definition_versions: an event threshold takes a one-sided operator$/;
 const FIRST_REF = /^source_metric_definition_versions: the first evidence reference is the completing act's own$/;
 const FOLLOW = /^source_metric_audit: the audit row must follow its own verification in the same transaction$/;
@@ -327,7 +327,7 @@ async function world() {
   W.paTeam = await platformAdmin();
   await k.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [W.paTeam.id, W.teamA]);
   await workspace(W.paTeam.id, "team", W.teamA);
-  W.seedBefore = await rows(k, `select * from training_load.source_metric_definition_versions where seed_migration is not null order by id`);
+  W.seedBefore = await rows(k, `select * from training_load.source_metric_definition_versions where seed_migration like 'migrations_v2/202610121000%' order by id`);
 }
 
 // ---------------------------------------------------------------------------
@@ -396,7 +396,7 @@ test("1. migration v37 on v36: three functions, two T2b triggers (one deferred),
   assert.deepEqual(await catalog(r), withAct, "the refusal changed nothing");
 });
 
-test("2. the database guards: a T2b revision INSERT or a state change without its lifecycle audit row is refused at COMMIT (v39), and no status or other column changes outside the two acts or together with one (23514); an act without the acting user, in another user's name, by a non-platform-admin or a revoked one is 42501; both acts in one update and a zone's meaning act are 23514; at COMMIT an act needs its audit row; an audit row must follow its own act (this transaction, its verifier, its reference), once; an action without a built chain is refused; a savepoint and an earlier transaction's setting fail closed; an event threshold's meaning is one-sided; the first evidence_ref is the completing act's own; one verification row per act, physically", async () => {
+test("2. the database guards: a T2b revision INSERT or a state change without its lifecycle audit row is refused at COMMIT (v39), and no status or other column changes outside the two acts or together with one (23514); an act without the acting user, in another user's name, by a non-platform-admin or a revoked one is 42501; both acts in one update and a zone's meaning act with an operator other than between or >= are 23514; at COMMIT an act needs its audit row; an audit row must follow its own act (this transaction, its verifier, its reference), once; an action without a built chain is refused; a savepoint and an earlier transaction's setting fail closed; an event threshold's meaning is one-sided; the first evidence_ref is the completing act's own; one verification row per act, physically", async () => {
   const f = await fixture();
   const draft = await fixture({ state: "draft" });
   // No new revision and no state change without its lifecycle audit row (v39; the
@@ -433,9 +433,9 @@ test("2. the database guards: a T2b revision INSERT or a state change without it
   await k.query(`select set_config('optimove.source_metric_actor', $1, false)`, [`${W.pa.id}:${lastXid}`]);
   refusedWith(await tx(null, (c) => unitAct(c, { revId: f.revId, by: W.pa.id })), "42501", NO_ACTOR);
   await k.query(`reset optimove.source_metric_actor`);
-  // A zone's meaning act, whatever the operator.
+  // A zone's meaning act takes between or >= only (v42, C103); no operator is refused too.
   const zone = await fixture({ kind: "zone_bounds" });
-  for (const operator of ["between", ">="]) refusedWith(await tx(W.pa.id, (c) => meaningAct(c, { revId: zone.revId, by: W.pa.id, operator })), "23514", ZONE);
+  for (const operator of [">", "<=", "<", null]) refusedWith(await tx(W.pa.id, (c) => meaningAct(c, { revId: zone.revId, by: W.pa.id, operator })), "23514", ZONE);
   // An event threshold's meaning takes a one-sided operator only.
   const ev = await fixture({ kind: "event_threshold" });
   refusedWith(await tx(W.pa.id, (c) => meaningAct(c, { revId: ev.revId, by: W.pa.id, operator: "between" })), "23514", EVENT_OP);
@@ -553,13 +553,13 @@ test("3. who may call: no session is 401; a coach, an athlete, a platform admin 
   const pa = await api(`/fields/${f.fieldId}`, { cookie: W.pa.cookie });
   assert.equal(pa.status, 200);
   assert.equal((await api(`/fields/${f.fieldId}?x=1`, { cookie: W.pa.cookie })).body.error, "invalid_query");
-  // A zone never tells a caller who may not verify that it exists: the identical 404, never its 409.
+  // A zone never tells a caller who may not verify that it exists: the identical 404, never its 400.
   const zone = await fixture({ kind: "zone_bounds" });
   for (const who of [W.coach, W.athlete, W.paTeam, W.caRevoked, W.caC, W.paRevoked, W.caA, W.paA]) {
     const res = await post(meaningPath(zone), who.cookie, meaningBody({ boundOperator: "==" }));
     assert.deepEqual([res.status, res.body], [404, { error: "notFound" }]);
   }
-  assert.equal((await post(meaningPath(zone), W.pa.cookie, meaningBody({ boundOperator: "==" }))).body.error, "verification_model_unresolved");
+  assert.equal((await post(meaningPath(zone), W.pa.cookie, meaningBody({ boundOperator: "==" }))).body.error, "invalid_operator");
 });
 
 test("4. the body: a JSON object only; an unknown or a server-derived field (actor, basis, status, time, state) is invalid_body; the requestKey is a UUID; the unit is a token (invalid_unit, the JavaScript rule agreeing with the database's); the evidence reference is a docs/ path with one anchor (invalid_evidence_ref, agreeing with the database's); the operator is one of the closed set, and one-sided for an event threshold; a bound unit exactly for a bound, an operator exactly for an event threshold; nothing is written", async () => {
@@ -648,23 +648,34 @@ test("6. an event threshold: the unit act needs the bound unit with it; the mean
   assert.equal((await post(unitPath(dec), W.pa.cookie, unitBody({ sourceUnit: "count", sourceBoundUnit: "m/s2" }))).body.revision.evidenceStatus, "verified");
 });
 
-test("7. a zone (C89): the unit act with its bound unit passes with a valid reference; the meaning act is 409 verification_model_unresolved whatever the operator (or none) or reference the body names - no boundOperator gets past it, nothing is written, and the zone never becomes verified", async () => {
+test("7. a zone (v42, C102, C103; C89 lifted): the unit act with its bound unit passes with a valid reference; the meaning act needs the operator of the zone's shape - between or >= (400 operator_required without one, 400 invalid_operator for >, <=, < and any other value, each with the zone's text, nothing written); after both acts the zone is verified with its operator", async () => {
   const zone = await fixture({ kind: "zone_bounds" });
   assert.equal((await post(unitPath(zone), W.pa.cookie, unitBody({ sourceUnit: "m", evidenceRef: "not a ref" }))).body.error, "invalid_evidence_ref");
   const u = await post(unitPath(zone), W.pa.cookie, unitBody({ sourceUnit: "m", sourceBoundUnit: "W/kg" }));
   assert.equal(u.status, 201, u.text);
   assert.deepEqual([u.body.revision.sourceUnit, u.body.revision.sourceBoundUnit, u.body.revision.evidenceStatus], ["m", "W/kg", "observed"]);
-  for (const body of [meaningBody(), meaningBody({ boundOperator: "between" }), meaningBody({ boundOperator: ">=" }), meaningBody({ boundOperator: "<" }),
-    meaningBody({ boundOperator: "==" }), meaningBody({ boundOperator: 3 }), meaningBody({ evidenceRef: "not a ref" })]) {
+  for (const [body, code] of [[meaningBody(), "operator_required"], [meaningBody({ boundOperator: ">" }), "invalid_operator"],
+    [meaningBody({ boundOperator: "<=" }), "invalid_operator"], [meaningBody({ boundOperator: "<" }), "invalid_operator"],
+    [meaningBody({ boundOperator: "==" }), "invalid_operator"], [meaningBody({ boundOperator: 3 }), "invalid_operator"],
+    [meaningBody({ boundOperator: "between", evidenceRef: "not a ref" }), "invalid_evidence_ref"]]) {
     const res = await post(meaningPath(zone), W.pa.cookie, body);
-    assert.deepEqual([res.status, res.body.error], [409, "verification_model_unresolved"], res.text);
+    assert.deepEqual([res.status, res.body.error], [400, code], res.text);
+    if (code !== "invalid_evidence_ref") assert.match(res.body.message, /zone/, "the zone's own text");
   }
-  const row = await revisionRow(zone);
+  let row = await revisionRow(zone);
   assert.deepEqual([row.meaning_verified_at, row.bound_operator, row.evidence_status], [null, null, "observed"]);
   assert.equal(await auditCount(zone), 1, "only the unit act");
-  // Before its unit, too.
+  const m = await post(meaningPath(zone), W.pa.cookie, meaningBody({ boundOperator: "between" }));
+  assert.equal(m.status, 201, m.text);
+  assert.deepEqual([m.body.revision.boundOperator, m.body.revision.evidenceStatus], ["between", "verified"]);
+  row = await revisionRow(zone);
+  assert.deepEqual([row.bound_operator, row.meaning_verified_by_user_id, row.evidence_status], ["between", W.pa.id, "verified"]);
+  assert.equal(await auditCount(zone), 2, "one audit row per act");
+  // Meaning first, with >=: no status until the unit (with its bound unit) is proven.
   const zone2 = await fixture({ kind: "zone_bounds" });
-  assert.equal((await post(meaningPath(zone2), W.pa.cookie, meaningBody({ boundOperator: "between" }))).body.error, "verification_model_unresolved");
+  const m2 = await post(meaningPath(zone2), W.pa.cookie, meaningBody({ boundOperator: ">=" }));
+  assert.deepEqual([m2.status, m2.body.revision.boundOperator, m2.body.revision.evidenceStatus], [201, ">=", "observed"]);
+  assert.equal((await post(unitPath(zone2), W.pa.cookie, unitBody({ sourceUnit: "m", sourceBoundUnit: "m/s" }))).body.revision.evidenceStatus, "verified");
 });
 
 test("8. state: a second act of the same kind is 409 *_already_verified with the current proof (a correction is a new revision); a retired revision is 409 revision_retired; a draft revision takes both acts; an unproven revision rises straight to verified with the completing act's reference", async () => {
@@ -880,7 +891,7 @@ test("15. the acting user is set from the session and left on no pool client; no
     }
   }
   for (const l of logLines) for (const id of [W.pa.id, W.pa2.id]) assert.ok(!l.includes(id), "no log line carries an acting user's id");
-  const seedAfter = await rows(k, `select * from training_load.source_metric_definition_versions where seed_migration is not null order by id`);
+  const seedAfter = await rows(k, `select * from training_load.source_metric_definition_versions where seed_migration like 'migrations_v2/202610121000%' order by id`);
   assert.equal(seedAfter.length, 9);
   assert.deepEqual(seedAfter, W.seedBefore, "the seeded revisions are untouched");
   for (const s of seedAfter) assert.deepEqual([s.source_unit, s.unit_verified_at, s.meaning_verified_at, s.evidence_status], [null, null, null, "observed"]);

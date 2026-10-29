@@ -18809,6 +18809,52 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
     justify-content: center;
   }
 }
+/* A zone's operator (v42): two choices, each a 44 px row that wraps. */
+.source-fields-zone-operator [role="radiogroup"] {
+  display: grid;
+  gap: 8px;
+}
+.source-fields-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.source-fields-choice input[type="radio"] {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  min-height: 0; /* .data-sources-form input sets 44 px for text fields */
+  margin: 0;
+  padding: 0;
+}
+/* A choice not made after a submit is marked on both rows. */
+.source-fields-zone-operator [role="radiogroup"][aria-invalid="true"] .source-fields-choice {
+  border-color: var(--danger);
+}
+/* While a write is in flight or its outcome is unconfirmed the choice is locked. */
+.source-fields-choice:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+.source-fields-choice:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+/* The focus shows on the whole choice, not as the text field's ring. */
+.source-fields-choice input[type="radio"]:focus {
+  box-shadow: none;
+}
+.source-fields-choice:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 /* Data configuration visual polish (PR-1): the built-in icons, the tiles that
    say what a thing is (a domain filled, a category outlined, a variable soft,

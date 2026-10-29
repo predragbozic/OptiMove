@@ -14,5 +14,8 @@ frontend/tests/support/** text eol=lf
 # on every checkout (no line-ending conversion); new files only, same reason as above.
 frontend/vendor/mediabunny/*.mjs -text
 frontend/vendor/echarts/** -text
+# Phase 5b (v42): the runbook SQL restores function bodies whose md5 the
+# preflight compares, so a CRLF checkout must not change them; new files only.
+docs/runbooks/source-metric-zone-model-v42*.sql text eol=lf
 # Binary media fixtures of the backend tests.
 backend/tests/fixtures/media/*.mp4 binary

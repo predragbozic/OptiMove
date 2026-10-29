@@ -626,6 +626,8 @@ order covers is merged under it.
 - **Red zone:** the production preflight, the merge (and so the deploy and the migration), and the production post-check
   of v42.
 - **Gate line: migration v42.** Its merge needs the owner's own order naming the pull request and v42.
+- **Status (2026-10-29):** implemented in an open pull request (branch `feature/phase5b-zone-model-v42`, from `0eb7e10`);
+  not merged, and v42 is applied to no persistent database. J7 "As built" in the discovery document records it.
 - **★★:** the owner approved the contract (J7) before any code and confirms the external review before the merge.
 - **Not in it:** the owner-run evidence and the first real confirmation of a zone field (a separate order, C97); 7f's
   rule "key → zone shape"; M4.

@@ -89,7 +89,7 @@ async function applyV41(url) {
 
 before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V41), "v41 is a test migration");
-  assert.equal(GPEXE_TEST_MIGRATIONS[GPEXE_TEST_MIGRATIONS.length - 1], V41, "v41 is the last test migration");
+  assert.equal(GPEXE_TEST_MIGRATIONS[GPEXE_TEST_MIGRATIONS.indexOf(V41) - 1], "202610271200_training_load_v40_source_metric_text_rules.sql", "v41 follows v40");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v41rb", migrations: UP_TO_V40 }),
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "p12b" }),

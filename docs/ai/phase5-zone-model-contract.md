@@ -237,7 +237,7 @@ transaction), and the old server keeps serving.
 |---|---|---|
 | A zone's meaning act | `409 verification_model_unresolved`, whatever the body | needs `boundOperator`: `between` or `>=` |
 | A zone without `boundOperator` | the `409` | `400 operator_required`, with a zone text |
-| A zone with `>`, `<=` or `<` | the `409` | `400 invalid_operator`, with a zone text: "A zone takes between (a closed zone) or >= (the open top zone)." |
+| A zone with `>`, `<=` or `<` | the `409` | `400 invalid_operator`, with a zone text: "A zone is either a closed zone (between) or the open top zone (>=)." (Wording amended in the phase 5b PR on the *Rukovodilac*'s word, after the UX review of `0093afba`; the rule is unchanged.) |
 | An unknown operator | `400 invalid_operator` for a plain field and an event threshold; for a zone, the `409` | `400 invalid_operator` for every kind |
 | An event threshold, a plain field | as J4 | unchanged |
 
@@ -263,11 +263,11 @@ transaction), and the old server keeps serving.
   in the platform workspace, an active field, a revision that is not retired, and no meaning yet.
   `meaningBlockedByZoneModel` and the "waits for a decision on zones" texts go.
 - **The operator choice for a zone**, required and with nothing preselected:
-  - "Between its lower and upper bound — a closed zone (between)";
-  - "At least its lower bound — the open top zone (>=)".
+  - "Has an upper limit — a closed zone (between)";
+  - "Has no upper limit — the open top zone (>=)".
 
-  The form says: "A closed zone and the open top zone are separate source fields. Choose what this field's evidence
-  shows. It is saved for good; a wrong choice cannot be mapped, and the correction is a new revision."
+  The choice's legend is "What kind of zone does this field hold?", and the form says: "Closed zones and the open top
+  zone are separate source fields. Choose what the evidence document shows." (Wording amended in the phase 5b PR on the *Rukovodilac*'s word, after the UX review of `0093afba`; the rule is unchanged.)
 - **The last question names the operator in words**, for a zone and for an event threshold. This also closes phase
   6's LOW note.
 - **The detail** shows a confirmed zone operator in the same words. The code text of `invalid_operator` depends on the
