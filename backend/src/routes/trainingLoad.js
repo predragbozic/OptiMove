@@ -4,7 +4,6 @@ import { pool, query } from "../db.js";
 import { resolveActiveWorkspace } from "../workspace.js";
 import {
   WEEKLY_PLAN_SESSION_FILTER_SQL,
-  athleteExtraFilterSql,
   canManageExternalScheduleInScope,
   canManagePlanTrainingLoadInScope,
   canResolvePlanOwnership,
@@ -1043,10 +1042,30 @@ function coachWorkspaceScopeSqlForWorkspace(workspace, req, alias, startIndex) {
 // filter is a UNION across kinds, not an AND.
 // ------------------------------------------------------------
 
-// The filter's union semantics (club OR team OR direct athlete, inside the
-// mandatory workspace scope) live in trainingLoadAccess.js's
-// athleteExtraFilterSql, imported above - moved there unchanged for the
-// central calendar (calendarQuery.js), which shares the same picker.
+// Correction (filter semantics): the picker is explicitly "Any mix of
+// clubs, teams and individual athletes" - within one kind, any selected
+// id (already true via `= any(...)`); ACROSS kinds, a union (club OR team
+// OR direct athlete), never an AND (which would routinely match nothing -
+// "athletes who are both in this club AND specifically this one person").
+// The whole union still sits inside the mandatory workspace scope (ANDed
+// with it), never instead of it - a coach can never widen their own
+// current-workspace scope via this filter, only narrow it.
+function athleteExtraFilterSql(alias, clubIds, teamIds, athleteIds, params) {
+  const conditions = [];
+  if (clubIds) {
+    params.push(clubIds);
+    conditions.push(`exists (select 1 from public.athlete_memberships am where am.athlete_id = ${alias}.id and am.membership_type = 'club' and am.status = 'active' and am.club_id = any($${params.length}::uuid[]))`);
+  }
+  if (teamIds) {
+    params.push(teamIds);
+    conditions.push(`exists (select 1 from public.athlete_memberships am where am.athlete_id = ${alias}.id and am.membership_type = 'team' and am.status = 'active' and am.team_id = any($${params.length}::uuid[]))`);
+  }
+  if (athleteIds) {
+    params.push(athleteIds);
+    conditions.push(`${alias}.id = any($${params.length}::uuid[])`);
+  }
+  return conditions.length ? ` and (${conditions.join(" or ")})` : "";
+}
 
 router.get("/weekly", async (req, res, next) => {
   try {

@@ -28,7 +28,7 @@ mounted in `backend/src/server.js` beside the other `requireAuth`-only readers (
 | `include=athletes` | adds the per-athlete rows of every item (section 2.6); default: ids and counts only | keeps a 62-day answer small |
 | Workspace | `resolveActiveWorkspace()` **once** per request; the same object scopes every kind | `backend/src/workspace.js`; the one-read discipline of `trainingLoad.js:1006-1047` |
 | **No write on read** (no domain write; the workspace fallback of `resolveActiveWorkspace()` may persist a preference, as on every route) | the service never calls `ensureCurrentExternalOccurrence*` (`backend/src/trainingLoadOccurrenceService.js:48, 117, 153`) nor `ensureCurrentOccurrence` (`backend/src/testsOccurrenceService.js:85`); schedule days without a generated occurrence are projected **in memory**, as Tests' week does | the TL calendar writes on read at `trainingLoad.js:1522, 1557`; Tests' pure projection `tests.js:1011-1024` |
-| Errors | `400` input, `403` no coach workspace / athlete account without a profile (as TL), `503 database_busy` from the global handler | `trainingLoad.js:1510-1511` |
+| Errors | `400` with a stable code in `error` and the sentence in `message` — `invalid_range`, `range_too_long`, `invalid_today`, `invalid_kinds`, `invalid_include`, `invalid_ids`; `403` no coach workspace / athlete account without a profile (as TL); `503 database_busy` from the global handler | `trainingLoad.js:1510-1511`; the newer routes' stable codes |
 
 Response:
 
@@ -84,7 +84,7 @@ hidden).
 | `slot` | `{ amPm: "AM"\|"PM"\|null, bta: "B"\|"T"\|"A"\|null, order: n }` for `planned`; `null` otherwise | `plan_sessions.am_pm`, `bta`, `session_order` |
 | `startTime` | `HH:MM` local or `null`: a planned session's `session_time`; an activity's `started_at` in its `timezone_snapshot`; a schedule's `opens_time` | K0 §4; no end time and no duration in K1 (K0 MEDIUM-3) |
 | `startsAt` | the instant, activities only | `activities.started_at` |
-| `teamIds` | the active team memberships of the item's athletes, within the workspace (an athlete in two teams puts the card in two teams, K0 §4); an activity card: its owner team | `public.athlete_memberships` |
+| `teamIds` | the team memberships of the item's athletes **on the item's day**, within the workspace (an athlete in two teams puts the card in two teams, K0 §4); an activity card: its owner team | `public.athlete_membership_periods` (v25) |
 | `athleteIds`, `athleteCount` | planned, external and test cards: the athletes of the item **within the caller's scope** (section 3), so a private coach never sees teammates. An activity card: **every canonical participant of a readable activity** (the activity belongs to the team and keeps its history: athletes who left the team stay listed, as on the activity detail) — except in the **athlete workspace**, which gets its own participation only (no teammate id, name, RPE or roster), the rule of the detail's athlete-self branch | — |
 | `expects` | section 2.4 | D15 |
 | `status` | section 2.5 | D14, D15 |
@@ -111,7 +111,7 @@ Nothing in K1 says that a **planned** session expects device data: no stored fac
 binding is a team fact, not a session fact), so it is not derived. K2's event types become the source of
 `expects`; the field's shape is chosen so they can replace this derivation without a contract change.
 
-### 2.5 `status` (D14) — one of `planned`, `done`, `awaiting_entry`, `not_opened`, `cancelled`, `none`
+### 2.5 `status` (D14) — one of `planned`, `done`, `awaiting_entry`, `missed`, `not_opened`, `cancelled`, `none`
 
 - `cancelled`: a cancelled schedule or occurrence (external, test).
 - `none`: `expects` is empty and the item has no roster with a measured source — a card without a status
@@ -121,8 +121,13 @@ binding is a team fact, not a session fact), so it is not derived. K2's event ty
   - `D >= T` and not met → `planned`;
   - `D < T` and not met → `awaiting_entry`.
 - A roster card (section 2.7) with a **measured source** (origin `api_import` / `source_import`, or an
-  effective measured value) and `attendance.needsState > 0` → `awaiting_entry` on any day; `needsState = 0`
-  → `done`.
+  effective measured value) and `attendance.needsState > 0` → `awaiting_entry` once the day has passed
+  (`planned` on the day itself); `needsState = 0` → `done`.
+- `missed`: the day has passed, the expectation is unmet, and **every** unanswered entry can no longer be
+  made — its assignment is in the terminal status `missed` (external and test assignments, v4 / v42) — so
+  the day never stays `awaiting_entry` forever; one entry still open keeps `awaiting_entry`. A planned
+  session's RPE has no terminal state (the athlete may answer later), so a planned group is never `missed`.
+  Per athlete the row reads `missed` too. K1b labels it.
 - An external or test day whose occurrence was never generated and `D < T` → `not_opened` (nobody could
   enter anything; never `awaiting_entry`); `D >= T` → `planned`.
 - **Never** `awaiting_entry` for a self-report activity (origin `planned_session` / `external_assignment`,
@@ -131,9 +136,10 @@ binding is a team fact, not a session fact), so it is not derived. K2's event ty
 
 ### 2.6 `include=athletes`
 
-Per item `athletes: [{ athleteId, name, teamIds, rpe: "submitted"|"missing"|"not_asked"|null,
-rosterState: <the roster read's state word>|null, planId, sessionId }]`, the same scope filter as
-`athleteIds`. Names through the same `coalesce(display_name, full_name, …)` the TL calendar uses
+Per item `athletes: [{ athleteId, name, teamIds, rpe: "submitted"|"missing"|"missed"|"not_asked"|null (planned,
+external), result: "completed"|"missing"|"missed"|"not_asked"|null (test), planId, sessionId, logicalSessionId
+(planned), assignmentId, assignmentStatus (external, test) }]`, the same scope filter as `athleteIds`. No
+roster state per athlete in K1a (K1b may ask for it through the roster read). Names through the same `coalesce(display_name, full_name, …)` the TL calendar uses
 (`trainingLoad.js:1632`). Off by default.
 
 ### 2.7 Attendance x/y — only where a roster exists
@@ -159,19 +165,27 @@ One `resolveActiveWorkspace()`, then per kind:
 | Workspace | Activities (own cards and `links.activityIds`) | Planned groups, external and test assignments (by athlete) | Projected schedule days (no occurrence yet) |
 |---|---|---|---|
 | platform | all (today's rule) | all | all |
-| **club** C | **D8: owned by C, or by an active team of C** (new) | athletes with an active club membership in C **or** an active team membership in a team of C (the TL calendar reads the club membership only, `trainingLoad.js:1011`; widened so a team member without a club row is not lost) | owned by C or a team of C, or targeting C, a team of C or one of those athletes |
-| team T (of club C) | owned by T (today's rule, D6) | active team members of T | owned by T, or targeting T, C or a member of T |
-| private coach | `owner_scope = 'user'`, own id (today's rule, D7) | `public.user_athletes` active (`trainingLoad.js:1023`) | owned by me, or targeting one of my athletes |
-| athlete | own canonical participation only, and of a shared activity only the own participant (never a teammate); filters ignored (as `trainingLoad.js:1510-1522`) | own plans, own assignments | own targets: schedules targeting the athlete, or an active team or club membership of theirs (never by owner) |
+| **club** C | **D8: owned by C, or by an active team of C** (new) | athletes with a club membership period in C **or** a team membership period in an active team of C **covering the item's day** (the TL calendar reads today's club membership only, `trainingLoad.js:1011`) | owned by C or a team of C, or targeting C, a team of C or one of those athletes (the athletes judged over the window) |
+| team T (of club C) | owned by T (today's rule, D6) | athletes with a team membership period in T covering the item's day | owned by T, or targeting T, C or a member of T (over the window) |
+| private coach | `owner_scope = 'user'`, own id (today's rule, D7) | `public.user_athletes` active (`trainingLoad.js:1023`; that relationship keeps no history, so it is today's) | owned by me, or targeting one of my athletes |
+| athlete | own canonical participation only, and of a shared activity only the own participant (never a teammate); filters ignored (as `trainingLoad.js:1510-1522`) | own plans, own assignments | own targets: schedules targeting the athlete, or a team or club membership of theirs within the window (never by owner) |
 | none / athlete account without profile | `403` | | |
 
-Plans are read by **membership** on the day, as Training Load and Coach Home do today, not by plan ownership
-— K0's Q-D, decided by the manager as decision 4 (section 8) inside D1–D15; the owner's external review of this
-pull request is asked to confirm it, since it means a club admin or team coach reads the session names, times
-and RPE state of a plan a private coach made for a dual-member athlete (test 20 pins the behaviour; the plan's
-own routes still answer that reader by their ownership rule). Switching later is one WHERE clause. The
-`clubIds` / `teamIds` / `athleteIds` filters narrow inside the scope (`athleteExtraFilterSql`); a projected
-schedule day whose targets leave nobody in the filter is not shown.
+Plans and assignments are read by **membership on the item's day** — the v25 periods
+(`public.athlete_membership_periods`, the same periods `training.activity_roster()` reads: a period covers the
+day when it began before the day's end and had not ended at its start), not by plan or schedule ownership —
+K0's Q-D, decided by the manager as decision 4 (section 8) inside D1–D15. So history does not change with the
+roster: an athlete who leaves a team stays on the cards of the days before they left and is on none after; a
+new member's earlier plans never appear on the team's past days (test 23). Training Load and Coach Home read
+today's membership instead; the difference is K1's. **What this means for a dual member**, honestly, for the
+owner's external review to confirm — the club admin and the team coach read, for an athlete who was theirs on
+that day, the session names, times and RPE state of **every** published plan of that athlete on that day,
+whoever made it: (1) a private coach's plan (test 20), (2) another team's plan for an athlete in two teams, (3)
+another club's plan for an athlete in two clubs. Activities are not read that way (owner scope, D8); the plan's
+own routes still answer such a reader by their ownership rule; `links.activityIds` of such a card carries only
+the activities the reader may open. Switching to plan ownership later is one WHERE clause. The `clubIds` /
+`teamIds` / `athleteIds` filters narrow inside the scope and follow the same day rule for club and team
+(`calendarAthleteFilterSql`); a projected schedule day whose targets leave nobody in the filter is not shown.
 
 **Exactly where D8 changes code** (reads only; every write path keeps `canManageActivityInScope`):
 
@@ -199,10 +213,12 @@ calendar read never answers `404` (a scope that sees nothing gets empty days); a
 
 - `backend/src/routes/calendar.js` — validation, the one workspace read, the answer.
 - `backend/src/calendarAccess.js` — the read scopes per workspace of section 3, built from
-  `activityScopeForWorkspace`, the new `activityReadScopeSqlForWorkspace`, its own athlete predicate (the
-  club branch is wider than `coachWorkspaceScopeSqlForWorkspace`'s, decision 5) and `athleteExtraFilterSql`,
-  which **moves** from `routes/trainingLoad.js:1055` into `backend/src/trainingLoadAccess.js` and is
-  imported back (no behaviour change; `/weekly` and `/calendar` keep calling it).
+  `activityScopeForWorkspace`, the new `activityReadScopeSqlForWorkspace`, and its own day-aware athlete
+  predicate and filter over the v25 periods (`periodCoversSql`; the club branch is wider than
+  `coachWorkspaceScopeSqlForWorkspace`'s, decision 5). The one thing shared with `routes/trainingLoad.js`
+  is `WEEKLY_PLAN_SESSION_FILTER_SQL`, moved into `backend/src/trainingLoadAccess.js` unchanged and imported
+  by both; the Training Load picker's own `athleteExtraFilterSql` stays where it was (it reads today's
+  membership, the calendar reads the day's).
 - `backend/src/calendarQuery.js` — the reads: one statement per kind for the window (planned sessions,
   activities with their links, external assignments and targets, test assignments and targets), the
   roster counts for the roster activities of the window in one statement, then grouping, folding, `expects`
@@ -252,6 +268,16 @@ point 1); the suite adds `plans.plans.builder_batch_id` to its own database befo
     the athlete's own projected schedule days; an external day with only excused assignments expects nothing;
     the self-report predicate follows v44's roster answer; the slot order of an item without a slot; the
     weekly-plan rule imported, not copied; a year outside 2000–2100 → 400.
+13. After the independent review (2026-10-30): D16 under every `kinds` filter — `kinds=activity` shows no RPE
+    activity of a training (the groups are read whenever activities are, and folded activities are never
+    emitted alone; a coach-made activity stays its own card); test 9 retargeted to a session no longer in the
+    answer (the plan taken back to a draft, an assignment outside the window); membership on the day (an athlete
+    who left yesterday is on the past card and not on the future one, the club still reads them by the club
+    membership; a new member's earlier plan is not on the team's past days, their later one is; the Team filter
+    follows); `missed` for external and test days whose unanswered entries are terminal, `awaiting_entry` while
+    one is still open; the roster wait only after the day (`deriveStatus`); the no-write guard compares a
+    content digest of thirteen tables, not counts; the statement count is asserted positive and equal across
+    1 session + 1 activity against 12 sessions + 2 RPE + 4 roster activities; every 400 carries its code.
 
 Also run and record: `training-load-calendar.test.mjs`, `training-activity.test.mjs`,
 `activity-roster-5a1.test.mjs`, `tests-weekly-calendar.test.mjs`; a failure not mine is reproduced on a
@@ -273,8 +299,10 @@ Trigger 3 (identity / linking) is not: K1 stores no link. No migration, so no `d
    the server's UTC date. The status enum `planned / done / awaiting_entry / not_opened / cancelled / none`
    stands: `done` = every expectation met, `none` = nothing was expected (K1b shows no badge), `awaiting_entry`
    only after the day passed with an unmet expectation or a roster (where one exists) that still needs a
-   state; a self-report activity is never awaiting. K1b decides the labels.
-4. **Q-D:** plans by **membership** on the day, as Training Load and Coach Home do, not by plan ownership.
+   state; a self-report activity is never awaiting. K1b decides the labels. After the independent review:
+   `missed` joins the enum (the day passed and every unanswered entry is terminal), and the roster wait too
+   starts only after the day.
+4. **Q-D:** plans by **membership on the item's day**, not by plan ownership — read from the v25 membership periods (the manager's reading of the plan as approved, after the independent review found the first build reading today's membership as Training Load and Coach Home do); the dual-member consequence in section 3 stays a point for the owner.
 5. **Club workspace** reads the plans of club members **and** of members of the club's teams (the spirit of D8).
 6. **Projected schedule days by target** (team / club / athlete in scope), not only by owner, the way
    `tests.js` projects them.
@@ -295,6 +323,8 @@ generator call; projection in memory); the SQL statement count stays independent
   unchanged here.
 - Local dates: a planned session is `plan_days.date`, an activity `occurred_local_date`, an assignment its
   own `local_scheduled_date`; `today` is the caller's date. No instant is converted on the server.
+- `public.user_athletes` (a private coach's athletes) keeps no history, so the private coach's scope is today's
+  relationship; `teams[].athleteCount` is today's active team membership count.
 - Recorded by the security review, outside this change: the existing `GET /api/training-load/calendar` still
   returns `participantCount` and the RPE requested / rated totals across every participant to an athlete
   (`routes/trainingLoad.js`, the activity query and its item); the new read gives an athlete their own

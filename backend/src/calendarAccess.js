@@ -5,26 +5,32 @@
 // trainingLoadAccess.js and trainingActivityAccess.js.
 //
 // Three predicates, one per family of rows:
-//   - athletes (plan sessions, assignments, targets): club → active members
-//     of the club or of one of the club's active teams (manager decision 5,
-//     the spirit of D8); team → active members of the team; private coach →
-//     the account's active public.user_athletes; platform → everyone;
-//     athlete → self.
+//   - athletes (plan sessions, assignments, targets), ON THE ITEM'S DAY
+//     (manager decision 4 as approved: "membership on the day"): the
+//     membership periods of migration v25 (public.athlete_membership_periods,
+//     the same periods training.activity_roster() reads) — club → a club
+//     period of the club or a team period of one of the club's active teams
+//     covering the day (manager decision 5, the spirit of D8); team → a team
+//     period of the team covering the day; private coach → the account's
+//     active public.user_athletes (no history exists for that relationship);
+//     platform → everyone; athlete → self. So an athlete who left a team
+//     stays on the cards of the days before they left and is on none after,
+//     and a new member's earlier plans never appear on the team's past days.
 //   - activities: trainingActivityAccess.js's READ scope (D8: a club reads
 //     the activities owned by its active teams as well as its own); athlete →
 //     own canonical participation.
 //   - schedules (the projected days of external and test schedules that have
 //     no generated occurrence yet): owned inside the scope, or targeting the
 //     scope's club, team or athletes (manager decision 6, the way
-//     routes/tests.js projects a week); for the athlete workspace, the
-//     schedules targeting the athlete, one of their active teams or clubs.
+//     routes/tests.js projects a week), the athletes judged over the window;
+//     for the athlete workspace, the schedules targeting the athlete, or one
+//     of their teams or clubs within the window.
 // Every predicate appends its bind parameters to the caller's `params`
 // array and returns a boolean SQL fragment (the convention of
 // activityScopeSqlForWorkspace). Nothing here writes.
 import { resolveActiveWorkspace } from "./workspace.js";
 import { query } from "./db.js";
 import { activityReadScopeSqlForWorkspace, activityScopeForWorkspace } from "./trainingActivityAccess.js";
-import { athleteExtraFilterSql } from "./trainingLoadAccess.js";
 
 // { type: "coach", workspace, activityScope, userId } for a coach-capable
 // workspace; { type: "athlete", workspace, athleteId, userId } for the
@@ -47,8 +53,18 @@ function clubTeamsSql(paramIndex) {
   return `(select t_c.id from public.teams t_c where t_c.club_id = $${paramIndex} and coalesce(t_c.is_active, true))`;
 }
 
-// `alias` is a public.athletes alias of the calling query.
-export function calendarAthleteScopeSql(ctx, alias, params) {
+// A membership period (alias `mp`) that overlaps the local days from
+// `fromExpr` to `toExpr` (both SQL date expressions; one day when equal):
+// the rule of training.activity_roster() for a session without a start
+// time — the period began before the end of the last day and had not ended
+// at the start of the first.
+export function periodCoversSql(mp, fromExpr, toExpr = fromExpr) {
+  return `${mp}.valid_from < ((${toExpr})::date + 1) and coalesce(${mp}.valid_to, 'infinity') > (${fromExpr})::date`;
+}
+
+// `alias` is a public.athletes alias of the calling query; `fromExpr` /
+// `toExpr` the day (or the window) the membership must cover.
+export function calendarAthleteScopeSql(ctx, alias, params, fromExpr, toExpr = fromExpr) {
   if (ctx.type === "athlete") {
     params.push(ctx.athleteId);
     return `${alias}.id = $${params.length}`;
@@ -58,13 +74,13 @@ export function calendarAthleteScopeSql(ctx, alias, params) {
   if (workspace.type === "club") {
     params.push(workspace.scopeId);
     const n = params.length;
-    return `exists (select 1 from public.athlete_memberships am_s where am_s.athlete_id = ${alias}.id and am_s.status = 'active'
-              and ((am_s.membership_type = 'club' and am_s.club_id = $${n})
-                or (am_s.membership_type = 'team' and am_s.team_id in ${clubTeamsSql(n)})))`;
+    return `exists (select 1 from public.athlete_membership_periods mp_s where mp_s.athlete_id = ${alias}.id and ${periodCoversSql("mp_s", fromExpr, toExpr)}
+              and ((mp_s.membership_type = 'club' and mp_s.club_id = $${n})
+                or (mp_s.membership_type = 'team' and mp_s.team_id in ${clubTeamsSql(n)})))`;
   }
   if (workspace.type === "team") {
     params.push(workspace.scopeId);
-    return `exists (select 1 from public.athlete_memberships am_s where am_s.athlete_id = ${alias}.id and am_s.membership_type = 'team' and am_s.status = 'active' and am_s.team_id = $${params.length})`;
+    return `exists (select 1 from public.athlete_membership_periods mp_s where mp_s.athlete_id = ${alias}.id and mp_s.membership_type = 'team' and mp_s.team_id = $${params.length} and ${periodCoversSql("mp_s", fromExpr, toExpr)})`;
   }
   if (workspace.type === "private_coach") {
     params.push(ctx.userId);
@@ -84,21 +100,22 @@ export function calendarActivityScopeSql(ctx, alias, params) {
 
 // `alias` is the schedule alias (owner_scope / owner_user_id / owner_club_id /
 // owner_team_id); `targetsTable` holds (schedule_id, target_kind,
-// target_athlete_id, target_team_id, target_club_id).
-export function calendarScheduleScopeSql(ctx, alias, targetsTable, params) {
+// target_athlete_id, target_team_id, target_club_id); `fromExpr` / `toExpr`
+// the window the athlete targets are judged over.
+export function calendarScheduleScopeSql(ctx, alias, targetsTable, params, fromExpr, toExpr) {
   if (ctx.type === "athlete") {
-    // Own targets only (plan section 3): the athlete directly, or an active
-    // team or club membership of theirs; never a schedule's owner.
+    // Own targets only (plan section 3): the athlete directly, or a team or
+    // club membership of theirs within the window; never a schedule's owner.
     params.push(ctx.athleteId);
     const n = params.length;
     return `exists (select 1 from ${targetsTable} tg where tg.schedule_id = ${alias}.id and (
               (tg.target_kind = 'athlete' and tg.target_athlete_id = $${n})
-           or (tg.target_kind = 'team' and exists (select 1 from public.athlete_memberships am_a where am_a.athlete_id = $${n} and am_a.membership_type = 'team' and am_a.status = 'active' and am_a.team_id = tg.target_team_id))
-           or (tg.target_kind = 'club' and exists (select 1 from public.athlete_memberships am_a where am_a.athlete_id = $${n} and am_a.membership_type = 'club' and am_a.status = 'active' and am_a.club_id = tg.target_club_id))))`;
+           or (tg.target_kind = 'team' and exists (select 1 from public.athlete_membership_periods mp_a where mp_a.athlete_id = $${n} and mp_a.membership_type = 'team' and mp_a.team_id = tg.target_team_id and ${periodCoversSql("mp_a", fromExpr, toExpr)}))
+           or (tg.target_kind = 'club' and exists (select 1 from public.athlete_membership_periods mp_a where mp_a.athlete_id = $${n} and mp_a.membership_type = 'club' and mp_a.club_id = tg.target_club_id and ${periodCoversSql("mp_a", fromExpr, toExpr)}))))`;
   }
   const workspace = ctx.workspace;
   if (workspace.type === "platform") return "true";
-  const athleteTarget = () => `(tg.target_kind = 'athlete' and exists (select 1 from public.athletes ax where ax.id = tg.target_athlete_id and ${calendarAthleteScopeSql(ctx, "ax", params)}))`;
+  const athleteTarget = () => `(tg.target_kind = 'athlete' and exists (select 1 from public.athletes ax where ax.id = tg.target_athlete_id and ${calendarAthleteScopeSql(ctx, "ax", params, fromExpr, toExpr)}))`;
   const withTargets = (owner, targets) => `(${owner} or exists (select 1 from ${targetsTable} tg where tg.schedule_id = ${alias}.id and (${targets})))`;
   if (workspace.type === "club") {
     params.push(workspace.scopeId);
@@ -122,24 +139,42 @@ export function calendarScheduleScopeSql(ctx, alias, targetsTable, params) {
   return "false";
 }
 
-// The optional Club / Team / Athletes filter: narrows inside the scope,
-// never widens it (the union semantics of athleteExtraFilterSql). `filters`
-// is { clubIds, teamIds, athleteIds } of UUID arrays or nulls.
-export function calendarAthleteFilterSql(alias, filters, params) {
-  return athleteExtraFilterSql(alias, filters.clubIds || null, filters.teamIds || null, filters.athleteIds || null, params);
+// The optional Club / Team / Athletes filter — the union semantics of the
+// Training Load picker ("any mix": club OR team OR direct athlete, inside
+// the mandatory scope, so it narrows and never widens), with the club and
+// team memberships judged on the item's day like the scope. `filters` is
+// { clubIds, teamIds, athleteIds } of UUID arrays or nulls; `alias` the
+// public.athletes alias. The result starts with " and (" or is "".
+export function calendarAthleteFilterSql(alias, filters, params, fromExpr, toExpr = fromExpr) {
+  const conditions = [];
+  if (filters.clubIds) {
+    params.push(filters.clubIds);
+    conditions.push(`exists (select 1 from public.athlete_membership_periods mp_f where mp_f.athlete_id = ${alias}.id and mp_f.membership_type = 'club' and mp_f.club_id = any($${params.length}::uuid[]) and ${periodCoversSql("mp_f", fromExpr, toExpr)})`);
+  }
+  if (filters.teamIds) {
+    params.push(filters.teamIds);
+    conditions.push(`exists (select 1 from public.athlete_membership_periods mp_f where mp_f.athlete_id = ${alias}.id and mp_f.membership_type = 'team' and mp_f.team_id = any($${params.length}::uuid[]) and ${periodCoversSql("mp_f", fromExpr, toExpr)})`);
+  }
+  if (filters.athleteIds) {
+    params.push(filters.athleteIds);
+    conditions.push(`${alias}.id = any($${params.length}::uuid[])`);
+  }
+  return conditions.length ? ` and (${conditions.join(" or ")})` : "";
 }
 
 // The same filter for an activity: at least one canonical participant
-// matches it (the rule of GET /api/training-load/calendar).
+// matches it on the activity's own day (the rule of GET
+// /api/training-load/calendar, with the day added).
 export function calendarActivityFilterSql(alias, filters, params) {
   if (!filters.clubIds && !filters.teamIds && !filters.athleteIds) return "";
-  const inner = athleteExtraFilterSql("af", filters.clubIds || null, filters.teamIds || null, filters.athleteIds || null, params);
+  const inner = calendarAthleteFilterSql("af", filters, params, `${alias}.occurred_local_date`);
   return ` and exists (select 1 from training.activity_participants ap_f join public.athletes af on af.id = ap_f.athlete_id where ap_f.activity_id = ${alias}.id and ap_f.merge_status = 'canonical'${inner})`;
 }
 
 // The teams the answer may name: the active club's active teams, or the one
 // team of a team workspace; [] for a private coach, a platform admin and an
-// athlete (section 1 of the plan).
+// athlete (section 1 of the plan). athleteCount is today's active team
+// membership count.
 export async function loadWorkspaceTeams(ctx) {
   if (ctx.type !== "coach") return [];
   const workspace = ctx.workspace;

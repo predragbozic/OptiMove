@@ -124,10 +124,18 @@ async function privateCoach(label = "private coach") {
   return withCookie(id);
 }
 async function addMembership({ athleteId, clubId, teamId = null, type = teamId ? "team" : "club", startsAt = "2026-01-01T00:00:00Z" }) {
-  await q(
-    `insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,$3,$4,'active',$5)`,
+  return (await q(
+    `insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,$3,$4,'active',$5) returning id`,
     [athleteId, clubId, teamId, type, startsAt],
-  );
+  ))[0].id;
+}
+// The statement Settings runs to archive a membership (organization.js); the
+// v25 trigger closes the membership's period at archived_at.
+async function archiveMembership(membershipId, archivedAt) {
+  await q(`update public.athlete_memberships set status = 'archived', archived_at = $2, updated_at = now() where id = $1`, [membershipId, archivedAt]);
+}
+async function teamMembershipId(athleteId, teamId) {
+  return (await q(`select id from public.athlete_memberships where athlete_id = $1 and team_id = $2 and membership_type = 'team'`, [athleteId, teamId]))[0].id;
 }
 // An athlete with an account (athlete workspace) and, when a team is given,
 // an active club and team membership since 2026-01-01.
@@ -370,9 +378,14 @@ const calendar = (cookie, { from = FROM, to = TO, extra = "" } = {}) => api(`/ap
 const itemsOn = (res, date) => (res.body.days?.find((d) => d.date === date) || { items: [] }).items;
 const allItems = (res) => (res.body.days || []).flatMap((d) => d.items);
 const ofKind = (items, kind) => items.filter((i) => i.kind === kind);
-async function rowCounts(tables) {
+// Row count plus a digest of every row's content per table: an UPDATE that
+// keeps the count changes the digest.
+async function rowDigests(tables) {
   const out = {};
-  for (const t of tables) out[t] = (await q(`select count(*)::int as n from ${t}`))[0].n;
+  for (const t of tables) {
+    const r = (await q(`select count(*)::int as n, coalesce(md5(string_agg(x::text, '|' order by x::text)), '') as d from ${t} x`))[0];
+    out[t] = `${r.n}:${r.d}`;
+  }
   return out;
 }
 
@@ -433,6 +446,18 @@ test("1. input: dates, the 62-day cap, today's drift, kinds, include and ids are
   assert.equal((await calendar(coach.cookie, { extra: "&kinds=planned,test" })).status, 200);
   assert.equal((await calendar(coach.cookie, { extra: "&include=everything" })).status, 400);
   assert.equal((await calendar(coach.cookie, { extra: "&teamIds=not-a-uuid" })).status, 400);
+  // Every 400 carries a stable code beside its sentence.
+  const codeOf = async (pathname) => (await api(pathname, { cookie: coach.cookie })).body;
+  assert.equal((await codeOf(`/api/calendar?to=${TO}`)).error, "invalid_range");
+  assert.equal((await codeOf(`/api/calendar?from=${TO}&to=${FROM}`)).error, "invalid_range");
+  assert.equal((await codeOf(`/api/calendar?from=${FROM}&to=${addDays(FROM, 63)}`)).error, "range_too_long");
+  assert.equal((await codeOf(`/api/calendar?from=${FROM}&to=${TO}&today=nope`)).error, "invalid_today");
+  assert.equal((await codeOf(`/api/calendar?from=${FROM}&to=${TO}&today=${addDays(TODAY, 3)}`)).error, "invalid_today");
+  assert.equal((await codeOf(`/api/calendar?from=${FROM}&to=${TO}&kinds=meeting`)).error, "invalid_kinds");
+  assert.equal((await codeOf(`/api/calendar?from=${FROM}&to=${TO}&include=everything`)).error, "invalid_include");
+  const ids = await codeOf(`/api/calendar?from=${FROM}&to=${TO}&athleteIds=x`);
+  assert.equal(ids.error, "invalid_ids");
+  assert.ok(typeof ids.message === "string" && ids.message.length > 0, "the sentence travels in message");
   const ok = await calendar(coach.cookie);
   assert.equal(ok.status, 200, ok.text);
   assert.equal(ok.body.from, FROM);
@@ -627,12 +652,19 @@ test("8. athlete workspace: own rows only, filters ignored, no teams; platform a
 // ---------------------------------------------------------------------------
 // Activity cards: self-report, imported, coach-made
 // ---------------------------------------------------------------------------
-test("9. a self-report activity on its own (kinds=activity) is done or none, never awaiting entry", async () => {
+test("9. a self-report activity whose session is no longer in the answer stands alone: done or none, never awaiting entry", async () => {
   const team = await teamWithBatch("a9", { n: 1 });
   const act = await submitRpe(team.athletes[0]);
+  // While the plan is published, kinds=activity shows NO separate card for
+  // the RPE activity (it belongs to the planned group, D16).
+  const folded = await calendar(team.coach.cookie, { extra: "&kinds=activity" });
+  assert.equal(itemsOn(folded, PAST).length, 0, "a linked RPE activity never stands beside its group");
+  // The coach takes the plan back to a draft: the group leaves the answer and
+  // the activity is its own card.
+  await q(`update plans.plans set status = 'draft' where id = $1`, [team.athletes[0].planId]);
   const res = await calendar(team.coach.cookie, { extra: "&kinds=activity" });
   const items = itemsOn(res, PAST);
-  assert.equal(items.length, 1);
+  assert.equal(items.length, 1, JSON.stringify(items));
   assert.equal(items[0].kind, "activity");
   assert.equal(items[0].key, `activity:${act.id}`);
   assert.equal(items[0].origin, "planned_session");
@@ -642,11 +674,13 @@ test("9. a self-report activity on its own (kinds=activity) is done or none, nev
   assert.equal(items[0].attendance, null, "v44: a self-report activity has no roster");
   assert.deepEqual(items[0].links.logicalSessionIds, [team.athletes[0].logicalSessionId]);
   // The coach's own materialization of one external assignment (no RPE yet)
-  // is a self-report activity too: never awaiting.
+  // whose assignment lies outside the window is a self-report activity on its
+  // own too: never awaiting.
   const coachOnly = await coachOf(team.teamId, "a9 coach 2");
-  const scheduleId = await makeExternalSchedule({ owner: { scope: "team", teamId: team.teamId }, createdBy: coachOnly.id, targets: [{ kind: "team", id: team.teamId }] });
-  const occurrenceId = await makeExternalOccurrence(scheduleId, PAST);
-  const assignmentId = await makeExternalAssignment(occurrenceId, team.athletes[0].athleteId, PAST);
+  const outside = addDays(FROM, -1);
+  const scheduleId = await makeExternalSchedule({ owner: { scope: "team", teamId: team.teamId }, createdBy: coachOnly.id, startDate: outside, targets: [{ kind: "team", id: team.teamId }] });
+  const occurrenceId = await makeExternalOccurrence(scheduleId, outside);
+  const assignmentId = await makeExternalAssignment(occurrenceId, team.athletes[0].athleteId, outside);
   const client = await appPool.connect();
   try {
     await client.query("begin");
@@ -764,10 +798,12 @@ test("12. external: one card per schedule and day with RPE x/y and the folded ac
   assert.equal(card.eventType, "match");
   assert.equal(card.startTime, "17:00");
   assert.deepEqual(card.expects, ["rpe"]);
-  assert.deepEqual(card.rpe, { asked: 2, submitted: 1 });
+  assert.deepEqual(card.rpe, { asked: 2, submitted: 1, missed: 0 });
   assert.equal(card.status, "awaiting_entry");
   assert.equal(card.projected, false);
   assert.deepEqual(card.links.activityIds, [folded.activityId], "the assignment's activity folds into the card");
+  const activitiesOnly = await calendar(team.coach.cookie, { extra: "&kinds=activity" });
+  assert.equal(itemsOn(activitiesOnly, PAST).some((it) => it.key === `activity:${folded.activityId}`), false, "kinds=activity never shows the folded activity on its own");
   assert.equal(card.links.externalOccurrenceId, occurrenceId);
   assert.deepEqual(card.athletes.map((x) => x.rpe).sort(), ["missing", "submitted"]);
   assert.deepEqual(card.teamIds, [team.teamId]);
@@ -831,7 +867,7 @@ test("13. test schedules: results x/y, awaiting entry until every result is in, 
   assert.equal(card.title, "WELLNESS");
   assert.equal(card.startTime, "07:00");
   assert.deepEqual(card.expects, ["test_result"]);
-  assert.deepEqual(card.results, { expected: 2, completed: 1 });
+  assert.deepEqual(card.results, { expected: 2, completed: 1, missed: 0 });
   assert.equal(card.status, "awaiting_entry");
   assert.equal(card.links.testOccurrenceId, occurrenceId);
   assert.deepEqual(card.athletes.map((x) => x.result).sort(), ["completed", "missing"]);
@@ -858,19 +894,24 @@ test("14. the read generates nothing: an active schedule whose current occurrenc
   const team = await teamWithBatch("nw14", { n: 2 });
   await makeExternalSchedule({ owner: { scope: "team", teamId: team.teamId }, createdBy: team.coach.id, startDate: TODAY, eventName: "Today's match", targets: [{ kind: "team", id: team.teamId }] });
   await makeTestSchedule({ owner: { scope: "team", teamId: team.teamId }, createdBy: team.coach.id, startDate: TODAY, targets: [{ kind: "team", id: team.teamId }] });
-  const tables = ["training_load.external_schedule_occurrences", "training_load.external_assignments", "tests.test_schedule_occurrences", "tests.test_assignments", "training.activities", "training_load.session_feedback"];
-  const before = await rowCounts(tables);
-  const res = await calendar(team.coach.cookie);
+  const tables = [
+    "training_load.external_schedules", "training_load.external_schedule_occurrences", "training_load.external_assignments",
+    "tests.test_schedules", "tests.test_schedule_occurrences", "tests.test_assignments",
+    "training.activities", "training.activity_participants", "training.activity_participant_session_links",
+    "training_load.session_feedback", "plans.plans", "plans.plan_sessions", "public.athlete_memberships",
+  ];
+  const before = await rowDigests(tables);
+  const res = await calendar(team.coach.cookie, { extra: "&include=athletes" });
   assert.equal(res.status, 200, res.text);
   assert.ok(itemsOn(res, TODAY).some((it) => it.kind === "external" && it.projected), "the day is projected, not generated");
   assert.ok(itemsOn(res, TODAY).some((it) => it.kind === "test" && it.projected));
-  assert.deepEqual(await rowCounts(tables), before, "no row of any schedule, assignment, activity or result table changed");
+  assert.deepEqual(await rowDigests(tables), before, "no row of any schedule, assignment, plan, membership, activity or result table changed (count and content digest)");
 
   // The control: the Training Load calendar writes on read.
   const tl = await api(`/api/training-load/calendar?dateFrom=${TODAY}&dateTo=${TODAY}`, { cookie: team.coach.cookie });
   assert.equal(tl.status, 200, tl.text);
-  const afterTl = await rowCounts(tables);
-  assert.ok(afterTl["training_load.external_schedule_occurrences"] > before["training_load.external_schedule_occurrences"], "the control generated the occurrence");
+  const afterTl = await rowDigests(tables);
+  assert.notEqual(afterTl["training_load.external_schedule_occurrences"], before["training_load.external_schedule_occurrences"], "the control generated the occurrence");
 
   // And statically: neither calendar module imports an occurrence generator.
   for (const file of ["calendarQuery.js", "calendarAccess.js", "routes/calendar.js"]) {
@@ -986,9 +1027,11 @@ test("17. athlete workspace on a shared team activity: own participation only â€
 
   // The RPE counts and the link ids are self-scoped as well: one team
   // activity on the batch day with both participants, each linked
-  // (confirmed) to their own planned session, B with an RPE result â€” A's
-  // card asks 1 (own), carries only A's logical session, and B's logical
-  // session id is nowhere in the answer.
+  // (confirmed) to their own planned session, B with an RPE result. A's plan
+  // is taken back to a draft, so for A the activity stands alone â€” A's card
+  // asks 1 (own), carries only A's logical session, and B's logical session
+  // id is nowhere in the answer. For the coach the activity folds into B's
+  // group (D16), which counts B's result.
   const shared = await makeActivity({ owner: { scope: "team", teamId: pair.teamId }, origin: "manual", name: "Shared", date: PAST });
   for (const athlete of [a, b]) {
     const participantId = await addParticipant(shared, athlete.athleteId, PAST);
@@ -1002,14 +1045,19 @@ test("17. athlete workspace on a shared team activity: own participation only â€
     `insert into training_load.session_feedback (athlete_id, session_date, logical_session_id, source, rpe, duration_minutes) values ($1,$2,$3,'planned',5,50)`,
     [b.athleteId, PAST, b.logicalSessionId],
   );
+  await q(`update plans.plans set status = 'draft' where id = $1`, [a.planId]);
   const aShared = await calendar(a.cookie, { extra: "&kinds=activity" });
   const sharedCard = itemsOn(aShared, PAST).find((it) => it.key === `activity:${shared}`);
-  assert.ok(sharedCard, "A is a participant, so A reads the activity");
+  assert.ok(sharedCard, "A is a participant whose session left the answer, so A reads the activity on its own");
   assert.deepEqual(sharedCard.rpe, { asked: 1, submitted: 0 }, "RPE counted for A alone, B's result not counted");
   assert.deepEqual(sharedCard.links.logicalSessionIds, [a.logicalSessionId]);
   assert.equal(aShared.text.includes(b.logicalSessionId), false, "B's logical session id is nowhere in A's answer");
-  const coachShared = await calendar(pair.coach.cookie, { extra: "&kinds=activity" });
-  assert.deepEqual(itemsOn(coachShared, PAST).find((it) => it.key === `activity:${shared}`).rpe, { asked: 2, submitted: 1 }, "the coach sees both (the control)");
+  const coachShared = await calendar(pair.coach.cookie, { extra: "&kinds=planned,activity" });
+  const bGroup = itemsOn(coachShared, PAST).find((it) => it.kind === "planned" && it.athleteIds.includes(b.athleteId));
+  assert.ok(bGroup, "the coach reads B's group");
+  assert.ok(bGroup.links.activityIds.includes(shared), "for the coach the shared activity folds into B's group (the control)");
+  assert.deepEqual(bGroup.rpe, { asked: 1, submitted: 1 });
+  assert.equal(itemsOn(coachShared, PAST).some((it) => it.key === `activity:${shared}`), false);
 });
 
 // ---------------------------------------------------------------------------
@@ -1137,10 +1185,15 @@ test("21. small rules: an external day whose only assignment is excused expects 
   const res = await calendar(team.coach.cookie, { extra: "&kinds=external" });
   const card = itemsOn(res, PAST).find((i) => i.key === `external:${scheduleId}:${PAST}`);
   assert.deepEqual(card.expects, []);
-  assert.deepEqual(card.rpe, { asked: 0, submitted: 0 });
+  assert.deepEqual(card.rpe, { asked: 0, submitted: 0, missed: 0 });
   assert.equal(card.status, "none");
 
-  const { isSelfReportCard, sortKey } = await import("../src/calendarQuery.js");
+  const { isSelfReportCard, sortKey, deriveStatus } = await import("../src/calendarQuery.js");
+  // A roster that still needs a state waits only once the day has passed.
+  const rosterCard = { cancelled: false, projected: false, selfReport: false, expects: ["device_data"], rpe: null, results: null, attendance: { roster: 4, present: 3, needsState: 1 }, measuredSource: true, date: TODAY };
+  assert.equal(deriveStatus(rosterCard, TODAY), "planned", "on the day itself the roster is not yet awaiting");
+  assert.equal(deriveStatus(rosterCard, addDays(TODAY, 1)), "awaiting_entry", "after the day it is");
+  assert.equal(deriveStatus({ ...rosterCard, attendance: { roster: 4, present: 4, needsState: 0 } }, TODAY), "done");
   assert.equal(isSelfReportCard({ origin: "planned_session" }, 1, false), true);
   assert.equal(isSelfReportCard({ origin: "planned_session" }, 1, true), false, "v44 says it has a roster (measured values): not a self-report card");
   assert.equal(isSelfReportCard({ origin: "planned_session" }, 2, false), false);
@@ -1158,14 +1211,21 @@ test("21. small rules: an external day whose only assignment is excused expects 
 // ---------------------------------------------------------------------------
 // Bounded statements
 // ---------------------------------------------------------------------------
-test("16. the number of SQL statements does not depend on the number of items", async () => {
+test("16. the number of SQL statements does not depend on the number of items (sessions, RPE activities, roster activities)", async () => {
   const small = await teamWithBatch("q16s", { n: 1 });
+  const smallManual = await makeActivity({ owner: { scope: "team", teamId: small.teamId }, origin: "manual", name: "One", date: PAST });
+  await addParticipant(smallManual, small.athletes[0].athleteId, PAST);
   const large = await teamWithBatch("q16l", { n: 4 });
   for (const athlete of large.athletes) {
     for (let i = 2; i <= 3; i += 1) await makeSession({ planId: athlete.planId, date: addDays(PAST, i - 2 + 1), name: `Session ${i}`, order: i });
   }
   await submitRpe(large.athletes[0]);
   await submitRpe(large.athletes[1]);
+  for (let i = 0; i < 4; i += 1) {
+    const manual = await makeActivity({ owner: { scope: "team", teamId: large.teamId }, origin: "manual", name: `Manual ${i}`, date: addDays(PAST, i % 3) });
+    await addParticipant(manual, large.athletes[i].athleteId, addDays(PAST, i % 3));
+    await addParticipant(manual, large.athletes[(i + 1) % 4].athleteId, addDays(PAST, i % 3));
+  }
   const original = appPool.query;
   let count = 0;
   appPool.query = function counted(...args) {
@@ -1176,12 +1236,108 @@ test("16. the number of SQL statements does not depend on the number of items", 
     count = 0;
     assert.equal((await calendar(small.coach.cookie)).status, 200);
     const smallCount = count;
+    assert.ok(smallCount > 0, "the interception counts real statements");
     count = 0;
     const res = await calendar(large.coach.cookie);
     assert.equal(res.status, 200);
     assert.equal(ofKind(allItems(res), "planned").length, 3, "three days of sessions, one card each");
-    assert.equal(count, smallCount, `the same number of statements for 1 and for 12 sessions (${smallCount})`);
+    assert.equal(ofKind(allItems(res), "activity").length, 4, "four coach-made roster activities, the two RPE activities folded");
+    assert.equal(count, smallCount, `the same number of statements for 1 session + 1 activity and for 12 sessions + 2 RPE + 4 roster activities (${smallCount})`);
   } finally {
     appPool.query = original;
   }
+});
+
+// ---------------------------------------------------------------------------
+// The independent review's round (D16 with kinds=activity, membership on the day, missed)
+// ---------------------------------------------------------------------------
+test("22. D16 holds for every kinds filter: a training with results is never twenty cards â€” kinds=activity shows no RPE activity, kinds=planned,activity shows the one group", async () => {
+  const team = await teamWithBatch("d16");
+  const actA = await submitRpe(team.athletes[0]);
+  const actB = await submitRpe(team.athletes[1]);
+  const activitiesOnly = await calendar(team.coach.cookie, { extra: "&kinds=activity" });
+  assert.equal(itemsOn(activitiesOnly, PAST).length, 0, "no separate RPE card");
+  const both = await calendar(team.coach.cookie, { extra: "&kinds=planned,activity" });
+  const items = itemsOn(both, PAST);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].kind, "planned");
+  assert.deepEqual([...items[0].links.activityIds].sort(), [actA.id, actB.id].sort());
+  // A coach-made activity of the same day stays its own card under kinds=activity.
+  const manual = await makeActivity({ owner: { scope: "team", teamId: team.teamId }, origin: "manual", name: "Gym", date: PAST });
+  await addParticipant(manual, team.athletes[0].athleteId, PAST);
+  const again = await calendar(team.coach.cookie, { extra: "&kinds=activity" });
+  assert.deepEqual(itemsOn(again, PAST).map((it) => it.key), [`activity:${manual}`]);
+});
+
+test("23. membership on the item's day (v25 periods): an athlete who left is on the cards before the day they left and on none after; a new member's earlier plans are not on the team's past days", async () => {
+  const team = await teamWithBatch("mb23", { n: 2 });
+  const [a, b] = team.athletes;
+  for (const athlete of [a, b]) await makeSession({ planId: athlete.planId, date: FUTURE, name: "Team training", order: 1 });
+  // B leaves the team yesterday (the membership is archived, its period closes then).
+  await archiveMembership(await teamMembershipId(b.athleteId, team.teamId), `${addDays(TODAY, -1)}T12:00:00Z`);
+  const res = await calendar(team.coach.cookie);
+  assert.deepEqual([...itemsOn(res, PAST)[0].athleteIds].sort(), [a.athleteId, b.athleteId].sort(), "before leaving, B is on the team's card");
+  assert.deepEqual(itemsOn(res, FUTURE)[0].athleteIds, [a.athleteId], "after leaving, B is not");
+  assert.deepEqual(itemsOn(res, FUTURE)[0].rpe, { asked: 1, submitted: 0 });
+  const admin1 = await clubAdminOf(team.clubId, "mb23 admin");
+  const clubRes = await calendar(admin1.cookie);
+  assert.equal(itemsOn(clubRes, FUTURE)[0].athleteCount, 2, "B's club membership stays, so the club still reads B");
+  assert.deepEqual(itemsOn(clubRes, FUTURE)[0].teamIds, [team.teamId]);
+  const bTeams = itemsOn(clubRes, FUTURE)[0];
+  assert.ok(bTeams, "the club card exists");
+
+  // N joins the team today; N's earlier plan (another coach's) stays off the team's past days.
+  const pc = await privateCoach("mb23 pc");
+  const n = await makeAthlete("mb23 n");
+  await q(`insert into public.user_athletes (user_id, athlete_id, relationship_type, is_active) values ($1,$2,'coach',true)`, [pc.id, n.athleteId]);
+  const nPlan = await makePlan({ athleteId: n.athleteId, coachUserId: pc.id, owner: { scope: "user", userId: pc.id } });
+  await makeSession({ planId: nPlan, date: PAST, name: "Before joining", rpeEnabled: false });
+  await makeSession({ planId: nPlan, date: FUTURE, name: "After joining", rpeEnabled: false });
+  await addMembership({ athleteId: n.athleteId, clubId: team.clubId, type: "club", startsAt: `${TODAY}T00:00:00Z` });
+  await addMembership({ athleteId: n.athleteId, clubId: team.clubId, teamId: team.teamId, startsAt: `${TODAY}T00:00:00Z` });
+  const res2 = await calendar(team.coach.cookie);
+  assert.equal(itemsOn(res2, PAST).some((it) => it.title === "Before joining"), false, "N's plan before joining is not the team's past");
+  const after = itemsOn(res2, FUTURE).find((it) => it.title === "After joining");
+  assert.ok(after, "N's plan after joining is on the team's calendar");
+  assert.deepEqual(after.athleteIds, [n.athleteId]);
+  assert.deepEqual(after.teamIds, [team.teamId], "the team id on the day");
+  // The Club / Team filter follows the same days.
+  const filtered = await calendar(team.coach.cookie, { extra: `&teamIds=${team.teamId}` });
+  assert.equal(itemsOn(filtered, PAST).some((it) => it.title === "Before joining"), false);
+  assert.ok(itemsOn(filtered, FUTURE).some((it) => it.title === "After joining"));
+});
+
+test("24. a terminal assignment: an external or test day whose unanswered entries can no longer be made is missed, not awaiting entry forever", async () => {
+  const team = await teamWithBatch("ms24", { n: 2 });
+  const [a, b] = team.athletes;
+  const makeDay = async (date, statuses) => {
+    const scheduleId = await makeExternalSchedule({ owner: { scope: "team", teamId: team.teamId }, createdBy: team.coach.id, startDate: date, eventName: `Match ${date}`, targets: [{ kind: "team", id: team.teamId }] });
+    const occurrenceId = await makeExternalOccurrence(scheduleId, date);
+    const athletes = [a, b];
+    for (let i = 0; i < statuses.length; i += 1) {
+      const assignmentId = await makeExternalAssignment(occurrenceId, athletes[i].athleteId, date, statuses[i]);
+      if (statuses[i] === "completed") await externalFeedback(athletes[i].athleteId, assignmentId, date);
+    }
+    return scheduleId;
+  };
+  const allMissed = await makeDay(PAST, ["missed", "missed"]);
+  const half = await makeDay(addDays(PAST, -1), ["completed", "missed"]);
+  const stillOpen = await makeDay(addDays(PAST, -2), ["missed", "pending"]);
+  const res = await calendar(team.coach.cookie, { extra: "&kinds=external&include=athletes" });
+  const cardOf = (id, date) => itemsOn(res, date).find((it) => it.key === `external:${id}:${date}`);
+  assert.equal(cardOf(allMissed, PAST).status, "missed");
+  assert.deepEqual(cardOf(allMissed, PAST).rpe, { asked: 2, submitted: 0, missed: 2 });
+  assert.deepEqual(cardOf(allMissed, PAST).athletes.map((x) => x.rpe), ["missed", "missed"]);
+  assert.equal(cardOf(half, addDays(PAST, -1)).status, "missed", "one answered, the other can no longer answer: missed");
+  assert.deepEqual(cardOf(half, addDays(PAST, -1)).rpe, { asked: 2, submitted: 1, missed: 1 });
+  assert.equal(cardOf(stillOpen, addDays(PAST, -2)).status, "awaiting_entry", "an entry that can still be made keeps the day awaiting");
+
+  const testSchedule = await makeTestSchedule({ owner: { scope: "team", teamId: team.teamId }, createdBy: team.coach.id, startDate: PAST, targets: [{ kind: "team", id: team.teamId }] });
+  const occurrenceId = await makeTestOccurrence(testSchedule, PAST);
+  await makeTestAssignment(occurrenceId, a.athleteId, PAST, "missed");
+  await makeTestAssignment(occurrenceId, b.athleteId, PAST, "completed");
+  const tests = await calendar(team.coach.cookie, { extra: "&kinds=test" });
+  const testCard = itemsOn(tests, PAST).find((it) => it.key === `test:${testSchedule}:${PAST}`);
+  assert.deepEqual(testCard.results, { expected: 2, completed: 1, missed: 1 });
+  assert.equal(testCard.status, "missed");
 });

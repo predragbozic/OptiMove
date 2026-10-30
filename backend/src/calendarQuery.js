@@ -31,7 +31,7 @@ import crypto from "node:crypto";
 import { query } from "./db.js";
 import {
   calendarActivityFilterSql, calendarActivityScopeSql, calendarAthleteFilterSql, calendarAthleteScopeSql,
-  calendarScheduleScopeSql, loadWorkspaceTeams,
+  calendarScheduleScopeSql, loadWorkspaceTeams, periodCoversSql,
 } from "./calendarAccess.js";
 // The one published-weekly-plan rule, shared with GET /weekly and GET
 // /calendar of routes/trainingLoad.js.
@@ -39,14 +39,18 @@ import { WEEKLY_PLAN_SESSION_FILTER_SQL } from "./trainingLoadAccess.js";
 
 export const CALENDAR_MAX_RANGE_DAYS = 62;
 export const CALENDAR_KINDS = Object.freeze(["planned", "activity", "external", "test"]);
-export const CALENDAR_STATUSES = Object.freeze(["planned", "done", "awaiting_entry", "not_opened", "cancelled", "none"]);
+export const CALENDAR_STATUSES = Object.freeze(["planned", "done", "awaiting_entry", "missed", "not_opened", "cancelled", "none"]);
 
 const athleteNameSql = (alias) => `coalesce(${alias}.display_name, ${alias}.full_name, concat_ws(' ', ${alias}.first_name, ${alias}.last_name), ${alias}.athlete_id)`;
-// The athlete's active team memberships among the workspace's teams
-// ($<teamsParam>::uuid[]), as an array; '{}' outside a club / team workspace.
-const athleteTeamIdsSql = (alias, teamsParam) =>
-  `(select coalesce(array_agg(distinct am_t.team_id), '{}') from public.athlete_memberships am_t
-     where am_t.athlete_id = ${alias}.id and am_t.membership_type = 'team' and am_t.status = 'active' and am_t.team_id = any($${teamsParam}::uuid[]))`;
+// The athlete's team memberships among the workspace's teams
+// ($<teamsParam>::uuid[]) ON THE DAY `dayExpr` (the v25 periods), as an
+// array; '{}' outside a club / team workspace.
+const athleteTeamIdsSql = (alias, teamsParam, dayExpr) =>
+  `(select coalesce(array_agg(distinct mp_t.team_id), '{}') from public.athlete_membership_periods mp_t
+     where mp_t.athlete_id = ${alias}.id and mp_t.membership_type = 'team' and mp_t.team_id = any($${teamsParam}::uuid[]) and ${periodCoversSql("mp_t", dayExpr)})`;
+// A terminal assignment status: the entry can no longer be made (plan 2.5,
+// status `missed`).
+const MISSED_ASSIGNMENT_STATUSES = new Set(["missed"]);
 
 // A self-report activity (migration v44's words): one athlete's own report,
 // never "awaiting entry" (D15). The verdict is v44's: a team-owned activity
@@ -107,13 +111,13 @@ export function plannedGroupKey(row, day) {
 
 async function readPlannedRows(ctx, { from, to, filters, teamIds }) {
   const params = [from, to, teamIds];
-  const scope = calendarAthleteScopeSql(ctx, "ath", params);
-  const extra = calendarAthleteFilterSql("ath", filters, params);
+  const scope = calendarAthleteScopeSql(ctx, "ath", params, "pd.date");
+  const extra = calendarAthleteFilterSql("ath", filters, params, "pd.date");
   const result = await query(
     `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.session_time, ps.am_pm, ps.bta, ps.session_order,
             pd.date as day, p.id as plan_id, p.builder_batch_id,
             ath.id as athlete_id, ${athleteNameSql("ath")} as athlete_name,
-            ${athleteTeamIdsSql("ath", 3)} as team_ids,
+            ${athleteTeamIdsSql("ath", 3, "pd.date")} as team_ids,
             (ps.rpe_enabled = true and training_load.planned_rpe_effective_for_plan(p.id, pd.date)) as rpe_expected,
             exists (select 1 from training_load.session_feedback sf where sf.athlete_id = ath.id and sf.logical_session_id = ps.logical_session_id) as rpe_submitted
        from plans.plan_sessions ps
@@ -233,10 +237,10 @@ async function readRosterCounts(activityIds) {
 
 async function readExternalAssignmentRows(ctx, { from, to, filters, teamIds }) {
   const params = [from, to, teamIds];
-  const scope = calendarAthleteScopeSql(ctx, "ath", params);
-  const extra = calendarAthleteFilterSql("ath", filters, params);
+  const scope = calendarAthleteScopeSql(ctx, "ath", params, "asg.local_scheduled_date");
+  const extra = calendarAthleteFilterSql("ath", filters, params, "asg.local_scheduled_date");
   const result = await query(
-    `select asg.id as assignment_id, asg.athlete_id, ${athleteNameSql("ath")} as athlete_name, ${athleteTeamIdsSql("ath", 3)} as team_ids,
+    `select asg.id as assignment_id, asg.athlete_id, ${athleteNameSql("ath")} as athlete_name, ${athleteTeamIdsSql("ath", 3, "asg.local_scheduled_date")} as team_ids,
             asg.local_scheduled_date as day, asg.status as assignment_status,
             eo.id as occurrence_id, eo.status as occurrence_status,
             s.id as schedule_id, s.event_name, s.event_type, s.status as schedule_status, s.opens_time,
@@ -258,7 +262,7 @@ async function readExternalAssignmentRows(ctx, { from, to, filters, teamIds }) {
 // explicit dates of a 'dates' schedule (migration v8) come along as text.
 async function readExternalScheduleRows(ctx, { from, to }) {
   const params = [from, to];
-  const scope = calendarScheduleScopeSql(ctx, "s", "training_load.external_schedule_targets", params);
+  const scope = calendarScheduleScopeSql(ctx, "s", "training_load.external_schedule_targets", params, "$1", "$2");
   if (scope === "false") return [];
   const result = await query(
     `select s.id, s.event_name, s.event_type, s.status, s.schedule_kind, s.start_date, s.end_date, s.recurrence_rule, s.opens_time,
@@ -276,10 +280,10 @@ async function readExternalScheduleRows(ctx, { from, to }) {
 
 async function readTestAssignmentRows(ctx, { from, to, filters, teamIds }) {
   const params = [from, to, teamIds];
-  const scope = calendarAthleteScopeSql(ctx, "ath", params);
-  const extra = calendarAthleteFilterSql("ath", filters, params);
+  const scope = calendarAthleteScopeSql(ctx, "ath", params, "asg.local_scheduled_date");
+  const extra = calendarAthleteFilterSql("ath", filters, params, "asg.local_scheduled_date");
   const result = await query(
-    `select asg.id as assignment_id, asg.athlete_id, ${athleteNameSql("ath")} as athlete_name, ${athleteTeamIdsSql("ath", 3)} as team_ids,
+    `select asg.id as assignment_id, asg.athlete_id, ${athleteNameSql("ath")} as athlete_name, ${athleteTeamIdsSql("ath", 3, "asg.local_scheduled_date")} as team_ids,
             asg.local_scheduled_date as day, asg.status as assignment_status,
             o.id as occurrence_id, o.status as occurrence_status,
             sch.id as schedule_id, sch.status as schedule_status, sch.opens_time,
@@ -300,7 +304,7 @@ async function readTestAssignmentRows(ctx, { from, to, filters, teamIds }) {
 
 async function readTestScheduleRows(ctx, { from, to }) {
   const params = [from, to];
-  const scope = calendarScheduleScopeSql(ctx, "sch", "tests.test_schedule_targets", params);
+  const scope = calendarScheduleScopeSql(ctx, "sch", "tests.test_schedule_targets", params, "$1", "$2");
   if (scope === "false") return [];
   const result = await query(
     `select sch.id, sch.status, sch.schedule_kind, sch.start_date, sch.end_date, sch.recurrence_rule, sch.opens_time,
@@ -317,36 +321,36 @@ async function readTestScheduleRows(ctx, { from, to }) {
   return result.rows;
 }
 
-// The athletes a set of schedules targets today, inside the caller's scope
-// (for a projected day, which has no assignment rows): direct athlete
-// targets, active members of a target team, active members of a target
-// club.
-async function readScheduleTargetAthletes(ctx, targetsTable, { scheduleIds, filters, teamIds }) {
-  if (!scheduleIds.length) return new Map();
-  const params = [scheduleIds, teamIds];
-  const scope = calendarAthleteScopeSql(ctx, "ath", params);
-  const extra = calendarAthleteFilterSql("ath", filters, params);
+// The athletes a schedule targets ON A PROJECTED DAY (which has no
+// assignment rows), inside the caller's scope on that day: direct athlete
+// targets, members of a target team on the day, members of a target club on
+// the day (the v25 periods). One statement for every (schedule, day) pair.
+async function readScheduleTargetAthletes(ctx, targetsTable, { pairs, filters, teamIds }) {
+  if (!pairs.length) return new Map();
+  const params = [pairs.map((p) => p.scheduleId), pairs.map((p) => p.day), teamIds];
+  const scope = calendarAthleteScopeSql(ctx, "ath", params, "p.day");
+  const extra = calendarAthleteFilterSql("ath", filters, params, "p.day");
   const result = await query(
-    `select tg.schedule_id, ath.id as athlete_id, ${athleteNameSql("ath")} as athlete_name, ${athleteTeamIdsSql("ath", 2)} as team_ids
-       from ${targetsTable} tg
+    `select p.schedule_id, p.day, ath.id as athlete_id, ${athleteNameSql("ath")} as athlete_name, ${athleteTeamIdsSql("ath", 3, "p.day")} as team_ids
+       from unnest($1::uuid[], $2::date[]) as p(schedule_id, day)
+       join ${targetsTable} tg on tg.schedule_id = p.schedule_id
        join public.athletes ath on (
             (tg.target_kind = 'athlete' and ath.id = tg.target_athlete_id)
-         or (tg.target_kind = 'team' and exists (select 1 from public.athlete_memberships am where am.athlete_id = ath.id and am.membership_type = 'team' and am.status = 'active' and am.team_id = tg.target_team_id))
-         or (tg.target_kind = 'club' and exists (select 1 from public.athlete_memberships am where am.athlete_id = ath.id and am.membership_type = 'club' and am.status = 'active' and am.club_id = tg.target_club_id)))
-      where tg.schedule_id = any($1::uuid[])
-        and coalesce(ath.is_active, true)
+         or (tg.target_kind = 'team' and exists (select 1 from public.athlete_membership_periods mp where mp.athlete_id = ath.id and mp.membership_type = 'team' and mp.team_id = tg.target_team_id and ${periodCoversSql("mp", "p.day")}))
+         or (tg.target_kind = 'club' and exists (select 1 from public.athlete_membership_periods mp where mp.athlete_id = ath.id and mp.membership_type = 'club' and mp.club_id = tg.target_club_id and ${periodCoversSql("mp", "p.day")})))
+      where coalesce(ath.is_active, true)
         and (${scope})${extra}
-      group by tg.schedule_id, ath.id
-      order by tg.schedule_id, athlete_name, ath.id`,
+      group by p.schedule_id, p.day, ath.id
+      order by p.schedule_id, p.day, athlete_name, ath.id`,
     params,
   );
-  const byScheduleId = new Map();
+  const byPair = new Map();
   for (const row of result.rows) {
-    const key = String(row.schedule_id);
-    if (!byScheduleId.has(key)) byScheduleId.set(key, []);
-    byScheduleId.get(key).push({ athleteId: row.athlete_id, name: row.athlete_name, teamIds: uniq(row.team_ids || []) });
+    const key = `${row.schedule_id}|${dateStr(row.day)}`;
+    if (!byPair.has(key)) byPair.set(key, []);
+    byPair.get(key).push({ athleteId: row.athlete_id, name: row.athlete_name, teamIds: uniq(row.team_ids || []) });
   }
-  return byScheduleId;
+  return byPair;
 }
 
 // ---------------------------------------------------------------------------
@@ -370,14 +374,28 @@ export function projectScheduleDates(schedule, from, to) {
 }
 
 // ---------------------------------------------------------------------------
-// Status (section 2.5; D14, D15).
+// Status (section 2.5; D14, D15). `awaiting_entry` only once the item's day
+// has passed, for an unmet expectation and for a roster that still needs a
+// state alike; `missed` when, after the day, every unmet entry can no longer
+// be made (a terminal assignment status); a self-report activity is never
+// awaiting.
 // ---------------------------------------------------------------------------
 export function deriveStatus(card, today) {
   if (card.cancelled) return "cancelled";
   if (card.projected) return card.date < today ? "not_opened" : "planned";
   const checks = [];
-  if (card.rpe && card.rpe.asked > 0) checks.push(card.rpe.submitted >= card.rpe.asked);
-  if (card.results && card.results.expected > 0) checks.push(card.results.completed >= card.results.expected);
+  let unmet = 0;
+  let terminal = 0;
+  if (card.rpe && card.rpe.asked > 0) {
+    checks.push(card.rpe.submitted >= card.rpe.asked);
+    unmet += Math.max(0, card.rpe.asked - card.rpe.submitted);
+    terminal += card.rpe.missed || 0;
+  }
+  if (card.results && card.results.expected > 0) {
+    checks.push(card.results.completed >= card.results.expected);
+    unmet += Math.max(0, card.results.expected - card.results.completed);
+    terminal += card.results.missed || 0;
+  }
   if (card.expects.includes("device_data")) checks.push(true);
   const rosterWaits = Boolean(card.attendance) && card.measuredSource === true;
   if (rosterWaits) checks.push(card.attendance.needsState === 0);
@@ -385,8 +403,9 @@ export function deriveStatus(card, today) {
   const met = checks.every(Boolean);
   if (card.selfReport) return met ? "done" : "none";
   if (met) return "done";
-  if (rosterWaits && card.attendance.needsState > 0) return "awaiting_entry";
-  return card.date < today ? "awaiting_entry" : "planned";
+  if (!(card.date < today)) return "planned";
+  if (unmet > 0 && terminal >= unmet && !(rosterWaits && card.attendance.needsState > 0)) return "missed";
+  return "awaiting_entry";
 }
 
 // The weekly plan's own order (frontend/weekly-plan.js: AM then PM, Before /
@@ -440,7 +459,11 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
   const logicalSessionToKey = new Map();
   const assignmentToKey = new Map();
 
-  if (wantPlanned) {
+  // The planned groups and the external days are read whenever activities
+  // are, so that an activity linked to one of them always folds into its
+  // card and never stands alone (D16: never twenty cards for one training);
+  // when their kind is not requested, the cards are simply not emitted.
+  if (wantPlanned || wantActivity) {
     for (const row of await readPlannedRows(ctx, { from, to, filters, teamIds })) {
       const day = dateStr(row.day);
       const key = plannedGroupKey(row, day);
@@ -476,7 +499,7 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     }
   }
 
-  if (wantExternal) {
+  if (wantExternal || wantActivity) {
     for (const row of await readExternalAssignmentRows(ctx, { from, to, filters, teamIds })) {
       const day = dateStr(row.day);
       const key = `external:${row.schedule_id}:${day}`;
@@ -492,10 +515,11 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
       const teamIdsOfAthlete = uniq(row.team_ids || []);
       teamIdsOfAthlete.forEach((id) => card.teamIds.add(id));
       const open = !CLOSED_ASSIGNMENT_STATUSES.has(row.assignment_status);
+      const missed = MISSED_ASSIGNMENT_STATUSES.has(row.assignment_status);
       card.athletes.push({
         athleteId: row.athlete_id, name: row.athlete_name, teamIds: teamIdsOfAthlete,
         assignmentId: row.assignment_id, assignmentStatus: row.assignment_status,
-        rpe: open ? (row.rpe_submitted ? "submitted" : "missing") : "not_asked",
+        rpe: !open ? "not_asked" : row.rpe_submitted ? "submitted" : missed ? "missed" : "missing",
       });
       assignmentToKey.set(String(row.assignment_id), key);
     }
@@ -503,10 +527,13 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
       if (card.kind !== "external") continue;
       const asked = card.athletes.filter((a) => a.rpe !== "not_asked").length;
       const submitted = card.athletes.filter((a) => a.rpe === "submitted").length;
-      card.rpe = { asked, submitted };
+      const missed = card.athletes.filter((a) => a.rpe === "missed").length;
+      card.rpe = { asked, submitted, missed };
       // Every assignment in scope cancelled or excused: nothing is expected.
       card.expects = asked > 0 ? ["rpe"] : [];
     }
+  }
+  if (wantExternal) {
     const schedules = await readExternalScheduleRows(ctx, { from, to });
     const projected = [];
     for (const schedule of schedules) {
@@ -518,10 +545,10 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     }
     if (projected.length) {
       const targets = await readScheduleTargetAthletes(ctx, "training_load.external_schedule_targets", {
-        scheduleIds: uniq(projected.map((p) => p.schedule.id)), filters, teamIds,
+        pairs: projected.map((p) => ({ scheduleId: p.schedule.id, day: p.day })), filters, teamIds,
       });
       for (const { key, schedule, day } of projected) {
-        const athletes = targets.get(String(schedule.id)) || [];
+        const athletes = targets.get(`${schedule.id}|${day}`) || [];
         if (filtering && !athletes.length) continue;
         const card = newCard({
           key, kind: "external", date: day, title: schedule.event_name || null, eventType: schedule.event_type || null,
@@ -551,17 +578,19 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
       const teamIdsOfAthlete = uniq(row.team_ids || []);
       teamIdsOfAthlete.forEach((id) => card.teamIds.add(id));
       const open = !CLOSED_ASSIGNMENT_STATUSES.has(row.assignment_status);
+      const missed = MISSED_ASSIGNMENT_STATUSES.has(row.assignment_status);
       card.athletes.push({
         athleteId: row.athlete_id, name: row.athlete_name, teamIds: teamIdsOfAthlete,
         assignmentId: row.assignment_id, assignmentStatus: row.assignment_status,
-        result: row.assignment_status === "completed" ? "completed" : open ? "missing" : "not_asked",
+        result: row.assignment_status === "completed" ? "completed" : !open ? "not_asked" : missed ? "missed" : "missing",
       });
     }
     for (const card of cards.values()) {
       if (card.kind !== "test") continue;
       const expected = card.athletes.filter((a) => a.result !== "not_asked").length;
       const completed = card.athletes.filter((a) => a.result === "completed").length;
-      card.results = { expected, completed };
+      const missed = card.athletes.filter((a) => a.result === "missed").length;
+      card.results = { expected, completed, missed };
       card.expects = expected > 0 ? ["test_result"] : [];
     }
     const schedules = await readTestScheduleRows(ctx, { from, to });
@@ -575,10 +604,10 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     }
     if (projected.length) {
       const targets = await readScheduleTargetAthletes(ctx, "tests.test_schedule_targets", {
-        scheduleIds: uniq(projected.map((p) => p.schedule.id)), filters, teamIds,
+        pairs: projected.map((p) => ({ scheduleId: p.schedule.id, day: p.day })), filters, teamIds,
       });
       for (const { key, schedule, day } of projected) {
-        const athletes = targets.get(String(schedule.id)) || [];
+        const athletes = targets.get(`${schedule.id}|${day}`) || [];
         if (filtering && !athletes.length) continue;
         const card = newCard({
           key, kind: "test", date: day, title: schedule.test_name || null,
