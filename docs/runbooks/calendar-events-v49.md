@@ -52,8 +52,10 @@ cleanup) cascades the club's unused type copies; a club with events or with a ty
 own `RESTRICT` foreign keys, as it is by its schedules today.
 
 **Known limits, recorded:** the link tables' triggers check the event's state and the plan's / activity's existence,
-not that the plan or activity belongs to the event's owner — K2a-1b's commands check it, and K2a-1b adds the
-at-COMMIT pairing of a link write with its change row; the `calendar` CHECKs call `training_load.source_metric_text_ok`,
+not that the plan or activity belongs to the event's owner — K2a-1b's commands check it (the session's athlete a target of
+the event that day and inside the caller's scope; an activity in the caller's scope with a targeted participant); every link write
+bumps the event's revision, so `events_need_change` requires its change row at COMMIT, but a raw link write that
+leaves the event untouched is not refused (a v50 decision, plan section 11); the `calendar` CHECKs call `training_load.source_metric_text_ok`,
 so a later `create or replace` of that function must keep its contract for these columns too (v40's fail-closed block
 names only its own columns); no `idle_in_transaction_session_timeout` is set for the event commands (as for the roster
 commands).

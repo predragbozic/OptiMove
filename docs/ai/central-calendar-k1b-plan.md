@@ -92,7 +92,7 @@ The month picker that the rail button used to open stays inside the weekly plan 
   `teamIds` holds none of the chosen teams; Types hide every card whose `kind` is not chosen. The chips' counts
   are counted over the displayed days of the unfiltered answer (the month's grid, the week, or the one day of
   the Day view, which shares its week's read), so every chip keeps its count while another is active; a toggle never
-  sends a request; the server's grouping is never changed (D16: hiding a whole card is not regrouping). The
+  sends a request; the server's grouping is never changed (D16b: hiding a whole card is not regrouping). The
   Types chip mirrors the server's `kinds` semantics: a folded RPE activity lives inside its planned card, so
   *Activities* shows the own-card activities only and never unfolds a group. The `kinds` / `teamIds` /
   `athleteIds` parameters stay unused by K1b (available to K3 when a scope grows).
@@ -219,7 +219,7 @@ grid on phones; a change to `GET /api/calendar`.
 |---|---|---|
 | Range ≤ 62 days, `today` | `from`, `to`, `today` | has |
 | Teams with names for the chips and colours | `teams[] { teamId, name, athleteCount }` | has (no `clubId` or colour — not needed in K1b) |
-| One card per thing, in the slot order (D13, D16) | `days[].items[]` ordered by the server | has |
+| One card per thing, in the slot order (D13, D16b — one planned card per owner, day, slot and name) | `days[].items[]` ordered by the server | has |
 | Card facts: title, kind, slot, time, teams, counts, expects, status, cancelled, projected, origin, eventType | the item model (K1 §2.3) | has |
 | Athlete names and per-athlete state for the panel | `include=athletes` → `athletes[] { athleteId, name, teamIds, rpe \| result }` | has, opt-in |
 | The TL activity to open (D14) | `links.activityIds` | has at card level; **no activity id per athlete** on a planned group's `athletes[]` → the button opens the TL day when several (section 6, decision D). Non-blocking; **K1a-API follow-up, not this PR:** a per-athlete `activityId` in the `include=athletes` rows, so the panel can open the right activity per athlete |
