@@ -76,3 +76,42 @@ export function activityScopeSqlForWorkspace(scope, alias, params) {
   }
   return "false";
 }
+
+// READ scope (owner decision D8, the central calendar K1a — see
+// docs/ai/central-calendar-k1-plan.md, section 3): in the active CLUB
+// workspace a club admin also reads the activities owned by the club's
+// active teams, so a team session seen on the club's calendar never ends in
+// a 404 on the activity detail (the O2 precedent of activityRoster.js, where
+// the club admin already decides on a team's roster through the club
+// workspace). Every other workspace keeps the manage scope above: a team
+// coach reads the team's own activities (D6), a private coach their own
+// (D7), a platform admin all. Reads only — the activity write routes
+// (materialize, reparent, merge, the match-suggestion accept / dismiss, the
+// metrics link) keep canManageActivityInScope / activityScopeSqlForWorkspace,
+// so a club admin reads a team activity but still cannot change it through
+// them (the same 404 as for a stranger; a deliberate asymmetry of the
+// read-only phase, decided with K2's events). The roster commands are the
+// one write the club admin already has, through O2 (activityRoster.js). An
+// archived team (public.teams.is_active = false) is not read, as the roster
+// read already treats it as missing.
+export function activityReadScopeSqlForWorkspace(scope, alias, params) {
+  if (scope.type === "club") {
+    params.push(scope.clubId);
+    const n = params.length;
+    return `((${alias}.owner_scope = 'club' and ${alias}.owner_club_id = $${n}) or (${alias}.owner_scope = 'team' and exists (select 1 from public.teams t_read where t_read.id = ${alias}.owner_team_id and t_read.club_id = $${n} and coalesce(t_read.is_active, true))))`;
+  }
+  return activityScopeSqlForWorkspace(scope, alias, params);
+}
+
+// Row variant of activityReadScopeSqlForWorkspace. `activity` carries the
+// owner columns and, for a team-owned row, `owner_team_club_id` and
+// `owner_team_active` from a `left join public.teams` the caller made —
+// never derived here from a second read.
+export function canReadActivityInScope(scope, activity) {
+  if (canManageActivityInScope(scope, activity)) return true;
+  if (scope.type !== "club") return false;
+  return activity.owner_scope === "team"
+    && activity.owner_team_club_id != null
+    && String(activity.owner_team_club_id) === String(scope.clubId)
+    && activity.owner_team_active !== false;
+}

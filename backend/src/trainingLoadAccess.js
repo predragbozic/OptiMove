@@ -230,3 +230,15 @@ export function externalScheduleScopeSqlForWorkspace(scope, params) {
   }
   return "false";
 }
+
+// The one rule for "a published weekly plan" that GET /weekly and GET
+// /calendar (routes/trainingLoad.js) and GET /api/calendar (calendarQuery.js)
+// read planned sessions through — moved here from routes/trainingLoad.js
+// unchanged so the central calendar shares it instead of copying it. `p` is
+// the plans.plans alias of the calling query.
+export const WEEKLY_PLAN_SESSION_FILTER_SQL = `
+  p.plan_type = 'weekly'
+  and p.status = 'active'
+  and coalesce(p.is_active, true)
+  and not coalesce(p.is_edit_draft, false)
+`;
