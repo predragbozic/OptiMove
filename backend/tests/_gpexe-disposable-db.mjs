@@ -67,6 +67,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202610281000_training_load_v41_metric_classification.sql",
   "202610282300_training_load_v42_source_metric_zone_model.sql",
   "202610291430_training_load_v43_source_metric_mapping_transitions.sql",
+  "202610301000_training_load_v44_activity_roster_self_report.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to

@@ -35,7 +35,7 @@ import pg from "pg";
 import { pool } from "./db.js";
 import { lockTeamForImport } from "./gpexeImportWriter.js";
 import {
-  RosterError, decisionView, loadRosterSnapshot, publicAthlete, resolveRosterTarget,
+  RosterError, decisionView, loadRosterSnapshot, noRoster, publicAthlete, resolveRosterTarget,
 } from "./activityRoster.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -268,7 +268,9 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
   try {
     await client.query("begin");
     await client.query(`set local lock_timeout = '${LOCK_TIMEOUT}'`);
-    const target = await resolveRosterTarget(client, ctx, activityId);
+    // The v44 gate is deferred: its answer is taken under the locks and
+    // only after the requestKey replay below.
+    const target = await resolveRosterTarget(client, ctx, activityId, { deferGate: true });
     const teamId = String(target.team.id);
     if (testHooks.beforeLocks) await testHooks.beforeLocks({ client, operation });
 
@@ -287,7 +289,7 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
     // right is checked again on that one before anything about it (its id,
     // a stored answer) is answered. Another team is the identical 404.
     if (canonicalId !== target.canonicalId) {
-      const again = await resolveRosterTarget(client, ctx, canonicalId);
+      const again = await resolveRosterTarget(client, ctx, canonicalId, { deferGate: true });
       if (String(again.team.id) !== teamId || again.basis !== target.basis) throw notFound();
     }
     if (operation === "complete") await client.query(`select training.lock_roster_completions(array[$1]::uuid[], true)`, [canonicalId]);
@@ -309,6 +311,13 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
     if (String(activityId) !== canonicalId) {
       throw conflict("activity_superseded", "This session was merged into another.", { canonicalActivityId: canonicalId });
     }
+    // The v44 gate, under the locks and after the replay: a saved answer wins
+    // over the present state (a saved write is never "nothing was saved"),
+    // and a reparent or merge that kept the canonical id but left this a
+    // self-report activity meanwhile gets the same 409 as the read gives,
+    // never the v25 trigger's error from the write below.
+    const gate = await client.query(`select coalesce(training.activity_has_roster($1), false) as has_roster`, [canonicalId]);
+    if (!gate.rows[0].has_roster) throw noRoster();
 
     const requestId = crypto.randomUUID();
     const snap = await loadRosterSnapshot(client, canonicalId);
