@@ -81,15 +81,19 @@ It applies only when all of these hold:
 - inside a stream the owner lets merge on its own (today: Exercise and Calendar).
 
 Then:
-1. One reviewer: `code-reviewer`; `mobile-qa` only when layout or CSS changes. The
-   orchestration matrix of `CLAUDE.md` still chooses the set; this fixes the rounds, not
-   the set.
-2. At most one narrow re-review, and only for a BLOCKER or HIGH. A MEDIUM is fixed and
-   proven by its test without a new round; the severity contract of `CLAUDE.md` still
-   applies — a MEDIUM is fixed or recorded, never dropped.
-3. Mutations: two or three on the key change, not a campaign.
+1. The reviewers the orchestration matrix of `CLAUDE.md` names: usually `code-reviewer`
+   alone, plus `mobile-qa` for a CSS, layout, responsive, pointer, touch or UI change.
+   This section fixes the rounds, not the set.
+2. At most one narrow re-review per domain, and only for a BLOCKER or HIGH. A MEDIUM is
+   fixed and proven by its test without a new round; the severity contract of `CLAUDE.md`
+   still applies — a MEDIUM is fixed or recorded, never dropped. If that re-review still
+   finds a BLOCKER or HIGH, the light regime ends and the full procedure applies (§5,
+   §10, and the external review of `CLAUDE.md` when its trigger 5 applies).
+3. Mutations only where §6 asks for them: two or three on the key change, not a
+   campaign; none for a CSS-only or copy-only change.
 4. Targeted test files during the work; the full frontend preset once, at the end, on
-   the final HEAD (§6 applied, not a new tier).
+   the final HEAD (§6 applied, not a new tier), plus the production build and
+   `git diff --check` (the Definition of Done of `CLAUDE.md`).
 5. Browser QA only for a visual or interaction change (`frontend.md`, "Browser QA").
 
 Target: 15–25 minutes from the brief to the PR. Deploy stays the owner's: small fixes are
@@ -146,8 +150,9 @@ next step. It does not retell every tool call, wait, grep or internal attempt, d
 repeat one fact in several sections, and no status message is sent without a new
 decision or result.
 
-A light-regime PR (§5a) says "light regime" in its body and lists what was not run (a
-full mutation campaign, browser QA), so the manager and the owner see the tier.
+A light-regime PR (§5a) says "light regime" in its body and lists what was not run (for
+example a full mutation campaign, and browser QA when the change was not visual or an
+interaction), so the manager and the owner see the tier.
 
 ## 10. Stop and ask
 
