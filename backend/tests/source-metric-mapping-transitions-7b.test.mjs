@@ -20,6 +20,7 @@ import pg from "pg";
 import * as runner from "../src/migrate.js";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 import { writeRevision } from "./support/source-revisions.mjs";
+import { createConversion, retireConversion as retireConversionRow, retireConversionStatements } from "./support/unit-conversions.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -283,12 +284,13 @@ async function openActivation(v) {
 async function conversion(from, to) {
   return one(k, `select id, trim_scale(scale)::text as scale, trim_scale(scale_divisor)::text as scale_divisor from training_load.unit_conversions where from_unit = $1 and to_unit = $2 and state = 'active'`, [from, to]);
 }
-const retireConversion = (c, id, by) => c.query(
-  `update training_load.unit_conversions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'Test retirement' where id = $1`, [id, by]);
+// Through v47's guarded path (support/unit-conversions.mjs): the acting user
+// and the audit row, every trigger on - in its own transaction, or in the
+// caller's open one (inTx).
+const retireConversion = (c, id, by, { inTx = false } = {}) => (inTx ? retireConversionStatements(c, { id, by }) : retireConversionRow(c, { id, by }));
 async function restoreConversion(from, to, scale, divisor) {
   if (await conversion(from, to)) return;
-  await k.query(`insert into training_load.unit_conversions (from_unit, to_unit, scale, scale_divisor, "offset", evidence_ref, created_by_user_id) values ($1,$2,$3,$4,0,$5,$6)`,
-    [from, to, scale, divisor, COMPAT, W.pa.id]);
+  await createConversion(k, { from, to, scale, divisor, evidenceRef: COMPAT, by: W.pa.id });
 }
 
 async function catalog(c) {
@@ -969,7 +971,7 @@ test("13. concurrency, in both orders, the second request always by another admi
     await writer.connect();
     try {
       await writer.query("begin");
-      await retireConversion(writer, (await conversion("s", "min")).id, W.pa.id);
+      await retireConversion(writer, (await conversion("s", "min")).id, W.pa.id, { inTx: true });
       const act2 = activate(v2, W.pa.cookie);
       assert.ok(await waitsOnRows(), "the activation waits for the retirement");
       await writer.query("commit");
