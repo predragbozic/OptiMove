@@ -381,7 +381,8 @@ Every other rule of those files applies as written.
      environment, scaling, suspension, deletion) stays the owner's.
    - Its scope, as the *Rukovodilac* reports: a Render API key belongs to the whole account, and the environment's
      network proxy attaches it only to requests under the deploy path of `optimove-eu`. A deploy hook would be narrower,
-     but as an environment variable it would be visible to every session. The owner chose the key (`6f0bdd58`).
+     but as an environment variable it would be visible to every session. The owner set up the key, following the
+     *Rukovodilac*'s directions, and agreed to its use (`6f0bdd58`).
    - The executor and the *Nezavisni revizor* never use that key or the Render API, even though an environment secret
      can be visible to every session of the environment: this is a rule, not a technical barrier. Neither ever prints,
      copies or records the key; a session that meets it does not use or repeat it and tells the owner, who can rotate
