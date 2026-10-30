@@ -4,8 +4,9 @@
 // each workspace gets, that their counts come from the reads the screens
 // already make (each read once, never a read of its own), what a card says
 // while a read runs, fails or holds a filtered list, the way into each screen
-// and back, Source fields' way back to the start screen, and the focus moving
-// to each new screen's title.
+// and back, Source fields' way back to the start screen, the focus moving to
+// each new screen's title, and every row of a read in a list that scrolls
+// inside its card (the owner's request of 2026-10-30).
 import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
@@ -89,13 +90,13 @@ beforeEach(() => {
   content.innerHTML = "";
 });
 
-test("1. Data configuration opens on the start screen: four cards for an administrator, each with its count and its first rows, from one read each", async () => {
+test("1. Data configuration opens on the start screen: four cards for an administrator, each with its count and its rows, from one read each", async () => {
   assert.equal(variablesState().view, "home", "a fresh screen starts on the start screen");
   await loadVariablesSection(render);
   assert.deepEqual(gets().sort(), [CB, FB, `${VB}?scope=own&state=active`].sort(), "the tree, the list and the fields: one read each, no read of its own");
   assert.equal($("#metric-variables-title").textContent, "Data configuration");
   assert.deepEqual(cards(), [
-    { title: "Variables", summary: "4 active variables", rows: ["Total distance", "Sprint <i>distance</i>", "Top speed"] },
+    { title: "Variables", summary: "4 active variables", rows: ["Total distance", "Sprint <i>distance</i>", "Top speed", "Accelerations"] },
     { title: "Domains", summary: "2 domains · 1 archived", rows: ["Endurance <b>", "Speed"] },
     { title: "Categories", summary: "1 category · 1 archived", rows: ["Aerobic capacity"] },
     { title: "Source fields", summary: "2 fields", rows: ["Total time", "Distance <x>"] },
@@ -106,10 +107,22 @@ test("1. Data configuration opens on the start screen: four cards for an adminis
   const rows = content.querySelectorAll(".dc-card")[0].querySelectorAll(".dc-card-row .dc-tile-variable");
   assert.equal(rows[0].classList.contains("is-empty"), false);
   assert.equal(rows[1].classList.contains("is-empty"), true);
-  // Every card is one button with the chevron "opens another screen".
+  // Every card's head is the button that opens its screen, with the chevron
+  // "opens another screen" and the card's own action; the card itself carries
+  // the same action for a click anywhere else on it.
   for (const card of content.querySelectorAll(".dc-card")) {
-    assert.equal(card.tagName, "BUTTON");
-    assert.ok(card.querySelector(".dc-chevron"));
+    assert.equal(card.tagName, "LI");
+    const open = card.querySelector(":scope > button.dc-card-open");
+    assert.ok(open && open.querySelector(".dc-chevron") && open.querySelector(".dc-card-title strong"));
+    assert.equal(open.dataset.action, card.dataset.action);
+    assert.equal(open.dataset.view ?? open.dataset.section, card.dataset.view ?? card.dataset.section);
+    assert.equal(card.querySelectorAll("button").length, 1, "one button per card: the rows are no controls");
+  }
+  // Four rows or fewer fit: no scrolling, no keyboard stop of their own.
+  for (const list of content.querySelectorAll(".dc-card-rows")) {
+    assert.equal(list.tagName, "UL");
+    assert.equal(list.classList.contains("is-scrolling"), false);
+    assert.equal(list.hasAttribute("tabindex"), false);
   }
   assert.ok(!$(".metric-variables-segmented") && !$(".training-load-subnav"), "no switch: the start screen replaces both");
 });
@@ -231,4 +244,34 @@ test("6. a workspace switch starts again on the start screen; opening a variable
   await click('[data-action="metric-variables-back"]');
   assert.equal($("#metric-variables-title").textContent, "Variables");
   assert.equal(document.activeElement, $("#metric-variables-title"), "the focus is on the list's title");
+});
+
+test("7. a card shows every row its read holds; from the fifth row on its list scrolls inside the card, is a keyboard stop named after the card, and a click on it still opens the screen", async () => {
+  variables = Array.from({ length: 12 }, (_, i) => variable(`v${i + 1}`, `Variable ${i + 1}`));
+  fields = Array.from({ length: 10 }, (_, i) => field(`f${i + 1}`, `Field ${i + 1}`));
+  await loadVariablesSection(render);
+  assert.deepEqual(gets().sort(), [CB, FB, `${VB}?scope=own&state=active`].sort(), "still one read each, no read of its own");
+  const [vars, domains, categories, sources] = cards();
+  assert.deepEqual([vars.summary, vars.rows.length, vars.rows[11]], ["12 active variables", 12, "Variable 12"], "every variable of the read, the count unchanged");
+  assert.deepEqual([sources.summary, sources.rows.length, sources.rows[9]], ["10 fields", 10, "Field 10"], "every field, the count unchanged");
+  assert.deepEqual([domains.rows.length, categories.rows.length], [2, 1]);
+  const list = (selector) => $(`${selector} > .dc-card-rows`);
+  for (const [selector, title] of [['.dc-card[data-view="variables"]', "Variables"], ['.dc-card[data-section="source-fields"]', "Source fields"]]) {
+    assert.ok(list(selector).classList.contains("is-scrolling"), `${title} scrolls`);
+    assert.equal(list(selector).getAttribute("tabindex"), "0", `${title}: the keyboard can reach the list to scroll it`);
+    assert.equal(list(selector).getAttribute("aria-label"), `${title} list`, "named apart from the card's button");
+    assert.equal(list(selector).getAttribute("role"), "list", "a list for every screen reader, its bullets hidden");
+  }
+  assert.ok(!list('.dc-card[data-view="domains"]').hasAttribute("tabindex"), "two domains fit: no keyboard stop");
+  // The app's delegation takes the nearest data-action: a row gives the card's.
+  const row = list('.dc-card[data-view="variables"]').querySelectorAll(".dc-card-row")[7];
+  const target = row.closest("[data-action]");
+  assert.equal(target, $('.dc-card[data-view="variables"]'));
+  await handleVariablesAction(target, { render });
+  assert.equal(variablesState().view, "variables", "a click on a row opens the screen, as before");
+  // A source field's row opens Source fields through Training Load's switch.
+  await click('[data-action="metric-classification-view"][data-view="home"]');
+  const fieldRow = list('.dc-card[data-section="source-fields"]').querySelector(".dc-card-row");
+  await handleTrainingLoadAction(fieldRow.closest("[data-action]"), { renderTrainingLoad: () => {}, openWeeklyPlanForAthleteOnDate: () => {} });
+  assert.equal(state.trainingLoad.section, "source-fields");
 });
