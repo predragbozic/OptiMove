@@ -172,12 +172,22 @@ One `resolveActiveWorkspace()`, then per kind:
 | none / athlete account without profile | `403` | | |
 
 Plans and assignments are read by **membership on the item's day** — the v25 periods
-(`public.athlete_membership_periods`, the same periods `training.activity_roster()` reads: a period covers the
-day when it began before the day's end and had not ended at its start), not by plan or schedule ownership —
-K0's Q-D, decided by the manager as decision 4 (section 8) inside D1–D15. So history does not change with the
-roster: an athlete who leaves a team stays on the cards of the days before they left and is on none after; a
-new member's earlier plans never appear on the team's past days (test 23). Training Load and Coach Home read
-today's membership instead; the difference is K1's. **What this means for a dual member**, honestly, for the
+(`public.athlete_membership_periods`, the same periods `training.activity_roster()` reads), not by plan or
+schedule ownership — K0's Q-D, decided by the manager as decision 4 (section 8) inside D1–D15. The one rule is
+`membershipOnDaySql` (`calendarAccess.js`): a period **covers** a day when its start is on or before the day and
+its end on or after it (an open period never ended) — compared at **date granularity in one stated zone, UTC**
+(the boundary instant read as a UTC date, unlike `activity_roster()`, which compares instants in the activity's
+own time zone); the **joining day and the leaving day both count**. One defined **fallback** (option b, below):
+for a day **before the athlete's first membership period in that club** (their OptiMove history there has not
+started: imported history, an athlete added late), the **current** membership decides, so a current member's
+older plans stay visible, exactly as Coach Home shows them today. Consequences: an athlete who leaves a team is
+on its cards through the leaving day and on none after (a former member gets no fallback); an athlete who moves
+from team X to team Y inside the club is X's through the leaving day and Y's from the joining day, never Y's
+before it (the club history already existed); a current member's plans from before `starts_at` are on the
+team's past days (tests 23 and 25). The three options the manager weighed — (a) strict periods (the calendar's
+past empties before every `starts_at`), **(b) periods with the fallback to the current membership before the
+first club period (chosen)**, (c) today's membership only (Training Load and Coach Home today) — are the owner's
+to change. **What this means for a dual member**, honestly, for the
 owner's external review to confirm — the club admin and the team coach read, for an athlete who was theirs on
 that day, the session names, times and RPE state of **every** published plan of that athlete on that day,
 whoever made it: (1) a private coach's plan (test 20), (2) another team's plan for an athlete in two teams, (3)
@@ -278,6 +288,9 @@ point 1); the suite adds `plans.plans.builder_batch_id` to its own database befo
     one is still open; the roster wait only after the day (`deriveStatus`); the no-write guard compares a
     content digest of thirteen tables, not counts; the statement count is asserted positive and equal across
     1 session + 1 activity against 12 sessions + 2 RPE + 4 roster activities; every 400 carries its code.
+14. After the independent review's second round: the membership rule's boundary days (the leaving day and the
+    joining day count), the fallback for a current member's plans before their first period, and the Club /
+    Team filter on the day for an athlete who moves from team X to team Y inside the club (tests 23, 25).
 
 Also run and record: `training-load-calendar.test.mjs`, `training-activity.test.mjs`,
 `activity-roster-5a1.test.mjs`, `tests-weekly-calendar.test.mjs`; a failure not mine is reproduced on a
@@ -302,7 +315,7 @@ Trigger 3 (identity / linking) is not: K1 stores no link. No migration, so no `d
    state; a self-report activity is never awaiting. K1b decides the labels. After the independent review:
    `missed` joins the enum (the day passed and every unanswered entry is terminal), and the roster wait too
    starts only after the day.
-4. **Q-D:** plans by **membership on the item's day**, not by plan ownership — read from the v25 membership periods (the manager's reading of the plan as approved, after the independent review found the first build reading today's membership as Training Load and Coach Home do); the dual-member consequence in section 3 stays a point for the owner.
+4. **Q-D:** plans by **membership on the item's day**, not by plan ownership — read from the v25 membership periods (the manager's reading of the plan as approved, after the independent review found the first build reading today's membership as Training Load and Coach Home do), with the fallback to the current membership for the days before the athlete's first period in the club (option b, the manager's decision after the independent review's second round); UTC date granularity, boundary days inclusive. The dual-member consequence and the fallback in section 3 stay points for the owner.
 5. **Club workspace** reads the plans of club members **and** of members of the club's teams (the spirit of D8).
 6. **Projected schedule days by target** (team / club / athlete in scope), not only by owner, the way
    `tests.js` projects them.
@@ -325,6 +338,11 @@ generator call; projection in memory); the SQL statement count stays independent
   own `local_scheduled_date`; `today` is the caller's date. No instant is converted on the server.
 - `public.user_athletes` (a private coach's athletes) keeps no history, so the private coach's scope is today's
   relationship; `teams[].athleteCount` is today's active team membership count.
+- Decision 4's consequence (section 3): a membership period starts at `starts_at`, the moment the athlete was added
+  in OptiMove (v25), not at a sporting join date; without the fallback every plan dated before it would vanish from
+  the club and team calendars while the weekly plan and Coach Home still show it. The fallback (option b) keeps a
+  current member's history visible and still removes a former member after the leaving day; the owner may choose
+  option (a) or (c) instead — one function changes (`membershipOnDaySql`).
 - Recorded by the security review, outside this change: the existing `GET /api/training-load/calendar` still
   returns `participantCount` and the RPE requested / rated totals across every participant to an athlete
   (`routes/trainingLoad.js`, the activity query and its item); the new read gives an athlete their own

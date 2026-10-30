@@ -1269,42 +1269,93 @@ test("22. D16 holds for every kinds filter: a training with results is never twe
   assert.deepEqual(itemsOn(again, PAST).map((it) => it.key), [`activity:${manual}`]);
 });
 
-test("23. membership on the item's day (v25 periods): an athlete who left is on the cards before the day they left and on none after; a new member's earlier plans are not on the team's past days", async () => {
+test("23. membership on the item's day (v25 periods, UTC dates): the leaving day and the joining day count; a former member is on no later card; a current member's plans from before their first period stay visible", async () => {
   const team = await teamWithBatch("mb23", { n: 2 });
   const [a, b] = team.athletes;
-  for (const athlete of [a, b]) await makeSession({ planId: athlete.planId, date: FUTURE, name: "Team training", order: 1 });
-  // B leaves the team yesterday (the membership is archived, its period closes then).
-  await archiveMembership(await teamMembershipId(b.athleteId, team.teamId), `${addDays(TODAY, -1)}T12:00:00Z`);
+  const LEAVE_DAY = addDays(TODAY, -1);
+  for (const athlete of [a, b]) {
+    await makeSession({ planId: athlete.planId, date: LEAVE_DAY, name: "Team training", order: 1 });
+    await makeSession({ planId: athlete.planId, date: FUTURE, name: "Team training", order: 1 });
+  }
+  const sorted = (ids) => [...ids].sort();
+  // B leaves the team on LEAVE_DAY at 12:00 UTC: the membership is archived and its period closes then.
+  await archiveMembership(await teamMembershipId(b.athleteId, team.teamId), `${LEAVE_DAY}T12:00:00Z`);
   const res = await calendar(team.coach.cookie);
-  assert.deepEqual([...itemsOn(res, PAST)[0].athleteIds].sort(), [a.athleteId, b.athleteId].sort(), "before leaving, B is on the team's card");
-  assert.deepEqual(itemsOn(res, FUTURE)[0].athleteIds, [a.athleteId], "after leaving, B is not");
+  assert.deepEqual(sorted(itemsOn(res, PAST)[0].athleteIds), sorted([a.athleteId, b.athleteId]), "before leaving, B is on the team's card");
+  assert.deepEqual(sorted(itemsOn(res, LEAVE_DAY)[0].athleteIds), sorted([a.athleteId, b.athleteId]), "the leaving day itself counts");
+  assert.deepEqual(itemsOn(res, FUTURE)[0].athleteIds, [a.athleteId], "after leaving, B is not (a former member gets no fallback)");
   assert.deepEqual(itemsOn(res, FUTURE)[0].rpe, { asked: 1, submitted: 0 });
   const admin1 = await clubAdminOf(team.clubId, "mb23 admin");
   const clubRes = await calendar(admin1.cookie);
   assert.equal(itemsOn(clubRes, FUTURE)[0].athleteCount, 2, "B's club membership stays, so the club still reads B");
   assert.deepEqual(itemsOn(clubRes, FUTURE)[0].teamIds, [team.teamId]);
-  const bTeams = itemsOn(clubRes, FUTURE)[0];
-  assert.ok(bTeams, "the club card exists");
 
-  // N joins the team today; N's earlier plan (another coach's) stays off the team's past days.
+  // N is added to the club and the team today (starts_at = today 00:00 UTC) with a plan another coach made
+  // before: the joining day counts, and the days before N's first membership period in the club fall back to
+  // the current membership (option b), so N's earlier plan IS on the team's past day — as Coach Home shows it.
   const pc = await privateCoach("mb23 pc");
   const n = await makeAthlete("mb23 n");
   await q(`insert into public.user_athletes (user_id, athlete_id, relationship_type, is_active) values ($1,$2,'coach',true)`, [pc.id, n.athleteId]);
   const nPlan = await makePlan({ athleteId: n.athleteId, coachUserId: pc.id, owner: { scope: "user", userId: pc.id } });
   await makeSession({ planId: nPlan, date: PAST, name: "Before joining", rpeEnabled: false });
+  await makeSession({ planId: nPlan, date: TODAY, name: "Joining day", rpeEnabled: false });
   await makeSession({ planId: nPlan, date: FUTURE, name: "After joining", rpeEnabled: false });
   await addMembership({ athleteId: n.athleteId, clubId: team.clubId, type: "club", startsAt: `${TODAY}T00:00:00Z` });
   await addMembership({ athleteId: n.athleteId, clubId: team.clubId, teamId: team.teamId, startsAt: `${TODAY}T00:00:00Z` });
   const res2 = await calendar(team.coach.cookie);
-  assert.equal(itemsOn(res2, PAST).some((it) => it.title === "Before joining"), false, "N's plan before joining is not the team's past");
+  const before = itemsOn(res2, PAST).find((it) => it.title === "Before joining");
+  assert.ok(before, "a current member's plan from before their first period stays visible (the fallback)");
+  assert.deepEqual(before.athleteIds, [n.athleteId]);
+  assert.deepEqual(before.teamIds, [team.teamId], "the fallback gives the team id too");
+  assert.ok(itemsOn(res2, TODAY).some((it) => it.title === "Joining day"), "the joining day counts");
   const after = itemsOn(res2, FUTURE).find((it) => it.title === "After joining");
   assert.ok(after, "N's plan after joining is on the team's calendar");
-  assert.deepEqual(after.athleteIds, [n.athleteId]);
-  assert.deepEqual(after.teamIds, [team.teamId], "the team id on the day");
-  // The Club / Team filter follows the same days.
+  assert.deepEqual(after.teamIds, [team.teamId]);
+  // The Team filter follows the same rule.
   const filtered = await calendar(team.coach.cookie, { extra: `&teamIds=${team.teamId}` });
-  assert.equal(itemsOn(filtered, PAST).some((it) => it.title === "Before joining"), false);
+  assert.ok(itemsOn(filtered, PAST).some((it) => it.title === "Before joining"));
   assert.ok(itemsOn(filtered, FUTURE).some((it) => it.title === "After joining"));
+  assert.equal(itemsOn(filtered, FUTURE).find((it) => it.title === "Team training").athleteIds.includes(b.athleteId), false, "the filter never brings a former member back");
+});
+
+test("25. the Club / Team filter on the day: an athlete who moves from team X to team Y inside the club is X's through the leaving day and Y's from the joining day, never Y's before it", async () => {
+  const clubId = await makeClub("mv25 club");
+  const teamX = await makeTeam(clubId, "mv25 X");
+  const teamY = await makeTeam(clubId, "mv25 Y");
+  const admin1 = await clubAdminOf(clubId, "mv25 admin");
+  const coachX = await coachOf(teamX, "mv25 coach X");
+  const coachY = await coachOf(teamY, "mv25 coach Y");
+  const m = await makeAthlete("mv25 m", { clubId, teamId: teamX });
+  const LEAVE_DAY = addDays(TODAY, -1);
+  await archiveMembership(await teamMembershipId(m.athleteId, teamX), `${LEAVE_DAY}T18:00:00Z`);
+  await addMembership({ athleteId: m.athleteId, clubId, teamId: teamY, startsAt: `${TODAY}T00:00:00Z` });
+  const planId = await makePlan({ athleteId: m.athleteId, coachUserId: admin1.id, owner: { scope: "club", clubId } });
+  for (const [date, name] of [[PAST, "Past"], [LEAVE_DAY, "Leaving day"], [TODAY, "Joining day"], [FUTURE, "Future"]]) {
+    await makeSession({ planId, date, name, rpeEnabled: false });
+  }
+  const titlesOn = (res, date) => itemsOn(res, date).map((it) => it.title);
+  const x = await calendar(admin1.cookie, { extra: `&teamIds=${teamX}` });
+  assert.deepEqual(titlesOn(x, PAST), ["Past"]);
+  assert.deepEqual(titlesOn(x, LEAVE_DAY), ["Leaving day"], "X keeps the athlete through the leaving day");
+  assert.deepEqual(titlesOn(x, TODAY), []);
+  assert.deepEqual(titlesOn(x, FUTURE), [], "X's later cards do not");
+  const y = await calendar(admin1.cookie, { extra: `&teamIds=${teamY}` });
+  assert.deepEqual(titlesOn(y, PAST), [], "never Y's before joining: the club history already existed, so no fallback");
+  assert.deepEqual(titlesOn(y, LEAVE_DAY), []);
+  assert.deepEqual(titlesOn(y, TODAY), ["Joining day"], "Y's from the joining day");
+  assert.deepEqual(titlesOn(y, FUTURE), ["Future"]);
+  // The team coaches' scopes and the cards' teamIds follow the same days.
+  const viewX = await calendar(coachX.cookie);
+  assert.deepEqual(titlesOn(viewX, LEAVE_DAY), ["Leaving day"]);
+  assert.deepEqual(titlesOn(viewX, TODAY), []);
+  const viewY = await calendar(coachY.cookie);
+  assert.deepEqual(titlesOn(viewY, PAST), []);
+  assert.deepEqual(titlesOn(viewY, TODAY), ["Joining day"]);
+  const all = await calendar(admin1.cookie);
+  assert.deepEqual(itemsOn(all, PAST).find((it) => it.title === "Past").teamIds, [teamX]);
+  assert.deepEqual(itemsOn(all, LEAVE_DAY).find((it) => it.title === "Leaving day").teamIds, [teamX]);
+  assert.deepEqual(itemsOn(all, TODAY).find((it) => it.title === "Joining day").teamIds, [teamY]);
+  assert.deepEqual(itemsOn(all, FUTURE).find((it) => it.title === "Future").teamIds, [teamY]);
 });
 
 test("24. a terminal assignment: an external or test day whose unanswered entries can no longer be made is missed, not awaiting entry forever", async () => {

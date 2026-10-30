@@ -6,16 +6,15 @@
 //
 // Three predicates, one per family of rows:
 //   - athletes (plan sessions, assignments, targets), ON THE ITEM'S DAY
-//     (manager decision 4 as approved: "membership on the day"): the
-//     membership periods of migration v25 (public.athlete_membership_periods,
-//     the same periods training.activity_roster() reads) — club → a club
-//     period of the club or a team period of one of the club's active teams
-//     covering the day (manager decision 5, the spirit of D8); team → a team
-//     period of the team covering the day; private coach → the account's
-//     active public.user_athletes (no history exists for that relationship);
-//     platform → everyone; athlete → self. So an athlete who left a team
-//     stays on the cards of the days before they left and is on none after,
-//     and a new member's earlier plans never appear on the team's past days.
+//     (manager decision 4 as approved: "membership on the day"), through the
+//     one function membershipOnDaySql below — the membership periods of
+//     migration v25 (public.athlete_membership_periods, the same periods
+//     training.activity_roster() reads) — club → a club period of the club
+//     or a team period of one of the club's active teams covering the day
+//     (manager decision 5, the spirit of D8); team → a team period of the
+//     team covering the day; private coach → the account's active
+//     public.user_athletes (no history exists for that relationship);
+//     platform → everyone; athlete → self.
 //   - activities: trainingActivityAccess.js's READ scope (D8: a club reads
 //     the activities owned by its active teams as well as its own); athlete →
 //     own canonical participation.
@@ -53,13 +52,46 @@ function clubTeamsSql(paramIndex) {
   return `(select t_c.id from public.teams t_c where t_c.club_id = $${paramIndex} and coalesce(t_c.is_active, true))`;
 }
 
-// A membership period (alias `mp`) that overlaps the local days from
-// `fromExpr` to `toExpr` (both SQL date expressions; one day when equal):
-// the rule of training.activity_roster() for a session without a start
-// time — the period began before the end of the last day and had not ended
-// at the start of the first.
+// The calendar day of a period boundary: its instant read as a UTC date.
+// Memberships are added and archived in Settings at a moment, items carry a
+// local day without a zone, so the comparison is made at DATE granularity in
+// ONE stated zone, UTC — unlike training.activity_roster(), which compares
+// instants in the activity's own time zone. The joining day and the leaving
+// day both count as member days.
+function periodDaySql(expr) {
+  return `(${expr} at time zone 'UTC')::date`;
+}
+
+// A membership period (alias `mp`) that covers at least one of the local
+// days from `fromExpr` to `toExpr` (both SQL date expressions; one day when
+// equal): it began on or before the last day and ended on or after the first
+// (an open period never ended).
 export function periodCoversSql(mp, fromExpr, toExpr = fromExpr) {
-  return `${mp}.valid_from < ((${toExpr})::date + 1) and coalesce(${mp}.valid_to, 'infinity') > (${fromExpr})::date`;
+  return `${periodDaySql(`${mp}.valid_from`)} <= (${toExpr})::date and (${fromExpr})::date <= coalesce(${periodDaySql(`${mp}.valid_to`)}, 'infinity'::date)`;
+}
+
+// THE membership rule of the calendar (manager decision 4 and its fallback,
+// option (b) of plan section 3): the athlete `athleteIdExpr` is a member of
+// what `cond(mp)` describes (a club, a team, a set of either) on the day(s)
+// when
+//   - a period of that membership covers the day (periodCoversSql), or
+//   - the day lies BEFORE the athlete's first membership period in that
+//     CLUB (their OptiMove history there has not started: imported history,
+//     an athlete added late) and the membership is current (an open period).
+// So an athlete who left stays on the cards through the leaving day and is
+// on none after; a current member's older plans stay visible, as Coach Home
+// shows them today; an athlete who moved from team X to team Y inside the
+// club is X's through the leaving day and Y's from the joining day, never
+// Y's before it (their club history already existed). `cond` is a function
+// of the period alias, e.g. (m) => `(${m}.membership_type = 'team' and ${m}.team_id = $3)`.
+export function membershipOnDaySql(athleteIdExpr, cond, fromExpr, toExpr = fromExpr) {
+  return `exists (select 1 from public.athlete_membership_periods mp
+           where mp.athlete_id = ${athleteIdExpr} and ${cond("mp")}
+             and (${periodCoversSql("mp", fromExpr, toExpr)}
+                  or (mp.valid_to is null
+                      and not exists (select 1 from public.athlete_membership_periods mp0
+                                       where mp0.athlete_id = ${athleteIdExpr} and mp0.club_id = mp.club_id
+                                         and ${periodDaySql("mp0.valid_from")} <= (${fromExpr})::date))))`;
 }
 
 // `alias` is a public.athletes alias of the calling query; `fromExpr` /
@@ -74,13 +106,12 @@ export function calendarAthleteScopeSql(ctx, alias, params, fromExpr, toExpr = f
   if (workspace.type === "club") {
     params.push(workspace.scopeId);
     const n = params.length;
-    return `exists (select 1 from public.athlete_membership_periods mp_s where mp_s.athlete_id = ${alias}.id and ${periodCoversSql("mp_s", fromExpr, toExpr)}
-              and ((mp_s.membership_type = 'club' and mp_s.club_id = $${n})
-                or (mp_s.membership_type = 'team' and mp_s.team_id in ${clubTeamsSql(n)})))`;
+    return membershipOnDaySql(`${alias}.id`, (m) => `((${m}.membership_type = 'club' and ${m}.club_id = $${n}) or (${m}.membership_type = 'team' and ${m}.team_id in ${clubTeamsSql(n)}))`, fromExpr, toExpr);
   }
   if (workspace.type === "team") {
     params.push(workspace.scopeId);
-    return `exists (select 1 from public.athlete_membership_periods mp_s where mp_s.athlete_id = ${alias}.id and mp_s.membership_type = 'team' and mp_s.team_id = $${params.length} and ${periodCoversSql("mp_s", fromExpr, toExpr)})`;
+    const n = params.length;
+    return membershipOnDaySql(`${alias}.id`, (m) => `(${m}.membership_type = 'team' and ${m}.team_id = $${n})`, fromExpr, toExpr);
   }
   if (workspace.type === "private_coach") {
     params.push(ctx.userId);
@@ -110,8 +141,8 @@ export function calendarScheduleScopeSql(ctx, alias, targetsTable, params, fromE
     const n = params.length;
     return `exists (select 1 from ${targetsTable} tg where tg.schedule_id = ${alias}.id and (
               (tg.target_kind = 'athlete' and tg.target_athlete_id = $${n})
-           or (tg.target_kind = 'team' and exists (select 1 from public.athlete_membership_periods mp_a where mp_a.athlete_id = $${n} and mp_a.membership_type = 'team' and mp_a.team_id = tg.target_team_id and ${periodCoversSql("mp_a", fromExpr, toExpr)}))
-           or (tg.target_kind = 'club' and exists (select 1 from public.athlete_membership_periods mp_a where mp_a.athlete_id = $${n} and mp_a.membership_type = 'club' and mp_a.club_id = tg.target_club_id and ${periodCoversSql("mp_a", fromExpr, toExpr)}))))`;
+           or (tg.target_kind = 'team' and ${membershipOnDaySql(`$${n}`, (m) => `(${m}.membership_type = 'team' and ${m}.team_id = tg.target_team_id)`, fromExpr, toExpr)})
+           or (tg.target_kind = 'club' and ${membershipOnDaySql(`$${n}`, (m) => `(${m}.membership_type = 'club' and ${m}.club_id = tg.target_club_id)`, fromExpr, toExpr)})))`;
   }
   const workspace = ctx.workspace;
   if (workspace.type === "platform") return "true";
@@ -142,18 +173,21 @@ export function calendarScheduleScopeSql(ctx, alias, targetsTable, params, fromE
 // The optional Club / Team / Athletes filter — the union semantics of the
 // Training Load picker ("any mix": club OR team OR direct athlete, inside
 // the mandatory scope, so it narrows and never widens), with the club and
-// team memberships judged on the item's day like the scope. `filters` is
-// { clubIds, teamIds, athleteIds } of UUID arrays or nulls; `alias` the
-// public.athletes alias. The result starts with " and (" or is "".
+// team memberships judged on the item's day by the same membershipOnDaySql
+// rule as the scope. `filters` is { clubIds, teamIds, athleteIds } of UUID
+// arrays or nulls; `alias` the public.athletes alias. The result starts with
+// " and (" or is "".
 export function calendarAthleteFilterSql(alias, filters, params, fromExpr, toExpr = fromExpr) {
   const conditions = [];
   if (filters.clubIds) {
     params.push(filters.clubIds);
-    conditions.push(`exists (select 1 from public.athlete_membership_periods mp_f where mp_f.athlete_id = ${alias}.id and mp_f.membership_type = 'club' and mp_f.club_id = any($${params.length}::uuid[]) and ${periodCoversSql("mp_f", fromExpr, toExpr)})`);
+    const n = params.length;
+    conditions.push(membershipOnDaySql(`${alias}.id`, (m) => `(${m}.membership_type = 'club' and ${m}.club_id = any($${n}::uuid[]))`, fromExpr, toExpr));
   }
   if (filters.teamIds) {
     params.push(filters.teamIds);
-    conditions.push(`exists (select 1 from public.athlete_membership_periods mp_f where mp_f.athlete_id = ${alias}.id and mp_f.membership_type = 'team' and mp_f.team_id = any($${params.length}::uuid[]) and ${periodCoversSql("mp_f", fromExpr, toExpr)})`);
+    const n = params.length;
+    conditions.push(membershipOnDaySql(`${alias}.id`, (m) => `(${m}.membership_type = 'team' and ${m}.team_id = any($${n}::uuid[]))`, fromExpr, toExpr));
   }
   if (filters.athleteIds) {
     params.push(filters.athleteIds);

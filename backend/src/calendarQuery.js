@@ -31,7 +31,7 @@ import crypto from "node:crypto";
 import { query } from "./db.js";
 import {
   calendarActivityFilterSql, calendarActivityScopeSql, calendarAthleteFilterSql, calendarAthleteScopeSql,
-  calendarScheduleScopeSql, loadWorkspaceTeams, periodCoversSql,
+  calendarScheduleScopeSql, loadWorkspaceTeams, membershipOnDaySql,
 } from "./calendarAccess.js";
 // The one published-weekly-plan rule, shared with GET /weekly and GET
 // /calendar of routes/trainingLoad.js.
@@ -43,11 +43,12 @@ export const CALENDAR_STATUSES = Object.freeze(["planned", "done", "awaiting_ent
 
 const athleteNameSql = (alias) => `coalesce(${alias}.display_name, ${alias}.full_name, concat_ws(' ', ${alias}.first_name, ${alias}.last_name), ${alias}.athlete_id)`;
 // The athlete's team memberships among the workspace's teams
-// ($<teamsParam>::uuid[]) ON THE DAY `dayExpr` (the v25 periods), as an
-// array; '{}' outside a club / team workspace.
+// ($<teamsParam>::uuid[]) ON THE DAY `dayExpr`, by the calendar's one
+// membership rule (calendarAccess.js membershipOnDaySql), as an array; '{}'
+// outside a club / team workspace.
 const athleteTeamIdsSql = (alias, teamsParam, dayExpr) =>
-  `(select coalesce(array_agg(distinct mp_t.team_id), '{}') from public.athlete_membership_periods mp_t
-     where mp_t.athlete_id = ${alias}.id and mp_t.membership_type = 'team' and mp_t.team_id = any($${teamsParam}::uuid[]) and ${periodCoversSql("mp_t", dayExpr)})`;
+  `(select coalesce(array_agg(distinct wt.id), '{}') from unnest($${teamsParam}::uuid[]) as wt(id)
+     where ${membershipOnDaySql(`${alias}.id`, (m) => `(${m}.membership_type = 'team' and ${m}.team_id = wt.id)`, dayExpr)})`;
 // A terminal assignment status: the entry can no longer be made (plan 2.5,
 // status `missed`).
 const MISSED_ASSIGNMENT_STATUSES = new Set(["missed"]);
@@ -324,7 +325,8 @@ async function readTestScheduleRows(ctx, { from, to }) {
 // The athletes a schedule targets ON A PROJECTED DAY (which has no
 // assignment rows), inside the caller's scope on that day: direct athlete
 // targets, members of a target team on the day, members of a target club on
-// the day (the v25 periods). One statement for every (schedule, day) pair.
+// the day (the calendar's one membership rule). One statement for every
+// (schedule, day) pair.
 async function readScheduleTargetAthletes(ctx, targetsTable, { pairs, filters, teamIds }) {
   if (!pairs.length) return new Map();
   const params = [pairs.map((p) => p.scheduleId), pairs.map((p) => p.day), teamIds];
@@ -336,8 +338,8 @@ async function readScheduleTargetAthletes(ctx, targetsTable, { pairs, filters, t
        join ${targetsTable} tg on tg.schedule_id = p.schedule_id
        join public.athletes ath on (
             (tg.target_kind = 'athlete' and ath.id = tg.target_athlete_id)
-         or (tg.target_kind = 'team' and exists (select 1 from public.athlete_membership_periods mp where mp.athlete_id = ath.id and mp.membership_type = 'team' and mp.team_id = tg.target_team_id and ${periodCoversSql("mp", "p.day")}))
-         or (tg.target_kind = 'club' and exists (select 1 from public.athlete_membership_periods mp where mp.athlete_id = ath.id and mp.membership_type = 'club' and mp.club_id = tg.target_club_id and ${periodCoversSql("mp", "p.day")})))
+         or (tg.target_kind = 'team' and ${membershipOnDaySql("ath.id", (m) => `(${m}.membership_type = 'team' and ${m}.team_id = tg.target_team_id)`, "p.day")})
+         or (tg.target_kind = 'club' and ${membershipOnDaySql("ath.id", (m) => `(${m}.membership_type = 'club' and ${m}.club_id = tg.target_club_id)`, "p.day")}))
       where coalesce(ath.is_active, true)
         and (${scope})${extra}
       group by p.schedule_id, p.day, ath.id
