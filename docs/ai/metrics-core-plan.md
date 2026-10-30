@@ -789,7 +789,37 @@ order covers is merged under it.
   - **v47 is directly confirmed on the production database** by the owner's post-check, all five blocks („sve
     potvrdjeno na postcheku”, as the *Rukovodilac* relays it; the block values were not written out). `CURRENT_STATE.md`
     holds the full record.
-- **Next by the order above: 7d.** 7d-B (T5 activations, migration v48) is Draft PR #295, under the external review.
+- **7d, Done, 2026-10-30.**
+  - PR #295 (branch `feature/7d-mapping-activations`): migration v48 is exactly
+    `migrations_v2/202610301900_training_load_v48_mapping_activations.sql`, sha256
+    `71e57c43c0820315926c9535c31b5efcd634908bfb4c7947a75fe8990193abe0`. J10 "As built" in the discovery document records it.
+  - Reviews: the internal reviews, then GO on `578717af` from the *Rukovodilac* and the *Nezavisni revizor*.
+  - The owner's words, in the *Rukovodilac*'s chat; the executor checked each turn in the *Rukovodilac*'s transcript:
+    - the order: „Odobravam i naređujem merge PR #295 sa migracijom
+      202610301900_training_load_v48_mapping_activations.sql, sha256
+      71e57c43c0820315926c9535c31b5efcd634908bfb4c7947a75fe8990193abe0.” (owner turn `0c75e9cc`, 21:49:14 UTC);
+    - the preflight, the same day as the merge: „preflight proslao odobravm merge 295” (owner turn `0eec3966`,
+      22:06:37 UTC).
+  - Merge by the executor: `e915a5b` (parents `f3fb8057` and `578717af`, 22:07:33 UTC), exactly from `578717af`. `main`
+    had moved after the branch's last merge of it by PR #294 (the calendar frontend) and PR #296 (documents): no
+    migration and no file shared with PR #295.
+  - Deploy: by the owner by hand, as `e915a5b` („… e915a5b9 je deployed”, owner turn `e21a1604`, 22:19:50 UTC). The
+    *Rukovodilac*'s smoke, 22:20:00 – 22:20:21 UTC: `/api/health` answered `ok: true` on `e915a5b` three times in a row;
+    `/api/auth/me` answered `{"user":null}`; without a login the activations list, start and end, the mappings,
+    variables and conversions reads, the GPEXE team status and the source-connection list answered 401.
+  - **v48 is directly confirmed on the production database** by the owner's post-check, all six blocks as expected
+    (owner turn `fe3ef070`, 22:26:39 UTC): `v48_rows` 1, `v48_checksum_ok` true, `later_migrations` 0;
+    `bodies_v48` 9; `basis_checks_v48` 2; `links_ok` 2, `guards_enabled` 2; `index_ok` true; `activations` 0,
+    `activation_audit_rows` 0. `CURRENT_STATE.md` holds the full record.
+  - A known nit, accepted by the *Rukovodilac* (its message queued at 19:25:07 UTC): the v48 file ends with an extra
+    blank line (`git diff --check`: "new blank line at EOF", line 597). The file stays as merged; a migration file is
+    never changed once applied (its checksum is recorded). From now on `git diff --check` is clean before every package
+    that carries a migration (the *Rukovodilac*'s rule).
+- **The contracts of 7e, 7f and 7g were merged before this record** as PR #297 (`39b4b52`, 22:23:10 UTC) on the
+  owner's word „merge” / „297” (owner turns `4fb1a9da`, 22:22:13 UTC, and `629c4a79`, 22:22:18 UTC), which changed
+  the *Rukovodilac*'s order (this facts record first).
+- **Next by the order above: 7f-B, then 7e-B, then 7g-B** (its migration written now that v48 is merged and
+  deployed).
 - **Input (red zone):** the owner's decisions from section K of the discovery document:
   - the minimum number of athletes for min / max;
   - system or club zone mappings;
