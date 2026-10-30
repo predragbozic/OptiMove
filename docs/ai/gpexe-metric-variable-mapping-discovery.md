@@ -3893,7 +3893,7 @@ read-only post-check, all five blocks):**
   block 4 on every pair test 5 compares, test 17 pins full pages of 100 and the rest), with 33 mutations of the
   service, the routes, v47 and the rollback, each killed by a behaviour test, plus the M2 architecture mutation.
 
-### J10. Activating a mapping version on a team binding — phase 7d (accepted 2026-10-30; merged and deployed, PR #295)
+### J10. Activating a mapping version on a team binding — phase 7d (accepted 2026-10-30; 7d-B merged and deployed, PR #295)
 
 The proposed ★★ contract is the separate document `docs/ai/phase7d-mapping-activations-contract.md` (phase 7d of
 `docs/ai/metrics-core-plan.md`), reviewed with J9 in one round: the writers of T5, `POST /activations` (one version on

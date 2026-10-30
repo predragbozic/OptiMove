@@ -789,7 +789,7 @@ order covers is merged under it.
   - **v47 is directly confirmed on the production database** by the owner's post-check, all five blocks („sve
     potvrdjeno na postcheku”, as the *Rukovodilac* relays it; the block values were not written out). `CURRENT_STATE.md`
     holds the full record.
-- **7d, Done, 2026-10-30.**
+- **7d-B, Done, 2026-10-30.**
   - PR #295 (branch `feature/7d-mapping-activations`): migration v48 is exactly
     `migrations_v2/202610301900_training_load_v48_mapping_activations.sql`, sha256
     `71e57c43c0820315926c9535c31b5efcd634908bfb4c7947a75fe8990193abe0`. J10 "As built" in the discovery document records it.
@@ -818,7 +818,9 @@ order covers is merged under it.
 - **The contracts of 7e, 7f and 7g were merged before this record** as PR #297 (`39b4b52`, 22:23:10 UTC) on the
   owner's word „merge” / „297” (owner turns `4fb1a9da`, 22:22:13 UTC, and `629c4a79`, 22:22:18 UTC), which changed
   the *Rukovodilac*'s order (this facts record first).
-- **Next by the order above: 7f-B, then 7e-B, then 7g-B** (its migration written now that v48 is merged and
+- **7d-C** (D3's prepared replacement in L4, R1 of J10) is not built; it is part of 7d (J10, R1) and has no place in
+  the order yet.
+- **Next, by J12's R1 (below): 7f-B, then 7e-B, then 7g-B** (its migration written now that v48 is merged and
   deployed).
 - **Input (red zone):** the owner's decisions from section K of the discovery document:
   - the minimum number of athletes for min / max;

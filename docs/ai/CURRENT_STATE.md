@@ -2901,8 +2901,8 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
-- **Deployed with `e915a5b`** (the merge of PR #295, phase 7d-B, migration v48), started by the owner by hand on
-  2026-10-30 (owner turn `e21a1604`, 22:19:50 UTC). Over `69af453` it adds PR #295, and PR #294 and PR #296 unless an
+- **Deployed with `e915a5b`** (the merge of PR #295, phase 7d-B, migration v48), deployed by the owner by hand on
+  2026-10-30 (reported in owner turn `e21a1604`, 22:19:50 UTC). Over `69af453` it adds PR #295, and PR #294 and PR #296 unless an
   earlier deploy carried them (not recorded here). See the phase 7d-B entry of the active phase for its smoke and the
   v48 post-check (**v48 directly confirmed**). PR #297 (`39b4b52`, documents only) was merged after it and goes out
   with the next deploy.
@@ -3351,30 +3351,31 @@ pre-existing; pass/fail counts don't belong in this file
 - **A stale comment in `pinnedDecisions`** (`backend/src/sourceRevisionLifecycleService.js`; the *Nezavisni revizor*'s
   LOW-1 on PR #273): it still says the caller learns "which archived clubs to restore", while `club_archived` no longer
   points to a restore (R8). Not done in PR #293 or PR #295: the comment is still at
-  `backend/src/sourceRevisionLifecycleService.js:235-236` on `39b4b52`. **The *Rukovodilac*'s rule** (its message
-  queued at 19:22:40 UTC): no pull request head is made for it alone; it is fixed in the first next pull request that
-  touches that file (7d-C at the latest).
+  `backend/src/sourceRevisionLifecycleService.js:234-235` on `39b4b52` (PR #295 moved it up one line). **The
+  *Rukovodilac*'s rule** (its message queued at 19:22:40 UTC): no pull request head is made for it alone; it is fixed in
+  the first next pull request that touches that file (the *Rukovodilac* names 7d-C, D3's prepared replacement).
 - **Owner concern, 2026-10-30: an athlete who trains with two teams** (owner turn `67e1025c`, 22:15:23 UTC, in the
   *Rukovodilac*'s chat): „… vise me brine situacija da jedan talentovani sportista je u nekim danima u prvom timu a nekim
   danima u u19 timu pa kako njega da sredimo da mu upadaju podaci kod njega”. The existing design, as the *Rukovodilac*
   reads it and the executor checked on `e915a5b`:
-  - an athlete may hold several different active team memberships at once (`public.athlete_memberships` is unique only
-    per athlete and team among active rows, `migrations/20260801_athlete_memberships.sql:63-73`;
-    `backend/src/routes/organization.js:3509-3510`);
+  - an athlete may hold several different active team memberships at once (`public.athlete_memberships` allows no two
+    identical active memberships, per athlete and club and per athlete and team, and nothing more,
+    `migrations/20260801_athlete_memberships.sql:63-73`; `backend/src/routes/organization.js:3509-3510`);
   - a GPEXE athlete link is per OptiMove team (unique per team and GPEXE athlete, and per team and athlete, among
     active links, `migrations_v2/202609191000_training_load_v22_gpexe_in_app_import.sql:94-97`) and needs an active
     membership of the athlete in that team (the link trigger, v22 `:125`);
   - so both teams link their GPEXE record to the same OptiMove athlete, and an event's participant is the athlete
     (`training_load.metric_event_participants.athlete_id`, v12 `:135-147`): both teams' data gather on him.
-  - **Risks:** (1) two profiles of one person (one created in each team) split his data; no athlete-profile merge or
-    duplicate-profile guard exists (a search of `backend/src`, `frontend` and `migrations_v2` found none, only the guard
-    against an identical active membership); (2) if the two teams' zones differ, his values land in two canonical
-    variables (OD1), which a per-athlete analysis has to know.
+  - **Risks:** (1) two profiles of one person (one created in each team) split his data. The only per-person
+    uniqueness is one login → at most one athlete profile (`athletes_user_id_unique`,
+    `migrations/20260802_user_global_roles.sql:54-61`, which `backend/src/routes/organization.js:1745-1766` relies on);
+    nothing stops two profiles without a login for the same person, and no athlete-profile merge exists. (2) If the two
+    teams' zones differ, his values land in two canonical variables (OD1), which a per-athlete analysis has to know.
   - **Not checked (open discovery questions):** both GPEXE teams recording the same session; the same GPEXE athlete id
     in both GPEXE teams.
   - No phase is opened for it without the *Rukovodilac*'s order.
 - **An athlete-profile duplicate guard, or a profile merge** (from the owner's concern above; a future proposal, not
-  scheduled): today nothing stops a second profile of the same person or merges two profiles.
+  scheduled): today nothing stops a second login-less profile of the same person, and nothing merges two profiles.
 - **The disposable test databases do not carry PR #267's three `media.*` migrations** (`GPEXE_TEST_MIGRATIONS` in
   `backend/tests/_gpexe-disposable-db.mjs`), so their order differs from production's. No object is shared with
   `training_load`, so no Metrics Core test is affected; whether to add them (with the earlier media migrations they
@@ -3936,7 +3937,8 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
    - phase 7, the rest of M2: 7a (PR #269), 7b (PR #273, v43), 7c (PR #293, v47) and 7d-B (PR #295, v48) are done,
      merged and deployed, v43, v47 and v48 directly confirmed by the owner's post-checks. The contracts of 7e, 7f and 7g
      and the owner's decisions OD1–OD7 are merged (PR #297). Next by the plan: 7f-B (the extractor registry, no
-     migration), 7e-B (the aggregate preview, no migration), 7g-B (ending a held source instance, migration v49), then
+     migration), 7e-B (the aggregate preview, no migration), 7g-B (ending a held source instance, migration v49 if none
+     comes between), then
      a minimal phase 8 (the Mappings tab) and phase 9 (the first controlled import); phases 7h and 7i come right after
      the first import, before more clubs are brought on. A mapping version is activated in production only once its
      source field's unit is confirmed (C97; the owner's read-only procedure is
