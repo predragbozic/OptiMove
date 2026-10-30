@@ -15,12 +15,17 @@
 select current_setting('server_version_num')::int as server_version_num,
        current_setting('server_version_num')::int >= 150000 as pg15_or_later;
 
--- 2. The migration state: v42 the last migration, recorded once with the
---    repository's checksum; v43 absent and nothing recorded at or after its
---    name (the migrator runs files in name order).
+-- 2. The migration state: v42 the last training_load migration, recorded
+--    once with the repository's checksum; v43 absent and nothing recorded at
+--    or after its name (the migrator runs files in name order). Migrations of
+--    other schemas may follow v42: on production, PR #267's three media.*
+--    migrations (202610291000, 202610291100, 202610291200) did, and none of
+--    them touches a training_load object.
 --    Expected: v42_rows = 1, v42_checksum_ok = true, v43_rows = 0,
---    at_or_after_v43 = 0,
---    last_migration = migrations_v2/202610282300_training_load_v42_source_metric_zone_model.sql.
+--    at_or_after_v43 = 0, and last_migration either
+--    migrations_v2/202610282300_training_load_v42_source_metric_zone_model.sql
+--    or a later migration of another schema whose name sorts before v43's
+--    (on production on 2026-10-29: migrations_v2/202610291200_media_drive_reference_bridge.sql).
 select
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202610282300_training_load_v42_source_metric_zone_model.sql') as v42_rows,
   (select bool_and(checksum = '042445620eade972e9940667c4777469a5e9d22f3d9b551d1d4b64bbdb610af1') from public.schema_migrations

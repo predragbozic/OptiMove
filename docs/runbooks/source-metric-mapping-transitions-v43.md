@@ -37,7 +37,8 @@ The same day as the merge and deploy:
 1. Run `docs/runbooks/source-metric-mapping-transitions-v43-preflight.sql` one block at a time. Every value must be the
    expected one:
    - block 1 shows PostgreSQL 15 or later;
-   - block 2 shows v42 as the last migration, with its checksum;
+   - block 2 shows v42 as the last `training_load` migration, with its checksum (a later migration of another schema,
+     such as PR #267's `media.*` ones on production, may follow it);
    - block 3 shows no v43 object and v35's `source_metric_actor_basis`;
    - **block 4 is a hard assertion: `safe_to_merge = true` (no active mapping version and no activation).** Anything
      else: stop, do not merge, report;
