@@ -759,13 +759,37 @@ order covers is merged under it.
     answered 401, and so did the mappings, variables and fields reads and the GPEXE team status.
   - **v43 is directly confirmed on the production database** by the owner's post-check. No mapping version is active
     in production. `CURRENT_STATE.md` holds the full record.
-- **Next by the order above: 7c.**
 - **7c and 7d, the contracts (J9, J10):** `docs/ai/phase7c-unit-conversions-contract.md` and
   `docs/ai/phase7d-mapping-activations-contract.md`, proposed on 2026-10-30 and reviewed in one ★★ round, as the
   *Rukovodilac* reads the owner's word „ako je sigurnije neka ide kako smo počeli, eventualno 7c i 7d možda u jedan pr”
   (owner turn `dc0796d5`, 2026-10-30 15:56:22 UTC, in the *Rukovodilac*'s chat; the executor checked it in the transcript).
   The implementations stay separate: 7c-B with migration v47, then 7d-B with v48, each merged only on the owner's
   order naming its pull request, migration file and sha256. 7d follows C106 (a club admin also writes T5).
+  The contracts were merged as PR #291 (`236cc68`) on the owner's word „Odobravam PR #291.” (owner turn `6b576fa7`,
+  17:40:12 UTC), which also confirms C106's breadth.
+- **7c, Done, 2026-10-30.**
+  - PR #293 (branch `feature/7c-unit-conversions`): migration v47 is exactly
+    `migrations_v2/202610301700_training_load_v47_unit_conversion_guards.sql`, sha256
+    `665ef79f74689eb19fa8a41fad84268c17029aa38c322adaac2f88b841dabd66`. J9 "As built" in the discovery document records it
+    (its heading is brought up to date in PR #295).
+  - Reviews: the internal reviews, then GO on `6219f056` from the *Rukovodilac* and the *Nezavisni revizor*.
+  - The owner's words, in the *Rukovodilac*'s chat; the executor checked each turn in the *Rukovodilac*'s transcript:
+    - the preflight, the same day as the merge: „preflight ocekivane vrednosti potvrdjene” (owner turn `eb9fe4e6`,
+      18:02:07 UTC);
+    - the order: „Odobravam i naređujem merge PR #293 sa migracijom
+      202610301700_training_load_v47_unit_conversion_guards.sql, sha256
+      665ef79f74689eb19fa8a41fad84268c17029aa38c322adaac2f88b841dabd66.” (owner turn `f5c75f18`, 18:02:27 UTC).
+  - Merge by the executor: `69af453` (parents `aa84d574` and `6219f056`, 18:17:43 UTC), exactly from `6219f056`. `main` had
+    moved before it by PR #292 (the central calendar's screen: frontend and a plan document, no migration; the two
+    merges share no file); the targeted 7c and M2 suites passed on the merge tree (PR #296's description).
+  - Deploy: by the owner by hand, as `69af453`. The *Rukovodilac*'s smoke, 18:23:09 – 18:23:30 UTC: `/api/health`
+    answered `ok: true` on `69af453` three times in a row; `/api/auth/me` answered `{"user":null}`; without a login the
+    conversion list (also with a cursor), the conversion create and retire, the mappings and variables reads and the
+    GPEXE team status answered 401.
+  - **v47 is directly confirmed on the production database** by the owner's post-check, all five blocks („sve
+    potvrdjeno na postcheku”, as the *Rukovodilac* relays it; the block values were not written out). `CURRENT_STATE.md`
+    holds the full record.
+- **Next by the order above: 7d.** 7d-B (T5 activations, migration v48) is Draft PR #295, under the external review.
 - **Input (red zone):** the owner's decisions from section K of the discovery document:
   - the minimum number of athletes for min / max;
   - system or club zone mappings;

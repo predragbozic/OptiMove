@@ -6,8 +6,9 @@
 // contracts are sections J1, J3, J3b and J4 of
 // docs/ai/gpexe-metric-variable-mapping-discovery.md, J5
 // (docs/ai/v39-revision-lifecycle-contract.md), J8
-// (docs/ai/phase7b-mapping-transitions-contract.md) and J9, the unit
-// conversions (docs/ai/phase7c-unit-conversions-contract.md):
+// (docs/ai/phase7b-mapping-transitions-contract.md), J9, the unit
+// conversions (docs/ai/phase7c-unit-conversions-contract.md), and J10, the T5
+// activations (docs/ai/phase7d-mapping-activations-contract.md):
 // a platform admin (platform workspace: the system scope; a club workspace:
 // that club's scope) or a club's own active admin in that club's workspace;
 // for the variable reads and the three R2 writes also an active coach of an
@@ -22,6 +23,7 @@ import * as fields from "../sourceFieldVerificationService.js";
 import * as revisions from "../sourceRevisionLifecycleService.js";
 import * as classification from "../canonicalClassificationService.js";
 import * as conversions from "../unitConversionService.js";
+import * as activations from "../sourceMetricActivationService.js";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 
 const router = Router();
@@ -135,6 +137,36 @@ router.post("/conversions/:conversionId/retire", handle(async (req, res) => {
   if (!conversions.mayMaintainConversions(ctx)) return notFound(res);
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await conversions.retireConversion({ ctx, conversionId: req.params.conversionId, body: req.body }), 200);
+}));
+
+// Phase 7d (J10): T5 activations. An active platform admin (the platform
+// workspace or a club workspace) and the active admin of a club in its own
+// workspace (C106) - everyone else the identical 404, before the body is
+// looked at; then 415, a non-object body 400, a malformed id the identical
+// 404, a wrong body shape 400, then the write. S1 starts one version on listed
+// bindings (201 { activations }); S2 ends one activation (200 { activation });
+// S3 lists them by bindingId or versionId ({ activations, nextCursor }).
+router.get("/activations", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!activations.mayManageActivations(ctx)) return notFound(res);
+  res.json(await activations.listActivations({ ctx, query: req.query }));
+}));
+
+router.post("/activations", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!activations.mayManageActivations(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await activations.startActivations({ ctx, body: req.body }), 201);
+}));
+
+router.post("/activations/:activationId/end", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!activations.mayManageActivations(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await activations.endActivation({ ctx, activationId: req.params.activationId, body: req.body }), 200);
 }));
 
 router.get("/mappings", handle(async (req, res) => {

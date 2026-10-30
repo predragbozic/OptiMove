@@ -272,13 +272,22 @@ async function asLaterPhase(sql, params) {
     throw error;
   }
 }
-// An open T5 activation of version v (cannot exist before phase 7d).
+// An open T5 activation of version v, written raw (phase 7d's start has its own
+// suite, mapping-activations-7d.test.mjs): a real team (the activation_end
+// audit row of its end references it), a binding id that names no binding.
 async function openActivation(v) {
   const row = await versionRow(v.versionId);
-  await asLaterPhase(`insert into training_load.source_metric_mapping_activations (mapping_version_id, mapping_id, source_metric_definition_id, metric_definition_id, parameter_fingerprint, source_team_binding_id, team_id,
+  const teamId = (await one(k, `insert into public.teams (club_id, name) values ($1,$2) returning id`, [W.clubA, `Team ${uid()}`])).id;
+  return (await asLaterPhase(`insert into training_load.source_metric_mapping_activations (mapping_version_id, mapping_id, source_metric_definition_id, metric_definition_id, parameter_fingerprint, source_team_binding_id, team_id,
                         applies_to_session, applies_to_drill, requirement, activated_by_user_id, activated_basis, reason)
-                      values ($1,$2,$3,$4,$5,$6,$6,true,true,'required',$7,'platform_admin','Phase 7d simulation')`,
-  [v.versionId, v.mappingId, row.source_metric_definition_id, row.metric_definition_id, row.parameter_fingerprint, crypto.randomUUID(), W.pa.id]);
+                      values ($1,$2,$3,$4,$5,$6,$7,true,true,'required',$8,'platform_admin','Phase 7d simulation') returning id`,
+  [v.versionId, v.mappingId, row.source_metric_definition_id, row.metric_definition_id, row.parameter_fingerprint, crypto.randomUUID(), teamId, W.pa.id])).rows[0].id;
+}
+// How an activation ended: [end_reason, ended_basis], and its activation_end row's reason.
+async function endOf(activationId) {
+  const a = await one(k, `select end_reason, ended_basis from training_load.source_metric_mapping_activations where id = $1`, [activationId]);
+  const audit = await one(k, `select reason from training_load.source_metric_audit where action = 'activation_end' and activation_id = $1`, [activationId]);
+  return [a.end_reason, a.ended_basis, audit?.reason ?? null];
 }
 // The active unit conversion of a pair; a retired pair gets a fresh active row again.
 async function conversion(from, to) {
@@ -758,7 +767,7 @@ test("9. information hiding: a club admin (own and other club), a team coach, a 
   assert.equal(ok200(await disable(clubDraft, W.paA.cookie, { requestKey: k3, expectedStatus: "draft", reason: "Club disable." })).replayed, true);
 });
 
-test("10. A1's refusals, each writing nothing: version_not_submitted, active_version_changed (null while one is active, a wrong id, a name while none is), revision_not_verified, target_not_active, canonical_version_changed, conversion_unavailable, bound_conversion_unavailable, level_not_allowed, source_metric_target_taken (a system and a club mapping of the same pair are both allowed), activation_open (A1 and A2)", async () => {
+test("10. A1's refusals, each writing nothing: version_not_submitted, active_version_changed (null while one is active, a wrong id, a name while none is), revision_not_verified, target_not_active, canonical_version_changed, conversion_unavailable, bound_conversion_unavailable, level_not_allowed, source_metric_target_taken (a system and a club mapping of the same pair are both allowed); from phase 7d an open activation is ended by A1's replacement and by A2, never a refusal", async () => {
   const f = await field();
   const draft = await version(f, { submit: false });
   assert.deepEqual(refused(await activate(draft, W.pa.cookie), 409, "version_not_submitted").current, { status: "draft" });
@@ -818,20 +827,20 @@ test("10. A1's refusals, each writing nothing: version_not_submitted, active_ver
   assert.ok(!JSON.stringify(taken).includes(first.mappingId) && !JSON.stringify(taken).includes(first.versionId), "names nothing of the other mapping");
   const clubSame = await version(shared, { owner: W.caA, target: W.clubAVar });
   ok200(await activate(clubSame, W.paA.cookie));
-  // An open activation (cannot exist before 7d): A1's replacement and A2 refuse it.
+  // An open activation (phase 7d, D6): A1's replacement and A2 end it with
+  // their own reason, never activation_open.
   const o = await field();
   const on = await activeVersion(o);
   const on1 = await version(o);
-  await openActivation(on);
-  // Refused by the service's own check under the locks, before any write (the
-  // v34 trigger is only the backstop).
-  let wrote = false;
-  service.setMappingWriteHoldForTests(async () => { wrote = true; });
-  refused(await activate(on1, W.pa.cookie, { expected: on.versionId, reason: "Replace." }), 409, "activation_open");
-  refused(await disable(on, W.pa.cookie, { expectedStatus: "active" }), 409, "activation_open");
-  service.setMappingWriteHoldForTests(null);
-  assert.equal(wrote, false, "refused before the first write");
-  assert.deepEqual([await statusOf(on), await statusOf(on1)], ["active", "needs_review"]);
+  const onActivation = await openActivation(on);
+  const replaced = ok200(await activate(on1, W.pa.cookie, { expected: on.versionId, reason: "Replace." }));
+  assert.deepEqual([replaced.activationsEnded, replaced.activations], [1, []]);
+  assert.deepEqual(await endOf(onActivation), ["mapping_version_replaced", "platform_admin", "Replace."]);
+  assert.deepEqual([await statusOf(on), await statusOf(on1)], ["disabled", "active"]);
+  const on1Activation = await openActivation(on1);
+  const disabledOne = ok200(await disable(on1, W.pa.cookie, { expectedStatus: "active" }));
+  assert.equal(disabledOne.activationsEnded, 1);
+  assert.deepEqual(await endOf(on1Activation), ["mapping_version_disabled", "platform_admin", "Wrong mapping."]);
   // Nothing of any refusal was recorded.
   for (const v of [draft, n1, lone, av, mv, cv, lv, second]) {
     assert.equal((await auditOf(`mapping_version_id = $1 and to_status in ('active', 'disabled')`, [v.versionId])).length, 0, v.versionId);
@@ -1096,7 +1105,7 @@ test("13. concurrency, in both orders, the second request always by another admi
   }
 });
 
-test("14. the pinned step (Q5, Q7): L4 and L5 disable an active pinned version - a system one and a club's (from the platform workspace) - each with its mapping_status row from active and the fixed reason, counted by owner scope only; an archived club's active version is 409 club_archived naming that club; an open activation stays refused", async () => {
+test("14. the pinned step (Q5, Q7): L4 and L5 disable an active pinned version - a system one and a club's (from the platform workspace) - each with its mapping_status row from active and the fixed reason, counted by owner scope only; an archived club's active version is 409 club_archived naming that club; from phase 7d an open activation is ended with the fixed reason (O5)", async () => {
   const f = await field();
   const r2 = await revisionOf(f, 2);
   const sysActive = await activeVersion(f);
@@ -1126,11 +1135,14 @@ test("14. the pinned step (Q5, Q7): L4 and L5 disable an active pinned version -
   } finally {
     await k.query(`update public.clubs set is_active = true where id = $1`, [W.clubB]);
   }
-  // An open activation (phase 7d) stays a refusal.
+  // An open activation (phase 7d, O5): the pinned step ends it with the fixed
+  // reason, then disables and retires.
   const h = await field();
   const hv = await activeVersion(h);
-  await openActivation(hv);
-  refused(await post(`/fields/${h.fieldId}/revisions/${h.revId}/retire`, W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "x" }), 409, "activation_open");
+  const hActivation = await openActivation(hv);
+  ok200(await post(`/fields/${h.fieldId}/revisions/${h.revId}/retire`, W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "x" }));
+  assert.deepEqual(await endOf(hActivation), ["mapping_version_disabled", "platform_admin", PINNED_REASON]);
+  assert.equal(await statusOf(hv), "disabled");
   assert.equal(lifecycle.PINNED_DISABLE_REASON, PINNED_REASON);
 });
 

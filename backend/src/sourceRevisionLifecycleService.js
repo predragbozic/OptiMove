@@ -16,10 +16,12 @@
 //   needs_review or active - a club's included -, with the fixed reason
 //   "Source revision retired." and one mapping_status audit row each, from
 //   the version's own status; a pinned draft stays a draft (it can no longer
-//   be submitted). An open activation cannot exist before phase 7d and is
-//   refused (fail closed); a needs_review or active version of an archived
-//   club, which no one may write, is 409 club_archived naming those clubs
-//   (O7(ii)(a); Q1 (a)). Answers count the disabled versions only, never a
+//   be submitted). From phase 7d (J10, O5) the open activations of those
+//   versions end first (mapping_version_disabled, with the same reason, on
+//   every club's binding: the platform admin's basis is derived without the
+//   club gate); a needs_review or active version of an archived club, which
+//   no one may write, is 409 club_archived naming those clubs (O7(ii)(a); Q1
+//   (a)) and ends nothing. Answers count the disabled versions only, never a
 //   mapping, a version or a club of another owner.
 // - O2 (L4): a verified revision is replaced only by a verified one.
 //
@@ -37,6 +39,7 @@
 // retirement, the activation), the T8 rows with the keyed one last, and the
 // bounded COMMIT (v39's deferred audit links).
 import { adminWriteKit, LIST_CAPS, SourceMetricMappingError } from "./sourceMetricMappingService.js";
+import { endAuditRows, endOpenActivations, lockOpenActivations } from "./sourceMetricActivationSteps.js";
 import { boundedText, unitTokenOk } from "./metricTextRules.js";
 import { evidenceRefOk, mayVerify } from "./sourceFieldVerificationService.js";
 
@@ -79,7 +82,6 @@ const TEXT = {
   revision_not_active: "The source field has no active revision to replace.",
   revision_changed: "The active revision of the source field is not the one this request names; read the field again.",
   successor_not_verified: "A verified revision is replaced only by a verified revision: confirm the draft's unit and meaning first.",
-  activation_open: "A mapping version pinned to this revision has an open activation; it is not retired before the activation ends.",
   club_archived: "A submitted or active mapping version pinned to this revision belongs to an archived club, whose versions no one may change; the revision is not retired while the club is archived.",
 };
 
@@ -188,8 +190,9 @@ async function lockField(client, fieldId) {
 
 // The pinned step's locks and facts (O4, O7) for a revision being retired:
 // the T3 rows of the versions pinned to it FOR SHARE, then those versions FOR
-// UPDATE, both in ascending id; their open activations. The clubs are locked
-// later, after the acting user's rows (v35's order).
+// UPDATE, both in ascending id; then their open activations FOR NO KEY UPDATE
+// in ascending id (phase 7d, O5). The clubs are locked later, after the
+// acting user's rows (v35's order).
 async function lockPinned(client, revisionId) {
   const mappingIds = (await client.query(
     `select distinct mapping_id from training_load.source_metric_mapping_versions where source_metric_version_id = $1`, [revisionId],
@@ -206,11 +209,7 @@ async function lockPinned(client, revisionId) {
         for update of v`,
     [revisionId],
   )).rows;
-  const openActivations = versions.length === 0 ? 0 : (await client.query(
-    `select count(*)::int as n from training_load.source_metric_mapping_activations
-      where mapping_version_id = any($1::uuid[]) and ended_at is null`,
-    [versions.map((v) => v.id)],
-  )).rows[0].n;
+  const openActivations = await lockOpenActivations(client, versions.map((v) => v.id));
   return { versions, openActivations };
 }
 
@@ -227,9 +226,9 @@ async function archivedPinnedClubs(client, toDisable) {
 
 // The pinned step's 409 decisions, after every lock and the right (J5.2, step
 // 5). From phase 7b an active pinned version is disabled like a submitted one
-// (O5: "a field can always be stopped"; J8 Q5 and Q7).
+// (O5: "a field can always be stopped"; J8 Q5 and Q7); from phase 7d its open
+// activations are ended, never a refusal.
 async function pinnedDecisions(client, pinned) {
-  if (pinned.openActivations > 0) throw refusal(409, "activation_open", TEXT.activation_open);
   const toDisable = pinned.versions.filter((v) => v.status === "needs_review" || v.status === "active");
   const archived = await archivedPinnedClubs(client, toDisable);
   // O7(ii)(a): the caller, an active platform admin, learns which archived
@@ -238,10 +237,12 @@ async function pinnedDecisions(client, pinned) {
   return toDisable;
 }
 
-// The pinned step's writes: one statement for the disables of both statuses,
-// before the retirement (v34 refuses a retirement while a pinned version is
-// needs_review or active).
-async function disablePinned(client, ctx, toDisable) {
+// The pinned step's writes: the open activations ended first (v34 refuses to
+// disable a version with an open activation), then one statement for the
+// disables of both statuses, before the retirement (v34 refuses a retirement
+// while a pinned version is needs_review or active).
+async function disablePinned(client, ctx, toDisable, openActivations) {
+  await endOpenActivations(client, ctx, openActivations, "mapping_version_disabled");
   if (toDisable.length === 0) return;
   await client.query(
     `update training_load.source_metric_mapping_versions
@@ -251,8 +252,10 @@ async function disablePinned(client, ctx, toDisable) {
   );
 }
 // Each row with its version's own from_status, as lockPinned read it under
-// FOR UPDATE (v35's deferred link needs the transition's real from status).
-async function disabledAuditRows(client, ctx, toDisable, operationId) {
+// FOR UPDATE (v35's deferred link needs the transition's real from status);
+// then one activation_end row per ended activation, with the same reason (the
+// version's disable_reason, v48).
+async function disabledAuditRows(client, ctx, toDisable, operationId, openActivations) {
   for (const v of toDisable) {
     await client.query(
       `insert into training_load.source_metric_audit
@@ -261,6 +264,7 @@ async function disabledAuditRows(client, ctx, toDisable, operationId) {
       [v.mapping_id, v.id, v.status, PINNED_DISABLE_REASON, ctx.userId, operationId],
     );
   }
+  await endAuditRows(client, ctx, openActivations, PINNED_DISABLE_REASON, operationId);
 }
 async function retire(client, ctx, revisionId, reason) {
   await client.query(
@@ -425,9 +429,9 @@ export async function retireRevision({ ctx, fieldId: rawField, revisionId: rawRe
       const toDisable = await pinnedDecisions(client, pinned);
       await databaseAgrees(client, { texts: [[reason, REASON_MAX_LENGTH, "invalid_body", TEXT.invalid_reason]] });
       if (writeHold) await writeHold(client, "retire");
-      await disablePinned(client, ctx, toDisable);
+      await disablePinned(client, ctx, toDisable, pinned.openActivations);
       await retire(client, ctx, revisionId, reason);
-      await disabledAuditRows(client, ctx, toDisable, operationId);
+      await disabledAuditRows(client, ctx, toDisable, operationId, pinned.openActivations);
       if (skipAuditRow !== action) {
         await revisionAuditRow(client, { action, fieldId, revisionId, fromStatus: target.state, toStatus: "retired", reason, ctx, operationId, requestKey, requestHash });
       }
@@ -504,10 +508,10 @@ export async function replaceRevision({ ctx, fieldId: rawField, revisionId: rawR
       const toDisable = await pinnedDecisions(client, pinned);
       await databaseAgrees(client, { texts: [[reason, REASON_MAX_LENGTH, "invalid_body", TEXT.invalid_reason]] });
       if (writeHold) await writeHold(client, "replace");
-      await disablePinned(client, ctx, toDisable);
+      await disablePinned(client, ctx, toDisable, pinned.openActivations);
       await retire(client, ctx, active.id, reason);
       await activate(client, ctx, revisionId);
-      await disabledAuditRows(client, ctx, toDisable, operationId);
+      await disabledAuditRows(client, ctx, toDisable, operationId, pinned.openActivations);
       if (skipAuditRow !== "source_metric_revision_retire") {
         await revisionAuditRow(client, { action: "source_metric_revision_retire", fieldId, revisionId: active.id, fromStatus: "active", toStatus: "retired", reason, ctx, operationId });
       }
