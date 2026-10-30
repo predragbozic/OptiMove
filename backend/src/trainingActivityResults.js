@@ -5,20 +5,12 @@
 // isAthleteSelf/scope split as trainingLoadMetrics.js's own
 // resolveReadContext).
 import { query } from "./db.js";
-import { activityScopeSqlForWorkspace, isAthleteInWorkspaceScope } from "./trainingActivityAccess.js";
+import { activityReadScopeSqlForWorkspace, canReadActivityInScope, isAthleteInWorkspaceScope } from "./trainingActivityAccess.js";
 
 function httpError(status, message) {
   const e = new Error(message);
   e.httpStatus = status;
   return e;
-}
-
-function canManageOwnerRow(scope, row) {
-  if (scope.type === "platform") return true;
-  if (scope.type === "club") return row.owner_scope === "club" && String(row.owner_club_id) === String(scope.clubId);
-  if (scope.type === "team") return row.owner_scope === "team" && String(row.owner_team_id) === String(scope.teamId);
-  if (scope.type === "private_coach") return row.owner_scope === "user" && String(row.owner_user_id) === String(scope.userId);
-  return false;
 }
 
 // Canonical activity detail: resolves p_activity_id (which may itself be
@@ -30,9 +22,20 @@ function canManageOwnerRow(scope, row) {
 // only ever read their OWN results (never another athlete's, even one
 // nominally "in their own workspace" — there is no such thing for an
 // athlete). A coach may read any activity within their currently active
-// workspace's owner scope.
+// workspace's READ scope (trainingActivityAccess.js's
+// canReadActivityInScope: the owner scope, and for a club workspace also
+// the activities of the club's active teams — owner decision D8). A missing
+// activity, another club's team, an archived team and every other caller
+// get the identical 404 (ADR-006).
 export async function getCanonicalActivityResults(readContext, activityId) {
-  const activityRow = await query(`select owner_scope, owner_user_id, owner_club_id, owner_team_id from training.activities where id = $1`, [activityId]);
+  const activityRow = await query(
+    `select a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id,
+            t.club_id as owner_team_club_id, coalesce(t.is_active, true) as owner_team_active
+     from training.activities a
+     left join public.teams t on t.id = a.owner_team_id
+     where a.id = $1`,
+    [activityId],
+  );
   if (!activityRow.rowCount) throw httpError(404, "Activity not found.");
 
   if (readContext.isAthleteSelf) {
@@ -42,7 +45,7 @@ export async function getCanonicalActivityResults(readContext, activityId) {
       [readContext.athleteId, activityId],
     );
     if (!owns.rowCount) throw httpError(404, "Activity not found.");
-  } else if (!canManageOwnerRow(readContext.scope, activityRow.rows[0])) {
+  } else if (!canReadActivityInScope(readContext.scope, activityRow.rows[0])) {
     throw httpError(404, "Activity not found.");
   }
 
@@ -148,7 +151,8 @@ export async function listActivities(readContext, { athleteId, dateFrom, dateTo,
   }
 
   const params = [dateFrom, dateTo];
-  const scopeSql = readContext.isAthleteSelf ? "true" : activityScopeSqlForWorkspace(readContext.scope, "a", params);
+  // The READ scope (D8): a club workspace lists its active teams' activities too.
+  const scopeSql = readContext.isAthleteSelf ? "true" : activityReadScopeSqlForWorkspace(readContext.scope, "a", params);
   let athleteSql = "true";
   if (targetAthleteId) {
     params.push(targetAthleteId);

@@ -3,6 +3,8 @@ import { Router } from "express";
 import { pool, query } from "../db.js";
 import { resolveActiveWorkspace } from "../workspace.js";
 import {
+  WEEKLY_PLAN_SESSION_FILTER_SQL,
+  athleteExtraFilterSql,
   canManageExternalScheduleInScope,
   canManagePlanTrainingLoadInScope,
   canResolvePlanOwnership,
@@ -14,7 +16,7 @@ import {
 import { ensureCurrentExternalOccurrence, ensureCurrentExternalOccurrencesForAthlete, ensureCurrentExternalOccurrencesForCoach } from "../trainingLoadOccurrenceService.js";
 import { emitRealtimeEvent } from "../realtime.js";
 import { materializePlannedRpeActivityForSubmit } from "../trainingActivityMaterialize.js";
-import { activityScopeForWorkspace, activityScopeSqlForWorkspace } from "../trainingActivityAccess.js";
+import { activityReadScopeSqlForWorkspace, activityScopeForWorkspace } from "../trainingActivityAccess.js";
 
 const router = Router();
 
@@ -35,7 +37,7 @@ const router = Router();
 // directly instead, applying the exact same "is this weekly plan actually
 // published" predicate that view already encodes (plan_type = 'weekly',
 // status = 'active', coalesce(is_active, true), not coalesce(is_edit_draft,
-// false)) - kept in one place, WEEKLY_PLAN_SESSION_FILTER_SQL below.
+// false)) - kept in one place, WEEKLY_PLAN_SESSION_FILTER_SQL (trainingLoadAccess.js).
 //
 // Correction round 2 (logical session identity): a saved result is looked
 // up/deduplicated by plans.plan_sessions.logical_session_id, NEVER by the
@@ -46,12 +48,9 @@ const router = Router();
 // in builder.js for exactly which copy paths carry logical_session_id
 // forward and which mint a fresh one.
 
-const WEEKLY_PLAN_SESSION_FILTER_SQL = `
-  p.plan_type = 'weekly'
-  and p.status = 'active'
-  and coalesce(p.is_active, true)
-  and not coalesce(p.is_edit_draft, false)
-`;
+// WEEKLY_PLAN_SESSION_FILTER_SQL (the "published weekly plan" rule every
+// planned-session read below applies) lives in trainingLoadAccess.js since
+// the central calendar (calendarQuery.js) shares it; imported above.
 
 function requireAthlete(req, res) {
   if (!req.authz?.isAthlete || !req.authz.athleteId) {
@@ -1044,30 +1043,10 @@ function coachWorkspaceScopeSqlForWorkspace(workspace, req, alias, startIndex) {
 // filter is a UNION across kinds, not an AND.
 // ------------------------------------------------------------
 
-// Correction (filter semantics): the picker is explicitly "Any mix of
-// clubs, teams and individual athletes" - within one kind, any selected
-// id (already true via `= any(...)`); ACROSS kinds, a union (club OR team
-// OR direct athlete), never an AND (which would routinely match nothing -
-// "athletes who are both in this club AND specifically this one person").
-// The whole union still sits inside the mandatory workspace scope (ANDed
-// with it), never instead of it - a coach can never widen their own
-// current-workspace scope via this filter, only narrow it.
-function athleteExtraFilterSql(alias, clubIds, teamIds, athleteIds, params) {
-  const conditions = [];
-  if (clubIds) {
-    params.push(clubIds);
-    conditions.push(`exists (select 1 from public.athlete_memberships am where am.athlete_id = ${alias}.id and am.membership_type = 'club' and am.status = 'active' and am.club_id = any($${params.length}::uuid[]))`);
-  }
-  if (teamIds) {
-    params.push(teamIds);
-    conditions.push(`exists (select 1 from public.athlete_memberships am where am.athlete_id = ${alias}.id and am.membership_type = 'team' and am.status = 'active' and am.team_id = any($${params.length}::uuid[]))`);
-  }
-  if (athleteIds) {
-    params.push(athleteIds);
-    conditions.push(`${alias}.id = any($${params.length}::uuid[])`);
-  }
-  return conditions.length ? ` and (${conditions.join(" or ")})` : "";
-}
+// The filter's union semantics (club OR team OR direct athlete, inside the
+// mandatory workspace scope) live in trainingLoadAccess.js's
+// athleteExtraFilterSql, imported above - moved there unchanged for the
+// central calendar (calendarQuery.js), which shares the same picker.
 
 router.get("/weekly", async (req, res, next) => {
   try {
@@ -1481,8 +1460,12 @@ router.get("/weekly", async (req, res, next) => {
 // joins below), not just a plain read.
 const CALENDAR_MAX_RANGE_DAYS = 62;
 
+// The READ scope (owner decision D8, the central calendar K1a): a club
+// workspace also lists the activities owned by the club's active teams, the
+// same rule the activity detail (trainingActivityResults.js) applies, so an
+// activity seen here always opens.
 function calendarActivityOwnerScopeSql(scope, alias, params) {
-  return activityScopeSqlForWorkspace(scope, alias, params);
+  return activityReadScopeSqlForWorkspace(scope, alias, params);
 }
 
 router.get("/calendar", async (req, res, next) => {

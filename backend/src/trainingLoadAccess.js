@@ -230,3 +230,45 @@ export function externalScheduleScopeSqlForWorkspace(scope, params) {
   }
   return "false";
 }
+
+// The one rule for "a published weekly plan" that GET /weekly and GET
+// /calendar (routes/trainingLoad.js) and GET /api/calendar (calendarQuery.js)
+// read planned sessions through — moved here from routes/trainingLoad.js
+// unchanged so the central calendar shares it instead of copying it. `p` is
+// the plans.plans alias of the calling query.
+export const WEEKLY_PLAN_SESSION_FILTER_SQL = `
+  p.plan_type = 'weekly'
+  and p.status = 'active'
+  and coalesce(p.is_active, true)
+  and not coalesce(p.is_edit_draft, false)
+`;
+
+// The optional Club / Team / Athletes filter of GET /weekly, GET /calendar
+// (routes/trainingLoad.js) and GET /api/calendar (calendarQuery.js), moved
+// here from routes/trainingLoad.js unchanged so the central calendar can
+// share it. The picker is explicitly "Any mix of clubs, teams and
+// individual athletes" - within one kind, any selected id (`= any(...)`);
+// ACROSS kinds, a union (club OR team OR direct athlete), never an AND
+// (which would routinely match nothing - "athletes who are both in this
+// club AND specifically this one person"). The whole union still sits
+// inside the mandatory workspace scope (ANDed with it by the caller),
+// never instead of it - a coach can never widen their own current-
+// workspace scope via this filter, only narrow it. `alias` is the
+// public.athletes alias of the calling query; the parameters are appended
+// to `params`; the result starts with " and (" or is "".
+export function athleteExtraFilterSql(alias, clubIds, teamIds, athleteIds, params) {
+  const conditions = [];
+  if (clubIds) {
+    params.push(clubIds);
+    conditions.push(`exists (select 1 from public.athlete_memberships am where am.athlete_id = ${alias}.id and am.membership_type = 'club' and am.status = 'active' and am.club_id = any($${params.length}::uuid[]))`);
+  }
+  if (teamIds) {
+    params.push(teamIds);
+    conditions.push(`exists (select 1 from public.athlete_memberships am where am.athlete_id = ${alias}.id and am.membership_type = 'team' and am.status = 'active' and am.team_id = any($${params.length}::uuid[]))`);
+  }
+  if (athleteIds) {
+    params.push(athleteIds);
+    conditions.push(`${alias}.id = any($${params.length}::uuid[])`);
+  }
+  return conditions.length ? ` and (${conditions.join(" or ")})` : "";
+}
