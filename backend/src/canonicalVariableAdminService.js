@@ -86,6 +86,7 @@ const TEXT = {
   rename_unchanged: "The new names are the same as the current ones.",
   variable_active: "The variable is already active.",
   restore_by_admin: "An administrator archived this variable; only an administrator can restore it.",
+  icon_unchanged: "The variable already has this icon.",
 };
 // A rename's precondition: the server's SHA-256 of the stored label, short
 // label, description and state (hex).
@@ -293,6 +294,8 @@ function actionsOf(row, ctx, editable) {
     if (!(coach && row.pinned)) actions.push("rename");
     if (!row.pinned) actions.push("archive");
     if (!isCoachView(ctx) && !row.pinned) actions.push("newVersion");
+    // J3b.11: every basis of a rename, a pinned variable too (display only).
+    actions.push("icon");
   } else if (!row.pinned && !(coach && !coachArchived(row))) {
     actions.push("restore");
   }
@@ -929,5 +932,37 @@ export async function restoreVariable({ ctx, variableId, body }) {
     },
     texts: () => [],
     update: () => ({ sql: "state = 'active'", values: [] }),
+  });
+}
+
+// An icon of a request: a key of the library, or null for none.
+function iconKeyField(value, field) {
+  if (value === null) return null;
+  if (!isIconKey(value)) throw invalidBody(`${field} is a key of the icon library, or null.`);
+  return value;
+}
+
+// POST /variables/:id/icon - the icon of an active variable (I1, J3b.11): a
+// library key, or null to remove it; expectedIconKey is the icon the caller
+// saw (a read's `icon`: a key or null). Every basis of a rename may do it, a
+// coach a pinned variable's too: an icon is display only and does not change
+// what the variable means. v44 records it as the change kind `icon`.
+export async function changeVariableIcon({ ctx, variableId, body }) {
+  const id = variableIdOrNotFound(variableId);
+  plainObject(body, ["requestKey", "expectedIconKey", "iconKey"], ["requestKey", "expectedIconKey", "iconKey"]);
+  const requestKey = uuidField(body.requestKey);
+  const expectedIconKey = iconKeyField(body.expectedIconKey, "expectedIconKey");
+  const iconKey = iconKeyField(body.iconKey, "iconKey");
+  const requestHash = hashOf({ contract: CONTRACT, operation: "variable_icon", variableId: id, body: { expectedIconKey, iconKey } });
+  const stored = iconKey === null ? null : `${ICON_PREFIX}${iconKey}`;
+  return runChange({
+    ctx, variableId: id, operation: "variable_icon", requestKey, requestHash, reason: null,
+    check: (row) => {
+      if (row.state !== "active") throw refusal(409, "variable_not_active", TEXT.variable_not_active);
+      if (iconOut(row.icon_url) !== expectedIconKey) throw refusal(409, "variable_changed", TEXT.variable_changed, { current: reducedOut(row, ctx) });
+      if ((row.icon_url ?? null) === stored) throw refusal(409, "icon_unchanged", TEXT.icon_unchanged);
+    },
+    texts: () => [],
+    update: () => ({ sql: "icon_url = $2", values: [stored] }),
   });
 }

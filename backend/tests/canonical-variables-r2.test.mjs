@@ -593,7 +593,7 @@ test("4. reads: a team workspace reads the reduced view (Q7) on the list, the de
   // The detail also carries the variable's domains and categories (phase 12b, J6 C6).
   assert.deepEqual([Object.keys(detail).sort(), Object.keys(detail.variable).sort(), detail.nextCursor], [["nextCursor", "variable"], [...REDUCED, "classification"].sort(), null]);
   assert.deepEqual(detail.variable.classification, { categories: [], domains: [], truncated: false });
-  assert.deepEqual([detail.variable.editable, detail.variable.actions, detail.variable.labelsToken], [true, ["rename", "archive"], tokenOf(v.label, null, null, "active")]);
+  assert.deepEqual([detail.variable.editable, detail.variable.actions, detail.variable.labelsToken], [true, ["rename", "archive", "icon"], tokenOf(v.label, null, null, "active")]);
   assert.deepEqual([(await api(`/variables/${v.id}?cursor=abc`, { cookie: W.coachA1.cookie })).body.error], ["invalid_query"]);
   // The reduced view's icon (PR-1): a key of the library, and null for any
   // other stored value - a URL, an alias, an unknown key - on the list and the
@@ -608,8 +608,8 @@ test("4. reads: a team workspace reads the reduced view (Q7) on the list, the de
   }
   // The admins: their view, with actions (newVersion only outside a team workspace) and the token.
   const admin = await view(W.caA, v.id);
-  assert.deepEqual([admin.actions, admin.labelsToken, Array.isArray(admin.versions)], [["rename", "archive", "newVersion"], detail.variable.labelsToken, true]);
-  assert.deepEqual((await view(W.caCoachA1, v.id)).actions, ["rename", "archive"], "an admin in a team workspace reads the team view");
+  assert.deepEqual([admin.actions, admin.labelsToken, Array.isArray(admin.versions)], [["rename", "archive", "newVersion", "icon"], detail.variable.labelsToken, true]);
+  assert.deepEqual((await view(W.caCoachA1, v.id)).actions, ["rename", "archive", "icon"], "an admin in a team workspace reads the team view");
   // A write answer, a replay and a verified lost COMMIT: the reduced view.
   const body = { requestKey: key(), labelsToken: detail.variable.labelsToken, description: "Read in metres" };
   const first = ok200(await post(`/variables/${v.id}/rename`, W.coachA1.cookie, body));
@@ -652,11 +652,11 @@ test("5. rename: the change row records old and new values from the database; a 
   const p = await created(W.caA.cookie, { levels: ["session"] });
   await pinned(p, W.caA.cookie);
   const pv = await view(W.coachA1, p.id);
-  assert.deepEqual(pv.actions, [], "a coach may neither rename nor archive a pinned variable");
+  assert.deepEqual(pv.actions, ["icon"], "a coach may neither rename nor archive a pinned variable; its icon, yes (J3b.11)");
   assert.deepEqual([(await rename(W.coachA1, p.id, { labelsToken: pv.labelsToken, label: p.label })).body.error], ["rename_unchanged"]);
   const coachPinned = await rename(W.coachA1, p.id, { labelsToken: pv.labelsToken, label: "Pinned rename" });
   assert.deepEqual([coachPinned.status, coachPinned.body.error], [409, "variable_pinned"]);
-  assert.equal((await view(W.caA, p.id)).actions.join(), "rename", "an admin may rename a pinned variable, not archive it");
+  assert.equal((await view(W.caA, p.id)).actions.join(), "rename,icon", "an admin may rename a pinned variable, not archive it");
   ok200(await rename(W.caA, p.id, { labelsToken: pv.labelsToken, label: "Pinned rename" }));
   // A legacy value longer than the output bound, and one on several lines: renamed through the token.
   const longLabel = "L".repeat(120);

@@ -147,6 +147,8 @@ export const createVersion = (id, body) => write(`${BASE}/${encodeURIComponent(i
 export const renameVariable = (id, body) => write(`${BASE}/${encodeURIComponent(id)}/rename`, body);
 export const archiveVariable = (id, body) => write(`${BASE}/${encodeURIComponent(id)}/archive`, body);
 export const restoreVariable = (id, body) => write(`${BASE}/${encodeURIComponent(id)}/restore`, body);
+// I1 (J3b.11): a new icon of the library, or none.
+export const changeVariableIcon = (id, body) => write(`${BASE}/${encodeURIComponent(id)}/icon`, body);
 
 export function errorInfo(error) {
   const data = error?.data && typeof error.data === "object" ? error.data : null;
@@ -180,6 +182,8 @@ const SETTLED_ON_CHECK = new Set([
   "current_version_changed", "variable_not_active", "variable_pinned", "version_unchanged",
   // R2's refusals come after the request record too (J3b.2, step 6).
   "variable_changed", "rename_unchanged", "variable_active", "restore_by_admin",
+  // And I1's (J3b.11).
+  "icon_unchanged",
 ]);
 export const checkSettles = (info) => SETTLED_ON_CHECK.has(info.code);
 export function checkNoteText(info) {
@@ -210,6 +214,7 @@ const CODE_TEXT = {
   rename_unchanged: "Nothing changed: these names are the ones already saved.",
   variable_active: "This variable is active (perhaps restored in the meantime), so there is nothing to restore.",
   restore_by_admin: "An administrator archived this variable, so only an administrator can restore it.",
+  icon_unchanged: "Nothing changed: this icon is the one already saved.",
 };
 // The same code means a different thing in each form (R2, J3b.2).
 const MODE_TEXT = {
@@ -224,6 +229,10 @@ const MODE_TEXT = {
   },
   restore: {
     variable_pinned: "A data source is now mapped to this variable (an active mapping), so it cannot be restored now. Nothing was saved.",
+  },
+  icon: {
+    variable_not_active: "This variable is archived now, so its icon cannot be changed. Nothing was saved.",
+    variable_changed: "Someone changed this variable's icon in the meantime, so your choice was not saved. This is its icon now; choose again if it is still needed.",
   },
 };
 export function codeText(info, mode = "") {
@@ -305,8 +314,9 @@ export function draftFromVersion(version) {
   return draft;
 }
 
-// The three R2 forms (J3b.2) never change how a variable is measured.
-export const CHANGE_MODES = Object.freeze(["rename", "archive", "restore"]);
+// The R2 forms (J3b.2) and the icon (I1, J3b.11) never change how a variable
+// is measured.
+export const CHANGE_MODES = Object.freeze(["rename", "archive", "restore", "icon"]);
 
 // The names a rename edits. A name the form cannot show exactly as it is saved
 // is "locked": read only, and never sent, until the coach chooses to replace
@@ -345,13 +355,17 @@ export function openForm(mode, { variable = null } = {}) {
     variableLabel: variable?.label || "",
     expectedCurrentVersionId: current?.id || null,
     labelsToken: change ? variable?.labelsToken || null : null,
+    // The icon the coach saw (a library key, or null): the server refuses the
+    // change when another one is saved meanwhile (J3b.11).
+    expectedIconKey: mode === "icon" ? variable?.icon || null : null,
     original: read ? read.names : null,
     locked: read ? read.locked : null,
     // A locked name the coach chose to replace: saving replaces the whole saved text.
     replacing: read ? { label: false, shortLabel: false, description: false } : null,
     // Set by a 409 variable_changed: the names someone else saved meanwhile.
     conflict: null,
-    draft: mode === "version" ? draftFromVersion(current) : read ? { ...emptyDraft(), ...read.names } : emptyDraft(),
+    draft: mode === "version" ? draftFromVersion(current) : read ? { ...emptyDraft(), ...read.names }
+      : mode === "icon" ? { ...emptyDraft(), iconKey: variable?.icon || "" } : emptyDraft(),
     dirty: false,
     requestKey: newRequestKey(),
     busy: false,
@@ -397,9 +411,9 @@ function decimalCompare(a, b) {
   return x === y ? 0 : x > y ? 1 : -1;
 }
 
-// The body of a rename, an archive or a restore (J3b.2) and its field errors;
-// `body` is null while a field is wrong or, for a rename, nothing changed
-// (`unchanged`).
+// The body of a rename, an archive, a restore (J3b.2) or an icon change
+// (J3b.11) and its field errors; `body` is null while a field is wrong or, for
+// a rename or an icon, nothing changed (`unchanged`).
 function buildChangeRequest(form) {
   const d = form.draft;
   const errors = {};
@@ -420,6 +434,11 @@ function buildChangeRequest(form) {
     if (Object.keys(errors).length) return { body: null, errors };
     if (!Object.keys(changed).length) return { body: null, errors, unchanged: true };
     return { errors, body: { requestKey: form.requestKey, labelsToken: form.labelsToken, ...changed } };
+  }
+  if (form.mode === "icon") {
+    const iconKey = d.iconKey || null;
+    if (iconKey === form.expectedIconKey) return { body: null, errors, unchanged: true };
+    return { errors, body: { requestKey: form.requestKey, expectedIconKey: form.expectedIconKey, iconKey } };
   }
   const reason = oneLine(d.reason);
   const message = textError(reason, LIMITS.reason, { required: form.mode === "archive" });

@@ -1,5 +1,6 @@
 // Training Load -> Data configuration -> Variables: loading, the forms and the
-// writes (create and new version, M3-0; rename, archive and restore, R2). One
+// writes (create and new version, M3-0; rename, archive and restore, R2; the
+// icon, I1). One
 // write at a time; a write whose answer is lost is shown as "Result not
 // confirmed" and checked by sending the very same request (the same request
 // key and body) again - the server replays a saved write and never saves twice.
@@ -13,7 +14,7 @@ import {
   submitClassificationForm, toTitle,
 } from "./metric-classification-actions.js";
 import {
-  CHANGE_MODES, archiveVariable, buildRequest, checkNoteText, checkSettles, codeText, createVariable, createVersion, emptyVariablesState,
+  CHANGE_MODES, archiveVariable, buildRequest, changeVariableIcon, checkNoteText, checkSettles, codeText, createVariable, createVersion, emptyVariablesState,
   errorInfo, fetchKeySuggestion, fetchVariable, fetchVariables, newRequestKey, openForm, outcomeUnknown, rebaseRename, renameVariable,
   replaceName, restoreVariable, variablesContext, variablesState,
 } from "./metric-variables-data.js";
@@ -154,6 +155,7 @@ const DISCARD_QUESTION = {
   rename: "Discard the new names you have not saved?",
   archive: "Discard the archive you have not confirmed?",
   restore: "Discard the restore you have not confirmed?",
+  icon: "Discard the icon you have not saved?",
 };
 // Closing or reloading the page while a save is in flight or not confirmed
 // loses the only view of its outcome; unsaved values are lost too.
@@ -186,7 +188,7 @@ export function dropVariablesForm({ keepDrop = false } = {}) {
 export async function handleVariablesAction(action, { render }) {
   const type = action.dataset.action || "";
   if (type.startsWith("metric-classification-")) return handleClassificationAction(action, { render, leaveForm, load: LOADERS });
-  // The shared icon picker, while this screen's create form has it open.
+  // The shared icon picker, while this screen's create or icon form has it open.
   if (type.startsWith("icon-picker-")) {
     if (!iconPickerOpenFor("metric-variables")) return false;
     return handleIconPickerAction(action, { render, apply: applyIcon });
@@ -194,18 +196,17 @@ export async function handleVariablesAction(action, { render }) {
   if (!type.startsWith("metric-variables-")) return false;
   const s = variablesState();
 
-  // The icon of a new variable: the picker opens on the current choice.
+  // The icon of a new variable, or of one being changed (I1): the picker opens
+  // on the current choice.
   if (type === "metric-variables-icon-open") {
     const form = s.form;
-    if (form?.mode !== "create" || form.busy || form.unconfirmed) return true;
-    openIconPicker({ host: "metric-variables", title: "Choose an icon for the variable", current: form.draft.iconKey, returnFocus: '[data-action="metric-variables-icon-open"]' });
-    render();
-    focusIconPicker();
+    if (!ICON_FORMS.has(form?.mode) || form.busy || form.unconfirmed) return true;
+    openIconChoice(form, render);
     return true;
   }
   if (type === "metric-variables-icon-clear") {
     const form = s.form;
-    if (form?.mode !== "create" || form.busy || form.unconfirmed || !form.draft.iconKey) return true;
+    if (!ICON_FORMS.has(form?.mode) || form.busy || form.unconfirmed || !form.draft.iconKey) return true;
     applyIcon(null);
     render();
     globalThis.document?.querySelector?.('[data-action="metric-variables-icon-open"]')?.focus?.();
@@ -228,15 +229,22 @@ export async function handleVariablesAction(action, { render }) {
     focusFirstField();
     return true;
   }
-  // R2: offered only where the server's `actions` names it (J3b.2).
-  const change = { "metric-variables-rename-open": "rename", "metric-variables-archive-open": "archive", "metric-variables-restore-open": "restore" }[type];
+  // R2 and I1: offered only where the server's `actions` names it (J3b.2, J3b.11).
+  const change = {
+    "metric-variables-rename-open": "rename", "metric-variables-archive-open": "archive", "metric-variables-restore-open": "restore",
+    "metric-variables-icon-change-open": "icon",
+  }[type];
   if (change) {
     const variable = s.detail.variable;
     if (s.form || !variable || !(variable.actions || []).includes(change)) return true;
     s.notice = "";
     s.form = openForm(change, { variable });
-    render();
-    focusFirstField();
+    // Change icon goes straight to the picker; its form holds the choice until Save.
+    if (change === "icon") openIconChoice(s.form, render);
+    else {
+      render();
+      focusFirstField();
+    }
     return true;
   }
   if (type === "metric-variables-name-replace") {
@@ -327,11 +335,20 @@ export async function handleVariablesAction(action, { render }) {
   return true;
 }
 
-// The picker's choice lands in the open create form only (never one that was
-// sent: its body is fixed until its result is known).
+// The forms that hold an icon choice: a new variable's, and a change of one (I1).
+const ICON_FORMS = new Set(["create", "icon"]);
+function openIconChoice(form, render) {
+  const title = form.mode === "icon" ? `Choose an icon for ${form.variableLabel}` : "Choose an icon for the variable";
+  openIconPicker({ host: "metric-variables", title, current: form.draft.iconKey, returnFocus: '[data-action="metric-variables-icon-open"]' });
+  render();
+  focusIconPicker();
+}
+
+// The picker's choice lands in the open create or icon form only (never one
+// that was sent: its body is fixed until its result is known).
 function applyIcon(key) {
   const form = variablesState().form;
-  if (form?.mode !== "create" || form.busy || form.unconfirmed) return;
+  if (!ICON_FORMS.has(form?.mode) || form.busy || form.unconfirmed) return;
   const next = key && isLibraryKey(key) ? key : "";
   if (next === form.draft.iconKey) return;
   form.draft.iconKey = next;
@@ -476,7 +493,7 @@ export async function submitVariablesForm(_formElement, { render }) {
   form.errors = errors;
   form.error = "";
   if (unchanged) {
-    form.error = "Nothing changed: change a name, or Cancel.";
+    form.error = form.mode === "icon" ? "Nothing changed: this is the icon already saved. Choose another one, or Cancel." : "Nothing changed: change a name, or Cancel.";
     render();
     return;
   }
@@ -500,6 +517,7 @@ const WRITES = {
   rename: (form) => renameVariable(form.variableId, form.sentBody),
   archive: (form) => archiveVariable(form.variableId, form.sentBody),
   restore: (form) => restoreVariable(form.variableId, form.sentBody),
+  icon: (form) => changeVariableIcon(form.variableId, form.sentBody),
 };
 
 async function send(render) {
@@ -580,8 +598,13 @@ async function saved(form, data, render) {
   if (form.mode === "create") {
     s.notice = data?.readError ? "The variable was created, but it could not be read back. Open it from the list." : `The variable ${variable?.label || ""} was created.`;
   } else if (CHANGE_MODES.includes(form.mode)) {
-    const done = { rename: "renamed", archive: "archived", restore: "restored" }[form.mode];
-    s.notice = data?.readError ? `The variable was ${done}, but it could not be read back. Open it again from the list.` : `The variable was ${done}.`;
+    if (form.mode === "icon") {
+      s.notice = data?.readError ? "The icon was changed, but the variable could not be read back. Open it again from the list."
+        : data?.variable && !data.variable.icon ? "The icon was removed." : "The icon was changed.";
+    } else {
+      const done = { rename: "renamed", archive: "archived", restore: "restored" }[form.mode];
+      s.notice = data?.readError ? `The variable was ${done}, but it could not be read back. Open it again from the list.` : `The variable was ${done}.`;
+    }
   } else {
     const number = data?.version?.versionNumber ?? variable?.currentVersion?.versionNumber;
     s.notice = data?.readError ? "The new version was saved, but it could not be read back. Open the variable again." : `Version ${number ?? ""} was saved.`;

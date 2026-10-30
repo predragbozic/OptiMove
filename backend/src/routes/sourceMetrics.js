@@ -244,6 +244,14 @@ router.post("/variables/:variableId/restore", handle(async (req, res) => {
   writeAnswer(res, await variables.restoreVariable({ ctx, variableId: req.params.variableId, body: req.body }), 200);
 }));
 
+// I1 (J3b.11): a variable's icon, for the same callers as a rename.
+router.post("/variables/:variableId/icon", handle(async (req, res) => {
+  const ctx = await editorContext(req, res);
+  if (!ctx) return;
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await variables.changeVariableIcon({ ctx, variableId: req.params.variableId, body: req.body }), 200);
+}));
+
 // Domains and categories of canonical variables (phase 12b, J6): the
 // classification for the variable editor's audience (a team workspace reads it,
 // O1); every write for the M3-0 admins only - everyone else the identical 404,

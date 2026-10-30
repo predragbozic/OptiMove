@@ -2,7 +2,7 @@
 // came from the server or the coach is escaped; ids live only in data-
 // attributes and under Technical details.
 import {
-  AGGREGATIONS, CONDITION_KINDS, LEVELS, LIMITS, OPERATORS, UNIT_SUGGESTIONS,
+  AGGREGATIONS, CHANGE_MODES, CONDITION_KINDS, LEVELS, LIMITS, OPERATORS, UNIT_SUGGESTIONS,
   aggregationLabel, conditionSummary, levelLabel, rangeSummary, readinessText, variablesContext, variablesState,
 } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -174,6 +174,7 @@ function renderDetailHtml(s, ctx) {
 const ACTION_BUTTONS = [
   ["rename", "metric-variables-rename-open", "Rename"],
   ["newVersion", "metric-variables-version-open", "New version"],
+  ["icon", "metric-variables-icon-change-open", "Change icon"],
   ["archive", "metric-variables-archive-open", "Archive"],
   ["restore", "metric-variables-restore-open", "Restore"],
 ];
@@ -280,20 +281,23 @@ function selectInput(form, field, label, options, { placeholder = "", structural
   `;
 }
 
-// The icon of a new variable (PR-1): chosen in the shared picker, sent as
-// iconKey. For now an icon is chosen only here, at create.
+// The icon of a new variable (PR-1) or of an existing one (I1, J3b.11): chosen
+// in the shared picker, sent as iconKey.
 function renderIconFieldHtml(form) {
   const locked = form.busy || form.unconfirmed;
   const key = form.draft.iconKey;
+  const change = form.mode === "icon";
+  const saved = change ? form.expectedIconKey : null;
+  const savedText = !change || (key || null) === saved ? "" : saved ? `Saved now: ${escapeHtml(saved)}.` : "Saved now: no icon.";
   return `
-    <fieldset class="metric-variables-fieldset"><legend>Icon <span class="muted">(optional)</span></legend>
+    <fieldset class="metric-variables-fieldset"><legend>Icon${change ? "" : ` <span class="muted">(optional)</span>`}</legend>
       <div class="dc-icon-choice">
         ${variableTileHtml({ icon: key }, { size: "lg" })}
-        <span class="dc-icon-choice-text" id="mv-icon-choice">${key ? `Chosen: <strong>${escapeHtml(key)}</strong>` : "No icon"}</span>
+        <span class="dc-icon-choice-text" id="mv-icon-choice">${key ? `Chosen: <strong>${escapeHtml(key)}</strong>` : "No icon"}${savedText ? ` <span class="muted">${savedText}</span>` : ""}</span>
         <button class="plain-button" type="button" data-action="metric-variables-icon-open" aria-describedby="mv-icon-choice mv-hint-iconKey" ${locked ? "disabled" : ""}>${key ? "Change icon" : "Choose icon"}</button>
         ${key ? `<button class="plain-button ghost" type="button" data-action="metric-variables-icon-clear" ${locked ? "disabled" : ""}>Remove icon</button>` : ""}
       </div>
-      <span class="muted" id="mv-hint-iconKey">Shown beside the variable in lists. Choose it now: after the variable is created its icon cannot be changed yet.</span>
+      <span class="muted" id="mv-hint-iconKey">Shown beside the variable in lists.${change ? "" : " You can change it later."}</span>
       ${fieldError(form, "iconKey")}
     </fieldset>`;
 }
@@ -322,7 +326,7 @@ function renderConditionHtml(form) {
 
 function renderFormHtml(s, ctx) {
   const form = s.form;
-  if (form.mode === "rename" || form.mode === "archive" || form.mode === "restore") return renderChangeFormHtml(form, ctx);
+  if (CHANGE_MODES.includes(form.mode)) return renderChangeFormHtml(form, ctx);
   const create = form.mode === "create";
   const locked = form.busy || form.unconfirmed;
   const title = create ? (ctx.owner === "system" ? "New system variable" : "New variable for this club") : `New version of ${escapeHtml(form.variableLabel)}`;
@@ -398,8 +402,10 @@ function unconfirmedHtml(form) {
     </div>`;
 }
 
-const CHANGE_TITLE = { rename: "Rename", archive: "Archive", restore: "Restore" };
-const CHANGE_SUBMIT = { rename: ["Save names", "Saving..."], archive: ["Archive variable", "Archiving..."], restore: ["Restore variable", "Restoring..."] };
+const CHANGE_TITLE = { rename: "Rename", archive: "Archive", restore: "Restore", icon: "Change the icon of" };
+const CHANGE_SUBMIT = {
+  rename: ["Save names", "Saving..."], archive: ["Archive variable", "Archiving..."], restore: ["Restore variable", "Restoring..."], icon: ["Save icon", "Saving..."],
+};
 
 // One name of a rename. A locked name (one the form cannot show exactly as
 // saved: cut by the read, or on several lines) is read only and is never sent
@@ -468,15 +474,19 @@ function renderChangeFormHtml(form, ctx) {
       <p class="metric-variables-field-note">Archiving affects ${reach}: until it is restored, no new values can be entered for it and it cannot be added to a dashboard. Values already recorded, its history and the dashboards that already show it stay as they are.${coach ? "" : " It also gets no new version, and no new mapping can use it."}</p>
       <p class="muted">${restorePromise(ctx)}</p>
       ${textInput(form, "reason", "Reason", { max: LIMITS.reason, required: true, hint: "Saved with the change, for example: replaced by the drill variable." })}`;
+  } else if (form.mode === "icon") {
+    body = `
+      <p class="muted">Only the icon changes, for ${reach}. The name, how the variable is measured and every recorded value stay as they are. Lists and dashboards show the new icon.</p>
+      ${renderIconFieldHtml(form)}`;
   } else {
     body = `
       <p class="metric-variables-field-note">The variable becomes active again for ${reach}: new values can be entered for it and it can be added to dashboards.${coach ? "" : " It can get new versions and be used by mappings again."}</p>
       ${textInput(form, "reason", "Reason", { max: LIMITS.reason })}`;
   }
   return `
-    <form class="data-sources-form metric-variables-form" data-metric-variables-form="${form.mode}" novalidate autocomplete="off">
+    <form class="data-sources-form metric-variables-form" data-metric-variables-form="${form.mode}" novalidate autocomplete="off"${iconPickerOpenFor("metric-variables") ? " inert" : ""}>
       <h2 id="metric-variables-title">${CHANGE_TITLE[form.mode]} ${escapeHtml(form.variableLabel)}</h2>
-      <p class="muted">Do not enter athlete names, ids, dates of birth or measured values.</p>
+      ${form.mode === "icon" ? "" : `<p class="muted">Do not enter athlete names, ids, dates of birth or measured values.</p>`}
       ${body}
       ${form.error ? `<p class="error" role="alert">${escapeHtml(form.error)}</p>` : ""}
       ${form.unconfirmed ? unconfirmedHtml(form) : `
