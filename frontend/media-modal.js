@@ -21,7 +21,6 @@ import { escapeAttr, escapeHtml } from "./utils.js";
 let opening = 0;
 let playbackAbort = null;
 let retryPlayback = null;
-let startOnFullscreen = null;
 
 // `access` is the R2 part of the media (FE-1): `videoMediaId` /
 // `imageMediaId` name the objects and `accessContext` ({ type, id }) is what
@@ -38,11 +37,10 @@ export function openMedia(title, imageUrl, videoUrl, access = {}) {
   const imagePreviewUrl = toDrivePreviewUrl(imageUrl);
   const hasImage = imageSources(imageUrl).length > 0;
   const cleanVideoUrl = String(videoUrl || "").trim();
-  // On a computer or a tablet an R2 video plays in the picture's own dialog;
-  // a phone, upright or turned, keeps its player (owner, 2026-10-29).
-  const inline = Boolean(videoMediaId) && !isMobileViewport() && !isShortViewport();
-  const announce = !inline && isMobileViewport();
-  const videoEmbed = videoMediaId ? renderAssetVideo(imageUrl, { inline, announce }) : videoEmbedMarkup(cleanVideoUrl, imageUrl);
+  // An R2 video plays in the picture's own dialog on every screen, a phone
+  // included; full screen only through its button (owner, 2026-10-30).
+  const inline = Boolean(videoMediaId);
+  const videoEmbed = inline ? renderAssetVideo(imageUrl) : videoEmbedMarkup(cleanVideoUrl, imageUrl);
   els.mediaTitle.textContent = title || "Exercise media";
   els.mediaModal.classList.toggle("is-video", Boolean(videoEmbed) && !inline);
   els.mediaModal.classList.toggle("is-inline-video", inline);
@@ -61,8 +59,8 @@ export function openMedia(title, imageUrl, videoUrl, access = {}) {
   `;
   markFrameVideo();
   els.mediaModal.hidden = false;
-  if (videoMediaId) {
-    wireAssetPlayback(session, { context: accessContext, withPoster: Boolean(imageMediaId), inline });
+  if (inline) {
+    wireAssetPlayback(session, { context: accessContext, withPoster: Boolean(imageMediaId) });
     return;
   }
   if (imageMediaId) void resolvePendingThumbnails(els.mediaBody);
@@ -125,24 +123,26 @@ function markFrameVideo() {
 // An R2 video: the same HTML5 player as a direct link, without an address
 // until the server has issued one (wireAssetPlayback), muted so it may start
 // by itself (its own controls turn the sound on). The poster is the legacy
-// image when there is one; an asset image is set once resolved. Inline (a
-// computer or a tablet) the full-screen button sits under the player's
-// corner, where it covers none of the browser's own controls; on a phone the
-// small box holds the button that asks for full screen, and the note only
-// where full screen is asked for by itself (`announce`, held upright).
-function renderAssetVideo(imageUrl, { inline = false, announce = false } = {}) {
+// image when there is one; an asset image is set once resolved. The
+// full-screen button sits under the player's corner, where it covers none of
+// the browser's own controls, and stays off until the video's size is known
+// (an iPhone's own player refuses a video without it).
+function renderAssetVideo(imageUrl) {
   const poster = toImageUrl(imageUrl);
-  const fullscreen = `<button class="media-fullscreen-button" data-action="enter-fullscreen" type="button" aria-label="Full screen"></button>`;
   return `
     <div class="media-asset" data-media-state="loading">
       <video class="media-video" controls playsinline muted preload="metadata"${poster ? ` poster="${escapeAttr(poster)}"` : ""}></video>
       <p class="media-status" role="status">Preparing the video...</p>
     </div>
-    ${inline
-      ? `<div class="media-video-actions">${fullscreen}</div>`
-      : `${announce ? `<p class="media-fullscreen-note">Opening video in full screen</p>` : ""}
-    ${fullscreen}`}
+    <div class="media-video-actions">
+      <button class="media-fullscreen-button" data-action="enter-fullscreen" type="button" aria-label="Full screen" disabled></button>
+    </div>
   `;
+}
+
+function setFullscreenReady(ready) {
+  const button = els.mediaBody?.querySelector('.media-video-actions [data-action="enter-fullscreen"]');
+  if (button) button.disabled = !ready;
 }
 
 function mediaDialog() {
@@ -190,6 +190,8 @@ function setAssetState(state, message = "", code = "") {
   const box = els.mediaBody?.querySelector(".media-asset");
   if (!box) return;
   box.dataset.mediaState = state;
+  // A new address (or none) leaves the video without its size until it loads.
+  if (state !== "ready") setFullscreenReady(false);
   const status = box.querySelector(".media-status");
   if (status) status.textContent = state === "loading" ? "Preparing the video..." : "";
   box.querySelector(".media-error")?.remove();
@@ -207,41 +209,22 @@ function setAssetState(state, message = "", code = "") {
 // same request), assigns it and starts it, and asks for a new one once when
 // the address fails to load (expired, revoked); a second failure is the error
 // state with Try again. Every step checks that this opening is still the one
-// on screen. Inline, leaving full screen comes back to the dialog; the phone's
-// small box closes then, as it shows nothing. On a phone held upright the
-// player sits behind the box's black cover until it is in full screen, so it
-// starts only then, never unseen (and never closed by its end unseen).
-function wireAssetPlayback(session, { context, withPoster, inline = false }) {
+// on screen. Full screen is entered only through the button, on every screen;
+// leaving it (Safari's own player included) comes back to the dialog, and
+// only the end of the video closes it.
+function wireAssetPlayback(session, { context, withPoster }) {
   const video = els.mediaBody?.querySelector(".media-asset .media-video");
   if (!video) return;
   const live = () => session === opening && !els.mediaModal.hidden && video.isConnected;
   video.muted = true;
   video.addEventListener("ended", closeMedia, { once: true });
   let sized = false;
-  let shown = inline || !isMobileViewport();
-  if (inline) {
-    video.addEventListener("loadedmetadata", () => {
-      if (live()) sized = fitDialogTo(video.videoWidth, video.videoHeight) || sized;
-    });
-    fitDialogToKnownPoster(video.getAttribute("poster"));
-  } else {
-    // iPhone Safari leaves its own full-screen player through this event.
-    video.addEventListener("webkitendfullscreen", closeMedia, { once: true });
-    video.addEventListener("loadedmetadata", () => {
-      if (live() && isMobileViewport()) enterMediaFullscreen(true);
-    }, { once: true });
-  }
-  if (!shown) {
-    const start = (element) => {
-      if (shown || element !== video || !live()) return;
-      shown = true;
-      startPlayback(video);
-    };
-    // iPhone Safari enters its own full-screen player through this event;
-    // every other browser through fullscreenchange (handleFullscreenChange).
-    video.addEventListener("webkitbeginfullscreen", () => start(video));
-    startOnFullscreen = start;
-  }
+  video.addEventListener("loadedmetadata", () => {
+    if (!live()) return;
+    sized = fitDialogTo(video.videoWidth, video.videoHeight) || sized;
+    setFullscreenReady(true);
+  });
+  fitDialogToKnownPoster(video.getAttribute("poster"));
   let attempts = 0;
   const onError = () => {
     if (!live()) return;
@@ -267,7 +250,7 @@ function wireAssetPlayback(session, { context, withPoster, inline = false }) {
       if (!live() || controller.signal.aborted) return;
       if (poster) {
         video.poster = poster;
-        if (inline && !sized) fitDialogToKnownPoster(poster);
+        if (!sized) fitDialogToKnownPoster(poster);
       }
       video.addEventListener("error", onError, { once: true });
       if (resume) {
@@ -277,7 +260,7 @@ function wireAssetPlayback(session, { context, withPoster, inline = false }) {
       }
       video.src = url;
       setAssetState("ready");
-      if (start && shown) startPlayback(video);
+      if (start) startPlayback(video);
     } catch (error) {
       if (!live() || controller.signal.aborted) return;
       setAssetState("error", PLAYBACK_MESSAGES[error?.code] || PLAYBACK_FAILED, error?.code || "media_access_failed");
@@ -295,7 +278,6 @@ function stopPlayback() {
   playbackAbort?.abort();
   playbackAbort = null;
   retryPlayback = null;
-  startOnFullscreen = null;
 }
 
 // The fallback belongs to its own opening: a timer left by a direct link
@@ -372,24 +354,13 @@ export function handleMediaAction(action) {
 // an R2 video in the picture's dialog (is-inline-video, never is-video).
 export function handleFullscreenChange() {
   const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
-  if (fullscreenElement) {
-    startOnFullscreen?.(fullscreenElement);
-    return;
-  }
-  if (els.mediaModal?.classList.contains("is-video") && !els.mediaModal.classList.contains("is-frame-video") && !els.mediaModal.hidden) {
+  if (!fullscreenElement && els.mediaModal?.classList.contains("is-video") && !els.mediaModal.classList.contains("is-frame-video") && !els.mediaModal.hidden) {
     closeMedia();
   }
 }
 
 function isMobileViewport() {
   return window.matchMedia?.("(max-width: 760px)").matches || window.innerWidth <= 760;
-}
-
-// A phone turned on its side: wider than 760 px, at most 500 px high (the
-// frame layout's own breakpoint in styles.css). The picture's dialog would
-// leave its video a strip there, so it keeps the player it had.
-function isShortViewport() {
-  return window.matchMedia?.("(max-height: 500px)").matches || window.innerHeight <= 500;
 }
 
 export function closeMedia() {

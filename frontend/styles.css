@@ -7016,17 +7016,6 @@ body:has(#workspacePanel:not([hidden])) .app-update-banner {
   transform: rotate(45deg);
 }
 
-.media-fullscreen-note {
-  position: absolute;
-  left: 18px;
-  bottom: 24px;
-  z-index: 4;
-  margin: 0;
-  color: rgba(255, 255, 255, 0.82);
-  font-size: 12px;
-  font-weight: 800;
-}
-
 .media-header {
   position: relative;
   z-index: 2;
@@ -7114,9 +7103,7 @@ body:has(#workspacePanel:not([hidden])) .app-update-banner {
 }
 
 /* An R2 video (FE-1): the player while its short-lived address is fetched,
-   and the error with Try again when it could not be. Both sit above the
-   phone layout's black cover (.media-modal.is-video:not(.is-frame-video)
-   .media-body::after). */
+   and the error with Try again when it could not be. */
 .media-asset {
   position: relative;
   width: 100%;
@@ -7186,17 +7173,23 @@ img[data-media-id]:not([src]) {
   border-radius: var(--radius);
 }
 
-/* An R2 video on a computer or a tablet (media-modal.js, is-inline-video):
-   the picture's light dialog with its title and Close, the player where the
-   picture would be, and the dialog in the video's shape (--media-aspect, set
-   from the video, else 16:9), bounded as the picture is: at most 76vh high
-   and 980 px or 96vw wide, never narrower than 300 px (the title, Close and
-   the player's own controls). The reserve under 92vh is the header with a
-   title on two lines, the body's padding and the button row. */
+/* An R2 video on every screen, a phone included (media-modal.js,
+   is-inline-video): the picture's light dialog with its title and Close,
+   the player where the picture would be, and the dialog in the video's
+   shape (--media-aspect, set from the video, else 16:9), bounded as the
+   picture is: at most 76vh high and 980 px wide, within the modal's 12 px
+   edges (a phone's width is the bound there), never narrower than 300 px
+   (the title, Close and the player's own controls). The reserve under 92vh
+   is the header with a title on two lines, the body's padding and the
+   button row. */
+.media-modal.is-inline-video {
+  padding: 12px;
+}
+
 .media-modal.is-inline-video .media-dialog {
   --media-aspect: 1.7778;
   --media-video-max-height: min(76vh, calc(92vh - 160px));
-  width: max(min(300px, 96vw), min(980px, 96vw, calc(var(--media-video-max-height) * var(--media-aspect) + 28px)));
+  width: max(min(300px, 100vw - 24px), min(980px, 100vw - 24px, calc(var(--media-video-max-height) * var(--media-aspect) + 28px)));
   overflow-y: auto;
 }
 
@@ -7250,6 +7243,61 @@ img[data-media-id]:not([src]) {
   bottom: auto;
   width: 44px;
   height: 44px;
+}
+
+/* Off until the video's size is known (media-modal.js), and seen to be off. */
+.media-video-actions .media-fullscreen-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* The error's sentence, Try again and Technical details fit even a wide,
+   short video box. */
+.media-modal.is-inline-video .media-asset[data-media-state="error"] {
+  min-height: 190px;
+}
+
+/* A phone turned on its side (at most 500 px high): the same dialog with a
+   one-line title, less padding and the edges nearer the screen's, so the
+   video keeps as much of the height as it can (never under 120 px; a still
+   shorter screen scrolls the dialog). The reserve is the header (Close and
+   its padding), the body's padding and the button row. */
+@media (max-height: 500px) {
+  .media-modal.is-inline-video {
+    padding: 8px;
+  }
+
+  .media-modal.is-inline-video .media-dialog {
+    --media-video-max-height: max(120px, calc(100vh - 16px - 124px));
+    max-height: calc(100vh - 16px);
+    width: max(min(300px, 100vw - 16px), min(980px, 100vw - 16px, calc(var(--media-video-max-height) * var(--media-aspect) + 16px)));
+  }
+
+  .media-modal.is-inline-video .media-header {
+    padding: 4px 8px;
+  }
+
+  .media-modal.is-inline-video .media-header h3 {
+    font-size: 17px;
+    -webkit-line-clamp: 1;
+  }
+
+  .media-modal.is-inline-video .media-body {
+    padding: 8px;
+  }
+
+  .media-modal.is-inline-video .media-video-actions {
+    margin-top: 4px;
+  }
+}
+
+@supports (height: 1dvh) {
+  @media (max-height: 500px) {
+    .media-modal.is-inline-video .media-dialog {
+      --media-video-max-height: max(120px, calc(100dvh - 16px - 124px));
+      max-height: calc(100dvh - 16px);
+    }
+  }
 }
 
 .media-image-secondary {
@@ -7934,9 +7982,9 @@ img[data-media-id]:not([src]) {
     line-height: 1.45;
   }
 
-  /* A <video> (an R2 asset or a direct link) plays in the phone's own
-     full-screen player; the small black box holds only the button that
-     asks for it. */
+  /* A direct link's <video> plays in the phone's own full-screen player; the
+     small black box only waits for it. (An R2 video opens in the picture's
+     dialog instead, is-inline-video.) */
   .media-modal.is-video:not(.is-frame-video) .media-dialog {
     width: min(82vw, 320px);
     height: 140px;
@@ -7950,21 +7998,6 @@ img[data-media-id]:not([src]) {
     inset: 0;
     z-index: 3;
     background: #000;
-  }
-
-  .media-modal.is-video:not(.is-frame-video) .media-fullscreen-button {
-    right: 50%;
-    bottom: 48px;
-    transform: translateX(50%);
-    width: 58px;
-    height: 58px;
-  }
-
-  .media-modal.is-video:not(.is-frame-video) .media-fullscreen-note {
-    right: 16px;
-    bottom: 16px;
-    left: 16px;
-    text-align: center;
   }
 
 }

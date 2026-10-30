@@ -9,7 +9,8 @@ import { JSDOM } from "jsdom";
 // black cover that waits for full screen - iPhone Safari cannot put an iframe
 // in full screen, so before this change a Drive video there could never be
 // seen or tapped. A Drive video also gets a real link to the file in Drive.
-// The R2 <video> path keeps its phone layout.
+// An R2 video opens in the picture's dialog on a phone too (owner, 2026-10-30;
+// media-modal-r2.test.mjs).
 
 const dom = new JSDOM(`<!doctype html><html><body>
   <div class="media-modal" id="mediaModal" hidden>
@@ -135,7 +136,7 @@ test("3b. a browser that reports full screen but cannot request it for an elemen
   delete document.webkitFullscreenEnabled;
 });
 
-test("4. a direct link that falls back to a frame takes the inline layout too; an R2 video keeps its phone layout, note and button", () => {
+test("4. a direct link that falls back to a frame takes the inline layout too; an R2 video opens in the picture's dialog on a phone too, with its button and no note", () => {
   phone({ fullscreen: false });
   modal.openMedia("Clip", "", "https://cdn.example/clip.mp4");
   assert.equal(els.mediaModal.classList.contains("is-frame-video"), false, "a <video> is not a frame");
@@ -145,15 +146,16 @@ test("4. a direct link that falls back to a frame takes the inline layout too; a
   modal.closeMedia();
   globalThis.fetch = () => new Promise(() => {});
   modal.openMedia("Dead Bug", "", "", { videoMediaId: "vid-1", accessContext: { type: "exercise", id: "e1" } });
-  assert.ok(els.mediaModal.classList.contains("is-video"));
+  assert.ok(els.mediaModal.classList.contains("is-inline-video"), "the picture's dialog (owner, 2026-10-30)");
+  assert.equal(els.mediaModal.classList.contains("is-video"), false, "never the black box");
   assert.equal(els.mediaModal.classList.contains("is-frame-video"), false);
   assert.ok(body().querySelector(".media-asset video.media-video"));
-  assert.match(body().querySelector(".media-fullscreen-note").textContent, /Opening video in full screen/);
-  assert.ok(body().querySelector('[data-action="enter-fullscreen"]'));
+  assert.equal(body().querySelector(".media-fullscreen-note"), null, "full screen is not asked for by itself");
+  assert.ok(body().querySelector('.media-video-actions [data-action="enter-fullscreen"]'));
   modal.closeMedia();
 });
 
-test("4b. leaving full screen keeps an embedded player and its Drive link on screen; an R2 video's small box still closes", () => {
+test("4b. leaving full screen keeps an embedded player and its Drive link on screen, and an R2 video's dialog on a phone too", () => {
   phone({ fullscreen: true });
   Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => null });
   modal.openMedia("Dead Bug", "", DRIVE_VIDEO);
@@ -165,7 +167,8 @@ test("4b. leaving full screen keeps an embedded player and its Drive link on scr
   globalThis.fetch = () => new Promise(() => {});
   modal.openMedia("Dead Bug", "", "", { videoMediaId: "vid-1", accessContext: { type: "exercise", id: "e1" } });
   modal.handleFullscreenChange();
-  assert.equal(els.mediaModal.hidden, true, "the R2 path is unchanged");
+  assert.equal(els.mediaModal.hidden, false, "back from full screen to the R2 video's dialog");
+  modal.closeMedia();
   delete document.fullscreenElement;
 });
 
