@@ -988,7 +988,7 @@ test("19. a mapping's versions are read in pages (number descending, an opaque c
   assert.deepEqual([detailAgain.status, detailAgain.body.mapping.versions[0].versionNumber], [200, count + 1]);
 });
 
-test("20. architecture: only the M2 service writes a mapping; a mapping version only the M2 service (create, submit and, from phase 7b, activate, replace and disable) and the revision lifecycle (its pinned step disables); the T8 audit is written by the M2 service, the M2b verification service, the revision lifecycle and the unit-conversion service (phase 7c), a T2b revision only by the M2b verification service and the revision lifecycle, a unit conversion only by the unit-conversion service; nothing in backend/src writes a T2a field, a T5 activation or a T6 value provenance, and nothing switches a trigger off", async () => {
+test("20. architecture: only the M2 service writes a mapping; a mapping version only the M2 service (create, submit and, from phase 7b, activate, replace and disable) and the revision lifecycle (its pinned step disables); the T8 audit is written by the M2 service, the M2b verification service, the revision lifecycle, the unit-conversion service (phase 7c) and the activation service with its shared steps (phase 7d), a T2b revision only by the M2b verification service and the revision lifecycle, a unit conversion only by the unit-conversion service, a T5 activation only by the activation service and its shared steps (phase 7d; A1, A2 and the pinned step call those steps); nothing in backend/src writes a T2a field or a T6 value provenance, and nothing switches a trigger off", async () => {
   const { readdirSync, readFileSync } = await import("node:fs");
   const { join, relative } = await import("node:path");
   const src = new URL("../src/", import.meta.url);
@@ -1006,13 +1006,16 @@ test("20. architecture: only the M2 service writes a mapping; a mapping version 
   const writers = (table) => files.filter((f) => writes(table).test(readFileSync(f, "utf8"))).map((f) => relative(root, f).replace(/\\/g, "/")).sort();
   assert.deepEqual(writers("source_metric_mappings"), ["sourceMetricMappingService.js"]);
   assert.deepEqual(writers("source_metric_mapping_versions"), ["sourceMetricMappingService.js", "sourceRevisionLifecycleService.js"]);
-  assert.deepEqual(writers("source_metric_audit"), ["sourceFieldVerificationService.js", "sourceMetricMappingService.js", "sourceRevisionLifecycleService.js", "unitConversionService.js"]);
+  assert.deepEqual(writers("source_metric_audit"), ["sourceFieldVerificationService.js", "sourceMetricActivationService.js", "sourceMetricActivationSteps.js", "sourceMetricMappingService.js", "sourceRevisionLifecycleService.js", "unitConversionService.js"]);
+  // Phase 7d (J10): the writers of T5 - S2's end in the activation service, the
+  // starts and the version-driven ends in the shared steps.
+  assert.deepEqual(writers("source_metric_mapping_activations"), ["sourceMetricActivationService.js", "sourceMetricActivationSteps.js"]);
   // Phase 7c (J9): the one writer of the unit conversions.
   assert.deepEqual(writers("unit_conversions"), ["unitConversionService.js"]);
   // No production module switches a trigger off (the Rukovodilac's note (ii) at the 7c GO).
   assert.deepEqual(files.filter((f) => /disable\s+trigger|session_replication_role/i.test(readFileSync(f, "utf8"))).map((f) => relative(root, f)), [], "nothing in backend/src switches a trigger off (disable trigger, session_replication_role)");
   assert.deepEqual(writers("source_metric_definition_versions"), ["sourceFieldVerificationService.js", "sourceRevisionLifecycleService.js"]);
-  for (const table of ["source_metric_mapping_activations", "metric_value_source_provenance", "source_metric_definitions"]) {
+  for (const table of ["metric_value_source_provenance", "source_metric_definitions"]) {
     assert.deepEqual(writers(table), [], table);
   }
 });

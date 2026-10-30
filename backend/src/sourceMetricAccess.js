@@ -39,6 +39,39 @@ export function mayTransitionMappings(ctx) {
   return ctx?.basis === "platform_admin" && (ctx.owner?.scope === "system" || ctx.owner?.scope === "club");
 }
 
+// Phase 7d (J10, C106): starting and ending a T5 activation are an active
+// platform admin's (in the platform workspace or a club workspace) and the
+// active club admin's in its own club's workspace; everyone else gets the
+// identical 404, before the body is looked at.
+export function mayManageActivations(ctx) {
+  if (ctx?.basis === "platform_admin") return ctx.owner?.scope === "system" || ctx.owner?.scope === "club";
+  return ctx?.basis === "club_admin" && ctx.owner?.scope === "club";
+}
+
+// J10 section 2.1, the one scope rule of S1, S2, S3, A1's listed starts and
+// every replay: the platform workspace admits system mappings on any club's
+// binding; club X's workspace (its admin, or a platform admin there) admits
+// system mappings and club X's own, on club X's bindings only. A binding with
+// no club (a connection that is not club-owned) is never admitted. Whether the
+// club is active is checked apart (an archived club is the identical 404).
+export function activationInScope(ctx, { mappingOwnerKey, bindingClubId }) {
+  if (!bindingClubId || !ctx?.owner) return false;
+  if (ctx.owner.scope === "system") return ctx.basis === "platform_admin" && mappingOwnerKey === "system";
+  return bindingClubId === ctx.owner.clubId && (mappingOwnerKey === "system" || mappingOwnerKey === ctx.owner.clubId);
+}
+
+// The bindings' clubs FOR SHARE, distinct ids in ascending order, for every
+// basis (R6): false when one is archived or missing, so a club archive waits
+// for the write or lands first.
+export async function bindingClubHolds(client, clubIds) {
+  const ids = [...new Set(clubIds)].sort();
+  if (ids.length === 0) return false;
+  const clubs = (await client.query(
+    `select id, coalesce(is_active, true) as active from public.clubs where id = any($1::uuid[]) order by id for share`, [ids],
+  )).rows;
+  return clubs.length === ids.length && clubs.every((c) => c.active);
+}
+
 // Test seam (never set by the application): runs inside a write's transaction
 // right before the caller's right is checked again under FOR SHARE (after
 // every registry lock).

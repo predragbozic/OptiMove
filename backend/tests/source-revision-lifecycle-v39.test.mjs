@@ -925,7 +925,7 @@ test("10. L4 replaces the active R by the draft R+1 in one transaction (200): R 
   // The seeds are observed, so any R+1 may replace one (not done here: the nine seeded fields are never touched).
 });
 
-test("11. the pinned step (L2, L4, L5; O4, O7): every needs_review version pinned to the retired revision - a club's included - is disabled by the acting platform admin with the fixed reason and one mapping_status row each, counted by owner scope; a pinned draft stays a draft and can no longer be submitted; after an L4 with one disabled version there is one keyed audit row and three rows of its operation; an archived club's version is 409 club_archived naming only that club; from phase 7b (J8 Q5, Q7) an active pinned version is disabled too, its row from active; an open activation is refused (fail closed) and names nothing", async () => {
+test("11. the pinned step (L2, L4, L5; O4, O7): every needs_review version pinned to the retired revision - a club's included - is disabled by the acting platform admin with the fixed reason and one mapping_status row each, counted by owner scope; a pinned draft stays a draft and can no longer be submitted; after an L4 with one disabled version there is one keyed audit row and three rows of its operation; an archived club's version is 409 club_archived naming only that club; from phase 7b (J8 Q5, Q7) an active pinned version is disabled too, its row from active; from phase 7d (J10, O5) its open activation is ended first, with the fixed reason", async () => {
   // L5 with a system and a club version submitted, and a club draft.
   const f = await field({ unit: "s" });
   const sys = await pinnedVersion(f, f.revId);
@@ -987,8 +987,9 @@ test("11. the pinned step (L2, L4, L5; O4, O7): every needs_review version pinne
     await k.query("begin");
     try {
       await k.query("set local session_replication_role = replica");
-      await k.query(sql, params);
+      const res = await k.query(sql, params);
       await k.query("commit");
+      return res;
     } catch (error) {
       await k.query("rollback").catch(() => {});
       throw error;
@@ -1008,15 +1009,20 @@ test("11. the pinned step (L2, L4, L5; O4, O7): every needs_review version pinne
   assert.ok(!active.text.includes(bvA.versionId) && !active.text.includes(bvA.mappingId), "counts only");
   const c = await field({ unit: "s" });
   const cv = await pinnedVersion(c, c.revId);
+  // A raw open activation (a real team, a binding id that names no binding):
+  // the pinned step ends it first, with the fixed reason, then retires.
   const binding = crypto.randomUUID();
   const fp = (await versionRow(cv.versionId)).parameter_fingerprint;
-  await asPhase7(`insert into training_load.source_metric_mapping_activations (mapping_version_id, mapping_id, source_metric_definition_id, metric_definition_id, parameter_fingerprint, source_team_binding_id, team_id,
+  const activationId = (await asPhase7(`insert into training_load.source_metric_mapping_activations (mapping_version_id, mapping_id, source_metric_definition_id, metric_definition_id, parameter_fingerprint, source_team_binding_id, team_id,
                      applies_to_session, applies_to_drill, requirement, activated_by_user_id, activated_basis, reason)
-                   values ($1,$2,$3,$4,$5,$6,$6,true,true,'required',$7,'platform_admin','Phase 7 simulation')`,
-    [cv.versionId, cv.mappingId, c.fieldId, W.sysVar.id, fp, binding, W.pa.id]);
+                   values ($1,$2,$3,$4,$5,$6,$7,true,true,'required',$8,'platform_admin','Phase 7 simulation') returning id`,
+    [cv.versionId, cv.mappingId, c.fieldId, W.sysVar.id, fp, binding, W.teamA, W.pa.id])).rows[0].id;
   const open = await post(retirePath(c, c.revId), W.pa.cookie, { requestKey: key(), expectedState: "active", reason: "x" });
-  assert.deepEqual([open.status, open.body.error], [409, "activation_open"]);
-  assert.equal((await revisionRow(c.revId)).state, "active");
+  assert.equal(open.status, 200, open.text);
+  assert.equal((await revisionRow(c.revId)).state, "retired");
+  const ended = await one(k, `select end_reason, ended_basis, ended_by_user_id from training_load.source_metric_mapping_activations where id = $1`, [activationId]);
+  assert.deepEqual([ended.end_reason, ended.ended_basis, ended.ended_by_user_id], ["mapping_version_disabled", "platform_admin", W.pa.id]);
+  assert.equal((await one(k, `select reason from training_load.source_metric_audit where action = 'activation_end' and activation_id = $1`, [activationId])).reason, PINNED_REASON);
 });
 
 test("12. the COMMIT of L4 through the real route: a refusal at COMMIT by a deferred v39 link is definite (500, nothing written, the key free); a lost COMMIT answer is verified by the request key on another connection (verified_after_commit_error); an unverifiable one is 503 outcome_unknown and the same key then replays the committed answer", async () => {
