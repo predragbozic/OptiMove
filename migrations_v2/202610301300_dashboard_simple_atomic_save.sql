@@ -604,4 +604,3 @@ begin
   return deleted_count;
 end;
 $$;
-
