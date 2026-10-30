@@ -3113,6 +3113,32 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
+- **A self-report activity has no roster — v43, built and externally reviewed, PR open** (owner decision
+  2026-10-29, option A; branch `fix/activity-roster-self-report-activities` from `cd0fce6`; not merged, not
+  applied anywhere). Internal reviews: `code-reviewer` and `db-reviewer`, each NOT READY → fixes → READY WITH
+  NON-BLOCKING NOTES. External review (owner-designated, ChatGPT, 2026-10-30): no blocking finding, "ready
+  for a PR with notes"; it could not run the tests (its runner stopped at the database check, 0 tests run),
+  so the test counts below are this session's only. Found during the central-calendar K0 discovery (PR #272) and reproduced
+  through the real routes on a disposable database: an athlete's RPE result for a team plan materializes a
+  team-owned activity with one participant (origin `planned_session`), whose roster under v25/v26 listed the
+  whole team — the athlete who gave the RPE included — as *Unknown / needs a state*, with the Roster tab
+  opening by itself; a training with 20 results is 20 such activities. v43
+  (`migrations_v2/202610291300_training_load_v43_activity_roster_self_report.sql`) adds
+  `training.activity_has_roster()` and redefines `training.activity_roster()` to return no rows for a
+  self-report activity (origin `planned_session` / `external_assignment`, at most one canonical participant
+  across its alias set, no measured value; an athlete's RPE for an external schedule makes one activity per
+  occurrence with every assignee, so a multi-assignee occurrence keeps its roster as the team's event — **this
+  case awaits the owner's confirmation in the external review**, the decision named only one athlete's own
+  result); every consumer inherits the rule through that function, a command answers its `requestKey` replay
+  before the gate, the read
+  answers `409 roster_not_applicable` to a caller who may decide and the identical 404 to everyone else, no
+  table, trigger or row changes, nothing in the frontend changes. Contract section 12 of
+  `docs/ai/phase5a-discovery-and-contract.md`, runbook `docs/runbooks/activity-roster-v43.md`, rollback
+  `docs/runbooks/activity-roster-v43-rollback.sql` (rehearsed). Tests
+  `backend/tests/activity-roster-self-report.test.mjs` (the real RPE route, every roster route, the
+  boundary cases, the migration round trip). Option C — one activity per team planned session — stays a
+  later phase with the central calendar's events. Not run against the deployed database; how many such
+  activities exist there is not read.
 - **A test for a team moved to another club in the middle of an R2 write** (the *Rukovodilac*'s LOW finding on
   PR #227, 2026-10-27; a test only, no code change). Its mutation S13 removes the `club_id = $2` condition from
   the team read of `coachRightsStillHold()` in `backend/src/sourceMetricMappingService.js`, and the R2 suite does

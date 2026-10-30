@@ -68,7 +68,10 @@ async function migrate(url, files, using = runner) {
 }
 
 before(async () => {
-  assert.equal(GPEXE_TEST_MIGRATIONS.at(-1), V42, "v42 is the last test migration");
+  // v42 need not be the last test migration (v43 follows it): the suite only
+  // needs it in the list, after v41, so the default database carries it.
+  assert.ok(GPEXE_TEST_MIGRATIONS.includes(V42), "v42 is a test migration");
+  assert.equal(GPEXE_TEST_MIGRATIONS[UP_TO_V41.length], V42, "v42 follows v41");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v42rb", migrations: UP_TO_V41 }),
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v42" }),
