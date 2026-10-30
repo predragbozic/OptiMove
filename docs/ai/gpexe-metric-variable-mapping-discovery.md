@@ -1149,6 +1149,9 @@ transcript; J11 section 0.1 holds the table):
     - **The *Rukovodilac*'s reading of the short answers:** OD4, a system mapping may carry zone or threshold bounds;
       OD5, D9 for an active platform admin in the platform workspace, with a reason, refused while the owner team has
       an active binding of that source team or an open activation on one (the narrower reading).
+    - **OD4 confirmed, and the order of phases 7h and 7i decided** as the *Rukovodilac* recommended: „oba pitanja po tvoojoj preporuci, e915a5b9 je deployed” (turn `e21a1604`, 22:19:50 UTC).
+      The order: the path to the first controlled import first (7f-B → 7e-B → 7g-B → a minimal phase 8 → phase 9),
+      then 7h and 7i, before more clubs are brought on.
 108. **OD6: a club's admin does its club's mappings** (supersedes C30's "only a platform admin" for a club mapping's
     status changes once phase 7h is built, and C106's last sentence for A1 and A2 on a club mapping).
     - **The owner's words:** „Povezivanje veza i raskidanje veza izmedju varijabli radi pre svega klupski admin, moze i

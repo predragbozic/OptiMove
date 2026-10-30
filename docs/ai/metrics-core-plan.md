@@ -802,15 +802,17 @@ order covers is merged under it.
   - A club's variable is named as the club likes and its admin chooses the field that fills it; its physical
     definition (the unit, a zone's bound, an event's threshold) must still match what GPEXE computes for the team, or
     the import refuses it fail-closed (ADR-007; the product rule beside OD1).
-- **The order of 7h and 7i: pending owner.** The *Rukovodilac*'s recommendation (its message queued at 22:17:27 UTC):
-  first the path to the first import (7f-B → 7e-B → 7g-B → a minimal phase 8 → phase 9), then 7h and 7i right
-  after, before other clubs start. The *Rukovodilac* asks the owner once, together with a confirmation of OD4.
-- **7h ★★: a club's admin approves, disables and replaces its club's mapping versions** (OD6, C108). A migration: the T8 rules of `mapping_status` and `mapping_version_replaced` admit the `club_admin`
-  basis for a club mapping, with the v43 guards and `mayTransitionMappings`; A1 and A2 then also end and start
-  activations for a club's admin. System mappings, the source fields' unit and meaning, the unit conversions and D9
-  stay the platform admin's. Its contract (J14) is written on the *Rukovodilac*'s order.
+- **The order of 7h and 7i, decided by the owner** as the *Rukovodilac* recommended (its message queued at 22:17:27
+  UTC), in the owner's words „oba pitanja po tvoojoj preporuci, e915a5b9 je deployed” (turn `e21a1604`, 22:19:50 UTC), which also confirms OD4: first the path to the
+  first controlled import (7f-B → 7e-B → 7g-B → a minimal phase 8 → phase 9, the first import), then 7h and 7i right
+  after it, before more clubs are brought on.
+- **7h ★★: a club's admin approves, disables and replaces its club's mapping versions** (OD6, C108). After the first
+  import (phase 9). A migration: the T8 rules of `mapping_status` and `mapping_version_replaced` admit the
+  `club_admin` basis for a club mapping, with the v43 guards and `mayTransitionMappings`; A1 and A2 then also end and
+  start activations for a club's admin. System mappings, the source fields' unit and meaning, the unit conversions
+  and D9 stay the platform admin's. Its contract (J14) is written on the *Rukovodilac*'s order.
 - **7i ★★: a club uses a system variable as it is or copies it into its own set, or hides it** (OD7, C109). After 7h
-  (the copied mappings are the club's drafts, approved under OD6). A copy is a club variable with the system
+  (the copied mappings are the club's drafts, approved under OD6), before more clubs are brought on. A copy is a club variable with the system
   variable's mappings as the club's draft versions; hiding is per club (likely a new table, so a migration). Its
   contract (J15) is written on the *Rukovodilac*'s order.
 - **Reserved after 7g, before phase 9** (the *Rukovodilac*'s note of 2026-10-30, queued at 18:31:50 UTC; built only on
