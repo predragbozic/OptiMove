@@ -1310,6 +1310,63 @@ test("26. a projected day is judged ON THAT DAY, never over the window: a former
   }
 });
 
+test("27. the pre-selection is a superset of the per-day check: a card permitted on a day before the athlete's first period (the fallback) is the same in a wide and in a one-day request; a schedule reached by nobody stays hidden in both", async () => {
+  const clubId = await makeClub("ps27 club");
+  const teamX = await makeTeam(clubId, "ps27 X");
+  const teamY = await makeTeam(clubId, "ps27 Y");
+  const coachX = await coachOf(teamX, "ps27 coach X");
+  const coachY = await coachOf(teamY, "ps27 coach Y");
+  const D1 = addDays(TODAY, -2);
+  const D3 = TODAY;
+  // M joins the club and both teams today, with no earlier history in the club:
+  // the days before are M's by the fallback, in X's scope and as Y's member alike.
+  const m = await makeAthlete("ps27 m");
+  await addMembership({ athleteId: m.athleteId, clubId, type: "club", startsAt: `${TODAY}T00:00:00Z` });
+  await addMembership({ athleteId: m.athleteId, clubId, teamId: teamX, startsAt: `${TODAY}T00:00:00Z` });
+  await addMembership({ athleteId: m.athleteId, clubId, teamId: teamY, startsAt: `${TODAY}T00:00:00Z` });
+  // Y's daily event and test over D1..D3, targeting team Y; X has no structural right over them.
+  const yEvent = await makeExternalSchedule({
+    owner: { scope: "team", teamId: teamY }, createdBy: coachY.id, kind: "recurring", startDate: D1, endDate: D3,
+    recurrence: { version: 1, freq: "daily" }, eventName: "Y camp", targets: [{ kind: "team", id: teamY }],
+  });
+  const yTest = await makeTestSchedule({
+    owner: { scope: "team", teamId: teamY }, createdBy: coachY.id, kind: "recurring", startDate: D1, endDate: D3,
+    recurrence: { version: 1, freq: "daily" }, targets: [{ kind: "team", id: teamY }],
+  });
+  // The negative control: another club's team event, reached by nobody of X's.
+  const otherClub = await makeClub("ps27 other");
+  const teamZ = await makeTeam(otherClub, "ps27 Z");
+  const otherAdmin = await clubAdminOf(otherClub, "ps27 other admin");
+  const zEvent = await makeExternalSchedule({ owner: { scope: "team", teamId: teamZ }, createdBy: otherAdmin.id, startDate: D1, eventName: "Z day", targets: [{ kind: "team", id: teamZ }] });
+
+  const wide = await calendar(coachX.cookie, { from: D1, to: D3, extra: "&kinds=external,test" });
+  const single = await calendar(coachX.cookie, { from: D1, to: D1, extra: "&kinds=external,test" });
+  assert.equal(wide.status, 200, wide.text);
+  assert.equal(single.status, 200, single.text);
+  const wideEvent = itemsOn(wide, D1).find((it) => it.key === `external:${yEvent}:${D1}`);
+  const singleEvent = itemsOn(single, D1).find((it) => it.key === `external:${yEvent}:${D1}`);
+  assert.ok(wideEvent, "the wide request shows Y's card of D1 (M is Y's member that day by the fallback)");
+  assert.ok(singleEvent, "the one-day request shows the same card");
+  assert.deepEqual(wideEvent.athleteIds, [m.athleteId]);
+  assert.deepEqual(singleEvent.athleteIds, [m.athleteId]);
+  const wideTest = itemsOn(wide, D1).find((it) => it.key === `test:${yTest}:${D1}`);
+  const singleTest = itemsOn(single, D1).find((it) => it.key === `test:${yTest}:${D1}`);
+  assert.ok(wideTest && singleTest, "the same for the test schedule");
+  assert.deepEqual(wideTest.athleteIds, singleTest.athleteIds);
+  assert.deepEqual(
+    itemsOn(wide, D1).map((it) => [it.key, it.athleteIds, it.status]),
+    itemsOn(single, D1).map((it) => [it.key, it.athleteIds, it.status]),
+    "D1 reads the same in both requests",
+  );
+  assert.equal(allItems(wide).some((it) => it.key.startsWith(`external:${zEvent}:`)), false, "a schedule reached by nobody and no structural relation stays hidden (wide)");
+  assert.equal(allItems(single).some((it) => it.key.startsWith(`external:${zEvent}:`)), false, "and in the one-day request");
+  // The athlete workspace's own view agrees between the two forms as well.
+  const mWide = await calendar(m.cookie, { from: D1, to: D3, extra: "&kinds=external,test" });
+  const mSingle = await calendar(m.cookie, { from: D1, to: D1, extra: "&kinds=external,test" });
+  assert.deepEqual(itemsOn(mWide, D1).map((it) => it.key).sort(), itemsOn(mSingle, D1).map((it) => it.key).sort());
+  assert.ok(itemsOn(mSingle, D1).some((it) => it.key === `external:${yEvent}:${D1}`), "M's own calendar shows Y's camp on D1 by the same rule");
+});
+
 // ---------------------------------------------------------------------------
 // Bounded statements
 // ---------------------------------------------------------------------------

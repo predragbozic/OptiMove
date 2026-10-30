@@ -174,7 +174,15 @@ export function calendarScheduleStructuralSql(ctx, alias, targetsTable, params) 
 // (readScheduleTargetAthletes judges every (schedule, day) with
 // membershipOnDaySql on the day), so a former member or a former coach
 // never sees a day after the membership ended, whatever range is asked.
-// `fromExpr` / `toExpr` are the window's SQL date expressions.
+// The pre-selection is a provable SUPERSET of what the per-day check can
+// allow on any day of the window, with the SAME membership semantics
+// (membershipOnDaySql over the window, fallback included — the window
+// version covers every day's own answer: a period covering a day covers the
+// window, and "no period started on or before the day" implies "none on or
+// before the window's first day"), so a wide request never shows a
+// permitted card that a one-day request hides (the owner's external
+// re-check of PR #281, P2). `fromExpr` / `toExpr` are the window's SQL date
+// expressions.
 export function calendarScheduleCandidateSql(ctx, alias, targetsTable, params, fromExpr, toExpr) {
   if (ctx.type === "athlete") {
     // Own targets (plan section 3): the athlete directly, or a team or club
@@ -189,14 +197,16 @@ export function calendarScheduleCandidateSql(ctx, alias, targetsTable, params, f
   if (ctx.workspace.type === "platform") return "true";
   const structural = calendarScheduleStructuralSql(ctx, alias, targetsTable, params);
   // A target the scope reaches only through athletes: a direct athlete
-  // target, or a team / club target whose members were in the scope on
-  // some day of the window.
+  // target, or a team / club target with an athlete who was both in the
+  // scope and a member of the target (the same membershipOnDaySql rule,
+  // fallback included) on some day of the window.
+  const athleteInScope = () => calendarAthleteScopeSql(ctx, "ax", params, fromExpr, toExpr);
   return `(${structural} or exists (select 1 from ${targetsTable} tg where tg.schedule_id = ${alias}.id and (
-            (tg.target_kind = 'athlete' and exists (select 1 from public.athletes ax where ax.id = tg.target_athlete_id and ${calendarAthleteScopeSql(ctx, "ax", params, fromExpr, toExpr)}))
-         or (tg.target_kind = 'team' and exists (select 1 from public.athlete_membership_periods mt where mt.team_id = tg.target_team_id and mt.membership_type = 'team' and ${periodCoversSql("mt", fromExpr, toExpr)}
-                 and exists (select 1 from public.athletes ax where ax.id = mt.athlete_id and ${calendarAthleteScopeSql(ctx, "ax", params, fromExpr, toExpr)})))
-         or (tg.target_kind = 'club' and exists (select 1 from public.athlete_membership_periods mc where mc.club_id = tg.target_club_id and mc.membership_type = 'club' and ${periodCoversSql("mc", fromExpr, toExpr)}
-                 and exists (select 1 from public.athletes ax where ax.id = mc.athlete_id and ${calendarAthleteScopeSql(ctx, "ax", params, fromExpr, toExpr)}))))))`;
+            (tg.target_kind = 'athlete' and exists (select 1 from public.athletes ax where ax.id = tg.target_athlete_id and ${athleteInScope()}))
+         or (tg.target_kind = 'team' and exists (select 1 from public.athletes ax where ${athleteInScope()}
+                 and ${membershipOnDaySql("ax.id", (m) => `(${m}.membership_type = 'team' and ${m}.team_id = tg.target_team_id)`, fromExpr, toExpr)}))
+         or (tg.target_kind = 'club' and exists (select 1 from public.athletes ax where ${athleteInScope()}
+                 and ${membershipOnDaySql("ax.id", (m) => `(${m}.membership_type = 'club' and ${m}.club_id = tg.target_club_id)`, fromExpr, toExpr)})))))`;
 }
 
 // The optional Club / Team / Athletes filter — the union semantics of the

@@ -199,7 +199,10 @@ the activities the reader may open. Switching to plan ownership later is one WHE
 
 **Projected schedule days are judged on the day, never over the window** (the owner's external review of this
 pull request, P1). The window only pre-selects candidate schedules (`calendarScheduleCandidateSql`: the
-structural relation, or a target reached through an athlete who was in the scope on some day of the window);
+structural relation, or a target reached through an athlete who was in the scope and a member of the target on
+some day of the window — judged with the **same** `membershipOnDaySql` semantics over the window, fallback
+included, so the pre-selection is a provable **superset** of every day's own check and a wide request never
+shows a permitted card that a one-day request hides; the owner's re-check P2, test 27);
 every projected day is then shown only through the **structural** relation (the scope owns the schedule, or the
 schedule targets the scope's club or team itself — the workspace's own event, shown whatever its members that
 day; `calendarScheduleStructuralSql`) or through **at least one athlete who was a member on that day**
