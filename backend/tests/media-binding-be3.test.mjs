@@ -750,6 +750,15 @@ async function planSession(owner,fields={}) {
  const day=(await client.query('insert into plans.plan_days(plan_id) values($1) returning id',[plan])).rows[0].id;
  return {plan,session:(await client.query('insert into plans.plan_sessions(plan_day_id) values($1) returning id',[day])).rows[0].id};
 }
+// A pending asset in a slot, a video in a picture slot: states the production
+// schema's L1 reference guard (MEDIA_L1_TEST) refuses to create, so they are
+// built with that guard off for this setup only. The guard is never relaxed for
+// the service under test, and without L1 nothing is switched off.
+async function withoutReferenceGuard(work) {
+ if(process.env.MEDIA_L1_TEST!=='true')return work();
+ await client.query('alter table library.exercises disable trigger media_l1_reference_guard');
+ try{return await work();}finally{await client.query('alter table library.exercises enable trigger media_l1_reference_guard');}
+}
 async function planItem(session,{video=null,image=null,videoAsset=null}={}) {
  return (await client.query("insert into plans.plan_items(plan_session_id,item_type,title,video_source,video_asset_id,video_url,image_url) values($1,'exercise','Matrix item',$2,$3,$4,$5) returning id",
   [session,videoAsset?'asset':'legacy',videoAsset,video,image])).rows[0].id;
@@ -774,9 +783,11 @@ async function seedMatrix() {
  ex.copyOfOwn=(await client.query("insert into library.exercises(name,owner_scope,owner_user_id,copy_parent_id) values('Inherits own','user',$1,$2) returning id",[coachId,ex.videoIdAsImage])).rows[0].id;
  ex.copyOfForeign=(await client.query("insert into library.exercises(name,owner_scope,owner_user_id,copy_parent_id) values('Inherits a foreign one','user',$1,$2) returning id",[coachId,ex.foreign])).rows[0].id;
  ex.pendingAsset=await exercise('Pending asset');const pending=await ready({type:'exercise_edit',exerciseId:ex.pendingAsset},'video',coachId,'pending');
- await client.query("update library.exercises set video_source='asset',video_asset_id=$2 where id=$1",[ex.pendingAsset,pending.id]);
  ex.wrongKind=await exercise('Image slot holds a video');
- await client.query("update library.exercises set image_source='asset',image_asset_id=$2 where id=$1",[ex.wrongKind,ownVideo.id]);
+ await withoutReferenceGuard(async()=>{
+  await client.query("update library.exercises set video_source='asset',video_asset_id=$2 where id=$1",[ex.pendingAsset,pending.id]);
+  await client.query("update library.exercises set image_source='asset',image_asset_id=$2 where id=$1",[ex.wrongKind,ownVideo.id]);
+ });
  const athleteLinked=crypto.randomUUID(),athleteRevoked=crypto.randomUUID();
  await client.query('insert into public.athletes(id,user_id,is_active) values($1,$2,true),($3,null,true)',[athleteLinked,athleteUserId,athleteRevoked]);
  await client.query('delete from public.athlete_library_access');
@@ -787,10 +798,15 @@ async function seedMatrix() {
  const approved=await planSession(coachId,{athlete_id:athleteLinked,plan_type:'program',is_template:true,requires_approval:true,status:'active'});
  await client.query("insert into library.program_access(plan_id,user_id,access_type,status) values($1,$2,'assigned','accessed')",[approved.plan,athleteUserId]);
  const inactive=await planSession(coachId,{is_active:false}),editDraft=await planSession(coachId,{is_active:false,is_edit_draft:true});
+ // The plan's visibility: another coach's public program template, and the
+ // coach's own plan that is neither private nor a template (readable because
+ // media access asks with editable:true).
+ const publicTemplate=await planSession(otherCoachId,{visibility:'public',plan_type:'program',is_template:true,status:'active'});
+ const ownTeamPlan=await planSession(coachId,{visibility:'team',is_template:false,status:'active'});
  items.ownAsset=await planItem(own.session,{videoAsset:ownVideo.id,image:DRIVE_VIDEO});
  items.ownDrive=await planItem(own.session,{video:DRIVE_VIDEO,image:DRIVE_IMAGE});
  items.ownLegacy=await planItem(own.session,{video:'https://legacy.test/old.mp4'});
- for(const [key,target] of Object.entries({foreign:foreignPlan,assigned,revoked,needsApproval,approved,inactive,editDraft}))items[key]=await planItem(target.session,{video:DRIVE_VIDEO,image:DRIVE_IMAGE});
+ for(const [key,target] of Object.entries({foreign:foreignPlan,assigned,revoked,needsApproval,approved,inactive,editDraft,publicTemplate,ownTeamPlan}))items[key]=await planItem(target.session,{video:DRIVE_VIDEO,image:DRIVE_IMAGE});
  uploads.coach=(await ready()).uploadId;
  uploads.other=(await ready({type:'exercise_create'},'video',otherCoachId)).uploadId;
  uploads.pending=(await ready({type:'exercise_create'},'video',coachId,'pending')).uploadId;
@@ -834,7 +850,7 @@ test('option A: the set-based batch answers every context class exactly as the o
  for(const key of ['granted','system','privateCopy','copyOfOwn'])assert.ok((await answer('coach','exercise',ex[key])).media,`coach plays ${key}`);
  for(const key of ['foreign','inactive','club','restricted','copyOfForeign','pendingAsset','wrongKind'])assert.deepEqual((await answer('coach','exercise',ex[key])).error,denied,`coach is refused ${key}`);
  assert.ok((await answer('admin','exercise',ex.club)).media,'a platform admin plays a club exercise');
- for(const key of ['ownAsset','ownDrive','ownLegacy','editDraft'])assert.ok((await answer('coach','plan_item',items[key])).media,`coach plays item ${key}`);
+ for(const key of ['ownAsset','ownDrive','ownLegacy','editDraft','publicTemplate','ownTeamPlan'])assert.ok((await answer('coach','plan_item',items[key])).media,`coach plays item ${key}`);
  for(const key of ['foreign','inactive'])assert.deepEqual((await answer('coach','plan_item',items[key])).error,denied,`coach is refused item ${key}`);
  for(const key of ['assigned','approved'])assert.ok((await answer('athlete','plan_item',items[key])).media,`athlete plays item ${key}`);
  for(const key of ['revoked','needsApproval','ownAsset'])assert.deepEqual((await answer('athlete','plan_item',items[key])).error,denied,`athlete is refused item ${key}`);
@@ -933,6 +949,9 @@ test('option A: the locks are the old ones, taken once per batch - the reuse loc
  assert.equal(sql.filter(s=>s.includes('from media.assets a ')).length,1,'the assets are read once');
  assert.equal(sharing.filter(s=>/from media\.assets a .* order by a\.id for share of a$/.test(s)).length,1,'that read locks them FOR SHARE, in id order');
  assert.ok(sharing.every(s=>/from media\.assets a .* order by a\.id for share of a$/.test(s) || /from media\.drive_copies c .* for share of c$/.test(s)),'FOR SHARE only on assets and an import preview\'s Drive copy, as before');
+ // Each import preview (the matrix has two) still locks its Drive copy row.
+ assert.equal(sql.filter(s=>/^select c\.asset_id from media\.drive_copies c /.test(s)).length,2,'the admin\'s two import previews are checked');
+ assert.equal(sharing.filter(s=>/^select c\.asset_id from media\.drive_copies c .* for share of c$/.test(s)).length,2,'each locks its Drive copy FOR SHARE');
  assert.equal(sql.at(-1),'commit');
  // A writer holding the reuse lock exclusively makes the batch wait at most
  // lock_timeout, then fail as a whole, as the old loop did.
