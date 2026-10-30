@@ -13,7 +13,7 @@ pull requests.
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 10); merged with PR #297. Built by 7f-B (section 11). |
+| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 10); merged with PR #297. Built by 7f-B (section 11): PR #301, merged as `59c2192` and deployed with `be0fe1b` on 2026-10-30. |
 | Verified against commit | `6a94ce29` (merge of PR #294). Every file and line reference below is to that commit unless it names another. |
 | Migration | **None.** The registry is code; the database cannot bind a key to code (P4 of J7, `migrations_v2/202610282300_training_load_v42_source_metric_zone_model.sql:28-31`). Section 6 says why nothing is lost. |
 | Order | **7f-B before 7e-B**: the aggregate preview (J11) reads values only through this registry. The plan lists 7e before 7f; section 8 asks the *Rukovodilac* to swap them. |
@@ -266,7 +266,8 @@ or revision, the `e03` / `api` family, derived values (`gpexeImportMapper.js:180
 
 ## 11. As built (7f-B)
 
-Branch `feature/7f-extractor-registry`, from `6568cf7` (merge of PR #299; the *Rukovodilac* ordered `39b4b52`, and
+PR #301, merged as `59c2192` (2026-10-30 23:39:12 UTC) and deployed with `be0fe1b` (live 23:55:23 UTC). Branch
+`feature/7f-extractor-registry`, from `6568cf7` (merge of PR #299; the *Rukovodilac* ordered `39b4b52`, and
 `39b4b52..6568cf7` changed only documents); no migration, no production write. Where the build differs from sections
 2, 3 and 7, this section says so. The line references of sections 1 to 7 are to `6a94ce29`; 7d-B (PR #295) moved the
 service's lines since, and the code below is named by function.
