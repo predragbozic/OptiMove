@@ -36,7 +36,8 @@ sessions were added later the same day at `6a94ce29` (merge of PR #294), after t
 nothing else was re-derived then. PR #296 (those facts), phase 7d-B (migration v48, PR #295), the deploy of `e915a5b`,
 the 7e–7g contracts with the owner's decisions OD1–OD7 (PR #297) and the owner's concern about an athlete who trains
 with two teams were added later the same day at `39b4b52` (merge of PR #297), after the owner's read-only v48
-post-check; nothing else was re-derived then.
+post-check; nothing else was re-derived then. PR #299 (those facts) and the note on the standing order for migration
+PRs were added on top of `6568cf7` (merge of PR #299); nothing else was re-derived then.
 
 ## Active phase
 
@@ -2436,6 +2437,12 @@ Technical details.
       22:23:10 UTC) exactly from `92a900ef`, on the owner's word „merge” / „297” (owner turns `4fb1a9da`, 22:22:13 UTC,
       and `629c4a79`, 22:22:18 UTC), which put it before this facts record (the *Rukovodilac*'s order had the facts
       record first). Not yet deployed; it goes out with the next deploy.
+    - **PR #299, the 7d-B facts record — merged (documents only).** Merged as `6568cf7` (parents `39b4b52` and
+      `b46cdcac`, 23:00:07 UTC) by the executor under the standing merge order, exactly from `b46cdcac`, after the
+      *Rukovodilac*'s GO on that head. Not yet deployed.
+    - **Migration PRs of the Metrics Core plan:** see "Standing order for migration PRs" in section 2 of
+      `docs/ai/metrics-core-plan.md`, in force from the merge of the PR that added it, on the terms of that section
+      ("When it is in force").
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
