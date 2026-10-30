@@ -1,7 +1,7 @@
--- v48 production preflight - READ ONLY. For the owner to run in the Supabase
+-- v49 production preflight - READ ONLY. For the owner to run in the Supabase
 -- SQL Editor, as the application's DATABASE_URL role (the one the migrator
 -- uses), on the day of the merge and deploy of the K2a-1a pull request
--- (migrations_v2/202610311000_calendar_v48_events.sql; plan
+-- (migrations_v2/202610311000_calendar_v49_events.sql; plan
 -- docs/ai/central-calendar-k2a-plan.md, section 10).
 --
 -- Run ONE numbered block at a time (select it, then Run): the editor shows only
@@ -10,32 +10,32 @@
 -- in the comments; any other value means: stop, change nothing, report the
 -- block, the column and the value.
 
--- 1. PostgreSQL 15 or later (v48 uses UNIQUE NULLS NOT DISTINCT).
+-- 1. PostgreSQL 15 or later (v49 uses UNIQUE NULLS NOT DISTINCT).
 --    Expected: pg15_or_later = true (the deployed server reported 170006).
 select current_setting('server_version_num')::int as server_version_num,
        current_setting('server_version_num')::int >= 150000 as pg15_or_later;
 
--- 2. The migration state: v47 recorded once with the repository's checksum,
---    v48 absent, nothing recorded at or after its name.
---    Expected: v47_rows = 1, v47_checksum_ok = true, v48_rows = 0,
---    at_or_after_v48 = 0, last_migration =
---    migrations_v2/202610301700_training_load_v47_unit_conversion_guards.sql
---    (or a later migration of another part whose name sorts before v48's).
+-- 2. The migration state: v48 recorded once with the repository's checksum,
+--    v49 absent, nothing recorded at or after its name.
+--    Expected: v48_rows = 1, v48_checksum_ok = true, v49_rows = 0,
+--    at_or_after_v49 = 0, last_migration =
+--    migrations_v2/202610301900_training_load_v48_mapping_activations.sql
+--    (or a later migration of another part whose name sorts before v49's).
 select
-  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202610301700_training_load_v47_unit_conversion_guards.sql') as v47_rows,
-  (select checksum from public.schema_migrations where migration_name = 'migrations_v2/202610301700_training_load_v47_unit_conversion_guards.sql') as v47_checksum,
-  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202610311000_calendar_v48_events.sql') as v48_rows,
-  (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name >= 'migrations_v2/202610311000_calendar_v48_events.sql') as at_or_after_v48,
+  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202610301900_training_load_v48_mapping_activations.sql') as v48_rows,
+  (select checksum from public.schema_migrations where migration_name = 'migrations_v2/202610301900_training_load_v48_mapping_activations.sql') as v48_checksum,
+  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202610311000_calendar_v49_events.sql') as v49_rows,
+  (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name >= 'migrations_v2/202610311000_calendar_v49_events.sql') as at_or_after_v49,
   (select migration_name from public.schema_migrations order by migration_name desc limit 1) as last_migration;
--- v47_checksum is compared by the executor with the repository's sha256 of
--- migrations_v2/202610301700_training_load_v47_unit_conversion_guards.sql
+-- v48_checksum is compared by the executor with the repository's sha256 of
+-- migrations_v2/202610301900_training_load_v48_mapping_activations.sql
 -- (the pull request names both files' sha256).
 
 -- 3. No calendar schema yet.
 --    Expected: schema_rows = 0.
 select count(*) as schema_rows from information_schema.schemata where schema_name = 'calendar';
 
--- 4. What v48 references exists.
+-- 4. What v49 references exists.
 --    Expected: every column true.
 select to_regclass('training_load.external_schedules') is not null as external_schedules,
        to_regprocedure('training_load.source_metric_text_ok(text, integer)') is not null as text_rule,
@@ -57,7 +57,7 @@ select has_database_privilege(current_user, current_database(), 'CREATE') as may
 select count(*) as active_clubs from public.clubs where coalesce(is_active, true);
 
 -- 7. A quiet moment: no other migration running, no transaction holding a
---    strong lock on a table v48 references (its foreign keys take SHARE ROW
+--    strong lock on a table v49 references (its foreign keys take SHARE ROW
 --    EXCLUSIVE on them), no idle transaction. An ordinary row write's
 --    RowExclusiveLock does not count.
 --    Expected: every count 0.

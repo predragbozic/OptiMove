@@ -1,8 +1,8 @@
--- Central calendar v48 (K2a-1a): events, their types, targets, links, the
+-- Central calendar v49 (K2a-1a): events, their types, targets, links, the
 -- request record, the change log and the writer lock, in a new `calendar`
 -- schema. Plan: docs/ai/central-calendar-k2a-plan.md (sections 1.2, 4, 6 and
--- 10, the owner decisions D18-D23); runbook docs/runbooks/calendar-events-v48.md;
--- rollback docs/runbooks/calendar-events-v48-rollback.sql. Lines that follow an
+-- 10, the owner decisions D18-D23); runbook docs/runbooks/calendar-events-v49.md;
+-- rollback docs/runbooks/calendar-events-v49-rollback.sql. Lines that follow an
 -- owner decision: D18 = the club_admin branch of lock_event_writer over a
 -- team-owned event; D19 = the seed's default_expects; D22 = end_day.
 --
@@ -35,7 +35,7 @@
 -- event needs at least one target at COMMIT; a request needs its change row
 -- at COMMIT. Text columns use the v40 twins of backend/src/metricTextRules.js.
 -- No row of any other schema is written. Rollback:
--- docs/runbooks/calendar-events-v48-rollback.sql (with the slice).
+-- docs/runbooks/calendar-events-v49-rollback.sql (with the slice).
 
 -- The foreign keys below take SHARE ROW EXCLUSIVE locks on users, clubs,
 -- teams, athletes, plans.plans, training.activities and
@@ -886,6 +886,6 @@ begin
   select count(*) into v_clubs from public.clubs where coalesce(is_active, true);
   select count(*) into v_copies from calendar.event_types where owner_scope = 'club';
   if v_system <> 7 or v_copies <> 7 * v_clubs then
-    raise exception 'calendar v48: the seed is not what was expected (system %, clubs %, copies %)', v_system, v_clubs, v_copies;
+    raise exception 'calendar v49: the seed is not what was expected (system %, clubs %, copies %)', v_system, v_clubs, v_copies;
   end if;
 end $$;

@@ -14,8 +14,9 @@ migration ran only on disposable databases.
   link, the first UI. Not in it: Settings → Calendar (K2b), colours, locations, groups, notifications
   (section 8).
 - **Migration number.** `main` already holds v46 (`202610301300_training_load_v46_classification_icons.sql`)
-  and v47 (`202610301700_training_load_v47_unit_conversion_guards.sql`), so the K2a migration is **v48**,
-  named `202610311000_calendar_v48_events.sql` (a new `calendar` schema, the count kept as `training_activity_v1`
+  and v47 (`202610301700_training_load_v47_unit_conversion_guards.sql`); PR #295 then took **v48**
+  (`202610301900_training_load_v48_mapping_activations.sql`, merged 2026-10-30), so the K2a migration is **v49**,
+  named `202610311000_calendar_v49_events.sql` (a new `calendar` schema, the count kept as `training_activity_v1`
   kept its own). Every choice below that touches it is marked ★ (external review, triggers 1 and 2; also 3 and
   4 — see section 7).
 
@@ -58,7 +59,7 @@ With (a) the event's own `title`, `start_time`, `location` and `status` are what
 schedule keeps collecting. **Cancelling an event does not cancel the referenced schedule in K2a** (no
 cross-domain write; the panel says so) — choice 9.12.
 
-### 1.2 Tables (★ migration v48, schema `calendar`)
+### 1.2 Tables (★ migration v49, schema `calendar`)
 
 Every text column passes `boundedText()` and `TEXT_FORBIDDEN` (`backend/src/metricTextRules.js:17-39`), with the
 database twins v40 already installed (`training_load.source_metric_text_ok`).
@@ -383,10 +384,10 @@ base kind.
 
 | Slice | Content | Reviewers | External review |
 |---|---|---|---|
-| **K2a-1a** ★ | migration v48 (every table of 1.2, the seed, the lock function, the guards, the rollback script and a read-only preflight / post-check in `docs/runbooks/calendar-events-v48*.sql`); `GET …/types`; create, edit, cancel; the read extension (`event` cards, the athlete's answer, `canManage`); the fixture list appended (`GPEXE_TEST_MIGRATIONS`, `_gpexe-disposable-db.mjs:75`; every slicing suite uses `indexOf`, none the list's end — verified) | `db-reviewer` + `security-reviewer` + `code-reviewer` | **yes**: triggers 1 (migration), 2 (owner_scope, workspace, info-hiding), 4 (lock order, idempotency) |
+| **K2a-1a** ★ | migration v49 (every table of 1.2, the seed, the lock function, the guards, the rollback script and a read-only preflight / post-check in `docs/runbooks/calendar-events-v49*.sql`); `GET …/types`; create, edit, cancel; the read extension (`event` cards, the athlete's answer, `canManage`); the fixture list appended (`GPEXE_TEST_MIGRATIONS`, `_gpexe-disposable-db.mjs:75`; every slicing suite uses `indexOf`, none the list's end — verified) | `db-reviewer` + `security-reviewer` + `code-reviewer` | **yes**: triggers 1 (migration), 2 (owner_scope, workspace, info-hiding), 4 (lock order, idempotency) |
 | **K2a-1b** | the links: attach / detach sessions with `alignSessions` (the toggle extracted into one shared function), attach / detach an activity, set / clear a schedule reference; the folding; `gaps` | `security-reviewer` + `code-reviewer` (+ `db-reviewer` only if the extracted toggle or a trigger changes) | **yes**: triggers 3 (linking) and 4 |
 | **K2a-2** | UI — **first item:** the deployed K1b screen gets a kind label and a chip for `kind: "event"` (LOW-8 of the K2a-1a independent review: the `event` cards this API already serves would otherwise render unlabelled there); then "New event" in the toolbar and on a day; the event card (type label, team stripe, time, location, status, counts, gap note); the panel with Edit / Cancel / Attach a training / Attach an activity / Detach for `canManage`; "Attach to event…" on a planned card's panel; the kind chips: `event` → **Events**, `external` → **RPE requests** (choice 9.10; today `external` is labelled "Events", `frontend/central-calendar-view.js:13`); a lost answer is *Result not confirmed · Check result* with the same `requestKey` (the roster and F3c3 pattern) | `code-reviewer` + `mobile-qa` + `ux-design-reviewer`; browser QA at 1280 / 360 / 375 / 390 px on the K1b harness | no (the server decides; no access change) |
-| **K2b** | Settings → Calendar: types CRUD with the archive rule, team colours (D11), locations (a catalog); the athlete's Upcoming events; v49 | `db-reviewer` + `security-reviewer` + `code-reviewer` + UI reviewers | yes (trigger 1) |
+| **K2b** | Settings → Calendar: types CRUD with the archive rule, team colours (D11), locations (a catalog); the athlete's Upcoming events; v50 | `db-reviewer` + `security-reviewer` + `code-reviewer` + UI reviewers | yes (trigger 1) |
 
 **Why two backend slices and one migration:** the reviewers read one schema once; each PR stays reviewable
 (the K1a PR took six rounds at about this size). A single migration with the link tables unused until K2a-1b has
@@ -394,10 +395,10 @@ the F3c1 precedent (v27's tables before their routes). Choice 9.5.
 
 **Tests, on disposable databases through the real routes** (`node scripts/test-runner.mjs --project backend --kind
 disposable --file central-calendar-k2a-events.test.mjs`, the K1a fixture: Tests files + the GPEXE list + v6 / v8,
-sorted; v48 sorts last):
+sorted; v49 sorts last):
 
 1. Migration: apply → objects, the seed exactly (7 system rows, 7 per club), every trigger enabled → rollback →
-   the v47 catalog digest identical → re-apply; the rollback refuses once an event exists or a later migration is
+   the previous catalog digest identical → re-apply; the rollback refuses once an event exists or a later migration is
    recorded.
 2. Create per workspace and basis (club admin, team coach, private coach, platform admin in a club workspace);
    the platform workspace `403 workspace_required`; the athlete `403`; the type's owner rule; `expects` default
@@ -466,7 +467,7 @@ mine is reproduced on a clean detached `origin/main` worktree before it is calle
 
 **Open environment item (not a K2a task; the owner's decision):** the local OPTIMOVE database stands at v21
 (CURRENT_STATE, since September), so every shared-kind suite has been unclaimable for every change since v22;
-`POST /api/organization/clubs` now also depends on v48 (the club's type copies), so `global-roles.test.mjs` (shared)
+`POST /api/organization/clubs` now also depends on v49 (the club's type copies), so `global-roles.test.mjs` (shared)
 would fail there until the local database is migrated. Whether to migrate it is the owner's separate decision. The
 club route is covered on a disposable database by the suite's tests 14 and 23 (K2a-1a).
 
@@ -489,10 +490,10 @@ re-homing of the other calendars.
    (informational gap only). And the gap as a panel note (recommended) or as a status badge.
 4. **Where the athlete sees events** — API in K2a-1 (recommended), the screen as an *Upcoming events* list on
    Athlete Home in K2b; or inside the Weekly plan (D5 says it does not change, so not recommended).
-5. **One migration v48 with every table** (recommended) or two (v48 events, v49 links).
+5. **One migration v49 with every table** (recommended) or two (v49 events, v50 links).
 6. **Schema name `calendar`** (recommended; K0 §8) or `training`.
 7. **Multi-day events in K2a** (`end_day`; recommended for camp / travel / day off) or one-day only.
-8. **Activity links in K2a** (recommended: the table in v48, manual attach in K2a-1b, so `device_data` can be met)
+8. **Activity links in K2a** (recommended: the table in v49, manual attach in K2a-1b, so `device_data` can be met)
    or K2c (then `device_data` is dormant in K2a).
 9. **The session link's identity** — the slot key (recommended, survives edit and sync) or `logical_session_id`
    (breaks on a batch sync).
@@ -518,8 +519,8 @@ they are), v44 (a self-report activity has no roster — unchanged by K2a).
 
 ## 10. Decisions (2026-10-30)
 
-**The manager's technical decisions, all as recommended:** 9.5 one migration v48 with every table; 9.6 schema
-`calendar`; 9.8 the activity link table in v48, manual attach in K2a-1b; 9.9 the session link by slot key; 9.10 the
+**The manager's technical decisions, all as recommended:** 9.5 one migration v49 with every table; 9.6 schema
+`calendar`; 9.8 the activity link table in v49, manual attach in K2a-1b; 9.9 the session link by slot key; 9.10 the
 chip words *Events* and *RPE requests*; 9.11 no system-owned events (the platform admin creates in the club's
 workspace); 9.12 an event's cancel never cancels its referenced schedule; 9.13 the trigger-checked test-schedule
 reference; 9.15 the v25 audit pattern; 9.17 the private coach targets athletes one by one with an "all my athletes"
@@ -537,7 +538,7 @@ section 2 describes.
 | **D22** (9.7) | Multi-day events in K2a (`end_day`). |
 | **D23** (9.16) | Match fields (opponent, home / away, result) in K2b with the type's `is_match`. |
 
-**K2a-1a as ordered:** migration v48 (every table of 1.2, the seed, `lock_event_writer`), the write routes create /
+**K2a-1a as ordered:** migration v49 (every table of 1.2, the seed, `lock_event_writer`), the write routes create /
 edit / cancel with `requestKey`, the lock order of 4.3, the identical 404, the audit; the read: events as `kind:
 "event"` items of `GET /api/calendar` with `expects` / `status`, the athlete's own view (D21), the fold of a
 referenced external / test schedule card under its event — so create and edit take `externalScheduleId` /

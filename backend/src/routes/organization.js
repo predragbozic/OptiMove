@@ -1016,7 +1016,7 @@ router.post("/clubs", async (req, res, next) => {
        returning id, name, short_name, logo_url, city, country`,
       [name, clean(req.body?.shortName), clean(req.body?.logoUrl), clean(req.body?.city), clean(req.body?.country)],
     );
-    // The club's copy of the calendar's default event types (migration v48,
+    // The club's copy of the calendar's default event types (migration v49,
     // docs/ai/central-calendar-k2a-plan.md section 6): seeded once, here, in
     // the same transaction as the club — never on read.
     await client.query(`select calendar.seed_club_event_types($1)`, [result.rows[0].id]);

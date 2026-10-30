@@ -1,7 +1,7 @@
 // Central calendar (K2a) — who may write an event, for which owner, on which
 // basis (docs/ai/central-calendar-k2a-plan.md, section 4.1; owner decisions
 // D4, D6, D7 and D18), and the target rules of plan section 1.2 as the
-// service checks them before the database's own triggers (migration v48).
+// service checks them before the database's own triggers (migration v49).
 //
 // The workspace is resolved ONCE per request (resolveCalendarContext of
 // calendarAccess.js) and threaded through; nothing here resolves it again.

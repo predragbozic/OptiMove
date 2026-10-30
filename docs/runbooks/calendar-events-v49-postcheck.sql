@@ -1,17 +1,17 @@
--- v48 production post-check - READ ONLY. For the owner to run in the Supabase
+-- v49 production post-check - READ ONLY. For the owner to run in the Supabase
 -- SQL Editor after the deploy of the K2a-1a pull request, one numbered block
 -- at a time. Every block is a plain SELECT; nothing is written. The expected
 -- values are in the comments; any other value means: stop, change nothing,
 -- report the block, the column and the value.
 
--- 1. v48 recorded once, with the repository's checksum (the sha256 named in
+-- 1. v49 recorded once, with the repository's checksum (the sha256 named in
 --    the pull request), as the last migration; nothing recorded after it.
---    Expected: v48_rows = 1, later_rows = 0, last_migration =
---    migrations_v2/202610311000_calendar_v48_events.sql.
+--    Expected: v49_rows = 1, later_rows = 0, last_migration =
+--    migrations_v2/202610311000_calendar_v49_events.sql.
 select
-  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202610311000_calendar_v48_events.sql') as v48_rows,
-  (select checksum from public.schema_migrations where migration_name = 'migrations_v2/202610311000_calendar_v48_events.sql') as v48_checksum,
-  (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202610311000_calendar_v48_events.sql') as later_rows,
+  (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202610311000_calendar_v49_events.sql') as v49_rows,
+  (select checksum from public.schema_migrations where migration_name = 'migrations_v2/202610311000_calendar_v49_events.sql') as v49_checksum,
+  (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202610311000_calendar_v49_events.sql') as later_rows,
   (select migration_name from public.schema_migrations where migration_name like 'migrations_v2/%' order by migration_name desc limit 1) as last_migration;
 
 -- 2. The objects: seven tables, the functions, the triggers - every trigger

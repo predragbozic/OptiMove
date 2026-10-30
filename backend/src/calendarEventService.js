@@ -168,7 +168,7 @@ function revisionField(body) {
 }
 
 // The service's mirror of the database's events_span_check and
-// events_time_shape (migration v48): a user error is a 400 here, never the
+// events_time_shape (migration v49): a user error is a 400 here, never the
 // trigger's 500.
 const MAX_EVENT_SPAN_DAYS = 366;
 function checkDaysAndTimes({ day, endDay, startTime, endTime }) {

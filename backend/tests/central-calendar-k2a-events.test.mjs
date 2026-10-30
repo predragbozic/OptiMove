@@ -1,11 +1,11 @@
-// Central calendar K2a-1a: migration v48 (calendar.*), the event commands
+// Central calendar K2a-1a: migration v49 (calendar.*), the event commands
 // (create / update / cancel with requestKey), the identical 404, the audit,
 // and the events in GET /api/calendar with the athlete's reduced view (D21).
 // Plan: docs/ai/central-calendar-k2a-plan.md (sections 1.2, 4, 5, 7, 10).
 //
 // Everything runs on ONE disposable database (optimove_tests_gpexe_k2a_*):
 // the GPEXE legacy scaffold, the Tests v42 files (for test schedules), the
-// training_load / training / calendar files through v48 plus v6 / v8, through
+// training_load / training / calendar files through v49 plus v6 / v8, through
 // the real runner; dropped at the end (the rollback rehearsal builds and
 // drops a second one). Nothing touches OPTIMOVE or any persistent database.
 // The real Express app is driven over HTTP with real session cookies.
@@ -24,7 +24,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 
-const V48 = "202610311000_calendar_v48_events.sql";
+const V49 = "202610311000_calendar_v49_events.sql";
 const TESTS_MIGRATIONS = [
   "202608220900_tests_v42_schema.sql",
   "202608221000_tests_v42_seed_wellness_fms.sql",
@@ -281,7 +281,7 @@ before(async () => {
   await admin.query(`alter table public.clubs
     add column if not exists short_name text, add column if not exists logo_url text, add column if not exists city text,
     add column if not exists country text, add column if not exists updated_at timestamptz not null default now()`);
-  assert.ok((await q(`select to_regclass('calendar.events') as t`))[0].t, "v48 is applied");
+  assert.ok((await q(`select to_regclass('calendar.events') as t`))[0].t, "v49 is applied");
   assert.ok((await q(`select to_regclass('tests.test_schedules') as t`))[0].t, "the Tests schema is applied");
 
   process.env.DATABASE_URL = db.url;
@@ -305,14 +305,14 @@ after(async () => {
 // ---------------------------------------------------------------------------
 // 1. The migration
 // ---------------------------------------------------------------------------
-test("1a. v48 is recorded once, with its objects and seed; the post-check runbook reads as expected; the catalog is read-only and a system type is never deleted", async () => {
+test("1a. v49 is recorded once, with its objects and seed; the post-check runbook reads as expected; the catalog is read-only and a system type is never deleted", async () => {
   // The post-check runbook, block by block, on the fresh database (before any
   // event exists): the owner's expected values.
-  const post = await runbookBlocks(admin, "calendar-events-v48-postcheck.sql");
-  assert.equal(Number(post[0].v48_rows), 1);
+  const post = await runbookBlocks(admin, "calendar-events-v49-postcheck.sql");
+  assert.equal(Number(post[0].v49_rows), 1);
   assert.equal(Number(post[0].later_rows), 0);
-  assert.equal(post[0].last_migration, `migrations_v2/${V48}`);
-  assert.match(post[0].v48_checksum, /^[0-9a-f]{64}$/);
+  assert.equal(post[0].last_migration, `migrations_v2/${V49}`);
+  assert.match(post[0].v49_checksum, /^[0-9a-f]{64}$/);
   assert.deepEqual({ tables: Number(post[1].tables), functions: Number(post[1].functions), triggers: Number(post[1].triggers), disabled: Number(post[1].disabled_triggers) },
     { tables: 7, functions: 22, triggers: 26, disabled: 0 }, "block 2");
   assert.equal(Number(post[2].system_types), 7);
@@ -325,7 +325,7 @@ test("1a. v48 is recorded once, with its objects and seed; the post-check runboo
   assert.equal(Number(post[5].tables_granted), 0, "block 6: no Data API role holds a privilege");
   assert.equal(Number(post[6].clubs_without_seven), 0, "block 7");
 
-  const rec = await q(`select count(*)::int as n from public.schema_migrations where migration_name like '%' || $1`, [V48]);
+  const rec = await q(`select count(*)::int as n from public.schema_migrations where migration_name like '%' || $1`, [V49]);
   assert.equal(rec[0].n, 1);
   const objs = (await q(`select (select count(*) from pg_tables where schemaname = 'calendar')::int as tables,
                                 (select count(*) from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'calendar' and not t.tgisinternal)::int as triggers,
@@ -346,7 +346,7 @@ test("1a. v48 is recorded once, with its objects and seed; the post-check runboo
   await assert.rejects(q(`delete from calendar.event_types where id = $1`, [training.id]), (e) => e.code === "23503");
 });
 
-test("1b. the rollback rehearsal: apply -> rollback -> the v47 catalog digest identical -> re-apply; the rollback refuses once an event exists", async () => {
+test("1b. the rollback rehearsal: apply -> rollback -> the v48 catalog digest identical -> re-apply; the rollback refuses once an event exists", async () => {
   const digestSql = `
     select md5(string_agg(x, '|' order by x)) as d from (
       select 'col:' || table_schema || '.' || table_name || '.' || column_name || ':' || data_type as x from information_schema.columns where table_schema not in ('pg_catalog', 'information_schema')
@@ -357,36 +357,36 @@ test("1b. the rollback rehearsal: apply -> rollback -> the v47 catalog digest id
       union all
       select 'idx:' || schemaname || '.' || indexname || ':' || indexdef from pg_indexes where schemaname not in ('pg_catalog', 'information_schema')
     ) s`;
-  const throughV47 = MIGRATIONS.filter((m) => m !== V48);
-  const other = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "k2arb", migrations: throughV47 });
+  const beforeOurs = MIGRATIONS.filter((m) => m !== V49);
+  const other = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "k2arb", migrations: beforeOurs });
   const client = new pg.Client({ connectionString: other.url });
   await client.connect();
   try {
     const before = (await client.query(digestSql)).rows[0].d;
-    // The preflight runbook on the database as it stands before v48: the
+    // The preflight runbook on the database as it stands before v49: the
     // owner's expected values (block 7 is the server-wide quiet-moment read,
     // whose counts other test databases on the same server may change; it is
     // asserted to run, not to be zero).
-    const pre = await runbookBlocks(client, "calendar-events-v48-preflight.sql");
+    const pre = await runbookBlocks(client, "calendar-events-v49-preflight.sql");
     assert.equal(pre[0].pg15_or_later, true, "block 1");
-    assert.equal(Number(pre[1].v47_rows), 1, "block 2");
-    assert.match(pre[1].v47_checksum, /^[0-9a-f]{64}$/);
-    assert.equal(Number(pre[1].v48_rows), 0);
-    assert.equal(Number(pre[1].at_or_after_v48), 0);
-    assert.equal(pre[1].last_migration, "migrations_v2/202610301700_training_load_v47_unit_conversion_guards.sql");
+    assert.equal(Number(pre[1].v48_rows), 1, "block 2");
+    assert.match(pre[1].v48_checksum, /^[0-9a-f]{64}$/);
+    assert.equal(Number(pre[1].v49_rows), 0);
+    assert.equal(Number(pre[1].at_or_after_v49), 0);
+    assert.equal(pre[1].last_migration, "migrations_v2/202610301900_training_load_v48_mapping_activations.sql");
     assert.equal(Number(pre[2].schema_rows), 0, "block 3");
     assert.ok(Object.values(pre[3]).every((v) => v === true), `block 4: ${JSON.stringify(pre[3])}`);
     assert.equal(pre[4].may_create_schema, true, "block 5");
     assert.ok(Number(pre[5].active_clubs) >= 0, "block 6");
     assert.ok("idle_in_transaction" in pre[6] && "strong_locks" in pre[6] && "other_migrators" in pre[6] && "migrator_lock_held" in pre[6], "block 7 runs");
-    await applyGpexeTestMigrations(other.url, [V48]);
-    assert.ok((await client.query(`select to_regclass('calendar.events') as t`)).rows[0].t, "v48 applied on the rehearsal database");
-    const rollback = await fsp.readFile(path.resolve(__dirname, "../../docs/runbooks/calendar-events-v48-rollback.sql"), "utf8");
+    await applyGpexeTestMigrations(other.url, [V49]);
+    assert.ok((await client.query(`select to_regclass('calendar.events') as t`)).rows[0].t, "v49 applied on the rehearsal database");
+    const rollback = await fsp.readFile(path.resolve(__dirname, "../../docs/runbooks/calendar-events-v49-rollback.sql"), "utf8");
     await client.query(rollback);
     assert.equal((await client.query(`select to_regclass('calendar.events') as t`)).rows[0].t, null, "the schema is gone");
-    assert.equal((await client.query(`select count(*)::int as n from public.schema_migrations where migration_name like '%' || $1`, [V48])).rows[0].n, 0, "the record is gone");
-    assert.equal((await client.query(digestSql)).rows[0].d, before, "the catalog is exactly v47's again");
-    await applyGpexeTestMigrations(other.url, [V48]);
+    assert.equal((await client.query(`select count(*)::int as n from public.schema_migrations where migration_name like '%' || $1`, [V49])).rows[0].n, 0, "the record is gone");
+    assert.equal((await client.query(digestSql)).rows[0].d, before, "the catalog is exactly v48's again");
+    await applyGpexeTestMigrations(other.url, [V49]);
     assert.ok((await client.query(`select to_regclass('calendar.events') as t`)).rows[0].t, "re-applied");
     // The other refusals, each leaving the schema in place: a later migration
     // recorded, a catalog row that is not the seed, the migrator's lock held.
@@ -419,7 +419,7 @@ test("1b. the rollback rehearsal: apply -> rollback -> the v47 catalog digest id
   const c = await clubFixture("rb");
   const created = await createEvent(c.clubAdmin.cookie, { eventTypeId: (await typeOf(c.clubAdmin.cookie, "meeting")).id, title: "Board", day: FUTURE, targets: [{ kind: "club", id: c.clubId }] });
   assert.equal(created.status, 201, created.text);
-  const rollback = await fsp.readFile(path.resolve(__dirname, "../../docs/runbooks/calendar-events-v48-rollback.sql"), "utf8");
+  const rollback = await fsp.readFile(path.resolve(__dirname, "../../docs/runbooks/calendar-events-v49-rollback.sql"), "utf8");
   await assert.rejects(admin.query(rollback), (e) => /rollback refused/.test(e.message) && /row\(s\) exist/.test(e.message));
   await admin.query("rollback").catch(() => {});
   assert.ok((await q(`select to_regclass('calendar.events') as t`))[0].t, "nothing was dropped");
