@@ -151,12 +151,13 @@ A field the UI does not show for that session is written as "not shown", never g
 ## 4. What the owner returns (numbers and booleans only)
 
 One table per session, **S1** and **S2**, athletes **A, B, C**; no name, id, date or screenshot. The evidence will be
-merged into the repository's history, so it carries the factor and its proof, not exact personal values:
+merged into the repository's history, so it carries the factor, the UI's unit and the flags only. **No performance
+value is returned or written, raw or rounded**: not in the table, a note, a chat or a document.
 
-| Field | Athlete | UI unit | UI ÷ raw (6 significant digits) | Raw value rounded to 2 significant digits | Non-zero? | Same factor for every athlete of both sessions? |
-|---|---|---|---|---|---|---|
-| `athlete_session.total_time` | A | min | … | … | yes / no | yes / no |
-| … | | | | | | |
+| Field | Athlete | UI unit | UI ÷ raw (6 significant digits) | Non-zero? | Same factor for every athlete of both sessions? |
+|---|---|---|---|---|---|
+| `athlete_session.total_time` | A | min | … | yes / no | yes / no |
+| … | | | | | |
 
 Plus, for every field: `the values differ between athletes` (yes / no); for the zone and event fields: `extremes
 match the team's thresholds` (yes / no) and `the UI's zone or event settings equal block 3` (yes / no); for `max_v`:

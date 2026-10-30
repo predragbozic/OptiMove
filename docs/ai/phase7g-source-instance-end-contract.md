@@ -67,7 +67,10 @@ after v48 is merged and deployed**, against v48's body as merged (section 6.3).
   (`migrations_v2/202609211000_training_load_v24_gpexe_settings_change_guard.sql:82-89`): a transaction-level try-lock
   that never waits. A bind takes it in the binding trigger (`migrations_v2/202609271000_training_load_v27_source_credential_connections.sql:323`),
   an Unbind too (`:374`), and so do a check, an import and a settings change (C57: the team lock first). It is the one
-  point that serializes the **insert** of a new binding.
+  point that serializes the **insert** of a new binding. "Never waits" holds for the try-lock only: the import writer
+  takes the same key with the **blocking** `pg_advisory_xact_lock` (`lockTeamForImport`,
+  `backend/src/gpexeImportWriter.js:599-602`), so a writer waits while 7g holds it. No cycle follows, because the
+  writer takes the team lock first, before any row lock (C57), and 7g takes it before any row lock too (section 4).
 - **T8's shape for `source_instance_end`** (`source_metric_audit_row_ok`, v34 `:1670-1671`; byte-identical in v48 on
   the 7d-B branch): only `metric_source_connection_id`, `team_id` optional; `from_status = 'active'`, `to_status =
   'inactive'`; `reason` required; `basis = 'platform_admin'`. Today every such insert ends at the revision guard's
@@ -135,7 +138,9 @@ Answers:
       included, C58): end it first (S2). *Interpretation, pending owner:* "that source's bindings" is read as the
       owner team's bindings of that source team; the new team's activations are its own and do not block the end.
    6. `try_again`: the team import lock is held (a check, import, bind, Unbind or settings change runs for the owner
-      team), or a row lock is not granted within the bound.
+      team), or a row lock is not granted within the bound. The service learns the first from its own try-lock's
+      boolean (section 4, step 2), never from a database text: `hold_gpexe_team_lock`'s `P0001` carries the team's id
+      and is never mapped (C72).
 4. **200** `{ "instance": <the row as in 3.1, state inactive> }`, with the usual replay (`replayed: true`),
    `request_key_reused`, `verified_after_commit_error` and `503 outcome_unknown` of `runWrite`.
 
@@ -146,9 +151,13 @@ One operation in `runWrite`'s transaction (the per-user lock, the request record
 1. the connection **read without a lock** (its owner team and T7 keys; the keys never change once set, v34's
    write-once trigger; the owner may still change on a connection no event or identity uses, v11 `protect_ownership`
    `:52-70`, so step 6 compares it again);
-2. **the owner team's import lock** (`hold_gpexe_team_lock(owner team, 'ending a source instance')`, a try-lock:
-   `try_again` when held) — the lock a bind, an Unbind, a check and an import take first, so no binding of the owner
-   team can be inserted or ended while the end runs;
+2. **the owner team's import lock**, taken by the service itself:
+   `select pg_try_advisory_xact_lock(hashtextextended('gpexe-import-team:' || $1::uuid::text, 21))`, the key in
+   canonical lower case, the same key as `hold_gpexe_team_lock` and `lockTeamForImport`. On `false` the answer is
+   `try_again`; no database text is mapped (C72). It is the lock a bind, an Unbind, a check and an import take first,
+   so no binding of the owner team can be inserted or ended while the end runs. The guard's own
+   `hold_gpexe_team_lock` (section 6, item 1) is then re-entrant and always succeeds; it serves only a raw writer,
+   which gets the lock there or is refused while another transaction holds it;
 3. the owner team's bindings naming that source system and source team `FOR SHARE`, in ascending id (never stronger
    than `FOR SHARE`, R5), then their open T5 rows (a plain read: no S1 can start on them, section 5);
 4. the v11 row `FOR NO KEY UPDATE` (after the bindings, as D's order: binding → Metrics Core connection; it waits for an
@@ -171,7 +180,9 @@ Nothing else changes: no event, identity, occasion, value, provenance, binding o
   after the end's COMMIT meets an `inactive` instance, and M4 then creates the team's own new instance (C36).
 - **Against an Unbind** of the owner team: the same team lock.
 - **Against M4's writer** (C57: the team lock first, then the connection `FOR UPDATE` for events and identities and
-  `FOR SHARE` for T6): the team lock serializes them; a writer that holds the connection without the team lock (none
+  `FOR SHARE` for T6): the team lock serializes them. The writer's lock is blocking (`gpexeImportWriter.js:601`): a
+  writer that starts while 7g holds the lock waits for 7g's COMMIT and then meets an `inactive` instance; 7g that
+  starts while a writer holds it gets `try_again`. A writer that holds the connection without the team lock (none
   today) would be waited for at step 4. The M4 writer must read `state` under its own `FOR UPDATE` and refuse an
   `inactive` connection (a prerequisite recorded for M4; today's `ensureSourceConnection` reads it unlocked).
 - **Against a T6 insert** (binding `FOR SHARE` → connection `FOR SHARE`): 7g takes the binding `FOR SHARE` before the
@@ -228,7 +239,9 @@ Nothing else changes: no event, identity, occasion, value, provenance, binding o
 **Existing tests that change `state` raw** must switch the guard off in their own disposable database, since the
 guarded path can never go `inactive → active` and never touches a keyless connection:
 `backend/tests/source-metric-mapping-m1.test.mjs:1058, 1061, 1062, 1103, 1416` and
-`backend/tests/gpexe-undo-guards.test.mjs:201`. No production code changes `state`.
+`backend/tests/gpexe-undo-guards.test.mjs:201`. The switch-off covers only the fixture blocks that change `state`
+directly and is undone right after them, as 7c does for v47 (the *Rukovodilac*'s note (ii) at 7c's GO). No production
+code changes `state`.
 
 ## 7. Security and privacy
 
@@ -261,6 +274,12 @@ guarded path can never go `inactive → active` and never touches a keyless conn
   binding `FOR UPDATE` must then fail the test; against S1 on the owner team's binding.
 - **Nothing else changes:** events, identities, values, provenance and dashboard rows of the instance are
   byte-identical before and after.
+- **The raw-flip fixtures:** the guard is switched off only around the fixture blocks of section 6 and switched on
+  again right after them; an architecture test asserts that no module of `backend/src` runs `disable trigger` (7c's
+  test 13).
+- **The team lock:** a held lock answers `try_again` from the try-lock's boolean, and no answer carries a database
+  text; a raw writer that sets the actor while another transaction holds the lock meets the guard's
+  `hold_gpexe_team_lock` refusal.
 - **Mutations** of every guard branch, the order of the 409s and the state checks.
 
 ## 9. Decisions for the *Rukovodilac*
@@ -298,3 +317,8 @@ lock), any frontend, any production write, a re-activation, a move of history be
   the owner (J13); `.gitattributes` for v49's runbook SQL (J13); the C97 blocks drop the read-only wrapper (the editor
   may show only the last statement), cast safely, count every whole-session row per athlete, and say they approximate
   the mapper's gates.
+- **External round (head `fedabc65`):** the *Nezavisni revizor* and the *Rukovodilac*, both GO with non-blocking
+  notes. Applied by the *Rukovodilac*'s decision, one new head with a narrow re-review: the service takes the team
+  lock itself and answers `try_again` from its boolean, never from `P0001` text (C72); "never waits" limited to the
+  try-lock, with the import writer's blocking lock; the guard's switch-off only around the raw-flip fixture blocks,
+  with the architecture test against `disable trigger`.
