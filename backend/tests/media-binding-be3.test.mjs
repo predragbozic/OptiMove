@@ -752,12 +752,19 @@ async function planSession(owner,fields={}) {
 }
 // A pending asset in a slot, a video in a picture slot: states the production
 // schema's L1 reference guard (MEDIA_L1_TEST) refuses to create, so they are
-// built with that guard off for this setup only. The guard is never relaxed for
-// the service under test, and without L1 nothing is switched off.
+// built with that guard off for this setup only - in one transaction, so no
+// other session ever sees it off and an error restores it. The guard is never
+// relaxed for the service under test, and without L1 nothing is switched off.
 async function withoutReferenceGuard(work) {
  if(process.env.MEDIA_L1_TEST!=='true')return work();
- await client.query('alter table library.exercises disable trigger media_l1_reference_guard');
- try{return await work();}finally{await client.query('alter table library.exercises enable trigger media_l1_reference_guard');}
+ await client.query('begin');
+ try {
+  await client.query('alter table library.exercises disable trigger media_l1_reference_guard');
+  const result=await work();
+  await client.query('alter table library.exercises enable trigger media_l1_reference_guard');
+  await client.query('commit');
+  return result;
+ } catch(error){await client.query('rollback').catch(()=>{});throw error;}
 }
 async function planItem(session,{video=null,image=null,videoAsset=null}={}) {
  return (await client.query("insert into plans.plan_items(plan_session_id,item_type,title,video_source,video_asset_id,video_url,image_url) values($1,'exercise','Matrix item',$2,$3,$4,$5) returning id",
