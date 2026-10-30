@@ -58,7 +58,7 @@ built or changed. Preserved V1 blobs retain extra fields; unrepresentable existi
 configurations require Advanced instead of destructive normalization. Unknown sidecar
 versions remain opaque and cannot be semantically rewritten through Simple.
 
-## DB rule coverage inventory — unit coverage is not DB parity
+## DB rule coverage inventory — scoped S2a PostgreSQL evidence
 
 The following is the S2a refusal inventory against current v15/v16/v17/v18 rules.
 No production SQL file or schema is changed. The DB constraints and triggers remain
@@ -66,19 +66,19 @@ the authoritative final write protection.
 
 | Existing rule family | Isolated S2a coverage | Real PostgreSQL parity in this delivery |
 |---|---|---|
-| Metric/source target visibility and active state | SQL target predicates; negative compiler/reader cases | Not executed |
-| Built-in fixed scope, source `not_applicable`, null unit | Catalog fixtures, schema/compiler checks | Not executed |
-| Scope capabilities (including zero rows) | Compiler boundary tests, picker SQL | Not executed |
-| Value type vs analytical aggregation | Numeric vs text/boolean negative cases | Not executed |
-| Source connection/policy pairing, role/coverage enums | Preserved-series negative cases | Not executed |
-| Comparison support, axis enums | Preserved-series/type negatives | Not executed |
-| Single metric/built-in reference and resolved status | Strict unions; exactly one compiled series; unresolved/multi-series => Advanced | Not executed |
-| Series cap/shared-axis unit consistency | Structurally one Simple series; multi-series => Advanced; table unit matching | Not executed; cross-series DB cases need existing Advanced regression |
-| Archive/template/workspace parent guards | Capability reader negatives before catalog access | Not executed |
-| Filter athlete/activity/component membership | Authorized server context, negative membership/parent cases | Not executed |
+| Metric/source target visibility and active state | SQL target predicates; negative compiler/reader cases | Actual reader SQL and target-owner matrix; pagination; new archived metric/inactive source binding rejection and inactive/foreign source update rollback |
+| Built-in fixed scope, source `not_applicable`, null unit | Catalog fixtures, schema/compiler checks | All five real built-ins; loaded metadata; legacy create/update projection; invalid scope create/update rollback |
+| Scope capabilities (including zero rows) | Compiler boundary tests, picker SQL | Zero/single/multiple capability rows; explicit choices, picker filtering and valid/invalid sanctioned create/update |
+| Value type vs analytical aggregation | Numeric vs text/boolean negative cases | All five numeric aggregations; text/boolean last/none; disallowed create/update rollback and stable compiler issue paths |
+| Source connection/policy pairing, role/coverage enums | Preserved-series negative cases | Loaded-policy preservation and actual DB checks; rejected writes preserve rows/revisions |
+| Comparison support, axis enums | Preserved-series/type negatives | Supported KPI comparison preservation, table comparison/type-switch denial and invalid axis create/update |
+| Single metric/built-in reference and resolved status | Strict unions; exactly one compiled series; unresolved/multi-series => Advanced | Stored single resolved series and represented-field equality; updates retain references; no rebinding proof |
+| Series cap/shared-axis unit consistency | Structurally one Simple series; multi-series => Advanced; table unit matching | Cross-series cases are unreachable through the one-series Simple output; not claimed as new parity coverage |
+| Archive/template/workspace parent guards | Capability reader negatives before catalog access | Actual existing authorization predicates; target query only before denial; legacy DB/API regression |
+| Filter athlete/activity/component membership | Authorized server context, negative membership/parent cases | Clean RPE create/update result tuples and multiplicity; component-only absent/cleared activity query results; exact conflict/foreign selector issue paths |
 | Presentation and rule shape/unit compatibility | Strict contracts and constant/reference capability negatives | No DB sidecar backstop exists yet; belongs to S2c |
-| Retained widget size on type change | Destination catalog min/max width/height checks; incompatible size => invalid without resizing | Not executed; narrow unit cases added |
-| Layout/order overlap, ownership immutability, write locks, revisions | No writer/layout mutation exists in S2a | Existing DB regression required before integration; not claimed by unit tests |
+| Retained widget size on type change | Destination catalog min/max width/height checks; incompatible size => invalid without resizing | DB-loaded Table-to-KPI refusal and SQL rollback; compatible explicit layout permits transition |
+| Layout/order overlap, ownership immutability, write locks, revisions | No writer/layout mutation exists in S2a | Existing 96-test real DB/API regression passed, including existing lock races; future Simple composite-writer guarantees remain unproved |
 
 Full real parity must cover non-racing valid/invalid create **and** update, known
 constraint rejection => stable code/path mapping, and race revalidation in the later
@@ -86,7 +86,7 @@ write adapter. S2a's mock query tests prove parameter construction/order and ser
 control flow, not SQL execution, DB authorization or concurrency. Future S2b/S2c
 must not treat them as substitute parity evidence.
 
-## Executed validation and limits
+## Original delivery validation and limits (historical)
 
 Results are recorded in the Draft PR and final delivery report. New unit/contract
 tests run without `DATABASE_URL`. Frontend regression covers the unchanged Display
@@ -106,12 +106,11 @@ setuid/setgroups permissions; no permission escalation or production service was
 No DB test is silently marked successful or skipped as proof. Shared persistent-db
 tests were not run because no such write was authorized.
 
-**Integration status: BLOCKED on actual disposable DB/API parity evidence and the
-requested technical/security review.** The isolated code can be reviewed in Draft;
-this does not authorize connecting production routes, S2b/S2c, migration, merge or
-deployment. No departure from pinned S1.1 is intentionally introduced. The future
-adapter's mandatory trusted input boundary and database proof are explicit limitations,
-not new product behavior or relaxed authorization.
+The original delivery was blocked on DB/API evidence and independent review. The
+targeted review corrections and scoped PostgreSQL verification below supersede
+those original evidence gaps. The PR remains Draft; connecting production routes,
+S2b/S2c, production migration, merge or deployment still require separate approval.
+The future adapter's mandatory trusted input boundary remains unchanged.
 
 ### Commands and measured results
 
@@ -157,3 +156,38 @@ DB access or S2b/S2c work was performed. The independent reviewer closed all thr
 findings after 93 additional focused in-memory cases: 21 layout, 48 component,
 24 timezone. No residual issue was found within the correction delta. This narrow
 recheck does not establish actual SQL, DB/API or concurrency parity.
+
+### Isolated PostgreSQL verification (2026-10-29; close-out 2026-10-30)
+
+The owner authorized a new temporary PostgreSQL 17 cluster, bound only to
+127.0.0.1 on a separate port. The repository runner received a test connection only
+in its child-process environment. No .env, persistent environment variable,
+pre-existing database/service configuration, or production data was changed.
+
+The original Dashboard suite passed **96/96** before new tests. Thirteen appended
+S2a tests then connected the actual capability reader/compiler to migrated
+disposable databases, existing sanctioned SQL writes and real Express endpoints.
+The final full suite passed **109/109**, with zero failures/skips/cancellations.
+The cleanup audit reported no database left behind and no maintenance-database
+writes. A separate close-out query confirmed only `postgres` remained with zero
+user objects. The temporary server was stopped after verification.
+
+The independent reviewer found no remaining test-design blocker after two focused
+additions: inactive/foreign binding rollback checks and component-only result
+proof. Scoped isolated-model S2a DB evidence closure was conditioned on the final
+109/109 and clean cleanup; both conditions were measured and satisfied.
+
+The test-only legacy projection stores only currently representable fields,
+using separate existing writes and DB-assigned IDs on create. Updates retain
+existing references; rebinding, presentation sidecar storage and atomic Simple
+save are not tested or implemented. Source compiler negatives use synthetic
+existing bindings and an unloaded connection; actual visibility/activity refusal
+is separately proved through reader SQL and DB backstops. Result proof covers
+clean RPE and selected-component fixtures, with exact values/identities and
+multiplicity. Full preview/saved-result parity, historical semantic proof and new
+Simple writer/race guarantees remain S2b/S2c gates.
+
+**Scoped S2a review and real-DB evidence are complete.** This closes the original
+missing-PostgreSQL-evidence blocker for the isolated model only. It does not
+authorize integration, merge, deployment, S2b or S2c. The confirmed unrelated
+Builder baseline failure remains unchanged.
