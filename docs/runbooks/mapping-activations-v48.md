@@ -120,5 +120,9 @@ database.
   reason "Source revision retired.".
 - **A club's own version on an archived club** stays as phase 7b decided: A1 and A2 are the identical 404, the pinned
   step answers `409 club_archived`, and its activations stay open until the club is restored.
+- **A club admin granted the platform admin role while a start or an end runs** gets `409 try_again` when the grant
+  lands before the request's rights check (the promotion probe). When it lands after that check, the database derives
+  `platform_admin` against the request's `club_admin` and refuses with `42501`. The answer is then a sanitized `500`,
+  nothing is written, and a retry succeeds. This is v35's rule (C79) and is accepted.
 - **An Unbind** never touches an activation (C58). An activation left open on an ended binding applies to nothing, the
   list shows it with `bindingState: "ended"`, and an end stops it.

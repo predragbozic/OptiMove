@@ -131,10 +131,11 @@ export async function lockListedBindings(client, bindings) {
 
 // The state checks of the listed starts, one ascending pass (section 4.1 step
 // 6): the first failing binding is named, whatever the kind of failure. `v` is
-// the version (with its field's source and API family); `ending` the open
-// activations this same operation ends first (A1's replacement), which do not
-// hold a binding.
-export async function checkListedStarts(client, v, bindings, locked, { ending = [] } = {}) {
+// the version (with its field's source and API family). A1 calls this after it
+// has ended N's open activations in the same transaction (section 4.3), so a
+// row it ended no longer holds its binding (test 9 restarts N+1 on N's own
+// binding).
+export async function checkListedStarts(client, v, bindings, locked) {
   for (const { bindingId } of bindings) {
     const b = locked.get(bindingId);
     if (b.state !== "active") throw stateRefusal("binding_not_active", { bindingId, bindingState: b.state });
@@ -142,15 +143,15 @@ export async function checkListedStarts(client, v, bindings, locked, { ending = 
     const sameField = await client.query(
       `select 1 from training_load.source_metric_mapping_activations
         where source_team_binding_id = $1 and source_metric_definition_id = $2 and parameter_fingerprint = $3
-          and ended_at is null and id <> all($4::uuid[])`,
-      [bindingId, v.source_metric_definition_id, v.parameter_fingerprint, ending],
+          and ended_at is null`,
+      [bindingId, v.source_metric_definition_id, v.parameter_fingerprint],
     );
     if (sameField.rowCount > 0) throw stateRefusal("activation_exists", { bindingId });
     const sameTarget = await client.query(
       `select 1 from training_load.source_metric_mapping_activations
-        where source_team_binding_id = $1 and metric_definition_id = $2 and ended_at is null and id <> all($5::uuid[])
+        where source_team_binding_id = $1 and metric_definition_id = $2 and ended_at is null
           and ((applies_to_session and $3::boolean) or (applies_to_drill and $4::boolean))`,
-      [bindingId, v.metric_definition_id, v.applies_to_session, v.applies_to_drill, ending],
+      [bindingId, v.metric_definition_id, v.applies_to_session, v.applies_to_drill],
     );
     if (sameTarget.rowCount > 0) throw stateRefusal("variable_taken_on_binding", { bindingId });
   }
@@ -221,7 +222,11 @@ export async function lockOpenActivations(client, versionIds) {
 // The ends, one statement, before the versions' status changes (v34 refuses
 // to disable a version with an open activation): at the transaction's time,
 // by the acting user. A version-driven end carries the platform admin's basis
-// the database derives without the club gate (section 2.3).
+// the database derives without the club gate (section 2.3): the basis is the
+// constant 'platform_admin' because A1, A2 and the pinned step admit only a
+// platform admin (mayTransitionMappings, the lifecycle's own gate); opening
+// them to another basis must change it here and in endAuditRows (v48 refuses
+// it with 42501 otherwise).
 export async function endOpenActivations(client, ctx, rows, endReason) {
   if (rows.length === 0) return;
   await client.query(
@@ -233,7 +238,8 @@ export async function endOpenActivations(client, ctx, rows, endReason) {
 }
 
 // One activation_end audit row per end, with the version's disable_reason as
-// its reason (v48 checks it), after the versions' status changes.
+// its reason (v48 checks it), after the versions' status changes; the basis is
+// 'platform_admin' for the reason given at endOpenActivations.
 export async function endAuditRows(client, ctx, rows, reason, operationId) {
   for (const r of rows) {
     await client.query(

@@ -866,7 +866,7 @@ const endOf = async (id) => {
   return [row.end_reason, row.ended_basis, row.ended_by_user_id, audit?.reason ?? null];
 };
 
-test("9. A1, A2 and the pinned step (D6, O5): a replacement ends the replaced version's activations - on an archived club's binding too - then activates and starts the listed bindings (activationsEnded, activations, also on replay); A2 and the pinned step (L4, L5) end a system version's activations on an archived club's binding; a club's own version on an archived club stays as 7b decided (A1 and A2 the identical 404, the pinned step 409 club_archived, the activation open); each activation_end reason is the version's disable_reason; A1's listed starts follow S1's scope and body rules; an A1 made before 7d replays", async () => {
+test("9. A1, A2 and the pinned step (D6, O5): a replacement ends the replaced version's activations - on an archived club's binding too - then activates and starts the listed bindings (activationsEnded, activations, also on replay); A2 and the pinned step (L4, L5) end a system version's activations on an archived club's binding; a club's own version on an archived club stays as 7b decided (A1 and A2 the identical 404, the pinned step 409 club_archived, the activation open); each activation_end reason is the version's disable_reason; A1's listed starts follow S1's scope and body rules; an A1 made before 7d replays; N+1 restarts on N's own binding", async () => {
   // A1 with a replacement: N active on a club A binding and on club C's binding (club C then archived).
   const f = await field();
   const target = await variable(W.pa);
@@ -962,6 +962,22 @@ test("9. A1, A2 and the pinned step (D6, O5): a replacement ends the replaced ve
   const hash7b = crypto.createHash("sha256").update(JSON.stringify({ route: "mapping_activate", mappingId: old.mappingId, versionId: old.versionId, toStatus: "active", expectedActiveVersionId: null, reason: null }), "utf8").digest("hex");
   assert.equal((await auditOf(`request_key = $1`, [kOld]))[0].request_hash, hash7b);
   assert.equal(ok(await activate(old, W.pa.cookie, { requestKey: kOld, extra: { activations: [] } })).replayed, true);
+  // The common replacement: N+1 restarted on the very binding N was open on.
+  // A1 ends N's rows before its listed checks and starts (section 4.3), so the
+  // same field and variable on that binding are free again in the same transaction.
+  const g = await field();
+  const gTarget = await variable(W.pa);
+  const gN = await version(g, { target: gTarget });
+  ok(await activate(gN, W.pa.cookie));
+  const bSame = await binding(W.clubA);
+  const gOn = ok(await start(W.pa, gN, [bSame]), 201).activations[0];
+  const gN1 = await version(g, { target: gTarget });
+  const restarted = ok(await activate(gN1, W.pa.cookie, { expected: gN.versionId, reason: reasonFor("Replace on the same binding."),
+    extra: { activations: listed([bSame]), activationReason: reasonFor("Restart on the same binding.") } }));
+  assert.deepEqual([restarted.activationsEnded, restarted.activations.map((a) => [a.bindingId, a.versionId])], [1, [[bSame.bindingId, gN1.versionId]]]);
+  assert.equal((await t5(gOn.id)).end_reason, "mapping_version_replaced");
+  const openOnSame = await rows(k, `select mapping_version_id from training_load.source_metric_mapping_activations where source_team_binding_id = $1 and ended_at is null`, [bSame.bindingId]);
+  assert.deepEqual(openOnSame.map((r) => r.mapping_version_id), [gN1.versionId]);
 });
 
 test("10. replay, keys and the COMMIT through the real route: a replay (S1 201 then 200 replayed; S2), request_key_reused (another body, another operation), a cross-workspace replay of S1, S2 and A1 (the identical 404), an answer lost but verified (200 verified_after_commit_error), one lost and not found (503 outcome_unknown, then the same key writes once), and a definite refusal by a deferred v48 link (500, nothing written, the key free)", async () => {

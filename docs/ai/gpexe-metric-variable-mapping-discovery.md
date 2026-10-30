@@ -3873,7 +3873,9 @@ proposed as its own pull request, 7d-C. No open owner question blocks it.
   - an activation's `basis` in an answer is its activated basis;
   - S3 takes `bindingId`, `versionId` or both; a cursor names the last row's id only;
   - A1 with `activations: []` is the same request as none (the same request hash), so a replay of an A1 made before
-    7d still replays (obligation (iv)).
+    7d still replays (obligation (iv));
+  - A1 checks and writes its listed starts after it has ended N's open activations in the same transaction, so N+1
+    restarts on N's own binding (test 9).
 - **Departures from section 4, in the safer direction:**
   - **S1's open-row conditions** are pre-read under S1's locks, so an S1 that meets an S2 still holding the same row
     answers `activation_exists` at once, before any wait (section 5's row "S1 against S2" describes a wait at the
@@ -3883,6 +3885,17 @@ proposed as its own pull request, 7d-C. No open owner question blocks it.
 - **The 7b and v39 suites:** their "Phase 7d simulation" fixtures keep their raw T5 rows, now with a real team (the
   `activation_end` audit row of an end references it), and the cases that expected `activation_open` now expect the
   ends (A1's replacement, A2, the pinned step). The M2 architecture test names the T5 writers.
+- **Recorded, not built (the internal reviews' LOW notes):**
+  - a start's `activated_at` is not pinned to the transaction's time at INSERT (an end's `ended_at` is), as no M1 table
+    pins its creation time (7c's note on `created_at`);
+  - S3 with `state=ended|all` and a `versionId` has no index for ended rows by version (v34's
+    `source_metric_activations_open_version_idx` is partial); a plain index on `(mapping_version_id)` when T5 grows;
+  - preflight block 5 counts every binding whose connection is not club-owned, ended ones included, so it can only
+    over-alarm;
+  - a club admin granted the platform admin role after the request's rights check gets a sanitized `500` (v48's `42501`),
+    not `try_again`; nothing is written (v35's rule, C79; the runbook says so);
+  - the version-driven ends write the basis `platform_admin` as a constant, because A1, A2 and the pinned step admit only
+    a platform admin; the code comment names the two places to change if they ever admit another basis.
 - **Tests:** `backend/tests/mapping-activations-7d.test.mjs` (14 tests, disposable databases), with 96 mutations of
   the services, the routes, v48 and its rollback (section 10 item 10 and more). 95 are killed by a behaviour test,
   among them the early checks of S1, S2 and S3 that stand before a locked check. Test 13 kills those: the early
