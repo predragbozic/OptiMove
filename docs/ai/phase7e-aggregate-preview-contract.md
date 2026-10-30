@@ -126,8 +126,9 @@ The router's usual sequence (`adminContext`, then the gate), with no body:
 Every step up to 5 is in one read-only transaction (`boundedRead`, `REPEATABLE READ READ ONLY` with the read's
 statement and lock timeouts, `backend/src/sourceMetricMappingService.js:160-168`), so the scope, the snapshot state and
 the bundle are one snapshot: a concurrent purge either lands before it (step 3) or not at all for this read. The
-candidate row is read without a lock. The same statement refuses a bundle larger than a fixed bound
-(`pg_column_size(raw_bundle)`, R7) with `409 candidate_too_large`, before the bundle leaves the database. The
+candidate row is read without a lock. The same statement refuses a bundle whose **uncompressed** text is larger than a
+fixed bound (`octet_length(raw_bundle::text)`, R7; `pg_column_size` would measure the possibly compressed stored size)
+with `409 candidate_too_large`, before the bundle leaves the database. The
 extraction and the aggregation (section 5) run in Node after the transaction has ended.
 
 ## 3. The answer (OD2, pending owner)
@@ -228,7 +229,8 @@ untouched. The phase 8 screen (the Mappings tab) is the first caller; the API is
 - **No leak:** a secret-scan of every answer **and every captured console line** of the suite for athlete, track and
   session ids, names, raw keys of the bundle and database texts (a session refused by the mapper included); the
   answer's keys are exactly section 3's.
-- **The bounds:** a bundle over the size bound is `409 candidate_too_large`, and nothing of it is read into Node.
+- **The bounds:** a highly repetitive bundle whose stored (compressed) size is under the bound but whose text is over
+  it is `409 candidate_too_large`, and nothing of it is read into Node.
 - **Mutations** of the scope rule, the 404-before-409 order, the minimum, the athlete gates and the conversion.
 
 ## 9. Decisions for the *Rukovodilac*
@@ -243,8 +245,8 @@ untouched. The phase 8 screen (the Mappings tab) is the first caller; the API is
 - **R5 — `candidate_source_mismatch`** for a candidate read from another family (no partial preview). Recommended.
 - **R6 — the team's current club** decides the candidate's scope (section 2), not 7d's connection-owner club.
   Recommended.
-- **R7 — a fixed size bound on the stored bundle** read by the preview (proposed 16 MiB, a constant of the service),
-  `409 candidate_too_large` above it. Recommended.
+- **R7 — a fixed bound on the bundle's uncompressed size** read by the preview (proposed 16 MiB of
+  `octet_length(raw_bundle::text)`, a constant of the service), `409 candidate_too_large` above it. Recommended.
 
 ## 10. Not in this contract
 
@@ -260,3 +262,9 @@ GPEXE answer, a preview of several candidates at once.
   or repeated `candidateId` is the 404 (security LOW); only the mapper's stable code crosses, with a console-capture
   test (security LOW); the isolation stated and a size bound on the stored bundle, the extraction after the transaction
   (db LOW); the five owner decisions under one numbering (the *Rukovodilac*'s note of 19:29 UTC).
+- **Narrow re-reviews of `e8060485..f8768e3a`:** `code-reviewer`, `db-reviewer`, `security-reviewer`, each READY WITH
+  NON-BLOCKING NOTES, every earlier finding closed. Their LOW notes applied without a further review: the preview's size
+  bound measures the uncompressed text (J11 R7); the 7g guard takes the owner team's lock itself and step 6 re-compares
+  the owner (J13); `.gitattributes` for v49's runbook SQL (J13); the C97 blocks drop the read-only wrapper (the editor
+  may show only the last statement), cast safely, count every whole-session row per athlete, and say they approximate
+  the mapper's gates.

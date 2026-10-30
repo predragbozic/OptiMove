@@ -143,8 +143,9 @@ Answers:
 
 One operation in `runWrite`'s transaction (the per-user lock, the request record, the acting user, the bounded COMMIT):
 
-1. the connection **read without a lock** (its owner team and T7 keys; the owner scope and the keys never change once
-   set, v11 `protect_ownership` and v34's write-once trigger);
+1. the connection **read without a lock** (its owner team and T7 keys; the keys never change once set, v34's
+   write-once trigger; the owner may still change on a connection no event or identity uses, v11 `protect_ownership`
+   `:52-70`, so step 6 compares it again);
 2. **the owner team's import lock** (`hold_gpexe_team_lock(owner team, 'ending a source instance')`, a try-lock:
    `try_again` when held) — the lock a bind, an Unbind, a check and an import take first, so no binding of the owner
    team can be inserted or ended while the end runs;
@@ -153,7 +154,8 @@ One operation in `runWrite`'s transaction (the per-user lock, the request record
 4. the v11 row `FOR NO KEY UPDATE` (after the bindings, as D's order: binding → Metrics Core connection; it waits for an
    import in flight that holds it `FOR SHARE` or `FOR UPDATE`, C55 and C57, bounded → `try_again`);
 5. `rightsStillHold` (the platform admin's role and user rows `FOR SHARE`);
-6. the checks of section 3.2, step 3, on the locked and re-read row;
+6. the locked row's `owner_team_id` compared with step 1's (`try_again` on a difference), then the checks of section
+   3.2, step 3, on the locked and re-read row;
 7. `update metric_source_connections set state = 'inactive' where id = $1`;
 8. the T8 row `source_instance_end`: `metric_source_connection_id`, `team_id` = the owner team, `from_status 'active'`,
    `to_status 'inactive'`, `reason`, `basis 'platform_admin'`, the operation id, the request key and hash (the keyed
@@ -188,7 +190,10 @@ Nothing else changes: no event, identity, occasion, value, provenance, binding o
      "metric_source_connections: only a team's source instance is ended"); the acting user from
      `source_metric_context_actor()` (v35's transaction-bound setting) with `source_metric_actor_basis(actor, null) =
      'platform_admin'` (`42501` "metric source connection: the acting user may not end this source instance");
-   - **the in-use checks again, as plain reads under the locks the route holds:** no `active` binding of the owner team
+   - the guard itself takes `hold_gpexe_team_lock(old.owner_team_id, 'ending a source instance')` (a re-entrant
+     try-lock: the route already holds it; a raw writer that sets the actor gets it here or a refusal), so the checks
+     below are authoritative for every writer, not only for the route;
+   - **the in-use checks again, as plain reads under that lock:** no `active` binding of the owner team
      naming the same source system, host and source team (`23514` "…: the owner team still holds an active binding of
      this source team"), and no open T5 activation on the owner team's bindings of it (`23514` "…: an activation of
      this source team is still open"); the indexes exist (`source_team_bindings_team_idx`, v27 `:293`;
@@ -216,7 +221,9 @@ Nothing else changes: no event, identity, occasion, value, provenance, binding o
    - the preflight shows v48 as the last migration, the md5 of the guard body v49 replaces, and counts connections
      with T7 keys and inactive keyed ones (both expected 0 before M4);
    - the post-check shows the recorded checksum, the guard's md5, the two triggers enabled (the deferred one
-     deferrable and initially deferred), the index valid.
+     deferrable and initially deferred), the index valid;
+   - `.gitattributes` gains `docs/runbooks/source-instance-end-v49*.sql text eol=lf`, as v42–v48 did, so the md5 of
+     v48's body restored by the rollback stays stable across checkouts.
 
 **Existing tests that change `state` raw** must switch the guard off in their own disposable database, since the
 guarded path can never go `inactive → active` and never touches a keyless connection:
@@ -285,3 +292,9 @@ lock), any frontend, any production write, a re-activation, a move of history be
   narrowing marked as an interpretation (code LOW); the exact key sets and a secret scan, the gate before the query, the
   guard's `WHEN` clause and v35's actor functions (security LOW); the lock modes, the post-check and the full list of
   raw-flip tests (db LOW).
+- **Narrow re-reviews of `e8060485..f8768e3a`:** `code-reviewer`, `db-reviewer`, `security-reviewer`, each READY WITH
+  NON-BLOCKING NOTES, every earlier finding closed. Their LOW notes applied without a further review: the preview's size
+  bound measures the uncompressed text (J11 R7); the 7g guard takes the owner team's lock itself and step 6 re-compares
+  the owner (J13); `.gitattributes` for v49's runbook SQL (J13); the C97 blocks drop the read-only wrapper (the editor
+  may show only the last statement), cast safely, count every whole-session row per athlete, and say they approximate
+  the mapper's gates.

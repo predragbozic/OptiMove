@@ -35,8 +35,9 @@ exact date. A new search of the same dates (the owner's own decision; it is a GP
 
 ## 1. Where and how
 
-- The Supabase SQL Editor of the production project, one block at a time, each inside `begin read only; … rollback;`.
-  Every block is a `SELECT`; none writes.
+- The Supabase SQL Editor of the production project, one block at a time. Every block is a single `SELECT`; none can
+  write. (A `begin read only; … rollback;` wrapper is left out on purpose: the editor may show only the last
+  statement's result, which would hide the rows.)
 - **The editor shows names next to performance values, to the owner only.** Use a new, unsaved (or private) snippet; no
   CSV export, no sharing, no SQL-editor AI assistant on these blocks; close the tab afterwards. Nothing of it is
   copied into a chat, a ticket, a screenshot or a document. The result is returned in the form of section 4, numbers
@@ -48,7 +49,6 @@ exact date. A new search of the same dates (the owner's own decision; it is a GP
 ### Block 1 — the sessions whose snapshot can still be read
 
 ```sql
-begin read only;
 select c.id as candidate_id,
        c.session_started_at,
        c.status,
@@ -63,7 +63,6 @@ select c.id as candidate_id,
    and c.raw_expires_at > now()
  order by c.session_started_at desc nulls last
  limit 20;
-rollback;
 ```
 
 Choose **two** sessions with `source_path = 'source_connection'` and `source_host_key = 'server3'`, preferably two
@@ -71,11 +70,11 @@ different days, each with several athletes. Call them **S1** and **S2** in every
 
 ### Block 2 — the whole-session values of up to three linked athletes of one session
 
-Run it for S1, then for S2. It applies the mapper's athlete gates (the row of this session, the whole-session row, valid
-statistics, one whole-session row per athlete).
+Run it for S1, then for S2. It **approximates** the mapper's athlete gates (the row of this session, the whole-session
+row, one whole-session row per athlete, valid statistics; the mapper also leaves out an athlete with an invalid drill
+row or several tracks). That only narrows whom A, B and C can be; it does not change a unit factor.
 
 ```sql
-begin read only;
 with c as (
   select raw_bundle as b, owner_team_id, gpexe_team_session_id as sid
     from training_load.gpexe_import_candidates
@@ -86,12 +85,12 @@ with c as (
                                       then c.b -> 'athleteSessions' else '[]'::jsonb end) r
    where r ->> 'drill' is null
      and r ->> 'teamsession' = c.sid
-     and (r ->> 'is_stats_valid') = 'true'
-     and jsonb_typeof(r -> 'total_distance') = 'number'
-     and (r ->> 'total_distance')::numeric > 0
 ), single as (
   select w.* from whole w
    where (select count(*) from whole w2 where w2.gpexe_athlete_id = w.gpexe_athlete_id) = 1
+     and (w.rw ->> 'is_stats_valid') = 'true'
+     and (case when jsonb_typeof(w.rw -> 'total_distance') = 'number'
+               then (w.rw ->> 'total_distance')::numeric end) > 0
 ), linked as (
   select s.*, coalesce(nullif(a.display_name, ''), a.full_name) as optimove_name
     from single s
@@ -114,13 +113,11 @@ select chr(64 + row_number() over (order by gpexe_athlete_id)::int) as athlete, 
        (select b -> 'details' -> 'full' -> 'players' -> gpexe_athlete_id -> 'tot_brake_events' from c) as brake
   from linked
  order by athlete;
-rollback;
 ```
 
 ### Block 3 — the team's thresholds stored with the session
 
 ```sql
-begin read only;
 select raw_bundle -> 'teamThresholds' -> 'power_thresholds'             as power_thresholds,
        raw_bundle -> 'teamThresholds' -> 'speed_thresholds'             as speed_thresholds,
        raw_bundle -> 'teamThresholds' -> 'acceleration_events_threshold' as acceleration_threshold,
@@ -129,7 +126,6 @@ select raw_bundle -> 'teamThresholds' -> 'power_thresholds'             as power
        raw_bundle -> 'teamThresholds' -> 'deceleration_events_duration'  as deceleration_duration
   from training_load.gpexe_import_candidates
  where id = '<candidate-uuid>'::uuid and raw_bundle is not null;
-rollback;
 ```
 
 ## 3. The comparison in the GPEXE UI

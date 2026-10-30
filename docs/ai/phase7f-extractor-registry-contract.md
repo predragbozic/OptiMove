@@ -244,3 +244,9 @@ or revision, the `e03` / `api` family, derived values (`gpexeImportMapper.js:180
   thresholds too (code LOW); A1's new refusals after `rightsStillHold` (security LOW); OD1 (with the owner's U15 /
   seniors question answered by the existing design) and OD4, marked pending owner (the *Rukovodilac*'s note of 19:29
   UTC).
+- **Narrow re-reviews of `e8060485..f8768e3a`:** `code-reviewer`, `db-reviewer`, `security-reviewer`, each READY WITH
+  NON-BLOCKING NOTES, every earlier finding closed. Their LOW notes applied without a further review: the preview's size
+  bound measures the uncompressed text (J11 R7); the 7g guard takes the owner team's lock itself and step 6 re-compares
+  the owner (J13); `.gitattributes` for v49's runbook SQL (J13); the C97 blocks drop the read-only wrapper (the editor
+  may show only the last statement), cast safely, count every whole-session row per athlete, and say they approximate
+  the mapper's gates.
