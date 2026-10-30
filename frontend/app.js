@@ -580,6 +580,7 @@ function bindEvents() {
   installThumbnailResolver(document.body);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
+    if (!els.mediaModal?.hidden) { closeMedia(); return; }
     // feature/mobile-messages-fullscreen: same priority chain as
     // handleAppBack() above, sharing the exact same function so the two
     // can never drift apart - see handleMessagesBack()'s own comment.
