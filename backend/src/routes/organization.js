@@ -1003,19 +1003,30 @@ async function loadGlobalRoles(userId) {
 }
 
 router.post("/clubs", async (req, res, next) => {
+  let client;
   try {
     if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only platform admin can create clubs." });
     const name = clean(req.body?.name);
     if (!name) return res.status(400).json({ error: "Club name is required." });
-    const result = await query(
+    client = await pool.connect();
+    await client.query("begin");
+    const result = await client.query(
       `insert into public.clubs (name, short_name, logo_url, city, country, is_active)
        values ($1, $2, $3, $4, $5, true)
        returning id, name, short_name, logo_url, city, country`,
       [name, clean(req.body?.shortName), clean(req.body?.logoUrl), clean(req.body?.city), clean(req.body?.country)],
     );
+    // The club's copy of the calendar's default event types (migration v48,
+    // docs/ai/central-calendar-k2a-plan.md section 6): seeded once, here, in
+    // the same transaction as the club — never on read.
+    await client.query(`select calendar.seed_club_event_types($1)`, [result.rows[0].id]);
+    await client.query("commit");
     res.status(201).json({ club: result.rows[0] });
   } catch (error) {
+    if (client) await client.query("rollback").catch(() => {});
     next(error);
+  } finally {
+    client?.release();
   }
 });
 

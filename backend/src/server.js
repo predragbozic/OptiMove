@@ -29,6 +29,7 @@ import trainingLoadRouter from "./routes/trainingLoad.js";
 import trainingLoadMetricsRouter from "./routes/trainingLoadMetrics.js";
 import trainingActivityRouter from "./routes/trainingActivity.js";
 import calendarRouter from "./routes/calendar.js";
+import calendarEventsRouter from "./routes/calendarEvents.js";
 import trainingLoadDashboardRouter from "./routes/trainingLoadDashboard.js";
 import gpexeImportRouter from "./routes/gpexeImport.js";
 import sourceConnectionsRouter from "./routes/sourceConnections.js";
@@ -122,6 +123,13 @@ app.use("/api/training-load/metrics", requireAuth, trainingLoadMetricsRouter);
 // activity results the same way; coach-only routes check via
 // requireActivityWorkspace inside the router.
 app.use("/api/training-activity", requireAuth, trainingActivityRouter);
+// requireAuth only (no requireCoach) — the central calendar's events (K2a):
+// the active workspace decides inside the router (calendarEventAccess.js) —
+// the athlete and platform workspaces create nothing, a club admin writes its
+// club's and its teams' events, a team coach its team's, a private coach its
+// own. Mounted before /api/calendar so the read-only router below never sees
+// these paths.
+app.use("/api/calendar/events", requireAuth, calendarEventsRouter);
 // requireAuth only (no requireCoach) — the central calendar (K1a) reads an
 // athlete's own rows in the athlete workspace, like /api/training-load's
 // own calendar; coach workspaces are scoped inside the router
