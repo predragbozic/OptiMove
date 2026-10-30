@@ -729,3 +729,92 @@ test("14. uploading a picture while the automatic thumbnail is made stops the au
   editor.closeExerciseEditor(state, h);
   withGuards();
 });
+
+// Owner, 2026-10-30: a frame of a video that is a Drive -> R2 copy (stored in
+// the platform's storage, not the coach's) is refused by the server as a frame
+// - 404 at the reservation, before any byte. It is saved as a plain picture,
+// once, without its moment. A transport that answers each call from a script.
+function scriptedTransport(answers) {
+  const transport = { calls: [] };
+  transport.upload = async (request) => {
+    const n = transport.calls.push(request);
+    const answer = answers[n - 1] ?? "ok";
+    if (answer !== "ok") throw Object.assign(new Error(answer.code), answer);
+    return { uploadId: `up-${n}`, mediaId: `new-${n}`, status: "completed", media: { source: "asset", mediaId: `new-${n}`, kind: request.slot, status: "ready" } };
+  };
+  return transport;
+}
+const refusedFrame = { code: "resource_not_found", uploadId: "", idempotencyKey: "k" };
+async function frameOfStored(transport) {
+  const frames = fakeFrames({ duration: 40 });
+  const h = handlers({ upload: transport.upload, ...frames.handlers });
+  fakeApi({ exercise: detail(storedVideo) });
+  await editor.openExerciseEditor(state, h, "e1");
+  await settle();
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-pick", "image"));
+  await settle();
+  await editor.handleExerciseEditorAction(state, h, action("exercise-media-frame-use", "image"));
+  await settle();
+  await settle();
+  return { h, frames };
+}
+const requestOf = (call) => ({ slot: call.slot, purpose: call.purpose, ...("sourceMediaId" in call ? { sourceMediaId: call.sourceMediaId } : {}), ...("frameTimeSeconds" in call ? { frameTimeSeconds: call.frameTimeSeconds } : {}), fileName: call.file?.name });
+
+test("15. a frame of a stored video the server refuses as a frame (a Drive copy) is saved as a plain picture - once, the same file, no moment, no 'can't be found'; a second refusal, a refusal after the reservation and a frame of a just-uploaded video are not retried", async () => {
+  withGuards({ transport: true, save: true });
+  // The copy: the frame is refused before any reservation, then goes up as a picture.
+  let transport = scriptedTransport([refusedFrame, "ok"]);
+  let { h } = await frameOfStored(transport);
+  assert.equal(transport.calls.length, 2, "one retry");
+  const [asFrame, asPicture] = transport.calls.map(requestOf);
+  assert.deepEqual(asFrame, { slot: "image", purpose: "video_frame", sourceMediaId: "vid-1", frameTimeSeconds: 10, fileName: frameFileName("Dead Bug", 10) });
+  assert.deepEqual(asPicture, { slot: "image", purpose: "exercise_image", fileName: frameFileName("Dead Bug", 10) }, "a plain picture of the same file, without source or moment");
+  assert.equal(transport.calls[0].file, transport.calls[1].file, "the capture itself is unchanged");
+  assert.equal(image().state, "uploaded");
+  assert.equal(image().mediaId, "new-2");
+  assert.equal(image().origin, null, "no frame provenance");
+  assert.equal(originLine(), "Taken from the video and saved as a picture.");
+  assert.doesNotMatch(rendered(), /can't be found/, "the first refusal is never shown");
+  editor.closeExerciseEditor(state, h);
+
+  // A second refusal (the exercise itself is gone): no second retry, the usual sentence.
+  transport = scriptedTransport([refusedFrame, refusedFrame]);
+  ({ h } = await frameOfStored(transport));
+  assert.equal(transport.calls.length, 2, "no second retry");
+  assert.equal(image().state, "failed");
+  assert.match(statusesOf("image"), /can't be found/);
+  editor.closeExerciseEditor(state, h);
+
+  // Another refusal before the reservation (no right, storage off): not retried as a picture.
+  for (const code of ["operation_not_allowed", "media_storage_disabled"]) {
+    transport = scriptedTransport([{ ...refusedFrame, code }]);
+    ({ h } = await frameOfStored(transport));
+    assert.equal(transport.calls.length, 1, `${code}: no retry`);
+    assert.equal(image().state, "failed");
+    editor.closeExerciseEditor(state, h);
+  }
+
+  // Refused after the reservation (bytes may have gone up): not repeated.
+  transport = scriptedTransport([{ ...refusedFrame, uploadId: "up-1" }]);
+  ({ h } = await frameOfStored(transport));
+  assert.equal(transport.calls.length, 1, "nothing is uploaded twice");
+  assert.equal(image().state, "failed");
+  editor.closeExerciseEditor(state, h);
+
+  // A frame of a video uploaded in this editor (the coach's own storage): a refusal is not retried.
+  const frames = fakeFrames({ duration: 40 });
+  transport = scriptedTransport(["ok", refusedFrame]);
+  h = handlers({ upload: transport.upload, ...frames.handlers });
+  fakeApi();
+  await editor.openExerciseEditor(state, h, "e1");
+  await settle();
+  await editor.chooseExerciseMediaFile(state, h, "video", file("clip.mp4", 100, "video/mp4"));
+  await settle();
+  await settle();
+  assert.equal(transport.calls.length, 2, "the video, then its automatic thumbnail");
+  assert.equal(transport.calls[1].purpose, "automatic_thumbnail");
+  assert.equal(image().origin?.purpose, "automatic_thumbnail", "kept as it was");
+  assert.notEqual(image().state, "uploaded");
+  editor.closeExerciseEditor(state, h);
+  withGuards();
+});

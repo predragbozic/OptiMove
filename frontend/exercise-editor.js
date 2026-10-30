@@ -1,7 +1,7 @@
 import { api } from "./api.js";
 import {
   applyMediaToSavePayload, chargedAccount, checkUploadStatus, describeStorageAccount, describeUploadError, emptyStorageState,
-  isMediaSaveEnabled, isResumableCode, isUploadTransportEnabled, readStorageUsage, startUpload, uploadContextFor, UPLOAD_SLOTS, validateFile,
+  FRAME_PURPOSES, isMediaSaveEnabled, isResumableCode, isUploadTransportEnabled, readStorageUsage, startUpload, uploadContextFor, UPLOAD_SLOTS, validateFile,
 } from "./exercise-media-upload.js";
 import {
   AUTOMATIC_THUMBNAIL_BOUND_MS, automaticThumbnailTime, captureFrameFromElement, captureVideoFrame, describeFrameError, describeFrameOrigin, formatFrameTime, FRAME_ERROR_CODES,
@@ -262,7 +262,8 @@ function renderMediaField(editor, spec, offered) {
   const remove = (label = "Remove") => `<button class="text-action" type="button" data-action="exercise-media-remove" data-slot="${spec.slot}"${off("exercise-media-remove")}>${label}</button>`;
   // PR 3: the picture may be a frame of the exercise's R2 video.
   const frame = (label) => (spec.slot === "image" && frameOffered(editor) ? `<button class="plain-button compact-button" type="button" data-action="exercise-media-frame-pick" data-slot="image">${label}</button>` : "");
-  const origin = spec.slot === "image" && field.origin ? `<p class="muted exercise-media-origin">${escapeHtml(describeFrameOrigin(field.origin))}</p>` : "";
+  const originText = spec.slot !== "image" ? "" : field.origin ? describeFrameOrigin(field.origin) : field.note === FRAME_SAVED_AS_PICTURE ? field.note : "";
+  const origin = originText ? `<p class="muted exercise-media-origin">${escapeHtml(originText)}</p>` : "";
   const picker = offered ? `<input type="file" accept="${escapeAttr(UPLOAD_SLOTS[spec.slot].accept)}" data-exercise-media-file="${spec.slot}" aria-label="Choose a ${spec.noun} file">` : "";
   const linkInput = `<label class="search-field"><span>${spec.label} URL</span><input class="builder-text-input" type="url" data-exercise-editor-field="${spec.urlKey}" value="${escapeAttr(url)}" placeholder="Google Drive, YouTube or direct link"></label>`;
   // No storage offered (the guard, the flag off, another workspace, a new
@@ -686,6 +687,14 @@ async function uploadExerciseMedia(state, handlers, slot, { resume = false } = {
   } catch (error) {
     if (!live()) return;
     const code = error?.code || "upload_failed";
+    // A frame of a stored video the server will not record as its frame - a
+    // Drive copy is in the platform's storage, not the coach's - is refused
+    // before any byte is sent (404, no upload). It goes up once more as a
+    // plain picture, without its moment (owner, 2026-10-30).
+    if (code === "resource_not_found" && !error?.uploadId && frameOfStoredVideo(editor, field)) {
+      Object.assign(field, { origin: null, note: FRAME_SAVED_AS_PICTURE });
+      return uploadExerciseMedia(state, handlers, slot);
+    }
     const cancelled = code === "cancelled" || code === "cancel_unconfirmed";
     Object.assign(field, {
       state: cancelled ? "cancelled" : "failed",
@@ -703,6 +712,13 @@ async function uploadExerciseMedia(state, handlers, slot, { resume = false } = {
     if (field.controller === controller) field.controller = null;
   }
   handlers.rerender();
+}
+
+const FRAME_SAVED_AS_PICTURE = "Taken from the video and saved as a picture.";
+// A frame (its origin) of the video stored with this exercise.
+function frameOfStoredVideo(editor, field) {
+  const video = editor.media.video;
+  return FRAME_PURPOSES.includes(field.origin?.purpose) && video?.state === "stored" && Boolean(video.mediaId) && video.mediaId === field.origin.sourceMediaId;
 }
 
 // After a verification timeout: the same session's status, no new upload.
