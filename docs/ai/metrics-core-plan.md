@@ -790,22 +790,29 @@ order covers is merged under it.
   zamisljene kao nesto sto klub moze vrlo brzo da koristi da mozda ih ubaci u svoje da ne mora da ih kreira ako mu
   odgovaraju, ako ne odgovaraju on moze i da ih sakrije, ne trebaju mu na primer... To je sustina, svi ce oni napraviti
   neki svoj skup core varijabli”.
-  - As the *Rukovodilac* reads it: the system variables are a starter kit, not a required shared registry. A club takes
-    one into its own set (a copy as a club variable) or hides it for the club; every club ends up with its own core
-    set. Dashboards and analyses of different clubs are not comparable by design, and no cross-club comparison is
-    built.
+  - As the *Rukovodilac* reads it: the system variables are a starter kit, not a required shared registry. A club uses
+    one as it is or copies it into its own set (OD7's two forms, the *Rukovodilac*'s decision), or hides it for the
+    club; every club ends up with its own core set.
+  - Comparing clubs is not a goal now (owner turn `67e1025c`, 22:15:23 UTC). If it is ever wanted, it is possible only
+    through system variables a club uses as they are (owner turn `d1b4e6e5`, 22:12:14 UTC); a club's copy is the
+    club's own. Nothing is built for it.
+  - Several sources (GPEXE in one club, Catapult in another; turn `d1b4e6e5`) need no change of the canonical
+    variables or the screens: C2, C4, C5 and C10 already cover them. A new source is its own adapter, source fields
+    with unit evidence and mappings; not planned before the first import (C109).
   - A club's variable is named as the club likes and its admin chooses the field that fills it; its physical
     definition (the unit, a zone's bound, an event's threshold) must still match what GPEXE computes for the team, or
     the import refuses it fail-closed (ADR-007; the product rule beside OD1).
-- **7h ★★: a club's admin approves, disables and replaces its club's mapping versions** (OD6, C108). After 7g-B,
-  before phase 8. A migration: the T8 rules of `mapping_status` and `mapping_version_replaced` admit the `club_admin`
+- **The order of 7h and 7i: pending owner.** The *Rukovodilac*'s recommendation (its message queued at 22:17:27 UTC):
+  first the path to the first import (7f-B → 7e-B → 7g-B → a minimal phase 8 → phase 9), then 7h and 7i right
+  after, before other clubs start. The *Rukovodilac* asks the owner once, together with a confirmation of OD4.
+- **7h ★★: a club's admin approves, disables and replaces its club's mapping versions** (OD6, C108). A migration: the T8 rules of `mapping_status` and `mapping_version_replaced` admit the `club_admin`
   basis for a club mapping, with the v43 guards and `mayTransitionMappings`; A1 and A2 then also end and start
   activations for a club's admin. System mappings, the source fields' unit and meaning, the unit conversions and D9
   stay the platform admin's. Its contract (J14) is written on the *Rukovodilac*'s order.
-- **7i ★★: a club takes a system variable into its own set, or hides it** (OD7, C109). After 7h (the copied mappings
-  are the club's drafts, approved under OD6), before phase 8. A copy is a club variable with the system variable's
-  mappings as the club's draft versions; hiding is per club (likely a new table, so a migration). Its contract (J15) is
-  written on the *Rukovodilac*'s order.
+- **7i ★★: a club uses a system variable as it is or copies it into its own set, or hides it** (OD7, C109). After 7h
+  (the copied mappings are the club's drafts, approved under OD6). A copy is a club variable with the system
+  variable's mappings as the club's draft versions; hiding is per club (likely a new table, so a migration). Its
+  contract (J15) is written on the *Rukovodilac*'s order.
 - **Reserved after 7g, before phase 9** (the *Rukovodilac*'s note of 2026-10-30, queued at 18:31:50 UTC; built only on
   its own order): a small pull request, "conditions 2 and 3 before the switch": a bounded lock wait before an
   approval's COMMIT (`lock_timeout` and `idle_in_transaction_session_timeout`, with a stable code), and the undo script

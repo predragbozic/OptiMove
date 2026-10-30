@@ -51,8 +51,12 @@ also recorded as C107–C109 of the discovery document.
 | **OD3** | The minimum count of athletes for min and max | **3** | „3. moze” (turn `396e7078`) | J11 section 4 |
 | **OD4** | May a system mapping carry zone or threshold bounds | **Yes** (the *Rukovodilac*'s reading): the bounds are not personal data; a team's own settings are shown only to that team's club and a platform admin | „4. to smo rekli” (turn `396e7078`) | J11 section 6, J12 section 4.1 |
 | **OD5** | The shape of the operation that ends a held source instance (D9) | **As recommended, the narrower reading** (the *Rukovodilac*'s reading): only an active platform admin in the platform workspace, with a mandatory reason, refused while the owner team has an active binding of that source team or an open activation on one | „5. to smo vec rekli dole” (turn `396e7078`) | J13 sections 2–4 |
-| **OD6** | Who approves and disables a club's mapping versions | **The club's own admin** for its club's mappings (`needs_review → active`, disabling, replacing); system mappings, the source fields' unit and meaning, the unit conversions and D9 stay the platform admin's. A migration: phase 7h, its own contract (J14) | „Rekli smo da sam mogu da klupski admin da radi mapiranja, i da preuzima sistemske varijable” (turn `a73981ac`, 22:08:40 UTC); „znaci promeni u skladu sta sam hteo, ne vidim problem” (turn `88ad60ca`, 22:09:13 UTC) | plan, phase 7h |
-| **OD7** | A club takes a system variable into its own set | **Yes**: the club copies a system variable into its own set, or hides it for the club; the copy brings the system variable's mappings as the club's draft versions, approved by the club's admin (OD6). Phase 7i, its own contract (J15) | the same turns `a73981ac` and `88ad60ca`, and the owner's guideline of turn `bf4c6ce7` (21:59:39 UTC, C109) | plan, phase 7i |
+| **OD6** | Who approves and disables a club's mapping versions | **The club's own admin** for its club's mappings (`needs_review → active`, disabling, replacing); system mappings, the source fields' unit and meaning, the unit conversions and D9 stay the platform admin's. A migration: phase 7h, its own contract (J14) | „Rekli smo da sam mogu da klupski admin da radi mapiranja, i da preuzima sistemske varijable” (turn `a73981ac`, 22:08:40 UTC); „znaci promeni u skladu sta sam hteo, ne vidim problem, da li ti vidis” (turn `88ad60ca`, 22:09:13 UTC) | plan, phase 7h |
+| **OD7** | A club takes a system variable into its own set | **Yes, in two forms, both offered** (the forms are the *Rukovodilac*'s decision of 2026-10-30, queued at 22:17:27 UTC; the owner is not asked separately): **(a) use as is**: the system variable is mapped and activated for the club's teams without a copy, and the club may hide it; **(b) copy to own**: a club variable with the system variable's mappings as the club's draft versions, approved by the club's admin (OD6). Phase 7i, its own contract (J15) | the same turns `a73981ac` and `88ad60ca`; the owner's guideline of turn `bf4c6ce7` (21:59:39 UTC) and turn `d1b4e6e5` (22:12:14 UTC) (C109) | plan, phase 7i |
+
+**Comparing clubs** (C109): not a goal now (the owner, turn `67e1025c`, 22:15:23 UTC: „nemoj sada da se zamaramo sa
+uporedjivanjem izmedju klubova …”). If it is ever wanted, it is possible only through system variables a club uses as
+they are (OD7 a); a club's copy (OD7 b) is the club's own. Nothing is built for it.
 
 **The product rule beside OD1** (the *Rukovodilac*'s reading of turn `a73981ac`: „moje zone mogu da se zovu kako hocu, a
 da preuzimam u njih sta hocu”): a club variable's name and description are the club's choice, and which GPEXE field
@@ -280,5 +284,10 @@ GPEXE answer, a preview of several candidates at once.
   the mapper's gates.
 - **External round (heads `fedabc65`, `d85160e0`):** the *Nezavisni revizor* and the *Rukovodilac*, GO with
   non-blocking notes, then a narrow re-GO of the notes applied (J13 and the C97 procedure).
-- **The owner's decisions (this head):** OD1–OD7 written as decided, with the owner's words (section 0.1); a narrow
-  re-review of the delta by both.
+- **The owner's decisions (head `b5c4f7e9`):** OD1–OD7 written as decided, with the owner's words (section 0.1). The
+  *Nezavisni revizor*'s narrow re-review: GO, one NIT (a shortened quote without a mark); the *Rukovodilac*'s: one
+  MEDIUM (the owner's later turn `d1b4e6e5` contradicts "not comparable by design"). Both withdrew the GO as a merge
+  basis.
+- **The next head:** the comparison sentence per the owner's turns `d1b4e6e5` and `67e1025c`; OD7's two forms (the
+  *Rukovodilac*'s decision); the guideline on several sources; the full quote of `88ad60ca`; the order of 7h and 7i
+  pending owner; a narrow re-review of the delta by both.

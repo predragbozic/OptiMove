@@ -1155,7 +1155,7 @@ transcript; J11 section 0.1 holds the table):
       sistemski ali pre svega klupski jer je to njegov posao. Zamisli da imamo 100 klubova …” (turn `122a4df5`,
       21:56:25 UTC); „moje zone mogu da se zovu kako hocu, a da preuzimam u njih sta hocu, mislim. Rekli smo da sam mogu
       da klupski admin da radi mapiranja, i da preuzima sistemske varijable” (turn `a73981ac`, 22:08:40 UTC); „znaci
-      promeni u skladu sta sam hteo, ne vidim problem” (turn `88ad60ca`, 22:09:13 UTC).
+      promeni u skladu sta sam hteo, ne vidim problem, da li ti vidis” (turn `88ad60ca`, 22:09:13 UTC).
     - **The *Rukovodilac*'s reading:** a club's active admin approves (`needs_review → active`), disables and replaces
       its own club's mapping versions; system mappings, the source fields' unit and meaning, the unit conversions and
       D9 stay the platform admin's. Phase 7h, a migration, its contract J14 on the *Rukovodilac*'s order. Until it is
@@ -1167,12 +1167,26 @@ transcript; J11 section 0.1 holds the table):
     - **The owner's words:** „Sistemske kanonske varijable su pre svega zamisljene kao nesto sto klub moze vrlo brzo
       da koristi da mozda ih ubaci u svoje da ne mora da ih kreira ako mu odgovaraju, ako ne odgovaraju on moze i da
       ih sakrije, ne trebaju mu na primer... To je sustina, svi ce oni napraviti neki svoj skup core varijabli” (turn
-      `bf4c6ce7`, 21:59:39 UTC), and turns `a73981ac` and `88ad60ca` above.
-    - **The *Rukovodilac*'s reading:** a club copies a system variable into its own set (a club variable) or hides it
-      for the club; the copy brings the system variable's mappings as the club's draft versions, approved under OD6
-      (C108). Every club has its own core set; dashboards of different clubs are not comparable by design, and no
-      cross-club comparison is built. Phase 7i (copy and hide; hiding per club is likely a new table, so a
-      migration), its contract J15 on the *Rukovodilac*'s order, after 7h.
+      `bf4c6ce7`, 21:59:39 UTC), and turns `a73981ac` and `88ad60ca` above; „Na zalost mi mozemo porediti samo ono  sto
+      klubovi budu preuzeli kao sistemske varijable, ali definitivno moramo imati slobodu klubovima da sami biraju sta
+      hoce da uvoze i koriste. Takodje oni ce koristiti razlicite gps sisteme ne samo gps, tako da ovaj deo sorce
+      metrics treba da imam u vidu da ce mozda imati total distance dobijen od gpexe u jednom timu, a u drugom klubu od
+      catapult sistema...” (turn `d1b4e6e5`, 22:12:14 UTC); „nemoj sada da se zamaramo sa uporedjivanjem izmedju
+      klubova …” (turn `67e1025c`, 22:15:23 UTC).
+    - **OD7's two forms, both offered** (the *Rukovodilac*'s decision, its message queued at 22:17:27 UTC; the owner
+      is not asked separately): (a) **use as is**: the system variable is mapped and activated for the club's teams
+      without a copy, and the club may hide it; (b) **copy to own**: a club variable with the system variable's
+      mappings as the club's draft versions, approved under OD6 (C108). Every club builds its own core set. Phase 7i
+      (the two forms and hiding; hiding per club is likely a new table, so a migration), its contract J15 on the
+      *Rukovodilac*'s order.
+    - **Comparing clubs:** not a goal now (turn `67e1025c`). If it is ever wanted, it is possible only through system
+      variables a club uses as they are (form a); a club's copy (form b) is the club's own. Nothing is built for it.
+    - **Several sources** (turn `d1b4e6e5`: GPEXE in one club, Catapult in another): the accepted decisions already
+      cover it: a canonical variable is created independently of any source (C2), several sources may fill the same
+      canonical variable (C4), two sources for the same fact are never merged (C5), and a fact's provenance is its own
+      row (C10). A new source is its own adapter, its own source fields with their unit evidence (as C97 asks for
+      server3) and its own mappings; no canonical variable or screen changes for it. Not planned before the first
+      import.
 
 ---
 
