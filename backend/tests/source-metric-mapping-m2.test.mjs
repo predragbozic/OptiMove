@@ -982,7 +982,7 @@ test("19. a mapping's versions are read in pages (number descending, an opaque c
   assert.deepEqual([detailAgain.status, detailAgain.body.mapping.versions[0].versionNumber], [200, count + 1]);
 });
 
-test("20. architecture: only the M2 service writes a mapping; a mapping version only the M2 service and the revision lifecycle (its pinned step disables); the T8 audit is written by the M2 service, the M2b verification service and the revision lifecycle, a T2b revision only by the M2b verification service and the revision lifecycle; nothing in backend/src writes a T2a field, a T5 activation, a T6 value provenance or a unit conversion", async () => {
+test("20. architecture: only the M2 service writes a mapping; a mapping version only the M2 service (create, submit and, from phase 7b, activate, replace and disable) and the revision lifecycle (its pinned step disables); the T8 audit is written by the M2 service, the M2b verification service and the revision lifecycle, a T2b revision only by the M2b verification service and the revision lifecycle; nothing in backend/src writes a T2a field, a T5 activation, a T6 value provenance or a unit conversion", async () => {
   const { readdirSync, readFileSync } = await import("node:fs");
   const { join, relative } = await import("node:path");
   const src = new URL("../src/", import.meta.url);

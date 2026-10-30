@@ -34,7 +34,8 @@ task (section 6); then phase 5b ★★ with its migration v42 (C103, section 5);
 Data configuration screens and on sources and users (section 6), its line in phases 8 and 11 (section 5), the future item
 of a private coach's own source and variables (section 6), and PR-1's merge (section 6). Added on 2026-10-29: the Done
 entry of phase 5b with its deploy facts (section 5), and the merges of PR-2 and the language pass with PR-1's deploy
-(section 6).
+(section 6); later the same day, in phase 7 (section 5), the owner's words of C104, the Done entry of 7a and the accepted
+contract of 7b (J8) with its gate line.
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
@@ -47,7 +48,8 @@ Done entries of phases 2b and 2c, phases 11 and 12, the Q10 line of section 6) w
 PR #241); phase 12's contract line, against `d96936c` (merge of PR #242); the Done entry of 12b, against `9361fff` (merge
 of PR #247); the Done entries of 12c and phase 6 and phase 5's decision, against `cf387f2` (merge of PR #251); phase
 5b, against `0b947ab` (merge of PR #252); the owner's guidance of 2026-10-28 and PR-1's merge, against `0e38ae9` (merge of
-PR #256); phase 5b's Done entry and the merges of PR-2 and the language pass, against `00b3958` (merge of PR #263).
+PR #256); phase 5b's Done entry and the merges of PR-2 and the language pass, against `00b3958` (merge of PR #263); phase
+7's lines of 2026-10-29 (C104, 7a, 7b), against `aaf150a` (merge of PR #269).
 
 ## 1. Who does what
 
@@ -708,6 +710,31 @@ order covers is merged under it.
   - 7e: the aggregate preview;
   - 7f: the extractor registry;
   - 7g: ending a held instance (D9 of the discovery document).
+- **The owner's words, 2026-10-29** (C104 of the discovery document): „A1 DA, I SVE PO PREPORUKAMA” (owner turn
+  `f505ec21`, 13:32:57 UTC, in the *Rukovodilac*'s chat; the executor checked it in the transcript).
+  - A1, the owner's own word „DA”: 7a may come before the acceptance of 7b's contract, although phase 7 is ★★
+    (section 3, A1).
+  - The *Rukovodilac* reads „sve po preporukama” as the acceptance of 7b's contract (J8) as a whole and of its questions
+    Q1, Q2, Q3, Q5, Q6 and Q7 as recommended; that reading is the *Rukovodilac*'s, not the owner's own words. Q4 stays
+    open for 7d and 7e.
+- **7a, Done, 2026-10-29.**
+  - PR #269 (branch `refactor/metrics-access-7a`, from `69d824f`): backend refactor and tests only, with no behaviour
+    change and no migration. The context resolver, the right check, the owner keys and the shared error moved from
+    `sourceMetricMappingService.js` to `backend/src/sourceMetricAccess.js`; section K of the discovery document marks the
+    move done.
+  - Reviews: `code-reviewer` and `security-reviewer` READY WITH NON-BLOCKING NOTES, every note applied (the MEDIUM: a
+    direct test of the resolver's read of an archived club); then the *Rukovodilac*'s GO on `d626165` (its message
+    queued at 13:53:18 UTC): no migration, risk low.
+  - Merge: `aaf150a` (parents `b0a839a` and `d626165`), made by the executor under the standing merge order exactly from
+    `d626165`; its tree equals the merge simulated before it.
+  - Deploy: not yet when this entry was written; production was last seen on `00b3958`.
+  - Left for before T5 (7d): the remaining copies `isOwn`, `readableSql` / `ownSql`, `ownerFilter` / `writableSql` and
+    `resolveVariableEditor`.
+- **7b, the contract (J8):** `docs/ai/phase7b-mapping-transitions-contract.md`, accepted on 2026-10-29 (C104).
+  - The *Rukovodilac* and the *Nezavisni revizor* gave GO on `f9f6bec` (PR #266, `69d824f`); the *Rukovodilac* decided
+    R1–R8 inside the plan. The acceptance was recorded by PR #268 (`b0a839a`).
+  - **Gate line: migration v43.** Its merge needs the owner's own order naming the pull request, the exact migration
+    file and its sha256, with the production preflight the same day.
 - **Input (red zone):** the owner's decisions from section K of the discovery document:
   - the minimum number of athletes for min / max;
   - system or club zone mappings;

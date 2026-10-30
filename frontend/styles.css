@@ -7186,6 +7186,72 @@ img[data-media-id]:not([src]) {
   border-radius: var(--radius);
 }
 
+/* An R2 video on a computer or a tablet (media-modal.js, is-inline-video):
+   the picture's light dialog with its title and Close, the player where the
+   picture would be, and the dialog in the video's shape (--media-aspect, set
+   from the video, else 16:9), bounded as the picture is: at most 76vh high
+   and 980 px or 96vw wide, never narrower than 300 px (the title, Close and
+   the player's own controls). The reserve under 92vh is the header with a
+   title on two lines, the body's padding and the button row. */
+.media-modal.is-inline-video .media-dialog {
+  --media-aspect: 1.7778;
+  --media-video-max-height: min(76vh, calc(92vh - 160px));
+  width: max(min(300px, 96vw), min(980px, 96vw, calc(var(--media-video-max-height) * var(--media-aspect) + 28px)));
+  overflow-y: auto;
+}
+
+/* iPad Safari: vh is the screen without its toolbars; dvh is what is seen. */
+@supports (height: 1dvh) {
+  .media-modal.is-inline-video .media-dialog {
+    --media-video-max-height: min(76dvh, calc(92dvh - 160px));
+    max-height: 92dvh;
+  }
+}
+
+.media-modal.is-inline-video .media-header .plain-button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* A long name stays on two lines here (the reserve above counts two), so the
+   player and its button fit without scrolling in a narrow upright dialog; the
+   whole name is still in the page for a screen reader. */
+.media-modal.is-inline-video .media-header h3 {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.media-modal.is-inline-video .media-asset {
+  height: auto;
+}
+
+.media-modal.is-inline-video .media-video {
+  height: auto;
+  aspect-ratio: var(--media-aspect);
+  max-height: var(--media-video-max-height);
+  border-radius: var(--radius);
+}
+
+/* The full-screen button under the player's corner: over the player it would
+   cover the browser's own controls (Chrome's menu at the bottom, the iPad's
+   sound at the top). */
+.media-video-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.media-video-actions .media-fullscreen-button {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  width: 44px;
+  height: 44px;
+}
+
 .media-image-secondary {
   width: 140px;
   height: 100px;
@@ -19016,19 +19082,17 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   margin: 0;
   padding: 0;
 }
+/* A card is a list item: its head is the button that opens the screen, and a
+   click anywhere else on it opens it too (its own data-action). */
 .dc-card {
   display: grid;
   gap: 12px;
-  width: 100%;
-  height: 100%;
-  min-height: 44px;
+  min-width: 0;
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
-  font: inherit;
-  text-align: left;
   align-content: start;
   cursor: pointer;
 }
@@ -19037,9 +19101,24 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
     border-color: var(--accent);
   }
 }
-.dc-card:focus-visible {
+.dc-card-open {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dc-card-open:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: 4px;
 }
 .dc-card-head {
   display: flex;
@@ -19061,19 +19140,45 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   flex: 0 0 20px;
   color: var(--muted);
 }
+/* Every row the screen's read holds, in a list four and a half rows high that
+   scrolls on its own; the half row shows there is more. A row is exactly
+   --dc-row high (the 28 px tile, or one and a half lines of a larger text), and
+   the list's height is counted in the same rows, so at any text size four rows
+   fit and a fifth scrolls - the rule data-config-home-view.js's VISIBLE_ROWS
+   follows when it makes a long list a keyboard stop. overscroll-behavior stays
+   the browser's default on purpose: a swipe that starts on a list at its end
+   moves the page, so a phone's page never stays caught in a card's list. */
 .dc-card-rows {
+  --dc-row: max(28px, 1.5em);
   display: grid;
   gap: 6px;
   min-width: 0;
+  max-height: calc(4.5 * var(--dc-row) + 4 * 6px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.dc-card-rows.is-scrolling {
+  padding-right: 4px;
+  border-radius: 6px;
+}
+.dc-card-rows.is-scrolling:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .dc-card-row {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  height: var(--dc-row);
+  overflow: hidden;
 }
 .dc-card-row > span:last-child {
   min-width: 0;
+  line-height: 1.5;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
