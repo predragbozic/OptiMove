@@ -16,7 +16,7 @@
 // same 404 (ADR-006). An activity that is not team-owned has no roster: 409
 // roster_not_applicable, but only for a caller who may otherwise manage the
 // activity in the active workspace; everyone else gets the 404. Neither has
-// a self-report activity (v43, owner decision 2026-10-29): a team-owned
+// a self-report activity (v44, owner decision 2026-10-29): a team-owned
 // activity of origin planned_session / external_assignment with at most one
 // canonical participant across its alias set and no measured value — one
 // athlete's own RPE or external result (an external occurrence with two or
@@ -45,7 +45,7 @@ export class RosterError extends Error {
 }
 
 const notFound = () => new RosterError(404, "notFound", "Not found.");
-// A self-report activity (v43): the same code as a non-team session.
+// A self-report activity (v44): the same code as a non-team session.
 export const noRoster = () => new RosterError(409, "roster_not_applicable", "This session holds one athlete's own result and has no roster.");
 
 // The user-facing words of every state. participated_no_values is O1 (a):
@@ -208,7 +208,7 @@ async function readInSnapshot(fn) {
 // the active-workspace path -> 404 notFound; a session that is not
 // team-owned -> 409 roster_not_applicable, but only for a caller who may
 // manage it in the active workspace.
-// `deferGate`: a command asks for the v43 gate's answer instead of the 409,
+// `deferGate`: a command asks for the v44 gate's answer instead of the 409,
 // because its requestKey replay must come first (a saved answer wins over the
 // present state); the read lets the 409 be thrown here.
 export async function resolveRosterTarget(client, ctx, activityId, { deferGate = false } = {}) {
@@ -243,7 +243,7 @@ export async function resolveRosterTarget(client, ctx, activityId, { deferGate =
   ))[0];
   const basis = rosterBasisForWorkspace(ctx.workspace, ctx.authz, team);
   if (!basis) throw notFound();
-  // A self-report activity (v43): the caller may decide on this team's
+  // A self-report activity (v44): the caller may decide on this team's
   // sessions, but this one holds one athlete's own result and has no roster.
   // Read only now, after the basis: a caller without one never pays for it.
   const hasRoster = (await one(`select coalesce(training.activity_has_roster($1), false) as has_roster`, [canonicalId]))[0].has_roster;

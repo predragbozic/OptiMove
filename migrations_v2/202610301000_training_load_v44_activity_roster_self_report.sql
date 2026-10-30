@@ -1,4 +1,4 @@
--- Training Load v43 — a self-report activity has no roster.
+-- Training Load v44 — a self-report activity has no roster.
 -- Owner decision 2026-10-29 (option A), after the behaviour was reproduced
 -- through the real routes on a disposable database the same day.
 --
@@ -57,9 +57,9 @@
 -- the database refuses one (v25: the athlete must be on the roster) as well
 -- as a 'complete' completion (v26: a non-empty roster), so the application
 -- creates no completion row for one. Rows a coach recorded on such an
--- activity before v43 are kept untouched (see the runbook's post-check).
+-- activity before v44 are kept untouched (see the runbook's post-check).
 --
--- Rollback: docs/runbooks/activity-roster-v43-rollback.sql — restores the v25
+-- Rollback: docs/runbooks/activity-roster-v44-rollback.sql — restores the v25
 -- definition of activity_roster(), drops activity_has_roster(), and refuses
 -- once a later migration is recorded.
 
@@ -99,7 +99,7 @@ $$ language sql stable;
 -- otherwise identical (members of the owner team whose period covers the
 -- session start, or overlaps the local day without a start time; one row per
 -- athlete; left_at as before). Empty for an activity that is not team-owned
--- and, from v43, for a self-report activity.
+-- and, from v44, for a self-report activity.
 create or replace function training.activity_roster(p_activity_id uuid)
 returns table (athlete_id uuid, member_from timestamptz, member_to timestamptz, left_at timestamptz) as $$
   with a as (

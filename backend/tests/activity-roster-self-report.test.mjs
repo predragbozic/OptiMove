@@ -1,8 +1,8 @@
-// v43: a self-report activity has no roster (owner decision 2026-10-29,
+// v44: a self-report activity has no roster (owner decision 2026-10-29,
 // option A). An athlete's own RPE result for a planned session is materialized
 // as ONE team-owned activity per athlete (origin planned_session, one
 // participant); under v25/v26 its roster listed the whole team — the athlete
-// who gave the RPE included — as "Unknown / needs a state". From v43 such an
+// who gave the RPE included — as "Unknown / needs a state". From v44 such an
 // activity has no roster: training.activity_has_roster() is false,
 // activity_roster() is empty, the read answers 409 roster_not_applicable to
 // a caller who may decide on the team's sessions and the identical 404 to
@@ -10,7 +10,7 @@
 // written. Every other team activity keeps its roster unchanged.
 //
 // Everything runs on disposable databases (optimove_tests_gpexe_selfreport_*
-// and, for the migration test, optimove_tests_gpexe_v43mig_*) created and
+// and, for the migration test, optimove_tests_gpexe_v44mig_*) created and
 // dropped here; nothing touches OPTIMOVE or any persistent database. The RPE
 // result goes through the real POST /api/training-load/sessions/:id/rpe, the
 // roster through the real routes, as the coach's screen would.
@@ -33,8 +33,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 const V42 = "202610282300_training_load_v42_source_metric_zone_model.sql";
-const V43 = "202610291300_training_load_v43_activity_roster_self_report.sql";
-const ROLLBACK_SQL = path.resolve(__dirname, "../../docs/runbooks/activity-roster-v43-rollback.sql");
+const V44 = "202610301000_training_load_v44_activity_roster_self_report.sql";
+const ROLLBACK_SQL = path.resolve(__dirname, "../../docs/runbooks/activity-roster-v44-rollback.sql");
 
 // A past day in every time zone the test may run in, inside an open
 // membership period (members since 2026-01-01); the submit route refuses a
@@ -287,7 +287,7 @@ before(async () => {
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
-  assert.ok((await q(`select to_regprocedure('training.activity_has_roster(uuid)') as f`))[0].f, "v43 applied");
+  assert.ok((await q(`select to_regprocedure('training.activity_has_roster(uuid)') as f`))[0].f, "v44 applied");
   // The GPEXE fixture carries the migrations the importer needs; the external
   // schedule routes (test 9) also need v6-v8 (event type, notification rules,
   // specific dates), applied here to this suite's database only. The runner
@@ -420,7 +420,7 @@ test("4. the roster is unchanged for a coach-created and for an imported team ac
     const r = await roster(id, t.coach.cookie);
     assert.equal(r.status, 200, `${label}: ${r.text}`);
     assert.equal(r.body.counts.total, 3, `${label}: the whole team is the roster`);
-    assert.equal(r.body.counts.needsState, 3, `${label}: everyone needs a state, as before v43`);
+    assert.equal(r.body.counts.needsState, 3, `${label}: everyone needs a state, as before v44`);
   }
   const clubOwned = (await q(
     `insert into training.activities (name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_club_id, origin)
@@ -455,7 +455,7 @@ test("5. the boundary: a self-report activity that holds a second canonical part
   const r = await roster(act.id, t.coach.cookie);
   assert.equal(r.status, 200, r.text);
   assert.equal(r.body.counts.total, 3);
-  assert.equal(r.body.counts.needsState, 3, "an RPE is not a measured value: Unknown, as before v43");
+  assert.equal(r.body.counts.needsState, 3, "an RPE is not a measured value: Unknown, as before v44");
 });
 
 test("6. a self-report activity superseded into a measured team activity is addressed through the canonical one, which has the roster", async () => {
@@ -599,7 +599,7 @@ test("9. an external schedule: an occurrence with one assignee is a self-report 
 
   // The whole team: one activity per occurrence with every assignee on it —
   // the team's event keeps its roster (and its RPE athletes still read
-  // Unknown, as before v43: a result is not a state yet).
+  // Unknown, as before v44: a result is not a state yet).
   const team = await externalScheduleFor(t.coach.cookie, [{ kind: "team", id: t.teamId }], "Away match");
   const anaTeam = await externalAssignmentOf(team, ana);
   await submitExternalRpe(ana, anaTeam.id);
@@ -609,7 +609,7 @@ test("9. an external schedule: an occurrence with one assignee is a self-report 
   const r = await roster(teamAct.id, t.coach.cookie);
   assert.equal(r.status, 200, r.text);
   assert.equal(r.body.counts.total, 3);
-  assert.equal(r.body.counts.needsState, 3, "as before v43");
+  assert.equal(r.body.counts.needsState, 3, "as before v44");
   await submitExternalRpe(bojan, (await externalAssignmentOf(team, bojan)).id);
   assert.equal((await activityOfOccurrence(anaTeam.occurrence_id)).id, teamAct.id, "a second result lands on the same activity");
 });
@@ -661,27 +661,27 @@ test("11. the v25 and v26 database rules read through the same roster: a raw sou
 });
 
 // ---------------------------------------------------------------------------
-// 12. Migration v43: apply, roll back, apply again
+// 12. Migration v44: apply, roll back, apply again
 // ---------------------------------------------------------------------------
-test("12. migration v43: applied by the runner on v42, the rollback returns the schema to v42 exactly, refuses under a later migration, v43 applies again, and a v43 that fails at its end leaves nothing", async () => {
+test("12. migration v44: applied by the runner on v42, the rollback returns the schema to v42 exactly, refuses under a later migration, v44 applies again, and a v44 that fails at its end leaves nothing", async () => {
   const upToV42 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V42) + 1);
-  assert.equal(GPEXE_TEST_MIGRATIONS[GPEXE_TEST_MIGRATIONS.indexOf(V42) + 1], V43, "v43 follows v42 in the fixture list");
-  const m = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v43mig", migrations: upToV42 });
+  assert.ok(GPEXE_TEST_MIGRATIONS.indexOf(V44) > GPEXE_TEST_MIGRATIONS.indexOf(V42), "v44 is listed after v42");
+  const m = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v44mig", migrations: upToV42 });
   const c = await newClient(m.url);
   try {
     assert.equal((await c.query("select current_database() as db")).rows[0].db, m.name);
     const v42 = await catalogDigest(c);
     assert.equal((await c.query(`select to_regprocedure('training.activity_has_roster(uuid)') as f`)).rows[0].f, null);
 
-    await applyGpexeTestMigrations(m.url, [...upToV42, V43]);
-    const v43 = await catalogDigest(c);
-    assert.notDeepEqual(v43, v42);
-    assert.equal((await c.query(`select count(*)::int as n from public.schema_migrations where migration_name like '%v43_activity_roster_self_report.sql'`)).rows[0].n, 1);
-    const changed = v43.filter((x) => !v42.includes(x)).concat(v42.filter((x) => !v43.includes(x)));
+    await applyGpexeTestMigrations(m.url, [...upToV42, V44]);
+    const v44 = await catalogDigest(c);
+    assert.notDeepEqual(v44, v42);
+    assert.equal((await c.query(`select count(*)::int as n from public.schema_migrations where migration_name like '%v44_activity_roster_self_report.sql'`)).rows[0].n, 1);
+    const changed = v44.filter((x) => !v42.includes(x)).concat(v42.filter((x) => !v44.includes(x)));
     assert.deepEqual(
       changed.map((x) => x.split("=")[0]).sort(),
       ["f:training.activity_has_roster(p_activity_id uuid)", "f:training.activity_roster(p_activity_id uuid)", "f:training.activity_roster(p_activity_id uuid)"],
-      "v43 adds one function and redefines one; nothing else in the catalog moves",
+      "v44 adds one function and redefines one; nothing else in the catalog moves",
     );
 
     // Under a later recorded migration the rollback refuses and changes nothing.
@@ -689,7 +689,7 @@ test("12. migration v43: applied by the runner on v42, the rollback returns the 
     await c.query(`insert into public.schema_migrations (migration_name, checksum, execution_time_ms, runner_version) values ($1,$2,0,'test')`, [later, "0".repeat(64)]);
     await assert.rejects(c.query(await fsp.readFile(ROLLBACK_SQL, "utf8")), /later migrations are applied/, "refused under a later migration");
     await c.query("rollback");
-    assert.deepEqual(await catalogDigest(c), v43, "nothing changed");
+    assert.deepEqual(await catalogDigest(c), v44, "nothing changed");
     await c.query(`delete from public.schema_migrations where migration_name = $1`, [later]);
     // While the migrator holds its session lock the rollback refuses too.
     const holder = await newClient(m.url);
@@ -701,34 +701,34 @@ test("12. migration v43: applied by the runner on v42, the rollback returns the 
     } finally {
       await holder.end();
     }
-    assert.deepEqual(await catalogDigest(c), v43, "nothing changed");
+    assert.deepEqual(await catalogDigest(c), v44, "nothing changed");
 
     await c.query(await fsp.readFile(ROLLBACK_SQL, "utf8"));
     assert.deepEqual(await catalogDigest(c), v42, "the rollback leaves exactly the v42 functions, triggers and indexes");
-    assert.equal((await c.query(`select count(*)::int as n from public.schema_migrations where migration_name like '%v43_activity_roster_self_report.sql'`)).rows[0].n, 0);
-    await assert.rejects(c.query(await fsp.readFile(ROLLBACK_SQL, "utf8")), /v43 is not recorded/, "a second rollback refuses");
+    assert.equal((await c.query(`select count(*)::int as n from public.schema_migrations where migration_name like '%v44_activity_roster_self_report.sql'`)).rows[0].n, 0);
+    await assert.rejects(c.query(await fsp.readFile(ROLLBACK_SQL, "utf8")), /v44 is not recorded/, "a second rollback refuses");
     // The refused script opened its transaction and stopped inside it (as
     // psql -v ON_ERROR_STOP=1 would); end it on this connection.
     await c.query("rollback");
 
-    await applyGpexeTestMigrations(m.url, [...upToV42, V43]);
-    assert.deepEqual(await catalogDigest(c), v43, "v43 applies again, identically");
+    await applyGpexeTestMigrations(m.url, [...upToV42, V44]);
+    assert.deepEqual(await catalogDigest(c), v44, "v44 applies again, identically");
 
-    // A v43 that fails at its very end leaves nothing and is not recorded.
+    // A v44 that fails at its very end leaves nothing and is not recorded.
     await c.query(await fsp.readFile(ROLLBACK_SQL, "utf8"));
-    const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "optimove-v43-fail-"));
+    const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "optimove-v44-fail-"));
     const dir = path.join(tempRoot, "migrations_v2");
     await fsp.mkdir(dir);
     try {
       for (const f of upToV42) await fsp.copyFile(path.resolve(__dirname, "../../migrations_v2", f), path.join(dir, f));
-      const broken = `${await fsp.readFile(path.resolve(__dirname, "../../migrations_v2", V43), "utf8")}\nselect 1 / 0;\n`;
-      await fsp.writeFile(path.join(dir, V43), broken, "utf8");
-      await assert.rejects(runner.runMigrations({ databaseUrl: m.url, migrationsRoot: dir }), /ABORT while applying .*v43_activity_roster_self_report.sql.*22012/);
+      const broken = `${await fsp.readFile(path.resolve(__dirname, "../../migrations_v2", V44), "utf8")}\nselect 1 / 0;\n`;
+      await fsp.writeFile(path.join(dir, V44), broken, "utf8");
+      await assert.rejects(runner.runMigrations({ databaseUrl: m.url, migrationsRoot: dir }), /ABORT while applying .*v44_activity_roster_self_report.sql.*22012/);
     } finally {
       await fsp.rm(tempRoot, { recursive: true, force: true });
     }
-    assert.deepEqual(await catalogDigest(c), v42, "a failed v43 leaves nothing behind");
-    assert.equal((await c.query(`select count(*)::int as n from public.schema_migrations where migration_name like '%v43_activity_roster_self_report.sql'`)).rows[0].n, 0);
+    assert.deepEqual(await catalogDigest(c), v42, "a failed v44 leaves nothing behind");
+    assert.equal((await c.query(`select count(*)::int as n from public.schema_migrations where migration_name like '%v44_activity_roster_self_report.sql'`)).rows[0].n, 0);
   } finally {
     await c.end();
     await m.drop();

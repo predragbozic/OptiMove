@@ -268,7 +268,7 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
   try {
     await client.query("begin");
     await client.query(`set local lock_timeout = '${LOCK_TIMEOUT}'`);
-    // The v43 gate is deferred: its answer is taken under the locks and
+    // The v44 gate is deferred: its answer is taken under the locks and
     // only after the requestKey replay below.
     const target = await resolveRosterTarget(client, ctx, activityId, { deferGate: true });
     const teamId = String(target.team.id);
@@ -311,7 +311,7 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
     if (String(activityId) !== canonicalId) {
       throw conflict("activity_superseded", "This session was merged into another.", { canonicalActivityId: canonicalId });
     }
-    // The v43 gate, under the locks and after the replay: a saved answer wins
+    // The v44 gate, under the locks and after the replay: a saved answer wins
     // over the present state (a saved write is never "nothing was saved"),
     // and a reparent or merge that kept the canonical id but left this a
     // self-report activity meanwhile gets the same 409 as the read gives,
