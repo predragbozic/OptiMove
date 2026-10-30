@@ -581,9 +581,7 @@ function bindEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (!els.mediaModal?.hidden) { closeMedia(); return; }
-    // feature/mobile-messages-fullscreen: same priority chain as
-    // handleAppBack() above, sharing the exact same function so the two
-    // can never drift apart - see handleMessagesBack()'s own comment.
+    // Same chain as handleAppBack(): the viewer, then handleMessagesBack().
     if (handleMessagesBack()) return;
     // No unsaved-changes state exists inside the Specific Program overlay
     // today (it's a read-only detail view), so Escape can always close it.
