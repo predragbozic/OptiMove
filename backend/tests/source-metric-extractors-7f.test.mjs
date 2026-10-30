@@ -200,6 +200,11 @@ test("7. one decimal comparison for every bound and threshold: 25.0 against [25,
   assert.deepEqual(acc.extract({ more: {} }, threshold(2.5, 0.3, ">=")), { skip: "events_missing" });
   assert.deepEqual(acc.extract({ more: { events: { ...events, acceleration_events_count: null } } }, threshold(2.5, 0.3, ">=")), { skip: "count_missing" });
   assert.deepEqual(acc.extract({ more: { events: { ...events, acceleration_events_threshold_value: "2.5" } } }, threshold(2.5, 0.3, ">=")), { value: 20 }, "a numeric text in the answer");
+  // Beyond a binary double: these decimals differ, while their doubles are equal.
+  assert.equal(sameDecimal("0.1", "0.10000000000000000001"), false);
+  assert.equal(Number("2.50000000000000000001"), 2.5, "the double cannot tell them apart");
+  assert.deepEqual(acc.extract({ more: { events } }, threshold("2.50000000000000000001", "0.3", ">=")), { skip: "threshold_mismatch" });
+  assert.deepEqual(acc.extract({ more: { events } }, threshold("2.5", "0.30000000000000000001", ">=")), { skip: "duration_mismatch" });
 });
 
 test("8. two teams, two variables (OD1): a version's fixed bounds give values for the team whose GPEXE zones match, and team_threshold_missing for the other, nothing written from a wrong zone", () => {
