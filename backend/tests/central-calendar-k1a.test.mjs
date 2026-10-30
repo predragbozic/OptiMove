@@ -983,6 +983,33 @@ test("17. athlete workspace on a shared team activity: own participation only â€
   assert.equal(aView.text.includes(b.name), false);
   assert.equal(aView.text.includes(b.athleteId), false);
   assert.equal(aCard.attendance, null);
+
+  // The RPE counts and the link ids are self-scoped as well: one team
+  // activity on the batch day with both participants, each linked
+  // (confirmed) to their own planned session, B with an RPE result â€” A's
+  // card asks 1 (own), carries only A's logical session, and B's logical
+  // session id is nowhere in the answer.
+  const shared = await makeActivity({ owner: { scope: "team", teamId: pair.teamId }, origin: "manual", name: "Shared", date: PAST });
+  for (const athlete of [a, b]) {
+    const participantId = await addParticipant(shared, athlete.athleteId, PAST);
+    await q(
+      `insert into training.activity_participant_session_links (activity_participant_id, athlete_id, logical_session_id, link_method, link_status, confirmed_at)
+       values ($1,$2,$3,'manual','confirmed',now())`,
+      [participantId, athlete.athleteId, athlete.logicalSessionId],
+    );
+  }
+  await q(
+    `insert into training_load.session_feedback (athlete_id, session_date, logical_session_id, source, rpe, duration_minutes) values ($1,$2,$3,'planned',5,50)`,
+    [b.athleteId, PAST, b.logicalSessionId],
+  );
+  const aShared = await calendar(a.cookie, { extra: "&kinds=activity" });
+  const sharedCard = itemsOn(aShared, PAST).find((it) => it.key === `activity:${shared}`);
+  assert.ok(sharedCard, "A is a participant, so A reads the activity");
+  assert.deepEqual(sharedCard.rpe, { asked: 1, submitted: 0 }, "RPE counted for A alone, B's result not counted");
+  assert.deepEqual(sharedCard.links.logicalSessionIds, [a.logicalSessionId]);
+  assert.equal(aShared.text.includes(b.logicalSessionId), false, "B's logical session id is nowhere in A's answer");
+  const coachShared = await calendar(pair.coach.cookie, { extra: "&kinds=activity" });
+  assert.deepEqual(itemsOn(coachShared, PAST).find((it) => it.key === `activity:${shared}`).rpe, { asked: 2, submitted: 1 }, "the coach sees both (the control)");
 });
 
 // ---------------------------------------------------------------------------

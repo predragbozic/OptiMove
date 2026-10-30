@@ -295,3 +295,11 @@ generator call; projection in memory); the SQL statement count stays independent
   unchanged here.
 - Local dates: a planned session is `plan_days.date`, an activity `occurred_local_date`, an assignment its
   own `local_scheduled_date`; `today` is the caller's date. No instant is converted on the server.
+- Recorded by the security review, outside this change: the existing `GET /api/training-load/calendar` still
+  returns `participantCount` and the RPE requested / rated totals across every participant to an athlete
+  (`routes/trainingLoad.js`, the activity query and its item); the new read gives an athlete their own
+  participation only. A separate task.
+- Not covered by a test (recorded): the number of `training.activity_has_roster()` calls per read (statement
+  count is bounded by test 16; the function runs only for own-card activities by construction), and the
+  `present` reconciliation under a two-states conflict after a merge (holds by construction: `did_not_participate`
+  is counted outside the needs-state group).
