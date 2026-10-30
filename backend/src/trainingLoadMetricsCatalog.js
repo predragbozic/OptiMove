@@ -75,6 +75,10 @@ function clampPageSize(raw) {
 // Domains / Categories (identical shape, kept as two small tables)
 // ---------------------------------------------------------------
 
+// The older API's node answers stay as they were before v46: the icon of a
+// domain or category (V4, J6.1) is read through the classification API only.
+const withoutIcon = ({ icon_url: _icon, ...row }) => row;
+
 async function listVisibleNodes(req, table, { activeOnly = true } = {}) {
   const params = [];
   const visSql = catalogVisibilitySql(req, "n", params);
@@ -83,7 +87,7 @@ async function listVisibleNodes(req, table, { activeOnly = true } = {}) {
     `select n.* from training_load.${table} n where ${visSql} ${activeSql} order by n.name`,
     params,
   );
-  return result.rows;
+  return result.rows.map(withoutIcon);
 }
 
 async function createNode(req, table, body) {
@@ -97,7 +101,7 @@ async function createNode(req, table, body) {
      values ($1,$2,$3,$4,$5,$6) returning *`,
     [name, owner.ownerScope, owner.ownerUserId, owner.ownerClubId, owner.ownerTeamId, req.user.id],
   );
-  return { row: result.rows[0] };
+  return { row: withoutIcon(result.rows[0]) };
 }
 
 async function archiveNode(req, table, id) {
@@ -106,7 +110,7 @@ async function archiveNode(req, table, id) {
   if (!row || !canManageCatalogRow(req, row)) return { ...NODE_NOT_FOUND };
   if (isCanonicalOwnerScope(row.owner_scope)) return { ...CANONICAL_CLASSIFICATION_READ_ONLY };
   const result = await query(`update training_load.${table} set is_active = false, updated_at = now() where id = $1 returning *`, [id]);
-  return { row: result.rows[0] };
+  return { row: withoutIcon(result.rows[0]) };
 }
 
 export const listDomains = (req) => listVisibleNodes(req, "metric_domains");

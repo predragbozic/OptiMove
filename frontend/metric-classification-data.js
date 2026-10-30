@@ -7,6 +7,7 @@
 // What a caller may do with a domain, category or link is the server's answer
 // (`editable`, `actions`), never worked out here from a role.
 import { api } from "./api.js";
+import { isLibraryKey } from "./icon-render.js";
 import { LIMITS, TEXT_FORBIDDEN, WRITE_BOUND_MS, errorInfo, newRequestKey, outcomeUnknown } from "./metric-variables-data.js";
 
 export { errorInfo, outcomeUnknown };
@@ -19,9 +20,12 @@ const KEY = /^[a-z][a-z0-9_]{0,62}$/;
 // The modes of the one open form (it shares the Variables screen's form slot,
 // so one write runs at a time and leaving asks first).
 export const CLASSIFICATION_MODES = Object.freeze([
-  "node-create", "node-rename", "node-archive", "node-restore", "category-place", "variable-link", "link-remove",
+  "node-create", "node-rename", "node-archive", "node-restore", "node-icon", "category-place", "variable-link", "link-remove",
 ]);
 export const isClassificationMode = (mode) => CLASSIFICATION_MODES.includes(mode);
+// The forms that hold an icon choice (V4, J6.1): a new domain's or category's,
+// and a change of one's icon.
+export const CLASSIFICATION_ICON_MODES = Object.freeze(["node-create", "node-icon"]);
 
 export function emptyClassificationState() {
   return { tree: null, loaded: false, loading: false, error: null };
@@ -127,7 +131,13 @@ export function openClassificationForm(mode, params = {}) {
     returnTo: params.returnTo || "classification",
     variableId: params.variableId || null,
   };
-  if (mode === "node-create") return { ...base, kind: params.kind, draft: { name: "", description: "", key: "" } };
+  if (mode === "node-create") return { ...base, kind: params.kind, draft: { name: "", description: "", key: "", iconKey: "" } };
+  if (mode === "node-icon") {
+    // The icon the coach saw (a library key, or null): the server refuses the
+    // change when another one is saved meanwhile (J6.1).
+    const icon = isLibraryKey(params.node?.icon) ? params.node.icon : null;
+    return { ...base, kind: params.kind, nodeId: params.node?.id || null, nodeName: params.node?.name || "", ownerScope: params.node?.ownerScope || "", expectedIconKey: icon, draft: { iconKey: icon || "" } };
+  }
   if (mode === "node-rename") {
     const node = params.node;
     const original = { name: node?.name || "", description: node?.description || "" };
@@ -163,8 +173,15 @@ export function buildClassificationRequest(form) {
     set("name", textError(name, CLASS_LIMITS.name, { required: true }));
     set("description", textError(description, CLASS_LIMITS.description));
     if (key && !KEY.test(key)) errors.key = "Lower-case letters, digits and underscores, starting with a letter, at most 63.";
+    // The icon is sent only when one is chosen: a create without it is the create of before.
+    const iconKey = isLibraryKey(d.iconKey) ? d.iconKey : "";
     if (Object.keys(errors).length) return { body: null, errors };
-    return { errors, body: { requestKey: form.requestKey, name, ...(description ? { description } : {}), ...(key ? { key } : {}) } };
+    return { errors, body: { requestKey: form.requestKey, name, ...(description ? { description } : {}), ...(key ? { key } : {}), ...(iconKey ? { iconKey } : {}) } };
+  }
+  if (form.mode === "node-icon") {
+    const iconKey = isLibraryKey(d.iconKey) ? d.iconKey : null;
+    if (iconKey === form.expectedIconKey) return { body: null, errors, unchanged: true };
+    return { errors, body: { requestKey: form.requestKey, expectedIconKey: form.expectedIconKey, iconKey } };
   }
   if (form.mode === "node-rename") {
     // Only a value the coach changed from what its field showed is checked and
@@ -205,6 +222,8 @@ export function buildClassificationRequest(form) {
 const SETTLED_ON_CHECK = new Set([
   "invalid_body", "key_required", "key_taken", "node_changed", "rename_unchanged", "node_not_active", "node_active",
   "node_archived", "variable_not_active", "link_outside_owner", "category_has_domain", "link_exists",
+  // And the icon's (V4, J6.1).
+  "icon_unchanged",
 ]);
 export const checkSettles = (info) => SETTLED_ON_CHECK.has(info.code);
 export function checkNoteText(info) {
@@ -232,9 +251,14 @@ const CODE_TEXT = {
   try_again: "The server was busy. Nothing was saved. Try again.",
   internal_error: "The server could not save it. Nothing was saved. Try again.",
   request_key_reused: "An earlier save of this form may already be stored. Cancel and look at what is saved now before saving again.",
+  icon_unchanged: "Nothing changed: this icon is the one already saved.",
 };
 const MODE_TEXT = {
   "node-archive": { node_not_active: () => "It is already archived." },
+  "node-icon": {
+    node_changed: () => "Someone changed its icon in the meantime, so your choice was not saved. This is its icon now; choose again if it is still needed.",
+    node_not_active: () => "It is archived now, so its icon cannot be changed. Nothing was saved.",
+  },
   // The likeliest cause is one created earlier (perhaps a save left without a
   // check): it is looked for first, since nothing is ever deleted.
   "node-create": { key_taken: (form) => `A ${nounOf(form?.kind)} here already uses ${String(form?.draft?.key ?? "").trim() ? "this custom key" : "the key made from this name"}, perhaps one created earlier or an archived one. Look for it under ${form?.kind === "domain" ? "Domains" : "Categories"} first; to create a different one, change the name or the custom key under Technical details.` },

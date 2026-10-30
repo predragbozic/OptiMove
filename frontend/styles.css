@@ -19125,6 +19125,23 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 .metric-classification-names .dc-inline {
   margin-bottom: 6px;
 }
+/* PR-1c: the text beside a tile keeps its line and wraps in its own box (a
+   long name at 360 px never leaves the tile alone above it). */
+.dc-inline > .dc-tile + * {
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* The filter note's sentence is one item, with its domain or category drawn
+   inline in it. */
+.metric-classification-filter-text {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dc-name-inline .dc-tile {
+  vertical-align: middle;
+  margin-right: 6px;
+}
 .metric-classification-names.dc-names {
   list-style: none;
   padding-left: 0;
@@ -19344,6 +19361,13 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   min-width: 0;
   margin: 0;
   font-size: 18px;
+  overflow-wrap: anywhere;
+}
+/* A name without spaces (up to 80 characters) wraps in a form's and a
+   detail's title too. */
+.metric-variables-form h2,
+.metric-variables-head h2 {
+  overflow-wrap: anywhere;
 }
 .icon-picker-head .plain-button {
   flex: 0 0 auto;

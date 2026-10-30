@@ -562,6 +562,7 @@ test("6. idempotency and outcome: a replay answers the current state and writes 
   const replay = ok200(await post(`/variables/${v.id}/icon`, W.coachA1.cookie, body));
   assert.deepEqual([replay.replayed, replay.variable.icon, (await changesOf(v.id)).length], [true, a, 1]);
   assert.deepEqual([(await post(`/variables/${v.id}/icon`, W.coachA1.cookie, { ...body, iconKey: b })).body.error], ["request_key_reused"]);
+  assert.deepEqual([(await post(`/variables/${v.id}/icon`, W.coachA1.cookie, { ...body, expectedIconKey: c })).body.error], ["request_key_reused"], "the icon seen is part of the request");
   assert.deepEqual([(await post(`/variables/${v.id}/archive`, W.coachA1.cookie, { requestKey: body.requestKey, reason: "x" })).body.error], ["request_key_reused"]);
   // Two identical requests at once.
   const twin = { requestKey: key(), expectedIconKey: a, iconKey: b };

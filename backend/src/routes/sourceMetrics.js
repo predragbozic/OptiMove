@@ -285,7 +285,8 @@ router.post("/classification/:kind", handle(async (req, res) => {
   writeAnswer(res, await classification.createNode({ ctx, kind: req.params.kind, body: req.body }), 201);
 }));
 
-for (const [act, fn] of [["rename", "renameNode"], ["archive", "archiveNode"], ["restore", "restoreNode"]]) {
+// The icon (V4, J6.1) for the same callers as a rename.
+for (const [act, fn] of [["rename", "renameNode"], ["archive", "archiveNode"], ["restore", "restoreNode"], ["icon", "changeNodeIcon"]]) {
   router.post(`/classification/:kind/:nodeId/${act}`, handle(async (req, res) => {
     const ctx = await adminContext(req, res);
     if (!ctx) return;

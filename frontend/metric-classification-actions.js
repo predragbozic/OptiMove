@@ -6,8 +6,10 @@
 // body) again - the server replays a saved write and never saves twice. The
 // variables' loaders come in from metric-variables-actions.js (`load`).
 import { variablesContext, variablesState } from "./metric-variables-data.js";
+import { isLibraryKey } from "./icon-render.js";
+import { focusIconPicker, openIconPicker } from "./icon-picker.js";
 import {
-  CLOSES_FORM, KEY_FIELD_TEXT, buildClassificationRequest, categoryPlaceable, changeNode, checkNoteText, checkSettles, classificationCodeText,
+  CLASSIFICATION_ICON_MODES, CLOSES_FORM, KEY_FIELD_TEXT, buildClassificationRequest, categoryPlaceable, changeNode, checkNoteText, checkSettles, classificationCodeText,
   createLink, createNode, errorInfo, fetchClassification, findNode, nounOf, openClassificationForm, outcomeUnknown, placeableDomains, removeLink,
   removablePlacement, removableVariableLink,
 } from "./metric-classification-data.js";
@@ -166,6 +168,24 @@ export async function handleClassificationAction(action, { render, leaveForm, lo
     return true;
   }
 
+  // The icon of the open form (V4, J6.1): the picker opens on the current
+  // choice, Remove icon clears it. A form that was sent keeps its body until
+  // its result is known.
+  if (type === "metric-classification-icon-open") {
+    const form = s.form;
+    if (!CLASSIFICATION_ICON_MODES.includes(form?.mode) || form.busy || form.unconfirmed) return true;
+    openIconChoice(form, render);
+    return true;
+  }
+  if (type === "metric-classification-icon-clear") {
+    const form = s.form;
+    if (!CLASSIFICATION_ICON_MODES.includes(form?.mode) || form.busy || form.unconfirmed || !form.draft.iconKey) return true;
+    applyClassificationIcon(null);
+    render();
+    globalThis.document?.querySelector?.('[data-action="metric-classification-icon-open"]')?.focus?.();
+    return true;
+  }
+
   // The forms: only an admin's, and only what the server's answer offers. One
   // write at a time: none opens while a drop (PR-2) is being saved or is not
   // confirmed, so its result and Check result stay on the screen.
@@ -178,14 +198,21 @@ export async function handleClassificationAction(action, { render, leaveForm, lo
     focusFirstField();
     return true;
   }
-  const verb = { "metric-classification-rename-open": "rename", "metric-classification-archive-open": "archive", "metric-classification-restore-open": "restore" }[type];
+  const verb = {
+    "metric-classification-rename-open": "rename", "metric-classification-archive-open": "archive", "metric-classification-restore-open": "restore",
+    "metric-classification-icon-change-open": "icon",
+  }[type];
   if (verb) {
     const node = nodeOf(action);
     if (!node || !(node.actions || []).includes(verb)) return true;
     s.notice = "";
     s.form = openClassificationForm(`node-${verb}`, { kind: action.dataset.kind, node });
-    render();
-    focusFirstField();
+    // Change icon goes straight to the picker; its form holds the choice until Save.
+    if (verb === "icon") openIconChoice(s.form, render);
+    else {
+      render();
+      focusFirstField();
+    }
     return true;
   }
   // Place and Remove open only for what the view offers: the same helpers
@@ -234,6 +261,26 @@ export async function handleClassificationAction(action, { render, leaveForm, lo
   return true;
 }
 
+// The shared picker, opened by this screen (its host is the Variables screen,
+// which renders it and routes its clicks to applyClassificationIcon).
+function openIconChoice(form, render) {
+  const what = form.mode === "node-icon" ? form.nodeName : `the ${nounOf(form.kind)}`;
+  openIconPicker({ host: "metric-variables", title: `Choose an icon for ${what}`, current: form.draft.iconKey, returnFocus: '[data-action="metric-classification-icon-open"]' });
+  render();
+  focusIconPicker();
+}
+// The picker's choice lands in the open create or icon form only (never one
+// that was sent: its body is fixed until its result is known).
+export function applyClassificationIcon(key) {
+  const form = variablesState().form;
+  if (!CLASSIFICATION_ICON_MODES.includes(form?.mode) || form.busy || form.unconfirmed) return;
+  const next = key && isLibraryKey(key) ? key : "";
+  if (next === form.draft.iconKey) return;
+  form.draft.iconKey = next;
+  form.dirty = true;
+  form.error = "";
+}
+
 // ---------------------------------------------------------------------------
 // Typing: the form's values live in state, so a repaint never loses them.
 // ---------------------------------------------------------------------------
@@ -268,7 +315,8 @@ export async function submitClassificationForm({ render, load }) {
   form.errors = errors;
   form.error = "";
   if (unchanged) {
-    form.error = "Nothing changed: change the name or the description, or Cancel.";
+    form.error = form.mode === "node-icon" ? "Nothing changed: this is the icon already saved. Choose another one, or Cancel."
+      : "Nothing changed: change the name or the description, or Cancel.";
     render();
     return;
   }
@@ -287,6 +335,7 @@ const WRITES = {
   "node-rename": (form) => changeNode(form.kind, form.nodeId, "rename", form.sentBody),
   "node-archive": (form) => changeNode(form.kind, form.nodeId, "archive", form.sentBody),
   "node-restore": (form) => changeNode(form.kind, form.nodeId, "restore", form.sentBody),
+  "node-icon": (form) => changeNode(form.kind, form.nodeId, "icon", form.sentBody),
   "category-place": (form) => createLink(form.sentBody),
   "variable-link": (form) => createLink(form.sentBody),
   "link-remove": (form) => removeLink(form.linkId, form.sentBody),
@@ -358,6 +407,8 @@ const DONE = {
   "node-rename": (form) => `The ${nounOf(form.kind)} was renamed.`,
   "node-archive": (form) => `The ${nounOf(form.kind)} was archived.`,
   "node-restore": (form) => `The ${nounOf(form.kind)} was restored.`,
+  // What was sent says whether an icon is left (V4), even when the answer could not be read back.
+  "node-icon": (form) => (form.sentBody?.iconKey === null ? "The icon was removed." : "The icon was changed."),
   "category-place": () => "The category was placed in the domain.",
   "variable-link": (form) => `The variable was added to the ${nounOf(form.linkKind)}.`,
   "link-remove": (form) => (form.subject && form.target ? `${form.subject} was removed from ${form.target}.` : `It was removed from the ${form.shape === "variable-category" ? "category" : "domain"}.`),

@@ -278,9 +278,10 @@ const labelsTokenOf = (row) => hashOf([row.label, row.short_label ?? null, row.d
 const coachArchived = (row) => row.last_change_kind === "archive" && row.last_change_basis === "team_coach";
 // A variable's icon (Data configuration visual polish, PR-1): the key of the
 // built-in library its icon_url names as `icon:<key>`; null for none and for
-// any other stored value (an older URL is never sent to this screen).
-const ICON_PREFIX = "icon:";
-function iconOut(iconUrl) {
+// any other stored value (an older URL is never sent to this screen). A domain's
+// and a category's icon (V4, J6.1) are read the same way.
+export const ICON_PREFIX = "icon:";
+export function iconOut(iconUrl) {
   if (typeof iconUrl !== "string" || !iconUrl.startsWith(ICON_PREFIX)) return null;
   const key = iconUrl.slice(ICON_PREFIX.length);
   return isIconKey(key) ? key : null;
