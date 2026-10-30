@@ -17,8 +17,8 @@ after v48 is merged and deployed**, against v48's body as merged (section 6.3).
 | Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 11). |
 | Verified against commit | `6a94ce29` (merge of PR #294) for `main`; v48 as on the 7d-B branch (PR #295, head `578717af`). Every file and line reference below is to `6a94ce29` unless it names another. |
 | Migration | **Yes**: the next free number after v48 (**v49** if none comes between), proposed as `migrations_v2/<YYYYMMDDHHMM>_training_load_v49_source_instance_end.sql` (section 6). |
-| **Pending owner** | The owner's five open decisions of phases 7e–7g are numbered OD1–OD5 in all three contracts (J11 section 0.1). This contract needs **OD5**, the shape of the operation (section K, line 3861). The *Rukovodilac* put it to the owner on 2026-10-30 with this recommendation: only an active platform admin in the platform workspace, a mandatory reason, refused while an open activation exists on that source's bindings. **OD5 is pending owner; nothing of 7g is built before the owner's yes.** The reading "that source's bindings = the owner team's bindings of the same source team" (section 3.2) is the executor's interpretation, part of the same pending decision. |
-| Decides | The *Rukovodilac*: R1–R6 (section 9). The owner: OD5. |
+| **Owner decisions** | The owner's decisions of phases 7e–7g are numbered OD1–OD7 in all three contracts (J11 section 0.1). This contract needs **OD5**, the shape of the operation, **decided on 2026-10-30 as recommended, with the narrower reading** (the *Rukovodilac*'s reading of the owner's „5. to smo vec rekli dole”, turn `396e7078`): only an active platform admin in the platform workspace, a mandatory reason, refused while the owner team has an active binding of that source team (R2) or an open activation on the owner team's bindings of it (section 3.2). OD6 leaves D9 the platform admin's. |
+| Decides | The *Rukovodilac*: R1–R6 (section 9). The owner: OD5 (decided). |
 
 ---
 
@@ -29,7 +29,7 @@ after v48 is merged and deployed**, against v48's body as merged (section 6.3).
   `active`. The partial unique of T7 allows one active instance per GPEXE team (v34 `:1458-1461`), so if the same GPEXE
   team is ever bound to another OptiMove team, that team's first M4 import is refused with `source_instance_held`
   until the old instance is ended.
-- **The operation** (OD5, pending owner): an active platform admin in the platform workspace ends one instance with a
+- **The operation** (OD5, decided): an active platform admin in the platform workspace ends one instance with a
   reason. The row turns `inactive`; nothing is deleted or moved, and every historical fact keeps pointing to it (C36).
   An ended instance stays ended.
 - **Refused while it is still in use:** an active binding of the owner team to that GPEXE team (R2), or an open
@@ -91,7 +91,7 @@ after v48 is merged and deployed**, against v48's body as merged (section 6.3).
   write kit `runWrite` (`backend/src/sourceMetricMappingService.js:726-800`) and 7c's `retireConversion` pattern
   (`unitConversionService.js:237-281`).
 
-## 2. Who (OD5, pending owner)
+## 2. Who (OD5, decided)
 
 An active platform admin **in the platform workspace** only (the gate of `mayMaintainConversions`). Everyone else,
 including a platform admin in a club workspace and every club admin, gets the identical 404 before the body or the
@@ -135,7 +135,7 @@ Answers:
       the same source system, host and source team; ending would only make its next import create a second instance;
    5. `instance_in_use` (`current: { activationId, bindingId }`, OD5): an open T5 activation exists on a binding of
       the owner team naming the same source system, host and source team (an ended binding's open activation
-      included, C58): end it first (S2). *Interpretation, pending owner:* "that source's bindings" is read as the
+      included, C58): end it first (S2). *Decided with OD5 (the narrower reading):* "that source's bindings" are the
       owner team's bindings of that source team; the new team's activations are its own and do not block the end.
    6. `try_again`: the team import lock is held (a check, import, bind, Unbind or settings change runs for the owner
       team), or a row lock is not granted within the bound. The service learns the first from its own try-lock's
@@ -321,4 +321,6 @@ lock), any frontend, any production write, a re-activation, a move of history be
   notes. Applied by the *Rukovodilac*'s decision, one new head with a narrow re-review: the service takes the team
   lock itself and answers `try_again` from its boolean, never from `P0001` text (C72); "never waits" limited to the
   try-lock, with the import writer's blocking lock; the guard's switch-off only around the raw-flip fixture blocks,
-  with the architecture test against `disable trigger`.
+  with the architecture test against `disable trigger`. Both narrow re-GOs on `d85160e0`.
+- **The owner's decisions (the next head):** OD5 written as decided, with the narrower reading; a narrow re-review of
+  the delta by both.

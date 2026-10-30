@@ -1134,6 +1134,46 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
       migration v48, which widens T5's two basis CHECKs and the T8 rules it needs. A1, A2 and the revision lifecycle
       stay the platform admin's.
 
+The owner's decisions of phases 7e–7g (2026-10-30, in the *Rukovodilac*'s chat; the executor checked each turn in its
+transcript; J11 section 0.1 holds the table):
+
+107. **OD1–OD5: the contracts J11, J12 and J13 as recommended.**
+    - **The owner's words:** „Sto se tice pregleda varijabli tokom povezivanja to je ok” (turn `347e2f96`, 21:57:20
+      UTC), and the answers to the five questions: „1. svaki klub kada napravi kanonske varijable za svoj tim moze
+      relativne da stavi to nije toliko ni bitno on ce da napise npr 80% od vmax i preuzimace 80% od vmax npr slicno
+      kao za fiksne stvari. 2. pregled smo odredili  kroz diskusiju 3. moze, 4. to smo rekli 5. to smo vec rekli dole”
+      (turn `396e7078`, 22:06:19 UTC).
+    - **Decided:** OD1, fixed zone bounds now, two canonical variables for two teams' different zones, a mismatch
+      refused fail-closed; a relative variable such as "80 % of Vmax" is a later derived variable (phase 11 of the
+      plan), not a zone mapping. OD2, the preview's fields as recommended. OD3, at least 3 athletes for min and max.
+    - **The *Rukovodilac*'s reading of the short answers:** OD4, a system mapping may carry zone or threshold bounds;
+      OD5, D9 for an active platform admin in the platform workspace, with a reason, refused while the owner team has
+      an active binding of that source team or an open activation on one (the narrower reading).
+108. **OD6: a club's admin does its club's mappings** (supersedes C30's "only a platform admin" for a club mapping's
+    status changes once phase 7h is built, and C106's last sentence for A1 and A2 on a club mapping).
+    - **The owner's words:** „Povezivanje veza i raskidanje veza izmedju varijabli radi pre svega klupski admin, moze i
+      sistemski ali pre svega klupski jer je to njegov posao. Zamisli da imamo 100 klubova …” (turn `122a4df5`,
+      21:56:25 UTC); „moje zone mogu da se zovu kako hocu, a da preuzimam u njih sta hocu, mislim. Rekli smo da sam mogu
+      da klupski admin da radi mapiranja, i da preuzima sistemske varijable” (turn `a73981ac`, 22:08:40 UTC); „znaci
+      promeni u skladu sta sam hteo, ne vidim problem” (turn `88ad60ca`, 22:09:13 UTC).
+    - **The *Rukovodilac*'s reading:** a club's active admin approves (`needs_review → active`), disables and replaces
+      its own club's mapping versions; system mappings, the source fields' unit and meaning, the unit conversions and
+      D9 stay the platform admin's. Phase 7h, a migration, its contract J14 on the *Rukovodilac*'s order. Until it is
+      built, A1 and A2 stay the platform admin's.
+    - **The product rule beside it:** a club's variable is named as the club likes and its admin chooses the field that
+      fills it; its physical definition (unit, zone bound, threshold) must match what GPEXE computes for the team, or
+      the import refuses it fail-closed (ADR-007).
+109. **OD7 and the guideline: system variables are a starter kit.**
+    - **The owner's words:** „Sistemske kanonske varijable su pre svega zamisljene kao nesto sto klub moze vrlo brzo
+      da koristi da mozda ih ubaci u svoje da ne mora da ih kreira ako mu odgovaraju, ako ne odgovaraju on moze i da
+      ih sakrije, ne trebaju mu na primer... To je sustina, svi ce oni napraviti neki svoj skup core varijabli” (turn
+      `bf4c6ce7`, 21:59:39 UTC), and turns `a73981ac` and `88ad60ca` above.
+    - **The *Rukovodilac*'s reading:** a club copies a system variable into its own set (a club variable) or hides it
+      for the club; the copy brings the system variable's mappings as the club's draft versions, approved under OD6
+      (C108). Every club has its own core set; dashboards of different clubs are not comparable by design, and no
+      cross-club comparison is built. Phase 7i (copy and hide; hiding per club is likely a new table, so a
+      migration), its contract J15 on the *Rukovodilac*'s order, after 7h.
+
 ---
 
 ## D. Accepted model — **implemented as schema in M1 (v34, merged and deployed); read and first written by M2 (J1), used by the importer only from M4**
@@ -3846,10 +3886,10 @@ UTC); their implementations stay separate pull requests:
   owner team's import lock; a guard on the v11 `state` and the T8 chain in a migration written after v48 is merged
   (v49 if none comes between).
 
-**The owner's five open decisions** of these phases (J11 section 0.1) are written into the contracts with the
-recommended options and marked **pending owner**; none is built before the owner's yes: OD1 team-relative zones (not
-now; two canonical variables), OD2 the preview's fields, OD3 the minimum count of athletes (3), OD4 bounds on a system
-mapping (yes), OD5 the shape of D9's operation.
+**The owner's decisions** of these phases (J11 section 0.1; C107–C109), decided on 2026-10-30: OD1 team-relative
+zones (not now; two canonical variables), OD2 the preview's fields, OD3 the minimum count of athletes (3), OD4 bounds
+on a system mapping (yes), OD5 the shape of D9's operation (the narrower reading), OD6 a club's admin approving its
+club's mapping versions (phase 7h), OD7 a club taking system variables into its own set (phase 7i).
 
 The owner-run procedure for the unit evidence of C97 (no GPEXE request by the executor, the stored snapshots read
 with read-only SQL and compared with the GPEXE UI) is `docs/runbooks/gpexe-c97-unit-evidence-owner-procedure.md`.
@@ -3863,7 +3903,7 @@ Decisions that may safely wait, with the PR that takes them:
 - the exact UI sentences for the new codes (M3);
 - the format of `evidence_ref` — decided for the database in M1 (C40); M2 only adds its API checks;
 - `unit_conversions` rows beyond the four seeded (M2 API);
-- the fields of the aggregate preview (M2) — OD2, proposed in J11 section 3 with the recommended option, pending owner;
+- the fields of the aggregate preview (M2) — OD2, decided (C107, J11 section 3);
 - the UI shape of the action over every active binding of a connection (M3);
 - names, descriptions, units, domains and `condition_description` values of the first system
   variables, the zones included (M3 / M6);
@@ -3875,18 +3915,18 @@ Decisions that may safely wait, with the PR that takes them:
 - the test-runner kind of the M1 suites — `disposable`, through the T1 runner (as built);
 - whether a system-owned zone or threshold mapping may show one team's bounds to every club admin,
   or such mappings are club-owned (the M1 schema supports both; the bounds are not personal data)
-  (M2 / M3) — OD4, recommended: yes, a system mapping may carry bounds, a team's own settings shown only to that
-  team's club and a platform admin; pending owner (J11 section 0.1); the 7e preview shows no bound (J11 section 6);
+  (M2 / M3) — OD4, decided: yes, a system mapping may carry bounds, a team's own settings shown only to that team's
+  club and a platform admin (C107, J11 section 0.1); the 7e preview shows no bound (J11 section 6);
 - the minimum count of athletes below which the aggregate preview returns the count only, without
-  min and max (M2) — OD3, proposed as 3 in J11 section 4, pending owner;
+  min and max (M2) — OD3, decided: 3 (C107, J11 section 4);
 - decided (C81, C82): the existing Metrics Core catalog API stays as it is for its current callers (its
   `403` for a foreign club or team, the forwarded `P0001` text, coach-created `team` / `user` definitions,
   A6); the M3 frontend writes canonical variables only through the M3-0 admin API (J3); *superseded in
   part by C98 (2026-10-26):* the older API no longer creates or changes a `system` or `club` definition,
   and a write on an existing row the caller may not manage answers the identical `404` instead of `403`
   (a create for a foreign club or team keeps its `403`);
-- the shape of the platform-admin operation that ends a held source instance (D9) (M2) — OD5, proposed in J13 sections
-  2–4 with the recommended option, pending owner;
+- the shape of the platform-admin operation that ends a held source instance (D9) (M2) — OD5, decided (C107, J13
+  sections 2–4);
 - **the mandatory gate of C73 is built in v35 (J2, C74–C79)**, merged and deployed (PR #161) and
   confirmed by the owner's production post-check;
 - a v35 / v36 test-hardening task (owner, 2026-10-14): a regression test that one SQL statement - a

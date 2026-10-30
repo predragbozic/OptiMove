@@ -17,8 +17,8 @@ pull requests.
 | Verified against commit | `6a94ce29` (merge of PR #294). Every file and line reference below is to that commit unless it names another. |
 | Migration | **None.** The registry is code; the database cannot bind a key to code (P4 of J7, `migrations_v2/202610282300_training_load_v42_source_metric_zone_model.sql:28-31`). Section 6 says why nothing is lost. |
 | Order | **7f-B before 7e-B**: the aggregate preview (J11) reads values only through this registry. The plan lists 7e before 7f; section 8 asks the *Rukovodilac* to swap them. |
-| **Pending owner** | **OD1** (team-relative zones; section 4.1) and **OD4** (a system mapping carrying zone or threshold bounds; section 4.1) of the five owner decisions of phases 7e–7g (J11 section 0.1). Written with the recommended options; **nothing of them is built before the owner's yes**. |
-| Decides | The *Rukovodilac*: R1–R4 (section 8). The owner: OD1, OD4; the operators of the two event fields wait for the C97 evidence, as before (section 4, item 3). |
+| **Owner decisions** | **OD1** (team-relative zones; section 4.1) and **OD4** (a system mapping carrying zone or threshold bounds; section 4.1), **decided on 2026-10-30** (J11 section 0.1, with the owner's words): fixed bounds now, and yes. **OD6** (a club's admin approves its club's mapping versions, phase 7h) changes who runs A1 for a club mapping, not this registry's check (section 4.1). |
+| Decides | The *Rukovodilac*: R1–R4 (section 8). The owner: OD1, OD4 (decided); the operators of the two event fields wait for the C97 evidence, as before (section 4, item 3). |
 
 ---
 
@@ -167,11 +167,11 @@ screen can offer only supported fields. No other read changes.
    athlete and session gates stay the mapper's (`gpexeImportMapper.js:280-333`). The registry reads one row; who is
    read is not its question.
 
-### 4.1 Different zones for different teams (OD1, OD4: pending owner)
+### 4.1 Different zones for different teams (OD1, OD4: decided)
 
 The owner asked on 2026-10-30 how a U15 team and a senior team with different speed or power zones are handled.
 
-- **With the existing design (recommended, OD1: no new model now):** a mapping version's bounds are fixed (its
+- **With the existing design (OD1, decided: no new model now):** a mapping version's bounds are fixed (its
   `source_parameters`). Two teams with different zones use **two canonical variables** (for example "Sprint distance ≥
   22 km/h" and "Sprint distance ≥ 25.2 km/h"), each with its own mapping and active version, and each team's binding
   activates the one that fits its own GPEXE zone settings (T5, per binding).
@@ -180,9 +180,19 @@ The owner asked on 2026-10-30 how a U15 team and a senior team with different sp
   event, and no value is written from a wrong zone (F's table). The 7e preview shows it as a count of 0 before
   anything is activated (J11 section 5).
 - **A team-relative zone** (one canonical variable whose bounds follow each team's own settings) would be a new
-  parameter kind and a new mapping model; it is **not built** unless the owner asks for it later (OD1).
-- **OD4 (recommended: yes):** a system mapping may carry zone or threshold bounds; the bounds are not personal data,
-  and a team's own settings are shown only to that team's club and a platform admin (the phase 8 screen's rule).
+  parameter kind and a new mapping model; it is **not built** (OD1). The owner's example, a club variable such as
+  "80 % of Vmax", is a derived variable of phase 11 with its own discovery, not a zone mapping: GPEXE's zone
+  distances are per team and absolute, and OptiMove stores no speed samples (the track projection keeps its id, the
+  athlete, the time zone and the timestamps only, `BUNDLE_FIELDS.track` in `backend/src/gpexeRestV1Adapter.js`), so
+  that discovery must first find where such a value can come from.
+- **OD4 (decided: yes):** a system mapping may carry zone or threshold bounds; the bounds are not personal data, and a
+  team's own settings are shown only to that team's club and a platform admin (the phase 8 screen's rule).
+- **The club's own names, the same physics** (the product rule beside OD1, J11 section 0.1): a club names its
+  variables as it likes and its admin chooses which field fills each; the version's bounds and thresholds must still
+  match what GPEXE computes for the team, or this registry's extractor refuses the value as above.
+- **OD6 (decided; built in phase 7h):** a club's admin will also approve, disable and replace its club's mapping
+  versions. A1 then has two kinds of actor; the registry checks of section 3 (`source_metric_unsupported`,
+  `parameters_unsupported`) run the same for both, after `rightsStillHold`.
 
 ## 5. Security and privacy
 
@@ -244,6 +254,9 @@ or revision, the `e03` / `api` family, derived values (`gpexeImportMapper.js:180
   thresholds too (code LOW); A1's new refusals after `rightsStillHold` (security LOW); OD1 (with the owner's U15 /
   seniors question answered by the existing design) and OD4, marked pending owner (the *Rukovodilac*'s note of 19:29
   UTC).
+- **External round and the owner's decisions:** GO from the *Nezavisni revizor* and the *Rukovodilac* on `fedabc65` and
+  `d85160e0`; then OD1 and OD4 written as decided, with OD6's effect on A1's actors and the note on "80 % of Vmax"
+  (section 4.1); a narrow re-review of the delta by both.
 - **Narrow re-reviews of `e8060485..f8768e3a`:** `code-reviewer`, `db-reviewer`, `security-reviewer`, each READY WITH
   NON-BLOCKING NOTES, every earlier finding closed. Their LOW notes applied without a further review: the preview's size
   bound measures the uncompressed text (J11 R7); the 7g guard takes the owner team's lock itself and step 6 re-compares

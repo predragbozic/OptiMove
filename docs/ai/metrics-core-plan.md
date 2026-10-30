@@ -771,16 +771,41 @@ order covers is merged under it.
   - system or club zone mappings;
   - the preview's fields;
   - the shape of the operation of discovery D9.
+
+  All four are decided (OD2–OD5, 2026-10-30; J11 section 0.1, C107).
 - **Reviewers:** the full set by the matrix, and the external review.
 - **Red zone:** as phase 4, for every PR.
 
 - **7e, 7f and 7g, the contracts (J11, J12, J13):** `docs/ai/phase7e-aggregate-preview-contract.md`,
   `docs/ai/phase7f-extractor-registry-contract.md` and `docs/ai/phase7g-source-instance-end-contract.md`, proposed on
   2026-10-30 on the *Rukovodilac*'s order and reviewed in one ★★ round. 7e and 7f need no migration; 7g's migration
-  is written after v48 is merged. J12 proposes 7f before 7e; 7e-B also comes after 7d-B. The owner's five open
-  decisions (OD1–OD5, J11 section 0.1: team-relative zones, the preview's fields, the minimum count of athletes, bounds
-  on a system mapping, the shape of D9's operation) are written with the recommended options and marked pending owner;
-  none is built before the owner's yes.
+  is written after v48 is merged. The order 7f-B, then 7e-B (after 7d-B too), then 7g-B is the *Rukovodilac*'s
+  (R1 of J12, accepted at its GO). The owner decided OD1–OD7 on 2026-10-30 (J11 section 0.1 with the owner's words;
+  C107–C109 of the discovery document): fixed zone bounds now (OD1), the preview's fields (OD2), at least 3 athletes
+  for min and max (OD3), bounds on a system mapping (OD4), D9 for a platform admin only with the narrower reading
+  (OD5), a club's admin approving its club's mapping versions (OD6) and a club taking system variables into its own
+  set (OD7).
+- **The owner's guideline for canonical variables** (owner turn `bf4c6ce7`, 2026-10-30 21:59:39 UTC, in the
+  *Rukovodilac*'s chat; the executor checked it in the transcript): „Sistemske kanonske varijable su pre svega
+  zamisljene kao nesto sto klub moze vrlo brzo da koristi da mozda ih ubaci u svoje da ne mora da ih kreira ako mu
+  odgovaraju, ako ne odgovaraju on moze i da ih sakrije, ne trebaju mu na primer... To je sustina, svi ce oni napraviti
+  neki svoj skup core varijabli”.
+  - As the *Rukovodilac* reads it: the system variables are a starter kit, not a required shared registry. A club takes
+    one into its own set (a copy as a club variable) or hides it for the club; every club ends up with its own core
+    set. Dashboards and analyses of different clubs are not comparable by design, and no cross-club comparison is
+    built.
+  - A club's variable is named as the club likes and its admin chooses the field that fills it; its physical
+    definition (the unit, a zone's bound, an event's threshold) must still match what GPEXE computes for the team, or
+    the import refuses it fail-closed (ADR-007; the product rule beside OD1).
+- **7h ★★: a club's admin approves, disables and replaces its club's mapping versions** (OD6, C108). After 7g-B,
+  before phase 8. A migration: the T8 rules of `mapping_status` and `mapping_version_replaced` admit the `club_admin`
+  basis for a club mapping, with the v43 guards and `mayTransitionMappings`; A1 and A2 then also end and start
+  activations for a club's admin. System mappings, the source fields' unit and meaning, the unit conversions and D9
+  stay the platform admin's. Its contract (J14) is written on the *Rukovodilac*'s order.
+- **7i ★★: a club takes a system variable into its own set, or hides it** (OD7, C109). After 7h (the copied mappings
+  are the club's drafts, approved under OD6), before phase 8. A copy is a club variable with the system variable's
+  mappings as the club's draft versions; hiding is per club (likely a new table, so a migration). Its contract (J15) is
+  written on the *Rukovodilac*'s order.
 - **Reserved after 7g, before phase 9** (the *Rukovodilac*'s note of 2026-10-30, queued at 18:31:50 UTC; built only on
   its own order): a small pull request, "conditions 2 and 3 before the switch": a bounded lock wait before an
   approval's COMMIT (`lock_timeout` and `idle_in_transaction_session_timeout`, with a stable code), and the undo script
@@ -890,6 +915,12 @@ M6 follows phase 9. All of it is the owner's and outside the green zone, the sta
   - the production post-check.
 - **★★:** the owner approves the contract before any code and confirms the external review before the merge.
 - **Start:** after phase 9 is merged, with the contract approved by the owner (★★).
+- **A relative variable, the owner's example** (OD1, 2026-10-30, owner turn `396e7078`): „svaki klub kada napravi
+  kanonske varijable za svoj tim moze relativne da stavi to nije toliko ni bitno on ce da napise npr 80% od vmax i
+  preuzimace 80% od vmax npr slicno kao za fiksne stvari”. Not urgent; its shape is for the owner in this phase's
+  contract. A fact for that discovery: GPEXE's zone distances are absolute per team, and OptiMove stores no speed
+  samples (`BUNDLE_FIELDS.track` keeps the track's id, athlete, time zone and timestamps only), so the discovery must
+  first find where a value above an athlete's own Vmax can come from.
 
 ### Phase 12 ★: domains and categories of canonical variables, after phase 4 and before phase 6 (may run in parallel with phase 5)
 - **Owner, 2026-10-27** (in the *Rukovodilac*'s chat, owner turn `655fc5c6`, 14:11:48 UTC): „imam jedan mali

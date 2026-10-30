@@ -18,8 +18,8 @@ after 7f-B** (it reads values only through 7f's registry; J12, R1).
 | Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 11). |
 | Verified against commit | `6a94ce29` (merge of PR #294). Every file and line reference below is to that commit unless it names another. |
 | Migration | **None.** A read over existing rows; no table, column, trigger or audit row. |
-| **Pending owner** | **OD2** (the preview's fields, section 3), **OD3** (the minimum count of athletes, section 4) and **OD4** (a system mapping carrying zone or threshold bounds, section 6) — section 0.1. **Nothing of them is built before the owner's yes.** |
-| Decides | The *Rukovodilac*: R1–R7 (section 9). The owner: OD2, OD3, OD4. |
+| **Owner decisions** | **OD2** (the preview's fields, section 3), **OD3** (the minimum count of athletes, section 4) and **OD4** (a system mapping carrying zone or threshold bounds, section 6): **decided on 2026-10-30 as recommended** — section 0.1, with the owner's words. |
+| Decides | The *Rukovodilac*: R1–R7 (section 9). The owner: OD2, OD3, OD4 (decided). |
 
 ---
 
@@ -33,22 +33,32 @@ after 7f-B** (it reads values only through 7f's registry; J12, R1).
   admin in the platform workspace (a system mapping, any club's candidate) or in club X's workspace, and club X's
   active admin in its own workspace (a system mapping or club X's own, over club X's candidates). Everyone else gets
   the identical 404, decided **before** `snapshot_expired` is answered.
-- **Never** a raw answer, a row per athlete, an athlete id or name, or a value below the minimum count (pending owner).
+- **Never** a raw answer, a row per athlete, an athlete id or name, or a value below the minimum count (OD3).
 - **The values are the ones M4 would write:** the same session and athlete gates as today's mapper, the version's field
   through 7f's extractor, at the version's levels, converted by the version's own factors with D8's storage rule.
 
-## 0.1 The owner's five open decisions of phases 7e–7g (pending owner)
+## 0.1 The owner's decisions of phases 7e–7g (OD1–OD7, decided on 2026-10-30)
 
-The *Rukovodilac* put them to the owner on 2026-10-30 with these recommendations. Each is written into its contract
-with the recommended option and marked **pending owner**; none is implemented before the owner's yes.
+The *Rukovodilac* put OD1–OD5 to the owner on 2026-10-30 with its recommendations; OD6 and OD7 came from the owner's
+own remarks the same evening. The owner's words are in the *Rukovodilac*'s chat; the executor checked each turn in its
+transcript. Where the owner's words are short ("to smo rekli"), the reading is the *Rukovodilac*'s, as marked. They are
+also recorded as C107–C109 of the discovery document.
 
-| | Decision | Recommended | Where |
-|---|---|---|---|
-| **OD1** | Team-relative zones as a canonical variable of their own (bounds that follow each team's settings) | **Not now**: fixed bounds per mapping version; two teams with different zones (for example U15 and seniors) use two canonical variables, each team's binding activating the one that fits it, a mismatch refused fail-closed | J12 section 4.1 |
-| **OD2** | The preview's fields | Exactly: the count of athletes with a value, min, max, the units before and after, and `snapshot_expired`; nothing more | J11 section 3 |
-| **OD3** | The minimum count of athletes for min and max | **3** | J11 section 4 |
-| **OD4** | May a system mapping carry zone or threshold bounds | **Yes**: the bounds are not personal data; a team's own settings are shown only to that team's club and a platform admin | J11 section 6, J12 section 4.1 |
-| **OD5** | The shape of the operation that ends a held source instance (D9) | Only an active platform admin in the platform workspace, with a mandatory reason, refused while an open activation exists on that source's bindings | J13 sections 2–4 |
+| | Decision | Decided | The owner's words | Where |
+|---|---|---|---|---|
+| **OD1** | Team-relative zones as a canonical variable of their own (bounds that follow each team's settings) | **Not now, fixed bounds**: two teams with different zones (for example U15 and seniors) use two canonical variables, each team's binding activating the one that fits it, a mismatch refused fail-closed. A relative variable such as "80 % of Vmax" is a later derived variable (phase 11), not a zone mapping | „svaki klub kada napravi kanonske varijable za svoj tim moze relativne da stavi to nije toliko ni bitno on ce da napise npr 80% od vmax …” (turn `396e7078`, 22:06:19 UTC) | J12 section 4.1 |
+| **OD2** | The preview's fields | **As recommended**: the count of athletes with a value, min, max, the units before and after, and `snapshot_expired`; nothing more | „Sto se tice pregleda varijabli tokom povezivanja to je ok” (turn `347e2f96`, 21:57:20 UTC); „2. pregled smo odredili  kroz diskusiju” (turn `396e7078`) | J11 section 3 |
+| **OD3** | The minimum count of athletes for min and max | **3** | „3. moze” (turn `396e7078`) | J11 section 4 |
+| **OD4** | May a system mapping carry zone or threshold bounds | **Yes** (the *Rukovodilac*'s reading): the bounds are not personal data; a team's own settings are shown only to that team's club and a platform admin | „4. to smo rekli” (turn `396e7078`) | J11 section 6, J12 section 4.1 |
+| **OD5** | The shape of the operation that ends a held source instance (D9) | **As recommended, the narrower reading** (the *Rukovodilac*'s reading): only an active platform admin in the platform workspace, with a mandatory reason, refused while the owner team has an active binding of that source team or an open activation on one | „5. to smo vec rekli dole” (turn `396e7078`) | J13 sections 2–4 |
+| **OD6** | Who approves and disables a club's mapping versions | **The club's own admin** for its club's mappings (`needs_review → active`, disabling, replacing); system mappings, the source fields' unit and meaning, the unit conversions and D9 stay the platform admin's. A migration: phase 7h, its own contract (J14) | „Rekli smo da sam mogu da klupski admin da radi mapiranja, i da preuzima sistemske varijable” (turn `a73981ac`, 22:08:40 UTC); „znaci promeni u skladu sta sam hteo, ne vidim problem” (turn `88ad60ca`, 22:09:13 UTC) | plan, phase 7h |
+| **OD7** | A club takes a system variable into its own set | **Yes**: the club copies a system variable into its own set, or hides it for the club; the copy brings the system variable's mappings as the club's draft versions, approved by the club's admin (OD6). Phase 7i, its own contract (J15) | the same turns `a73981ac` and `88ad60ca`, and the owner's guideline of turn `bf4c6ce7` (21:59:39 UTC, C109) | plan, phase 7i |
+
+**The product rule beside OD1** (the *Rukovodilac*'s reading of turn `a73981ac`: „moje zone mogu da se zovu kako hocu, a
+da preuzimam u njih sta hocu”): a club variable's name and description are the club's choice, and which GPEXE field
+fills it is the club admin's mapping choice. What stays fixed is that its physical definition (the unit, a zone's
+bound, an event's threshold) matches what GPEXE computes for that team; otherwise the import refuses fail-closed
+(ADR-007, J12 section 4.1).
 
 ## 1. What exists (verified)
 
@@ -131,7 +141,7 @@ fixed bound (`octet_length(raw_bundle::text)`, R7; `pg_column_size` would measur
 with `409 candidate_too_large`, before the bundle leaves the database. The
 extraction and the aggregation (section 5) run in Node after the transaction has ended.
 
-## 3. The answer (OD2, pending owner)
+## 3. The answer (OD2, decided)
 
 ```
 { "preview": {
@@ -162,9 +172,9 @@ and after) and nothing more. Two options the owner may prefer instead, not built
 left out by each stable skip code (useful to explain a low count, it reveals no value), or the athletes the session
 has in total.
 
-## 4. The minimum count (OD3, pending owner)
+## 4. The minimum count (OD3, decided)
 
-`minimumAthletes` = **3** (recommended). With fewer athletes with a value, `min` and `max` (and their canonical forms)
+`minimumAthletes` = **3** (OD3, decided). With fewer athletes with a value, `min` and `max` (and their canonical forms)
 are `null` and only the count is answered, because a min or max of one or two athletes is a single athlete's value.
 The number is a constant of the service (`PREVIEW_MINIMUM_ATHLETES`), echoed in every answer; changing it is a code
 change.
@@ -193,11 +203,11 @@ exactly as the import will. A version whose bounds do not fit the team gives a c
   purged snapshot, is the identical 404 (section 2). A test per role and workspace pins it (section 8).
 - **No value of fewer than `minimumAthletes` athletes** leaves the server (OD3). Above it, min and max are still values
   of single athletes (with 3 athletes, two of the three values, unattributed); the number is a product guard, not an
-  authorization boundary. For the owner's decision: the same per-athlete values are already visible to the team's coach
+  authorization boundary. As recorded for OD3: the same per-athlete values are already visible to the team's coach
   and admins today (the source-athletes helper values and the stored candidate preview,
   `backend/src/gpexeImportPreview.js:146, 272, 308`).
-- **Zone and threshold bounds** (OD4, line 3850 of the discovery document; recommended: a system mapping may carry
-  them, and a team's own settings are shown only to that team's club and a platform admin; **pending owner**) are not
+- **Zone and threshold bounds** (OD4, decided: a system mapping may carry them, and a team's own settings are shown
+  only to that team's club and a platform admin) are not
   shown by the preview at all: the answer carries no bound, only counts and values in the field's unit. So OD4 does
   not change 7e; it is the phase 8 screen's question.
 - **No coach** gets the preview: the audience is the mapping admins (R1), narrower than today's candidate reads.
@@ -268,3 +278,7 @@ GPEXE answer, a preview of several candidates at once.
   the owner (J13); `.gitattributes` for v49's runbook SQL (J13); the C97 blocks drop the read-only wrapper (the editor
   may show only the last statement), cast safely, count every whole-session row per athlete, and say they approximate
   the mapper's gates.
+- **External round (heads `fedabc65`, `d85160e0`):** the *Nezavisni revizor* and the *Rukovodilac*, GO with
+  non-blocking notes, then a narrow re-GO of the notes applied (J13 and the C97 procedure).
+- **The owner's decisions (this head):** OD1–OD7 written as decided, with the owner's words (section 0.1); a narrow
+  re-review of the delta by both.
