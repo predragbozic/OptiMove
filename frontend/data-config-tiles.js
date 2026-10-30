@@ -4,9 +4,11 @@
 // a soft one with its own icon (the neutral dashed circle without, never an
 // icon of the library), a source field a
 // neutral tile with an icon for its kind of value. A club's domain or category
-// takes the club colour, as Home does for club things. Decoration only: the
-// name and the badges beside it carry the meaning.
-import { renderIconSvg } from "./icon-render.js";
+// takes the club colour, as Home does for club things, and shows its own icon
+// when it has one (V4, J6.1), else the kind's own symbol; the tile's shape
+// still says domain or category. Decoration only: the name and the badges
+// beside it carry the meaning.
+import { isLibraryKey, renderIconSvg } from "./icon-render.js";
 
 const sized = (size) => (size ? ` dc-tile-${size}` : "");
 
@@ -17,7 +19,8 @@ export function variableTileHtml(item, { size = "" } = {}) {
 export function nodeTileHtml(kind, node, { size = "" } = {}) {
   const domain = kind === "domain";
   const club = node?.ownerScope === "club" ? " is-club" : "";
-  return `<span class="dc-tile ${domain ? "dc-tile-domain" : "dc-tile-category"}${club}${sized(size)}" aria-hidden="true">${renderIconSvg(domain ? "stack" : "folder")}</span>`;
+  const icon = isLibraryKey(node?.icon) ? node.icon : domain ? "stack" : "folder";
+  return `<span class="dc-tile ${domain ? "dc-tile-domain" : "dc-tile-category"}${club}${sized(size)}" aria-hidden="true">${renderIconSvg(icon)}</span>`;
 }
 
 // A source field's kind of value: a zone, a count of events, or by its unit a

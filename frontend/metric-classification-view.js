@@ -6,6 +6,7 @@ import {
 } from "./metric-classification-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import { HOME_BACK, nodeTileHtml, variableTileHtml } from "./data-config-tiles.js";
+import { iconPickerOpenFor } from "./icon-picker.js";
 import { dragOffered, dropBlocked, dropNeedsAsk, dropTargets } from "./metric-classification-drag.js";
 
 const cut = (node) => `${escapeHtml(node?.name || "")}${node?.truncated ? "…" : ""}`;
@@ -50,7 +51,7 @@ export function renderFilterHtml(s) {
 export function renderFilterNoteHtml(s, ctx) {
   if (!s.filter) return "";
   const node = findNode(s.classification.tree, s.filter.kind, s.filter.id);
-  const name = node ? escapeHtml(node.name || "") : `this ${nounOf(s.filter.kind)}`;
+  const name = node ? `<span class="dc-inline">${nodeTileHtml(s.filter.kind, node, { size: "sm" })}<span>${escapeHtml(node.name || "")}</span></span>` : `this ${nounOf(s.filter.kind)}`;
   const how = s.filter.kind === "domain" ? `in the domain ${name}, directly or through one of its categories` : `in the category ${name}`;
   const what = ctx.owner !== "club" ? `Showing the variables ${how}.`
     : s.scope === "system" ? `Showing the system variables ${how}.`
@@ -259,6 +260,7 @@ function renderCategoriesListHtml(tree, t, ctx, canCreate, targets = null) {
 // ---------------------------------------------------------------------------
 const NODE_ACTIONS = [
   ["rename", "metric-classification-rename-open", "Rename"],
+  ["icon", "metric-classification-icon-change-open", "Change icon"],
   ["archive", "metric-classification-archive-open", "Archive"],
   ["restore", "metric-classification-restore-open", "Restore"],
 ];
@@ -361,10 +363,10 @@ export function renderVariableClassificationHtml(item, ctx, classification) {
       ${rows.length || via.length ? `<ul class="metric-classification-links">
         ${rows.map(({ entry, kind, label, removable }) => `
           <li>
-            <span><span class="muted">${label}:</span> ${escapeHtml(entry.name || "")} ${nodeBadges(entry)}</span>
+            <span class="dc-inline">${nodeTileHtml(kind, entry, { size: "sm" })}<span><span class="muted">${label}:</span> ${escapeHtml(entry.name || "")} ${nodeBadges(entry)}</span></span>
             ${removable ? `<button class="plain-button ghost compact-button" type="button" data-action="metric-classification-link-remove-open" data-link-id="${escapeAttr(entry.linkId)}" data-variable-id="${escapeAttr(item.id)}" aria-label="${escapeAttr(`Remove from ${entry.name || `the ${kind}`}`)}">Remove</button>` : ""}
           </li>`).join("")}
-        ${via.map((entry) => `<li><span><span class="muted">Domain:</span> ${escapeHtml(entry.name || "")} ${nodeBadges(entry)} <span class="muted">(through ${escapeHtml(categoryName(entry.viaCategoryId))})</span></span></li>`).join("")}
+        ${via.map((entry) => `<li><span class="dc-inline">${nodeTileHtml("domain", entry, { size: "sm" })}<span><span class="muted">Domain:</span> ${escapeHtml(entry.name || "")} ${nodeBadges(entry)} <span class="muted">(through ${escapeHtml(categoryName(entry.viaCategoryId))})</span></span></span></li>`).join("")}
       </ul>` : `<p class="muted">In no domain or category yet.</p>`}
       ${c.truncated ? `<p class="muted">Only the first 500 links are shown.</p>` : ""}
       ${canAdd("category") || canAdd("domain") ? `<div class="metric-classification-add">
@@ -427,6 +429,28 @@ function actionsHtml(form, submitLabel, busyLabel) {
 }
 const optionOf = (node, ctx) => ({ value: node.id, label: `${node.name || ""}${node.ownerScope === "system" && ctx.owner === "club" ? " (system)" : ""}` });
 
+// The icon of a new domain or category, or of one being changed (V4, J6.1):
+// chosen in the shared picker, sent as iconKey. Without one, the tile keeps the
+// kind's own symbol.
+function iconFieldHtml(form, ctx) {
+  const locked = form.busy || form.unconfirmed;
+  const key = form.draft.iconKey;
+  const change = form.mode === "node-icon";
+  const saved = change ? form.expectedIconKey : null;
+  const savedText = !change || (key || null) === saved ? "" : saved ? `Saved now: ${escapeHtml(saved)}.` : "Saved now: no icon.";
+  const owner = change ? form.ownerScope : ctx.owner === "system" ? "system" : "club";
+  return `
+    <fieldset class="metric-variables-fieldset"><legend>Icon${change ? "" : ` <span class="muted">(optional)</span>`}</legend>
+      <div class="dc-icon-choice">
+        ${nodeTileHtml(form.kind, { icon: key, ownerScope: owner }, { size: "lg" })}
+        <span class="dc-icon-choice-text" id="mc-icon-choice">${key ? `Chosen: <strong>${escapeHtml(key)}</strong>` : "No icon"}${savedText ? ` <span class="muted dc-icon-choice-saved">${savedText}</span>` : ""}</span>
+        <button class="plain-button" type="button" data-action="metric-classification-icon-open" aria-describedby="mc-icon-choice mc-hint-iconKey" ${locked ? "disabled" : ""}>${key ? "Change icon" : "Choose icon"}</button>
+        ${key ? `<button class="plain-button ghost" type="button" data-action="metric-classification-icon-clear" ${locked ? "disabled" : ""}>Remove icon</button>` : ""}
+      </div>
+      <span class="muted" id="mc-hint-iconKey">Shown beside the ${nounOf(form.kind)} in lists.${change ? "" : " You can change it later."}</span>
+    </fieldset>`;
+}
+
 export function renderClassificationFormHtml(s, ctx) {
   const form = s.form;
   const tree = s.classification.tree;
@@ -439,6 +463,7 @@ export function renderClassificationFormHtml(s, ctx) {
     body = `
       ${textInput(form, "name", "Name", { max: CLASS_LIMITS.name, required: true, hint: form.kind === "domain" ? "For example Endurance or Speed." : "For example Aerobic capacity." })}
       ${textInput(form, "description", "Description", { max: CLASS_LIMITS.description })}
+      ${iconFieldHtml(form, ctx)}
       <details class="data-sources-tech" ${form.errors.key || String(form.draft.key ?? "").trim() ? "open" : ""}><summary>Technical details</summary>
         ${textInput(form, "key", "Custom key", { max: CLASS_LIMITS.key, token: true, hint: "Leave empty to use a key made from the name. It cannot be changed later." })}
       </details>
@@ -452,6 +477,12 @@ export function renderClassificationFormHtml(s, ctx) {
       ${textInput(form, "name", "Name", { max: CLASS_LIMITS.name, required: true })}
       ${textInput(form, "description", "Description", { max: CLASS_LIMITS.description, hint: "Leave it empty to remove it." })}`;
     submit = ["Save changes", "Saving..."];
+  } else if (form.mode === "node-icon") {
+    title = `Change the icon of ${escapeHtml(form.nodeName)}`;
+    body = `
+      <p class="muted">Only the icon changes. The name, the key, its links and its variables stay as they are.</p>
+      ${iconFieldHtml(form, ctx)}`;
+    submit = ["Save icon", "Saving..."];
   } else if (form.mode === "node-archive") {
     title = `Archive ${escapeHtml(form.nodeName)}`;
     body = `
@@ -495,9 +526,10 @@ export function renderClassificationFormHtml(s, ctx) {
     submit = [form.shape === "variable-category" ? "Remove from the category" : "Remove from the domain", "Removing..."];
   }
   // Only a form with a text field asks to keep personal data out of it.
-  const hasText = !["category-place", "variable-link"].includes(form.mode);
+  const hasText = !["category-place", "variable-link", "node-icon"].includes(form.mode);
+  // The form is inert behind the open icon picker (it is modal).
   return `
-    <form class="data-sources-form metric-variables-form metric-classification-form" data-metric-variables-form="${form.mode}" novalidate autocomplete="off">
+    <form class="data-sources-form metric-variables-form metric-classification-form" data-metric-variables-form="${form.mode}" novalidate autocomplete="off"${iconPickerOpenFor("metric-variables") ? " inert" : ""}>
       <h2 id="metric-variables-title">${title}</h2>
       ${hasText ? `<p class="muted">Do not enter athlete names, ids, dates of birth or measured values.</p>` : ""}
       ${body}

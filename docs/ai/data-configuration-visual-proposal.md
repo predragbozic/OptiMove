@@ -123,7 +123,7 @@ The order is approved: step 1, then step 2. Nothing else is approved yet (plan, 
 - The evidence badges get the four colours of the legend: Not proven grey, Documented blue, Observed amber, Verified
   green. Colour is never the only carrier: every badge keeps its word (the *Rukovodilac*'s LOW-2).
 
-### 3.6 Domains and categories of variables (V4; now since C105, PR-1c, migration v45)
+### 3.6 Domains and categories of variables (V4; now since C105, PR-1c, migration v46)
 - An icon on a domain or a category needs a migration: one nullable column per table, with the same value rule and
   v41's guards widened (a canonical row's icon change audited as its rename is).
 - **Proposed column name: `icon_url`, holding `icon:<key>`**, the name every other table uses. One renderer and one
@@ -264,7 +264,7 @@ owner's own words. The executor checked the turn in the *Rukovodilac*'s transcri
   Recommended: **later**; the filled and outlined tiles separate them in the meantime. **Changed to now on 2026-10-30
   (C105):** the owner's words „Oboje uradi, da ne ostavljamo za kasnije, to ce nas optereceivati” (owner turn
   `26cd9d0e`, 10:18:24 UTC, in the *Rukovodilac*'s chat), the answer to the icon change of an existing variable (I1,
-  PR-1b, v44) and to V4 (PR-1c, v45; J6.1 of the discovery document).
+  PR-1b, v45) and to V4 (PR-1c, v46; J6.1 of the discovery document).
 - **V5 — own icons (step 2), PNG only first:** yes, or PNG and SVG together. Recommended: **PNG first**.
 
 **For the *Rukovodilac* (inside the plan) — decided on 2026-10-28, as proposed:**

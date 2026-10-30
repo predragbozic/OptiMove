@@ -10,7 +10,7 @@ import { isLibraryKey } from "./icon-render.js";
 import { isClassificationMode } from "./metric-classification-data.js";
 import { discardDrop, dropLeaveQuestion, dropNeedsAsk, ensureTray } from "./metric-classification-drag.js";
 import {
-  afterUncheckedClose, ensureClassification, handleClassificationAction, handleClassificationInput, loadClassification, sendClassification,
+  afterUncheckedClose, applyClassificationIcon, ensureClassification, handleClassificationAction, handleClassificationInput, loadClassification, sendClassification,
   submitClassificationForm, toTitle,
 } from "./metric-classification-actions.js";
 import {
@@ -148,6 +148,7 @@ const DISCARD_QUESTION = {
   "node-rename": "Discard the new name you have not saved?",
   "node-archive": "Discard the archive you have not confirmed?",
   "node-restore": "Discard the restore you have not confirmed?",
+  "node-icon": "Discard the icon you have not saved?",
   "category-place": "Discard the placement you have not saved?",
   "variable-link": "Discard the link you have not saved?",
   "link-remove": "Discard the removal you have not confirmed?",
@@ -345,9 +346,15 @@ function openIconChoice(form, render) {
 }
 
 // The picker's choice lands in the open create or icon form only (never one
-// that was sent: its body is fixed until its result is known).
+// that was sent: its body is fixed until its result is known), a variable's or
+// a domain's or category's.
 function applyIcon(key) {
   const form = variablesState().form;
+  // A domain's or a category's form (V4) takes the choice there.
+  if (isClassificationMode(form?.mode)) {
+    applyClassificationIcon(key);
+    return;
+  }
   if (!ICON_FORMS.has(form?.mode) || form.busy || form.unconfirmed) return;
   const next = key && isLibraryKey(key) ? key : "";
   if (next === form.draft.iconKey) return;

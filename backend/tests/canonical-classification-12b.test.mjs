@@ -570,11 +570,11 @@ test("3. C1, the read: the platform workspace reads the system's domains and cat
   const a = await tree(W.caA);
   const sysInA = a.domains.find((x) => x.id === sys.id);
   assert.deepEqual(sysInA, {
-    id: sys.id, key: sys.key, name: sys.name, description: "The system's domain", ownerScope: "system", state: "active",
+    id: sys.id, key: sys.key, name: sys.name, description: "The system's domain", icon: null, ownerScope: "system", state: "active",
     editable: false, actions: [], namesToken: tokenOf(sys.name, "The system's domain", true), truncated: false,
   });
   const ownInA = a.categories.find((x) => x.id === own.id);
-  assert.deepEqual([ownInA.editable, ownInA.actions, ownInA.ownerScope, ownInA.namesToken], [true, ["rename", "archive"], "club", tokenOf(own.name, null, true)]);
+  assert.deepEqual([ownInA.editable, ownInA.actions, ownInA.ownerScope, ownInA.namesToken], [true, ["rename", "archive", "icon"], "club", tokenOf(own.name, null, true)]);
   assert.ok(!a.categories.some((x) => x.id === other.id), "never another club's");
   assert.deepEqual(a.categoryDomains.filter((x) => x.id === placed.id), [{ id: placed.id, variableId: null, categoryId: own.id, domainId: sys.id, ownerScope: "club", editable: true, actions: ["remove"] }]);
   assert.ok(a.categoryDomains.every((x) => x.variableId === null), "only category -> domain links");
@@ -596,7 +596,7 @@ test("3. C1, the read: the platform workspace reads the system's domains and cat
 test("4. C2, a create: the key suggested from the name or given (M3-0's rule), unique per owner and kind (409 key_taken), free across owners; the text rule on the name (80) and description (500); the body never names an owner, actor or basis; the change row (the database's) and the request row (basis derived) carry what was written", async () => {
   const tag = uid();
   const d = await domainOf(W.caA, { name: `High speed ${tag}` });
-  assert.deepEqual([d.key, d.name, d.description, d.state, d.ownerScope, d.editable, d.actions], [`high_speed_${tag}`, `High speed ${tag}`, null, "active", "club", true, ["rename", "archive"]]);
+  assert.deepEqual([d.key, d.name, d.description, d.state, d.ownerScope, d.editable, d.actions], [`high_speed_${tag}`, `High speed ${tag}`, null, "active", "club", true, ["rename", "archive", "icon"]]);
   const given = await categoryOf(W.caA, { name: "Endurance", key: `endurance_${tag}`, description: "Aerobic work" });
   assert.deepEqual([given.key, given.description], [`endurance_${tag}`, "Aerobic work"]);
   // Unique per owner and kind; the same key is free in the other kind, another club and the system.

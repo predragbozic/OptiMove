@@ -17,7 +17,8 @@
 // removed link's row FOR UPDATE; then the rights FOR SHARE (rightsStillHold:
 // user, club). The v41 guards lock the same targets again, already held.
 import { adminWriteKit, SourceMetricMappingError, TEXT_LIMITS } from "./sourceMetricMappingService.js";
-import { KEY_RULE, suggestVariableKey } from "./canonicalVariableAdminService.js";
+import { ICON_PREFIX, KEY_RULE, iconOut, suggestVariableKey } from "./canonicalVariableAdminService.js";
+import { isIconKey } from "./iconKeys.js";
 
 const {
   runWrite, boundedRead, rightsStillHold, refusal, NOT_FOUND, MESSAGES, plainObject, uuidField, boundedText, boundedOut,
@@ -54,6 +55,9 @@ const TEXT = {
   category_has_domain: "The category already sits under a domain; remove that link first.",
   link_exists: "This link already exists.",
   link_shape: "A link names exactly two of variableId, categoryId and domainId.",
+  invalid_icon: "iconKey is a key of the icon library.",
+  icon_node_changed: "Another icon was saved since it was read; read it again.",
+  icon_unchanged: "The domain or category already has this icon.",
 };
 
 const isCoachView = (ctx) => ctx.view === "coach";
@@ -84,10 +88,10 @@ const namesTokenOf = (row) => hashOf([row.name, row.description ?? null, row.is_
 // ---------------------------------------------------------------------------
 // Output
 // ---------------------------------------------------------------------------
-const NODE_COLUMNS = "n.id, n.key, n.name, n.description, n.owner_scope, n.owner_club_id, n.is_active, n.created_at, n.updated_at";
+const NODE_COLUMNS = "n.id, n.key, n.name, n.description, n.icon_url, n.owner_scope, n.owner_club_id, n.is_active, n.created_at, n.updated_at";
 function actionsOf(row, ctx, editable) {
   if (!editable || isCoachView(ctx)) return [];
-  return row.is_active ? ["rename", "archive"] : ["restore"];
+  return row.is_active ? ["rename", "archive", "icon"] : ["restore"];
 }
 function nodeOut(row, ctx) {
   const editable = isOwn(row, ctx) && !isCoachView(ctx);
@@ -95,7 +99,7 @@ function nodeOut(row, ctx) {
   const name = boundedOut(row.name, NAME_MAX);
   const description = boundedOut(row.description ?? null, DESCRIPTION_MAX);
   return {
-    id: row.id, key: key.text, name: name.text, description: description.text, ownerScope: row.owner_scope,
+    id: row.id, key: key.text, name: name.text, description: description.text, icon: iconOut(row.icon_url), ownerScope: row.owner_scope,
     state: row.is_active ? "active" : "archived", editable, actions: actionsOf(row, ctx, editable),
     namesToken: namesTokenOf(row), truncated: key.cut || name.cut || description.cut,
   };
@@ -155,8 +159,8 @@ export async function variableClassification(client, ctx, variableId) {
   const linkReadable = readableSql(ctx, "l", params);
   const rows = (await client.query(
     `select l.id as link_id, l.category_id, l.domain_id,
-            c.key as c_key, c.name as c_name, c.is_active as c_active, c.owner_scope as c_owner,
-            d.key as d_key, d.name as d_name, d.is_active as d_active, d.owner_scope as d_owner
+            c.key as c_key, c.name as c_name, c.is_active as c_active, c.owner_scope as c_owner, c.icon_url as c_icon,
+            d.key as d_key, d.name as d_name, d.is_active as d_active, d.owner_scope as d_owner, d.icon_url as d_icon
        from training_load.metric_structure_links l
        left join training_load.metric_categories c on c.id = l.category_id
        left join training_load.metric_domains d on d.id = l.domain_id
@@ -173,25 +177,27 @@ export async function variableClassification(client, ctx, variableId) {
     const viaParams = [categoryIds];
     const viaReadable = readableSql(ctx, "l", viaParams);
     via = (await client.query(
-      `select l.category_id, l.domain_id, d.key as d_key, d.name as d_name, d.is_active as d_active, d.owner_scope as d_owner
+      `select l.category_id, l.domain_id, d.key as d_key, d.name as d_name, d.is_active as d_active, d.owner_scope as d_owner,
+              d.icon_url as d_icon
          from training_load.metric_structure_links l
          join training_load.metric_domains d on d.id = l.domain_id
         where l.category_id = any($1::uuid[]) and l.metric_definition_id is null and l.domain_id is not null and ${viaReadable}`,
       viaParams,
     )).rows;
   }
-  const named = (key, name) => ({ key: boundedOut(key, TEXT_LIMITS.key).text, name: boundedOut(name, NAME_MAX).text });
+  // V4 (J6.1): each named node carries its icon, read as a node's own (iconOut).
+  const named = (key, name, icon) => ({ key: boundedOut(key, TEXT_LIMITS.key).text, name: boundedOut(name, NAME_MAX).text, icon: iconOut(icon) });
   return {
     categories: rows.filter((r) => r.category_id).map((r) => ({
-      linkId: r.link_id, id: r.category_id, ...named(r.c_key, r.c_name), state: r.c_active ? "active" : "archived", ownerScope: r.c_owner,
+      linkId: r.link_id, id: r.category_id, ...named(r.c_key, r.c_name, r.c_icon), state: r.c_active ? "active" : "archived", ownerScope: r.c_owner,
     })),
     domains: [
       ...rows.filter((r) => r.domain_id).map((r) => ({
-        linkId: r.link_id, id: r.domain_id, ...named(r.d_key, r.d_name), state: r.d_active ? "active" : "archived", ownerScope: r.d_owner,
+        linkId: r.link_id, id: r.domain_id, ...named(r.d_key, r.d_name, r.d_icon), state: r.d_active ? "active" : "archived", ownerScope: r.d_owner,
         viaCategoryId: null,
       })),
       ...via.map((r) => ({
-        linkId: null, id: r.domain_id, ...named(r.d_key, r.d_name), state: r.d_active ? "active" : "archived", ownerScope: r.d_owner,
+        linkId: null, id: r.domain_id, ...named(r.d_key, r.d_name, r.d_icon), state: r.d_active ? "active" : "archived", ownerScope: r.d_owner,
         viaCategoryId: r.category_id,
       })),
     ],
@@ -341,10 +347,12 @@ function idOrNotFound(raw) {
 export async function createNode({ ctx, kind: rawKind, body }) {
   adminOnly(ctx);
   const kind = kindOf(rawKind);
-  plainObject(body, ["requestKey", "name", "description", "key"], ["requestKey", "name"]);
+  plainObject(body, ["requestKey", "name", "description", "key", "iconKey"], ["requestKey", "name"]);
   const requestKey = uuidField(body.requestKey);
   const name = textField(body, "name", NAME_MAX, TEXT.invalid_name, { nullable: false });
   const description = textField(body, "description", DESCRIPTION_MAX, TEXT.invalid_description, { nullable: true }) ?? null;
+  // V4 (J6.1): an optional icon of the library; null or absent for none.
+  const iconKey = iconKeyField(body.iconKey, { optional: true });
   let key;
   if (Object.hasOwn(body, "key")) {
     if (typeof body.key !== "string" || !KEY_RULE.test(body.key)) throw invalidBody(TEXT.invalid_key);
@@ -354,16 +362,17 @@ export async function createNode({ ctx, kind: rawKind, body }) {
     if (key === null) throw refusal(400, "key_required", TEXT.key_required);
   }
   const operation = `${kind}_create`;
-  const requestHash = hashOf({ contract: CONTRACT, operation, owner: ownerKeyOf(ctx), body: { name, description, key } });
+  // A body without an icon hashes as before v46, so an older create still replays.
+  const requestHash = hashOf({ contract: CONTRACT, operation, owner: ownerKeyOf(ctx), body: { name, description, key, ...(iconKey === null ? {} : { iconKey }) } });
   return write({
     ctx, operation, requestKey, requestHash,
     body: async (client) => {
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       await textsAgree(client, [[name, NAME_MAX, TEXT.invalid_name], [description, DESCRIPTION_MAX, TEXT.invalid_description]]);
       const id = (await client.query(
-        `insert into ${KINDS[kind].table} (name, description, key, owner_scope, owner_club_id, created_by_user_id)
-         values ($1, $2, $3, $4, $5, $6) returning id`,
-        [name, description, key, ctx.owner.scope, ctx.owner.clubId, ctx.userId],
+        `insert into ${KINDS[kind].table} (name, description, key, icon_url, owner_scope, owner_club_id, created_by_user_id)
+         values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+        [name, description, key, iconKey === null ? null : `${ICON_PREFIX}${iconKey}`, ctx.owner.scope, ctx.owner.clubId, ctx.userId],
       )).rows[0].id;
       await insertRequest(client, { ctx, requestKey, requestHash, operation, changeId: await changeIdOf(client, KINDS[kind].column, id) });
       return { operation, object_kind: kind, [KINDS[kind].column]: id, owner_scope: ctx.owner.scope, owner_club_id: ctx.owner.clubId };
@@ -482,6 +491,40 @@ export async function restoreNode({ ctx, kind: rawKind, nodeId, body }) {
     check: (row) => { if (row.is_active) throw refusal(409, "node_active", TEXT.node_active); },
     texts: () => [],
     update: () => ({ sql: "is_active = true", values: [] }),
+  });
+}
+
+// An icon key of the body: a key of the library or null (absent counts as null
+// only where it is optional).
+function iconKeyField(value, { optional = false } = {}) {
+  if (value === null || (optional && value === undefined)) return null;
+  if (!isIconKey(value)) throw invalidBody(TEXT.invalid_icon);
+  return value;
+}
+
+// V4 (J6.1): POST /classification/{domains|categories}/:id/icon - a new icon of
+// the library, or none, for an active node; expectedIconKey is the icon the
+// caller saw.
+export async function changeNodeIcon({ ctx, kind: rawKind, nodeId, body }) {
+  adminOnly(ctx);
+  const kind = kindOf(rawKind);
+  const id = idOrNotFound(nodeId);
+  plainObject(body, ["requestKey", "expectedIconKey", "iconKey"], ["requestKey", "expectedIconKey", "iconKey"]);
+  const requestKey = uuidField(body.requestKey);
+  const expectedIconKey = iconKeyField(body.expectedIconKey);
+  const iconKey = iconKeyField(body.iconKey);
+  const operation = `${kind}_icon`;
+  const requestHash = hashOf({ contract: CONTRACT, operation, id, body: { expectedIconKey, iconKey } });
+  const stored = iconKey === null ? null : `${ICON_PREFIX}${iconKey}`;
+  return changeNode({
+    ctx, kind, id, operation, requestKey, requestHash, reason: null,
+    check: (row) => {
+      if (!row.is_active) throw refusal(409, "node_not_active", TEXT.node_not_active);
+      if (iconOut(row.icon_url) !== expectedIconKey) throw refusal(409, "node_changed", TEXT.icon_node_changed, { current: nodeOut(row, ctx) });
+      if ((row.icon_url ?? null) === stored) throw refusal(409, "icon_unchanged", TEXT.icon_unchanged);
+    },
+    texts: () => [],
+    update: () => ({ sql: "icon_url = $2", values: [stored] }),
   });
 }
 
