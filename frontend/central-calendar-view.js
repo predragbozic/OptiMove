@@ -325,9 +325,29 @@ function renderFiltersHtml(cal, counts, teams) {
   return `<div class="cc-filters">${groups}${types}</div>`;
 }
 
+// The view and week-layout switches are icon buttons (owner, 2026-10-30) in
+// the app's own icon-tab pattern - TRAINING_LOAD_TAB_ICONS
+// (training-load-view.js) and TESTS_TAB_ICONS (tests-view.js): 24 x 24
+// strokes in the text colour, local path data, the name in aria-label and
+// title. Time grid is the icon library's clock and Day its calendar-event
+// square (icon-library.js); Month, Week and List are drawn on the same
+// calendar frame so the three views read as one family.
+const CALENDAR_FRAME = `<rect x="4" y="5" width="16" height="16" rx="2"></rect><path d="M16 3v4"></path><path d="M8 3v4"></path><path d="M4 11h16"></path>`;
+export const CENTRAL_CALENDAR_SWITCH_ICONS = Object.freeze({
+  month: `${CALENDAR_FRAME}<path d="M4 16h16"></path><path d="M9.33 11v10"></path><path d="M14.67 11v10"></path>`,
+  week: `${CALENDAR_FRAME}<rect x="5" y="14" width="14" height="3.5" rx="1"></rect>`,
+  day: `${CALENDAR_FRAME}<rect x="8" y="14" width="4" height="4" rx="1"></rect>`,
+  list: `<path d="M9 6h11"></path><path d="M9 12h11"></path><path d="M9 18h11"></path><path d="M5 6h.01"></path><path d="M5 12h.01"></path><path d="M5 18h.01"></path>`,
+  grid: `<circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 3"></path>`,
+});
+
+function renderSwitchIcon(value) {
+  return `<svg class="cc-switch-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${CENTRAL_CALENDAR_SWITCH_ICONS[value] || ""}</svg>`;
+}
+
 function renderToolbarHtml(cal, layout) {
   const unit = cal.view === "month" ? "month" : cal.view === "day" ? "day" : "week";
-  const segment = (value, label, action, attr, current) => `<button type="button" class="cc-segment${current === value ? " is-active" : ""}" data-action="${action}" ${attr}="${value}" aria-pressed="${current === value ? "true" : "false"}">${label}</button>`;
+  const segment = (value, label, action, attr, current) => `<button type="button" class="cc-segment${current === value ? " is-active" : ""}" data-action="${action}" ${attr}="${value}" aria-pressed="${current === value ? "true" : "false"}" aria-label="${label}" title="${label}">${renderSwitchIcon(value)}</button>`;
   const modeSwitch = layout === "wide" && cal.view === "week"
     ? `<div class="cc-segmented cc-mode-switch" role="group" aria-label="Week layout">
           ${segment("list", "List", "central-calendar-mode", "data-mode", cal.weekMode || "list")}

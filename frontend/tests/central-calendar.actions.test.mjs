@@ -492,6 +492,55 @@ test("6f. a repaint keeps the chip rows' sideways scroll and the focused control
   restoreCentralCalendarView(after, null);
 });
 
+test("6g. the view and week-layout switches are icon buttons named by aria-label and title, the chosen one pressed, and each one works", async () => {
+  installFetchMock(okResponder());
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-mode", mode: "list" });
+  let doc = dom();
+  const named = (selector) => [...doc.querySelectorAll(`${selector} .cc-segment`)];
+  const views = named(".cc-view-switch");
+  assert.deepEqual(views.map((b) => b.getAttribute("aria-label")), ["Month", "Week", "Day"]);
+  assert.deepEqual(named(".cc-mode-switch").map((b) => b.getAttribute("aria-label")), ["List", "Time grid"]);
+  for (const button of [...views, ...named(".cc-mode-switch")]) {
+    assert.equal(button.getAttribute("title"), button.getAttribute("aria-label"), "the name is also the tooltip");
+    assert.equal(button.textContent.trim(), "", "an icon button, no visible text");
+    const icon = button.querySelector("svg.cc-switch-icon");
+    assert.ok(icon && icon.getAttribute("aria-hidden") === "true", "the icon is decoration; the button carries the name");
+    assert.ok(icon.innerHTML.length > 0, "every switch draws its icon");
+  }
+  // Exactly the chosen one is pressed and active, in both groups.
+  const pressed = (buttons) => buttons.filter((b) => b.getAttribute("aria-pressed") === "true").map((b) => b.getAttribute("aria-label"));
+  assert.deepEqual(pressed(views), ["Week"]);
+  assert.deepEqual(views.filter((b) => b.classList.contains("is-active")).map((b) => b.getAttribute("aria-label")), ["Week"]);
+  assert.deepEqual(pressed(named(".cc-mode-switch")), ["List"]);
+  // Each switch, clicked by what it carries, does what its name says.
+  const click = async (label) => {
+    const button = [...doc.querySelectorAll(".cc-segment")].find((b) => b.getAttribute("aria-label") === label);
+    await act({ ...button.dataset });
+    doc = dom();
+  };
+  await click("Time grid");
+  assert.equal(state.centralCalendar.weekMode, "grid");
+  assert.ok(doc.querySelector(".cc-timegrid"));
+  assert.deepEqual(pressed(named(".cc-mode-switch")), ["Time grid"]);
+  await click("List");
+  assert.equal(state.centralCalendar.weekMode, "list");
+  await click("Month");
+  assert.equal(state.centralCalendar.view, "month");
+  assert.deepEqual(pressed(named(".cc-view-switch")), ["Month"]);
+  assert.equal(doc.querySelector(".cc-mode-switch"), null, "the week layout switch belongs to the week");
+  await click("Day");
+  assert.equal(state.centralCalendar.view, "day");
+  await click("Week");
+  assert.equal(state.centralCalendar.view, "week");
+  // The active state is the app's icon-tab one (the surface, the text colour), never the accent fill.
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const activeRule = css.match(/\n\.cc-segment\.is-active \{([^}]*)\}/)?.[1] || "";
+  assert.match(activeRule, /background: var\(--surface\);/);
+  assert.match(activeRule, /color: var\(--text\);/);
+  assert.doesNotMatch(activeRule, /--accent/);
+});
+
 test("6d. a phone's week is the seven-day strip over the selected day's list; its month cells select a day", async () => {
   installFetchMock(okResponder());
   layout = "phone";
