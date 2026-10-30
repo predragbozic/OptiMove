@@ -2925,6 +2925,78 @@ action buttons sit in a grid of columns at least 140 px wide, and the form's but
 
 The record is in the pull request. Not checked on a physical device.
 
+#### J3b.11 Changing a variable's icon — I1, "PR-1b" (discovery, 2026-10-30; proposed, not built)
+
+The *Rukovodilac*'s order of 2026-10-30, after the owner's words in its chat („ja sada nemam mogucnost da menjam
+ikonicu u varijabli kada kreiram i sl”); the option I1 of `docs/ai/data-configuration-visual-proposal.md` section 3.4
+(V3), accepted with V1–V5. Verified against `5a4c480`.
+
+**What exists:**
+- A variable's icon is `training_load.metric_definitions.icon_url` (v10). M3-0's create stores `icon:<key>` for an
+  `iconKey` of the library (`backend/src/iconKeys.js`); a read returns `icon` only for a library key (`iconOut`), any
+  other stored value as `null`. No route changes it after the create, and the older catalog refuses a canonical
+  variable (C98).
+- v38's change record `training_load.metric_variable_changes`: `kind` `rename` / `archive` / `restore`, the old and
+  new label, short label, description and state, the user and the transaction; append-only, one per definition and
+  transaction, linked at COMMIT to its request row. The AFTER UPDATE trigger `metric_definitions_v38_record_change` (of
+  `label, short_label, description, state`, when one of them changed) writes it through
+  `metric_definitions_record_change()`.
+- The request row (`metric_variable_requests`, v36 and v38): `metric_variable_requests_change_guard()` checks the
+  actor, the basis `metric_variable_change_basis()` derives (platform admin, the club's admin, a team coach for a club
+  variable), the one change of the transaction, the definition's values against the change's new values, the
+  operation against the kind, the texts and the coach's rules.
+- **The gap:** an update of `icon_url` alone fires no v38 trigger, so it would be an unaudited write (C76). v34's
+  decision 9 guards `current_version_id`, `state` and the owner columns only.
+
+**v44** (proposed file `migrations_v2/202610301200_training_load_v44_metric_variable_icon.sql`, named by the day it is
+written; it sorts after v43). It adds no table and changes no row:
+1. `metric_variable_changes` gets `old_icon_url` and `new_icon_url` (nullable; the rows before v44 keep `null`) and the
+   kind `icon`. The kind's shape: `icon` keeps the state `active` and the three texts and changes the icon, and its new
+   value is `null` or `icon:` and a key's shape; `rename`, `archive` and `restore` keep the icon. So one update cannot
+   rename and change the icon at once.
+2. The trigger's column list and its WHEN gain `icon_url`. `metric_definitions_record_change()` (replaced) writes the
+   two icon columns and takes the kind `icon` when only the icon changed.
+3. `metric_variable_requests` gets the operation `variable_icon` in its operation, change, coach-shape and reason
+   checks, and in the change guard's WHEN. `metric_variable_requests_change_guard()` (replaced) pairs it with the kind
+   `icon` and compares the definition's `icon_url` with the change's new value, like the texts.
+4. The rollback refuses once any `icon` change or `variable_icon` request exists, under a later migration, and while
+   the migrator holds its lock. It restores v38's two functions byte for byte, the trigger and the constraints, and
+   drops the two columns. There are a read-only preflight and post-check, and a runbook.
+
+**Route** `POST /api/training-load/sources/metrics/variables/:id/icon` `{ requestKey, expectedIconKey, iconKey }`:
+- `iconKey` is a library key, or `null` to remove the icon; `expectedIconKey` is the key, or `null`, the caller saw.
+- It runs through R2's `runChange`: the same resolver, owner and workspace, the identical `404`, the request row and
+  its replay, and the bounded COMMIT, with the right checked again after it.
+- Refusals:
+  - `variable_not_active`;
+  - `variable_changed` (another icon is stored), with the current variable;
+  - `icon_unchanged`;
+  - `400` for a key outside the library.
+- The answer is the variable, as a rename answers it.
+- The read's `actions` gains `icon`.
+
+**Frontend:** the variable's detail gets **Change icon**. It opens PR-1c's picker (the same dialog: 44 px targets,
+Escape, the page inert behind it) with a **No icon** choice. After a success, the list, the detail and the chips show
+the new icon. The new-version form does not change.
+
+**Tests and reviews:**
+- A disposable suite: the migration and the rollback rehearsal, the route, information hiding, replay, a lost COMMIT
+  and the database's guards by direct SQL.
+- A frontend test, and mutations of the key guards.
+- `db-reviewer`, `security-reviewer`, `code-reviewer` and `mobile-qa`, then the *Rukovodilac* and the *Nezavisni
+  revizor* (trigger 1).
+- The merge needs the owner's order naming the pull request, the migration file and its sha256.
+
+**Questions for the *Rukovodilac*:**
+- **Q1, who.** The order names the platform admin and the club admin in their club. R2's rename, and I1 as the proposal
+  described it ("the same rights (R2: …)"), also let **a team coach** change a club variable. Recommended: the same
+  three bases as a rename (one resolver, one database guard). The alternative is that the guard and the `actions`
+  refuse `team_coach` for the icon.
+- **Q2, a pinned variable** (an active mapping version names its current version). A coach may not rename one.
+  Recommended: its icon may change for every basis, because an icon is display only and does not change what the
+  variable means. The only state rule is `active`.
+- **Q3, the file name:** v44 as `202610301200_training_load_v44_metric_variable_icon.sql`.
+
 ### J4. M2b — the source-field evidence confirmation and its database guards v37 (as built)
 
 Service `backend/src/sourceFieldVerificationService.js` (M2's machinery, `adminWriteKit`; the revision
