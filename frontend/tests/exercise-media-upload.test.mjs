@@ -395,3 +395,22 @@ test("13. idempotency: a lost initiation is retried with the same key; a resumed
   assert.equal(FakeXHR.instances.length, 0);
   upload.setUploadTransportEnabled(false);
 });
+
+// The editor's fallback for a frame of a Drive copy (exercise-editor.js,
+// uploadExerciseMedia) retries as a picture only when the reservation itself
+// was refused - nothing sent - which this transport marks by an empty uploadId.
+test("14. a frame whose reservation is refused (404) rejects with an empty uploadId after one request and no PUT; a refusal after the reservation carries its upload id", async () => {
+  upload.setUploadTransportEnabled(true);
+  resetXhr();
+  const calls = fakeApi([initiate(() => ({ status: 404, json: { code: "resource_not_found" } }))]);
+  const frame = { file: file("frame.jpg", 10, "image/jpeg"), slot: "image", context: edit, purpose: "video_frame", sourceMediaId: "vid-1", frameTimeSeconds: 10 };
+  await assert.rejects(upload.startUpload(frame, noSleep), (error) => error.code === "resource_not_found" && error.uploadId === "");
+  assert.equal(calls.length, 1, "one request");
+  assert.equal(calls[0].body.purpose, "video_frame");
+  assert.equal(FakeXHR.instances.length, 0, "no PUT");
+  resetXhr();
+  fakeApi([initiate(), complete(() => ({ status: 404, json: { code: "resource_not_found" } }))]);
+  FakeXHR.onSend = (xhr) => xhr.finish(200);
+  await assert.rejects(upload.startUpload(frame, noSleep), (error) => error.code === "resource_not_found" && error.uploadId === "up-1");
+  upload.setUploadTransportEnabled(false);
+});
