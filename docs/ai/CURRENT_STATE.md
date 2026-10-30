@@ -36,7 +36,8 @@ sessions were added later the same day at `6a94ce29` (merge of PR #294), after t
 nothing else was re-derived then. PR #296 (those facts), phase 7d-B (migration v48, PR #295), the deploy of `e915a5b`,
 the 7e–7g contracts with the owner's decisions OD1–OD7 (PR #297) and the owner's concern about an athlete who trains
 with two teams were added later the same day at `39b4b52` (merge of PR #297), after the owner's read-only v48
-post-check; nothing else was re-derived then.
+post-check; nothing else was re-derived then. PR #299 (those facts) and the note on the standing order for migration
+PRs were added at `6568cf7` (merge of PR #299); nothing else was re-derived then.
 
 ## Active phase
 
@@ -2436,6 +2437,15 @@ Technical details.
       22:23:10 UTC) exactly from `92a900ef`, on the owner's word „merge” / „297” (owner turns `4fb1a9da`, 22:22:13 UTC,
       and `629c4a79`, 22:22:18 UTC), which put it before this facts record (the *Rukovodilac*'s order had the facts
       record first). Not yet deployed; it goes out with the next deploy.
+    - **PR #299, the 7d-B facts record — merged (documents only).** Merged as `6568cf7` (parents `39b4b52` and
+      `b46cdcac`, 23:00:07 UTC) by the executor under the standing merge order, exactly from `b46cdcac`, after the
+      *Rukovodilac*'s GO on that head. Not yet deployed.
+    - **Migration PRs follow the plan's "Standing order for migration PRs"** (`docs/ai/metrics-core-plan.md`, section
+      2; the owner's turns `4fb68fa8`, `b39df04b`, `0957fe7d`, `f9408eca`, `cbd80a95` and `70c0ec92` of 2026-10-30 in
+      the *Rukovodilac*'s chat, confirmed by the owner directly in the executor's chat before this record was merged):
+      merged by the executor without the owner's sentence after both ★★ GOs, the *Rukovodilac*'s check of each migration
+      file and its sha256 and his same-day read-only preflight through the Supabase connector; deployed by the owner by
+      hand; the smoke and the read-only post-check by the *Rukovodilac*.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
