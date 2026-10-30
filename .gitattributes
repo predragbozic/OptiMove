@@ -25,5 +25,8 @@ docs/runbooks/metric-variable-icon-v45*.sql text eol=lf
 # PR-1c (v46): the rollback restores v41's function bodies, which the preflight
 # and the post-check compare by md5; new files only, same reason.
 docs/runbooks/classification-icons-v46*.sql text eol=lf
+# Phase 7c (v47): the rollback restores v39's body of source_metric_audit_revision_guard(),
+# which the preflight and the post-check compare by md5; new files only, same reason.
+docs/runbooks/unit-conversion-guards-v47*.sql text eol=lf
 # Binary media fixtures of the backend tests.
 backend/tests/fixtures/media/*.mp4 binary

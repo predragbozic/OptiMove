@@ -8,8 +8,9 @@
 // D2-D10, E, G and "M2 HTTP contract" (approved by the owner on 2026-10-13);
 // phase 7b: docs/ai/phase7b-mapping-transitions-contract.md (J8, C104).
 // Schema: migrations v34 (M1), v35 and v43. Nothing here writes a T5
-// activation or a T6 fact, confirms a unit or a meaning, retires a source
-// revision, or talks to a source.
+// activation, a T6 fact or a unit conversion (unitConversionService.js,
+// phase 7c), confirms a unit or a meaning, retires a source revision, or talks
+// to a source.
 //
 // Ownership comes from the caller's active workspace only (owner decision
 // 2026-10-13): the platform workspace is the system scope (a platform admin
@@ -70,8 +71,9 @@ const NOT_FOUND = () => refusal(404, "notFound", "Not found.");
 
 // The list caps of the approved contract, for the catalogs M2 does not write:
 // a longer result is refused, never cut, so a client never takes a partial
-// list for the whole one.
-export const LIST_CAPS = Object.freeze({ fields: 100, revisionsPerField: 20, targets: 200, conversions: 100 });
+// list for the whole one. (The unit conversions are written by phase 7c and
+// read in pages: unitConversionService.js.)
+export const LIST_CAPS = Object.freeze({ fields: 100, revisionsPerField: 20, targets: 200 });
 // The mappings and a mapping's versions grow by M2's own writes, so they are
 // read in pages of a fixed size, by an opaque cursor (owner decision,
 // external review 2026-10-13).
@@ -557,20 +559,6 @@ export async function listTargets({ ctx }) {
       scopes: row.scopes ?? [], versionReady: notReadyCode === null, notReadyCode,
     };
   });
-}
-
-export async function listConversions({ ctx }) {
-  void ctx;
-  const rows = await boundedRead(async (client) => (await client.query(
-    `select id, from_unit, to_unit, trim_scale(scale)::text as scale, trim_scale(scale_divisor)::text as scale_divisor,
-            trim_scale("offset")::text as "offset", evidence_ref
-       from training_load.unit_conversions where state = 'active'
-      order by from_unit collate "C", to_unit collate "C"
-      limit $1`,
-    [LIST_CAPS.conversions + 1],
-  )).rows);
-  if (rows.length > LIST_CAPS.conversions) throw tooLarge(LIST_CAPS.conversions);
-  return rows.map((r) => ({ id: r.id, fromUnit: r.from_unit, toUnit: r.to_unit, scale: r.scale, scaleDivisor: r.scale_divisor, offset: r.offset, evidenceRef: r.evidence_ref }));
 }
 
 // A mapping version as the API returns it: numbers as exact decimal text,

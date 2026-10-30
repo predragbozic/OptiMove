@@ -5,8 +5,9 @@
 // behind requireAuth, and the source-field revision lifecycle (L1-L5). The
 // contracts are sections J1, J3, J3b and J4 of
 // docs/ai/gpexe-metric-variable-mapping-discovery.md, J5
-// (docs/ai/v39-revision-lifecycle-contract.md) and J8
-// (docs/ai/phase7b-mapping-transitions-contract.md):
+// (docs/ai/v39-revision-lifecycle-contract.md), J8
+// (docs/ai/phase7b-mapping-transitions-contract.md) and J9, the unit
+// conversions (docs/ai/phase7c-unit-conversions-contract.md):
 // a platform admin (platform workspace: the system scope; a club workspace:
 // that club's scope) or a club's own active admin in that club's workspace;
 // for the variable reads and the three R2 writes also an active coach of an
@@ -20,6 +21,7 @@ import * as variables from "../canonicalVariableAdminService.js";
 import * as fields from "../sourceFieldVerificationService.js";
 import * as revisions from "../sourceRevisionLifecycleService.js";
 import * as classification from "../canonicalClassificationService.js";
+import * as conversions from "../unitConversionService.js";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 
 const router = Router();
@@ -106,10 +108,33 @@ router.get("/targets", handle(async (req, res) => {
   res.json({ targets: await service.listTargets({ ctx }) });
 }));
 
+// { conversions, nextCursor }: one page of the active conversions (J9, C68);
+// nextCursor is null on the last.
 router.get("/conversions", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
-  res.json({ conversions: await service.listConversions({ ctx }) });
+  res.json(await conversions.listConversions({ ctx, query: req.query }));
+}));
+
+// Phase 7c (J9): creating (201 { conversion }) and retiring (200 { conversion })
+// a unit conversion. An active platform admin in the platform workspace only -
+// everyone else the identical 404, before the body is looked at; then 415, a
+// non-object body 400, a malformed id the identical 404, a wrong body shape 400,
+// then the write.
+router.post("/conversions", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!conversions.mayMaintainConversions(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await conversions.createConversion({ ctx, body: req.body }), 201);
+}));
+
+router.post("/conversions/:conversionId/retire", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!conversions.mayMaintainConversions(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await conversions.retireConversion({ ctx, conversionId: req.params.conversionId, body: req.body }), 200);
 }));
 
 router.get("/mappings", handle(async (req, res) => {

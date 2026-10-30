@@ -10,6 +10,7 @@ import http from "node:http";
 import pg from "pg";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-disposable-db.mjs";
 import { activateRevisionRow, retireRevisionRow, verifyRevisionRow, writeRevision, zoneMeaningAsFutureDecision } from "./support/source-revisions.mjs";
+import { createConversion, retireConversion as retireConversionRow, retireConversionHeld, retireConversionStatements } from "./support/unit-conversions.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -167,10 +168,10 @@ async function field({ kind = "none", unit = "s", boundUnit = null, operator = n
   if (verify && zone) await zoneMeaningAsFutureDecision(admin, { fieldId: def.id, revisionId: revId, by, operator, meaningRef: COMPAT });
   return { id: def.id, revId };
 }
-async function conversion(from, to, scale, divisor = "1", offset = "0") {
-  return (await one(`insert into training_load.unit_conversions (from_unit, to_unit, scale, scale_divisor, "offset", evidence_ref, created_by_user_id) values ($1,$2,$3,$4,$5,$6,$7) returning id`, [from, to, scale, divisor, offset, D5, W.pa.id])).id;
-}
-const retireConversion = (id) => q(`update training_load.unit_conversions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'Test retirement' where id = $1`, [id, W.pa.id]);
+// Conversions through v47's guarded path (support/unit-conversions.mjs): the
+// acting user and the audit row, every trigger on.
+const conversion = (from, to, scale, divisor = "1", offset = "0") => createConversion(admin, { from, to, scale, divisor, offset, evidenceRef: D5, by: W.pa.id });
+const retireConversion = (id) => retireConversionRow(admin, { id, by: W.pa.id });
 
 async function mappingFor(actor, sourceMetricId, metricDefinitionId) {
   const r = await post("/mappings", actor.cookie, { requestKey: key(), sourceMetricId, metricDefinitionId });
@@ -274,8 +275,8 @@ async function world() {
   W.clubBMin = await canonical({ scope: "club", clubId: W.clubB, unit: "min" });
   W.teamMd = await canonical({ scope: "team", teamId: W.teamA, unit: "min" });
   W.userMd = await canonical({ scope: "user", userId: W.coach.id, unit: "min" });
-  // A conversion that is not in the D5 normal form ((1, 4) is (0.25, 1)), and one to retire.
-  W.convAaBb = await conversion("aa", "bb", "1", "4");
+  // A conversion to retire. (A conversion outside the D5 normal form - (1, 4)
+  // for (0.25, 1) - cannot be stored since v47's CHECK; test 9 shows it.)
   W.convCcDd = await conversion("cc", "dd", "2", "1");
   W.metricsDigest = await metricsDigest();
 }
@@ -383,6 +384,7 @@ test("3. GET /targets: only the workspace's owner scope (platform: system; club 
 test("4. GET /conversions: the active rows only, ordered by unit pair, factors as exact decimal text", async () => {
   const r = await api("/conversions", { cookie: W.caB.cookie });
   assert.equal(r.status, 200);
+  assert.equal(r.body.nextCursor, null, "one page (phase 7c pages the list)");
   const pairs = r.body.conversions.map((c) => `${c.fromUnit}>${c.toUnit}`);
   const rows = await q(`select from_unit, to_unit from training_load.unit_conversions where state = 'active' order by from_unit collate "C", to_unit collate "C"`);
   assert.deepEqual(pairs, rows.map((x) => `${x.from_unit}>${x.to_unit}`), "the database's order");
@@ -586,10 +588,13 @@ test("8. POST versions: identity and non-identity conversions are server-derived
   }
 });
 
-test("9. conversion rows: a non-normal active row ((1, 4) instead of (0.25, 1)) is refused, a missing or retired row is conversion_unavailable, a new active row is used with its own factors; numerically equal parameter inputs give the same canonical parameters and fingerprint, equal to an independent computation", async () => {
+test("9. conversion rows: a non-normal row ((1, 4) instead of (0.25, 1)) cannot be stored since v47, so the pair has no active row (conversion_unavailable); a missing or retired row is conversion_unavailable, a new active row is used with its own factors; numerically equal parameter inputs give the same canonical parameters and fingerprint, equal to an independent computation", async () => {
+  // v47's CHECK refuses the non-normal row whoever writes it (createVersion's
+  // 409 conversion_not_normal stays as a backstop for a stored row).
+  await assert.rejects(conversion("aa", "bb", "1", "4"), (e) => e.code === "23514" && e.constraint === "unit_conversions_factors_normal_form");
   const aaMap = await mappingFor(W.pa, W.fAa.id, W.sysBb.id);
   const notNormal = await post(`/mappings/${aaMap.id}/versions`, W.pa.cookie, versionBody(W.fAa.revId, { conversionNote: "aa to bb" }));
-  assert.deepEqual([notNormal.status, notNormal.body.error], [409, "conversion_not_normal"]);
+  assert.deepEqual([notNormal.status, notNormal.body.error], [409, "conversion_unavailable"]);
   const ccMap = await mappingFor(W.pa, W.fCc.id, W.sysDd.id);
   assert.equal((await post(`/mappings/${ccMap.id}/versions`, W.pa.cookie, versionBody(W.fCc.revId, { conversionNote: "cc to dd" }))).status, 201);
   await retireConversion(W.convCcDd);
@@ -796,11 +801,13 @@ test("14. the lock order against a conversion retirement, both orders: a version
   const retirer = new pg.Client({ connectionString: db.url });
   await retirer.connect();
   try {
-    const retiring = retirer.query(`update training_load.unit_conversions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'Test retirement' where id = $1`, [conv, W.pa.id]);
+    await retirer.query("begin");
+    const retiring = retireConversionStatements(retirer, { id: conv, by: W.pa.id });
     assert.equal(await someoneWaits(), true, "the retirement waits for the version's FOR SHARE");
     g.open();
     assert.equal((await writing).status, 201);
     await retiring;
+    await retirer.query("commit");
   } finally {
     await retirer.end();
     service.setMappingWriteHoldForTests(null);
@@ -810,8 +817,7 @@ test("14. the lock order against a conversion retirement, both orders: a version
   const holder = new pg.Client({ connectionString: db.url });
   await holder.connect();
   try {
-    await holder.query("begin");
-    await holder.query(`update training_load.unit_conversions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'Test retirement' where id = $1`, [conv2, W.pa.id]);
+    await retireConversionHeld(holder, { id: conv2, by: W.pa.id });
     const writing2 = post(`/mappings/${m.id}/versions`, W.pa.cookie, versionBody(f.revId, { conversionNote: "ee to ff" }));
     assert.equal(await someoneWaits(), true, "the version waits for the retirement");
     await holder.query("commit");
@@ -982,7 +988,7 @@ test("19. a mapping's versions are read in pages (number descending, an opaque c
   assert.deepEqual([detailAgain.status, detailAgain.body.mapping.versions[0].versionNumber], [200, count + 1]);
 });
 
-test("20. architecture: only the M2 service writes a mapping; a mapping version only the M2 service (create, submit and, from phase 7b, activate, replace and disable) and the revision lifecycle (its pinned step disables); the T8 audit is written by the M2 service, the M2b verification service and the revision lifecycle, a T2b revision only by the M2b verification service and the revision lifecycle; nothing in backend/src writes a T2a field, a T5 activation, a T6 value provenance or a unit conversion", async () => {
+test("20. architecture: only the M2 service writes a mapping; a mapping version only the M2 service (create, submit and, from phase 7b, activate, replace and disable) and the revision lifecycle (its pinned step disables); the T8 audit is written by the M2 service, the M2b verification service, the revision lifecycle and the unit-conversion service (phase 7c), a T2b revision only by the M2b verification service and the revision lifecycle, a unit conversion only by the unit-conversion service; nothing in backend/src writes a T2a field, a T5 activation or a T6 value provenance, and nothing switches a trigger off", async () => {
   const { readdirSync, readFileSync } = await import("node:fs");
   const { join, relative } = await import("node:path");
   const src = new URL("../src/", import.meta.url);
@@ -1000,9 +1006,13 @@ test("20. architecture: only the M2 service writes a mapping; a mapping version 
   const writers = (table) => files.filter((f) => writes(table).test(readFileSync(f, "utf8"))).map((f) => relative(root, f).replace(/\\/g, "/")).sort();
   assert.deepEqual(writers("source_metric_mappings"), ["sourceMetricMappingService.js"]);
   assert.deepEqual(writers("source_metric_mapping_versions"), ["sourceMetricMappingService.js", "sourceRevisionLifecycleService.js"]);
-  assert.deepEqual(writers("source_metric_audit"), ["sourceFieldVerificationService.js", "sourceMetricMappingService.js", "sourceRevisionLifecycleService.js"]);
+  assert.deepEqual(writers("source_metric_audit"), ["sourceFieldVerificationService.js", "sourceMetricMappingService.js", "sourceRevisionLifecycleService.js", "unitConversionService.js"]);
+  // Phase 7c (J9): the one writer of the unit conversions.
+  assert.deepEqual(writers("unit_conversions"), ["unitConversionService.js"]);
+  // No production module switches a trigger off (the Rukovodilac's note (ii) at the 7c GO).
+  assert.deepEqual(files.filter((f) => /disable\s+trigger|session_replication_role/i.test(readFileSync(f, "utf8"))).map((f) => relative(root, f)), [], "nothing in backend/src switches a trigger off (disable trigger, session_replication_role)");
   assert.deepEqual(writers("source_metric_definition_versions"), ["sourceFieldVerificationService.js", "sourceRevisionLifecycleService.js"]);
-  for (const table of ["source_metric_mapping_activations", "metric_value_source_provenance", "source_metric_definitions", "unit_conversions"]) {
+  for (const table of ["source_metric_mapping_activations", "metric_value_source_provenance", "source_metric_definitions"]) {
     assert.deepEqual(writers(table), [], table);
   }
 });
@@ -1288,13 +1298,14 @@ test("26. nothing of M2 writes a T5 activation, a T6 fact, a T2a / T2b row or Me
   assert.equal((await one(`select count(*)::int as n from training_load.metric_value_source_provenance`)).n, 0);
   assert.equal((await one(`select count(*)::int as n from training_load.source_metric_mapping_versions where status not in ('draft', 'needs_review')`)).n, 0, "no activation or disabling");
   assert.deepEqual(await metricsDigest(), W.metricsDigest, "Metrics Core unchanged");
-  // M2's request records; the other audit rows are this file's revision fixtures
-  // (backend/tests/support/source-revisions.mjs) and its raw database writes,
-  // none of them a request record.
+  // M2's request records; the other audit rows are this file's revision and
+  // conversion fixtures (backend/tests/support/source-revisions.mjs,
+  // unit-conversions.mjs) and its raw database writes, none of them a request
+  // record.
   const actions = (await q(`select distinct action from training_load.source_metric_audit where request_key is not null order by 1`)).map((r) => r.action);
   assert.deepEqual(actions, ["mapping_create", "mapping_status", "mapping_version_create"]);
   const fixtureActions = (await q(`select distinct action from training_load.source_metric_audit where request_key is null order by 1`)).map((r) => r.action);
-  assert.ok(fixtureActions.every((a) => /^(source_metric_(revision_(create|activate|retire)|unit_verified|meaning_verified)|mapping_(create|version_create|status))$/.test(a)), fixtureActions.join(","));
+  assert.ok(fixtureActions.every((a) => /^(source_metric_(revision_(create|activate|retire)|unit_verified|meaning_verified)|mapping_(create|version_create|status)|unit_conversion_(create|retire))$/.test(a)), fixtureActions.join(","));
   const userIds = [W.pa.id, W.pa2.id, W.paA.id, W.caA.id, W.caA2.id, W.caB.id];
   for (const text of responses) {
     assert.ok(!/source_metric_(mapping|audit|definition)|violates|syntax error|relation "/i.test(text), `no database text: ${text.slice(0, 160)}`);

@@ -89,7 +89,7 @@ test("4. no access decision is made in the M2 service; the module makes them and
 
 test("5. every service that uses the M2 kit takes the right check from it, never from a copy", () => {
   const kitUsers = [...files].filter(([file, text]) => file !== SERVICE && /\badminWriteKit\b/.test(text)).map(([file]) => file).sort();
-  assert.deepEqual(kitUsers, ["canonicalClassificationService.js", "canonicalVariableAdminService.js", "sourceFieldVerificationService.js", "sourceRevisionLifecycleService.js"]);
+  assert.deepEqual(kitUsers, ["canonicalClassificationService.js", "canonicalVariableAdminService.js", "sourceFieldVerificationService.js", "sourceRevisionLifecycleService.js", "unitConversionService.js"]);
   for (const file of kitUsers) {
     const text = files.get(file);
     const kit = text.match(/const \{([\s\S]*?)\} = adminWriteKit;/);
