@@ -3828,6 +3828,26 @@ in the revision lifecycle's pinned step, replacing 7b's `activation_open` refusa
 v47), the database actor guard C76 requires, with the `club_admin` basis C106 adds. D3's prepared replacement in L4 is
 proposed as its own pull request, 7d-C. No open owner question blocks it. Nothing of it is built.
 
+### J11, J12, J13. The aggregate preview, the extractor registry, ending a held source instance — phases 7e, 7f, 7g (proposed)
+
+Three proposed ★★ contracts, reviewed in one round on the *Rukovodilac*'s order of 2026-10-30 (queued at 18:31:50
+UTC); their implementations stay separate pull requests:
+- **J11, 7e** — `docs/ai/phase7e-aggregate-preview-contract.md`: `GET …/mappings/:mappingId/versions/:versionId/preview?candidateId=…`,
+  the count of athletes with a value, min, max and the units before and after over one saved candidate, for the
+  mapping admins of 7d within 7d's scope rule; the identical 404 before `snapshot_expired`. **No migration.** Its
+  fields (K) and the minimum count of athletes (K) are **pending owner**, written with the recommended options.
+- **J12, 7f** — `docs/ai/phase7f-extractor-registry-contract.md`: one code extractor per seeded `rest_v1` field,
+  keyed by `(source_system, api_family, source_metric_key)`, `source_metric_unsupported` and
+  `parameters_unsupported` at T4 create and A1 activate; it closes J7's obligations for the zone keys. **No
+  migration.** It proposes 7f before 7e (the preview reads through it).
+- **J13, 7g** — `docs/ai/phase7g-source-instance-end-contract.md`: D9's operation (`source_instance_end`) for an
+  active platform admin in the platform workspace, with a reason, refused while the instance is in use; a guard on
+  the v11 `state` and the T8 chain in a migration after v48 (v49 if none comes between). Its shape (K) is **pending
+  owner**, written with the recommended option.
+
+The owner-run procedure for the unit evidence of C97 (no GPEXE request by the executor, the stored snapshots read
+with read-only SQL and compared with the GPEXE UI) is `docs/runbooks/gpexe-c97-unit-evidence-owner-procedure.md`.
+
 ---
 
 ## K. Open, but not blocking M1
@@ -3837,7 +3857,7 @@ Decisions that may safely wait, with the PR that takes them:
 - the exact UI sentences for the new codes (M3);
 - the format of `evidence_ref` — decided for the database in M1 (C40); M2 only adds its API checks;
 - `unit_conversions` rows beyond the four seeded (M2 API);
-- the fields of the aggregate preview (M2);
+- the fields of the aggregate preview (M2) — proposed in J11 section 3 with the recommended option, pending owner;
 - the UI shape of the action over every active binding of a connection (M3);
 - names, descriptions, units, domains and `condition_description` values of the first system
   variables, the zones included (M3 / M6);
@@ -3849,16 +3869,17 @@ Decisions that may safely wait, with the PR that takes them:
 - the test-runner kind of the M1 suites — `disposable`, through the T1 runner (as built);
 - whether a system-owned zone or threshold mapping may show one team's bounds to every club admin,
   or such mappings are club-owned (the M1 schema supports both; the bounds are not personal data)
-  (M2 / M3);
+  (M2 / M3) — the 7e preview shows no bound (J11 section 6), so it stays the phase 8 screen's question;
 - the minimum count of athletes below which the aggregate preview returns the count only, without
-  min and max (M2);
+  min and max (M2) — proposed as 3 in J11 section 4, pending owner;
 - decided (C81, C82): the existing Metrics Core catalog API stays as it is for its current callers (its
   `403` for a foreign club or team, the forwarded `P0001` text, coach-created `team` / `user` definitions,
   A6); the M3 frontend writes canonical variables only through the M3-0 admin API (J3); *superseded in
   part by C98 (2026-10-26):* the older API no longer creates or changes a `system` or `club` definition,
   and a write on an existing row the caller may not manage answers the identical `404` instead of `403`
   (a create for a foreign club or team keeps its `403`);
-- the shape of the platform-admin operation that ends a held source instance (D9) (M2);
+- the shape of the platform-admin operation that ends a held source instance (D9) (M2) — proposed in J13 sections 2–4
+  with the recommended option, pending owner;
 - **the mandatory gate of C73 is built in v35 (J2, C74–C79)**, merged and deployed (PR #161) and
   confirmed by the owner's production post-check;
 - a v35 / v36 test-hardening task (owner, 2026-10-14): a regression test that one SQL statement - a

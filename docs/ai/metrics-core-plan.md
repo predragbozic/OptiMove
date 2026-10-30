@@ -774,6 +774,16 @@ order covers is merged under it.
 - **Reviewers:** the full set by the matrix, and the external review.
 - **Red zone:** as phase 4, for every PR.
 
+- **7e, 7f and 7g, the contracts (J11, J12, J13):** `docs/ai/phase7e-aggregate-preview-contract.md`,
+  `docs/ai/phase7f-extractor-registry-contract.md` and `docs/ai/phase7g-source-instance-end-contract.md`, proposed on
+  2026-10-30 on the *Rukovodilac*'s order and reviewed in one ★★ round. 7e and 7f need no migration; 7g's migration
+  comes after v48. J12 proposes 7f before 7e. The owner's K decisions they need (the preview's fields, the minimum
+  count of athletes, the shape of D9's operation) are written with the recommended options, pending owner.
+- **Reserved after 7g, before phase 9** (the *Rukovodilac*'s note of 2026-10-30, queued at 18:31:50 UTC; built only on
+  its own order): a small pull request, "conditions 2 and 3 before the switch": a bounded lock wait before an
+  approval's COMMIT (`lock_timeout` and `idle_in_transaction_session_timeout`, with a stable code), and the undo script
+  taking the team import lock (`lockTeamForImport`) — conditions 2 and 3 under "Separate tasks" of `CURRENT_STATE.md`.
+
 ### Phase 8 ★: M3 Mappings tab, after 7b and 7d
 - **Acceptance:** an activation's confirmation names the source, the mapping version, the team and the binding.
 - **The owner's guidance** (owner turn `d9a0b800`, 2026-10-28, section 6): „Stim sto ovo mora biti mnogo jednostavnijeg
