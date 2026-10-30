@@ -13,7 +13,7 @@ pull requests.
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 10). |
+| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 10); merged with PR #297. Built by 7f-B (section 11). |
 | Verified against commit | `6a94ce29` (merge of PR #294). Every file and line reference below is to that commit unless it names another. |
 | Migration | **None.** The registry is code; the database cannot bind a key to code (P4 of J7, `migrations_v2/202610282300_training_load_v42_source_metric_zone_model.sql:28-31`). Section 6 says why nothing is lost. |
 | Order | **7f-B before 7e-B**: the aggregate preview (J11) reads values only through this registry. The plan lists 7e before 7f; section 8 asks the *Rukovodilac* to swap them. |
@@ -263,3 +263,74 @@ or revision, the `e03` / `api` family, derived values (`gpexeImportMapper.js:180
   the owner (J13); `.gitattributes` for v49's runbook SQL (J13); the C97 blocks drop the read-only wrapper (the editor
   may show only the last statement), cast safely, count every whole-session row per athlete, and say they approximate
   the mapper's gates.
+
+## 11. As built (7f-B)
+
+Branch `feature/7f-extractor-registry`, from `6568cf7` (merge of PR #299; the *Rukovodilac* ordered `39b4b52`, and
+`39b4b52..6568cf7` changed only documents); no migration, no production write. Where the build differs from sections
+2, 3 and 7, this section says so. The line references of sections 1 to 7 are to `6a94ce29`; 7d-B (PR #295) moved the
+service's lines since, and the code below is named by function.
+
+- **The module** `backend/src/sourceMetricExtractors.js`: `EXTRACTORS` (frozen, null prototype, the ten
+  `gpexe/rest_v1/…` entries of section 2.1), `extractorFor()`, `extractabilityCode()`, and the decimal helpers
+  `canonicalDecimal()`, `compareDecimal()` and `sameDecimal()` (R2: a `BigInt` comparison of canonical decimal text,
+  no binary floating point). `extract()` throws `ExtractorError` (`parameters_unsupported`) for parameters its entry
+  refuses, and otherwise returns `{ value }` or `{ skip }` with today's codes.
+- **Kind none** accepts `null` and `{}`: the stored form of a version without parameters is `{}` (v34), not `null` as
+  section 2.1 says.
+- **A revision with another value shape or parameter kind** than the entry's is `source_metric_unsupported`
+  (`extractabilityCode()`): a later revision R+1 of a seeded field may change them (the lifecycle of phase 4), and the
+  entry reads only its own shape.
+- **T4 create** (`createVersion`): the check runs after every `404`, after the revision's `409`s and the input check of
+  `sourceParameters` (`400`), and before the target, conversion and parameter `409`s, the locks and the rights check
+  (R3). It reads the field's key and the revision's value shape; a kind-none version is checked with `{}`.
+- **A1** (`activateVersion`, activation and replacement): the check runs after `rightsStillHold` and every existing
+  state refusal (`source_metric_target_taken` last), before the first write. R3's "after every `404`" holds for every
+  `404` before the first write; since 7d-B the listed starts' binding `404`s come after A1's first write (the end of
+  the open activations), as before 7f. It reads the stored parameters as exact
+  text (`PARAMS_AS_TEXT`, the form A1 already uses), so the stored decimals are compared, never a binary double.
+- **R2 changes one result on purpose.** The `rest_v1` projection lets an event's threshold and duration be short
+  strings (`gpexeRestV1Adapter.js`, `scalar`); today's mapper compares them with `!==`, so `"2.5"` against `2.5` is
+  `threshold_mismatch`, and the registry, comparing decimals, accepts it. Zone extremes and team thresholds are
+  numbers by the projection, so nothing else differs. `.open_top`'s rule (one null-top zone) is J7's and differs from
+  today's exact match by design.
+- **Versions activated before 7f-B are not checked again** (section 3, items 3 and 5). In production none exists: no
+  source field is confirmed (C97 is still owed, `CURRENT_STATE.md`), so A1 refuses every activation with
+  `revision_not_verified`, and the v43 post-check found no active mapping version. On a database where one exists
+  (a test database built with the seam), `extract()` parses the parameters again and throws `ExtractorError`, so no
+  value can be read through it; M4 meets that as the configuration error of section 3, item 5.
+- **T4 answers the new `409` before its rights re-check**, like every other `409` of T4 (R3); A1 answers it after.
+- **Two `canonicalDecimal` functions:** the service's one normalises a request's decimal input; the registry's
+  one compares JSON numbers and decimal text. They are not interchangeable, and the registry imports nothing from
+  the service (that would pull the database module into a pure module).
+- **`extractorAvailable`** is on every field of `GET /fields` and on `GET /fields/:fieldId`
+  (`sourceFieldVerificationService.js`); the same boolean for every reader. It is decided by the field's key alone:
+  a later revision of another shape is still refused at T4 (the shape check above).
+- **A test seam, not in section 7.** The suites written before 7f build their mappings on synthetic fields keyed
+  `<suite>.test.<id>`, which the registry refuses. `setExtractorFallbackForTests()` lets such a key, and only a key of
+  that form, be answered by a test's own entry; a seeded key never reaches it. Eleven existing suites call
+  `allowSyntheticTestFields()` (`backend/tests/support/test-extractors.mjs`: an entry that declares no shape and
+  accepts every parameter), and the architecture test proves that no module of `backend/src` sets the seam. The new
+  route suite sets the seam itself in three cases: to build two versions as they were made before 7f (A1 then
+  refuses them, once with the permissive entry removed and once through the real closed-power entry), and to read a
+  closed zone (between 25 and 60 W/kg) through the real closed-power entry at A1, since the one seeded closed key is
+  confirmed with `>=` earlier in the suite.
+- **Tests:**
+  - `backend/tests/source-metric-extractors-7f.test.mjs` (unit): the table, decimals, every `checkParameters`, J7's
+    zone rules, the decimal comparison in zones and events, two teams with two variables, the characterisation
+    against `GPEXE_METRIC_SPECS` on six bundle variants at both levels and on a bundle whose `more` went through the
+    adapter's `projectMore` and whose team thresholds are the stored GPEXE answer
+    `fixtures/gpexe-team-thresholds-1473.json`, `extractabilityCode()`, the seam, the architecture guard.
+  - `backend/tests/source-metric-extractors-routes-7f.test.mjs` (a disposable database): the registry against the
+    seed, `extractorAvailable`, T4 create's two refusals with nothing written and their place after the `404`s and
+    before the target side's `409`s (a field the registry does not read and a missing conversion answer the
+    registry's code; a supported field still answers `conversion_unavailable`), the shape of a later revision, A1's
+    two refusals after the `404`, the right and the state refusals, A1 accepting the stored parameters of an open top
+    zone, an acceleration count and a closed zone (a broken read of the stored decimals at A1 fails it), and every
+    answer free of a parameter.
+- **An existing guard extended:** `gpexe-rest-v1-adapter-reads.test.mjs` B7.8 refused any module but the adapter and
+  the mapper naming `details.players`; the registry's two keys do. B7.8 now exempts the registry and pins it instead:
+  its only such text is its two keys, its details entries are exactly `DETAILS_CONSUMED_FIELDS`, and it reads one
+  property of an athlete's details (`playerDetails[`), never another.
+- **Not built here (section 6):** the test that "the importer never writes a value without an extractor" belongs to
+  M4, which is the first importer that reads through the registry.

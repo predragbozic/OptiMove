@@ -1339,14 +1339,25 @@ test("B7.7b architecture guard for drills: the mapper reads no drill player metr
   assert.deepEqual([...touched], [], "no other drill metric is read");
 });
 
-test("B7.8 static architecture guard: no consumer outside the adapter and the mapper reads the stored details (JS or SQL), and the mapper's own reads are exactly the whole-session / drill player lookup and detailsNumber's one field read", async () => {
+test("B7.8 static architecture guard: no consumer outside the adapter, the mapper and the extractor registry reads the stored details (JS or SQL), the registry reads only the consumed fields, and the mapper's own reads are exactly the whole-session / drill player lookup and detailsNumber's one field read", async () => {
   const srcDir = path.resolve(ROOT, "backend/src");
   const files = (await fsp.readdir(srcDir, { recursive: true })).filter((f) => f.endsWith(".js")).map((f) => path.join(srcDir, f));
   const DETAILS_READ = /\bdetails\??\.(full|drills|players)\b|->>?\s*'details'|\[\s*['"]details['"]\s*\]/;
   for (const file of files) {
-    if (/gpexeRestV1Adapter\.js$|gpexeImportMapper\.js$/.test(file)) continue;
+    if (/gpexeRestV1Adapter\.js$|gpexeImportMapper\.js$|sourceMetricExtractors\.js$/.test(file)) continue;
     assert.doesNotMatch(await fsp.readFile(file, "utf8"), DETAILS_READ, `${path.relative(ROOT, file)} reads the stored details`);
   }
+  // Phase 7f: the extractor registry names the two consumed fields in its keys
+  // ("details.players.<field>") and reads exactly those, through the one athlete's
+  // details it is given - never the bundle's details object.
+  const registry = await fsp.readFile(path.resolve(srcDir, "sourceMetricExtractors.js"), "utf8");
+  assert.equal((registry.match(new RegExp(DETAILS_READ.source, "g")) || []).length, (registry.match(/"details\.players\.[a-z_]+"/g) || []).length,
+    "the registry never looks up the stored details: its only matches are its own key strings");
+  assert.deepEqual([...registry.matchAll(/detailsEntry\("details\.players\.([a-z_]+)", "([a-z_]+)"\)/g)].map((m) => [m[1], m[2]]),
+    DETAILS_CONSUMED_FIELDS.map((f) => [f, f]), "the registry's details entries are exactly the consumed fields");
+  assert.equal((registry.match(/\bdetails\.players\./g) || []).length, DETAILS_CONSUMED_FIELDS.length, "no other details key");
+  assert.equal((registry.match(/\bplayerDetails\[/g) || []).length, 1, "detailsNumber's one field read");
+  assert.equal((registry.match(/\bplayerDetails\??\./g) || []).length, 0, "no other property of an athlete's details is read");
   const mapper = await fsp.readFile(path.resolve(srcDir, "gpexeImportMapper.js"), "utf8");
   const count = (re) => (mapper.match(re) || []).length;
   assert.equal(count(/\bdetails\?\.full\b/g), 1, "one whole-session lookup");
