@@ -360,7 +360,8 @@ track was not fetched fails the session (`track_missing`, :318). No selection, s
 29. Generic `observed` source metric revisions are seeded without confirmed units and without any
     active mapping.
 30. Club mapping proposals are part of the M1 model and the M3 UI; activation and ending of an
-    activation are platform-admin only in the first scope.
+    activation are platform-admin only in the first scope. **Superseded for T5 by C106** (2026-10-30): the club's own
+    admin may also start and end an activation on its club's bindings.
 31. `source_host_key` stays beside `source_instance_key`.
 
 Decided by the owner's external review of PR #156 (2026-10-12), after the internal reviews raised
@@ -1119,6 +1120,19 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
     - **What follows:** each pull request's merge needs the owner's order naming it, its exact migration file and its
       sha256, with the production preflight the same day. The plan's line for V4 (section 6) changes in the next plan
       pull request the owner names.
+106. **A club admin also starts and ends T5 activations** (phase 7d; supersedes C30 and D7's "only a platform admin in
+    the first scope" for T5).
+    - **The owner's words**, in the *Rukovodilac*'s chat, checked by the executor in the transcript: „klupski admin
+      treba takođe da ima mogućnost to da uradi” (owner turn `715938df`, 2026-10-30 16:03:47 UTC), the answer to the
+      question whether a club admin may write T5 as well as a platform admin.
+    - **The *Rukovodilac*'s reading** (its message queued at 16:04:13 UTC; its reading, not the owner's words): an
+      active platform admin (the platform workspace, or the club's workspace) and the active admin of the club that
+      owns the binding, in that club's workspace, start and end an activation on that club's bindings; a club admin
+      with a system mapping or its own club's mapping only; never another club's mapping or binding; the identical 404
+      for everyone else (ADR-006); the basis written as `platform_admin` or `club_admin`.
+    - **What follows:** the 7d contract (J10, `docs/ai/phase7d-mapping-activations-contract.md`) builds it with
+      migration v48, which widens T5's two basis CHECKs and the T8 rules it needs. A1, A2 and the revision lifecycle
+      stay the platform admin's.
 
 ---
 
@@ -1471,7 +1485,8 @@ the deploy that carries it); a test runs that insert shape.
 ### D7. T5 `training_load.source_metric_mapping_activations` — the permission for one version on one binding
 
 - Purpose: "this team binding may import through exactly this mapping version". Written and ended
-  only by a platform admin in the first scope.
+  only by a platform admin in the first scope. **Superseded by C106** (2026-10-30): the club's own admin may also
+  start and end an activation on its club's bindings (J10).
 - Columns: `id`; `mapping_version_id`, `mapping_id`, `source_metric_definition_id`,
   `metric_definition_id`, `parameter_fingerprint` with `fk (…) → T4 (id, mapping_id,
   source_metric_definition_id, metric_definition_id, parameter_fingerprint)` (checked copies, so the
@@ -3749,6 +3764,16 @@ row of its own (Q2) and no frontend (Q3, phase 8); and migration v47, the databa
 new writer (the acting user on the row, the T8 chain in `source_metric_audit_revision_guard()`, the deferred audit
 links, the unit-token CHECK). A retirement changes no active mapping version (D5, C34). No question is put to the
 owner. Nothing of it is built.
+
+### J10. Activating a mapping version on a team binding — phase 7d (proposed, not accepted)
+
+The proposed ★★ contract is the separate document `docs/ai/phase7d-mapping-activations-contract.md` (phase 7d of
+`docs/ai/metrics-core-plan.md`), reviewed with J9 in one round: the writers of T5, `POST /activations` (one version on
+explicitly listed bindings, one operation), `POST /activations/:activationId/end` and `GET /activations`; for an active
+platform admin and, since C106, the active admin of the club that owns the binding; D6's steps in A1 and A2 and O5's
+in the revision lifecycle's pinned step, replacing 7b's `activation_open` refusal (R4 of J8); and migration v48 (after
+v47), the database actor guard C76 requires, with the `club_admin` basis C106 adds. D3's prepared replacement in L4 is
+proposed as its own pull request, 7d-C. No open owner question blocks it. Nothing of it is built.
 
 ---
 
