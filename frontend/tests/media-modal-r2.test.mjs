@@ -644,3 +644,47 @@ test("10. styles.css: the dialog follows --media-aspect within the picture's bou
   assert.equal(/\.media-fullscreen-note/.test(css), false, "no rule is left for the note the R2 video no longer shows");
   assert.equal(/is-video:not\(\.is-frame-video\) \.media-fullscreen-button/.test(css), false, "nor for a button the phone's black box no longer holds");
 });
+
+// Owner, 2026-10-30: "Iz sekcije se ne moze uci u vezbu. Ako se pritisne na
+// vezbu ili sliku video se otvara u pozadini a ne ispred pa se ne vidi. To se
+// samo dešava kod specific programa." A Specific Program's sections are drawn
+// inside its overlay (program-view.js, renderProgramNodeOverlayHtml), which
+// stacked above the media viewer. jsdom computes no stacking, so the contract
+// is the stylesheet's: the viewer is the top layer of the app.
+test("11. styles.css: the media viewer opens in front of every overlay it is opened from (the Specific Program its sections are drawn in, its info popup, the Builder's modals, the exercise editor) and of every other layer", () => {
+  const plain = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  // Every rule with a z-index, one entry per selector of a selector list.
+  const layers = [...plain.matchAll(/([^{}]+)\{[^{}]*?z-index:\s*(\d+)/g)]
+    .flatMap((match) => match[1].split(",").map((selector) => ({ selector: selector.trim(), z: Number(match[2]) })));
+  const zOf = (selector) => {
+    const found = layers.filter((layer) => layer.selector === selector);
+    assert.ok(found.length >= 1, `${selector} has a z-index`);
+    return Math.max(...found.map((layer) => layer.z));
+  };
+  // The viewer element itself in any state or media query (.media-modal,
+  // .media-modal.is-video, ...): its lowest layer must still be in front.
+  const ownLayers = layers.filter((layer) => /^\.media-modal(?![\w-])[^\s>+~]*$/.test(layer.selector));
+  assert.ok(ownLayers.length >= 1, "the viewer has a z-index");
+  const viewer = Math.min(...ownLayers.map((layer) => layer.z));
+  for (const overlay of [".program-preview-overlay", ".program-info-overlay", ".builder-modal-overlay", ".exercise-editor-overlay", ".exercise-tag-overlay"]) {
+    assert.ok(viewer > zOf(overlay), `the viewer (${viewer}) is in front of ${overlay} (${zOf(overlay)})`);
+  }
+  const above = layers.filter((layer) => !ownLayers.includes(layer) && layer.z >= viewer);
+  assert.deepEqual(above, [], "no other layer of the app is drawn over the viewer");
+});
+
+// With the viewer in front of a Specific Program, Escape must close only the
+// viewer, as phone Back does (handleAppBack): the section stays open behind it.
+test("12. app.js: Escape closes an open media viewer and stops there, before the Specific Program overlay and every other layer, the way phone Back does", () => {
+  const appJs = readFileSync(fileURLToPath(new URL("../app.js", import.meta.url)), "utf8").replace(/\r\n/g, "\n");
+  const start = appJs.indexOf('document.addEventListener("keydown", (event) => {');
+  assert.ok(start >= 0, "the Escape handler");
+  const block = appJs.slice(start, appJs.indexOf("\n  });", start));
+  const viewer = block.indexOf("if (!els.mediaModal?.hidden) { closeMedia(); return; }");
+  assert.ok(viewer > block.indexOf('event.key !== "Escape"'), "the viewer is checked once the key is Escape");
+  for (const later of ["handleMessagesBack()", "closeSpecificProgramOverlay()", "closeAthleteExitConfirm()", "closeExerciseViewMenus("]) {
+    assert.ok(block.indexOf(later) > viewer, `the viewer is closed alone, before ${later}`);
+  }
+  const back = appJs.slice(appJs.indexOf("function handleAppBack() {"), appJs.indexOf("function handleAppBack() {") + 200);
+  assert.match(back, /if \(!els\.mediaModal\?\.hidden\) \{\s*closeMedia\(\);\s*return true;/, "phone Back does the same");
+});
