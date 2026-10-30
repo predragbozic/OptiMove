@@ -74,14 +74,18 @@ import {
   submitCoachProfileForm as submitCoachProfileFormAction,
 } from "./coach-profile-actions.js";
 import { renderCoachesHtml } from "./coach-profiles.js";
-import { coachHomePickerRows, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
+import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
+import { captureCentralCalendarView, centralCalendarLayout, centralCalendarRosterIndex, closeCentralCalendarPanel, handleCentralCalendarAction, restoreCentralCalendarView } from "./central-calendar-actions.js";
+import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
+import { renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoachHomeExtras, loadMoreCoachHomeExercises, resetCoachHomeForWorkspaceChange } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { calendarToggled as importsCalendarToggled, clearPendingIdentityLoads } from "./gpexe-import-data.js";
-import { activityRosterDisclosureToggled, closeActivityRosterOverlay } from "./activity-roster-actions.js";
+import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
+import { resetActivityRoster } from "./activity-roster-data.js";
 import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
@@ -417,7 +421,14 @@ function bindEvents() {
   els.mobileNavToggle?.addEventListener("click", toggleMobileNav);
   els.mobileNavBackdrop?.addEventListener("click", closeMobileNav);
   els.signOut?.addEventListener("click", signOut);
-  els.calendarToggle?.addEventListener("click", openWeeklyCalendarFromRail);
+  els.calendarToggle?.addEventListener("click", openCentralCalendarFromRail);
+  // The central calendar draws itself again when a layout breakpoint is
+  // crossed (a phone's day strip against a week's columns, the time grid
+  // and the side panel of a wide screen) - central-calendar-actions.js's
+  // centralCalendarLayout reads the same two queries.
+  for (const query of ["(max-width: 760px)", "(max-width: 1023px)"]) {
+    window.matchMedia?.(query)?.addEventListener?.("change", () => renderCentralCalendar());
+  }
   els.tabs.forEach((tab) => {
     tab.addEventListener("click", (event) => {
       // Dashboards UX H2: an unsaved Dashboards layout asks before leaving
@@ -590,6 +601,8 @@ function bindEvents() {
     closeSpecificProgramOverlay();
     if (state.athleteExitConfirmOpen) closeAthleteExitConfirm();
     if (state.mobileNavOpen) closeMobileNav();
+    // Central calendar (K1b): Escape closes the open item panel.
+    if (closeCentralCalendarPanel(renderCentralCalendar)) return;
     closeMedia();
     closeExerciseViewMenus(null, els.content);
     if (state.organizationUserManage.open) closeManageAccountModal(renderOrganizationPanel);
@@ -1687,28 +1700,25 @@ function collapseRailAfterNav() {
   closeMobileNav();
 }
 
-function openWeeklyCalendarFromRail() {
-  if (!confirmLeaveTrainingLoad("weekly")) return;
-  const shouldToggleLoadedWeekly = state.activeTab === "weekly" && state.lastWeeklyData && state.selectedAthleteId;
-  if (state.activeTab !== "weekly" || (shouldToggleLoadedWeekly && !state.weekSelectorOpen)) pushAppHistory();
-  state.activeTab = "weekly";
+// The rail's Calendar item opens the central calendar (K1b, D1): the
+// club's, team's or private coach's calendar over GET /api/calendar. The
+// athlete's weekly plan it used to open stays reachable from Athletes ->
+// athlete, Coach Home and the calendar's own item panel (D5); its month
+// picker stays inside the weekly plan (the week-title button).
+function openCentralCalendarFromRail() {
+  if (!confirmLeaveTrainingLoad("central-calendar")) return;
+  if (state.activeTab !== "central-calendar") pushAppHistory();
+  state.activeTab = "central-calendar";
   state.selectedProgramId = null;
   state.selectedTemplateId = null;
   state.navStack = [];
   state.athletesExpanded = false;
-  state.openWeekCalendarOnLoad = !shouldToggleLoadedWeekly;
+  state.weekSelectorOpen = false;
+  state.openWeekCalendarOnLoad = false;
   collapseRailAfterNav();
   renderAthleteListState();
   renderTabs();
   renderLibraryNav();
-  if (shouldToggleLoadedWeekly) {
-    state.weekSelectorOpen = !state.weekSelectorOpen;
-    const weeks = state.lastWeeklyData.weeks || [];
-    const activeWeek = weeks[Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex))] || weeks[0];
-    state.weekCalendarMonth = monthStartIso(activeWeek?.weekStart || localDateIso());
-    renderWeeklyRoot(state.lastWeeklyData);
-    return;
-  }
   loadActiveTab();
 }
 
@@ -2036,6 +2046,10 @@ function handleAppBack() {
   const exerciseLayer = closeTopExerciseLayer();
   if (exerciseLayer) return exerciseLayer;
 
+  // Central calendar (K1b): an open item panel closes before anything else
+  // of the screen (the Training Load drawers' own rule).
+  if (closeCentralCalendarPanel(renderCentralCalendar)) return true;
+
   // Drilled into a node (domain/category/section) from inside the Specific
   // Program overlay: step back ONE level and stay inside the overlay - this
   // must run before the overlay-close check below, otherwise Back from a
@@ -2071,8 +2085,10 @@ function handleAppBack() {
   }
 
   // The athlete shell's own root/landing tab is athlete-home (no separate
-  // Home nav item exists - see goHome()); the coach shell's is unchanged.
-  const rootTab = isAthleteMode() ? "athlete-home" : "weekly";
+  // Home nav item exists - see goHome()); the coach shell's is Home (K1b,
+  // D1: the rail's Calendar is the central calendar now, and the weekly
+  // plan without a picked athlete is only "No athlete selected.").
+  const rootTab = isAthleteMode() ? "athlete-home" : "coach-home";
   if (state.activeTab !== rootTab) {
     if (!confirmLeaveTrainingLoad(rootTab)) return BACK_STAYED;
     state.activeTab = rootTab;
@@ -2135,6 +2151,9 @@ async function loadAthletes() {
     // of those mutations must invalidate it too, not just the initial
     // session bootstrap call this function also serves as.
     invalidateCoachHomeCache();
+    // The central calendar's teams, chips and cards follow the same roster
+    // and memberships (K1b) - the same reasoning.
+    invalidateCentralCalendarCache();
     const athleteParam = new URLSearchParams(window.location.search).get("athlete");
     const requestedAthlete = state.athletes.find((athlete) => athlete.athlete_id === athleteParam);
     state.selectedAthleteId = requestedAthlete?.athlete_id || state.athletes[0]?.athlete_id || null;
@@ -2176,6 +2195,7 @@ async function loadActiveTab() {
     return renderOrganizationPanel({ refresh: false });
   }
   if (state.activeTab === "coach-home") return loadCoachHome();
+  if (state.activeTab === "central-calendar") return loadCentralCalendar();
   if (state.activeTab === "athlete-home") return loadAthleteHome();
   if (state.activeTab === "weekly") return loadWeekly();
   if (state.activeTab === "programs") return loadPrograms();
@@ -2204,6 +2224,62 @@ async function loadCoachHome({ forceRefresh = false } = {}) {
   // load beside the roster, each drawing its own card when it arrives.
   if (state.currentUser?.activeWorkspace?.type !== "platform") void loadCoachHomeExtras({ onChange: refreshCoachHomeSection, forceRefresh });
   return loadCoachHomeData({ setLoading, renderCoachHome, forceRefresh });
+}
+
+// Central calendar (K1b, docs/ai/central-calendar-k1b-plan.md): the rail's
+// Calendar item. One read per visible range (central-calendar-data.js);
+// the shell paints the title and the workspace, the module the rest.
+async function loadCentralCalendar({ forceRefresh = false } = {}) {
+  state.navStack = [];
+  els.context.textContent = coachHomeWorkspaceLabel(state.currentUser?.activeWorkspace);
+  els.title.textContent = "Calendar";
+  els.toolbar.innerHTML = "";
+  renderCentralCalendar();
+  await loadCentralCalendarData({ render: renderCentralCalendar, forceRefresh });
+}
+
+function renderCentralCalendar() {
+  if (state.activeTab !== "central-calendar") return;
+  // A repaint keeps the chip rows' sideways scroll and the focused control.
+  const snapshot = captureCentralCalendarView(els.content.querySelector(".central-calendar"));
+  els.content.innerHTML = renderCentralCalendarHtml(state.centralCalendar, { today: localDateIso(), layout: centralCalendarLayout(), roster: centralCalendarRosterIndex() });
+  restoreCentralCalendarView(els.content.querySelector(".central-calendar"), snapshot);
+}
+
+// D14: the item panel's button to the Training Load activity - the detail
+// when the card holds one activity (the hand-off Athletes -> Activities
+// already makes), Activities on that day when it folds several. The TL
+// Activities screen may still hold a roster write in flight or a result not
+// confirmed (phase 5a3b): its own question is asked BEFORE the tab changes,
+// so a "No" leaves the calendar exactly as it was; after a "Yes" the roster
+// state is dropped here, so the reused TL branches never ask twice.
+async function openTrainingLoadFromCalendar({ activityId, date }) {
+  if (!confirmLeaveTrainingLoad("training-load")) return;
+  const cal = state.trainingLoad.calendar;
+  if (!activityId || activityId !== cal.selectedActivityId) {
+    if (!rosterMayBeLeft()) return;
+    resetActivityRoster(activityId || null);
+  }
+  pushAppHistory();
+  state.activeTab = "training-load";
+  state.navStack = [];
+  state.selectedProgramId = null;
+  state.selectedTemplateId = null;
+  els.context.textContent = "Training load";
+  els.title.textContent = "Training load";
+  els.toolbar.innerHTML = "";
+  renderTabs();
+  renderLibraryNav();
+  if (activityId) {
+    await handleTrainingLoadAction({ dataset: { action: "training-load-results-view-activity-in-calendar", activityId, date } }, { renderTrainingLoad, openWeeklyPlanForAthleteOnDate });
+    return;
+  }
+  // The day: Activities' own day selection (its week change and shared-week
+  // sync included), then the section's read, instant when that week is cached.
+  setTrainingLoadSection("today");
+  await handleTrainingLoadAction({ dataset: { action: "training-load-calendar-select-day", date } }, { renderTrainingLoad, openWeeklyPlanForAthleteOnDate });
+  await loadTrainingLoadSectionData("today", renderTrainingLoad);
+  renderTrainingLoad();
 }
 
 function renderCoachHome({ rows, error }) {
@@ -2589,6 +2665,10 @@ async function handleContentClick(event) {
   }
   if (type.startsWith("builder-")) {
     void handleBuilderAction(action).catch(renderBuilderError);
+    return;
+  }
+  if (type.startsWith("central-calendar-")) {
+    await handleCentralCalendarAction(action, { render: renderCentralCalendar, openWeeklyPlanForAthleteOnDate, openTrainingLoad: openTrainingLoadFromCalendar });
     return;
   }
   if (type === "back") {
@@ -3035,6 +3115,11 @@ async function onWorkspaceChanged() {
   coachHomeRows = [];
   coachHomePicker = { mode: "", query: "" };
   resetCoachHomeForWorkspaceChange();
+  // The central calendar reads the new workspace's own scope (K1a, one
+  // resolveActiveWorkspace per request): the old one's range, filters and
+  // open panel never carry over, nor its cached answers.
+  resetCentralCalendarForWorkspaceChange();
+  invalidateCentralCalendarCache();
   state.athletes = [];
   state.selectedAthleteId = null;
   renderAthleteList();
@@ -3049,7 +3134,7 @@ async function onWorkspaceChanged() {
   resetTrainingLoadForWorkspaceChange();
   renderTabs();
   renderLibraryNav();
-  if (["organization", "coach-home", "coaches", "templates", "exercises", "tests", "training-load"].includes(state.activeTab)) setLoading("Loading workspace...");
+  if (["organization", "coach-home", "central-calendar", "coaches", "templates", "exercises", "tests", "training-load"].includes(state.activeTab)) setLoading("Loading workspace...");
   try {
     const roster = await api("/api/admin/athletes");
     if (generation !== workspaceRosterGeneration || contextKey !== buildContextKey(currentUserWorkspaceContextParts())) return;
@@ -3065,6 +3150,7 @@ async function onWorkspaceChanged() {
   if (state.organization.section === "sourceConnections") enterSourceConnectionsSection();
   if (state.activeTab === "organization") return renderOrganizationPanel();
   if (state.activeTab === "coach-home") return loadCoachHome({ forceRefresh: true });
+  if (state.activeTab === "central-calendar") return loadCentralCalendar({ forceRefresh: true });
   if (state.activeTab === "coaches") return loadCoaches({ forceRefresh: true });
   if (state.activeTab === "templates") return loadTemplates({ forceRefresh: true });
   if (state.activeTab === "exercises") return loadExercises({ renderExercises, setLoading }, { forceRefresh: true });

@@ -19849,3 +19849,1127 @@ body.exercise-header-pinned #viewToolbar {
     box-shadow: 0 4px 12px rgba(22, 34, 45, 0.12);
   }
 }
+
+/* ============================================================
+   Central calendar (K1b) - docs/ai/central-calendar-k1b-plan.md.
+   One read of GET /api/calendar per visible range; a month, a week (the
+   server's slot order as a list, or a time grid at >= 1024 px) or a day;
+   the Groups and Types chips; the card; the item panel (a side column at
+   >= 1024 px, a bottom sheet below). Eight team colours by the team's
+   position in the answer's teams[] (D11: the club picks its own in K2).
+   ============================================================ */
+.central-calendar {
+  --cc-team-0: #1f6f68;
+  --cc-team-1: #b5542b;
+  --cc-team-2: #4a5fc1;
+  --cc-team-3: #8a4c8f;
+  --cc-team-4: #2f7d3a;
+  --cc-team-5: #b07a0a;
+  --cc-team-6: #c23a6b;
+  --cc-team-7: #3b7f9c;
+  --cc-team-none: #9aa4b2;
+  --cc-done: #2f7d3a;
+  --cc-done-soft: #e4f3e6;
+  --cc-awaiting: #9a5b05;
+  --cc-awaiting-soft: #fbefd9;
+  --cc-missed: #a23b3b;
+  --cc-missed-soft: #f8e3e3;
+  --cc-cancelled: #667085;
+  --cc-cancelled-soft: #eceff3;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.cc-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cc-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cc-nav-arrow {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.cc-period {
+  margin: 0 6px;
+  font-size: 18px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.cc-today,
+.cc-clear-filters,
+.cc-retry,
+.cc-panel-button,
+.cc-inline-button {
+  min-height: 44px;
+}
+
+.cc-switches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cc-segmented {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.cc-segment {
+  min-width: 64px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cc-segment + .cc-segment {
+  border-left: 1px solid var(--line);
+}
+
+.cc-segment.is-active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.cc-segment:focus-visible,
+.cc-chip:focus-visible,
+.cc-card:focus-visible,
+.cc-mini:focus-visible,
+.cc-strip-day:focus-visible,
+.cc-month-cell:focus-visible,
+.cc-month-number:focus-visible,
+.cc-month-more:focus-visible,
+.cc-day-head:focus-visible,
+.cc-athlete:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cc-filters {
+  display: grid;
+  gap: 8px;
+}
+
+.cc-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.cc-chip-row-label {
+  min-width: 56px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cc-chip.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.cc-chip-dot,
+.cc-team-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border-radius: 50%;
+  background: var(--cc-team-color, var(--cc-team-none));
+}
+
+.cc-chip-label {
+  overflow-wrap: anywhere;
+}
+
+.cc-chip-count {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cc-chip.is-active .cc-chip-count {
+  background: #fff;
+}
+
+.cc-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  min-width: 0;
+}
+
+.cc-layout-wide.cc-panel-open .cc-body {
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+
+@media (max-width: 1439px) {
+  .cc-layout-wide.cc-panel-open .cc-body {
+    grid-template-columns: minmax(0, 1fr) 300px;
+  }
+}
+
+.cc-main {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* Loading, error, empty. */
+.cc-state {
+  margin: 0;
+  padding: 24px 16px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--muted);
+  text-align: center;
+}
+
+.cc-state-error {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  border-color: rgba(162, 59, 59, 0.35);
+  color: var(--danger);
+}
+
+.cc-state-text {
+  margin: 0;
+  font-weight: 700;
+}
+
+.cc-state-hint {
+  margin: 0;
+  color: var(--muted);
+}
+
+.cc-technical {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* A 44 px disclosure that keeps its marker (the repo's own summary pattern). */
+.cc-technical summary {
+  display: list-item;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding-block: 12px;
+  cursor: pointer;
+}
+
+.cc-technical p {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.cc-empty {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  padding: 20px 16px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.cc-empty-text {
+  margin: 0;
+}
+
+.cc-refresh-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Week as columns (761 px and up). A column never gets narrower than a
+   readable card; with the panel open on a 1024-1280 px screen the week
+   scrolls inside its own box, never the page. */
+.cc-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(128px, 1fr));
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+/* A tablet (761-1023 px): narrower columns and gaps. Beside the coach rail a
+   768 px screen still scrolls the week about 60 px inside its box; the
+   badge and the title wrap, nothing is clipped. */
+.cc-layout-medium .cc-week {
+  grid-template-columns: repeat(7, minmax(100px, 1fr));
+  gap: 4px;
+}
+
+.cc-layout-medium .cc-day-column {
+  padding: 6px;
+}
+
+.cc-day-column {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.cc-day-column.is-today {
+  border-color: var(--accent);
+  box-shadow: inset 0 3px 0 var(--accent);
+}
+
+.cc-day-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cc-day-head:hover {
+  background: var(--accent-soft);
+}
+
+.cc-day-name {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.cc-day-number {
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.cc-day-count {
+  margin-left: auto;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.cc-day-cards {
+  display: grid;
+  gap: 8px;
+}
+
+.cc-day-empty {
+  margin: 0;
+  padding: 8px 4px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* The card (D14): the team colour, when, what, the status and one count. */
+.cc-card {
+  display: grid;
+  grid-template-columns: 5px minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cc-card:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+}
+
+.cc-card.is-open {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.cc-card-stripe {
+  background: var(--cc-team-color, var(--cc-team-none));
+}
+
+.cc-card-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px 8px 0;
+}
+
+.cc-card-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cc-card-when {
+  color: var(--text);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.cc-card-title {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.is-cancelled .cc-card-title,
+.is-cancelled .cc-mini-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.cc-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.cc-card-count {
+  color: var(--muted);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.cc-card-teams {
+  display: inline-flex;
+  gap: 3px;
+}
+
+/* The badge wraps inside a narrow column (a tablet, a wide screen with the
+   panel open) instead of being clipped by the card. */
+.cc-badge {
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.cc-badge-done {
+  background: var(--cc-done-soft);
+  color: var(--cc-done);
+}
+
+.cc-badge-awaiting {
+  background: var(--cc-awaiting-soft);
+  color: var(--cc-awaiting);
+}
+
+.cc-badge-missed {
+  background: var(--cc-missed-soft);
+  color: var(--cc-missed);
+}
+
+.cc-badge-cancelled,
+.cc-badge-muted {
+  background: var(--cc-cancelled-soft);
+  color: var(--cc-cancelled);
+}
+
+/* Week as a time grid (>= 1024 px only). With the panel open on a 1024 px
+   screen the grid scrolls inside its box rather than crushing a column. */
+.cc-timegrid {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.cc-timegrid-row {
+  display: grid;
+  grid-template-columns: 56px repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  align-items: stretch;
+  min-width: 826px;
+}
+
+.cc-timegrid-hour {
+  align-self: start;
+  padding: 6px 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.cc-timegrid-head {
+  min-width: 0;
+}
+
+.cc-timegrid-cell {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  min-width: 0;
+  min-height: 40px;
+  padding: 2px;
+  border-top: 1px solid var(--line);
+}
+
+.cc-timegrid-cell.is-today {
+  background: rgba(31, 111, 104, 0.05);
+}
+
+.cc-timegrid-untimed {
+  min-height: 44px;
+  border-top: 0;
+}
+
+.cc-timegrid-untimed-row {
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--line-strong);
+}
+
+.cc-timegrid .cc-card-kind {
+  display: none;
+}
+
+/* The month grid. */
+.cc-month {
+  display: grid;
+  gap: 4px;
+}
+
+.cc-month-weekdays,
+.cc-month-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.cc-month-weekdays span {
+  padding: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.cc-month-cell {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  min-width: 0;
+  min-height: 96px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.cc-month-cell.is-outside {
+  background: var(--surface-soft);
+}
+
+.cc-month-cell.is-outside .cc-month-number {
+  color: var(--muted);
+}
+
+.cc-month-cell.is-today .cc-month-number {
+  background: var(--accent);
+  color: #fff;
+}
+
+.cc-month-number {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.cc-month-number:hover {
+  background: var(--accent-soft);
+}
+
+.cc-month-cards {
+  display: grid;
+  gap: 3px;
+}
+
+/* The month's compact card: 36 px on a pointer screen (>= 1024 px), a full
+   44 px touch target on a tablet (761-1023 px); a phone's month cell is one
+   button and has no compact cards. */
+.cc-mini {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 36px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cc-mini:hover {
+  background: var(--accent-soft);
+}
+
+.cc-mini.is-open {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.cc-mini-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cc-team-color, var(--cc-team-none));
+}
+
+.cc-mini-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cc-mini-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.cc-mini-status-done {
+  background: var(--cc-done);
+}
+
+.cc-mini-status-awaiting {
+  background: var(--cc-awaiting);
+}
+
+.cc-mini-status-missed {
+  background: var(--cc-missed);
+}
+
+.cc-mini-status-cancelled,
+.cc-mini-status-muted {
+  background: var(--cc-cancelled);
+}
+
+.cc-layout-medium .cc-mini,
+.cc-layout-medium .cc-month-more {
+  min-height: 44px;
+}
+
+.cc-month-more {
+  min-height: 36px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cc-month-more:hover {
+  background: var(--accent-soft);
+}
+
+/* A touch screen of any width (an iPad in landscape) gets full targets. */
+@media (pointer: coarse) {
+  .cc-mini,
+  .cc-month-more {
+    min-height: 44px;
+  }
+}
+
+.cc-month-count {
+  display: none;
+}
+
+/* A phone's seven-day strip and the selected day's list. */
+.cc-strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.cc-strip-day {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  min-height: 56px;
+  padding: 6px 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.cc-strip-day.is-today {
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+
+.cc-strip-day.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.cc-strip-name {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.cc-strip-number {
+  font-weight: 800;
+}
+
+.cc-strip-count,
+.cc-month-count {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.cc-day-list {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cc-day-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.cc-day-today-tag {
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  vertical-align: middle;
+}
+
+/* The item panel. */
+.cc-panel {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.cc-layout-wide .cc-panel {
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+}
+
+.cc-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cc-panel-title {
+  margin: 0;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.cc-panel-close {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.cc-panel-kind,
+.cc-panel-when,
+.cc-panel-note,
+.cc-panel-sentence {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.cc-panel-teams {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.cc-panel-team {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 10px 2px 6px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  font-size: 13px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.cc-panel-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.cc-panel-status .cc-panel-sentence {
+  flex-basis: 100%;
+}
+
+.cc-panel-count {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.cc-panel-button {
+  justify-self: start;
+}
+
+.cc-panel-athletes {
+  display: grid;
+  gap: 8px;
+}
+
+.cc-panel-subtitle {
+  margin: 0;
+  font-size: 14px;
+}
+
+.cc-athletes {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cc-athlete {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cc-athlete:hover {
+  background: var(--accent-soft);
+}
+
+.cc-athlete-name {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.cc-athlete-side {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.cc-athlete-state-submitted,
+.cc-athlete-state-completed {
+  color: var(--cc-done);
+  font-weight: 700;
+}
+
+.cc-athlete-state-missing {
+  color: var(--cc-awaiting);
+  font-weight: 700;
+}
+
+.cc-athlete-state-missed {
+  color: var(--cc-missed);
+  font-weight: 700;
+}
+
+.cc-sheet-backdrop {
+  display: none;
+}
+
+/* Below 1024 px the panel is a bottom sheet over a backdrop; the sheet
+   scrolls on its own and never hands the scroll on to the page. */
+@media (max-width: 1023px) {
+  .cc-sheet-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    appearance: none;
+    background: rgba(13, 27, 36, 0.46);
+    touch-action: none;
+  }
+
+  /* A block (not a grid) so the sticky header below can really stick;
+     centred with auto margins, never a half-pixel transform. */
+  .cc-panel.cc-sheet {
+    display: block;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1201;
+    width: min(100%, 640px);
+    max-height: 85dvh;
+    margin-inline: auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 14px 16px calc(14px + env(safe-area-inset-bottom, 0px));
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -12px 40px rgba(14, 28, 37, 0.28);
+  }
+
+  .cc-panel.cc-sheet > * + * {
+    margin-top: 12px;
+  }
+
+  /* The title and Close stay in reach while a long athlete list scrolls. */
+  .cc-sheet .cc-panel-head {
+    position: sticky;
+    top: -14px;
+    z-index: 1;
+    margin: -14px -16px 0;
+    padding: 14px 16px 8px;
+    background: var(--surface);
+  }
+}
+
+@media (max-width: 380px) {
+  .cc-strip,
+  .cc-month-weekdays,
+  .cc-month-week {
+    gap: 2px;
+  }
+}
+
+@media (max-width: 760px) {
+  .cc-toolbar,
+  .cc-switches {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* One compact row: the arrows, the period and Today, so the first screen
+     still shows the day strip and its cards. */
+  .cc-nav {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) 44px auto;
+    align-items: center;
+  }
+
+  .cc-period {
+    margin: 0;
+    font-size: 15px;
+    text-align: center;
+  }
+
+  .cc-today {
+    padding: 0 10px;
+  }
+
+  .cc-switches .cc-segmented {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    width: 100%;
+  }
+
+  /* The chips scroll sideways in one row each instead of wrapping; the
+     shell keeps each row's scroll position across a repaint. */
+  .cc-chip-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 2px 2px 4px;
+    scrollbar-width: none;
+  }
+
+  .cc-chip-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .cc-chip,
+  .cc-chip-row-label,
+  .cc-clear-filters {
+    flex: 0 0 auto;
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  /* A phone's month cell is one button: the number and the day's count. */
+  .cc-month-cell {
+    justify-items: center;
+    min-height: 56px;
+    padding: 4px 2px;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .cc-month-cell.is-outside {
+    background: transparent;
+  }
+
+  .cc-month-cell.is-selected {
+    background: var(--accent-soft);
+  }
+
+  .cc-month-cell .cc-month-number {
+    width: 36px;
+    height: 36px;
+    justify-self: center;
+  }
+
+  .cc-month-count {
+    display: inline-block;
+  }
+}
+
+.cc-athlete-static {
+  cursor: default;
+}
+
+.cc-athlete-static:hover {
+  background: transparent;
+}
+
+.cc-athlete-note {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+}

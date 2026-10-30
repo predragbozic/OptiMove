@@ -41,6 +41,37 @@ export const emptyCoachHomeState = () => ({
   programs: { items: [], loaded: false, loading: false, error: "" },
 });
 
+// The central calendar (K1b, docs/ai/central-calendar-k1b-plan.md): one
+// read of GET /api/calendar per visible range, shown as a month, a week
+// (a slot-ordered list, or a time grid on a wide screen) or a day. The
+// filters are applied here, never sent (decision A); the panel's athletes
+// come from one extra read of the item's day with include=athletes. Reset
+// on a workspace change (central-calendar-data.js).
+export const emptyCentralCalendarState = () => ({
+  view: "week",
+  // "" until the first load reads the device preference ("list" | "grid").
+  weekMode: "",
+  // The day the views are built around ("" = today at the first open) and
+  // the day a phone's strip or the month grid points at.
+  anchor: "",
+  selectedDate: "",
+  filters: { teamIds: [], kinds: [] },
+  range: { from: "", to: "" },
+  data: null,
+  loading: false,
+  error: "",
+  errorCode: "",
+  errorDetail: "",
+  // A failed refresh over a shown calendar (with Try again) and a plain
+  // notice (the open item is no longer in the answer), each one line.
+  refreshError: "",
+  notice: "",
+  // The open item: its key and day, and the athletes of the day read
+  // ("changed" when the key is no longer in that answer, "failed" when the
+  // read failed).
+  panel: { open: false, key: "", date: "", athletes: null, loading: false, error: "" },
+});
+
 export const emptyExerciseOptions = () => ({
   purposes: [],
   qualities: [],
@@ -1073,6 +1104,7 @@ export const createInitialState = () => ({
   },
   coaches: { rows: [], selected: null, detail: null, editOpen: false, contactOpen: false, error: "" },
   coachHome: emptyCoachHomeState(),
+  centralCalendar: emptyCentralCalendarState(),
   notifications: { rows: [], unreadCount: 0, open: false, loading: false, error: "" },
   tests: emptyTestsState(),
   trainingLoad: emptyTrainingLoadState(),

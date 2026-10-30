@@ -87,9 +87,9 @@ test("handleAppBack() closes the mobile nav drawer, before the internal tab-hist
 
 // === 3. Back from Calendar/Specific programs/Program Library/Coaches/Settings returns to the previous athlete view (Home) ===
 
-test("handleAppBack()'s root-tab fallback targets athlete-home for the athlete shell (weekly for the coach shell, unchanged)", () => {
+test("handleAppBack()'s root-tab fallback targets athlete-home for the athlete shell (coach-home for the coach shell since K1b, D1)", () => {
   const body = functionBody("handleAppBack");
-  assert.match(body, /const rootTab = isAthleteMode\(\) \? "athlete-home" : "weekly";/);
+  assert.match(body, /const rootTab = isAthleteMode\(\) \? "athlete-home" : "coach-home";/);
   assert.match(body, /if \(state\.activeTab !== rootTab\) \{/);
   assert.match(body, /state\.activeTab = rootTab;/);
 });
