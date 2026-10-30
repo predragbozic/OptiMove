@@ -71,6 +71,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202610301200_training_load_v45_metric_variable_icon.sql",
   "202610301300_training_load_v46_classification_icons.sql",
   "202610301700_training_load_v47_unit_conversion_guards.sql",
+  "202610301900_training_load_v48_mapping_activations.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to

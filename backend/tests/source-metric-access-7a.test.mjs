@@ -59,8 +59,8 @@ test("3. the M2 service binds the context resolver to its bounded read and takes
   assert.ok(imported, "the service imports the module");
   const names = imported[1].split(",").map((n) => n.trim()).filter(Boolean).sort();
   assert.deepEqual(names, [
-    "SourceMetricMappingError", "TRY_AGAIN_TEXT", "UUID", "mayTransitionMappings", "ownerKeyOf", "readableOwnerKeys", "refusal",
-    "resolveMappingAdminWith", "rightsStillHold", "setRightsHoldForTests",
+    "SourceMetricMappingError", "TRY_AGAIN_TEXT", "UUID", "bindingClubHolds", "mayTransitionMappings", "ownerKeyOf", "readableOwnerKeys",
+    "refusal", "resolveMappingAdminWith", "rightsStillHold", "setRightsHoldForTests",
   ]);
   assert.match(service, /export \{ SourceMetricMappingError, mayTransitionMappings \};/);
   // Only the service calls the resolver with a read, so every other caller goes
@@ -89,7 +89,7 @@ test("4. no access decision is made in the M2 service; the module makes them and
 
 test("5. every service that uses the M2 kit takes the right check from it, never from a copy", () => {
   const kitUsers = [...files].filter(([file, text]) => file !== SERVICE && /\badminWriteKit\b/.test(text)).map(([file]) => file).sort();
-  assert.deepEqual(kitUsers, ["canonicalClassificationService.js", "canonicalVariableAdminService.js", "sourceFieldVerificationService.js", "sourceRevisionLifecycleService.js", "unitConversionService.js"]);
+  assert.deepEqual(kitUsers, ["canonicalClassificationService.js", "canonicalVariableAdminService.js", "sourceFieldVerificationService.js", "sourceMetricActivationService.js", "sourceRevisionLifecycleService.js", "unitConversionService.js"]);
   for (const file of kitUsers) {
     const text = files.get(file);
     const kit = text.match(/const \{([\s\S]*?)\} = adminWriteKit;/);
