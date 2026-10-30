@@ -5,6 +5,7 @@ import { invalidateBuilderDraftsCache, loadBuilderNodePresets } from "./builder-
 import { findBuilderNode, findBuilderSession } from "./builder-helpers.js";
 import { invalidateCoachHomeCache } from "./coach-home-data.js";
 import { invalidateAthleteHomeCache } from "./athlete-home-data.js";
+import { invalidateCentralCalendarCache } from "./central-calendar-data.js";
 import { normalizeExerciseView, saveExerciseViewPreference } from "./exercise-view-modes.js";
 import { emptyBlockPicker, emptyBuilderState, state } from "./state.js";
 import { localDateIso, weekMondayIso } from "./utils.js";
@@ -168,6 +169,9 @@ async function exitBuilderToPlanContext(plan, handlers) {
     // above, just for the athlete-facing rollup instead of the coach-facing
     // one.
     invalidateAthleteHomeCache();
+    // The central calendar's planned cards are these plans' sessions
+    // (K1b) - same reasoning again, for the club's or team's calendar.
+    invalidateCentralCalendarCache();
     return;
   }
   if (plan?.isTemplate || !plan?.athleteId) {
@@ -1476,6 +1480,8 @@ export async function handleBuilderDraftAction(action, handlers) {
       invalidateCoachHomeCache();
       // Same reasoning, for the athlete-facing Home rollup.
       invalidateAthleteHomeCache();
+      // And for the central calendar's planned cards (K1b).
+      invalidateCentralCalendarCache();
     } else if (state.activeTab === "programs") {
       state.selectedProgramId = null;
       // Just deleted this plan - the cached specific-programs payload for

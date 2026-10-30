@@ -61,7 +61,10 @@ export function renderAccessNav() {
 
 export function renderLibraryNav() {
   renderAccessNav();
-  if (state.activeTab === "organization" && !hasOrganizationAccess()) state.activeTab = "weekly";
+  // A coach who loses Settings access lands on Home (K1b, D1: the weekly
+  // plan without a picked athlete is only "No athlete selected."); the
+  // athlete shell keeps its own weekly plan as the fallback.
+  if (state.activeTab === "organization" && !hasOrganizationAccess()) state.activeTab = isAthleteMode() ? "weekly" : "coach-home";
   if (isAthleteMode() && state.activeTab === "builder") state.activeTab = "weekly";
   document.querySelectorAll("[data-library-tab]").forEach((button) => {
     const tab = button.dataset.libraryTab;
@@ -94,7 +97,8 @@ export function renderLibraryNav() {
     button.classList.toggle("is-active", isCalendar || isDirectTab);
   });
   document.querySelector("#athletesToggle")?.classList.toggle("is-active", state.athletesExpanded);
-  document.querySelector("#calendarToggle")?.classList.toggle("is-active", state.activeTab === "weekly" && state.weekSelectorOpen);
+  // The rail's Calendar is the central calendar (K1b, D1).
+  document.querySelector("#calendarToggle")?.classList.toggle("is-active", state.activeTab === "central-calendar");
 }
 
 export function renderRailState() {
