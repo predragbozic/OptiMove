@@ -35,7 +35,8 @@ Data configuration screens and on sources and users (section 6), its line in pha
 of a private coach's own source and variables (section 6), and PR-1's merge (section 6). Added on 2026-10-29: the Done
 entry of phase 5b with its deploy facts (section 5), and the merges of PR-2 and the language pass with PR-1's deploy
 (section 6); later the same day, in phase 7 (section 5), the owner's words of C104, the Done entry of 7a and the accepted
-contract of 7b (J8) with its gate line.
+contract of 7b (J8) with its gate line. Added on 2026-10-30: the Done entry of 7b and 7a's deploy (section 5), and the
+deploys of PR-2 and the language pass and the Done entries of PR-1b and PR-1c (section 6).
 
 The text below follows those sources. Where it records an owner order that departs from a project rule, it quotes the
 order and names the rule (section 2).
@@ -49,7 +50,8 @@ PR #241); phase 12's contract line, against `d96936c` (merge of PR #242); the Do
 of PR #247); the Done entries of 12c and phase 6 and phase 5's decision, against `cf387f2` (merge of PR #251); phase
 5b, against `0b947ab` (merge of PR #252); the owner's guidance of 2026-10-28 and PR-1's merge, against `0e38ae9` (merge of
 PR #256); phase 5b's Done entry and the merges of PR-2 and the language pass, against `00b3958` (merge of PR #263); phase
-7's lines of 2026-10-29 (C104, 7a, 7b), against `aaf150a` (merge of PR #269).
+7's lines of 2026-10-29 (C104, 7a, 7b), against `aaf150a` (merge of PR #269); the entries of 2026-10-30, against
+`70e9e2b` (merge of PR #287).
 
 ## 1. Who does what
 
@@ -727,7 +729,8 @@ order covers is merged under it.
     queued at 13:53:18 UTC): no migration, risk low.
   - Merge: `aaf150a` (parents `b0a839a` and `d626165`), made by the executor under the standing merge order exactly from
     `d626165`; its tree equals the merge simulated before it.
-  - Deploy: not yet when this entry was written; production was last seen on `00b3958`.
+  - Deploy: not yet when this entry was written; production was last seen on `00b3958`. Deployed since with `62090a6`
+    (production served it at 16:12 UTC on 2026-10-29, the *Rukovodilac*'s read).
   - Left for before T5 (7d): the remaining copies `isOwn`, `readableSql` / `ownSql`, `ownerFilter` / `writableSql` and
     `resolveVariableEditor`.
 - **7b, the contract (J8):** `docs/ai/phase7b-mapping-transitions-contract.md`, accepted on 2026-10-29 (C104).
@@ -735,6 +738,28 @@ order covers is merged under it.
     R1–R8 inside the plan. The acceptance was recorded by PR #268 (`b0a839a`).
   - **Gate line: migration v43.** Its merge needs the owner's own order naming the pull request, the exact migration
     file and its sha256, with the production preflight the same day.
+- **7b, Done, 2026-10-30.**
+  - PR #273 (branch `feature/metrics-mapping-transitions-7b-v43`): migration v43 is exactly
+    `migrations_v2/202610291430_training_load_v43_source_metric_mapping_transitions.sql`, sha256
+    `b88c1662b4dd2fd0e2ff79886fd49ebe28d9f38236044ecccd5739e6f86af363`. J8 "As built" in the discovery document records it.
+  - Reviews: `db-reviewer`, `security-reviewer` and `code-reviewer` READY WITH NON-BLOCKING NOTES, every note applied;
+    GO on `fdc584e2` from the *Rukovodilac* (2026-10-29 15:35 UTC) and the *Nezavisni revizor* (15:52 UTC), with no
+    BLOCKER, HIGH or MEDIUM.
+  - The owner's words, in the *Rukovodilac*'s chat; the executor checked each turn in the *Rukovodilac*'s transcript:
+    - the preflight, the same day as the merge: blocks 1 and 3–9 as expected (owner turn `ad289dcd`, 2026-10-30
+      09:51:12 UTC);
+    - the order: „Odobravam PR #271 i naređujem merge PR #273 sa migracijom
+      202610291430_training_load_v43_source_metric_mapping_transitions.sql, sha256
+      b88c1662b4dd2fd0e2ff79886fd49ebe28d9f38236044ecccd5739e6f86af363.” (owner turn `e9bf80b0`, 09:51:30 UTC);
+    - the post-check: all six blocks as expected (owner turn `ce45421e`, 10:07:29 UTC).
+  - Merges by the executor: PR #271 as `51025e4` (09:54:50 UTC), then PR #273 as `5a4c480` (parents `51025e4` and
+    `fdc584e2`, 09:56:06 UTC), exactly from `fdc584e2`.
+  - Deploy: by the owner by hand, as `5a4c480`. The *Rukovodilac*'s smoke, 10:05:14 – 10:05:15 UTC: `/api/health`
+    answered `ok: true` on `5a4c480` three times; `/api/auth/me` answered `{"user":null}`; without a login A1 and A2
+    answered 401, and so did the mappings, variables and fields reads and the GPEXE team status.
+  - **v43 is directly confirmed on the production database** by the owner's post-check. No mapping version is active
+    in production. `CURRENT_STATE.md` holds the full record.
+- **Next by the order above: 7c.**
 - **Input (red zone):** the owner's decisions from section K of the discovery document:
   - the minimum number of athletes for min / max;
   - system or club zone mappings;
@@ -1072,9 +1097,27 @@ is the *Rukovodilac*'s.
     proposal's section 12 records it as built). The executor merged it under the standing merge order from exactly
     `54bbaaf`, after the *Rukovodilac*'s GO on that head (its message queued at 11:19:22 UTC), which followed a NO-GO on
     `8c7a0048` whose MEDIUM was fixed. It replaces PR #260, closed as superseded after PR #262 conflicted with it in
-    `frontend/styles.css`. Not deployed yet. Its LOW follow-ups (LOW-2, LOW-4, a touch laptop or an iPad, more than 100
-    variables) are recorded in that section, not scheduled.
-  - Next: PR-1b only on the owner's order naming its migration.
+    `frontend/styles.css`. Deployed with `00b3958`. Its LOW follow-ups (LOW-2, LOW-4, a touch laptop or an iPad, more than
+    100 variables) are recorded in that section, not scheduled.
+  - **PR-1b is done** (I1, V3; PR #282, merge commit `46e0303`, 2026-10-30 13:42:52 UTC, with migration v45
+    `migrations_v2/202610301200_training_load_v45_metric_variable_icon.sql`, sha256
+    `e7a4d23dcd387b6f2e1474cc7b9026605d76504175e6e0ce691907c5d4bce400`): changing an existing variable's icon. Merged by
+    the executor exactly from `8f8fac6` on the owner's order „Odobravam i naređujem merge PR #282 sa migracijom
+    202610301200_training_load_v45_metric_variable_icon.sql, sha256
+    e7a4d23dcd387b6f2e1474cc7b9026605d76504175e6e0ce691907c5d4bce400.” (owner turn `5475773b`, 13:41:24 UTC, in the
+    *Rukovodilac*'s chat, checked in its transcript), after the GO of both reviewers and the owner's preflight (owner
+    turn `68395f16`). Deployed with `d9383adb`; **v45 is directly confirmed** by the owner's post-check (owner turn
+    `8a26c92c`). J3b.11 of the discovery document records it as built.
+  - **PR-1c is done** (V4, C105 of the discovery document; PR #287, merge commit `70e9e2b`, 2026-10-30 15:16:15 UTC, with
+    migration v46 `migrations_v2/202610301300_training_load_v46_classification_icons.sql`, sha256
+    `b0390376d6ed2e01a4a1b216c120e29ce7d34d31d41e27fd313904b3cdef4e80`): icons of domains and categories. Merged by the
+    executor exactly from `1c97379` on the owner's order „Odobravam i naređujem merge PR #287 sa migracijom
+    202610301300_training_load_v46_classification_icons.sql, sha256
+    b0390376d6ed2e01a4a1b216c120e29ce7d34d31d41e27fd313904b3cdef4e80.” (owner turn `30593475`, 14:24:30 UTC, checked the
+    same way), after the GO of both reviewers and the owner's preflight (owner turn `be927574`). Deployed with
+    `70e9e2b`; **v46 is directly confirmed** by the owner's post-check (owner turn `31b0b0c4`). J6.1 records it as built.
+    The plan's V4 line above ("domain and category icons later") and "Not in step 1" below are C105's to change, in the
+    plan pull request the owner names.
 - **Not in step 1:** an icon on a domain or a category of variables. `metric_domains` and `metric_categories` have no
   icon column (v10, v41), so it needs a migration, which is an owner's option.
 - **Step 2 ★★, scheduled by the owner: a club's or a person's own icons.**
@@ -1125,7 +1168,7 @@ What of point 1 PR-1 already holds (checked against `0e38ae9`):
 changes no API.
 - **Done, 2026-10-29:** PR #261, merge commit `d29776f`, 11:17:54 UTC; frontend only, no migration. The executor merged
   it under the standing merge order from exactly `0141df9`, after the *Rukovodilac*'s GO on that head (its message
-  queued at 11:11:20 UTC). The proposal's section 13 records it as built. Not deployed yet.
+  queued at 11:11:20 UTC). The proposal's section 13 records it as built. Deployed with `00b3958`.
 
 **Sources and users: the owner's word of 2026-10-28.** Owner turn `269910e0` in the *Rukovodilac*'s chat, received by
 the server at 23:27:25 UTC; it reached the *Rukovodilac*'s conversation at 23:40:09 UTC (the time its own transcript
