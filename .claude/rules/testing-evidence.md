@@ -10,6 +10,13 @@ Done includes test results.
    cross-cutting change) and, if frontend was touched, the production build.
 3. Only if a test fails: determine whether it's a regression from this change or a
    pre-existing failure (see below).
+4. Then stop. Once the change is implemented, its targeted tests and the relevant
+   regression scope pass, and the one post-implementation review has no BLOCKER/HIGH
+   finding, no further complete review round, broad test run (another full suite, an
+   integration harness, extra reviewer passes) or new verification is started on the
+   agent's own initiative. Every additional check must name a concrete reason, the
+   expected benefit and a bounded scope; an expensive one is proposed to the owner first
+   and run only after an explicit approval (owner rule, 2026-10-18).
 
 ## Claims that require a real run
 
