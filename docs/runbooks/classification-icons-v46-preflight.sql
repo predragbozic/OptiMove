@@ -127,8 +127,8 @@ select count(*) as actor_defaults
 
 -- 8. A quiet moment. Until the migration commits it holds ACCESS EXCLUSIVE on
 --    the four tables (reads of domains and categories wait too: for the
---    migration's few milliseconds, or up to the runner's 30 s lock timeout
---    while it waits for a lock); so no other session holds or waits for any
+--    migration's short run, or up to the runner's 30 s lock timeout while it
+--    waits for a lock on them); so no other session holds or waits for any
 --    lock on them, and none is idle in a transaction.
 --    Expected: locks_on_v46_tables = 0, idle_in_transaction = 0. A non-zero
 --    locks_on_v46_tables that is gone when the block is run again a few

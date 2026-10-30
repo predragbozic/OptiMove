@@ -511,10 +511,17 @@ test("4. the change: the answer and every read (the classification, a variable's
   ok(await setIcon(W.caA, "categories", category.id, null, b));
   assert.deepEqual([(await nodeIn(W.caA, "domains", n.id)).icon, (await nodeIn(W.coachA1, "domains", n.id)).icon], [a, a]);
   // The older API's answers stay as they were before v46: no icon column.
-  const older = ok(await api("/domains", { base: "/api/training-load/metrics", cookie: W.caA.cookie })).rows.find((x) => x.id === n.id);
-  // Its rows name their creator by that API's own contract: test 9 scans this route's answers, not that one's.
+  // Its rows name their creator by that API's own contract, so test 9 deliberately leaves the older API's answers out
+  // of its scan (each is popped): it scans this pull request's routes.
+  const OLDER = "/api/training-load/metrics";
+  const older = ok(await api("/domains", { base: OLDER, cookie: W.caA.cookie })).rows.find((x) => x.id === n.id);
   responses.pop();
-  assert.deepEqual([Boolean(older), older && "icon_url" in older], [true, false], "the older API never names the icon");
+  // Its create and archive answers too (a private coach's own domain: it refuses canonical rows).
+  const mine = ok(await api("/domains", { base: OLDER, method: "POST", cookie: W.privateCoach.cookie, body: { name: `Mine ${uid()}`, ownerScope: "user" } }), 201).row;
+  responses.pop();
+  const mineArchived = ok(await api(`/domains/${mine.id}/archive`, { base: OLDER, method: "POST", cookie: W.privateCoach.cookie, body: {} })).row;
+  responses.pop();
+  assert.deepEqual([Boolean(older), older && "icon_url" in older, "icon_url" in mine, mineArchived.is_active, "icon_url" in mineArchived], [true, false, false, false, false], "the older API never names the icon");
   for (const who of [W.caA, W.coachA1]) {
     const detail = ok(await api(`/variables/${v.id}`, { cookie: who.cookie })).variable.classification;
     assert.deepEqual(
