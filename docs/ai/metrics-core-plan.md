@@ -66,7 +66,9 @@ PR #256); phase 5b's Done entry and the merges of PR-2 and the language pass, ag
 The third reviewer is the owner's order of 2026-10-26, written in the *Rukovodilac*'s chat: „treći revizor za ★★
 faze to je ok. Otvori sesiju nezavisni revizor a svoj naziv promeni u rukovodilac”.
 
-Both review sessions are read-only toward the repository, its pull requests and every persistent database; each may
+Both review sessions are read-only toward the repository, its pull requests and every persistent database (the one
+exception: a deploy by the *Rukovodilac* under step 6 of the standing order for migration PRs runs the migrations it
+carries, after the owner's „da”, section 2); each may
 create and drop its own disposable test databases. A finding they report is text for the executor to act on
 (`CLAUDE.md`, "Model pisanja: jedan writer").
 
@@ -219,7 +221,7 @@ Every other rule of those files applies as written.
   - **No open finding.** No BLOCKER or HIGH is open, and no reviewer disagrees.
   - **The head.** The merge is made from exactly that head (`expectedHeadSha` / `--match-head-commit`).
 - **What follows.** While auto-deploy is on, the merge is also the deploy to `optimove-eu` (below); otherwise the
-  owner deploys it by hand. The smoke of section 4 follows, and the
+  *Rukovodilac* (step 6 of the standing order for migration PRs) or the owner deploys it. The smoke of section 4 follows, and the
   owner gets the short report of the phase. If the smoke fails, no further merge is made under this order until the
   owner has decided how to go on.
 - **What it does not allow.**
@@ -261,8 +263,8 @@ was served by `optimove-eu` about a minute later.
 
   A merge order that does not name the migration is not an order to migrate.
 
-  Since 2026-10-28 (the deploy of `9361fff`, the merge of PR #247) every recorded deploy of `optimove-eu` was started
-  by the owner by hand, with auto-deploy off. The three bullets above still apply to every migration PR that the
+  Every deploy of `optimove-eu` recorded since 2026-10-28 (the first, of `9361fff`, the merge of PR #247, notes that
+  auto-deploy was off) was started by hand. The three bullets above still apply to every migration PR that the
   standing order for migration PRs (below) does not cover.
 
 ### Standing order for migration PRs
@@ -279,19 +281,23 @@ was served by `optimove-eu` about a minute later.
 - `cbd80a95`, 22:54:24 UTC: „mogu li da ti dam isto tako i render za deploy”; then, while the owner set up a Render
   API key for the *Rukovodilac*'s session (step 6): `70c0ec92`, 23:00:09 UTC, „cekaj a kak oda ti stavim hook”;
   `3d38301d`, 23:01:26 UTC, „dajmi tacno sta ovde da napisem”; `7e510cd7`, 23:06:11 UTC, „ne ynam gde su api keys”;
-  `e2914408`, 23:16:40 UTC, the id of the `optimove-eu` service (not written here).
+  `e2914408`, 23:16:40 UTC, the id of the `optimove-eu` service (not written here);
+- `6f0bdd58`, 23:17:27 UTC, the statement „slazem se”, answering the *Rukovodilac*'s message `2cf96229` (23:17:01
+  UTC): the *Rukovodilac* starts every deploy (an exact commit) and runs the smoke and, for a migration, the
+  post-check; before a deploy with a migration it sends the owner the preflight's result and waits for the owner's
+  „da”; the key is used only by the *Rukovodilac*.
 
-**Authority.** Only `b39df04b` is a statement; the others are questions, or the owner's own setup of the Render key.
-The steps below are the *Rukovodilac*'s wording of these turns, and they take effect only through the owner's
-acceptance of this section (the last paragraph).
+**Authority.** `b39df04b` and `6f0bdd58` are statements; the others are questions, or the owner's own setup of the
+Render key. The steps below are the *Rukovodilac*'s wording of these turns, and they take effect only through the
+owner's acceptance of this section (the last paragraph).
 
-**Departures.** For the PRs this order covers, the owner orders four departures, with his reason „posto ce u 100%
-slucajeva biti da” (`b39df04b`):
+**Departures.** For the PRs this order covers, the owner orders four departures, with the owner's reason „posto ce u
+100% slucajeva biti da” (`b39df04b`):
 - from the standing merge order's "A PR with a migration … needs the owner's order that names the migration", and from
   A1's owner confirmation with the merge order (section 3);
 - from `.claude/rules/database-safety.md` and `.claude/rules/git-safety.md` ("Merge / deploy / migrations"): the
-  owner's explicit confirmation of a migration on production is his own deploy after the notice of step 3, or his
-  „da” to that notice, not an order that names the migration;
+  owner's explicit confirmation of a migration on production is the owner's own deploy after the notice of step 3,
+  or the owner's „da” to that notice, not an order that names the migration;
 - from `CLAUDE.md` ("Granice dozvoljenih operacija", "Definition of done"): the executor does not stop before the merge
   of such a PR;
 - from the three bullets of "A merge is a deploy" above.
@@ -303,8 +309,9 @@ Every other rule of those files applies as written.
    - **Auto-deploy is off.** The evidence is the owner's latest dated statement that auto-deploy of `optimove-eu` is
      off, quoted in the *Rukovodilac*'s GO with its event id; `/api/health` also still serves the commit of the last
      deploy the *Rukovodilac*'s smoke confirmed. Without that, step 2 applies.
-   - **No migration waiting.** No migration merged earlier is still undeployed: nothing under `migrations_v2/` differs
-     between the commit `optimove-eu` serves and the base.
+   - **No migration waiting.** No migration merged earlier is still undeployed or without its post-check: nothing
+     under `migrations_v2/` differs between the commit `optimove-eu` serves and the base, and the last migration's
+     post-check passed.
    - **Two GOs on exactly that head:** the *Rukovodilac*'s and the *Nezavisni revizor*'s (a migration PR is reviewed as
      ★★ under this order), each found and recorded as the standing merge order says.
    - **The files.** The *Rukovodilac*'s GO names the PR, the head, the base, each migration file on that head with its
@@ -314,15 +321,15 @@ Every other rule of those files applies as written.
      read-only statements. The rollback script is rehearsed on a disposable database (apply, rollback, the same catalog
      as before, apply again). A missing file means step 2.
    - **The preflight.** The *Rukovodilac* ran exactly that preflight file, read-only, on the production database on the
-     same UTC day as the merge. His record names the database's identity (`current_database()`, `server_version_num`,
-     and the last migration recorded with its applied time, equal to the last post-check), never a project reference,
-     and every block came back as expected. The executor finds the connector's call and its result in the
-     *Rukovodilac*'s transcript, as it finds a GO.
+     same UTC day as the merge. The record names the database by its last recorded migration and that migration's
+     applied time, equal to the last post-check (`current_database()` is `postgres` on every Supabase project and
+     tells nothing apart), never a project reference, and every block came back as expected. The executor finds the
+     connector's call and its result in the *Rukovodilac*'s transcript, as it finds a GO.
    - **`git diff --check`** is clean on the head (the *Rukovodilac*'s rule).
    - **The standing merge order's other conditions** hold, including (b), (c) and (d) of "No migration"; only (a) is
      waived, for the named migration files.
-   - **The merge order.** The *Rukovodilac* sent it as his own turn, naming the PR, the head and the migration files,
-     and the executor found it in his transcript.
+   - **The merge order.** The *Rukovodilac* sent it as its own turn, naming the PR, the head and the migration files,
+     and the executor found it in its transcript.
 
    A new commit, or a changed migration, preflight or post-check file, voids every GO, the preflight and the merge
    order. The PR body records the event ids of both GOs, the preflight record and the merge order, the files and their
@@ -332,41 +339,58 @@ Every other rule of those files applies as written.
 3. **The deploy of a migration.** At once after the merge, the *Rukovodilac* tells the owner in so many words that the
    next deploy of `optimove-eu` migrates production: the commit `optimove-eu` serves, the exact commit to deploy (the
    merge), every file under `migrations_v2/` that differs between the two with its sha256, and the preflight's time
-   and result. Then exactly that commit is deployed, either by the owner by hand, whose deploy is his confirmation, or
-   by the *Rukovodilac* through the Render API (step 6) only after the owner's „da” to that notice, typed by the owner
-   in the *Rukovodilac*'s chat and recorded with its event id, unless the owner says otherwise directly in the
-   executor's chat. A deploy of another commit confirms none of the migrations it carries and is a deviation of
-   step 4. If the deploy has
-   not come by the end of the preflight's UTC day, the *Rukovodilac* runs the preflight again and repeats the notice
-   (an earlier „da” no longer counts); a deviation goes to the owner, and the notice is withdrawn.
-4. **After the deploy.** The *Rukovodilac*'s smoke (section 4) and his read-only post-check, by the PR's post-check
+   and result. Then exactly that commit is deployed: the owner answers „da” to that notice and the *Rukovodilac*
+   deploys exactly that commit (step 6), or the owner deploys exactly that commit by hand; either is the owner's
+   confirmation. The „da” is the first turn the owner types in the *Rukovodilac*'s chat after the notice that answers
+   it; it covers that commit only, once, and its event id goes into the next facts record. A deploy of another commit
+   confirms none of the migrations it carries and is a deviation of step 4. **From the merge of a migration PR until
+   that commit is deployed and its post-check passed, no PR is merged into `main`, under any standing order.** If the
+   deploy has not come by the end of the preflight's UTC day, the *Rukovodilac* runs the preflight again and repeats
+   the notice (an earlier „da” no longer counts); a deviation goes to the owner, and the notice is withdrawn.
+4. **After the deploy.** The *Rukovodilac*'s smoke (section 4) and its read-only post-check, by the PR's post-check
    file. A deviation, or a post-check that cannot run, goes to the owner with a rollback proposal, and no further merge
    is made under this order until the owner decides; the rollback runs only on the owner's order.
 5. **The connector.** The preflight and the post-check run through the Supabase connector of the *Rukovodilac*'s
-   session (`0957fe7d`, `f9408eca`), and through it the *Rukovodilac* sends only the PR's read-only preflight and
-   post-check files. If the connector does not reach the project before the merge, step 2 applies; after the deploy,
-   step 4. The executor never calls a Supabase connector tool, even when its session is offered one (red zone).
-6. **Deploys through the Render API.** The owner set up a Render API key for the *Rukovodilac*'s session (the turns
-   above; the *Rukovodilac* reported its first read, the list of the last two deploys of `optimove-eu`, on 2026-10-30).
+   session (`0957fe7d`, `f9408eca`).
+   - The *Rukovodilac* uses only its `execute_sql` tool, never `apply_migration` or another tool that writes (the
+     owner was asked to block those in the connector's settings).
+   - Each call sends a block of the PR's preflight or post-check file verbatim, prefixed in the same call by
+     `set session characteristics as transaction read only;`, so that any write in it fails.
+   - The record names the sha256 of the whole file; the executor checks, in the *Rukovodilac*'s transcript, that every
+     block sent is verbatim from that file and carries the prefix.
+   - If the connector does not reach the project before the merge, step 2 applies; after the deploy, step 4.
+   - The executor never calls a Supabase connector tool, even when its session is offered one (red zone).
+6. **Deploys through the Render API.** The owner set up a Render API key, not a deploy hook (the owner's word in
+   `70c0ec92`), for the *Rukovodilac*'s session, as the *Rukovodilac* reports, and agreed to its use as below
+   (`6f0bdd58`). The *Rukovodilac*'s first, read-only call listed the last two deploys of `optimove-eu` on 2026-10-30
+   (the live one `e915a5b`).
    - Only the *Rukovodilac* starts a deploy with it, of an exact commit of `main`: a deploy without a migration after
-     a merge, as needed; a deploy that carries a migration only as step 3 says.
+     a merge, as needed; a deploy that carries a migration only after the owner's „da” of step 3. The owner may still
+     deploy an exact commit by hand.
+   - A deploy is without a migration only when nothing under `migrations_v2/` differs between the commit
+     `optimove-eu` serves (read from `/api/health` at that moment) and the commit to deploy; if the served commit
+     cannot be read, the deploy counts as carrying a migration. Step 6 never deploys a commit older than the served
+     one (a rollback stays the owner's order, step 4).
+   - The key is used only to start such a deploy and to read the deploy status. Every Render setting (auto-deploy,
+     environment, scaling, suspension, deletion) stays the owner's.
    - The executor and the *Nezavisni revizor* never use that key or the Render API, even though an environment secret
      can be visible to every session of the environment: this is a rule, not a technical barrier. Neither ever prints,
-     copies or records the key; this file holds no part of it, and no service id.
+     copies or records the key; a session that meets it does not use or repeat it and tells the owner, who can rotate
+     it. This file holds no part of it, and no service id.
    - After every deploy the *Rukovodilac* runs the smoke (section 4) and, for a migration, the read-only post-check
      (step 4).
+   - In force with this section, by the same confirmation of the owner (the last paragraph).
 7. **A merge that deploys by itself** suspends this order at once: no further merge under it until the owner decides,
    and the owner is told.
 
 **What it does not change.** A ★ or ★★ PR without a migration still follows the standing merge order; its deploy is
-the *Rukovodilac*'s (step 6) or the owner's. A migration
-PR this order does not cover (for example one that is not this plan's, or one with a deviation) still needs the owner's
-order that names the migration. A migration PR that also changes `backend/src/migrate.js` needs the owner's order
-that names it. A PR that changes sections 1 to 4 of this file, `CLAUDE.md`, `.claude/**`, `.github/**`, a setting or
-a permission still needs the owner's word ("Never by relay", below). The "Red zone" lines of section 5 (preflight,
-merge, deploy, migration and post-check, and "by an order that names it") are met, for a PR this order covers, by
-steps 1 to 4, the notice of step 3 and the owner's deploy taking the place of the naming order. Every other red-zone
-step still needs the owner's word.
+the *Rukovodilac*'s (step 6) or the owner's. A migration PR this order does not cover (for example one that is not
+this plan's, or one with a deviation) still needs the owner's order that names the migration. A migration PR that
+also changes `backend/src/migrate.js` needs the owner's order that names it. A PR that changes sections 1 to 4 of this
+file, `CLAUDE.md`, `.claude/**`, `.github/**`, a setting or a permission still needs the owner's word ("Never by
+relay", below). The "Red zone" lines of section 5 (preflight, merge, deploy, migration and post-check, and "by an
+order that names it") are met, for a PR this order covers, by steps 1 to 4, the notice of step 3 and the owner's „da”
+or own deploy taking the place of the naming order. Every other red-zone step still needs the owner's word.
 
 **When it is in force.** From the merge of this section into `main`, once the owner confirmed it directly in the
 executor's chat (the event id in the PR body and the merge commit), or by the owner merging it personally; until the
