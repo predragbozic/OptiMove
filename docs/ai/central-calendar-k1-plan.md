@@ -358,6 +358,12 @@ generator call; projection in memory); the SQL statement count stays independent
   own `local_scheduled_date`; `today` is the caller's date. No instant is converted on the server.
 - `public.user_athletes` (a private coach's athletes) keeps no history, so the private coach's scope is today's
   relationship; `teams[].athleteCount` is today's active team membership count.
+- A **generated** assignment made while the athlete was a member stays theirs: a former member still reads a
+  future generated assignment of their former team as their own row (the athlete workspace reads own
+  assignments), the Training Load "frozen membership" rule of the occurrence generator
+  (`trainingLoadOccurrenceService.js`, the outstanding-snapshot branch), while a **projected** day of the former
+  team is not theirs. Pinned as the current behaviour by test 26; the owner may read it differently (a point
+  for the external review).
 - Decision 4's consequence (section 3): a membership period starts at `starts_at`, the moment the athlete was added
   in OptiMove (v25), not at a sporting join date; without the fallback every plan dated before it would vanish from
   the club and team calendars while the weekly plan and Coach Home still show it. The fallback (option b) keeps a

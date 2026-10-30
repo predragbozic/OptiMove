@@ -137,6 +137,9 @@ async function archiveMembership(membershipId, archivedAt) {
 async function teamMembershipId(athleteId, teamId) {
   return (await q(`select id from public.athlete_memberships where athlete_id = $1 and team_id = $2 and membership_type = 'team'`, [athleteId, teamId]))[0].id;
 }
+async function clubMembershipId(athleteId, clubId) {
+  return (await q(`select id from public.athlete_memberships where athlete_id = $1 and club_id = $2 and membership_type = 'club'`, [athleteId, clubId]))[0].id;
+}
 // An athlete with an account (athlete workspace) and, when a team is given,
 // an active club and team membership since 2026-01-01.
 async function makeAthlete(name, { clubId = null, teamId = null, tz = "UTC" } = {}) {
@@ -1266,8 +1269,35 @@ test("26. a projected day is judged ON THAT DAY, never over the window: a former
   assert.ok(fCard, "an assignment that exists for the athlete is their own row (as the Training Load athlete routes read it)");
   assert.deepEqual(fCard.athleteIds, [former.athleteId]);
 
+  // The club as the target, per day: a former CLUB member (left yesterday, no
+  // team) never sees the club's future event or test; the covered day stays;
+  // a current member sees them; the club admin's own event lists only that
+  // day's members.
+  const admin1 = await clubAdminOf(clubId, "ex26 admin");
+  const formerClub = await makeAthlete("ex26 former club", { clubId });
+  await archiveMembership(await clubMembershipId(formerClub.athleteId, clubId), `${LEAVE_DAY}T12:00:00Z`);
+  const clubEvent = await makeExternalSchedule({ owner: { scope: "club", clubId }, createdBy: admin1.id, startDate: FUTURE, eventName: "Club future day", targets: [{ kind: "club", id: clubId }] });
+  const clubTest = await makeTestSchedule({ owner: { scope: "club", clubId }, createdBy: admin1.id, startDate: FUTURE, targets: [{ kind: "club", id: clubId }] });
+  const clubPastEvent = await makeExternalSchedule({ owner: { scope: "club", clubId }, createdBy: admin1.id, startDate: PAST, eventName: "Club past day", targets: [{ kind: "club", id: clubId }] });
+  const fc = await calendar(formerClub.cookie, { extra: "&kinds=external,test" });
+  assert.equal(keysOn(fc, FUTURE).includes(`external:${clubEvent}:${FUTURE}`), false, "a former club member never sees the club's future event");
+  assert.equal(keysOn(fc, FUTURE).includes(`test:${clubTest}:${FUTURE}`), false, "nor its future test");
+  assert.ok(keysOn(fc, PAST).includes(`external:${clubPastEvent}:${PAST}`), "the covered day stays");
+  const cc = await calendar(current.cookie, { extra: "&kinds=external,test" });
+  assert.ok(keysOn(cc, FUTURE).includes(`external:${clubEvent}:${FUTURE}`), "a current member sees the club's event");
+  assert.ok(keysOn(cc, FUTURE).includes(`test:${clubTest}:${FUTURE}`));
+  const adminView = await calendar(admin1.cookie, { extra: "&kinds=external,test" });
+  const adminFuture = itemsOn(adminView, FUTURE).find((it) => it.key === `external:${clubEvent}:${FUTURE}`);
+  assert.ok(adminFuture, "the club's own event is structural for the club admin");
+  assert.equal(adminFuture.athleteIds.includes(formerClub.athleteId), false, "the former club member is not among that day's members");
+  assert.ok(adminFuture.athleteIds.includes(current.athleteId));
+  const adminPast = itemsOn(adminView, PAST).find((it) => it.key === `external:${clubPastEvent}:${PAST}`);
+  assert.ok(adminPast.athleteIds.includes(formerClub.athleteId), "on the covered day they are");
+  const adminFutureTest = itemsOn(adminView, FUTURE).find((it) => it.key === `test:${clubTest}:${FUTURE}`);
+  assert.equal(adminFutureTest.athleteIds.includes(formerClub.athleteId), false);
+
   // A wide range equals the union of its single-day answers.
-  for (const viewer of [coachT, former, current]) {
+  for (const viewer of [coachT, former, current, formerClub, admin1]) {
     const wide = await calendar(viewer.cookie, { extra: "&kinds=external,test" });
     for (const day of [PAST, LEAVE_DAY, TODAY, FUTURE]) {
       const single = await calendar(viewer.cookie, { from: day, to: day, extra: "&kinds=external,test" });
@@ -1283,11 +1313,23 @@ test("26. a projected day is judged ON THAT DAY, never over the window: a former
 // ---------------------------------------------------------------------------
 // Bounded statements
 // ---------------------------------------------------------------------------
-test("16. the number of SQL statements does not depend on the number of items (sessions, RPE activities, roster activities)", async () => {
+test("16. the number of SQL statements does not depend on the number of items (sessions, RPE activities, roster activities, projected schedule days)", async () => {
   const small = await teamWithBatch("q16s", { n: 1 });
   const smallManual = await makeActivity({ owner: { scope: "team", teamId: small.teamId }, origin: "manual", name: "One", date: PAST });
   await addParticipant(smallManual, small.athletes[0].athleteId, PAST);
+  await makeExternalSchedule({ owner: { scope: "team", teamId: small.teamId }, createdBy: small.coach.id, startDate: FUTURE, eventName: "Small match", targets: [{ kind: "team", id: small.teamId }] });
+  await makeTestSchedule({ owner: { scope: "team", teamId: small.teamId }, createdBy: small.coach.id, startDate: FUTURE, targets: [{ kind: "team", id: small.teamId }] });
   const large = await teamWithBatch("q16l", { n: 4 });
+  for (let i = 0; i < 3; i += 1) {
+    await makeExternalSchedule({
+      owner: { scope: "team", teamId: large.teamId }, createdBy: large.coach.id, kind: "recurring", startDate: TODAY, endDate: addDays(TODAY, 3),
+      recurrence: { version: 1, freq: "daily" }, eventName: `Camp ${i}`, targets: [{ kind: "team", id: large.teamId }],
+    });
+    await makeTestSchedule({
+      owner: { scope: "team", teamId: large.teamId }, createdBy: large.coach.id, kind: "recurring", startDate: TODAY, endDate: addDays(TODAY, 3),
+      recurrence: { version: 1, freq: "daily" }, targets: [{ kind: "team", id: large.teamId }],
+    });
+  }
   for (const athlete of large.athletes) {
     for (let i = 2; i <= 3; i += 1) await makeSession({ planId: athlete.planId, date: addDays(PAST, i - 2 + 1), name: `Session ${i}`, order: i });
   }
@@ -1314,7 +1356,9 @@ test("16. the number of SQL statements does not depend on the number of items (s
     assert.equal(res.status, 200);
     assert.equal(ofKind(allItems(res), "planned").length, 3, "three days of sessions, one card each");
     assert.equal(ofKind(allItems(res), "activity").length, 4, "four coach-made roster activities, the two RPE activities folded");
-    assert.equal(count, smallCount, `the same number of statements for 1 session + 1 activity and for 12 sessions + 2 RPE + 4 roster activities (${smallCount})`);
+    assert.equal(ofKind(allItems(res), "external").length, 12, "three daily schedules over four projected days");
+    assert.equal(ofKind(allItems(res), "test").length, 12);
+    assert.equal(count, smallCount, `the same number of statements for 1 session + 1 activity + 2 projected days and for 12 sessions + 2 RPE + 4 roster activities + 24 projected days (${smallCount})`);
   } finally {
     appPool.query = original;
   }
