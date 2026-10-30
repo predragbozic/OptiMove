@@ -1021,7 +1021,7 @@ test("10. replay, keys and the COMMIT through the real route: a replay (S1 201 t
   assert.equal((await t5(relinked.activations[0].id)).ended_at, null, "nothing written");
 });
 
-test("11. direct SQL against v48: no actor, another user, a wrong basis, a club admin on another club, a start without its audit row at COMMIT, a second audit row, a savepoint, a version-driven end outside its disable's transaction, a replaced end without its replacement, a club admin's version-driven end, a version-driven end with another reason, an audit row naming no activation, a connection that is not club-owned, an end at another time - each refused", async () => {
+test("11. direct SQL against v48: no actor, another user (a start, an end), a wrong basis (a start, its audit row), a club admin on another club, a start without its audit row at COMMIT, a second audit row, a savepoint, a version-driven end outside its disable's transaction, a replaced end without its replacement, a club admin's version-driven end, a version-driven end with another reason, an audit row naming no activation, a connection that is not club-owned, an end at another time - each refused", async () => {
   const v = await sysVersion();
   const insertT5 = (c, b, { by = W.pa.id, basis = "platform_admin", ver = v } = {}) => c.query(
     `insert into training_load.source_metric_mapping_activations (mapping_version_id, mapping_id, source_metric_definition_id, metric_definition_id, parameter_fingerprint,
@@ -1039,6 +1039,7 @@ test("11. direct SQL against v48: no actor, another user, a wrong basis, a club 
   refusedWith(await tx(W.caB.id, (c) => insertT5(c, b, { by: W.caB.id, basis: "club_admin" })), "42501", ACTOR_T5);
   refusedWith(await tx(W.pa.id, (c) => insertT5(c, b)), "23514", START_LINK);
   refusedWith(await tx(W.pa.id, async (c) => { const id = await insertT5(c, b); await startRow(c, id, b); await startRow(c, id, b); }), "23514", AUDIT_ONCE);
+  refusedWith(await tx(W.pa.id, async (c) => { const id = await insertT5(c, b); await startRow(c, id, b, { basis: "club_admin" }); }), "42501", ACTOR_T8);
   refusedWith(await tx(W.pa.id, async (c) => { await c.query("savepoint s"); const id = await insertT5(c, b); await c.query("release savepoint s"); await startRow(c, id, b); }), "23514", AUDIT_FOLLOWS);
   refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, mapping_version_id, activation_id, team_id, reason, performed_by_user_id, basis, operation_id)
                                                values ('activation_start', $1, gen_random_uuid(), $2, 'x', $3, 'platform_admin', gen_random_uuid())`, [v.versionId, b.teamId, W.pa.id])), "23514", AUDIT_NAMES);
@@ -1052,6 +1053,7 @@ test("11. direct SQL against v48: no actor, another user, a wrong basis, a club 
     `insert into training_load.source_metric_audit (action, mapping_version_id, activation_id, team_id, reason, performed_by_user_id, basis, operation_id)
      values ('activation_end', $1, $2, $3, $4, $5, $6, $7)`, [ver.versionId, id, team, reason, by, basis, operationId]);
   refusedWith(await tx(W.pa.id, (c) => endSql(c, open, { at: "now() - interval '1 minute'" })), "23514", END_TIME);
+  refusedWith(await tx(W.pa.id, (c) => endSql(c, open, { by: W.pa2.id })), "42501", ACTOR_T5);
   refusedWith(await tx(W.caA.id, (c) => endSql(c, open, { by: W.caA.id, basis: "club_admin", endReason: "mapping_version_disabled" })), "42501", ACTOR_T5);
   refusedWith(await tx(W.pa.id, (c) => endSql(c, open)), "23514", END_LINK);
   // A version-driven end in a transaction that did not disable its version (a raw
@@ -1305,7 +1307,130 @@ test("12. concurrency (section 5): S1 against A2 on one mapping; S2 against A2 a
   assert.ok(!logLines.some((l) => l.includes("40P01")), "no deadlock");
 });
 
-test("13. no answer and no log line carries a reason, an acting user's id or a database text", async () => {
+test("13. the early checks (defence in depth behind the locked ones): the gate admits the admins' contexts only; a version not of the named mapping, an archived club and an archived team (S1) and another club's activation (S2) are the identical 404 at once while a row the locked step needs is held elsewhere; S3's query keeps the scope, so rows outside it never take a page's place; field_retired is answered before a binding's refusal, and a field retired inside the write is v34's backstop, the same 409", async () => {
+  // The gate: only an admin's context passes (a coach's, a team workspace's or a
+  // malformed one never does, whatever resolves it).
+  for (const ctx of [null, {}, { basis: "team_coach", owner: { scope: "team", clubId: W.clubA } }, { basis: "club_admin", owner: { scope: "system" } },
+    { basis: "club_admin", owner: { scope: "team", clubId: W.clubA } }, { basis: "platform_admin", owner: { scope: "team", clubId: W.clubA } }]) {
+    assert.equal(activations.mayManageActivations(ctx), false, JSON.stringify(ctx));
+  }
+  for (const ctx of [{ basis: "platform_admin", owner: { scope: "system" } }, { basis: "platform_admin", owner: { scope: "club", clubId: W.clubA } },
+    { basis: "club_admin", owner: { scope: "club", clubId: W.clubA } }]) {
+    assert.equal(activations.mayManageActivations(ctx), true, JSON.stringify(ctx));
+  }
+  const peer = new pg.Client({ connectionString: db.url });
+  await peer.connect();
+  // `sql` holds a row in another transaction while `fn` runs; the locked step
+  // would wait for it (and answer try_again after its lock timeout).
+  const holding = async (sql, params, fn) => {
+    await peer.query("begin");
+    try {
+      await peer.query(sql, params);
+      await fn();
+    } finally {
+      await peer.query("rollback");
+    }
+  };
+  const retireRaw = async (client, fieldId) => {
+    await client.query("set local session_replication_role = replica");
+    await client.query(`update training_load.source_metric_definitions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'Raw fixture.' where id = $1`, [fieldId, W.pa.id]);
+    await client.query("set local session_replication_role = origin");
+  };
+  try {
+    const before = await t5Count();
+    // S1: a version not of the named mapping, while the named mapping's row is held.
+    const v = await sysVersion();
+    const other = await sysVersion();
+    const bA = await binding(W.clubA);
+    await holding(`select 1 from training_load.source_metric_mappings where id = $1 for update`, [v.mappingId], async () => {
+      isNotFound(await start(W.pa, { ...v, versionId: other.versionId }, [bA]), "a version not of the named mapping");
+    });
+    // S1: an archived team and an archived club, while the binding's row is held.
+    const vT = await sysVersion();
+    const bT = await binding(W.clubA);
+    await setTeamActive(bT.teamId, false);
+    await holding(`select 1 from training_load.source_team_bindings where id = $1 for update`, [bT.bindingId], async () => {
+      isNotFound(await start(W.pa, vT, [bT]), "an archived team");
+    });
+    const vC = await sysVersion();
+    const bC = await binding(W.clubC);
+    await setClubActive(W.clubC, false);
+    try {
+      await holding(`select 1 from training_load.source_team_bindings where id = $1 for update`, [bC.bindingId], async () => {
+        isNotFound(await start(W.pa, vC, [bC]), "an archived club");
+      });
+    } finally {
+      await restoreClubC();
+    }
+    assert.equal(await t5Count(), before, "nothing written");
+    // S2: another club's activation, while an importing transaction holds it FOR SHARE (C49).
+    const onA = ok(await start(W.caA, v, [bA]), 201).activations[0];
+    await holding(`select 1 from training_load.source_metric_mapping_activations where id = $1 for share`, [onA.id], async () => {
+      isNotFound(await end(W.caB, onA.id), "another club's activation");
+    });
+    assert.equal((await t5(onA.id)).ended_at, null, "still open");
+    // S3: 101 ended activations of club A's own mapping with the lowest ids sit
+    // before a system activation on one binding; the platform workspace's page
+    // is the system activation, never an empty page without a cursor.
+    const cv = await clubVersion(W.caA, W.paA);
+    const bP = await binding(W.clubA);
+    const sysOn = ok(await start(W.pa, v, [bP]), 201).activations[0];
+    const clubOn = ok(await start(W.caA, cv, [bP]), 201).activations[0];
+    const copies = Array.from({ length: 101 }, (_, i) => `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`);
+    await k.query("begin");
+    try {
+      await k.query("set local session_replication_role = replica");
+      await k.query(
+        `insert into training_load.source_metric_mapping_activations
+         select (jsonb_populate_record(null::training_load.source_metric_mapping_activations,
+                   to_jsonb(a) || jsonb_build_object('id', c.id, 'ended_at', now(), 'ended_by_user_id', a.activated_by_user_id,
+                                                     'ended_basis', a.activated_basis, 'end_reason', 'admin_ended'))).*
+           from training_load.source_metric_mapping_activations a cross join unnest($2::uuid[]) as c(id)
+          where a.id = $1`,
+        [clubOn.id, copies]);
+      await k.query("commit");
+    } catch (error) {
+      await k.query("rollback").catch(() => {});
+      throw error;
+    }
+    try {
+      const page = ok(await list(W.pa, { bindingId: bP.bindingId, state: "all" }));
+      assert.deepEqual(page.activations.map((a) => a.id), [sysOn.id], "the platform workspace's page");
+      assert.equal(page.nextCursor, null);
+      const clubPage = ok(await list(W.caA, { bindingId: bP.bindingId, state: "all" }));
+      assert.equal(clubPage.activations.length, 100, "club A's first page is full");
+      assert.ok(clubPage.nextCursor, "club A's next page");
+    } finally {
+      await k.query("begin");
+      await k.query("set local session_replication_role = replica");
+      await k.query(`delete from training_load.source_metric_mapping_activations where id = any($1::uuid[])`, [copies]);
+      await k.query("commit");
+    }
+    // field_retired is a state of the version, answered before a binding's
+    // refusal (here activation_exists).
+    const vR = await sysVersion();
+    const bR = await binding(W.clubA);
+    ok(await start(W.pa, vR, [bR]), 201);
+    await k.query("begin");
+    await retireRaw(k, vR.fieldId);
+    await k.query("commit");
+    refused(await start(W.pa, vR, [bR]), 409, "field_retired");
+    // A field retired inside the write, after S1's own check: v34's backstop
+    // refuses the T5 row and the service answers the same 409; nothing is written.
+    const vF = await sysVersion();
+    const bF = await binding(W.clubA);
+    const count = await t5Count();
+    activations.setActivationWriteHoldForTests(async (client, where) => { if (where === "activation_start") await retireRaw(client, vF.fieldId); });
+    refused(await start(W.pa, vF, [bF]), 409, "field_retired");
+    activations.setActivationWriteHoldForTests(null);
+    assert.equal(await t5Count(), count, "nothing written");
+    assert.equal((await one(k, `select state from training_load.source_metric_definitions where id = $1`, [vF.fieldId])).state, "active", "the raw retire rolled back with it");
+  } finally {
+    await peer.end().catch(() => {});
+  }
+});
+
+test("14. no answer and no log line carries a reason, an acting user's id or a database text", async () => {
   const admins = [W.pa, W.pa2, W.pa3, W.paA, W.paB, W.paC, W.caA, W.caA2, W.caB, W.caC, W.caAB];
   for (const text of responses) {
     for (const reason of sentReasons) assert.ok(!text.includes(reason), `an answer carries a reason: ${text.slice(0, 200)}`);

@@ -669,12 +669,13 @@ test("10. retire: 200 with the row retired (the retirer the acting user, at the 
   ok(await create(W.pa.cookie, createBody({ fromUnit: "m", toUnit: "km", scale: "0.001", evidenceRef: "docs/ai/gpexe-metric-variable-mapping-discovery.md#d5-unit-conversion-seed" })), 201);
 });
 
-test("11. replay and keys: the same key and body replays the same conversion (create and retire, 200 replayed); another body or another operation on the key is request_key_reused; '3.60' and '3.6' are one request", async () => {
+test("11. replay and keys: the same key and body replays the same conversion (create and retire, 200 replayed); another body (an offset, an evidenceRef) or another operation on the key is request_key_reused; '3.60' and '3.6' are one request", async () => {
   const body = createBody({ scale: "3.6" });
   const first = ok(await create(W.pa.cookie, body), 201);
   const replay = ok(await create(W.pa.cookie, { ...body, scale: "3.60" }));
   assert.deepEqual([replay.replayed, replay.conversion.id], [true, first.conversion.id]);
   refused(await create(W.pa.cookie, { ...body, offset: "1" }), 409, "request_key_reused");
+  refused(await create(W.pa.cookie, { ...body, evidenceRef: "docs/ai/test-evidence.md#another-conversion" }), 409, "request_key_reused");
   refused(await retire(first.conversion.id, W.pa.cookie, { requestKey: body.requestKey }), 409, "request_key_reused");
   const reason = "Replay reason.";
   const rk = key();
