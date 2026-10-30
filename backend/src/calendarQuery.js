@@ -31,7 +31,7 @@ import crypto from "node:crypto";
 import { query } from "./db.js";
 import {
   calendarActivityFilterSql, calendarActivityScopeSql, calendarAthleteFilterSql, calendarAthleteScopeSql,
-  calendarScheduleScopeSql, loadWorkspaceTeams, membershipOnDaySql,
+  calendarScheduleCandidateSql, calendarScheduleStructuralSql, loadWorkspaceTeams, membershipOnDaySql,
 } from "./calendarAccess.js";
 // The one published-weekly-plan rule, shared with GET /weekly and GET
 // /calendar of routes/trainingLoad.js.
@@ -258,21 +258,27 @@ async function readExternalAssignmentRows(ctx, { from, to, filters, teamIds }) {
   return result.rows;
 }
 
-// Active external schedules that could occupy the window, for the in-memory
-// projection of the days that have no generated occurrence yet; the
-// explicit dates of a 'dates' schedule (migration v8) come along as text.
+// Active external schedules that could occupy the window — the CANDIDATES
+// of the in-memory projection of the days that have no generated occurrence
+// yet, each with its `structural` relation to the workspace (owned, or
+// targeting the workspace's club / team itself). A candidate reached only
+// through athletes shows a day only when readScheduleTargetAthletes finds a
+// member ON THAT DAY (readCalendar). The explicit dates of a 'dates'
+// schedule (migration v8) come along as text.
 async function readExternalScheduleRows(ctx, { from, to }) {
   const params = [from, to];
-  const scope = calendarScheduleScopeSql(ctx, "s", "training_load.external_schedule_targets", params, "$1", "$2");
-  if (scope === "false") return [];
+  const candidate = calendarScheduleCandidateSql(ctx, "s", "training_load.external_schedule_targets", params, "$1", "$2");
+  if (candidate === "false") return [];
+  const structural = calendarScheduleStructuralSql(ctx, "s", "training_load.external_schedule_targets", params);
   const result = await query(
     `select s.id, s.event_name, s.event_type, s.status, s.schedule_kind, s.start_date, s.end_date, s.recurrence_rule, s.opens_time,
+            (${structural}) as structural,
             (select coalesce(array_agg(d.scheduled_date::text order by d.scheduled_date), '{}') from training_load.external_schedule_dates d
               where d.schedule_id = s.id and d.scheduled_date between $1::date and $2::date) as explicit_dates
        from training_load.external_schedules s
       where s.status = 'active'
         and s.start_date <= $2::date and (s.end_date is null or s.end_date >= $1::date)
-        and (${scope})
+        and (${candidate})
       order by s.id`,
     params,
   );
@@ -303,19 +309,22 @@ async function readTestAssignmentRows(ctx, { from, to, filters, teamIds }) {
   return result.rows;
 }
 
+// The same for test schedules (candidates with their structural relation).
 async function readTestScheduleRows(ctx, { from, to }) {
   const params = [from, to];
-  const scope = calendarScheduleScopeSql(ctx, "sch", "tests.test_schedule_targets", params, "$1", "$2");
-  if (scope === "false") return [];
+  const candidate = calendarScheduleCandidateSql(ctx, "sch", "tests.test_schedule_targets", params, "$1", "$2");
+  if (candidate === "false") return [];
+  const structural = calendarScheduleStructuralSql(ctx, "sch", "tests.test_schedule_targets", params);
   const result = await query(
     `select sch.id, sch.status, sch.schedule_kind, sch.start_date, sch.end_date, sch.recurrence_rule, sch.opens_time,
+            (${structural}) as structural,
             coalesce(tv.name, tbv.name) as test_name
        from tests.test_schedules sch
        left join tests.test_versions tv on tv.id = sch.test_version_id
        left join tests.test_battery_versions tbv on tbv.id = sch.test_battery_version_id
       where sch.status = 'active'
         and sch.start_date <= $2::date and (sch.end_date is null or sch.end_date >= $1::date)
-        and (${scope})
+        and (${candidate})
       order by sch.id`,
     params,
   );
@@ -551,6 +560,9 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
       });
       for (const { key, schedule, day } of projected) {
         const athletes = targets.get(`${schedule.id}|${day}`) || [];
+        // The day's access: the workspace's own event (structural), or at
+        // least one athlete who was a member ON THAT DAY — never the window.
+        if (schedule.structural !== true && !athletes.length) continue;
         if (filtering && !athletes.length) continue;
         const card = newCard({
           key, kind: "external", date: day, title: schedule.event_name || null, eventType: schedule.event_type || null,
@@ -610,6 +622,7 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
       });
       for (const { key, schedule, day } of projected) {
         const athletes = targets.get(`${schedule.id}|${day}`) || [];
+        if (schedule.structural !== true && !athletes.length) continue;
         if (filtering && !athletes.length) continue;
         const card = newCard({
           key, kind: "test", date: day, title: schedule.test_name || null,

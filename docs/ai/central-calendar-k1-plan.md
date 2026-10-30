@@ -165,10 +165,10 @@ One `resolveActiveWorkspace()`, then per kind:
 | Workspace | Activities (own cards and `links.activityIds`) | Planned groups, external and test assignments (by athlete) | Projected schedule days (no occurrence yet) |
 |---|---|---|---|
 | platform | all (today's rule) | all | all |
-| **club** C | **D8: owned by C, or by an active team of C** (new) | athletes with a club membership period in C **or** a team membership period in an active team of C **covering the item's day** (the TL calendar reads today's club membership only, `trainingLoad.js:1011`) | owned by C or a team of C, or targeting C, a team of C or one of those athletes (the athletes judged over the window) |
-| team T (of club C) | owned by T (today's rule, D6) | athletes with a team membership period in T covering the item's day | owned by T, or targeting T, C or a member of T (over the window) |
+| **club** C | **D8: owned by C, or by an active team of C** (new) | athletes with a club membership period in C **or** a team membership period in an active team of C **covering the item's day** (the TL calendar reads today's club membership only, `trainingLoad.js:1011`) | owned by C or a team of C, or targeting C or a team of C (structural: every projected day); targeting one of those athletes: a day only when the athlete was a member **on that day** |
+| team T (of club C) | owned by T (today's rule, D6) | athletes with a team membership period in T covering the item's day | owned by T, or targeting T or C (structural); targeting a member: a day only when they were T's member **on that day** |
 | private coach | `owner_scope = 'user'`, own id (today's rule, D7) | `public.user_athletes` active (`trainingLoad.js:1023`; that relationship keeps no history, so it is today's) | owned by me, or targeting one of my athletes |
-| athlete | own canonical participation only, and of a shared activity only the own participant (never a teammate); filters ignored (as `trainingLoad.js:1510-1522`) | own plans, own assignments | own targets: schedules targeting the athlete, or a team or club membership of theirs within the window (never by owner) |
+| athlete | own canonical participation only, and of a shared activity only the own participant (never a teammate); filters ignored (as `trainingLoad.js:1510-1522`) | own plans, own assignments | own targets: schedules targeting the athlete directly, or a team or club the athlete was a member of **on that day** (never by owner) |
 | none / athlete account without profile | `403` | | |
 
 Plans and assignments are read by **membership on the item's day** — the v25 periods
@@ -196,6 +196,18 @@ own routes still answer such a reader by their ownership rule; `links.activityId
 the activities the reader may open. Switching to plan ownership later is one WHERE clause. The `clubIds` /
 `teamIds` / `athleteIds` filters narrow inside the scope and follow the same day rule for club and team
 (`calendarAthleteFilterSql`); a projected schedule day whose targets leave nobody in the filter is not shown.
+
+**Projected schedule days are judged on the day, never over the window** (the owner's external review of this
+pull request, P1). The window only pre-selects candidate schedules (`calendarScheduleCandidateSql`: the
+structural relation, or a target reached through an athlete who was in the scope on some day of the window);
+every projected day is then shown only through the **structural** relation (the scope owns the schedule, or the
+schedule targets the scope's club or team itself — the workspace's own event, shown whatever its members that
+day; `calendarScheduleStructuralSql`) or through **at least one athlete who was a member on that day**
+(`readScheduleTargetAthletes`, one `unnest` statement over every (schedule, day) pair with `membershipOnDaySql`
+on the day). So a former member never sees the former team's future event or test, and a former coach never
+sees another team's future event addressed to their former athlete, whatever range is asked; the days the
+membership covered stay; a wide range answers exactly the union of its days (test 26). Generated occurrences
+and assignments carry the athlete and are judged by the assignment's own day in the same way.
 
 **Exactly where D8 changes code** (reads only; every write path keeps `canManageActivityInScope`):
 
@@ -291,6 +303,12 @@ point 1); the suite adds `plans.plans.builder_batch_id` to its own database befo
 14. After the independent review's second round: the membership rule's boundary days (the leaving day and the
     joining day count), the fallback for a current member's plans before their first period, and the Club /
     Team filter on the day for an athlete who moves from team X to team Y inside the club (tests 23, 25).
+15. After the owner's external review (P1): a projected day judged on the day — a former member never sees the
+    former team's future event or test, a former coach never sees another team's future event or test addressed
+    to their former athlete, over a range spanning the leaving day; the covered days and a current member's view
+    stay; the team's own event lists only that day's members; a generated assignment of a former member is not
+    the team's on that day (the athlete still reads their own row); a wide range equals the union of its single
+    days (test 26).
 
 Also run and record: `training-load-calendar.test.mjs`, `training-activity.test.mjs`,
 `activity-roster-5a1.test.mjs`, `tests-weekly-calendar.test.mjs`; a failure not mine is reproduced on a
@@ -318,7 +336,9 @@ Trigger 3 (identity / linking) is not: K1 stores no link. No migration, so no `d
 4. **Q-D:** plans by **membership on the item's day**, not by plan ownership — read from the v25 membership periods (the manager's reading of the plan as approved, after the independent review found the first build reading today's membership as Training Load and Coach Home do), with the fallback to the current membership for the days before the athlete's first period in the club (option b, the manager's decision after the independent review's second round); UTC date granularity, boundary days inclusive. The dual-member consequence and the fallback in section 3 stay points for the owner.
 5. **Club workspace** reads the plans of club members **and** of members of the club's teams (the spirit of D8).
 6. **Projected schedule days by target** (team / club / athlete in scope), not only by owner, the way
-   `tests.js` projects them.
+   `tests.js` projects them — and, after the owner's external review, judged **on the day**: the structural relation
+   (owner, or the scope's club / team as the target) shows every projected day, a relation through athletes only the
+   days on which an athlete was a member (section 3).
 7. **The read / write split after D8** is accepted for K1 (read-only phase), stated in section 3 as a
    deliberate asymmetry and handed to `security-reviewer` explicitly; writes are decided with K2's events.
 

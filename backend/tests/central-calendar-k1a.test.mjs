@@ -1208,6 +1208,78 @@ test("21. small rules: an external day whose only assignment is excused expects 
   assert.ok(before(pmSlot, afternoonNoSlot), "PM/Before precedes a PM item without a slot (Training rank)");
 });
 
+test("26. a projected day is judged ON THAT DAY, never over the window: a former member and a former coach never see a future event or test after the membership ended, whatever range is asked; the covered days stay; a wide range equals its days", async () => {
+  const clubId = await makeClub("ex26 club");
+  const teamT = await makeTeam(clubId, "ex26 T");
+  const teamY = await makeTeam(clubId, "ex26 Y");
+  const coachT = await coachOf(teamT, "ex26 coach T");
+  const coachY = await coachOf(teamY, "ex26 coach Y");
+  const current = await makeAthlete("ex26 current", { clubId, teamId: teamT });
+  const former = await makeAthlete("ex26 former", { clubId, teamId: teamT });
+  const LEAVE_DAY = addDays(TODAY, -1);
+  await archiveMembership(await teamMembershipId(former.athleteId, teamT), `${LEAVE_DAY}T12:00:00Z`);
+  // T's future event and test (the team as the target), no occurrence; T's past event as the positive control.
+  const tEvent = await makeExternalSchedule({ owner: { scope: "team", teamId: teamT }, createdBy: coachT.id, startDate: FUTURE, eventName: "T future match", targets: [{ kind: "team", id: teamT }] });
+  const tTest = await makeTestSchedule({ owner: { scope: "team", teamId: teamT }, createdBy: coachT.id, startDate: FUTURE, targets: [{ kind: "team", id: teamT }] });
+  const tPastEvent = await makeExternalSchedule({ owner: { scope: "team", teamId: teamT }, createdBy: coachT.id, startDate: PAST, eventName: "T past match", targets: [{ kind: "team", id: teamT }] });
+  // Y's future event and test addressed to the former athlete directly; Y's past one as the positive control.
+  const yEvent = await makeExternalSchedule({ owner: { scope: "team", teamId: teamY }, createdBy: coachY.id, startDate: FUTURE, eventName: "Y guest", targets: [{ kind: "athlete", id: former.athleteId }] });
+  const yTest = await makeTestSchedule({ owner: { scope: "team", teamId: teamY }, createdBy: coachY.id, startDate: FUTURE, targets: [{ kind: "athlete", id: former.athleteId }] });
+  const yPastEvent = await makeExternalSchedule({ owner: { scope: "team", teamId: teamY }, createdBy: coachY.id, startDate: PAST, eventName: "Y past guest", targets: [{ kind: "athlete", id: former.athleteId }] });
+  const keysOn = (res, day) => itemsOn(res, day).map((it) => it.key);
+
+  // (1) and (2): the former member, over a range that spans the leaving day.
+  const f = await calendar(former.cookie, { extra: "&kinds=external,test" });
+  assert.equal(f.status, 200, f.text);
+  assert.equal(keysOn(f, FUTURE).includes(`external:${tEvent}:${FUTURE}`), false, "(1) a former member never sees the former team's future event");
+  assert.equal(keysOn(f, FUTURE).includes(`test:${tTest}:${FUTURE}`), false, "(2) nor its future test");
+  assert.ok(keysOn(f, PAST).includes(`external:${tPastEvent}:${PAST}`), "a day the membership covered stays");
+  assert.ok(keysOn(f, FUTURE).includes(`external:${yEvent}:${FUTURE}`), "a schedule addressed to the athlete directly is theirs whatever the team");
+  const c = await calendar(current.cookie, { extra: "&kinds=external,test" });
+  assert.ok(keysOn(c, FUTURE).includes(`external:${tEvent}:${FUTURE}`), "a current member sees it");
+  assert.ok(keysOn(c, FUTURE).includes(`test:${tTest}:${FUTURE}`));
+
+  // (3) and (4): the former coach (team T's workspace) and Y's schedules addressed to the former athlete.
+  const t = await calendar(coachT.cookie, { extra: "&kinds=external,test" });
+  assert.equal(keysOn(t, FUTURE).includes(`external:${yEvent}:${FUTURE}`), false, "(3) a former coach never sees another team's future event addressed to their former athlete");
+  assert.equal(keysOn(t, FUTURE).includes(`test:${yTest}:${FUTURE}`), false, "(4) nor its test");
+  assert.ok(keysOn(t, PAST).includes(`external:${yPastEvent}:${PAST}`), "while the athlete was T's, Y's schedule addressed to them was on T's calendar");
+  const tFuture = itemsOn(t, FUTURE).find((it) => it.key === `external:${tEvent}:${FUTURE}`);
+  assert.ok(tFuture, "T's own event is T's (structural), shown");
+  assert.deepEqual(tFuture.athleteIds, [current.athleteId], "and lists only the members of that day");
+  const y = await calendar(coachY.cookie, { extra: "&kinds=external,test" });
+  assert.ok(keysOn(y, FUTURE).includes(`external:${yEvent}:${FUTURE}`), "Y's coach sees Y's own event");
+
+  // Generated rows are judged by the assignment's own day as well: an
+  // occurrence of T's future event with assignments for both athletes.
+  const occurrenceId = await makeExternalOccurrence(tEvent, FUTURE, "scheduled");
+  await makeExternalAssignment(occurrenceId, former.athleteId, FUTURE);
+  await makeExternalAssignment(occurrenceId, current.athleteId, FUTURE);
+  const t2 = await calendar(coachT.cookie, { extra: "&kinds=external&include=athletes" });
+  const tCard = itemsOn(t2, FUTURE).find((it) => it.key === `external:${tEvent}:${FUTURE}`);
+  assert.equal(tCard.projected, false);
+  assert.deepEqual(tCard.athleteIds, [current.athleteId], "the former member's generated assignment is not T's on that day");
+  assert.ok(itemsOn(t2, FUTURE).every((it) => !it.athleteIds.includes(former.athleteId) && !(it.athletes || []).some((x) => x.athleteId === former.athleteId)), "no card of a day after the leaving day names the former member");
+  assert.ok(itemsOn(t2, PAST).some((it) => it.athleteIds.includes(former.athleteId)), "a day the membership covered still names them (Y's past guest)");
+  const f2 = await calendar(former.cookie, { extra: "&kinds=external" });
+  const fCard = itemsOn(f2, FUTURE).find((it) => it.key === `external:${tEvent}:${FUTURE}`);
+  assert.ok(fCard, "an assignment that exists for the athlete is their own row (as the Training Load athlete routes read it)");
+  assert.deepEqual(fCard.athleteIds, [former.athleteId]);
+
+  // A wide range equals the union of its single-day answers.
+  for (const viewer of [coachT, former, current]) {
+    const wide = await calendar(viewer.cookie, { extra: "&kinds=external,test" });
+    for (const day of [PAST, LEAVE_DAY, TODAY, FUTURE]) {
+      const single = await calendar(viewer.cookie, { from: day, to: day, extra: "&kinds=external,test" });
+      assert.deepEqual(
+        itemsOn(wide, day).map((it) => [it.key, it.athleteIds, it.status]),
+        itemsOn(single, day).map((it) => [it.key, it.athleteIds, it.status]),
+        `${day}: the same cards in a wide and in a one-day range`,
+      );
+    }
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Bounded statements
 // ---------------------------------------------------------------------------
