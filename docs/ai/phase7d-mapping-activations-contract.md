@@ -11,10 +11,10 @@ that v47 writes. 7d-B may start as soon as 7c-B has both GOs, without waiting fo
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s orders of that day (queued at 15:56:56 and 16:04:13 UTC). |
+| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s orders of that day (queued at 15:56:56 and 16:04:13 UTC). Accepted on 2026-10-30: the *Rukovodilac*'s ★★ GO on head `f602591` (its message queued at 16:48:23 UTC) and the *Nezavisni revizor*'s GO on the same head (queued at 16:49:42 UTC). The *Nezavisni revizor*'s LOW is applied after the GO (section 13, round 4). |
 | Verified against commit | `70e9e2b` (merge of PR #287), the code and migrations of the base `3d4cd12`. Every file and line reference below is to that commit. |
 | The owner's decision | **C106** (2026-10-30): „klupski admin treba takođe da ima mogućnost to da uradi” (owner turn `715938df`, 16:03:47 UTC, in the *Rukovodilac*'s chat; the executor checked it in the transcript). Section 2 records the *Rukovodilac*'s reading of it. It supersedes D7's "only a platform admin in the first scope" and C30 for T5. |
-| Decides | The *Rukovodilac*: R1–R7 (section 12), inside the plan. The owner: no open question blocks 7d (section 11). |
+| Decides | The *Rukovodilac*: R1–R9 and section 7 (section 12), accepted at the GO. The owner: no open question blocks 7d (section 11); the breadth of the *Rukovodilac*'s reading of C106 is named for the owner in section 2. |
 | Migration | **v48**, proposed as `migrations_v2/<YYYYMMDDHHMM>_training_load_v48_mapping_activations.sql`, after v47 (7c). |
 
 ---
@@ -164,6 +164,11 @@ that v47 writes. 7d-B may start as soon as 7c-B has both GOs, without waiting fo
   - in club X's workspace (support): system mappings and club X's mappings, on club X's bindings.
 - **An active club admin of club X, in club X's workspace:** system mappings ("a reference") and club X's own mappings,
   on club X's bindings.
+
+**The breadth of this reading, named for the owner** (the *Nezavisni revizor*'s note at the GO): the owner's words say
+that a club admin may also do it. The *Rukovodilac*'s reading lets a club admin start **system** mappings on its own
+club's bindings, and end on them an activation that a platform admin started. That is wider than the literal words. It
+is recorded as the *Rukovodilac*'s reading, and it is put to the owner with the request for the owner's word on PR #291.
 
 **Never:**
 - another club's mapping;
@@ -394,6 +399,10 @@ index names.
    identical 404, before any lock.
 3. The actor setting.
 4. **The locks:**
+   - T2a (the source field) and T2b (the version's revision) `FOR SHARE`, in D's order, as 7b's `lockRevision` does for
+     A1 and A2 (the *Nezavisni revizor*'s note at the GO). The revision lifecycle takes T2a `FOR SHARE` and the field's
+     T2b rows `FOR UPDATE` (`sourceRevisionLifecycleService.js` lines 175–179), so S1 and a retirement serialize at T2b.
+     A future writer that retires T2a meets S1's `FOR SHARE` there too, so the two can never both pass on plain reads;
    - T3 (the mapping) `FOR SHARE`. 7b's transitions take it `FOR NO KEY UPDATE`, so a start and a disable of the same
      mapping serialize;
    - T4 (the version) `FOR SHARE`, its mapping checked again;
@@ -422,8 +431,8 @@ index names.
 8. The T8 rows: N `activation_start` rows, the keyed one last.
 9. The bounded COMMIT, with v48's deferred links.
 
-**S1's real lock order:** T3 → T4 → the bindings (`FOR SHARE`) → their teams (`FOR SHARE`) → the role and user rows →
-the club rows → the new T5 rows → T8.
+**S1's real lock order:** T2a → T2b → T3 → T4 → the bindings (`FOR SHARE`) → their teams (`FOR SHARE`) → the role and
+user rows → the club rows → the new T5 rows → T8.
 
 Against D's order (T3 → T4 → T5 → binding → MC connection → the acting user's rows), the new T5 rows come after the
 user and club rows. This forms no cycle, for two reasons:
@@ -503,7 +512,7 @@ followed by the role, user and club rows. S1's order, and why its one difference
 | A club archive (the club row updated) | S1 and S2 hold the club row FOR SHARE (step 5). The archive waits for them, or lands first, and then S1 or S2 answers the identical 404. The archive takes no T3, T4, T5 or binding lock, so there is no cycle. A1, A2 and the pinned step lock no club row for their ends (section 2.3), so an archive never blocks them. |
 | A team archive | S1 and A1's starts hold the bindings' team rows FOR SHARE (step 4). The archive waits for them, or lands first, and then S1 answers the identical 404. S2, A2 and the pinned step lock no team row. |
 | A team move | v27 refuses it while the team is bound through its club's connection (lines 410–430). After an Unbind it may move: S2, A2 and the pinned step lock no team row, and the scope stays the connection's club (section 2.2). |
-| S1 against the pinned step on the same version | Both take T3 FOR SHARE, which is compatible (`lockPinned` line 198), so they serialize at T4 (S1 FOR SHARE against the pinned step's FOR UPDATE, lines 200–208). If the pinned step is first, S1 then reads the version disabled (`version_not_active`). If S1 is first, the pinned step reads S1's committed new row among the open rows and ends it. |
+| S1 against the pinned step on the same version | Both take T2a FOR SHARE. The lifecycle then takes the field's T2b rows FOR UPDATE (lines 175–179) against S1's T2b FOR SHARE, so they serialize at T2b; their later T3 (FOR SHARE on both sides) and T4 (S1 FOR SHARE against the pinned step's FOR UPDATE, lines 198–208) are taken in the same order. If the pinned step is first, S1 then reads the version disabled (`version_not_active`). If S1 is first, the pinned step reads S1's committed new row among the open rows and ends it. |
 | A role revocation | The writes meet it only at their user-row FOR SHARE (the 7c argument). |
 
 **Why S2 locks T3 and T4 first:**
@@ -643,12 +652,15 @@ lock table training_load.source_metric_audit in share row exclusive mode;
 It is rehearsed as v47's, with a `.gitattributes` LF line from the start.
 
 **The merge order:** v48 embeds v47's final revision-guard body and its md5, and the preflight checks them. 7d-B is
-therefore written on v47's merged text, never on a draft, and merges after 7c-B.
+therefore written on v47's merged text, never on a draft: its code may start earlier, but its pull request opens only
+after 7c-B is merged (the *Rukovodilac*'s note (v) at the GO).
 
 **The preflight (about 9 blocks):**
 - v47 the last migration with its checksum;
 - the md5 of the six bodies v48 replaces;
 - no T5 row, and no activation T8 row;
+- no binding whose connection is not club-owned or has no `owner_club_id` (expected 0). Otherwise S1 would refuse
+  fail-closed in production with no visible reason (the *Rukovodilac*'s note (iii) at the GO);
 - no v48 object;
 - the migrator owns both tables;
 - a quiet moment.
@@ -785,7 +797,7 @@ therefore written on v47's merged text, never on a draft, and merges after 7c-B.
    - S2 against A2, and S2 against the pinned step, on the same row (both orders; the T8 foreign key on the version is
      the reason for S2's order, section 5);
    - S1 against S2 on the same binding and field;
-   - S1 against the pinned step on the same version (both orders);
+   - S1 against the pinned step on the same version (both orders; they meet at T2b);
    - S1 against a raw `UPDATE` ending the binding (it waits, then `binding_not_active`), and against a team archive
      (it waits, then the identical 404);
    - S1 against an Unbind of the binding (both orders: the Unbind waits, or S1 answers `binding_not_active`);
@@ -823,7 +835,7 @@ therefore written on v47's merged text, never on a draft, and merges after 7c-B.
 
 ---
 
-## 12. Proposed for the *Rukovodilac* (inside the plan)
+## 12. Accepted by the *Rukovodilac* (inside the plan; proposed here, accepted at the GO of 2026-10-30)
 
 - **R1:** D3's prepared replacement in L4 (Q5) as its own pull request, **7d-C**, after 7d-B.
   - It activates new versions inside the lifecycle, so it must meet the G1 obligation of J8's section 11. That is its
@@ -842,8 +854,7 @@ therefore written on v47's merged text, never on a draft, and merges after 7c-B.
 - **R7:** `GET /activations` pages (C68) and needs a `bindingId` or a `versionId`.
 - **R8:** A1 and A2 report the number of activations they ended (`activationsEnded`), and A1 also reports the ones it
   started. No acknowledgement is required before they end activations that are not restarted: the screens of phase 8
-  show the list before the call. If the *Rukovodilac* wants an explicit precondition (for example
-  `expectedOpenActivations`), it is a body key added to the request hash.
+  show the list before the call. **Accepted without an `expectedOpenActivations` precondition.**
 - **R9:** an archived club's binding:
   - S1 and S2 answer the identical 404 for both bases (ADR-006, as F3c2e/f for connections);
   - A1, A2 and the pinned step of a **system** version still end its activations (section 2.3);
@@ -854,8 +865,17 @@ therefore written on v47's merged text, never on a draft, and merges after 7c-B.
   reaches every club, or by restoring the club.
 
   The code review proposed that a platform admin's S2 should also pass on an archived club; the security review
-  proposed the 404. The contract follows the security review, because the cleanup paths stay open. The *Rukovodilac*
-  decides.
+  proposed the 404. The contract follows the security review, because the cleanup paths stay open. **Accepted: the
+  *Rukovodilac* follows the security position, and the *Nezavisni revizor* agrees.**
+- **Section 7** (the helpers stay where they are, three new functions in `sourceMetricAccess.js`,
+  `sourceConnectionService.js` untouched): accepted.
+
+### 12.1 Obligations for 7d-B (the *Rukovodilac*'s notes at the GO)
+
+- **(iii)** v48's preflight checks that no binding's connection lacks a club owner (section 6.4).
+- **(iv)** An A1 replay made before 7d hashes without the new keys and still replays (section 4.4, test 6).
+- **(v)** The 7d-B pull request opens only after 7c-B is merged (section 6.4).
+- **The *Nezavisni revizor*'s LOW-1:** S1 locks T2a and T2b `FOR SHARE` before T3 (section 4.1).
 
 ---
 
@@ -906,6 +926,15 @@ in this revision:
 
 The code re-review said the v35 actor guard fires before v34's insert guard. The trigger names sort the other way
 (`…_insert_guard` before `…_v35_actor_guard`), as the DB re-review said, and the contract follows the names.
+
+**Round 4: the ★★ round** (2026-10-30, head `f602591`).
+- The *Rukovodilac*: GO, with no BLOCKER, HIGH or MEDIUM. Its decisions are recorded in section 12, and its notes in
+  section 12.1 and in the 7c contract's section 9.4.
+- The *Nezavisni revizor*: GO (READY WITH NON-BLOCKING NOTES).
+  - **LOW-1:** S1 did not lock T2a and T2b, a latent write skew with a future T2a retirement. Applied in section 4.1,
+    the lock order and section 5.
+  - **LOW-2:** the breadth of the C106 reading is named for the owner in section 2.
+  - **INFO-1:** R9; it agrees with the choice.
 
 ## 14. Not in 7d
 

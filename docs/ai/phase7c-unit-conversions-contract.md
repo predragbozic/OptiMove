@@ -14,9 +14,9 @@ Each implementation:
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (its message queued at 15:36:31 UTC), after the owner's word „daj mu zadatke 7c” (owner turn `77b204df`, 2026-10-30 15:33:57 UTC, in the *Rukovodilac*'s chat; the executor checked it in the transcript). Reviewed with 7d after the owner's word „ako je sigurnije neka ide kako smo počeli, eventualno 7c i 7d možda u jedan pr” (owner turn `dc0796d5`, 15:56:22 UTC), as the *Rukovodilac* reads it. Revised after the internal reviews (section 11). |
+| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (its message queued at 15:36:31 UTC), after the owner's word „daj mu zadatke 7c” (owner turn `77b204df`, 2026-10-30 15:33:57 UTC, in the *Rukovodilac*'s chat; the executor checked it in the transcript). Reviewed with 7d after the owner's word „ako je sigurnije neka ide kako smo počeli, eventualno 7c i 7d možda u jedan pr” (owner turn `dc0796d5`, 15:56:22 UTC), as the *Rukovodilac* reads it. Revised after the internal reviews (section 11). Accepted on 2026-10-30: the *Rukovodilac*'s ★★ GO on head `f602591` (its message queued at 16:48:23 UTC) and the *Nezavisni revizor*'s GO on the same head (queued at 16:49:42 UTC). |
 | Verified against commit | `70e9e2b` (merge of PR #287). Every file and line reference below is to that commit. The base of this pull request, `3d4cd12` (merge of PR #290), changed only documents, so the references hold there too. |
-| Decides | The *Rukovodilac*: Q1–Q3 (section 9.1), decided in the order; R1–R7 (section 9.2), proposed here. The owner: nothing new is asked (section 9.3). |
+| Decides | The *Rukovodilac*: Q1–Q3 (section 9.1), decided in the order and confirmed at the GO; R1–R7 (section 9.2), accepted at the GO as proposed. The owner: nothing new is asked (section 9.3). |
 | Migration | **v47**, proposed as `migrations_v2/<YYYYMMDDHHMM>_training_load_v47_unit_conversion_guards.sql`, named by the day it is written. No file carries the label v47 at `70e9e2b` (v46 is the last). |
 
 ---
@@ -594,6 +594,9 @@ with the files, since the rollback restores a body whose md5 the preflight and t
 13. **The existing suites keep running** (the v37 precedent): the M1, M2, 7b and v39 fixtures that write
     `unit_conversions` raw switch v47's three triggers off around those writes, as the M2b fixtures do for v37's. The M2
     architecture test that lists the writers of the Metrics Core tables names the new writer.
+    - The switch-off is limited to those fixture blocks and is undone right after them, as M2b does for v37 (the
+      *Rukovodilac*'s note (ii) at the GO).
+    - An architecture test asserts that no production module (`backend/src`) runs `disable trigger`.
 14. **Regression:**
     - M1, M2, v35, M2b, v39, v42, 7b and the 7c suite;
     - `--preset gpexe` against its baseline;
@@ -613,7 +616,7 @@ with the files, since the rollback restores a body whose md5 the preflight and t
   the unit or the conversion"). Discovery found no reason to build a minimal admin screen now: every write has an API
   and a test, and no conversion beyond the four seeded ones is needed before the C97 evidence confirms a unit.
 
-### 9.2 Proposed for the *Rukovodilac* (inside the plan)
+### 9.2 Accepted by the *Rukovodilac* (inside the plan; proposed here, accepted at the GO of 2026-10-30)
 
 - **R1:** each number at most 40 characters of text. The representable range of D5 stays as it is (K: `7/3` and
   `°F → °C` remain refused).
@@ -633,6 +636,13 @@ with the files, since the rollback restores a body whose md5 the preflight and t
 
 Nothing new: the contract adds no product rule. It builds the two operations the accepted design (D5, D10) already
 names, under the existing audience and evidence rules.
+
+### 9.4 Obligations for 7c-B (the *Rukovodilac*'s notes at the GO)
+
+- **(i)** The retire writes `retired_at = now()` exactly, never `clock_timestamp()`; otherwise v47 refuses it with
+  `23514` (section 6.2). Test 8 covers it.
+- **(ii)** The v47 switch-off in the existing suites stays inside the fixture blocks, with an architecture test against
+  `disable trigger` in production code (test 13).
 
 ---
 
