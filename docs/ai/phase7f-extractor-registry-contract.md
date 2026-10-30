@@ -13,11 +13,12 @@ pull requests.
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC). |
+| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 10). |
 | Verified against commit | `6a94ce29` (merge of PR #294). Every file and line reference below is to that commit unless it names another. |
 | Migration | **None.** The registry is code; the database cannot bind a key to code (P4 of J7, `migrations_v2/202610282300_training_load_v42_source_metric_zone_model.sql:28-31`). Section 6 says why nothing is lost. |
 | Order | **7f-B before 7e-B**: the aggregate preview (J11) reads values only through this registry. The plan lists 7e before 7f; section 8 asks the *Rukovodilac* to swap them. |
-| Decides | The *Rukovodilac*: R1–R4 (section 8). The owner: nothing; the operators of the two event fields wait for the C97 evidence, as before (section 4.3). |
+| **Pending owner** | **OD1** (team-relative zones; section 4.1) and **OD4** (a system mapping carrying zone or threshold bounds; section 4.1) of the five owner decisions of phases 7e–7g (J11 section 0.1). Written with the recommended options; **nothing of them is built before the owner's yes**. |
+| Decides | The *Rukovodilac*: R1–R4 (section 8). The owner: OD1, OD4; the operators of the two event fields wait for the C97 evidence, as before (section 4, item 3). |
 
 ---
 
@@ -114,10 +115,12 @@ pull requests.
 | `more.events.deceleration_events_count` | — / down | operator `<=` or `<` | the same with `deceleration_events_*` |
 | `details.players.tot_burst_events`, `tot_brake_events` | — | `sourceParameters` is `null` | `playerDetails.tot_*_events`: `{unit: "number", value: <finite>}` → `value`; otherwise today's `detailsNumber` codes |
 
-- **The decimal comparison of a threshold** (R2): the answer's number and the version's stored decimal are compared
-  after both are written as canonical decimal text (no exponent, no trailing zeros), so `2.5` equals `2.50`, and
-  `2.5` never equals `2.4999999`. Today's mapper compares with `!==` against hard-coded numbers; the result is the
-  same for every value the probes saw.
+- **One decimal comparison for every bound and threshold** (R2): a zone's `lower` / `upper` against the answer's
+  `extremes` and the team's `power_thresholds` / `speed_thresholds`, and an event's `threshold_value` /
+  `duration_seconds` against the answer's, are compared after both sides are written as canonical decimal text (no
+  exponent, no trailing zeros), so `25` equals `25.0`, `2.5` equals `2.50`, and `2.5` never equals `2.4999999`.
+  Today's mapper compares JSON numbers with `===`, `!==` and `includes` (`gpexeImportMapper.js:65, 68, 104-105`); the
+  result is the same for every value the probes saw.
 - **The operator of an event field** is the one the meaning act confirms (C97 still owes its evidence). The registry
   accepts both one-sided operators of the field's direction and never interprets the difference: the GPEXE answer
   carries no operator (`gpexeRestV1Adapter.js:92`), only the threshold the count was computed with, and that is what
@@ -135,16 +138,18 @@ All in the services; no route, table or trigger is added.
    parameters_unsupported` (both with nothing written; neither depends on a lock: the key and the parameters are
    immutable).
 2. **A1 activate** (activation and replacement, 7b): the same two checks on the version to be activated, after its
-   rows are locked and before any write; the answer is the same `409`. A draft created before 7f-B is caught here.
+   rows are locked **and after `rightsStillHold`** (7b's rule: a state refusal only after the right is confirmed
+   again), before any write; the answer is the same `409`. A draft created before 7f-B is caught here.
 3. **The listed starts** (S1, A1's listed starts, 7d): only an `active` version can be started, and every active
    version passed (2), so nothing more is checked.
 4. **The 7e preview** (J11): an unsupported field answers `409 source_metric_unsupported`.
 5. **M4's import** reads values only through `extractorFor`; a version whose field has none is a configuration error
    that (1) and (2) make unreachable.
 
-The order of the new refusals among the existing ones of T4 create and A1 (R3): after every `404` and every
-state refusal the route has today, and before the first write. So a caller who may not see the mapping learns
-nothing new.
+The order of the new refusals among the existing ones (R3): at T4 create, after every `404` and with its other
+`409`s (which today come before its rights check, `sourceMetricMappingService.js:1068-1108`); at A1, after every `404`,
+after `rightsStillHold` and after its existing state refusals, before the first write. So a caller who may not see
+the mapping learns nothing new.
 
 `GET /fields` (and `GET /fields/:fieldId`) add `extractorAvailable: true | false` per field (R4), so the phase 8
 screen can offer only supported fields. No other read changes.
@@ -161,6 +166,23 @@ screen can offer only supported fields. No other read changes.
 4. **Multiple tracks, invalid row statistics, a whole-row count ≠ 1, a session that is not `FULL TRAINING`**: the
    athlete and session gates stay the mapper's (`gpexeImportMapper.js:280-333`). The registry reads one row; who is
    read is not its question.
+
+### 4.1 Different zones for different teams (OD1, OD4: pending owner)
+
+The owner asked on 2026-10-30 how a U15 team and a senior team with different speed or power zones are handled.
+
+- **With the existing design (recommended, OD1: no new model now):** a mapping version's bounds are fixed (its
+  `source_parameters`). Two teams with different zones use **two canonical variables** (for example "Sprint distance ≥
+  22 km/h" and "Sprint distance ≥ 25.2 km/h"), each with its own mapping and active version, and each team's binding
+  activates the one that fits its own GPEXE zone settings (T5, per binding).
+- **A team whose GPEXE settings do not contain the version's bounds is refused fail-closed:** the extractor answers
+  `team_threshold_missing` or `team_threshold_split` for a zone, `threshold_mismatch` or `duration_mismatch` for an
+  event, and no value is written from a wrong zone (F's table). The 7e preview shows it as a count of 0 before
+  anything is activated (J11 section 5).
+- **A team-relative zone** (one canonical variable whose bounds follow each team's own settings) would be a new
+  parameter kind and a new mapping model; it is **not built** unless the owner asks for it later (OD1).
+- **OD4 (recommended: yes):** a system mapping may carry zone or threshold bounds; the bounds are not personal data,
+  and a team's own settings are shown only to that team's club and a platform admin (the phase 8 screen's rule).
 
 ## 5. Security and privacy
 
@@ -189,7 +211,10 @@ screen can offer only supported fields. No other read changes.
 - **The zone rules of J7:** closed zones only for the power key; exactly one null-top zone for `.open_top` (none →
   `zone_boundary_missing`, two → `zone_boundary_ambiguous`); the open zone for speed; each wrong operator / shape →
   `parameters_unsupported`.
-- **The decimal threshold comparison:** `2.5` = `2.50`; `2.5` ≠ `2.4999999`; a threshold of another sign.
+- **The decimal comparison:** a zone bound `25.0` in the version against `extremes [25, 60]` and team thresholds
+  `[25, 60]` gives the same distance as `25`; `2.5` = `2.50`; `2.5` ≠ `2.4999999`; a threshold of another sign.
+- **Two teams, two variables** (OD1): one team's settings match the version's bounds and give values, the other's do
+  not and give `team_threshold_missing` with nothing written.
 - **Enforcement through the real routes:** T4 create and A1 activate answer `409 source_metric_unsupported` and `409
   parameters_unsupported` with nothing written; the order after the `404`s (a caller outside the mapping's scope
   still gets the identical `404`); `GET /fields` carries `extractorAvailable`.
@@ -201,7 +226,7 @@ screen can offer only supported fields. No other read changes.
 ## 8. Decisions for the *Rukovodilac*
 
 - **R1 — order:** 7f-B before 7e-B (the preview needs the registry). Recommended: swap 7e and 7f in the plan's order.
-- **R2 — threshold equality as decimals** (section 2.1). Recommended.
+- **R2 — one decimal comparison for every bound and threshold** (section 2.1). Recommended.
 - **R3 — the place of the new refusals** in T4 create and A1 (section 3). Recommended.
 - **R4 — `extractorAvailable` on `GET /fields`.** Recommended; it is the only read change.
 
@@ -211,3 +236,11 @@ No owner decision is needed for 7f. The owner's K items for 7e and 7g are in J11
 
 M4 (the importer reading activations), the import switch, the phase 8 screen, any GPEXE request, a new source field
 or revision, the `e03` / `api` family, derived values (`gpexeImportMapper.js:180-186`), multiple tracks (section I).
+
+## 10. Review record
+
+- **Internal round 1 (head `e8060485`):** `code-reviewer`, `db-reviewer`, `security-reviewer`, each READY WITH
+  NON-BLOCKING NOTES, no BLOCKER or HIGH. Applied in this revision: one decimal comparison for zone bounds and team
+  thresholds too (code LOW); A1's new refusals after `rightsStillHold` (security LOW); OD1 (with the owner's U15 /
+  seniors question answered by the existing design) and OD4, marked pending owner (the *Rukovodilac*'s note of 19:29
+  UTC).

@@ -9,16 +9,17 @@ who may see it) and two open items of section K (line 3840: its fields; lines 38
 athletes for min and max).
 
 It is reviewed together with the 7f contract (`docs/ai/phase7f-extractor-registry-contract.md`, J12) and the 7g
-contract (`docs/ai/phase7g-source-instance-end-contract.md`, J13) in one ★★ round. **It reads values only through
-7f's registry, so 7e-B comes after 7f-B** (J12, R1).
+contract (`docs/ai/phase7g-source-instance-end-contract.md`, J13) in one ★★ round. **7e-B comes after 7d-B** (it uses
+7d's `mayManageActivations` and its scope rule, section 2.1 of `docs/ai/phase7d-mapping-activations-contract.md`) **and
+after 7f-B** (it reads values only through 7f's registry; J12, R1).
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC). |
+| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 11). |
 | Verified against commit | `6a94ce29` (merge of PR #294). Every file and line reference below is to that commit unless it names another. |
 | Migration | **None.** A read over existing rows; no table, column, trigger or audit row. |
-| **Pending owner** | **P1** the preview's fields (section 3) and **P2** the minimum count of athletes for min and max (section 4) are section K's open items. The *Rukovodilac* put both to the owner on 2026-10-30 with these recommendations: P1 exactly the four facts below and nothing more; P2 = 3. Until the owner answers, the contract is written with the recommended options, marked **pending owner**. **P3**, whether a system zone or threshold mapping may show one team's bounds, is J13's neighbour item in K (line 3850); it does not change this contract (section 6). |
-| Decides | The *Rukovodilac*: R1–R5 (section 9). The owner: P1, P2. |
+| **Pending owner** | **OD2** (the preview's fields, section 3), **OD3** (the minimum count of athletes, section 4) and **OD4** (a system mapping carrying zone or threshold bounds, section 6) — section 0.1. **Nothing of them is built before the owner's yes.** |
+| Decides | The *Rukovodilac*: R1–R7 (section 9). The owner: OD2, OD3, OD4. |
 
 ---
 
@@ -35,6 +36,19 @@ contract (`docs/ai/phase7g-source-instance-end-contract.md`, J13) in one ★★ 
 - **Never** a raw answer, a row per athlete, an athlete id or name, or a value below the minimum count (pending owner).
 - **The values are the ones M4 would write:** the same session and athlete gates as today's mapper, the version's field
   through 7f's extractor, at the version's levels, converted by the version's own factors with D8's storage rule.
+
+## 0.1 The owner's five open decisions of phases 7e–7g (pending owner)
+
+The *Rukovodilac* put them to the owner on 2026-10-30 with these recommendations. Each is written into its contract
+with the recommended option and marked **pending owner**; none is implemented before the owner's yes.
+
+| | Decision | Recommended | Where |
+|---|---|---|---|
+| **OD1** | Team-relative zones as a canonical variable of their own (bounds that follow each team's settings) | **Not now**: fixed bounds per mapping version; two teams with different zones (for example U15 and seniors) use two canonical variables, each team's binding activating the one that fits it, a mismatch refused fail-closed | J12 section 4.1 |
+| **OD2** | The preview's fields | Exactly: the count of athletes with a value, min, max, the units before and after, and `snapshot_expired`; nothing more | J11 section 3 |
+| **OD3** | The minimum count of athletes for min and max | **3** | J11 section 4 |
+| **OD4** | May a system mapping carry zone or threshold bounds | **Yes**: the bounds are not personal data; a team's own settings are shown only to that team's club and a platform admin | J11 section 6, J12 section 4.1 |
+| **OD5** | The shape of the operation that ends a held source instance (D9) | Only an active platform admin in the platform workspace, with a mandatory reason, refused while an open activation exists on that source's bindings | J13 sections 2–4 |
 
 ## 1. What exists (verified)
 
@@ -80,17 +94,28 @@ contract (`docs/ai/phase7g-source-instance-end-contract.md`, J13) in one ★★ 
 The router's usual sequence (`adminContext`, then the gate), with no body:
 
 1. **401** without a session (`requireAuth`).
-2. **The identical 404** (`{ "error": "notFound" }`) for every one of these, in this order, each a plain read:
+2. **The identical 404** (`{ "error": "notFound" }`) for every one of these, in this order (steps 4 and 5 inside the
+   read-only transaction below):
    1. no mapping-admin context (`resolveMappingAdmin`), or `mayManageActivations(ctx)` false (the same audience as 7d);
-   2. a malformed `mappingId`, `versionId` or `candidateId`; an unknown query parameter;
-   3. the mapping not readable in the workspace, or the version not of that mapping;
-   4. the candidate missing; its team missing, archived, or without a club; its club archived;
-   5. **the scope rule** (R1): the platform workspace (a platform admin) admits a **system** mapping over any club's
-      candidate; club X's workspace (its admin, or a platform admin there) admits a system mapping or club X's own,
-      over **club X's candidates only**. Everything else is outside the scope.
+   2. a malformed `mappingId` or `versionId`;
+   3. a missing, repeated (an array) or malformed `candidateId`; any other query parameter;
+   4. the mapping not readable in the workspace, or the version not of that mapping;
+   5. **the candidate outside the scope**, decided in **one statement**: the candidate, its team and the team's club
+      read together, with the scope in the `WHERE` clause — the team and the club active, and `ctx.owner.scope =
+      'system'` (a platform admin in the platform workspace, a **system** mapping) or `team.club_id =
+      ctx.owner.clubId` (club X's workspace, its admin or a platform admin there; a system mapping or club X's own).
+      Zero rows is the 404: a missing candidate, a missing, archived or club-less team, an archived club, another club's
+      candidate all look the same (R1).
+
+   `ctx` (from `resolveMappingAdmin`, once per request) is the only workspace fact; the route never calls
+   `resolveGpexeTeamAccess`, which would resolve the workspace a second time. The candidate's club is **the team's
+   current club**, as every candidate read uses today (`gpexeImportAccess.js:22, 34`), not 7d's "the binding's
+   connection's club" (7d section 2.2): a candidate names a team, not a binding, and its scope follows the team, so a
+   team moved to another club (no route moves a team today) takes its candidates' visibility with it (R6).
 3. **409 `snapshot_expired`** when the candidate's raw snapshot is purged **or** past `raw_expires_at` (R2: as the
    application treats it today), with `{ current: { reason: "purged" | "expired" } }`. A caller who reached this step
    may see the candidate, so its snapshot's state hides nothing.
+   Then **409 `candidate_too_large`** when the stored bundle is over the size bound (R7).
 4. **409 `candidate_source_mismatch`** when the candidate was read from another source family than the version's field
    (a `legacy_env` candidate, or a host whose `api_family` differs).
 5. **409 `source_metric_unsupported` / `parameters_unsupported`** from 7f's registry (J12, section 3).
@@ -98,11 +123,14 @@ The router's usual sequence (`adminContext`, then the gate), with no body:
    refuses the whole session (section 1).
 7. **200** with the preview (section 3).
 
-Every step is in one read-only transaction (`boundedRead`: the read's statement and lock timeouts). The candidate row
-is read without a lock; a concurrent purge either lands first (step 3) or after the read (the preview stands for the
-snapshot it read).
+Every step up to 5 is in one read-only transaction (`boundedRead`, `REPEATABLE READ READ ONLY` with the read's
+statement and lock timeouts, `backend/src/sourceMetricMappingService.js:160-168`), so the scope, the snapshot state and
+the bundle are one snapshot: a concurrent purge either lands before it (step 3) or not at all for this read. The
+candidate row is read without a lock. The same statement refuses a bundle larger than a fixed bound
+(`pg_column_size(raw_bundle)`, R7) with `409 candidate_too_large`, before the bundle leaves the database. The
+extraction and the aggregation (section 5) run in Node after the transaction has ended.
 
-## 3. The answer (P1, pending owner)
+## 3. The answer (OD2, pending owner)
 
 ```
 { "preview": {
@@ -120,11 +148,11 @@ snapshot it read).
   whom 7f's extractor returns a value at that level. At the drill level, an athlete counts once whatever the number of
   their drills with a value.
 - **`min` / `max`:** over every value of the level (at the drill level, every athlete-drill value), in the source unit,
-  as canonical decimal text; **`null` when `athletesWithValue` < `minimumAthletes`** (P2).
+  as canonical decimal text; **`null` when `athletesWithValue` < `minimumAthletes`** (OD3).
 - **`minCanonical` / `maxCanonical`:** the same two values through the version's own conversion, computed in decimal
   and rounded to scale 9 half away from zero (D8's rule, the one `source_metric_value_matches` checks). No other
   rounding.
-- **Nothing else** (P1): no athlete id, name or position; no value list or histogram; no skip codes or counts per
+- **Nothing else** (OD2): no athlete id, name or position; no value list or histogram; no skip codes or counts per
   reason; no `raw_bundle`; no session label beyond what the candidate list already shows (the answer names the
   candidate by id only). A count of 0 is an answer, not an error.
 
@@ -133,7 +161,7 @@ and after) and nothing more. Two options the owner may prefer instead, not built
 left out by each stable skip code (useful to explain a low count, it reveals no value), or the athletes the session
 has in total.
 
-## 4. The minimum count (P2, pending owner)
+## 4. The minimum count (OD3, pending owner)
 
 `minimumAthletes` = **3** (recommended). With fewer athletes with a value, `min` and `max` (and their canonical forms)
 are `null` and only the count is answered, because a min or max of one or two athletes is a single athlete's value.
@@ -144,10 +172,12 @@ change.
 
 For the version's field, through `extractorFor(field)` (J12) with the version's `source_parameters`:
 
-1. Read the candidate's `raw_bundle` once (it is at most a few MiB; the projection bounds every answer at 5 MiB,
-   `gpexeRestV1Adapter.js`).
+1. Read the candidate's `raw_bundle` once, inside the size bound of section 2 (every source answer is bounded at 5
+   MiB by the adapter; the stored bundle has no database bound of its own, hence R7).
 2. Apply the mapper's session gates and athlete gates exactly as M4 will (the same functions, exported for this use;
-   R3), so the preview never counts an athlete the import would leave out.
+   R3), so the preview never counts an athlete the import would leave out. **Only the stable `error.code` of a
+   refusal crosses that boundary:** the mapper's messages and its `anomalies` list carry athlete, track and session ids
+   (`gpexeImportMapper.js:282, 303, 318-331`) and never reach an answer or a log line.
 3. For each remaining athlete: at the session level the whole-session row; at the drill level each drill row; call
    `extract({ row, more, playerDetails, thresholds }, sourceParameters)`. A skip is not a value.
 4. Aggregate per level as in section 3, then convert min and max.
@@ -160,12 +190,15 @@ exactly as the import will. A version whose bounds do not fit the team gives a c
 
 - **Info-hiding:** the candidate exists for the caller only inside the scope rule; outside it every case, including a
   purged snapshot, is the identical 404 (section 2). A test per role and workspace pins it (section 8).
-- **No value of fewer than `minimumAthletes` athletes** leaves the server (P2). Above it, min and max are still values
-  of single athletes; the owner's choice of the number is the accepted bound (it is a K item for exactly that
-  reason).
-- **Zone and threshold bounds** (P3, line 3850 of the discovery document) are not shown by the preview at all: the
-  answer carries no bound, only counts and values in the field's unit. So P3 does not block 7e; it stays the phase 8
-  screen's question.
+- **No value of fewer than `minimumAthletes` athletes** leaves the server (OD3). Above it, min and max are still values
+  of single athletes (with 3 athletes, two of the three values, unattributed); the number is a product guard, not an
+  authorization boundary. For the owner's decision: the same per-athlete values are already visible to the team's coach
+  and admins today (the source-athletes helper values and the stored candidate preview,
+  `backend/src/gpexeImportPreview.js:146, 272, 308`).
+- **Zone and threshold bounds** (OD4, line 3850 of the discovery document; recommended: a system mapping may carry
+  them, and a team's own settings are shown only to that team's club and a platform admin; **pending owner**) are not
+  shown by the preview at all: the answer carries no bound, only counts and values in the field's unit. So OD4 does
+  not change 7e; it is the phase 8 screen's question.
 - **No coach** gets the preview: the audience is the mapping admins (R1), narrower than today's candidate reads.
 - The answer and every log line carry no reason text, no athlete id and no database text (the 7d test pattern).
 
@@ -177,10 +210,13 @@ untouched. The phase 8 screen (the Mappings tab) is the first caller; the API is
 ## 8. Tests (7e-B)
 
 - **Access and info-hiding through the real route:** 401; the identical 404 for a coach, a user with no role, another
-  club's admin, an admin of two clubs in the other club's workspace, the platform workspace over a club mapping, a
-  version not of the named mapping, a candidate of another team or club, a team without a club, an archived team or
-  club; each **also with a purged and with an expired snapshot**, so the 404 always comes before `snapshot_expired`.
-- **The order of the 409s** (section 2): `snapshot_expired` (purged, expired) before `candidate_source_mismatch` before
+  club's admin, an admin of two clubs in the other club's workspace, a platform admin in a team workspace, a platform
+  admin in club X's workspace over a club Y candidate, the platform workspace over a club mapping, a version not of the
+  named mapping, a candidate of another team or club, a team without a club, an archived team or club, a missing or
+  repeated `candidateId`, an unknown parameter; each **also with a purged and with an expired snapshot**, so the 404
+  always comes before `snapshot_expired`.
+- **The order of the 409s** (section 2): `snapshot_expired` (purged, expired) before `candidate_too_large` before
+  `candidate_source_mismatch` before
   `source_metric_unsupported` / `parameters_unsupported` before `candidate_not_importable`.
 - **The values** on the existing GPEXE fixtures: for each of the ten fields with the bounds of today's specs, the
   counts and min / max equal the values today's mapper would import for the same athletes (before its unit
@@ -189,8 +225,10 @@ untouched. The phase 8 screen (the Mappings tab) is the first caller; the API is
 - **The minimum:** 2 athletes with a value give the count and `null` min / max; 3 give all.
 - **The conversion:** min / max canonical through `s → min` and `m/s → km/h` at scale 9 half away from zero (a value
   that rounds at the 10th place).
-- **No leak:** a secret-scan of every answer of the suite for athlete ids, names, raw keys of the bundle and database
-  texts; the answer's keys are exactly section 3's.
+- **No leak:** a secret-scan of every answer **and every captured console line** of the suite for athlete, track and
+  session ids, names, raw keys of the bundle and database texts (a session refused by the mapper included); the
+  answer's keys are exactly section 3's.
+- **The bounds:** a bundle over the size bound is `409 candidate_too_large`, and nothing of it is read into Node.
 - **Mutations** of the scope rule, the 404-before-409 order, the minimum, the athlete gates and the conversion.
 
 ## 9. Decisions for the *Rukovodilac*
@@ -203,8 +241,22 @@ untouched. The phase 8 screen (the Mappings tab) is the first caller; the API is
   behaviour change). Recommended.
 - **R4 — the route is a `GET`** with the candidate in the query (a read, no request key). Recommended.
 - **R5 — `candidate_source_mismatch`** for a candidate read from another family (no partial preview). Recommended.
+- **R6 — the team's current club** decides the candidate's scope (section 2), not 7d's connection-owner club.
+  Recommended.
+- **R7 — a fixed size bound on the stored bundle** read by the preview (proposed 16 MiB, a constant of the service),
+  `409 candidate_too_large` above it. Recommended.
 
 ## 10. Not in this contract
 
 The phase 8 screen, the importer (M4), the import switch, any GPEXE request, a stored preview, a preview over a live
 GPEXE answer, a preview of several candidates at once.
+
+## 11. Review record
+
+- **Internal round 1 (head `e8060485`):** `code-reviewer`, `db-reviewer`, `security-reviewer`, each READY WITH
+  NON-BLOCKING NOTES, no BLOCKER or HIGH. Applied in this revision: the candidate's scope in one statement with `ctx` as
+  the only workspace fact, and the team's current club stated as a choice (security MEDIUM); OD4 written with its
+  recommended option and marked pending owner (code MEDIUM); the dependency on 7d-B (code and security LOW); a missing
+  or repeated `candidateId` is the 404 (security LOW); only the mapper's stable code crosses, with a console-capture
+  test (security LOW); the isolation stated and a size bound on the stored bundle, the extraction after the transaction
+  (db LOW); the five owner decisions under one numbering (the *Rukovodilac*'s note of 19:29 UTC).

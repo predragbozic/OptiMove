@@ -777,8 +777,10 @@ order covers is merged under it.
 - **7e, 7f and 7g, the contracts (J11, J12, J13):** `docs/ai/phase7e-aggregate-preview-contract.md`,
   `docs/ai/phase7f-extractor-registry-contract.md` and `docs/ai/phase7g-source-instance-end-contract.md`, proposed on
   2026-10-30 on the *Rukovodilac*'s order and reviewed in one ★★ round. 7e and 7f need no migration; 7g's migration
-  comes after v48. J12 proposes 7f before 7e. The owner's K decisions they need (the preview's fields, the minimum
-  count of athletes, the shape of D9's operation) are written with the recommended options, pending owner.
+  is written after v48 is merged. J12 proposes 7f before 7e; 7e-B also comes after 7d-B. The owner's five open
+  decisions (OD1–OD5, J11 section 0.1: team-relative zones, the preview's fields, the minimum count of athletes, bounds
+  on a system mapping, the shape of D9's operation) are written with the recommended options and marked pending owner;
+  none is built before the owner's yes.
 - **Reserved after 7g, before phase 9** (the *Rukovodilac*'s note of 2026-10-30, queued at 18:31:50 UTC; built only on
   its own order): a small pull request, "conditions 2 and 3 before the switch": a bounded lock wait before an
   approval's COMMIT (`lock_timeout` and `idle_in_transaction_session_timeout`, with a stable code), and the undo script

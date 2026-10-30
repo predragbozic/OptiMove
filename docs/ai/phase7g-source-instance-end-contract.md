@@ -9,30 +9,32 @@ instance (D9)").
 
 It is reviewed together with the 7e contract (`docs/ai/phase7e-aggregate-preview-contract.md`, J11) and the 7f
 contract (`docs/ai/phase7f-extractor-registry-contract.md`, J12) in one ★★ round. The implementation is its own pull
-request, 7g-B, with a migration that replaces a function body of v48 (7d-B), so **7g-B comes after 7d-B**.
+request, 7g-B, with a migration that replaces a function body of v48 (7d-B): **7g-B's migration is written only
+after v48 is merged and deployed**, against v48's body as merged (section 6.3).
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC). |
+| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 11). |
 | Verified against commit | `6a94ce29` (merge of PR #294) for `main`; v48 as on the 7d-B branch (PR #295, head `578717af`). Every file and line reference below is to `6a94ce29` unless it names another. |
 | Migration | **Yes**: the next free number after v48 (**v49** if none comes between), proposed as `migrations_v2/<YYYYMMDDHHMM>_training_load_v49_source_instance_end.sql` (section 6). |
-| **Pending owner** | **P4**, the shape of the operation (section K, line 3861). The *Rukovodilac* put it to the owner on 2026-10-30 with this recommendation, which the contract is written with, marked **pending owner**: only an active platform admin in the platform workspace, a mandatory reason, refused while an open activation exists on that source's bindings. |
-| Decides | The *Rukovodilac*: R1–R5 (section 9). The owner: P4. |
+| **Pending owner** | The owner's five open decisions of phases 7e–7g are numbered OD1–OD5 in all three contracts (J11 section 0.1). This contract needs **OD5**, the shape of the operation (section K, line 3861). The *Rukovodilac* put it to the owner on 2026-10-30 with this recommendation: only an active platform admin in the platform workspace, a mandatory reason, refused while an open activation exists on that source's bindings. **OD5 is pending owner; nothing of 7g is built before the owner's yes.** The reading "that source's bindings = the owner team's bindings of the same source team" (section 3.2) is the executor's interpretation, part of the same pending decision. |
+| Decides | The *Rukovodilac*: R1–R6 (section 9). The owner: OD5. |
 
 ---
 
 ## 0. In short
 
-- **What a held instance is:** a Metrics Core source connection (`training_load.metric_source_connections`, v11) whose
-  write-once source instance (T7: `source_host_key`, `source_instance_key` = the GPEXE Team ID) is `active`. The
-  partial unique of T7 allows one active instance per GPEXE team (v34 `:1458-1461`), so if the same GPEXE team is ever
-  bound to another OptiMove team, that team's first M4 import is refused with `source_instance_held` until the old
-  instance is ended.
-- **The operation:** an active platform admin in the platform workspace ends one instance with a reason (P4). The row
-  turns `inactive`; nothing is deleted or moved, and every historical fact keeps pointing to it (C36). An ended
-  instance stays ended.
-- **Refused while it is still in use** (P4): an open activation on the old team's bindings of that GPEXE team, or an
-  active binding of the old team to that GPEXE team (R2).
+- **What a held instance is:** a Metrics Core source connection (`training_load.metric_source_connections`, v11) owned
+  by a team, whose write-once source instance (T7: `source_host_key`, `source_instance_key` = the GPEXE Team ID) is
+  `active`. The partial unique of T7 allows one active instance per GPEXE team (v34 `:1458-1461`), so if the same GPEXE
+  team is ever bound to another OptiMove team, that team's first M4 import is refused with `source_instance_held`
+  until the old instance is ended.
+- **The operation** (OD5, pending owner): an active platform admin in the platform workspace ends one instance with a
+  reason. The row turns `inactive`; nothing is deleted or moved, and every historical fact keeps pointing to it (C36).
+  An ended instance stays ended.
+- **Refused while it is still in use:** an active binding of the owner team to that GPEXE team (R2), or an open
+  activation on the owner team's bindings of that GPEXE team (OD5). Both are checked by the route **and by the
+  database guard**, under the owner team's import lock.
 - **Today nothing can be ended:** no code sets the T7 keys before M4, so every GPEXE connection answers
   `instance_not_held`. 7g-B is built and tested on fixtures, dormant until M4 writes its first instance.
 - **The database guard** (C76): a v11 `state` change only as this operation's write, by the acting platform admin,
@@ -53,22 +55,31 @@ request, 7g-B, with a migration that replaces a function body of v48 (7d-B), so 
     dashboard series (v16 `:367`), event bindings (v20 `:112`), the deletion log (v21 `:42`), roster observations
     (v25 `:647`), T6 provenance (v34 `:1492-1494`), T8 (v34 `:1690`, not indexed).
 - **Writers and readers:** the only writer is the GPEXE import writer's `ensureSourceConnection`
-  (`backend/src/gpexeImportWriter.js:137-158`): it finds the team's `active` GPEXE row or inserts one; it never sets the
-  T7 keys and never updates a row. No code sets `inactive`. Readers of `state`: the writer (`:140`), the import preview
-  (`backend/src/gpexeImportPreview.js:86-96, 228-233`), the settings blockers (`backend/src/gpexeImportService.js:185-187`,
-  v24), the dashboards (v16 `:844-861`), the T6 guard (v34 `:1552-1556`).
-- **T8's shape for `source_instance_end`** (`source_metric_audit_row_ok`, v34 `:1670-1671`; byte-identical in v48 on the
-  7d-B branch): only `metric_source_connection_id`, `team_id` optional; `from_status = 'active'`, `to_status =
+  (`backend/src/gpexeImportWriter.js:137-158`): it finds the team's `active` GPEXE row without a lock or inserts one; it
+  never sets the T7 keys and never updates a row. No code sets `inactive`. Readers of `state`: the writer (`:140`), the
+  import preview (`backend/src/gpexeImportPreview.js:86-96, 228-233`), the settings blockers
+  (`backend/src/gpexeImportService.js:185-187`, v24), the dashboards (v16 `:835-861`, a gate for a **new** series
+  binding only, not retroactive: existing series keep working after an end), the T6 guard (v34 `:1547-1556`).
+- **The documented lock order of every writer** (v34 `:38-49`): … → T5 → the team binding → the Metrics Core connection
+  (`FOR SHARE`, only a new fact) → the acting user's rows. The T6 guard takes the binding and then the connection
+  `FOR SHARE` (v34 `:1547-1553`); v16's series triggers take the connection `FOR SHARE` (v16 `:780, 851`).
+- **The team import lock**, `training_load.hold_gpexe_team_lock(team, what)`
+  (`migrations_v2/202609211000_training_load_v24_gpexe_settings_change_guard.sql:82-89`): a transaction-level try-lock
+  that never waits. A bind takes it in the binding trigger (`migrations_v2/202609271000_training_load_v27_source_credential_connections.sql:323`),
+  an Unbind too (`:374`), and so do a check, an import and a settings change (C57: the team lock first). It is the one
+  point that serializes the **insert** of a new binding.
+- **T8's shape for `source_instance_end`** (`source_metric_audit_row_ok`, v34 `:1670-1671`; byte-identical in v48 on
+  the 7d-B branch): only `metric_source_connection_id`, `team_id` optional; `from_status = 'active'`, `to_status =
   'inactive'`; `reason` required; `basis = 'platform_admin'`. Today every such insert ends at the revision guard's
-  `23514` "source_metric_audit: no writer of this action exists yet" (v47 `:244-246`; v48 keeps it, its header `:41-53`).
+  `23514` "source_metric_audit: no writer of this action exists yet" (v47 `:244-246`; v48 keeps it).
 - **The link to a binding** is only the T6 guard (v34 `:1547-1556, 1601-1605`): the instance's `source_system` = the
   binding's, `source_host_key` = its credential connection's `host_key`, `source_instance_key` = the binding's
   `source_team_id`; the binding and the instance `active`. No foreign key either way.
 - **Can a held instance arise for GPEXE?** Not today (no T7 keys are written), and after M4 only after an Unbind and a
   re-bind of the same GPEXE team to another OptiMove team, which v30 (`refuse_unapproved_gpexe_binding`,
-  `migrations_v2/202610041000_training_load_v30_gpexe_team_settings_bound_final.sql:111-141`; `gpexe_team_settings_canonical_team_id_key`, `:175-176`)
-  and v24 (`refuse_gpexe_team_repoint`, `:96-161`) make unreachable for GPEXE. D9 calls the rule defence in depth; 7g
-  is that defence's release valve for a future source.
+  `migrations_v2/202610041000_training_load_v30_gpexe_team_settings_bound_final.sql:111-141`;
+  `gpexe_team_settings_canonical_team_id_key`, `:175-176`) and v24 (`refuse_gpexe_team_repoint`, `:96-161`) make
+  unreachable for GPEXE. D9 calls the rule defence in depth; 7g is that defence's release valve for a future source.
 - **The pre-M4 risk** (inference from the code): if a pre-M4 GPEXE connection were set `inactive`, the team's next
   import would insert a fresh connection and the per-connection event dedup (v20 `:74-83`) would let the same session
   in twice. 7g must therefore never touch a connection without T7 keys (R1).
@@ -77,27 +88,31 @@ request, 7g-B, with a migration that replaces a function body of v48 (7d-B), so 
   write kit `runWrite` (`backend/src/sourceMetricMappingService.js:726-800`) and 7c's `retireConversion` pattern
   (`unitConversionService.js:237-281`).
 
-## 2. Who (P4, pending owner)
+## 2. Who (OD5, pending owner)
 
 An active platform admin **in the platform workspace** only (the gate of `mayMaintainConversions`). Everyone else,
-including a platform admin in a club workspace and every club admin, gets the identical 404 before the body is read.
-The instance is a fact of the whole platform (one GPEXE team across every club), so no club scope applies.
+including a platform admin in a club workspace and every club admin, gets the identical 404 before the body or the
+query is read. The instance is a fact of the whole platform (one GPEXE team across every club), so no club scope
+applies.
 
 ## 3. The routes
 
-### 3.1 `GET /api/training-load/sources/metrics/source-instances[?state=active|inactive|all][&sourceSystem=gpexe]`
+### 3.1 `GET /api/training-load/sources/metrics/source-instances[?state=active|inactive|all][&sourceSystem=gpexe][&cursor=…]`
 
-Pages of 100 by an opaque cursor (the last row's id), only connections **with** T7 keys (an instance); `state`
-defaults to `active`. Each row:
+The gate first (the identical 404), then the query (`400 invalid_query` for an unknown or repeated parameter, a bad
+`state` or a bad cursor). Pages of 100 by an opaque cursor (the last row's id); only **team-owned** connections
+**with** T7 keys (an instance); `state` defaults to `active`. Each row carries **exactly** these keys:
 
 ```
 { "id", "sourceSystem", "sourceHostKey", "sourceInstanceKey", "state", "createdAt",
-  "ownerTeamId", "ownerTeamName", "held": true | false, "endedAt": <from its audit row> | null }
+  "ownerTeamId", "ownerTeamName", "held", "endedAt" }
 ```
 
-`held` is true when an `active` binding of another OptiMove team names the same `source_system`, host and source
-team, so the instance is what blocks that team (the cheap read the admin needs to find what to end). The answer never
-carries a credential column (no join to `source_credential_connections` beyond its `host_key`).
+- `held` is `true` when an `active` binding of **another** OptiMove team names the same source system, host and source
+  team, so the instance is what blocks that team. It is computed from `source_team_bindings` joined to its credential
+  connection's `host_key` only (an explicit column list; no other column of `source_credential_connections` is ever
+  selected).
+- `endedAt` is the `performed_at` of the connection's `source_instance_end` audit row, or `null`.
 
 ### 3.2 `POST /api/training-load/sources/metrics/source-instances/:connectionId/end`
 
@@ -109,112 +124,164 @@ Answers:
 
 1. **401**; then **the identical 404**: not the gate; a malformed id; a connection that does not exist.
 2. **415 / 400** for a body that is not a JSON object or has another shape.
-3. **409** (after the locks of section 5), in this order, each with the current facts in `current`:
-   1. `instance_not_held`: the connection has no T7 keys (every pre-M4 connection, R1);
-   2. `instance_mismatch`: `expected` differs from the row (a stale screen);
-   3. `instance_already_ended`: `state` is `inactive`;
-   4. `instance_binding_active` (R2): the owner team has an `active` binding naming the same source system, host and
-      source team; ending would only make its next import create a second instance;
-   5. `instance_in_use` (P4): an open T5 activation exists on any binding of the owner team naming the same source
-      system, host and source team (an ended binding's open activation included, C58): end it first (S2);
-   6. `try_again`: a lock not granted within the bound.
+3. **409** (after the locks of section 4), in this order, each with `current` carrying **exactly** the keys listed:
+   1. `instance_not_held` (`current: { id }`): the connection has no T7 keys, or its owner is not a team (R1);
+   2. `instance_mismatch` (`current`: the row of 3.1): `expected` differs from the row (a stale screen);
+   3. `instance_already_ended` (`current`: the row of 3.1): `state` is `inactive`;
+   4. `instance_binding_active` (`current: { bindingId, teamId }`, R2): the owner team has an `active` binding naming
+      the same source system, host and source team; ending would only make its next import create a second instance;
+   5. `instance_in_use` (`current: { activationId, bindingId }`, OD5): an open T5 activation exists on a binding of
+      the owner team naming the same source system, host and source team (an ended binding's open activation
+      included, C58): end it first (S2). *Interpretation, pending owner:* "that source's bindings" is read as the
+      owner team's bindings of that source team; the new team's activations are its own and do not block the end.
+   6. `try_again`: the team import lock is held (a check, import, bind, Unbind or settings change runs for the owner
+      team), or a row lock is not granted within the bound.
 4. **200** `{ "instance": <the row as in 3.1, state inactive> }`, with the usual replay (`replayed: true`),
    `request_key_reused`, `verified_after_commit_error` and `503 outcome_unknown` of `runWrite`.
 
-## 4. The write
+## 4. The write, in the documented lock order
 
-One operation in `runWrite`'s transaction (the per-user lock, the request record, the acting user `optimove.source_metric_actor`, the bounded COMMIT):
+One operation in `runWrite`'s transaction (the per-user lock, the request record, the acting user, the bounded COMMIT):
 
-1. the v11 row `FOR NO KEY UPDATE` (it waits for an import in flight that holds it `FOR SHARE` or `FOR UPDATE`, C55 and
-   C57; bounded by the row lock timeout → `try_again`);
-2. the owner team's bindings of that source system and source team `FOR SHARE`, in ascending id (so a bind or an
-   Unbind lands first or waits);
-3. `rightsStillHold` (the platform admin's role and user rows `FOR SHARE`);
-4. the checks of section 3.2, step 3;
-5. `update metric_source_connections set state = 'inactive' where id = $1`;
-6. the T8 row `source_instance_end`: `metric_source_connection_id`, `team_id` = the owner team (NULL when the owner is
-   not a team), `from_status 'active'`, `to_status 'inactive'`, `reason`, `basis 'platform_admin'`, the operation id,
-   the request key and hash (the keyed row is the only row).
+1. the connection **read without a lock** (its owner team and T7 keys; the owner scope and the keys never change once
+   set, v11 `protect_ownership` and v34's write-once trigger);
+2. **the owner team's import lock** (`hold_gpexe_team_lock(owner team, 'ending a source instance')`, a try-lock:
+   `try_again` when held) — the lock a bind, an Unbind, a check and an import take first, so no binding of the owner
+   team can be inserted or ended while the end runs;
+3. the owner team's bindings naming that source system and source team `FOR SHARE`, in ascending id (never stronger
+   than `FOR SHARE`, R5), then their open T5 rows (a plain read: no S1 can start on them, section 5);
+4. the v11 row `FOR NO KEY UPDATE` (after the bindings, as D's order: binding → Metrics Core connection; it waits for an
+   import in flight that holds it `FOR SHARE` or `FOR UPDATE`, C55 and C57, bounded → `try_again`);
+5. `rightsStillHold` (the platform admin's role and user rows `FOR SHARE`);
+6. the checks of section 3.2, step 3, on the locked and re-read row;
+7. `update metric_source_connections set state = 'inactive' where id = $1`;
+8. the T8 row `source_instance_end`: `metric_source_connection_id`, `team_id` = the owner team, `from_status 'active'`,
+   `to_status 'inactive'`, `reason`, `basis 'platform_admin'`, the operation id, the request key and hash (the keyed
+   row is the only row).
 
-Nothing else changes: no event, identity, occasion, value, provenance or binding row; no history moves (C36).
+Nothing else changes: no event, identity, occasion, value, provenance, binding or dashboard row; no history moves
+(C36).
 
-## 5. Lock order and concurrency
+## 5. Concurrency
 
-- **Against M4's writer** (C57): the writer locks the v11 row `FOR UPDATE` for every event and identity insert and
-  `FOR SHARE` for every T6 insert, inside one importing transaction. 7g's `FOR NO KEY UPDATE` conflicts with both, so
-  an end waits for an import in flight (or answers `try_again`), and an import that starts after the end sees the
-  instance `inactive` and is refused by the T6 guard (C55) and M4's own checks.
-- **Against a bind or an Unbind** of the owner team for that source team: both take the binding row; 7g reads the
-  bindings `FOR SHARE` after the v11 row, so a concurrent bind lands first (then `instance_binding_active`) or waits.
-- **Against S1** on the owner team's binding: S1 needs an `active` binding; with step 4 of section 3.2 refusing an
-  active binding, an S1 that lands after the end meets an ended binding (`binding_not_active`).
-- No path takes the v11 row after a binding or a T5 row, so no cycle arises.
+- **Against a bind of the owner team** (an INSERT of a new binding): both take the owner team's import lock first; the
+  second gets `try_again`. A bind that committed before the end makes the end answer `instance_binding_active`; a bind
+  after the end's COMMIT meets an `inactive` instance, and M4 then creates the team's own new instance (C36).
+- **Against an Unbind** of the owner team: the same team lock.
+- **Against M4's writer** (C57: the team lock first, then the connection `FOR UPDATE` for events and identities and
+  `FOR SHARE` for T6): the team lock serializes them; a writer that holds the connection without the team lock (none
+  today) would be waited for at step 4. The M4 writer must read `state` under its own `FOR UPDATE` and refuse an
+  `inactive` connection (a prerequisite recorded for M4; today's `ensureSourceConnection` reads it unlocked).
+- **Against a T6 insert** (binding `FOR SHARE` → connection `FOR SHARE`): 7g takes the binding `FOR SHARE` before the
+  connection, the same order, so no cycle; and only `FOR SHARE` on the binding (R5).
+- **Against S1** on the owner team's binding: S1 needs an `active` binding; with step 3.2.4 refusing one, an S1 that
+  lands after the end meets an ended binding (`binding_not_active`).
+- **Against S2** ending one of the open activations: S2 takes T5 `FOR NO KEY UPDATE`; 7g only reads T5 (an end that
+  commits first lets the 7g check pass; one that commits after it leaves nothing open).
 
 ## 6. The migration (v49, proposed)
 
-1. **The v11 state guard** (`BEFORE UPDATE OF state` on `metric_source_connections`):
-   - `active → inactive` only when the row has T7 keys, the acting user (v35's setting) is an active platform admin;
-     otherwise `42501` "metric source connection: the acting user may not end this source instance" or `23514`
-     "metric_source_connections: only a source instance is ended";
+1. **The v11 state guard** (`BEFORE UPDATE OF state` on `metric_source_connections`, `WHEN (old.state is distinct
+   from new.state)`, so `set state = state` passes):
    - `inactive → active` is always refused: `23514` "metric_source_connections: an ended source instance is final";
+   - `active → inactive` only when the row has T7 keys and `owner_scope = 'team'` (`23514`
+     "metric_source_connections: only a team's source instance is ended"); the acting user from
+     `source_metric_context_actor()` (v35's transaction-bound setting) with `source_metric_actor_basis(actor, null) =
+     'platform_admin'` (`42501` "metric source connection: the acting user may not end this source instance");
+   - **the in-use checks again, as plain reads under the locks the route holds:** no `active` binding of the owner team
+     naming the same source system, host and source team (`23514` "…: the owner team still holds an active binding of
+     this source team"), and no open T5 activation on the owner team's bindings of it (`23514` "…: an activation of
+     this source team is still open"); the indexes exist (`source_team_bindings_team_idx`, v27 `:293`;
+     `source_metric_activations_binding_idx`, v34 `:1348`);
    - an INSERT (the importer's) is untouched.
-2. **A deferred constraint trigger** on that UPDATE: at COMMIT, the transaction holds the connection's
-   `source_instance_end` audit row (`23514` "metric_source_connections: a source instance is ended with its audit
-   row").
-3. **T8:** the revision guard's body (v48's, replaced in full) gains the `source_instance_end` branch: the named
-   connection was changed to `inactive` in this transaction (its `xmin` is the current transaction), `team_id` is the
-   owner team or NULL when the owner is not a team, the reason is non-empty, and the row is the connection's only one.
-   v35's actor guard already admits an active platform admin with `basis = 'platform_admin'` for this action
-   (v35 `:227-233`), so it is unchanged. A unique partial index makes "once" physical:
-   `source_metric_audit_v49_instance_end_once (metric_source_connection_id) where action = 'source_instance_end'`.
-4. **Locks:** `metric_source_connections` and `source_metric_audit` in the order of their writers.
-5. **Rollback, read-only preflight, post-check, runbook** (as v47 and v48): the rollback refuses once any
-   `source_instance_end` row exists or any connection with T7 keys is `inactive`; the preflight shows v48 as the last
-   migration and the guard body v49 replaces as the one in force (md5), and counts connections with T7 keys and
-   inactive ones (both expected 0 before M4).
+2. **A deferred constraint trigger** on that UPDATE (`WHEN (old.state is distinct from new.state)`): at COMMIT, the
+   transaction holds the connection's `source_instance_end` audit row (`23514` "metric_source_connections: a source
+   instance is ended with its audit row").
+3. **T8:** the revision guard's body — **v48's body as merged**, replaced in full, with the new branch inserted
+   before the final "no writer of this action exists yet" refusal. The migration first asserts in a `DO` block that
+   `md5(prosrc)` of the body in force equals v48's (refused otherwise, before any change). The branch: the named
+   connection is `inactive`, has T7 keys and `owner_scope = 'team'`; its row's `xmin` is the current transaction
+   (`source_metric_current_xmin()`); `team_id` equals its `owner_team_id`; the reason is non-empty; the row is the
+   connection's only one. v35's actor guard already admits an active platform admin with `basis = 'platform_admin'`
+   for this action (v35 `:227-233`), so it is unchanged. A unique partial index makes "once" physical and also covers
+   T8's unindexed foreign key: `source_metric_audit_v49_instance_end_once (metric_source_connection_id) where action =
+   'source_instance_end'`.
+4. **Locks**, at the top, in this order (the v47 pattern): `lock table training_load.metric_source_connections in
+   share row exclusive mode; lock table training_load.source_metric_audit in share row exclusive mode;` — the 7g
+   writer takes the connection, then the audit table, and other audit writers touch the connection only through this
+   action's foreign key.
+5. **Rollback, read-only preflight, post-check, runbook** (as v47 and v48):
+   - the rollback refuses under a later migration, once any `source_instance_end` row exists or any keyed connection is
+     `inactive`, and restores v48's body verbatim;
+   - the preflight shows v48 as the last migration, the md5 of the guard body v49 replaces, and counts connections
+     with T7 keys and inactive keyed ones (both expected 0 before M4);
+   - the post-check shows the recorded checksum, the guard's md5, the two triggers enabled (the deferred one
+     deferrable and initially deferred), the index valid.
 
-Existing tests that flip `state` raw (`backend/tests/source-metric-mapping-m1.test.mjs:1058-1062`,
-`backend/tests/gpexe-undo-guards.test.mjs:201`) write with the guard switched off in their own disposable database
-or through the guarded path; no production code changes `state`.
+**Existing tests that change `state` raw** must switch the guard off in their own disposable database, since the
+guarded path can never go `inactive → active` and never touches a keyless connection:
+`backend/tests/source-metric-mapping-m1.test.mjs:1058, 1061, 1062, 1103, 1416` and
+`backend/tests/gpexe-undo-guards.test.mjs:201`. No production code changes `state`.
 
 ## 7. Security and privacy
 
-- The only audience is a platform admin in the platform workspace; the identical 404 for everyone else.
-- The answer carries a GPEXE Team ID (not personal data; a platform admin already sees it in Settings → Data
-  sources), a team id and name, and no credential column, reason, acting user or database text.
+- The only audience is a platform admin in the platform workspace; the identical 404 for everyone else, before the
+  body or the query is validated.
+- Every answer carries only the keys listed in section 3 (a GPEXE Team ID, not personal data, which a platform admin
+  already sees in Settings → Data sources; a team id and name); never a credential column, a reason, an acting user or
+  a database text.
 - The reason is written to the audit row only.
 - The guard holds against a raw writer that sets the actor (C74's stated limit: not against the migration role).
 
 ## 8. Tests (7g-B)
 
-- **The migration:** applied by the runner on v48 with no deadlock against a reader of v11; the guard's refusals in
-  direct SQL (no actor, a club admin, a connection without keys, `inactive → active`, an end without its audit row at
-  COMMIT, a second audit row, an audit row naming a connection not ended in this transaction, a savepoint); the
-  rehearsed rollback back to v48's catalog exactly, and v49 again.
-- **The routes:** 401; the identical 404 for a club admin, a platform admin in a club workspace, a coach, an unknown
-  id; 415 / 400; each 409 of section 3.2 in its order; the 200 and its replay, `request_key_reused`, the lost COMMIT
-  (`verified_after_commit_error`, `outcome_unknown`) through the real route.
-- **The list:** only connections with keys; `held` true and false; pages of 100.
-- **Concurrency:** an end against an importing transaction holding the row `FOR SHARE` (waits, then succeeds or
-  `try_again`); against a bind of the owner team (both orders); against S1 on the owner team's binding.
-- **Nothing else changes:** events, identities, values and provenance rows of the instance are byte-identical before
-  and after.
+- **The migration:** applied by the runner on v48 with no deadlock against a reader of v11; the `DO` assertion refuses
+  a body that is not v48's; the guard's refusals in direct SQL (no actor, a club admin, a connection without keys, a
+  club-owned connection, `inactive → active`, `set state = state` passing, an end with an active binding of the owner
+  team, an end with an open activation, an end without its audit row at COMMIT, a second audit row, an audit row
+  naming a connection not ended in this transaction, a savepoint); the rehearsed rollback back to v48's catalog
+  exactly, and v49 again.
+- **The routes:** 401; the identical 404 for a club admin, a platform admin in a club workspace, a coach, an unknown id
+  (the GET list also with a bad query, still 404); 415 / 400; each 409 of section 3.2 in its order; the 200 and its
+  replay, `request_key_reused`, the lost COMMIT (`verified_after_commit_error`, `outcome_unknown`) through the real
+  route.
+- **The keys:** the exact key set of a list row, of the 200 and of each 409's `current`; a secret scan of every answer
+  for credential ciphertext, key version and account label.
+- **The list:** only team-owned connections with keys; `held` true and false; pages of 100.
+- **Concurrency:** an end against a bind of the owner team to the same source team, both orders (the second gets
+  `try_again`, or the end answers `instance_binding_active`); against an Unbind; against an importing transaction
+  holding the connection `FOR SHARE`; against a T6 insert in D's order (no `40P01`), and a mutation that takes the
+  binding `FOR UPDATE` must then fail the test; against S1 on the owner team's binding.
+- **Nothing else changes:** events, identities, values, provenance and dashboard rows of the instance are
+  byte-identical before and after.
 - **Mutations** of every guard branch, the order of the 409s and the state checks.
 
 ## 9. Decisions for the *Rukovodilac*
 
-- **R1 — only a connection with T7 keys is an instance** (`instance_not_held` otherwise), so 7g can never reopen the
-  pre-M4 double-import risk. Recommended.
+- **R1 — only a team-owned connection with T7 keys is an instance** (`instance_not_held` otherwise), so 7g can never
+  reopen the pre-M4 double-import risk and never meets an owner without a team. Recommended.
 - **R2 — `instance_binding_active`:** refuse while the owner team still has an active binding to the same GPEXE team.
   Recommended: D9's purpose is the release after a re-bind; an instance in use is not "held".
 - **R3 — the list route** (3.1), with `held`. Recommended: the admin needs to find what to end.
 - **R4 — an ended instance is final in the database** (`inactive → active` refused). Recommended: C36 says the old
   instance is ended and the new team's writer creates its own.
-- **R5 — 7g-B may be built before M4** and stays dormant (every GPEXE connection answers `instance_not_held`) until M4
-  writes T7 keys. Recommended: the plan orders 7g before phase 9; the guard also closes today's unchecked `state`
-  UPDATE.
+- **R5 — the documented lock order** (section 4: the team lock, the bindings `FOR SHARE`, then the connection), never
+  more than `FOR SHARE` on a binding. Recommended.
+- **R6 — 7g-B may be built before M4** and stays dormant (every GPEXE connection answers `instance_not_held`) until M4
+  writes T7 keys; its migration is written after v48 is merged and deployed. Recommended.
 
 ## 10. Not in this contract
 
-M4 (writing T7 keys, `source_instance_held`, `session_imported_under_another_instance`), any frontend, any production
-write, a re-activation, a move of history between teams, a delete.
+M4 (writing T7 keys, `source_instance_held`, `session_imported_under_another_instance`, reading `state` under its own
+lock), any frontend, any production write, a re-activation, a move of history between teams, a delete.
+
+## 11. Review record
+
+- **Internal round 1 (head `e8060485`):** `code-reviewer`, `db-reviewer`, `security-reviewer`, each READY WITH
+  NON-BLOCKING NOTES, no BLOCKER or HIGH. Applied in this revision: a bind is an INSERT, so the owner team's import lock
+  serializes it (code and db MEDIUM); the documented lock order, bindings before the connection, and the false "no path"
+  sentence removed (code and db MEDIUM); R1 includes `owner_scope = 'team'` and the in-use checks are repeated in the
+  database guard (db MEDIUM); v49 is written against v48's merged body with an md5 assertion (db MEDIUM); OD5's
+  narrowing marked as an interpretation (code LOW); the exact key sets and a secret scan, the gate before the query, the
+  guard's `WHEN` clause and v35's actor functions (security LOW); the lock modes, the post-check and the full list of
+  raw-flip tests (db LOW).
