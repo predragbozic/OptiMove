@@ -93,7 +93,11 @@ transaction, not one per context:
 - the shared reuse lock and the statement timeout are taken once.
 
 A batch of 50 exercises or 50 items of one plan sends about 9–11 statements
-(before: about 500). Single `/access` is a batch of one. A context still answers on
+(before: about 500).
+
+The 10 s statement timeout now bounds the one read of all of a batch's exercises,
+not each context's own read. A pathologically slow read fails the whole batch
+(503), as any database error always did. Nothing is leaked or widened by this. Single `/access` is a batch of one. A context still answers on
 its own, and a missing, foreign or revoked one reads as 404 `resource_not_found`.
 
 Exercise access uses existing Library read/block/copy ancestry gates and an

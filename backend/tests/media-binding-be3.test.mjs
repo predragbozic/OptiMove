@@ -734,6 +734,8 @@ const people={
  admin:{user:{id:otherCoachId},authz:authzOf(['platform_admin'],false,true)},
  revokedAdmin:{user:{id:otherCoachId},authz:authzOf([],false,true)},
  noWorkspace:{user:{id:coachId},authz:authzOf([],false,false)},
+ // An athlete account that is also a coach: its own template needs no approval.
+ coachAthlete:{user:{id:coachId},authz:authzOf([],true,true)},
 };
 // A pool whose clients record every statement they send.
 function recordingPool() {
@@ -836,6 +838,7 @@ test('option A: the set-based batch answers every context class exactly as the o
  for(const key of ['foreign','inactive'])assert.deepEqual((await answer('coach','plan_item',items[key])).error,denied,`coach is refused item ${key}`);
  for(const key of ['assigned','approved'])assert.ok((await answer('athlete','plan_item',items[key])).media,`athlete plays item ${key}`);
  for(const key of ['revoked','needsApproval','ownAsset'])assert.deepEqual((await answer('athlete','plan_item',items[key])).error,denied,`athlete is refused item ${key}`);
+ assert.ok((await answer('coachAthlete','plan_item',items.needsApproval)).media,'the template\'s own coach, also an athlete, needs no approval');
  assert.deepEqual((await answer('athlete','exercise',ex.own)).error,denied,'no exercise outside a coach workspace');
  for(const key of ['coach','boundOwn'])assert.ok((await answer('coach','upload',uploads[key])).media,`uploader previews ${key}`);
  for(const key of ['other','pending','boundInactive','drive'])assert.deepEqual((await answer('coach','upload',uploads[key])).error,denied,`coach is refused upload ${key}`);
@@ -848,12 +851,37 @@ test('option A: the set-based batch answers every context class exactly as the o
  const twice=await fresh.batch(people.coach,{requests:[{context:{type:'exercise',id:ex.own},slots:['video']},{context:{type:'exercise',id:ex.own},slots:['video']}]});
  assert.deepEqual(twice.results[0].media,twice.results[1].media);
  // With media storage off every request answers 503 on its own, as before.
- process.env.MEDIA_STORAGE_ENABLED='false';
- assert.deepEqual(await fresh.batch(people.coach,{requests:matrix.requests.slice(0,3)}),await oracle.batch(people.coach,{requests:matrix.requests.slice(0,3)}));
- await assert.rejects(fresh.access(people.coach,matrix.requests[0]),e=>e.code==='media_storage_disabled' && e.status===503);
- process.env.MEDIA_STORAGE_ENABLED='true';
+ const enabled=process.env.MEDIA_STORAGE_ENABLED;
+ try {
+  process.env.MEDIA_STORAGE_ENABLED='false';
+  assert.deepEqual(await fresh.batch(people.coach,{requests:matrix.requests.slice(0,3)}),await oracle.batch(people.coach,{requests:matrix.requests.slice(0,3)}));
+  await assert.rejects(fresh.access(people.coach,matrix.requests[0]),e=>e.code==='media_storage_disabled' && e.status===503);
+ } finally {if(enabled===undefined)delete process.env.MEDIA_STORAGE_ENABLED;else process.env.MEDIA_STORAGE_ENABLED=enabled;}
  await assert.rejects(fresh.batch(people.coach,{requests:Array(51).fill(matrix.requests[0])}),e=>e.code==='invalid_request');
  await assert.rejects(fresh.batch(people.coach,{requests:[]}),e=>e.code==='invalid_request');
+});
+
+// The split the old loop made: a MediaStorageError (also one from signing)
+// stays on its request, any other error fails the whole call.
+test('option A: a signing error stays on its request when it is a MediaStorageError and fails the whole call otherwise, as before',async()=>{
+ const matrix=await seedMatrix(),failing=matrix.assets.imageCopy;
+ const storeThrowing=kind=>({signGet:async asset=>{
+  if(asset.id===failing)throw kind==='plain'?new Error('boom'):Object.assign(new MediaStorageError(503,'media_storage_unavailable'),{retryable:true});
+  return fixedStore.signGet(asset);
+ }});
+ const requests=[{context:{type:'exercise',id:matrix.ex.own},slots:['video','image']},{context:{type:'exercise',id:matrix.ex.system},slots:['video']}];
+ for(const kind of ['plain','typed']) {
+  const fresh=createMediaAccessService({pool,store:storeThrowing(kind)}),oracle=createOracleMediaAccessService({pool,store:storeThrowing(kind)});
+  if(kind==='plain') {
+   for(const service of [fresh,oracle])await assert.rejects(service.batch(people.coach,{requests}),/boom/);
+   await assert.rejects(fresh.access(people.coach,requests[0]),/boom/);
+   continue;
+  }
+  const result=await fresh.batch(people.coach,{requests});
+  assert.deepEqual(result,await oracle.batch(people.coach,{requests}));
+  assert.deepEqual(result.results[0],{index:0,error:{code:'media_storage_unavailable',status:503,retryable:true}},'the request whose image could not be signed answers that, nothing of its video');
+  assert.ok(result.results[1].media.video,'the next request is answered');
+ }
 });
 
 test('option A: a batch of 50 sends a bounded number of statements, not one transaction per context',async t=>{
