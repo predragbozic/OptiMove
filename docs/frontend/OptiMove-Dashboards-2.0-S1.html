@@ -1,0 +1,1623 @@
+<!doctype html><html lang="sr-Latn"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OptiMove Dashboards 2.0 — S1 Contract & Model</title><style>
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:#edf1f6;color:#1c3044;font:15px/1.7 system-ui,-apple-system,Segoe UI,sans-serif}.paper{max-width:1200px;margin:32px auto;padding:46px 58px;background:#fff;border-radius:16px;box-shadow:0 8px 30px #1c304410}.eyebrow{font-size:12px;letter-spacing:1.8px;font-weight:700;color:#2259a9}.status{margin:20px 0;padding:16px 18px;border-left:4px solid #2f6655;background:#eef6f2;border-radius:5px;color:#244f42}.meta{display:flex;flex-wrap:wrap;gap:9px;margin:14px 0}.meta span{font-size:12px;background:#edf2f9;padding:6px 10px;border-radius:5px}h1{font-size:34px;line-height:1.25;letter-spacing:-.7px;margin:20px 0}h2{font-size:25px;line-height:1.35;margin:44px 0 18px;padding-top:22px;border-top:1px solid #dce3ec;scroll-margin-top:20px}h3{font-size:19px;line-height:1.45;margin:28px 0 14px}p{margin:13px 0}ul,ol{padding-left:25px}li{margin:8px 0}a{color:#1b58ad;text-decoration-thickness:1px;text-underline-offset:3px;overflow-wrap:anywhere}.contents{display:grid;grid-template-columns:1fr 1fr;gap:6px 20px;margin:25px 0 35px;padding:18px;background:#f5f7fb;border-radius:8px}.contents a{font-size:13px;text-decoration:none;padding:5px 0}.table-wrap{overflow-x:auto;margin:18px 0 26px}table{width:100%;border-collapse:collapse;min-width:650px;font-size:13px;line-height:1.65}th,td{border:1px solid #dae3ed;text-align:left;vertical-align:top;padding:11px 12px;overflow-wrap:anywhere}th{background:#eaf0f7;font-weight:650}tr:nth-child(even){background:#fafbfd}code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.88em;background:#eef2f7;border-radius:3px;padding:2px 4px;overflow-wrap:anywhere}pre{background:#142a41;color:#edf4fb;padding:22px;border-radius:10px;overflow:auto;font-size:13px;line-height:1.6;tab-size:2}pre code{background:none;color:inherit;padding:0;font-size:inherit;overflow-wrap:normal}.footer{border-top:1px solid #dce3ec;margin-top:45px;padding-top:20px;color:#5e7083;font-size:12px}.count{font-size:12px;color:#5e7083;margin-top:12px}@media(max-width:760px){body{background:#fff}.paper{margin:0;padding:24px 18px;border-radius:0;box-shadow:none}h1{font-size:28px}h2{font-size:22px}.contents{grid-template-columns:1fr}pre{padding:15px}th,td{padding:8px}table{font-size:12px}}@media print{body{background:#fff;font-size:10pt}.paper{max-width:none;margin:0;padding:8mm;border-radius:0;box-shadow:none}.contents{display:none}h1{font-size:24pt}h2{font-size:17pt;break-after:avoid}h3{font-size:13pt;break-after:avoid}table{min-width:0;font-size:9pt}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:8pt;background:#f2f4f8;color:#1c3044;border:1px solid #dce3ec}.table-wrap{overflow:visible}a{color:inherit}h2{scroll-margin-top:0}}
+</style></head><body><main class="paper"><div class="eyebrow">OPTIMOVE · DASHBOARDS 2.0</div><div class="meta"><span>S1.1 · Potvrđene odluke</span><span>29.10.2026.</span><span>Main 69d824f · delta b0a839a</span><span>Dokumentaciona isporuka</span></div><div class="status"><strong>Za završnu nezavisnu proveru S1.1.</strong> Odobreni UX ostaje osnova. Bez implementacije produkcionih funkcija, migracija, merge-a, deploy-a ili produkcionih upisa.</div><nav class="contents" aria-label="Sadržaj"><a href="#section-0">Simple Editor Contract &amp; Model</a><a href="#section-1">1. Granice i proverena osnova</a><a href="#section-2">2. Normativne odluke</a><a href="#section-3">3. Funkcionalna specifikacija editora</a><a href="#section-4">4. Predlog modela konfiguracije</a><a href="#section-5">5. ECharts interakcioni ugovor</a><a href="#section-6">6. Deklarativna pravila tabela</a><a href="#section-7">7. Preview, validacija i API predlog</a><a href="#section-8">8. Kompatibilnost i Pages zavisnosti</a><a href="#section-9">9. Test matrica i acceptance</a><a href="#section-10">10. Rizici i odluke koje slede iz ugovora</a><a href="#section-11">11. Predlog PR-ova i redosleda rada</a><a href="#section-12">12. Završetak S1 i sledeća odluka</a><a href="#section-13">13. Izvori i simboli za proveru</a><a href="#section-14">14. S1.1 — potvrđene odluke i zatvaranje review nalaza</a></nav><h1>OptiMove Dashboards 2.0 — S1</h1>
+<h2 id="section-0">Simple Editor Contract &amp; Model</h2>
+<p><strong>29. oktobar 2026. · S1.1 Contract Corrections · Šest odluka vlasnika potvrđeno · Za završnu nezavisnu proveru</strong></p>
+<p>Konačni UX je odobren: Team Performance, Pages (Dnevni izveštaj, Nedeljni izveštaj, Igrači, Utakmice), Simple Editor u tri koraka, preview pre dodavanja, napredne opcije van osnovnog toka, interaktivni grafikoni i razumljiva pravila tabela. S1 pretvara taj pravac u tehnički ugovor; ne menja UX i ne implementira produkcione funkcije.</p>
+<p><strong>Preporuka:</strong> isti kanonski query i Display Model V1/V2; zajednički validator/kompajler za preview i atomski save; zaseban verzionisani presentation ugovor za interakcije i tabele. Backend izračunava i proverava podatke i odstupanja; frontend prikazuje proverene vrednosti i njihove oznake.</p>
+<p><strong>S1.1 status:</strong> korekcije nad PR #265 HEAD <code>1cc768add03acfe8abdc64aed4bde8424fb7990c</code>, na osnovu pregleda relevantnog koda na main-u <code>69d824f102b2301fd00bca9c40c719a65b6d5c57</code>. Vlasnik je potvrdio šest odluka (§14), uključujući limit prikazanih sportista i razlikovanje per-process od globalne zaštite pool-a. One su normativni ugovor buduće implementacije; kod, schema i serversko okruženje nisu promenjeni. Završna nezavisna provera je naredni gate; S2 nije odobren. Originalna S1 osnova u §1 je istorijski zapis, a acceptance matrica predstavlja buduće provere, ne izvršene implementacione testove.</p>
+<h2 id="section-1">1. Granice i proverena osnova</h2>
+<p>Pregledan je aktuelni <code>main</code> repozitorijuma <code>predragbozic/OptiMove</code> na commitu <strong>82fbb3ca14754442dc3a7f78a92a7e6a090393a2</strong> (PR #255). U odnosu na S0 runtime osnovu <code>165998802ab6655260559da4af483c7e4e554d6d</code>, GitHub compare pokazuje šest dokumentacionih fajlova, bez runtime/schema/dependency izmena. Dashboard moduli su ponovo pročitani na novom punom SHA; pregledani su i relevantni testovi, katalog, workspace/auth moduli i aktuelni Metrics Core plan. Aktuelna S0 datoteka pročitana je iz sačuvanog izveštaja; kasnije eksplicitne korisničke odluke imaju prednost nad ranijim predlozima.</p>
+<p>Originalna S1 isporuka bila je izveštaj sa modelima i matricom provera. Naknadni dokumentacioni handoff je Draft PR #265; S1.1 menja isključivo ovaj Markdown i njegov HTML izveštaj. Nisu menjani aplikacioni kod, postojeće konfiguracije ili prototip; nisu pokrenuti backend/test suite, migracija, merge, deploy ni produkcioni upit. Snimci šeme i source ne dokazuju trenutno primenjene migracije ili produkcionu dostupnost podataka. Test matrica predstavlja obavezu buduće implementacije, ne izvršene testove. Dokumentaciona S1.1 provera obuhvata MD/HTML parity, JSON primere i diff scope; ona nije dokaz izvršenih DB/API/load testova.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Ugovor koji postoji danas</th>
+<th>Dokaz u main-u</th>
+<th>Posledica</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Četiri widget tipa</td>
+<td>v18 seed, <code>training-load-analysis-data.js</code></td>
+<td>API ključevi ostaju <code>kpi</code>, <code>line_chart</code>, <code>bar_chart</code>, <code>table</code></td>
+</tr>
+<tr>
+<td>V1/absent/null čitanje i strog V2</td>
+<td><code>training-load-analysis-display-config.js</code></td>
+<td>Nema dodatnih polja u V2; nepoznata verzija ostaje unsupported</td>
+</tr>
+<tr>
+<td>V2 samo numberFormat/legend/valueLabels</td>
+<td>Isti normalizer</td>
+<td>Interakcije i formatting ne mogu se samo dopisati u V2</td>
+</tr>
+<tr>
+<td>Server proverava minimalni schemaVersion</td>
+<td>Dashboard route <code>validDisplayConfig</code>, red 95</td>
+<td>Novi save mora proveravati punu novu strukturu i V2, uz preserve put za stare blobove</td>
+</tr>
+<tr>
+<td>Identitet, problem stanja i lossless redovi</td>
+<td><code>training-load-analysis-display-model.js</code></td>
+<td>Nema numeričkog objedinjavanja sportista, izvora ili jedinica, coercion-a ili prvog KPI reda; presentation composer sme postaviti odvojene athlete serije na kompatibilan plot</td>
+</tr>
+<tr>
+<td>ECharts danas jedan plot po chartGroups particiji, uključujući sportistu</td>
+<td><code>training-load-analysis-echarts-options.js</code></td>
+<td>Novi opt-in presentation composer iz §5.2 raspoređuje sportiste u isti kompatibilan plot bez promene raw identiteta; legacy prikaz ostaje isti</td>
+</tr>
+<tr>
+<td>Tooltip sada zaokružuje prema precision</td>
+<td><code>training-load-analysis-echarts.js</code>, mount</td>
+<td>Za tačnu vrednost u tooltip-u potreban je kontrolisan adapter update</td>
+</tr>
+<tr>
+<td>Nema dataZoom/click/legend state ugovora</td>
+<td>Ista dva modula</td>
+<td>Ne tvrditi da je tražena interaktivnost već završena</td>
+</tr>
+<tr>
+<td>Jedan batch sačuvanih widgeta</td>
+<td>POST <code>/:dashboardId/query</code>, <code>queryDashboard</code></td>
+<td>Nema query-a nesnimljenog drafta; novi preview adapter je potreban</td>
+</tr>
+<tr>
+<td>Period do 400 dana, query do 200 widgeta, athleteIds do 500</td>
+<td>Dashboard route</td>
+<td>Sačuvati granice; preview dodatno ograničen na jedan widget/jednu seriju</td>
+</tr>
+<tr>
+<td>Default → request → widget filter</td>
+<td><code>trainingLoadDashboardQuery.js:617+</code></td>
+<td>Page sloj dodaje se pre runtime-a, bez promene inherit/clear semantike</td>
+</tr>
+<tr>
+<td>Upis kroz sanctioned funkcije, klon izuzetak</td>
+<td>ADR-003, Widgets/Catalog</td>
+<td>Atomic Simple save dobija novu sanctioned transakciju; HTTP compensation nije atomika</td>
+</tr>
+<tr>
+<td>Owner i data workspace su nezavisni</td>
+<td>ADR-002, DashboardAccess/route</td>
+<td>Novi endpointi moraju proveravati oba i parent članstvo</td>
+</tr>
+<tr>
+<td>Katalog vraća current version i scope_capabilities</td>
+<td>MetricsCatalog/listDefinitions</td>
+<td>Nema paralelnog registra ili izmišljanja default agregacije</td>
+</tr>
+</tbody></table></div>
+<p><strong>Dve konkretne integracione granice:</strong> v42 je već imenovana za Claude Phase 5b zone model i ne može se rezervisati za Dashboard. Persisted KPI danas ima <code>max_width=4</code>; odobreni prototip ima i široke KPI kartice. Za verno mapiranje dve desktop kartice širine 6 potrebna je kasnija eksplicitna promena kataloškog limita do 6, uz postojeći 12-column model. Ovaj dokument predlaže taj tehnički korak za odobrenje; ne sužava odobreni UX i ne menja katalog. Mobilne dve kartice u redu su poseban responsive prikaz, bez prepisivanja sačuvanih koordinata.</p>
+<h2 id="section-2">2. Normativne odluke</h2>
+<p>„MORA” označava acceptance uslov. Šest odluka potvrđenih u S1.1 (§14) su normativni ugovor buduće implementacije. Ostali eksplicitni opcioni gate-ovi ostaju zasebni. Svi novi endpointi, DTO objekti, tokeni, kolone i error kodovi ispod su <strong>planirani API</strong>, ne zatečeno ponašanje. Potvrda ugovora nije odobrenje implementacije, migracije, ključa/env promene, merge-a ili deploy-a.</p>
+<ol>
+<li>Simple Editor pravi ili menja jedan widget sa tačno jednom razrešenom DB/query serijom. Više sportista unutar nje mogu biti više ECharts presentation serija, bez dodavanja DB serija. Multi-series u DB smislu, unresolved/ambiguous i ostale složene konfiguracije ostaju u Advanced Editor-u.</li>
+<li>Metrika → sportisti i period → prikaz ostaju jedina tri koraka. U pouzdanom slučaju trener ne bira scope, axis, coverage, source policy ili agregacionu funkciju.</li>
+<li>Period pripada stranici; pojedinačni widget ima eksplicitan athlete/activity/component override, bez datuma u override-u. Promena perioda iz editora je vidljivo označena kao promena za celu stranicu.</li>
+<li>Preview koristi autorizovane stvarne podatke preko postojećeg query engine-a. Nema probnog widgeta, upisa preview rezultata ili frontend računanja merenja.</li>
+<li>Upis nastupa samo posle završne korisničke akcije. Preview token potvrđuje validiran draft i kontekst, ne zamrzava rezultate merenja.</li>
+<li>V1/V2 ostaju isti ugovori. Novi presentation sidecar je odvojen; nema implicitnog upgrade-a ili gubitka starih polja.</li>
+<li>Tooltip, legend, zoom i izbor tačke su presentation/runtime interakcije. Ne menjaju query/agregaciju/period ostalih widgeta bez posebne eksplicitne akcije.</li>
+<li>Sva primena pravila tabela i računanje odstupanja imaju jedan backend evaluator posle kanonskog query-a. Raw/result <code>value</code> se ne menja.</li>
+<li>Boja nikada nije jedini signal. Problem stanja imaju prednost nad pravilima; nikad se ne računaju kao nula.</li>
+<li>Existing API i shared Claude autorizacija nisu dozvola ovom toku da menja podatke, izvršava migracije ili deploy.</li>
+</ol>
+<h2 id="section-3">3. Funkcionalna specifikacija editora</h2>
+<h3>3.1 Metrika</h3>
+<p>Postojeći GET <code>/api/training-load/metrics/definitions</code> sam nije dovoljan za Simple picker: catalog visibility obuhvata više članstava korisnika, dok binding zavisi od data workspace-a ciljnog dashboarda. Budući Simple catalog adapter MORA pre paginacije primeniti target-dashboard visibility i eligibility: active definition/current version, value type, scope capability, validnu agregaciju i source dostupnost. Domains/categories/structure-links ostaju jasne kategorije, bez drugog registra. Built-in redove MORA vratiti capabilities iz postojeće <code>dashboard_builtin_series</code> tabele, sa odvojenim discriminator-om: key, label, unit (uključujući null), value_type, allowed/default aggregation, fixed scope, is_active i važeća source policy. Današnji API ne izlaže taj katalog; frontend hardkodovana jedinica count nije izvor istine. Ovo su budući implementacioni zadaci, ne već dostupne rute. Svaki izbor ima naziv, jedinicu ili objašnjenje da jedinica nije zadana, kategoriju i vrednosni tip. Nedostatak kategorije nije nedostupnost metrike. Pretraga mora razlikovati prazno, učitavanje, grešku i nepotpuno učitanu listu; nema prećutnog skraćivanja kataloga.</p>
+<p><code>metricRef</code> je tagged union: ili <code>kind=metric</code> + <code>metricDefinitionId</code>, ili <code>kind=builtin</code> + <code>key</code>; nikad oba. Jedini izvor dozvole je server. Dostupnost se proverava pri izboru, pri preview-u i ponovo u save transakciji. Neaktivna ili tuđa nova referenca daje info-hiding odbijanje, bez otkrivanja postojanja. Workspace promena briše picker cache/draft kontekst i zahteva novi izbor ili autorizovano ponovno otvaranje.</p>
+<p><code>catalogToken</code> je server fingerprint važeće definicije/verzije, tipa, jedinice, scope capabilities i state-a; nije token dozvole. Promena semantike između preview-a i save-a daje <code>catalogChanged</code>, bez automatskog prevezivanja verzije. Sačuvani metric_definition_id ostaje kanonski ID; vrednosti ostaju vezane za sopstvene istorijske verzije, kao danas.</p>
+<h3>3.2 Sportisti i period</h3>
+<p>Početno stanje je „Prati filtere stranice”, uz konkretna imena/broj i datume. Imenovani picker nudi samo vidljive sportiste u aktivnom workspace-u. API ni ovde ne prima owner/workspace da bi klijent birao tuđi podatkovni kontekst.</p>
+<p><code>inherit</code> ne šalje athleteIds ključ u widget override-u. <code>selected</code> zahteva 1–500 jedinstvenih UUID-ova; prazan izbor je greška u editoru. Posebna akcija „Svi dostupni” znači <code>allAuthorized</code>, koja se prevodi u eksplicitno <code>athleteIds:null</code>, uz server autorizovano ograničenje. Stari raw <code>athleteIds:[]</code> nastavlja da znači isto što i null; UI nikada ne koristi deselect-all kao tu akciju.</p>
+<p>Activity i component ostaju Advanced opcije sa tri stanja: inherit / clear / concrete ID. Promena roditeljske aktivnosti ne sme tiho zadržati komponentu koja joj ne pripada; traži se razrešenje pre preview-a. Otvaranje starog widgeta ne prepravlja njegov filter.</p>
+<p>Page period ima fixed ili relative definiciju sa eksplicitnom IANA zonom. Datumi su lokalni ISO datumi, uključivi; server razrešava relativni opseg i vraća konkretne granice. <code>this_week</code> znači ponedeljak–nedelja, <code>last_7_days</code> danas minus 6 do danas: različiti preset-i. Backend ima autoritativni <code>evaluatedAt</code>; UI ne koristi uređajev sat da bi drugi saradnik dobio drugi shared period. Dok Pages nisu persistirane, legacy adapter ima postojeći runtime period bez automatskog čuvanja. IANA zona služi razrešavanju relativnih preseta i evaluatedAt; fixed opseg filtrira sačuvani occurred_local_date. Promena zone ne preračunava datume aktivnosti ili istorijske bucket-e.</p>
+<p>Promena perioda u draftu ne menja Dashboard dok se ne pritisne završna akcija. Posle uspešnog save-a primenjuje se kao lični runtime period cele stranice, osim ako je korisnik izričito izabrao „Sačuvaj kao početne filtere”. Taj shared upis ima zaseban manage/revision guard i u istoj je save transakciji. Sam pregled stranice ne upisuje shared defaults.</p>
+<p>Efektivan filter ostaje: dashboard default → saved Page default → runtime Page izbor → widget override → obavezna workspace autorizacija. Override je zamena po ključu, ne presek sa Page izborom. Badge i rezime ističu poseban izbor i nude „Vrati na filtere stranice”. Ta akcija briše override ključ; ne šalje null umesto inherit-a.</p>
+<h3>3.3 Prikaz i automatski predlog</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Izbor korisnika</th>
+<th>API tip / grupisanje</th>
+<th>Kada je pouzdan</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>KPI</td>
+<td><code>kpi</code>; obično <code>athlete</code> za jednog sportistu</td>
+<td>Tačno jedan važeći scalar u realnom preview rezultatu; nema uzimanja prvog reda</td>
+</tr>
+<tr>
+<td>Trend</td>
+<td><code>line_chart</code>; <code>day</code> ili <code>week</code></td>
+<td>Numerički scalar-i, validne vremenske kante; zasebna athlete linija u kompatibilnom plotu po §5.2, bez spajanja jedinica/izvora</td>
+</tr>
+<tr>
+<td>Poređenje</td>
+<td><code>bar_chart</code>; <code>athlete</code></td>
+<td>Numerički rezultati po sportisti u istim dozvoljenim semantičkim granicama; različite jedinice/izvori se ne spajaju</td>
+</tr>
+<tr>
+<td>Tabela</td>
+<td><code>table</code>; dozvoljeni postojeći groupBy</td>
+<td>Siguran izbor za više grupa, tekst, boolean, array i problem stanja</td>
+</tr>
+</tbody></table></div>
+<p>Predlog prikaza je <code>reliable</code> samo ako katalog/capabilities i eksplicitna politika daju jednoznačan scope/agregaciju. U suprotnom je <code>requiresChoice</code>, uz jasno objašnjenje u istom koraku i odlazak u Advanced po potrebi. Nema novih vrednosti <code>groupBy</code> ili univerzalnog sum za svaku numeričku metriku. Daily aggregation metadata nije automatski dozvola da se ista funkcija primeni između sportista ili kroz ceo period.</p>
+<p>Za built-in se koriste stvarni catalog default-i: RPE avg/session; sRPE sum/session; duration_minutes sum/session; session_count sum/day; last_session_date last/day. Built-in source policy je <code>not_applicable</code>; metric default-i i policies moraju biti validni po postojećim validatorima. Postojeći defaults <code>all_with_conflicts</code>, <code>standalone_and_source_rollup</code>, <code>complete_and_partial</code> nisu dozvola da se konflikt pretvori u zbir.</p>
+<p>Multi-athlete grafikon podržava najviše <strong>20 prikazanih sportista po plotu</strong>, ne 20 redova ili tačaka: 20 sportista × 400 dana ne znači skraćivanje na 20 redova. Ako izbor/efektivni skup za plot ima 25 sportista, nema „prvih 20”, skrivenog uzorka, top-N ni uspešnog tokena za takav chart. UI nudi eksplicitan izbor najviše 20 ili Table; Table ostaje pod opštim response/athlete limitima. Imena se učitavaju preko autorizovanog roster/athlete read porta u istom data workspace-u i opsegu, bez cross-workspace lookup-a; ako ime nije dostupno, prikazati neutralnu oznaku „Sportista” sa stabilnim lokalnim razlikovanjem. ID, ne ime, određuje mapiranje tačke, kategorije i legende.</p>
+<p>Timski KPI ostaje postojeća cohort agregacija. <code>avg</code> je prosek svih eligible ulaznih vrednosti po sadašnjem query engine-u, ne nov obračun proseka prethodno sabranih athlete totala. Opis prikazuje tu semantiku; ako namera nije pouzdana, nema automatskog predloga timskog KPI-ja.</p>
+<p>Završni preview prikazuje stvarne rezultate, tačan period, naziv, jedinicu i efektivne filtere. Validan empty/missing/conflict rezultat može se sačuvati, uz vidljivo upozorenje i korisničku potvrdu; query error ili nevalidna konfiguracija zahtevaju retry/korekciju. KPI sa više grupa ostaje bez headline-a i blokira finalno dodavanje dok se kontekst ne suzi ili ne izabere Table. Izbor jednog sportiste sam po sebi nije garancija jednog reda: odluku donosi stvarni preview, bez tihog automatskog prebacivanja na drugi tip. Nema četvrtog koraka.</p>
+<h3>3.4 Stanja, otkazivanje i osvežavanje</h3>
+<p>Editor ima stanja <code>editing</code>, <code>validating</code>, <code>previewLoading</code>, <code>previewReady</code>, <code>previewProblem</code>, <code>saving</code>, <code>outcomeUnknown</code>, <code>saved</code>. Jedan draftVersion raste na svaku stvarnu promenu. Promena query/presentation postavke poništava prethodni preview token i klijentski zahtev u letu; HTTP abort sam po sebi ne znači da je PostgreSQL rad završen (§7.1.2); loading ima prednost nad starim rezultatima. Title-only promena može osvežiti prikaz lokalno, ali zahteva novi validirani token za finalni identičan payload.</p>
+<p>Cancel odbacuje draft i staged period/defaults; pre prvog write-a nema compensation poziva. Zatvaranje prljavog drafta nudi ostani/odbaci. Posle nepoznatog save ishoda UI kaže „Rezultat nije potvrđen” i omogućuje proveru istog zahteva; ne nudi „Otkaži sve” kao da server sigurno nije ništa snimio. Save dugme se zaključava dok je zahtev u letu; sam disabled nije zaštita od dupliranja.</p>
+<h2 id="section-4">4. Predlog modela konfiguracije</h2>
+<h3>4.1 Razdvojeni životni vekovi</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Deo</th>
+<th>Životni vek / vlasnik</th>
+<th>Sadržaj</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>EditorDraft v1</td>
+<td>Lokalni, nesnimljeni</td>
+<td>Koraci, metricRef, selector, query intent, title i presentation izbor</td>
+</tr>
+<tr>
+<td>Compiled widget/series</td>
+<td>Server → postojeće tabele</td>
+<td>Postojeći metric ID, scope, aggregation, groupBy, policy i revision ugovori</td>
+</tr>
+<tr>
+<td>display_config V1/V2</td>
+<td>Postojeće polje</td>
+<td>Isti V1/V2 ugovor i postojeći normalizer</td>
+</tr>
+<tr>
+<td>presentation_config v1</td>
+<td>Predlog nove nullable JSON kolone widgeta</td>
+<td>Samo deklarativni chartComposition, chartInteractions i tableFormatting</td>
+</tr>
+<tr>
+<td>InteractionState v1</td>
+<td>Lokalni, nesnimljeni</td>
+<td>Zoom prozor, legend selected, izabrana tačka, otvoren detalj</td>
+</tr>
+<tr>
+<td>RuleEvaluation v1</td>
+<td>Query response, bez čuvanja u metric_values</td>
+<td>Proverena annotation, reference identitet i evaluaciono stanje</td>
+</tr>
+</tbody></table></div>
+<p><code>presentation_config</code> zahteva buduću aditivnu migraciju i route/clone proširenje. Ne ubacivati ova polja u display_config V2, template hints, title ili source policy. Čitanje sidecar-a null znači bez novih mogućnosti i bez upisa. Nepoznata sidecar verzija prikazuje osnovne vrednosti i upozorenje da su dodatne opcije nepodržane; Simple save ne prepisuje sidecar. Invalid sidecar takođe ne narušava postojeći validan Display Model.</p>
+<h3>4.2 Draft v1 — konkretan primer</h3>
+<pre><code class="language-json">{
+  &quot;contractVersion&quot;: 1,
+  &quot;draftId&quot;: &quot;11111111-1111-4111-8111-111111111111&quot;,
+  &quot;draftVersion&quot;: 3,
+  &quot;title&quot;: &quot;sRPE po danima&quot;,
+  &quot;metricRef&quot;: {&quot;kind&quot;: &quot;builtin&quot;, &quot;key&quot;: &quot;srpe&quot;},
+  &quot;athleteSelection&quot;: {&quot;mode&quot;: &quot;inherit&quot;},
+  &quot;advancedFilter&quot;: {
+    &quot;activity&quot;: {&quot;mode&quot;: &quot;inherit&quot;},
+    &quot;component&quot;: {&quot;mode&quot;: &quot;inherit&quot;}
+  },
+  &quot;periodIntent&quot;: {&quot;mode&quot;: &quot;inherit&quot;},
+  &quot;view&quot;: {
+    &quot;type&quot;: &quot;line_chart&quot;,
+    &quot;groupBy&quot;: &quot;day&quot;,
+    &quot;dataScopeLevel&quot;: &quot;session&quot;,
+    &quot;analyticalAggregation&quot;: &quot;sum&quot;
+  },
+  &quot;display&quot;: {
+    &quot;mode&quot;: &quot;replace&quot;,
+    &quot;value&quot;: {&quot;schemaVersion&quot;: 2, &quot;numberFormat&quot;: {&quot;maximumFractionDigits&quot;: 1}}
+  },
+  &quot;presentation&quot;: {
+    &quot;mode&quot;: &quot;replace&quot;,
+    &quot;value&quot;: {
+      &quot;schemaVersion&quot;: 1,
+      &quot;chartComposition&quot;: &quot;athletes-v1&quot;,
+      &quot;chartInteractions&quot;: {
+        &quot;tooltip&quot;: {&quot;mode&quot;: &quot;exact&quot;},
+        &quot;legend&quot;: {&quot;toggle&quot;: true},
+        &quot;zoom&quot;: {&quot;mode&quot;: &quot;local&quot;, &quot;applyPeriodAction&quot;: true},
+        &quot;pointSelection&quot;: {&quot;mode&quot;: &quot;details&quot;},
+        &quot;yAxis&quot;: {&quot;mode&quot;: &quot;auto&quot;}
+      }
+    }
+  }
+}
+</code></pre>
+<p>Ovo je kompletan Simple draft primer za built-in. <code>view</code> vrednosti mogu biti automatski popunjene proverеним predlogom; nisu nova obavezna tehnička polja osnovnog ekrana. Metric varijanta metricRef ima samo <code>kind:metric</code> i UUID <code>metricDefinitionId</code>, uz odvojen server catalogToken. Policies koje osnovni editor ne menja compiler preuzima iz existing widgeta ili postojećih važećih default-a. Klijent ne sme slati <code>resolutionStatus</code>, owner, workspace, SQL, formule ili proizvoljne ECharts opcije.</p>
+<p>Za update, <code>display:{mode:preserve}</code> i <code>presentation:{mode:preserve}</code> čuvaju originalne server blobove bez njihovog slanja/normalizovanog prepisivanja. Replace je dozvoljen samo za potpuno validnu podržanu strukturu. Nema null-as-delete; brisanje sidecar-a je eksplicitno <code>presentation:{mode:clear}</code> i traži potvrdu korisnika ako uklanja postojeća pravila. New create nema preserve izvor i prihvata replace ili izostavljene sekcije sa dokumentovanim novim defaults.</p>
+<p><code>periodIntent</code> je union inherit ili <code>replacePageRuntime</code> sa periodConfig; opciona odvojena <code>savePageDefaults:true</code> označava eksplicitan shared upis i dozvoljena je tek uz persisted Pages capability. Bez te zastavice runtime promena nije DB upis filtera. <code>athleteSelection</code> je inherit / selected + athleteIds / allAuthorized. Activity/component su inherit / clear / selected + id. Dodatna polja u svim novim objektima su greška (<code>additionalProperties:false</code>).</p>
+<h3>4.3 Osnovne granice validacije</h3>
+<p>Draft UUID; draftVersion pozitivan safe integer; title trim 1–200 znakova. Tačno jedan metricRef i jedna resolved serija. Tipovi/groupBy/scope/aggregation samo postojeće enum vrednosti i kompatibilne kombinacije. Datum je stvaran kalendarski datum, opseg uključiv, dateTo ≥ dateFrom, najviše 400 dana; validna IANA zona. Athlete UUID-ovi jedinstveni, 1–500 za selected. Reference source/metric/athlete/activity/component proveravaju se na serveru u stvarnom kontekstu.</p>
+<p>Predlog novih zaštitnih granica: preview body do 64 KiB, jedna serija, najviše 20 table pravila; label pravila do 120 znakova, lokalno renderovan escaped plain text; response limit 2 MiB bez silent truncation-a. Prevelik rezultat daje <code>previewTooLarge</code> i predlog užeg opsega, ne nepotpun „uspešan” preview. Limiti se primenjuju i na HTML fallback/table data da zaštita ne nestane ako chart nije učitan. Preview koristi početni debounce/SQL/DB transaction budžet 350 ms / 3 s / 5 s iz §7.1.2; nema dodatnog paralelnog 10s query budžeta. Granice MORA potvrditi load test pre aktivacije; nisu obećanje produkcionog SLA.</p>
+<h3>4.4 Precizni union-i i normalizacija</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Objekat</th>
+<th>Dozvoljene varijante / obavezna polja</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>metricRef</td>
+<td><code>{kind:metric,metricDefinitionId:UUID}</code> ili <code>{kind:builtin,key:activeBuiltinKey}</code></td>
+</tr>
+<tr>
+<td>athleteSelection</td>
+<td><code>{mode:inherit}</code>, <code>{mode:allAuthorized}</code> ili <code>{mode:selected,athleteIds:UUID[1..500]}</code></td>
+</tr>
+<tr>
+<td>activity/component</td>
+<td><code>{mode:inherit}</code>, <code>{mode:clear}</code> ili <code>{mode:selected,id:UUID}</code></td>
+</tr>
+<tr>
+<td>periodIntent</td>
+<td><code>{mode:inherit}</code> ili <code>{mode:replacePageRuntime,periodConfig:PeriodConfigV1,savePageDefaults:boolean}</code></td>
+</tr>
+<tr>
+<td>PeriodConfigV1</td>
+<td><code>{schemaVersion:1,mode:fixed,dateFrom:ISODate,dateTo:ISODate,timeZone:IANA}</code> ili <code>{schemaVersion:1,mode:relative,preset:Preset,timeZone:IANA}</code></td>
+</tr>
+<tr>
+<td>Preset v1</td>
+<td><code>today</code>, <code>last_7_days</code>, <code>last_28_days</code>, <code>this_week</code>; drugi preset zahteva eksplicitno proširenje capability-ja</td>
+</tr>
+<tr>
+<td>display</td>
+<td>Za create: izostavljeno ili <code>{mode:replace,value:ValidDisplayV2}</code>. Za update: preserve ili eksplicitni replace podržane verzije; legacy V1 se prenosi samo preserve putem</td>
+</tr>
+<tr>
+<td>presentation</td>
+<td>Create: izostavljeno ili replace sa PresentationV1. Update: preserve / replace / clear; polja se ne kombinuju između varijanti</td>
+</tr>
+<tr>
+<td>view</td>
+<td>type, groupBy, dataScopeLevel, analyticalAggregation; obavezna validna proverena kombinacija pre query-a, makar popunjena compiler predlogom</td>
+</tr>
+<tr>
+<td>yAxis</td>
+<td><code>{mode:auto}</code> ili <code>{mode:fixed,min:finiteNumber,max:finiteNumber}</code></td>
+</tr>
+<tr>
+<td>rule reference</td>
+<td><code>{kind:constant,value:finiteNumber,unit:stringOrNull}</code> ili <code>{kind:backendReference,id:opaqueId,semanticsVersion:nonemptyString}</code></td>
+</tr>
+</tbody></table></div>
+<p>Nijedan union ne prihvata polja druge varijante. Novi objekti odbijaju unknown keys; izostavljene opcione sekcije dobijaju samo dokumentovane defaults. <code>view</code> bez validnih parametara može proći inicijalni editing state, ali ne preview/save. Jedina nullable polja su eksplicitno navedena; null nije opšti način resetovanja.</p>
+<p><code>context.period</code> je obavezan za legacy adapter. Za Page može biti izostavljen (server koristi Page saved/default period) ili predstavljati lični konkretan runtime opseg; server ga proverava. <code>periodIntent:replacePageRuntime</code> ima prednost nad tim kontekstom. <code>savePageDefaults</code> je polje samo replace varijante i eksplicitno false po početnom izboru; true se nudi samo manager-u sa persisted Pages capability-jem.</p>
+<p>Annotation target koristi sinhroni <code>identityKey</code>: kanonsku rekurzivnu serializaciju tačno iste detached <code>identity</code> strukture koju gradi Display Model (seriesId, metricDefinitionId, builtInSeriesKey, athleteId, bucketKey, unit, groupBy i source sa policy/configuredConnectionId/reported). Primena koristi isti algoritam kao postojeći identityKey: sortirani object keys, očuvan redosled nizova i tipovi. Izostavljeno reported source polje se ne izmišlja kao null činjenica. Backend i frontend fixture-i dokazuju identičnost; nema asinhronog browser SHA-256 uslova u sinhronom renderu. Ovo nije novi metric identitet. Draft/context/payload hash-evi za token i ledger i dalje su serverski SHA-256 kanonskog sadržaja. Numerička vrednost nije deo identiteta, ali queryId vezuje annotation za konkretni rezultat. rowIndex ostaje query-local index originalnog odgovora, bez prethodnog sortiranja raw redova.</p>
+<h2 id="section-5">5. ECharts interakcioni ugovor</h2>
+<h3>5.1 Deklarativna struktura v1</h3>
+<p><code>chartComposition</code> važi samo za line_chart/bar_chart: izostavljeno znači postojeće legacy particionisanje; jedina nova vrednost je <code>athletes-v1</code>, dostupna kada server capabilities potvrdi podršku. Novi Simple chart create bira tu vrednost; postojeći sidecar bez nje ostaje na starom prikazu dok korisnik eksplicitno ne potvrdi novi preview. Ne menjati display_config V1/V2, row identity ili chartGroups izlaz.</p>
+<p><code>chartInteractions</code> važi samo za line_chart/bar_chart. Dozvoljeni su tooltip.mode=<code>exact|formatted</code>; legend.toggle boolean; zoom.mode=<code>disabled|local</code>; zoom.applyPeriodAction boolean; pointSelection.mode=<code>disabled|details</code>; yAxis union auto ili fixed sa min/max. Nepoznat ključ/vrednost se odbija pri novom upisu. Tooltip <code>formatted</code> koristi postojeću numberFormat prezentaciju; <code>exact</code> je default za nove Simple grafikone. Vidljivost legende i value labels ostaje u display_config, bez drugog kontradiktornog visible polja u sidecar-u.</p>
+<p>Osnovni flow ne prikazuje ova tehnička polja. Novi Simple grafikoni dobijaju pouzdane defaults; postojeći bez sidecar-a zadržavaju sadašnje ponašanje. Ručni Y opseg je Advanced; promena X metrike ili zamena jedinice nisu axis formatting i zahtevaju novi query intent/preview.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Interakcija</th>
+<th>Obavezno ponašanje</th>
+<th>ECharts adapter</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Tooltip</td>
+<td>Pun server-transport numerički rezultat, jedinica, bucket, sportista, naziv i prijavljeni source/provenance; nula i negativni brojevi ostaju vidljivi</td>
+<td>RichText, confine; lokalna safe formatter funkcija, nikad callback iz JSON-a</td>
+</tr>
+<tr>
+<td>Legend toggle</td>
+<td>Za day/week sakrije/prikaže athlete presentation seriju; backend filter i tabela se ne menjaju. Za athlete poređenje jedna serija ima athlete kategorije: nema lažnog per-athlete series toggle-a</td>
+<td><code>legendselectchanged</code>; ključ po plotKey + athleteId + phase; stabilni ID i jedinstveni display label, ne samo ime</td>
+</tr>
+<tr>
+<td>Zoom</td>
+<td>Lokalni prozor unutar već učitanih podataka; nema nove agregacije, sumiranja ili downsampling-a koji gubi redove/status</td>
+<td><code>dataZoom</code>, slider; inside pinch po potrebi, mouse wheel off da ne zarobi scroll stranice</td>
+</tr>
+<tr>
+<td>Primeni period</td>
+<td>Zasebna akcija sa jasnim uticajem na celu Page; posle potvrde šalje jedan novi Page batch</td>
+<td>Mapiranje krajnjih bucket-a u validne datume; nema implicitnog query-a na svaki drag</td>
+</tr>
+<tr>
+<td>Tačka/bar</td>
+<td>Detalj tačno odabranog server reda, uključujući status i provenance; bez upisa ili automatskog sportista filtera</td>
+<td><code>click</code> mapiran kroz plotRows → originalni row locator; ne indeks prve sirove liste</td>
+</tr>
+<tr>
+<td>Resize/mobile</td>
+<td>Isti numerički sadržaj; prilagođene oznake/touch target, tap za detalj; bez hover-only bitne informacije</td>
+<td>Postojeći ResizeObserver, resize/dispose i generation guard</td>
+</tr>
+</tbody></table></div>
+<p>„Tačna vrednost” znači punu preciznost broja koji je već stigao postojećim JSON ugovorom, bez dodatnog toFixed zaokruživanja tooltip-a. Nije obećanje proizvoljne decimalne preciznosti izvan postojećeg transporta. Zabeležena server jedinica može biti null; ne izmišljati RPE/count jedinicu iz UI labela kao novu stvarnu jedinicu.</p>
+<h3>5.2 Ose, zoom i granice identiteta</h3>
+<p>X je postojeći groupBy/bucket, ne slobodno proizvoljno polje. Day i week su vremenski bucket-i; backend week key je datum ponedeljka (<code>isoWeekKey</code>). Primena week zoom-a uključuje celu izabranu nedeljnu kantu, presečenu postojećim query opsegom; server revalidira datume. Session/component/athlete/cohort kategoričke ose nemaju „Primeni period”; ne tumačiti UUID kao datum. Za day/week bar ili line dozvoljen local zoom; za ostale zoom disabled u v1.</p>
+<p>Y auto zadržava postojeću ECharts value-axis semantiku, uključujući prikaz nule i negativnih vrednosti. Fixed zahteva finite min &lt; max i istu jedinicu; ne skalira ili konvertuje meru. Vrednosti van opsega ne clamp-uju se u izmišljenu graničnu vrednost: jasno upozorenje i dostupne originalne vrednosti u tabeli; korisnik može vratiti auto. Log ose, dual-unit overlay i izmena unit labela kao konverzije nisu u ovom ugovoru.</p>
+<p>Za <code>chartComposition:athletes-v1</code>, novi presentation composer čita lossless Display Model redove/particije; <strong>ne menja</strong> njihov identitet, chartStatus ili backend izračune. Plot key čine widgetId, DB seriesId, metric/built-in identitet, groupBy, stvarna output jedinica, source policy/configured source i svaki raspoloživi reported source/provenance identitet, plus phase (<code>current</code>/<code>comparison</code>). AthleteId i bucketKey nisu deo plot key-a. Različite jedinice ili izvori ostaju odvojeni plotovi. Nepostojeća reported činjenica ostaje „nije prijavljeno”, nikada dokaz istog stvarnog izvora ili dozvola za njihovo numeričko sabiranje. Današnji engine vraća reported={} u standardnoj Simple putanji; test drugih izvora zato koristi eksplicitne source fixture-e, bez tvrdnje da su ti podaci danas dostupni.</p>
+<p>Za day/week svaki athleteId je zasebna ECharts serija (plotKey + athleteId + phase), sa zajedničkom vremenskom osom. Za groupBy=athlete svaki sportista je zasebna X kategorija identifikovana athleteId, uz jednu ECharts seriju; backend bucketKey=&quot;all&quot; nije X labela svih sportista. Tako više sportista sa bucketKey=&quot;all&quot; nije duplicate bucket: duplikat se proverava unutar istog punog athlete identiteta. Nema dodatne agregacije, sparivanja različitih source redova niti izbora prvog duplikata. Ostala groupBy imaju postojeći odvojeni prikaz i validna ograničenja; nepodržan oblik ne dobija automatski composition.</p>
+<p>Limit je 20 sportista u efektivnom prikazanom skupu jednog plota, bez obzira na broj njihovih vremenskih redova. Prekoračenje blokira potvrdu tog chart izbora sa <code>requiresChoice</code>; izbor se ne menja dok korisnik ne izabere podskup ili Table. Nedostajući sportisti se ne izbacuju da bi se veštački zadovoljio limit. Zasebna response-size granica i dalje važi.</p>
+<p>Za day/week osa je gusta lista bucket-a iz server resolvedPeriod, sa Monday-based week granicama i presekom query perioda. Sportista bez vraćenog reda u bucket-u dobija samo presentation placeholder <code>noObservation</code> i null ECharts tačku. Placeholder nema raw rowIndex/merenje/annotation i ne ulazi u Display Model kao fabriciran red. To nije vraćeni missing/conflict red i nije nula. Tooltip/dostupni opis kažu „Nema podataka”; click ne otvara tuđi red. Svi stvarni problem redovi ostaju u osnovnoj tabeli. <code>connectNulls:false</code> tada sprečava spajanje preko neopaženih dana; zoom koristi gustu osu i resolvedPeriod, ne retku listu vraćenih redova.</p>
+<p>Legend state ostaje lokalno plot-u; skrivanje svih serija ima vidljivo „Serije su skrivene” i reset. Athlete comparison kategorije nisu ECharts serije i ne predstavljaju se kao per-athlete legenda. Event locator za postojeću tačku je queryId + phase + athleteId + bucketKey + rowIndex + identityKey; vezan je za tačnu uređenu presentation mapu koju chart prima.</p>
+<p><code>InteractionState</code> se ne snima u display_config i ne bump-uje revisions. Čuva se lokalno samo dok plot data/context fingerprint ostaje isti. Promena workspace-a, query perioda, widget sadržaja ili nestanak particije resetuje stanje; UI-only repaint ga ne gubi. Local zoom ne menja dostupnu numeričku tabelu; klik „Primeni period” menja runtime Page kontekst eksplicitno. Cancel editora ne primenjuje zoom kao Page filter.</p>
+<p>Missing/conflict/error/unsupported/duplicate bucket i noObservation placeholder-i ostaju gaps; <code>connectNulls:false</code>, bez front imputation-a ili pretvaranja false/string/array u broj. Numerička tabela omogućuje pregled svih problem redova koje null chart tačka ne može da klikne. Event handler za dataIndex mora koristiti istu sortiranu listu koju je adapter poslao u plot; dupli bucket ne bira „prvu” meru.</p>
+<p>Chart mount/disconnect uklanja instance, ResizeObserver i sve <code>on/off</code> handlere. Odloženi import ne montira chart starog drafta ili neaktivne Page. ECharts je postojeći pinned self-hosted 6.1.0, bez CDN-a ili druge biblioteke. Accessibility tabela ostaje dostupna kad biblioteka ne uspe da se učita; tastatura i native kontrole imaju isti put do izbora/detalja/reset-a.</p>
+<h2 id="section-6">6. Deklarativna pravila tabela</h2>
+<h3>6.1 Model v1</h3>
+<p>Pravila se podešavaju u Advanced za Table, ne dodaju novi obavezni korak. Mogu se pregledati iz menija tabele: naziv, šta se poredi, jedinica, pragovi, cilj, stil i objašnjenje. UI rečenica mora odgovarati serijalizovanom pravilu, npr. „sRPE veći od 2.000 AU → oznaka Iznad praga”.</p>
+<pre><code class="language-json">{
+  &quot;schemaVersion&quot;: 1,
+  &quot;tableFormatting&quot;: {
+    &quot;evaluationVersion&quot;: 1,
+    &quot;rules&quot;: [
+      {
+        &quot;id&quot;: &quot;review-high-load&quot;,
+        &quot;priority&quot;: 10,
+        &quot;enabled&quot;: true,
+        &quot;name&quot;: &quot;Opterećenje iznad izabranog praga&quot;,
+        &quot;target&quot;: {
+          &quot;series&quot;: &quot;main&quot;,
+          &quot;phase&quot;: &quot;current&quot;,
+          &quot;cell&quot;: &quot;value&quot;,
+          &quot;athletes&quot;: {&quot;mode&quot;: &quot;allReturned&quot;}
+        },
+        &quot;operand&quot;: &quot;value&quot;,
+        &quot;operator&quot;: &quot;gt&quot;,
+        &quot;threshold&quot;: {&quot;value&quot;: 2000, &quot;unit&quot;: &quot;AU&quot;},
+        &quot;style&quot;: {
+          &quot;tone&quot;: &quot;caution&quot;,
+          &quot;marker&quot;: &quot;up&quot;,
+          &quot;label&quot;: &quot;Iznad izabranog praga&quot;
+        }
+      }
+    ]
+  }
+}
+</code></pre>
+<p>Ovaj objekat je sidecar presentation_config za Table; nema chartInteractions sekcije. <code>series:main</code> je logički slot jedine Simple serije, koji compiler u preview-u mapira na draft series ID, a pri save-u na persisted ID. Kada se postojeći widget pretvori u multi-series Advanced konfiguraciju, dodatna pravila moraju imati eksplicitne ciljeve; <code>main</code> ne sme neprimetno početi da znači drugu metriku. Promena metrike/jedinice sa pravilima traži njihovu ponovnu validaciju i novi preview, ne automatsko prenošenje pragova.</p>
+<h3>6.2 Polja, operatori i jedinice</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Polje</th>
+<th>Normativni ugovor</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>id / priority</td>
+<td>Stabilan lokalni ID do 64 znaka; jedinstveni pozitivan priority; manji broj je ranije pravilo</td>
+</tr>
+<tr>
+<td>target</td>
+<td>Samo value ćelija navedenog series slot-a, phase=current u v1; allReturned ili eksplicitni athleteIds u dozvoljenom skupu</td>
+</tr>
+<tr>
+<td>operand</td>
+<td><code>value</code>, <code>referenceDifference</code> ili <code>referencePercent</code>; poslednja dva zahtevaju reference objekat</td>
+</tr>
+<tr>
+<td>operator</td>
+<td><code>gt</code>, <code>gte</code>, <code>lt</code>, <code>lte</code>, <code>between</code>, <code>outside</code></td>
+</tr>
+<tr>
+<td>threshold</td>
+<td>Za jednovrednosni operator finite value i tačna zadata jedinica; eksplicitni kataloški null važi samo uz isti dokazani semantic binding; nije wildcard</td>
+</tr>
+<tr>
+<td>range</td>
+<td>Za between/outside: finite lower/upper, lower ≤ upper, lowerInclusive/upperInclusive booleans, unit</td>
+</tr>
+<tr>
+<td>reference</td>
+<td><code>constant</code> sa finite value/unit ili <code>backendReference</code> sa autorizovanim opaque ID i eksplicitnim semanticsVersion</td>
+</tr>
+<tr>
+<td>formulaVersion</td>
+<td>Obavezno i tačno <code>signed-relative-abs-v1</code> samo za operand referencePercent; u ostalim operandima izostavljeno</td>
+</tr>
+<tr>
+<td>style</td>
+<td>tone: <code>neutral</code>, <code>positive</code>, <code>caution</code>, <code>negative</code>; marker: <code>none</code>, <code>up</code>, <code>down</code>, <code>check</code>, <code>alert</code>, <code>star1</code>, <code>star2</code>, <code>star3</code>; obavezan smislen plain-text label</td>
+</tr>
+</tbody></table></div>
+<p>Value threshold jedinica mora biti ista kao stvarna output jedinica i vezana semantika metrike. Za referenceDifference threshold je u jedinici metrike; za referencePercent prag je u <code>%</code>, dok reference mora biti u originalnoj jedinici metrike. Nema jedinica m↔km konverzije u evaluatoru ili frontend-u. Precision prikaza ne utiče na granice: 1999,96 se poredi pre formatiranja na 2000. Equality se ne dodaje preko proizvoljnog epsilon-a.</p>
+<p>Za gt/gte/lt/lte obavezan je threshold i zabranjen range; za between/outside obavezan je range i zabranjen threshold. Za operand=value nema reference/formulaVersion; za referenceDifference obavezna je reference, bez formulaVersion; za referencePercent obavezni su reference i imenovana formulaVersion. <code>unit:null</code> mora biti eksplicitno zadat u katalogu/built-in metapodacima i rule binding-u, uz isti dokazani semantic fingerprint. To omogućuje npr. RPE &gt; 7 sa zadatim kataloškim null, ali null ne znači wildcard, konverziju ili dokaz fizičke bezdimenzionalnosti. Izostavljena/unknown ili mixed istorijska jedinica nije isto što i eksplicitni kataloški null; evaluator bez dokaza ostaje ineligible. Ne izmišljati jedinicu count ili RPE iz UI naziva.</p>
+<p>Za between, oba testa krajeva moraju proći sa zadatim inclusivity. Outside je tačan komplement tako definisanog intervala, ali samo na eligible konačnim numeričkim vrednostima. Jednake donja/gornja granica dozvoljene su samo kada su oba kraja uključiva; ostale prazne intervale odbiti kao grešku konfiguracije. Nije dozvoljena arbitrana formula, regex, HTML, CSS boja, JS callback, URL slike ili korisnički SVG.</p>
+<h3>6.3 Reference i odstupanja</h3>
+<p><code>constant</code> je vrednost koju je korisnik svesno uneo kao prag/referencu za izlaznu agregiranu ćeliju. Ne postaje nova kanonska metrika ili istorijsko merenje. <code>backendReference</code> nije naziv za sada nepostojeći reference endpoint: omogućava se tek kada postoji imenovan, autorizovan resolver u backendu. Capability mora biti false do tada; ne uzimati „prosek ekipe” u frontend-u niti proglasiti trenutni katalog dovoljnim dokazom referentne vrednosti.</p>
+<p>Resolver vraća jednu referencu odgovarajućeg athlete/cohort/grain/period/unit/source/metric semantic konteksta, njenu verziju i provenance. Ako nedostaje, ima više kandidata, različitu jedinicu, nepoznatu semantiku ili source konflikt, pravilo je notApplicable sa razlogom, bez povoljne boje. Kod agregiranih output ćelija referenca mora eksplicitno važiti za tu agregaciju i opseg. Nema poređenja daily reference sa weekly sum-om samo zato što oba nose AU.</p>
+<p>Za <code>referenceDifference</code> definicija v1 je <strong>value − reference</strong>. Za opcioni <code>referencePercent</code> predlaže se jedina imenovana formula <strong>signed-relative-abs-v1: 100 × (value − reference) / abs(reference)</strong>. Potrebni su finite scalar-i, kompatibilan kontekst, reference ≠ 0 i finite rezultat. Nulta referenca daje <code>undefinedReferenceZero</code>; nema infinity, nule, epsilon denominator-a ili deljenja frontend-a. Formula koristi abs denominator da znak znači numerički rast/pad i kod negativne reference; ne znači automatski sportsko poboljšanje. Negativne reference dozvoliti samo ako metrika/referenca takav domen validno podržavaju.</p>
+<p>Primer za proveru: value=1250 AU, reference=1000 AU → difference=250 AU, referencePercent=25%; pravilo <code>gt 20 %</code> daje odgovarajuću oznaku. value=0, reference=1000 → −100%; value=−80, reference=−100 → +20% samo ako je takav domen dozvoljen. Ovo je <strong>predlog eksplicitne formule za odobrenje</strong>, ne novi već postojeći backend obračun. Capability za percent ostaje false dok zasebna implementacija formule i njeni fixture testovi nisu odobreni i prošli.</p>
+<p>Derived annotation se vraća u query response, nikada ne prepisuje value/rawValue/rawCount, ne ide u metric_values i ne menja aggregationRole/source politika. Percent/delta badge ima navedenu referencu i verziju formule; nijedan tooltip ne prikazuje ga kao izmerenu metričku vrednost.</p>
+<h3>6.4 Redosled evaluacije i vizuelna primena</h3>
+<p>Prvo proveriti status originalne ćelije. Samo <code>value</code> + finite numeric scalar + kompatibilna jedinica/semantika je eligible. Missing, konflikt bilo kog tipa, error, unsupported, string, boolean, array, non-finite i nedovoljno jasan identitet ne ulaze u poređenje. Problem status se prikazuje nezavisno; nema „uspešnog” check mark-a. Dupli identiteti/bucket-i ostaju dostupni kao redovi, ali ne dobijaju izmišljenu jedinstvenu referencu ili automatsku ocenu.</p>
+<p>Pravila se proveravaju po priority; prvo enabled eligible podudaranje daje <strong>jedan</strong> style. Ne mešati pozadine i strelice iz više različitih pravila. Ako se intervali preklapaju, editor pokazuje upozorenje i jasno koji ima prioritet; rezultat je determinističan. Bez match-a vrednost je neutralna, bez oznake. Disabled pravilo ne učestvuje.</p>
+<p>Vizuelna strelica je indikator eksplicitnog pravila, ne dokaz temporalnog trenda. Za vremensku promenu mora postojati kompatibilna backend referenca prethodnog perioda. Pozitivni rast ne dobija automatski pozitivnu boju. Zvezdice su proizvoljna korisnička klasifikacija sa vidljivom legendom, nikad implicitna statistička značajnost ili medicinski rizik. Tone je semantički design token prilagođen light/dark temi; label i dostupno objašnjenje ostaju i bez boje. Missing/error se ne prekrivaju formatting stilom.</p>
+<h3>6.5 Ugovor evaluacionog odgovora</h3>
+<p>Evaluator radi jednom posle kanonskog query-a, zajednički za preview i saved query. Frontend ne ponavlja logiku pragova niti računa reference. Pored postojećih widget/series/current/comparison struktura server vraća sidecar <code>presentationAnnotations</code>.</p>
+<pre><code class="language-json">{
+  &quot;queryId&quot;: &quot;22222222-2222-4222-8222-222222222222&quot;,
+  &quot;presentationAnnotations&quot;: {
+    &quot;evaluationVersion&quot;: 1,
+    &quot;entries&quot;: [
+      {
+        &quot;target&quot;: {
+          &quot;widgetId&quot;: &quot;11111111-1111-4111-8111-111111111111&quot;,
+          &quot;seriesId&quot;: &quot;33333333-3333-4333-8333-333333333333&quot;,
+          &quot;phase&quot;: &quot;current&quot;,
+          &quot;rowIndex&quot;: 0,
+          &quot;identityKey&quot;: &quot;canonical-detached-row-identity&quot;
+        },
+        &quot;state&quot;: &quot;matched&quot;,
+        &quot;ruleId&quot;: &quot;review-high-load&quot;,
+        &quot;style&quot;: {&quot;tone&quot;: &quot;caution&quot;, &quot;marker&quot;: &quot;up&quot;, &quot;label&quot;: &quot;Iznad izabranog praga&quot;},
+        &quot;explanationCode&quot;: &quot;valueAboveThreshold&quot;,
+        &quot;evaluatedValue&quot;: 2180,
+        &quot;threshold&quot;: {&quot;value&quot;: 2000, &quot;unit&quot;: &quot;AU&quot;}
+      }
+    ]
+  }
+}
+</code></pre>
+<p>Target je query-local: queryId + widget/series/phase/rowIndex + kanonizovani identityKey (metric/built-in, athlete, bucket, unit, grouping, prijavljeni source). To nije index vidljivo sortirane HTML tabele. Adapter koristi postojeći Display Model rowIndex i detached identity; ne menja sam model. Nepodudaranje queryId/identiteta, duplikat annotation target-a ili foreign ID odbacuje annotation i pokazuje bezbedan neutralan prikaz uz grešku dekoracije; raw rezultat ostaje vidljiv. Nema annotations-only cache-a odvojenog od odgovora kojem pripadaju.</p>
+<p>Evaluation stanja su <code>matched</code>, <code>unmatched</code>, <code>ineligible</code>, <code>referenceUnavailable</code>, <code>referenceIncompatible</code>, <code>undefinedReferenceZero</code>, <code>error</code>. Greška pravila ne obara postojeću validnu brojčanu vrednost, ali uklanja ocenu i pokazuje da pravilo nije primenjeno. Neprosleđivanje annotation-a u response-u kad je evaluator capability=false nije uspešna primena pravila. Nova konfiguracija koja traži unsupported capability odbija se već u validaciji.</p>
+<h2 id="section-7">7. Preview, validacija i API predlog</h2>
+<h3>7.1 Rute i capabilities</h3>
+<p>Base je postojeći <code>/api/training-load/dashboards/:dashboardId</code>. Nove rute su ispod <code>simple-editor</code> da se ne promene stare body šeme.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Ruta</th>
+<th>Namena i pristup</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>GET <code>/simple-editor/capabilities</code></td>
+<td>Read-only podržane ugovorne verzije, widget tipovi/bounds, policy/default metadata iz postojećeg kataloga, Pages/presentation/rule/reference/percent capabilities; nije drugi metric registry</td>
+</tr>
+<tr>
+<td>POST <code>/simple-editor/validate</code></td>
+<td>Read-only validacija/kompajliranje drafta, issue code/path i reliable suggestion; ne vraća preview token i ne poziva query nepotrebno</td>
+</tr>
+<tr>
+<td>POST <code>/simple-editor/preview</code></td>
+<td>Read-only validate + autorizovani query + annotations + previewToken</td>
+</tr>
+<tr>
+<td>POST <code>/simple-editor/widgets</code></td>
+<td>Atomski create jedne serije/widgeta sa finalnim potvrđenim draftom</td>
+</tr>
+<tr>
+<td>PUT <code>/simple-editor/widgets/:widgetId</code></td>
+<td>Atomski update Simple podobnog widgeta; nepotpuni implicitni replace nije dozvoljen</td>
+</tr>
+<tr>
+<td>POST <code>/simple-editor/requests/status</code></td>
+<td>Read-only provera konkretnog client requestId bez query string izlaganja; samo inicijator i isti autorizovani kontekst</td>
+</tr>
+</tbody></table></div>
+<p>POST preview/status ne znači upis. Preview nema dashboard/Page/selection/preference/metric writes. Postojeći <code>resolveActiveWorkspace</code> ume da upiše fallback preference, zato se za novi read-only put MORA koristiti side-effect-free rezolucija istim autorizacionim pravilima. Ako saved preference nedostaje ili više nije validna, odgovor je <code>workspaceSelectionRequired</code>, bez silent prebacivanja ili upisa. Simple zahteva poklapanje aktivnog i dashboard data workspace-a: to je stroži novi put, ne tvrdnja da ga postojeći Advanced writer već zahteva. Resource mismatch ostaje 404 notFound; workspaceSelectionRequired odnosi se na nevažeću/nedostajuću aktivnu selekciju pre target pristupa. Očitavanje auth sesije u <code>authMiddleware</code> je read-only u pregledanom kodu; ne uvoditi novi audit table write za preview. Operativni server log/metrics nisu upis poslovnih podataka i ne smeju sadržati kompletan osetljiv payload.</p>
+<p>Preview izvodi metadata i fact čitanja kroz isti klijentski READ ONLY REPEATABLE READ kontekst. Postojeći query engine trenutno uvozi globalni db query; potreban je uski dependency injection query runner-a da sve njegove čitanje koriste isti klijent. To je planirana adapter promena, ne novi obračun. Ne koristiti SELECT FOR UPDATE u preview-u. Za saved query i dalje ostaje postojeća semantika; eventualno preuzimanje snapshot adaptera je zasebno proverena promena.</p>
+<h3>7.1.1 Zajednička validacija i DB parity</h3>
+<p>Potvrđena odluka: jedan zajednički JS validator/compiler za validate, preview i Simple save. DB constraints/trigeri ostaju konačna autoritativna zaštita upisa; read-only preview ih ne „izvršava” INSERT-om, savepoint probom ili zaključavanjem. Budući adapter eksplicitno replicira relevantne DB zabrane u zajedničkoj validaciji; nema tvrdnje da su današnji trigeri već read-only funkcije ili da preview može pozivati njihove lock-ove.</p>
+<p>S2a acceptance zahteva inventar <strong>svih relevantnih</strong> zabrana iz važeće šeme i sanctioned funkcija, ne samo nekoliko izabranih fixture-a: widget/series broj i tip, axis-unit kompatibilnost, metric/built-in izbor i aktivnost, fixed built-in scope, scope capability, value_type/aggregation, source policy/connection visibility i aktivnost, comparison period, template/resolution/filter članstvo, shape/bounds, presentation/rule compatibility. Svaki DB refusal ima matching invalid fixture kroz validate/preview i stvarni save na disposable bazi, i validan granični par. Mapiranje je stabilni code/path bez SQL poruke ili tuđih podataka. Parity uključuje create/update, ne samo create. Auth/foreign target odluke prethode detaljnim issue porukama po ADR-006.</p>
+<p>Za isti snapshot i kontekst validacija ima isti rezultat. Konkurentna promena posle preview-a sme biti odbijena pri zaključanoj save revalidaciji; to je dokumentovan stale/catalog/context konflikt, ne dozvola za non-racing parity razilaženje ili generički invalidRequest za poznatu zabranu. CI dodavanje/promena DB zabrane zahteva ažuriranje parity inventara i testova. Preview query uspeh sam ne dokazuje mogućnost save-a.</p>
+<h3>7.1.2 Ograničenje preview rada i DB pool zaštita</h3>
+<p>Početni ugovor odobren od vlasnika: debounce <strong>350 ms</strong>, <strong>jedan aktivan preview po autentifikovanom korisniku</strong> kroz tabove, i za POOL_MAX=10 <strong>najviše dva aktivna preview-a po server procesu</strong>. Za manji pool lokalni limit je <code>min(2, floor((POOL_MAX-1)/2))</code>; POOL_MAX se ne povećava zbog preview-a. Admission se proverava pre DB checkout-a, bez neograničenog čekanja u redu. Noviji zahtev dok stariji još radi dobija 429 <code>previewBusy</code> i kratki Retry-After; klijent eventualno ponavlja samo najnoviji važeći draft nakon odgovora, ne šalje paralelnu oluju.</p>
+<p>DB upiti imaju <code>SET LOCAL statement_timeout</code> najviše <strong>3 s</strong>, uz <strong>5 s ukupnog DB transaction budžeta</strong> koji se ne restartuje pri svakom SQL statement-u; preostali rok dodatno sužava statement timeout. Checkout takođe ima ograničenje i ne započinje već istekli zahtev. Metapodaci/facts ostaju u istom READ ONLY REPEATABLE READ klijentu. HTTP abort/AbortController/generation guard nije potvrda da je PostgreSQL završio: server pokušava bezbedan cancellation, zatim čeka potvrđen prekid/rollback i release. Admission slot se oslobađa tek kada je resurs stvarno oslobođen ili neupotrebljiva konekcija uklonjena; ne vraćati aktivnog client-a u pool. Ako cancellation ne može bezbedno da se izvrši, timeout ostaje backstop. Cleanup koji zapne zadržava zauzet slot/refusal i prijavljuje degradaciju; ne pušta novi SQL preko navodnog slobodnog slota. Pet sekundi nije obećanje da nestala mrežna konekcija ili njen cleanup već imaju potvrđen ishod.</p>
+<p><strong>Per-process nije globalno:</strong> dva procesa mogu ukupno izvršavati četiri preview-a. Svi procesi, servisi i overlap deploy instance dele database/session-pool kapacitet. Jedan-per-user kroz više procesa zahteva koordinisani admission ili dokazanu jedinstvenu user-affinity putanju; lokalni Map sam to ne garantuje. Izbor eventualnog distribuiranog/globalnog mehanizma je budući implementacioni/deployment zadatak, ne postojeća infrastruktura niti njeno odobrenje ovim dokumentom. Pre aktivacije MORA biti dokazano da se korisnički limit ne zaobilazi preko procesa i da zbirni DB budžet ostavlja prostor drugim endpointima; bez toga capability ostaje isključen. Lokalni preview limit sam ne garantuje da drugi potrošači ne mogu iscrpeti pool.</p>
+<p>350 ms / 3 s / 5 s i navedeni admission limiti su početni ugovor: load test više tabova, korisnika i procesa, uz spor SQL, abort i pool zasićenje, mora potvrditi bezbednost i prihvatljiv odziv pre aktivacije. Nema promene produkcionih env vrednosti ili globalne kontrole u S1.1.</p>
+<h3>7.2 Request envelope</h3>
+<pre><code class="language-json">{
+  &quot;contractVersion&quot;: 1,
+  &quot;context&quot;: {
+    &quot;kind&quot;: &quot;legacyDashboard&quot;,
+    &quot;runtimeFilter&quot;: {
+      &quot;athleteIds&quot;: [
+        &quot;44444444-4444-4444-8444-444444444444&quot;
+      ]
+    },
+    &quot;period&quot;: {
+      &quot;dateFrom&quot;: &quot;2026-10-22&quot;,
+      &quot;dateTo&quot;: &quot;2026-10-28&quot;,
+      &quot;timeZone&quot;: &quot;Europe/Belgrade&quot;
+    }
+  },
+  &quot;draftRef&quot;: {
+    &quot;draftId&quot;: &quot;11111111-1111-4111-8111-111111111111&quot;,
+    &quot;draftVersion&quot;: 3
+  },
+  &quot;draft&quot;: {
+    &quot;contractVersion&quot;: 1,
+    &quot;draftId&quot;: &quot;11111111-1111-4111-8111-111111111111&quot;,
+    &quot;draftVersion&quot;: 3,
+    &quot;title&quot;: &quot;sRPE po danima&quot;,
+    &quot;metricRef&quot;: {
+      &quot;kind&quot;: &quot;builtin&quot;,
+      &quot;key&quot;: &quot;srpe&quot;
+    },
+    &quot;athleteSelection&quot;: {
+      &quot;mode&quot;: &quot;inherit&quot;
+    },
+    &quot;advancedFilter&quot;: {
+      &quot;activity&quot;: {
+        &quot;mode&quot;: &quot;inherit&quot;
+      },
+      &quot;component&quot;: {
+        &quot;mode&quot;: &quot;inherit&quot;
+      }
+    },
+    &quot;periodIntent&quot;: {
+      &quot;mode&quot;: &quot;inherit&quot;
+    },
+    &quot;view&quot;: {
+      &quot;type&quot;: &quot;line_chart&quot;,
+      &quot;groupBy&quot;: &quot;day&quot;,
+      &quot;dataScopeLevel&quot;: &quot;session&quot;,
+      &quot;analyticalAggregation&quot;: &quot;sum&quot;
+    },
+    &quot;display&quot;: {
+      &quot;mode&quot;: &quot;replace&quot;,
+      &quot;value&quot;: {
+        &quot;schemaVersion&quot;: 2,
+        &quot;numberFormat&quot;: {
+          &quot;maximumFractionDigits&quot;: 1
+        }
+      }
+    },
+    &quot;presentation&quot;: {
+      &quot;mode&quot;: &quot;replace&quot;,
+      &quot;value&quot;: {
+        &quot;schemaVersion&quot;: 1,
+        &quot;chartComposition&quot;: &quot;athletes-v1&quot;,
+        &quot;chartInteractions&quot;: {
+          &quot;tooltip&quot;: {
+            &quot;mode&quot;: &quot;exact&quot;
+          },
+          &quot;legend&quot;: {
+            &quot;toggle&quot;: true
+          },
+          &quot;zoom&quot;: {
+            &quot;mode&quot;: &quot;local&quot;,
+            &quot;applyPeriodAction&quot;: true
+          },
+          &quot;pointSelection&quot;: {
+            &quot;mode&quot;: &quot;details&quot;
+          },
+          &quot;yAxis&quot;: {
+            &quot;mode&quot;: &quot;auto&quot;
+          }
+        }
+      }
+    }
+  },
+  &quot;editTarget&quot;: null
+}
+</code></pre>
+<p>Primer prikazuje stvarni shape objekta. <code>draft</code> je EditorDraft v1 objekat; draftRef MORA odgovarati njegovim ID/version. <code>expectedCatalogToken</code> je opciona envelope vrednost: izostavljena pri prvom izboru, a posle validacije/preview-a vraćeni fingerprint služi za otkrivanje promene metapodataka pre novog preview-a. Update šalje <code>editTarget:{widgetId,expectedWidgetRevision}</code>; novi draft ga ima null. Server proverava widget parent članstvo pre čitanja specifičnih detalja.</p>
+<p>Persisted Pages kontekst je tagged union <code>kind=page</code> sa pageId. Informativne dashboard/Page layout revizije nisu opšti save preduslov. Samo eksplicitni <code>savePageDefaults:true</code> zahteva <code>expectedPageDefaultsRevision</code> sa zasebnim sadržajnim, ne layout brojačem. Dok taj future Pages port nije implementiran, capability za shared defaults je false. Za običan widget save relevantni fingerprint obuhvata efektivni default kontekst bez layout-a. Legacy nema pageId i prihvata se samo dok je dashboard logički jedna stranica. Nema izmišljenog virtual Page UUID-a koji bi neko kasnije pokušao da sačuva. Putanje su iste; context union uklanja potrebu da editor dva puta menja ugovor kada S4 uvede Pages. Na multi-page dashboardu legacy zahtev daje <code>pagesClientRequired</code>.</p>
+<p>Validate vraća <code>status:valid|invalid|advancedRequired</code>, <code>issues:[{code,path,severity}]</code>, <code>suggestion:{type,confidence,reasonCode}</code>, server-normalized compiled query i capabilities. Sam validate nije dokaz da query daje scalar KPI. Primedbe na strane reference su generičke i ne otkrivaju tuđe ID-ove/nazive.</p>
+<h3>7.3 Preview response i token</h3>
+<p>Preview response obavezno sadrži contractVersion, queryId, draftId/draftVersion, draftHash, contextFingerprint, evaluatedAt, resolvedPeriod, effectiveFilterSummary, dashboardRevision i Page/widget revisions kada postoje, catalogToken, <code>normalizedWidget</code> u postojećem snake_case obliku, <code>widgetResult:{widgetId,series}</code> u postojećem batch obliku, presentationAnnotations, warnings, server-issued requestIssuedAt/serverNow i previewToken/expiresAt. Postojeći Display Model prima normalizedWidget i samo njegov widgetResult, ne ceo envelope.</p>
+<p>Draft widget/series imaju deterministične privremene UUID-ove unutar drafta i status <code>resolved</code> samo ako ih je server validirao. Oni nisu DB redovi. Save response vraća mapping privremenih na stvarne ID-ove; nema čuvanja klijentskog lažnog <code>resolutionStatus</code>. Dashboard/Page layout revizije u odgovoru su informativne, bez opšteg equality guard-a. Client acceptance: draftVersion, selected workspace/dashboard/Page, relevantna widget revision i context fingerprint moraju biti aktuelni; tuđa nepovezana dashboard layout revision nije preduslov; stariji odgovor se odbacuje i kada je HTTP 200.</p>
+<p>Preview token je opaque, potpisan, bez persistence-a mernih rezultata, važi <strong>10 minuta po server satu</strong>. Ima verziju/keyId i potpis posebnim serverskim ključem; ne koristiti session/auth ključ kao nedokumentovani fallback. Buduća konfiguracija/rotacija ključa zahteva zasebno operativno odobrenje; S1.1 ne kreira ključ, env vrednost ni deploy. Pri rotaciji stari ključ može ostati verifikacioni najduže za dokumentovani token prozor; unknown keyId/invalid signature traže novi preview. Ledger replay nakon već potvrđenog COMMIT-a ne zavisi od opstanka starog ključa.</p>
+<p>Potpis obuhvata autentifikovanog korisnika, data workspace, parent/widget target, relevantnu widget revision, draftHash, catalog/semantic fingerprint, efektivni contextFingerprint, periodIntent i konkretni <code>resolvedPeriod</code> sa zonskom definicijom, evaluatedAt, server-issued <code>requestIssuedAt</code>, issuedAt i expiresAt. Token nije dozvola i ne preskače trenutnu autorizaciju niti DB revalidaciju. <code>requestIssuedAt</code> iz preview odgovora korisnik kopira nepromenjeno; sat browsera ga ne određuje. Response vraća i server now/expiresAt za prikaz; obnavljanje tokena ne osvežava originalno vreme već započetog requestId.</p>
+<p>Za prvo izvršenje server proverava da je efektivni period isti kao u tokenu. Relative preset se ponovo razrešava po server satu/ugovorenoj IANA zoni samo radi ove provere, ne da bi save tiho promenio period. Prelazak ponoći ili promena defaults/runtime perioda koja menja resolvedPeriod daje 409 <code>previewRequired</code>, uz reason <code>effectivePeriodChanged</code>; novi preview i nova korisnička potvrda obavezni su pre nove operacije. Isto važi za bilo koju drugu efektivnu promenu perioda, ne samo datumsku granicu. Raw facts sa novim merenjima unutar istog perioda ne zahtevaju zamenu metric binding-a ili novi token: preview nije snapshot budućih merenja. Posle save-a ide fresh Page batch.</p>
+<p>Za već završen identičan zahtev važi ledger replay iz §7.5 <strong>pre</strong> provere isteka tokena, stare widget revizije ili ponovnog razrešavanja relative perioda. Vraća se originalni receipt/period, ne novo izvršenje za novi dan. Novi token za drugačiji efektivni period nije identičan replay čak i ako periodIntent ostane today. HTTP retry posle nepoznatog ishoda čuva originalni requestId, server requestIssuedAt, normalized input i resolvedPeriod; ne pravi novi ključ ili menja sadržaj. Cancel ne poziva create/delete, a token sam ništa ne snima.</p>
+<h3>7.4 Atomski save i update</h3>
+<p>Save šalje isti envelope, previewToken i identifikaciju zahteva:</p>
+<pre><code class="language-json">{
+  &quot;requestId&quot;: &quot;55555555-5555-4555-8555-555555555555&quot;,
+  &quot;requestIssuedAt&quot;: &quot;2026-10-29T08:00:00Z&quot;,
+  &quot;resolvedPeriod&quot;: {
+    &quot;dateFrom&quot;: &quot;2026-10-22&quot;,
+    &quot;dateTo&quot;: &quot;2026-10-28&quot;,
+    &quot;timeZone&quot;: &quot;Europe/Belgrade&quot;
+  },
+  &quot;previewToken&quot;: &quot;opaque-signed-preview-token&quot;,
+  &quot;input&quot;: {
+    &quot;contractVersion&quot;: 1,
+    &quot;context&quot;: {
+      &quot;kind&quot;: &quot;legacyDashboard&quot;,
+      &quot;runtimeFilter&quot;: {
+        &quot;athleteIds&quot;: [
+          &quot;44444444-4444-4444-8444-444444444444&quot;
+        ]
+      },
+      &quot;period&quot;: {
+        &quot;dateFrom&quot;: &quot;2026-10-22&quot;,
+        &quot;dateTo&quot;: &quot;2026-10-28&quot;,
+        &quot;timeZone&quot;: &quot;Europe/Belgrade&quot;
+      }
+    },
+    &quot;draftRef&quot;: {
+      &quot;draftId&quot;: &quot;11111111-1111-4111-8111-111111111111&quot;,
+      &quot;draftVersion&quot;: 3
+    },
+    &quot;draft&quot;: {
+      &quot;contractVersion&quot;: 1,
+      &quot;draftId&quot;: &quot;11111111-1111-4111-8111-111111111111&quot;,
+      &quot;draftVersion&quot;: 3,
+      &quot;title&quot;: &quot;sRPE po danima&quot;,
+      &quot;metricRef&quot;: {
+        &quot;kind&quot;: &quot;builtin&quot;,
+        &quot;key&quot;: &quot;srpe&quot;
+      },
+      &quot;athleteSelection&quot;: {
+        &quot;mode&quot;: &quot;inherit&quot;
+      },
+      &quot;advancedFilter&quot;: {
+        &quot;activity&quot;: {
+          &quot;mode&quot;: &quot;inherit&quot;
+        },
+        &quot;component&quot;: {
+          &quot;mode&quot;: &quot;inherit&quot;
+        }
+      },
+      &quot;periodIntent&quot;: {
+        &quot;mode&quot;: &quot;inherit&quot;
+      },
+      &quot;view&quot;: {
+        &quot;type&quot;: &quot;line_chart&quot;,
+        &quot;groupBy&quot;: &quot;day&quot;,
+        &quot;dataScopeLevel&quot;: &quot;session&quot;,
+        &quot;analyticalAggregation&quot;: &quot;sum&quot;
+      },
+      &quot;display&quot;: {
+        &quot;mode&quot;: &quot;replace&quot;,
+        &quot;value&quot;: {
+          &quot;schemaVersion&quot;: 2,
+          &quot;numberFormat&quot;: {
+            &quot;maximumFractionDigits&quot;: 1
+          }
+        }
+      },
+      &quot;presentation&quot;: {
+        &quot;mode&quot;: &quot;replace&quot;,
+        &quot;value&quot;: {
+          &quot;schemaVersion&quot;: 1,
+          &quot;chartComposition&quot;: &quot;athletes-v1&quot;,
+          &quot;chartInteractions&quot;: {
+            &quot;tooltip&quot;: {
+              &quot;mode&quot;: &quot;exact&quot;
+            },
+            &quot;legend&quot;: {
+              &quot;toggle&quot;: true
+            },
+            &quot;zoom&quot;: {
+              &quot;mode&quot;: &quot;local&quot;,
+              &quot;applyPeriodAction&quot;: true
+            },
+            &quot;pointSelection&quot;: {
+              &quot;mode&quot;: &quot;details&quot;
+            },
+            &quot;yAxis&quot;: {
+              &quot;mode&quot;: &quot;auto&quot;
+            }
+          }
+        }
+      }
+    },
+    &quot;editTarget&quot;: null
+  }
+}
+</code></pre>
+<p>Save nosi eksplicitni <code>resolvedPeriod</code> iz preview odgovora, uz isti server requestIssuedAt; oba se pri prvom izvršenju porede sa potpisanim tokenom. Replay izračunava hash iz dostavljenog originalnog input-a/perioda/vremena i poredi ga sa durable ledger-om, bez oslanjanja na istekli token ili stari ključ. Save <code>input</code> MORA biti isti envelope objekat koji je validiran preview-om; string ili skraćena verzija nisu prihvaćeni. Zahtev ne prihvata klijentski claims o ownership-u, manage pravu ili output izračunatim vrednostima. Datumi/UUID-ovi/token u primeru su ilustracije ugovora, ne važeći zahtev prema postojećem API-ju.</p>
+<p>Server prvo revalidira auth/visibility, inicijatora, workspace i target, pa proverava postojeći ledger zahtev: identičan završen replay vraća receipt pre novih token/revision/period zahteva. Za novo izvršenje proverava token i Simple eligibility; zatim u jednoj transakciji uz request idempotency lock lock-uje dashboard → Page ako postoji → widget → series i relevantne revizije/fingerprint. Update koristi expectedWidgetRevision (postojeća series mutacija već povećava widget revision), bez redundantnog nepostojećeg series revision polja. Create ne zahteva expectedDashboardRevision od preview-a; čita sadašnju revision pod lock-om za unutrašnji sanctioned poziv i bira položaj iz tadašnjeg layout-a. To zahteva novi Simple composite port, ne promenu postojećih legacy writer preduslova. Promena efektivnih defaults/statusa/memberstva/semantike traži novi preview; nepovezana promena rasporeda drugog widgeta ne menja fingerprint. Eksplicitni shared Page defaults write proverava expectedPageDefaultsRevision, a ne opštu layout revision. Privremeni request ledger lock je prvi i zasebne je hijerarhije; isti redosled važi za sve nove save/status adaptere. Metadata/catalog čitanja za binding štite se kompatibilnim lock-om kao postojeći writer, uz proveru da ne obrću postojeći lock redosled.</p>
+<p>Nova sanctioned kompozitna funkcija pravi widget i tačno jednu seriju ili menja postojeći widget/seriju i presentation config. Koristi zajednički JS validator/compiler i postojeće DB trigere/constraints kao konačni backstop (§7.1.1), limits, visibility i archive guards; raw multitable write iz HTTP rute nije dozvoljen. Type promena koja bi ranije zahtevala više koraka izvršava se u istoj transakciji u trigger-kompatibilnom redosledu. Ako je potreban novi series ID, obavezno se vraća mapping i prevode rule target-i. Svaki problem rollback-uje ceo zahtev, uključujući staged Page defaults i idempotency success receipt. Nema stanja „widget dodat, metrika nije”.</p>
+<p>Position/order za create određuje server iz slobodnog prostora aktivne Page, u postojećoj 12-column mreži i kataloškim granicama. Nema optimistic proizvoljnog overlap položaja. Save ne snima drag/layout draft druge operacije. Existing ID/config/filter/series polja koje Simple ne menja ostaju isti. Ako widget nije potpuno predstavljiv Simple modelom, vraća <code>advancedRequired</code>, bez destruktivnog svođenja. Advanced stari writer nastavlja sa svojim postojećim poštenim partial-save ugovorom; ovaj PR ga ne proglašava atomskim.</p>
+<p>Save response vraća requestId, operation=<code>created|updated|unchanged</code>, widgetId/seriesId mapping, nove revisions i konkretan period/runtime update koji frontend primenjuje samo ako je originalni kontekst još aktivan. Uspeh koji stigne posle promene workspace-a ne vraća korisnika na stari Dashboard; invalidira se odgovarajući cache. Fresh result i annotations dolaze običnim query-em, ne iz starih preview brojeva.</p>
+<p>Za odobreni novi KPI širine 6, predlog je proširiti samo catalog max_width na 6 u zasebnom S2d; postojeći catalog default_width=3 i stari saved layout-i ostaju isti. Novi Simple create može eksplicitno postaviti 6 kada feature capability to potvrđuje. Novi frontend layout limit mora odgovarati katalogu. Pre prvog takvog upisa server uvodi legacy layout guard za dashboard koji sadrži KPI širi od 4: stari flat layout writer bez novog contract capability-ja dobija <code>editorClientRequired</code>, jer stari otvoreni tab clamp-uje KPI na 4 i može ga nenamerno suziti. Staro čitanje i bezbedni metadata-only upisi ostaju kompatibilni. Novi layout zahtev nosi <code>X-OptiMove-Dashboard-Contract: simple-editor-1</code>; server ga prepoznaje samo kao compatibility signal, nikada kao autorizaciju, i i dalje proverava pun layout/reviziju/prava. Stari tab bez tog signala dobija kontrolisanu poruku da osveži aplikaciju. Ovaj guard je odvojen od kasnijeg multi-page guard-a i oba se moraju testirati. Ako proširenje nije odobreno, implementacija ne menja UX samostalno nego ostaje na ovom otvorenom tehničkom gate-u.</p>
+<h3>7.5 Idempotency i nepoznat ishod</h3>
+<p>Predlog ledger-a: unique (initiatorUserId, requestId), uz vezani workspace/dashboard/Page/widget, operation, canonical payload hash, requestIssuedAt, status i minimalni receipt. Isti ključ ne može biti upotrebljen za drugi target čak ni kada isti korisnik upravlja oba. Ne skladištiti merne rezultate u ledger-u.</p>
+<p>Canonical hash uključuje finalni sadržaj, target i relevantne očekivane revizije/fingerprint, unit-aware pravila, periodIntent, tokenom potvrđeni resolvedPeriod/timeZone i originalni server requestIssuedAt; object keys deterministični, set-like athlete ID-ovi sortirani, pravila sortirana po eksplicitnom priority. Isključiti transport-only previewToken, trace ID i vreme ponovnog slanja. <code>requestIssuedAt</code> je isti za sve pokušaje; vrednosti i njihove tipove ne zaokruživati. Preview token se validira pre prvog izvršenja; autorizovani replay završenog identičnog zahteva vraća receipt i kad je token istekao ili originalna revision sada stale. Promena payload-a/efektivnog perioda zahteva novi preview i novi requestId tek nakon razrešenja prethodnog ishoda; ne koristi se novi ključ da se zaobiđe nepoznat prethodni COMMIT.</p>
+<p>Prvi concurrent zahtev dobija ledger lock i commit-uje success receipt u istoj transakciji kao widget. Drugi identičan zahtev čeka u ograničenom roku, zatim vidi isti receipt ili <code>requestInProgress</code>; različit hash daje <code>idempotencyConflict</code>. Ne postoji commit poslovnog upisa bez receipt-a. Pre-commit pad rollback-uje oba; retry istog zahteva je dozvoljen. Posle commit-a izgubljen odgovor ima isti requestId/status put, bez drugog widgeta. Status koji ne vidi receipt može reći <code>notRecorded</code>, ali to nije dokaz da prvi zahtev sigurno neće commit-ovati; bezbedan sledeći korak je isti idempotentni zahtev.</p>
+<p>Retention ugovor ostaje 7 dana plus najmanje 10 minuta zaštite: receipt se ne uklanja pre isteka originalnog request prozora plus zaštita, niti dok je zahtev u letu/nerazrešen. <code>requestIssuedAt</code> mora biti server-issued vreme iz tokena, ne klijentski timestamp. Prvo izvršenje zahteva važeći 10-minutni preview i originalno vreme najviše 7 dana staro; buduće vreme van dokumentovane server clock tolerancije se odbija, ali browser clock skew ne utiče na save. Istovetan retry nikada ne osvežava taj timestamp ili rok. Završeni ledger replay unutar retention-a ne traži važeći preview. Po isteku originalnog request prozora nema automatskog resubmit-a pod novim ključem: <code>requestExpired</code> i read-only provera targeta pre nove korisničke akcije. Time uklanjanje starog ledger reda ne pretvara stari legitiman retry u novi create. Tačan cleanup job se posebno implementira/testira i ne proširuje ovaj S1 scope.</p>
+<p>Svaki replay/status ponovo proverava trenutnu autentifikaciju, inicijatora, workspace i pristup targetu. Opozvana prava daju generički denial, ne receipt sa starim podacima. Idempotency ne zamenjuje revision concurrency: drugi requestId sa starom revizijom dobija staleRevision. Bez automatskog rebase-a preko relevantnog tuđeg metric/rule/default izbora; layout drugog widgeta nije relevantni content konflikt.</p>
+<h3>7.5.1 Serverski COMMIT ishod</h3>
+<p>Save ima ograničene rokove: početni COMMIT acknowledgment budžet 5 s i nezavisnu read-only ledger proveru u dodatnih najviše 5 s, uključujući ograničeni checkout. Ove rokove i recovery kapacitet proveriti opterećenjem pre aktivacije; nisu preview 3 s statement timeout niti garancija da je server COMMIT otkazan istekom klijentskog čekanja. Save transakcija ne drži preview admission slot.</p>
+<p>Ako COMMIT odgovor nestane ili istekne rok, konekcija se ne vraća kao zdrav idle client i ne pokušava se novi business write. Bounded provera na drugoj konekciji proverava durable success receipt, identičan hash i originalni target pod trenutnim pravima. Potvrđen receipt vraća HTTP 200 sa <code>verification:verifiedAfterCommitError</code> i istim receipt-om (i za originalni create). Ako provera ne može dobiti konekciju, ne uspe, ili receipt još nije vidljiv dok COMMIT može biti u letu, HTTP 503 <code>outcomeUnknown</code> sa requestId i bez tvrdnje rollback-a. Čak ni vidljiv notRecorded sam ne dokazuje neuspeh: status i identičan idempotentni retry koriste originalni ključ i ledger lock; nema automatskog novog requestId ili „ponovo dodaj”.</p>
+<p>Poznato pre-COMMIT odbijanje uz potvrđen rollback vraća odgovarajući stabilan error. COMMIT greška/timeout nisu takav dokaz. Status/replay za revoke-ovan target vraća info-hiding 404, nikada receipt disclosure. Recovery put deli pool sa ostatkom aplikacije: nedostupan recovery kapacitet vodi u outcomeUnknown, ne u neograničeno čekanje ili veći POOL_MAX.</p>
+<h3>7.6 Error ugovor</h3>
+<p>Novi endpointi koriste stabilni <code>error</code> code i opcione <code>issues</code> sa path/code, bez SQLSTATE poruke, constraint naziva, stack-a ili tuđih ID-ova. Stare rute zadržavaju postojeći ugovor; ne raditi globalni rewrite grešaka.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Kodovi / ponašanje</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>400</td>
+<td>invalidRequest, invalidDraft, unsupportedContractVersion; tačan path za korisničku konfiguraciju</td>
+</tr>
+<tr>
+<td>401</td>
+<td>unauthenticated; bez preview vrednosti</td>
+</tr>
+<tr>
+<td>403</td>
+<td>Ne koristiti za nedostatak see/manage prava nad resursom; ADR-006 zahteva isti 404/error kao za nepostojeći resurs</td>
+</tr>
+<tr>
+<td>404</td>
+<td>notFound za nepostojeći ili nedozvoljeni dashboard/Page/widget/metric/source i data-workspace mismatch; isto kada je parent vidljiv, ali korisnik nema manage pravo; bez otkrivanja razloga</td>
+</tr>
+<tr>
+<td>409</td>
+<td>staleRevision, catalogChanged, workspaceSelectionRequired, dashboardArchived, templateRequiresClone, pagesClientRequired, editorClientRequired, advancedRequired, previewRequired, idempotencyConflict, requestExpired</td>
+</tr>
+<tr>
+<td>413 / 422</td>
+<td>payloadTooLarge / previewTooLarge ili unsupportedCapability; kontrolisano, bez partial podataka</td>
+</tr>
+<tr>
+<td>429</td>
+<td>previewBusy za user/process admission limit pre checkout-a; Retry-After i bez paralelnog query-a</td>
+</tr>
+<tr>
+<td>503</td>
+<td>requestInProgress / serviceUnavailable; outcomeUnknown samo uz nepoznat save COMMIT ishod, isti requestId/status/retry put</td>
+</tr>
+<tr>
+<td>504</td>
+<td>previewTimeout; potvrđen DB cleanup po §7.1.2, bez validnog preview tokena</td>
+</tr>
+</tbody></table></div>
+<p>Per-series query error unutar 200 odgovora ostaje error u Display Model-u i blokira finalni „preview potvrđen” status; ne tumači se kao empty. Konfiguraciono validan missing ili source conflict ostaje eksplicitni rezultat, bez skrivanja problema. Network/timeout pri save-u uvek može biti outcomeUnknown; proverava se isti requestId, ne nasumično ponavlja create.</p>
+<h2 id="section-8">8. Kompatibilnost i Pages zavisnosti</h2>
+<h3>8.1 Matrica čitanja i uređivanja</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Postojeći slučaj</th>
+<th>Obavezno ponašanje</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Null/absent/V1</td>
+<td>Isti sadašnji normalizer defaults; bez pisanja pri otvaranju. Title/filter izmena preserve-uje originalni display blob</td>
+</tr>
+<tr>
+<td>V1 sa extra fields</td>
+<td>Extra polja ne dobijaju novo značenje; nema automatskog čišćenja. Replace display-a zahteva eksplicitnu konverziju i prikaz promene</td>
+</tr>
+<tr>
+<td>Validan V2</td>
+<td>Isti precision/legend/valueLabels; sidecar se obrađuje odvojeno</td>
+</tr>
+<tr>
+<td>Invalid V2 / unknown display version</td>
+<td>Postojeće invalid/unsupported stanje; Simple ne popravlja ili downgrade-uje; otvaranje u Advanced ili read-only pomoć</td>
+</tr>
+<tr>
+<td>Jedna serija sa naprednim policies</td>
+<td>Preserve može zadržati tačno ista polja samo ako compiler dokazuje round-trip; inače AdvancedRequired</td>
+</tr>
+<tr>
+<td>Više serija / unresolved / ambiguous</td>
+<td>Advanced; nema uklanjanja viška, automatskog resolve-a ili prvog kandidata</td>
+</tr>
+<tr>
+<td>Sidecar null</td>
+<td>Osnovni stari prikaz; bez novih formatting/zoom defaults pri čitanju</td>
+</tr>
+<tr>
+<td>Unknown sidecar version</td>
+<td>Vrednosti ostaju, jasna unsupported decoration oznaka; bez sidecar rewrite-a</td>
+</tr>
+<tr>
+<td>Template / archived</td>
+<td>Struktura po postojećim pravima; bez preview query-a za workspace-less template i bez mutation/query-a arhiviranog dashboarda</td>
+</tr>
+<tr>
+<td>Athlete workspace</td>
+<td>Obavezno suženje na konkretnog athlete-a; override ne širi opseg</td>
+</tr>
+</tbody></table></div>
+<p>Postojeći layout, active_dashboard pointer, revisions, owner i data workspace ostaju isti. Query rezultat sa novim annotations je aditivan; stari Display Model mora nastaviti da prihvata iste redove. New saved presentation config mora biti kopiran u template clone, page duplicate i dashboard clone putanjama, sa prevodom series reference-a; eksplicitne SQL liste kolona ne smeju ga tiho izgubiti. Stari Advanced PATCH koji ne navodi sidecar ga čuva. Promena tipa Table→Chart sa table pravilima zahteva eksplicitno rešavanje ili očuvanje kao neaktivne/neprimenljive dekoracije uz jasno upozorenje; ne brisati automatski, niti evaluirati table pravila nad chart-om.</p>
+<h3>8.1.1 Sve presentation writer putanje — budući acceptance uslovi</h3>
+<p>S2c mora zajedno obuhvatiti DB JSON shape/version backstop, <code>getDashboardDetail</code> eksplicitni SELECT, route allowlist-e i service parametre, sanctioned <code>create_widget</code>/<code>update_widget_content</code> ili novi composite port, eksplicitnu listu kolona u <code>dashboard_widgets_bump_revision</code>, series writer-e i clone INSERT. Samo dodavanje kolone nije kompletna promena. Navedeno nije implementirano u S1.1.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Putanja</th>
+<th>Obavezno ponašanje pri budućoj implementaciji</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Simple create/update</td>
+<td>Jedna transakcija widget/series/sidecar/receipt; preserve/replace/clear eksplicitni; sidecar-only izmena podiže widget revision, a stara revision se odbija</td>
+</tr>
+<tr>
+<td>Legacy/Advanced metadata, title, state, layout</td>
+<td>Neprosleđeni sidecar ostaje sačuvan bez normalizacije ili implicitnog clear-a; unknown version se ne prepisuje</td>
+</tr>
+<tr>
+<td>Advanced promena type/metric/groupBy/aggregation/source/scope/filtera; series add/update/delete/reorder</td>
+<td>Revalidirati zavisna pravila i ciljeve pre mutacije; writer koji to ne podržava kontrolisano odbija semantičku izmenu, bez delimičnog upisa ili tiho važećih starih pravila</td>
+</tr>
+<tr>
+<td>Template/dashboard clone</td>
+<td>Kopirati sidecar, remap-ovati widget/series ID-ove i dokazati metric/unit/reference kompatibilnost u target workspace-u; ambiguous/unresolved nikada nije validna ocena. Unknown version očuvati bez evaluacije</td>
+</tr>
+<tr>
+<td>Budući Page duplicate</td>
+<td>Isti uslovi kao clone, uz novo članstvo i nezavisne ID-ove/layout; bez stranih reference ID-ova i deljenih promenljivih objekata</td>
+</tr>
+<tr>
+<td>Saved query/detail</td>
+<td>Eksplicitne read projekcije uključuju sidecar i proverene annotation metadata; read fallback ne upisuje podatke</td>
+</tr>
+<tr>
+<td>DB backstop i svi writer-i</td>
+<td>Nijedna zaobilazna putanja ne sme aktivirati nekompatibilno pravilo; raw-SQL clone izuzetak i sanctioned funkcije imaju isti acceptance dokaz</td>
+</tr>
+</tbody></table></div>
+<h3>8.1.2 Semantički dokaz za pravila tabela</h3>
+<p>Odsustvo semanticConflict zastavice u današnjem query rezultatu nije samo po sebi dokaz pune kompatibilnosti. Budući evaluator MORA iz istog autorizovanog query/metadata snapshot-a dobiti evaluation context: metric/built-in identitet, istorijske version ID-ove i dokaz njihove kompatibilnosti, stvarnu output jedinicu i poreklo te jedinice, value type, scope, groupBy/grain, analytical i daily aggregation, konkretan period, athlete/cohort skup, source policy/configured source i raspoloživi reported provenance. Ista jedinica ili current_version_id sami ne dokazuju kompatibilnost istorijskih doprinosa.</p>
+<p>Rule binding nosi provereni semantic fingerprint. Validate/preview/save i svaka semantička writer promena proveravaju ga ponovo. Backend reference mora odgovarati istom dokazanom domenu/verziji; foreign reference se odbija info-hiding odgovorom. Bez dokaza nova konfiguracija nije validna. Postojeći raw broj ostaje čitljiv, ali annotation je ineligible/referenceIncompatible sa objašnjenjem, bez boje/ocene. Metadata sidecar ne dodaje merenja, ne menja identitet Display Model-a niti backend agregaciju. BackendReference i percent ostaju disabled do zasebno odobrenog i validiranog resolver/formula ugovora.</p>
+<h3>8.2 Šta ne čeka Pages, a šta čeka</h3>
+<p>S2 može realizovati validator, compiler, chart presentation ugovor, preview i atomic Simple save na legacy single-page adapteru. Ne mora da čeka novu Page tabelu da bi ugovor bio proverljiv. Taj adapter nema trajne page defaults/period i nema multi-page upis.</p>
+<p>Persisted Page kontekst, pageRevision, shared default filteri, page-local layout i clone/delete/reorder implementiraju se u Pages fazi. S1 prihvata njihov tačan minimalni port: resolveContext → authorize → read defaults/period → revision fingerprint → compile widget → query → annotations. Period mutation pogađa samo aktivnu Page; ne postoji dashboard-wide runtime period koji prećutno menja sve stranice.</p>
+<p>Legacy guard za multi-page dashboard MORA stići pre prvog multi-page upisa: stari flat detail/query/layout/widget writer bez Page konteksta kontrolisano odbija operaciju. Nova Page članstva, UNIQUE order/mobile constraints i overlap trigger scope moraju biti usklađeni; jedna nova tabela nije dovoljno. Očuvati dashboard → Page → widget → series lock redosled i pod istim dashboard lock-om proveravati Page članstvo/revizije.</p>
+<p>S4 backfill će samo pridružiti postojeće widgete početnoj Page uz iste ID-ove/config/filter/layout bindinge. Nove kolone/null sidecar defaults ne menjaju metričke podatke. S1 ne rezerviše migracioni broj i ne proizvodi izvršiv SQL. V42 je Claude zona ugovor; novi broj/filename rezerviše se koordinisano tek u odobrenoj implementaciji.</p>
+<h3>8.3 Metrics Core paralelni tok</h3>
+<p>Metrics Core ostaje jedini registry; Dashboard ne uvodi formule, unit conversions, zone definicije, importer izuzetke ili novu source precedence politiku. Source conflict/historical semantic version pravila ostaju postojeća. Novi procentualni rule evaluator nije derived canonical variable i ne koristi se da zameni buduću Claude derived-metrics fazu.</p>
+<p>Od Claude toka potrebni su stabilni katalog metadata/capability ugovori i eventualno imenovan reference resolver. U nedostatku resolver-a podržani su static threshold/constant reference modeli, a backendReference i percent su eksplicitno capability-gated. Pages, osnovni Simple Editor i interaktivni chartovi ne čekaju zone/import/derived pipeline.</p>
+<p>Shared hot spots su DashboardQuery (query runner injection), shared app/state/styles, migrations namespace i budući icon library renderer. Dashboard PR menja samo bounded query adapter delove uz review diff-a; ne preuzima Claude source-mapping/zone/import rad. Dokumentaciona standing merge autorizacija Claude plana se ne prenosi na S tok.</p>
+<h2 id="section-9">9. Test matrica i acceptance</h2>
+<p>Ovo su planirani testovi. <strong>Nijedan naveden test nije izvršen u S1.</strong> Postojeće suite nazive koristiti kao regression oslonac, ali dodati nezavisne fixture slučajeve koji dokazuju poslovne ugovore, ne samo kopiraju implementation.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Scenario / nivo</th>
+<th>Očekivani dokaz</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>M01</td>
+<td>Catalog search/pagination/labels/unit/category</td>
+<td>Postojeći vidljivi katalog, svi cursor-i, bez duplog registry-a ili silent truncation-a</td>
+</tr>
+<tr>
+<td>M02</td>
+<td>Foreign/inactive metric, stale catalogToken</td>
+<td>Info-hiding denial / catalogChanged; nema query-a ni upisa preko starog izbora</td>
+</tr>
+<tr>
+<td>M03</td>
+<td>Workspace switch i kasni odgovor</td>
+<td>Stari picker/preview nikad ne prepišu novi kontekst</td>
+</tr>
+<tr>
+<td>M04</td>
+<td>Built-in pet tipova</td>
+<td>Stvarni fixed scope/default/source policy; RPE null unit ostaje null</td>
+</tr>
+<tr>
+<td>M05</td>
+<td>Nepouzdan scope/agregacija</td>
+<td>RequiresChoice/AdvancedRequired, bez izmišljenog sum-a</td>
+</tr>
+<tr>
+<td>F01</td>
+<td>Inherit, selected, allAuthorized, [] legacy</td>
+<td>Tačna razlika absent/null/[]; prazni picker ne proširuje skup</td>
+</tr>
+<tr>
+<td>F02</td>
+<td>Page izbor promenjen, widget fiksiran</td>
+<td>Widget ostaje fiksiran sa badge-om; reset uklanja ključ</td>
+</tr>
+<tr>
+<td>F03</td>
+<td>Athlete workspace i drugi UUID u override-u</td>
+<td>Rezultat ne izlazi iz autorizovanog athlete opsega</td>
+</tr>
+<tr>
+<td>F04</td>
+<td>Activity/component mismatch i clear</td>
+<td>Vidljiva korekcija; nema tihog reparent-a ili pogrešne komponente</td>
+</tr>
+<tr>
+<td>F05</td>
+<td>DST, this_week, last_7_days, različiti browser satovi</td>
+<td>Server zona i uključivi datumi; Monday week ≠ rolling 7d</td>
+</tr>
+<tr>
+<td>F06</td>
+<td>Cancel staged period/defaults</td>
+<td>Nijedan postojeći filter/default ne promenjen</td>
+</tr>
+<tr>
+<td>V01</td>
+<td>KPI jedan scalar / više grupa / array</td>
+<td>Scalar prikaz; multi-group ne bira prvi; array usmerava na Table</td>
+</tr>
+<tr>
+<td>V02</td>
+<td>Numeric/text/boolean/array view suggestion</td>
+<td>Reliable samo gde dokazivo; bez coercion-a u chart</td>
+</tr>
+<tr>
+<td>V03</td>
+<td>Missing/conflict/query error</td>
+<td>Različita stanja; problem nije nula; query error nije validan empty preview</td>
+</tr>
+<tr>
+<td>V04</td>
+<td>Obavezna tri koraka desktop/mobile</td>
+<td>Ista odluka i povratak, bez dodatnog obaveznog tehničkog koraka</td>
+</tr>
+<tr>
+<td>P01</td>
+<td>Isti fixture preview i saved query</td>
+<td>Isti multiskup redova, vrednosti, statusi i identiteti uz isti stabilni fixture/snapshot; razlike samo u prevedenim ID-ovima. Poređenje po punom identitetu, ne rowIndex-u ili SQL redosledu bez ORDER BY</td>
+</tr>
+<tr>
+<td>P02</td>
+<td>Preview read-only uključujući fallback workspace</td>
+<td>Nula poslovnih/preference/selection/idempotency upisa; READ ONLY tx; bez probnih widgeta</td>
+</tr>
+<tr>
+<td>P03</td>
+<td>Metadata/facts čitanje na različitim konekcijama</td>
+<td>Test odbija regresiju: isti klijent/snapshot kroz query injection</td>
+</tr>
+<tr>
+<td>P04</td>
+<td>Brz draft edit / 200 stariji odgovor</td>
+<td>Samo najnoviji draftVersion/context ulazi u prikaz; late load ne montira stari chart</td>
+</tr>
+<tr>
+<td>P05</td>
+<td>Empty/conflict preview potvrda</td>
+<td>Može sačuvati samo uz vidljivo upozorenje; invalid/timeout blokira</td>
+</tr>
+<tr>
+<td>P06</td>
+<td>Preview token expiry/tampering/context reuse</td>
+<td>Odbijen; drugi korisnik/workspace/izmenjen draft nije replay dozvola</td>
+</tr>
+<tr>
+<td>P07</td>
+<td>64 KiB/2 MiB/400 dana granice</td>
+<td>Kontrolisana greška, bez nepotpunog uspešnog preview-a</td>
+</tr>
+<tr>
+<td>C01</td>
+<td>Tooltip decimal precision, zero/negative</td>
+<td>Pun transport broj, ispravna jedinica/identitet; chart label precision ne skraćuje exact tooltip</td>
+</tr>
+<tr>
+<td>C02</td>
+<td>Sintetički različiti reported source identiteti i ista imena</td>
+<td>Odvojeni plotovi/legend state bez name kolizije; današnji Simple reported={} ne predstavlja dokaz dostupnosti tih izvora</td>
+</tr>
+<tr>
+<td>C03</td>
+<td>Legend hide/show/all hidden</td>
+<td>Nema query-a, revision promene ili nestanka osnovne tabele; jasan reset</td>
+</tr>
+<tr>
+<td>C04</td>
+<td>Day/week zoom</td>
+<td>Lokalna promena prozora, bez agregacije; explicit apply šalje jedan Page batch</td>
+</tr>
+<tr>
+<td>C05</td>
+<td>Kategorički bucket UUID + zoom</td>
+<td>Ne nudi vremenski apply; nema tumačenja UUID-a kao datuma</td>
+</tr>
+<tr>
+<td>C06</td>
+<td>Zoom week partial bounds</td>
+<td>Ispravni Monday-based bucket-i i server period validacija</td>
+</tr>
+<tr>
+<td>C07</td>
+<td>Klik sortirane tačke/bar-a</td>
+<td>Tačan originalni row locator; ne prvi raw row ili druga source particija</td>
+</tr>
+<tr>
+<td>C08</td>
+<td>Duplicate/missing bucket i gap</td>
+<td>Bez tačke/redukcije; svi problem redovi u tabeli; connectNulls false</td>
+</tr>
+<tr>
+<td>C09</td>
+<td>Y fixed, min≥max, negative, van bounds</td>
+<td>Invalid bounds odbijeni; out-of-range upozorenje, originalne vrednosti očuvane</td>
+</tr>
+<tr>
+<td>C10</td>
+<td>Resize, 20 Page switch-eva, import failure</td>
+<td>Broj instanci/observera/handlera ne raste; fallback ostaje čitljiv</td>
+</tr>
+<tr>
+<td>C11</td>
+<td>Touch pinch/scroll/tap, tastatura</td>
+<td>Scroll nije zarobljen; detalji dostupni bez hover-a; ista funkcionalnost</td>
+</tr>
+<tr>
+<td>T01</td>
+<td>gt/gte/lt/lte granice</td>
+<td>-1,0,1 i tačna threshold vrednost daju očekivane match-eve</td>
+</tr>
+<tr>
+<td>T02</td>
+<td>Between/outside, sva 4 inclusivity para</td>
+<td>Tačne granice/komplement; prazan interval konfiguraciona greška</td>
+</tr>
+<tr>
+<td>T03</td>
+<td>Raw decimal naspram prikaza</td>
+<td>1999,96 prikazano 2000 ne prolazi gt 2000</td>
+</tr>
+<tr>
+<td>T04</td>
+<td>Jedinica/semantika mismatch</td>
+<td>Nema konverzije, style-a ili numeričke ocene; jasan razlog</td>
+</tr>
+<tr>
+<td>T05</td>
+<td>Null/false/empty string/array/NaN/error/conflict</td>
+<td>Nijedan nije nula; postojeća vrednost/status ostaju lossless</td>
+</tr>
+<tr>
+<td>T06</td>
+<td>Overlapping pravila / priorities</td>
+<td>First-match determinističan; dupli priority odbijen; warning objašnjava prioritet</td>
+</tr>
+<tr>
+<td>T07</td>
+<td>Ref missing/multiple/foreign/source mismatch</td>
+<td>Generic denial ili notApplicable, nikad automatski timski prosek</td>
+</tr>
+<tr>
+<td>T08</td>
+<td>Percent 1250/1000, 0/1000, -80/-100, ref 0</td>
+<td>25%, −100%, +20% ako domen dozvoljen; undefinedReferenceZero za nultu referencu</td>
+</tr>
+<tr>
+<td>T09</td>
+<td>Overflow/non-finite/ref sem version</td>
+<td>Evaluator error bez stilizovane ocene; osnovni rezultat ostaje</td>
+</tr>
+<tr>
+<td>T10</td>
+<td>Fake HTML/style/callback/URL</td>
+<td>Striktan schema reject i escaping; nema korisničkog koda u ECharts</td>
+</tr>
+<tr>
+<td>T11</td>
+<td>Query/row annotation mismatch/duplikat</td>
+<td>Bezbedan neutralan prikaz i decoration error; ne boji pogrešan red</td>
+</tr>
+<tr>
+<td>T12</td>
+<td>Sorting/filter prikaza tabele</td>
+<td>Annotation prati originalni rowIndex/identity, ne vizuelni index</td>
+</tr>
+<tr>
+<td>T13</td>
+<td>Arrow/star bez boje i čitač ekrana</td>
+<td>Vidljiv smislen label, jedinica/prag/referenca dostupni; nema implicitne značajnosti</td>
+</tr>
+<tr>
+<td>S01</td>
+<td>Widget+series create, svaki failure injection</td>
+<td>Potpun rollback; nema praznog widgeta ili success receipt-a</td>
+</tr>
+<tr>
+<td>S02</td>
+<td>Type/metric update sa unit/cap/pravilo konfliktom</td>
+<td>Ili cela validna izmena ili nula; očuvani originali</td>
+</tr>
+<tr>
+<td>S03</td>
+<td>Isti request dvaput/concurrent/lost response</td>
+<td>Jedan widget i jedan receipt; identičan replay bez stale false-negative</td>
+</tr>
+<tr>
+<td>S04</td>
+<td>Isti requestId, drugi payload/target</td>
+<td>IdempotencyConflict; bez drugog upisa</td>
+</tr>
+<tr>
+<td>S05</td>
+<td>Različit requestId, stale revision</td>
+<td>StaleRevision; bez lost update-a ili auto-rebase-a</td>
+</tr>
+<tr>
+<td>S06</td>
+<td>Server crash pre/posle commit-a</td>
+<td>Pre: rollback oba. Posle: receipt proverljiv, bez duplikata</td>
+</tr>
+<tr>
+<td>S07</td>
+<td>Ledger TTL/clock skew i stari retry</td>
+<td>Original issuedAt se ne osvežava; istekao pokušaj ne postaje novi create</td>
+</tr>
+<tr>
+<td>S08</td>
+<td>Revoked rights pre replay/status</td>
+<td>Nema receipt disclosure-a, čak i ako prethodni write jeste uspeo</td>
+</tr>
+<tr>
+<td>S09</td>
+<td>Shared Page default + widget save failure</td>
+<td>Rollback oba; runtime UI se ne primenjuje pre potvrđenog uspeha</td>
+</tr>
+<tr>
+<td>B01</td>
+<td>V1/extra fields/null/V2 round-trip</td>
+<td>Otvaranje nema write; preserve čuva originalne blobove i nepoznata polja</td>
+</tr>
+<tr>
+<td>B02</td>
+<td>Unsupported/invalid display/sidecar</td>
+<td>Eksplicitno stanje; nema downgrade-a ili vraćanja default-a kao validnog save-a</td>
+</tr>
+<tr>
+<td>B03</td>
+<td>Multi-series Advanced i source policies</td>
+<td>Nema uklanjanja bindinga/policy-a; Simple odbija nepredstavljiv slučaj</td>
+</tr>
+<tr>
+<td>B04</td>
+<td>Template clone/Page duplicate</td>
+<td>Sidecar i pravila očuvani, ID mapping tačan, unresolved nije prvi kandidat</td>
+</tr>
+<tr>
+<td>B05</td>
+<td>Single-page KPI width=6 i stari layout tab</td>
+<td>Staro čitanje radi; stari writer se odbija pre clamp/rewrite-a; novi writer poštuje 6, stari saved 3/4 ostaju isti</td>
+</tr>
+<tr>
+<td>G01</td>
+<td>Single-page legacy / multi-page guard</td>
+<td>Isti stari rezultat na legacy; flat multi-page writer kontrolisano odbijen</td>
+</tr>
+<tr>
+<td>G02</td>
+<td>Foreign Page/widget, dve sesije menadžera</td>
+<td>Članstvo i owner/data-workspace provere nezavisne; info-hiding</td>
+</tr>
+<tr>
+<td>G03</td>
+<td>Page A query kasni posle Page B</td>
+<td>A ne menja B, njene annotations, filtere ili legend state</td>
+</tr>
+<tr>
+<td>P08</td>
+<td>Inventar svih relevantnih DB zabrana, validni/invalidni i race fixture-i</td>
+<td>Validate/preview/save isti code/path za neracing kontekst; DB backstop odbija race; svaki novi trigger menja parity inventar</td>
+</tr>
+<tr>
+<td>P09</td>
+<td>Više tabova, korisnika i procesa; spor SQL i zasićen pool</td>
+<td>User limit 1, process limit 2 pri pool=10, admission pre checkout-a, bounded 429; zbirni deployment budžet i drugi endpoint provereni pre aktivacije</td>
+</tr>
+<tr>
+<td>P10</td>
+<td>HTTP abort dok PostgreSQL još radi; cleanup neuspeh</td>
+<td>Nema lažnog slobodnog slota/client release-a; cancellation/rollback potvrđen ili konekcija uklonjena; bez idle-in-transaction leak-a</td>
+</tr>
+<tr>
+<td>C12</td>
+<td>20 sportista × mnogo redova i izbor 25 sportista</td>
+<td>20 athlete presentation serija nije 20 redova; 25 zahteva izbor ili Table, nikada automatski prvih 20</td>
+</tr>
+<tr>
+<td>C13</td>
+<td>Ista imena, nedostupna imena i groupBy=athlete bucketKey=all</td>
+<td>ID-based legenda/kategorije, autorizovani label port; bez lažnog duplicate bucket-a među različitim sportistima</td>
+</tr>
+<tr>
+<td>C14</td>
+<td>Pon/čet podaci, prazni uto/sre, week partial bounds</td>
+<td>Gusta osa/noObservation gap; nema raw/annotation placeholder reda ili nule; zoom po resolvedPeriod</td>
+</tr>
+<tr>
+<td>T15</td>
+<td>RPE explicit null naspram missing/mixed istorijske jedinice</td>
+<td>Null nije wildcard; samo dokazani semantic binding prima pravilo; bez izmišljenog count/RPE unit labela</td>
+</tr>
+<tr>
+<td>S10</td>
+<td>Tuđi layout naspram widget/series/default promene</td>
+<td>Nema globalnog dashboard stale konflikta za tuđi layout; sopstveni content i efektivni defaults revalidirani</td>
+</tr>
+<tr>
+<td>S11</td>
+<td>Relative period preko ponoći, novi token i browser sat ±1 dan</td>
+<td>Server issuedAt, potpisan resolvedPeriod; promena efektivnog perioda traži novi preview pre prvog izvršenja; gotov replay vraća stari receipt</td>
+</tr>
+<tr>
+<td>S12</td>
+<td>COMMIT acknowledgment error/timeout, positive/absent/unavailable receipt</td>
+<td>Bounded druga konekcija: HTTP 200 verifiedAfterCommitError samo za durable receipt; ostalo 503 outcomeUnknown bez novog requestId ili tvrdnje rollback-a</td>
+</tr>
+<tr>
+<td>S13</td>
+<td>Isti requestId, periodIntent=today, drugi resolvedPeriod</td>
+<td>Različit canonical hash daje idempotencyConflict, ne drugi create; recovery čuva originalni input/vreme/period</td>
+</tr>
+<tr>
+<td>S14</td>
+<td>Rotacija/unknown keyId, expired token i cleanup retention granica</td>
+<td>Novi save revalidira token; gotov ledger replay ne zavisi od starog ključa; cleanup ne briše in-flight ili još replay-validan receipt</td>
+</tr>
+<tr>
+<td>U01</td>
+<td>360/375/390px, 768px, 1440px, 200% zoom</td>
+<td>Bez document overflow-a; input≥16px i dodir≥44px; osnovne opcije ostaju razumljive</td>
+</tr>
+<tr>
+<td>U02</td>
+<td>Tastatura/reader/reduced-motion/chart failure</td>
+<td>Fokus i objašnjenja dostupni; boja i hover nisu jedini signal</td>
+</tr>
+</tbody></table></div>
+<p>Obavezni regression oslonci: <code>training-load-analysis-display-model.test.mjs</code>, display-view, echarts, analysis.actions, dashboards.actions/editor/H4/UX; backend <code>training-load-dashboard.test.mjs</code> i relevantne visibility/scope capability suite. Novi read-only i atomic save testovi moraju imati realne disposable DB/API dokaze pre readiness-a, ne samo mocked HTTP. To zahteva buduće posebno odobreno okruženje i izvršenje migracija; S1 ih ne pokreće.</p>
+<p>Za vizuelne izmene izvršiti stvarni browser QA i Vite production build sa vendor notices. Full-suite baseline dug evidentirati po tadašnjem main-u i stvarnim potpisima; ne prenositi istorijske S0 brojeve kao novi rezultat i ne uklanjati testove radi zelenog statusa. Contract fixtures proveravaju originalne vrednosti/identitete/status, ne samo snapshot CSS-a.</p>
+<h2 id="section-10">10. Rizici i odluke koje slede iz ugovora</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Prioritet</th>
+<th>Rizik / posledica</th>
+<th>Predložena kontrola</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Visok</td>
+<td>Novi ključevi u display_config V2 postaju invalid</td>
+<td>Sidecar v1 i strogi novi validator; postojeći normalizer netaknut</td>
+</tr>
+<tr>
+<td>Visok</td>
+<td>Preview put preko workspace resolver-a potajno upisuje preference</td>
+<td>Side-effect-free resolver i READ ONLY client; negativni DB test P02</td>
+</tr>
+<tr>
+<td>Visok</td>
+<td>Preview admission iscrpi deljeni pool ili HTTP abort prerano oslobodi slot</td>
+<td>Per-user/per-process admission, stvarni DB cleanup, multi-process load gate pre aktivacije</td>
+</tr>
+<tr>
+<td>Visok</td>
+<td>Reuse query-a van istog snapshot-a ili promena backend matematike</td>
+<td>Bounded query-runner injection, identični fixture rezultati i Claude diff review</td>
+</tr>
+<tr>
+<td>Visok</td>
+<td>Retry pravi dupli widget ili lost update</td>
+<td>Atomic receipt + payload hash + revision guards; bounded status/replay</td>
+</tr>
+<tr>
+<td>Visok</td>
+<td>Reference/percent daju lažnu ocenu</td>
+<td>Explicit resolver/formula capability i testovi; bez fallback proseka/nule</td>
+</tr>
+<tr>
+<td>Visok</td>
+<td>Stari flat client menja drugu Page</td>
+<td>Server legacy guard pre multi-page capability</td>
+</tr>
+<tr>
+<td>Srednji</td>
+<td>Široke KPI kartice iz UX-a nisu dozvoljene sadašnjim katalogom</td>
+<td>Predlog max_width=6 u zasebnom S2d, stari default=3 i saved koordinate nepromenjeni; legacy layout guard pre prvog width=6 upisa</td>
+</tr>
+<tr>
+<td>Srednji</td>
+<td>Tooltip ili click pogrešno pripišu vrednost drugom izvoru</td>
+<td>Plot/row identity mapping; ne koristiti nazive ili sortirani HTML index kao ID</td>
+</tr>
+<tr>
+<td>Srednji</td>
+<td>Pravilo na jednoj jedinici preneto na drugu metriku</td>
+<td>Revalidate/remap uz novi preview; nikakav silent threshold conversion</td>
+</tr>
+<tr>
+<td>Srednji</td>
+<td>Legend/zoom nestaje na svakom app repaint-u</td>
+<td>Lokalni InteractionState po context fingerprint-u, dispose bez leak-a</td>
+</tr>
+<tr>
+<td>Srednji</td>
+<td>Previše kontrola vrati tehnički builder</td>
+<td>Tri koraka, defaults kada pouzdani, Advanced za rules/axis; bez novih obaveznih polja</td>
+</tr>
+<tr>
+<td>Srednji</td>
+<td>Claude v42/zone rad konfliktuje sa Dashboard migracijom</td>
+<td>Bez rezervacije v42, odvojene grane i unapred dogovoren migration slot</td>
+</tr>
+</tbody></table></div>
+<p>Šest S1.1 odluka je potvrđeno u §14. Sidecar i 7-dnevni ledger retention ostaju deo dokumentovanog modela, bez izvršenja migracija. Opcioni <code>referencePercent</code> resolver/formula capability i proširenje KPI max_width na 6 ostaju zasebni implementacioni/aktivacioni gate-ovi, ne automatski odobren rad. BackendReference ostaje zaključan dok resolver ne postoji. Ovo su dopune tehničkog ugovora, bez izmene odobrenog trokoraka, tabova ili vizuelne hijerarhije. Ako neka od njih nije prihvaćena, menja se taj deo ugovora pre implementacije; nema potrebe ponavljati celo UX projektovanje.</p>
+<h2 id="section-11">11. Predlog PR-ova i redosleda rada</h2>
+<p>Ovaj plan razlaže S2–S6 u pregledive PR-ove jer je S1 sada, po eksplicitnom zahtevu, isključivo contract/model dokument. S1 ne sadrži produkcioni model modul, čak ni pod oznakom „čista funkcija”. Dokumentacioni handoff i S1.1 korekcije nalaze se na istom Draft PR #265; sledeća radnja je završna nezavisna provera ugovora, ne implementacija.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>PR / redosled</th>
+<th>Konkretna isporuka</th>
+<th>Zavisnosti i gate</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>S2a — shared contract/model</td>
+<td>Zajednički JS validator/compiler, kompletan DB parity inventar/fixtures, target-eligible picker i DB-backed built-in capabilities; strog novi V2 write uz preserve</td>
+<td>Tek zasebno odobren S2; bez UX redesign-a; code review</td>
+</tr>
+<tr>
+<td>S2b — read-only preview</td>
+<td>Read-only workspace path, query injection, snapshot/identity response, potpisani server-time token, period/replay ugovor i multi-process proverena admission zaštita</td>
+<td>S2a; security/query review. Stvarna read-only DB/API provera na odobrenoj disposable bazi</td>
+</tr>
+<tr>
+<td>S2c — atomic Simple save</td>
+<td>Sanctioned composite create/update, presentation storage/DB CHECK/revision i sve writer/clone/read putanje, ledger/receipt, unknown COMMIT recovery; single-page legacy adapter</td>
+<td>S2a/b; novi dogovoreni migration slot, DB/security/concurrency spoljni review. Izvršenje migracije zasebno odobrenje</td>
+</tr>
+<tr>
+<td>S2d — KPI širina (zaseban gate)</td>
+<td>Prvo legacy layout guard, zatim max_width=6 samo uz odobrenje; default=3 i saved 3/4 netaknuti</td>
+<td>Opciono pre aktivacije width=6; nije uslov osnovnog Simple ugovora; bez automatske migracije</td>
+</tr>
+<tr>
+<td>S3a — Simple Editor UI</td>
+<td>Tri koraka, postojeći catalogue pickeri, page inheritance, live preview, save/retry/outcomeUnknown i Advanced bridge</td>
+<td>S2a–c; mobile/UX/code review; browser/build, bez novih default metrika</td>
+</tr>
+<tr>
+<td>S3b — ECharts interactions</td>
+<td>Opt-in athletes-v1 composer, limit 20 sportista, gusta osa/noObservation, lossless tooltip/legend/zoom/detail i lifecycle</td>
+<td>S2a i S3a context port; bez query matematike. C01–C14 i stvarni desktop/touch/browser QA</td>
+</tr>
+<tr>
+<td>S3c — table rule evaluator/presentation</td>
+<td>Static thresholds, intervali, constant reference i lossless annotations; pravila u Advanced; razumljiv badge/legend</td>
+<td>S2a–c; evaluator backend + frontend display adapter, T01–T13. Percent/reference backend capability ostaje false dok njegov poseban gate nije zatvoren</td>
+</tr>
+<tr>
+<td>S3d — opcioni reference/percent capability</td>
+<td>Imenovan backend resolver ako postoji, formula signed-relative-abs-v1 i validacija domenskog konteksta</td>
+<td>S3c i zasebno prihvaćena formula/resolver zavisnost; Metrics Core vlasnik ugovora, spoljni review; nije blocker za osnovni editor</td>
+</tr>
+<tr>
+<td>S4 — Pages backend/compatibility</td>
+<td>Page tabela/backfill, parent FK, page-scoped constraints/overlap/functions, API i multi-page legacy guard; očuvanje prethodno uvedenog KPI bounds/guard ugovora</td>
+<td>Posebno odobren Pages ugovor i migracioni slot; server guard pre multi-page upisa; DB/security/concurrency review</td>
+</tr>
+<tr>
+<td>S5 — Pages UX/templates</td>
+<td>Četiri odobrena Page primera, CRUD/reorder/duplicate, lazy query/render, page filters/runtime i saved defaults</td>
+<td>S4; S3 editor context ostaje isti. Match metrics samo kada stvarno dostupne; bez novog importera</td>
+</tr>
+<tr>
+<td>S6 — integration/release packet</td>
+<td>Full compatibility matrix, usability, performance, accessibility, actual-main drift review i rollout/rollback plan</td>
+<td>S2–S5; rezultati i baseline transparentni; kraj na kandidatu za review, bez automatskog merge/deploy-a</td>
+</tr>
+</tbody></table></div>
+<p>Redosled S3b i S3c može biti paralelan po razdvojenim fajlovima kada S2 ugovor i write/query port budu stabilni; ovaj dokument ne pokreće paralelne agente. S4 ne zahteva da percent/reference funkcija bude gotova. S5 osnovni reporti mogu koristiti built-in podatke i postojeće kanonske metrike bez čekanja na Claude future zone/derived tok.</p>
+<p>Svaki budući PR nosi originalni cilj, acceptance, tačan base/head, diff, stvarne test rezultate i poznati baseline. Auth/ownership, sanctioned SQL/migration, concurrency i nova identity materializacija imaju spoljni review gate prema repo protokolu. Ovaj contract izveštaj ne predstavlja takvu closing reviziju ili merge-readiness dokaz.</p>
+<h2 id="section-12">12. Završetak S1 i sledeća odluka</h2>
+<p>S1 priprema svih šest traženih isporuka: funkcionalnu specifikaciju, konfiguracioni/API model, validaciju i kompatibilnost, test matricu, rizike/Pages zavisnosti i redosled PR-ova. Odobreni UX je očuvan. Ograničenja sadašnjeg runtime-a su eksplicitno označena, naročito V2 extension granica, read-only workspace rezolucija, nepostojanje reference resolver ugovora i KPI širina.</p>
+<p><strong>S1.1 status: šest odluka potvrđeno i ugovor korigovan; sledeći gate je završna nezavisna provera zatvaranja nalaza.</strong> S2a nije započet niti odobren. Dokumentaciona potvrda nije odobrenje migracije, promene serverskih promenljivih/ključa, merge-a, deploy-a ili produkcionih upisa.</p>
+<h2 id="section-13">13. Izvori i simboli za proveru</h2>
+<ul>
+<li><a href="https://github.com/predragbozic/OptiMove/tree/82fbb3ca14754442dc3a7f78a92a7e6a090393a2">Aktuelni pinovani main</a> i <a href="https://github.com/predragbozic/OptiMove/compare/165998802ab6655260559da4af483c7e4e554d6d...82fbb3ca14754442dc3a7f78a92a7e6a090393a2">source delta prema S0 osnovi</a>.</li>
+<li><a href="https://github.com/predragbozic/OptiMove/blob/82fbb3ca14754442dc3a7f78a92a7e6a090393a2/frontend/training-load-analysis-display-config.js">Display normalizer</a>, <a href="https://github.com/predragbozic/OptiMove/blob/82fbb3ca14754442dc3a7f78a92a7e6a090393a2/frontend/training-load-analysis-display-model.js">Display Model</a>: normalizeRow, chartGroups, buildDashboardWidgetDisplayModel.</li>
+<li><a href="https://github.com/predragbozic/OptiMove/blob/82fbb3ca14754442dc3a7f78a92a7e6a090393a2/frontend/training-load-analysis-echarts-options.js">ECharts options</a> i <a href="https://github.com/predragbozic/OptiMove/blob/82fbb3ca14754442dc3a7f78a92a7e6a090393a2/frontend/training-load-analysis-echarts.js">mount/lifecycle</a>: dashboardChartPlots, mount, release, disconnectedCallback.</li>
+<li><a href="https://github.com/predragbozic/OptiMove/blob/82fbb3ca14754442dc3a7f78a92a7e6a090393a2/backend/src/routes/trainingLoadDashboard.js">Dashboard route</a>, <a href="https://github.com/predragbozic/OptiMove/blob/82fbb3ca14754442dc3a7f78a92a7e6a090393a2/backend/src/trainingLoadDashboardQuery.js">query engine</a>, Access/Catalog/Widgets moduli u istom backend/src direktorijumu.</li>
+<li><a href="https://github.com/predragbozic/OptiMove/blob/82fbb3ca14754442dc3a7f78a92a7e6a090393a2/backend/src/workspace.js">Workspace resolver</a>, auth.js, trainingLoadMetricsCatalog.js/listDefinitions i routes/trainingLoadMetrics.js za postojeće read/authorization/capability granice.</li>
+<li><a href="https://github.com/predragbozic/OptiMove/blob/82fbb3ca14754442dc3a7f78a92a7e6a090393a2/migrations_v2/202609101200_training_load_v18_dashboard_catalog_seed.sql">v18 seed/bounds/defaults</a>; v15–v17 i v19 za postojeće tables/constraints/sanctioned writes.</li>
+<li><a href="https://github.com/predragbozic/OptiMove/blob/82fbb3ca14754442dc3a7f78a92a7e6a090393a2/docs/ai/metrics-core-plan.md">Metrics Core plan</a>, <a href="https://github.com/predragbozic/OptiMove/blob/82fbb3ca14754442dc3a7f78a92a7e6a090393a2/docs/ai/phase5-zone-model-contract.md">Phase 5 zone contract</a>, ADR-002/003/007 i docs/frontend/dashboard-display-model.md.</li>
+<li>Postojeći frontend display-model/display-view/echarts testovi pročitani su kao izvor slučajeva; nisu pokrenuti. S0 i odobreni prototip su dizajn reference, ne dokaz već implementiranog preview/API/Pages ugovora.</li>
+</ul>
+<p>Dopunski S1.1 izvori na pregledanom main-u <code>69d824f</code> (delta do tada aktuelnog main-a <code>b0a839a33309324fd4ba863e77322fe27e959b9b</code> proverena je bez promene ovih relevantnih Dashboard/query/pool/ADR fajlova): <a href="https://github.com/predragbozic/OptiMove/blob/69d824f102b2301fd00bca9c40c719a65b6d5c57/docs/decisions/ADR-006-info-hiding-authorization.md">ADR-006</a>, <a href="https://github.com/predragbozic/OptiMove/blob/69d824f102b2301fd00bca9c40c719a65b6d5c57/backend/src/dbPoolConfig.js">DB pool config</a>, <a href="https://github.com/predragbozic/OptiMove/blob/69d824f102b2301fd00bca9c40c719a65b6d5c57/backend/src/trainingLoadDashboardQuery.js">query engine</a>, <a href="https://github.com/predragbozic/OptiMove/blob/69d824f102b2301fd00bca9c40c719a65b6d5c57/migrations_v2/202609101000_training_load_v16_dashboard_widgets_series_selection.sql">widget revision i binding trigeri</a>, <a href="https://github.com/predragbozic/OptiMove/blob/69d824f102b2301fd00bca9c40c719a65b6d5c57/migrations_v2/202609101100_training_load_v17_dashboard_sanctioned_functions.sql">sanctioned potpisi</a>, <a href="https://github.com/predragbozic/OptiMove/blob/69d824f102b2301fd00bca9c40c719a65b6d5c57/backend/src/trainingLoadDashboardCatalog.js">detail/clone</a>.</p>
+<h2 id="section-14">14. S1.1 — potvrđene odluke i zatvaranje review nalaza</h2>
+<p>Vlasnik je 29.10.2026. izričito potvrdio svih šest odluka, uz uslove da 20 znači broj prikazanih sportista (ne redova), da nema automatskog izbacivanja, da su 350 ms / 3 s / 5 s početne vrednosti za load test pre aktivacije, da per-process nije globalni limit i da HTTP abort ne znači završen PostgreSQL query. Potvrđena je samo dokumentacija i ažuriranje istog Draft PR #265; nije odobren S2, migracija, env/ključ, merge ili deploy.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Odluka</th>
+<th>Potvrđeni ugovor</th>
+<th>Normativno mesto</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>D1</td>
+<td>Opt-in athletes-v1 composer; day/week athlete serije, athlete kategorije, 20 sportista po plotu bez tihog odsecanja</td>
+<td>§3.3, §4.1–2, §5.1–2; C12–C14</td>
+</tr>
+<tr>
+<td>D2</td>
+<td>Zajednički JS validator/compiler i DB trigeri kao konačna zaštita, kompletni DB parity fixture-i</td>
+<td>§7.1.1, §7.4; P01/P08</td>
+</tr>
+<tr>
+<td>D3</td>
+<td>1/user; 2/process pri pool=10, manji limit za manji pool; pre-checkout admission, početni 350 ms/3 s/5 s i multi-process/load gate</td>
+<td>§4.3, §7.1.2; P09/P10</td>
+</tr>
+<tr>
+<td>D4</td>
+<td>Widget revision + relevantni context fingerprint; bez konflikta za tuđi layout; create bira položaj pod lock-om</td>
+<td>§7.2–4; S05/S10</td>
+</tr>
+<tr>
+<td>D5</td>
+<td>Explicit null samo sa dokazanim semantic binding-om; gusta osa/noObservation bez fabricated merenja</td>
+<td>§5.2, §6.2, §8.1.2; T15/C14</td>
+</tr>
+<tr>
+<td>D6</td>
+<td>Potpisani 10-min token, server vreme, zaključan period, novi preview pri promeni efektivnog perioda; receipt replay i bounded unknown-COMMIT provera</td>
+<td>§7.3–6; S03/S06/S11–S14</td>
+</tr>
+</tbody></table></div>
+<p>Izvori revizije: pun Claude izveštaj „Pasted markdown(20261029-132220).md” (PR #265, main 311d9e4, 3 HIGH/9 MEDIUM/7 LOW) i preneti Codex sažetak pet nalaza (H1 writer paths, H2 semantic metadata, M1 period/token/replay, M2 visibility/eligibility, M3 style tabela). Pun originalni Codex izveštaj nije dostupan; zatvaranje njegovih pet prenetih nalaza ne znači dokaz da je pregledan nedostupan originalni tekst. Sledeća nezavisna provera ocenjuje ovaj kompletan ugovor i tu granicu dokaza.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Nalaz</th>
+<th>Dokumentaciona korekcija</th>
+<th>Acceptance dokaz buduće implementacije</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Claude H1</td>
+<td>Multi-athlete sastav, legenda/kategorije, opt-in kompatibilnost i limit sportista</td>
+<td>C02/C03/C07/C12–C14</td>
+</tr>
+<tr>
+<td>Claude H2</td>
+<td>Imenovan zajednički JS izvor, DB backstop i potpuna parity obaveza</td>
+<td>P01/P08</td>
+</tr>
+<tr>
+<td>Claude H3</td>
+<td>Pre-checkout admission, timeouts, abort/cleanup i multi-process gate</td>
+<td>P09/P10</td>
+</tr>
+<tr>
+<td>Claude M1 / Codex M2</td>
+<td>Target SQL eligibility naspram opšte catalog visibility</td>
+<td>M01/M02/M06</td>
+</tr>
+<tr>
+<td>Claude M2</td>
+<td>DB-backed built-in capabilities, stvarni null unit</td>
+<td>M04/M07</td>
+</tr>
+<tr>
+<td>Claude M3</td>
+<td>ADR-006: 404 notFound i za vidljiv parent bez manage prava</td>
+<td>G02/A01/S08</td>
+</tr>
+<tr>
+<td>Claude M4 / Codex H1</td>
+<td>Sve writer/read/clone/DB signature/revision putanje i semantička revalidacija</td>
+<td>W01/W02/B01–B04/S02</td>
+</tr>
+<tr>
+<td>Claude M5</td>
+<td>Relevantna widget revision/context, bez globalnog layout preduslova</td>
+<td>S05/S10</td>
+</tr>
+<tr>
+<td>Claude M6</td>
+<td>Autorizovan label port i neutralan fallback, ID-based ključevi</td>
+<td>C13</td>
+</tr>
+<tr>
+<td>Claude M7 / Codex H2</td>
+<td>Null semantika i metadata dokaz istorijskih unit/semantic/reference konteksta</td>
+<td>T04/T07/T14/T15/W02</td>
+</tr>
+<tr>
+<td>Claude M8</td>
+<td>Gusta temporalna osa, noObservation bez raw merenja</td>
+<td>C04/C08/C14</td>
+</tr>
+<tr>
+<td>Claude M9</td>
+<td>Serverski COMMIT verification i outcomeUnknown</td>
+<td>S06/S12</td>
+</tr>
+<tr>
+<td>Claude L1 / Codex M3</td>
+<td>Style enum bez pipe razbijanja, MD/HTML parity</td>
+<td>D01</td>
+</tr>
+<tr>
+<td>Claude L2</td>
+<td>Zona za relativne presete, occurred_local_date za fixed opseg</td>
+<td>F05/S11</td>
+</tr>
+<tr>
+<td>Claude L3</td>
+<td>Missing/invalid saved preference bez upisa; stroži Simple workspace put</td>
+<td>P02/G02</td>
+</tr>
+<tr>
+<td>Claude L4</td>
+<td>Kanonski sinhroni identityKey; source fixture granica</td>
+<td>T11/T12/C02</td>
+</tr>
+<tr>
+<td>Claude L5/L6 / Codex M1</td>
+<td>Server requestIssuedAt, signing key/rotacija, period/hash/replay redosled</td>
+<td>P06/S07/S11/S13/S14</td>
+</tr>
+<tr>
+<td>Claude L7</td>
+<td>Multiskup parity po identitetu, ne rowIndex-u između query-a</td>
+<td>P01</td>
+</tr>
+</tbody></table></div>
+<h3>14.1 Dodatne provere korekcija</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Budući acceptance scenario</th>
+<th>Očekivani dokaz</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>W01</td>
+<td>Svaka putanja iz §8.1.1, sidecar-only izmena i stale update</td>
+<td>Preserve/replace/clear bez gubitka; sidecar revision guard; semantička izmena revalidirana ili atomski odbijena</td>
+</tr>
+<tr>
+<td>W02</td>
+<td>Clone/template rebind u drugi workspace/metric sa istom jedinicom</td>
+<td>Remap ID-ova i dokaz kompatibilnosti; ambiguous/reference mismatch bez automatske ocene</td>
+</tr>
+<tr>
+<td>T14</td>
+<td>Mešane istorijske verzije bez explicit semanticConflict</td>
+<td>Nema ocene bez metadata dokaza; originalne vrednosti ostaju lossless</td>
+</tr>
+<tr>
+<td>M06</td>
+<td>Admin klubova A i B uređuje dashboard A</td>
+<td>B metrika nije u SQL-filtered picker-u; direktan foreign ID info-hiding odbijen</td>
+</tr>
+<tr>
+<td>M07</td>
+<td>Built-in capabilities naspram v18 seeda</td>
+<td>Tačni scope/type/default/unit/state; session_count null ne postaje count</td>
+</tr>
+<tr>
+<td>A01</td>
+<td>Parent vidljiv bez manage prava; foreign i nepostojeći parent</td>
+<td>Isti 404/error po ADR-006; osetljivi detalji se ne otkrivaju pre prava</td>
+</tr>
+<tr>
+<td>D01</td>
+<td>MD/HTML style tabela i normative sekcije</td>
+<td>Sve enum vrednosti i isti renderovani body; jednake ćelije i JSON primeri</td>
+</tr>
+</tbody></table></div>
+<p>Sve reference na S2–S6 su budući implementacioni zadaci. Njihova DB/API/load/browser testiranja nisu izvršena u ovoj dokumentacionoj isporuci. Otvoreni operativni gate-ovi su buduća validacija opterećenja i deployment-wide admission-a, zasebno odobrenje ključa/env-a i svake migracije; opcioni backendReference/percent i KPI width=6 nisu blokada osnovnog editora. To nisu preostale nepotvrđene odluke D1–D6. S1.1 se predaje na završnu nezavisnu proveru i nema automatskog početka S2.</p>
+<div class="footer">S1.1 završava na korigovanom tehničkom ugovoru i test planu. S2a nije započet. Sve test stavke predstavljaju buduće acceptance obaveze, ne izvršene testove.</div></main></body></html>
