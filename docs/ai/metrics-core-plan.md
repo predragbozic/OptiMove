@@ -309,8 +309,8 @@ Every other rule of those files applies as written.
    - **Auto-deploy is off.** The evidence is the owner's latest dated statement that auto-deploy of `optimove-eu` is
      off, quoted in the *Rukovodilac*'s GO with its event id; `/api/health` also still serves the commit of the last
      deploy the *Rukovodilac*'s smoke confirmed. Without that, step 2 applies.
-   - **No migration waiting.** No migration merged earlier is still undeployed or without its post-check: nothing
-     under `migrations_v2/` differs between the commit `optimove-eu` serves and the base, and the last migration's
+   - **No migration waiting.** No migration merged earlier is still undeployed or without its post-check: none of the
+     migration paths of step 3 differs between the commit `optimove-eu` serves and the base, and the last migration's
      post-check passed.
    - **Two GOs on exactly that head:** the *Rukovodilac*'s and the *Nezavisni revizor*'s (a migration PR is reviewed as
      ★★ under this order), each found and recorded as the standing merge order says.
@@ -318,8 +318,9 @@ Every other rule of those files applies as written.
      sha256, its rollback script, and its read-only preflight and post-check files with their sha256. The executor
      computes each sha256 itself; checks that `git diff --name-status` lists under `migrations_v2/` and `migrations/`
      only the named migration files, each as an add; and checks that the preflight and post-check files hold only
-     read-only statements. The rollback script is rehearsed on a disposable database (apply, rollback, the same catalog
-     as before, apply again). A missing file means step 2.
+     read-only statements and no transaction or session control (`BEGIN`, `START`, `COMMIT`, `END`, `ROLLBACK`,
+     `SAVEPOINT`, `RELEASE`, `SET`, `RESET`, `DISCARD`, `set_config`). The rollback script is rehearsed on a
+     disposable database (apply, rollback, the same catalog as before, apply again). A missing file means step 2.
    - **The preflight.** The *Rukovodilac* ran exactly that preflight file, read-only, on the production database on the
      same UTC day as the merge. The record names the database by its last recorded migration and that migration's
      applied time, equal to the last post-check (`current_database()` is `postgres` on every Supabase project and
@@ -338,10 +339,12 @@ Every other rule of those files applies as written.
    the owner's order that names the migration (the three bullets of "A merge is a deploy").
 3. **The deploy of a migration.** At once after the merge, the *Rukovodilac* tells the owner in so many words that the
    next deploy of `optimove-eu` migrates production: the commit `optimove-eu` serves, the exact commit to deploy (the
-   merge), every file under `migrations_v2/` that differs between the two with its sha256, and the preflight's time
-   and result. Then exactly that commit is deployed: the owner answers „da” to that notice and the *Rukovodilac*
-   deploys exactly that commit (step 6), or the owner deploys exactly that commit by hand; either is the owner's
-   confirmation. The „da” is the first turn the owner types in the *Rukovodilac*'s chat after the notice that answers
+   merge), every file of the migration paths that differs between the two with its sha256, and the preflight's time
+   and result. The migration paths are `migrations_v2/`, `migrations/`, `backend/src/migrate.js` and the `start`
+   script of `backend/package.json` (it runs `migrate.js` before the server); a deploy carries a migration when any of
+   them differs between the commit `optimove-eu` serves and the commit deployed. Then exactly that commit is
+   deployed: the owner answers „da” to that notice and the *Rukovodilac* deploys exactly that commit (step 6), or the
+   owner deploys exactly that commit by hand; either is the owner's confirmation. The „da” is the first turn the owner types in the *Rukovodilac*'s chat after the notice that answers
    it; it covers that commit only, once, and its event id goes into the next facts record. A deploy of another commit
    confirms none of the migrations it carries and is a deviation of step 4. **From the merge of a migration PR until
    that commit is deployed and its post-check passed, no PR is merged into `main`, under any standing order.** If the
@@ -354,10 +357,11 @@ Every other rule of those files applies as written.
    session (`0957fe7d`, `f9408eca`).
    - The *Rukovodilac* uses only its `execute_sql` tool, never `apply_migration` or another tool that writes (the
      owner was asked to block those in the connector's settings).
-   - Each call sends a block of the PR's preflight or post-check file verbatim, prefixed in the same call by
-     `set session characteristics as transaction read only;`, so that any write in it fails.
+   - Each call sends exactly `begin transaction read only;`, then one block of the PR's preflight or post-check file
+     verbatim, then `rollback;`, so that any write in the block fails. (A `set session characteristics … read only`
+     prefix in the same call does not protect the statements after it: it applies only to later transactions.)
    - The record names the sha256 of the whole file; the executor checks, in the *Rukovodilac*'s transcript, that every
-     block sent is verbatim from that file and carries the prefix.
+     call is exactly that wrapper around a block taken verbatim from that file.
    - If the connector does not reach the project before the merge, step 2 applies; after the deploy, step 4.
    - The executor never calls a Supabase connector tool, even when its session is offered one (red zone).
 6. **Deploys through the Render API.** The owner set up a Render API key, not a deploy hook (the owner's word in
@@ -367,7 +371,7 @@ Every other rule of those files applies as written.
    - Only the *Rukovodilac* starts a deploy with it, of an exact commit of `main`: a deploy without a migration after
      a merge, as needed; a deploy that carries a migration only after the owner's „da” of step 3. The owner may still
      deploy an exact commit by hand.
-   - A deploy is without a migration only when nothing under `migrations_v2/` differs between the commit
+   - A deploy is without a migration only when none of the migration paths of step 3 differs between the commit
      `optimove-eu` serves (read from `/api/health` at that moment) and the commit to deploy; if the served commit
      cannot be read, the deploy counts as carrying a migration. Step 6 never deploys a commit older than the served
      one (a rollback stays the owner's order, step 4).
