@@ -313,6 +313,14 @@ test("Remove icon (and the picker's Use no icon) sends null with the icon seen; 
   await click('[data-action="icon-picker-none"]');
   await submit();
   assert.deepEqual([JSON.parse(posts()[0].rawBody).expectedIconKey, JSON.parse(posts()[0].rawBody).iconKey], ["heart", null]);
+  // Saved, but the node could not be read back: the notice still says what was sent.
+  resetVariables();
+  serve(() => ({ status: 200, body: { readError: true, domainId: D1, replayed: false } }));
+  await openNode("domain", D1);
+  await click('[data-action="metric-classification-icon-change-open"]');
+  await click('[data-action="icon-picker-none"]');
+  await submit();
+  assert.match(text(), /The icon was removed\. It could not be read back; the list below is read again\./);
 });
 
 test("refusals: node_changed and node_not_active close the form and read the tree again with the icon's own sentence; icon_unchanged and a refused body keep it open", async () => {

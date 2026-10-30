@@ -36,9 +36,11 @@
 -- runWrite), then the node tables - so a write or a replay in flight never waits
 -- for v46 while v46 waits for it; ACCESS EXCLUSIVE (new columns and checks);
 -- the runner's lock_timeout bounds each wait. A read of the classification
--- reads only the node and link tables, which v46 takes last. A future migration that sets the icon of a
--- system or club node disables the record triggers inside itself, as for a
--- name.
+-- takes the domains before the categories, as v46 does, except a variable's
+-- classification (C6), which joins the categories first: met at a deploy, one
+-- of the two ends with 40P01 and nothing written (the runbook). A future
+-- migration that sets the icon of a system or club node disables the record
+-- triggers inside itself, as for a name.
 
 -- ---------------------------------------------------------------------------
 -- 0. The locks, in a write's own order.

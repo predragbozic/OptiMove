@@ -498,7 +498,7 @@ test("3. the order of the answers: a coach's 404 comes before the body is looked
   assert.deepEqual([(await nodeRow("categories", n.id)).icon_url, (await changesOf("categories", n.id)).length], [null, 1]);
 });
 
-test("4. the change: the answer and every read (the classification, a variable's detail for an admin and a coach) carry the new icon; the change row records the old and new stored values and keeps the name, description, state and names token; node_changed (with the current node) for a stale expectedIconKey; icon_unchanged; No icon (null); a stored value that is not a library key reads as no icon and is replaced; node_not_active after an archive; a rename, an archive and a restore keep the icon in their change rows", async () => {
+test("4. the change: the answer and every read (the classification, a variable's detail for an admin and a coach) carry the new icon, and the older API's answer stays without it; the change row records the old and new stored values and keeps the name, description, state and names token; node_changed (with the current node) for a stale expectedIconKey; icon_unchanged; No icon (null); a stored value that is not a library key reads as no icon and is replaced; node_not_active after an archive; a rename, an archive and a restore keep the icon in their change rows", async () => {
   const [a, b] = ICON_KEYS;
   const n = await node(W.caA, "domains", { description: "Kept" });
   const category = await node(W.caA, "categories");
@@ -510,6 +510,11 @@ test("4. the change: the answer and every read (the classification, a variable's
   assert.deepEqual([first.domain.icon, first.domain.namesToken, first.domain.name, first.domain.description], [a, n.namesToken, n.name, "Kept"]);
   ok(await setIcon(W.caA, "categories", category.id, null, b));
   assert.deepEqual([(await nodeIn(W.caA, "domains", n.id)).icon, (await nodeIn(W.coachA1, "domains", n.id)).icon], [a, a]);
+  // The older API's answers stay as they were before v46: no icon column.
+  const older = ok(await api("/domains", { base: "/api/training-load/metrics", cookie: W.caA.cookie })).rows.find((x) => x.id === n.id);
+  // Its rows name their creator by that API's own contract: test 9 scans this route's answers, not that one's.
+  responses.pop();
+  assert.deepEqual([Boolean(older), older && "icon_url" in older], [true, false], "the older API never names the icon");
   for (const who of [W.caA, W.coachA1]) {
     const detail = ok(await api(`/variables/${v.id}`, { cookie: who.cookie })).variable.classification;
     assert.deepEqual(
@@ -586,6 +591,7 @@ test("6. idempotency and outcome: a replay answers the current state and writes 
   const replay = ok(await post(`/classification/domains/${n.id}/icon`, W.caA.cookie, body));
   assert.deepEqual([replay.replayed, replay.domain.icon, (await changesOf("domains", n.id)).length], [true, a, 2]);
   assert.deepEqual([(await post(`/classification/domains/${n.id}/icon`, W.caA.cookie, { ...body, iconKey: b })).body.error], ["request_key_reused"]);
+  assert.deepEqual([(await post(`/classification/domains/${n.id}/icon`, W.caA.cookie, { ...body, expectedIconKey: c })).body.error], ["request_key_reused"], "the icon seen is part of the request");
   assert.deepEqual([(await post(`/classification/domains/${n.id}/archive`, W.caA.cookie, { requestKey: body.requestKey, reason: "x" })).body.error], ["request_key_reused"]);
   // Two identical requests at once.
   const twin = { requestKey: key(), expectedIconKey: a, iconKey: b };

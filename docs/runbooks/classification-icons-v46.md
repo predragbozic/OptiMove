@@ -87,13 +87,15 @@ this preflight the same day.
 ## If v46 refuses at deploy
 
 **Lock timeout.** v46 takes `ACCESS EXCLUSIVE` on the four tables, in the order a write takes them: the request record,
-the change record, the domains, the categories. A long read or write on one of them makes v46 fail on the runner's lock
-timeout. Nothing of v46 is written (one transaction), the new server does not start, and the old server keeps serving.
+the change record, the domains, the categories. While it waits for a lock (up to the runner's 30 s lock timeout), new
+reads of domains and categories wait behind it. A long read or write on one of the tables makes v46 fail on the
+runner's lock timeout. Nothing of v46 is written (one transaction), the new server does not start, and the old server keeps serving.
 1. Check that no session holds a lock on the four tables (block 8 of the preflight).
 2. Run the deploy again in a quiet moment.
 3. If it fails the same way again, report to the owner. Make no manual change in the database.
 
-**A deadlock (40P01).** One read joins the categories before the domains. If that read gets the categories just as v46
+**A deadlock (40P01).** One read, a variable's domains and categories (in the old server that still serves during the
+deploy, and in the new one), joins the categories before the domains. If that read gets the categories just as v46
 holds the domains and waits for the categories, PostgreSQL ends one of the two after a second, with nothing written:
 - either the read fails once;
 - or v46 fails, and the deploy is run again as for a lock timeout.

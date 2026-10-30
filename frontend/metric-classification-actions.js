@@ -407,8 +407,8 @@ const DONE = {
   "node-rename": (form) => `The ${nounOf(form.kind)} was renamed.`,
   "node-archive": (form) => `The ${nounOf(form.kind)} was archived.`,
   "node-restore": (form) => `The ${nounOf(form.kind)} was restored.`,
-  // The answer says whether an icon is left (V4).
-  "node-icon": (form, data) => (data?.[form.kind] && !data[form.kind].icon ? "The icon was removed." : "The icon was changed."),
+  // What was sent says whether an icon is left (V4), even when the answer could not be read back.
+  "node-icon": (form) => (form.sentBody?.iconKey === null ? "The icon was removed." : "The icon was changed."),
   "category-place": () => "The category was placed in the domain.",
   "variable-link": (form) => `The variable was added to the ${nounOf(form.linkKind)}.`,
   "link-remove": (form) => (form.subject && form.target ? `${form.subject} was removed from ${form.target}.` : `It was removed from the ${form.shape === "variable-category" ? "category" : "domain"}.`),
@@ -416,7 +416,7 @@ const DONE = {
 async function saved(form, data, { render, load }) {
   const s = variablesState();
   s.form = null;
-  s.notice = data?.readError ? `${DONE[form.mode](form, data)} It could not be read back; the list below is read again.` : DONE[form.mode](form, data);
+  s.notice = data?.readError ? `${DONE[form.mode](form)} It could not be read back; the list below is read again.` : DONE[form.mode](form);
   // A new domain or category opens; a change keeps its node open.
   if (form.mode === "node-create") {
     const created = data?.[form.kind] || null;

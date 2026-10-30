@@ -13,7 +13,7 @@
 --    last_migration = migrations_v2/202610301300_training_load_v46_classification_icons.sql.
 select
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202610301300_training_load_v46_classification_icons.sql') as v46_rows,
-  (select bool_and(checksum = 'e279bd6cbb01f39c6ab39fb1963b855431806a2c1ab7483e718eabe7e4f7c1d2') from public.schema_migrations
+  (select bool_and(checksum = 'b0390376d6ed2e01a4a1b216c120e29ce7d34d31d41e27fd313904b3cdef4e80') from public.schema_migrations
     where migration_name = 'migrations_v2/202610301300_training_load_v46_classification_icons.sql') as v46_checksum_ok,
   (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%'
     and migration_name > 'migrations_v2/202610301300_training_load_v46_classification_icons.sql') as later_rows,

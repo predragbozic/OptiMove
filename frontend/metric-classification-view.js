@@ -51,12 +51,12 @@ export function renderFilterHtml(s) {
 export function renderFilterNoteHtml(s, ctx) {
   if (!s.filter) return "";
   const node = findNode(s.classification.tree, s.filter.kind, s.filter.id);
-  const name = node ? `<span class="dc-inline">${nodeTileHtml(s.filter.kind, node, { size: "sm" })}<span>${escapeHtml(node.name || "")}</span></span>` : `this ${nounOf(s.filter.kind)}`;
+  const name = node ? `<span class="dc-name-inline">${nodeTileHtml(s.filter.kind, node, { size: "sm" })}${escapeHtml(node.name || "")}</span>` : `this ${nounOf(s.filter.kind)}`;
   const how = s.filter.kind === "domain" ? `in the domain ${name}, directly or through one of its categories` : `in the category ${name}`;
   const what = ctx.owner !== "club" ? `Showing the variables ${how}.`
     : s.scope === "system" ? `Showing the system variables ${how}.`
     : `Showing this club's variables ${how}. System variables placed there are under System (reference).`;
-  return `<p class="muted metric-classification-filter-note">${what} <button class="plain-button ghost compact-button" type="button" data-action="metric-classification-filter-clear">Show all</button></p>`;
+  return `<p class="muted metric-classification-filter-note"><span class="metric-classification-filter-text">${what}</span> <button class="plain-button ghost compact-button" type="button" data-action="metric-classification-filter-clear">Show all</button></p>`;
 }
 
 // ---------------------------------------------------------------------------

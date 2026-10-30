@@ -3447,7 +3447,7 @@ the *Rukovodilac*'s decision of 2026-10-30 after PR #275 took v44 for the roster
 - `nodeOut` gains `icon` (a library key or `null`, like a variable's), and the node's `actions` gains `icon`.
 
 **Frontend:**
-- The domain and category create forms get PR-1c's icon picker (now on the variable form).
+- The domain and category create forms get PR-1's icon picker (now on the variable form).
 - A domain's and a category's detail gets **Change icon**, with **No icon**.
 - The icon shows in the Domains and Categories lists, the tiles and the chips, the variable list's filter and the
   start screen's cards.
@@ -3529,6 +3529,11 @@ database**):
   - **Reads:** a node's read carries `icon`, and `actions` gains `icon` on an active node the caller may change. A
     variable's classification (C6) carries each category's and domain's `icon` too.
   - `iconOut` and `ICON_PREFIX` are now exported from `canonicalVariableAdminService.js`.
+  - The older API (`/api/training-load/metrics/domains` and `/categories`, `trainingLoadMetricsCatalog.js`) leaves
+    `icon_url` out of its node answers, as before v46 (the code and security reviews).
+  - A test proves that `expectedIconKey` is part of the request (the same key with another seen icon is
+    `request_key_reused`), for this route and for PR-1b's variable icon (the *Rukovodilac*'s LOW on #282, closed
+    here).
 - **Frontend:**
   - A node's tile draws its own icon, or else its kind's symbol, and keeps its filled (domain) or outlined (category)
     shape. That reaches the lists, the start screen's cards, a node's detail, a domain's categories and a category's
@@ -3536,11 +3541,14 @@ database**):
   - A variable's domains and categories, and the filter note under the variables list, draw small tiles. A native
     `select` cannot draw an icon, so the note says with its tile what the list is filtered by.
   - The create forms have the icon field.
+  - A text beside a tile keeps its line on a phone; a title wraps a name without spaces (the mobile review).
   - A node's detail offers **Change icon** after Rename, only where `actions` names it. It opens the shared picker at
     once over an inert form: Save icon, Remove icon, "Saved now", Check result with the same request, and the leave
     guard.
-- **Residual (runbook):** one read joins the categories before the domains. If it meets v46 between its two node locks,
-  PostgreSQL ends one of the two (40P01) with nothing written. The preflight's quiet moment keeps this away.
+- **Residual (runbook, migration header):** a variable's classification (C6) joins the categories before the domains,
+  in the old server that serves during the deploy too. If it meets v46 between its two node locks, PostgreSQL ends one
+  of the two (40P01) with nothing written. The preflight's quiet moment keeps this away. Every other read takes the
+  domains first.
 - **Tests** (disposable databases only):
   - `backend/tests/classification-icons-1c.test.mjs`, 10 tests: the rehearsal and every rollback refusal; the rights
     and the identical `404`; the order of the answers; the change and the reads; create with an icon and its hash;
