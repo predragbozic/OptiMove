@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { JSDOM } from "jsdom";
 
 // The overlay ladder (styles.css, the comment above .media-modal): every
 // layer clears what it is opened from. A Specific Program draws its sections
@@ -103,7 +104,7 @@ function loadHandlers(state, { editorCloses = true } = {}) {
     return appJs.slice(from, appJs.indexOf(end, from) + end.length);
   };
   const escape = sourceOf("(event) => {\n    if (event.key !== \"Escape\") return;", "\n  }");
-  const closeTop = sourceOf("function closeTopExerciseLayer() {", "\n}");
+  const closeTop = sourceOf("const EDITOR_TEXT_FIELD =", "\n}");
   const appBack = sourceOf("function handleAppBack() {", "\n}");
   const detail = { present: state.detailOpen };
   const scope = {
@@ -115,6 +116,8 @@ function loadHandlers(state, { editorCloses = true } = {}) {
     },
     closeExerciseEditor: () => { calls.push("closeExerciseEditor"); if (editorCloses) state.exerciseEditor.open = false; return editorCloses; },
     returnToNodeParent: () => { calls.push("returnToNodeParent"); detail.present = false; },
+    // The browser's Back: the popstate it causes is not run here.
+    window: { history: { back: () => calls.push("history.back") } },
     closeSpecificProgramOverlay: () => { calls.push("closeSpecificProgramOverlay"); return true; },
   };
   const proxy = new Proxy(scope, {
@@ -128,6 +131,7 @@ function loadHandlers(state, { editorCloses = true } = {}) {
 
 const baseState = (overrides = {}) => ({
   exerciseEditor: { open: false }, detailOpen: false, mediaOpen: false,
+  appHistoryDepth: 0, exerciseDetail: { ids: ["item-1"], currentId: "item-1" },
   athleteExitConfirmOpen: false, mobileNavOpen: false, navStack: [{ type: "section" }],
   organizationUserManage: { open: false }, organizationInvite: { open: false }, athleteAccountManage: { open: false },
   workspaceSwitcher: { open: false }, iconPicker: null, activeTab: "programs", trainingLoad: { section: "" },
@@ -162,8 +166,40 @@ test("3. Escape closes only the topmost layer: the exercise detail opened over a
   assert.deepEqual(run.calls, [], "another key does nothing");
 });
 
+test("3b. Escape spends the history entry the detail was opened with, as its own Back button does; Escape in a text field of the editor first only leaves the field, so one key never drops what was typed", () => {
+  // The detail pushed an entry (open-exercise): Escape goes back through the
+  // browser, and the popstate closes it (handleAppBack, test 4).
+  let state = baseState({ detailOpen: true, appHistoryDepth: 1 });
+  let run = loadHandlers(state);
+  run.escape({ key: "Escape" });
+  assert.deepEqual(run.calls.filter((name) => name !== "handleMessagesBack"), ["history.back"], "no direct close that would leave the entry behind");
+  assert.equal(state.exerciseDetail.currentId, null, "a detail answer still in flight cannot open it again");
+  state = baseState({ detailOpen: true, appHistoryDepth: 0 });
+  run = loadHandlers(state);
+  run.escape({ key: "Escape" });
+  assert.deepEqual(run.calls.filter((name) => name !== "handleMessagesBack"), ["returnToNodeParent"], "with no entry, it closes directly");
+
+  const dom = new JSDOM(`<div class="exercise-editor-overlay"><input name="name" value="Typed name"><textarea name="notes">Typed notes</textarea><input type="checkbox"><button type="button">Save</button></div>`);
+  const [text, notes, box, button] = dom.window.document.querySelectorAll("input[name], textarea, input[type=checkbox], button");
+  for (const field of [text, notes]) {
+    run = loadHandlers(baseState({ detailOpen: true, exerciseEditor: { open: true } }));
+    field.blur = () => run.calls.push("blur");
+    run.escape({ key: "Escape", target: field });
+    assert.deepEqual(run.calls.filter((name) => name !== "handleMessagesBack"), ["blur"], `Escape in ${field.tagName.toLowerCase()} leaves the field; the editor stays open`);
+    run.escape({ key: "Escape", target: dom.window.document.body });
+    assert.deepEqual(run.calls.filter((name) => name !== "handleMessagesBack"), ["blur", "closeExerciseEditor"], "the next Escape closes the editor");
+  }
+  for (const target of [box, button]) {
+    run = loadHandlers(baseState({ detailOpen: true, exerciseEditor: { open: true } }));
+    run.escape({ key: "Escape", target });
+    assert.deepEqual(run.calls.filter((name) => name !== "handleMessagesBack"), ["closeExerciseEditor"], "a checkbox or a button is not a text field");
+  }
+  dom.window.close();
+});
+
 test("4. phone Back closes only the topmost layer too: the editor, then the detail, before the section steps up or the Specific Program closes; an editor that stays open puts the consumed history entry back", () => {
-  let state = baseState({ detailOpen: true, exerciseEditor: { open: true } });
+  // The popstate of a Back press already spent the entry: it never goes back again.
+  let state = baseState({ detailOpen: true, exerciseEditor: { open: true }, appHistoryDepth: 1 });
   let run = loadHandlers(state);
   assert.equal(run.handleAppBack(), true);
   assert.deepEqual(run.calls.filter((name) => name !== "handleMessagesBack"), ["closeExerciseEditor"]);
@@ -172,6 +208,7 @@ test("4. phone Back closes only the topmost layer too: the editor, then the deta
   assert.equal(run.handleAppBack(), true);
   assert.deepEqual(run.calls.filter((name) => name !== "handleMessagesBack"), ["closeExerciseEditor", "returnToNodeParent"], "the next Back closes the detail");
   assert.equal(state.navStack.length, 1);
+  assert.equal(state.exerciseDetail.currentId, null, "a detail answer still in flight cannot open it again");
 
   state = baseState({ detailOpen: true, exerciseEditor: { open: true } });
   run = loadHandlers(state, { editorCloses: false });

@@ -25,10 +25,13 @@ export const DETAIL_SWIPE = Object.freeze({ minDistance: 120, minWidthShare: 0.3
 const SCROLL_TOLERANCE = 2;
 
 // Where a swipe may start. The media viewer, calendars, the week picker and
-// lists that scroll sideways keep the finger for themselves.
+// lists that scroll sideways keep the finger for themselves, and so does a
+// dialog over the detail (the editor, its frame slider included; tags; a
+// Builder modal): a drag in it never moves or closes the exercise behind.
 export function isSwipeArea(target, { mediaOpen = false } = {}) {
   if (mediaOpen) return false;
   if (target.closest(".calendar-grid, .week-selector, .week-calendar-picker, .program-day-grid, .exercise-list, .tests-calendar, .exercise-sibling-strip")) return false;
+  if (target.closest(".exercise-editor-overlay, .exercise-tag-overlay, .builder-modal-overlay")) return false;
   return Boolean(target.closest(".exercise-detail, .panel, .node-grid"));
 }
 

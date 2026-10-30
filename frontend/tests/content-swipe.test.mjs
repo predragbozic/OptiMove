@@ -208,6 +208,22 @@ test("C4: where a swipe may start is unchanged, the strip aside - calendars, the
   p.dom.window.close();
 });
 
+// A dialog opened over the detail (the editor from Edit / Copy, now drawn in
+// front of a Specific Program too) keeps the finger: a fast drag on its frame
+// slider met the detail's swipe and moved the exercise behind it.
+test("C6: a swipe in a dialog over the detail - the editor and its slider, tags, a Builder modal - never changes the exercise behind; the detail itself still swipes", () => {
+  const p = detail();
+  p.content.insertAdjacentHTML("beforeend", '<div class="exercise-editor-overlay"><section class="panel exercise-editor-modal"><input type="range" class="frame"><p class="text">x</p></section></div><div class="exercise-tag-overlay"><section class="panel exercise-tag-modal"><p class="tag">t</p></section></div><div class="builder-modal-overlay"><section class="panel"><p class="builder">b</p></section></div>');
+  for (const selector of [".frame", ".text", ".tag", ".builder"]) {
+    p.gesture(p.content.querySelector(selector), [300, 400], [140, 400], 150);
+    p.gesture(p.content.querySelector(selector), [100, 400], [260, 400], 150);
+  }
+  assert.deepEqual(p.swipes, []);
+  p.gesture(p.area, [300, 400], [160, 400], 150);
+  assert.deepEqual(p.swipes, [1], "the detail itself: as before");
+  p.dom.window.close();
+});
+
 test("app.js: one listener pair on #content, the old vertical rule gone, back on the first exercise still returns", async () => {
   const app = (await readFile(new URL("../app.js", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
   assert.match(app, /const contentSwipe = createContentSwipe\(\{ content: els\.content, onSwipe: handleHorizontalSwipe, isMediaOpen: \(\) => !els\.mediaModal\?\.hidden \}\);\n  els\.content\.addEventListener\("touchstart", contentSwipe\.start, \{ passive: true \}\);\n  els\.content\.addEventListener\("touchend", contentSwipe\.end, \{ passive: true \}\);/);

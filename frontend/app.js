@@ -584,7 +584,7 @@ function bindEvents() {
     if (!els.mediaModal?.hidden) { closeMedia(); return; }
     // Same chain as handleAppBack(): the viewer, then handleMessagesBack().
     if (handleMessagesBack()) return;
-    if (closeTopExerciseLayer()) return;
+    if (closeTopExerciseLayer(event)) return;
     // No unsaved-changes state exists inside the Specific Program overlay
     // today (it's a read-only detail view), so Escape can always close it.
     closeSpecificProgramOverlay();
@@ -3892,10 +3892,29 @@ function moveExerciseDetail(delta) {
 // Program a section opened them from stays open behind (the overlay ladder
 // in styles.css, above .media-modal). The editor opens without a history
 // entry of its own and may ask first (an upload in flight): when it stays
-// open, BACK_STAYED puts back the entry Back consumed.
-function closeTopExerciseLayer() {
-  if (state.exerciseEditor.open) return closeExerciseEditor(state, exerciseEditorHandlers) ? true : BACK_STAYED;
+// open, BACK_STAYED puts back the entry Back consumed. Escape (`escape`, the
+// key event) first only leaves a text field of the editor, so one key never
+// drops what was typed; and it closes the detail the way exercise-back does,
+// spending the entry open-exercise pushed (the popstate comes back here).
+const EDITOR_TEXT_FIELD = 'textarea, select, input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="button"]):not([type="submit"])';
+function closeTopExerciseLayer(escape = null) {
+  if (state.exerciseEditor.open) {
+    const field = escape?.target;
+    if (field?.closest?.(".exercise-editor-overlay") && field.matches?.(EDITOR_TEXT_FIELD)) {
+      field.blur();
+      return true;
+    }
+    return closeExerciseEditor(state, exerciseEditorHandlers) ? true : BACK_STAYED;
+  }
   if (!els.content.querySelector(".exercise-detail")) return false;
+  // A detail answer still in flight (Next) must not open it again.
+  state.exerciseDetail.currentId = null;
+  if (escape) {
+    if (state.appHistoryDepth > 0) {
+      window.history.back();
+      return true;
+    }
+  }
   returnToNodeParent();
   return true;
 }
