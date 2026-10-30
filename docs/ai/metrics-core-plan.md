@@ -358,9 +358,10 @@ Every other rule of those files applies as written.
    session (`0957fe7d`, `f9408eca`).
    - The *Rukovodilac* uses only its `execute_sql` tool, never `apply_migration` or another tool that writes (the
      owner was asked to block those in the connector's settings).
-   - Each call sends exactly `begin transaction read only;`, then one block of the PR's preflight or post-check file
-     verbatim, then `rollback;`, so that any write in the block fails. (A `set session characteristics … read only`
-     prefix in the same call does not protect the statements after it: it applies only to later transactions.)
+   - Each call sends exactly `begin transaction read only;` (or its synonym `start transaction read only;`), then one
+     block of the PR's preflight or post-check file verbatim, then `rollback;`, so that any write in the block fails
+     and nothing stays on the session. (A `set session characteristics … read only` prefix in the same call does not
+     protect the statements after it, and it would change the session's default on a pooled connection.)
    - The record names the sha256 of the whole file; the executor checks, in the *Rukovodilac*'s transcript, that every
      call is exactly that wrapper around a block taken verbatim from that file.
    - If the connector does not reach the project before the merge, step 2 applies; after the deploy, step 4.
@@ -378,6 +379,9 @@ Every other rule of those files applies as written.
      one (a rollback stays the owner's order, step 4).
    - The key is used only to start such a deploy and to read the deploy status. Every Render setting (auto-deploy,
      environment, scaling, suspension, deletion) stays the owner's.
+   - Its scope, as the *Rukovodilac* reports: a Render API key belongs to the whole account, and the environment's
+     network proxy attaches it only to requests under the deploy path of `optimove-eu`. A deploy hook would be narrower,
+     but as an environment variable it would be visible to every session. The owner chose the key (`6f0bdd58`).
    - The executor and the *Nezavisni revizor* never use that key or the Render API, even though an environment secret
      can be visible to every session of the environment: this is a rule, not a technical barrier. Neither ever prints,
      copies or records the key; a session that meets it does not use or repeat it and tells the owner, who can rotate
