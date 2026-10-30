@@ -292,3 +292,193 @@ test("7. the installed resolver asks for every new picture on the next frame, in
   playback.forgetMediaAccess();
   dom.window.close();
 });
+
+// Owner, 2026-10-30 ("Deploy + C pa A"), option C: the pictures on screen get
+// their addresses first, in a small batch of their own; the rest follow in
+// full batches sent at the same time, each batch shown as soon as it answers.
+
+const ON_SCREEN = { top: 100, bottom: 200, left: 0, right: 100, width: 100, height: 100 };
+const BELOW = { top: 2000, bottom: 2100, left: 0, right: 100, width: 100, height: 100 };
+const ABOVE = { top: -500, bottom: -400, left: 0, right: 100, width: 100, height: 100 };
+
+// A page of `count` pictures (one context each), the given ones on screen,
+// the `above` ones scrolled past, the rest below.
+function page(count, visible = [], above = []) {
+  const dom = new JSDOM(`<main>${Array.from({ length: count }, (_, index) => media.renderAssetImage(`img-${index}`, ctx(String(index)), "thumb")).join("")}</main>`, { pretendToBeVisual: true });
+  const images = [...dom.window.document.querySelectorAll("img")];
+  images.forEach((image, index) => {
+    const rect = visible.includes(index) ? ON_SCREEN : above.includes(index) ? ABOVE : BELOW;
+    image.getBoundingClientRect = () => ({ ...rect, x: rect.left, y: rect.top });
+  });
+  return { dom, doc: dom.window.document, images };
+}
+
+// Every batch call held until released by its index.
+function heldBatches() {
+  const releases = [];
+  const calls = fakeFetch((url, body) => new Promise((resolve) => {
+    releases.push(() => resolve(batchAnswer((context) => asset(`img-${context.id}`, `https://r2.example/${context.id}`))(url, body)));
+  }));
+  return { calls, release: (index) => releases[index]() };
+}
+
+const ids = (call) => call.body.requests.map((request) => request.context.id);
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+const range = (from, to) => Array.from({ length: to - from }, (_, index) => String(from + index));
+
+test("8. the pictures on screen go first: a page of 60 with 8 on screen sends the 8 alone and the other 52 at the same time as 50 + 2; the 8 are shown before the big batch answers", async () => {
+  playback.forgetMediaAccess();
+  assert.equal(playback.ACCESS_FIRST_BATCH_LIMIT, 12);
+  const visible = range(20, 28).map(Number);
+  const { dom, doc, images } = page(60, visible, range(0, 20).map(Number));
+  const { calls, release } = heldBatches();
+  const done = playback.resolvePendingThumbnails(doc);
+  assert.equal(calls.length, 3, "every batch leaves at once");
+  assert.deepEqual(ids(calls[0]), range(20, 28), "the 8 on screen alone, in page order (the 20 scrolled past are not on screen)");
+  assert.deepEqual(ids(calls[1]), [...range(0, 20), ...range(28, 58)], "the rest in page order, 50 at a time");
+  assert.deepEqual(ids(calls[2]), range(58, 60));
+  images[50].remove();
+  release(0);
+  await settle();
+  for (const index of visible) assert.equal(images[index].src, `https://r2.example/${index}`, `picture ${index} is shown while the big batch is still out`);
+  assert.equal(images[0].hasAttribute("src"), false, "the big batch has not answered yet");
+  release(1);
+  release(2);
+  assert.equal(await done, 59, "every picture still on the page got its address");
+  assert.equal(images[30].src, "https://r2.example/30");
+  assert.equal(images[50].hasAttribute("src"), false, "a picture gone from the page is left alone");
+  playback.forgetMediaAccess();
+  dom.window.close();
+});
+
+test("8b. more than 12 on screen: the first 12 of them go first, the other on-screen ones lead the next batch", async () => {
+  playback.forgetMediaAccess();
+  const { dom, doc } = page(40, range(10, 30).map(Number));
+  const { calls, release } = heldBatches();
+  const done = playback.resolvePendingThumbnails(doc);
+  assert.deepEqual(calls.map((call) => call.body.requests.length), [12, 28]);
+  assert.deepEqual(ids(calls[0]), range(10, 22));
+  assert.deepEqual(ids(calls[1]), [...range(22, 30), ...range(0, 10), ...range(30, 40)]);
+  release(0);
+  release(1);
+  assert.equal(await done, 40);
+  playback.forgetMediaAccess();
+  dom.window.close();
+});
+
+test("9. with nothing on screen the page order holds: 112 pictures go out as 12, 50 and 50, all at once, and each batch is shown as soon as it answers, not after the last", async () => {
+  playback.forgetMediaAccess();
+  const { dom, doc, images } = page(112);
+  const { calls, release } = heldBatches();
+  const done = playback.resolvePendingThumbnails(doc);
+  assert.deepEqual(calls.map((call) => call.body.requests.length), [12, 50, 50]);
+  assert.deepEqual(ids(calls[0]), range(0, 12));
+  assert.deepEqual(ids(calls[2]), range(62, 112));
+  release(1);
+  await settle();
+  assert.equal(images[12].src, "https://r2.example/12", "the second batch is shown though the first and the third are still out");
+  assert.equal(images[61].src, "https://r2.example/61");
+  assert.equal(images[0].hasAttribute("src"), false);
+  assert.equal(images[62].hasAttribute("src"), false);
+  release(0);
+  release(2);
+  assert.equal(await done, 112);
+  playback.forgetMediaAccess();
+  dom.window.close();
+});
+
+test("10. a context is never asked for twice: not while its request is out (a second pass or a new picture of it waits for the same answer), not once it is known", async () => {
+  playback.forgetMediaAccess();
+  const { dom, doc, images } = page(3, [0, 1, 2]);
+  const { calls, release } = heldBatches();
+  const first = playback.resolvePendingThumbnails(doc);
+  assert.equal(calls.length, 1);
+  assert.equal(await playback.resolvePendingThumbnails(doc), 0, "pictures already being resolved are not taken again");
+  doc.querySelector("main").insertAdjacentHTML("beforeend", media.renderAssetImage("img-1", ctx("1"), "thumb"));
+  const twin = doc.querySelector("main").lastElementChild;
+  const second = playback.resolvePendingThumbnails(doc);
+  assert.equal(calls.length, 1, "a new picture of a context that is out waits for that answer");
+  release(0);
+  assert.equal(await first, 3);
+  assert.equal(await second, 1);
+  assert.equal(twin.src, "https://r2.example/1");
+  doc.querySelector("main").insertAdjacentHTML("beforeend", media.renderAssetImage("img-2", ctx("2"), "thumb"));
+  assert.equal(await playback.resolvePendingThumbnails(doc), 1);
+  assert.equal(calls.length, 1, "a known context is not asked again");
+  assert.ok(images.every((image) => image.src));
+  playback.forgetMediaAccess();
+  dom.window.close();
+});
+
+test("11. the installed resolver: a picture scrolled to later already has its address (the whole page is asked for, on-screen first), and pictures added by Load more are asked for on the next frame", async () => {
+  playback.forgetMediaAccess();
+  const dom = new JSDOM("<main></main>", { pretendToBeVisual: true });
+  const doc = dom.window.document;
+  const calls = fakeFetch(batchAnswer((context) => asset(`img-${context.id}`, `https://r2.example/${context.id}`)));
+  const uninstall = playback.installThumbnailResolver(doc.body);
+  doc.querySelector("main").innerHTML = Array.from({ length: 30 }, (_, index) => media.renderAssetImage(`img-${index}`, ctx(String(index)), "thumb")).join("");
+  [...doc.querySelectorAll("img")].forEach((image, index) => {
+    const rect = index >= 25 ? ON_SCREEN : BELOW;
+    image.getBoundingClientRect = () => ({ ...rect });
+  });
+  await new Promise((resolve) => dom.window.requestAnimationFrame(() => setTimeout(resolve, 0)));
+  await settle();
+  assert.deepEqual(ids(calls[0]), range(25, 30), "the five on screen first, alone");
+  assert.equal(calls.length, 2, "30 pictures: the 5 on screen, then the other 25");
+  assert.deepEqual(ids(calls[1]), range(0, 25));
+  assert.ok([...doc.querySelectorAll("img")].every((image) => image.src), "every picture has its address before it is scrolled to");
+  doc.querySelector("main").insertAdjacentHTML("beforeend", Array.from({ length: 10 }, (_, index) => media.renderAssetImage(`img-${30 + index}`, ctx(String(30 + index)), "thumb")).join(""));
+  await new Promise((resolve) => dom.window.requestAnimationFrame(() => setTimeout(resolve, 0)));
+  await settle();
+  assert.equal(calls.length, 3, "Load more: one more batch");
+  assert.deepEqual(ids(calls[2]), range(30, 40), "only the new pictures");
+  assert.equal(doc.querySelectorAll("img:not([src])").length, 0);
+  uninstall();
+  playback.forgetMediaAccess();
+  dom.window.close();
+});
+
+test("12. a pair that needs no request takes no place in the first batch: after a filter change the 8 new pictures on screen go alone, the 12 known ones are shown at once without a request", async () => {
+  playback.forgetMediaAccess();
+  const earlier = page(12, range(0, 12).map(Number));
+  const before = heldBatches();
+  const known = playback.resolvePendingThumbnails(earlier.doc);
+  before.release(0);
+  assert.equal(await known, 12);
+  earlier.dom.window.close();
+
+  const { dom, doc, images } = page(40, range(0, 20).map(Number));
+  const { calls, release } = heldBatches();
+  const done = playback.resolvePendingThumbnails(doc);
+  assert.deepEqual(ids(calls[0]), range(12, 20), "the first batch holds only the on-screen pictures that need a request");
+  assert.deepEqual(ids(calls[1]), range(20, 40));
+  assert.equal(calls.length, 2, "the known ones are never asked for");
+  await settle();
+  for (const index of range(0, 12).map(Number)) assert.equal(images[index].src, `https://r2.example/${index}`, `known picture ${index} is shown before any batch answers`);
+  release(0);
+  release(1);
+  assert.equal(await done, 40);
+  playback.forgetMediaAccess();
+  dom.window.close();
+});
+
+test("13. off to the right, off to the left or with no size is not on screen", async () => {
+  playback.forgetMediaAccess();
+  const { dom, doc, images } = page(4);
+  const rects = [
+    { top: 100, bottom: 200, left: 2000, right: 2100, width: 100, height: 100 },
+    { top: 100, bottom: 100, left: 10, right: 10, width: 0, height: 0 },
+    ON_SCREEN,
+    { top: 100, bottom: 200, left: -300, right: -200, width: 100, height: 100 },
+  ];
+  images.forEach((image, index) => { image.getBoundingClientRect = () => ({ ...rects[index] }); });
+  const { calls, release } = heldBatches();
+  const done = playback.resolvePendingThumbnails(doc);
+  assert.deepEqual(ids(calls[0]), ["2"], "only the picture inside the window goes first");
+  assert.deepEqual(ids(calls[1]), ["0", "1", "3"]);
+  release(0);
+  release(1);
+  assert.equal(await done, 4);
+  playback.forgetMediaAccess();
+  dom.window.close();
+});
