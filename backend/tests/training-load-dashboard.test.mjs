@@ -41,6 +41,7 @@ const MIGRATIONS = [
   "202609101100_training_load_v17_dashboard_sanctioned_functions.sql",
   "202609101200_training_load_v18_dashboard_catalog_seed.sql",
   "202609170900_training_load_v19_dashboard_delete.sql",
+  "202610301300_dashboard_simple_atomic_save.sql",
 ];
 const BASE_MIGRATIONS = MIGRATIONS.slice(0, 14); // everything BEFORE the dashboard migrations — used by the upgrade-safety test
 const DASHBOARD_MIGRATIONS = MIGRATIONS.slice(14);
@@ -477,18 +478,18 @@ async function makeComponentFixture({ clubId, coachId, athleteId, connectionId, 
 // rollback-on-error, run against a real, unmodified migrate.js.
 // ============================================================
 
-test("§1.1 all 19 migrations (incl. v15-v19) applied cleanly at before() — schema_migrations records exactly this run's own files", async () => {
+test("§1.1 all 20 migrations including Simple atomic save apply cleanly and record exactly this run's dashboard files", async () => {
   const applied = await query(`select migration_name from public.schema_migrations where migration_name like '%dashboard%' order by migration_name`);
-  assert.equal(applied.rowCount, 5, "exactly the 5 new dashboard migrations (v15-v19) must be recorded");
+  assert.equal(applied.rowCount, 6, "all six dashboard migrations including Simple atomic save must be recorded");
 });
 
 test("§1.2 re-applying the SAME migrations_v2 directory a second time is a genuine no-op (checksum-safe idempotent re-run)", async () => {
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
   const applied = await query(`select count(*)::int as n from public.schema_migrations where migration_name like '%dashboard%'`);
-  assert.equal(applied.rows[0].n, 5, "re-running must not duplicate or re-apply anything");
+  assert.equal(applied.rows[0].n, 6, "re-running must not duplicate or re-apply anything");
 });
 
-test("§1.3 upgrade path: a database at exactly v1-v14 (no dashboard tables) can apply v15-v18 cleanly on top, in one runner call", async () => {
+test("§1.3 upgrade path: a database at exactly v1-v14 can apply all six dashboard migrations in one runner call", async () => {
   const upgradeDb = await makeTempDb("upgrade");
   const upgradeClient = new pg.Client({ connectionString: upgradeDb.url });
   await upgradeClient.connect();
@@ -3403,7 +3404,7 @@ async function s2aLegacyProjection(fixture, compiled, { existing = null, layout 
   for (const key of ["metric_definition_id", "built_in_series_key", "resolution_status", "series_order", "axis", "source_policy", "source_connection_id", "data_scope_level", "analytical_aggregation", "aggregation_role_policy", "coverage_policy", "comparison_period"]) {
     assert.deepEqual(stored.series[0][key], series[key], key);
   }
-  assert.equal(Object.hasOwn(stored, "presentation_config"), false, "legacy projection cannot persist the S2a sidecar; storage belongs to S2c");
+  assert.equal(stored.presentation_config, null, "legacy projection leaves the sidecar null unless explicitly written");
   if (!existing) {
     assert.notEqual(widgetId, widget.id, "legacy writers assign real IDs, independently of compiler draft IDs");
     assert.notEqual(seriesId, series.id);
@@ -4487,4 +4488,1009 @@ test("S2b P03/P10 a clean current numeric KPI cannot hide a real historical bool
   assert.equal(failed.body.previewToken, undefined);
   assert.equal(failed.body.widgetResult, undefined);
   assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+async function s2cHttpHarness(testContext, options = {}) {
+  const modules = await s2bModules();
+  const { createSimpleSaveService } = await import("../src/dashboardSimple/saveService.js");
+  const { createSimpleSaveRouter } = await import("../src/dashboardSimple/saveRouter.js");
+  assert.equal(process.env.DATABASE_URL, db.url);
+  assert.match(db.name, /^optimove_tests_tldash_primary_[a-f0-9]{12}$/);
+  const databasePool = new pg.Pool({ connectionString: db.url, max: 4 });
+  const observations = [], lifecycle = [];
+  let commitFaultInjected = false, releaseCommitAcknowledgement;
+  const now = options.now ?? (() => Date.now());
+  const tokenService = options.tokenService ?? modules.createPreviewTokenService({ keyId: `s2c-${uid()}`, key: crypto.randomBytes(32), now });
+  const savePool = {
+    connect(callback) {
+      if (typeof callback !== "function") {
+        return new Promise((resolve, reject) => savePool.connect((error, client) => error ? reject(error) : resolve(client)));
+      }
+      if (commitFaultInjected && options.recoveryUnavailable) {
+        callback(new Error("s2c recovery connection unavailable"));
+        return;
+      }
+      return databasePool.connect((error, client) => {
+        if (error) { callback(error); return; }
+        const backendPid = client.processID;
+        const checkout = lifecycle.filter(event => event.kind === "checkout").length + 1;
+        lifecycle.push({ kind: "checkout", checkout, backendPid });
+        callback(null, {
+          on: client.on.bind(client),
+          removeListener: client.removeListener.bind(client),
+          async query(sql, params) {
+            observations.push({ sql, checkout, backendPid });
+            if (/^\s*commit\s*;?\s*$/i.test(sql) && options.commitFault && !commitFaultInjected) {
+              commitFaultInjected = true;
+              if (options.commitFault === "before") throw new Error("s2c COMMIT was not sent");
+              const result = await client.query(sql, params);
+              if (options.commitFault === "after") throw new Error("s2c COMMIT acknowledgement lost");
+              if (options.commitFault === "delayed") {
+                await new Promise(resolve => { releaseCommitAcknowledgement = resolve; });
+                return result;
+              }
+              assert.fail(`Unsupported COMMIT fault ${options.commitFault}`);
+            }
+            const result = await client.query(sql, params);
+            if (/^\s*select\b/i.test(sql)) {
+              const transaction = (await client.query("select current_database() as database_name, current_setting('transaction_read_only') as read_only")).rows[0];
+              observations[observations.length - 1] = { sql, checkout, backendPid, ...transaction };
+            }
+            return result;
+          },
+          release(destroy) {
+            lifecycle.push({ kind: "release", checkout, backendPid, destroy: Boolean(destroy) });
+            client.release(destroy);
+          },
+        });
+      });
+    },
+  };
+  const coordinator = modules.createPreviewAdmissionCoordinator({ maxActiveDeployment: 2 });
+  const admission = modules.createPreviewAdmission({ coordinator, processId: `s2c-${uid()}`, poolMax: 4 });
+  const previewService = modules.createSimplePreviewService({
+    pool: databasePool, queryDashboard: modules.queryDashboard, admission, tokenService, now,
+    activation: { coordinatedAdmissionVerified: true, deploymentBudgetVerified: true },
+  });
+  const saveService = createSimpleSaveService({
+    pool: savePool, tokenService, now,
+    ...(options.defaultActivation ? {} : { activation: options.activation ?? { atomicSaveVerified: true } }),
+    transactionOptions: {
+      checkoutTimeoutMs: 1000, transactionTimeoutMs: 5000, statementTimeoutMs: 3000,
+      commitTimeoutMs: 150, recoveryTimeoutMs: 1000, ...options.transactionOptions,
+    },
+  });
+  const previewRouter = modules.createSimplePreviewRouter({ service: previewService });
+  const app = modules.express();
+  app.use(modules.authMiddleware);
+  if (options.afterAuthentication) app.use((req, res, next) => Promise.resolve(options.afterAuthentication(req)).then(() => next(), next));
+  const mountPath = "/api/training-load/dashboards/:dashboardId/simple-editor";
+  app.use(mountPath, (req, res, next) => /^\/(preview|validate|capabilities)\/?$/.test(req.path) ? previewRouter(req, res, next) : next());
+  app.use(mountPath, createSimpleSaveRouter({ service: saveService }));
+  const saveServer = http.createServer(app);
+  testContext.after(async () => {
+    releaseCommitAcknowledgement?.();
+    saveServer.closeAllConnections();
+    await new Promise(resolve => saveServer.close(resolve));
+    await databasePool.end();
+  });
+  await new Promise(resolve => saveServer.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${saveServer.address().port}`;
+  async function request(dashboardId, action, { cookie, body, method = "POST", rawBody } = {}) {
+    const response = await fetch(`${origin}/api/training-load/dashboards/${dashboardId}/simple-editor/${action}`, {
+      method, signal: AbortSignal.timeout(12000),
+      headers: { "Content-Type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
+      body: rawBody ?? JSON.stringify(body),
+    });
+    return { status: response.status, body: await response.json() };
+  }
+  async function preview(fixture, input = s2bEnvelope()) {
+    const response = await request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie, body: input });
+    s2bAssertPreview(response);
+    assert.equal(typeof response.body.requestIssuedAt, "string");
+    return {
+      response: response.body,
+      body: {
+        requestId: crypto.randomUUID(), requestIssuedAt: response.body.requestIssuedAt,
+        resolvedPeriod: response.body.resolvedPeriod, previewToken: response.body.previewToken, input,
+      },
+    };
+  }
+  function save(fixture, body, widgetId = null) {
+    return request(fixture.dashboard.id, widgetId ? `widgets/${widgetId}` : "widgets", {
+      cookie: fixture.coachCookie, body, method: widgetId ? "PUT" : "POST",
+    });
+  }
+  return { ...modules, request, preview, save, saveService, tokenService, observations, lifecycle };
+}
+
+function s2cReceipt(response, operation) {
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  const { verification, ...receipt } = response.body;
+  assert.ok(["commitAcknowledged", "replayed", "verifiedAfterCommitError"].includes(verification), JSON.stringify(response.body));
+  assert.equal(receipt.operation, operation);
+  assert.match(receipt.widgetId, /^[a-f0-9-]{36}$/i);
+  assert.match(receipt.seriesId, /^[a-f0-9-]{36}$/i);
+  assert.ok(Number.isSafeInteger(receipt.widgetRevision) && receipt.widgetRevision > 0);
+  assert.ok(Number.isSafeInteger(receipt.dashboardRevision) && receipt.dashboardRevision > 0);
+  return receipt;
+}
+
+async function s2cLedger(fixture, requestId, queryRunner = query) {
+  return (await queryRunner("select * from training_load.dashboard_simple_requests where initiator_user_id=$1 and request_id=$2", [fixture.coachId, requestId])).rows;
+}
+
+async function s2cSqlSave(fixture, prepared, { widget = prepared.response.normalizedWidget, widgetId = null, expectedRevision = null, requestId = prepared.body.requestId, payloadHash = "a".repeat(64) } = {}, queryRunner = query) {
+  const signedEnvelope = JSON.parse(Buffer.from(prepared.body.previewToken.split(".")[0], "base64url").toString("utf8"));
+  return queryRunner("select training_load.save_simple_widget($1::uuid,$2::uuid,$3::text,$4::timestamptz,$5::uuid,$6::uuid,$7::integer,$8::jsonb,$9::jsonb,$10::jsonb) as receipt", [
+    fixture.coachId, requestId, payloadHash, prepared.body.requestIssuedAt, fixture.dashboard.id, widgetId, expectedRevision,
+    JSON.stringify(widget), JSON.stringify(prepared.body.resolvedPeriod), JSON.stringify(signedEnvelope.binding.workspace),
+  ]);
+}
+
+async function s2cEditPreview(harness, fixture, widgetId, change = {}) {
+  const stored = await s2aStored(widgetId);
+  const draft = s2aUpdateDraft({ ...s2bEnvelope().draft, title: stored.title, ...change });
+  return harness.preview(fixture, s2bEnvelope(draft, { editTarget: { widgetId, expectedWidgetRevision: stored.revision } }));
+}
+
+test("S2c relative midnight requires a fresh preview for a new write but replays the original completed receipt", async testContext => {
+  const fixture = await s2aFixture("s2c-midnight");
+  let serverNow = Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z') - 1000;
+  const originalDay = new Date(serverNow).toISOString().slice(0, 10);
+  const harness = await s2cHttpHarness(testContext, { now: () => serverNow });
+  const input = s2bEnvelope();
+  input.draft.periodIntent = { mode: 'replacePageRuntime', periodConfig: { schemaVersion: 1, mode: 'relative', preset: 'today', timeZone: 'UTC' } };
+  const prepared = await harness.preview(fixture, input);
+  assert.equal(prepared.body.resolvedPeriod.dateFrom, originalDay);
+  const receipt = s2cReceipt(await harness.save(fixture, prepared.body), 'created');
+  serverNow += 2000;
+  const before = await s2bDatabaseState();
+  const newRequest = { ...prepared.body, requestId: crypto.randomUUID() };
+  const refused = await harness.save(fixture, newRequest);
+  assert.deepEqual(refused, { status: 409, body: { error: 'previewRequired', reason: 'effectivePeriodChanged' } });
+  assert.deepEqual(await s2cLedger(fixture, newRequest.requestId), []);
+  assert.deepEqual(s2cReceipt(await harness.save(fixture, prepared.body), 'created'), receipt);
+  assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+test("S2c S01 default activation refuses saves; real HTTP authentication gates save and token-free status", async testContext => {
+  const fixture = await s2aFixture("s2c-activation");
+  const harness = await s2cHttpHarness(testContext, { defaultActivation: true });
+  const prepared = await harness.preview(fixture);
+  const before = await s2bDatabaseState();
+  const disabled = await harness.save(fixture, prepared.body);
+  assert.deepEqual(disabled, { status: 503, body: { error: "saveUnavailable" } });
+  for (const cookie of [undefined, cookieFor(crypto.randomBytes(32).toString("hex"))]) {
+    for (const action of ["widgets", "requests/status"]) {
+      const denied = await harness.request(fixture.dashboard.id, action, { cookie, body: action === "widgets" ? prepared.body : { requestId: prepared.body.requestId } });
+      assert.equal(denied.status, 401, JSON.stringify(denied));
+      assert.equal(denied.body.receipt, undefined);
+    }
+  }
+  assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+test("S2c S01/S02 one real HTTP save atomically stores widget, exactly one series, presentation and a value-free receipt", async testContext => {
+  const fixture = await s2bDataFixture("s2c-atomic");
+  const harness = await s2cHttpHarness(testContext);
+  const draft = s2aDraft({ kind: "builtin", key: "rpe" }, { type: "line_chart", dataScopeLevel: "session", analyticalAggregation: "avg" });
+  const prepared = await harness.preview(fixture, s2bEnvelope(draft));
+  const before = await s2bDatabaseState();
+  const response = await harness.save(fixture, prepared.body);
+  const receipt = s2cReceipt(response, "created");
+  assert.equal(response.body.verification, "commitAcknowledged");
+  const stored = await s2aStored(receipt.widgetId);
+  const state = await s2aState(fixture.dashboard.id);
+  assert.equal(state.widgets.length, 1);
+  assert.equal(state.series.length, 1);
+  assert.equal(stored.series[0].id, receipt.seriesId);
+  assert.equal(stored.revision, receipt.widgetRevision);
+  assert.equal(state.dashboard.revision, receipt.dashboardRevision);
+  for (const field of ["widget_type", "title", "group_by", "display_config", "presentation_config", "local_filter_override"]) assert.deepEqual(stored[field], prepared.response.normalizedWidget[field], field);
+  assert.ok(stored.presentation_config?.chartInteractions);
+  assert.notEqual(stored.id, prepared.response.normalizedWidget.id);
+  assert.notEqual(stored.series[0].id, prepared.response.normalizedWidget.series[0].id);
+  assert.deepEqual(receipt.idMapping, {
+    widget: { from: prepared.response.normalizedWidget.id, to: stored.id },
+    series: { from: prepared.response.normalizedWidget.series[0].id, to: stored.series[0].id },
+  });
+  assert.deepEqual(receipt.resolvedPeriod, prepared.body.resolvedPeriod);
+  assert.equal(Date.parse(receipt.requestIssuedAt), Date.parse(prepared.body.requestIssuedAt));
+  const ledger = await s2cLedger(fixture, prepared.body.requestId);
+  assert.equal(ledger.length, 1);
+  assert.deepEqual(ledger[0].receipt, receipt);
+  assert.match(ledger[0].payload_hash, /^[a-f0-9]{64}$/);
+  assert.deepEqual(Object.keys(ledger[0]).sort(), ["initiator_user_id", "request_id", "dashboard_id", "widget_id", "workspace", "payload_hash", "request_issued_at", "resolved_period", "receipt", "created_at", "retain_until"].sort());
+  assert.deepEqual(Object.keys(receipt).sort(), ["requestId", "operation", "widgetId", "seriesId", "idMapping", "widgetRevision", "dashboardRevision", "resolvedPeriod", "requestIssuedAt"].sort());
+  const after = await s2bDatabaseState();
+  const changedTables = new Set(['"training_load"."dashboards"', '"training_load"."dashboard_widgets"', '"training_load"."dashboard_widget_series"', '"training_load"."dashboard_simple_requests"']);
+  for (const [table, original] of Object.entries(before)) if (!changedTables.has(table)) assert.deepEqual(after[table], original, table);
+  const queried = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/query`, { method: "POST", cookie: fixture.coachCookie, body: { dateFrom: prepared.body.resolvedPeriod.dateFrom, dateTo: prepared.body.resolvedPeriod.dateTo } });
+  assert.equal(queried.status, 200, JSON.stringify(queried.body));
+  assert.deepEqual(s2bRows(queried.body.widgets[0].series[0].data.current), s2bRows(fixture.expectedRows));
+});
+
+test("S2c S02 real series and presentation trigger failures roll back the entire SQL save including widget and receipt", async testContext => {
+  const fixture = await s2aFixture("s2c-rollback");
+  const harness = await s2cHttpHarness(testContext);
+  const prepared = await harness.preview(fixture);
+  const before = await s2bDatabaseState();
+  const invalidSeries = structuredClone(prepared.response.normalizedWidget);
+  invalidSeries.series[0].data_scope_level = "unsupported_scope";
+  await assert.rejects(() => s2cSqlSave(fixture, prepared, { widget: invalidSeries }), error => error.code && /scope|scope_level/i.test(error.message));
+  const invalidPresentation = structuredClone(prepared.response.normalizedWidget);
+  invalidPresentation.presentation_config = { schemaVersion: 1, chartInteractions: { legend: { toggle: true } } };
+  await assert.rejects(() => s2cSqlSave(fixture, prepared, { widget: invalidPresentation }), error => error.code === "S2C02");
+  assert.deepEqual(await s2bDatabaseState(), before);
+  assert.deepEqual(await s2cLedger(fixture, prepared.body.requestId), []);
+  assert.equal((await s2aState(fixture.dashboard.id)).widgets.length, 0);
+  s2cReceipt(await harness.save(fixture, prepared.body), "created");
+});
+
+test("S2c S03 same and truly concurrent request IDs yield one durable result without extra rows or revisions", async testContext => {
+  const fixture = await s2aFixture("s2c-idempotency");
+  const harness = await s2cHttpHarness(testContext);
+  const prepared = await harness.preview(fixture);
+  const blocker = await newClient();
+  let responses;
+  try {
+    await blocker.client.query("begin");
+    await blocker.client.query("select pg_advisory_xact_lock(hashtextextended('dashboard-simple:' || $1::text || ':' || $2::text, 0))", [fixture.coachId, prepared.body.requestId]);
+    const concurrent = [harness.save(fixture, prepared.body), harness.save(fixture, prepared.body)];
+    await s2bWaitForDatabaseState(async () => {
+      const waiting = await query("select count(*)::int as n from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and query ilike '%pg_advisory_xact_lock(hashtextextended($1,0))%' ");
+      return waiting.rows[0].n >= 1;
+    }, "real save requests waiting on the held request lock");
+    await blocker.client.query("commit");
+    responses = await Promise.all(concurrent);
+  } finally {
+    await blocker.client.query("rollback");
+    await blocker.client.end();
+  }
+  const receipt = s2cReceipt(responses[0], "created");
+  assert.deepEqual(s2cReceipt(responses[1], "created"), receipt);
+  const beforeReplay = await s2bDatabaseState();
+  const replay = await harness.save(fixture, prepared.body);
+  assert.deepEqual(s2cReceipt(replay, "created"), receipt);
+  assert.equal(replay.body.verification, "replayed");
+  assert.deepEqual(await s2bDatabaseState(), beforeReplay);
+  assert.equal((await s2cLedger(fixture, prepared.body.requestId)).length, 1);
+  assert.equal((await s2aState(fixture.dashboard.id)).widgets.length, 1);
+});
+
+test("S2c S04 a new request key with a stale edit revision refuses 409 and records no receipt", async testContext => {
+  const fixture = await s2aFixture("s2c-stale");
+  const harness = await s2cHttpHarness(testContext);
+  const created = s2cReceipt(await harness.save(fixture, (await harness.preview(fixture)).body), "created");
+  const edit = await s2cEditPreview(harness, fixture, created.widgetId, { title: "Simple pending edit" });
+  const changed = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${created.widgetId}`, {
+    method: "PATCH", cookie: fixture.coachCookie, body: { expectedWidgetRevision: created.widgetRevision, title: "Concurrent Advanced edit" },
+  });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  const before = await s2bDatabaseState();
+  const stale = await harness.save(fixture, edit.body, created.widgetId);
+  assert.equal(stale.status, 409, JSON.stringify(stale.body));
+  assert.equal(stale.body.error, "staleRevision");
+  assert.deepEqual(await s2cLedger(fixture, edit.body.requestId), []);
+  assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+test("S2c S05 a completed request key cannot be reused with different payload or another authorized target", async testContext => {
+  const fixture = await s2aFixture("s2c-conflict");
+  const harness = await s2cHttpHarness(testContext);
+  const prepared = await harness.preview(fixture);
+  s2cReceipt(await harness.save(fixture, prepared.body), "created");
+  const anotherDashboard = await makeDashboardHttp(fixture.coachCookie);
+  const secondTarget = { ...fixture, dashboard: anotherDashboard };
+  const secondPrepared = await harness.preview(secondTarget);
+  secondPrepared.body.requestId = prepared.body.requestId;
+  const mutated = structuredClone(prepared.body);
+  mutated.input.draft.title = "Changed after completed save";
+  const before = await s2bDatabaseState();
+  for (const [target, body] of [[fixture, mutated], [secondTarget, secondPrepared.body]]) {
+    const conflict = await harness.save(target, body);
+    assert.equal(conflict.status, 409, JSON.stringify(conflict.body));
+    assert.equal(conflict.body.error, "idempotencyConflict");
+    assert.equal(conflict.body.widgetId, undefined);
+    assert.equal(conflict.body.receipt, undefined);
+  }
+  assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+test("S2c S06 current authorization is reloaded after middleware for completed replay and status, without disclosing receipts", async testContext => {
+  const fixture = await s2aFixture("s2c-revocation");
+  let revoke = false;
+  const harness = await s2cHttpHarness(testContext, {
+    afterAuthentication: async () => {
+      if (revoke) await query("update public.user_club_roles set is_active=false where user_id=$1 and club_id=$2", [fixture.coachId, fixture.clubId]);
+    },
+  });
+  const prepared = await harness.preview(fixture);
+  s2cReceipt(await harness.save(fixture, prepared.body), "created");
+  revoke = true;
+  const status = await harness.request(fixture.dashboard.id, "requests/status", { cookie: fixture.coachCookie, body: { requestId: prepared.body.requestId } });
+  const replay = await harness.save(fixture, prepared.body);
+  for (const denied of [status, replay]) {
+    assert.equal(denied.status, 404, JSON.stringify(denied));
+    assert.equal(denied.body.error, "notFound");
+    assert.equal(denied.body.receipt, undefined);
+    assert.equal(denied.body.widgetId, undefined);
+  }
+  assert.equal((await s2cLedger(fixture, prepared.body.requestId)).length, 1);
+});
+
+test("S2c S07 a completed replay precedes expired or retired-key token validation and preserves its original receipt", async testContext => {
+  const fixture = await s2aFixture("s2c-expired-replay");
+  let clock = Date.now();
+  const harness = await s2cHttpHarness(testContext, { now: () => clock });
+  const prepared = await harness.preview(fixture);
+  const receipt = s2cReceipt(await harness.save(fixture, prepared.body), "created");
+  clock += 11 * 60 * 1000;
+  const before = await s2bDatabaseState();
+  assert.deepEqual(s2cReceipt(await harness.save(fixture, prepared.body), "created"), receipt);
+  const rotated = await s2cHttpHarness(testContext);
+  const rotatedReplay = await rotated.save(fixture, prepared.body);
+  assert.deepEqual(s2cReceipt(rotatedReplay, "created"), receipt);
+  assert.equal(rotatedReplay.body.verification, "replayed");
+  assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+test("S2c S08 unrelated dashboard layout changes after preview do not block a create or overwrite existing placement", async testContext => {
+  const fixture = await s2aFixture("s2c-layout");
+  const harness = await s2cHttpHarness(testContext);
+  const prepared = await harness.preview(fixture);
+  const existing = await makeWidgetHttp(fixture.coachCookie, fixture.dashboard);
+  const moved = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${existing.widgetId}/layout`, {
+    method: "PATCH", cookie: fixture.coachCookie, body: { expectedWidgetRevision: 1, x: 0, y: 10 },
+  });
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  const before = await s2aStored(existing.widgetId);
+  const receipt = s2cReceipt(await harness.save(fixture, prepared.body), "created");
+  assert.deepEqual(await s2aStored(existing.widgetId), before);
+  const state = await s2aState(fixture.dashboard.id);
+  assert.equal(state.widgets.length, 2);
+  assert.ok(receipt.dashboardRevision > prepared.response.dashboardRevision);
+  const saved = await s2aStored(receipt.widgetId);
+  assert.ok(!(saved.x < before.x + before.width && before.x < saved.x + saved.width && saved.y < before.y + before.height && before.y < saved.y + saved.height));
+});
+
+test("S2c S09 a real COMMIT followed by a lost acknowledgement returns a receipt verified on a new read-only client", async testContext => {
+  const fixture = await s2aFixture("s2c-commit-lost");
+  const harness = await s2cHttpHarness(testContext, { commitFault: "after" });
+  const prepared = await harness.preview(fixture);
+  const response = await harness.save(fixture, prepared.body);
+  const receipt = s2cReceipt(response, "created");
+  assert.equal(response.body.verification, "verifiedAfterCommitError");
+  const commit = harness.observations.find(item => /^commit$/i.test(item.sql));
+  const recovery = harness.observations.find(item => item.checkout > commit.checkout && /dashboard_simple_requests/i.test(item.sql));
+  assert.ok(recovery, JSON.stringify(harness.observations));
+  assert.notEqual(recovery.backendPid, commit.backendPid);
+  assert.equal(recovery.read_only, "on");
+  assert.equal(recovery.database_name, db.name);
+  assert.ok(harness.lifecycle.some(event => event.kind === "release" && event.checkout === commit.checkout && event.destroy));
+  assert.deepEqual((await s2cLedger(fixture, prepared.body.requestId))[0].receipt, receipt);
+});
+
+test("S2c S09 a delayed COMMIT acknowledgement is bounded while a real committed receipt is recovered", { timeout: 15000 }, async testContext => {
+  const fixture = await s2aFixture("s2c-commit-delayed");
+  const harness = await s2cHttpHarness(testContext, { commitFault: "delayed", transactionOptions: { commitTimeoutMs: 100, recoveryTimeoutMs: 1000 } });
+  const prepared = await harness.preview(fixture);
+  const startedAt = performance.now();
+  const response = await harness.save(fixture, prepared.body);
+  const receipt = s2cReceipt(response, "created");
+  assert.ok(performance.now() - startedAt < 6000, "COMMIT acknowledgement and recovery must have bounded waits");
+  assert.equal(response.body.verification, "verifiedAfterCommitError");
+  assert.deepEqual((await s2cLedger(fixture, prepared.body.requestId))[0].receipt, receipt);
+  assert.equal((await s2aState(fixture.dashboard.id)).widgets.length, 1);
+});
+
+test("S2c S10 absent or unavailable recovery after attempted COMMIT yields 503 outcomeUnknown without claiming rollback", async testContext => {
+  for (const recoveryUnavailable of [false, true]) {
+    const fixture = await s2aFixture(`s2c-unknown-${recoveryUnavailable}`);
+    const harness = await s2cHttpHarness(testContext, { commitFault: recoveryUnavailable ? "after" : "before", recoveryUnavailable });
+    const prepared = await harness.preview(fixture);
+    const response = await harness.save(fixture, prepared.body);
+    assert.equal(response.status, 503, JSON.stringify(response));
+    assert.equal(response.body.error, "outcomeUnknown");
+    assert.equal(response.body.requestId, prepared.body.requestId);
+    assert.equal(response.body.receipt, undefined);
+    assert.ok(!/rolled.?back|not.?saved/i.test(JSON.stringify(response.body)));
+    const ledger = await s2cLedger(fixture, prepared.body.requestId);
+    assert.equal(ledger.length, recoveryUnavailable ? 1 : 0);
+    assert.equal((await s2aState(fixture.dashboard.id)).widgets.length, recoveryUnavailable ? 1 : 0);
+  }
+});
+
+test("S2c S07/S11 a completed request replays after archive while a new request remains forbidden", async testContext => {
+  const fixture = await s2aFixture("s2c-archive-replay");
+  const harness = await s2cHttpHarness(testContext);
+  const prepared = await harness.preview(fixture);
+  const receipt = s2cReceipt(await harness.save(fixture, prepared.body), "created");
+  const pending = await harness.preview(fixture);
+  const archived = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/archive`, {
+    method: "POST", cookie: fixture.coachCookie,
+    body: { expectedRevision: await freshRevision(fixture.coachCookie, fixture.dashboard.id) },
+  });
+  assert.equal(archived.status, 200, JSON.stringify(archived.body));
+  const before = await s2bDatabaseState();
+  const replay = await harness.save(fixture, prepared.body);
+  assert.deepEqual(s2cReceipt(replay, "created"), receipt);
+  assert.equal(replay.body.verification, "replayed");
+  const status = await harness.request(fixture.dashboard.id, "requests/status", { cookie: fixture.coachCookie, body: { requestId: prepared.body.requestId } });
+  assert.deepEqual(status, { status: 200, body: { status: "recorded", requestId: prepared.body.requestId, receipt } });
+  const refused = await harness.save(fixture, pending.body);
+  assert.deepEqual(refused, { status: 409, body: { error: "dashboardArchived" } });
+  assert.deepEqual(await s2cLedger(fixture, pending.body.requestId), []);
+  assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+test("S2c S10/S11 status needs only current authentication and request ID; notRecorded permits retry without claiming rollback", async testContext => {
+  const fixture = await s2aFixture("s2c-status");
+  const harness = await s2cHttpHarness(testContext);
+  const prepared = await harness.preview(fixture);
+  const receipt = s2cReceipt(await harness.save(fixture, prepared.body), "created");
+  const currentCookie = await loginCookie(fixture.coachId);
+  const statusHarness = await s2cHttpHarness(testContext, { defaultActivation: true });
+  const unknownId = crypto.randomUUID();
+  const before = await s2bDatabaseState();
+  const recorded = await statusHarness.request(fixture.dashboard.id, "requests/status", { cookie: currentCookie, body: { requestId: prepared.body.requestId } });
+  assert.deepEqual(recorded, { status: 200, body: { status: "recorded", requestId: prepared.body.requestId, receipt } });
+  const missing = await statusHarness.request(fixture.dashboard.id, "requests/status", { cookie: currentCookie, body: { requestId: unknownId } });
+  assert.deepEqual(missing, { status: 200, body: { status: "notRecorded", requestId: unknownId, retrySameRequest: true } });
+  assert.ok(!/rolled.?back|not.?saved/i.test(JSON.stringify(missing.body)));
+  assert.ok(statusHarness.observations.filter(item => /dashboard_simple_requests/i.test(item.sql)).every(item => item.read_only === "on"));
+  assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+test("S2c S12 a presentation-only save increments only the widget revision; preserve and identical replace are genuine no-ops, clear persists null", async testContext => {
+  const fixture = await s2aFixture("s2c-sidecar-only");
+  const harness = await s2cHttpHarness(testContext);
+  const initial = s2cReceipt(await harness.save(fixture, (await harness.preview(fixture)).body), "created");
+  const original = await s2aStored(initial.widgetId);
+  assert.equal(original.presentation_config, null);
+  const sidecar = { schemaVersion: 1, tableFormatting: { evaluationVersion: 1, rules: [] } };
+  const replacement = await s2cEditPreview(harness, fixture, initial.widgetId, { presentation: { mode: "replace", value: sidecar } });
+  const updated = s2cReceipt(await harness.save(fixture, replacement.body, initial.widgetId), "updated");
+  const stored = await s2aStored(initial.widgetId);
+  assert.deepEqual(stored.presentation_config, sidecar);
+  assert.equal(stored.revision, original.revision + 1);
+  assert.equal(updated.widgetRevision, stored.revision);
+  assert.equal(updated.dashboardRevision, initial.dashboardRevision);
+  assert.equal(updated.seriesId, initial.seriesId);
+  const { presentation_config: originalPresentation, revision: originalRevision, updated_at: originalUpdatedAt, ...originalContent } = original;
+  const { presentation_config: changedPresentation, revision: changedRevision, updated_at: changedUpdatedAt, ...changedContent } = stored;
+  assert.deepEqual(changedContent, originalContent);
+  for (const presentation of [{ mode: "preserve" }, { mode: "replace", value: sidecar }]) {
+    const noOp = await s2cEditPreview(harness, fixture, initial.widgetId, { presentation });
+    const receipt = s2cReceipt(await harness.save(fixture, noOp.body, initial.widgetId), "unchanged");
+    assert.equal(receipt.widgetRevision, stored.revision);
+    assert.equal(receipt.dashboardRevision, initial.dashboardRevision);
+    assert.deepEqual(await s2aStored(initial.widgetId), stored);
+    assert.deepEqual((await s2cLedger(fixture, noOp.body.requestId))[0].receipt, receipt);
+  }
+  const clear = await s2cEditPreview(harness, fixture, initial.widgetId, { presentation: { mode: "clear" } });
+  const clearedReceipt = s2cReceipt(await harness.save(fixture, clear.body, initial.widgetId), "updated");
+  const cleared = await s2aStored(initial.widgetId);
+  assert.equal(cleared.presentation_config, null);
+  assert.equal(cleared.revision, stored.revision + 1);
+  assert.equal(clearedReceipt.dashboardRevision, initial.dashboardRevision);
+  assert.deepEqual(cleared.series, original.series);
+  const preserveNull = await s2cEditPreview(harness, fixture, initial.widgetId);
+  assert.equal(s2cReceipt(await harness.save(fixture, preserveNull.body, initial.widgetId), "unchanged").widgetRevision, cleared.revision);
+  assert.deepEqual(await s2aStored(initial.widgetId), cleared);
+});
+
+test("S2c S12 Advanced presentation modes preserve omitted sidecars, reject ambiguous null and bump revision only for an actual replacement or clear", async testContext => {
+  const fixture = await s2aFixture("s2c-advanced-sidecar");
+  const harness = await s2cHttpHarness(testContext);
+  const created = s2cReceipt(await harness.save(fixture, (await harness.preview(fixture)).body), "created");
+  const sidecar = { schemaVersion: 1, tableFormatting: { evaluationVersion: 1, rules: [] } };
+  async function patch(body) {
+    const current = await s2aStored(created.widgetId);
+    return api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${created.widgetId}`, {
+      method: "PATCH", cookie: fixture.coachCookie, body: { expectedWidgetRevision: current.revision, ...body },
+    });
+  }
+  assert.equal((await patch({ presentation: { mode: "replace", value: sidecar } })).status, 200);
+  let stored = await s2aStored(created.widgetId);
+  assert.deepEqual(stored.presentation_config, sidecar);
+  assert.equal(stored.revision, created.widgetRevision + 1);
+  for (const body of [{ title: stored.title }, { presentation: { mode: "preserve" } }, { presentation: { mode: "replace", value: sidecar } }]) {
+    const response = await patch(body);
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    assert.deepEqual(await s2aStored(created.widgetId), stored);
+  }
+  const ambiguous = await patch({ presentation: null });
+  assert.equal(ambiguous.status, 400, JSON.stringify(ambiguous.body));
+  assert.deepEqual(await s2aStored(created.widgetId), stored);
+  const cleared = await patch({ presentation: { mode: "clear" } });
+  assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
+  const afterClear = await s2aStored(created.widgetId);
+  assert.equal(afterClear.presentation_config, null);
+  assert.equal(afterClear.revision, stored.revision + 1);
+  stored = afterClear;
+  assert.equal((await patch({ presentation: { mode: "clear" } })).status, 200);
+  assert.deepEqual(await s2aStored(created.widgetId), stored);
+  assert.equal((await s2aState(fixture.dashboard.id)).dashboard.revision, created.dashboardRevision);
+});
+
+test("S2c S13 cloning a template copies supported and opaque presentation JSON exactly while assigning new widget and series IDs", async testContext => {
+  const fixture = await s2aFixture("s2c-clone-sidecars");
+  const harness = await s2cHttpHarness(testContext);
+  const supported = { schemaVersion: 1, tableFormatting: { evaluationVersion: 1, rules: [] } };
+  const opaque = { schemaVersion: 73, vendor: { nested: [null, true, "opaque", { threshold: 12.75 }] } };
+  const sourceIds = [];
+  for (const [index, sidecar] of [supported, opaque].entries()) {
+    const draft = { ...s2bEnvelope().draft, title: `Clone source ${index}` };
+    const saved = s2cReceipt(await harness.save(fixture, (await harness.preview(fixture, s2bEnvelope(draft))).body), "created");
+    await query("update training_load.dashboard_widgets set presentation_config=$2::jsonb where id=$1", [saved.widgetId, JSON.stringify(sidecar)]);
+    sourceIds.push(saved.widgetId);
+  }
+  const template = await api(`/api/training-load/dashboards/${fixture.dashboard.id}`, {
+    method: "PATCH", cookie: fixture.coachCookie,
+    body: { expectedRevision: await freshRevision(fixture.coachCookie, fixture.dashboard.id), isTemplate: true },
+  });
+  assert.equal(template.status, 200, JSON.stringify(template.body));
+  const before = await s2aState(fixture.dashboard.id);
+  const clone = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/clone`, {
+    method: "POST", cookie: fixture.coachCookie, body: { ownerScope: "user", name: "Exact sidecar clone" },
+  });
+  assert.equal(clone.status, 201, JSON.stringify(clone.body));
+  const cloned = await api(`/api/training-load/dashboards/${clone.body.dashboard.id}`, { cookie: fixture.coachCookie });
+  assert.equal(cloned.status, 200, JSON.stringify(cloned.body));
+  assert.equal(cloned.body.widgets.length, 2);
+  for (const sourceId of sourceIds) {
+    const source = await s2aStored(sourceId);
+    const copied = cloned.body.widgets.find(widget => widget.title === source.title);
+    assert.ok(copied, JSON.stringify(cloned.body));
+    assert.notEqual(copied.id, source.id);
+    assert.deepEqual(copied.presentation_config, source.presentation_config);
+    const persisted = await s2aStored(copied.id);
+    assert.deepEqual(persisted.presentation_config, source.presentation_config);
+    assert.equal(persisted.series.length, 1);
+    assert.notEqual(persisted.series[0].id, source.series[0].id);
+    assert.equal(persisted.series[0].built_in_series_key, source.series[0].built_in_series_key);
+    assert.equal(persisted.series[0].resolution_status, "resolved");
+  }
+  assert.deepEqual(await s2aState(fixture.dashboard.id), before);
+});
+
+test("S2c S13 opaque presentation versions survive title and layout edits; semantic writes fail atomically until explicit clear", async testContext => {
+  const fixture = await s2aFixture("s2c-opaque-guard");
+  const harness = await s2cHttpHarness(testContext);
+  const created = s2cReceipt(await harness.save(fixture, (await harness.preview(fixture)).body), "created");
+  const opaque = { schemaVersion: 42, futureRules: [{ opaque: [1, "two", null] }] };
+  await query("update training_load.dashboard_widgets set presentation_config=$2::jsonb where id=$1", [created.widgetId, JSON.stringify(opaque)]);
+  let stored = await s2aStored(created.widgetId);
+  const renamed = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${created.widgetId}`, {
+    method: "PATCH", cookie: fixture.coachCookie,
+    body: { expectedWidgetRevision: stored.revision, title: "Opaque title remains editable" },
+  });
+  assert.equal(renamed.status, 200, JSON.stringify(renamed.body));
+  stored = await s2aStored(created.widgetId);
+  const moved = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${created.widgetId}/layout`, {
+    method: "PATCH", cookie: fixture.coachCookie, body: { expectedWidgetRevision: stored.revision, y: 9 },
+  });
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  stored = await s2aStored(created.widgetId);
+  assert.deepEqual(stored.presentation_config, opaque);
+  const detail = await api(`/api/training-load/dashboards/${fixture.dashboard.id}`, { cookie: fixture.coachCookie });
+  assert.deepEqual(detail.body.widgets[0].presentation_config, opaque);
+  const before = await s2bDatabaseState();
+  await assert.rejects(() => query("select * from training_load.update_widget_content($1,$2,null,null,'week',null,null,null,false)", [stored.id, stored.revision]), error => error.code === "S2C03");
+  await assert.rejects(() => s2aRawUpdate(stored.id, { analytical_aggregation: "sum" }), error => error.code === "S2C03");
+  assert.deepEqual(await s2bDatabaseState(), before);
+  const guardedDraft = s2aUpdateDraft({ ...s2bEnvelope().draft, title: stored.title, view: { type: "table", groupBy: "week", dataScopeLevel: "session", analyticalAggregation: "avg" } });
+  const guarded = await harness.request(fixture.dashboard.id, "preview", {
+    cookie: fixture.coachCookie,
+    body: s2bEnvelope(guardedDraft, { editTarget: { widgetId: stored.id, expectedWidgetRevision: stored.revision } }),
+  });
+  assert.equal(guarded.status, 200, JSON.stringify(guarded.body));
+  assert.equal(guarded.body.status, "advancedRequired");
+  assert.ok(guarded.body.issues.some(issue => issue.code === "presentationRevalidationRequired"));
+  assert.equal(guarded.body.previewToken, undefined);
+  assert.deepEqual(await s2bDatabaseState(), before);
+  const cleared = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${created.widgetId}`, {
+    method: "PATCH", cookie: fixture.coachCookie, body: { expectedWidgetRevision: stored.revision, presentation: { mode: "clear" } },
+  });
+  assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
+  const afterClear = await s2aStored(stored.id);
+  assert.equal(afterClear.presentation_config, null);
+  assert.equal(afterClear.revision, stored.revision + 1);
+  const edited = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${created.widgetId}`, {
+    method: "PATCH", cookie: fixture.coachCookie, body: { expectedWidgetRevision: afterClear.revision, groupBy: "week" },
+  });
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  await s2aRawUpdate(stored.id, { analytical_aggregation: "sum" });
+  const final = await s2aStored(stored.id);
+  assert.equal(final.group_by, "week");
+  assert.equal(final.presentation_config, null);
+  assert.equal(final.series[0].analytical_aggregation, "sum");
+});
+
+test("S2c S14 ledger retention is exactly seven days plus ten minutes and cleanup skips an expired request whose real advisory lock is busy", { timeout: 15000 }, async testContext => {
+  const fixture = await s2aFixture("s2c-retention");
+  const harness = await s2cHttpHarness(testContext);
+  const preparedRequests = [];
+  for (let index = 0; index < 3; index += 1) {
+    const prepared = await harness.preview(fixture);
+    s2cReceipt(await harness.save(fixture, prepared.body), "created");
+    preparedRequests.push(prepared);
+  }
+  const [grace, expired, busy] = preparedRequests;
+  const retention = await query("select extract(epoch from retain_until-request_issued_at)::integer as seconds from training_load.dashboard_simple_requests where initiator_user_id=$1", [fixture.coachId]);
+  assert.equal(retention.rowCount, 3);
+  assert.ok(retention.rows.every(row => row.seconds === 7 * 24 * 60 * 60 + 10 * 60));
+  await query(`update training_load.dashboard_simple_requests set
+    request_issued_at=transaction_timestamp()-interval '168 hours 5 minutes',
+    retain_until=transaction_timestamp()+interval '5 minutes'
+    where initiator_user_id=$1 and request_id=$2`, [fixture.coachId, grace.body.requestId]);
+  await query(`update training_load.dashboard_simple_requests set
+    request_issued_at=transaction_timestamp()-interval '168 hours 10 minutes 1 second',
+    retain_until=transaction_timestamp()-interval '1 second'
+    where initiator_user_id=$1 and request_id=any($2::uuid[])`, [fixture.coachId, [expired.body.requestId, busy.body.requestId]]);
+  const graceStatus = await harness.request(fixture.dashboard.id, "requests/status", { cookie: fixture.coachCookie, body: { requestId: grace.body.requestId } });
+  assert.equal(graceStatus.status, 200, JSON.stringify(graceStatus.body));
+  assert.equal(graceStatus.body.status, "recorded");
+  const expiredStatus = await harness.request(fixture.dashboard.id, "requests/status", { cookie: fixture.coachCookie, body: { requestId: expired.body.requestId } });
+  assert.deepEqual(expiredStatus, { status: 409, body: { error: "requestExpired" } });
+  const blocker = await newClient();
+  const beforeCleanup = await s2aState(fixture.dashboard.id);
+  try {
+    await blocker.client.query("begin");
+    await blocker.client.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [`dashboard-simple:${fixture.coachId}:${busy.body.requestId}`]);
+    const cleanup = await query("select training_load.cleanup_dashboard_simple_requests(1000) as deleted");
+    assert.equal(cleanup.rows[0].deleted, 1);
+    assert.deepEqual(await s2cLedger(fixture, expired.body.requestId), []);
+    assert.equal((await s2cLedger(fixture, busy.body.requestId)).length, 1);
+    assert.equal((await s2cLedger(fixture, grace.body.requestId)).length, 1);
+    await blocker.client.query("commit");
+  } finally {
+    await blocker.client.query("rollback");
+    await blocker.client.end();
+  }
+  const cleanup = await query("select training_load.cleanup_dashboard_simple_requests(1000) as deleted");
+  assert.equal(cleanup.rows[0].deleted, 1);
+  assert.deepEqual(await s2cLedger(fixture, busy.body.requestId), []);
+  assert.equal((await s2cLedger(fixture, grace.body.requestId)).length, 1);
+  assert.deepEqual(await s2aState(fixture.dashboard.id), beforeCleanup);
+});
+
+test("S2c S12/S13 opaque chart clear or replacement can atomically change grouping and binding; a final series failure restores the entire transition", async testContext => {
+  const sidecar = {
+    schemaVersion: 1, chartComposition: "athletes-v1",
+    chartInteractions: { tooltip: { mode: "formatted" }, legend: { toggle: false }, zoom: { mode: "local", applyPeriodAction: true }, pointSelection: { mode: "details" }, yAxis: { mode: "auto" } },
+  };
+  for (const presentation of [{ mode: "clear" }, { mode: "replace", value: sidecar }]) {
+    const fixture = await s2aFixture(`s2c-opaque-atomic-${presentation.mode}`);
+    const harness = await s2cHttpHarness(testContext);
+    const initialDraft = s2aDraft({ kind: "builtin", key: "rpe" }, { type: "line_chart", dataScopeLevel: "session", analyticalAggregation: "avg" });
+    const created = s2cReceipt(await harness.save(fixture, (await harness.preview(fixture, s2bEnvelope(initialDraft))).body), "created");
+    const opaque = { schemaVersion: 42, unknownChart: { exact: [true, null, "future"] } };
+    await query("update training_load.dashboard_widgets set presentation_config=$2::jsonb where id=$1", [created.widgetId, JSON.stringify(opaque)]);
+    const stored = await s2aStored(created.widgetId);
+    const changedDraft = s2aUpdateDraft({
+      ...initialDraft, draftVersion: 2, metricRef: { kind: "builtin", key: "duration_minutes" },
+      view: { type: "line_chart", groupBy: "week", dataScopeLevel: "session", analyticalAggregation: "sum" },
+      presentation,
+    });
+    const input = s2bEnvelope(changedDraft, { editTarget: { widgetId: stored.id, expectedWidgetRevision: stored.revision } });
+    const preserve = await harness.request(fixture.dashboard.id, "preview", {
+      cookie: fixture.coachCookie, body: { ...input, draft: { ...changedDraft, presentation: { mode: "preserve" } } },
+    });
+    assert.equal(preserve.status, 200, JSON.stringify(preserve.body));
+    assert.equal(preserve.body.status, "advancedRequired");
+    assert.ok(preserve.body.issues.some(issue => issue.code === "presentationRevalidationRequired"));
+    assert.equal(preserve.body.previewToken, undefined);
+    const prepared = await harness.preview(fixture, input);
+    const invalidFinalSeries = structuredClone(prepared.response.normalizedWidget);
+    invalidFinalSeries.series[0].data_scope_level = "unsupported_scope";
+    const beforeFailure = await s2bDatabaseState();
+    await assert.rejects(() => s2cSqlSave(fixture, prepared, {
+      widget: invalidFinalSeries, widgetId: stored.id, expectedRevision: stored.revision,
+    }), error => error.code && /scope|scope_level/i.test(error.message));
+    assert.deepEqual(await s2bDatabaseState(), beforeFailure, "clearing opaque JSON and deleting the old binding must roll back if the replacement series fails");
+    assert.deepEqual(await s2aStored(stored.id), stored);
+    assert.deepEqual(await s2cLedger(fixture, prepared.body.requestId), []);
+    const receipt = s2cReceipt(await harness.save(fixture, prepared.body, stored.id), "updated");
+    const saved = await s2aStored(stored.id);
+    assert.equal(saved.group_by, "week");
+    assert.deepEqual(saved.presentation_config, presentation.mode === "clear" ? null : sidecar);
+    assert.equal(saved.series.length, 1);
+    assert.equal(saved.series[0].built_in_series_key, "duration_minutes");
+    assert.equal(saved.series[0].analytical_aggregation, "sum");
+    assert.notEqual(saved.series[0].id, stored.series[0].id);
+    assert.equal((await query("select id from training_load.dashboard_widget_series where id=$1", [stored.series[0].id])).rowCount, 0);
+    assert.equal(receipt.widgetId, stored.id);
+    assert.equal(receipt.seriesId, saved.series[0].id);
+    assert.deepEqual(receipt.idMapping.series, { from: prepared.response.normalizedWidget.series[0].id, to: saved.series[0].id });
+    assert.ok(receipt.widgetRevision > stored.revision);
+    assert.equal(receipt.dashboardRevision, created.dashboardRevision);
+    assert.deepEqual((await s2cLedger(fixture, prepared.body.requestId))[0].receipt, receipt);
+  }
+});
+
+test("S2c S13 V1 chart attachment and series insertion reject current text or boolean metrics; numeric and null-sidecar legacy paths succeed", async () => {
+  const fixture = await s2aFixture("s2c-numeric-chart-guard");
+  const sidecar = { schemaVersion: 1, chartComposition: "athletes-v1", chartInteractions: { tooltip: { mode: "exact" } } };
+  let chartIndex = 0;
+  async function chart(presentation) {
+    const created = await makeWidgetHttp(fixture.coachCookie, {
+      ...fixture.dashboard, revision: await freshRevision(fixture.coachCookie, fixture.dashboard.id),
+    }, { widgetType: "line_chart", groupBy: "day", y: chartIndex++ * 5, ...(presentation ? { presentation: { mode: "replace", value: presentation } } : {}) });
+    return s2aStored(created.widgetId);
+  }
+  async function add(widgetId, binding) {
+    const current = await s2aStored(widgetId);
+    return api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${widgetId}/series`, {
+      method: "POST", cookie: fixture.coachCookie,
+      body: { expectedWidgetRevision: current.revision, seriesOrder: 0, dataScopeLevel: "session", analyticalAggregation: "last", ...binding },
+    });
+  }
+  for (const valueType of ["text", "boolean", "numeric"]) {
+    const definition = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, valueType, dailyAggregationMethod: "last", scopeLevels: ["session"] });
+    const legacy = await chart(null);
+    const legacyAdded = await add(legacy.id, { metricDefinitionId: definition.metricDefinitionId });
+    assert.equal(legacyAdded.status, 201, JSON.stringify({ valueType, response: legacyAdded.body }));
+    const legacyStored = await s2aStored(legacy.id);
+    assert.equal(legacyStored.presentation_config, null);
+    assert.equal(legacyStored.series[0].metric_definition_id, definition.metricDefinitionId);
+    const beforeAttachment = await s2bDatabaseState();
+    const attached = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${legacy.id}`, {
+      method: "PATCH", cookie: fixture.coachCookie,
+      body: { expectedWidgetRevision: legacyStored.revision, presentation: { mode: "replace", value: sidecar } },
+    });
+    if (valueType === "numeric") {
+      assert.equal(attached.status, 200, JSON.stringify(attached.body));
+      assert.deepEqual((await s2aStored(legacy.id)).presentation_config, sidecar);
+    } else {
+      assert.deepEqual(attached, { status: 400, body: { error: "invalidRequest" } });
+      await assert.rejects(() => query("select * from training_load.update_widget_content_with_presentation($1,$2,null,null,null,null,null,null,false,'replace',$3::jsonb)", [legacy.id, legacyStored.revision, JSON.stringify(sidecar)]), error => error.code === "S2C02" && /numericChartRequired/.test(error.message));
+      assert.deepEqual(await s2bDatabaseState(), beforeAttachment);
+    }
+    const known = await chart(sidecar);
+    const beforeInsertion = await s2bDatabaseState();
+    const inserted = await add(known.id, { metricDefinitionId: definition.metricDefinitionId });
+    if (valueType === "numeric") {
+      assert.equal(inserted.status, 201, JSON.stringify(inserted.body));
+      assert.equal((await s2aStored(known.id)).series[0].metric_definition_id, definition.metricDefinitionId);
+    } else {
+      assert.deepEqual(inserted, { status: 400, body: { error: "invalidRequest" } });
+      assert.deepEqual(await s2bDatabaseState(), beforeInsertion);
+      assert.deepEqual((await s2aStored(known.id)).series, []);
+    }
+  }
+  const builtin = await chart(sidecar);
+  const beforeBuiltin = await s2bDatabaseState();
+  const textBuiltin = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${builtin.id}/series`, {
+    method: "POST", cookie: fixture.coachCookie,
+    body: { expectedWidgetRevision: builtin.revision, seriesOrder: 0, builtInSeriesKey: "last_session_date", dataScopeLevel: "day", analyticalAggregation: "last" },
+  });
+  assert.deepEqual(textBuiltin, { status: 400, body: { error: "invalidRequest" } });
+  assert.deepEqual(await s2bDatabaseState(), beforeBuiltin);
+});
+
+test("S2c S13 the series-update binding guard rejects text and boolean under V1 charts while null-sidecar legacy resolution remains supported", async () => {
+  const fixture = await s2aFixture("s2c-resolve-chart-guard");
+  const sidecar = { schemaVersion: 1, chartInteractions: { tooltip: { mode: "exact" } } };
+  const numericSource = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, dailyAggregationMethod: "last", scopeLevels: ["session"] });
+  let chartIndex = 0;
+  for (const valueType of ["text", "boolean", "numeric"]) {
+    const definition = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, valueType, dailyAggregationMethod: "last", scopeLevels: ["session"] });
+    const known = await makeWidgetHttp(fixture.coachCookie, {
+      ...fixture.dashboard, revision: await freshRevision(fixture.coachCookie, fixture.dashboard.id),
+    }, { widgetType: "line_chart", groupBy: "day", y: chartIndex++ * 5, presentation: { mode: "replace", value: sidecar } });
+    const knownWidget = await s2aStored(known.widgetId);
+    const numericAdded = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${known.widgetId}/series`, {
+      method: "POST", cookie: fixture.coachCookie,
+      body: { expectedWidgetRevision: knownWidget.revision, seriesOrder: 0, metricDefinitionId: numericSource.metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "last" },
+    });
+    assert.equal(numericAdded.status, 201, JSON.stringify(numericAdded.body));
+    const numericWidget = await s2aStored(known.widgetId);
+    const beforeBinding = await s2bDatabaseState();
+    const rebind = () => query("update training_load.dashboard_widget_series set metric_definition_id=$2, resolution_status='resolved' where id=$1", [numericWidget.series[0].id, definition.metricDefinitionId]);
+    if (valueType === "numeric") {
+      await rebind();
+      assert.equal((await s2aStored(known.widgetId)).series[0].metric_definition_id, definition.metricDefinitionId);
+    } else {
+      await assert.rejects(rebind, error => error.code === "S2C02" && /numericChartRequired/.test(error.message));
+      assert.deepEqual(await s2bDatabaseState(), beforeBinding);
+    }
+    const created = await makeWidgetHttp(fixture.coachCookie, {
+      ...fixture.dashboard, revision: await freshRevision(fixture.coachCookie, fixture.dashboard.id),
+    }, { widgetType: "line_chart", groupBy: "day", y: chartIndex++ * 5 });
+    const added = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${created.widgetId}/series`, {
+      method: "POST", cookie: fixture.coachCookie,
+      body: { expectedWidgetRevision: 1, seriesOrder: 0, templateMetricKeyHints: [{ key: `unresolved-${uid()}` }], dataScopeLevel: "session", analyticalAggregation: "last" },
+    });
+    assert.equal(added.status, 201, JSON.stringify(added.body));
+    const unresolved = await s2aStored(created.widgetId);
+    assert.equal(unresolved.series[0].resolution_status, "unresolved");
+    assert.equal(unresolved.presentation_config, null);
+    const resolved = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${created.widgetId}/series/${unresolved.series[0].id}/resolve`, {
+      method: "POST", cookie: fixture.coachCookie, body: { expectedWidgetRevision: unresolved.revision, metricDefinitionId: definition.metricDefinitionId },
+    });
+    assert.equal(resolved.status, 200, JSON.stringify(resolved.body));
+    const stored = await s2aStored(created.widgetId);
+    assert.equal(stored.series[0].resolution_status, "resolved");
+    assert.equal(stored.series[0].metric_definition_id, definition.metricDefinitionId);
+    assert.equal(stored.presentation_config, null);
+  }
+});
+
+for (const candidateCount of [0, 2]) {
+  test(`S2c P2 V1 chart clone with ${candidateCount} candidates preserves its placeholder and sidecar; repair accepts numeric and rejects text/boolean`, async () => {
+    const { adminId, adminCookie } = await makePlatformAdmin(`s2c-p2-${candidateCount}`);
+    const { clubId, coachId, coachCookie } = await makeClubCoach(`s2c-p2-target-${candidateCount}`);
+    const key = `s2c-p2-${uid()}`;
+    const sourceMetricId = (await query("insert into training_load.metric_definitions (key,label,owner_scope,state,created_by_user_id) values ($1,'Numeric source','system','active',$2) returning id", [key, adminId])).rows[0].id;
+    const sourceVersionId = (await query("insert into training_load.metric_definition_versions (metric_definition_id,version_number,unit,value_type,daily_aggregation_method,created_by_user_id) values ($1,1,'bpm','numeric','last',$2) returning id", [sourceMetricId, adminId])).rows[0].id;
+    await query("update training_load.metric_definitions set current_version_id=$1 where id=$2", [sourceVersionId, sourceMetricId]);
+    const template = await makeDashboardHttp(adminCookie, { ownerScope: "system" });
+    const created = await makeWidgetHttp(adminCookie, template, { widgetType: "line_chart", groupBy: "day" });
+    const added = await api(`/api/training-load/dashboards/${template.id}/widgets/${created.widgetId}/series`, {
+      method: "POST", cookie: adminCookie,
+      body: { expectedWidgetRevision: 1, seriesOrder: 0, metricDefinitionId: sourceMetricId, dataScopeLevel: "session", analyticalAggregation: "last" },
+    });
+    assert.equal(added.status, 201, JSON.stringify(added.body));
+    const sidecar = { schemaVersion: 1, chartComposition: "athletes-v1", chartInteractions: { tooltip: { mode: "exact" }, legend: { toggle: true }, zoom: { mode: "local", applyPeriodAction: true }, pointSelection: { mode: "details" }, yAxis: { mode: "fixed", min: -5, max: 100 } } };
+    const sourceBefore = await s2aStored(created.widgetId);
+    const attached = await api(`/api/training-load/dashboards/${template.id}/widgets/${created.widgetId}`, {
+      method: "PATCH", cookie: adminCookie,
+      body: { expectedWidgetRevision: sourceBefore.revision, presentation: { mode: "replace", value: sidecar } },
+    });
+    assert.equal(attached.status, 200, JSON.stringify(attached.body));
+    if (candidateCount === 0) await query("update training_load.metric_definitions set state='archived' where id=$1", [sourceMetricId]);
+    const numeric = await makeMetricDefinition({ clubId, adminId: coachId, key: candidateCount === 2 ? key : undefined, dailyAggregationMethod: "last", scopeLevels: ["session"] });
+    const source = await s2aStored(created.widgetId);
+    const cloned = await api(`/api/training-load/dashboards/${template.id}/clone`, {
+      method: "POST", cookie: coachCookie, body: { ownerScope: "club", ownerClubId: clubId },
+    });
+    assert.equal(cloned.status, 201, JSON.stringify(cloned.body));
+    const status = candidateCount === 0 ? "unresolved" : "ambiguous";
+    assert.deepEqual(cloned.body.cloneReport, [{ sourceSeriesId: source.series[0].id, resolution: status }]);
+    const dashboardId = cloned.body.dashboard.id;
+    const detail = await api(`/api/training-load/dashboards/${dashboardId}`, { cookie: coachCookie });
+    assert.equal(detail.status, 200, JSON.stringify(detail.body));
+    assert.equal(detail.body.widgets.length, 1);
+    const widget = detail.body.widgets[0];
+    assert.deepEqual(widget.presentation_config, sidecar);
+    assert.equal(widget.series.length, 1);
+    const series = widget.series[0];
+    assert.equal(series.resolution_status, status);
+    assert.equal(series.metric_definition_id, null);
+    assert.equal(series.built_in_series_key, null);
+    assert.deepEqual(series.template_metric_key_hints, source.series[0].template_metric_key_hints);
+    if (candidateCount === 0) assert.equal(series.template_resolution_candidates, null);
+    else assert.deepEqual([...series.template_resolution_candidates].sort(), [sourceMetricId, numeric.metricDefinitionId].sort());
+    const queried = await api(`/api/training-load/dashboards/${dashboardId}/query`, {
+      method: "POST", cookie: coachCookie, body: { dateFrom: "2026-01-01", dateTo: "2026-01-02" },
+    });
+    assert.equal(queried.status, 200, JSON.stringify(queried.body));
+    assert.equal(queried.body.widgets[0].series[0].status, status);
+    const resolve = metricDefinitionId => api(`/api/training-load/dashboards/${dashboardId}/widgets/${widget.id}/series/${series.id}/resolve`, {
+      method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: widget.revision, metricDefinitionId },
+    });
+    for (const valueType of ["text", "boolean"]) {
+      const invalid = await makeMetricDefinition({ clubId, adminId: coachId, valueType, dailyAggregationMethod: "last", scopeLevels: ["session"] });
+      const before = await s2aState(dashboardId);
+      assert.deepEqual(await resolve(invalid.metricDefinitionId), { status: 400, body: { error: "invalidRequest" } });
+      assert.deepEqual(await s2aState(dashboardId), before, `${valueType} repair must preserve the placeholder, candidates, presentation and revisions`);
+      await s2aDbReject(dashboardId, () => query("select * from training_load.resolve_series_binding($1,$2,$3,$4)", [series.id, widget.id, widget.revision, invalid.metricDefinitionId]), "S2C02", /numericChartRequired/);
+    }
+    const repaired = await resolve(numeric.metricDefinitionId);
+    assert.equal(repaired.status, 200, JSON.stringify(repaired.body));
+    const saved = await s2aStored(widget.id);
+    assert.deepEqual(saved.presentation_config, sidecar);
+    assert.equal(saved.series[0].id, series.id);
+    assert.equal(saved.series[0].resolution_status, "resolved");
+    assert.equal(saved.series[0].metric_definition_id, numeric.metricDefinitionId);
+    assert.equal(saved.series[0].template_resolution_candidates, null);
+    assert.deepEqual(saved.series[0].template_metric_key_hints, series.template_metric_key_hints);
+    assert.ok(saved.revision > widget.revision);
+    assert.equal(repaired.body.widgetRevision, saved.revision);
+    assert.deepEqual(await s2aStored(source.id), source);
+  });
+}
+
+test("S2c S13 failure at final presentation attachment restores the original opaque chart, binding, revisions and receipts", async testContext => {
+  const fixture = await s2aFixture("s2c-final-attachment-rollback");
+  const harness = await s2cHttpHarness(testContext);
+  const originalMetric = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, dailyAggregationMethod: "last", scopeLevels: ["session"] });
+  const previewMetric = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, dailyAggregationMethod: "last", scopeLevels: ["session"] });
+  const textMetric = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, valueType: "text", dailyAggregationMethod: "last", scopeLevels: ["session"] });
+  const draft = s2aDraft({ kind: "metric", metricDefinitionId: originalMetric.metricDefinitionId }, { type: "line_chart", dataScopeLevel: "session", analyticalAggregation: "last" });
+  const originalSave = await harness.preview(fixture, s2bEnvelope(draft));
+  const originalReceipt = s2cReceipt(await harness.save(fixture, originalSave.body), "created");
+  const opaque = { schemaVersion: 42, futureChart: { retained: ["exact", null, 17] } };
+  await query("update training_load.dashboard_widgets set presentation_config=$2::jsonb where id=$1", [originalReceipt.widgetId, JSON.stringify(opaque)]);
+  const original = await s2aStored(originalReceipt.widgetId);
+  const sidecar = { schemaVersion: 1, chartComposition: "athletes-v1", chartInteractions: { tooltip: { mode: "exact" } } };
+  const changedDraft = s2aUpdateDraft({
+    ...draft, draftVersion: 2, title: "Rebound chart", metricRef: { kind: "metric", metricDefinitionId: previewMetric.metricDefinitionId },
+    view: { type: "line_chart", groupBy: "week", dataScopeLevel: "session", analyticalAggregation: "last" },
+    presentation: { mode: "replace", value: sidecar },
+  });
+  const prepared = await harness.preview(fixture, s2bEnvelope(changedDraft, { editTarget: { widgetId: original.id, expectedWidgetRevision: original.revision } }));
+  const finalAttachmentFailure = structuredClone(prepared.response.normalizedWidget);
+  finalAttachmentFailure.series[0].metric_definition_id = textMetric.metricDefinitionId;
+  assert.equal(finalAttachmentFailure.series[0].analytical_aggregation, "last");
+  assert.equal(finalAttachmentFailure.series[0].source_policy, "all_with_conflicts");
+  const before = await s2bDatabaseState();
+  const originalLedger = await s2cLedger(fixture, originalSave.body.requestId);
+  const proof = await newClient();
+  try {
+    await proof.client.query("begin");
+    const withoutSidecar = structuredClone(finalAttachmentFailure);
+    withoutSidecar.presentation_config = null;
+    const result = await s2cSqlSave(fixture, prepared, {
+      widget: withoutSidecar, widgetId: original.id, expectedRevision: original.revision,
+    }, proof.client.query.bind(proof.client));
+    assert.equal(result.rows[0].receipt.operation, "updated");
+    const intermediate = (await proof.client.query(`select widget.presentation_config, widget.group_by, series.metric_definition_id,
+      series.analytical_aggregation from training_load.dashboard_widgets widget
+      join training_load.dashboard_widget_series series on series.widget_id=widget.id where widget.id=$1`, [original.id])).rows;
+    assert.deepEqual(intermediate, [{ presentation_config: null, group_by: "week", metric_definition_id: textMetric.metricDefinitionId, analytical_aggregation: "last" }]);
+  } finally {
+    await proof.client.query("rollback");
+    await proof.client.end();
+  }
+  assert.deepEqual(await s2bDatabaseState(), before, "the valid binding probe must leave no committed changes");
+  await assert.rejects(() => s2cSqlSave(fixture, prepared, {
+    widget: finalAttachmentFailure, widgetId: original.id, expectedRevision: original.revision,
+  }), error => error.code === "S2C02" && error.message === "numericChartRequired"
+    && /update training_load\.dashboard_widgets\s+set presentation_config\s*=\s*desired_widget\.presentation_config/i.test(error.where ?? ""));
+  assert.deepEqual(await s2bDatabaseState(), before);
+  assert.deepEqual(await s2aStored(original.id), original);
+  assert.deepEqual(await s2cLedger(fixture, prepared.body.requestId), []);
+  assert.deepEqual(await s2cLedger(fixture, originalSave.body.requestId), originalLedger);
+  assert.deepEqual(originalLedger[0].receipt, originalReceipt);
+});
+
+test("S2c S13 a legacy text metric chart with a null sidecar atomically becomes a numeric chart with V1 presentation", async testContext => {
+  const fixture = await s2aFixture("s2c-text-to-numeric-transition");
+  const harness = await s2cHttpHarness(testContext);
+  const textMetric = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, valueType: "text", dailyAggregationMethod: "last", scopeLevels: ["session"] });
+  const numericMetric = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, dailyAggregationMethod: "last", scopeLevels: ["session"] });
+  const legacyWidget = await makeWidgetHttp(fixture.coachCookie, fixture.dashboard, { widgetType: "line_chart", groupBy: "day", title: "Legacy text chart" });
+  const added = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${legacyWidget.widgetId}/series`, {
+    method: "POST", cookie: fixture.coachCookie,
+    body: { expectedWidgetRevision: 1, seriesOrder: 0, metricDefinitionId: textMetric.metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "last" },
+  });
+  assert.equal(added.status, 201, JSON.stringify(added.body));
+  const legacy = await s2aStored(legacyWidget.widgetId);
+  assert.equal(legacy.presentation_config, null);
+  assert.equal(legacy.series[0].metric_definition_id, textMetric.metricDefinitionId);
+  const dashboardBefore = (await s2aState(fixture.dashboard.id)).dashboard;
+  const sidecar = { schemaVersion: 1, chartComposition: "athletes-v1", chartInteractions: { tooltip: { mode: "exact" }, zoom: { mode: "local", applyPeriodAction: true } } };
+  const draft = s2aUpdateDraft(s2aDraft({ kind: "metric", metricDefinitionId: numericMetric.metricDefinitionId }, { type: "line_chart", groupBy: "week", dataScopeLevel: "session", analyticalAggregation: "avg" }));
+  draft.title = "Numeric chart with presentation";
+  draft.presentation = { mode: "replace", value: sidecar };
+  const prepared = await harness.preview(fixture, s2bEnvelope(draft, { editTarget: { widgetId: legacy.id, expectedWidgetRevision: legacy.revision } }));
+  const response = await harness.save(fixture, prepared.body, legacy.id);
+  const receipt = s2cReceipt(response, "updated");
+  const saved = await s2aStored(legacy.id);
+  assert.equal(saved.id, legacy.id);
+  assert.equal(saved.widget_type, "line_chart");
+  assert.equal(saved.group_by, "week");
+  assert.equal(saved.title, draft.title);
+  assert.deepEqual(saved.presentation_config, sidecar);
+  assert.equal(saved.series.length, 1);
+  assert.equal(saved.series[0].metric_definition_id, numericMetric.metricDefinitionId);
+  assert.equal(saved.series[0].built_in_series_key, null);
+  assert.equal(saved.series[0].analytical_aggregation, "avg");
+  assert.equal(saved.series[0].resolution_status, "resolved");
+  assert.notEqual(saved.series[0].id, legacy.series[0].id);
+  assert.equal((await query("select id from training_load.dashboard_widget_series where id=$1", [legacy.series[0].id])).rowCount, 0);
+  for (const field of ["x", "y", "width", "height", "widget_order", "mobile_order"]) assert.equal(saved[field], legacy[field], field);
+  assert.ok(saved.revision > legacy.revision);
+  assert.equal(receipt.widgetRevision, saved.revision);
+  assert.equal(receipt.dashboardRevision, dashboardBefore.revision);
+  assert.equal(receipt.seriesId, saved.series[0].id);
+  assert.deepEqual(receipt.idMapping.series, { from: prepared.response.normalizedWidget.series[0].id, to: saved.series[0].id });
+  assert.deepEqual((await s2cLedger(fixture, prepared.body.requestId))[0].receipt, receipt);
+  const beforeReplay = await s2bDatabaseState();
+  assert.deepEqual(s2cReceipt(await harness.save(fixture, prepared.body, saved.id), "updated"), receipt);
+  assert.deepEqual(await s2bDatabaseState(), beforeReplay);
 });

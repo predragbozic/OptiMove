@@ -5,7 +5,7 @@ import { canManageDashboardRow, dataWorkspaceMatches, dataWorkspaceForActiveWork
 import { isUuid } from './schema.js';
 import { previewError } from './previewTransaction.js';
 
-export async function authorizePreviewTarget(queryRunner, req, dashboardId) {
+export async function authorizePreviewTarget(queryRunner, req, dashboardId, { requireWritable = true } = {}) {
   if (!isUuid(req?.user?.id)) throw previewError('notFound', 404);
   let user;
   if (req.sessionToken) {
@@ -22,8 +22,8 @@ export async function authorizePreviewTarget(queryRunner, req, dashboardId) {
   if (!isUuid(dashboardId)) throw previewError('notFound', 404);
   const dashboard = (await queryRunner('select * from training_load.dashboards where id=$1', [dashboardId])).rows[0];
   if (!dashboard || !canManageDashboardRow(serverReq, dashboard) || !dataWorkspaceMatches(workspace, dashboard)) throw previewError('notFound', 404);
-  if (dashboard.status !== 'active') throw previewError('dashboardArchived', 409);
-  if (dashboard.is_template || dashboard.data_workspace_type == null) throw previewError('templateRequiresClone', 409);
+  if (requireWritable && dashboard.status !== 'active') throw previewError('dashboardArchived', 409);
+  if (requireWritable && (dashboard.is_template || dashboard.data_workspace_type == null)) throw previewError('templateRequiresClone', 409);
   return { req: serverReq, dashboard, workspace };
 }
 
