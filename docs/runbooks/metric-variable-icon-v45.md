@@ -41,7 +41,7 @@ The same day as the merge and deploy:
    - block 3 shows that the two functions, the two triggers and the five checks v45 changes are v38's, every trigger of
      the three tables enabled;
    - block 4 shows no v45 object;
-   - block 5 shows the migrator's role owns the three tables;
+   - block 5 shows the migrator's role owns the three tables and the two functions;
    - block 6: no row outside v38's kinds; record `change_rows` and `request_rows` (the post-check's baseline) and the
      icon counts (information only);
    - block 7 shows no actor default;
@@ -72,7 +72,7 @@ this preflight the same day.
    - block 4 shows the five checks with the icon;
    - block 5: `change_rows` and `request_rows` equal to or above preflight block 6, `unpaired_icon_rows = 0`,
      `icon_changes = icon_requests` (both `0` before anyone used the route);
-   - block 6 shows no actor default.
+   - block 6 shows no actor default and no disabled trigger of the three tables.
 
 ## If v45 refuses at deploy
 

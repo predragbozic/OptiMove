@@ -623,7 +623,12 @@ test("7. the database guards, by direct SQL: an icon UPDATE without an acting us
     iconSet("/assets/x.svg"), iconSet("icon:Run"), iconSet("icon:"), iconSet("icon:run--x"), `icon_url = 'icon:${a} '`, iconSet(`icon:${"a".repeat(65)}`)]) {
     refusedWith(await tx(W.caA.id, (c) => rawChange(c, { ...clubAdmin, operation: "variable_icon", set })), "23514", KIND_SHAPE);
   }
-  // The legitimate raw write, and the kind matching the operation.
+  // The legitimate raw write (69 characters, the bound itself, are admitted),
+  // and the kind matching the operation.
+  okTx(await tx(W.caA.id, async (c) => {
+    await rawChange(c, { ...clubAdmin, operation: "variable_icon", set: iconSet(`icon:${"a".repeat(64)}`) });
+    throw Object.assign(new Error("roll back the probe"), { probe: true });
+  }).then((res) => (res.error?.probe ? { ok: true } : res)));
   okTx(await tx(W.caA.id, (c) => rawChange(c, { ...clubAdmin, operation: "variable_icon", set: iconSet(`icon:${a}`) })));
   refusedWith(await tx(W.caA.id, (c) => rawChange(c, { ...clubAdmin, operation: "variable_rename", set: iconSet(`icon:${b}`) })), "23514", MISMATCH);
   refusedWith(await tx(W.caA.id, (c) => rawChange(c, { ...clubAdmin, operation: "variable_icon", set: "label = 'renamed by icon'" })), "23514", MISMATCH);
