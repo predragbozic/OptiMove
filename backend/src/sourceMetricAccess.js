@@ -30,6 +30,15 @@ export const refusal = (status, code, message, details) => new SourceMetricMappi
 export const TRY_AGAIN_TEXT = "Another change is running. Nothing was changed; try again in a moment.";
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Phase 7b (J8, R3): activating, replacing and disabling a mapping version are
+// an active platform admin's, in the workspace of the mapping's owner (the
+// platform workspace for a system mapping, club X's for a club X mapping;
+// C60). A club admin reads its club's versions but gets the identical 404
+// here; the routes ask this before they look at the body.
+export function mayTransitionMappings(ctx) {
+  return ctx?.basis === "platform_admin" && (ctx.owner?.scope === "system" || ctx.owner?.scope === "club");
+}
+
 // Test seam (never set by the application): runs inside a write's transaction
 // right before the caller's right is checked again under FOR SHARE (after
 // every registry lock).

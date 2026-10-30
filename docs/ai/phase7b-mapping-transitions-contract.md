@@ -1,7 +1,8 @@
 # J8 — phase 7b: activating, disabling and replacing a mapping version (accepted ★★ contract, C104)
 
 **Accepted on 2026-10-29 (C104 of the discovery document): the owner accepted the contract as a whole and answered
-Q1, Q2, Q3, Q5, Q6 and Q7 as recommended. Not implemented yet: no code, and no migration file.** It is the contract of
+Q1, Q2, Q3, Q5, Q6 and Q7 as recommended. Implemented in the phase 7b pull request, not merged: section J8 "As built"
+of the discovery document.** It is the contract of
 phase 7b of `docs/ai/metrics-core-plan.md`
 (section 5, phase 7: "7b: T4 activate, disable and replacement"). It extends
 `docs/ai/gpexe-metric-variable-mapping-discovery.md` (the *discovery document*): sections D6, D10, J1, J2 and J5, and
@@ -16,7 +17,7 @@ the open points of section K. It follows phase 4's pattern (`docs/ai/v39-revisio
 | Verified against commit | `311d9e4` (merge of PR #264). Every file and line reference below is to that commit. |
 | Decides | The owner: the contract as a whole and Q1, Q2, Q3, Q5, Q6, Q7 (section 9), decided (C104). The *Rukovodilac*: R1–R8 (section 10), inside the plan, accepted as written. |
 | Accepted | 2026-10-29 (C104). The owner's words: „A1 DA, I SVE PO PREPORUKAMA” (owner turn `f505ec21`, 2026-10-29 13:32:57 UTC, in the *Rukovodilac*'s chat; the executor checked it in the transcript). The *Rukovodilac* reads „sve po preporukama” as the acceptance of the contract as a whole and of every question as recommended, as C103 did for J7; that reading is the *Rukovodilac*'s, not the owner's own words. |
-| Migration | **v43**, name `migrations_v2/202610301000_training_load_v43_source_metric_mapping_transitions.sql` (no other file carries the label v43 at `311d9e4`). The file is written in the implementation pull request; its merge needs the owner's order naming the pull request, the exact file name and its sha256, with the preflight the same day. |
+| Migration | **v43**, proposed as `migrations_v2/202610301000_training_load_v43_source_metric_mapping_transitions.sql` (no other file carries the label v43 at `311d9e4`); as built `migrations_v2/202610291430_training_load_v43_source_metric_mapping_transitions.sql`, named by the convention after the day it was written (the *Rukovodilac*'s order of 2026-10-29). The file is written in the implementation pull request; its merge needs the owner's order naming the pull request, the exact file name and its sha256, with the preflight the same day. |
 
 ---
 
@@ -386,6 +387,9 @@ after every earlier T8 trigger (`…_v35_actor_guard`, `…_v37_revision_guard`)
   - the rollback would restore both v35 bodies, and the post-check would compare their md5;
   - its tests: an archived club still refuses a mapping create, a version create, a submit and an activation by direct
     SQL, and v36 and v41 writes too.
+- **As built, the database's clock only:** G2 makes an application-supplied timestamp, or an explicit `performed_at`,
+  a refusal at the audit insert. Every writer uses `clock_timestamp()` and the column default; a backfill of historical
+  transition rows would switch the T8 triggers off for its own transaction, as for v35.
 - **What v43 does not change:**
   - v34's forward-only status machine: "a future back to draft needs a new rule" (K);
   - v34's checks of an activation;

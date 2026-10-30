@@ -1,12 +1,15 @@
 // Source metric mapping administration (M2): the read API of the source
 // metric catalog, the canonical targets and the unit conversions, and the
-// first writes of the mapping contract - a mapping identity (T3), a draft
-// mapping version (T4) and its submission (draft -> needs_review).
+// writes of the mapping contract - a mapping identity (T3), a draft mapping
+// version (T4), its submission (draft -> needs_review) and, from phase 7b,
+// its activation (needs_review -> active; with the replacement of the
+// mapping's active version in the same transaction, D6) and its disable.
 // Contract: docs/ai/gpexe-metric-variable-mapping-discovery.md, section C,
-// D2-D10, E, G and "M2 HTTP contract" (approved by the owner on 2026-10-13).
-// Schema: migration v34 (M1). Nothing here activates a version, writes a T5
-// activation or a T6 fact, confirms a unit or a meaning, retires or disables
-// anything, or talks to a source.
+// D2-D10, E, G and "M2 HTTP contract" (approved by the owner on 2026-10-13);
+// phase 7b: docs/ai/phase7b-mapping-transitions-contract.md (J8, C104).
+// Schema: migrations v34 (M1), v35 and v43. Nothing here writes a T5
+// activation or a T6 fact, confirms a unit or a meaning, retires a source
+// revision, or talks to a source.
 //
 // Ownership comes from the caller's active workspace only (owner decision
 // 2026-10-13): the platform workspace is the system scope (a platform admin
@@ -40,10 +43,10 @@ import { pool } from "./db.js";
 import { boundedText } from "./metricTextRules.js";
 import {
   SourceMetricMappingError, refusal, TRY_AGAIN_TEXT, UUID, resolveMappingAdminWith, rightsStillHold, ownerKeyOf, readableOwnerKeys,
-  setRightsHoldForTests,
+  setRightsHoldForTests, mayTransitionMappings,
 } from "./sourceMetricAccess.js";
 
-export { SourceMetricMappingError };
+export { SourceMetricMappingError, mayTransitionMappings };
 const { DatabaseError } = pg;
 // v35: the acting user of a write transaction, bound to that transaction's id
 // (a session-level setting or one from another transaction is refused).
@@ -312,6 +315,13 @@ const TRIGGER_REFUSALS = new Map([
   ["source_metric_mapping_versions: the canonical condition description has no supported shape", [409, "condition_description_unsupported"]],
   ["source_metric_mapping_versions: the source and canonical bounds are not equivalent", [409, "parameters_not_equivalent"]],
   ["source_metric_mapping_versions: the source and canonical thresholds are not equivalent", [409, "parameters_not_equivalent"]],
+  // v34's transition texts (lines 1176, 1181 and 1202), the backstop of
+  // phase 7b's own checks under the locks (J8, section 2). The one text of
+  // line 1181 covers an inactive definition and a moved current version; the
+  // service's own check tells target_not_active from canonical_version_changed.
+  ["source_metric_mapping_versions: the source revision must be active and verified", [409, "revision_not_verified"]],
+  ["source_metric_mapping_versions: the canonical definition must be active with the pinned version current", [409, "canonical_version_changed"]],
+  ["source_metric_mapping_versions: a mapping version with an open activation is not disabled", [409, "activation_open"]],
 ]);
 // The v34 actor refusals (migration lines 175, 190 and 1166), exactly.
 const ACTOR_REFUSALS = new Set([
@@ -332,6 +342,13 @@ const MESSAGES = {
   bound_conversion_unavailable: "No active unit conversion exists for the bound unit pair.",
   condition_description_unsupported: "The canonical condition description has no supported shape for this parameter kind.",
   parameters_not_equivalent: "The source parameters are not equivalent to the canonical parameters.",
+  version_not_submitted: "Only a submitted version (needs_review) is activated.",
+  active_version_changed: "The mapping's active version is not the one this request names; read the mapping again.",
+  version_status_changed: "The version is not in the status this request names; read the mapping again.",
+  revision_not_verified: "The source revision of this version is not active and verified.",
+  canonical_version_changed: "The canonical variable has a newer current version than this mapping version pins; create a new mapping version.",
+  source_metric_target_taken: "Another mapping of this owner already has an active version for this source field and parameters.",
+  activation_open: "The mapping version has an open activation; it is not changed before the activation ends.",
 };
 export function classifyDatabaseError(error) {
   if (error instanceof SourceMetricMappingError) return error;
@@ -352,6 +369,12 @@ export function classifyDatabaseError(error) {
   }
   if (code === "23505") {
     if (error.constraint === "source_metric_mappings_pair_key") return refusal(409, "mapping_exists", "A mapping of this source metric to this canonical definition already exists.");
+    // Phase 7b (J8, section 2): two mappings of one owner lock different T3
+    // rows, so the index decides between two activations of the same field and
+    // parameters; one active version per mapping cannot race behind the T3
+    // lock and is the backstop (its current state is read after the rollback).
+    if (error.constraint === "source_metric_mapping_versions_one_active_target_per_owner") return refusal(409, "source_metric_target_taken", MESSAGES.source_metric_target_taken);
+    if (error.constraint === "source_metric_mapping_versions_one_active_per_mapping") return refusal(409, "active_version_changed", MESSAGES.active_version_changed);
     if (error.constraint === "source_metric_mapping_versions_number_key" || error.constraint === "source_metric_audit_one_request_per_key") return refusal(409, "try_again", MESSAGES.try_again);
   }
   if (code === "23514" && !error.constraint && TRIGGER_REFUSALS.has(error.message)) {
@@ -551,14 +574,15 @@ export async function listConversions({ ctx }) {
 }
 
 // A mapping version as the API returns it: numbers as exact decimal text,
-// parameter numbers as text too; no acting user, no disable reason.
+// parameter numbers as text too; when it was submitted, activated and
+// disabled (R2), but no acting user and no disable reason (C63).
 const PARAMS_AS_TEXT = (column) => `(select coalesce(jsonb_object_agg(e.key, case jsonb_typeof(e.value) when 'number' then to_jsonb(trim_scale((e.value #>> '{}')::numeric)::text) else e.value end), '{}'::jsonb) from jsonb_each(${column}) e)`;
 const VERSION_COLUMNS = `v.id, v.mapping_id, v.version_number, v.status, v.source_metric_version_id, v.metric_definition_version_id,
   v.source_unit, v.target_unit, trim_scale(v.scale)::text as scale, trim_scale(v.scale_divisor)::text as scale_divisor, trim_scale(v."offset")::text as "offset",
   v.parameter_kind, ${PARAMS_AS_TEXT("v.source_parameters")} as source_parameters, ${PARAMS_AS_TEXT("v.canonical_parameters")} as canonical_parameters,
   trim_scale(v.parameter_scale)::text as parameter_scale, trim_scale(v.parameter_scale_divisor)::text as parameter_scale_divisor,
   trim_scale(v.parameter_offset)::text as parameter_offset, v.parameter_fingerprint, v.applies_to_session, v.applies_to_drill,
-  v.conversion_note, v.created_at, v.submitted_at`;
+  v.conversion_note, v.created_at, v.submitted_at, v.activated_at, v.disabled_at`;
 function publicVersion(v) {
   return {
     id: v.id, mappingId: v.mapping_id, versionNumber: v.version_number, status: v.status, sourceRevisionId: v.source_metric_version_id,
@@ -568,6 +592,7 @@ function publicVersion(v) {
     parameterScale: v.parameter_scale, parameterScaleDivisor: v.parameter_scale_divisor, parameterOffset: v.parameter_offset,
     parameterFingerprint: v.parameter_fingerprint, appliesToSession: v.applies_to_session, appliesToDrill: v.applies_to_drill,
     conversionNote: v.conversion_note, createdAt: v.created_at, submittedAt: v.submitted_at,
+    activatedAt: v.activated_at, disabledAt: v.disabled_at,
   };
 }
 // B3 (M3-0): the source field's own label (1-80 by its CHECK, D2) and the
@@ -701,9 +726,10 @@ export async function getMapping({ ctx, mappingId, query }) {
 // ---------------------------------------------------------------------------
 // Where a write's request record lives: M2's own writes use their T8 audit row;
 // the canonical-variable admin API (M3-0, v36) its metric_variable_requests row.
-// `find` answers (operation, request_hash) plus the ids the reread needs.
+// `find` answers (operation, request_hash) plus the ids the reread needs; the
+// operation_id lets a replacement's replay name the version it replaced (R7).
 const MAPPING_REQUESTS = Object.freeze({
-  find: `select action as operation, request_hash, mapping_id, mapping_version_id
+  find: `select action as operation, request_hash, operation_id, mapping_id, mapping_version_id
            from training_load.source_metric_audit where performed_by_user_id = $1 and request_key = $2`,
   exists: `select 1 from training_load.source_metric_audit where performed_by_user_id = $1 and request_key = $2`,
 });
@@ -835,12 +861,13 @@ async function requestIsCommitted(userId, requestKey, existsSql) {
   }
 }
 
-async function insertRequestRecord(client, { action, mappingId, mappingVersionId = null, fromStatus = null, toStatus = null, ctx, operationId, requestKey, requestHash }) {
+// The operation's keyed T8 row; `reason` for a disable and a replacement (R7).
+async function insertRequestRecord(client, { action, mappingId, mappingVersionId = null, fromStatus = null, toStatus = null, reason = null, ctx, operationId, requestKey, requestHash }) {
   await client.query(
     `insert into training_load.source_metric_audit
-       (action, mapping_id, mapping_version_id, from_status, to_status, performed_by_user_id, basis, operation_id, request_key, request_hash)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-    [action, mappingId, mappingVersionId, fromStatus, toStatus, ctx.userId, ctx.basis, operationId, requestKey, requestHash],
+       (action, mapping_id, mapping_version_id, from_status, to_status, reason, performed_by_user_id, basis, operation_id, request_key, request_hash)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+    [action, mappingId, mappingVersionId, fromStatus, toStatus, reason, ctx.userId, ctx.basis, operationId, requestKey, requestHash],
   );
 }
 
@@ -1159,6 +1186,283 @@ export async function submitVersion({ ctx, mappingId, versionId, body }) {
       );
       await insertRequestRecord(client, { action: "mapping_status", mappingId: mId, mappingVersionId: vId, fromStatus: "draft", toStatus: "needs_review", ctx, operationId, requestKey, requestHash });
       return { mapping_id: mId, mapping_version_id: vId };
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7b (J8, C104): activate, replace and disable a mapping version - an
+// active platform admin's only, in the workspace of the mapping's owner
+// (mayTransitionMappings; the routes ask it before the body). Each is one
+// bounded transaction of runWrite in J8's lock order (section 4): the
+// per-user lock and the request record; for an activation the active
+// unit_conversions rows of the value and bound pairs in one statement, in
+// ascending id, FOR SHARE (v34's own function, C52); T2a and T2b FOR SHARE;
+// T3 FOR NO KEY UPDATE (it serializes every transition of one mapping, a
+// submission and the revision lifecycle's pinned step); the T4 rows FOR
+// UPDATE in ascending id; the open T5 activations counted; for an activation
+// metric_definitions and its scope capability rows FOR SHARE; the acting
+// user's rows FOR SHARE. The states are compared under those locks, but a
+// state refusal is answered only after the right is confirmed again, so a
+// caller who lost it sees the identical 404, never `current`. Then the
+// writes - the status changes, then the T8 rows with the keyed one last - and
+// the bounded COMMIT. The disable reason is written and audited, never
+// returned (C63).
+// ---------------------------------------------------------------------------
+export const TRANSITION_REASON_MAX_LENGTH = 500;
+const EXPECTED_STATUSES = new Set(["draft", "needs_review", "active"]);
+const INVALID_REASON = "reason is one line of 1-500 visible characters without surrounding spaces.";
+
+// Test seam (never set by the application): "split_operation" writes the
+// replaced version's mapping_status row under another operation_id, so v43's
+// deferred G1 refuses the COMMIT (J8 section 8: a definite COMMIT refusal).
+let transitionAuditFault = null;
+export function setMappingTransitionAuditFaultForTests(kind) { transitionAuditFault = kind ?? null; }
+
+function transitionPath(mappingId, versionId) {
+  if (typeof mappingId !== "string" || !UUID.test(mappingId) || typeof versionId !== "string" || !UUID.test(versionId)) throw NOT_FOUND();
+  return { mId: mappingId.toLowerCase(), vId: versionId.toLowerCase() };
+}
+function transitionReason(value) {
+  if (!boundedText(value, TRANSITION_REASON_MAX_LENGTH)) throw refusal(400, "invalid_body", INVALID_REASON);
+  return value;
+}
+// The database's own text rule, once more inside the write (v40 makes the
+// JavaScript twin the same rule; the audit column's CHECK is the backstop).
+async function databaseTextAgrees(client, reason) {
+  if ((await client.query(`select training_load.source_metric_text_ok($1, $2) as ok`, [reason, TRANSITION_REASON_MAX_LENGTH])).rows[0].ok !== true) {
+    throw refusal(400, "invalid_body", INVALID_REASON);
+  }
+}
+
+// The version and its mapping, a plain read to learn the units and ids (every
+// column but the status is immutable, v34); the owner is the workspace's.
+async function transitionTarget(client, ctx, mId, vId) {
+  const v = (await client.query(
+    `select v.id, v.mapping_id, v.status, v.source_metric_definition_id, v.source_metric_version_id, v.metric_definition_id,
+            v.metric_definition_version_id, v.parameter_fingerprint, v.owner_key, v.source_unit, v.target_unit,
+            trim_scale(v.scale)::text as scale, trim_scale(v.scale_divisor)::text as scale_divisor, trim_scale(v."offset")::text as "offset",
+            v.parameter_kind, v.source_parameters ->> 'unit' as source_bound_unit, v.canonical_parameters ->> 'unit' as canonical_bound_unit,
+            trim_scale(v.parameter_scale)::text as parameter_scale, trim_scale(v.parameter_scale_divisor)::text as parameter_scale_divisor,
+            trim_scale(v.parameter_offset)::text as parameter_offset, v.applies_to_session, v.applies_to_drill
+       from training_load.source_metric_mapping_versions v
+       join training_load.source_metric_mappings m on m.id = v.mapping_id
+      where v.id = $1 and v.mapping_id = $2 and m.owner_key = $3`,
+    [vId, mId, ownerKeyOf(ctx)],
+  )).rows[0];
+  if (!v) throw NOT_FOUND();
+  return v;
+}
+
+// T2a and T2b of the version FOR SHARE (J8 section 4, step 3).
+async function lockRevision(client, v) {
+  await client.query(`select 1 from training_load.source_metric_definitions where id = $1 for share`, [v.source_metric_definition_id]);
+  return (await client.query(
+    `select state, evidence_status from training_load.source_metric_definition_versions where id = $1 for share`, [v.source_metric_version_id],
+  )).rows[0];
+}
+
+// The T4 rows FOR UPDATE in ascending id (step 5), and their open T5
+// activations, counted (step 6; no T5 writer exists before phase 7d).
+async function lockVersions(client, ids) {
+  const sorted = [...new Set(ids)].sort();
+  const locked = new Map((await client.query(
+    `select id, status from training_load.source_metric_mapping_versions where id = any($1::uuid[]) order by id for update`, [sorted],
+  )).rows.map((r) => [r.id, r.status]));
+  const open = (await client.query(
+    `select count(*)::int as n from training_load.source_metric_mapping_activations where mapping_version_id = any($1::uuid[]) and ended_at is null`, [sorted],
+  )).rows[0].n;
+  return { locked, open };
+}
+
+// C52: under the conversion locks taken first, the value pair and the bound
+// pair each hold exactly one active row with the version's own factors (the
+// identity needs none), as v34's activation checks them again.
+async function conversionsHold(client, v) {
+  const holds = async (from, to, scale, divisor, offset) => from === to || (await client.query(
+    `select count(*)::int as n from training_load.unit_conversions
+      where from_unit = $1 and to_unit = $2 and state = 'active'
+        and scale = $3::numeric and scale_divisor = $4::numeric and "offset" = $5::numeric`,
+    [from, to, scale, divisor, offset],
+  )).rows[0].n === 1;
+  if (!(await holds(v.source_unit, v.target_unit, v.scale, v.scale_divisor, v.offset))) return "conversion_unavailable";
+  if (v.parameter_kind !== "none"
+      && !(await holds(v.source_bound_unit, v.canonical_bound_unit, v.parameter_scale, v.parameter_scale_divisor, v.parameter_offset))) {
+    return "bound_conversion_unavailable";
+  }
+  return null;
+}
+
+async function activeVersionOf(executor, ctx, mappingId) {
+  return (await executor.query(
+    `select v.id from training_load.source_metric_mapping_versions v
+       join training_load.source_metric_mappings m on m.id = v.mapping_id
+      where v.mapping_id = $1 and v.status = 'active' and m.owner_key = $2`,
+    [mappingId, ownerKeyOf(ctx)],
+  )).rows[0]?.id ?? null;
+}
+
+// The answer of an activation (and its replay): the version and, for a
+// replacement, the version it replaced - the operation's own mapping_status
+// row active -> disabled of another version of the same mapping (R7).
+async function activationAnswer(executor, ctx, record) {
+  const version = await writableVersion(executor, ctx, record.mapping_id, record.mapping_version_id);
+  if (!version) return null;
+  const replaced = (await executor.query(
+    `select mapping_version_id from training_load.source_metric_audit
+      where operation_id = $1 and action = 'mapping_status' and from_status = 'active' and to_status = 'disabled'
+        and mapping_id = $2 and mapping_version_id <> $3`,
+    [record.operation_id, record.mapping_id, record.mapping_version_id],
+  )).rows[0];
+  return { version, replaced: replaced ? replaced.mapping_version_id : null };
+}
+
+// A1: POST /mappings/:mappingId/versions/:versionId/activate - needs_review ->
+// active. With expectedActiveVersionId (the active version the caller saw) and
+// a reason, the same transaction disables that version first (D6, Q3); with
+// null, a mapping that has an active version is active_version_changed, never
+// an automatic replacement.
+export async function activateVersion({ ctx, mappingId, versionId, body }) {
+  if (!mayTransitionMappings(ctx)) throw NOT_FOUND();
+  const { mId, vId } = transitionPath(mappingId, versionId);
+  plainObject(body, ["requestKey", "expectedActiveVersionId", "reason"], ["requestKey", "expectedActiveVersionId"]);
+  const requestKey = uuidField(body.requestKey);
+  const expectedActiveVersionId = body.expectedActiveVersionId === null ? null : uuidField(body.expectedActiveVersionId);
+  let reason = null;
+  if (expectedActiveVersionId === null) {
+    if ("reason" in body) throw refusal(400, "invalid_body", "reason is given only when the activation replaces the active version.");
+  } else {
+    if (!("reason" in body)) throw refusal(400, "invalid_body", "A replacement of the active version needs a reason.");
+    reason = transitionReason(body.reason);
+  }
+  const replacing = expectedActiveVersionId !== null;
+  const action = replacing ? "mapping_version_replaced" : "mapping_status";
+  const requestHash = hashOf({ route: "mapping_activate", mappingId: mId, versionId: vId, toStatus: "active", expectedActiveVersionId, reason });
+  return runWrite({
+    ctx, where: replacing ? "mapping_version_replace" : "mapping_version_activate", requestKey, requestHash, action,
+    reread: (executor, record) => activationAnswer(executor, ctx, record),
+    body: async (client, operationId) => {
+      const v = await transitionTarget(client, ctx, mId, vId);
+      // Step 2: the conversion rows, in one statement (v34's own function).
+      await client.query(`select training_load.source_metric_lock_conversions($1, $2, $3, $4)`,
+        [v.source_unit, v.target_unit, v.source_bound_unit, v.canonical_bound_unit]);
+      const revision = await lockRevision(client, v);
+      await client.query(`select 1 from training_load.source_metric_mappings where id = $1 for no key update`, [mId]);
+      const active = (await client.query(
+        `select id from training_load.source_metric_mapping_versions where mapping_id = $1 and status = 'active'`, [mId],
+      )).rows[0]?.id ?? null;
+      const { locked, open } = await lockVersions(client, active ? [vId, active] : [vId]);
+      const md = (await client.query(
+        `select state, current_version_id from training_load.metric_definitions where id = $1 for share`, [v.metric_definition_id],
+      )).rows[0];
+      const scopes = (await client.query(
+        `select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 order by scope_level for share`,
+        [v.metric_definition_id],
+      )).rows.map((r) => r.scope_level);
+      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      // The states, answered only now (after the right).
+      const status = locked.get(vId);
+      if (status !== "needs_review") throw refusal(409, "version_not_submitted", MESSAGES.version_not_submitted, { current: { status } });
+      if (active !== expectedActiveVersionId) throw refusal(409, "active_version_changed", MESSAGES.active_version_changed, { current: { activeVersionId: active } });
+      if (!revision || revision.state !== "active" || revision.evidence_status !== "verified") throw refusal(409, "revision_not_verified", MESSAGES.revision_not_verified);
+      if (!md || md.state !== "active") throw refusal(409, "target_not_active", MESSAGES.target_not_active);
+      if (md.current_version_id !== v.metric_definition_version_id) throw refusal(409, "canonical_version_changed", MESSAGES.canonical_version_changed);
+      const conversion = await conversionsHold(client, v);
+      if (conversion) throw refusal(409, conversion, MESSAGES[conversion]);
+      if ((v.applies_to_session && !scopes.includes("session")) || (v.applies_to_drill && !scopes.includes("component"))) {
+        throw refusal(409, "level_not_allowed", MESSAGES.level_not_allowed);
+      }
+      if (open > 0) throw refusal(409, "activation_open", MESSAGES.activation_open);
+      // Another mapping of the same owner with an active version of the same
+      // field and parameters (C33): a plain read; the index decides a race.
+      const taken = await client.query(
+        `select 1 from training_load.source_metric_mapping_versions
+          where status = 'active' and source_metric_definition_id = $1 and parameter_fingerprint = $2 and owner_key = $3 and mapping_id <> $4`,
+        [v.source_metric_definition_id, v.parameter_fingerprint, v.owner_key, mId],
+      );
+      if (taken.rowCount > 0) throw refusal(409, "source_metric_target_taken", MESSAGES.source_metric_target_taken);
+      if (replacing) await databaseTextAgrees(client, reason);
+      if (writeHold) await writeHold(client, replacing ? "mapping_version_replace" : "mapping_version_activate");
+      // The writes: N disabled first (one active version per mapping), then
+      // N+1 activated; N's audit row, then N+1's keyed row last.
+      if (replacing) {
+        await client.query(
+          `update training_load.source_metric_mapping_versions
+              set status = 'disabled', disabled_by_user_id = $2, disabled_at = clock_timestamp(), disabled_basis = $3, disable_reason = $4
+            where id = $1`,
+          [active, ctx.userId, ctx.basis, reason],
+        );
+      }
+      await client.query(
+        `update training_load.source_metric_mapping_versions
+            set status = 'active', activated_by_user_id = $2, activated_at = clock_timestamp(), activated_basis = $3
+          where id = $1`,
+        [vId, ctx.userId, ctx.basis],
+      );
+      if (replacing) {
+        // The replaced version's own row: no request key (one request record
+        // per operation, source_metric_audit_request_pair), its own insert.
+        await client.query(
+          `insert into training_load.source_metric_audit
+             (action, mapping_id, mapping_version_id, from_status, to_status, reason, performed_by_user_id, basis, operation_id)
+           values ('mapping_status', $1, $2, 'active', 'disabled', $3, $4, $5, $6)`,
+          [mId, active, reason, ctx.userId, ctx.basis, transitionAuditFault === "split_operation" ? crypto.randomUUID() : operationId],
+        );
+      }
+      await insertRequestRecord(client, { action, mappingId: mId, mappingVersionId: vId, fromStatus: "needs_review", toStatus: "active", reason, ctx, operationId, requestKey, requestHash });
+      return { mapping_id: mId, mapping_version_id: vId, operation_id: operationId };
+    },
+  }).catch(async (error) => {
+    // The one-active-per-mapping backstop: the current active version, read
+    // after the rollback (a version of this caller's own mapping).
+    if (error instanceof SourceMetricMappingError && error.code === "active_version_changed" && !error.details) {
+      const current = await boundedRead((client) => activeVersionOf(client, ctx, mId)).catch(() => undefined);
+      if (current !== undefined) error.details = { current: { activeVersionId: current } };
+    }
+    throw error;
+  });
+}
+
+// A2: POST /mappings/:mappingId/versions/:versionId/disable - draft,
+// needs_review or active -> disabled, with a reason. expectedStatus is the
+// status the caller saw, so a stale screen never disables a version that
+// moved meanwhile.
+export async function disableVersion({ ctx, mappingId, versionId, body }) {
+  if (!mayTransitionMappings(ctx)) throw NOT_FOUND();
+  const { mId, vId } = transitionPath(mappingId, versionId);
+  plainObject(body, ["requestKey", "expectedStatus", "reason"], ["requestKey", "expectedStatus", "reason"]);
+  const requestKey = uuidField(body.requestKey);
+  if (typeof body.expectedStatus !== "string" || !EXPECTED_STATUSES.has(body.expectedStatus)) {
+    throw refusal(400, "invalid_body", "expectedStatus is draft, needs_review or active: the status of the version this request disables.");
+  }
+  const expectedStatus = body.expectedStatus;
+  const reason = transitionReason(body.reason);
+  const requestHash = hashOf({ route: "mapping_disable", mappingId: mId, versionId: vId, toStatus: "disabled", expectedStatus, reason });
+  return runWrite({
+    ctx, where: "mapping_version_disable", requestKey, requestHash, action: "mapping_status",
+    reread: async (executor, record) => {
+      const version = await writableVersion(executor, ctx, record.mapping_id, record.mapping_version_id);
+      return version ? { version } : null;
+    },
+    body: async (client, operationId) => {
+      const v = await transitionTarget(client, ctx, mId, vId);
+      await lockRevision(client, v);
+      await client.query(`select 1 from training_load.source_metric_mappings where id = $1 for no key update`, [mId]);
+      const { locked, open } = await lockVersions(client, [vId]);
+      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      const status = locked.get(vId);
+      if (status !== expectedStatus) throw refusal(409, "version_status_changed", MESSAGES.version_status_changed, { current: { status } });
+      if (open > 0) throw refusal(409, "activation_open", MESSAGES.activation_open);
+      await databaseTextAgrees(client, reason);
+      if (writeHold) await writeHold(client, "mapping_version_disable");
+      await client.query(
+        `update training_load.source_metric_mapping_versions
+            set status = 'disabled', disabled_by_user_id = $2, disabled_at = clock_timestamp(), disabled_basis = $3, disable_reason = $4
+          where id = $1`,
+        [vId, ctx.userId, ctx.basis, reason],
+      );
+      await insertRequestRecord(client, { action: "mapping_status", mappingId: mId, mappingVersionId: vId, fromStatus: status, toStatus: "disabled", reason, ctx, operationId, requestKey, requestHash });
+      return { mapping_id: mId, mapping_version_id: vId, operation_id: operationId };
     },
   });
 }

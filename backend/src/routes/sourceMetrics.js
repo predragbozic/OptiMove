@@ -1,10 +1,12 @@
-// Source metric mapping administration (M2), the canonical-variable admin API
-// (M3-0, with R2's rename, archive and restore) and the source-field evidence
-// confirmation (M2b), mounted at /api/training-load/sources/metrics behind
-// requireAuth, and the source-field revision lifecycle (L1-L5). The contracts
-// are sections J1, J3, J3b and J4 of
-// docs/ai/gpexe-metric-variable-mapping-discovery.md and J5
-// (docs/ai/v39-revision-lifecycle-contract.md):
+// Source metric mapping administration (M2, with phase 7b's activation,
+// replacement and disable of a mapping version), the canonical-variable admin
+// API (M3-0, with R2's rename, archive and restore) and the source-field
+// evidence confirmation (M2b), mounted at /api/training-load/sources/metrics
+// behind requireAuth, and the source-field revision lifecycle (L1-L5). The
+// contracts are sections J1, J3, J3b and J4 of
+// docs/ai/gpexe-metric-variable-mapping-discovery.md, J5
+// (docs/ai/v39-revision-lifecycle-contract.md) and J8
+// (docs/ai/phase7b-mapping-transitions-contract.md):
 // a platform admin (platform workspace: the system scope; a club workspace:
 // that club's scope) or a club's own active admin in that club's workspace;
 // for the variable reads and the three R2 writes also an active coach of an
@@ -153,6 +155,28 @@ router.post("/mappings/:mappingId/versions/:versionId/submit", handle(async (req
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await service.submitVersion({ ctx, mappingId: req.params.mappingId, versionId: req.params.versionId, body: req.body }), 200);
+}));
+
+// Phase 7b (J8): A1 activates a submitted version (and, naming the active
+// version, replaces it in the same transaction); A2 disables a version. An
+// active platform admin in the workspace of the mapping's owner only - a club
+// admin and everyone else the identical 404, before the body is looked at;
+// then 415, a non-object body 400, a malformed id the identical 404, a wrong
+// body shape 400, then the write (200 { version[, replaced] }).
+router.post("/mappings/:mappingId/versions/:versionId/activate", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!service.mayTransitionMappings(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await service.activateVersion({ ctx, mappingId: req.params.mappingId, versionId: req.params.versionId, body: req.body }), 200);
+}));
+
+router.post("/mappings/:mappingId/versions/:versionId/disable", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!service.mayTransitionMappings(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await service.disableVersion({ ctx, mappingId: req.params.mappingId, versionId: req.params.versionId, body: req.body }), 200);
 }));
 
 // The canonical-variable admin API (M3-0, section J3): OptiMove's own
