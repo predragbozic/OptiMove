@@ -53,11 +53,18 @@
 
 export const MENU_CACHE_POLICIES = {
   weekly: {
-    label: "Calendar",
+    label: "Weekly plan (Athletes -> athlete; the athlete shell's Weekly plan)",
     policy: "cached",
     namespace: "weekly",
     rationale:
-      "Wired into view-cache.js in perf/calendar-and-menu-cache-policy. Context key is [...workspace parts, athleteId] - GET /api/athletes/:id/program-data?program=__weekly__ never takes a date/week/month/day parameter (the backend always returns every week for that athlete), so period/view selection is deliberately NOT part of the key - see loadWeekly's own comment in app.js.",
+      "Wired into view-cache.js in perf/calendar-and-menu-cache-policy. Context key is [...workspace parts, athleteId] - GET /api/athletes/:id/program-data?program=__weekly__ never takes a date/week/month/day parameter (the backend always returns every week for that athlete), so period/view selection is deliberately NOT part of the key - see loadWeekly's own comment in app.js. Since K1b the rail's Calendar item opens the central calendar instead (below); this view stays reachable from Athletes -> athlete, Coach Home and the central calendar's own drill-in (D5).",
+  },
+  "central-calendar": {
+    label: "Calendar (the central calendar, K1b)",
+    policy: "cached",
+    namespace: "central-calendar",
+    rationale:
+      "Wired into view-cache.js in K1b (docs/ai/central-calendar-k1b-plan.md). One GET /api/calendar per visible range; the context key is [...workspace parts, from, to, today] (central-calendar-data.js's centralCalendarContextKey) - the range is what reaches the server, and `today` is in the key because the server derives every status from it (a tab left open past midnight reads again). The Groups and Types chips, the view (month/week/day) and the week mode are client-side only and deliberately NOT in the key (decision A: the chips hide whole cards of the one unfiltered answer, a toggle never sends). The item panel's athlete names are a separate single-day read with include=athletes under the sibling namespace central-calendar-day, keyed [...workspace parts, date, today]. Default TTL; invalidated by invalidateCentralCalendarCache() at the Builder's two weekly-plan exits (builder-actions.js, the same sites that invalidate weekly and Coach Home), by app.js loadAthletes (the roster reload after every Settings mutation of athletes and memberships, as for Coach Home) and on a workspace switch (app.js onWorkspaceChanged). Writers this browser can also run but that do not invalidate it - a roster decision or an external-schedule change in Training Load, a Tests schedule - and writers of other browsers (an athlete's RPE, a GPEXE import) are covered by the 30 s TTL only: a re-entry inside it shows the previous counts, the background refresh after it corrects them.",
   },
   coaches: {
     label: "Coaches",

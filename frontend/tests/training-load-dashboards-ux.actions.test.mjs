@@ -1691,7 +1691,7 @@ test("H2 (owner review): every main sidebar/rail navigation and browser Back in 
   assert.match(slice("els.libraryTabs.forEach((button) => {", 200), /openLibraryTab\(button\.dataset\)/, "sidebar library tabs go through openLibraryTab");
   before(slice("function openLibraryTab("), "if (!confirmLeaveTrainingLoad(libraryTab)) return Promise.resolve(false);", "pushAppHistory();", "sidebar library tabs");
   before(slice("els.athleteTabs.forEach((button) => {"), "if (!confirmLeaveTrainingLoad(", "pushAppHistory();", "athlete tabs");
-  before(slice("function openWeeklyCalendarFromRail() {"), 'if (!confirmLeaveTrainingLoad("weekly")) return;', "pushAppHistory();", "rail calendar");
+  before(slice("function openCentralCalendarFromRail() {"), 'if (!confirmLeaveTrainingLoad("central-calendar")) return;', "pushAppHistory();", "rail calendar");
   before(slice("async function handleGlobalClick(event) {"), "if (!confirmLeaveTrainingLoad(nextTab)) return;", "pushAppHistory();", "global [data-tab]");
   before(slice('action.dataset.action === "brand-home"'), 'if (!confirmLeaveTrainingLoad("coach-home")) return;', "pushAppHistory();", "brand home");
   before(slice('els.athleteList.querySelectorAll(".athlete-button").forEach((button) => {'), 'if (!confirmLeaveTrainingLoad("weekly")) return;', 'state.activeTab = "weekly";', "rail athlete list");
