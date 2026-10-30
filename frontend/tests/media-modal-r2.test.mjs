@@ -644,3 +644,25 @@ test("10. styles.css: the dialog follows --media-aspect within the picture's bou
   assert.equal(/\.media-fullscreen-note/.test(css), false, "no rule is left for the note the R2 video no longer shows");
   assert.equal(/is-video:not\(\.is-frame-video\) \.media-fullscreen-button/.test(css), false, "nor for a button the phone's black box no longer holds");
 });
+
+// Owner, 2026-10-30: "Iz sekcije se ne moze uci u vezbu. Ako se pritisne na
+// vezbu ili sliku video se otvara u pozadini a ne ispred pa se ne vidi. To se
+// samo dešava kod specific programa." A Specific Program's sections are drawn
+// inside its overlay (program-view.js, renderProgramNodeOverlayHtml), which
+// stacked above the media viewer. jsdom computes no stacking, so the contract
+// is the stylesheet's: the viewer is the top layer of the app.
+test("11. styles.css: the media viewer opens in front of every overlay it is opened from (the Specific Program its sections are drawn in, its info popup, the Builder's modals, the exercise editor) and of every other layer", () => {
+  const plain = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const layers = [...plain.matchAll(/([^{}]+)\{[^{}]*?z-index:\s*(\d+)/g)].map((match) => ({ selector: match[1].trim(), z: Number(match[2]) }));
+  const zOf = (selector) => {
+    const found = layers.filter((layer) => layer.selector === selector);
+    assert.ok(found.length >= 1, `${selector} has a z-index`);
+    return Math.max(...found.map((layer) => layer.z));
+  };
+  const viewer = zOf(".media-modal");
+  for (const overlay of [".program-preview-overlay", ".program-info-overlay", ".builder-modal-overlay", ".exercise-editor-overlay", ".exercise-tag-overlay"]) {
+    assert.ok(viewer > zOf(overlay), `the viewer (${viewer}) is in front of ${overlay} (${zOf(overlay)})`);
+  }
+  const above = layers.filter((layer) => layer.selector !== ".media-modal" && layer.z >= viewer);
+  assert.deepEqual(above, [], "no other layer of the app is drawn over the viewer");
+});

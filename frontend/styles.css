@@ -6853,10 +6853,18 @@ body.specific-program-open {
   color: #fff;
 }
 
+/* z-index: 1400 - the media viewer is opened from inside other overlays and
+   must clear every one of them: the Specific Program / Template preview
+   (.program-preview-overlay, 1200; a Specific Program's sections are drawn
+   inside it), its info popup (.program-info-overlay, 1250), the Builder's
+   modals (.builder-modal-overlay, 1300) and the exercise editor (1000). At
+   1000 it opened behind the Specific Program, unseen ("video se otvara u
+   pozadini a ne ispred", 2026-10-30); a phone hid it only while the video
+   went to full screen by itself. Nothing opens over the viewer. */
 .media-modal {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 1400;
   display: grid;
   place-items: center;
   padding: 20px;
