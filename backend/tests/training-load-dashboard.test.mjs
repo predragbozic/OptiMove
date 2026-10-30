@@ -3819,3 +3819,672 @@ test("S2a component-only parity: absent/cleared activity compiles and queries on
   s2aIssue(fixture.compileSimpleDraft(foreignDraft, snapshot, context, stored), "notFound", "$.advancedFilter.componentId");
   assert.deepEqual(await s2aState(fixture.dashboard.id), beforeDenied);
 });
+
+async function s2bModules() {
+  const [expressModule, authModule, serviceModule, routerModule, admissionModule, tokenModule, queryModule] = await Promise.all([
+    import("express"), import("../src/auth.js"), import("../src/dashboardSimple/previewService.js"),
+    import("../src/dashboardSimple/previewRouter.js"), import("../src/dashboardSimple/previewAdmission.js"),
+    import("../src/dashboardSimple/previewTokens.js"), import("../src/trainingLoadDashboardQuery.js"),
+  ]);
+  return { express: expressModule.default, ...authModule, ...serviceModule, ...routerModule, ...admissionModule, ...tokenModule, ...queryModule };
+}
+
+function s2bEnvelope(draft = s2aDraft({ kind: "builtin", key: "rpe" }, { dataScopeLevel: "session", analyticalAggregation: "avg" }), overrides = {}) {
+  return {
+    contractVersion: 1, context: { kind: "legacyDashboard", period: s2aContext().period },
+    draftRef: { draftId: draft.draftId, draftVersion: draft.draftVersion }, draft, editTarget: null, ...overrides,
+  };
+}
+
+async function s2bHttpHarness(testContext, options = {}) {
+  const modules = await s2bModules();
+  assert.match(db.name, /^optimove_tests_tldash_primary_[a-f0-9]{12}$/);
+  const previewPool = new pg.Pool({ connectionString: db.url, max: 3 });
+  const observations = [], lifecycle = [], queryDashboardErrors = [];
+  const observedPool = {
+    async connect() {
+      const client = await previewPool.connect();
+      const backendPid = (await client.query("select pg_backend_pid() as pid")).rows[0].pid;
+      lifecycle.push({ kind: "checkout", backendPid });
+      return {
+        async query(sql, params) {
+          const result = await client.query(sql, params);
+          if (options.observe && /^\s*select\b/i.test(sql)) {
+            const state = (await client.query(`select current_database() as database_name, pg_backend_pid() as backend_pid,
+              current_setting('transaction_isolation') as isolation, current_setting('transaction_read_only') as read_only,
+              txid_current_snapshot()::text as snapshot`)).rows[0];
+            observations.push({ sql, ...state });
+          }
+          return result;
+        },
+        release(destroy) {
+          lifecycle.push({ kind: "release", backendPid, destroy: Boolean(destroy) });
+          client.release(destroy);
+        },
+      };
+    },
+  };
+  const coordinator = modules.createPreviewAdmissionCoordinator({ maxActiveDeployment: 1 });
+  const admission = modules.createPreviewAdmission({ coordinator, processId: `s2b-http-${uid()}`, poolMax: 3 });
+  const tokenService = modules.createPreviewTokenService({ keyId: `s2b-test-${uid()}`, key: crypto.randomBytes(32) });
+  const service = modules.createSimplePreviewService({
+    pool: observedPool,
+    queryDashboard: async (...args) => {
+      try { return await (options.queryDashboard ?? modules.queryDashboard)(...args); }
+      catch (error) { queryDashboardErrors.push(error); throw error; }
+    },
+    admission, tokenService,
+    activation: options.activation ?? { coordinatedAdmissionVerified: true, deploymentBudgetVerified: true },
+    transactionOptions: options.transactionOptions ?? {},
+  });
+  const app = modules.express();
+  app.use(modules.authMiddleware);
+  if (options.upstreamParser) app.use(modules.express.json({ limit: '128kb', verify: options.captureOriginalBytes ? modules.captureSimplePreviewRequestBytes : undefined }));
+  if (options.afterAuthentication) app.use((req, res, next) => Promise.resolve(options.afterAuthentication(req)).then(() => next(), next));
+  app.use("/api/training-load/dashboards/:dashboardId/simple-editor", modules.createSimplePreviewRouter({ service }));
+  const previewServer = http.createServer(app);
+  testContext.after(async () => {
+    previewServer.closeAllConnections();
+    await new Promise(resolve => previewServer.close(resolve));
+    await previewPool.end();
+  });
+  await new Promise(resolve => previewServer.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${previewServer.address().port}`;
+  function url(dashboardId, action) {
+    return `${origin}/api/training-load/dashboards/${dashboardId}/simple-editor/${action}`;
+  }
+  async function request(dashboardId, action, { cookie, body, signal, rawBody } = {}) {
+    const response = await fetch(url(dashboardId, action), {
+      method: action === "capabilities" ? "GET" : "POST", signal,
+      headers: { "Content-Type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
+      body: action === "capabilities" ? undefined : rawBody ?? JSON.stringify(body ?? s2bEnvelope()),
+    });
+    return {
+      status: response.status, body: await response.json(), headers: response.headers,
+      internalQueryErrors: queryDashboardErrors.map(error => ({ code: error.code, message: error.message, stack: error.stack })),
+    };
+  }
+  return { ...modules, service, admission, tokenService, previewPool, observations, lifecycle, queryDashboardErrors, request };
+}
+
+async function s2bDataFixture(label) {
+  const fixture = await s2aFixture(label);
+  const first = await makeAthleteInClub(fixture.clubId), second = await makeAthleteInClub(fixture.clubId);
+  const expectedRows = [];
+  for (const [athleteId, date, rpe] of [[first.athleteId, "2026-09-09", 6], [first.athleteId, "2026-09-10", 8], [second.athleteId, "2026-09-09", 9]]) {
+    const activity = await makeActivityWithEvent({ clubId: fixture.clubId, coachId: fixture.coachId, athleteId, date });
+    await makeRpeFeedback({ clubId: fixture.clubId, athleteId, activityParticipantId: activity.participantId, date, rpe });
+    expectedRows.push({ athleteId, bucketKey: date, unit: null, value: rpe, rawCount: 1 });
+  }
+  return { ...fixture, first, second, expectedRows };
+}
+
+function s2bRows(rows) {
+  return rows.map(row => [row.athleteId, row.bucketKey, row.unit, row.value, row.rawCount])
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+}
+
+function s2bAssertPreview(response) {
+  assert.equal(response.status, 200, JSON.stringify({ body: response.body, internalQueryErrors: response.internalQueryErrors }));
+  assert.equal(response.body.status, "valid", JSON.stringify(response.body));
+  assert.equal(response.body.widgetResult.series.length, 1);
+  assert.equal(response.body.widgetResult.series[0].status, "ok");
+  assert.equal(typeof response.body.previewToken, "string");
+  return response.body.widgetResult.series[0].data.current;
+}
+
+async function s2bDatabaseState() {
+  const tables = (await query(`select schemaname, tablename from pg_tables
+    where schemaname in ('public','training','training_load','plans') order by schemaname, tablename`)).rows;
+  const state = {};
+  for (const table of tables) {
+    const identifier = value => `"${value.replaceAll('"', '""')}"`;
+    const relation = `${identifier(table.schemaname)}.${identifier(table.tablename)}`;
+    state[relation] = (await query(`select count(*)::int as row_count,
+      md5(coalesce(string_agg(to_jsonb(record)::text, E'\n' order by to_jsonb(record)::text), '')) as digest from ${relation} record`)).rows[0];
+  }
+  return state;
+}
+
+async function s2bWaitForDatabaseState(predicate, description, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await predicate();
+    if (result) return result;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.fail(`Timed out waiting for ${description}`);
+}
+
+test("S2b P01/P09 real HTTP session authentication, fresh session recheck and disabled preview gate", async testContext => {
+  const fixture = await s2aFixture("s2b-auth");
+  const harness = await s2bHttpHarness(testContext, { activation: {} });
+  for (const cookie of [undefined, cookieFor(crypto.randomBytes(32).toString("hex"))]) {
+    const denied = await harness.request(fixture.dashboard.id, "capabilities", { cookie });
+    assert.equal(denied.status, 401);
+  }
+  const capabilities = await harness.request(fixture.dashboard.id, "capabilities", { cookie: fixture.coachCookie });
+  assert.equal(capabilities.status, 200, JSON.stringify(capabilities.body));
+  assert.equal(capabilities.body.capabilities.preview, false);
+  const disabled = await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie });
+  assert.deepEqual({ status: disabled.status, body: disabled.body }, { status: 503, body: { error: "previewUnavailable" } });
+  const validation = await harness.request(fixture.dashboard.id, "validate", { cookie: fixture.coachCookie });
+  assert.equal(validation.status, 200, JSON.stringify(validation.body));
+  assert.equal(validation.body.status, "valid", JSON.stringify(validation.body));
+  assert.equal(validation.body.previewToken, undefined);
+  let authenticatedUserId;
+  const revokingHarness = await s2bHttpHarness(testContext, {
+    afterAuthentication: async req => {
+      authenticatedUserId = req.user?.id;
+      await query("delete from public.auth_sessions where user_id=$1", [fixture.coachId]);
+    },
+  });
+  const revokedDuringRequest = await revokingHarness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie });
+  assert.equal(authenticatedUserId, fixture.coachId);
+  assert.deepEqual({ status: revokedDuringRequest.status, body: revokedDuringRequest.body }, { status: 404, body: { error: "notFound" } });
+  const revokedNextRequest = await harness.request(fixture.dashboard.id, "capabilities", { cookie: fixture.coachCookie });
+  assert.equal(revokedNextRequest.status, 401);
+});
+
+test("S2b P01 missing or revoked workspace requires explicit selection without fallback or preference writes", async testContext => {
+  const fixture = await s2aFixture("s2b-workspace");
+  const harness = await s2bHttpHarness(testContext);
+  await query("delete from public.user_workspace_preferences where user_id=$1", [fixture.coachId]);
+  for (const state of ["missing", "revoked"]) {
+    if (state === "revoked") {
+      await setActiveWorkspace(fixture.coachId, "club", fixture.clubId);
+      await query("update public.user_club_roles set is_active=false where user_id=$1 and club_id=$2", [fixture.coachId, fixture.clubId]);
+    }
+    const before = await s2bDatabaseState();
+    for (const action of ["capabilities", "validate", "preview"]) {
+      const response = await harness.request(fixture.dashboard.id, action, { cookie: fixture.coachCookie });
+      assert.deepEqual({ status: response.status, body: response.body }, { status: 409, body: { error: "workspaceSelectionRequired" } }, `${state}: ${action}`);
+    }
+    assert.deepEqual(await s2bDatabaseState(), before, `${state} workspace must not create or repair a preference or mutate any application row`);
+  }
+});
+
+test("S2b P01/P02 foreign and workspace-mismatched targets hide existence before draft validation", async testContext => {
+  const fixture = await s2aFixture("s2b-target");
+  const foreign = await s2aFixture("s2b-target-foreign");
+  const harness = await s2bHttpHarness(testContext);
+  const before = await s2bDatabaseState();
+  for (const dashboardId of [foreign.dashboard.id, crypto.randomUUID(), "invalid-dashboard-id"]) {
+    for (const action of ["validate", "preview"]) {
+      const response = await harness.request(dashboardId, action, { cookie: fixture.coachCookie, body: { draft: { secretProbe: true } } });
+      assert.deepEqual({ status: response.status, body: response.body }, { status: 404, body: { error: "notFound" } });
+    }
+  }
+  const malformedOwnDraft = await harness.request(fixture.dashboard.id, "validate", { cookie: fixture.coachCookie, body: {} });
+  assert.equal(malformedOwnDraft.status, 200);
+  assert.equal(malformedOwnDraft.body.status, "invalid");
+  assert.ok(malformedOwnDraft.body.issues.length > 0);
+  assert.deepEqual(await s2bDatabaseState(), before);
+  await grantClubAdmin(fixture.coachId, foreign.clubId);
+  await setActiveWorkspace(fixture.coachId, "club", foreign.clubId);
+  for (const action of ["capabilities", "validate", "preview"]) {
+    const mismatch = await harness.request(fixture.dashboard.id, action, { cookie: fixture.coachCookie, body: {} });
+    assert.deepEqual({ status: mismatch.status, body: mismatch.body }, { status: 404, body: { error: "notFound" } });
+  }
+});
+
+test("S2b P02/P03 preview equals a clean saved legacy projection, preserves IDs/multiplicity and writes no application rows; former members cannot broaden an empty selection", async testContext => {
+  const fixture = await s2bDataFixture("s2b-parity");
+  const envelope = s2bEnvelope();
+  const snapshot = await fixture.reader.load({ ...fixture.target, metricRef: envelope.draft.metricRef });
+  const compiled = fixture.compileSimpleDraft(envelope.draft, snapshot, s2aContext([fixture.first.athleteId, fixture.second.athleteId]));
+  const stored = await s2aLegacyProjection(fixture, compiled);
+  let engineCalls = 0;
+  const { queryDashboard } = await s2bModules();
+  const harness = await s2bHttpHarness(testContext, {
+    queryDashboard: async (...args) => { engineCalls += 1; return queryDashboard(...args); },
+  });
+  const before = await s2bDatabaseState();
+  const capabilities = await harness.request(fixture.dashboard.id, "capabilities", { cookie: fixture.coachCookie });
+  assert.equal(capabilities.body.capabilities.preview, true);
+  const validated = await harness.request(fixture.dashboard.id, "validate", { cookie: fixture.coachCookie, body: envelope });
+  assert.equal(validated.body.status, "valid", JSON.stringify(validated.body));
+  assert.equal(validated.body.previewToken, undefined);
+  const preview = await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie, body: envelope });
+  const rows = s2bAssertPreview(preview);
+  assert.deepEqual(s2bRows(rows), s2bRows(fixture.expectedRows));
+  assert.equal(preview.body.widgetResult.widgetId, compiled.widget.id);
+  assert.equal(preview.body.widgetResult.series[0].widgetId, compiled.widget.id);
+  assert.equal(preview.body.widgetResult.series[0].seriesId, compiled.widget.series[0].id);
+  const legacy = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/query`, {
+    method: "POST", cookie: fixture.coachCookie, body: { dateFrom: envelope.context.period.dateFrom, dateTo: envelope.context.period.dateTo },
+  });
+  assert.equal(legacy.status, 200, JSON.stringify(legacy.body));
+  assert.equal(legacy.body.widgets[0].widgetId, stored.id);
+  assert.equal(legacy.body.widgets[0].series[0].seriesId, stored.series[0].id);
+  const mappedLegacy = structuredClone(legacy.body.widgets[0]);
+  mappedLegacy.widgetId = compiled.widget.id;
+  mappedLegacy.series[0].widgetId = compiled.widget.id;
+  mappedLegacy.series[0].seriesId = compiled.widget.series[0].id;
+  assert.deepEqual({ ...mappedLegacy, series: mappedLegacy.series.map(series => ({ ...series, data: { ...series.data, current: s2bRows(series.data.current) } })) },
+    { ...preview.body.widgetResult, series: preview.body.widgetResult.series.map(series => ({ ...series, data: { ...series.data, current: s2bRows(series.data.current) } })) });
+  assert.deepEqual(await s2bDatabaseState(), before, "capabilities/validate/preview/legacy reads must preserve widgets, preferences, selections, sessions, metrics and existing ledgers");
+  await query("update public.athlete_memberships set status='inactive' where club_id=$1", [fixture.clubId]);
+  const afterRevocation = await s2bDatabaseState();
+  const callsBeforeEmptyPreview = engineCalls;
+  const empty = await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie, body: envelope });
+  assert.deepEqual(s2bAssertPreview(empty), []);
+  assert.deepEqual(empty.body.effectiveFilterSummary.athleteIds, []);
+  assert.ok(empty.body.warnings.some(warning => warning.code === "emptyPreview"));
+  assert.equal(engineCalls, callsBeforeEmptyPreview, "zero authorized athletes must bypass the legacy empty-array normalization");
+  assert.deepEqual(await s2bDatabaseState(), afterRevocation);
+});
+
+test("S2b P03/P06 one real repeatable-read read-only client spans authorization/catalog/facts and holds the old snapshot across a concurrent fact insert", async testContext => {
+  const fixture = await s2bDataFixture("s2b-snapshot");
+  const { queryDashboard } = await s2bModules();
+  let changed = false, injectedRunner;
+  const harness = await s2bHttpHarness(testContext, {
+    observe: true,
+    queryDashboard: async (workspace, widgets, period, options) => {
+      assert.equal(typeof options.queryRunner, "function");
+      injectedRunner = options.queryRunner;
+      if (!changed) {
+        changed = true;
+        const activity = await makeActivityWithEvent({ clubId: fixture.clubId, coachId: fixture.coachId, athleteId: fixture.second.athleteId, date: "2026-09-10" });
+        await makeRpeFeedback({ clubId: fixture.clubId, athleteId: fixture.second.athleteId, activityParticipantId: activity.participantId, date: "2026-09-10", rpe: 3 });
+      }
+      return queryDashboard(workspace, widgets, period, options);
+    },
+  });
+  const preview = await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie });
+  assert.deepEqual(s2bRows(s2bAssertPreview(preview)), s2bRows(fixture.expectedRows));
+  assert.equal(typeof injectedRunner, "function");
+  assert.ok(harness.observations.some(item => /auth_sessions/i.test(item.sql)));
+  assert.ok(harness.observations.some(item => /user_club_roles/i.test(item.sql)));
+  assert.ok(harness.observations.some(item => /user_workspace_preferences/i.test(item.sql)));
+  assert.ok(harness.observations.some(item => /dashboard_builtin_series/i.test(item.sql)));
+  assert.ok(harness.observations.some(item => /canonical/i.test(item.sql)), "the actual engine must read canonical facts through the injected runner");
+  assert.equal(new Set(harness.observations.map(item => item.backend_pid)).size, 1);
+  assert.equal(new Set(harness.observations.map(item => item.snapshot)).size, 1);
+  for (const observation of harness.observations) {
+    assert.equal(observation.database_name, db.name);
+    assert.equal(observation.isolation, "repeatable read");
+    assert.equal(observation.read_only, "on");
+  }
+  const freshExpected = [...fixture.expectedRows, { athleteId: fixture.second.athleteId, bucketKey: "2026-09-10", unit: null, value: 3, rawCount: 1 }];
+  const fresh = await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie });
+  assert.deepEqual(s2bRows(s2bAssertPreview(fresh)), s2bRows(freshExpected));
+});
+
+test("S2b P06 PostgreSQL itself refuses a sanctioned writer inside the preview transaction and a separate follow-up still succeeds", async testContext => {
+  const fixture = await s2bDataFixture("s2b-readonly");
+  const { queryDashboard } = await s2bModules();
+  let attemptWrite = true, databaseRejection;
+  const harness = await s2bHttpHarness(testContext, {
+    observe: true,
+    queryDashboard: async (workspace, widgets, period, options) => {
+      if (attemptWrite) {
+        attemptWrite = false;
+        try {
+          await options.queryRunner("select * from training_load.create_widget($1,$2,'table','Forbidden preview write',99,0::smallint,80::smallint,6::smallint,4::smallint,99)", [fixture.dashboard.id, fixture.dashboard.revision]);
+          assert.fail("PostgreSQL accepted a write in a preview transaction");
+        } catch (error) {
+          databaseRejection = error;
+          throw error;
+        }
+      }
+      return queryDashboard(workspace, widgets, period, options);
+    },
+  });
+  const before = await s2bDatabaseState();
+  const rejected = await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie });
+  assert.equal(databaseRejection?.code, "25006", "the assertion must reach PostgreSQL rather than only a JavaScript SQL guard");
+  assert.deepEqual({ status: rejected.status, body: rejected.body }, { status: 503, body: { error: "previewReadOnlyViolation" } });
+  assert.deepEqual(await s2bDatabaseState(), before);
+  const followUp = await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie });
+  assert.deepEqual(s2bRows(s2bAssertPreview(followUp)), s2bRows(fixture.expectedRows));
+  assert.deepEqual(await s2bDatabaseState(), before, "a failed read-only probe must not poison the subsequent preview or mutate state");
+});
+
+test("S2b P02/P03 stale edit revision rejects and component inherit uses the runtime component's real parent rather than the stored component's parent", async testContext => {
+  const fixture = await s2aFixture("s2b-component");
+  const { athleteId } = await makeAthleteInClub(fixture.clubId);
+  const connectionId = await makeSourceConnection(fixture.clubId);
+  const definition = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, scopeLevels: ["component"] });
+  const first = await makeComponentFixture({ ...fixture, athleteId, connectionId, date: "2026-09-09" });
+  const second = await makeComponentFixture({ ...fixture, athleteId, connectionId, date: "2026-09-10" });
+  for (const [component, value] of [[first, 10], [second, 20]]) await addMetricValue({ eventParticipantId: component.eventParticipantId, ...definition, value, segmentId: component.segmentAId });
+  const draft = s2aDraft({ kind: "metric", metricDefinitionId: definition.metricDefinitionId }, { type: "table", groupBy: "component", dataScopeLevel: "component", analyticalAggregation: "sum" });
+  draft.advancedFilter.component = { mode: "selected", id: first.componentAId };
+  const snapshot = await fixture.reader.load({ ...fixture.target, metricRef: draft.metricRef });
+  const compiled = fixture.compileSimpleDraft(draft, snapshot, {
+    ...s2aContext([athleteId]), componentActivityId: first.activityId,
+    authorizedFilterIds: { activityId: [first.activityId, second.activityId], componentId: [first.componentAId, second.componentAId] },
+  });
+  const stored = await s2aLegacyProjection(fixture, compiled);
+  const inherited = s2aUpdateDraft({ ...draft, advancedFilter: { activity: { mode: "inherit" }, component: { mode: "inherit" } } });
+  const envelope = s2bEnvelope(inherited, {
+    context: { kind: "legacyDashboard", period: s2aContext().period, runtimeFilter: { activityId: second.activityId, componentId: second.componentAId } },
+    editTarget: { widgetId: stored.id, expectedWidgetRevision: stored.revision },
+  });
+  const harness = await s2bHttpHarness(testContext);
+  const before = await s2bDatabaseState();
+  const response = await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie, body: envelope });
+  assert.deepEqual(s2bRows(s2bAssertPreview(response)), [[athleteId, second.componentAId, "bpm", 20, 1]]);
+  assert.equal(response.body.effectiveFilterSummary.componentId, second.componentAId);
+  assert.equal(response.body.effectiveFilterSummary.activityId, second.activityId);
+  const stale = await harness.request(fixture.dashboard.id, "preview", {
+    cookie: fixture.coachCookie, body: { ...envelope, editTarget: { ...envelope.editTarget, expectedWidgetRevision: stored.revision + 1 } },
+  });
+  assert.deepEqual({ status: stale.status, body: stale.body }, { status: 409, body: { error: "staleRevision" } });
+  assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+test("S2b P02/P07 invalid catalog binding and changed expected catalog token produce no preview proof", async testContext => {
+  const fixture = await s2bDataFixture("s2b-catalog");
+  const harness = await s2bHttpHarness(testContext);
+  const envelope = s2bEnvelope();
+  const before = await s2bDatabaseState();
+  const invalid = await harness.request(fixture.dashboard.id, "preview", {
+    cookie: fixture.coachCookie, body: s2bEnvelope(s2aDraft({ kind: "metric", metricDefinitionId: crypto.randomUUID() }, { dataScopeLevel: "session", analyticalAggregation: "avg" })),
+  });
+  assert.deepEqual({ status: invalid.status, body: invalid.body }, { status: 404, body: { error: "notFound" } });
+  assert.equal(invalid.body.previewToken, undefined);
+  assert.equal(invalid.body.widgetResult, undefined);
+  const valid = await harness.request(fixture.dashboard.id, "validate", { cookie: fixture.coachCookie, body: envelope });
+  assert.equal(valid.body.status, "valid", JSON.stringify(valid.body));
+  assert.equal(typeof valid.body.catalogToken, "string");
+  const changed = await harness.request(fixture.dashboard.id, "preview", {
+    cookie: fixture.coachCookie, body: { ...envelope, expectedCatalogToken: `stale-${valid.body.catalogToken}` },
+  });
+  assert.deepEqual({ status: changed.status, body: changed.body }, { status: 409, body: { error: "catalogChanged" } });
+  assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+test("S2b P07 a token from a real HTTP preview binds the loaded user/workspace/target/catalog/draft/context/period and rejects tampering", async testContext => {
+  const fixture = await s2bDataFixture("s2b-token");
+  const harness = await s2bHttpHarness(testContext);
+  const envelope = s2bEnvelope();
+  const preview = await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie, body: envelope });
+  s2bAssertPreview(preview);
+  const [encoded, signature] = preview.body.previewToken.split(".");
+  const { binding } = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  assert.equal(binding.userId, fixture.coachId);
+  assert.deepEqual(binding.workspace, fixture.target.dataWorkspace);
+  assert.deepEqual(binding.target, { dashboardId: fixture.dashboard.id, widgetId: null, widgetRevision: null });
+  for (const field of ["draftHash", "catalogToken", "contextFingerprint", "resolvedPeriod", "evaluatedAt"]) assert.deepEqual(binding[field], preview.body[field]);
+  assert.deepEqual(binding.periodIntent, envelope.draft.periodIntent);
+  const snapshot = await fixture.reader.load({ ...fixture.target, metricRef: envelope.draft.metricRef });
+  const compiled = fixture.compileSimpleDraft(envelope.draft, snapshot, { ...s2aContext([fixture.first.athleteId, fixture.second.athleteId]), evaluatedAt: preview.body.evaluatedAt });
+  assert.equal(binding.semanticFingerprint, compiled.semanticBinding.fingerprint);
+  assert.deepEqual(harness.tokenService.verify(preview.body.previewToken, binding), binding);
+  for (const field of Object.keys(binding)) {
+    const changed = structuredClone(binding);
+    if (field === "workspace") changed.workspace.dataWorkspaceScopeId = crypto.randomUUID();
+    else if (field === "target") changed.target.dashboardId = crypto.randomUUID();
+    else if (field === "periodIntent") changed.periodIntent = { mode: "replacePageRuntime", periodConfig: { mode: "relative", schemaVersion: 1, preset: "today", timeZone: "UTC" } };
+    else if (field === "resolvedPeriod") changed.resolvedPeriod.dateFrom = "2026-09-08";
+    else if (field === "evaluatedAt") changed.evaluatedAt = new Date(Date.parse(binding.evaluatedAt) - 1).toISOString();
+    else changed[field] = field === "userId" ? crypto.randomUUID() : `changed-${changed[field]}`;
+    assert.throws(() => harness.tokenService.verify(preview.body.previewToken, changed), error => error.code === "previewRequired" && error.status === 409, field);
+  }
+  const tamperedSignature = `${signature[0] === "A" ? "B" : "A"}${signature.slice(1)}`;
+  assert.throws(() => harness.tokenService.verify(`${encoded}.${tamperedSignature}`, binding), error => error.code === "previewRequired" && error.status === 409);
+});
+
+test("S2b P03/P10 a genuine engine SQL error is a controlled failure without empty-result proof, and the next request works", async testContext => {
+  const fixture = await s2bDataFixture("s2b-query-error");
+  const { queryDashboard } = await s2bModules();
+  let injectSqlError = true, errorCode;
+  const harness = await s2bHttpHarness(testContext, {
+    queryDashboard: async (workspace, widgets, period, options) => {
+      const queryRunner = async (sql, params) => {
+        if (injectSqlError && /canonical/i.test(sql)) {
+          injectSqlError = false;
+          try { await options.queryRunner("select 1 / 0 as s2b_real_sql_failure"); }
+          catch (error) { errorCode = error.code; throw error; }
+        }
+        return options.queryRunner(sql, params);
+      };
+      return queryDashboard(workspace, widgets, period, { ...options, queryRunner });
+    },
+  });
+  const before = await s2bDatabaseState();
+  const failed = await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie });
+  assert.equal(errorCode, "22012", "the failure must originate from a real PostgreSQL statement in the actual engine runner");
+  assert.deepEqual({ status: failed.status, body: failed.body }, { status: 503, body: { error: "previewQueryFailed" } });
+  assert.equal(failed.body.previewToken, undefined);
+  assert.equal(failed.body.widgetResult, undefined);
+  assert.ok(!JSON.stringify(failed.body).includes("s2b_real_sql_failure"));
+  assert.deepEqual(s2bRows(s2bAssertPreview(await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie }))), s2bRows(fixture.expectedRows));
+  assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+test("S2b P09/P10 HTTP request bytes stop at 64 KiB and a real metric result exceeding 2 MiB is refused without a preview token", async testContext => {
+  const fixture = await s2aFixture("s2b-size");
+  const { athleteId } = await makeAthleteInClub(fixture.clubId);
+  const definition = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, valueType: "text", dailyAggregationMethod: "last", scopeLevels: ["session"] });
+  const activity = await makeActivityWithEvent({ ...fixture, athleteId, date: "2026-09-09" });
+  const occasion = (await query("insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id", [activity.eventParticipantId])).rows[0].id;
+  await query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_text, unit_at_capture, aggregation_role, coverage)
+    values ($1,$2,$3,repeat('z', $4),'bpm','standalone','not_applicable')`, [occasion, definition.metricDefinitionId, definition.versionId, 2 * 1024 * 1024]);
+  const envelope = s2bEnvelope(s2aDraft({ kind: "metric", metricDefinitionId: definition.metricDefinitionId }, { dataScopeLevel: "session", analyticalAggregation: "last" }));
+  let engineResultBytes = 0;
+  const { queryDashboard } = await s2bModules();
+  const harness = await s2bHttpHarness(testContext, {
+    queryDashboard: async (...args) => {
+      const results = await queryDashboard(...args);
+      assert.equal(results[0].series[0].status, "ok");
+      assert.equal(results[0].series[0].data.current[0].value.length, 2 * 1024 * 1024);
+      engineResultBytes = Buffer.byteLength(JSON.stringify(results));
+      return results;
+    },
+  });
+  const before = await s2bDatabaseState();
+  const encoded = JSON.stringify(envelope);
+  const atLimit = await harness.request(fixture.dashboard.id, "validate", {
+    cookie: fixture.coachCookie, rawBody: encoded + " ".repeat(65536 - Buffer.byteLength(encoded)),
+  });
+  assert.equal(atLimit.status, 200, JSON.stringify(atLimit.body));
+  assert.equal(atLimit.body.status, "valid", JSON.stringify(atLimit.body));
+  const oversizedRequest = await harness.request(fixture.dashboard.id, "preview", {
+    cookie: fixture.coachCookie, rawBody: encoded + " ".repeat(65537 - Buffer.byteLength(encoded)),
+  });
+  assert.deepEqual({ status: oversizedRequest.status, body: oversizedRequest.body }, { status: 413, body: { error: "payloadTooLarge" } });
+  assert.equal(engineResultBytes, 0);
+  const oversizedResponse = await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie, body: envelope });
+  assert.ok(engineResultBytes > 2 * 1024 * 1024, "the actual query engine must have produced the oversized database result");
+  assert.deepEqual({ status: oversizedResponse.status, body: oversizedResponse.body }, { status: 413, body: { error: "previewTooLarge" } });
+  assert.equal(oversizedResponse.body.previewToken, undefined);
+  assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+test("S2b P07 an upstream JSON parser must preserve original byte evidence including whitespace", async testContext => {
+  const fixture = await s2bDataFixture('s2b-upstream-parser');
+  const envelope = s2bEnvelope();
+  const encoded = JSON.stringify(envelope);
+  const rawAtLimit = encoded + ' '.repeat(65536 - Buffer.byteLength(encoded));
+  const rawTooLarge = rawAtLimit + ' ';
+  const missingProof = await s2bHttpHarness(testContext, { upstreamParser: true });
+  const capturedProof = await s2bHttpHarness(testContext, { upstreamParser: true, captureOriginalBytes: true });
+  const before = await s2bDatabaseState();
+  const blocked = await missingProof.request(fixture.dashboard.id, 'preview', { cookie: fixture.coachCookie, body: envelope });
+  assert.deepEqual({ status: blocked.status, body: blocked.body }, { status: 503, body: { error: 'previewParserRequired' } });
+  const accepted = await capturedProof.request(fixture.dashboard.id, 'validate', { cookie: fixture.coachCookie, rawBody: rawAtLimit });
+  assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+  assert.equal(accepted.body.status, 'valid', JSON.stringify(accepted.body));
+  const refused = await capturedProof.request(fixture.dashboard.id, 'preview', { cookie: fixture.coachCookie, rawBody: rawTooLarge });
+  assert.deepEqual({ status: refused.status, body: refused.body }, { status: 413, body: { error: 'payloadTooLarge' } });
+  assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+test("S2b P06/P09/P10 real SQL timeout and HTTP abort retain admission until cleanup, never reuse a busy pool client, and permit follow-up previews", { timeout: 20000 }, async testContext => {
+  const fixture = await s2bDataFixture("s2b-cancellation");
+  const { queryDashboard } = await s2bModules();
+  for (const mode of ["timeout", "abort"]) {
+    let slow = true, slowPid, slowStatementFinished = false;
+    const harness = await s2bHttpHarness(testContext, {
+      transactionOptions: { checkoutTimeoutMs: 1000, statementTimeoutMs: mode === "timeout" ? 250 : 1000, transactionTimeoutMs: 2500 },
+      queryDashboard: async (workspace, widgets, period, options) => {
+        if (slow) {
+          slow = false;
+          slowPid = (await options.queryRunner("select pg_backend_pid() as pid")).rows[0].pid;
+          try { await options.queryRunner("select pg_sleep(0.7)"); }
+          finally { slowStatementFinished = true; }
+        }
+        return queryDashboard(workspace, widgets, period, options);
+      },
+    });
+    const before = await s2bDatabaseState();
+    const controller = new AbortController();
+    const pending = harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie, signal: controller.signal })
+      .then(response => ({ response }), error => ({ error }));
+    await s2bWaitForDatabaseState(async () => {
+      if (!slowPid) return false;
+      return (await query("select pid from pg_stat_activity where pid=$1 and state='active' and wait_event='PgSleep'", [slowPid])).rows.length === 1;
+    }, `${mode} query to enter PostgreSQL PgSleep`);
+    assert.equal(slowStatementFinished, false);
+    if (mode === "abort") controller.abort();
+    await assert.rejects(() => harness.admission.tryAcquire({ userId: fixture.coachId }), error => error.code === "previewBusy", "the same user's lease remains occupied while PostgreSQL is executing");
+    await assert.rejects(() => harness.admission.tryAcquire({ userId: crypto.randomUUID() }), error => error.code === "previewBusy", "the deployment slot remains occupied while PostgreSQL is executing");
+    assert.equal(harness.lifecycle.some(item => item.kind === "release" && item.backendPid === slowPid), false, "a still-running client must not be returned to the pool");
+    if (mode === "timeout") {
+      const { response, error } = await pending;
+      assert.equal(error, undefined);
+      assert.deepEqual({ status: response.status, body: response.body }, { status: 503, body: { error: "previewTimeout" } });
+    } else {
+      const { error } = await pending;
+      assert.equal(error?.name, "AbortError");
+    }
+    await s2bWaitForDatabaseState(async () => {
+      if (!slowStatementFinished || !harness.lifecycle.some(item => item.kind === "release" && item.backendPid === slowPid)) return false;
+      const state = (await query("select state, xact_start from pg_stat_activity where pid=$1", [slowPid])).rows[0];
+      return !state || state.state === "idle" && state.xact_start === null;
+    }, `${mode} rollback or connection destruction`);
+    const lease = await harness.admission.tryAcquire({ userId: fixture.coachId });
+    await lease.release();
+    const followUp = await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie });
+    assert.deepEqual(s2bRows(s2bAssertPreview(followUp)), s2bRows(fixture.expectedRows));
+    assert.deepEqual(await s2bDatabaseState(), before);
+  }
+});
+
+test("S2b P01/P02 a foreign edit widget stays 404 before an invalid draft title can disclose detailed validation", async testContext => {
+  const fixture = await s2aFixture("s2b-edit-gate");
+  const sameOwnerDashboard = await makeDashboardHttp(fixture.coachCookie);
+  const foreign = await s2aFixture("s2b-edit-gate-foreign");
+  const ownWidget = await makeWidgetHttp(fixture.coachCookie, fixture.dashboard);
+  const otherDashboardWidget = await makeWidgetHttp(fixture.coachCookie, sameOwnerDashboard);
+  const foreignWidget = await makeWidgetHttp(foreign.coachCookie, foreign.dashboard);
+  const harness = await s2bHttpHarness(testContext);
+  const draft = s2aUpdateDraft({ ...s2bEnvelope().draft, title: "" });
+  const before = await s2bDatabaseState();
+  for (const action of ["validate", "preview"]) {
+    for (const widgetId of [otherDashboardWidget.widgetId, foreignWidget.widgetId, crypto.randomUUID()]) {
+      const denied = await harness.request(fixture.dashboard.id, action, {
+        cookie: fixture.coachCookie, body: s2bEnvelope(draft, { editTarget: { widgetId, expectedWidgetRevision: 1 } }),
+      });
+      assert.deepEqual({ status: denied.status, body: denied.body }, { status: 404, body: { error: "notFound" } });
+      assert.equal(denied.body.issues, undefined);
+      assert.equal(denied.body.previewToken, undefined);
+    }
+    const authorized = await harness.request(fixture.dashboard.id, action, {
+      cookie: fixture.coachCookie, body: s2bEnvelope(draft, { editTarget: { widgetId: ownWidget.widgetId, expectedWidgetRevision: 1 } }),
+    });
+    assert.equal(authorized.status, 200, JSON.stringify(authorized.body));
+    assert.equal(authorized.body.status, "invalid");
+    assert.ok(authorized.body.issues.some(issue => issue.path === "$.draft.title"), JSON.stringify(authorized.body));
+    assert.equal(authorized.body.previewToken, undefined);
+  }
+  assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+async function s2bHistoricalTypeFixture(label, historicalDate, numericDate) {
+  const fixture = await s2aFixture(label);
+  const { athleteId } = await makeAthleteInClub(fixture.clubId);
+  const definition = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, valueType: "boolean", dailyAggregationMethod: "last", scopeLevels: ["session"] });
+  const historicalActivity = await makeActivityWithEvent({ ...fixture, athleteId, date: historicalDate });
+  const occasion = (await query("insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id", [historicalActivity.eventParticipantId])).rows[0].id;
+  await query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_boolean, unit_at_capture, aggregation_role, coverage)
+    values ($1,$2,$3,true,'bpm','standalone','not_applicable')`, [occasion, definition.metricDefinitionId, definition.versionId]);
+  const numericVersionId = (await query(`insert into training_load.metric_definition_versions
+    (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, created_by_user_id)
+    values ($1,2,'bpm','numeric','sum',$2) returning id`, [definition.metricDefinitionId, fixture.coachId])).rows[0].id;
+  await query("update training_load.metric_definitions set current_version_id=$1 where id=$2", [numericVersionId, definition.metricDefinitionId]);
+  const numericActivity = await makeActivityWithEvent({ ...fixture, athleteId, date: numericDate });
+  await addMetricValue({ eventParticipantId: numericActivity.eventParticipantId, metricDefinitionId: definition.metricDefinitionId, versionId: numericVersionId, value: 7 });
+  const versions = (await query("select version_number, value_type from training_load.metric_definition_versions where metric_definition_id=$1 order by version_number", [definition.metricDefinitionId])).rows;
+  assert.deepEqual(versions, [{ version_number: 1, value_type: "boolean" }, { version_number: 2, value_type: "numeric" }]);
+  return { ...fixture, athleteId, metricDefinitionId: definition.metricDefinitionId };
+}
+
+test("S2b P03/P10 real historical boolean facts under a now-numeric catalog yield a current row.error and must fail preview without proof", async testContext => {
+  const fixture = await s2bHistoricalTypeFixture("s2b-history-current", "2026-09-09", "2026-09-10");
+  const { queryDashboard } = await s2bModules();
+  const engineResults = [];
+  const harness = await s2bHttpHarness(testContext, {
+    queryDashboard: async (...args) => {
+      const result = await queryDashboard(...args);
+      engineResults.push(result);
+      return result;
+    },
+  });
+  const draft = s2aDraft({ kind: "metric", metricDefinitionId: fixture.metricDefinitionId }, { dataScopeLevel: "session", analyticalAggregation: "sum" });
+  const envelope = s2bEnvelope(draft);
+  const before = await s2bDatabaseState();
+  const validated = await harness.request(fixture.dashboard.id, "validate", { cookie: fixture.coachCookie, body: envelope });
+  assert.equal(validated.status, 200, JSON.stringify(validated.body));
+  assert.equal(validated.body.status, "valid", JSON.stringify(validated.body));
+  const failed = await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie, body: envelope });
+  assert.equal(engineResults.length, 1, JSON.stringify(failed));
+  const series = engineResults[0][0].series[0];
+  assert.equal(series.status, "ok", "this regression concerns an error row inside an otherwise successful actual engine result");
+  assert.equal(series.data.current.length, 2);
+  const historicalRow = series.data.current.find(row => row.bucketKey === "2026-09-09");
+  assert.equal(historicalRow.athleteId, fixture.athleteId);
+  assert.equal(historicalRow.value, null);
+  assert.match(historicalRow.error, /aggregation 'sum'.*value_type 'boolean'/);
+  assert.ok(!historicalRow.typeConflict && !historicalRow.semanticConflict);
+  assert.equal(series.data.current.find(row => row.bucketKey === "2026-09-10").value, 7);
+  assert.equal(series.data.comparison, null);
+  assert.deepEqual({ status: failed.status, body: failed.body }, { status: 503, body: { error: "previewQueryFailed" } });
+  assert.equal(failed.body.previewToken, undefined);
+  assert.equal(failed.body.widgetResult, undefined);
+  assert.deepEqual(await s2bDatabaseState(), before);
+});
+
+test("S2b P03/P10 a clean current numeric KPI cannot hide a real historical boolean error in its comparison result", async testContext => {
+  const fixture = await s2bHistoricalTypeFixture("s2b-history-comparison", "2026-09-08", "2026-09-09");
+  const draft = s2aDraft({ kind: "metric", metricDefinitionId: fixture.metricDefinitionId }, { type: "kpi", groupBy: "athlete", dataScopeLevel: "session", analyticalAggregation: "sum" });
+  const snapshot = await fixture.reader.load({ ...fixture.target, metricRef: draft.metricRef });
+  const compiled = fixture.compileSimpleDraft(draft, snapshot, s2aContext([fixture.athleteId]));
+  let stored = await s2aLegacyProjection(fixture, compiled, { layout: { width: 3, height: 3 } });
+  await s2aRawUpdate(stored.id, { comparison_period: "previous_period" });
+  stored = await s2aStored(stored.id);
+  const envelope = s2bEnvelope(s2aUpdateDraft(draft), { editTarget: { widgetId: stored.id, expectedWidgetRevision: stored.revision } });
+  const { queryDashboard } = await s2bModules();
+  const engineResults = [];
+  const harness = await s2bHttpHarness(testContext, {
+    queryDashboard: async (...args) => {
+      const result = await queryDashboard(...args);
+      engineResults.push(result);
+      return result;
+    },
+  });
+  const before = await s2bDatabaseState();
+  const validated = await harness.request(fixture.dashboard.id, "validate", { cookie: fixture.coachCookie, body: envelope });
+  assert.equal(validated.status, 200, JSON.stringify(validated.body));
+  assert.equal(validated.body.status, "valid", JSON.stringify(validated.body));
+  const failed = await harness.request(fixture.dashboard.id, "preview", { cookie: fixture.coachCookie, body: envelope });
+  assert.equal(engineResults.length, 1, JSON.stringify(failed));
+  const series = engineResults[0][0].series[0];
+  assert.equal(series.status, "ok");
+  assert.deepEqual(s2bRows(series.data.current), [[fixture.athleteId, "all", "bpm", 7, 1]]);
+  assert.equal(series.data.comparison.length, 1);
+  assert.deepEqual(series.data.comparisonRange, { dateFrom: "2026-09-07", dateTo: "2026-09-08" });
+  const historicalRow = series.data.comparison[0];
+  assert.equal(historicalRow.athleteId, fixture.athleteId);
+  assert.equal(historicalRow.value, null);
+  assert.match(historicalRow.error, /aggregation 'sum'.*value_type 'boolean'/);
+  assert.ok(!historicalRow.typeConflict && !historicalRow.semanticConflict);
+  assert.deepEqual({ status: failed.status, body: failed.body }, { status: 503, body: { error: "previewQueryFailed" } });
+  assert.equal(failed.body.previewToken, undefined);
+  assert.equal(failed.body.widgetResult, undefined);
+  assert.deepEqual(await s2bDatabaseState(), before);
+});

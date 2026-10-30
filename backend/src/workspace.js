@@ -34,7 +34,7 @@ function sortByLabel(rows) {
 // offered as a workspace even if the underlying role row is technically
 // still active, matching how the rest of the app treats an archived
 // club/team as no longer a real place to work in.
-export async function loadAvailableWorkspaces(authz) {
+export async function loadAvailableWorkspaces(authz, queryRunner = query) {
   const workspaces = [];
   if (authz.platformRoles.length > 0) {
     workspaces.push({ type: "platform", scopeId: null, label: "Platform administration", role: "platform_admin" });
@@ -47,10 +47,10 @@ export async function loadAvailableWorkspaces(authz) {
   const teamIds = authz.teamRoles.filter((r) => r.role === "team_coach").map((r) => r.teamId);
   const [clubsResult, teamsResult] = await Promise.all([
     clubIds.length
-      ? query(`select id, name from public.clubs where id = any($1::uuid[]) and coalesce(is_active, true)`, [clubIds])
+      ? queryRunner(`select id, name from public.clubs where id = any($1::uuid[]) and coalesce(is_active, true)`, [clubIds])
       : { rows: [] },
     teamIds.length
-      ? query(`select id, name, club_id from public.teams where id = any($1::uuid[]) and coalesce(is_active, true)`, [teamIds])
+      ? queryRunner(`select id, name, club_id from public.teams where id = any($1::uuid[]) and coalesce(is_active, true)`, [teamIds])
       : { rows: [] },
   ]);
   for (const club of sortByLabel(clubsResult.rows)) {
@@ -68,6 +68,15 @@ export async function loadAvailableWorkspaces(authz) {
 
 function findWorkspace(workspaces, type, scopeId) {
   return workspaces.find((w) => w.type === type && String(w.scopeId || "") === String(scopeId || "")) || null;
+}
+
+export async function resolveActiveWorkspaceReadOnly(userId, authz, queryRunner = query) {
+  const availableWorkspaces = await loadAvailableWorkspaces(authz, queryRunner);
+  const preference = (await queryRunner(
+    'select workspace_type, scope_id from public.user_workspace_preferences where user_id = $1 limit 1', [userId],
+  )).rows[0];
+  const workspace = preference ? findWorkspace(availableWorkspaces, preference.workspace_type, preference.scope_id) : null;
+  return { workspace, availableWorkspaces };
 }
 
 function pickFallbackWorkspace(workspaces) {
