@@ -19082,19 +19082,17 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   margin: 0;
   padding: 0;
 }
+/* A card is a list item: its head is the button that opens the screen, and a
+   click anywhere else on it opens it too (its own data-action). */
 .dc-card {
   display: grid;
   gap: 12px;
-  width: 100%;
-  height: 100%;
-  min-height: 44px;
+  min-width: 0;
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
-  font: inherit;
-  text-align: left;
   align-content: start;
   cursor: pointer;
 }
@@ -19103,9 +19101,24 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
     border-color: var(--accent);
   }
 }
-.dc-card:focus-visible {
+.dc-card-open {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dc-card-open:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: 4px;
 }
 .dc-card-head {
   display: flex;
@@ -19127,10 +19140,26 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   flex: 0 0 20px;
   color: var(--muted);
 }
+/* Every row the screen's read holds, in a list four and a half rows high (a
+   28 px tile and a 6 px gap each) that scrolls on its own; the half row shows
+   there is more. */
 .dc-card-rows {
   display: grid;
   gap: 6px;
   min-width: 0;
+  max-height: calc(4.5 * 28px + 4 * 6px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+.dc-card-rows.is-scrolling {
+  padding-right: 4px;
+  border-radius: 6px;
+}
+.dc-card-rows.is-scrolling:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .dc-card-row {
   display: flex;

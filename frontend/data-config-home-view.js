@@ -1,8 +1,10 @@
 // Training Load -> Data configuration: the start screen (layout C, PR-1;
 // docs/ai/data-configuration-visual-proposal.md section 4). Cards like the
 // coach's Home - Variables, Domains, Categories and, for an administrator,
-// Source fields - each with its count and its first rows, opening its own
-// screen. It replaces the two look-alike switches of before (Variables |
+// Source fields - each with its count and its rows, opening its own screen.
+// A card shows every row its read already holds, in a list about four and a
+// half rows high that scrolls on its own (the owner's request of 2026-10-30).
+// It replaces the two look-alike switches of before (Variables |
 // Source fields above Variables | Domains & categories). The counts come from
 // the reads the screens already make (the variables list, the one read of the
 // domains and categories, the source fields list): no read of its own and no
@@ -12,7 +14,10 @@ import { CHEVRON_HTML, fieldTileHtml, nodeTileHtml, variableTileHtml } from "./d
 import { currentRevision } from "./source-fields-data.js";
 import { escapeHtml } from "./utils.js";
 
-const FIRST_ROWS = 3;
+// Up to four rows fit without scrolling; from the fifth on the list scrolls
+// (the CSS height of .dc-card-rows is four and a half rows), and only then is
+// it a keyboard stop of its own.
+const VISIBLE_ROWS = 4;
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 function intro(ctx) {
@@ -21,18 +26,26 @@ function intro(ctx) {
   return `How ${escapeHtml(ctx.clubName || "this club")}'s training data is described: its variables, how they are grouped, and the fields its data sources deliver.`;
 }
 
-// One card: a button that opens its screen, with a summary and its first rows.
+// One card: its head is the button that opens its screen (the keyboard's and
+// the screen reader's way in); a click or a tap anywhere else on the card opens
+// it too, through the card's own data-action. Its rows are a list of their own
+// that scrolls inside the card: a browser sends no click after a scrolling
+// drag, wheel or scrollbar, so scrolling never opens the screen.
 function card({ attrs, tile, title, summary, rows = [] }) {
+  const scrolls = rows.length > VISIBLE_ROWS;
+  const list = rows.length
+    ? `<ul class="dc-card-rows${scrolls ? " is-scrolling" : ""}" aria-label="${title}"${scrolls ? ` tabindex="0"` : ""}>${rows.map((row) => `<li class="dc-card-row">${row}</li>`).join("")}</ul>`
+    : "";
   return `
-    <li>
-      <button type="button" class="dc-card" ${attrs}>
+    <li class="dc-card" ${attrs}>
+      <button type="button" class="dc-card-open" ${attrs}>
         <span class="dc-card-head">
           ${tile}
           <span class="dc-card-title"><strong>${title}</strong><span class="muted">${summary}</span></span>
           ${CHEVRON_HTML}
         </span>
-        ${rows.length ? `<span class="dc-card-rows">${rows.map((row) => `<span class="dc-card-row">${row}</span>`).join("")}</span>` : ""}
       </button>
+      ${list}
     </li>`;
 }
 
@@ -48,7 +61,7 @@ function variablesCard(s) {
   else if (plain) {
     const n = list.items.length;
     summary = n ? `${list.nextCursor ? `More than ${n}` : n} active ${n === 1 && !list.nextCursor ? "variable" : "variables"}` : "No active variables yet";
-    rows = list.items.slice(0, FIRST_ROWS).map((item) => `${variableTileHtml(item, { size: "sm" })}<span>${escapeHtml(item.label || "")}</span>`);
+    rows = list.items.map((item) => `${variableTileHtml(item, { size: "sm" })}<span>${escapeHtml(item.label || "")}</span>`);
   }
   return card({ attrs: `data-action="metric-classification-view" data-view="variables"`, tile: variableTileHtml({ icon: "chart-dots" }), title: "Variables", summary, rows });
 }
@@ -63,7 +76,7 @@ function nodesCard(s, kind) {
   if (c.error && !c.tree) summary = "Could not be loaded. Open to try again.";
   else if (!c.tree) summary = c.loading ? "Loading..." : "Open";
   else summary = `${active.length ? plural(active.length, noun[0], noun[1]) : `No ${noun[1]} yet`}${archived ? ` · ${archived} archived` : ""}`;
-  const rows = active.slice(0, FIRST_ROWS).map((n) => `${nodeTileHtml(kind, n, { size: "sm" })}<span>${escapeHtml(n.name || "")}</span>`);
+  const rows = active.map((n) => `${nodeTileHtml(kind, n, { size: "sm" })}<span>${escapeHtml(n.name || "")}</span>`);
   return card({
     attrs: `data-action="metric-classification-view" data-view="${kind === "domain" ? "domains" : "categories"}"`,
     tile: nodeTileHtml(kind, null),
@@ -81,7 +94,7 @@ function sourceFieldsCard() {
   else if (!list.loaded) summary = list.loading ? "Loading..." : "Open";
   else {
     summary = list.items.length ? plural(list.items.length, "field", "fields") : "No source fields yet";
-    rows = list.items.slice(0, FIRST_ROWS).map((field) => `${fieldTileHtml(currentRevision(field), { size: "sm" })}<span>${escapeHtml(field.label || field.key || "")}</span>`);
+    rows = list.items.map((field) => `${fieldTileHtml(currentRevision(field), { size: "sm" })}<span>${escapeHtml(field.label || field.key || "")}</span>`);
   }
   return card({ attrs: `data-action="training-load-section" data-section="source-fields"`, tile: fieldTileHtml({ valueShape: "number" }), title: "Source fields", summary, rows });
 }
