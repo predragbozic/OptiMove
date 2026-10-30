@@ -17,6 +17,9 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
+import { allowSyntheticTestFields } from "./support/test-extractors.mjs";
+
+allowSyntheticTestFields();
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;

@@ -53,6 +53,7 @@ import {
   checkListedStarts, endAuditRows, endOpenActivations, insertStarts, lockListedBindings, lockOpenActivations, operationEndCount,
   operationStarts, startAuditRows,
 } from "./sourceMetricActivationSteps.js";
+import { extractabilityCode, extractorFor } from "./sourceMetricExtractors.js";
 
 export { SourceMetricMappingError, mayTransitionMappings };
 const { DatabaseError } = pg;
@@ -362,8 +363,25 @@ const MESSAGES = {
   canonical_version_changed: "The canonical variable has a newer current version than this mapping version pins; create a new mapping version.",
   source_metric_target_taken: "Another mapping of this owner already has an active version for this source field and parameters.",
   activation_open: "The mapping version has an open activation; it is not changed before the activation ends.",
+  source_metric_unsupported: "OptiMove cannot read this source field yet.",
+  parameters_unsupported: "The source parameters do not fit this source field.",
   ...ACTIVATION_MESSAGES,
 };
+
+// Phase 7f (J12 section 3): a version is created and activated only for a
+// source field the extractor registry reads, with parameters its entry
+// accepts. The field's key, the revision's shape and kind and the version's
+// parameters never change, so the check needs no lock. The refusal names the
+// code only, never a parameter. `facts` carries the field's key, the
+// revision's value shape and parameter kind, and the parameters as exact
+// decimal text.
+function assertExtractable(facts) {
+  const code = extractabilityCode({
+    sourceSystem: facts.source_system, apiFamily: facts.api_family, sourceMetricKey: facts.source_metric_key,
+    valueShape: facts.value_shape, parameterKind: facts.parameter_kind, sourceParameters: facts.source_parameters,
+  });
+  if (code) throw refusal(409, code, MESSAGES[code]);
+}
 export function classifyDatabaseError(error) {
   if (error instanceof SourceMetricMappingError) return error;
   const code = error?.code;
@@ -505,6 +523,7 @@ export async function listFields({ ctx, query }) {
     if (list.length > LIST_CAPS.revisionsPerField) throw tooLarge(LIST_CAPS.revisionsPerField);
     return {
       id: f.id, sourceSystem: f.source_system, apiFamily: f.api_family, key: f.source_metric_key, label: f.source_label, state: f.state,
+      extractorAvailable: extractorFor({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key }) !== null,
       revisions: list.map(revisionOut),
     };
   });
@@ -1035,6 +1054,14 @@ export async function createVersion({ ctx, mappingId, body }) {
         throw refusal(409, "level_not_allowed", MESSAGES.level_not_allowed);
       }
       const source = sourceParametersFor(revision.parameter_kind, revision.bound_operator, revision.source_bound_unit, body.sourceParameters);
+      const field = (await client.query(
+        `select d.source_system, d.api_family, d.source_metric_key, r.value_shape
+           from training_load.source_metric_definitions d
+           join training_load.source_metric_definition_versions r on r.source_metric_definition_id = d.id
+          where d.id = $1 and r.id = $2`,
+        [mapping.source_metric_definition_id, sourceRevisionId],
+      )).rows[0];
+      assertExtractable({ ...field, parameter_kind: revision.parameter_kind, source_parameters: revision.parameter_kind === "none" ? {} : source });
       const canonicalSql = `select d.state, d.current_version_id, ${CANONICAL_VERSION_COLUMNS},
                                    (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes
                               from training_load.metric_definitions d
@@ -1417,6 +1444,17 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
         [v.source_metric_definition_id, v.parameter_fingerprint, v.owner_key, mId],
       );
       if (taken.rowCount > 0) throw refusal(409, "source_metric_target_taken", MESSAGES.source_metric_target_taken);
+      // Phase 7f: the field and the parameters again, after the right and the
+      // states (R3): a draft created before 7f is caught here.
+      assertExtractable((await client.query(
+        `select d.source_system, d.api_family, d.source_metric_key, r.value_shape, v.parameter_kind,
+                ${PARAMS_AS_TEXT("v.source_parameters")} as source_parameters
+           from training_load.source_metric_mapping_versions v
+           join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id
+           join training_load.source_metric_definition_versions r on r.id = v.source_metric_version_id
+          where v.id = $1`,
+        [vId],
+      )).rows[0]);
       if (replacing) await databaseTextAgrees(client, reason);
       if (listed.length > 0) await databaseTextAgrees(client, activationReason);
       if (writeHold) await writeHold(client, replacing ? "mapping_version_replace" : "mapping_version_activate");
