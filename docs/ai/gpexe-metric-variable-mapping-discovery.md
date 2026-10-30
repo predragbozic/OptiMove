@@ -3793,6 +3793,9 @@ decisions Q1–Q3 and R1–R7 (the contract's section 9).
     v39 suite's raw conversion row is planted on its v38 / v39 rehearsal database, so neither meets v47. The M2
     architecture test names the new writer and asserts that no module of `backend/src` runs `disable trigger` (the
     *Rukovodilac*'s note (ii));
+  - **M2b's test 2** expected `unit_conversion_create` to be refused as an action with no writer. Since v47 that action
+    has its chain, so the test now expects v47's "must follow its own conversion change" refusal; `source_metric_create`
+    keeps the "no writer of this action exists yet" case;
   - **M2's test 9** stored a `(1, 4)` row to reach `createVersion`'s `409 conversion_not_normal`. Since v47's CHECK no
     row outside the normal form can exist, so the test now shows the database refusing that row and the pair answering
     `conversion_unavailable`. `conversion_not_normal` stays in `createVersion` as a backstop that no stored row can

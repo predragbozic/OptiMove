@@ -43,6 +43,8 @@ const NO_ACTOR = /no acting user is set for this transaction/;
 const NO_CREATE_ROW = /^source_metric_definition_versions: a revision is written with its source_metric_revision_create audit row$/;
 const NO_STATE_ROW = /^source_metric_definition_versions: a state change is written with its source_metric_revision_activate or _retire audit row$/;
 const LIFECYCLE_FOLLOW = /^source_metric_audit: the audit row must follow its own revision change in the same transaction$/;
+// v47 (phase 7c): a conversion's audit row has its chain; without its own conversion change it is refused.
+const CONVERSION_FOLLOW = /^source_metric_audit: the audit row must follow its own conversion change in the same transaction$/;
 const ONE_ACT = /^source_metric_definition_versions: a revision is changed only by one unit or meaning verification$/;
 const OTHER_USER = /^source metric verification: the row names another user than the acting user$/;
 const MAY_NOT = /^source metric verification: the acting user may not verify a source metric$/;
@@ -520,7 +522,8 @@ test("2. the database guards: a T2b revision INSERT or a state change without it
   refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, performed_by_user_id, basis, operation_id, from_status, to_status) values ('source_metric_create',$1,$2,'platform_admin',$3,null,'active')`, [f.fieldId, W.pa.id, crypto.randomUUID()])), "23514", NO_WRITER);
   // A lifecycle row has its chain since v39: without its own change it is refused.
   refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, source_metric_version_id, performed_by_user_id, basis, operation_id, from_status, to_status) values ('source_metric_revision_activate',$1,$2,$3,'platform_admin',$4,'draft','active')`, [draft.fieldId, draft.revId, W.pa.id, crypto.randomUUID()])), "23514", LIFECYCLE_FOLLOW);
-  refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, unit_conversion_id, evidence_ref, performed_by_user_id, basis, operation_id, from_status, to_status) values ('unit_conversion_create',$1,$2,$3,'platform_admin',$4,null,'active')`, [conv, COMPAT, W.pa.id, crypto.randomUUID()])), "23514", NO_WRITER);
+  // A conversion row has its chain since v47 (phase 7c): without its own conversion change it is refused.
+  refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, unit_conversion_id, evidence_ref, performed_by_user_id, basis, operation_id, from_status, to_status) values ('unit_conversion_create',$1,$2,$3,'platform_admin',$4,null,'active')`, [conv, COMPAT, W.pa.id, crypto.randomUUID()])), "23514", CONVERSION_FOLLOW);
 });
 
 test("3. who may call: no session is 401; a coach, an athlete, a platform admin in a team workspace, a revoked club role, an archived club and a revoked platform admin get the same 404 on every field route; a club admin and a platform admin in a club workspace read the field (as /fields) but get the same 404 on both acts, before the body is looked at; an unknown field, a malformed id and a revision of another field are the same 404; a zone's meaning act never tells such a caller that the zone exists", async () => {

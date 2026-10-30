@@ -726,8 +726,10 @@ test("14. direct SQL against v47: without the actor, with another user, with a c
   refusedWith(await tx(null, (c) => insertRow(c, { by: pa })), "42501");
   // Another user named.
   refusedWith(await tx(pa2, (c) => insertRow(c, { by: pa })), "42501", V47_ACTOR);
-  // A club admin, as actor and creator (v34's guard refuses first).
-  refusedWith(await tx(W.caA.id, (c) => insertRow(c, { by: W.caA.id })), "42501");
+  // A club admin, as actor and creator: v34's guard refuses first (its creator
+  // must be an active platform admin), so v47's basis check of an INSERT is a
+  // second line no write reaches while v34's holds.
+  refusedWith(await tx(W.caA.id, (c) => insertRow(c, { by: W.caA.id })), "42501", /^source metric mapping: the acting user is not an active platform admin$/);
   // A seed marker outside its seeding migration (v34's seed window).
   refusedWith(await tx(pa, (c) => insertRow(c, { seed: "migrations_v2/202610121000_training_load_v34_source_metric_mapping.sql" })), "42501");
   // The create without its audit row: refused at COMMIT.
