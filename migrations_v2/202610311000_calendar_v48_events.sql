@@ -300,7 +300,7 @@ begin
   -- team moved to another club, must never make the event uncancellable.
   if tg_op = 'INSERT' or new.timezone is distinct from old.timezone then
     if not exists (select 1 from pg_timezone_names where name = new.timezone) then
-      raise exception 'calendar.events: timezone is not a recognized IANA name' using errcode = '23514';
+      raise exception 'calendar.events: timezone is not a recognized IANA name' using errcode = '23514', constraint = 'events_timezone_iana';
     end if;
   end if;
 
@@ -744,13 +744,15 @@ create constraint trigger event_requests_need_change
 -- the rest of the transaction, so a role revoked or an owner archived
 -- meanwhile waits behind the write and a write never lands on a revoked
 -- role. The order is v25 / v26's (training.lock_activity_decider and the
--- roster's team → club → role → user): the owner team, then its club (both
--- active), then the role row, then the acting user's row. Bases:
+-- roster's team → club → role → user): the owner team, then its club, then
+-- the role row, then the acting user's row. Bases:
 --   platform_admin  an active platform admin; any owner, a private coach's
---                   events included (support, plan 4.1)
+--                   events included (support, plan 4.1), an archived team's
+--                   or club's events included
 --   club_admin      the active admin of the owner club, or of the owner
---                   TEAM's club (owner decision D18)
---   team_coach      an active coach of the owner team
+--                   TEAM's club (owner decision D18), the club active; the
+--                   team may be archived (plan 4.1: the next level up)
+--   team_coach      an active coach of the owner team, team and club active
 --   private_coach   the owner user themself, an active independent coach
 --                   (public.user_global_roles, the fact authz.isIndependentCoach reads)
 -- 42501 for everything else; the service answers the identical 404 (ADR-006).
@@ -758,6 +760,8 @@ create function calendar.lock_event_writer(p_user_id uuid, p_owner_scope varchar
 returns varchar language plpgsql as $$
 declare
   v_club_id uuid;
+  v_team_active boolean;
+  v_club_active boolean;
 begin
   if p_basis is null or p_basis not in ('platform_admin', 'club_admin', 'team_coach', 'private_coach') then
     raise exception 'lock_event_writer: unknown basis %', p_basis using errcode = 'invalid_parameter_value';
@@ -766,19 +770,30 @@ begin
     raise exception 'lock_event_writer: unknown owner' using errcode = 'invalid_parameter_value';
   end if;
 
-  -- 1. The owner: the team (active), then its club (active); a club; a user.
+  -- 1. The owner: the team, then its club; a club; a user. An archived owner
+  --    takes writes from the next level up only (plan section 4.1, so its
+  --    events can still be cancelled): an archived team never through its
+  --    team_coach (its club's admin or the platform admin instead); an
+  --    archived club — an archived team's club included — through
+  --    platform_admin only.
   if p_owner_scope = 'team' then
-    select t.club_id into v_club_id from public.teams t where t.id = p_owner_id and coalesce(t.is_active, true) for share;
+    select t.club_id, coalesce(t.is_active, true) into v_club_id, v_team_active from public.teams t where t.id = p_owner_id for share;
     if not found then
-      raise exception 'user % may not write the events of a team that is not active', p_user_id using errcode = 'insufficient_privilege';
+      raise exception 'user % may not write the events of an unknown team', p_user_id using errcode = 'insufficient_privilege';
+    end if;
+    if not v_team_active and p_basis = 'team_coach' then
+      raise exception 'user % may not write the events of an archived team as team_coach', p_user_id using errcode = 'insufficient_privilege';
     end if;
   elsif p_owner_scope = 'club' then
     v_club_id := p_owner_id;
   end if;
   if v_club_id is not null then
-    perform 1 from public.clubs c where c.id = v_club_id and coalesce(c.is_active, true) for share;
+    select coalesce(c.is_active, true) into v_club_active from public.clubs c where c.id = v_club_id for share;
     if not found then
-      raise exception 'user % may not write the events of a club that is not active', p_user_id using errcode = 'insufficient_privilege';
+      raise exception 'user % may not write the events of an unknown club', p_user_id using errcode = 'insufficient_privilege';
+    end if;
+    if not v_club_active and p_basis <> 'platform_admin' then
+      raise exception 'user % may not write the events of an archived club as %', p_user_id, p_basis using errcode = 'insufficient_privilege';
     end if;
   end if;
   if p_owner_scope = 'user' and p_basis <> 'platform_admin' and p_owner_id <> p_user_id then

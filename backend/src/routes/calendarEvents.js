@@ -23,7 +23,8 @@ const NOT_FOUND_BODY = Object.freeze({ error: "notFound", message: "Not found." 
 
 function respondError(req, res, error, { read = false } = {}) {
   if (error instanceof EventError) {
-    if (error.status === 404) return res.status(404).json(NOT_FOUND_BODY);
+    // The one 404, never cached (as the GPEXE administrator routes answer).
+    if (error.status === 404) return res.status(404).set("Cache-Control", "no-store").json(NOT_FOUND_BODY);
     if (error.code === "forbidden") return res.status(403).json({ error: "Forbidden" });
     return res.status(error.status).json({ error: error.code, message: error.message, ...(error.details ?? {}) });
   }

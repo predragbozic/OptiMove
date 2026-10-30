@@ -64,26 +64,32 @@ export function eventOwnerOfRow(row) {
 //     opened the team's workspace writes as club_admin; never a club-owned
 //     event (the team coach reads it, the panel offers nothing);
 //   private coach → private_coach for the account's own events.
-// An archived owner team or club takes no write (the lock function refuses
-// it too, so `canManage` and the write verdict agree).
+// An archived owner takes writes from the next level up only (plan 4.1,
+// the manager's decision of 2026-10-30, so an archived team's or club's
+// events can still be cancelled): an archived team of an active club → its
+// club's admin or the platform admin, never the team coach; an archived club
+// (an archived team's club included) → the platform admin only. The lock
+// function refuses the same bases, so `canManage` and the write verdict
+// agree.
 export function eventWriteBasis(ctx, owner) {
   if (ctx.type !== "coach" || !owner) return null;
-  if (owner.scope === "team" && (owner.teamActive === false || owner.teamClubActive === false)) return null;
-  if (owner.scope === "club" && owner.clubActive === false) return null;
+  const teamArchived = owner.scope === "team" && owner.teamActive === false;
+  const clubArchived = (owner.scope === "club" && owner.clubActive === false) || (owner.scope === "team" && owner.teamClubActive === false);
   const { workspace: ws, authz } = ctx;
-  if (ws.type === "platform") return isPlatformAdministrator(authz) ? "platform_admin" : null;
+  const platform = isPlatformAdministrator(authz) ? "platform_admin" : null;
+  if (ws.type === "platform") return platform;
   if (ws.type === "club") {
     const club = String(ws.scopeId);
     const inClub = (owner.scope === "club" && owner.clubId === club) || (owner.scope === "team" && owner.teamClubId === club);
     if (!inClub) return null;
-    if (holdsClubAdminRole(authz, club)) return "club_admin";
-    return isPlatformAdministrator(authz) ? "platform_admin" : null;
+    if (!clubArchived && holdsClubAdminRole(authz, club)) return "club_admin";
+    return platform;
   }
   if (ws.type === "team") {
     if (owner.scope !== "team" || owner.teamId !== String(ws.scopeId)) return null;
-    if (holdsTeamCoachRole(authz, owner.teamId)) return "team_coach";
-    if (owner.teamClubId && holdsClubAdminRole(authz, owner.teamClubId)) return "club_admin";
-    return isPlatformAdministrator(authz) ? "platform_admin" : null;
+    if (!teamArchived && !clubArchived && holdsTeamCoachRole(authz, owner.teamId)) return "team_coach";
+    if (!clubArchived && owner.teamClubId && holdsClubAdminRole(authz, owner.teamClubId)) return "club_admin";
+    return platform;
   }
   if (ws.type === "private_coach") {
     if (owner.scope !== "user" || owner.userId !== String(ctx.userId)) return null;

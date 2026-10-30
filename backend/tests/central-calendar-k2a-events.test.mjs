@@ -772,6 +772,9 @@ test("9. GET /api/calendar: event cards per workspace with canManage, kinds, inc
   const training = await typeOf(c.clubAdmin.cookie, "training");
   const clubEvent = (await createEvent(c.clubAdmin.cookie, { eventTypeId: training.id, title: "Club day", day: FUTURE, startTime: "10:00", location: "Stadium", notes: "Internal", targets: [{ kind: "club", id: c.clubId }] })).body.event;
   const teamEvent = (await createEvent(c.coach1.cookie, { eventTypeId: training.id, title: "Team session", day: FUTURE, startTime: "17:30", targets: [{ kind: "team", id: c.team1 }] })).body.event;
+  // D21 "teams": a direct target on a club-owned event names no team; on a team-owned event it names the owner team.
+  const directClub = (await createEvent(c.clubAdmin.cookie, { eventTypeId: training.id, title: "One to one (club)", day: FUTURE, targets: [{ kind: "athlete", id: c.a1.athleteId }] })).body.event;
+  const directTeam = (await createEvent(c.coach1.cookie, { eventTypeId: training.id, title: "One to one (team)", day: FUTURE, targets: [{ kind: "athlete", id: c.a1.athleteId }] })).body.event;
   const left = await makeAthlete("read left", { clubId: c.clubId, teamId: c.team1 });
   const pastTeamEvent = (await createEvent(c.coach1.cookie, { eventTypeId: training.id, title: "Earlier session", day: PAST, targets: [{ kind: "team", id: c.team1 }] })).body.event;
   await archiveMembership(await teamMembershipId(left.athleteId, c.team1), `${addDays(TODAY, -1)}T10:00:00Z`);
@@ -834,7 +837,13 @@ test("9. GET /api/calendar: event cards per workspace with canManage, kinds, inc
   const athleteRes = await calendar(c.a1.cookie, { extra: "&include=athletes" });
   assert.equal(athleteRes.status, 200, athleteRes.text);
   const athleteCards = ofKind(allItems(athleteRes), "event");
-  assert.deepEqual(athleteCards.map((i) => i.links.eventId).sort(), [clubEvent.id, pastTeamEvent.id, teamEvent.id].sort());
+  assert.deepEqual(athleteCards.map((i) => i.links.eventId).sort(), [clubEvent.id, pastTeamEvent.id, teamEvent.id, directClub.id, directTeam.id].sort());
+  const teamsByEvent = Object.fromEntries(athleteCards.map((card) => [card.links.eventId, card.teamIds]));
+  assert.deepEqual(teamsByEvent[teamEvent.id], [c.team1], "D21 teams: the athlete's own team among the event's team targets");
+  assert.deepEqual(teamsByEvent[pastTeamEvent.id], [c.team1]);
+  assert.deepEqual(teamsByEvent[clubEvent.id], [], "a club target names no team");
+  assert.deepEqual(teamsByEvent[directClub.id], [], "a direct athlete target on a club-owned event names no team");
+  assert.deepEqual(teamsByEvent[directTeam.id], [c.team1], "a direct athlete target on a team-owned event names the owner team");
   const allowed = ["key", "kind", "date", "title", "eventKind", "eventTypeLabel", "span", "startTime", "endTime", "location", "status", "cancelled", "teamIds", "links"].sort();
   for (const card of athleteCards) {
     assert.deepEqual(Object.keys(card).sort(), allowed, `the athlete's card carries only the allowed fields: ${Object.keys(card).join(",")}`);
@@ -1153,6 +1162,7 @@ test("16. GET /:id for a reader who may not manage the event carries only the ta
   assert.deepEqual(byCoach1.body.event.targets.map((t) => [t.kind, t.id]).sort(), [["athlete", c.a1.athleteId], ["athlete", c.a2.athleteId], ["club", c.clubId]].sort());
   assert.equal(byCoach1.text.includes(c.team2), false, "team 2 is outside team 1's scope");
   assert.equal(byCoach1.text.includes("Coach notes"), false);
+  assert.equal("eventTypeId" in byCoach1.body.event, false, "the reduced view carries no type id (the card's contract)");
   // Team 2's coach: the club target and the team-2 target, no team-1 athlete.
   const byCoach2 = await getEvent(c.coach2.cookie, ev.id);
   assert.equal(byCoach2.status, 200, byCoach2.text);
@@ -1196,6 +1206,21 @@ test("17. a requestKey is bound to its event and its owner: the same key and bod
   assert.equal(inB.status, 409, inB.text);
   assert.equal(inB.body.error, "request_key_reused");
   assert.equal((await q(`select count(*)::int as n from calendar.events where owner_club_id = $1`, [other.clubId]))[0].n, 0, "nothing created in B");
+  await setWorkspace(c.clubAdmin.id, "club", c.clubId);
+  // One account that is both the club's admin and team 1's coach: the same
+  // create body and key in the club workspace, then in the team workspace,
+  // is another owner — refused, nothing created.
+  await q(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1, $2, 'team_coach', true)`, [c.clubAdmin.id, c.team1]);
+  const dualKey = newKey();
+  const dualBody = { requestKey: dualKey, timezone: TZ, eventTypeId: meeting.id, title: "Dual", day: FUTURE, targets: [{ kind: "team", id: c.team1 }] };
+  const asClub = await api("/api/calendar/events", { method: "POST", cookie: c.clubAdmin.cookie, body: dualBody });
+  assert.equal(asClub.status, 201, asClub.text);
+  assert.equal(asClub.body.event.ownerScope, "club");
+  await setWorkspace(c.clubAdmin.id, "team", c.team1);
+  const asTeam = await api("/api/calendar/events", { method: "POST", cookie: c.clubAdmin.cookie, body: dualBody });
+  assert.equal(asTeam.status, 409, asTeam.text);
+  assert.equal(asTeam.body.error, "request_key_reused");
+  assert.equal((await q(`select count(*)::int as n from calendar.events where title = 'Dual'`))[0].n, 1, "no second event");
   await setWorkspace(c.clubAdmin.id, "club", c.clubId);
 });
 
@@ -1259,7 +1284,7 @@ test("19. two creates with the same key at the same time: the second meets the u
   }
 });
 
-test("20. the platform admin manages a private coach's event from the platform workspace; an archived club's event is read as not manageable and its write answers the 404", async () => {
+test("20. the platform admin manages a private coach's event from the platform workspace; an archived owner's events pass to the next level up — the platform admin for an archived club, the club admin for an archived team — and everyone else gets the 404", async () => {
   const p = await privateCoach("pa coach");
   const own = await makeAthlete("pa athlete");
   await q(`insert into public.user_athletes (user_id, athlete_id) values ($1, $2)`, [p.id, own.athleteId]);
@@ -1278,17 +1303,52 @@ test("20. the platform admin manages a private coach's event from the platform w
   const teamEvent = (await createEvent(c.coach1.cookie, { eventTypeId: training.id, title: "Team before archive", day: FUTURE, targets: [{ kind: "team", id: c.team1 }] })).body.event;
   await q(`update public.clubs set is_active = false where id = $1`, [c.clubId]);
   try {
+    // An archived club: the platform admin alone manages its events and its
+    // teams' events; the club admin and the team coach get the one 404 (the
+    // same answer the lock speaks), and canManage says so.
     const afterArchive = await calendar(platform.cookie);
-    assert.equal(eventCards(afterArchive, clubEvent.id)[0].canManage, false);
-    const write = await patchEvent(platform.cookie, clubEvent.id, { expectedRevision: 1, title: "X" });
-    assert.equal(write.status, 404, write.text);
-    // A team-owned event of the archived club, for its coach: the same answer as the lock's.
+    assert.equal(eventCards(afterArchive, clubEvent.id)[0].canManage, true, "the platform admin may still cancel an archived club's event");
+    const support = await cancelEvent(platform.cookie, clubEvent.id, { expectedRevision: 1, reason: "Club archived" });
+    assert.equal(support.status, 200, support.text);
+    assert.equal((await q(`select basis from calendar.event_changes where event_id = $1 and kind = 'cancel'`, [clubEvent.id]))[0].basis, "platform_admin");
+    const adminWrite = await patchEvent(c.clubAdmin.cookie, teamEvent.id, { expectedRevision: 1, title: "X" });
+    assert.equal(adminWrite.status, 404, adminWrite.text);
     const coachRead = await calendar(c.coach1.cookie);
     assert.equal(eventCards(coachRead, teamEvent.id)[0].canManage, false, "the team's club is archived");
     const coachWrite = await patchEvent(c.coach1.cookie, teamEvent.id, { expectedRevision: 1, title: "X" });
     assert.equal(coachWrite.status, 404, coachWrite.text);
+    assert.equal(coachWrite.text, JSON.stringify({ error: "notFound", message: "Not found." }));
+    const supportTeam = await patchEvent(platform.cookie, teamEvent.id, { expectedRevision: 1, title: "Team (support)" });
+    assert.equal(supportTeam.status, 200, supportTeam.text);
+    assert.equal((await q(`select title from calendar.events where id = $1`, [teamEvent.id]))[0].title, "Team (support)");
   } finally {
     await q(`update public.clubs set is_active = true where id = $1`, [c.clubId]);
+  }
+  // An archived team of an active club: its club's admin (D18, the next level
+  // up) and the platform admin manage its events, audited on their basis; its
+  // own coach gets the 404 (the workspace of an archived team is not offered
+  // at all, and the lock refuses team_coach either way).
+  const t3 = await makeTeam(c.clubId, "pa T3");
+  const coach3 = await coachOf(t3, "pa coach 3");
+  const t3Event = (await createEvent(coach3.cookie, { eventTypeId: training.id, title: "T3 before archive", day: FUTURE, targets: [{ kind: "team", id: t3 }] })).body.event;
+  await q(`update public.teams set is_active = false where id = $1`, [t3]);
+  try {
+    const coachWrite = await cancelEvent(coach3.cookie, t3Event.id, { expectedRevision: 1 });
+    assert.equal(coachWrite.status, 404, coachWrite.text);
+    assert.equal(coachWrite.text, JSON.stringify({ error: "notFound", message: "Not found." }));
+    const byAdmin = await getEvent(c.clubAdmin.cookie, t3Event.id);
+    assert.equal(byAdmin.status, 200, byAdmin.text);
+    assert.equal(byAdmin.body.event.canManage, true, "the club admin manages the archived team's event");
+    const renamed = await patchEvent(c.clubAdmin.cookie, t3Event.id, { expectedRevision: 1, title: "T3 (archived team)" });
+    assert.equal(renamed.status, 200, renamed.text);
+    const bySupport = await patchEvent(platform.cookie, t3Event.id, { expectedRevision: 2, title: "T3 (support)" });
+    assert.equal(bySupport.status, 200, bySupport.text);
+    const cancelled = await cancelEvent(c.clubAdmin.cookie, t3Event.id, { expectedRevision: 3, reason: "Team archived" });
+    assert.equal(cancelled.status, 200, cancelled.text);
+    assert.deepEqual((await q(`select basis from calendar.event_changes where event_id = $1 and kind <> 'create' order by revision`, [t3Event.id])).map((r) => r.basis), ["club_admin", "platform_admin", "club_admin"]);
+    assert.equal((await q(`select status from calendar.events where id = $1`, [t3Event.id]))[0].status, "cancelled");
+  } finally {
+    await q(`update public.teams set is_active = true where id = $1`, [t3]);
   }
 });
 
@@ -1485,13 +1545,19 @@ test("24. lock_event_writer: every basis and owner combination, including the pl
   await refused("another coach's events", p.id, "user", nobody, "private_coach");
   await refused("no independent_coach role", nobody, "user", nobody, "private_coach");
   await assert.rejects(lock(c.clubAdmin.id, "club", c.clubId, "owner"), (e) => e.code === "22023");
+  await refused("an unknown team", c.clubAdmin.id, "team", crypto.randomUUID(), "club_admin");
+  // An archived owner: the next level up only (plan 4.1).
   await q(`update public.teams set is_active = false where id = $1`, [c.team1]);
-  await refused("an archived team", c.coach1.id, "team", c.team1, "team_coach");
+  await refused("an archived team, as its coach", c.coach1.id, "team", c.team1, "team_coach");
+  assert.equal(await lock(c.clubAdmin.id, "team", c.team1, "club_admin"), "club_admin", "an archived team of an active club: its club's admin");
+  assert.equal(await lock(platform.id, "team", c.team1, "platform_admin"), "platform_admin");
   await q(`update public.teams set is_active = true where id = $1`, [c.team1]);
   await q(`update public.clubs set is_active = false where id = $1`, [c.clubId]);
   await refused("a team of an archived club, as its coach", c.coach1.id, "team", c.team1, "team_coach");
-  await refused("a team of an archived club, as the platform admin", platform.id, "team", c.team1, "platform_admin");
-  await refused("an archived club", c.clubAdmin.id, "club", c.clubId, "club_admin");
+  await refused("a team of an archived club, as the club admin", c.clubAdmin.id, "team", c.team1, "club_admin");
+  assert.equal(await lock(platform.id, "team", c.team1, "platform_admin"), "platform_admin", "an archived club: the platform admin only");
+  await refused("an archived club, as its admin", c.clubAdmin.id, "club", c.clubId, "club_admin");
+  assert.equal(await lock(platform.id, "club", c.clubId, "platform_admin"), "platform_admin");
   await q(`update public.clubs set is_active = true where id = $1`, [c.clubId]);
 });
 
@@ -1504,9 +1570,16 @@ test("25. a cancel still works after the referenced test schedule was deleted an
   const withTest = (await createEvent(c.coach1.cookie, { eventTypeId: testType.id, title: "Wellness", day: FUTURE, testScheduleId: schedule, targets: [{ kind: "team", id: c.team1 }] })).body.event;
   await q(`delete from tests.test_schedule_targets where schedule_id = $1`, [schedule]);
   await q(`delete from tests.test_schedules where id = $1`, [schedule]);
-  const renamed = await patchEvent(c.coach1.cookie, withTest.id, { expectedRevision: 1, title: "Wellness (schedule gone)" });
+  // Setting the OTHER reference validates only that one: the dangling test
+  // schedule reference is left as it is.
+  const ext = await makeExternalSchedule({ owner: { scope: "team", teamId: c.team1 }, createdBy: c.coach1.id, startDate: FUTURE, eventName: "Wellness RPE", targets: [{ kind: "team", id: c.team1 }] });
+  const refOnly = await patchEvent(c.coach1.cookie, withTest.id, { expectedRevision: 1, externalScheduleId: ext });
+  assert.equal(refOnly.status, 200, refOnly.text);
+  assert.equal(refOnly.body.event.externalScheduleId, ext);
+  assert.equal(refOnly.body.event.testScheduleId, schedule, "the dangling reference stays");
+  const renamed = await patchEvent(c.coach1.cookie, withTest.id, { expectedRevision: 2, title: "Wellness (schedule gone)" });
   assert.equal(renamed.status, 200, renamed.text);
-  const cancelled = await cancelEvent(c.coach1.cookie, withTest.id, { expectedRevision: 2 });
+  const cancelled = await cancelEvent(c.coach1.cookie, withTest.id, { expectedRevision: 3 });
   assert.equal(cancelled.status, 200, cancelled.text);
   const read = await calendar(c.coach1.cookie);
   assert.equal(eventCards(read, withTest.id)[0].status, "cancelled", "the event stands alone and reads");
@@ -1561,12 +1634,85 @@ test("27. the same-key race with a failing lookup says try again, never that the
   }
 });
 
-test("26. GET /types in an archived team's workspace answers 403, not the system set", async () => {
+test("26. GET /types and a create in a team workspace of an archived club answer the one 404, never the system set; an archived team's own workspace is not offered at all (403)", async () => {
   const c = await clubFixture("types-archived");
   await q(`update public.teams set is_active = false where id = $1`, [c.team1]);
   try {
+    // The workspace of an archived team is never offered (workspace.js), so
+    // the coach reaches no coach workspace at all.
     assert.equal((await typesOf(c.coach1.cookie)).status, 403);
   } finally {
     await q(`update public.teams set is_active = true where id = $1`, [c.team1]);
   }
+  // A team of an archived club: the team workspace still resolves, but
+  // nothing can be created there — no types, and the create is the 404.
+  await q(`update public.clubs set is_active = false where id = $1`, [c.clubId]);
+  try {
+    const types = await typesOf(c.coach2.cookie);
+    assert.equal(types.status, 404, types.text);
+    assert.equal(types.text, JSON.stringify({ error: "notFound", message: "Not found." }));
+    const create = await createEvent(c.coach2.cookie, { eventTypeId: crypto.randomUUID(), title: "X", day: FUTURE, targets: [{ kind: "team", id: c.team2 }] });
+    assert.equal(create.status, 404, create.text);
+    assert.equal(create.text, JSON.stringify({ error: "notFound", message: "Not found." }));
+    assert.equal((await q(`select count(*)::int as n from calendar.events where owner_team_id = $1`, [c.team2]))[0].n, 0);
+  } finally {
+    await q(`update public.clubs set is_active = true where id = $1`, [c.clubId]);
+  }
+});
+
+test("28. a right lost between the request's check and the lock (42501 on an existing event) is the one 404 body, never a 500; the 404 is no-store", async () => {
+  const c = await clubFixture("lost-right");
+  const training = await typeOf(c.coach1.cookie, "training");
+  const ev = (await createEvent(c.coach1.cookie, { eventTypeId: training.id, title: "Before", day: FUTURE, targets: [{ kind: "team", id: c.team1 }] })).body.event;
+  const hooks = eventService.testHooks;
+  // The coach's role row deactivated after the service's own check, before the lock (the roster suites' pattern).
+  hooks.beforeLocks = async () => { await q(`update public.user_team_roles set is_active = false where user_id = $1`, [c.coach1.id]); };
+  try {
+    const res = await patchEvent(c.coach1.cookie, ev.id, { expectedRevision: 1, title: "After" });
+    assert.equal(res.status, 404, res.text);
+    assert.equal(res.text, JSON.stringify({ error: "notFound", message: "Not found." }));
+    assert.equal((await q(`select title from calendar.events where id = $1`, [ev.id]))[0].title, "Before");
+    assert.equal((await q(`select count(*)::int as n from calendar.event_requests where performed_by_user_id = $1`, [c.coach1.id]))[0].n, 1, "the create's request row only");
+  } finally {
+    delete hooks.beforeLocks;
+    await q(`update public.user_team_roles set is_active = true where user_id = $1`, [c.coach1.id]);
+  }
+  // The owner team archived inside the hook: the lock refuses team_coach (plan 4.1).
+  hooks.beforeLocks = async () => { await q(`update public.teams set is_active = false where id = $1`, [c.team1]); };
+  try {
+    const res = await cancelEvent(c.coach1.cookie, ev.id, { expectedRevision: 1 });
+    assert.equal(res.status, 404, res.text);
+    assert.equal(res.text, JSON.stringify({ error: "notFound", message: "Not found." }));
+    assert.equal((await q(`select status from calendar.events where id = $1`, [ev.id]))[0].status, "planned");
+  } finally {
+    delete hooks.beforeLocks;
+    await q(`update public.teams set is_active = true where id = $1`, [c.team1]);
+  }
+  // The router's 404 is never cached.
+  const raw = await fetch(`${apiBase}/api/calendar/events/${crypto.randomUUID()}`, { headers: { Cookie: c.coach1.cookie } });
+  assert.equal(raw.status, 404);
+  assert.equal(raw.headers.get("cache-control"), "no-store");
+  assert.equal(await raw.text(), JSON.stringify({ error: "notFound", message: "Not found." }));
+});
+
+test("29. a referenced schedule belongs to the event's owner or its club, for every basis: the platform admin cannot bind club A's event to club B's schedule, nor to another team's", async () => {
+  const c = await clubFixture("so");
+  const other = await clubFixture("so-other");
+  const platform = await platformAdmin();
+  const match = await typeOf(c.coach1.cookie, "match");
+  const ev = (await createEvent(c.coach1.cookie, { eventTypeId: match.id, title: "Derby", day: FUTURE, targets: [{ kind: "team", id: c.team1 }] })).body.event;
+  const schedB = await makeExternalSchedule({ owner: { scope: "club", clubId: other.clubId }, createdBy: other.clubAdmin.id, startDate: FUTURE, targets: [{ kind: "club", id: other.clubId }] });
+  const schedT2 = await makeExternalSchedule({ owner: { scope: "team", teamId: c.team2 }, createdBy: c.coach2.id, startDate: FUTURE, targets: [{ kind: "team", id: c.team2 }] });
+  const schedClub = await makeExternalSchedule({ owner: { scope: "club", clubId: c.clubId }, createdBy: c.clubAdmin.id, startDate: FUTURE, targets: [{ kind: "club", id: c.clubId }] });
+  const foreign = await patchEvent(platform.cookie, ev.id, { expectedRevision: 1, externalScheduleId: schedB });
+  const random = await patchEvent(platform.cookie, ev.id, { expectedRevision: 1, externalScheduleId: crypto.randomUUID() });
+  const sibling = await patchEvent(platform.cookie, ev.id, { expectedRevision: 1, externalScheduleId: schedT2 });
+  assert.equal(foreign.status, 400, foreign.text);
+  assert.equal(foreign.body.error, "schedule_not_available");
+  assert.equal(foreign.text, random.text, "a foreign schedule reads exactly as a random id");
+  assert.equal(sibling.text, random.text, "another team's schedule of the same club is not the owner's either");
+  assert.equal((await q(`select revision from calendar.events where id = $1`, [ev.id]))[0].revision, 1, "the refusals wrote nothing");
+  const own = await patchEvent(platform.cookie, ev.id, { expectedRevision: 1, externalScheduleId: schedClub });
+  assert.equal(own.status, 200, own.text, "the owner team's club's schedule is the owner's");
+  assert.equal(own.body.event.externalScheduleId, schedClub);
 });

@@ -327,7 +327,7 @@ async function reducedViewOf(row, ctx, queryable) {
   }
   return {
     id: row.id, ownerScope: row.owner_scope,
-    eventTypeId: row.event_type_id, eventKind: row.event_kind, eventTypeLabel: row.event_type_label,
+    eventKind: row.event_kind, eventTypeLabel: row.event_type_label,
     title: row.title, day: span.from, endDay: dateStr(row.end_day),
     startTime: timeStr(row.start_time), endTime: timeStr(row.end_time), timezone: row.timezone, location: row.location,
     status: row.status, cancelledAt: row.cancelled_at ? new Date(row.cancelled_at).toISOString() : null,
@@ -348,19 +348,26 @@ async function readEventView(queryable, ctx, eventId) {
   return reducedViewOf(row, ctx, queryable);
 }
 
+// The club of an ACTIVE team of an ACTIVE club, else null: a team workspace
+// whose team or club is archived creates nothing and lists no types.
 async function teamClubId(queryable, teamId) {
-  const row = (await queryable.query(`select club_id, coalesce(is_active, true) as active from public.teams where id = $1`, [teamId])).rows[0];
+  const row = (await queryable.query(
+    `select t.club_id, (coalesce(t.is_active, true) and coalesce(c.is_active, true)) as active
+       from public.teams t join public.clubs c on c.id = t.club_id where t.id = $1`,
+    [teamId],
+  )).rows[0];
   return row && row.active ? String(row.club_id) : null;
 }
 
 // GET /types — the types the active workspace may use, non-archived. An
-// archived team's workspace (nothing can be created there) gets nothing.
+// archived team's workspace, or a team workspace of an archived club (nothing
+// can be created there), gets the router's one 404, as every write there.
 export async function listEventTypes(ctx) {
   if (ctx.type !== "coach") throw forbidden();
   const owner = eventOwnerForWorkspace(ctx);
   if (owner?.scope === "team") {
     owner.teamClubId = await teamClubId(pool, owner.teamId);
-    if (!owner.teamClubId) throw forbidden();
+    if (!owner.teamClubId) throw notFound();
   }
   const params = [];
   const ownerSql = eventTypesOwnerSql(owner, "t", params);
@@ -407,33 +414,45 @@ async function resolveType(client, owner, eventTypeId) {
   return row;
 }
 
-async function checkTimezone(client, timezone) {
-  const ok = (await client.query(`select 1 from pg_timezone_names where name = $1`, [timezone])).rowCount > 0;
-  if (!ok) throw bad("invalid_timezone", "timezone must be an IANA time zone name.");
-}
-
 const scheduleNotAvailable = () => bad("schedule_not_available", "This schedule is not available in this workspace.");
 
-// The referenced schedules (plan 1.1, option a): each must exist and be
-// manageable in the ACTIVE workspace — both through the external schedules'
-// own workspace-bound rule (the test schedule shares the owner columns, so
-// the same predicate applies; the Tests module's account-wide
-// canManageSchedule would let an admin of two clubs reach the other club's
-// schedule from this workspace); a test schedule only on a `test` kind.
-async function checkScheduleRefs(client, ctx, { externalScheduleId, testScheduleId, kind }) {
+// A referenced schedule belongs to the event's owner or to the owner team's
+// club — whoever writes, the platform admin included (whose workspace rule
+// below reaches every schedule): a club-owned event references the club's
+// schedules, a team-owned event the team's or its club's, a private coach's
+// event the coach's own.
+function scheduleBelongsToOwner(owner, row) {
+  if (owner.scope === "club") return row.owner_scope === "club" && String(row.owner_club_id) === owner.clubId;
+  if (owner.scope === "team") {
+    return (row.owner_scope === "team" && String(row.owner_team_id) === owner.teamId)
+      || (row.owner_scope === "club" && owner.teamClubId !== null && String(row.owner_club_id) === owner.teamClubId);
+  }
+  return row.owner_scope === "user" && String(row.owner_user_id) === owner.userId;
+}
+
+// The referenced schedules (plan 1.1, option a): each must exist, belong to
+// the event's owner (above) and be manageable in the ACTIVE workspace — both
+// through the external schedules' own workspace-bound rule (the test
+// schedule shares the owner columns, so the same predicate applies; the Tests
+// module's account-wide canManageSchedule would let an admin of two clubs
+// reach the other club's schedule from this workspace); a test schedule only
+// on a `test` kind. Every refusal is the one answer, whatever the reason.
+async function checkScheduleRefs(client, ctx, owner, { externalScheduleId, testScheduleId, kind }) {
   const scope = externalScheduleScopeForWorkspace(ctx.workspace, { user: { id: ctx.userId } });
+  const usable = (row) => Boolean(row) && scope.type !== null && canManageExternalScheduleInScope(scope, row) && scheduleBelongsToOwner(owner, row);
   if (externalScheduleId) {
     const row = (await client.query(`select owner_scope, owner_user_id, owner_club_id, owner_team_id from training_load.external_schedules where id = $1`, [externalScheduleId])).rows[0];
-    if (!row || scope.type === null || !canManageExternalScheduleInScope(scope, row)) throw scheduleNotAvailable();
+    if (!usable(row)) throw scheduleNotAvailable();
   }
   if (testScheduleId) {
     if (kind !== "test") throw conflict("schedule_kind_mismatch", "A test schedule can be referenced only by an event of kind test.");
     const row = (await client.query(`select owner_scope, owner_user_id, owner_club_id, owner_team_id from tests.test_schedules where id = $1`, [testScheduleId])).rows[0];
-    if (!row || scope.type === null || !canManageExternalScheduleInScope(scope, row)) throw scheduleNotAvailable();
+    if (!usable(row)) throw scheduleNotAvailable();
   }
 }
 
 const SCHEDULE_UNIQUE_CONSTRAINTS = new Set(["events_one_planned_per_external_schedule", "events_one_planned_per_test_schedule"]);
+const TIMEZONE_CONSTRAINT = "events_timezone_iana";
 const REQUEST_KEY_CONSTRAINT = "event_requests_one_per_key";
 
 // ---------------------------------------------------------------------------
@@ -497,7 +516,7 @@ async function runEventCommand(ctx, { requestKey, canonical, eventId }, apply) {
       }
       if (owner.scope === "team") {
         owner.teamClubId = await teamClubId(client, owner.teamId);
-        if (!owner.teamClubId) throw forbidden();
+        if (!owner.teamClubId) throw notFound();
       }
       basis = eventWriteBasis(ctx, owner);
       if (!basis) throw forbidden();
@@ -554,6 +573,9 @@ async function runEventCommand(ctx, { requestKey, canonical, eventId }, apply) {
     if (!commitSent) {
       await client.query("rollback").catch(() => { broken = true; });
       if (error?.code === "55P03" || error?.code === "40P01") throw conflict("try_again", "The event is being changed. Try again.");
+      // The time zone is checked by events_before_write alone (one scan of
+      // pg_timezone_names per write, the invariant where it holds).
+      if (error?.code === "23514" && error.constraint === TIMEZONE_CONSTRAINT) throw bad("invalid_timezone", "timezone must be an IANA time zone name.");
       if (error?.code === "23505" && SCHEDULE_UNIQUE_CONSTRAINTS.has(error.constraint)) {
         throw conflict("schedule_already_referenced", "Another planned event already refers to this schedule.");
       }
@@ -645,8 +667,7 @@ export async function createEvent(ctx, body) {
   return runEventCommand(ctx, { requestKey, canonical, eventId: null }, async ({ client, owner }) => {
     const type = await resolveType(client, owner, canonical.eventTypeId);
     const expects = canonical.expects ?? (type.default_expects || []);
-    await checkTimezone(client, canonical.timezone);
-    await checkScheduleRefs(client, ctx, { externalScheduleId: canonical.externalScheduleId, testScheduleId: canonical.testScheduleId, kind: type.kind });
+    await checkScheduleRefs(client, ctx, owner, { externalScheduleId: canonical.externalScheduleId, testScheduleId: canonical.testScheduleId, kind: type.kind });
     const targets = await resolveEventTargets(client, owner, canonical.targets, canonical.day);
     const inserted = await client.query(
       `insert into calendar.events (owner_scope, owner_user_id, owner_club_id, owner_team_id, event_type_id, title, day, end_day, start_time, end_time,
@@ -714,12 +735,17 @@ export async function updateEvent(ctx, eventId, body) {
       typeChanged = true;
     }
     const expects = "expects" in f ? f.expects : (row.expects || []);
-    if ("timezone" in f && f.timezone !== row.timezone) await checkTimezone(client, f.timezone);
-    const refsChanged = String(next.externalScheduleId ?? "") !== String(row.external_schedule_id ?? "") || String(next.testScheduleId ?? "") !== String(row.test_schedule_id ?? "");
-    if (refsChanged || (typeChanged && next.testScheduleId)) {
-      await checkScheduleRefs(client, ctx, {
-        externalScheduleId: refsChanged ? next.externalScheduleId : null,
-        testScheduleId: next.testScheduleId, kind,
+    // Only a reference that is set or changed is validated (the database's
+    // rule as well), plus the test schedule when the type changed (its kind
+    // rule): the other reference, unchanged, may point at a schedule the
+    // Tests module deleted since, and must never block this write.
+    const extChanged = String(next.externalScheduleId ?? "") !== String(row.external_schedule_id ?? "");
+    const testChanged = String(next.testScheduleId ?? "") !== String(row.test_schedule_id ?? "");
+    if (extChanged || testChanged || (typeChanged && next.testScheduleId)) {
+      await checkScheduleRefs(client, ctx, owner, {
+        externalScheduleId: extChanged ? next.externalScheduleId : null,
+        testScheduleId: testChanged || typeChanged ? next.testScheduleId : null,
+        kind,
       });
     }
     const before = await readEventView(client, ctx, row.id);

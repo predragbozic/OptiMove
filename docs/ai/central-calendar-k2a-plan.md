@@ -296,6 +296,14 @@ or club, the wrong workspace (ADR-006). A foreign or non-existent **target id** 
 convention (a foreign filter id never confirms existence), not the external route's `403 "outside your
 access"` (`trainingLoad.js:1841`). The read's `canManage` is computed by the same function.
 
+**An archived owner (manager decision of 2026-10-30, after the independent review of K2a-1a):** the events of an
+archived team or club must stay cancellable, so a write on them passes to the **next level up** only — an archived
+team of an active club: its club's admin (`club_admin`) or the platform admin, never the team coach; an archived
+club (an archived team's club included): the platform admin only. `eventWriteBasis` and
+`calendar.lock_event_writer()` both refuse the other bases (so `canManage` and the write verdict agree), the write
+is audited on its basis as usual, and nothing can be created for an archived owner: a team workspace of an archived
+club lists no types and its create answers the one 404 (an archived team's own workspace is never offered at all).
+
 ### 4.2 Routes (every write: `requestKey`, one transaction, stable codes, no SQL text)
 
 | Route | Body | Notes |
@@ -377,7 +385,7 @@ base kind.
 |---|---|---|---|
 | **K2a-1a** ★ | migration v48 (every table of 1.2, the seed, the lock function, the guards, the rollback script and a read-only preflight / post-check in `docs/runbooks/calendar-events-v48*.sql`); `GET …/types`; create, edit, cancel; the read extension (`event` cards, the athlete's answer, `canManage`); the fixture list appended (`GPEXE_TEST_MIGRATIONS`, `_gpexe-disposable-db.mjs:75`; every slicing suite uses `indexOf`, none the list's end — verified) | `db-reviewer` + `security-reviewer` + `code-reviewer` | **yes**: triggers 1 (migration), 2 (owner_scope, workspace, info-hiding), 4 (lock order, idempotency) |
 | **K2a-1b** | the links: attach / detach sessions with `alignSessions` (the toggle extracted into one shared function), attach / detach an activity, set / clear a schedule reference; the folding; `gaps` | `security-reviewer` + `code-reviewer` (+ `db-reviewer` only if the extracted toggle or a trigger changes) | **yes**: triggers 3 (linking) and 4 |
-| **K2a-2** | UI: "New event" in the toolbar and on a day; the event card (type label, team stripe, time, location, status, counts, gap note); the panel with Edit / Cancel / Attach a training / Attach an activity / Detach for `canManage`; "Attach to event…" on a planned card's panel; the kind chips: `event` → **Events**, `external` → **RPE requests** (choice 9.10; today `external` is labelled "Events", `frontend/central-calendar-view.js:13`); a lost answer is *Result not confirmed · Check result* with the same `requestKey` (the roster and F3c3 pattern) | `code-reviewer` + `mobile-qa` + `ux-design-reviewer`; browser QA at 1280 / 360 / 375 / 390 px on the K1b harness | no (the server decides; no access change) |
+| **K2a-2** | UI — **first item:** the deployed K1b screen gets a kind label and a chip for `kind: "event"` (LOW-8 of the K2a-1a independent review: the `event` cards this API already serves would otherwise render unlabelled there); then "New event" in the toolbar and on a day; the event card (type label, team stripe, time, location, status, counts, gap note); the panel with Edit / Cancel / Attach a training / Attach an activity / Detach for `canManage`; "Attach to event…" on a planned card's panel; the kind chips: `event` → **Events**, `external` → **RPE requests** (choice 9.10; today `external` is labelled "Events", `frontend/central-calendar-view.js:13`); a lost answer is *Result not confirmed · Check result* with the same `requestKey` (the roster and F3c3 pattern) | `code-reviewer` + `mobile-qa` + `ux-design-reviewer`; browser QA at 1280 / 360 / 375 / 390 px on the K1b harness | no (the server decides; no access change) |
 | **K2b** | Settings → Calendar: types CRUD with the archive rule, team colours (D11), locations (a catalog); the athlete's Upcoming events; v49 | `db-reviewer` + `security-reviewer` + `code-reviewer` + UI reviewers | yes (trigger 1) |
 
 **Why two backend slices and one migration:** the reviewers read one schema once; each PR stays reviewable
@@ -451,6 +459,10 @@ mine is reproduced on a clean detached `origin/main` worktree before it is calle
 - No notification is sent for an event (the athlete learns of it only on their Home once K2b lands).
 - `end_time` on a multi-day event is not interpreted (one card per day, times shown on each).
 - Performance is not a concern: events are tens per month; the reads stay bounded.
+- The athlete's cards of the **other** kinds (planned, external, test) still carry `teamIds: []`: K1a computes an
+  athlete's team ids against the workspace's teams, which an athlete workspace has none of. The event card (K2a-1a,
+  round 2) derives them from the event's own teams instead — the athlete's teams on the day among the event's team
+  targets and owner team (D21 "teams"). Aligning the other kinds is a K1a follow-up, not a K2a task.
 
 **Open environment item (not a K2a task; the owner's decision):** the local OPTIMOVE database stands at v21
 (CURRENT_STATE, since September), so every shared-kind suite has been unclaimable for every change since v22;
@@ -564,5 +576,15 @@ owner's external review (triggers 1, 2, 4).
   archived, as the lock refuses it; a failed lookup in the same-key race says *try again*, never that the key is
   another's; the rollback locks the tables in the writers' order after the migrator's lock and the record check; the
   preflight and post-check blocks run in the suite against their expected values.
+- **The independent review of PR #298 (`6800176`; READY WITH NON-BLOCKING NOTES — 1 MEDIUM, 9 LOW, 1 nit), all
+  applied in one round:** the athlete's event card carries the athlete's own teams among the event's teams (D21;
+  the other kinds are the follow-up in section 8); an archived owner's events pass to the next level up (section
+  4.1); the reduced view carries no type id (the card's contract); a referenced schedule must belong to the event's
+  owner or its club whoever writes, the platform admin included; only a reference that changed is validated again
+  (a dangling one never blocks a write); the time zone is the database's check alone, its refusal mapped to
+  `400 invalid_timezone`; a team workspace of an archived club lists no types and creates nothing (the one 404);
+  the router's 404 is `no-store`; two test gaps closed (a right lost between the check and the lock → the 404
+  body; one account's key reused across its club and team workspaces → `409 request_key_reused`); K2a-2's first
+  item recorded in section 7.
 - **Environment:** the shared-kind suites were not run (the local OPTIMOVE database is at v21, pre-existing); the
   open item is recorded in section 8.

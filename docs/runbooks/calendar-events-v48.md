@@ -20,9 +20,12 @@ Plan and decisions: `docs/ai/central-calendar-k2a-plan.md` (sections 1.2, 4, 6 a
   - `event_requests` (the `requestKey` record) and `event_changes` (the change log): append-only; a request without
     its change row cannot be committed.
   - `calendar.lock_event_writer(user, owner_scope, owner_id, basis)` — the v25 / v26 pattern and order: the owner
-    team, then its club (both active), then the role row the basis rests on, then the acting user's row, all
-    `FOR SHARE`; `42501` otherwise. Bases `platform_admin` (any owner, a private coach's events included — support),
-    `club_admin` (the owner club, or the owner team's club — D18), `team_coach`, `private_coach`.
+    team, then its club, then the role row the basis rests on, then the acting user's row, all `FOR SHARE`; `42501`
+    otherwise. Bases `platform_admin` (any owner, a private coach's events included — support), `club_admin` (the
+    owner club, or the owner team's club — D18), `team_coach`, `private_coach`. An archived owner takes writes from
+    the next level up only (plan 4.1): an archived team of an active club through `club_admin` or `platform_admin`,
+    never `team_coach`; an archived club through `platform_admin` only — so an archived team's or club's events can
+    still be cancelled, and nothing can be created for them.
   - No existing table, column, row or trigger is changed. The only writes outside the new schema: none.
 - **The code** (one release with v48): `POST / PATCH /api/calendar/events`, `POST …/:id/cancel`, `GET …/types`,
   `GET …/:id` (`backend/src/routes/calendarEvents.js`, `calendarEventService.js`, `calendarEventAccess.js`); events

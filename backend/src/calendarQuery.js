@@ -833,8 +833,17 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
       const last = lastOwn < to ? lastOwn : to;
       for (let cursor = first; cursor <= last; cursor = addDaysIso(cursor, 1)) pairs.push({ scheduleId: row.id, day: cursor });
     }
-    const targets = await readScheduleTargetAthletes(ctx, "calendar.event_targets", { pairs, filters, teamIds, idColumn: "event_id" });
     const teamTargets = await readEventTeamTargets(eventRows.map((r) => r.id));
+    // The teams an event names: its team targets and its owner team.
+    const eventTeams = (row) => new Set([...(teamTargets.get(String(row.id)) || []), ...(row.owner_scope === "team" && row.owner_team_id ? [String(row.owner_team_id)] : [])]);
+    // A coach's card names the workspace's teams; the athlete's card (D21
+    // "teams") names the athlete's own teams ON THAT DAY among the teams the
+    // event names — the membership rule of readScheduleTargetAthletes over
+    // the union of the window's event teams, cut back per event below. (The
+    // other kinds' athlete cards still carry no team: a K1a follow-up, plan
+    // section 8.)
+    const teamScope = ctx.type === "athlete" ? uniq(eventRows.flatMap((row) => [...eventTeams(row)])) : teamIds;
+    const targets = await readScheduleTargetAthletes(ctx, "calendar.event_targets", { pairs, filters, teamIds: teamScope, idColumn: "event_id" });
     const workspaceTeams = new Set(teamIds.map(String));
     for (const row of eventRows) {
       const canManage = ctx.type === "coach" && eventWriteBasis(ctx, eventOwnerOfRow(row)) !== null;
@@ -858,7 +867,12 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
             testScheduleId: row.test_schedule_id ? String(row.test_schedule_id) : null, testOccurrenceId: null,
           },
         });
-        athletes.forEach((a) => a.teamIds.forEach((id) => card.teamIds.add(id)));
+        if (ctx.type === "athlete") {
+          const named = eventTeams(row);
+          athletes.forEach((a) => a.teamIds.forEach((id) => { if (named.has(String(id))) card.teamIds.add(String(id)); }));
+        } else {
+          athletes.forEach((a) => a.teamIds.forEach((id) => card.teamIds.add(id)));
+        }
         for (const id of teamTargets.get(String(row.id)) || []) if (workspaceTeams.has(id)) card.teamIds.add(id);
         if (row.owner_scope === "team" && row.owner_team_id && workspaceTeams.has(String(row.owner_team_id))) card.teamIds.add(String(row.owner_team_id));
         // The referenced schedule's card of this day folds under a PLANNED
