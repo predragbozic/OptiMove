@@ -760,6 +760,12 @@ order covers is merged under it.
   - **v43 is directly confirmed on the production database** by the owner's post-check. No mapping version is active
     in production. `CURRENT_STATE.md` holds the full record.
 - **Next by the order above: 7c.**
+- **7c and 7d, the contracts (J9, J10):** `docs/ai/phase7c-unit-conversions-contract.md` and
+  `docs/ai/phase7d-mapping-activations-contract.md`, proposed on 2026-10-30 and reviewed in one ★★ round, as the
+  *Rukovodilac* reads the owner's word „ako je sigurnije neka ide kako smo počeli, eventualno 7c i 7d možda u jedan pr”
+  (owner turn `dc0796d5`, 2026-10-30 15:56:22 UTC, in the *Rukovodilac*'s chat; the executor checked it in the transcript).
+  The implementations stay separate: 7c-B with migration v47, then 7d-B with v48, each merged only on the owner's
+  order naming its pull request, migration file and sha256. 7d follows C106 (a club admin also writes T5).
 - **Input (red zone):** the owner's decisions from section K of the discovery document:
   - the minimum number of athletes for min / max;
   - system or club zone mappings;
