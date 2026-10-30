@@ -30,7 +30,10 @@ post-check; nothing else was re-derived then. Data configuration PR-1b (migratio
 #277 and PR #278, the deploys of `0592550`, `d9383adb`, `fb33918e` and `70e9e2b`, and the pull requests of the owner's
 other sessions they carry (PR #275 with the roster's v44, #276, #280, #281, #283, #284, #286, #288 and #289) were
 added later the same day at `70e9e2b` (merge of PR #287), after the owner's read-only v46 post-check; nothing else was
-re-derived then.
+re-derived then. PR #290 (those facts), the 7c and 7d contracts (PR #291, C106), phase 7c (migration v47, PR #293), the
+deploy of `69af453`, the open 7d-B pull request (PR #295, migration v48) and PR #292 and PR #294 of the owner's other
+sessions were added later the same day at `6a94ce29` (merge of PR #294), after the owner's read-only v47 post-check;
+nothing else was re-derived then.
 
 ## Active phase
 
@@ -2361,6 +2364,43 @@ Technical details.
       - Recorded: the one surviving mutation is equivalent (without the plain pre-read of a taken target, the per-owner
         index gives the same answer: the pre-read is an optimization, the index the guarantee); the executor and the
         reviewers ran PostgreSQL 16 only, production runs 17. The local OPTIMOVE database is untouched.
+    - **The 7c and 7d contracts, PR #291** (`docs/ai/phase7c-unit-conversions-contract.md`, J9;
+      `docs/ai/phase7d-mapping-activations-contract.md`, J10), reviewed in one ★★ round. Merged as `236cc68` on
+      2026-10-30 at 17:41:21 UTC, on the owner's word „Odobravam PR #291.” (owner turn `6b576fa7`, 17:40:12 UTC, in the
+      *Rukovodilac*'s chat), which also confirms C106: a club's active admin also starts and ends T5 activations on that
+      club's bindings, in its own workspace.
+    - **7c, PR #293: maintaining the unit conversions, with migration v47 — merged and deployed, and v47 directly
+      confirmed on the production database.** Contract J9; as built: J9 of the discovery document; runbook
+      `docs/runbooks/unit-conversion-guards-v47.md`.
+      - **What it adds:** under `/api/training-load/sources/metrics/conversions`, the paged read (for the mapping
+        admins) and the create and `…/:conversionId/retire` (for an active platform admin in the platform workspace
+        only), with v47's database actor guard of every conversion write and its audit rows.
+      - **Reviews:** the internal reviews, then GO on head `6219f056` from the *Rukovodilac* and the *Nezavisni revizor*.
+      - **Preflight (owner-run, read-only):** „preflight ocekivane vrednosti potvrdjene” (owner turn `eb9fe4e6`,
+        2026-10-30 18:02:07 UTC).
+      - **The owner's order** (owner turn `f5c75f18`, 18:02:27 UTC, in the *Rukovodilac*'s chat, checked by the
+        executor word for word in its transcript): „Odobravam i naređujem merge PR #293 sa migracijom
+        202610301700_training_load_v47_unit_conversion_guards.sql, sha256
+        665ef79f74689eb19fa8a41fad84268c17029aa38c322adaac2f88b841dabd66.”
+      - **Merge** by the executor: `69af453` (parents `aa84d574` and `6219f056`, 18:17:43 UTC), exactly from
+        `6219f056`. `main` had moved before it by PR #292 (no migration, no file shared with PR #293); the targeted 7c
+        and M2 suites were green on the merge tree.
+      - **Deploy:** by the owner by hand, as `69af453` (production served `aa84d574` at 18:18 UTC). The *Rukovodilac*'s
+        smoke, 18:23:09 – 18:23:30 UTC: `/api/health` answered `ok: true` on `69af453` three times in a row;
+        `/api/auth/me` answered `{"user":null}`; without a login the conversion list (also with a cursor), the create
+        and the retire of a conversion (with `{}`), the mappings and variables reads and the GPEXE team status answered
+        401.
+      - **Post-check (owner-run, read-only, after 18:24 UTC):** all five blocks as expected („sve potvrdjeno na
+        postcheku”, as the *Rukovodilac* relays it in its message of 18:28 UTC; the block values were not written out).
+        **v47 is directly confirmed on the production database.**
+    - **7d-B, PR #295 (Draft): T5 activations, with migration v48 — not merged, v48 applied to no persistent
+      database.** S1 (start one active version on listed bindings), S2 (end one activation) and S3 (list them), for an
+      active platform admin and, by C106, the active admin of the club that owns the binding's connection; A1, A2 and
+      the pinned step end the open activations of the version they disable. Head `578717af`; the internal reviews
+      (`db-reviewer`, `security-reviewer`, `code-reviewer`) READY or READY WITH NON-BLOCKING NOTES; the EXTERNAL REVIEW
+      REQUIRED package went to the *Rukovodilac* and the *Nezavisni revizor* on 2026-10-30. Its merge needs the owner's
+      order naming the pull request, `migrations_v2/202610301900_training_load_v48_mapping_activations.sql` and its
+      sha256, with the preflight `docs/runbooks/mapping-activations-v48-preflight.sql` the same day.
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2826,6 +2866,16 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- **Deployed with `69af453`** (the merge of PR #293, phase 7c, migration v47), started by the owner by hand on
+  2026-10-30 (production served `aa84d574` at 18:18 UTC before it). See the phase 7c entry of the active phase for its
+  smoke and the v47 post-check (**v47 directly confirmed**). It carries, besides PR #293:
+  - PR #290 (the facts of PR-1b and PR-1c, documents only, merge commit `3d4cd12`, 15:54:54 UTC), merged by the
+    executor under the standing merge order after the *Rukovodilac*'s GO, and PR #291 (the 7c and 7d contracts,
+    `236cc68`, 17:41:21 UTC) on the owner's word;
+  - PR #292 (the central calendar's screen K1b, frontend and a plan document, merge commit `aa84d574`), merged from the
+    owner's account in another session, a track outside this plan's reviews.
+- **PR #294** (the central calendar's view switches, frontend only, merge commit `6a94ce29`) was merged from the owner's
+  account in another session after it; its deploy is not recorded here.
 - **Deployed with `70e9e2b`** (the merge of PR #287, Data configuration PR-1c, migration v46), started by the owner by
   hand on 2026-10-30 ("Deploy a specific commit"; production served `fb33918e` at 15:19 UTC before it). See the PR-1c
   entry under "Data configuration: visual polish" for its smoke and the v46 post-check (**v46 directly confirmed**).
@@ -3257,7 +3307,8 @@ pre-existing; pass/fail counts don't belong in this file
   activities exist there is not read.
 - **A stale comment in `pinnedDecisions`** (`backend/src/sourceRevisionLifecycleService.js`; the *Nezavisni revizor*'s
   LOW-1 on PR #273): it still says the caller learns "which archived clubs to restore", while `club_archived` no longer
-  points to a restore (R8). The *Rukovodilac*'s order: fix it in the phase 7c pull request.
+  points to a restore (R8). The *Rukovodilac*'s order: fix it in the phase 7c pull request. **Done in PR #293:** the
+  comment no longer mentions a restore.
 - **The disposable test databases do not carry PR #267's three `media.*` migrations** (`GPEXE_TEST_MIGRATIONS` in
   `backend/tests/_gpexe-disposable-db.mjs`), so their order differs from production's. No object is shared with
   `training_load`, so no Metrics Core test is affected; whether to add them (with the earlier media migrations they
@@ -3805,7 +3856,7 @@ pre-existing; pass/fail counts don't belong in this file
 
 PR A (F3c3), PR #139, PR #140, the whole-session projection (PR #141), the identity probe (PR #143),
 the identity implementation (PR #144, v32), the id masking (PR #145), the hardening (PR #146), the
-window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224), R2, renaming, archiving and restoring a canonical variable (PR #227, v38), Q10 part A (PR #229), phase 2c, R2 in the Variables view (PR #237), the plan's working mode with phases 11 and 12 (PR #238, `b358dae`), the v39 / v40 contract J5 (PR #240, `0c7104c`), phase 4, the revision lifecycle and Q10 part B (PR #241, v39 and v40, `290b6cf`), the phase 12 contract (PR #244, `a07fdd1`), 12b, domains and categories of canonical variables (PR #247, v41, `9361fff`), 12c, their frontend (PR #249, `3532bc5`), and the phase 5 options (PR #250) are merged and deployed (the last three with `ae29b08`); phase 6, the Source fields view (PR #251, `cf387f2`), and the documents of PR #252 (`0b947ab`) are merged and deployed (with `0b947ab`); M2b (PR #164, v37) is merged and its deploy is inferred; the phase 5b acceptance (PR #255), Data configuration PR-1 (PR #256), phase 5b, the zone model (PR #259, v42, `ed86ca8`, directly confirmed by the owner's post-check), and the plan's guidance (PR #258) are merged and deployed (with `d9a02ad8`); the Source fields language pass (PR #261) and Data configuration PR-2 (PR #263, `00b3958`) are merged and deployed (with `00b3958`); phase 7a (PR #269, `aaf150a`) is merged and deployed (with `62090a6`); the plan's phase 7 entries (PR #271, `51025e4`) and phase 7b, activating, disabling and replacing a mapping version (PR #273, v43, `5a4c480`, directly confirmed by the owner's post-check), are merged and deployed (with `5a4c480`); the scrolling lists of the start screen's cards (PR #278, `01cd32d`) are merged and deployed (with `0592550`); Data configuration PR-1b, changing a variable's icon (PR #282, v45, `46e0303`, directly confirmed by the owner's post-check), is merged and deployed (with `d9383adb`); Data configuration PR-1c, the icons of domains and categories (PR #287, v46, `70e9e2b`, directly confirmed by the owner's post-check), is merged and deployed (with `70e9e2b`). PR #142 is closed as superseded. Next steps, in order:
+window diagnostic (PR #147), the whole-list window (PR #148), the drill projection (PR #149), the drill-set diagnostic (PR #150), the drill-count diagnostic (PR #151), the fix that ignores a drill answer's drills_count (PR #152), the pre-import safety package (PR #153, v33), its frontend half (PR #154), the T1 test infrastructure (PR #155), the mapping discovery (PR #156), the agent-efficiency rule (PR #158), M1, the mapping schema (PR #159, v34), the first M2 PR, the mapping administration API (PR #160), v35, the database actor guards (PR #161), M3-0, the canonical-variable admin API (PR #163, v36), the older catalog's guard C98 (PR #219), the Metrics Core plan (PR #221), M3a, the Variables view (PR #218), the R2 contract (PR #224), R2, renaming, archiving and restoring a canonical variable (PR #227, v38), Q10 part A (PR #229), phase 2c, R2 in the Variables view (PR #237), the plan's working mode with phases 11 and 12 (PR #238, `b358dae`), the v39 / v40 contract J5 (PR #240, `0c7104c`), phase 4, the revision lifecycle and Q10 part B (PR #241, v39 and v40, `290b6cf`), the phase 12 contract (PR #244, `a07fdd1`), 12b, domains and categories of canonical variables (PR #247, v41, `9361fff`), 12c, their frontend (PR #249, `3532bc5`), and the phase 5 options (PR #250) are merged and deployed (the last three with `ae29b08`); phase 6, the Source fields view (PR #251, `cf387f2`), and the documents of PR #252 (`0b947ab`) are merged and deployed (with `0b947ab`); M2b (PR #164, v37) is merged and its deploy is inferred; the phase 5b acceptance (PR #255), Data configuration PR-1 (PR #256), phase 5b, the zone model (PR #259, v42, `ed86ca8`, directly confirmed by the owner's post-check), and the plan's guidance (PR #258) are merged and deployed (with `d9a02ad8`); the Source fields language pass (PR #261) and Data configuration PR-2 (PR #263, `00b3958`) are merged and deployed (with `00b3958`); phase 7a (PR #269, `aaf150a`) is merged and deployed (with `62090a6`); the plan's phase 7 entries (PR #271, `51025e4`) and phase 7b, activating, disabling and replacing a mapping version (PR #273, v43, `5a4c480`, directly confirmed by the owner's post-check), are merged and deployed (with `5a4c480`); the scrolling lists of the start screen's cards (PR #278, `01cd32d`) are merged and deployed (with `0592550`); Data configuration PR-1b, changing a variable's icon (PR #282, v45, `46e0303`, directly confirmed by the owner's post-check), is merged and deployed (with `d9383adb`); Data configuration PR-1c, the icons of domains and categories (PR #287, v46, `70e9e2b`, directly confirmed by the owner's post-check), is merged and deployed (with `70e9e2b`); the facts PR #290 (`3d4cd12`), the 7c and 7d contracts (PR #291, `236cc68`) and phase 7c, maintaining the unit conversions (PR #293, v47, `69af453`, directly confirmed by the owner's post-check), are merged and deployed (with `69af453`). PR #142 is closed as superseded. Next steps, in order:
 1. **The Metrics Core plan** (`docs/ai/metrics-core-plan.md`) sets the order of the Metrics Core work. Its
    phases 0, 1, 2, 3, 2b, 2c, 4, 5b, 6 and 12 are done, and so is Q10: part A in PR #229, part B as v40 in PR #241. Phase 5
    is decided, and phase 5b implements it. Phase 4 is the revision lifecycle (C91) with migrations v39
@@ -3816,10 +3867,12 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
    - phase 5b, the zone model (option A, C102), is done: PR #259 merged (`ed86ca8`) and deployed with `d9a02ad8`, v42
      directly confirmed by the owner's post-check. Its first real zone confirmation waits for the C97 evidence;
    - Data configuration: PR-2 (PR #263) and the language pass (PR #261) are merged and deployed (with `00b3958`);
-   - phase 7, the rest of M2: 7a (PR #269) and 7b (PR #273, v43) are done, merged and deployed, v43 directly confirmed
-     by the owner's post-check. Next by the plan is 7c (`unit_conversions` maintenance), its discovery and contract on
-     the *Rukovodilac*'s order, then 7d (T5 activations) and phase 8 (the Mappings tab). A mapping version is activated
-     in production only once its source field's unit is confirmed (C97);
+   - phase 7, the rest of M2: 7a (PR #269), 7b (PR #273, v43) and 7c (PR #293, v47) are done, merged
+     and deployed, v43 and v47 directly confirmed by the owner's post-checks. 7d-B (T5 activations, v48) is Draft PR
+     #295, under the external review; its merge needs the owner's order. Next by the plan: the contracts of 7e (the
+     aggregate preview), 7f (the extractor registry) and 7g (ending a held source instance, D9) in one docs pull
+     request, then phase 8 (the Mappings tab). A mapping version is activated in production only once its source
+     field's unit is confirmed (C97);
    - Data configuration: PR-1b (a variable's icon, v45) and PR-1c (the icons of domains and categories, v46) are merged
      and deployed, both migrations directly confirmed by the owner's post-checks; their follow-ups are under Separate
      tasks;
