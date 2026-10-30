@@ -34,7 +34,7 @@ function intro(ctx) {
 function card({ attrs, tile, title, summary, rows = [] }) {
   const scrolls = rows.length > VISIBLE_ROWS;
   const list = rows.length
-    ? `<ul class="dc-card-rows${scrolls ? " is-scrolling" : ""}" aria-label="${title}"${scrolls ? ` tabindex="0"` : ""}>${rows.map((row) => `<li class="dc-card-row">${row}</li>`).join("")}</ul>`
+    ? `<ul class="dc-card-rows${scrolls ? " is-scrolling" : ""}" role="list" aria-label="${title} list"${scrolls ? ` tabindex="0"` : ""}>${rows.map((row) => `<li class="dc-card-row">${row}</li>`).join("")}</ul>`
     : "";
   return `
     <li class="dc-card" ${attrs}>

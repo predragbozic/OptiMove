@@ -19140,17 +19140,24 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   flex: 0 0 20px;
   color: var(--muted);
 }
-/* Every row the screen's read holds, in a list four and a half rows high (a
-   28 px tile and a 6 px gap each) that scrolls on its own; the half row shows
-   there is more. */
+/* Every row the screen's read holds, in a list four and a half rows high that
+   scrolls on its own; the half row shows there is more. A row is exactly
+   --dc-row high (the 28 px tile, or one and a half lines of a larger text), and
+   the list's height is counted in the same rows, so at any text size four rows
+   fit and a fifth scrolls - the rule data-config-home-view.js's VISIBLE_ROWS
+   follows when it makes a long list a keyboard stop. overscroll-behavior stays
+   the browser's default on purpose: a swipe that starts on a list at its end
+   moves the page, so a phone's page never stays caught in a card's list. */
 .dc-card-rows {
+  --dc-row: max(28px, 1.5em);
   display: grid;
   gap: 6px;
   min-width: 0;
-  max-height: calc(4.5 * 28px + 4 * 6px);
+  max-height: calc(4.5 * var(--dc-row) + 4 * 6px);
   margin: 0;
   padding: 0;
   list-style: none;
+  overflow-x: hidden;
   overflow-y: auto;
 }
 .dc-card-rows.is-scrolling {
@@ -19166,9 +19173,12 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   align-items: center;
   gap: 8px;
   min-width: 0;
+  height: var(--dc-row);
+  overflow: hidden;
 }
 .dc-card-row > span:last-child {
   min-width: 0;
+  line-height: 1.5;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

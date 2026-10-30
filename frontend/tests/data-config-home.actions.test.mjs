@@ -259,7 +259,8 @@ test("7. a card shows every row its read holds; from the fifth row on its list s
   for (const [selector, title] of [['.dc-card[data-view="variables"]', "Variables"], ['.dc-card[data-section="source-fields"]', "Source fields"]]) {
     assert.ok(list(selector).classList.contains("is-scrolling"), `${title} scrolls`);
     assert.equal(list(selector).getAttribute("tabindex"), "0", `${title}: the keyboard can reach the list to scroll it`);
-    assert.equal(list(selector).getAttribute("aria-label"), title);
+    assert.equal(list(selector).getAttribute("aria-label"), `${title} list`, "named apart from the card's button");
+    assert.equal(list(selector).getAttribute("role"), "list", "a list for every screen reader, its bullets hidden");
   }
   assert.ok(!list('.dc-card[data-view="domains"]').hasAttribute("tabindex"), "two domains fit: no keyboard stop");
   // The app's delegation takes the nearest data-action: a row gives the card's.
