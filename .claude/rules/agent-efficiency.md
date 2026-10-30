@@ -67,6 +67,39 @@ test result; reviewing a domain the change did not touch.
   optional wording or style change that would itself need a new full review is recorded
   as a follow-up instead; no new commit after the final review for an optional NIT.
 
+## 5a. The light regime for a small frontend fix
+
+Owner, 2026-10-30. Like the rest of this file it sets only the order and the extent of
+the work: it never removes a mandatory review trigger, the external review of
+`CLAUDE.md`, a relevant test, or a database, security, privacy or production gate.
+
+It applies only when all of these hold:
+- frontend only, no migration;
+- no auth, access, ownership or info-hiding change, and none of the five external-review
+  triggers of `CLAUDE.md`;
+- a few files;
+- inside a stream the owner lets merge on its own (today: Exercise and Calendar).
+
+Then:
+1. The reviewers the orchestration matrix of `CLAUDE.md` names: usually `code-reviewer`
+   alone, plus `mobile-qa` for a CSS, layout, responsive, pointer, touch or UI change.
+   This section fixes the rounds, not the set.
+2. At most one narrow re-review per domain, and only for a BLOCKER or HIGH. A MEDIUM is
+   fixed and proven by its test without a new round; the severity contract of `CLAUDE.md`
+   still applies — a MEDIUM is fixed or recorded, never dropped. If that re-review still
+   finds a BLOCKER or HIGH, the light regime ends and the full procedure applies (§5,
+   §10, and the external review of `CLAUDE.md` when its trigger 5 applies).
+3. Mutations only where §6 asks for them: two or three on the key change, not a
+   campaign; none for a CSS-only or copy-only change.
+4. Targeted test files during the work; the full frontend preset once, at the end, on
+   the final HEAD (§6 applied, not a new tier), plus the production build and
+   `git diff --check` (the Definition of Done of `CLAUDE.md`).
+5. Browser QA only for a visual or interaction change (`frontend.md`, "Browser QA").
+
+Target: 15–25 minutes from the brief to the PR. Deploy stays the owner's: small fixes are
+collected and deployed together (at the end of the day, or when a few are ready); an
+urgent fix goes alone. A change outside this scope keeps the full procedure.
+
 ## 6. Test tiers (the T1 runner)
 
 - During development: only the directly affected files
@@ -116,6 +149,10 @@ test results; the review findings; the remaining risks and owner decisions; the 
 next step. It does not retell every tool call, wait, grep or internal attempt, does not
 repeat one fact in several sections, and no status message is sent without a new
 decision or result.
+
+A light-regime PR (§5a) says "light regime" in its body and lists what was not run (for
+example a full mutation campaign, and browser QA when the change was not visual or an
+interaction), so the manager and the owner see the tier.
 
 ## 10. Stop and ask
 
