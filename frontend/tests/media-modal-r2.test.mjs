@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
 
 // FE-1: the media modal with an R2 video or image - the short-lived address
@@ -22,6 +24,19 @@ const dom = new JSDOM(`<!doctype html><html><body>
 globalThis.document = dom.window.document;
 globalThis.window = dom.window;
 globalThis.HTMLImageElement = dom.window.HTMLImageElement;
+
+// jsdom has no media playback: play() is recorded with the address the
+// element held at that moment and answers what the test sets.
+const plays = [];
+let playAnswer = () => Promise.resolve();
+dom.window.HTMLMediaElement.prototype.play = function play() {
+  plays.push({ src: this.getAttribute("src") || "", muted: this.muted });
+  return playAnswer();
+};
+// A computer (the default here) or a phone, as media-modal.js asks for it.
+const computer = () => { window.matchMedia = () => ({ matches: false }); };
+const phone = () => { window.matchMedia = (query) => ({ matches: query === "(max-width: 760px)" }); };
+computer();
 
 const { els } = await import("../dom.js");
 const media = await import("../media.js");
@@ -70,7 +85,8 @@ test("1. an R2 video: the HTML5 player without an address, one request for the r
   const calls = fakeFetch(slotAnswer((slot) => (slot === "video" ? asset("vid-1", "https://r2.example/vid-1?sig=1") : null)));
   modal.handleMediaAction(control(assetVideoRow));
   assert.equal(els.mediaModal.hidden, false);
-  assert.ok(els.mediaModal.classList.contains("is-video"));
+  assert.ok(els.mediaModal.classList.contains("is-inline-video"), "on a computer: the picture's dialog");
+  assert.equal(els.mediaModal.classList.contains("is-video"), false, "not the black video box");
   const video = body().querySelector("video.media-video");
   assert.ok(video);
   assert.equal(video.hasAttribute("src"), false, "no address until the server issued one");
@@ -78,7 +94,7 @@ test("1. an R2 video: the HTML5 player without an address, one request for the r
   assert.equal(video.getAttribute("controls"), "");
   assert.equal(body().querySelector(".media-asset").dataset.mediaState, "loading");
   assert.match(body().querySelector(".media-status").textContent, /Preparing the video/);
-  assert.ok(body().querySelector('[data-action="enter-fullscreen"]'), "the full-screen button is the phone's gesture");
+  assert.ok(body().querySelector('.media-video-actions [data-action="enter-fullscreen"]'), "the full-screen button, under the player");
   await settle();
   assert.deepEqual(calls, [{ url: playback.ACCESS_ROUTE, body: { context, slots: ["video"] } }]);
   assert.equal(video.src, "https://r2.example/vid-1?sig=1");
@@ -189,10 +205,14 @@ test("5. Google Drive, YouTube and a direct link are drawn exactly as before, wi
   const calls = fakeFetch(() => new Promise((resolve) => { release = () => resolve({ video: asset("vid-1", "https://r2.example/late") }); }));
   modal.handleMediaAction(control(assetVideoRow));
   modal.closeMedia();
+  const playsBefore = plays.length;
   modal.openMedia("Clip", "", "https://cdn.example/clip.mp4");
   const direct = body().querySelector("video.media-video");
   assert.ok(direct.hasAttribute("controls") && direct.hasAttribute("playsinline"));
   assert.equal(direct.getAttribute("preload"), "metadata");
+  assert.equal(direct.hasAttribute("muted"), false, "a direct link is drawn as before");
+  assert.ok(els.mediaModal.classList.contains("is-video"));
+  assert.equal(els.mediaModal.classList.contains("is-inline-video"), false);
   assert.equal(direct.querySelector("source").getAttribute("src"), "https://cdn.example/clip.mp4");
   assert.equal(body().querySelector(".media-asset"), null, "a direct link is not an asset");
   release();
@@ -205,6 +225,10 @@ test("5. Google Drive, YouTube and a direct link are drawn exactly as before, wi
   modal.closeMedia();
   modal.openMedia("Drive", "https://drive.google.com/file/d/IMG_1/view", "https://drive.google.com/file/d/FILE_1/view?usp=sharing");
   assert.equal(body().querySelector("iframe.media-frame-video").getAttribute("src"), "https://drive.google.com/file/d/FILE_1/preview?autoplay=1");
+  assert.ok(els.mediaModal.classList.contains("is-video") && els.mediaModal.classList.contains("is-frame-video"), "the Drive player's layout as before");
+  assert.equal(els.mediaModal.classList.contains("is-inline-video"), false);
+  assert.equal(body().querySelector(".media-video-actions"), null);
+  assert.equal(els.mediaModal.querySelector(".media-dialog").style.getPropertyValue("--media-aspect"), "");
   modal.closeMedia();
   modal.openMedia("Picture", "https://drive.google.com/file/d/IMG_1/view", "");
   assert.equal(els.mediaModal.classList.contains("is-video"), false);
@@ -214,5 +238,263 @@ test("5. Google Drive, YouTube and a direct link are drawn exactly as before, wi
   assert.match(body().textContent, /No media available/);
   modal.closeMedia();
   assert.equal(calls.length, 1, "only the R2 opening asked the server");
+  assert.equal(plays.length, playsBefore, "nothing but an R2 video is started by OptiMove");
   playback.forgetMediaAccess();
+});
+
+// Owner, 2026-10-29: on a computer or a tablet an R2 video opens like the
+// picture (the light dialog with the title, the video where the picture
+// would be), starts by itself without sound, and offers full screen; the
+// dialog takes the video's shape. A phone keeps its full-screen player, muted
+// and started too.
+
+const css = readFileSync(fileURLToPath(new URL("../styles.css", import.meta.url)), "utf8").replace(/\r\n/g, "\n");
+const dialog = () => els.mediaModal.querySelector(".media-dialog");
+const aspect = () => dialog().style.getPropertyValue("--media-aspect");
+const posterRow = { name: "Dead Bug", media: { video: { source: "asset", mediaId: "vid-1" }, image: { source: "legacy", url: "https://drive.google.com/file/d/IMG_1/view" }, accessContext: context } };
+const LEGACY_POSTER = "https://drive.google.com/thumbnail?id=IMG_1&sz=w1000";
+
+function sizeOf(video, width, height) {
+  Object.defineProperty(video, "videoWidth", { configurable: true, value: width });
+  Object.defineProperty(video, "videoHeight", { configurable: true, value: height });
+  video.dispatchEvent(new dom.window.Event("loadedmetadata"));
+}
+
+// The browser holds these pictures already (their size is known at once).
+function knownPictures(sizes) {
+  const proto = dom.window.HTMLImageElement.prototype;
+  const keys = ["complete", "naturalWidth", "naturalHeight"];
+  const saved = keys.map((key) => [key, Object.getOwnPropertyDescriptor(proto, key)]);
+  const of = (image) => sizes[image.getAttribute("src")];
+  Object.defineProperty(proto, "complete", { configurable: true, get() { return Boolean(of(this)); } });
+  Object.defineProperty(proto, "naturalWidth", { configurable: true, get() { return of(this)?.[0] || 0; } });
+  Object.defineProperty(proto, "naturalHeight", { configurable: true, get() { return of(this)?.[1] || 0; } });
+  return () => { for (const [key, descriptor] of saved) Object.defineProperty(proto, key, descriptor); };
+}
+
+function topLevelRule(selector) {
+  const at = css.indexOf(`\n${selector} {`);
+  assert.ok(at >= 0, `rule ${selector} must exist`);
+  const media = css.lastIndexOf("\n@media", at);
+  assert.ok(media < 0 || css.indexOf("\n}\n", media) < at, `${selector} applies at every width, inside no @media block`);
+  return css.slice(at, css.indexOf("}", at));
+}
+
+test("6. on a computer an R2 video opens in the picture's dialog: the title, the poster, muted, started once its address is assigned; a refused start leaves the poster and the controls without a message", async () => {
+  computer();
+  playback.forgetMediaAccess();
+  fakeFetch(slotAnswer((slot) => (slot === "video" ? asset("vid-1", "https://r2.example/vid-1?sig=1") : null)));
+  const before = plays.length;
+  modal.handleMediaAction(control(posterRow));
+  assert.equal(els.mediaTitle.textContent, "Dead Bug", "the title header, as for a picture");
+  assert.ok(els.mediaModal.classList.contains("is-inline-video"));
+  assert.equal(els.mediaModal.classList.contains("is-video"), false);
+  const video = body().querySelector(".media-asset video.media-video");
+  assert.equal(video.getAttribute("poster"), LEGACY_POSTER, "the exercise picture is the poster");
+  assert.equal(video.hasAttribute("muted"), true, "muted by default");
+  assert.equal(video.muted, true);
+  assert.equal(video.getAttribute("controls"), "", "the sound control stays in the player's own controls");
+  assert.equal(video.getAttribute("playsinline"), "");
+  assert.equal(video.getAttribute("preload"), "metadata");
+  assert.equal(body().querySelector(".media-fullscreen-note"), null, "full screen is not entered by itself, so it is not announced");
+  assert.equal(plays.length, before, "nothing to start before the address");
+  await settle();
+  assert.deepEqual(plays.slice(before), [{ src: "https://r2.example/vid-1?sig=1", muted: true }], "started once, muted, with its address");
+  modal.closeMedia();
+  playback.forgetMediaAccess();
+
+  playAnswer = () => Promise.reject(Object.assign(new Error("blocked"), { name: "NotAllowedError" }));
+  try {
+    modal.handleMediaAction(control(posterRow));
+    await settle();
+    await settle();
+    assert.equal(body().querySelector(".media-asset").dataset.mediaState, "ready", "a refused start is not an error");
+    assert.equal(body().querySelector(".media-error"), null);
+    assert.equal(body().querySelector("video.media-video").getAttribute("poster"), LEGACY_POSTER);
+    assert.equal(body().querySelector("video.media-video").getAttribute("controls"), "");
+    modal.closeMedia();
+    playAnswer = () => { throw new Error("no media support"); };
+    modal.handleMediaAction(control(posterRow));
+    await settle();
+    assert.equal(body().querySelector(".media-asset").dataset.mediaState, "ready", "a start that throws is not an error either");
+  } finally {
+    playAnswer = () => Promise.resolve();
+    modal.closeMedia();
+    playback.forgetMediaAccess();
+  }
+});
+
+test("7. the dialog takes the video's shape once its size is known, upright or wide; before that a poster the browser already holds, else the default; nothing of it outlives the opening", async () => {
+  computer();
+  playback.forgetMediaAccess();
+  fakeFetch(slotAnswer((slot) => asset(slot === "video" ? "vid-1" : "img-1", `https://r2.example/${slot === "video" ? "vid-1" : "img-1"}`)));
+  modal.handleMediaAction(control(assetVideoRow));
+  assert.equal(aspect(), "", "nothing known yet: the default shape");
+  await settle();
+  const video = body().querySelector("video.media-video");
+  sizeOf(video, 720, 1280);
+  assert.equal(aspect(), "0.5625", "a phone video held upright");
+  sizeOf(video, 1920, 1080);
+  assert.equal(aspect(), "1.7778", "a wide video");
+  sizeOf(video, 0, 0);
+  assert.equal(aspect(), "1.7778", "a size that cannot be read changes nothing");
+  modal.closeMedia();
+  assert.equal(aspect(), "", "Close leaves the dialog as the picture view expects it");
+
+  // A poster the browser holds sizes the dialog before the video does; the
+  // video's own size wins once known.
+  let restore = knownPictures({ [LEGACY_POSTER]: [1080, 1350] });
+  try {
+    modal.handleMediaAction(control(posterRow));
+    assert.equal(aspect(), "0.8000", "the known poster's shape at once");
+    await settle();
+    sizeOf(body().querySelector("video.media-video"), 720, 1280);
+    assert.equal(aspect(), "0.5625");
+    modal.closeMedia();
+  } finally {
+    restore();
+  }
+  // An R2 poster from the same answer, held by the browser, before the video's size.
+  playback.forgetMediaAccess();
+  restore = knownPictures({ "https://r2.example/img-1": [1280, 720] });
+  try {
+    modal.handleMediaAction(control({ name: "Plank", media: { video: { source: "asset", mediaId: "vid-1" }, image: { source: "asset", mediaId: "img-1" }, accessContext: context } }));
+    assert.equal(aspect(), "");
+    await settle();
+    assert.equal(body().querySelector("video.media-video").poster, "https://r2.example/img-1");
+    assert.equal(aspect(), "1.7778", "the R2 poster's shape");
+    modal.closeMedia();
+  } finally {
+    restore();
+  }
+  // A poster the browser does not hold yet: the default until the video says.
+  playback.forgetMediaAccess();
+  modal.handleMediaAction(control(posterRow));
+  await settle();
+  assert.equal(aspect(), "", "no request and no guess");
+  // A picture opened after a video gets the plain picture dialog.
+  sizeOf(body().querySelector("video.media-video"), 720, 1280);
+  modal.openMedia("Picture", "https://drive.google.com/file/d/IMG_1/view", "");
+  assert.equal(aspect(), "", "opening something else in the same dialog resets the shape");
+  assert.equal(els.mediaModal.classList.contains("is-inline-video"), false);
+  assert.ok(body().querySelector("img.media-image-full"));
+  modal.closeMedia();
+  playback.forgetMediaAccess();
+});
+
+test("8. full screen in the dialog: the button under the player asks for the video's full screen, leaving it comes back to the dialog, and the end of the video still closes it", async () => {
+  computer();
+  playback.forgetMediaAccess();
+  const requests = [];
+  dom.window.Element.prototype.requestFullscreen = function requestFullscreen() { requests.push(this); return Promise.resolve(); };
+  Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => null });
+  try {
+    fakeFetch(slotAnswer((slot) => (slot === "video" ? asset("vid-1", "https://r2.example/vid-1") : null)));
+    modal.handleMediaAction(control(assetVideoRow));
+    await settle();
+    const video = body().querySelector("video.media-video");
+    sizeOf(video, 1920, 1080);
+    assert.equal(requests.length, 0, "a computer is not put in full screen by itself");
+    const button = body().querySelector('.media-video-actions [data-action="enter-fullscreen"]');
+    assert.equal(button.getAttribute("aria-label"), "Full screen");
+    assert.equal(modal.handleMediaAction(button), true);
+    assert.deepEqual(requests, [video], "the video itself goes full screen");
+    modal.handleFullscreenChange();
+    assert.equal(els.mediaModal.hidden, false, "back from full screen to the dialog");
+    video.dispatchEvent(new dom.window.Event("webkitendfullscreen"));
+    assert.equal(els.mediaModal.hidden, false, "Safari's own player, left, comes back to the dialog too");
+    assert.equal(video.getAttribute("src"), "https://r2.example/vid-1");
+    video.dispatchEvent(new dom.window.Event("ended"));
+    assert.equal(els.mediaModal.hidden, true, "the end of the video closes the dialog, as before");
+    assert.equal(els.mediaModal.classList.contains("is-inline-video"), false);
+  } finally {
+    delete dom.window.Element.prototype.requestFullscreen;
+    delete document.fullscreenElement;
+    modal.closeMedia();
+    playback.forgetMediaAccess();
+  }
+});
+
+test("9. a phone keeps its full-screen player (the small box, the note, full screen asked once the size is known, closed on leaving it), now muted and started too", async () => {
+  phone();
+  playback.forgetMediaAccess();
+  const requests = [];
+  dom.window.Element.prototype.requestFullscreen = function requestFullscreen() { requests.push(this); return Promise.resolve(); };
+  Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => null });
+  try {
+    fakeFetch(slotAnswer((slot) => (slot === "video" ? asset("vid-1", "https://r2.example/vid-1") : null)));
+    const before = plays.length;
+    modal.handleMediaAction(control(assetVideoRow));
+    assert.ok(els.mediaModal.classList.contains("is-video"));
+    assert.equal(els.mediaModal.classList.contains("is-inline-video"), false);
+    assert.match(body().querySelector(".media-fullscreen-note").textContent, /Opening video in full screen/);
+    assert.ok(body().querySelector(':scope > [data-action="enter-fullscreen"]'), "the phone's button, as before");
+    assert.equal(body().querySelector(".media-video-actions"), null);
+    const video = body().querySelector("video.media-video");
+    assert.equal(video.muted, true);
+    assert.equal(video.hasAttribute("muted"), true);
+    await settle();
+    assert.deepEqual(plays.slice(before), [{ src: "https://r2.example/vid-1", muted: true }]);
+    sizeOf(video, 720, 1280);
+    assert.deepEqual(requests, [video], "full screen asked for once the size is known, as before");
+    assert.equal(aspect(), "", "the phone's box keeps its own size");
+    modal.handleFullscreenChange();
+    assert.equal(els.mediaModal.hidden, true, "leaving full screen closes the small box, as before");
+    modal.handleMediaAction(control(assetVideoRow));
+    await settle();
+    body().querySelector("video.media-video").dispatchEvent(new dom.window.Event("webkitendfullscreen"));
+    assert.equal(els.mediaModal.hidden, true, "iPhone Safari's own player, left, closes it, as before");
+  } finally {
+    delete dom.window.Element.prototype.requestFullscreen;
+    delete document.fullscreenElement;
+    modal.closeMedia();
+    playback.forgetMediaAccess();
+    computer();
+  }
+});
+
+test("9b. a phone turned on its side (wider than 760 px, at most 500 px high) keeps the player it had, now muted and started; it is not put in full screen by itself, as before", async () => {
+  window.matchMedia = (query) => ({ matches: query === "(max-height: 500px)" });
+  playback.forgetMediaAccess();
+  const requests = [];
+  dom.window.Element.prototype.requestFullscreen = function requestFullscreen() { requests.push(this); return Promise.resolve(); };
+  try {
+    fakeFetch(slotAnswer((slot) => (slot === "video" ? asset("vid-1", "https://r2.example/vid-1") : null)));
+    const before = plays.length;
+    modal.handleMediaAction(control(assetVideoRow));
+    assert.ok(els.mediaModal.classList.contains("is-video"), "the player it had, not the picture's dialog");
+    assert.equal(els.mediaModal.classList.contains("is-inline-video"), false);
+    assert.equal(body().querySelector(".media-video-actions"), null);
+    assert.ok(body().querySelector(':scope > [data-action="enter-fullscreen"]'));
+    await settle();
+    assert.deepEqual(plays.slice(before), [{ src: "https://r2.example/vid-1", muted: true }]);
+    sizeOf(body().querySelector("video.media-video"), 720, 1280);
+    assert.equal(requests.length, 0, "only a phone held upright asks for full screen by itself, as before");
+    assert.equal(aspect(), "");
+  } finally {
+    delete dom.window.Element.prototype.requestFullscreen;
+    modal.closeMedia();
+    playback.forgetMediaAccess();
+    computer();
+  }
+});
+
+test("10. styles.css: the dialog follows --media-aspect within the picture's bounds at every width, the video fills it without bars, and the full-screen button is a 44 px target under the player", () => {
+  const dialogRule = topLevelRule(".media-modal.is-inline-video .media-dialog");
+  assert.match(dialogRule, /--media-aspect: 1\.7778;/, "16:9 until the video says otherwise");
+  assert.match(dialogRule, /--media-video-max-height: min\(76vh, calc\(92vh - \d+px\)\);/, "at most 76vh high, as the picture");
+  assert.match(dialogRule, /width: max\(min\(300px, 96vw\), min\(980px, 96vw, calc\(var\(--media-video-max-height\) \* var\(--media-aspect\) \+ 28px\)\)\);/, "as wide as the shape asks, within 980 px and 96vw");
+  const videoRule = topLevelRule(".media-modal.is-inline-video .media-video");
+  assert.match(videoRule, /aspect-ratio: var\(--media-aspect\);/);
+  assert.match(videoRule, /max-height: var\(--media-video-max-height\);/);
+  assert.match(videoRule, /height: auto;/);
+  const buttonRule = topLevelRule(".media-video-actions .media-fullscreen-button");
+  assert.match(buttonRule, /width: 44px;/);
+  assert.match(buttonRule, /height: 44px;/);
+  assert.match(buttonRule, /position: relative;/, "in the row under the player, never over its controls");
+  const titleRule = topLevelRule(".media-modal.is-inline-video .media-header h3");
+  assert.match(titleRule, /-webkit-line-clamp: 2;/, "a long name keeps to the two lines the reserve counts");
+  assert.match(titleRule, /overflow: hidden;/);
+  const headerRules = [...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]*is-inline-video[^{}]*\.media-header[^{}]*)\{/g)].map((match) => match[1].trim());
+  assert.deepEqual(headerRules, [".media-modal.is-inline-video .media-header h3"], "the header keeps the picture view's title and Close otherwise");
 });
