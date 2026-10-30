@@ -770,7 +770,8 @@ order covers is merged under it.
 - **7c, Done, 2026-10-30.**
   - PR #293 (branch `feature/7c-unit-conversions`): migration v47 is exactly
     `migrations_v2/202610301700_training_load_v47_unit_conversion_guards.sql`, sha256
-    `665ef79f74689eb19fa8a41fad84268c17029aa38c322adaac2f88b841dabd66`. J9 "As built" in the discovery document records it.
+    `665ef79f74689eb19fa8a41fad84268c17029aa38c322adaac2f88b841dabd66`. J9 "As built" in the discovery document records it
+    (its heading is brought up to date in PR #295).
   - Reviews: the internal reviews, then GO on `6219f056` from the *Rukovodilac* and the *Nezavisni revizor*.
   - The owner's words, in the *Rukovodilac*'s chat; the executor checked each turn in the *Rukovodilac*'s transcript:
     - the preflight, the same day as the merge: „preflight ocekivane vrednosti potvrdjene” (owner turn `eb9fe4e6`,
@@ -779,8 +780,8 @@ order covers is merged under it.
       202610301700_training_load_v47_unit_conversion_guards.sql, sha256
       665ef79f74689eb19fa8a41fad84268c17029aa38c322adaac2f88b841dabd66.” (owner turn `f5c75f18`, 18:02:27 UTC).
   - Merge by the executor: `69af453` (parents `aa84d574` and `6219f056`, 18:17:43 UTC), exactly from `6219f056`. `main` had
-    moved before it by PR #292 (the central calendar's screen: frontend and a plan document, no migration, no file shared
-    with PR #293); the targeted 7c and M2 suites were green on the merge tree.
+    moved before it by PR #292 (the central calendar's screen: frontend and a plan document, no migration; the two
+    merges share no file); on the merge tree the targeted suites passed (7c 18/0, M2 26/0).
   - Deploy: by the owner by hand, as `69af453`. The *Rukovodilac*'s smoke, 18:23:09 – 18:23:30 UTC: `/api/health`
     answered `ok: true` on `69af453` three times in a row; `/api/auth/me` answered `{"user":null}`; without a login the
     conversion list (also with a cursor), the conversion create and retire, the mappings and variables reads and the
