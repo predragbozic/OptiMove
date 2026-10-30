@@ -7200,6 +7200,19 @@ img[data-media-id]:not([src]) {
   overflow-y: auto;
 }
 
+/* iPad Safari: vh is the screen without its toolbars; dvh is what is seen. */
+@supports (height: 1dvh) {
+  .media-modal.is-inline-video .media-dialog {
+    --media-video-max-height: min(76dvh, calc(92dvh - 160px));
+    max-height: 92dvh;
+  }
+}
+
+.media-modal.is-inline-video .media-header .plain-button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
 /* A long name stays on two lines here (the reserve above counts two), so the
    player and its button fit without scrolling in a narrow upright dialog; the
    whole name is still in the page for a screen reader. */

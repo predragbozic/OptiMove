@@ -415,12 +415,13 @@ test("8. full screen in the dialog: the button under the player asks for the vid
   }
 });
 
-test("9. a phone keeps its full-screen player (the small box, the note, full screen asked once the size is known, closed on leaving it), now muted and started too", async () => {
+test("9. a phone keeps its full-screen player (the small box, the note, full screen asked once the size is known, closed on leaving it); muted, it starts once it is in full screen, never behind the box's cover", async () => {
   phone();
   playback.forgetMediaAccess();
   const requests = [];
   dom.window.Element.prototype.requestFullscreen = function requestFullscreen() { requests.push(this); return Promise.resolve(); };
-  Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => null });
+  let fullscreenElement = null;
+  Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => fullscreenElement });
   try {
     fakeFetch(slotAnswer((slot) => (slot === "video" ? asset("vid-1", "https://r2.example/vid-1") : null)));
     const before = plays.length;
@@ -434,10 +435,17 @@ test("9. a phone keeps its full-screen player (the small box, the note, full scr
     assert.equal(video.muted, true);
     assert.equal(video.hasAttribute("muted"), true);
     await settle();
-    assert.deepEqual(plays.slice(before), [{ src: "https://r2.example/vid-1", muted: true }]);
+    assert.equal(video.getAttribute("src"), "https://r2.example/vid-1");
+    assert.deepEqual(plays.slice(before), [], "behind the black cover it waits");
     sizeOf(video, 720, 1280);
     assert.deepEqual(requests, [video], "full screen asked for once the size is known, as before");
     assert.equal(aspect(), "", "the phone's box keeps its own size");
+    fullscreenElement = video;
+    modal.handleFullscreenChange();
+    assert.deepEqual(plays.slice(before), [{ src: "https://r2.example/vid-1", muted: true }], "in full screen it starts, muted");
+    modal.handleFullscreenChange();
+    assert.equal(plays.length - before, 1, "started once");
+    fullscreenElement = null;
     modal.handleFullscreenChange();
     assert.equal(els.mediaModal.hidden, true, "leaving full screen closes the small box, as before");
     modal.handleMediaAction(control(assetVideoRow));
@@ -450,6 +458,103 @@ test("9. a phone keeps its full-screen player (the small box, the note, full scr
     modal.closeMedia();
     playback.forgetMediaAccess();
     computer();
+  }
+});
+
+test("9c. a phone that refuses the automatic full screen: the video waits behind the cover, so its end can never close the box unseen; the button's full screen (Safari's own player too) starts it, and only that opening's video", async () => {
+  phone();
+  playback.forgetMediaAccess();
+  dom.window.Element.prototype.requestFullscreen = () => Promise.reject(new Error("denied"));
+  let fullscreenElement = null;
+  Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => fullscreenElement });
+  try {
+    fakeFetch(slotAnswer((slot) => (slot === "video" ? asset("vid-1", "https://r2.example/vid-1") : null)));
+    const before = plays.length;
+    modal.handleMediaAction(control(assetVideoRow));
+    await settle();
+    const video = body().querySelector("video.media-video");
+    sizeOf(video, 720, 1280);
+    await settle();
+    assert.deepEqual(plays.slice(before), [], "a refused full screen starts nothing");
+    assert.equal(els.mediaModal.hidden, false);
+    fullscreenElement = document.body;
+    modal.handleFullscreenChange();
+    assert.deepEqual(plays.slice(before), [], "another element in full screen starts nothing");
+    fullscreenElement = null;
+    // Safari's own player (the full-screen button on an iPhone).
+    video.dispatchEvent(new dom.window.Event("webkitbeginfullscreen"));
+    assert.deepEqual(plays.slice(before), [{ src: "https://r2.example/vid-1", muted: true }]);
+    modal.closeMedia();
+    // A video of a closed opening never starts.
+    modal.handleMediaAction(control(assetVideoRow));
+    await settle();
+    const stale = body().querySelector("video.media-video");
+    modal.closeMedia();
+    const count = plays.length;
+    fullscreenElement = stale;
+    modal.handleFullscreenChange();
+    stale.dispatchEvent(new dom.window.Event("webkitbeginfullscreen"));
+    assert.equal(plays.length, count);
+  } finally {
+    delete dom.window.Element.prototype.requestFullscreen;
+    delete document.fullscreenElement;
+    modal.closeMedia();
+    playback.forgetMediaAccess();
+    computer();
+  }
+});
+
+test("9d. a new address after an error restarts a video that was playing or had not started yet, never one the coach paused; the dialog's shape is read only from this opening's video", async () => {
+  computer();
+  playback.forgetMediaAccess();
+  let issued = 0;
+  fakeFetch(slotAnswer((slot) => (slot === "video" ? asset("vid-1", `https://r2.example/vid-1?sig=${++issued}`) : null)));
+  const playing = (video, paused, time) => {
+    Object.defineProperty(video, "paused", { configurable: true, value: paused });
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: time });
+  };
+  try {
+    const before = plays.length;
+    modal.handleMediaAction(control(assetVideoRow));
+    await settle();
+    const video = body().querySelector("video.media-video");
+    assert.equal(plays.length - before, 1);
+    playing(video, false, 12);
+    video.dispatchEvent(new dom.window.Event("error"));
+    await settle();
+    assert.equal(video.getAttribute("src"), "https://r2.example/vid-1?sig=2");
+    assert.deepEqual(plays.slice(before + 1), [{ src: "https://r2.example/vid-1?sig=2", muted: true }], "it was playing: it goes on");
+    modal.closeMedia();
+
+    const second = plays.length;
+    modal.handleMediaAction(control(assetVideoRow));
+    await settle();
+    const paused = body().querySelector("video.media-video");
+    const issuedBefore = issued;
+    playing(paused, true, 30);
+    paused.dispatchEvent(new dom.window.Event("error"));
+    await settle();
+    assert.equal(issued, issuedBefore + 1, "a new address was asked for");
+    assert.equal(paused.getAttribute("src"), `https://r2.example/vid-1?sig=${issued}`, "and assigned where it was");
+    assert.equal(plays.length - second, 1, "paused by the coach: it stays paused");
+    modal.closeMedia();
+
+    const third = plays.length;
+    modal.handleMediaAction(control(assetVideoRow));
+    await settle();
+    const neverStarted = body().querySelector("video.media-video");
+    playing(neverStarted, true, 0);
+    neverStarted.dispatchEvent(new dom.window.Event("error"));
+    await settle();
+    assert.equal(plays.length - third, 2, "the first address failed before it played: the new one starts");
+
+    // The shape listener of a replaced video changes nothing.
+    modal.openMedia("Picture", "https://drive.google.com/file/d/IMG_1/view", "");
+    sizeOf(neverStarted, 720, 1280);
+    assert.equal(aspect(), "");
+  } finally {
+    modal.closeMedia();
+    playback.forgetMediaAccess();
   }
 });
 
@@ -466,6 +571,7 @@ test("9b. a phone turned on its side (wider than 760 px, at most 500 px high) ke
     assert.equal(els.mediaModal.classList.contains("is-inline-video"), false);
     assert.equal(body().querySelector(".media-video-actions"), null);
     assert.ok(body().querySelector(':scope > [data-action="enter-fullscreen"]'));
+    assert.equal(body().querySelector(".media-fullscreen-note"), null, "no note: full screen is not asked for by itself here");
     await settle();
     assert.deepEqual(plays.slice(before), [{ src: "https://r2.example/vid-1", muted: true }]);
     sizeOf(body().querySelector("video.media-video"), 720, 1280);
@@ -495,6 +601,12 @@ test("10. styles.css: the dialog follows --media-aspect within the picture's bou
   const titleRule = topLevelRule(".media-modal.is-inline-video .media-header h3");
   assert.match(titleRule, /-webkit-line-clamp: 2;/, "a long name keeps to the two lines the reserve counts");
   assert.match(titleRule, /overflow: hidden;/);
+  const closeRule = topLevelRule(".media-modal.is-inline-video .media-header .plain-button");
+  assert.match(closeRule, /min-width: 44px;/);
+  assert.match(closeRule, /min-height: 44px;/, "Close is a 44 px target where the video is the dialog's main use");
   const headerRules = [...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]*is-inline-video[^{}]*\.media-header[^{}]*)\{/g)].map((match) => match[1].trim());
-  assert.deepEqual(headerRules, [".media-modal.is-inline-video .media-header h3"], "the header keeps the picture view's title and Close otherwise");
+  assert.deepEqual(headerRules.sort(), [".media-modal.is-inline-video .media-header .plain-button", ".media-modal.is-inline-video .media-header h3"], "the header keeps the picture view's title and Close otherwise");
+  const dynamic = css.slice(css.indexOf("@supports (height: 1dvh) {"), css.indexOf("\n}\n", css.indexOf("@supports (height: 1dvh) {")));
+  assert.match(dynamic, /\.media-modal\.is-inline-video \.media-dialog \{\s*--media-video-max-height: min\(76dvh, calc\(92dvh - 160px\)\);\s*max-height: 92dvh;/, "the same bounds against what is seen, where the browser knows dvh");
+  assert.match(dialogRule, /calc\(92vh - 160px\)/, "the same reserve in both");
 });
