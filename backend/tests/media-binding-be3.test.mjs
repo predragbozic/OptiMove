@@ -12,6 +12,7 @@ import {mediaRetentionDatabaseError} from '../src/mediaReferences.js';
 import {createMediaAccessService,decorateMediaRows} from '../src/exerciseMedia.js';
 import {createR2UploadStore} from '../src/r2UploadStore.js';
 import {createMediaStorageService,MediaStorageError} from '../src/mediaStorage.js';
+import {createOracleMediaAccessService} from './support/media-access-oracle.mjs';
 let accessService;
 const coachId = crypto.randomUUID();
 const otherCoachId = crypto.randomUUID();
@@ -719,4 +720,252 @@ test('Drive copy: an editor echoing the blank link fields keeps the Drive link o
  assert.equal(stored.image_url,null,'the image has no copy: a blank link clears it, as before');
  const changed=await request('/api/exercises/'+id,{name:'Relinked',videoUrl:'https://youtu.be/dQw4w9WgXcQ'},{method:'PATCH'});
  assert.equal(changed.status,200);assert.equal((await client.query('select video_url from library.exercises where id=$1',[id])).rows[0].video_url,'https://youtu.be/dQw4w9WgXcQ','a new link still replaces it');
+});
+
+// ---- Option A (owner, 2026-10-30): the batch authorizes its contexts together --
+// One transaction per batch, the contexts of a type authorized at once. It must
+// answer every context exactly as the old per-context access() did: the oracle
+// is that implementation, kept unchanged in support/media-access-oracle.mjs.
+const fixedStore={signGet:async asset=>({url:'https://private.test/'+asset.id,expiresAt:'2030-01-01T00:00:00.000Z'})};
+const authzOf=(roles,athlete,coach)=>({platformRoles:roles,clubRoles:[],teamRoles:[],managedTeamIds:[],isAthlete:athlete,capabilities:{coachWorkspace:coach}});
+const people={
+ coach:{user:{id:coachId},authz:authzOf([],false,true)},
+ athlete:{user:{id:athleteUserId},authz:authzOf([],true,false)},
+ admin:{user:{id:otherCoachId},authz:authzOf(['platform_admin'],false,true)},
+ revokedAdmin:{user:{id:otherCoachId},authz:authzOf([],false,true)},
+ noWorkspace:{user:{id:coachId},authz:authzOf([],false,false)},
+ // An athlete account that is also a coach: its own template needs no approval.
+ coachAthlete:{user:{id:coachId},authz:authzOf([],true,true)},
+};
+// A pool whose clients record every statement they send.
+function recordingPool() {
+ const statements=[];
+ return {statements,async connect(){const c=await pool.connect();return {query:(sql,params)=>{statements.push(typeof sql==='string'?sql:sql.text);return c.query(sql,params);},release:(...args)=>c.release(...args)};}};
+}
+const accessServices=(target=pool)=>({fresh:createMediaAccessService({pool:target,store:fixedStore}),oracle:createOracleMediaAccessService({pool:target,store:fixedStore})});
+const outcomeOf=async promise=>{try{return {media:await promise};}catch(e){if(!(e instanceof MediaStorageError))throw e;return {error:{code:e.code,status:e.status,retryable:Boolean(e.retryable)}};}};
+async function planSession(owner,fields={}) {
+ const plan=(await client.query("insert into plans.plans(created_by_user_id,name) values($1,'Matrix plan') returning id",[owner])).rows[0].id;
+ for(const [column,value] of Object.entries(fields))await client.query(`update plans.plans set ${column}=$2 where id=$1`,[plan,value]);
+ const day=(await client.query('insert into plans.plan_days(plan_id) values($1) returning id',[plan])).rows[0].id;
+ return {plan,session:(await client.query('insert into plans.plan_sessions(plan_day_id) values($1) returning id',[day])).rows[0].id};
+}
+// A pending asset in a slot, a video in a picture slot: states the production
+// schema's L1 reference guard (MEDIA_L1_TEST) refuses to create, so they are
+// built with that guard off for this setup only - in one transaction, so no
+// other session ever sees it off and an error restores it. The guard is never
+// relaxed for the service under test, and without L1 nothing is switched off.
+async function withoutReferenceGuard(work) {
+ if(process.env.MEDIA_L1_TEST!=='true')return work();
+ await client.query('begin');
+ try {
+  await client.query('alter table library.exercises disable trigger media_l1_reference_guard');
+  const result=await work();
+  await client.query('alter table library.exercises enable trigger media_l1_reference_guard');
+  await client.query('commit');
+  return result;
+ } catch(error){await client.query('rollback').catch(()=>{});throw error;}
+}
+async function planItem(session,{video=null,image=null,videoAsset=null}={}) {
+ return (await client.query("insert into plans.plan_items(plan_session_id,item_type,title,video_source,video_asset_id,video_url,image_url) values($1,'exercise','Matrix item',$2,$3,$4,$5) returning id",
+  [session,videoAsset?'asset':'legacy',videoAsset,video,image])).rows[0].id;
+}
+// Every context class the rules tell apart, in one mixed list of requests.
+async function seedMatrix() {
+ const ex={},items={},uploads={};
+ const imageCopy=await driveCopy('1DriveImageFile0000000000CD','image'),videoCopy=await driveCopy('1DriveVideoFile0000000000AB');
+ ex.own=await exercise('Own R2');const ownVideo=await ready({type:'exercise_edit',exerciseId:ex.own});
+ await client.query("update library.exercises set video_source='asset',video_asset_id=$2,image_url=$3 where id=$1",[ex.own,ownVideo.id,DRIVE_IMAGE]);
+ ex.legacy=await exercise('Plain legacy');
+ ex.videoIdAsImage=await driveExercise(coachId,{image:DRIVE_VIDEO});
+ ex.foreign=await driveExercise(otherCoachId);
+ ex.system=await driveExercise(null,{scope:'system'});
+ ex.inactive=(await client.query("insert into library.exercises(name,owner_scope,owner_user_id,is_active,video_url) values('Inactive','user',$1,false,$2) returning id",[coachId,DRIVE_VIDEO])).rows[0].id;
+ ex.club=(await client.query("insert into library.exercises(name,owner_scope,owner_club_id,video_url) values('Club','club',$1,$2) returning id",[crypto.randomUUID(),DRIVE_VIDEO])).rows[0].id;
+ ex.restricted=await driveExercise(null,{scope:'system'});ex.granted=await driveExercise(null,{scope:'system'});
+ const blocked=(await client.query("insert into library.exercise_collections(name) values('Matrix restricted') returning id")).rows[0].id,granted=(await client.query("insert into library.exercise_collections(name) values('Matrix granted') returning id")).rows[0].id;
+ await client.query('insert into library.exercise_collection_items values($1,$2),($3,$4)',[blocked,ex.restricted,granted,ex.granted]);
+ await client.query('insert into library.exercise_collection_users values($1,$2)',[granted,coachId]);
+ ex.privateCopy=(await client.query("insert into library.exercises(name,owner_scope,owner_user_id,source_exercise_id) values('Inherits a readable source','user',$1,$2) returning id",[coachId,ex.system])).rows[0].id;
+ ex.copyOfOwn=(await client.query("insert into library.exercises(name,owner_scope,owner_user_id,copy_parent_id) values('Inherits own','user',$1,$2) returning id",[coachId,ex.videoIdAsImage])).rows[0].id;
+ ex.copyOfForeign=(await client.query("insert into library.exercises(name,owner_scope,owner_user_id,copy_parent_id) values('Inherits a foreign one','user',$1,$2) returning id",[coachId,ex.foreign])).rows[0].id;
+ ex.pendingAsset=await exercise('Pending asset');const pending=await ready({type:'exercise_edit',exerciseId:ex.pendingAsset},'video',coachId,'pending');
+ ex.wrongKind=await exercise('Image slot holds a video');
+ await withoutReferenceGuard(async()=>{
+  await client.query("update library.exercises set video_source='asset',video_asset_id=$2 where id=$1",[ex.pendingAsset,pending.id]);
+  await client.query("update library.exercises set image_source='asset',image_asset_id=$2 where id=$1",[ex.wrongKind,ownVideo.id]);
+ });
+ const athleteLinked=crypto.randomUUID(),athleteRevoked=crypto.randomUUID();
+ await client.query('insert into public.athletes(id,user_id,is_active) values($1,$2,true),($3,null,true)',[athleteLinked,athleteUserId,athleteRevoked]);
+ await client.query('delete from public.athlete_library_access');
+ await client.query('insert into public.athlete_library_access(athlete_id,require_approval) values($1,true)',[athleteLinked]);
+ const own=await planSession(coachId),foreignPlan=await planSession(otherCoachId);
+ const assigned=await planSession(coachId,{athlete_id:athleteLinked,is_template:false,status:'active'}),revoked=await planSession(coachId,{athlete_id:athleteRevoked,is_template:false,status:'active'});
+ const needsApproval=await planSession(coachId,{athlete_id:athleteLinked,plan_type:'program',is_template:true,requires_approval:true,status:'active'});
+ const approved=await planSession(coachId,{athlete_id:athleteLinked,plan_type:'program',is_template:true,requires_approval:true,status:'active'});
+ await client.query("insert into library.program_access(plan_id,user_id,access_type,status) values($1,$2,'assigned','accessed')",[approved.plan,athleteUserId]);
+ const inactive=await planSession(coachId,{is_active:false}),editDraft=await planSession(coachId,{is_active:false,is_edit_draft:true});
+ // The plan's visibility: another coach's public program template, and the
+ // coach's own plan that is neither private nor a template (readable because
+ // media access asks with editable:true).
+ const publicTemplate=await planSession(otherCoachId,{visibility:'public',plan_type:'program',is_template:true,status:'active'});
+ const ownTeamPlan=await planSession(coachId,{visibility:'team',is_template:false,status:'active'});
+ items.ownAsset=await planItem(own.session,{videoAsset:ownVideo.id,image:DRIVE_VIDEO});
+ items.ownDrive=await planItem(own.session,{video:DRIVE_VIDEO,image:DRIVE_IMAGE});
+ items.ownLegacy=await planItem(own.session,{video:'https://legacy.test/old.mp4'});
+ for(const [key,target] of Object.entries({foreign:foreignPlan,assigned,revoked,needsApproval,approved,inactive,editDraft,publicTemplate,ownTeamPlan}))items[key]=await planItem(target.session,{video:DRIVE_VIDEO,image:DRIVE_IMAGE});
+ uploads.coach=(await ready()).uploadId;
+ uploads.other=(await ready({type:'exercise_create'},'video',otherCoachId)).uploadId;
+ uploads.pending=(await ready({type:'exercise_create'},'video',coachId,'pending')).uploadId;
+ uploads.boundInactive=(await ready({type:'exercise_edit',exerciseId:ex.inactive})).uploadId;
+ uploads.boundOwn=(await ready({type:'exercise_edit',exerciseId:ex.own},'image')).uploadId;
+ const platform=await createMediaStorageService(pool).ensureAccount({type:'platform'});uploads.drive=crypto.randomUUID();
+ await client.query("insert into media.uploads(id,asset_id,storage_account_id,uploaded_by_user_id,idempotency_key,request_fingerprint,context,purpose,temporary_object_key,expected_size_bytes,expected_mime_type,reserved_bytes,status,expires_at) values($1,$2,$3,$4,$5,'fixture',$6,'drive_import_video',$7,1,'video/mp4',1,'completed',now()+interval '10 minutes')",
+  [uploads.drive,videoCopy,platform,otherCoachId,crypto.randomUUID(),{type:'drive_import',driveFileId:'1DriveVideoFile0000000000AB'},'tmp/'+uploads.drive]);
+ // An import whose Drive copy is no longer mapped: nothing to preview, even for the admin.
+ const unmapped=crypto.randomUUID();uploads.driveUnmapped=crypto.randomUUID();
+ await client.query("insert into media.assets(id,object_key,kind,storage_account_id,uploaded_by_user_id,status,size_bytes,mime_type) values($1,$2,'video',$3,$4,'ready',1,'video/mp4')",[unmapped,'assets/'+unmapped,platform,otherCoachId]);
+ await client.query("insert into media.uploads(id,asset_id,storage_account_id,uploaded_by_user_id,idempotency_key,request_fingerprint,context,purpose,temporary_object_key,expected_size_bytes,expected_mime_type,reserved_bytes,status,expires_at) values($1,$2,$3,$4,$5,'fixture',$6,'drive_import_video',$7,1,'video/mp4',1,'completed',now()+interval '10 minutes')",
+  [uploads.driveUnmapped,unmapped,platform,otherCoachId,crypto.randomUUID(),{type:'drive_import',driveFileId:'1DriveUnmappedFile00000000EF'},'tmp/'+uploads.driveUnmapped]);
+ const both=['video','image'];
+ const requests=[
+  ...Object.values(ex).map(id=>({context:{type:'exercise',id},slots:both})),
+  ...Object.values(items).map(id=>({context:{type:'plan_item',id},slots:both})),
+  ...Object.values(uploads).map(id=>({context:{type:'upload',id},slots:['video','image']})),
+  {context:{type:'exercise',id:ex.own},slots:['image']},{context:{type:'plan_item',id:items.ownDrive},slots:['video']},
+  {context:{type:'exercise',id:crypto.randomUUID()},slots:['video']},{context:{type:'plan_item',id:crypto.randomUUID()},slots:['video']},
+  {context:{type:'upload',id:crypto.randomUUID()},slots:['video']},{context:{type:'exercise',id:'not-a-uuid'},slots:['video']},
+  {context:{type:'exercise',id:ex.own},slots:['audio']},{context:{type:'exercise',id:ex.own},slots:[]},{context:{type:'nope',id:ex.own},slots:['video']},
+ ];
+ return {ex,items,uploads,requests,assets:{ownVideo:ownVideo.id,imageCopy,videoCopy}};
+}
+
+test('option A: the set-based batch answers every context class exactly as the old per-context access, for every kind of requester, and single access() is a batch of one',async()=>{
+ const matrix=await seedMatrix(),{fresh,oracle}=accessServices();
+ assert.ok(matrix.requests.length<=50,'one batch');
+ for(const [who,req] of Object.entries(people)) {
+  const expected=await oracle.batch(req,{requests:matrix.requests});
+  assert.deepEqual(await fresh.batch(req,{requests:matrix.requests}),expected,`${who}: the whole batch`);
+  for(const [index,request] of matrix.requests.entries())assert.deepEqual(await outcomeOf(fresh.access(req,request)),await outcomeOf(oracle.access(req,request)),`${who}: access() of request ${index}`);
+ }
+ // The fixture is meaningful: the rules grant and refuse where they should.
+ const answer=async(who,type,id,slots=['video','image'])=>(await fresh.batch(people[who],{requests:[{context:{type,id},slots}]})).results[0];
+ const {ex,items,uploads,assets}=matrix,denied={code:'resource_not_found',status:404,retryable:false};
+ assert.deepEqual((await answer('coach','exercise',ex.own)).media,{video:{source:'asset',mediaId:assets.ownVideo,mimeType:'video/mp4',...await fixedStore.signGet({id:assets.ownVideo})},image:{source:'asset',mediaId:assets.imageCopy,mimeType:'image/jpeg',...await fixedStore.signGet({id:assets.imageCopy})}});
+ assert.deepEqual(Object.keys((await answer('coach','exercise',ex.videoIdAsImage)).media),['video'],'a video copy never plays as an image');
+ assert.deepEqual((await answer('coach','exercise',ex.legacy)).media,{},'a link without a copy signs nothing');
+ for(const key of ['granted','system','privateCopy','copyOfOwn'])assert.ok((await answer('coach','exercise',ex[key])).media,`coach plays ${key}`);
+ for(const key of ['foreign','inactive','club','restricted','copyOfForeign','pendingAsset','wrongKind'])assert.deepEqual((await answer('coach','exercise',ex[key])).error,denied,`coach is refused ${key}`);
+ assert.ok((await answer('admin','exercise',ex.club)).media,'a platform admin plays a club exercise');
+ for(const key of ['ownAsset','ownDrive','ownLegacy','editDraft','publicTemplate','ownTeamPlan'])assert.ok((await answer('coach','plan_item',items[key])).media,`coach plays item ${key}`);
+ for(const key of ['foreign','inactive'])assert.deepEqual((await answer('coach','plan_item',items[key])).error,denied,`coach is refused item ${key}`);
+ for(const key of ['assigned','approved'])assert.ok((await answer('athlete','plan_item',items[key])).media,`athlete plays item ${key}`);
+ for(const key of ['revoked','needsApproval','ownAsset'])assert.deepEqual((await answer('athlete','plan_item',items[key])).error,denied,`athlete is refused item ${key}`);
+ assert.ok((await answer('coachAthlete','plan_item',items.needsApproval)).media,'the template\'s own coach, also an athlete, needs no approval');
+ assert.deepEqual((await answer('athlete','exercise',ex.own)).error,denied,'no exercise outside a coach workspace');
+ for(const key of ['coach','boundOwn'])assert.ok((await answer('coach','upload',uploads[key])).media,`uploader previews ${key}`);
+ for(const key of ['other','pending','boundInactive','drive'])assert.deepEqual((await answer('coach','upload',uploads[key])).error,denied,`coach is refused upload ${key}`);
+ assert.equal((await answer('admin','upload',uploads.drive,['video'])).media.video.mediaId,assets.videoCopy,'the importing platform admin previews the copy');
+ assert.deepEqual((await answer('revokedAdmin','upload',uploads.drive,['video'])).error,denied,'a revoked platform role previews nothing');
+ assert.deepEqual((await answer('admin','upload',uploads.driveUnmapped,['video'])).error,denied,'an import without its Drive mapping previews nothing');
+ assert.deepEqual((await answer('noWorkspace','upload',uploads.coach,['video'])).error,denied);
+ assert.deepEqual((await fresh.batch(people.coach,{requests:[{context:{type:'exercise',id:'not-a-uuid'},slots:['video']}]})).results[0].error,{code:'invalid_request',status:400,retryable:false});
+ // A duplicated context answers at every index.
+ const twice=await fresh.batch(people.coach,{requests:[{context:{type:'exercise',id:ex.own},slots:['video']},{context:{type:'exercise',id:ex.own},slots:['video']}]});
+ assert.deepEqual(twice.results[0].media,twice.results[1].media);
+ // With media storage off every request answers 503 on its own, as before.
+ const enabled=process.env.MEDIA_STORAGE_ENABLED;
+ try {
+  process.env.MEDIA_STORAGE_ENABLED='false';
+  assert.deepEqual(await fresh.batch(people.coach,{requests:matrix.requests.slice(0,3)}),await oracle.batch(people.coach,{requests:matrix.requests.slice(0,3)}));
+  await assert.rejects(fresh.access(people.coach,matrix.requests[0]),e=>e.code==='media_storage_disabled' && e.status===503);
+ } finally {if(enabled===undefined)delete process.env.MEDIA_STORAGE_ENABLED;else process.env.MEDIA_STORAGE_ENABLED=enabled;}
+ await assert.rejects(fresh.batch(people.coach,{requests:Array(51).fill(matrix.requests[0])}),e=>e.code==='invalid_request');
+ await assert.rejects(fresh.batch(people.coach,{requests:[]}),e=>e.code==='invalid_request');
+});
+
+// The split the old loop made: a MediaStorageError (also one from signing)
+// stays on its request, any other error fails the whole call.
+test('option A: a signing error stays on its request when it is a MediaStorageError and fails the whole call otherwise, as before',async()=>{
+ const matrix=await seedMatrix(),failing=matrix.assets.imageCopy;
+ const storeThrowing=kind=>({signGet:async asset=>{
+  if(asset.id===failing)throw kind==='plain'?new Error('boom'):Object.assign(new MediaStorageError(503,'media_storage_unavailable'),{retryable:true});
+  return fixedStore.signGet(asset);
+ }});
+ const requests=[{context:{type:'exercise',id:matrix.ex.own},slots:['video','image']},{context:{type:'exercise',id:matrix.ex.system},slots:['video']}];
+ for(const kind of ['plain','typed']) {
+  const fresh=createMediaAccessService({pool,store:storeThrowing(kind)}),oracle=createOracleMediaAccessService({pool,store:storeThrowing(kind)});
+  if(kind==='plain') {
+   for(const service of [fresh,oracle])await assert.rejects(service.batch(people.coach,{requests}),/boom/);
+   await assert.rejects(fresh.access(people.coach,requests[0]),/boom/);
+   continue;
+  }
+  const result=await fresh.batch(people.coach,{requests});
+  assert.deepEqual(result,await oracle.batch(people.coach,{requests}));
+  assert.deepEqual(result.results[0],{index:0,error:{code:'media_storage_unavailable',status:503,retryable:true}},'the request whose image could not be signed answers that, nothing of its video');
+  assert.ok(result.results[1].media.video,'the next request is answered');
+ }
+});
+
+test('option A: a batch of 50 sends a bounded number of statements, not one transaction per context',async t=>{
+ const copy=await driveCopy('1DriveVideoFile0000000000AB'),exerciseIds=[],{session}=await planSession(coachId),itemIds=[];
+ for(let index=0;index<50;index+=1) {
+  exerciseIds.push(await driveExercise());
+  itemIds.push(await planItem(session,index%2?{video:DRIVE_VIDEO}:{videoAsset:copy}));
+ }
+ const count=async(kind,ids,who='coach')=>{
+  const recorded={fresh:recordingPool(),oracle:recordingPool()};
+  const requests=ids.map(id=>({context:{type:kind,id},slots:['video','image']}));
+  const freshResult=await accessServices(recorded.fresh).fresh.batch(people[who],{requests});
+  const oracleResult=await accessServices(recorded.oracle).oracle.batch(people[who],{requests});
+  assert.deepEqual(freshResult,oracleResult);
+  assert.equal(freshResult.results.filter(r=>r.media?.video?.mediaId===copy).length,50,'every context plays');
+  return {fresh:recorded.fresh.statements.length,oracle:recorded.oracle.statements.length};
+ };
+ // begin, statement_timeout, the isolation check, lock_timeout, the reuse lock,
+ // the exercises, their Drive copies, the assets, commit.
+ const exercises=await count('exercise',exerciseIds);
+ assert.ok(exercises.fresh<=9,`50 exercises: ${exercises.fresh} statements`);
+ // ... the items and their plan instead of the exercises, and the plan's own access check once.
+ const planItems=await count('plan_item',itemIds);
+ assert.ok(planItems.fresh<=11,`50 items of one plan: ${planItems.fresh} statements`);
+ assert.ok(exercises.oracle>=50*8 && planItems.oracle>=50*8,'the old loop: a transaction per context');
+ t.diagnostic(`statements for 50 exercises: ${exercises.oracle} before, ${exercises.fresh} now; for 50 items of one plan: ${planItems.oracle} before, ${planItems.fresh} now`);
+});
+
+test('option A: one foreign context in a batch of 50 answers alone, exactly like a missing one, and never fails or shows the others',async()=>{
+ const copy=await driveCopy('1DriveVideoFile0000000000AB'),ids=[];
+ for(let index=0;index<49;index+=1)ids.push(await driveExercise());
+ const foreign=await driveExercise(otherCoachId),missing=crypto.randomUUID(),{fresh}=accessServices();
+ const result=await fresh.batch(people.coach,{requests:[...ids,foreign].map(id=>({context:{type:'exercise',id},slots:['video']}))});
+ assert.equal(result.results.length,50);
+ assert.ok(result.results.slice(0,49).every((r,index)=>r.index===index && r.media.video.mediaId===copy));
+ const alone=await fresh.batch(people.coach,{requests:[{context:{type:'exercise',id:missing},slots:['video']}]});
+ assert.deepEqual(result.results[49],{index:49,error:alone.results[0].error},'a foreign context reads as a missing one');
+ assert.equal(JSON.stringify(result.results[49]).includes(foreign),false);
+});
+
+test('option A: the locks are the old ones, taken once per batch - the reuse lock shared, FOR SHARE on assets only and in id order, the statement timeout first',async()=>{
+ const matrix=await seedMatrix(),recorded=recordingPool();
+ await accessServices(recorded).fresh.batch(people.admin,{requests:matrix.requests});
+ const sql=recorded.statements.map(s=>s.replace(/\s+/g,' ').trim().toLowerCase());
+ assert.deepEqual(sql.slice(0,2),['begin',"set local statement_timeout='10s'"]);
+ assert.equal(sql.filter(s=>s.includes('pg_advisory_xact_lock_shared')).length,1,'the reuse lock once');
+ assert.equal(sql.filter(s=>s.includes('for update')).length,0,'no row is locked for update');
+ const sharing=sql.filter(s=>s.includes('for share'));
+ assert.equal(sql.filter(s=>s.includes('from media.assets a ')).length,1,'the assets are read once');
+ assert.equal(sharing.filter(s=>/from media\.assets a .* order by a\.id for share of a$/.test(s)).length,1,'that read locks them FOR SHARE, in id order');
+ assert.ok(sharing.every(s=>/from media\.assets a .* order by a\.id for share of a$/.test(s) || /from media\.drive_copies c .* for share of c$/.test(s)),'FOR SHARE only on assets and an import preview\'s Drive copy, as before');
+ // Each import preview (the matrix has two) still locks its Drive copy row.
+ assert.equal(sql.filter(s=>/^select c\.asset_id from media\.drive_copies c /.test(s)).length,2,'the admin\'s two import previews are checked');
+ assert.equal(sharing.filter(s=>/^select c\.asset_id from media\.drive_copies c .* for share of c$/.test(s)).length,2,'each locks its Drive copy FOR SHARE');
+ assert.equal(sql.at(-1),'commit');
+ // A writer holding the reuse lock exclusively makes the batch wait at most
+ // lock_timeout, then fail as a whole, as the old loop did.
+ const holder=new pg.Client({connectionString:database.url});await holder.connect();
+ try {
+  await holder.query('begin');await holder.query("select pg_advisory_xact_lock(hashtextextended('exercise_collections',0))");
+  const {fresh,oracle}=accessServices();
+  for(const service of [fresh,oracle])await assert.rejects(service.batch(people.coach,{requests:matrix.requests}),e=>e.code==='55P03');
+ } finally {await holder.query('rollback').catch(()=>{});await holder.end();}
 });

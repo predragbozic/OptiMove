@@ -126,67 +126,141 @@ export async function snapshotExerciseMedia(run,exerciseId,itemId) {
   await run(`update plans.plan_items p set video_source=e.video_source,video_asset_id=e.video_asset_id,image_source=e.image_source,image_asset_id=e.image_asset_id,video_url=case when e.video_source='legacy' then coalesce(p.video_url,e.video_url) else e.video_url end,image_url=case when e.image_source='legacy' then coalesce(p.image_url,e.image_url) else e.image_url end
     from library.exercises e where e.id=$1 and p.id=$2`,[exerciseId,itemId]);
 }
+// One request's own checks, before any database work, in the order and with
+// the codes they always had.
+function accessRequest(req,body) {
+  if(!mediaEnabled())fail(503,'media_storage_disabled');
+  if(!req.user)fail(401,'authentication_required');
+  const context=body?.context,wanted=body?.slots;
+  if(!context || !['exercise','plan_item','upload'].includes(context.type) || !Array.isArray(wanted) || !wanted.length || wanted.length>2 || wanted.some(s=>!slots.includes(s)))fail(400,'invalid_request');
+  const id=uuid(context.id);
+  return {type:context.type,id,key:context.type+':'+id,slots:[...new Set(wanted)]};
+}
+// The asset a slot of an authorized row plays: its own, or for a legacy Drive
+// link the ready copy (copies: readyDriveCopies of every such link at once).
+const ownAssetOf=(row,slot)=>row[slot+'_source']==='asset'?row[slot+'_asset_id']:null;
+const legacyDriveOf=(row,slot)=>!ownAssetOf(row,slot) && (row[slot+'_source'] || 'legacy')==='legacy'?driveFileIdOf(legacyUrlOf(row,slot)):null;
+const slotAssetOf=(row,slot,copies)=>ownAssetOf(row,slot) || (legacyDriveOf(row,slot) && copies.get(`${legacyDriveOf(row,slot)}:${slot}`)) || null;
+// Option A of the image-latency discovery (owner, 2026-10-30): one transaction
+// for a whole batch, the contexts of a type authorized together, with the
+// same rules a single context always had - the same SQL fragments
+// (exerciseReadScopeSql, exerciseMediaJoinSql) over `= any(...)`, the
+// plan-access functions once per plan, an upload's own checks one by one.
+// A context that is missing, foreign, revoked or not allowed answers 404
+// resource_not_found on its own and never fails or shows the others. access()
+// is a batch of one, so there is one authorization path.
 export function createMediaAccessService({pool,store,canReadPlan=canAccessPlan,approvalRequired=needsTemplateApproval}) {
-  async function access(req,body) {
-    if(!mediaEnabled())fail(503,'media_storage_disabled');
-    if(!req.user)fail(401,'authentication_required');
-    const context=body?.context,wanted=body?.slots;
-    if(!context || !['exercise','plan_item','upload'].includes(context.type) || !Array.isArray(wanted) || !wanted.length || wanted.length>2 || wanted.some(s=>!slots.includes(s)))fail(400,'invalid_request');
-    const id=uuid(context.id),c=await pool.connect();
+  // The rows each authorized context may play, by `type:id`.
+  async function authorizedRows(run,req,requests) {
+    const rows=new Map();
+    const idsOf=type=>[...new Set(requests.filter(r=>r.type===type).map(r=>r.id))];
+    const exerciseIds=idsOf('exercise');
+    if(exerciseIds.length && req.authz?.capabilities?.coachWorkspace) {
+      // The effective links (a private copy inherits its source's): a Drive copy is found by them.
+      const found=await run(`select e.*,coalesce(e.video_url,fallback_media.video_url) as effective_video_url,coalesce(e.image_url,fallback_media.image_url) as effective_image_url
+        from library.exercises e ${exerciseMediaJoinSql} where e.id=any($2::uuid[]) and ${exerciseReadScopeSql}`,[req.user.id,exerciseIds]);
+      for(const row of found.rows)rows.set('exercise:'+row.id,row);
+    }
+    const itemIds=idsOf('plan_item');
+    if(itemIds.length) {
+      const items=(await run(`select pi.*,pd.plan_id from plans.plan_items pi join plans.plan_sessions ps on ps.id=pi.plan_session_id join plans.plan_days pd on pd.id=ps.plan_day_id where pi.id=any($1::uuid[])`,[itemIds])).rows;
+      const planIds=[...new Set(items.map(item=>item.plan_id))];
+      const plans=new Map(planIds.length?(await run('select * from plans.plans where id=any($1::uuid[])',[planIds])).rows.map(plan=>[plan.id,plan]):[]);
+      // A plan's access depends on the plan alone: asked once per plan, not per item.
+      const readable=new Set();
+      for(const planId of planIds) {
+        const plan=plans.get(planId);
+        if(plan && (plan.is_active!==false || plan.is_edit_draft===true) && await canReadPlan(run,req,planId,{editable:true}) && !await approvalRequired(run,req,plan,planId))readable.add(planId);
+      }
+      for(const item of items)if(readable.has(item.plan_id))rows.set('plan_item:'+item.id,item);
+    }
+    // An upload preview (the editor's, one or two at a time): its own checks.
+    for(const id of idsOf('upload')) {
+      const u=(await run("select u.*,a.kind from media.uploads u join media.assets a on a.id=u.asset_id where u.id=$1 and u.uploaded_by_user_id=$2 and u.status='completed'",[id,req.user.id])).rows[0];
+      if(!u)continue;
+      // A completed edit upload is still subject to current source rights.
+      if(u.context.type==='drive_import') {
+        if(!req.authz?.platformRoles?.includes('platform_admin'))continue;
+        const mapped=await run(`select c.asset_id from media.drive_copies c
+          join media.storage_accounts a on a.id=$3 and a.owner_platform
+          where c.drive_file_id=$1 and c.kind=$2 and c.asset_id=$4 for share of c`,
+          [u.context.driveFileId,u.kind,u.storage_account_id,u.asset_id]);
+        if(!mapped.rowCount)continue;
+      } else if(u.context.type==='exercise_edit' || u.context.boundExerciseId) {
+        const target=u.context.exerciseId||u.context.boundExerciseId;
+        if(!req.authz?.capabilities?.coachWorkspace || !(await run(`select e.id from library.exercises e where e.id=$2 and ${exerciseReadScopeSql}`,[req.user.id,target])).rowCount)continue;
+      } else if(!req.authz?.capabilities?.coachWorkspace)continue;
+      rows.set('upload:'+id,{[u.kind+'_source']:'asset',[u.kind+'_asset_id']:u.asset_id});
+    }
+    return rows;
+  }
+  // One outcome per body, in order: { media } or { error } (a MediaStorageError).
+  async function resolve(req,bodies) {
+    const outcomes=bodies.map(body=>{
+      try {return {request:accessRequest(req,body)};}
+      catch(e){if(!(e instanceof MediaStorageError))throw e;return {error:e};}
+    });
+    const requests=outcomes.filter(o=>o.request).map(o=>o.request);
+    if(!requests.length)return outcomes;
+    const c=await pool.connect();
     try {
+      // The shared reuse lock once for the batch: it guards reads against an
+      // application-block change, and every context's reads are inside it.
       await c.query('begin');await c.query("set local statement_timeout='10s'");await lockExerciseReuse(c);
-      const run=c.query.bind(c);let row;
-      if(context.type==='exercise') {
-        if(!req.authz?.capabilities?.coachWorkspace)fail(404,'resource_not_found');
-        // The effective links (a private copy inherits its source's): a Drive copy is found by them.
-        row=(await run(`select e.*,coalesce(e.video_url,fallback_media.video_url) as effective_video_url,coalesce(e.image_url,fallback_media.image_url) as effective_image_url
-          from library.exercises e ${exerciseMediaJoinSql} where e.id=$2 and ${exerciseReadScopeSql}`,[req.user.id,id])).rows[0];
-      } else if(context.type==='plan_item') {
-        const item=(await run(`select pi.*,pd.plan_id from plans.plan_items pi join plans.plan_sessions ps on ps.id=pi.plan_session_id join plans.plan_days pd on pd.id=ps.plan_day_id where pi.id=$1`,[id])).rows[0];
-        if(item) {
-          const plan=(await run('select * from plans.plans where id=$1',[item.plan_id])).rows[0];
-          if(plan && (plan.is_active!==false || plan.is_edit_draft===true) && await canReadPlan(run,req,item.plan_id,{editable:true}) && !await approvalRequired(run,req,plan,item.plan_id))row=item;
-        }
-      } else {
-        const u=(await run("select u.*,a.kind from media.uploads u join media.assets a on a.id=u.asset_id where u.id=$1 and u.uploaded_by_user_id=$2 and u.status='completed'",[id,req.user.id])).rows[0];
-        if(u) {
-          // A completed edit upload is still subject to current source rights.
-          if(u.context.type==='drive_import') {
-            if(!req.authz?.platformRoles?.includes('platform_admin'))fail(404,'resource_not_found');
-            const mapped=await run(`select c.asset_id from media.drive_copies c
-              join media.storage_accounts a on a.id=$3 and a.owner_platform
-              where c.drive_file_id=$1 and c.kind=$2 and c.asset_id=$4 for share of c`,
-              [u.context.driveFileId,u.kind,u.storage_account_id,u.asset_id]);
-            if(!mapped.rowCount)fail(404,'resource_not_found');
-          } else if(u.context.type==='exercise_edit' || u.context.boundExerciseId) {
-            const target=u.context.exerciseId||u.context.boundExerciseId;
-            if(!req.authz?.capabilities?.coachWorkspace || !(await run(`select e.id from library.exercises e where e.id=$2 and ${exerciseReadScopeSql}`,[req.user.id,target])).rowCount)fail(404,'resource_not_found');
-          } else if(!req.authz?.capabilities?.coachWorkspace)fail(404,'resource_not_found');
-          row={[u.kind+'_source']:'asset',[u.kind+'_asset_id']:u.asset_id};
+      const run=c.query.bind(c);
+      const rows=await authorizedRows(run,req,requests);
+      const driveIds=[];
+      for(const request of requests) {
+        const row=rows.get(request.key);
+        if(row)for(const slot of request.slots)driveIds.push(legacyDriveOf(row,slot));
+      }
+      // A legacy Drive link of an authorized row, with a ready copy: one query.
+      const copies=await readyDriveCopies(run,driveIds);
+      const pairs=new Map();
+      for(const request of requests) {
+        const row=rows.get(request.key);
+        if(row)for(const slot of request.slots) {
+          const assetId=slotAssetOf(row,slot,copies);
+          if(assetId)pairs.set(assetId+':'+slot,[assetId,slot]);
         }
       }
-      if(!row)fail(404,'resource_not_found');
-      const result={};
-      for(const slot of new Set(wanted)) {
-        let assetId=row[slot+'_source']==='asset'?row[slot+'_asset_id']:null;
-        if(!assetId && (row[slot+'_source'] || 'legacy')==='legacy') {
-          // A legacy Drive link of this row, authorized above, with a ready copy.
-          const drive=driveFileIdOf(legacyUrlOf(row,slot));
-          if(drive)assetId=(await readyDriveCopies(run,[drive])).get(`${drive}:${slot}`) || null;
-        }
-        if(!assetId)continue;
-        const asset=(await run("select * from media.assets where id=$1 and status='ready' and kind=$2 for share",[assetId,slot])).rows[0];
-        if(!asset)fail(404,'resource_not_found');
-        const signed=await store.signGet(asset);
-        result[slot]={source:'asset',mediaId:asset.id,mimeType:asset.mime_type,...signed};
+      const assets=new Map();
+      if(pairs.size) {
+        const wanted=[...pairs.values()];
+        const found=await run(`select a.* from media.assets a join unnest($1::uuid[],$2::text[]) as wanted(id,kind) on a.id=wanted.id and a.kind=wanted.kind
+          where a.status='ready' order by a.id for share of a`,[wanted.map(p=>p[0]),wanted.map(p=>p[1])]);
+        for(const asset of found.rows)assets.set(asset.id+':'+asset.kind,asset);
       }
-      await c.query('commit');return result;
+      for(const outcome of outcomes) {
+        if(!outcome.request)continue;
+        try {
+          const request=outcome.request,row=rows.get(request.key);
+          if(!row)fail(404,'resource_not_found');
+          const result={};
+          for(const slot of request.slots) {
+            const assetId=slotAssetOf(row,slot,copies);
+            if(!assetId)continue;
+            const asset=assets.get(assetId+':'+slot);
+            if(!asset)fail(404,'resource_not_found');
+            const signed=await store.signGet(asset);
+            result[slot]={source:'asset',mediaId:asset.id,mimeType:asset.mime_type,...signed};
+          }
+          outcome.media=result;
+        } catch(e){if(!(e instanceof MediaStorageError))throw e;outcome.error=e;}
+      }
+      await c.query('commit');return outcomes;
     } catch(e){await c.query('rollback').catch(()=>{});throw e;}finally{c.release();}
   }
-  return {access,async batch(req,body) {
-    if(!Array.isArray(body?.requests) || body.requests.length<1 || body.requests.length>50)fail(400,'invalid_request');
-    const results=[];
-    for(const [index,request] of body.requests.entries())try{results.push({index,media:await access(req,request)});}catch(e){if(!(e instanceof MediaStorageError))throw e;results.push({index,error:{code:e.code,status:e.status,retryable:Boolean(e.retryable)}});}
-    return {results};
-  }};
+  return {
+    async access(req,body) {
+      const [outcome]=await resolve(req,[body]);
+      if(outcome.error)throw outcome.error;
+      return outcome.media;
+    },
+    async batch(req,body) {
+      if(!Array.isArray(body?.requests) || body.requests.length<1 || body.requests.length>50)fail(400,'invalid_request');
+      const outcomes=await resolve(req,body.requests);
+      return {results:outcomes.map(({media,error},index)=>error?{index,error:{code:error.code,status:error.status,retryable:Boolean(error.retryable)}}:{index,media})};
+    },
+  };
 }

@@ -81,6 +81,25 @@ Response `{results:[{index,media}|{index,error:{code,status,retryable}}]}`.
 Every context is authorized separately; one denial does not disclose another
 context or grant a URL. Responses are Cache-Control:no-store.
 
+Since option A of the image-latency discovery (2026-10-30), a batch is one
+transaction, not one per context:
+- the contexts of a type are authorized together, by the same rules as before:
+  - exercises: the same scope and media-join SQL fragments over `id = any(...)`;
+  - plan items: one read of the items and of their plans, then the plan read and
+    approval checks once per plan;
+  - upload previews: their own checks one by one;
+- the Drive copies and the assets (`FOR SHARE`, in id order) are read once for the
+  whole batch;
+- the shared reuse lock and the statement timeout are taken once.
+
+A batch of 50 exercises or 50 items of one plan sends about 9–11 statements
+(before: about 500).
+
+The 10 s statement timeout now bounds the one read of all of a batch's exercises,
+not each context's own read. A pathologically slow read fails the whole batch
+(503), as any database error always did. Nothing is leaked or widened by this. Single `/access` is a batch of one. A context still answers on
+its own, and a missing, foreign or revoked one reads as 404 `resource_not_found`.
+
 Exercise access uses existing Library read/block/copy ancestry gates and an
 active exercise. Plan-item access uses its own retained reference and existing
 plan access/athlete assignment/approval checks, without requiring new Library
