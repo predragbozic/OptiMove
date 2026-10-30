@@ -117,6 +117,7 @@ import { AUTOGROW_SELECTOR, autosizeTextarea } from "./textarea-autosize.js";
 import { toggleClampedTitle } from "./title-clamp.js";
 import { openExerciseCollections } from "./exercise-collections.js";
 import {
+  closeExerciseEditor,
   handleExerciseEditorAction,
   handleExerciseEditorChange,
   handleExerciseEditorInput,
@@ -583,6 +584,7 @@ function bindEvents() {
     if (!els.mediaModal?.hidden) { closeMedia(); return; }
     // Same chain as handleAppBack(): the viewer, then handleMessagesBack().
     if (handleMessagesBack()) return;
+    if (closeTopExerciseLayer()) return;
     // No unsaved-changes state exists inside the Specific Program overlay
     // today (it's a read-only detail view), so Escape can always close it.
     closeSpecificProgramOverlay();
@@ -2031,10 +2033,8 @@ function handleAppBack() {
     return true;
   }
 
-  if (els.content.querySelector(".exercise-detail")) {
-    returnToNodeParent();
-    return true;
-  }
+  const exerciseLayer = closeTopExerciseLayer();
+  if (exerciseLayer) return exerciseLayer;
 
   // Drilled into a node (domain/category/section) from inside the Specific
   // Program overlay: step back ONE level and stay inside the overlay - this
@@ -3885,6 +3885,19 @@ function moveExerciseDetail(delta) {
   const item = getItemById(nextId);
   if (!item) return;
   renderExerciseDetail(item, nextId);
+}
+
+// Escape and phone Back close only the topmost exercise layer: the editor
+// (Edit / Copy, opened over the detail), else the detail. The Specific
+// Program a section opened them from stays open behind (the overlay ladder
+// in styles.css, above .media-modal). The editor opens without a history
+// entry of its own and may ask first (an upload in flight): when it stays
+// open, BACK_STAYED puts back the entry Back consumed.
+function closeTopExerciseLayer() {
+  if (state.exerciseEditor.open) return closeExerciseEditor(state, exerciseEditorHandlers) ? true : BACK_STAYED;
+  if (!els.content.querySelector(".exercise-detail")) return false;
+  returnToNodeParent();
+  return true;
 }
 
 function returnToNodeParent() {
