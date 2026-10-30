@@ -26,6 +26,12 @@ import { decodeAccessContext, normalizeAccessContext, parseImageFallbacks } from
 export const ACCESS_ROUTE = "/api/media/access";
 export const ACCESS_BATCH_ROUTE = "/api/media/access/batch";
 export const ACCESS_BATCH_LIMIT = 50;
+// The pictures on screen go first, in a small batch of their own (at most
+// this many): the server signs a batch one context after another, so a batch
+// answers only once all of its contexts are done - a small first batch
+// answers in a fraction of a full one, and the rest follow in full batches
+// sent at the same time.
+export const ACCESS_FIRST_BATCH_LIMIT = 12;
 export const MEDIA_SLOTS = Object.freeze(["video", "image"]);
 export const PLAYBACK_TTL_MS = 10 * 60 * 1000;
 export const ACCESS_URL_MARGIN_MS = 30 * 1000;
@@ -276,13 +282,52 @@ function giveUpAssetImage(image) {
   if (Event) image.dispatchEvent(new Event("error"));
 }
 
+// A picture inside the window now (one with no size, hidden or folded away,
+// is not).
+function onScreen(image) {
+  const view = image.ownerDocument?.defaultView;
+  const rect = image.getBoundingClientRect?.();
+  if (!view || !rect || !(rect.width > 0 || rect.height > 0)) return false;
+  return rect.bottom > 0 && rect.right > 0 && rect.top < view.innerHeight && rect.left < view.innerWidth;
+}
+
+// Every picture of the page is asked for (so one scrolled to later already
+// has its address), but the ones on screen first: grouped by (context, slot)
+// in that order, the pairs on screen (at most ACCESS_FIRST_BATCH_LIMIT; the
+// first ACCESS_FIRST_BATCH_LIMIT in page order when none is) in a batch of
+// their own and the rest in batches of ACCESS_BATCH_LIMIT, all sent at once,
+// each batch's pictures shown as soon as that batch answers.
 async function resolveImages(images) {
   const wanted = images.filter((image) => image?.dataset?.mediaId && !image.dataset.mediaResolving);
   if (!wanted.length) return 0;
   for (const image of wanted) image.dataset.mediaResolving = "1";
-  const answers = await resolveMediaAccess(wanted.map(imageRequest));
+  const ordered = wanted
+    .map((image, index) => ({ image, index, first: onScreen(image) ? 0 : 1 }))
+    .sort((a, b) => a.first - b.first || a.index - b.index);
+  const groups = new Map();
+  let shownPairs = 0;
+  for (const { image, first } of ordered) {
+    const request = imageRequest(image);
+    const key = accessKey(request.context, request.slot);
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      if (first === 0) shownPairs += 1;
+    }
+    groups.get(key).push(image);
+  }
+  const keys = [...groups.keys()];
+  const chunks = [];
+  const firstSize = Math.min(shownPairs || ACCESS_FIRST_BATCH_LIMIT, ACCESS_FIRST_BATCH_LIMIT);
+  for (let start = 0, size = firstSize; start < keys.length; start += size, size = ACCESS_BATCH_LIMIT) {
+    chunks.push(keys.slice(start, start + size).flatMap((key) => groups.get(key)));
+  }
+  const counts = await Promise.all(chunks.map(async (chunk) => showResolved(chunk, await resolveMediaAccess(chunk.map(imageRequest)))));
+  return counts.reduce((sum, count) => sum + count, 0);
+}
+
+function showResolved(images, answers) {
   let resolved = 0;
-  for (const image of wanted) {
+  for (const image of images) {
     delete image.dataset.mediaResolving;
     if (!image.isConnected) continue;
     const request = imageRequest(image);
@@ -302,7 +347,7 @@ async function resolveImages(images) {
 const PENDING_SELECTOR = "img[data-media-id]:not([src])";
 
 // Gives every asset picture under `root` that has no address yet its address,
-// in one batch. Returns how many got one.
+// the ones on screen first (resolveImages). Returns how many got one.
 export function resolvePendingThumbnails(root) {
   return resolveImages([...(root?.querySelectorAll?.(PENDING_SELECTOR) || [])]);
 }
