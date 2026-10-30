@@ -60,7 +60,7 @@ export async function listDashboards(req, dataWorkspace, { includeTemplates = tr
 export async function getDashboardDetail(req, dataWorkspace, dashboardId) {
   const dashboard = await fetchVisibleDashboard(req, dataWorkspace, dashboardId);
   const widgets = await query(
-    `select id, widget_type, title, widget_order, x, y, width, height, mobile_order, group_by, state, display_config, local_filter_override, revision
+    `select id, widget_type, title, widget_order, x, y, width, height, mobile_order, group_by, state, display_config, presentation_config, local_filter_override, revision
      from training_load.dashboard_widgets where dashboard_id = $1 order by widget_order`,
     [dashboardId],
   );
@@ -330,8 +330,8 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
     const widgetIdMap = new Map();
     for (const w of widgets.rows) {
       const nw = await c.query(
-        `insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order, group_by, state, display_config, local_filter_override)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,
+        `insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order, group_by, state, display_config, local_filter_override, presentation_config)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,null) returning id`,
         [newDashboard.id, w.widget_type, w.title, w.widget_order, w.x, w.y, w.width, w.height, w.mobile_order, w.group_by, w.state, w.display_config, w.local_filter_override],
       );
       widgetIdMap.set(w.id, nw.rows[0].id);
@@ -418,6 +418,15 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
         [newWidgetId, s.series_order, s.metric_definition_id, s.axis, s.color, s.display_label, s.source_policy, s.source_connection_id, s.data_scope_level, s.analytical_aggregation, s.aggregation_role_policy, s.coverage_policy, s.comparison_period, req.user.id],
       );
       cloneReport.push({ sourceSeriesId: s.id, resolution: "copied" });
+    }
+    for (const sourceWidget of widgets.rows) {
+      await c.query(
+        `update training_load.dashboard_widgets as cloned_widget
+         set presentation_config = source_widget.presentation_config
+         from training_load.dashboard_widgets as source_widget
+         where cloned_widget.id = $1 and source_widget.id = $2`,
+        [widgetIdMap.get(sourceWidget.id), sourceWidget.id],
+      );
     }
     await c.query("commit");
     return { dashboard: newDashboard, cloneReport };

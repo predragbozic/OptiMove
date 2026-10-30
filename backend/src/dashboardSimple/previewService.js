@@ -1,12 +1,12 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { validateContract, isUuid } from './schema.js';
-import { compileSimpleDraft, canonicalKey } from './compiler.js';
+import { compileSimpleDraft } from './compiler.js';
+import { simpleFingerprint as hash, buildSimplePreviewBinding } from './previewBinding.js';
 import { createSimpleCapabilityReader } from './capabilities.js';
 import { canManageDashboardRow, dataWorkspaceMatches } from '../trainingLoadDashboardAccess.js';
 import { authorizePreviewTarget, loadPreviewContext, loadPreviewExisting } from './previewContext.js';
 import { previewError, withPreviewTransaction } from './previewTransaction.js';
 
-const hash = value => createHash('sha256').update(canonicalKey(value)).digest('hex');
 const responseLimit = 2 * 1024 * 1024;
 const issueResult = (status, code, path) => ({ status, issues: [{ code, path, severity: 'error' }] });
 
@@ -58,7 +58,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
       const results = compiled.effectiveFilter.athleteIds.length
         ? await queryDashboard(target.workspace, [queryWidget], compiled.resolvedPeriod, { queryRunner })
         : [{ widgetId: queryWidget.id, series: [{ widgetId: queryWidget.id, seriesId: queryWidget.series[0].id, status: 'ok', data: { current: [], comparison: null, comparisonRange: null } }] }];
-      const widgetResult = results[0];
+      const widgetResult = results[0] && { ...results[0], presentation_config: compiled.widget.presentation_config ?? null };
       if (!widgetResult || widgetResult.series?.length !== 1 || widgetResult.series.some(series => series.status !== 'ok')) throw previewError('previewQueryFailed');
       const current = widgetResult.series[0].data?.current;
       const comparison = widgetResult.series[0].data?.comparison;
@@ -70,12 +70,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
       const warnings = [];
       if (!current.length) warnings.push({ code: 'emptyPreview' });
       if (allRows.some(row => row.conflict || row.typeConflict || row.semanticConflict || row.unitConflict)) warnings.push({ code: 'problemData' });
-      const binding = {
-        userId: target.req.user.id, workspace: target.workspace,
-        target: { dashboardId, widgetId: existing?.id ?? null, widgetRevision: existing?.revision ?? null },
-        draftHash, catalogToken: compiled.catalogToken, semanticFingerprint: compiled.semanticBinding.fingerprint,
-        contextFingerprint, periodIntent: envelope.draft.periodIntent, resolvedPeriod: compiled.resolvedPeriod, evaluatedAt,
-      };
+      const binding = buildSimplePreviewBinding({ target, envelope, existing, compiled, context, evaluatedAt });
       const response = { ...common, queryId: randomUUID(), widgetResult, presentationAnnotations: [], warnings, ...tokenService.issue(binding) };
       const encoded = JSON.stringify(response, (key, value) => {
         if (typeof value === 'number' && !Number.isFinite(value)) throw previewError('previewQueryFailed');

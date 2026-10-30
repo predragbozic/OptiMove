@@ -193,11 +193,15 @@ export async function updateWidgetLayout(dashboardId, widgetId, { expectedWidget
 // Widgets.
 // ------------------------------------------------------------
 
-export async function createWidget(dashboardId, { expectedDashboardRevision, widgetType, title, widgetOrder, x, y, width, height, mobileOrder, groupBy, displayConfig, localFilterOverride }) {
+export async function createWidget(dashboardId, { expectedDashboardRevision, widgetType, title, widgetOrder, x, y, width, height, mobileOrder, groupBy, displayConfig, localFilterOverride, presentation }) {
   try {
+    const createParameters = [dashboardId, expectedDashboardRevision, widgetType, title, widgetOrder, x, y, width, height, mobileOrder, groupBy ?? "day", displayConfig ? JSON.stringify(displayConfig) : null, localFilterOverride ? JSON.stringify(localFilterOverride) : null];
+    if (presentation !== undefined) createParameters.push(JSON.stringify(presentation.value));
     const r = await query(
-      `select * from training_load.create_widget($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-      [dashboardId, expectedDashboardRevision, widgetType, title, widgetOrder, x, y, width, height, mobileOrder, groupBy ?? "day", displayConfig ? JSON.stringify(displayConfig) : null, localFilterOverride ? JSON.stringify(localFilterOverride) : null],
+      presentation === undefined
+        ? `select * from training_load.create_widget($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`
+        : `select * from training_load.create_widget_with_presentation($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      createParameters,
     );
     return { widgetId: r.rows[0].widget_id, dashboardRevision: r.rows[0].dashboard_revision };
   } catch (error) {
@@ -216,14 +220,19 @@ export async function updateWidgetContent(dashboardId, widgetId, body) {
   // directly off the request body.
   const hasLocalFilterOverride = Object.prototype.hasOwnProperty.call(body, "localFilterOverride");
   const clearLocalFilterOverride = hasLocalFilterOverride && body.localFilterOverride === null;
+  const hasPresentation = Object.prototype.hasOwnProperty.call(body, "presentation");
   try {
+    const updateParameters = [
+      widgetId, body.expectedWidgetRevision, body.widgetType ?? null, body.title ?? null, body.groupBy ?? null,
+      body.state ?? null, body.displayConfig ? JSON.stringify(body.displayConfig) : null,
+      body.localFilterOverride ? JSON.stringify(body.localFilterOverride) : null, clearLocalFilterOverride,
+    ];
+    if (hasPresentation) updateParameters.push(body.presentation.mode, body.presentation.mode === "replace" ? JSON.stringify(body.presentation.value) : null);
     const r = await query(
-      `select * from training_load.update_widget_content($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [
-        widgetId, body.expectedWidgetRevision, body.widgetType ?? null, body.title ?? null, body.groupBy ?? null,
-        body.state ?? null, body.displayConfig ? JSON.stringify(body.displayConfig) : null,
-        body.localFilterOverride ? JSON.stringify(body.localFilterOverride) : null, clearLocalFilterOverride,
-      ],
+      hasPresentation
+        ? `select * from training_load.update_widget_content_with_presentation($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`
+        : `select * from training_load.update_widget_content($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      updateParameters,
     );
     return { widget: r.rows[0] };
   } catch (error) {
