@@ -222,12 +222,12 @@ test("4. T4 create on seeded fields: a field without parameters and the open top
   const openTop = await seeded("more.complementary_data.power.distance.open_top");
   await confirm(openTop, { unit: "m", boundUnit: "W/kg", operator: ">=" });
   const mTop = await mapping(openTop, await variable({ unit: "m", condition: { kind: "zone", operator: ">=", value: "75", unit: "W/kg" } }));
-  ok(await createVersion(mTop, openTop, { lower: "75", upper: null }), 201);
+  W.top = { mappingId: mTop, versionId: ok(await createVersion(mTop, openTop, { lower: "75", upper: null }), 201).version.id };
   // An acceleration count, >= 2.5 m/s2 for 0.3 s.
   const acc = await seeded("more.events.acceleration_events_count");
   await confirm(acc, { unit: "count", boundUnit: "m/s2", operator: ">=" });
   const mAcc = await mapping(acc, await variable({ unit: "count", condition: { kind: "event_threshold", operator: ">=", value: "2.5", durationSeconds: "0.3", unit: "m/s2" } }));
-  ok(await createVersion(mAcc, acc, { thresholdValue: "2.5", durationSeconds: "0.3" }), 201);
+  W.acc = { mappingId: mAcc, versionId: ok(await createVersion(mAcc, acc, { thresholdValue: "2.5", durationSeconds: "0.3" }), 201).version.id };
   // The operators the registry refuses for their key's shape (J7's obligation).
   const closed = await seeded("more.complementary_data.power.distance");
   await confirm(closed, { unit: "m", boundUnit: "W/kg", operator: ">=" });
@@ -323,6 +323,27 @@ test("6. A1: a supported version is activated; a version made before phase 7f (b
     setExtractorFallbackForTests(null);
   }
   assert.equal(await statusOf(vz.id), "needs_review");
+});
+
+test("6b. A1 accepts the stored parameters of a supported zone or event version: the open top zone (>= 75 W/kg) and the acceleration count (>= 2.5 m/s2 for 0.3 s) of test 4 are activated, and a closed zone (between 25 and 60 W/kg) read by the real closed-power entry too - the read of the stored decimals at A1 is what lets them through", async () => {
+  for (const v of [W.top, W.acc]) {
+    ok(await submit(v.mappingId, v.versionId));
+    ok(await activate(v.mappingId, v.versionId));
+    assert.equal(await statusOf(v.versionId), "active");
+  }
+  // The one seeded closed key was confirmed with >= in test 4, so a closed zone at
+  // A1 goes through a synthetic field read by the real closed-power entry.
+  const z = await synthetic({ valueShape: "zone_distance", parameterKind: "zone_bounds", unit: "m", boundUnit: "W/kg", operator: "between" });
+  const mz = await mapping(z, await variable({ unit: "m", condition: { kind: "zone", operator: "between", lower: "25", upper: "60", unit: "W/kg" } }));
+  setExtractorFallbackForTests(() => EXTRACTORS["gpexe/rest_v1/more.complementary_data.power.distance"]);
+  try {
+    const vz = ok(await createVersion(mz, z, { lower: "25", upper: "60" }), 201).version;
+    ok(await submit(mz, vz.id));
+    ok(await activate(mz, vz.id));
+    assert.equal(await statusOf(vz.id), "active");
+  } finally {
+    setExtractorFallbackForTests(null);
+  }
 });
 
 test("7. no answer of this suite carries a stack, a database text or a parameter of a refused version", () => {
