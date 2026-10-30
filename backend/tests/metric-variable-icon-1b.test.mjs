@@ -1,11 +1,12 @@
 // PR-1b (I1) - changing the icon of a canonical variable
 // (backend/src/canonicalVariableAdminService.js changeVariableIcon, the route
-// POST /api/training-load/sources/metrics/variables/:id/icon) and migration v44
+// POST /api/training-load/sources/metrics/variables/:id/icon) and migration v45
 // (the icon in v38's change record, the kind 'icon', the operation
 // 'variable_icon'). Through the real HTTP stack, on disposable
 // optimove_tests_gpexe_* databases only (never OPTIMOVE): one migrated through
-// v43 that rehearses v44's preflight / apply / post-check / rollback /
-// re-apply, one migrated through v44 for the behaviour. Contract:
+// the migration before v45 (the roster's v44, PR #275) that rehearses v45's
+// preflight / apply / post-check / rollback /
+// re-apply, one migrated through v45 for the behaviour. Contract:
 // docs/ai/gpexe-metric-variable-mapping-discovery.md, section J3b.11.
 import { after, afterEach, before, test } from "node:test";
 import assert from "node:assert/strict";
@@ -26,15 +27,15 @@ if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see ba
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "../..");
-const V44 = "202610301200_training_load_v44_metric_variable_icon.sql";
-const V44_NAME = `migrations_v2/${V44}`;
-const V43_NAME = "migrations_v2/202610291430_training_load_v43_source_metric_mapping_transitions.sql";
-const UP_TO_V43 = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V44));
-const MIGRATION_PATH = path.resolve(ROOT, "migrations_v2", V44);
-const ROLLBACK_PATH = path.resolve(ROOT, "docs/runbooks/metric-variable-icon-v44-rollback.sql");
-const V43_ROLLBACK_PATH = path.resolve(ROOT, "docs/runbooks/source-metric-mapping-transitions-v43-rollback.sql");
-const PREFLIGHT_PATH = path.resolve(ROOT, "docs/runbooks/metric-variable-icon-v44-preflight.sql");
-const POSTCHECK_PATH = path.resolve(ROOT, "docs/runbooks/metric-variable-icon-v44-postcheck.sql");
+const V45 = "202610301200_training_load_v45_metric_variable_icon.sql";
+const V45_NAME = `migrations_v2/${V45}`;
+const PREV_NAME = "migrations_v2/202610301000_training_load_v44_activity_roster_self_report.sql";
+const UP_TO_PREV = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V45));
+const MIGRATION_PATH = path.resolve(ROOT, "migrations_v2", V45);
+const ROLLBACK_PATH = path.resolve(ROOT, "docs/runbooks/metric-variable-icon-v45-rollback.sql");
+const PREV_ROLLBACK_PATH = path.resolve(ROOT, "docs/runbooks/activity-roster-v44-rollback.sql");
+const PREFLIGHT_PATH = path.resolve(ROOT, "docs/runbooks/metric-variable-icon-v45-preflight.sql");
+const POSTCHECK_PATH = path.resolve(ROOT, "docs/runbooks/metric-variable-icon-v45-postcheck.sql");
 const PREFIX = "/api/training-load/sources/metrics";
 const COMPAT = "docs/ai/gpexe-rest-v1-compatibility.md#2-the-table";
 const CTX = `select set_config('optimove.source_metric_actor', $1 || ':' || pg_current_xact_id()::text, true)`;
@@ -59,14 +60,14 @@ const responses = [];
 const originalConsole = {};
 const openGates = [];
 
-// v43's files and v44, through the real runner (its checksum and lock rules).
-async function applyV44(url) {
-  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "optimove-v44-migrations-"));
+// The files before v45 and v45, through the real runner (its checksum and lock rules).
+async function applyV45(url) {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "optimove-v45-migrations-"));
   const dir = path.join(tempRoot, "migrations_v2");
   await fsp.mkdir(dir);
   try {
-    for (const f of UP_TO_V43) await fsp.copyFile(path.resolve(ROOT, "migrations_v2", f), path.join(dir, f));
-    await fsp.copyFile(MIGRATION_PATH, path.join(dir, V44));
+    for (const f of UP_TO_PREV) await fsp.copyFile(path.resolve(ROOT, "migrations_v2", f), path.join(dir, f));
+    await fsp.copyFile(MIGRATION_PATH, path.join(dir, V45));
     await runner.runMigrations({ databaseUrl: url, migrationsRoot: dir });
   } finally {
     await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
@@ -74,10 +75,10 @@ async function applyV44(url) {
 }
 
 before(async () => {
-  assert.ok(GPEXE_TEST_MIGRATIONS.includes(V44), "v44 is a test migration");
-  assert.equal(UP_TO_V43.at(-1), V43_NAME.slice("migrations_v2/".length), "v44 follows v43 in the test set");
+  assert.ok(GPEXE_TEST_MIGRATIONS.includes(V45), "v45 is a test migration");
+  assert.equal(UP_TO_PREV.at(-1), PREV_NAME.slice("migrations_v2/".length), "v45 follows the roster's v44 in the test set");
   [rdb, db] = await Promise.all([
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v44rb", migrations: UP_TO_V43 }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v45rb", migrations: UP_TO_PREV }),
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "icon1b" }),
   ]);
   for (const d of [rdb, db]) assert.match(d.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
@@ -88,7 +89,7 @@ before(async () => {
   for (const c of [r, r2, k, k2]) await c.connect();
   assert.equal((await r.query("select current_database() as d")).rows[0].d, rdb.name, "SAFETY");
   assert.equal((await k.query("select current_database() as d")).rows[0].d, db.name, "SAFETY");
-  assert.equal((await k.query(`select 1 from public.schema_migrations where migration_name = $1`, [V44_NAME])).rowCount, 1, "the behaviour database carries v44");
+  assert.equal((await k.query(`select 1 from public.schema_migrations where migration_name = $1`, [V45_NAME])).rowCount, 1, "the behaviour database carries v45");
   process.env.DATABASE_URL = db.url;
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     originalConsole[level] = console[level];
@@ -351,25 +352,26 @@ async function world() {
 }
 
 // ---------------------------------------------------------------------------
-test("1. migration v44 on v43: the read-only preflight; through the real runner two columns, five checks (v38's names), two functions and two triggers change and nothing else; the read-only post-check; the rollback refuses without v44, under a later migration, while the migrator runs, with an icon change or a variable_icon request, a column missing or a trigger disabled; it returns the identical v43 catalog (comments included) and v44 applies again identically; v43's rollback refuses while v44 is recorded", async () => {
-  assert.match((await runScript(r, ROLLBACK_PATH))?.message ?? "", /^v44 rollback refused: v44 is not recorded/);
+test("1. migration v45 on the roster's v44: the read-only preflight; through the real runner two columns, five checks (v38's names), two functions and two triggers change and nothing else; the read-only post-check; the rollback refuses without v45, under a later migration, while the migrator runs, with an icon change or a variable_icon request, a column missing or a trigger disabled; it returns the identical catalog before it (comments included) and v45 applies again identically; the roster v44's rollback refuses while v45 is recorded", async () => {
+  assert.match((await runScript(r, ROLLBACK_PATH))?.message ?? "", /^v45 rollback refused: v45 is not recorded/);
   const pre = await runbook(r, PREFLIGHT_PATH);
   assert.deepEqual(
-    [pre.pg15_or_later, pre.v43_rows, pre.v43_checksum_ok, pre.v38_checksum_ok, pre.v44_rows, pre.at_or_after_v44, pre.last_migration,
-      pre.record_body_v38, pre.guard_body_v38, pre.v38_triggers_enabled, pre.v38_checks, pre.disabled_triggers, pre.v44_columns, pre.icon_in_checks,
-      pre.owns_definitions, pre.owns_changes, pre.owns_requests, pre.rows_outside_v38, pre.actor_defaults, pre.conflicting_locks, pre.idle_in_transaction],
-    [true, "1", true, true, "0", "0", V43_NAME, true, true, "2", "5", "0", "0", "0", true, true, true, "0", "0", "0", "0"],
+    [pre.pg15_or_later, pre.v43_rows, pre.v43_checksum_ok, pre.v38_checksum_ok, pre.roster_v44_rows, pre.roster_v44_checksum_ok, pre.v45_rows, pre.at_or_after_v45, pre.last_migration,
+      pre.record_body_v38, pre.guard_body_v38, pre.v38_triggers_enabled, pre.record_trigger_v38, pre.guard_trigger_v38, pre.v38_checks, pre.disabled_triggers,
+      pre.v45_columns, pre.icon_in_checks, pre.owns_definitions, pre.owns_changes, pre.owns_requests, pre.owns_functions, pre.rows_outside_v38, pre.actor_defaults, pre.conflicting_locks, pre.idle_in_transaction],
+    [true, "1", true, true, "1", true, "0", "0", PREV_NAME, true, true, "2", true, true, "5", "0", "0", "0", true, true, true, "2", "0", "0", "0", "0"],
   );
-  const before43 = await catalog(r);
-  await applyV44(rdb.url);
-  const post44 = await runbook(r, POSTCHECK_PATH);
+  const beforeV45 = await catalog(r);
+  await applyV45(rdb.url);
+  const post45 = await runbook(r, POSTCHECK_PATH);
   assert.deepEqual(
-    [post44.v44_rows, post44.v44_checksum_ok, post44.later_rows, post44.last_migration, post44.icon_columns, post44.icon_columns_text_nullable,
-      post44.record_body_v44, post44.guard_body_v44, post44.comments, post44.triggers_enabled, post44.record_on_icon, post44.guard_on_icon,
-      post44.checks_with_icon, post44.change_rows, post44.request_rows, post44.icon_changes, post44.icon_requests, post44.unpaired_icon_rows, post44.actor_defaults],
-    ["1", true, "0", V44_NAME, "2", "2", true, true, "2", "2", true, true, "5", pre.change_rows, pre.request_rows, "0", "0", "0", "0"],
+    [post45.v45_rows, post45.v45_checksum_ok, post45.later_rows, post45.last_migration, post45.icon_columns, post45.icon_columns_text_nullable,
+      post45.record_body_v45, post45.guard_body_v45, post45.comments, post45.triggers_enabled, post45.record_on_icon, post45.guard_on_icon,
+      post45.checks_with_icon, post45.change_rows, post45.request_rows, post45.icon_changes, post45.icon_requests, post45.unpaired_icon_rows, post45.actor_defaults,
+      post45.disabled_triggers],
+    ["1", true, "0", V45_NAME, "2", "2", true, true, "2", "2", true, true, "5", pre.change_rows, pre.request_rows, "0", "0", "0", "0", "0"],
   );
-  const after44 = await catalog(r);
+  const after45 = await catalog(r);
   const added = (list, base, keyOf) => list.filter((x) => !base.some((y) => keyOf(y) === keyOf(x)));
   const removed = (list, base, keyOf) => added(base, list, keyOf);
   const changed = (list, base, keyOf) => list.filter((x) => base.some((y) => keyOf(y) === keyOf(x) && JSON.stringify(y) !== JSON.stringify(x)));
@@ -378,9 +380,9 @@ test("1. migration v44 on v43: the read-only preflight; through the real runner 
     constraints: (x) => `${x.rel}.${x.conname}`, indexes: (x) => x.indexname, triggers: (x) => `${x.relname}.${x.tgname}`, functions: (x) => `${x.proname}(${x.args})`,
   };
   const diff = Object.fromEntries(Object.entries(keys).map(([part, keyOf]) => [part, {
-    added: added(after44[part], before43[part], keyOf).map(keyOf).sort(),
-    removed: removed(after44[part], before43[part], keyOf).map(keyOf).sort(),
-    changed: changed(after44[part], before43[part], keyOf).map(keyOf).sort(),
+    added: added(after45[part], beforeV45[part], keyOf).map(keyOf).sort(),
+    removed: removed(after45[part], beforeV45[part], keyOf).map(keyOf).sort(),
+    changed: changed(after45[part], beforeV45[part], keyOf).map(keyOf).sort(),
   }]));
   assert.deepEqual(diff, {
     tables: { added: [], removed: [], changed: [] },
@@ -390,47 +392,47 @@ test("1. migration v44 on v43: the read-only preflight; through the real runner 
     triggers: { added: [], removed: [], changed: ["metric_definitions.metric_definitions_v38_record_change", "metric_variable_requests.metric_variable_requests_change_guard"] },
     functions: { added: [], removed: [], changed: ICON_FUNCTIONS.map((n) => `${n}()`) },
   });
-  assert.deepEqual(after44.migrations, [...before43.migrations, V44_NAME].sort());
-  for (const f of after44.functions.filter((x) => ICON_FUNCTIONS.includes(x.proname))) assert.match(f.comment, /^v44 \(J3b\.11\): /);
+  assert.deepEqual(after45.migrations, [...beforeV45.migrations, V45_NAME].sort());
+  for (const f of after45.functions.filter((x) => ICON_FUNCTIONS.includes(x.proname))) assert.match(f.comment, /^v45 \(J3b\.11\): /);
   // The rollback's refusals, each in a transaction that is rolled back.
   const refusal = (e) => e?.message ?? "";
   assert.match(refusal(await rollbackAfter((c) => c.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/209912312359_training_load_v99_test_only.sql', $1, 'test')`, ["0".repeat(64)]))),
-    /^v44 rollback refused: later migrations are applied$/);
+    /^v45 rollback refused: later migrations are applied$/);
   const plantChange = async (c) => {
     await c.query("set local session_replication_role = replica");
     await c.query(`insert into training_load.metric_variable_changes (metric_definition_id, owner_scope, kind, old_label, new_label, old_state, new_state, old_icon_url, new_icon_url, changed_by_user_id, xact_id)
       values ($1,'system','icon','x','x','active','active',null,'icon:run',$2,pg_current_xact_id())`, [crypto.randomUUID(), crypto.randomUUID()]);
     await c.query("set local session_replication_role = origin");
   };
-  assert.match(refusal(await rollbackAfter(plantChange)), /^v44 rollback refused: an icon change is recorded$/);
+  assert.match(refusal(await rollbackAfter(plantChange)), /^v45 rollback refused: an icon change is recorded$/);
   const plantRequest = async (c) => {
     await c.query("set local session_replication_role = replica");
     await c.query(`insert into training_load.metric_variable_requests (request_key, requested_by_user_id, operation, request_hash, owner_scope, basis, metric_definition_id, metric_variable_change_id)
       values ($1,$2,'variable_icon',$3,'system','platform_admin',$4,$5)`, [key(), crypto.randomUUID(), "0".repeat(64), crypto.randomUUID(), crypto.randomUUID()]);
     await c.query("set local session_replication_role = origin");
   };
-  assert.match(refusal(await rollbackAfter(plantRequest)), /^v44 rollback refused: an icon change is recorded$/);
+  assert.match(refusal(await rollbackAfter(plantRequest)), /^v45 rollback refused: an icon change is recorded$/);
   assert.match(refusal(await rollbackAfter((c) => c.query(`alter table training_load.metric_variable_changes drop column new_icon_url`))),
-    /^v44 rollback refused: a v44 column is missing$/);
+    /^v45 rollback refused: a v45 column is missing$/);
   for (const [table, trigger] of [["metric_definitions", ICON_TRIGGERS[0]], ["metric_variable_requests", ICON_TRIGGERS[1]]]) {
     assert.match(refusal(await rollbackAfter((c) => c.query(`alter table training_load.${table} disable trigger ${trigger}`))),
-      /^v44 rollback refused: a v44 trigger is disabled$/, trigger);
+      /^v45 rollback refused: a v45 trigger is disabled$/, trigger);
   }
   await r2.query("select pg_advisory_lock(822026)");
   try {
-    assert.match(refusal(await runScript(r, ROLLBACK_PATH)), /^v44 rollback refused: the migrator is running$/);
+    assert.match(refusal(await runScript(r, ROLLBACK_PATH)), /^v45 rollback refused: the migrator is running$/);
   } finally {
     await r2.query("select pg_advisory_unlock(822026)");
   }
-  assert.deepEqual(await catalog(r), after44, "every refusal changed nothing");
-  // v43's rollback refuses while v44 is recorded.
-  assert.match(refusal(await runScript(r, V43_ROLLBACK_PATH)), /^v43 rollback refused: .*later migration/);
-  // The rollback, then v43's catalog exactly; the preflight reads as before; v44 again.
+  assert.deepEqual(await catalog(r), after45, "every refusal changed nothing");
+  // The roster v44's rollback refuses while v45 is recorded.
+  assert.match(refusal(await runScript(r, PREV_ROLLBACK_PATH)), /^v44 rollback refused: later migrations are applied/);
+  // The rollback, then the catalog before v45 exactly; the preflight reads as before; v45 again.
   assert.equal(await runScript(r, ROLLBACK_PATH), null);
-  assert.deepEqual(await catalog(r), before43, "the identical v43 catalog, comments included");
+  assert.deepEqual(await catalog(r), beforeV45, "the identical catalog before v45, comments included");
   assert.deepEqual(await runbook(r, PREFLIGHT_PATH), pre);
-  await applyV44(rdb.url);
-  assert.deepEqual(await catalog(r), after44, "v44 applies again identically");
+  await applyV45(rdb.url);
+  assert.deepEqual(await catalog(r), after45, "v45 applies again identically");
 });
 
 test("2. who may change an icon: the platform admin on a system variable and (in the club's workspace) on a club variable, the club's admin and a coach of an active team of the club on a club variable, each with its basis; a coach never on a system variable; another club, a team without a club, an archived team or club, a revoked role, an athlete, a private-coaching workspace and a missing variable get the byte-identical 404; 401 without a session", async () => {
@@ -613,8 +615,12 @@ test("7. the database guards, by direct SQL: an icon UPDATE without an acting us
   refusedWith(await tx(null, (c) => c.query(`update training_load.metric_definitions set icon_url = $2 where id = $1`, [v.id, `icon:${a}`])), "42501", NO_ACTOR);
   refusedWith(await tx(W.caA.id, (c) => c.query(`update training_load.metric_definitions set icon_url = $2 where id = $1`, [v.id, `icon:${a}`])), "23514", REQUEST_LINK);
   const clubAdmin = { defId: v.id, by: W.caA.id, basis: "club_admin", clubId: W.clubA };
+  // Every key of the library fits the database's shape and its length bound
+  // (a future key outside them would surface as a 500, never be stored).
+  const SHAPE = /^icon:[a-z0-9]+(-[a-z0-9]+)*$/;
+  assert.deepEqual(ICON_KEYS.filter((x) => !SHAPE.test(`icon:${x}`) || `icon:${x}`.length > 69), [], "every library key is storable");
   for (const set of [`label = 'both', ${iconSet(`icon:${a}`)}`, `description = 'both', ${iconSet(`icon:${a}`)}`, `state = 'archived', ${iconSet(`icon:${a}`)}`,
-    iconSet("/assets/x.svg"), iconSet("icon:Run"), iconSet("icon:"), iconSet("icon:run--x"), `icon_url = 'icon:${a} '`]) {
+    iconSet("/assets/x.svg"), iconSet("icon:Run"), iconSet("icon:"), iconSet("icon:run--x"), `icon_url = 'icon:${a} '`, iconSet(`icon:${"a".repeat(65)}`)]) {
     refusedWith(await tx(W.caA.id, (c) => rawChange(c, { ...clubAdmin, operation: "variable_icon", set })), "23514", KIND_SHAPE);
   }
   // The legitimate raw write, and the kind matching the operation.
@@ -679,7 +685,7 @@ test("8. no answer and no log line carries SQL, a trigger's or the database's te
   for (const id of [W.coachA1.id, W.caA.id, W.pa.id]) assert.ok(!everything.includes(id), "no acting user's id");
 });
 
-test("9. v44 reads back the same after pg_dump and pg_restore (what gpexe-backup-verify compares): the two triggers, the checks of both record tables and the two functions", async () => {
+test("9. v45 reads back the same after pg_dump and pg_restore (what gpexe-backup-verify compares): the two triggers, the checks of both record tables and the two functions", async () => {
   const target = await createDisposableDatabase({ prefix: "gpexe", label: "i1rt", baseDatabaseUrl: ORIGINAL_DATABASE_URL });
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "optimove-i1-roundtrip-"));
   const restored = new pg.Client({ connectionString: target.url });

@@ -1075,7 +1075,7 @@ test("18. iconKey at create (Data configuration visual polish, PR-1): only a key
   assert.equal(list.find((x) => x.id === withIcon.body.variable.id).icon, "run");
   assert.equal((await api(`/variables/${withIcon.body.variable.id}`, { cookie: W.pa.cookie })).body.variable.icon, "run");
   for (const stored of ["/assets/icons/metric-default.svg", "icon:dumbbell", "icon:no-such-icon", "run", "icon:", "icon:run "]) {
-    // Planted with v44's change trigger off: since v44 an icon update needs its
+    // Planted with v45's change trigger off: since v45 an icon update needs its
     // acting user and request row, as a rename does (J3b.11).
     await k.query("begin");
     await k.query("set local session_replication_role = replica");

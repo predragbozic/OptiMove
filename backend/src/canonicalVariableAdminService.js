@@ -946,7 +946,7 @@ function iconKeyField(value, field) {
 // library key, or null to remove it; expectedIconKey is the icon the caller
 // saw (a read's `icon`: a key or null). Every basis of a rename may do it, a
 // coach a pinned variable's too: an icon is display only and does not change
-// what the variable means. v44 records it as the change kind `icon`.
+// what the variable means. v45 records it as the change kind `icon`.
 export async function changeVariableIcon({ ctx, variableId, body }) {
   const id = variableIdOrNotFound(variableId);
   plainObject(body, ["requestKey", "expectedIconKey", "iconKey"], ["requestKey", "expectedIconKey", "iconKey"]);

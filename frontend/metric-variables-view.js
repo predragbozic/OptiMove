@@ -293,7 +293,7 @@ function renderIconFieldHtml(form) {
     <fieldset class="metric-variables-fieldset"><legend>Icon${change ? "" : ` <span class="muted">(optional)</span>`}</legend>
       <div class="dc-icon-choice">
         ${variableTileHtml({ icon: key }, { size: "lg" })}
-        <span class="dc-icon-choice-text" id="mv-icon-choice">${key ? `Chosen: <strong>${escapeHtml(key)}</strong>` : "No icon"}${savedText ? ` <span class="muted">${savedText}</span>` : ""}</span>
+        <span class="dc-icon-choice-text" id="mv-icon-choice">${key ? `Chosen: <strong>${escapeHtml(key)}</strong>` : "No icon"}${savedText ? ` <span class="muted dc-icon-choice-saved">${savedText}</span>` : ""}</span>
         <button class="plain-button" type="button" data-action="metric-variables-icon-open" aria-describedby="mv-icon-choice mv-hint-iconKey" ${locked ? "disabled" : ""}>${key ? "Change icon" : "Choose icon"}</button>
         ${key ? `<button class="plain-button ghost" type="button" data-action="metric-variables-icon-clear" ${locked ? "disabled" : ""}>Remove icon</button>` : ""}
       </div>

@@ -1,78 +1,81 @@
--- Rollback of migration v44 (changing the icon of a canonical variable; I1,
+-- Rollback of migration v45 (changing the icon of a canonical variable; I1,
 -- PR-1b):
--- migrations_v2/202610301200_training_load_v44_metric_variable_icon.sql
+-- migrations_v2/202610301200_training_load_v45_metric_variable_icon.sql
 --
 -- Not a migration and never run automatically. Rehearsed on disposable
 -- databases (backend/tests/metric-variable-icon-1b.test.mjs: apply -> rollback
--- -> the v43 catalog, comments included, exactly -> re-apply, and every
+-- -> the catalog before v45, comments included, exactly -> re-apply, and every
 -- refusal below). Before it is run anywhere real: a fresh restore-verified
--- backup exists; the deployed commit no longer contains the v44 migration file
--- (otherwise the migrator applies v44 again at the next start) nor the icon
+-- backup exists; the deployed commit no longer contains the v45 migration file
+-- (otherwise the migrator applies v45 again at the next start) nor the icon
 -- route that writes it; and the owner approved this database specifically
 -- (.claude/rules/database-safety.md).
 --
--- v44 adds two columns of training_load.metric_variable_changes, widens five
+-- v45 adds two columns of training_load.metric_variable_changes, widens five
 -- checks under their v38 names, replaces two v38 functions (with comments)
 -- and redefines two v38 triggers; it changes no row. This script restores v38's
 -- exact definitions (the functions byte for byte, without a comment), drops the
--- two columns and removes the v44 record. It refuses, changing nothing, when
+-- two columns and removes the v45 record. It refuses, changing nothing, when
 --   * the migrator is running (it holds the advisory lock 822026 of
 --     backend/src/migrate.js; this script takes the same lock for its own
 --     transaction, without waiting);
---   * v44 is not recorded on the database, or any later migrations_v2
+--   * v45 is not recorded on the database, or any later migrations_v2
 --     migration is;
 --   * any change row of the kind 'icon' or any request of the operation
 --     'variable_icon' exists - they are the only record of an icon change; once
 --     one exists the way forward is a new migration, never this script;
---   * a v44 column is missing, or a v44 trigger is disabled.
--- The icon values of the rename, archive and restore rows written while v44
+--   * a v45 column is missing, or a v45 trigger is disabled.
+-- The icon values of the rename, archive and restore rows written while v45
 -- was applied are dropped with the columns: they only repeat the icon those
 -- rows kept.
 --
 -- One transaction: everything or nothing. Run it at a quiet moment as
---   psql -v ON_ERROR_STOP=1 -f metric-variable-icon-v44-rollback.sql
--- (the script carries its own BEGIN and COMMIT). It takes v44's locks in v44's
--- order (metric_definitions in SHARE ROW EXCLUSIVE, so reads go on; the two
--- record tables in ACCESS EXCLUSIVE); waits are bounded: a transaction that
--- holds one of the three tables makes this script fail after 5 s.
+--   psql -v ON_ERROR_STOP=1 -f metric-variable-icon-v45-rollback.sql
+-- (the script carries its own BEGIN and COMMIT). It takes v45's locks in v45's
+-- order (the request record, the definitions, the change record; the
+-- definitions in SHARE ROW EXCLUSIVE, so their plain reads go on; the two
+-- records in ACCESS EXCLUSIVE); waits are bounded: a transaction that holds one
+-- of the three tables makes this script fail after 5 s, and a deadlock (40P01)
+-- ends it with nothing changed.
 begin;
 set local lock_timeout = '5s';
 
 do $$
 begin
   if not pg_try_advisory_xact_lock(822026) then
-    raise exception 'v44 rollback refused: the migrator is running';
+    raise exception 'v45 rollback refused: the migrator is running';
   end if;
 end $$;
 
 do $$
 begin
   if not exists (select 1 from public.schema_migrations
-                  where migration_name = 'migrations_v2/202610301200_training_load_v44_metric_variable_icon.sql') then
-    raise exception 'v44 rollback refused: v44 is not recorded on this database';
+                  where migration_name = 'migrations_v2/202610301200_training_load_v45_metric_variable_icon.sql') then
+    raise exception 'v45 rollback refused: v45 is not recorded on this database';
   end if;
 end $$;
 
--- The three tables' locks before the checks, in a change's own order and in
--- the modes the redefinitions need, so no lock is upgraded later: no
--- definition is written, and no change or request row read or written, until
--- the COMMIT.
+-- The three tables' locks before the checks, in a write's own order (the
+-- request record first, as runWrite reads it) and in the modes the
+-- redefinitions need, so no lock is upgraded later: no definition is written,
+-- and no change or request row read or written, until the COMMIT.
+lock table training_load.metric_variable_requests in access exclusive mode;
 lock table training_load.metric_definitions in share row exclusive mode;
-lock table training_load.metric_variable_changes, training_load.metric_variable_requests in access exclusive mode;
+lock table training_load.metric_variable_changes in access exclusive mode;
 
 do $$
 declare
-  v44 constant text := 'migrations_v2/202610301200_training_load_v44_metric_variable_icon.sql';
+  v45 constant text := 'migrations_v2/202610301200_training_load_v45_metric_variable_icon.sql';
   reasons text[] := '{}';
 begin
   if exists (select 1 from public.schema_migrations
-              where migration_name like 'migrations_v2/%' and migration_name > v44) then
+              where migration_name like 'migrations_v2/%' and migration_name > v45) then
     reasons := array_append(reasons, 'later migrations are applied');
   end if;
   if (select count(*) from information_schema.columns
        where table_schema = 'training_load' and table_name = 'metric_variable_changes'
          and column_name in ('old_icon_url', 'new_icon_url')) <> 2 then
-    reasons := array_append(reasons, 'a v44 column is missing');
+    reasons := array_append(reasons, 'a v45 column is missing');
   elsif exists (select 1 from training_load.metric_variable_changes where kind = 'icon')
      or exists (select 1 from training_load.metric_variable_requests where operation = 'variable_icon') then
     reasons := array_append(reasons, 'an icon change is recorded');
@@ -81,10 +84,10 @@ begin
               where n.nspname = 'training_load'
                 and t.tgname in ('metric_definitions_v38_record_change', 'metric_variable_requests_change_guard')
                 and t.tgenabled <> 'O') then
-    reasons := array_append(reasons, 'a v44 trigger is disabled');
+    reasons := array_append(reasons, 'a v45 trigger is disabled');
   end if;
   if array_length(reasons, 1) > 0 then
-    raise exception 'v44 rollback refused: %', array_to_string(reasons, '; ');
+    raise exception 'v45 rollback refused: %', array_to_string(reasons, '; ');
   end if;
 end $$;
 
@@ -244,6 +247,6 @@ alter table training_load.metric_variable_changes
   drop column old_icon_url,
   drop column new_icon_url;
 
-delete from public.schema_migrations where migration_name = 'migrations_v2/202610301200_training_load_v44_metric_variable_icon.sql';
+delete from public.schema_migrations where migration_name = 'migrations_v2/202610301200_training_load_v45_metric_variable_icon.sql';
 
 commit;

@@ -1,18 +1,19 @@
--- v44: changing the icon of a canonical variable (I1, PR-1b).
+-- v45: changing the icon of a canonical variable (I1, PR-1b).
 --
 -- Contract: docs/ai/gpexe-metric-variable-mapping-discovery.md, section
 -- J3b.11 (the Rukovodilac's order and decisions of 2026-10-30, after the
 -- owner's words quoted there). A variable's icon is
 -- metric_definitions.icon_url (v10); M3-0's create stores `icon:<key>`.
--- Before v44 an UPDATE of icon_url alone fired no v38 trigger: an unaudited
--- write (C76). v44 makes an icon change a fourth kind of v38's audited
+-- Before v45 an UPDATE of icon_url alone fired no v38 trigger: an unaudited
+-- write (C76). v45 makes an icon change a fourth kind of v38's audited
 -- change, written by the same trigger and followed by its own request row, as
 -- a rename is:
 --
 --   * metric_variable_changes gains old_icon_url and new_icon_url (the rows
---     before v44 keep null) and the kind 'icon': the state stays 'active', the
+--     before v45 keep null) and the kind 'icon': the state stays 'active', the
 --     label, short label and description stay, the icon changes, and its new
---     value is null or `icon:` and a key's shape. A rename, an archive and a
+--     value is null or `icon:` and a key's shape, at most 69 characters (the
+--     library's membership is the service's check). A rename, an archive and a
 --     restore keep the icon, so one UPDATE cannot rename and change the icon
 --     at once (23514).
 --   * metric_definitions_v38_record_change fires on icon_url too, and
@@ -29,25 +30,35 @@
 --
 -- No table, no index, no row is added or changed; the two functions are
 -- replaced, the two triggers redefined in place and five checks widened (their
--- v38 names kept). Rollback: docs/runbooks/metric-variable-icon-v44-rollback.sql
+-- v38 names kept). Rollback: docs/runbooks/metric-variable-icon-v45-rollback.sql
 -- (it refuses once any icon change or request exists). Fixed messages: no id,
 -- name, value or SQL.
 --
--- Locks: the three tables first, in the order a change takes them (the
--- definition, then its change row, then its request row), so v44 never waits
--- for a writer that waits for it; the runner's lock_timeout bounds each wait.
+-- Locks: the three tables first, in the order a write takes them - the request
+-- record (a write and a replay read it first, runWrite), then the definition,
+-- then the change record - so a write or a replay in flight never waits for v45
+-- while v45 waits for it. A plain read that joins the change record before the
+-- request record could still meet v45 in the other order for a moment: PostgreSQL
+-- then ends one of them (40P01); if it is v45, nothing of it is written and the
+-- deploy is repeated. The runner's lock_timeout bounds each wait.
 -- metric_definitions is held in SHARE ROW EXCLUSIVE (its trigger is replaced
--- with CREATE OR REPLACE TRIGGER), so reads of the variables go on; the two
--- record tables in ACCESS EXCLUSIVE (their columns and checks).
+-- with CREATE OR REPLACE TRIGGER), so plain reads of metric_definitions go on;
+-- the two record tables in ACCESS EXCLUSIVE (their columns and checks), so the
+-- Variables screen's reads, which join the change record, wait until v45
+-- commits (seconds). CREATE OR REPLACE TRIGGER leaves both triggers enabled.
+-- A change row's old_icon_url keeps the stored value it replaced, whatever it
+-- was (a legacy URL included), for good: the record is append-only (as v38
+-- keeps a replaced label).
 -- A future migration that changes the icon of a system or club definition
 -- disables metric_definitions_v38_record_change inside itself, as for a label
 -- (v38's note).
 
 -- ---------------------------------------------------------------------------
--- 0. The locks, in a change's own order.
+-- 0. The locks, in a write's own order.
 -- ---------------------------------------------------------------------------
+lock table training_load.metric_variable_requests in access exclusive mode;
 lock table training_load.metric_definitions in share row exclusive mode;
-lock table training_load.metric_variable_changes, training_load.metric_variable_requests in access exclusive mode;
+lock table training_load.metric_variable_changes in access exclusive mode;
 
 -- ---------------------------------------------------------------------------
 -- 1. The change record: the icon's old and new value, the kind 'icon'.
@@ -66,7 +77,7 @@ alter table training_load.metric_variable_changes
         and old_label = new_label and old_short_label is not distinct from new_short_label
         and old_description is not distinct from new_description
         and old_icon_url is distinct from new_icon_url
-        and (new_icon_url is null or new_icon_url ~ '^icon:[a-z0-9]+(-[a-z0-9]+)*$'))
+        and (new_icon_url is null or (new_icon_url ~ '^icon:[a-z0-9]+(-[a-z0-9]+)*$' and char_length(new_icon_url) <= 69)))
   );
 
 -- ---------------------------------------------------------------------------
@@ -226,6 +237,6 @@ create or replace trigger metric_variable_requests_change_guard
   execute function training_load.metric_variable_requests_change_guard();
 
 comment on function training_load.metric_definitions_record_change() is
-  'v44 (J3b.11): records a rename, an archive, a restore or an icon change of a system or club variable, with the icon''s old and new value.';
+  'v45 (J3b.11): records a rename, an archive, a restore or an icon change of a system or club variable, with the icon''s old and new value.';
 comment on function training_load.metric_variable_requests_change_guard() is
-  'v44 (J3b.11): the R2 request guard of v38, with the operation variable_icon paired with the kind icon and the icon compared.';
+  'v45 (J3b.11): the R2 request guard of v38, with the operation variable_icon paired with the kind icon and the icon compared.';
