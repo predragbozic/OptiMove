@@ -32,6 +32,7 @@ const {
   restoreCentralCalendarView,
 } = await import("../central-calendar-actions.js");
 const {
+  centralCalendarContextKey,
   centralCalendarRange,
   describeCentralCalendarError,
   invalidateCentralCalendarCache,
@@ -191,6 +192,31 @@ test("2b. a slower older answer never overwrites the range the coach moved on to
   assert.equal(state.centralCalendar.loading, false);
 });
 
+test("2b2. the cache key names the account, the workspace and the browser's date: another workspace reads again even without an invalidation", async () => {
+  const calls = installFetchMock(okResponder());
+  await loadCentralCalendar({ render });
+  assert.equal(calls.length, 1);
+  // Another workspace of the same account, and nothing invalidated: the same
+  // range must not be answered from club-1's entry.
+  state.currentUser = { id: "coach-1", activeWorkspace: { type: "club", scopeId: "club-2", label: "Second Club" } };
+  await loadCentralCalendar({ render });
+  assert.equal(calls.length, 2, "a second workspace is a second cache slot");
+  state.currentUser = { id: "coach-1", activeWorkspace: { type: "team", scopeId: "team-9", label: "U17" } };
+  await loadCentralCalendar({ render });
+  assert.equal(calls.length, 3, "another workspace type too");
+  state.currentUser = { id: "coach-2", activeWorkspace: { type: "team", scopeId: "team-9", label: "U17" } };
+  await loadCentralCalendar({ render });
+  assert.equal(calls.length, 4, "another account too");
+  state.currentUser = { id: "coach-1", activeWorkspace: { type: "club", scopeId: "club-1", label: "First Club" } };
+  await loadCentralCalendar({ render });
+  assert.equal(calls.length, 4, "back in club-1 the first entry is still fresh");
+  // The server derives every status from `today`: another date is another slot.
+  const key = (today) => centralCalendarContextKey(MONDAY, DAY(6), today);
+  assert.notEqual(key("2026-01-01"), key("2026-01-02"));
+  assert.equal(key("2026-01-01"), key("2026-01-01"));
+  assert.notEqual(centralCalendarContextKey(MONDAY, DAY(6), TODAY), centralCalendarContextKey(DAY(7), DAY(13), TODAY), "and another range");
+});
+
 test("2c. a workspace switch mid-flight drops the old workspace's answer and clears the slice", async () => {
   const pending = [];
   installFetchMock((call) => new Promise((resolve) => { pending.push({ call, resolve }); }));
@@ -229,6 +255,22 @@ test("3a. the Groups and Types chips count the unfiltered answer and a toggle hi
 
   await act({ action: "central-calendar-toggle-team", teamId: U17 });
   assert.equal(dom().querySelectorAll(".cc-card").length, 9, "toggled off again");
+});
+
+test("3a2. the chips count the displayed days of the unfiltered answer: in Day view a chip shows that day's count", async () => {
+  installFetchMock(okResponder());
+  state.centralCalendar.view = "day";
+  state.centralCalendar.anchor = DAY(0);
+  await loadCentralCalendar({ render });
+  const doc = dom();
+  const chipCount = (selector) => doc.querySelector(`${selector} .cc-chip-count`).textContent;
+  assert.equal(chipCount('[data-kind="planned"]'), "2", "Monday's two trainings, not the week's");
+  assert.equal(chipCount('[data-kind="activity"]'), "1", "Monday's one own-card activity");
+  assert.equal(chipCount('[data-kind="external"]'), "0");
+  assert.equal(chipCount('[data-kind="test"]'), "0");
+  assert.equal(chipCount(`[data-team-id="${U19}"]`), "3");
+  assert.equal(chipCount(`[data-team-id="${U17}"]`), "1");
+  assert.equal(chipCount(`[data-team-id="${U15}"]`), "0");
 });
 
 test("3b. the Types chip follows the server's kinds: Activities shows own-card activities and never unfolds a training's RPE activities", async () => {
@@ -741,6 +783,15 @@ test("8c. empty states: nothing in the period, or nothing matching the filters w
   installFetchMock(okResponder({ items: [] }));
   await loadCentralCalendar({ render });
   assert.match(dom().querySelector(".cc-empty-text").textContent, /Nothing planned or recorded this week/);
+  // A phone's empty month says it once, not also "Nothing on this day." under the grid.
+  layout = "phone";
+  await act({ action: "central-calendar-view", view: "month" });
+  const phoneDoc = dom();
+  assert.match(phoneDoc.querySelector(".cc-empty-text").textContent, /Nothing planned or recorded this month/);
+  assert.equal(phoneDoc.querySelector(".cc-day-list"), null);
+  assert.equal(phoneDoc.querySelectorAll(".cc-day-empty").length, 0);
+  // A month with something in it keeps the selected day's list (6d).
+  layout = "wide";
   clearAllViewCache();
   resetCentralCalendarForWorkspaceChange();
   installFetchMock(okResponder({ items: ITEMS.filter((item) => item.kind === "planned") }));

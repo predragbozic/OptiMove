@@ -90,7 +90,8 @@ The month picker that the rail button used to open stays inside the weekly plan 
   another workspace (`training-load-calendar-data.js` pattern). An `invalidated-stale` outcome retries once.
 - **Filters are client-side** over the one unfiltered answer (**decision A**): Groups hide every card whose
   `teamIds` holds none of the chosen teams; Types hide every card whose `kind` is not chosen. The chips' counts
-  are counted over the loaded range, so every chip keeps its count while another is active; a toggle never
+  are counted over the displayed days of the unfiltered answer (the month's grid, the week, or the one day of
+  the Day view, which shares its week's read), so every chip keeps its count while another is active; a toggle never
   sends a request; the server's grouping is never changed (D16: hiding a whole card is not regrouping). The
   Types chip mirrors the server's `kinds` semantics: a folded RPE activity lives inside its planned card, so
   *Activities* shows the own-card activities only and never unfolds a group. The `kinds` / `teamIds` /
@@ -123,7 +124,8 @@ The month picker that the rail button used to open stays inside the weekly plan 
 - **Week, list mode (default, D13):** seven columns Mon–Sun; each column lists its day's cards **in the
   server's order** (K1 §2.8: AM/PM, Before/Training/After, order, time, title) — the client never re-sorts in
   list mode. Today's column is marked; an empty day shows a quiet dash.
-- **Week, time grid (D13 second mode):** rows by hour from 06:00 to 22:00, widened to the earliest / latest
+- **Week, time grid (D13 second mode):** hour rows 06:00 to 21:00 (the last row takes the 21:xx starts, so the
+  grid covers 06:00–22:00; `DAY_GRID_START_HOUR` / `DAY_GRID_END_HOUR` in the view), widened to the earliest / latest
   `startTime` in the week; a card with a `startTime` sits at its hour with a **fixed height** (start only — no
   end, no duration, K0 MEDIUM-3); cards without a time go in a *No time* band above the grid, in the list
   order. The grid is **offered at ≥ 1024 px only** (the manager's GO): below that seven hour-columns cannot
@@ -236,7 +238,7 @@ Nothing blocks K1b. No backend change is made.
 2. The same range again inside the TTL sends nothing; another range sends one request; a slower older answer
    is dropped after a newer range (deferred fetch); a workspace switch resets the slice and never applies the
    old workspace's answer.
-3. Chips: counts from the loaded range; a Group / Type toggle hides the right cards and **sends no request**;
+3. Chips: counts over the displayed days of the unfiltered answer; a Group / Type toggle hides the right cards and **sends no request**;
    Clear; `kind` names.
 4. List order kept exactly as the server's (never re-sorted); the time grid places timed cards by hour and the
    untimed ones in the *No time* band.
@@ -277,7 +279,7 @@ screen, several files.
 ## 12. The manager's decisions (GO of 2026-10-30; all inside D1–D16, no owner round)
 
 - **A. Filters client-side** over one unfiltered answer per visible range — accepted. The chips' counts come
-  from the unfiltered answer; the Types chip mirrors the server's `kinds` semantics (a folded RPE activity
+  from the unfiltered answer, over the displayed days; the Types chip mirrors the server's `kinds` semantics (a folded RPE activity
   lives inside its planned card — *Activities* shows own-card activities and never unfolds them); no second
   request on a chip toggle; the server's `teamIds` / `kinds` / `athleteIds` stay unused in K1b (available for
   K3).
@@ -314,3 +316,24 @@ Recorded for the owner, not changed: *RPE 0/20* on a future planned card (a D14 
 (*Planned training* / *Recorded activities*); the first team's name on Day-view cards; the *Not opened* badge word.
 **K1a-API follow-ups:** a per-athlete `activityId` in `include=athletes` rows (decision D); `program-data` read by
 `athlete_uuid` (section 6).
+
+## 14. Round 2 — the independent review (2026-10-30, head `c7c2b05`)
+
+READY WITH NON-BLOCKING NOTES, no BLOCKER / HIGH / MEDIUM. The three LOW, closed in one short round (tests and
+text only, plus one copy nit):
+- **LOW-1, the cache key untested:** test 2b2 loads the same range in club-1, then in club-2, a team workspace and
+  another account without any invalidation (each a new request; club-1 again is still fresh), and checks that
+  another `today` or another range is another key. Mutations of `centralCalendarContextKey` (without `today`,
+  without the workspace parts, without the scope id) now fail the suite.
+- **LOW-2, the chip counts' wording:** the code counts over the displayed days of the unfiltered answer (in Day
+  view a chip shows that day); section 3, section 10, section 12 and the `menu-cache-policy.js` entry now say so;
+  test 3a2 pins the Day-view counts.
+- **LOW-3, the time grid's hours:** section 4 aligned to the code (`DAY_GRID_END_HOUR = 21`: hour rows 06:00 to
+  21:00, the last row takes the 21:xx starts, so the grid covers 06:00–22:00; a later start widens it).
+- The copy nit: a phone's empty month says "Nothing planned or recorded this month." once, without the selected
+  day's own "Nothing on this day." under the grid (test 8c).
+
+Recorded behaviour, unchanged:
+- **Back after a drill-in lands on Home**, not on the calendar: the app's Back model with decision E (the coach's
+  root is Home). The rail's Calendar reopens the calendar on the same cached range.
+- The panel's athlete list is sorted by name (section 2.6 of the K1 plan defines no order).

@@ -20,6 +20,9 @@ const EVENT_TYPE_LABELS = Object.freeze({
   match: "Match", friendly: "Friendly match", tournament: "Tournament", training: "Training", travel: "Travel",
   meeting: "Meeting", camp: "Camp", recovery: "Recovery", rest: "Rest", other: "Event",
 });
+// The time grid's default hour rows, 06:00 to 21:00: the last row takes the
+// 21:xx starts, so the grid covers 06:00-22:00; an earlier or later start
+// widens it (plan section 4).
 const DAY_GRID_START_HOUR = 6;
 const DAY_GRID_END_HOUR = 21;
 const MONTH_CELL_CARDS = 3;
@@ -82,7 +85,9 @@ export function centralCalendarVisibleItems(items, filters) {
   });
 }
 
-// The chips' counts over the displayed days, from the unfiltered answer.
+// The chips' counts over the displayed days of the unfiltered answer (a
+// month's grid, the week, or the one day of the Day view): what a chip
+// would show or hide on this screen, whatever else is chosen.
 export function centralCalendarChipCounts(byDate, days) {
   const teams = new Map();
   const kinds = Object.fromEntries(CENTRAL_CALENDAR_KINDS.map((kind) => [kind, 0]));
@@ -460,7 +465,7 @@ function renderSelectedDayListHtml(date, byDate, cal, teams, today, { heading = 
 // The month grid: on a wide or medium screen each cell holds up to three
 // compact cards and "+n more"; on a phone a cell is one button with the
 // day's count and the selected day's list follows the grid.
-function renderMonthHtml(days, byDate, cal, teams, today, layout) {
+function renderMonthHtml(days, byDate, cal, teams, today, layout, { dayList = true } = {}) {
   const monthIso = cal.anchor.slice(0, 7);
   const weeks = [];
   for (let index = 0; index < days.length; index += 7) weeks.push(days.slice(index, index + 7));
@@ -493,7 +498,7 @@ function renderMonthHtml(days, byDate, cal, teams, today, layout) {
       <div class="cc-month-weekdays" aria-hidden="true">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((name) => `<span>${name}</span>`).join("")}</div>
       ${weeks.map((week) => `<div class="cc-month-week">${week.map(cell).join("")}</div>`).join("")}
     </div>
-    ${phone ? renderSelectedDayListHtml(selected, byDate, cal, teams, today) : ""}`;
+    ${phone && dayList ? renderSelectedDayListHtml(selected, byDate, cal, teams, today) : ""}`;
 }
 
 function renderBodyHtml(cal, layout, today) {
@@ -503,7 +508,9 @@ function renderBodyHtml(cal, layout, today) {
   const days = centralCalendarDisplayedDays(cal.view, cal.anchor);
   const anyVisible = days.some((date) => centralCalendarVisibleItems(byDate.get(date), cal.filters).length > 0);
   const scope = cal.view === "month" ? "this month" : cal.view === "day" ? "on this day" : "this week";
-  if (cal.view === "month") return renderMonthHtml(days, byDate, cal, teams, today, layout) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
+  // A month with nothing to show says so once: a phone then skips the
+  // selected day's own "Nothing on this day." under the grid.
+  if (cal.view === "month") return renderMonthHtml(days, byDate, cal, teams, today, layout, { dayList: anyVisible }) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
   if (cal.view === "day") return renderSelectedDayListHtml(days[0], byDate, cal, teams, today, { heading: false });
   if (layout === "phone") {
     const selected = days.includes(cal.selectedDate) ? cal.selectedDate : days[0];
