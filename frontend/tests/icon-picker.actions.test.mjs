@@ -82,7 +82,7 @@ test("1. the create form offers an optional icon; the picker opens as a dialog w
   await openCreate();
   const field = $(".dc-icon-choice");
   assert.match(field.textContent.replace(/\s+/g, " "), /No icon Choose icon/);
-  assert.match($("#mv-hint-iconKey").textContent, /Choose it now: after the variable is created its icon cannot be changed yet\./);
+  assert.match($("#mv-hint-iconKey").textContent, /Shown beside the variable in lists\. You can change it later\./);
   await click('[data-action="metric-variables-icon-open"]');
   const dialog = $('[data-icon-picker] [role="dialog"]');
   assert.ok(dialog);

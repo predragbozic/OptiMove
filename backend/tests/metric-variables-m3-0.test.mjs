@@ -1075,7 +1075,12 @@ test("18. iconKey at create (Data configuration visual polish, PR-1): only a key
   assert.equal(list.find((x) => x.id === withIcon.body.variable.id).icon, "run");
   assert.equal((await api(`/variables/${withIcon.body.variable.id}`, { cookie: W.pa.cookie })).body.variable.icon, "run");
   for (const stored of ["/assets/icons/metric-default.svg", "icon:dumbbell", "icon:no-such-icon", "run", "icon:", "icon:run "]) {
+    // Planted with v45's change trigger off: since v45 an icon update needs its
+    // acting user and request row, as a rename does (J3b.11).
+    await k.query("begin");
+    await k.query("set local session_replication_role = replica");
     await k.query(`update training_load.metric_definitions set icon_url = $1 where id = $2`, [stored, plain.body.variable.id]);
+    await k.query("commit");
     const read = (await api(`/variables/${plain.body.variable.id}`, { cookie: W.pa.cookie })).body.variable;
     assert.equal(read.icon, null, stored);
     assert.ok(!JSON.stringify(read).includes(stored === "run" ? "\"run\"" : stored), `the stored ${stored} is never sent`);

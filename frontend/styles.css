@@ -19291,6 +19291,10 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* The icon saved now (Change icon, I1): its own line, never split from its key. */
+.dc-icon-choice-saved {
+  display: block;
+}
 /* The shared icon picker: a dialog on a computer, a bottom sheet on a phone. */
 .icon-picker-overlay {
   position: fixed;
