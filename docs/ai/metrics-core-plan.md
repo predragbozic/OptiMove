@@ -344,8 +344,9 @@ Every other rule of those files applies as written.
    script of `backend/package.json` (it runs `migrate.js` before the server); a deploy carries a migration when any of
    them differs between the commit `optimove-eu` serves and the commit deployed. Then exactly that commit is
    deployed: the owner answers „da” to that notice and the *Rukovodilac* deploys exactly that commit (step 6), or the
-   owner deploys exactly that commit by hand; either is the owner's confirmation. The „da” is the first turn the owner types in the *Rukovodilac*'s chat after the notice that answers
-   it; it covers that commit only, once, and its event id goes into the next facts record. A deploy of another commit
+   owner deploys exactly that commit by hand; either is the owner's confirmation. The „da” is the first turn the
+   owner types in the *Rukovodilac*'s chat after the notice that answers it; it covers that commit only, once, and its
+   event id goes into the next facts record. A deploy of another commit
    confirms none of the migrations it carries and is a deviation of step 4. **From the merge of a migration PR until
    that commit is deployed and its post-check passed, no PR is merged into `main`, under any standing order.** If the
    deploy has not come by the end of the preflight's UTC day, the *Rukovodilac* runs the preflight again and repeats
