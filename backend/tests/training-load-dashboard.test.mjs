@@ -4502,38 +4502,48 @@ async function s2cHttpHarness(testContext, options = {}) {
   const now = options.now ?? (() => Date.now());
   const tokenService = options.tokenService ?? modules.createPreviewTokenService({ keyId: `s2c-${uid()}`, key: crypto.randomBytes(32), now });
   const savePool = {
-    async connect() {
-      if (commitFaultInjected && options.recoveryUnavailable) throw new Error("s2c recovery connection unavailable");
-      const client = await databasePool.connect();
-      const backendPid = (await client.query("select pg_backend_pid() as pid")).rows[0].pid;
-      const checkout = lifecycle.filter(event => event.kind === "checkout").length + 1;
-      lifecycle.push({ kind: "checkout", checkout, backendPid });
-      return {
-        async query(sql, params) {
-          observations.push({ sql, checkout, backendPid });
-          if (/^\s*commit\s*;?\s*$/i.test(sql) && options.commitFault && !commitFaultInjected) {
-            commitFaultInjected = true;
-            if (options.commitFault === "before") throw new Error("s2c COMMIT was not sent");
-            const result = await client.query(sql, params);
-            if (options.commitFault === "after") throw new Error("s2c COMMIT acknowledgement lost");
-            if (options.commitFault === "delayed") {
-              await new Promise(resolve => { releaseCommitAcknowledgement = resolve; });
-              return result;
+    connect(callback) {
+      if (typeof callback !== "function") {
+        return new Promise((resolve, reject) => savePool.connect((error, client) => error ? reject(error) : resolve(client)));
+      }
+      if (commitFaultInjected && options.recoveryUnavailable) {
+        callback(new Error("s2c recovery connection unavailable"));
+        return;
+      }
+      return databasePool.connect((error, client) => {
+        if (error) { callback(error); return; }
+        const backendPid = client.processID;
+        const checkout = lifecycle.filter(event => event.kind === "checkout").length + 1;
+        lifecycle.push({ kind: "checkout", checkout, backendPid });
+        callback(null, {
+          on: client.on.bind(client),
+          removeListener: client.removeListener.bind(client),
+          async query(sql, params) {
+            observations.push({ sql, checkout, backendPid });
+            if (/^\s*commit\s*;?\s*$/i.test(sql) && options.commitFault && !commitFaultInjected) {
+              commitFaultInjected = true;
+              if (options.commitFault === "before") throw new Error("s2c COMMIT was not sent");
+              const result = await client.query(sql, params);
+              if (options.commitFault === "after") throw new Error("s2c COMMIT acknowledgement lost");
+              if (options.commitFault === "delayed") {
+                await new Promise(resolve => { releaseCommitAcknowledgement = resolve; });
+                return result;
+              }
+              assert.fail(`Unsupported COMMIT fault ${options.commitFault}`);
             }
-            assert.fail(`Unsupported COMMIT fault ${options.commitFault}`);
-          }
-          const result = await client.query(sql, params);
-          if (/^\s*select\b/i.test(sql)) {
-            const transaction = (await client.query("select current_database() as database_name, current_setting('transaction_read_only') as read_only")).rows[0];
-            observations[observations.length - 1] = { sql, checkout, backendPid, ...transaction };
-          }
-          return result;
-        },
-        release(destroy) {
-          lifecycle.push({ kind: "release", checkout, backendPid, destroy: Boolean(destroy) });
-          client.release(destroy);
-        },
-      };
+            const result = await client.query(sql, params);
+            if (/^\s*select\b/i.test(sql)) {
+              const transaction = (await client.query("select current_database() as database_name, current_setting('transaction_read_only') as read_only")).rows[0];
+              observations[observations.length - 1] = { sql, checkout, backendPid, ...transaction };
+            }
+            return result;
+          },
+          release(destroy) {
+            lifecycle.push({ kind: "release", checkout, backendPid, destroy: Boolean(destroy) });
+            client.release(destroy);
+          },
+        });
+      });
     },
   };
   const coordinator = modules.createPreviewAdmissionCoordinator({ maxActiveDeployment: 2 });
@@ -5308,6 +5318,81 @@ test("S2c S13 the series-update binding guard rejects text and boolean under V1 
     assert.equal(stored.presentation_config, null);
   }
 });
+
+for (const candidateCount of [0, 2]) {
+  test(`S2c P2 V1 chart clone with ${candidateCount} candidates preserves its placeholder and sidecar; repair accepts numeric and rejects text/boolean`, async () => {
+    const { adminId, adminCookie } = await makePlatformAdmin(`s2c-p2-${candidateCount}`);
+    const { clubId, coachId, coachCookie } = await makeClubCoach(`s2c-p2-target-${candidateCount}`);
+    const key = `s2c-p2-${uid()}`;
+    const sourceMetricId = (await query("insert into training_load.metric_definitions (key,label,owner_scope,state,created_by_user_id) values ($1,'Numeric source','system','active',$2) returning id", [key, adminId])).rows[0].id;
+    const sourceVersionId = (await query("insert into training_load.metric_definition_versions (metric_definition_id,version_number,unit,value_type,daily_aggregation_method,created_by_user_id) values ($1,1,'bpm','numeric','last',$2) returning id", [sourceMetricId, adminId])).rows[0].id;
+    await query("update training_load.metric_definitions set current_version_id=$1 where id=$2", [sourceVersionId, sourceMetricId]);
+    const template = await makeDashboardHttp(adminCookie, { ownerScope: "system" });
+    const created = await makeWidgetHttp(adminCookie, template, { widgetType: "line_chart", groupBy: "day" });
+    const added = await api(`/api/training-load/dashboards/${template.id}/widgets/${created.widgetId}/series`, {
+      method: "POST", cookie: adminCookie,
+      body: { expectedWidgetRevision: 1, seriesOrder: 0, metricDefinitionId: sourceMetricId, dataScopeLevel: "session", analyticalAggregation: "last" },
+    });
+    assert.equal(added.status, 201, JSON.stringify(added.body));
+    const sidecar = { schemaVersion: 1, chartComposition: "athletes-v1", chartInteractions: { tooltip: { mode: "exact" }, legend: { toggle: true }, zoom: { mode: "local", applyPeriodAction: true }, pointSelection: { mode: "details" }, yAxis: { mode: "fixed", min: -5, max: 100 } } };
+    const sourceBefore = await s2aStored(created.widgetId);
+    const attached = await api(`/api/training-load/dashboards/${template.id}/widgets/${created.widgetId}`, {
+      method: "PATCH", cookie: adminCookie,
+      body: { expectedWidgetRevision: sourceBefore.revision, presentation: { mode: "replace", value: sidecar } },
+    });
+    assert.equal(attached.status, 200, JSON.stringify(attached.body));
+    if (candidateCount === 0) await query("update training_load.metric_definitions set state='archived' where id=$1", [sourceMetricId]);
+    const numeric = await makeMetricDefinition({ clubId, adminId: coachId, key: candidateCount === 2 ? key : undefined, dailyAggregationMethod: "last", scopeLevels: ["session"] });
+    const source = await s2aStored(created.widgetId);
+    const cloned = await api(`/api/training-load/dashboards/${template.id}/clone`, {
+      method: "POST", cookie: coachCookie, body: { ownerScope: "club", ownerClubId: clubId },
+    });
+    assert.equal(cloned.status, 201, JSON.stringify(cloned.body));
+    const status = candidateCount === 0 ? "unresolved" : "ambiguous";
+    assert.deepEqual(cloned.body.cloneReport, [{ sourceSeriesId: source.series[0].id, resolution: status }]);
+    const dashboardId = cloned.body.dashboard.id;
+    const detail = await api(`/api/training-load/dashboards/${dashboardId}`, { cookie: coachCookie });
+    assert.equal(detail.status, 200, JSON.stringify(detail.body));
+    assert.equal(detail.body.widgets.length, 1);
+    const widget = detail.body.widgets[0];
+    assert.deepEqual(widget.presentation_config, sidecar);
+    assert.equal(widget.series.length, 1);
+    const series = widget.series[0];
+    assert.equal(series.resolution_status, status);
+    assert.equal(series.metric_definition_id, null);
+    assert.equal(series.built_in_series_key, null);
+    assert.deepEqual(series.template_metric_key_hints, source.series[0].template_metric_key_hints);
+    if (candidateCount === 0) assert.equal(series.template_resolution_candidates, null);
+    else assert.deepEqual([...series.template_resolution_candidates].sort(), [sourceMetricId, numeric.metricDefinitionId].sort());
+    const queried = await api(`/api/training-load/dashboards/${dashboardId}/query`, {
+      method: "POST", cookie: coachCookie, body: { dateFrom: "2026-01-01", dateTo: "2026-01-02" },
+    });
+    assert.equal(queried.status, 200, JSON.stringify(queried.body));
+    assert.equal(queried.body.widgets[0].series[0].status, status);
+    const resolve = metricDefinitionId => api(`/api/training-load/dashboards/${dashboardId}/widgets/${widget.id}/series/${series.id}/resolve`, {
+      method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: widget.revision, metricDefinitionId },
+    });
+    for (const valueType of ["text", "boolean"]) {
+      const invalid = await makeMetricDefinition({ clubId, adminId: coachId, valueType, dailyAggregationMethod: "last", scopeLevels: ["session"] });
+      const before = await s2aState(dashboardId);
+      assert.deepEqual(await resolve(invalid.metricDefinitionId), { status: 400, body: { error: "invalidRequest" } });
+      assert.deepEqual(await s2aState(dashboardId), before, `${valueType} repair must preserve the placeholder, candidates, presentation and revisions`);
+      await s2aDbReject(dashboardId, () => query("select * from training_load.resolve_series_binding($1,$2,$3,$4)", [series.id, widget.id, widget.revision, invalid.metricDefinitionId]), "S2C02", /numericChartRequired/);
+    }
+    const repaired = await resolve(numeric.metricDefinitionId);
+    assert.equal(repaired.status, 200, JSON.stringify(repaired.body));
+    const saved = await s2aStored(widget.id);
+    assert.deepEqual(saved.presentation_config, sidecar);
+    assert.equal(saved.series[0].id, series.id);
+    assert.equal(saved.series[0].resolution_status, "resolved");
+    assert.equal(saved.series[0].metric_definition_id, numeric.metricDefinitionId);
+    assert.equal(saved.series[0].template_resolution_candidates, null);
+    assert.deepEqual(saved.series[0].template_metric_key_hints, series.template_metric_key_hints);
+    assert.ok(saved.revision > widget.revision);
+    assert.equal(repaired.body.widgetRevision, saved.revision);
+    assert.deepEqual(await s2aStored(source.id), source);
+  });
+}
 
 test("S2c S13 failure at final presentation attachment restores the original opaque chart, binding, revisions and receipts", async testContext => {
   const fixture = await s2aFixture("s2c-final-attachment-rollback");

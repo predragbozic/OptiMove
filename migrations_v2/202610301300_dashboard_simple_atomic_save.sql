@@ -114,6 +114,8 @@ declare
 begin
   if p_config is null or training_load.dashboard_presentation_opaque(p_config)
     or p_widget_type not in ('line_chart','bar_chart') then return; end if;
+  if p_resolution_status in ('unresolved','ambiguous')
+    and p_metric_id is null and p_builtin_key is null then return; end if;
   if p_metric_id is not null then
     select definition.current_version_id into current_version from training_load.metric_definitions definition
       where definition.id=p_metric_id for share;

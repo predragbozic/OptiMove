@@ -1,12 +1,14 @@
 {
   "$comment": "Read by scripts/test-runner.mjs. knownFailures: tests that fail on origin/main today, each identified by the WHOLE fingerprint - file, exact title, node's failureType and messagePattern (a regular expression over the first line of the failure message); a failure whose title is listed but whose type or message differs is reported as a new failure, a listed test that passes is reported title by title so an entry is removed in the PR that fixes it; an entry for a secret / credential scan test is refused by the runner. fileOptions.testTimeoutMs: node's per-test limit for one file. knownNoExit: files whose process stays alive after every test finished. kindOverrides: a file mapped to a kind when the static classification is wrong, with the reason in kindOverrideNotes.",
   "kindOverrides": {
+    "dashboard-simple-checkout-boundary.test.mjs": "unit",
     "dashboard-simple-presentation-writers.test.mjs": "unit",
     "dashboard-simple-query-runner.test.mjs": "unit",
     "http-parser-security.test.mjs": "unit",
     "production-static-serving.test.mjs": "disposable"
   },
   "kindOverrideNotes": {
+    "dashboard-simple-checkout-boundary.test.mjs": "uses the installed pg Pool and Client protocol handlers with a NoSocketClient whose connect/query/end are in-memory overrides; no socket or database connection is opened",
     "dashboard-simple-presentation-writers.test.mjs": "db.js and the query engine are replaced with node:test module mocks before importing routes; every query and client is an in-memory fixture, with no database connection",
     "dashboard-simple-query-runner.test.mjs": "the query engine's db.js dependency is replaced with node:test module mocking before import; every runner is an in-memory fixture, the default runner throws unless explicitly mocked, and no real pool or database connection is created",
     "http-parser-security.test.mjs": "imports the real app with an unreachable loopback URL solely to construct its lazy pool; pool.query is replaced before app import with a fail-fast counter and asserted unused; only parser rejection and unauthenticated routes, no database connection",

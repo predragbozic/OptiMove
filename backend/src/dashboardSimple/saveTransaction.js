@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { previewError } from './previewTransaction.js';
+import { checkoutObservedClient } from './clientLifecycle.js';
 
 function bounded(promise, milliseconds, error) {
   let timer;
@@ -12,23 +13,25 @@ export async function runSimpleSaveTransaction({ pool, requestId, write, verify,
       ![checkoutTimeoutMs, transactionTimeoutMs, statementTimeoutMs, commitTimeoutMs, recoveryTimeoutMs].every(value => Number.isSafeInteger(value) && value > 0) ||
       checkoutTimeoutMs > 5000 || transactionTimeoutMs > 10000 || statementTimeoutMs > 3000 || commitTimeoutMs > 5000 || recoveryTimeoutMs > 5000) throw new TypeError('Bounded save dependencies required');
   const unknown = () => Object.assign(previewError('outcomeUnknown'), { requestId });
-  let client, released = false, commitStarted = false, begun = false;
+  let client, lifecycle, released = false, commitStarted = false, begun = false;
   const release = destroy => {
     if (released) return;
     released = true;
-    client?.release(destroy);
+    lifecycle?.release(destroy);
   };
-  const pendingClient = Promise.resolve().then(() => pool.connect());
-  try { client = await bounded(pendingClient, checkoutTimeoutMs, previewError('saveBusy')); }
-  catch (error) { pendingClient.then(lateClient => lateClient.release(true), () => {}).catch(() => {}); throw error; }
+  const pendingClient = checkoutObservedClient(pool);
+  try { ({ client, lifecycle } = await bounded(pendingClient, checkoutTimeoutMs, previewError('saveBusy'))); }
+  catch (error) { pendingClient.then(late => late.lifecycle.release(true), () => {}).catch(() => {}); throw error; }
   const deadline = performance.now() + transactionTimeoutMs;
   let stopped = false, queue = Promise.resolve();
   const queryRunner = (sql, params = []) => {
     const running = queue.then(async () => {
+      lifecycle.check();
       if (stopped || performance.now() >= deadline) throw previewError('saveTimeout');
       if (typeof sql !== 'string' || !/^\s*select\b/i.test(sql) || /;\s*\S/.test(sql)) throw previewError('saveFailed');
       const remaining = Math.max(1, Math.min(statementTimeoutMs, Math.floor(deadline - performance.now())));
       await client.query(`set local statement_timeout = '${remaining}ms'`);
+      lifecycle.check();
       if (stopped || performance.now() >= deadline) throw previewError('saveTimeout');
       return client.query(sql, params);
     });
@@ -37,13 +40,14 @@ export async function runSimpleSaveTransaction({ pool, requestId, write, verify,
   };
   try {
     begun = true;
-    await bounded(client.query('begin'), Math.max(1, deadline - performance.now()), previewError('saveTimeout'));
-    await bounded(client.query("set local lock_timeout = '1000ms'"), Math.max(1, deadline - performance.now()), previewError('saveTimeout'));
-    const result = await bounded(Promise.resolve().then(() => write(queryRunner)), Math.max(1, deadline - performance.now()), previewError('saveTimeout'));
-    await queue;
+    await bounded(lifecycle.run(() => client.query('begin')), Math.max(1, deadline - performance.now()), previewError('saveTimeout'));
+    await bounded(lifecycle.run(() => client.query("set local lock_timeout = '1000ms'")), Math.max(1, deadline - performance.now()), previewError('saveTimeout'));
+    const result = await bounded(lifecycle.run(() => write(queryRunner)), Math.max(1, deadline - performance.now()), previewError('saveTimeout'));
+    await bounded(lifecycle.run(() => queue), Math.max(1, deadline - performance.now()), previewError('saveTimeout'));
     if (performance.now() >= deadline) throw previewError('saveTimeout');
+    lifecycle.check();
     commitStarted = true;
-    await bounded(client.query('commit'), commitTimeoutMs, unknown());
+    await bounded(lifecycle.run(() => client.query('commit')), commitTimeoutMs, unknown());
     begun = false;
     release(false);
     return { ...result.receipt, verification: result.replayed ? 'replayed' : 'commitAcknowledged' };
@@ -61,7 +65,7 @@ export async function runSimpleSaveTransaction({ pool, requestId, write, verify,
     }
     let rollbackConfirmed = false;
     if (begun) {
-      try { await bounded(client.query('rollback'), 500, unknown()); rollbackConfirmed = true; } catch {}
+      try { await bounded(lifecycle.run(() => client.query('rollback')), 500, unknown()); rollbackConfirmed = true; } catch {}
     }
     release(!rollbackConfirmed);
     if (!rollbackConfirmed) throw unknown();

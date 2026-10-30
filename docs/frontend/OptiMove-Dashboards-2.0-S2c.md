@@ -35,6 +35,13 @@ returns `verifiedAfterCommitError`; an absent/unavailable result returns
 `503 outcomeUnknown` and the original request ID. Recovery never issues another
 business write or claims that a lost acknowledgement proves rollback.
 
+Checked-out save and read-only clients are observed for connection error/end
+events. The observer is installed synchronously inside the pool's checkout
+callback, before resolving the application Promise, and races transaction work.
+Failed clients are destroyed; owned listeners are removed only after pool handoff.
+Pool adapters must forward callback checkout synchronously to preserve this
+boundary. Promise-only fixtures remain supported for in-memory unit tests.
+
 ## Presentation compatibility
 
 `presentation_config` is nullable and revision-aware. Legacy writers retain their
@@ -47,8 +54,11 @@ Unknown versions are opaque. Safe title/layout edits preserve them; semantic edi
 must explicitly clear or replace them. Composite transitions temporarily detach
 presentation inside the same transaction and validate the final attachment after
 series changes. A subsequent failure rolls the entire transition back. Known V1
-chart presentation requires a resolved numeric binding in both attachment and
-series mutation guards. Null-sidecar legacy behavior is preserved.
+chart presentation requires resolved bindings to be numeric in both attachment
+and series mutation guards. Portable clone placeholders with unresolved/ambiguous
+status and no bound metric/builtin preserve their exact sidecar and repair path;
+existing hints/candidates constraints still apply. Repair to text/boolean remains
+rejected, while numeric repair succeeds. Null-sidecar legacy behavior is preserved.
 
 Nonempty table rules, reference/percent evaluators, Pages and S2d KPI width changes
 remain outside this phase. Save transport accepts at most 96 KiB of original
@@ -60,6 +70,13 @@ The independent reviewer found two P2 issues in opaque transitions and numeric
 chart eligibility. Both fixes passed the reviewer's subsequent static review;
 that review did not execute tests. Measured test results are recorded separately
 in the coordinator's S2c status report.
+
+A subsequent independent review of `4132100` reproduced checked-out connection
+process termination (P1) and V1-chart clone rejection for unresolved metrics (P2).
+The follow-up changes add synchronous checkout observation and preserve valid
+placeholder bindings. Regressions include real PostgreSQL disconnects in child
+processes, installed pg protocol checkout-boundary tests without sockets, and
+clone/repair cases. The original external reproductions were rerun unchanged.
 
 The pre-existing Builder unit failure remains a failure; it is not waived or
 reclassified here. Before activation, reconcile the stacked branch with current
