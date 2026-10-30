@@ -27,8 +27,9 @@ that v47 writes. 7d-B may start as soon as 7c-B has both GOs, without waiting fo
   club's workspace. A club admin works only on its own club's bindings, and only with system mappings or its own
   club's mappings. Everyone else gets the identical 404. Section 2's table is the one scope rule of every route,
   replay and list.
-- **A version can always be stopped:** the ends that A1, A2 and the pinned step write are a platform admin's and pass
-  even on an archived club's binding. A start, and an end by S2, need the binding's club active.
+- **A system version can always be stopped:** the ends that A1, A2 and the pinned step write are a platform admin's
+  and pass even on an archived club's binding. A club's own version on an archived club stays as 7b decided (section
+  2.3). A start, and an end by S2, need the binding's club active.
 - **The new routes:**
   - S1 `POST /activations`: start one version on one or more explicitly listed bindings, in one operation;
   - S2 `POST /activations/:activationId/end`: end one activation;
@@ -217,8 +218,15 @@ The basis is the one the database derives for the acting user. Which club it is 
 `activated_basis`, `ended_basis` and the T8 `basis` carry it.
 
 **Why the second row:**
-- A1, A2 and the pinned step stop a version, or every version pinned to a source field. An open activation on an
-  archived club's binding must never stop them, so a field can always be stopped (O5; 7b Q7).
+- A1, A2 and the pinned step stop a version, or every version pinned to a source field. An open activation of a
+  **system** version on an archived club's binding must never stop them (O5; 7b Q7).
+- **A club's own version on an archived club is unchanged by 7d:** 7b decided it (7b Q1(a), O7(ii)(a), C104).
+  - A1 and A2 in that club's workspace are the identical 404, because `resolveMappingAdminWith` admits no archived
+    club (`sourceMetricAccess.js` lines 69–72).
+  - The pinned step answers `409 club_archived` (`archivedPinnedClubs`, `sourceRevisionLifecycleService.js` lines
+    219–237) and ends nothing, because it rolls back whole.
+  - So that version's activations stay open until the club is restored. This is the one case where "a field can
+    always be stopped" waits for a restore, as 7b already records.
 - The NULL club cannot widen a club admin's reach: a club admin gets no basis from it.
 - An S2 end on an archived club's binding is the identical 404, as everywhere else. The activation stays open, as the
   club's binding does (section 1.4), and S2 reaches it again if the club is restored. A2 and the pinned step still end
@@ -389,22 +397,33 @@ index names.
    - T3 (the mapping) `FOR SHARE`. 7b's transitions take it `FOR NO KEY UPDATE`, so a start and a disable of the same
      mapping serialize;
    - T4 (the version) `FOR SHARE`, its mapping checked again;
-   - the binding rows `FOR KEY SHARE`, ascending by id. This is the lock the T5 foreign key takes anyway, taken here, so
-     an Unbind waits for this transaction or lands first (section 5).
+   - the binding rows `FOR SHARE`, ascending by id. That is stronger than the `FOR KEY SHARE` the T5 foreign key takes:
+     it conflicts with every UPDATE of the binding, so any Unbind, through `unbindTeam` or a raw writer, waits for
+     this transaction or lands first (section 5). It is compatible with the importer's and T6's `FOR SHARE` (C55);
+   - the bindings' team rows `FOR SHARE`, distinct ids ascending, as a bind locks its team
+     (`sourceConnectionService.js` line 965). A team archive therefore waits or lands first.
 5. **The rights:**
    - the actor side: the existing `rightsStillHold(client, ctx)` of `sourceMetricAccess.js`, with its C79 promotion
      probe (`409 try_again`);
-   - the binding side, for **every** basis: `bindingClubHolds(client, clubId)`, the binding's club row `FOR SHARE`. An
-     archived club is the identical 404, and an archive running meanwhile waits or lands first (R6);
-   - section 2.1's rule again on the locked facts.
-6. **The state checks**, per binding in ascending id; the first failure is named. The version is active, the binding is
-   active (read under its lock), the binding's team is active, and the field is active.
+   - the binding side, for **every** basis: `bindingClubHolds(client, clubIds)`, the bindings' club rows `FOR SHARE`,
+     distinct ids ascending. An archived club is the identical 404, and an archive running meanwhile waits or lands
+     first (R6);
+   - section 2.1's rule again on the locked facts, and the teams again under their lock: an archived team is the
+     identical 404, never a named 409.
+6. **The state checks**, per binding in ascending id; the first failure is named:
+   - the version is active, the binding is active (read under its lock), and the field is active;
+   - then the two open-row conditions, as plain reads: an open row for the binding, field and fingerprint
+     (`activation_exists`), and an open row for the binding and canonical variable at the level
+     (`variable_taken_on_binding`).
+
+   So one ascending pass names the lowest failing binding, whatever the kind of failure. The unique indexes stay the
+   backstop: a `23505` at step 7 names the binding of the insert that failed.
 7. **The T5 INSERTs**, ascending by binding id. v34's guard and v48's guard run on each.
 8. The T8 rows: N `activation_start` rows, the keyed one last.
 9. The bounded COMMIT, with v48's deferred links.
 
-**S1's real lock order:** T3 → T4 → the bindings (`FOR KEY SHARE`) → the role and user rows → the club row → the new T5
-rows → T8.
+**S1's real lock order:** T3 → T4 → the bindings (`FOR SHARE`) → their teams (`FOR SHARE`) → the role and user rows →
+the club rows → the new T5 rows → T8.
 
 Against D's order (T3 → T4 → T5 → binding → MC connection → the acting user's rows), the new T5 rows come after the
 user and club rows. This forms no cycle, for two reasons:
@@ -439,10 +458,20 @@ user and club rows. This forms no cycle, for two reasons:
 - **Placement:** 7b's lock order stays. After the T4 rows (`FOR UPDATE`), the open T5 rows of those versions are taken
   `FOR NO KEY UPDATE` in ascending id (D: "then the T5 rows, before its first modification"). They are no longer only
   counted.
+- **A1's real order:** the conversion rows (C52, `activateVersion` line 1347) → T2a and T2b `FOR SHARE` → T3
+  `FOR NO KEY UPDATE` → T4 `FOR UPDATE` → (metric definitions and scope capabilities) → the open T5 rows `FOR NO KEY UPDATE` → the role and user rows (7b's `rightsStillHold`,
+  `activateVersion` line 1362) → the listed bindings `FOR SHARE` → their teams → their club rows → the new T5 rows →
+  T8.
+  - The listed bindings come after the user rows. No cycle forms: an Unbind holds a binding `FOR UPDATE` and then
+    wants only `FOR SHARE` rows that A1 holds `FOR SHARE`, so it never waits back.
+  - **A1's listed bindings' scope is read plainly** with 7b's `transitionTarget`, before A1's first lock. A1's caller
+    is a platform admin in the workspace of the mapping's owner, so the scope read is 7b's, and section 9's "before
+    any lock" holds for A1 as for S1 and S2.
 - **The writes, in this order:**
   1. the T5 ends, with `ended_basis` derived without the club gate (section 2.3);
   2. 7b's status changes;
-  3. A1's listed bindings: `FOR KEY SHARE` ascending, `bindingClubHolds` and the state checks, as S1's steps 4–6;
+  3. A1's listed bindings: `FOR SHARE` ascending, their teams `FOR SHARE`, `bindingClubHolds` and the state checks,
+     as S1's steps 4–6;
   4. any new T5 rows;
   5. the T8 rows: the `activation_end` rows (each with the version's `disable_reason`) and the `activation_start`
      rows, then 7b's own, with the keyed one last.
@@ -469,10 +498,12 @@ followed by the role, user and club rows. S1's order, and why its one difference
 | S1 or S2 against A1 / A2 of the same mapping | Each takes T3 first among the registry rows (S1 and S2 `FOR SHARE`, A1 and A2 `FOR NO KEY UPDATE`): they serialize, and no cycle can form. |
 | S2 against an A2 (or the pinned step) ending the same row | All take T3 and T4 before the T5 row (section 4.2 step 4): S2 takes both `FOR SHARE`; A2 takes T3 `FOR NO KEY UPDATE` and T4 `FOR UPDATE` (`disableVersion`, lines 1449–1451); the pinned step takes T3 `FOR SHARE` and T4 `FOR UPDATE` (`lockPinned`, lines 193–215). So S2 and A2 serialize at T3, and S2 and the pinned step at T4, before either holds the T5 row. The second finds the row ended: S2 answers `activation_not_open`, and A2 or the pinned step skips an ended row. |
 | S1 against S2 on the same binding and field | S2 ends the open row while S1 inserts a new one. S1 waits only on the open-row unique index entry, which S2's end releases at its COMMIT. S2 waits on nothing S1 holds, so there is no cycle. |
-| M4's importer (C57: team lock → T2b → T3 → T4 → T5 FOR SHARE → binding → MC connection → T6) | **S1:** holds T3 and T4 FOR SHARE and the bindings FOR KEY SHARE, all compatible with the importer's FOR SHARE, and inserts new rows the importer cannot be waiting for. **S2 / A2 / the pinned step:** wait for an importing transaction's FOR SHARE on the T5 row, then end it. The importer's T6 rows stay (C49). No 7d write takes the team lock, so no cycle forms. |
-| An Unbind (per-user lock → connection FOR NO KEY UPDATE → team lock → binding FOR UPDATE → its own role, user and club rows FOR SHARE) | S1 holds the binding `FOR KEY SHARE` from step 4, which conflicts with the Unbind's `FOR UPDATE`. S1 never waits for the connection or the team lock. The role, user and club rows are FOR SHARE on both sides, so they are compatible. One side waits for the other and the other never waits back, so no cycle forms. A wait beyond 2 s answers `try_again` on either side (C58's bound). If the Unbind commits first, S1 reads the ended binding under its lock and answers `binding_not_active`. S2 takes no binding lock and does not meet an Unbind. |
+| M4's importer (C57: team lock → T2b → T3 → T4 → T5 FOR SHARE → binding → MC connection → T6) | **S1:** holds T3, T4 and the bindings FOR SHARE, all compatible with the importer's FOR SHARE, and inserts new rows the importer cannot be waiting for. **S2 / A2 / the pinned step:** wait for an importing transaction's FOR SHARE on the T5 row, then end it. The importer's T6 rows stay (C49). No 7d write takes the team lock, so no cycle forms. |
+| An Unbind (per-user lock → connection FOR NO KEY UPDATE → team lock → binding FOR UPDATE → its own role, user and club rows FOR SHARE) | S1 holds the binding `FOR SHARE` from step 4, which conflicts with the Unbind's `FOR UPDATE` and with any raw UPDATE of the binding. S1 never waits for the connection or the team lock. The role, user and club rows are FOR SHARE on both sides, so they are compatible. One side waits for the other and the other never waits back, so no cycle forms. A wait beyond 2 s answers `try_again` on either side (C58's bound). If the Unbind commits first, S1 reads the ended binding under its lock and answers `binding_not_active`. S2 takes no binding lock and does not meet an Unbind. |
 | A club archive (the club row updated) | S1 and S2 hold the club row FOR SHARE (step 5). The archive waits for them, or lands first, and then S1 or S2 answers the identical 404. The archive takes no T3, T4, T5 or binding lock, so there is no cycle. A1, A2 and the pinned step lock no club row for their ends (section 2.3), so an archive never blocks them. |
-| A team move | v27 refuses it while the team is bound through its club's connection (lines 410–430). After an Unbind it may move: it touches none of the rows a 7d write locks, and the scope stays the connection's club (section 2.2). |
+| A team archive | S1 and A1's starts hold the bindings' team rows FOR SHARE (step 4). The archive waits for them, or lands first, and then S1 answers the identical 404. S2, A2 and the pinned step lock no team row. |
+| A team move | v27 refuses it while the team is bound through its club's connection (lines 410–430). After an Unbind it may move: S2, A2 and the pinned step lock no team row, and the scope stays the connection's club (section 2.2). |
+| S1 against the pinned step on the same version | Both take T3 FOR SHARE, which is compatible (`lockPinned` line 198), so they serialize at T4 (S1 FOR SHARE against the pinned step's FOR UPDATE, lines 200–208). If the pinned step is first, S1 then reads the version disabled (`version_not_active`). If S1 is first, the pinned step reads S1's committed new row among the open rows and ends it. |
 | A role revocation | The writes meet it only at their user-row FOR SHARE (the 7c argument). |
 
 **Why S2 locks T3 and T4 first:**
@@ -489,8 +520,8 @@ followed by the role, user and club rows. S1's order, and why its one difference
 **The Unbind race D accepts is closed for S1 and A1:**
 - D (discovery lines 1149–1153) accepted that an activation may land on a binding that has just ended. Such an
   activation applies to nothing, because T6 requires an active binding `FOR SHARE` (C55).
-- S1 and A1 now hold the binding `FOR KEY SHARE` before they check its state, so they cannot land on it. R4 records
-  the change.
+- S1 and A1 now hold the binding `FOR SHARE` before they check its state, so they cannot land on it, whoever ends the
+  binding. R4 records the change.
 - An activation can still sit open on an ended binding when the Unbind came after the start (C58: an Unbind never
   touches T5). S3 shows such a row with `bindingState: "ended"`, and S2 can end it.
 
@@ -552,9 +583,9 @@ lock table training_load.source_metric_audit in share row exclusive mode;
   - an end with `mapping_version_disabled` sits in the transaction that disabled its version. The T4 row's `xmin` is
     this transaction and its status is `disabled`. The link compares `xmin`, never a time, because 7b writes
     `disabled_at = clock_timestamp()`;
-  - an end with `mapping_version_replaced` meets the same condition, and in addition this transaction holds a T8
-    `mapping_version_replaced` row of the same mapping (v43's G1 replacement row). So an A2 disable cannot be labelled
-    as a replacement.
+  - an end with `mapping_version_replaced` meets the same condition, and in addition a T8 `mapping_version_replaced`
+    row of the same mapping carries the same `operation_id` as the end's `activation_end` row (v43's G1 pattern, v43
+    lines 59–61). So an A2 disable cannot be labelled as a replacement.
 
   The failure messages are fixed texts.
 
@@ -568,14 +599,18 @@ lock table training_load.source_metric_audit in share row exclusive mode;
 - **`source_metric_audit_insert_guard()`** (v34): a `club_admin` row of an activation action names its club through
   `source_metric_binding_club` of the activation's binding, never through the team and never through `mapping_id`. The
   mapping rule stays for the mapping actions.
-- **`source_metric_audit_actor_guard()`** (v35): the activation actions read their T5 row by `activation_id`. A
-  missing row is `42501` (fail closed: this BEFORE trigger runs before the foreign key check). The basis is then
-  derived as section 2.3 says:
+- **`source_metric_audit_actor_guard()`** (v35): the activation actions read their T5 row by `activation_id`. The
+  basis is then derived as section 2.3 says:
   - `activation_start`, and `activation_end` of an `admin_ended` end: `source_metric_actor_basis(actor, binding club)`;
   - `activation_end` of a `mapping_version_replaced` or `mapping_version_disabled` end: `source_metric_actor_basis(actor,
     NULL)`.
 
   The row's `basis` must equal it, and NULL is `42501`. Every other non-mapping action keeps `platform_admin` only.
+- **The order of the BEFORE triggers on T8** is alphabetical: `source_metric_audit_insert_guard` (v34) fires before
+  `source_metric_audit_v35_actor_guard`. So an activation row that names no existing T5 row of its version and team
+  is refused first by v34's check (`23514`, *"an activation row must name its own mapping version and team"*, v34
+  lines 1754–1758), which v48 keeps. The actor guard's own refusal of a missing row (`42501`) is defence in depth and
+  is not reached first.
 - **`source_metric_audit_revision_guard()`** (v47's body) gains the activation branch:
   - the T5 row is written in this transaction (xmin);
   - **start:** its activator is the actor, and the T8 reason equals the T5 reason;
@@ -670,8 +705,8 @@ therefore written on v47's merged text, never on a draft, and merges after 7c-B.
 - **The tests:**
   - the M2 architecture test lists the T5 writers;
   - the 7b and v39 cases that expect `activation_open` change to expect the ends;
-  - the "Phase 7d simulation" fixtures keep their raw T5 rows with the replica role (7b lines 259–282, v39 lines 391
-    and 427, M2 line 200);
+  - the "Phase 7d simulation" fixtures keep their raw T5 rows with the replica role (7b lines 259–282, 434 and 490;
+    v39 lines 391, 427 and 989; M2 line 200). The replica role also skips v48's deferred links;
   - the M1 suite stops at v34 (its line 54), so its raw T5 cases are not affected.
 
 ---
@@ -707,7 +742,8 @@ therefore written on v47's merged text, never on a draft, and merges after 7c-B.
    - one binding and several bindings (in ascending order);
    - the `required` / `optional` copies, the T8 rows and the keyed row last;
    - every refusal of 3.7, both unique indexes included;
-   - several failing bindings: the first by ascending id is named, and nothing is written;
+   - several failing bindings of different kinds (a state failure on a higher id, an open-row failure on a lower
+     one): the lowest is named, and nothing is written;
    - a club admin's start: `201`, basis `club_admin` on T5 and T8.
 4. **S2:**
    - an end, `activation_not_open`, and the reason only in T8;
@@ -720,8 +756,10 @@ therefore written on v47's merged text, never on a draft, and merges after 7c-B.
    - the open rows ended with the right `end_reason` and T8 rows, then the 7b transition, then A1's listed starts;
    - G1 unaffected;
    - an A1 replay made before 7d still replays;
-   - **an archived club:** an open activation on its binding is ended by A2, by A1 (replacement) and by the pinned step
-     (L2, L4, L5), with basis `platform_admin`;
+   - **an archived club:** an open activation of a **system** version on its binding is ended by A2, by A1
+     (replacement) and by the pinned step (L2, L4, L5), with basis `platform_admin`;
+   - **a club's own version on an archived club:** A1 and A2 answer the identical 404, the pinned step answers
+     `409 club_archived`, and the activation stays open (7b Q1(a));
    - each `activation_end` T8 reason equals the version's `disable_reason`;
    - `activationsEnded` and `activations` in the answers and in their replays;
    - a cross-workspace replay of S1, S2 and A1: the identical 404.
@@ -739,7 +777,7 @@ therefore written on v47's merged text, never on a draft, and merges after 7c-B.
    - a `mapping_version_replaced` end in a disable without a `mapping_version_replaced` T8 row;
    - a club admin writing a version-driven end (`42501`);
    - a version-driven end whose T8 reason is not the version's `disable_reason` (`23514`);
-   - an activation T8 row naming no existing T5 row (`42501`);
+   - an activation T8 row naming no existing T5 row (`23514`, v34's insert guard first);
    - a T5 row on a connection that is not club-owned (`23514`);
    - `ended_at` not `now()`.
 9. **Concurrency:**
@@ -747,6 +785,9 @@ therefore written on v47's merged text, never on a draft, and merges after 7c-B.
    - S2 against A2, and S2 against the pinned step, on the same row (both orders; the T8 foreign key on the version is
      the reason for S2's order, section 5);
    - S1 against S2 on the same binding and field;
+   - S1 against the pinned step on the same version (both orders);
+   - S1 against a raw `UPDATE` ending the binding (it waits, then `binding_not_active`), and against a team archive
+     (it waits, then the identical 404);
    - S1 against an Unbind of the binding (both orders: the Unbind waits, or S1 answers `binding_not_active`);
    - S1 and S2 against a club archive (both orders);
    - a club admin promoted to platform admin during S1: `409 try_again`;
@@ -791,8 +832,8 @@ therefore written on v47's merged text, never on a draft, and merges after 7c-B.
   - Q5's "with 7d" still holds: 7d-C is part of 7d.
 - **R2:** at most 50 bindings in one S1 or A1 call.
 - **R3:** A1 may start the listed bindings with or without a replacement.
-- **R4:** S1 and A1 hold the binding `FOR KEY SHARE` before they check its state (section 4.1). The Unbind race that D
-  accepted is therefore closed for them. An activation can still sit open on a binding that ended after its start
+- **R4:** S1 and A1 hold the binding `FOR SHARE` before they check its state (section 4.1). The Unbind race that D
+  accepted is therefore closed for them, against `unbindTeam` and a raw UPDATE alike. An activation can still sit open on a binding that ended after its start
   (C58); it applies to nothing, and S2 ends it.
 - **R5:** an end needs a reason (1–500), written to T8 only. A version-driven end carries the version's
   `disable_reason`.
@@ -805,7 +846,12 @@ therefore written on v47's merged text, never on a draft, and merges after 7c-B.
   `expectedOpenActivations`), it is a body key added to the request hash.
 - **R9:** an archived club's binding:
   - S1 and S2 answer the identical 404 for both bases (ADR-006, as F3c2e/f for connections);
-  - A1, A2 and the pinned step still end its activations (section 2.3).
+  - A1, A2 and the pinned step of a **system** version still end its activations (section 2.3);
+  - a club's own version on an archived club stays as 7b decided: A1 and A2 are 404, and the pinned step answers
+    `409 club_archived` and ends nothing.
+
+  So a platform admin can stop one activation on an archived club only by disabling the whole system version, which
+  reaches every club, or by restoring the club.
 
   The code review proposed that a platform admin's S2 should also pass on an archived club; the security review
   proposed the 404. The contract follows the security review, because the cleanup paths stay open. The *Rukovodilac*
@@ -843,6 +889,23 @@ READY. Every finding is applied in this revision:
 - T8 also has a single-column foreign key `mapping_version_id → T4(id)`. It is checked for that row, and it takes
   `FOR KEY SHARE` on T4.
 - So S2 must take T3 and T4 before the T5 row (section 4.2 step 4), and the contract says why (section 5).
+
+**Round 3** (2026-10-30), narrow re-reviews of the delta on head `f3d655f`. Each verdict: READY WITH NON-BLOCKING
+NOTES. Every round-2 finding is closed, and each reviewer confirmed the correction to the DB review's argument. Applied
+in this revision:
+
+| Finding | Reviewers | Where |
+|---|---|---|
+| MEDIUM: "a version can always be stopped" holds only for system versions; a club's own version on an archived club stays as 7b decided | security (DB as LOW) | 0, 2.3, R9, test 6 |
+| LOW: an archived team was a named state check on an unlocked read; the teams are now locked FOR SHARE as a bind does, and an archived team is the identical 404 | code, security | 4.1, 4.3, 5, tests 9 |
+| LOW: the bindings FOR SHARE, not FOR KEY SHARE, so a raw UPDATE ending a binding also waits | code | 4.1, 4.3, 5, R4, test 9 |
+| LOW: S1 against the pinned step, and A1's real order | code | 4.3, 5, test 9 |
+| LOW: the lowest failing binding: the open-row conditions are pre-read in the same pass | security | 4.1, test 3 |
+| LOW: the T8 triggers fire alphabetically, so v34's insert guard (`23514`) refuses a missing T5 row first | DB | 6.3, test 8 |
+| NIT: `bindingClubHolds` locks distinct clubs ascending; A1's scope read before its first lock; the "replaced" link by `operation_id`; the complete list of replica-role fixtures | DB, security | 4.1, 4.3, 6.2, 8 |
+
+The code re-review said the v35 actor guard fires before v34's insert guard. The trigger names sort the other way
+(`…_insert_guard` before `…_v35_actor_guard`), as the DB re-review said, and the contract follows the names.
 
 ## 14. Not in 7d
 
