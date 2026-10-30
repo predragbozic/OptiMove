@@ -3279,3 +3279,543 @@ test("log 9: the log's own CHECKs reject a malformed record written outside dele
   await assert.rejects(insert({}), (e) => e.code === "23505", "a second record for the same dashboard id");
   assert.equal((await deletionLogRows(dashboard.id)).length, 1);
 });
+
+async function s2aModules() {
+  assert.match(db.name, /^optimove_tests_tldash_primary_[a-f0-9]{12}$/);
+  assert.equal(process.env.DATABASE_URL, db.url, "S2a may only use this suite's disposable database");
+  assert.equal((await query("select current_database() as db")).rows[0].db, db.name);
+  const { createSimpleCapabilityReader } = await import("../src/dashboardSimple/capabilities.js");
+  const { compileSimpleDraft } = await import("../src/dashboardSimple/compiler.js");
+  const { canManageDashboardRow, dataWorkspaceMatches, dataWorkspaceForActiveWorkspace } = await import("../src/trainingLoadDashboardAccess.js");
+  const { loadAuthorizationContext } = await import("../src/authz.js");
+  const statements = [];
+  const reader = createSimpleCapabilityReader({
+    query: async (sql, params) => {
+      assert.match(sql, /^\s*select\b/i, "the capability port must remain read-only");
+      statements.push(sql);
+      return query(sql, params);
+    },
+    canManageDashboardRow, dataWorkspaceMatches,
+  });
+  async function args(userId, dashboardId, type, scopeId = null) {
+    const user = (await query("select * from public.users where id=$1", [userId])).rows[0];
+    const req = { user, authz: await loadAuthorizationContext(user) };
+    return { req, dashboardId, dataWorkspace: dataWorkspaceForActiveWorkspace({ type, scopeId }, req) };
+  }
+  return { reader, compileSimpleDraft, statements, args };
+}
+
+function s2aDraft(metricRef, view = {}) {
+  return {
+    contractVersion: 1, draftId: crypto.randomUUID(), draftVersion: 1, title: "S2a parity",
+    metricRef, athleteSelection: { mode: "inherit" },
+    advancedFilter: { activity: { mode: "inherit" }, component: { mode: "inherit" } },
+    periodIntent: { mode: "inherit" }, view: { type: "table", groupBy: "day", ...view },
+  };
+}
+
+function s2aContext(athleteIds = []) {
+  return { authorizedAthleteIds: athleteIds, period: { dateFrom: "2026-09-09", dateTo: "2026-09-10", timeZone: "UTC" }, evaluatedAt: "2026-10-29T12:00:00Z" };
+}
+
+function s2aUpdateDraft(draft) {
+  return { ...draft, display: draft.display ?? { mode: "preserve" }, presentation: draft.presentation ?? { mode: "preserve" } };
+}
+
+function s2aIssue(result, code, issuePath, status = "invalid") {
+  assert.equal(result.status, status, JSON.stringify(result));
+  assert.ok(result.issues.some(issue => issue.code === code && issue.path === issuePath), JSON.stringify(result.issues));
+  assert.equal(result.widget, undefined);
+}
+
+async function s2aFixture(label) {
+  const modules = await s2aModules();
+  const actor = await makeClubCoach(label);
+  const dashboard = await makeDashboardHttp(actor.coachCookie);
+  assert.ok(dashboard?.id);
+  return { ...modules, ...actor, dashboard, target: await modules.args(actor.coachId, dashboard.id, "club", actor.clubId) };
+}
+
+async function s2aStored(widgetId) {
+  const widget = (await query("select * from training_load.dashboard_widgets where id=$1", [widgetId])).rows[0];
+  assert.ok(widget);
+  const series = (await query("select * from training_load.dashboard_widget_series where widget_id=$1 order by series_order, id", [widgetId])).rows;
+  return { ...widget, series };
+}
+
+async function s2aState(dashboardId) {
+  return (await query(`select to_jsonb(d) as dashboard,
+    (select coalesce(jsonb_agg(to_jsonb(w) order by w.id), '[]'::jsonb) from training_load.dashboard_widgets w where w.dashboard_id=d.id) as widgets,
+    (select coalesce(jsonb_agg(to_jsonb(s) order by s.id), '[]'::jsonb) from training_load.dashboard_widget_series s join training_load.dashboard_widgets w on w.id=s.widget_id where w.dashboard_id=d.id) as series
+    from training_load.dashboards d where d.id=$1`, [dashboardId])).rows[0];
+}
+
+async function s2aDbReject(dashboardId, run, code, message) {
+  const before = await s2aState(dashboardId);
+  await assert.rejects(run, error => error.code === code && (!message || message.test(error.message)));
+  assert.deepEqual(await s2aState(dashboardId), before, "rejected SQL must leave all rows and revisions unchanged");
+}
+
+function s2aSeriesBody(series) {
+  return {
+    axis: series.axis, sourcePolicy: series.source_policy, sourceConnectionId: series.source_connection_id,
+    dataScopeLevel: series.data_scope_level, analyticalAggregation: series.analytical_aggregation,
+    aggregationRolePolicy: series.aggregation_role_policy, coveragePolicy: series.coverage_policy,
+    comparisonPeriod: series.comparison_period,
+  };
+}
+
+async function s2aLegacyProjection(fixture, compiled, { existing = null, layout = {} } = {}) {
+  assert.equal(compiled.status, "valid", JSON.stringify(compiled));
+  assert.equal(compiled.requiresPreview, true, "compilation is not an executed Simple preview/save");
+  assert.equal(compiled.semanticBinding.proof, "catalogOnly");
+  assert.equal(compiled.semanticBinding.requiresResultSemanticProof, true);
+  const widget = compiled.widget, series = widget.series[0];
+  assert.equal(widget.series.length, 1);
+  const content = { widgetType: widget.widget_type, title: widget.title, groupBy: widget.group_by, displayConfig: widget.display_config, localFilterOverride: widget.local_filter_override };
+  let widgetId, seriesId;
+  if (existing) {
+    widgetId = existing.id;
+    seriesId = existing.series[0].id;
+    const updated = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${widgetId}`, {
+      method: "PATCH", cookie: fixture.coachCookie, body: { expectedWidgetRevision: existing.revision, ...content },
+    });
+    assert.equal(updated.status, 200, JSON.stringify(updated.body));
+    const current = await s2aStored(widgetId);
+    const updatedSeries = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${widgetId}/series/${seriesId}`, {
+      method: "PATCH", cookie: fixture.coachCookie, body: { expectedWidgetRevision: current.revision, ...s2aSeriesBody(series) },
+    });
+    assert.equal(updatedSeries.status, 200, JSON.stringify(updatedSeries.body));
+  } else {
+    const created = await makeWidgetHttp(fixture.coachCookie, { ...fixture.dashboard, revision: await freshRevision(fixture.coachCookie, fixture.dashboard.id) }, { ...content, ...layout });
+    widgetId = created.widgetId;
+    const added = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${widgetId}/series`, {
+      method: "POST", cookie: fixture.coachCookie,
+      body: { expectedWidgetRevision: 1, seriesOrder: series.series_order, ...(series.metric_definition_id ? { metricDefinitionId: series.metric_definition_id } : { builtInSeriesKey: series.built_in_series_key }), ...s2aSeriesBody(series) },
+    });
+    assert.equal(added.status, 201, JSON.stringify(added.body));
+    seriesId = added.body.seriesId;
+  }
+  const stored = await s2aStored(widgetId);
+  for (const key of ["widget_type", "title", "group_by", "display_config", "local_filter_override"]) assert.deepEqual(stored[key], widget[key], key);
+  assert.equal(stored.series.length, 1);
+  assert.equal(stored.series[0].id, seriesId);
+  for (const key of ["metric_definition_id", "built_in_series_key", "resolution_status", "series_order", "axis", "source_policy", "source_connection_id", "data_scope_level", "analytical_aggregation", "aggregation_role_policy", "coverage_policy", "comparison_period"]) {
+    assert.deepEqual(stored.series[0][key], series[key], key);
+  }
+  assert.equal(Object.hasOwn(stored, "presentation_config"), false, "legacy projection cannot persist the S2a sidecar; storage belongs to S2c");
+  if (!existing) {
+    assert.notEqual(widgetId, widget.id, "legacy writers assign real IDs, independently of compiler draft IDs");
+    assert.notEqual(seriesId, series.id);
+  }
+  return stored;
+}
+
+async function s2aRawAdd(widgetId, compiledSeries, overrides = {}) {
+  const series = { ...compiledSeries, ...overrides };
+  const widget = await s2aStored(widgetId);
+  return query(`select * from training_load.add_series($1,$2,$3,$4,$5,null,$6,null,null,$7,$8,$9,$10,$11,$12,$13)`,
+    [widgetId, widget.revision, series.series_order, series.metric_definition_id, series.built_in_series_key, series.axis,
+      series.source_policy, series.source_connection_id, series.data_scope_level, series.analytical_aggregation,
+      series.aggregation_role_policy, series.coverage_policy, series.comparison_period]);
+}
+
+async function s2aRawUpdate(widgetId, overrides) {
+  const widget = await s2aStored(widgetId), series = { ...widget.series[0], ...overrides };
+  return query(`select * from training_load.update_series($1,$2,$3,$4,null,false,null,false,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [series.id, widgetId, widget.revision, series.axis, series.source_policy, series.source_connection_id, series.data_scope_level,
+      series.analytical_aggregation, series.aggregation_role_policy, series.coverage_policy, series.comparison_period, series.comparison_period === null]);
+}
+
+test("S2a target gate: real manage/workspace predicates deny unauthorized, mismatched, missing, archived and template targets before catalog SQL", async () => {
+  const fixture = await s2aFixture("s2a-target");
+  const stranger = await makeUser();
+  const template = await makeDashboardHttp(fixture.coachCookie, { isTemplate: true });
+  const archived = await makeDashboardHttp(fixture.coachCookie);
+  const archive = await api(`/api/training-load/dashboards/${archived.id}/archive`, { method: "POST", cookie: fixture.coachCookie, body: { expectedRevision: archived.revision } });
+  assert.equal(archive.status, 200, JSON.stringify(archive.body));
+  const cases = [
+    [await fixture.args(stranger, fixture.dashboard.id, "club", fixture.clubId), "notFound", 404],
+    [await fixture.args(fixture.coachId, fixture.dashboard.id, "club", await makeClub()), "notFound", 404],
+    [{ ...fixture.target, dashboardId: crypto.randomUUID() }, "notFound", 404],
+    [{ ...fixture.target, dashboardId: archived.id }, "dashboardArchived", 409],
+    [{ ...fixture.target, dashboardId: template.id }, "templateRequiresClone", 409],
+  ];
+  const { adminId } = await makePlatformAdmin("s2a-private");
+  await grantGlobalRole(fixture.coachId, "independent_coach");
+  await setActiveWorkspace(fixture.coachId, "private_coach");
+  const privateBoard = await makeDashboardHttp(fixture.coachCookie);
+  cases.push([await fixture.args(adminId, privateBoard.id, "private_coach"), "notFound", 404]);
+  for (const [target, code, status] of cases) {
+    for (const method of ["load", "listMetrics"]) {
+      fixture.statements.length = 0;
+      await assert.rejects(() => fixture.reader[method]({ ...target, metricRef: { kind: "builtin", key: "rpe" } }), error => error.code === code && error.status === status);
+      assert.equal(fixture.statements.length, 1);
+      assert.match(fixture.statements[0], /^select \* from training_load\.dashboards where id = \$1$/);
+    }
+  }
+});
+
+test("S2a SQL picker: dual-club/platform actor sees only target bindings before pagination; metric/source owner and active-state parity", async () => {
+  const fixture = await s2aFixture("s2a-picker");
+  const otherClub = await makeClub();
+  await grantClubAdmin(fixture.coachId, otherClub);
+  await grantGlobalRole(fixture.coachId, "platform_admin");
+  const foreignUser = await makeUser();
+  const teamA = await makeTeamCoach("s2a-picker-a", { clubId: fixture.clubId });
+  const teamB = await makeTeamCoach("s2a-picker-b", { clubId: otherClub });
+  const prefix = `s2apicker-${uid()}`;
+  const owners = [
+    ["system", null], ["club", fixture.clubId], ["club", otherClub], ["team", teamA.teamId],
+    ["team", teamB.teamId], ["user", fixture.coachId], ["user", foreignUser],
+  ];
+  const entries = [];
+  for (const [scope, ownerId] of owners) {
+    const def = await query(`insert into training_load.metric_definitions (key,label,owner_scope,owner_user_id,owner_club_id,owner_team_id)
+      values ($1,$1,$2,$3,$4,$5) returning id`, [`${prefix}-${entries.length}`, scope, scope === "user" ? ownerId : null, scope === "club" ? ownerId : null, scope === "team" ? ownerId : null]);
+    const metricId = def.rows[0].id;
+    const version = await query(`insert into training_load.metric_definition_versions (metric_definition_id,version_number,value_type,daily_aggregation_method) values ($1,1,'numeric','sum') returning id`, [metricId]);
+    await query("update training_load.metric_definitions set current_version_id=$1 where id=$2", [version.rows[0].id, metricId]);
+    const source = await query(`insert into training_load.metric_source_connections (source_system,owner_scope,owner_user_id,owner_club_id,owner_team_id)
+      values ('s2a',$1,$2,$3,$4) returning id`, [scope, scope === "user" ? ownerId : null, scope === "club" ? ownerId : null, scope === "team" ? ownerId : null]);
+    entries.push({ scope, ownerId, metricId, sourceId: source.rows[0].id });
+  }
+  const inactiveMetric = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, key: `${prefix}-inactive` });
+  await query("update training_load.metric_definitions set state='archived' where id=$1", [inactiveMetric.metricDefinitionId]);
+  const noVersion = await query("insert into training_load.metric_definitions (key,label,owner_scope,owner_club_id) values ($1,$1,'club',$2) returning id", [`${prefix}-no-version`, fixture.clubId]);
+  const inactiveSource = await makeSourceConnection(fixture.clubId);
+  await query("update training_load.metric_source_connections set state='inactive' where id=$1", [inactiveSource]);
+  const sharedClub = await makeDashboardHttp(fixture.coachCookie, { ownerScope: "club", ownerClubId: fixture.clubId });
+  const sharedTeam = await makeDashboardHttp(teamA.coachCookie, { ownerScope: "team", ownerTeamId: teamA.teamId });
+  await setActiveWorkspace(fixture.coachId, "platform");
+  const platformBoard = await makeDashboardHttp(fixture.coachCookie);
+  const targets = [
+    [fixture.dashboard, "club", fixture.clubId, [0, 1, 5]],
+    [sharedClub, "club", fixture.clubId, [0, 1]],
+    [sharedTeam, "team", teamA.teamId, [0, 3]],
+    [platformBoard, "platform", null, [0, 5]],
+  ];
+  for (const [dashboard, type, scopeId, allowed] of targets) {
+    await setActiveWorkspace(fixture.coachId, type, scopeId);
+    const target = await fixture.args(fixture.coachId, dashboard.id, type, scopeId);
+    const ids = [], cursors = new Set();
+    let afterId = null;
+    do {
+      const page = await fixture.reader.listMetrics({ ...target, search: prefix, limit: 1, afterId });
+      assert.equal(page.metrics.length, 1, "filtering after pagination would produce short/empty pages");
+      ids.push(...page.metrics.map(metric => metric.id));
+      afterId = page.nextCursor;
+      if (afterId) { assert.ok(!cursors.has(afterId)); cursors.add(afterId); }
+      assert.ok(ids.length <= allowed.length);
+    } while (afterId);
+    assert.deepEqual(ids, allowed.map(index => entries[index].metricId).sort());
+    assert.equal(new Set(ids).size, ids.length);
+    const widget = await makeWidgetHttp(type === "team" ? teamA.coachCookie : fixture.coachCookie, { ...dashboard, revision: await freshRevision(fixture.coachCookie, dashboard.id) });
+    for (const [index, entry] of entries.entries()) {
+      const metricRef = { kind: "metric", metricDefinitionId: entry.metricId };
+      if (allowed.includes(index)) {
+        const snapshot = await fixture.reader.load({ ...target, metricRef, sourceConnectionId: entry.sourceId });
+        assert.equal(snapshot.metric.current_version_id, (await query("select current_version_id from training_load.metric_definitions where id=$1", [entry.metricId])).rows[0].current_version_id);
+        assert.equal(snapshot.connection.id, entry.sourceId);
+      } else {
+        await assert.rejects(() => fixture.reader.load({ ...target, metricRef }), error => error.code === "notFound" && error.status === 404);
+        await assert.rejects(() => fixture.reader.load({ ...target, metricRef: { kind: "metric", metricDefinitionId: entries[0].metricId }, sourceConnectionId: entry.sourceId }), error => error.code === "notFound" && error.status === 404);
+        const base = { series_order: 0, metric_definition_id: entry.metricId, built_in_series_key: null, axis: "primary", source_policy: "all_with_conflicts", source_connection_id: null, data_scope_level: "session", analytical_aggregation: "sum", aggregation_role_policy: "standalone_only", coverage_policy: "any", comparison_period: null };
+        await s2aDbReject(dashboard.id, () => s2aRawAdd(widget.widgetId, base), "P0001", /not visible/);
+        await s2aDbReject(dashboard.id, () => s2aRawAdd(widget.widgetId, base, { metric_definition_id: entries[0].metricId, source_policy: "source_connection", source_connection_id: entry.sourceId }), "P0001", /not visible/);
+      }
+    }
+  }
+  const target = await fixture.args(fixture.coachId, fixture.dashboard.id, "club", fixture.clubId);
+  for (const metricId of [inactiveMetric.metricDefinitionId, noVersion.rows[0].id, crypto.randomUUID()]) {
+    await assert.rejects(() => fixture.reader.load({ ...target, metricRef: { kind: "metric", metricDefinitionId: metricId } }), error => error.code === "notFound" && error.status === 404);
+  }
+  for (const sourceConnectionId of [inactiveSource, crypto.randomUUID()]) {
+    await assert.rejects(() => fixture.reader.load({ ...target, metricRef: { kind: "metric", metricDefinitionId: entries[0].metricId }, sourceConnectionId }), error => error.code === "notFound" && error.status === 404);
+  }
+  await setActiveWorkspace(fixture.coachId, "club", fixture.clubId);
+  const draft = s2aDraft({ kind: "metric", metricDefinitionId: entries[0].metricId }, { dataScopeLevel: "session", analyticalAggregation: "avg" });
+  const snapshot = await fixture.reader.load({ ...target, metricRef: draft.metricRef });
+  const compiled = fixture.compileSimpleDraft(draft, snapshot, s2aContext());
+  const stored = await s2aLegacyProjection(fixture, compiled, { layout: { y: 8 } });
+  await s2aDbReject(fixture.dashboard.id, () => s2aRawAdd(stored.id, compiled.widget.series[0], {
+    series_order: 1, metric_definition_id: inactiveMetric.metricDefinitionId,
+  }), "P0001", /metric_definition .*not active/);
+  await s2aDbReject(fixture.dashboard.id, () => s2aRawAdd(stored.id, compiled.widget.series[0], {
+    series_order: 1, source_policy: "source_connection", source_connection_id: inactiveSource,
+  }), "P0001", /source_connection .*not active/);
+  for (const [sourceId, message] of [[inactiveSource, /not active/], [entries[2].sourceId, /not visible/]]) {
+    const badExisting = structuredClone(stored);
+    badExisting.series[0].source_policy = "source_connection";
+    badExisting.series[0].source_connection_id = sourceId;
+    s2aIssue(fixture.compileSimpleDraft(s2aUpdateDraft(draft), snapshot, s2aContext(), badExisting), "notFound", "$.metricRef");
+    await s2aDbReject(fixture.dashboard.id, () => s2aRawUpdate(stored.id, {
+      source_policy: "source_connection", source_connection_id: sourceId,
+    }), "P0001", message);
+  }
+});
+
+for (const [key, scope, aggregation, unit] of [
+  ["rpe", "session", "avg", null], ["srpe", "session", "sum", undefined],
+  ["duration_minutes", "session", "sum", "min"], ["session_count", "day", "sum", null], ["last_session_date", "day", "last", null],
+]) test(`S2a builtin ${key}: loaded catalog defaults/null unit; legacy create/update projection and DB fixed-scope refusal`, async () => {
+  const fixture = await s2aFixture(`s2a-${key}`);
+  const draft = s2aDraft({ kind: "builtin", key });
+  const snapshot = await fixture.reader.load({ ...fixture.target, metricRef: draft.metricRef });
+  const catalog = (await query("select * from training_load.dashboard_builtin_series where key=$1", [key])).rows[0];
+  assert.equal(snapshot.metric.unit, catalog.unit);
+  if (unit !== undefined) assert.equal(snapshot.metric.unit, unit);
+  assert.equal(snapshot.metric.fixed_data_scope_level, scope);
+  assert.equal(snapshot.metric.default_analytical_aggregation, aggregation);
+  assert.equal(snapshot.metric.is_active, true);
+  assert.deepEqual(snapshot.metric.allowed_aggregations, catalog.value_type === "numeric" ? ["sum", "avg", "max", "last", "none"] : ["last", "none"]);
+  const compiled = fixture.compileSimpleDraft(draft, snapshot, s2aContext());
+  assert.equal(compiled.status, "valid", JSON.stringify(compiled));
+  assert.equal(compiled.semanticBinding.unit, catalog.unit);
+  assert.equal(compiled.widget.series[0].source_policy, "not_applicable");
+  const stored = await s2aLegacyProjection(fixture, compiled);
+  const nextDraft = { ...draft, title: "Updated from loaded DB", display: { mode: "preserve" }, presentation: { mode: "preserve" } };
+  await s2aLegacyProjection(fixture, fixture.compileSimpleDraft(nextDraft, snapshot, s2aContext(), stored), { existing: stored });
+  const badScope = scope === "session" ? "day" : "session";
+  s2aIssue(fixture.compileSimpleDraft({ ...draft, view: { ...draft.view, dataScopeLevel: badScope } }, snapshot, s2aContext()), "scopeCapability", "$.view.dataScopeLevel");
+  s2aIssue(fixture.compileSimpleDraft({ ...nextDraft, view: { ...nextDraft.view, dataScopeLevel: badScope } }, snapshot, s2aContext(), await s2aStored(stored.id)), "scopeCapability", "$.view.dataScopeLevel");
+  await s2aDbReject(fixture.dashboard.id, () => s2aRawAdd(stored.id, compiled.widget.series[0], { series_order: 1, data_scope_level: badScope }), "P0001", /always scope_level/);
+  await s2aDbReject(fixture.dashboard.id, () => s2aRawUpdate(stored.id, { data_scope_level: badScope }), "P0001", /always scope_level/);
+});
+
+test("S2a metric scopes: zero rows require explicit choice and allow every scope; positive capabilities filter SQL and reject create/update", async () => {
+  const fixture = await s2aFixture("s2a-scopes");
+  for (const scopeLevels of [[], ["session"], ["session", "component"]]) {
+    const def = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, scopeLevels });
+    const draft = s2aDraft({ kind: "metric", metricDefinitionId: def.metricDefinitionId }, { analyticalAggregation: "avg" });
+    const snapshot = await fixture.reader.load({ ...fixture.target, metricRef: draft.metricRef });
+    assert.deepEqual(snapshot.metric.scope_capabilities, [...scopeLevels].sort());
+    const implicit = fixture.compileSimpleDraft(draft, snapshot, s2aContext());
+    if (scopeLevels.length === 1) assert.equal(implicit.status, "valid", JSON.stringify(implicit));
+    else s2aIssue(implicit, "requiresChoice", "$.view.dataScopeLevel", "requiresChoice");
+    const noAggregation = { ...draft, view: { type: "table", groupBy: "day", dataScopeLevel: "session" } };
+    s2aIssue(fixture.compileSimpleDraft(noAggregation, snapshot, s2aContext()), "requiresChoice", "$.view.analyticalAggregation", "requiresChoice");
+    const valid = fixture.compileSimpleDraft({ ...draft, view: { ...draft.view, dataScopeLevel: "session" } }, snapshot, s2aContext());
+    let stored = await s2aLegacyProjection(fixture, valid, { layout: { y: scopeLevels.length * 8 } });
+    for (const scope of ["day", "session", "component"]) {
+      const selected = { ...draft, view: { ...draft.view, dataScopeLevel: scope } };
+      const page = await fixture.reader.listMetrics({ ...fixture.target, search: snapshot.metric.key, dataScopeLevel: scope });
+      const allowed = scopeLevels.length === 0 || scopeLevels.includes(scope);
+      assert.equal(page.metrics.some(metric => metric.id === def.metricDefinitionId), allowed);
+      if (allowed) {
+        stored = await s2aLegacyProjection(fixture, fixture.compileSimpleDraft(s2aUpdateDraft(selected), snapshot, s2aContext(), stored), { existing: stored });
+        const added = await s2aRawAdd(stored.id, valid.widget.series[0], { series_order: scope === "day" ? 1 : scope === "session" ? 2 : 3, data_scope_level: scope });
+        await query("select * from training_load.delete_series($1,$2,$3)", [added.rows[0].series_id, stored.id, added.rows[0].widget_revision]);
+        stored = await s2aStored(stored.id);
+      } else {
+        s2aIssue(fixture.compileSimpleDraft(selected, snapshot, s2aContext()), "scopeCapability", "$.view.dataScopeLevel");
+        s2aIssue(fixture.compileSimpleDraft(s2aUpdateDraft(selected), snapshot, s2aContext(), stored), "scopeCapability", "$.view.dataScopeLevel");
+        await s2aDbReject(fixture.dashboard.id, () => s2aRawAdd(stored.id, valid.widget.series[0], { series_order: 1, data_scope_level: scope }), "P0001", /never been configured/);
+        await s2aDbReject(fixture.dashboard.id, () => s2aRawUpdate(stored.id, { data_scope_level: scope }), "P0001", /never been configured/);
+      }
+    }
+  }
+});
+
+test("S2a aggregation parity: numeric all five, text/boolean last/none; exact compiler paths and DB create/update refusals", async () => {
+  const fixture = await s2aFixture("s2a-aggregation");
+  for (const [index, valueType] of ["numeric", "text", "boolean"].entries()) {
+    const def = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, valueType, dailyAggregationMethod: "last", scopeLevels: ["session"] });
+    const draft = s2aDraft({ kind: "metric", metricDefinitionId: def.metricDefinitionId }, { dataScopeLevel: "session", analyticalAggregation: "last" });
+    const snapshot = await fixture.reader.load({ ...fixture.target, metricRef: draft.metricRef });
+    const valid = fixture.compileSimpleDraft(draft, snapshot, s2aContext());
+    let stored = await s2aLegacyProjection(fixture, valid, { layout: { y: index * 8 } });
+    for (const aggregation of ["sum", "avg", "max", "last", "none"]) {
+      const selected = { ...draft, view: { ...draft.view, analyticalAggregation: aggregation } };
+      if (valueType === "numeric" || ["last", "none"].includes(aggregation)) {
+        stored = await s2aLegacyProjection(fixture, fixture.compileSimpleDraft(s2aUpdateDraft(selected), snapshot, s2aContext(), stored), { existing: stored });
+        const added = await s2aRawAdd(stored.id, valid.widget.series[0], { series_order: 1, analytical_aggregation: aggregation });
+        await query("select * from training_load.delete_series($1,$2,$3)", [added.rows[0].series_id, stored.id, added.rows[0].widget_revision]);
+        stored = await s2aStored(stored.id);
+      } else {
+        s2aIssue(fixture.compileSimpleDraft(selected, snapshot, s2aContext()), "aggregationType", "$.view.analyticalAggregation");
+        s2aIssue(fixture.compileSimpleDraft(s2aUpdateDraft(selected), snapshot, s2aContext(), stored), "aggregationType", "$.view.analyticalAggregation");
+        await s2aDbReject(fixture.dashboard.id, () => s2aRawAdd(stored.id, valid.widget.series[0], { series_order: 1, analytical_aggregation: aggregation }), "P0001", /only supports analytical_aggregation last\/none/);
+        await s2aDbReject(fixture.dashboard.id, () => s2aRawUpdate(stored.id, { analytical_aggregation: aggregation }), "P0001", /only supports analytical_aggregation last\/none/);
+      }
+    }
+  }
+});
+
+test("S2a source/axis/comparison policies: preserve loaded bindings, paired pins and supported KPI comparison; real create/update backstops", async () => {
+  const fixture = await s2aFixture("s2a-policies");
+  const def = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, scopeLevels: ["session"] });
+  const sourceId = await makeSourceConnection(fixture.clubId);
+  const draft = s2aDraft({ kind: "metric", metricDefinitionId: def.metricDefinitionId }, { dataScopeLevel: "session", analyticalAggregation: "avg" });
+  const snapshot = await fixture.reader.load({ ...fixture.target, metricRef: draft.metricRef, sourceConnectionId: sourceId });
+  const valid = fixture.compileSimpleDraft(draft, snapshot, s2aContext());
+  let stored = await s2aLegacyProjection(fixture, valid);
+  const matrix = [
+    ["axis", "wrong", "axis", "$.metricRef", "23514", null],
+    ["source_policy", "not_applicable", "sourcePolicy", "$.metricRef", "23514", null],
+    ["source_policy", "source_connection", "sourceConnectionRequired", "$.metricRef", "23514", null],
+    ["source_connection_id", sourceId, "sourceConnectionRequired", "$.metricRef", "23514", null],
+    ["aggregation_role_policy", "wrong", "aggregationRolePolicy", "$.metricRef", "23514", null],
+    ["coverage_policy", "wrong", "coveragePolicy", "$.metricRef", "23514", null],
+    ["comparison_period", "previous_period", "comparisonPeriod", "$.view.type", "P0001", /not supported/],
+  ];
+  for (const [field, value, code, issuePath, sqlState, message] of matrix) {
+    const badExisting = structuredClone(stored);
+    badExisting.series[0][field] = value;
+    s2aIssue(fixture.compileSimpleDraft(s2aUpdateDraft(draft), snapshot, s2aContext(), badExisting), code, issuePath);
+    await s2aDbReject(fixture.dashboard.id, () => s2aRawAdd(stored.id, valid.widget.series[0], { series_order: 1, [field]: value }), sqlState, message);
+    if (field !== "source_connection_id") await s2aDbReject(fixture.dashboard.id, () => s2aRawUpdate(stored.id, { [field]: value }), sqlState, message);
+  }
+  for (const sourcePolicy of ["all_with_conflicts", "manual", "api_import", "csv_import", "derived", "source_connection"]) {
+    await s2aRawUpdate(stored.id, { source_policy: sourcePolicy, source_connection_id: sourcePolicy === "source_connection" ? sourceId : null, axis: "secondary" });
+    stored = await s2aStored(stored.id);
+    const next = fixture.compileSimpleDraft({ ...draft, display: { mode: "preserve" }, presentation: { mode: "preserve" } }, snapshot, s2aContext(), stored);
+    stored = await s2aLegacyProjection(fixture, next, { existing: stored });
+    assert.equal(stored.series[0].source_policy, sourcePolicy);
+    assert.equal(stored.series[0].source_connection_id, sourcePolicy === "source_connection" ? sourceId : null);
+  }
+  const kpiDraft = { ...draft, view: { ...draft.view, type: "kpi", groupBy: "athlete" } };
+  const kpi = await s2aLegacyProjection(fixture, fixture.compileSimpleDraft(kpiDraft, snapshot, s2aContext()), { layout: { y: 8, width: 3, height: 3 } });
+  for (const comparison of ["previous_period", "previous_year"]) {
+    await s2aRawUpdate(kpi.id, { comparison_period: comparison });
+    const loaded = await s2aStored(kpi.id);
+    await s2aLegacyProjection(fixture, fixture.compileSimpleDraft(s2aUpdateDraft(kpiDraft), snapshot, s2aContext(), loaded), { existing: loaded });
+    const tableDraft = { ...kpiDraft, view: { ...kpiDraft.view, type: "table" } };
+    s2aIssue(fixture.compileSimpleDraft(s2aUpdateDraft(tableDraft), snapshot, s2aContext(), await s2aStored(kpi.id)), "comparisonPeriod", "$.view.type");
+    const current = await s2aStored(kpi.id);
+    await s2aDbReject(fixture.dashboard.id, () => query("select * from training_load.update_widget_content($1,$2,$3)", [kpi.id, current.revision - 1, "table"]), "40001", /stale/);
+    await s2aDbReject(fixture.dashboard.id, () => query("select * from training_load.update_widget_content($1,$2,$3)", [kpi.id, current.revision, "table"]), "P0001", /comparison_period/);
+  }
+});
+
+test("S2a retained size correction: loaded Table-to-KPI fails with widgetSizeBounds and DB rollback, compatible explicit layout then transitions", async () => {
+  const fixture = await s2aFixture("s2a-size");
+  const draft = s2aDraft({ kind: "builtin", key: "rpe" });
+  const snapshot = await fixture.reader.load({ ...fixture.target, metricRef: draft.metricRef });
+  let stored = await s2aLegacyProjection(fixture, fixture.compileSimpleDraft(draft, snapshot, s2aContext()));
+  const kpiDraft = { ...draft, view: { type: "kpi", groupBy: "athlete" }, display: { mode: "preserve" }, presentation: { mode: "preserve" } };
+  s2aIssue(fixture.compileSimpleDraft(kpiDraft, snapshot, s2aContext(), stored), "widgetSizeBounds", "$.view.type");
+  await s2aDbReject(fixture.dashboard.id, () => query("select * from training_load.update_widget_content($1,$2,$3)", [stored.id, stored.revision, "kpi"]), "P0001", /out of bounds/);
+  const dashboardRevision = (await s2aState(fixture.dashboard.id)).dashboard.revision;
+  await s2aDbReject(fixture.dashboard.id, () => query("select * from training_load.create_widget($1,$2,'kpi','Invalid size',99,$3,$4,$5,$6,99)", [fixture.dashboard.id, dashboardRevision, 0, 8, 6, 4]), "P0001", /out of bounds/);
+  const result = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${stored.id}/layout`, { method: "PATCH", cookie: fixture.coachCookie, body: { expectedWidgetRevision: stored.revision, width: 3, height: 3 } });
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  stored = await s2aStored(stored.id);
+  const compiled = fixture.compileSimpleDraft(kpiDraft, snapshot, s2aContext(), stored);
+  assert.equal(compiled.status, "valid", JSON.stringify(compiled));
+  assert.equal(compiled.widget.width, 3);
+  assert.equal(compiled.widget.height, 3);
+  stored = await s2aLegacyProjection(fixture, compiled, { existing: stored });
+  assert.equal(stored.widget_type, "kpi");
+  assert.equal(stored.width, 3);
+  assert.equal(stored.height, 3);
+});
+
+test("S2a compiled filter query parity: stored legacy projection preserves V1 and exact result identity/status/value multiplicity on create/update", async () => {
+  const fixture = await s2aFixture("s2a-query");
+  const first = await makeAthleteInClub(fixture.clubId), second = await makeAthleteInClub(fixture.clubId);
+  const fixtureRows = [];
+  for (const [athleteId, date, rpe] of [[first.athleteId, "2026-09-09", 6], [first.athleteId, "2026-09-10", 8], [second.athleteId, "2026-09-09", 9]]) {
+    const activity = await makeActivityWithEvent({ clubId: fixture.clubId, coachId: fixture.coachId, athleteId, date });
+    await makeRpeFeedback({ clubId: fixture.clubId, athleteId, activityParticipantId: activity.participantId, date, rpe });
+    fixtureRows.push({ athleteId, bucketKey: date, unit: null, value: rpe, rawCount: 1 });
+  }
+  const draft = s2aDraft({ kind: "builtin", key: "rpe" });
+  draft.athleteSelection = { mode: "selected", athleteIds: [first.athleteId] };
+  const snapshot = await fixture.reader.load({ ...fixture.target, metricRef: draft.metricRef });
+  const context = s2aContext([first.athleteId, second.athleteId]);
+  const compiled = fixture.compileSimpleDraft(draft, snapshot, context);
+  assert.deepEqual(compiled.effectiveFilter.athleteIds, [first.athleteId]);
+  assert.equal(compiled.semanticBinding.valueType, "numeric");
+  let stored = await s2aLegacyProjection(fixture, compiled);
+  const tuple = row => [row.athleteId, row.bucketKey, row.unit, row.value, row.rawCount];
+  const sort = rows => rows.map(tuple).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  async function verify(expected) {
+    const result = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/query`, { method: "POST", cookie: fixture.coachCookie, body: { dateFrom: context.period.dateFrom, dateTo: context.period.dateTo } });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.widgets.length, 1);
+    assert.equal(result.body.widgets[0].widgetId, stored.id);
+    assert.equal(result.body.widgets[0].series.length, 1);
+    const series = result.body.widgets[0].series[0];
+    assert.equal(series.seriesId, stored.series[0].id);
+    assert.equal(series.status, "ok");
+    assert.deepEqual(sort(series.data.current), sort(expected));
+    for (const row of series.data.current) for (const flag of ["error", "typeConflict", "semanticConflict", "targetConflict", "conflict"]) assert.ok(!row[flag], JSON.stringify(row));
+  }
+  await verify(fixtureRows.filter(row => row.athleteId === first.athleteId));
+  const legacy = { schemaVersion: 1, opaqueLegacy: { retained: [1, "two"] } };
+  const changed = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${stored.id}`, { method: "PATCH", cookie: fixture.coachCookie, body: { expectedWidgetRevision: stored.revision, displayConfig: legacy } });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  stored = await s2aStored(stored.id);
+  const all = { ...draft, athleteSelection: { mode: "allAuthorized" }, display: { mode: "preserve" }, presentation: { mode: "preserve" } };
+  const update = fixture.compileSimpleDraft(all, snapshot, context, stored);
+  assert.equal(update.widget.local_filter_override.athleteIds, null);
+  assert.deepEqual(update.widget.display_config, legacy);
+  stored = await s2aLegacyProjection(fixture, update, { existing: stored });
+  await verify(fixtureRows);
+});
+
+test("S2a component-only parity: absent/cleared activity compiles and queries only the selected real component; parent and foreign denials have exact paths", async () => {
+  const fixture = await s2aFixture("s2a-component");
+  const { athleteId } = await makeAthleteInClub(fixture.clubId);
+  const connectionId = await makeSourceConnection(fixture.clubId);
+  const { metricDefinitionId, versionId } = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, scopeLevels: ["component"] });
+  const components = await makeComponentFixture({ clubId: fixture.clubId, coachId: fixture.coachId, athleteId, connectionId, date: "2026-09-09" });
+  for (const [segmentId, value] of [[components.segmentAId, 10], [components.segmentBId, 20]]) {
+    await addMetricValue({ eventParticipantId: components.eventParticipantId, metricDefinitionId, versionId, segmentId, value });
+  }
+  const otherActivity = await makeActivityWithEvent({ clubId: fixture.clubId, coachId: fixture.coachId, athleteId, connectionId, date: "2026-09-10" });
+  const foreignCoach = await makeClubCoach("s2a-component-foreign");
+  const foreignAthlete = await makeAthleteInClub(foreignCoach.clubId);
+  const foreignComponents = await makeComponentFixture({
+    clubId: foreignCoach.clubId, coachId: foreignCoach.coachId, athleteId: foreignAthlete.athleteId,
+    connectionId: await makeSourceConnection(foreignCoach.clubId), date: "2026-09-09",
+  });
+  const draft = s2aDraft({ kind: "metric", metricDefinitionId }, { groupBy: "component", dataScopeLevel: "component", analyticalAggregation: "sum" });
+  draft.advancedFilter.component = { mode: "selected", id: components.componentAId };
+  let snapshot = await fixture.reader.load({ ...fixture.target, metricRef: draft.metricRef });
+  const context = {
+    ...s2aContext([athleteId]), componentActivityId: components.activityId,
+    authorizedFilterIds: { activityId: [components.activityId, otherActivity.activityId], componentId: [components.componentAId, components.componentBId] },
+  };
+  const compiled = fixture.compileSimpleDraft(draft, snapshot, context);
+  assert.equal(compiled.status, "valid", JSON.stringify(compiled));
+  assert.equal(Object.hasOwn(compiled.widget.local_filter_override, "activityId"), false);
+  assert.equal(compiled.effectiveFilter.componentId, components.componentAId);
+  let stored = await s2aLegacyProjection(fixture, compiled);
+  async function verifySelectedComponent() {
+    const result = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/query`, {
+      method: "POST", cookie: fixture.coachCookie, body: { dateFrom: context.period.dateFrom, dateTo: context.period.dateTo },
+    });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.widgets.length, 1);
+    assert.equal(result.body.widgets[0].widgetId, stored.id);
+    assert.equal(result.body.widgets[0].series.length, 1);
+    const series = result.body.widgets[0].series[0];
+    assert.equal(series.seriesId, stored.series[0].id);
+    assert.equal(series.status, "ok");
+    assert.deepEqual(series.data.current.map(row => [row.athleteId, row.bucketKey, row.unit, row.value, row.rawCount]), [[athleteId, components.componentAId, "bpm", 10, 1]]);
+    for (const row of series.data.current) for (const flag of ["error", "typeConflict", "semanticConflict", "conflict"]) assert.ok(!row[flag], JSON.stringify(row));
+  }
+  await verifySelectedComponent();
+  const defaultChanged = await api(`/api/training-load/dashboards/${fixture.dashboard.id}`, {
+    method: "PATCH", cookie: fixture.coachCookie,
+    body: { expectedRevision: await freshRevision(fixture.coachCookie, fixture.dashboard.id), defaultFilter: { activityId: otherActivity.activityId } },
+  });
+  assert.equal(defaultChanged.status, 200, JSON.stringify(defaultChanged.body));
+  snapshot = await fixture.reader.load({ ...fixture.target, metricRef: draft.metricRef });
+  context.defaultFilter = snapshot.dashboard.default_filter;
+  assert.deepEqual(context.defaultFilter, { activityId: otherActivity.activityId });
+  const clearedDraft = s2aUpdateDraft({ ...draft, advancedFilter: { ...draft.advancedFilter, activity: { mode: "clear" } } });
+  const cleared = fixture.compileSimpleDraft(clearedDraft, snapshot, context, stored);
+  assert.equal(cleared.status, "valid", JSON.stringify(cleared));
+  assert.equal(cleared.effectiveFilter.activityId, null);
+  assert.equal(cleared.widget.local_filter_override.activityId, null);
+  stored = await s2aLegacyProjection(fixture, cleared, { existing: stored });
+  await verifySelectedComponent();
+  const beforeDenied = await s2aState(fixture.dashboard.id);
+  s2aIssue(fixture.compileSimpleDraft(s2aUpdateDraft(draft), snapshot, context, stored), "componentActivityMismatch", "$.advancedFilter.component");
+  const foreignDraft = { ...clearedDraft, advancedFilter: { ...clearedDraft.advancedFilter, component: { mode: "selected", id: foreignComponents.componentAId } } };
+  s2aIssue(fixture.compileSimpleDraft(foreignDraft, snapshot, context, stored), "notFound", "$.advancedFilter.componentId");
+  assert.deepEqual(await s2aState(fixture.dashboard.id), beforeDenied);
+});
