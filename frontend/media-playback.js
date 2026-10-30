@@ -296,7 +296,9 @@ function onScreen(image) {
 // in that order, the pairs on screen (at most ACCESS_FIRST_BATCH_LIMIT; the
 // first ACCESS_FIRST_BATCH_LIMIT in page order when none is) in a batch of
 // their own and the rest in batches of ACCESS_BATCH_LIMIT, all sent at once,
-// each batch's pictures shown as soon as that batch answers.
+// each batch's pictures shown as soon as that batch answers. A pair that
+// needs no request (cached, already asked for, or with no context) takes no
+// place in a batch: those pictures are shown on their own, at once.
 async function resolveImages(images) {
   const wanted = images.filter((image) => image?.dataset?.mediaId && !image.dataset.mediaResolving);
   if (!wanted.length) return 0;
@@ -305,10 +307,15 @@ async function resolveImages(images) {
     .map((image, index) => ({ image, index, first: onScreen(image) ? 0 : 1 }))
     .sort((a, b) => a.first - b.first || a.index - b.index);
   const groups = new Map();
+  const known = [];
   let shownPairs = 0;
   for (const { image, first } of ordered) {
     const request = imageRequest(image);
     const key = accessKey(request.context, request.slot);
+    if (!key || inFlight.has(key) || cachedMediaAccess(request.context, request.slot)) {
+      known.push(image);
+      continue;
+    }
     if (!groups.has(key)) {
       groups.set(key, []);
       if (first === 0) shownPairs += 1;
@@ -316,7 +323,7 @@ async function resolveImages(images) {
     groups.get(key).push(image);
   }
   const keys = [...groups.keys()];
-  const chunks = [];
+  const chunks = known.length ? [known] : [];
   const firstSize = Math.min(shownPairs || ACCESS_FIRST_BATCH_LIMIT, ACCESS_FIRST_BATCH_LIMIT);
   for (let start = 0, size = firstSize; start < keys.length; start += size, size = ACCESS_BATCH_LIMIT) {
     chunks.push(keys.slice(start, start + size).flatMap((key) => groups.get(key)));

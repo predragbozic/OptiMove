@@ -326,7 +326,7 @@ const ids = (call) => call.body.requests.map((request) => request.context.id);
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 const range = (from, to) => Array.from({ length: to - from }, (_, index) => String(from + index));
 
-test("8. the pictures on screen go first: a page of 60 with 8 on screen sends the 8 (then the next 4) in a first batch of 12 and the other 48 at the same time; the first 12 are shown before the big batch answers", async () => {
+test("8. the pictures on screen go first: a page of 60 with 8 on screen sends the 8 alone and the other 52 at the same time as 50 + 2; the 8 are shown before the big batch answers", async () => {
   playback.forgetMediaAccess();
   assert.equal(playback.ACCESS_FIRST_BATCH_LIMIT, 12);
   const visible = range(20, 28).map(Number);
@@ -434,6 +434,51 @@ test("11. the installed resolver: a picture scrolled to later already has its ad
   assert.deepEqual(ids(calls[2]), range(30, 40), "only the new pictures");
   assert.equal(doc.querySelectorAll("img:not([src])").length, 0);
   uninstall();
+  playback.forgetMediaAccess();
+  dom.window.close();
+});
+
+test("12. a pair that needs no request takes no place in the first batch: after a filter change the 8 new pictures on screen go alone, the 12 known ones are shown at once without a request", async () => {
+  playback.forgetMediaAccess();
+  const earlier = page(12, range(0, 12).map(Number));
+  const before = heldBatches();
+  const known = playback.resolvePendingThumbnails(earlier.doc);
+  before.release(0);
+  assert.equal(await known, 12);
+  earlier.dom.window.close();
+
+  const { dom, doc, images } = page(40, range(0, 20).map(Number));
+  const { calls, release } = heldBatches();
+  const done = playback.resolvePendingThumbnails(doc);
+  assert.deepEqual(ids(calls[0]), range(12, 20), "the first batch holds only the on-screen pictures that need a request");
+  assert.deepEqual(ids(calls[1]), range(20, 40));
+  assert.equal(calls.length, 2, "the known ones are never asked for");
+  await settle();
+  for (const index of range(0, 12).map(Number)) assert.equal(images[index].src, `https://r2.example/${index}`, `known picture ${index} is shown before any batch answers`);
+  release(0);
+  release(1);
+  assert.equal(await done, 40);
+  playback.forgetMediaAccess();
+  dom.window.close();
+});
+
+test("13. off to the right, off to the left or with no size is not on screen", async () => {
+  playback.forgetMediaAccess();
+  const { dom, doc, images } = page(4);
+  const rects = [
+    { top: 100, bottom: 200, left: 2000, right: 2100, width: 100, height: 100 },
+    { top: 100, bottom: 100, left: 10, right: 10, width: 0, height: 0 },
+    ON_SCREEN,
+    { top: 100, bottom: 200, left: -300, right: -200, width: 100, height: 100 },
+  ];
+  images.forEach((image, index) => { image.getBoundingClientRect = () => ({ ...rects[index] }); });
+  const { calls, release } = heldBatches();
+  const done = playback.resolvePendingThumbnails(doc);
+  assert.deepEqual(ids(calls[0]), ["2"], "only the picture inside the window goes first");
+  assert.deepEqual(ids(calls[1]), ["0", "1", "3"]);
+  release(0);
+  release(1);
+  assert.equal(await done, 4);
   playback.forgetMediaAccess();
   dom.window.close();
 });
