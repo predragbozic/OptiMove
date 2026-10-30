@@ -1010,7 +1010,7 @@ test("20. architecture: only the M2 service writes a mapping; a mapping version 
   // Phase 7c (J9): the one writer of the unit conversions.
   assert.deepEqual(writers("unit_conversions"), ["unitConversionService.js"]);
   // No production module switches a trigger off (the Rukovodilac's note (ii) at the 7c GO).
-  assert.deepEqual(files.filter((f) => /disable\s+trigger/i.test(readFileSync(f, "utf8"))).map((f) => relative(root, f)), [], "no disable trigger in backend/src");
+  assert.deepEqual(files.filter((f) => /disable\s+trigger|session_replication_role/i.test(readFileSync(f, "utf8"))).map((f) => relative(root, f)), [], "nothing in backend/src switches a trigger off (disable trigger, session_replication_role)");
   assert.deepEqual(writers("source_metric_definition_versions"), ["sourceFieldVerificationService.js", "sourceRevisionLifecycleService.js"]);
   for (const table of ["source_metric_mapping_activations", "metric_value_source_provenance", "source_metric_definitions"]) {
     assert.deepEqual(writers(table), [], table);

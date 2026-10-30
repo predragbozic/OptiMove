@@ -3790,17 +3790,32 @@ decisions Q1–Q3 and R1–R7 (the contract's section 9).
   - **item 13:** the M2 and 7b suites write their conversion fixtures through v47's guarded path instead of switching
     v47's triggers off. The shared fixture `backend/tests/support/unit-conversions.mjs` sets the acting user and
     writes the audit row, every trigger on, so no trigger is switched off anywhere. The M1 suite stops at v34, and the
-    v39 suite's raw conversion row is planted on its v38 / v39 rehearsal database, so neither meets v47. The M2
-    architecture test names the new writer and asserts that no module of `backend/src` runs `disable trigger` (the
-    *Rukovodilac*'s note (ii));
+    v39 suite's raw conversion row is planted on its v38 / v39 rehearsal database, so neither meets v47. Each of the
+    fixture's writers, the statement helpers included, checks first that it runs on a disposable database. The M2
+    architecture test names the new writer and asserts that no module of `backend/src` runs `disable trigger` or sets
+    `session_replication_role` (the *Rukovodilac*'s note (ii));
   - **M2b's test 2** expected `unit_conversion_create` to be refused as an action with no writer. Since v47 that action
     has its chain, so the test now expects v47's "must follow its own conversion change" refusal; `source_metric_create`
     keeps the "no writer of this action exists yet" case;
   - **M2's test 9** stored a `(1, 4)` row to reach `createVersion`'s `409 conversion_not_normal`. Since v47's CHECK no
     row outside the normal form can exist, so the test now shows the database refusing that row and the pair answering
     `conversion_unavailable`. `conversion_not_normal` stays in `createVersion` as a backstop that no stored row can
-    reach while v47 holds.
-- **Tests:** `backend/tests/unit-conversions-7c.test.mjs` (18 tests, disposable databases), with 33 mutations of the
+    reach while v47 holds;
+  - **the rollback (section 6.7)** takes the audit table in ACCESS EXCLUSIVE, not SHARE ROW EXCLUSIVE: its DROP INDEX
+    needs it, and taking it at once (in v47's order) avoids an upgrade later;
+  - **item 9:** test 15 shows the activation's `409 conversion_unavailable` and the version left `needs_review`; v34's
+    own refusal of an activation without an equal active conversion is M1's test 22, which v47 does not change.
+- **Recorded, not built (the internal reviews' LOW notes):**
+  - a conversion's `created_at` is not pinned to the transaction's time at INSERT (only `retired_at` is), as no M1
+    table pins its creation time;
+  - v47's INSERT branch also checks the basis, which v34's own platform-admin refusal reaches first; it stays as a
+    second line;
+  - the audit guard's "once" lookup may scan the (small) audit table in a generic plan; the unique index is the
+    physical guard;
+  - a retired conversion's id is accepted as a `GET /conversions` cursor, so paging stays stable across a concurrent
+    retirement.
+- **Tests:** `backend/tests/unit-conversions-7c.test.mjs` (18 tests, disposable databases; test 1 runs the preflight's
+  block 4 on every pair test 5 compares, test 17 pins full pages of 100 and the rest), with 33 mutations of the
   service, the routes, v47 and the rollback, each killed by a behaviour test, plus the M2 architecture mutation.
 
 ### J10. Activating a mapping version on a team binding — phase 7d (accepted 2026-10-30, not built)

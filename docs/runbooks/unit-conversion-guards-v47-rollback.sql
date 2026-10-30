@@ -58,9 +58,10 @@ begin
 end $$;
 
 -- v47's locks, in v47's order (the writers' order): unit_conversions ACCESS
--- EXCLUSIVE (the CHECKs and triggers it drops), then the audit table (the
--- index and the trigger function) - before the checks, so no conversion and no
--- audit row is written until the COMMIT.
+-- EXCLUSIVE (the CHECKs and triggers it drops), then the audit table ACCESS
+-- EXCLUSIVE - stronger than v47's SHARE ROW EXCLUSIVE, because DROP INDEX
+-- needs it; taken at once, never upgraded later - before the checks, so no
+-- conversion and no audit row is written until the COMMIT.
 lock table training_load.unit_conversions in access exclusive mode;
 lock table training_load.source_metric_audit in access exclusive mode;
 

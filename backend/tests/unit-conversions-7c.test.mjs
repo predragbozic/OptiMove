@@ -349,7 +349,12 @@ async function world() {
 // ---------------------------------------------------------------------------
 // The rehearsal database (through v46).
 // ---------------------------------------------------------------------------
-test("1. on v46: every expected value of the read-only preflight; its block 4 counts a planted row the new rules refuse, and v47 itself then refuses, changing nothing; the rollback refuses without v47", async () => {
+// Factor pairs inside and outside D5's normal form: the JavaScript rule, v47's
+// function (test 5) and the preflight's block 4 (test 1) must agree on each.
+const NORMAL_FORM_PAIRS = [["3.6", "1"], ["0.001", "1"], ["1", "60"], ["1", "3.6"], ["1", "4"], ["1", "0.25"], ["1", "2"], ["1", "1"], ["2", "2"], ["36", "10"],
+  ["2", "120"], ["1", "7"], ["1", "0.3"], ["1", "12.5"], ["1", "1.5"], ["1", "0.125"], ["7", "1"], ["1", "1024"], ["1", "3000"], ["0.5", "1"]];
+
+test("1. on v46: every expected value of the read-only preflight; its block 4 counts a planted row the new rules refuse (and judges every pair of test 5 as the JavaScript rule does), and v47 itself then refuses, changing nothing; the rollback refuses without v47", async () => {
   const pre = await blocks(r, PREFLIGHT);
   assert.deepEqual(Object.keys(pre).map(Number), [1, 2, 3, 4, 5, 6, 7, 8]);
   assert.equal(pre[1][0].pg15_or_later, true);
@@ -379,6 +384,24 @@ test("1. on v46: every expected value of the read-only preflight; its block 4 co
       await r.query("savepoint s");
       await assert.rejects(r.query(v47Text), (e) => e.code === "23514" && refusal.test(e.message));
       await r.query("rollback to savepoint s");
+    } finally {
+      await r.query("rollback");
+    }
+  }
+  // Block 4's inline rule judges every pair as isNormalFormPair does (one
+  // planted row at a time, rolled back). v34's CHECK (scale = 1 or divisor = 1)
+  // already keeps the other pairs out of the table, so only those are planted.
+  const plantable = NORMAL_FORM_PAIRS.filter(([scale, divisor]) => Number(scale) === 1 || Number(divisor) === 1);
+  assert.ok(plantable.some(([s, d]) => service.isNormalFormPair(s, d)) && plantable.some(([s, d]) => !service.isNormalFormPair(s, d)));
+  for (const [scale, divisor] of plantable) {
+    await r.query("begin");
+    try {
+      await r.query("set local session_replication_role = replica");
+      await r.query(`insert into training_load.unit_conversions (from_unit, to_unit, scale, scale_divisor, "offset", evidence_ref, created_by_user_id)
+                     values ('pa', 'pb', $1::numeric, $2::numeric, 0, $3, gen_random_uuid())`, [scale, divisor, EVIDENCE]);
+      const b4 = (await blocks(r, PREFLIGHT))[4][0];
+      const normal = service.isNormalFormPair(scale, divisor);
+      assert.deepEqual([b4.refused_rows, b4.safe_to_merge], [normal ? "0" : "1", normal], `block 4 on (${scale}, ${divisor})`);
     } finally {
       await r.query("rollback");
     }
@@ -516,9 +539,7 @@ test("4. the rollback returns v46's catalog exactly (comments included; v39's bo
 });
 
 test("5. the JavaScript normal form (isNormalFormPair) and v47's source_metric_factor_pair_normal agree, pair by pair", async () => {
-  const pairs = [["3.6", "1"], ["0.001", "1"], ["1", "60"], ["1", "3.6"], ["1", "4"], ["1", "0.25"], ["1", "2"], ["1", "1"], ["2", "2"], ["36", "10"],
-    ["2", "120"], ["1", "7"], ["1", "0.3"], ["1", "12.5"], ["1", "1.5"], ["1", "0.125"], ["7", "1"], ["1", "1024"], ["1", "3000"], ["0.5", "1"]];
-  for (const [s, d] of pairs) {
+  for (const [s, d] of NORMAL_FORM_PAIRS) {
     const sql = (await one(k, `select training_load.source_metric_factor_pair_normal($1::numeric, $2::numeric) as n`, [s, d])).n;
     assert.equal(sql, service.isNormalFormPair(s, d), `(${s}, ${d})`);
   }
@@ -832,6 +853,7 @@ test("15. concurrency: a retirement waits for an activation's FOR SHARE and the 
   heldRetire.g.open();
   ok(await retiring2);
   refused(await act2, 409, "conversion_unavailable");
+  assert.equal((await one(k, `select status from training_load.source_metric_mapping_versions where id = $1`, [v2.versionId])).status, "needs_review", "the version was not activated");
   // Two creates of one pair.
   const p = pair();
   const heldCreate = holdConversion("unit_conversion_create");
@@ -887,11 +909,12 @@ test("17. GET /conversions answers in pages of 100 with an opaque, stable cursor
   for (let i = 0; i < 101; i += 1) await createConversion(k, { from: `zp${String(i).padStart(3, "0")}`, to: "zq", scale: "2", evidenceRef: EVIDENCE, by: W.pa.id });
   const all = (await rows(k, `select id, seed_migration is not null as seeded from training_load.unit_conversions where state = 'active' order by from_unit collate "C", to_unit collate "C", id`));
   const seen = [];
+  const sizes = [];
   let cursor = null;
   let pages = 0;
   do {
     const res = ok(await api(`/conversions${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`, { cookie: W.caA.cookie }));
-    assert.ok(res.conversions.length <= 100);
+    sizes.push(res.conversions.length);
     for (const c of res.conversions) assert.deepEqual(Object.keys(c).sort(), ["evidenceRef", "fromUnit", "id", "offset", "scale", "scaleDivisor", "seeded", "toUnit"]);
     seen.push(...res.conversions.map((c) => c.id));
     if (res.nextCursor) {
@@ -903,7 +926,10 @@ test("17. GET /conversions answers in pages of 100 with an opaque, stable cursor
     pages += 1;
   } while (cursor);
   assert.deepEqual(seen, all.map((x) => x.id), "every active row once, in order");
-  assert.ok(pages >= 2);
+  // Exactly full pages of 100 and one last page with the rest (section 8, item 11).
+  assert.ok(all.length > 100);
+  assert.equal(pages, Math.ceil(all.length / 100));
+  assert.deepEqual(sizes, [...Array(pages - 1).fill(100), all.length - 100 * (pages - 1)]);
   const first = ok(await api("/conversions", { cookie: W.pa.cookie }));
   assert.equal(first.conversions.length, 100);
   assert.deepEqual(first.conversions.filter((c) => c.seeded).length > 0, true, "the seed rows say seeded");
