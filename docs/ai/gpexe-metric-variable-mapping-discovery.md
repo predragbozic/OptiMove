@@ -1079,8 +1079,8 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
     - **What follows:** the implementation pull request (J7). Its merge, v42 and its production pre- and post-checks
       each need the owner's order that names them.
 104. **Activating, disabling and replacing a mapping version: the contract J8 and migration v43 (phase 7b)** (the
-    contract is J8, `docs/ai/phase7b-mapping-transitions-contract.md`; implemented in the phase 7b pull request, not
-    merged: J8 "As built").
+    contract is J8, `docs/ai/phase7b-mapping-transitions-contract.md`; built in PR #273, merged and deployed as `5a4c480`,
+    v43 directly confirmed on production by the owner's read-only post-check: J8 "As built").
     - **Reviewed:** `db-reviewer`, `security-reviewer` and `code-reviewer` (two NOT READY on the first draft, every
       finding applied; READY WITH NON-BLOCKING NOTES on the revision); then the *Rukovodilac* and the *Nezavisni
       revizor* gave GO on `f9f6bec`, and the proposal was merged as PR #266 (`69d824f`).
@@ -1105,6 +1105,19 @@ findings M-1 and P-1; built in the canonical-guard pull request, no migration):*
     - **Not needed for 7b:** Q4 (system or club ownership of zone and threshold mappings) stays open for 7d and 7e.
     - **What follows:** the implementation pull request (J8). Its merge, v43 and its production pre- and post-checks
       each need the owner's order that names them (the exact file and its sha256).
+105. **Icons of a variable after its create, and of domains and categories, now** (the visual proposal's V3 and V4,
+    `docs/ai/data-configuration-visual-proposal.md` section 10).
+    - **The owner's words**, in the *Rukovodilac*'s chat, checked by the executor in the transcript:
+      - „takođe, ja sada nemam mogucnost da menjam ikonicu u varijabli kada kreiram i sl” (owner turn `4d301507`,
+        2026-10-30 10:08:13 UTC);
+      - „Oboje uradi, da ne ostavljamo za kasnije, to ce nas optereceivati” (owner turn `26cd9d0e`, 10:18:24 UTC),
+        the answer to the *Rukovodilac*'s two questions: the icon change of an existing variable (I1) and icons on
+        domains and categories (V4).
+    - **Decided:** both now. V4 changes from "later" (the recommendation of 2026-10-28) to **now**. I1 (V3), already
+      accepted, is built now as PR-1b with migration v44 (J3b.11); V4 as PR-1c with migration v45 (J6.1).
+    - **What follows:** each pull request's merge needs the owner's order naming it, its exact migration file and its
+      sha256, with the production preflight the same day. The plan's line for V4 (section 6) changes in the next plan
+      pull request the owner names.
 
 ---
 
@@ -3370,6 +3383,88 @@ backend, API contract or migration changed. The owner deployed it by hand with `
   - physical device checks: the iOS keyboard with the first field focused, native select pickers with groups,
     hardware Back, a native `confirm()` in PWA mode.
 - **O8 stays a follow-up:** the older reads show a club's domains and categories to its club admins only.
+
+#### J6.1 Icons of domains and categories — V4 now, "PR-1c" (discovery, 2026-10-30; proposed, not built)
+
+C105: the owner decided V4 **now**. The *Rukovodilac*'s order of 2026-10-30 sets the shape below. Verified against
+`01cd32d`.
+
+**What exists:**
+- `training_load.metric_domains` and `metric_categories` (v10) have no icon column. v41 added only `key`, its rules
+  and `description`.
+- v41's guard `metric_classification_node_guard()` (BEFORE INSERT / UPDATE / DELETE of both tables, for canonical
+  rows only):
+  - an insert names the acting user, has an active basis and its key, and its texts are bounded;
+  - an update keeps the identity and owner columns, the key and the creator;
+  - an update changes the name and description, or the state, never both;
+  - an update must change one of them, otherwise it is refused as "changes nothing". So an update of a new column
+    alone would be refused.
+- The change record `metric_classification_changes`: `object_kind`, kind `create` / `rename` / `archive` /
+  `restore` / `link` / `remove`, the old and new name, description and `active`. It is written by
+  `metric_classification_record_node_change()`, through the AFTER INSERT triggers and the AFTER UPDATE triggers of
+  `name, description, is_active` (`metric_domains_v41_record_change`, `metric_categories_v41_record_change`).
+- The request record `metric_classification_requests` (operations `domain_` / `category_` + `create` / `rename` /
+  `archive` / `restore`, and the two link operations; basis `platform_admin` or `club_admin`), checked by
+  `metric_classification_requests_guard()`. The guard takes the expected kind from the operation's second word and
+  compares the node's name, description and state with the change's new values.
+
+**v45** (proposed file `migrations_v2/202610301300_training_load_v45_classification_icons.sql`; it sorts after v44's
+`202610301200`, and the two touch no common object):
+1. One column on each table: `metric_domains.icon_url` and `metric_categories.icon_url`.
+   - Each is a nullable `text`, with a CHECK that the value is `null` or `icon:` and a key's shape
+     (`^icon:[a-z0-9]+(-[a-z0-9]+)*$`). There are no URLs until step 2.
+   - Library membership is the service's check.
+2. `metric_classification_changes` gets `old_icon_url` and `new_icon_url` and the kind `icon` for a domain or a
+   category.
+   - `icon`: the node is active before and after, its name and description are kept, and the icon changes.
+   - `create` may carry the new icon. `rename`, `archive` and `restore` keep the icon.
+   - The rows before v45 keep `null`.
+3. `metric_classification_node_guard()` is replaced. It allows an icon-only change of an active node. It refuses an
+   icon change together with a name, description or state change, and on an archived node (restore first).
+4. `metric_classification_record_node_change()` is replaced. It writes the icon columns and takes the kind `icon`.
+   The two AFTER UPDATE triggers gain `icon_url` in their column list and their WHEN.
+5. `metric_classification_requests` gets the operations `domain_icon` and `category_icon` (the guard's split takes
+   `icon` as their kind). `metric_classification_requests_guard()` is replaced and also compares the node's icon with
+   the change's new value.
+6. **Rollback:** it is fail-closed. It drops the two columns only while every `icon_url` is `null`. It refuses once
+   any change or request of the kind `icon` exists, under a later migration, and while the migrator holds its lock.
+   It restores v41's three functions byte for byte, the two triggers and the constraints. There are also a read-only
+   preflight and post-check, and a runbook.
+
+**API** (12b's routes, `backend/src/canonicalClassificationService.js`):
+- **Create (J6's C2 / C3):** the bodies take an optional `iconKey` (a library key). A body without it hashes exactly
+  as before, so an older create still replays.
+- **`POST /api/training-load/sources/metrics/classification/{domains|categories}/:id/icon`**
+  `{ requestKey, expectedIconKey, iconKey }`:
+  - `iconKey` is a key, or `null` to remove the icon;
+  - the rights are the same as a rename: a platform admin, and a club's admin for their club, through
+    `source_metric_actor_basis`;
+  - it gives the identical `404`, replays, and has the bounded COMMIT;
+  - refusals: `node_not_active`, `node_changed` (another icon is stored), `icon_unchanged`, and `400` for a key
+    outside the library.
+- `nodeOut` gains `icon` (a library key or `null`, like a variable's), and the node's `actions` gains `icon`.
+
+**Frontend:**
+- The domain and category create forms get PR-1c's icon picker (now on the variable form).
+- A domain's and a category's detail gets **Change icon**, with **No icon**.
+- The icon shows in the Domains and Categories lists, the tiles and the chips, the variable list's filter and the
+  start screen's cards.
+- Without an icon, the tiles stay as today: a domain's filled tile and a category's outlined one.
+
+**Tests and reviews:**
+- A disposable suite: the migration and the rollback rehearsal (including the refusal while an icon is set), the
+  routes, information hiding, replay, a lost COMMIT, and the guards by direct SQL.
+- Frontend tests, and mutations of the key guards.
+- `db-reviewer`, `security-reviewer`, `code-reviewer`, `mobile-qa` and `ux-design-reviewer`, then the *Rukovodilac*
+  and the *Nezavisni revizor* (trigger 1).
+- The merge needs the owner's order naming the pull request, the file and its sha256. If PR-1b and PR-1c are ready
+  together, both orders come in one message.
+
+**For the *Rukovodilac*:**
+- **Q1, the file names:** v44 is `202610301200_…_v44_metric_variable_icon.sql`, and v45 is
+  `202610301300_training_load_v45_classification_icons.sql`.
+- **Q2, the order of the two pull requests:** each is built from `main` on its own and touches no common object.
+  Recommended: PR-1b first, then PR-1c, both from `main`.
 
 ### J7. The zone model, option A — phase 5b (accepted; merged and deployed, v42 confirmed on production)
 
