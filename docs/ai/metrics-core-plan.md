@@ -59,7 +59,7 @@ PR #256); phase 5b's Done entry and the merges of PR-2 and the language pass, ag
 | Role | Session | Does |
 |---|---|---|
 | Owner | — | Decides. Every red-zone step is the owner's, case by case (section 2). |
-| Executor | the main Claude session of `CLAUDE.md` | The only writer: code, migrations, documents, branches, Draft PRs. Runs the internal reviewers by the orchestration matrix of `CLAUDE.md`. Makes every merge into `main`, on the owner's order or under the standing merge order, after checking it (section 2). |
+| Executor | the main Claude session of `CLAUDE.md` | The only writer: code, migrations, documents, branches, Draft PRs. Runs the internal reviewers by the orchestration matrix of `CLAUDE.md`. Makes every merge into `main`, on the owner's order, under the standing merge order or under the standing order for migration PRs, after checking it (section 2). |
 | *Rukovodilac* (planning and review) | `session_01MCgqwiexBgNEBaMKskhbTZ` | Plans and leads the phases. Reviews every phase and gives GO or NO-GO on an exact head. It is the designated external reviewer for the five triggers of `CLAUDE.md` (owner: „… revizori …” in the adoption above). Relays the owner's words (section 2). |
 | *Nezavisni revizor* (independent reviewer) | `session_01YC2kSvwQcRiYteWE268sNf` | A third review of the ★★ phases (2b, 4, 7, 9, 10, 11 and R1). Its packet carries no conclusion of the *Rukovodilac*. Disagreements between the two reviewers go to the owner. |
 
@@ -127,7 +127,8 @@ This standing order departs from two project rules, and only for this plan's fea
   - every other hard prohibition of that file.
 - **`CLAUDE.md`** ("External-review okidači") says no PR is opened before the external review. Here a **Draft** PR is
   opened as the vehicle of that review. Merge-readiness, a ready-for-review PR and the merge still wait for the
-  external review, and for the owner outside the standing merge order (below).
+  external review, and for the owner outside the standing merge order and the standing order for migration PRs
+  (below).
 
 A third owner-ordered departure is the relay of approvals, a fourth the standing merge order, and a fifth the standing
 order for migration PRs (all below). Everywhere else, `CLAUDE.md` and `.claude/rules/` apply as written. Where this
@@ -295,45 +296,49 @@ Every other rule of those files applies as written.
 
 1. **The merge, without the owner's sentence.** The executor marks a PR of this plan that carries a migration ready for
    review and merges it into `main` when all of these hold:
-   - **Auto-deploy is off.** The *Rukovodilac*'s GO quotes the owner's latest statement that auto-deploy of
-     `optimove-eu` is off, with its event id, and `/api/health` still serves the commit of the last deploy the
-     *Rukovodilac*'s smoke confirmed. Without that, step 2 applies.
+   - **Auto-deploy is off.** The evidence is the owner's latest dated statement that auto-deploy of `optimove-eu` is
+     off, quoted in the *Rukovodilac*'s GO with its event id; `/api/health` also still serves the commit of the last
+     deploy the *Rukovodilac*'s smoke confirmed. Without that, step 2 applies.
+   - **No migration waiting.** No migration merged earlier is still undeployed: nothing under `migrations_v2/` differs
+     between the commit `optimove-eu` serves and the base.
    - **Two GOs on exactly that head:** the *Rukovodilac*'s and the *Nezavisni revizor*'s (a migration PR is reviewed as
      ★★ under this order), each found and recorded as the standing merge order says.
    - **The files.** The *Rukovodilac*'s GO names the PR, the head, the base, each migration file on that head with its
-     sha256, its rollback script, and its read-only preflight file with its sha256. The executor computes each sha256
-     itself and checks that the migration files the diff adds are exactly the named ones. The rollback script is
-     rehearsed on a disposable database (apply, rollback, the same catalog as before, apply again).
+     sha256, its rollback script, and its read-only preflight and post-check files with their sha256. The executor
+     computes each sha256 itself; checks that `git diff --name-status` lists under `migrations_v2/` and `migrations/`
+     only the named migration files, each as an add; and checks that the preflight and post-check files hold only
+     read-only statements. The rollback script is rehearsed on a disposable database (apply, rollback, the same catalog
+     as before, apply again). A missing file means step 2.
    - **The preflight.** The *Rukovodilac* ran exactly that preflight file, read-only, on the production database on the
-     same UTC day. His record names the database's identity (`current_database()`, `server_version_num`, and the last
-     migration recorded with its applied time, equal to the last post-check), never a project reference, and every
-     block came back as expected. The executor finds the connector's call and its result in the *Rukovodilac*'s
-     transcript, as it finds a GO.
+     same UTC day as the merge. His record names the database's identity (`current_database()`, `server_version_num`,
+     and the last migration recorded with its applied time, equal to the last post-check), never a project reference,
+     and every block came back as expected. The executor finds the connector's call and its result in the
+     *Rukovodilac*'s transcript, as it finds a GO.
    - **`git diff --check`** is clean on the head (the *Rukovodilac*'s rule).
    - **The standing merge order's other conditions** hold, including (b), (c) and (d) of "No migration"; only (a) is
      waived, for the named migration files.
    - **The merge order.** The *Rukovodilac* sent it as his own turn, naming the PR, the head and the migration files,
      and the executor found it in his transcript.
 
-   A new commit, or a changed migration or preflight file, voids every GO, the preflight and the merge order. The PR
-   body records the event ids of both GOs, the preflight record and the merge order, the files and their sha256, and
-   the preflight's time and block verdicts (counts only, no row values).
+   A new commit, or a changed migration, preflight or post-check file, voids every GO, the preflight and the merge
+   order. The PR body records the event ids of both GOs, the preflight record and the merge order, the files and their
+   sha256, the rollback rehearsal's result, and the preflight's time and block verdicts (counts only, no row values).
 2. **A deviation or a missing condition.** No merge. The *Rukovodilac* takes it to the owner, and the PR waits for
    the owner's order that names the migration (the three bullets of "A merge is a deploy").
-3. **The deploy is the owner's.** Before the owner deploys, the *Rukovodilac* tells him in so many words that the next
-   deploy of `optimove-eu` migrates production: the PR, the migration files and their sha256, and the preflight's time
-   and result. It asks for no reply. The migrations a deploy carries are every file under `migrations_v2/` that
-   differs between the commit `optimove-eu` serves and the commit deployed; if that is more than the files of the
-   notice, the others need the owner's order that names them. The owner's deploy after that notice is his
-   confirmation. If the deploy comes on a later UTC day than the preflight, or another migration was merged in
-   between, the *Rukovodilac* runs the preflight again before the notice; a deviation goes to the owner, and no notice
-   is sent.
+3. **The deploy is the owner's.** At once after the merge, the *Rukovodilac* tells the owner in so many words that the
+   next deploy of `optimove-eu` migrates production: the commit `optimove-eu` serves, the exact commit to deploy (the
+   merge), every file under `migrations_v2/` that differs between the two with its sha256, and the preflight's time
+   and result. It asks for no reply. The owner deploys exactly that commit, and that deploy is his confirmation; a
+   deploy of another commit confirms none of the migrations it carries and is a deviation of step 4. If the deploy has
+   not come by the end of the preflight's UTC day, the *Rukovodilac* runs the preflight again and repeats the notice; a
+   deviation goes to the owner, and the notice is withdrawn.
 4. **After the deploy.** The *Rukovodilac*'s smoke (section 4) and his read-only post-check, by the PR's post-check
-   file. A deviation goes to the owner with a rollback proposal; the rollback runs only on the owner's order.
+   file. A deviation, or a post-check that cannot run, goes to the owner with a rollback proposal, and no further merge
+   is made under this order until the owner decides; the rollback runs only on the owner's order.
 5. **The connector.** The preflight and the post-check run through the Supabase connector of the *Rukovodilac*'s
    session (`0957fe7d`, `f9408eca`), and through it the *Rukovodilac* sends only the PR's read-only preflight and
-   post-check files. If the connector does not reach the project, step 2 applies. The executor never calls a Supabase
-   connector tool, even when its session is offered one (red zone).
+   post-check files. If the connector does not reach the project before the merge, step 2 applies; after the deploy,
+   step 4. The executor never calls a Supabase connector tool, even when its session is offered one (red zone).
 6. **A Render deploy hook** (`cbd80a95`, `70c0ec92`) is not part of this order. When the owner gives one, his own order
    says who may start which deploy with it. The *Rukovodilac*'s proposal for that order, recorded here as a proposal
    only: a deploy without a migration by the *Rukovodilac*; a deploy that carries a migration (step 3's definition)
@@ -342,12 +347,14 @@ Every other rule of those files applies as written.
 7. **A merge that deploys by itself** suspends this order at once: no further merge under it until the owner decides,
    and the owner is told.
 
-**What it does not change.** A ★ or ★★ PR without a migration still follows the standing merge order. A migration PR
-this order does not cover (for example one that is not this plan's, or one with a deviation) still needs the owner's
-order that names the migration. A PR that changes sections 1 to 4 of this file, `CLAUDE.md`, `.claude/**`,
-`.github/**`, `backend/src/migrate.js`, a setting or a permission still needs the owner's word ("Never by relay",
-below). The "Red zone" lines of section 5 ("preflight, merge, post-check") are met, for a PR this order covers, by
-steps 1 to 4. Every other red-zone step still needs the owner's word.
+**What it does not change.** A ★ or ★★ PR without a migration still follows the standing merge order. A migration
+PR this order does not cover (for example one that is not this plan's, or one with a deviation) still needs the owner's
+order that names the migration. A migration PR that also changes `backend/src/migrate.js` needs the owner's order
+that names it. A PR that changes sections 1 to 4 of this file, `CLAUDE.md`, `.claude/**`, `.github/**`, a setting or
+a permission still needs the owner's word ("Never by relay", below). The "Red zone" lines of section 5 (preflight,
+merge, deploy, migration and post-check, and "by an order that names it") are met, for a PR this order covers, by
+steps 1 to 4, the notice of step 3 and the owner's deploy taking the place of the naming order. Every other red-zone
+step still needs the owner's word.
 
 **When it is in force.** From the merge of this section into `main`, once the owner confirmed it directly in the
 executor's chat (the event id in the PR body and the merge commit), or by the owner merging it personally; until the
