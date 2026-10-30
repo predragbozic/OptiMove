@@ -125,7 +125,8 @@ function markFrameVideo() {
 // by itself (its own controls turn the sound on). The poster is the legacy
 // image when there is one; an asset image is set once resolved. The
 // full-screen button sits under the player's corner, where it covers none of
-// the browser's own controls.
+// the browser's own controls, and stays off until the video's size is known
+// (an iPhone's own player refuses a video without it).
 function renderAssetVideo(imageUrl) {
   const poster = toImageUrl(imageUrl);
   return `
@@ -134,9 +135,14 @@ function renderAssetVideo(imageUrl) {
       <p class="media-status" role="status">Preparing the video...</p>
     </div>
     <div class="media-video-actions">
-      <button class="media-fullscreen-button" data-action="enter-fullscreen" type="button" aria-label="Full screen"></button>
+      <button class="media-fullscreen-button" data-action="enter-fullscreen" type="button" aria-label="Full screen" disabled></button>
     </div>
   `;
+}
+
+function setFullscreenReady(ready) {
+  const button = els.mediaBody?.querySelector('.media-video-actions [data-action="enter-fullscreen"]');
+  if (button) button.disabled = !ready;
 }
 
 function mediaDialog() {
@@ -184,6 +190,8 @@ function setAssetState(state, message = "", code = "") {
   const box = els.mediaBody?.querySelector(".media-asset");
   if (!box) return;
   box.dataset.mediaState = state;
+  // A new address (or none) leaves the video without its size until it loads.
+  if (state !== "ready") setFullscreenReady(false);
   const status = box.querySelector(".media-status");
   if (status) status.textContent = state === "loading" ? "Preparing the video..." : "";
   box.querySelector(".media-error")?.remove();
@@ -212,7 +220,9 @@ function wireAssetPlayback(session, { context, withPoster }) {
   video.addEventListener("ended", closeMedia, { once: true });
   let sized = false;
   video.addEventListener("loadedmetadata", () => {
-    if (live()) sized = fitDialogTo(video.videoWidth, video.videoHeight) || sized;
+    if (!live()) return;
+    sized = fitDialogTo(video.videoWidth, video.videoHeight) || sized;
+    setFullscreenReady(true);
   });
   fitDialogToKnownPoster(video.getAttribute("poster"));
   let attempts = 0;
