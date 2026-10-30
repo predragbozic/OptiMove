@@ -7186,6 +7186,72 @@ img[data-media-id]:not([src]) {
   border-radius: var(--radius);
 }
 
+/* An R2 video on a computer or a tablet (media-modal.js, is-inline-video):
+   the picture's light dialog with its title and Close, the player where the
+   picture would be, and the dialog in the video's shape (--media-aspect, set
+   from the video, else 16:9), bounded as the picture is: at most 76vh high
+   and 980 px or 96vw wide, never narrower than 300 px (the title, Close and
+   the player's own controls). The reserve under 92vh is the header with a
+   title on two lines, the body's padding and the button row. */
+.media-modal.is-inline-video .media-dialog {
+  --media-aspect: 1.7778;
+  --media-video-max-height: min(76vh, calc(92vh - 160px));
+  width: max(min(300px, 96vw), min(980px, 96vw, calc(var(--media-video-max-height) * var(--media-aspect) + 28px)));
+  overflow-y: auto;
+}
+
+/* iPad Safari: vh is the screen without its toolbars; dvh is what is seen. */
+@supports (height: 1dvh) {
+  .media-modal.is-inline-video .media-dialog {
+    --media-video-max-height: min(76dvh, calc(92dvh - 160px));
+    max-height: 92dvh;
+  }
+}
+
+.media-modal.is-inline-video .media-header .plain-button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* A long name stays on two lines here (the reserve above counts two), so the
+   player and its button fit without scrolling in a narrow upright dialog; the
+   whole name is still in the page for a screen reader. */
+.media-modal.is-inline-video .media-header h3 {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.media-modal.is-inline-video .media-asset {
+  height: auto;
+}
+
+.media-modal.is-inline-video .media-video {
+  height: auto;
+  aspect-ratio: var(--media-aspect);
+  max-height: var(--media-video-max-height);
+  border-radius: var(--radius);
+}
+
+/* The full-screen button under the player's corner: over the player it would
+   cover the browser's own controls (Chrome's menu at the bottom, the iPad's
+   sound at the top). */
+.media-video-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.media-video-actions .media-fullscreen-button {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  width: 44px;
+  height: 44px;
+}
+
 .media-image-secondary {
   width: 140px;
   height: 100px;
