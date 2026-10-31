@@ -416,3 +416,27 @@ export function buildGpexeImportPlan(bundle, { metricSpecs = GPEXE_METRIC_SPECS 
     derivedNotImported: GPEXE_DERIVED_NOT_IMPORTED,
   };
 }
+
+// Phase 7e (J11, R3): the values one extractor gives each athlete the import
+// keeps, per level, through the import's own session and athlete gates - the
+// plan above with that extractor in place of GPEXE_METRIC_SPECS (the seam M4
+// uses). Only a refusal's stable code leaves: the plan's messages, anomalies
+// and skips name session, track, row and athlete ids, and none of them is
+// returned. `extract` gets the plan's per-row input and returns { value } or
+// { skip }.
+export function gpexeLevelValues(bundle, extract) {
+  let plan;
+  try {
+    plan = buildGpexeImportPlan(bundle, { metricSpecs: [{ key: "preview", extract }] });
+  } catch (error) {
+    if (error instanceof GpexeMappingError) return { code: error.code };
+    throw error;
+  }
+  const valuesAt = (participant, level) => participant.results
+    .filter((result) => result.level === level)
+    .flatMap((result) => result.values.map((entry) => entry.value));
+  return {
+    code: null,
+    athletes: plan.participants.map((participant) => ({ session: valuesAt(participant, "full"), drill: valuesAt(participant, "drill") })),
+  };
+}

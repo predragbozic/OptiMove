@@ -7,8 +7,9 @@
 // docs/ai/gpexe-metric-variable-mapping-discovery.md, J5
 // (docs/ai/v39-revision-lifecycle-contract.md), J8
 // (docs/ai/phase7b-mapping-transitions-contract.md), J9, the unit
-// conversions (docs/ai/phase7c-unit-conversions-contract.md), and J10, the T5
-// activations (docs/ai/phase7d-mapping-activations-contract.md):
+// conversions (docs/ai/phase7c-unit-conversions-contract.md), J10, the T5
+// activations (docs/ai/phase7d-mapping-activations-contract.md), and J11, the
+// aggregate preview (docs/ai/phase7e-aggregate-preview-contract.md):
 // a platform admin (platform workspace: the system scope; a club workspace:
 // that club's scope) or a club's own active admin in that club's workspace;
 // for the variable reads and the three R2 writes also an active coach of an
@@ -24,6 +25,7 @@ import * as revisions from "../sourceRevisionLifecycleService.js";
 import * as classification from "../canonicalClassificationService.js";
 import * as conversions from "../unitConversionService.js";
 import * as activations from "../sourceMetricActivationService.js";
+import * as previews from "../sourceMetricPreviewService.js";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 
 const router = Router();
@@ -212,6 +214,17 @@ router.post("/mappings/:mappingId/versions/:versionId/submit", handle(async (req
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await service.submitVersion({ ctx, mappingId: req.params.mappingId, versionId: req.params.versionId, body: req.body }), 200);
+}));
+
+// Phase 7e (J11): the aggregate preview of a mapping version over one saved
+// GPEXE candidate (?candidateId=). 7d's audience (mayManageActivations); every
+// other caller, a malformed id or query and a candidate outside the scope the
+// identical 404, before snapshot_expired. A read: nothing is written.
+router.get("/mappings/:mappingId/versions/:versionId/preview", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!previews.mayManageActivations(ctx)) return notFound(res);
+  res.json(await previews.previewVersion({ ctx, mappingId: req.params.mappingId, versionId: req.params.versionId, query: req.query }));
 }));
 
 // Phase 7b (J8): A1 activates a submitted version (and, naming the active
