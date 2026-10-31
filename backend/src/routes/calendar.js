@@ -7,34 +7,19 @@
 // in calendarQuery.js. No route here writes.
 import { Router } from "express";
 import { resolveCalendarContext } from "../calendarAccess.js";
-import { CALENDAR_KINDS, CALENDAR_MAX_RANGE_DAYS, readCalendar } from "../calendarQuery.js";
+import { CALENDAR_KINDS, CALENDAR_MAX_RANGE_DAYS, isValidCalendarDate, readCalendar } from "../calendarQuery.js";
 
 const router = Router();
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 // How far the caller's `today` may lie from the server's UTC date (manager
 // decision 3): a browser's local date is at most one day away; two keeps a
 // clock a little off from being refused.
 const TODAY_MAX_DRIFT_DAYS = 2;
 
-// A real Gregorian date (the rule of routes/trainingLoad.js's
-// isValidGregorianDateString): "2026-02-30" is refused, and so is a year
-// outside 2000-2100 — a day walk towards "9999-12-31" would otherwise leave
-// the four-digit form and fail inside the read instead of here.
-const MIN_YEAR = 2000;
-const MAX_YEAR = 2100;
-function validDate(value) {
-  if (typeof value !== "string") return false;
-  const match = DATE_PATTERN.exec(value);
-  if (!match) return false;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (year < MIN_YEAR || year > MAX_YEAR || month < 1 || month > 12 || day < 1 || day > 31) return false;
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-}
+// A real Gregorian date with a year in 2000-2100 (isValidCalendarDate,
+// calendarQuery.js — shared with the event commands since K2a).
+const validDate = isValidCalendarDate;
 function daysBetween(fromIso, toIso) {
   return Math.round((new Date(`${toIso}T00:00:00Z`) - new Date(`${fromIso}T00:00:00Z`)) / 86400000);
 }
@@ -96,6 +81,9 @@ router.get("/", async (req, res, next) => {
     }
 
     const ctx = await resolveCalendarContext(req);
+    // The event cards' `canManage` (K2a) is decided from the same roles the
+    // events router writes with (calendarEventAccess.js).
+    ctx.authz = req.authz;
     if (ctx.type === null) {
       if (ctx.reason === "no_athlete_profile") return res.status(403).json({ error: "This account has no athlete profile." });
       return res.status(403).json({ error: "Forbidden" });
