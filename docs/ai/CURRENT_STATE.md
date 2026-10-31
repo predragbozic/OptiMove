@@ -39,7 +39,10 @@ with two teams were added later the same day at `39b4b52` (merge of PR #297), af
 post-check; nothing else was re-derived then. PR #299 (those facts) and the note on the standing order for migration
 PRs were added on top of `6568cf7` (merge of PR #299); nothing else was re-derived then. Phase 7f-B (PR #301), PR #300
 (the standing order for migration PRs, in force) and the deploy of `be0fe1b` were added at `be0fe1b` (merge of PR
-#300), with the gpexe baseline reproduction on `6568cf7`; nothing else was re-derived then.
+#300), with the gpexe baseline reproduction on `6568cf7`; nothing else was re-derived then. Phase 7e-B (PR #303), PR
+#298 (the calendar's events and migration v49, another track) with the *Rukovodilac*'s v49 post-check, and the deploys
+of `0117912` and `e6ca433` were added at `e6ca433` (merge of PR #303), with the gpexe baseline reproduction on
+`0117912`; nothing else was re-derived then.
 
 ## Active phase
 
@@ -2468,6 +2471,34 @@ Technical details.
       PR-ove, uključujući korak 6 (Render deploy preko Rukovodioca)”, the owner typing „…” for the head; the executor
       reads it as `d5be8103`, the only head with both GOs and the PR's head since them), after the GO of the *Nezavisni revizor* (its turn `10e14ad9`) and the *Rukovodilac* (its turn
       `1debe65f`) on that head. Deployed with `be0fe1b` (below).
+    - **7e-B, PR #303: the aggregate preview of a mapping version (J11, no migration) — merged and deployed.**
+      - **What:** `GET /api/training-load/sources/metrics/mappings/:mappingId/versions/:versionId/preview?candidateId=…`
+        for 7d's audience: over one saved GPEXE candidate, the count of athletes with a value and min / max in the
+        source unit and through the version's own conversion, per level, min / max only from 3 athletes (OD3); the
+        identical 404 before `snapshot_expired`; nothing written. J11 section 12 ("As built") records it.
+      - **Reviews:** the internal reviews (`code-reviewer`, `security-reviewer`, `db-reviewer`) and a narrow re-review
+        of their notes, then GO on `ee873f53` from the *Nezavisni revizor* (its turn `88e691e3`, 01:36:16 UTC) and the
+        *Rukovodilac* (its turn `3bf1249e`, 01:38:21 UTC), each with one optional LOW that was not applied, so no new
+        head (J11 section 12, "After the external round").
+      - **Merge gate:** PR #298 (below) merged migration v49 at 00:22:52 UTC, so under section 2 of the plan nothing was
+        merged before v49's post-check. The owner left the post-check to the *Rukovodilac* (owner turn `92025482`,
+        01:40:21 UTC, typed „Ja ne radim post ček već ri”, read as „… već ti”), which ran
+        `docs/runbooks/calendar-events-v49-postcheck.sql` read-only, each of its seven blocks in
+        `begin transaction read only; … rollback;`, every block as expected, and then gave the merge order (its turn
+        `8ced4dea`, 01:42:04 UTC).
+      - **Merge** by the executor under the standing merge order: `e6ca433` (parents `0117912` and `ee873f53`, 01:42:32
+        UTC), exactly from `ee873f53`.
+      - **Deploy** by the *Rukovodilac* through the Render API (step 6): no migration path differs between the served
+        `0117912` and `e6ca433`; started 01:43:09 UTC, live 01:43:55 UTC. Its smoke, 01:44:01 – 01:44:22 UTC (its turn
+        `f81ff94b`): `/api/health` answered `ok: true` on `e6ca433` three times in a row; `/api/auth/me` answered
+        `{"user":null}`; without a login the preview route (with and without `?candidateId=<zero UUID>`), `GET /fields`,
+        `GET /activations?bindingId=<zero UUID>` and the GPEXE team status answered 401. No migration: v49 stays the
+        last one on the production database.
+    - **PR #298, the central calendar's events K2a-1a and migration v49 — merged and deployed (another track).** Merge
+      commit `0117912` (2026-10-31 00:22:52 UTC), merged from the owner's account in another session, a track outside
+      this plan's reviews. **v49 directly confirmed** by the *Rukovodilac*'s read-only post-check (above). v49 is the
+      calendar's migration, not Metrics Core's: 7g-B's migration is therefore v50 (J13 named v49 "if none comes
+      between").
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2933,6 +2964,13 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- **Deployed with `e6ca433`** (the merge of PR #303, 7e-B), started by the *Rukovodilac* through the Render API on
+  2026-10-31 (live 01:43:55 UTC), under step 6 of the standing order for migration PRs. Over `0117912` it adds only
+  PR #303; no migration. See the 7e-B entry of the active phase for its smoke.
+- **Deployed with `0117912`** (the merge of PR #298, the calendar's events, migration v49): production served it at
+  01:07 UTC on 2026-10-31 at the latest; who started that deploy is not recorded here. Over `be0fe1b` it adds PR #302
+  (the 7f-B facts, documents only, `0c30e84`, merged by the executor under the standing merge order) and PR #298.
+  **v49 directly confirmed** by the *Rukovodilac*'s read-only post-check (the 7e-B entry of the active phase).
 - **Deployed with `be0fe1b`** (the merge of PR #300), started by the *Rukovodilac* through the Render API on
   2026-10-30 (live 23:55:23 UTC), the first deploy under step 6 of the standing order for migration PRs. Over
   `e915a5b` it adds PR #297, PR #299, PR #301 (7f-B) and PR #300; no migration. See the 7f-B entry of the active phase
@@ -3340,6 +3378,8 @@ pre-existing; pass/fail counts don't belong in this file
   `--preset backend-fast` in `gpexe-client.test.mjs` and `gpexe-rest-v1-adapter-reads.test.mjs`; the latter is
   cancelled from B4.2 on before most of its tests run, so the note above that its "never answers" fakes pass on Node
   22 does not hold in this container. Its tests B7.5 and B7.8, run alone with `--test-name-pattern`, passed.
+  Reproduced again on a clean detached `0117912` on 2026-10-31 for the 7e-B runs: the same three files, with the same
+  counts as the branch's runs; B7.7, B7.7b, B7.8 and B8.2, run alone, passed.
 - `backend/tests/source-hosts-server3.test.mjs` test 12 (no credential or token in any file of the change) failed on
   `main` from PR #264 on: two full 40-hex commit ids in this file read as a REST token's shape. They are shortened in
   the facts pull request of 2026-10-30.
@@ -3976,9 +4016,9 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
    - Data configuration: PR-2 (PR #263) and the language pass (PR #261) are merged and deployed (with `00b3958`);
    - phase 7, the rest of M2: 7a (PR #269), 7b (PR #273, v43), 7c (PR #293, v47) and 7d-B (PR #295, v48) are done,
      merged and deployed, v43, v47 and v48 directly confirmed by the owner's post-checks. The contracts of 7e, 7f and 7g
-     and the owner's decisions OD1–OD7 are merged (PR #297); 7f-B (the extractor registry, PR #301) is merged and
-     deployed. Next by the plan: 7e-B (the aggregate preview, no migration), 7g-B (ending a held source instance,
-     migration v49 if none comes between), then
+     and the owner's decisions OD1–OD7 are merged (PR #297); 7f-B (the extractor registry, PR #301) and 7e-B (the
+     aggregate preview, PR #303) are merged and deployed. Next by the plan: 7g-B (ending a held source instance,
+     migration v50, since v49 is the calendar's, PR #298), then
      a minimal phase 8 (the Mappings tab) and phase 9 (the first controlled import); phases 7h and 7i come right after
      the first import, before more clubs are brought on. A mapping version is activated in production only once its
      source field's unit is confirmed (C97; the owner's read-only procedure is
