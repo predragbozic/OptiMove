@@ -363,7 +363,7 @@ test("2. the identical 404 (no-store), each case with an available, a purged and
   ok(await preview(V.time, W.cC.ok, W.pa));
 });
 
-test("3. the path and the query: a malformed id, a version not of the named mapping, an unknown candidate, and a missing, empty, repeated, nested or malformed candidateId or any other parameter are the identical 404; an upper-case candidate id is the same candidate", async () => {
+test("3. the path and the query: a malformed id, a version not of the named mapping, an unknown candidate, and a missing, empty, repeated, nested or malformed candidateId or any other parameter (one named like an Object.prototype member included) are the identical 404; an upper-case candidate id is the same candidate", async () => {
   const bad = [
     ["a malformed mapping id", api(previewPath({ mappingId: "not-a-uuid", versionId: V.time.versionId }, `candidateId=${W.cA.ok}`), { cookie: W.pa.cookie })],
     ["a malformed version id", api(previewPath({ mappingId: V.time.mappingId, versionId: "123" }, `candidateId=${W.cA.ok}`), { cookie: W.pa.cookie })],
@@ -377,6 +377,11 @@ test("3. the path and the query: a malformed id, a version not of the named mapp
     ["a nested candidateId", api(previewPath(V.time, `candidateId[x]=${W.cA.ok}`), { cookie: W.pa.cookie })],
     ["another parameter", preview(V.time, W.cA.ok, W.pa, "&x=1")],
     ["another parameter alone", api(previewPath(V.time, `id=${W.cA.ok}`), { cookie: W.pa.cookie })],
+    // Keys a query parser drops or nests (Object.prototype names, brackets) still count.
+    ["a constructor parameter", preview(V.time, W.cA.ok, W.pa, "&constructor=1")],
+    ["a toString parameter", preview(V.time, W.cA.ok, W.pa, "&toString=1")],
+    ["a __proto__ parameter", preview(V.time, W.cA.ok, W.pa, "&__proto__=1")],
+    ["an encoded bracket", api(previewPath(V.time, `candidateId%5Bx%5D=${W.cA.ok}`), { cookie: W.pa.cookie })],
   ];
   for (const [label, pending] of bad) isNotFound(await pending, label);
   for (const state of ["purged", "expired"]) {
@@ -523,56 +528,69 @@ test("7. the minimum count, a level the version does not apply to, a count of 0,
   assert.deepEqual(max.levels.session, { athletesWithValue: 3, min: "1.000000001", max: "8.1", minCanonical: "3.600000004", maxCanonical: "29.16" });
 });
 
-test("8. the size bound (R7) measures the uncompressed text: a bundle whose stored size is under 16 MiB but whose text is over it is 409 candidate_too_large, and no row the database returns carries it", async () => {
+// Every row any statement of the requests made by `fn` returns, recorded
+// (pool.query checks out with a callback: that form is passed through).
+async function recordRows(fn) {
+  const seen = [];
+  const original = appPool.connect;
+  const wrapped = [];
+  appPool.connect = function connect(...args) {
+    if (typeof args[args.length - 1] === "function") return original.apply(this, args);
+    return original.apply(this, args).then((client) => {
+      const query = client.query;
+      client.query = async function q(...qa) {
+        const result = await query.apply(this, qa);
+        for (const row of result?.rows ?? []) seen.push(row);
+        return result;
+      };
+      wrapped.push([client, query]);
+      return client;
+    });
+  };
+  try {
+    await fn();
+  } finally {
+    appPool.connect = original;
+    for (const [client, query] of wrapped) client.query = query;
+  }
+  return seen;
+}
+const textBytes = async (id) => (await one(`select octet_length(raw_bundle::text)::int as n from training_load.gpexe_import_candidates where id = $1`, [id])).n;
+// Pads a candidate's stored bundle to exactly `bytes` of text (an extra key the mapper never reads).
+async function padTo(id, bytes) {
+  const pad = (n) => k.query(`update training_load.gpexe_import_candidates set raw_bundle = raw_bundle || jsonb_build_object('pad', repeat('a', $2::int)) where id = $1`, [id, n]);
+  await pad(1000);
+  await pad(bytes - (await textBytes(id) - 1000));
+  assert.equal(await textBytes(id), bytes);
+}
+
+test("8. the size bound (R7) measures the uncompressed text and is decided once: a bundle whose stored size is under 16 MiB but whose text is over it is 409 candidate_too_large and no row the database returns carries it; exactly 16 MiB of text is previewed, one byte more is refused", async () => {
   const big = await candidate(W.tA);
   await k.query(`update training_load.gpexe_import_candidates set raw_bundle = raw_bundle || jsonb_build_object('pad', repeat('a', $2::int)) where id = $1`, [big, MAX_BYTES]);
   const premise = await one(`select octet_length(raw_bundle::text) as text_bytes, pg_column_size(raw_bundle) as stored_bytes from training_load.gpexe_import_candidates where id = $1`, [big]);
   assert.ok(premise.text_bytes > MAX_BYTES && premise.stored_bytes < MAX_BYTES, JSON.stringify(premise));
-  // Every row any statement of the request returns, recorded.
-  // (pool.query checks out with a callback: that form is passed through.)
-  const seen = [];
-  const original = appPool.connect;
-  const wrapped = [];
-  const spy = () => {
-    appPool.connect = function connect(...args) {
-      if (typeof args[args.length - 1] === "function") return original.apply(this, args);
-      return original.apply(this, args).then((client) => {
-        const query = client.query;
-        client.query = async function q(...qa) {
-          const result = await query.apply(this, qa);
-          for (const row of result?.rows ?? []) seen.push(row);
-          return result;
-        };
-        wrapped.push([client, query]);
-        return client;
-      });
-    };
-  };
-  spy();
-  try {
+  const seen = await recordRows(async () => {
     const res = await preview(V.time, big, W.pa);
     refused(res, 409, "candidate_too_large");
     assert.ok(res.text.length < 400);
-  } finally {
-    appPool.connect = original;
-    for (const [client, query] of wrapped) client.query = query;
-  }
+  });
   const withBundle = seen.filter((row) => Object.hasOwn(row, "raw_bundle"));
   assert.equal(withBundle.length, 1, "the candidate statement ran");
   assert.equal(withBundle[0].raw_bundle, null, "the bundle never left the database");
-  assert.ok(Number(withBundle[0].bundle_bytes) > MAX_BYTES);
+  assert.equal(withBundle[0].too_large, true);
+  // The boundary: exactly the bound is read and previewed; one byte more is refused.
+  const exact = await candidate(W.tA);
+  await padTo(exact, MAX_BYTES);
+  assert.equal(ok(await preview(V.time, exact, W.pa)).preview.levels.session.athletesWithValue, 3);
+  const over = await candidate(W.tA);
+  await padTo(over, MAX_BYTES + 1);
+  refused(await preview(V.time, over, W.pa), 409, "candidate_too_large");
   // Under the bound, the same statement returns it.
   const small = await candidate(W.tA);
-  seen.length = 0;
-  wrapped.length = 0;
-  spy();
-  try {
-    ok(await preview(V.time, small, W.pa));
-  } finally {
-    appPool.connect = original;
-    for (const [client, query] of wrapped) client.query = query;
-  }
-  assert.equal(typeof seen.find((row) => Object.hasOwn(row, "raw_bundle")).raw_bundle, "object");
+  const seenSmall = await recordRows(async () => { ok(await preview(V.time, small, W.pa)); });
+  const row = seenSmall.find((r) => Object.hasOwn(r, "raw_bundle"));
+  assert.equal(typeof row.raw_bundle, "object");
+  assert.equal(row.too_large, false);
 });
 
 test("9. the preview reads any stored status (no status gate): a superseded candidate is previewed; nothing is written by any preview (no candidate, check, version or audit row changes)", async () => {
@@ -592,20 +610,20 @@ test("9. the preview reads any stored status (no status gate): a superseded cand
   assert.deepEqual(await counts(), before);
 });
 
-test("10. the service decides the audience too: a context outside 7d's audience is the 404 before any read, whatever the route gate does", async () => {
+test("10. the service decides the audience too: a context outside 7d's audience is the 404 before any read, whatever the route gate does; it reads exactly one candidateId from the raw query string", async () => {
+  const one_ = `candidateId=${W.cA.ok}`;
   for (const ctx of [
     null,
     { userId: W.coachA.id, basis: "team_coach", owner: { scope: "club", clubId: W.clubA } },
     { userId: W.caA.id, basis: "club_admin", owner: { scope: "system", clubId: null } },
   ]) {
-    await assert.rejects(previews.previewVersion({ ctx, mappingId: V.time.mappingId, versionId: V.time.versionId, query: { candidateId: W.cA.ok } }), (e) => e.status === 404, JSON.stringify(ctx));
+    await assert.rejects(previews.previewVersion({ ctx, mappingId: V.time.mappingId, versionId: V.time.versionId, queryString: one_ }), (e) => e.status === 404, JSON.stringify(ctx));
   }
-  // An Express query with a repeated or nested parameter.
   const ctx = { userId: W.pa.id, basis: "platform_admin", owner: { scope: "system", clubId: null } };
-  for (const query of [{ candidateId: [W.cA.ok, W.cA.ok] }, { candidateId: { x: W.cA.ok } }, {}, null, { candidateId: W.cA.ok, y: "1" }]) {
-    await assert.rejects(previews.previewVersion({ ctx, mappingId: V.time.mappingId, versionId: V.time.versionId, query }), (e) => e.status === 404, JSON.stringify(query));
+  for (const queryString of [`${one_}&${one_}`, `candidateId[x]=${W.cA.ok}`, "", undefined, null, `${one_}&y=1`, `${one_}&constructor=1`, `${one_}&__proto__=1`, `candidateId=${W.cA.ok}x`]) {
+    await assert.rejects(previews.previewVersion({ ctx, mappingId: V.time.mappingId, versionId: V.time.versionId, queryString }), (e) => e.status === 404, JSON.stringify(queryString));
   }
-  const body = await previews.previewVersion({ ctx, mappingId: V.time.mappingId, versionId: V.time.versionId, query: { candidateId: W.cA.ok } });
+  const body = await previews.previewVersion({ ctx, mappingId: V.time.mappingId, versionId: V.time.versionId, queryString: one_ });
   assert.equal(body.preview.levels.session.athletesWithValue, 3);
 });
 
@@ -621,9 +639,55 @@ test("11. architecture: the preview service writes nothing, resolves no workspac
   // One statement decides the candidate's scope (J11 section 2.5).
   assert.equal((service.match(/from training_load\.gpexe_import_candidates/g) || []).length, 1);
   assert.match(service, /with scoped as materialized \(/);
+  // The two fences: the scope before anything is measured, the size evaluated once.
+  assert.equal((service.match(/ offset 0\) (sz|b)\b/g) || []).length, 2);
+  // The route hands the service the raw query string, never Express's parsed req.query.
   const routes = fs.readFileSync(path.join(SRC, "routes/sourceMetrics.js"), "utf8");
   assert.match(routes, /router\.get\("\/mappings\/:mappingId\/versions\/:versionId\/preview"/);
   assert.match(routes, /import \* as previews from "\.\.\/sourceMetricPreviewService\.js";/);
+  const route = routes.slice(routes.indexOf('router.get("/mappings/:mappingId/versions/:versionId/preview"'));
+  const body = route.slice(0, route.indexOf("\n}));"));
+  assert.match(body, /previewVersion\(\{ ctx, mappingId: req\.params\.mappingId, versionId: req\.params\.versionId, queryString \}\)/);
+  assert.doesNotMatch(body, /req\.query/);
+});
+
+test("13. a refusal of the family or of the registry is answered without reading the bundle out of the database", async () => {
+  // The family: a legacy_env candidate and an e03 (api) candidate.
+  for (const c of [W.cL, W.cE]) {
+    const seenFamily = await recordRows(async () => { refused(await preview(V.time, c, W.pa), 409, "candidate_source_mismatch"); });
+    const row = seenFamily.find((r) => Object.hasOwn(r, "raw_bundle"));
+    assert.equal(row.raw_bundle, null, "the bundle never left the database");
+  }
+  // The registry: decided from the version row alone.
+  const f = await synthetic();
+  setExtractorFallbackForTests(() => SYNTHETIC);
+  let v;
+  try { v = await version(f, { unit: "s" }); } finally { setExtractorFallbackForTests(null); }
+  const seen = await recordRows(async () => { refused(await preview(v, W.cA.ok, W.pa), 409, "source_metric_unsupported"); });
+  const rows = seen.filter((row) => Object.hasOwn(row, "raw_bundle"));
+  assert.equal(rows.length, 1, "the candidate statement ran");
+  assert.equal(rows[0].raw_bundle, null, "the bundle never left the database");
+  assert.equal(rows[0].too_large, false);
+  // The same candidate with a version the registry reads: the bundle is read.
+  const seenOk = await recordRows(async () => { ok(await preview(V.time, W.cA.ok, W.pa)); });
+  assert.equal(typeof seenOk.find((row) => Object.hasOwn(row, "raw_bundle")).raw_bundle, "object");
+});
+
+test("14. R6: the candidate's scope is its team's current club, not the club of the connection it was read through: a team moved to club B (its binding ended first) takes its candidates to club B's admin, and club A's admin gets the identical 404 before snapshot_expired", async () => {
+  const tM = await gpexeTeam(W.clubA);
+  const cM = await candidates(tM);
+  ok(await preview(V.time, cM.ok, W.caA));
+  isNotFound(await preview(V.time, cM.ok, W.caB), "club B before the move");
+  await k.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'Test unbind.' where id = $1`, [tM.bindingId, W.pa.id]);
+  await k.query(`update public.teams set club_id = $2 where id = $1`, [tM.teamId, W.clubB]);
+  for (const state of ["ok", "purged", "expired"]) isNotFound(await preview(V.time, cM[state], W.caA), `club A after the move (${state})`);
+  assert.equal(ok(await preview(V.time, cM.ok, W.caB)).preview.levels.session.athletesWithValue, 3);
+  assert.deepEqual(refused(await preview(V.time, cM.purged, W.caB), 409, "snapshot_expired").current, { reason: "purged" });
+  assert.deepEqual(refused(await preview(V.time, cM.expired, W.caB), 409, "snapshot_expired").current, { reason: "expired" });
+  ok(await preview(V.time, cM.ok, W.pa));
+  // The club mapping follows the workspace, not the team: club B's admin over club B's mapping.
+  ok(await preview(V.clubB, cM.ok, W.caB));
+  isNotFound(await preview(V.clubA, cM.ok, W.caB), "club A's mapping in club B's workspace");
 });
 
 test("12. no preview answer and no log line of this suite carries an athlete, track or session id, a raw key of the bundle, a stack or a database text; no answer at all carries an id of the bundle", () => {

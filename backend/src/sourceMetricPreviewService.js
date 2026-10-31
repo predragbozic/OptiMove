@@ -42,20 +42,22 @@ const PREVIEW_MESSAGES = {
   candidate_not_importable: "The import would not take this GPEXE session.",
 };
 
-// J11 section 2.2-2.3: the path ids and the one query parameter. Anything
-// else - a missing, repeated (an array) or nested candidateId, another
-// parameter, a malformed id - is the identical 404.
-function previewInput(mappingId, versionId, query) {
+// J11 section 2.2-2.3: the path ids and the one query parameter, read from
+// the raw query string (never Express's parsed req.query, which drops a key
+// named like an Object.prototype member and nests brackets). Anything else -
+// a missing, empty, repeated or bracketed candidateId, any other parameter,
+// a malformed id - is the identical 404.
+function previewInput(mappingId, versionId, queryString) {
   if (typeof mappingId !== "string" || !UUID.test(mappingId) || typeof versionId !== "string" || !UUID.test(versionId)) throw NOT_FOUND();
-  const q = query ?? {};
-  const keys = Object.keys(q);
-  if (keys.length !== 1 || keys[0] !== "candidateId" || typeof q.candidateId !== "string" || !UUID.test(q.candidateId)) throw NOT_FOUND();
-  return { mId: mappingId.toLowerCase(), vId: versionId.toLowerCase(), cId: q.candidateId.toLowerCase() };
+  if (typeof queryString !== "string") throw NOT_FOUND();
+  const entries = [...new URLSearchParams(queryString)];
+  if (entries.length !== 1 || entries[0][0] !== "candidateId" || !UUID.test(entries[0][1])) throw NOT_FOUND();
+  return { mId: mappingId.toLowerCase(), vId: versionId.toLowerCase(), cId: entries[0][1].toLowerCase() };
 }
 
-export async function previewVersion({ ctx, mappingId, versionId, query }) {
+export async function previewVersion({ ctx, mappingId, versionId, queryString }) {
   if (!mayManageActivations(ctx)) throw NOT_FOUND();
-  const { mId, vId, cId } = previewInput(mappingId, versionId, query);
+  const { mId, vId, cId } = previewInput(mappingId, versionId, queryString);
   // One REPEATABLE READ READ ONLY transaction: the version, the candidate's
   // scope, its snapshot state and its bundle are one snapshot. The candidate
   // row is read without a lock.
@@ -74,49 +76,58 @@ export async function previewVersion({ ctx, mappingId, versionId, query }) {
       [vId, mId, readableOwnerKeys(ctx)],
     )).rows[0];
     if (!version) throw NOT_FOUND();
+    // Phase 7f's registry (J12 section 3), decided from the version row alone
+    // (pure: no lock, no read): its refusal is answered in the order of J11
+    // section 2, but the bundle is read only for a version that may read it.
+    const registryCode = extractabilityCode({
+      sourceSystem: version.source_system, apiFamily: version.api_family, sourceMetricKey: version.source_metric_key,
+      valueShape: version.value_shape, parameterKind: version.parameter_kind, sourceParameters: version.source_parameters,
+    });
+    const mayRead = version.source_system === GPEXE_SOURCE_SYSTEM && registryCode === null;
     // The candidate inside the scope, in one statement (R1, R6): its team and
     // the team's club active; the platform workspace any club's candidate,
     // club X's workspace club X's only. A missing candidate, a missing,
     // archived or club-less team, an archived club and another club's
-    // candidate are all zero rows. The bundle leaves the database only when
-    // the snapshot is stored, not expired, within the size bound and of the
-    // version's family.
+    // candidate are all zero rows. Two fences keep the cost where it belongs:
+    // the MATERIALIZED CTE applies the scope before anything of the row is
+    // measured (so an out-of-scope candidate is never serialized), and
+    // OFFSET 0 evaluates the size once. The size is measured only for a
+    // stored, unexpired snapshot and decided once (too_large); the bundle
+    // leaves the database only when the snapshot is stored, not expired,
+    // within the bound, of the version's family and the version may read it.
     const candidate = (await client.query(
       `with scoped as materialized (
-         select c.id, c.owner_team_id, c.last_seen_check_id, c.raw_purged_at, c.raw_expires_at, c.raw_bundle
+         select c.id, c.owner_team_id, c.last_seen_check_id, c.raw_purged_at is not null as purged,
+                c.raw_expires_at <= now() as expired, c.raw_bundle
            from training_load.gpexe_import_candidates c
            join public.teams t on t.id = c.owner_team_id and coalesce(t.is_active, true)
            join public.clubs cl on cl.id = t.club_id and coalesce(cl.is_active, true)
           where c.id = $1::uuid
             and (($2::text = 'system' and $3::uuid is null) or ($2::text = 'club' and t.club_id = $3::uuid)))
-       select s.id, (s.raw_purged_at is not null) as purged, (s.raw_expires_at <= now()) as expired, sz.bundle_bytes,
-              k.source_path, h.api_family,
-              case when s.raw_purged_at is null and s.raw_expires_at > now() and sz.bundle_bytes <= $4::int
-                    and k.source_path = $7::text and h.api_family = $6::text then s.raw_bundle end as raw_bundle
+       select s.id, s.purged, s.expired, b.too_large, k.source_path, h.api_family,
+              case when b.too_large is false and k.source_path = $7::text and h.api_family = $6::text and $8::boolean
+                   then s.raw_bundle end as raw_bundle
          from scoped s
-         cross join lateral (select octet_length(s.raw_bundle::text) as bundle_bytes offset 0) sz
+         cross join lateral (select case when s.purged or s.expired then null else octet_length(s.raw_bundle::text) end as bundle_bytes offset 0) sz
+         cross join lateral (select sz.bundle_bytes > $4::int as too_large offset 0) b
          left join training_load.gpexe_import_checks k on k.id = s.last_seen_check_id and k.owner_team_id = s.owner_team_id
          left join training_load.source_host_catalog h on h.source_system = $5::text and h.host_key = k.source_host_key`,
-      [cId, ctx.owner.scope, ctx.owner.scope === "club" ? ctx.owner.clubId : null, PREVIEW_MAX_BUNDLE_BYTES, version.source_system, version.api_family, SOURCE_CONNECTION_PATH],
+      [cId, ctx.owner.scope, ctx.owner.scope === "club" ? ctx.owner.clubId : null, PREVIEW_MAX_BUNDLE_BYTES, GPEXE_SOURCE_SYSTEM, version.api_family, SOURCE_CONNECTION_PATH, mayRead],
     )).rows[0];
     if (!candidate) throw NOT_FOUND();
     // A caller who got here may see the candidate: its snapshot's state hides
     // nothing (R2: purged, or past raw_expires_at as the application treats it).
     if (candidate.purged) throw refusal(409, "snapshot_expired", PREVIEW_MESSAGES.snapshot_expired, { current: { reason: "purged" } });
     if (candidate.expired) throw refusal(409, "snapshot_expired", PREVIEW_MESSAGES.snapshot_expired, { current: { reason: "expired" } });
-    if (Number(candidate.bundle_bytes) > PREVIEW_MAX_BUNDLE_BYTES) throw refusal(409, "candidate_too_large", PREVIEW_MESSAGES.candidate_too_large);
+    if (candidate.too_large === true) throw refusal(409, "candidate_too_large", PREVIEW_MESSAGES.candidate_too_large);
     // R5: the candidate's family is its last check's path and host.
     if (version.source_system !== GPEXE_SOURCE_SYSTEM || candidate.source_path !== SOURCE_CONNECTION_PATH || candidate.api_family !== version.api_family) {
       throw refusal(409, "candidate_source_mismatch", PREVIEW_MESSAGES.candidate_source_mismatch);
     }
+    if (registryCode) throw refusal(409, registryCode, MESSAGES[registryCode]);
     return { v: version, bundle: candidate.raw_bundle };
   });
-  // After the transaction: the registry (7f, J12 section 3), then the values.
-  const code = extractabilityCode({
-    sourceSystem: v.source_system, apiFamily: v.api_family, sourceMetricKey: v.source_metric_key,
-    valueShape: v.value_shape, parameterKind: v.parameter_kind, sourceParameters: v.source_parameters,
-  });
-  if (code) throw refusal(409, code, MESSAGES[code]);
+  // After the transaction: the values.
   // Fail closed: every check above lets the bundle through or refuses.
   if (bundle === null || typeof bundle !== "object") throw new Error("preview bundle missing");
   const entry = extractorFor({ sourceSystem: v.source_system, apiFamily: v.api_family, sourceMetricKey: v.source_metric_key });

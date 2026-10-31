@@ -224,7 +224,10 @@ router.get("/mappings/:mappingId/versions/:versionId/preview", handle(async (req
   const ctx = await adminContext(req, res);
   if (!ctx) return;
   if (!previews.mayManageActivations(ctx)) return notFound(res);
-  res.json(await previews.previewVersion({ ctx, mappingId: req.params.mappingId, versionId: req.params.versionId, query: req.query }));
+  // The raw query string: the service reads exactly one candidateId from it.
+  const at = req.originalUrl.indexOf("?");
+  const queryString = at === -1 ? "" : req.originalUrl.slice(at + 1);
+  res.json(await previews.previewVersion({ ctx, mappingId: req.params.mappingId, versionId: req.params.versionId, queryString }));
 }));
 
 // Phase 7b (J8): A1 activates a submitted version (and, naming the active
