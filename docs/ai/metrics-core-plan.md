@@ -985,9 +985,26 @@ order covers is merged under it; a migration PR that the standing order for migr
     `/api/auth/me` answered `{"user":null}`; without a login `GET /fields`, `GET /fields/<zero UUID>`,
     `POST /mappings/<zero UUID>/versions` (with `{}`), `GET /activations`, `GET /mappings` and the GPEXE team status
     answered 401.
+- **7e-B, Done, 2026-10-31.**
+  - PR #303 (branch `feature/7e-aggregate-preview`, base `0117912`): the aggregate preview of a mapping version over
+    one saved GPEXE candidate (`backend/src/sourceMetricPreviewService.js`, `backend/src/sourceMetricPreview.js`, the
+    mapper's `gpexeLevelValues`, the route); no migration, nothing written. J11 section 12 ("As built") records it.
+  - Reviews: the internal reviews and a narrow re-review of their notes, then GO on `ee873f53` from the *Nezavisni
+    revizor* (its turn `88e691e3`, 01:36:16 UTC) and the *Rukovodilac* (its turn `3bf1249e`, 01:38:21 UTC).
+  - Merge gate: PR #298 (the calendar's events, another track) had merged migration v49; the merge waited for v49's
+    read-only post-check, which the *Rukovodilac* ran on the owner's word (owner turn `92025482`) before its merge
+    order (its turn `8ced4dea`, 01:42:04 UTC).
+  - Merge by the executor under the standing merge order: `e6ca433` (parents `0117912` and `ee873f53`, 01:42:32 UTC),
+    exactly from `ee873f53`.
+  - Deploy: by the *Rukovodilac* through the Render API (step 6), started at 01:43:09 UTC and live at 01:43:55 UTC; no
+    migration path differs between the served `0117912` and `e6ca433`. The *Rukovodilac*'s smoke, 01:44:01 – 01:44:22
+    UTC: `/api/health` answered `ok: true` on `e6ca433` three times in a row; `/api/auth/me` answered
+    `{"user":null}`; without a login the preview route (with and without `?candidateId=<zero UUID>`), `GET /fields`,
+    `GET /activations?bindingId=<zero UUID>` and the GPEXE team status answered 401.
 - **7d-C** (D3's prepared replacement in L4, R1 of J10) is not built; it is part of 7d (J10, R1) and has no place in
   the order yet.
-- **Next, by J12's R1 (below): 7e-B, then 7g-B** (its migration written now that v48 is merged and deployed).
+- **Next, by J12's R1 (below): 7g-B** (its migration written now that v48 is merged and deployed; it is **v50**,
+  because v49 is the calendar's, PR #298; J13 named v49 "if none comes between").
 - **Input (red zone):** the owner's decisions from section K of the discovery document:
   - the minimum number of athletes for min / max;
   - system or club zone mappings;
@@ -1052,6 +1069,9 @@ order covers is merged under it; a migration PR that the standing order for migr
     - `ux-design-reviewer` gets the owner's sentence as an acceptance criterion;
     - the API stays as it is, and a mapping still needs a confirmed unit: the simplicity is in the guidance, never in
       fewer checks.
+- **From 7e-B's external review** (the *Rukovodilac*, its turn `3bf1249e`, 2026-10-31): the aggregate preview (J11)
+  also shows a candidate whose `drill_parameter_effect` is `not_observed`, which cannot be approved for import; this
+  phase's screen must mark such a candidate as not for import wherever it shows the preview.
 
 ### Phase 9 ★★: M4, the importer integration
 - Triggers 1, 3 and 4; the five-point rule for transactions; the import switch stays off.

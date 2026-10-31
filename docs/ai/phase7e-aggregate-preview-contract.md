@@ -15,7 +15,7 @@ after 7f-B** (it reads values only through 7f's registry; J12, R1).
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 11); accepted with PR #297. **Built by 7e-B** in an open pull request (section 12, "As built"). |
+| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 11); accepted with PR #297. **Built by 7e-B** (section 12, "As built"): PR #303, merged as `e6ca433` and deployed on 2026-10-31. |
 | Verified against commit | `6a94ce29` (merge of PR #294). Every file and line reference below is to that commit unless it names another. |
 | Migration | **None.** A read over existing rows; no table, column, trigger or audit row. |
 | **Owner decisions** | **OD2** (the preview's fields, section 3), **OD3** (the minimum count of athletes, section 4) and **OD4** (a system mapping carrying zone or threshold bounds, section 6): **decided on 2026-10-30 as recommended** — section 0.1, with the owner's words. |
@@ -295,7 +295,8 @@ GPEXE answer, a preview of several candidates at once.
 
 ## 12. As built (7e-B)
 
-**Base** `0117912` (merge of PR #298, the calendar's events and migration v49; no Metrics Core file). The sections above were verified against `6a94ce29`; their references into
+PR #303, merged as `e6ca433` (2026-10-31 01:42:32 UTC) exactly from `ee873f53` and deployed the same night (live
+01:43:55 UTC). **Base** `0117912` (merge of PR #298, the calendar's events and migration v49; no Metrics Core file). The sections above were verified against `6a94ce29`; their references into
 code moved since: `boundedRead` is `backend/src/sourceMetricMappingService.js:168-199`; `mayManageActivations` is
 `backend/src/sourceMetricAccess.js:46-49` and `readableOwnerKeys` `:109` (7a's module, not `:55-76`); `getMapping` is
 `sourceMetricMappingService.js:720-746`. **No migration, no write, no importer change.**
@@ -427,3 +428,22 @@ Recorded without code: the scope in SQL only (item 9) and the size limit (item 1
 without a club role has no club workspace (`workspace.js` lists a club workspace only for an active `club_admin`
 role), so the suite's platform admin in club A's workspace holds that role and still resolves with the
 `platform_admin` basis.
+
+**After the external round** (GO on `ee873f53` from the *Nezavisni revizor*, its turn `88e691e3`, and the
+*Rukovodilac*, its turn `3bf1249e`, 2026-10-31; no BLOCKER, HIGH or MEDIUM; no new head):
+- **The *Rukovodilac*'s answers to the open questions:** (a) no status gate, accepted (the snapshot is the only
+  condition); (b) a candidate whose `drill_parameter_effect` is `not_observed` is previewed, accepted, with an
+  obligation on phase 8: its screen marks such a candidate as not for import (recorded in the plan, phase 8); (c) a
+  count of 0 against `candidate_not_importable`, accepted (the same as the import); (d) the wider list of the mapper's
+  refusals, accepted as documented in item 5.
+- **The *Rukovodilac*'s optional LOW** (a test that would kill its mutation removing the JavaScript `source_path`
+  check): that mutation is equivalent by the schema. v31's `gpexe_import_checks_source_path_facts`
+  (`migrations_v2/202610041200_training_load_v31_gpexe_import_checks_source_path.sql:81-89`) gives a `legacy_env`
+  check no `source_host_key`, so no catalog row joins and `api_family` is NULL; the family check refuses it anyway, and
+  no row with another path but the same family can exist.
+- **The *Nezavisni revizor*'s optional LOW-1:** no test pinned that the candidate's last check must be of its own team
+  (its mutation dropping `k.owner_team_id = s.owner_team_id` survived; v22 ties the two by a plain foreign key only).
+  The executor wrote the test (a candidate whose last check is another team's: `409 candidate_source_mismatch`, the
+  bundle left in the database), as a case of the route suite's test 13, and saw that mutation fail it; it was not
+  committed, since both GOs were on `ee873f53`, and it goes with the next pull request that touches the preview
+  (`CURRENT_STATE.md`, "Separate tasks").
