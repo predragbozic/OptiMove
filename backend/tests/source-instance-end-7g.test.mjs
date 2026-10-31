@@ -446,13 +446,13 @@ async function world() {
 // ---------------------------------------------------------------------------
 // The rehearsal database (through v49).
 // ---------------------------------------------------------------------------
-test("1. on v49: every expected value of the read-only preflight (block 4 counts a source_instance_end row and a keyed inactive connection and is then not safe to merge); the rollback refuses without v50", async () => {
+test("1. on v49: every expected value of the read-only preflight (block 4 counts a source_instance_end row and a keyed inactive connection and is then not safe to merge, and counts a series pinned to an inactive connection); the rollback refuses without v50", async () => {
   const pre = await blocks(r, PREFLIGHT);
   assert.deepEqual(Object.keys(pre).map(Number), [1, 2, 3, 4, 5, 6, 7, 8]);
   assert.equal(pre[1][0].pg15_or_later, true);
   assert.deepEqual(pre[2][0], { v48_rows: "1", v48_checksum_ok: true, v49_rows: "1", v49_checksum_ok: true, v50_rows: "0", at_or_after_v50: "0", last_migration: V49_NAME });
   assert.deepEqual(pre[3][0], { revision_guard_is_v48: true, row_ok_is_v48: true, actor_guard_is_v48: true, dashboard_gate_is_v16: true });
-  assert.deepEqual(pre[4][0], { instance_end_rows: "0", inactive_keyed: "0", keyed_connections: "0", safe_to_merge: true });
+  assert.deepEqual(pre[4][0], { instance_end_rows: "0", inactive_keyed: "0", keyed_connections: "0", safe_to_merge: true, series_on_inactive: "0" });
   assert.deepEqual(pre[5][0], { v50_functions: "0", v50_triggers: "0", v50_index: "0" });
   assert.deepEqual(pre[6][0], { schema_create: true, owns_connections: true, owns_audit: true, disabled_triggers: "0" });
   assert.deepEqual(pre[7][0], { actor_defaults: "0" });
@@ -465,11 +465,16 @@ test("1. on v49: every expected value of the read-only preflight (block 4 counts
     await r.query(`insert into training_load.metric_source_connections (id, source_system, owner_scope, owner_team_id, source_host_key, source_instance_key, state)
                    values ($1,'gpexe','team',$1,'server3','1','inactive')`, [id]);
     const planted = await blocks(r, PREFLIGHT);
-    assert.deepEqual(planted[4][0], { instance_end_rows: "0", inactive_keyed: "1", keyed_connections: "1", safe_to_merge: false });
+    assert.deepEqual(planted[4][0], { instance_end_rows: "0", inactive_keyed: "1", keyed_connections: "1", safe_to_merge: false, series_on_inactive: "0" });
     await r.query(`update training_load.metric_source_connections set state = 'active' where id = $1`, [id]);
     await r.query(`insert into training_load.source_metric_audit (action, metric_source_connection_id, from_status, to_status, reason, performed_by_user_id, basis, operation_id)
                    values ('source_instance_end',$1,'active','inactive','x',$1,'platform_admin',$1)`, [id]);
-    assert.deepEqual((await blocks(r, PREFLIGHT))[4][0], { instance_end_rows: "1", inactive_keyed: "0", keyed_connections: "1", safe_to_merge: false });
+    assert.deepEqual((await blocks(r, PREFLIGHT))[4][0], { instance_end_rows: "1", inactive_keyed: "0", keyed_connections: "1", safe_to_merge: false, series_on_inactive: "0" });
+    // A series pinned to an inactive connection is counted (planted with triggers and foreign keys off).
+    await r.query(`update training_load.metric_source_connections set state = 'inactive' where id = $1`, [id]);
+    await r.query(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, resolution_status, source_policy, source_connection_id)
+                   values ($1, 1, $1, 'resolved', 'source_connection', $1)`, [id]);
+    assert.equal((await blocks(r, PREFLIGHT))[4][0].series_on_inactive, "1");
   } finally {
     await r.query("rollback");
   }
@@ -493,7 +498,7 @@ test("2. v50 refuses, changing nothing, when the body in force of the T8 revisio
   }
 });
 
-test("3. v50 through the runner on v49: a FOR SHARE reader of the connections never blocks it; an open INSERT makes it wait, and it then applies with no deadlock; it adds exactly its two functions, two triggers and one index and replaces only the revision guard's body (v48's plus the new branch); every expected value of the post-check", async () => {
+test("3. v50 through the runner on v49: a FOR SHARE reader of the connections never blocks it; an open INSERT makes it wait, and it then applies with no deadlock; it adds exactly its two functions, two triggers and one index and replaces only two bodies (v48's revision guard plus the new branch, v16's dashboard gate plus its early return); every expected value of the post-check", async () => {
   const reader = await client(rdb.url);
   const writer = await client(rdb.url);
   let applying;
@@ -977,10 +982,15 @@ test("11. concurrency: the owner team's import lock held by a bind, an Unbind or
   const ending = endIt(W.pa, s1);
   await until(() => state.entered, "the end holds its locks");
   // Were S1 to wait on any of the end's locks, it could not answer before the gate opens.
-  const s1Answer = await Promise.race([startS1(v, s1.bindingId, W.pa2), new Promise((res) => setTimeout(() => res(null), 10_000))]);
-  assert.ok(s1Answer, "S1 answered while the end still held its locks");
-  refused(s1Answer, 409, "binding_not_active");
-  g.open();
+  let timer;
+  try {
+    const s1Answer = await Promise.race([startS1(v, s1.bindingId, W.pa2), new Promise((res) => { timer = setTimeout(() => res(null), 10_000); })]);
+    assert.ok(s1Answer, "S1 answered while the end still held its locks");
+    refused(s1Answer, 409, "binding_not_active");
+  } finally {
+    clearTimeout(timer);
+    g.open();
+  }
   assert.equal(ok(await ending).instance.state, "inactive");
   // A real S1 on the active binding, then an Unbind (C58): the open activation keeps the instance in use until S2 ends it.
   const used = await instance({ binding: "active" });
@@ -1126,7 +1136,7 @@ test("14. a dashboard series pinned to an instance stays editable after the end 
   assert.equal((await one(k, `select source_connection_id from training_load.dashboard_widget_series where id = $1`, [unpinned.series_id])).source_connection_id, null);
 });
 
-test("15. no answer carries a reason, an acting user, a credential part, an account label or a database text, and no log line a reason or a database text", async () => {
+test("15. no answer carries a reason, an acting user, a credential part, an account label or a database text, and no log line a reason, an acting user, a credential part or a database text", async () => {
   // One more answer of each kind for the scan.
   const inst = await instance();
   ok(await endIt(W.pa, inst));
@@ -1150,8 +1160,9 @@ test("15. no answer carries a reason, an acting user, a credential part, an acco
     }
     assert.ok(!/"reason"|"label"/.test(text), "no reason or label field");
   }
+  const userIds = [W.pa.id, W.pa2.id, W.paA.id, W.caA.id, W.coachA.id, W.plain.id];
   for (const line of logLines) {
-    for (const value of [...sentReasons, ...secrets, "metric_source_connections:", "metric source connection:", "source_metric_audit:", "source instance:"]) {
+    for (const value of [...sentReasons, ...secrets, ...userIds, "metric_source_connections:", "metric source connection:", "source_metric_audit:", "source instance:"]) {
       assert.ok(!line.includes(value), `a log line carries ${value.slice(0, 40)}`);
     }
   }

@@ -63,13 +63,19 @@ select
 --    once one does). No code writes the T7 keys before M4, so keyed_connections
 --    is expected to be 0 as well.
 --    Expected: instance_end_rows = 0, inactive_keyed = 0, keyed_connections = 0,
---    safe_to_merge = true.
+--    safe_to_merge = true. Informational, expected 0 (no code sets a
+--    connection inactive): series_on_inactive, the dashboard series already
+--    pinned to an inactive connection - the only rows v50's early return in
+--    v16's dashboard gate changes anything for on the day of the deploy.
 select
   (select count(*) from training_load.source_metric_audit where action = 'source_instance_end') as instance_end_rows,
   (select count(*) from training_load.metric_source_connections where source_host_key is not null and state = 'inactive') as inactive_keyed,
   (select count(*) from training_load.metric_source_connections where source_host_key is not null) as keyed_connections,
   (select count(*) from training_load.source_metric_audit where action = 'source_instance_end') = 0
-    and (select count(*) from training_load.metric_source_connections where source_host_key is not null and state = 'inactive') = 0 as safe_to_merge;
+    and (select count(*) from training_load.metric_source_connections where source_host_key is not null and state = 'inactive') = 0 as safe_to_merge,
+  (select count(*) from training_load.dashboard_widget_series s
+     join training_load.metric_source_connections c on c.id = s.source_connection_id
+    where c.state = 'inactive') as series_on_inactive;
 
 -- 5. No v50 object exists yet (no name collision).
 --    Expected: v50_functions = 0, v50_triggers = 0, v50_index = 0.

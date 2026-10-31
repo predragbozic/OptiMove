@@ -59,7 +59,8 @@ Supabase connector tool and never touches the production database.
    - block 3 shows v48's revision guard, `source_metric_audit_row_ok` and `source_metric_audit_actor_guard` and v16's
      dashboard gate in force;
    - **block 4 is a hard assertion: `safe_to_merge = true` (no `source_instance_end` row and no keyed inactive
-     connection).** Anything else: stop, do not merge, report. `keyed_connections` is expected to be 0 before M4;
+     connection).** Anything else: stop, do not merge, report. `keyed_connections` is expected to be 0 before M4, and
+     `series_on_inactive` (informational) 0;
    - block 5 shows no v50 object;
    - block 6 shows the migrator's role may create the objects and owns both tables, and every trigger of both tables
      enabled;

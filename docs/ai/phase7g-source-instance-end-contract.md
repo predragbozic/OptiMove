@@ -386,9 +386,12 @@ touches no Metrics Core function or table (it only calls `training_load.source_m
    `404` (before the query or the body) → `415` → a non-object body `400` → a malformed id `404` → the body's shape
    `400` → inside the write: `request_key_reused` or the replay → a missing connection `404` → the 409s. `try_again` can
    come before every 409 (the owner team's try-lock is step 2, and a row lock not granted in its bound is answered
-   where it happens), and before the `404` of a right lost during the request.
+   where it happens), and before the `404` of a right lost during the request. Its other causes: the owner changed
+   between the plain read and the lock, a keyless connection became an instance before the re-read (item 13), and a
+   request record taken by a concurrent request with the same key (`source_metric_audit_one_request_per_operation`).
 10. **The 200's keys** are `{ instance, replayed }`, plus `commitConfirmation: "verified_after_commit_error"` after a
-    verified COMMIT (section 3.2 names only `instance`).
+    verified COMMIT (section 3.2 names only `instance`); a committed end whose answer could not be read (the write kit's
+    `answerAfterCommit`) is `200 { readError: true, connectionId, replayed: false }`.
 11. **The bindings and the host** (section 4 step 3): a binding has no host column; the host is
     `source_credential_connections.host_key` through `connection_id`. The service locks `for share of b` (never
     stronger, R5) the owner team's bindings of that source system and source team, in ascending id, and the host decides
@@ -420,7 +423,9 @@ touches no Metrics Core function or table (it only calls `training_load.source_m
     a dashboard with such a series (`409 sourceConnectionResolutionRequired`, `trainingLoadDashboardCatalog.js`,
     unchanged). Only the trigger's body changes: no new write path to the dashboard tables (ADR-003), and v16's
     analogous metric gate is untouched. Found by the internal `db-reviewer` round; built on the *Rukovodilac*'s decision
-    (option (a), 2026-10-31); no effect in production before M4 (no instance can be ended).
+    (option (a), 2026-10-31). On the day of the deploy it changes something only for a series already pinned to an
+    inactive connection, which no code creates (the preflight's block 4 counts them, `series_on_inactive`, expected 0);
+    before M4 no instance can be ended.
 
 **Tests** (`backend/tests/source-instance-end-7g.test.mjs`, two disposable databases): on v49 the preflight's every
 block, its stop values planted and rolled back, and the rollback's refusal without v50; the `DO` assertion refusing a
@@ -445,11 +450,32 @@ new binding and a re-binding to the ended connection refused; a scan of every an
 `held`, the list's filters, query and cursor, `expected`'s formats) and of every v50 guard branch (final, OLD's keys, an owner or source-system
 change, the actor, the team lock, the binding and activation checks with their host, the `WHEN` clause, the deferred
 link, the T8 branch's transaction, state, evidence, team and once checks, the dashboard gate's early return and its
-condition) are killed by the suite. The one survivor, the T8
+condition), and a write kit that logs the acting user on a lost COMMIT, are killed by the suite. The one survivor, the T8
 branch's own actor check, is equivalent by construction: v35's trigger `source_metric_audit_v35_actor_guard` (v48's
 body) runs before the revision guard's and refuses every row that check would (another user than the acting one, an
 actor who is not an active platform admin, a basis other than `platform_admin`). Every source restored byte for byte
 (sha256 checked).
 
-**Review record.** Pending: the internal round (`code-reviewer`, `db-reviewer`, `security-reviewer`) on the frozen head,
-then the ★★ external round.
+**Review record.**
+- **Internal round on `95ddb919`:** `db-reviewer` and `security-reviewer` READY WITH NON-BLOCKING NOTES; `code-reviewer`
+  answered `BLOCKED: incomplete review packet` (its packet was a file reference, not in the message; re-run below).
+  Applied in `48659915`:
+  - db MEDIUM: a series pinned to an ended instance became uneditable (item 17; built as option (a) on the
+    *Rukovodilac*'s decision);
+  - db LOW: `source_system` pinned in the ending UPDATE (item 4);
+  - db NITs: the deferred link's comment, and deterministic checks in place of two timing ones in the concurrency test;
+  - security MEDIUM: tests of a right lost on a keyless connection, during the end and after its COMMIT, with
+    mutations of both re-checks;
+  - security LOW: `try_again` before the right's re-check, accepted as documented (item 9).
+- **Round 2 on `48659915`:** `code-reviewer` (full diff, packet in the message) READY WITH NON-BLOCKING NOTES; the
+  narrow re-reviews of the delta by `db-reviewer` and `security-reviewer` READY WITH NON-BLOCKING NOTES, every
+  first-round finding closed. Applied in the next head, all to tests and documents except one informational preflight
+  column:
+  - code LOW: the log scan also refuses the acting users' ids (proved by a mutation that logs one);
+  - code NIT: J1 row 11 and items 9 and 10 list every cause of `try_again` and the `readError` answer;
+  - db NITs: test 3's title, the `.gitattributes` comment, the concurrency test's timer and gate in a `finally`;
+  - security NIT: item 17's wording, now backed by preflight block 4's informational `series_on_inactive`.
+
+  Not applied: db's optional preflight check of the gate function's owner (the migrator's role created it in v16, and
+  a failure rolls v50 back whole).
+- **External round (★★):** pending.
