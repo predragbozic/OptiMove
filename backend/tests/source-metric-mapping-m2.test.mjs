@@ -11,6 +11,9 @@ import pg from "pg";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-disposable-db.mjs";
 import { activateRevisionRow, retireRevisionRow, verifyRevisionRow, writeRevision, zoneMeaningAsFutureDecision } from "./support/source-revisions.mjs";
 import { createConversion, retireConversion as retireConversionRow, retireConversionHeld, retireConversionStatements } from "./support/unit-conversions.mjs";
+import { allowSyntheticTestFields } from "./support/test-extractors.mjs";
+
+allowSyntheticTestFields();
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
