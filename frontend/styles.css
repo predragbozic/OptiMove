@@ -20986,3 +20986,522 @@ body.exercise-header-pinned #viewToolbar {
   font-size: 12px;
   font-style: italic;
 }
+
+/* ============================================================
+   Central calendar (K2a-2) - docs/ai/central-calendar-k2a-2-plan.md.
+   Events in the screen: the collapsible Filters panel, the smaller chips
+   (13 px, the owner's note), the type icons, the team pill, the Planned
+   pill, the strip's team dots, the per-team row and "No time" of the
+   selected day, the event's panel and its form (create, edit, cancel).
+   ============================================================ */
+.central-calendar {
+  --cc-planned: #3b5bab;
+  --cc-planned-soft: #e7edfa;
+}
+
+/* The chips: the panel's own 13 px (the team pills' size), 11 px counts.
+   44 px tall on a phone, a tablet and a touch screen; 36 px on a pointer
+   screen of 1024 px and up (the compact month cards' rule). */
+.cc-chip {
+  gap: 6px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.cc-chip-count {
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.cc-chip-row-label {
+  min-width: 64px;
+  font-size: 11px;
+}
+
+.cc-chip-icon {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.cc-chip.is-active .cc-chip-icon {
+  color: inherit;
+}
+
+@media (min-width: 1024px) and (pointer: fine) {
+  .cc-chip {
+    min-height: 36px;
+  }
+}
+
+/* The Filters panel: one bar (the toggle and Clear filters), the chips
+   under it while it is open. */
+.cc-filters-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.cc-filters-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cc-filters-toggle:hover {
+  border-color: var(--line-strong);
+}
+
+.cc-filters-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cc-filters-icon {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.cc-filters-word {
+  font-weight: 800;
+}
+
+.cc-filters-summary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cc-filters-chevron {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-left: 4px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: translateY(-2px) rotate(45deg);
+}
+
+.cc-filters.is-open .cc-filters-chevron {
+  transform: translateY(2px) rotate(-135deg);
+}
+
+.cc-filters-body {
+  display: grid;
+  gap: 8px;
+}
+
+.cc-filters-body[hidden] {
+  display: none;
+}
+
+/* The card: the type's icon, an event's place and day of a span, the team
+   pill, the Planned pill. */
+.cc-card-top {
+  align-items: center;
+}
+
+.cc-card-icon {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.cc-card-span {
+  font-weight: 700;
+}
+
+.cc-card-place {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.cc-team-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 1px 8px 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  background: color-mix(in srgb, var(--cc-team-color, var(--cc-team-none)) 14%, var(--surface));
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.cc-team-pill .cc-team-dot {
+  width: 8px;
+  height: 8px;
+  flex-basis: 8px;
+}
+
+.cc-team-pill-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cc-badge-planned {
+  background: var(--cc-planned-soft);
+  color: var(--cc-planned);
+}
+
+.cc-mini-status-planned {
+  background: var(--cc-planned);
+}
+
+.cc-mini-icon {
+  margin-right: 4px;
+  vertical-align: -2px;
+  color: var(--muted);
+}
+
+/* The phone's strip: one dot per team with a visible card that day. */
+.cc-strip-dots {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  min-height: 6px;
+}
+
+.cc-strip-dots .cc-team-dot {
+  width: 6px;
+  height: 6px;
+  flex-basis: 6px;
+}
+
+/* The selected day: the per-team row and the "No time" section. */
+.cc-day-teams {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cc-day-teams .cc-team-pill {
+  padding: 3px 10px 3px 8px;
+  font-size: 12px;
+}
+
+.cc-day-teams .cc-team-pill.is-empty {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.cc-day-section {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Buttons of the toolbar and the panel. */
+.cc-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.cc-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.cc-danger {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+
+.cc-danger-outline {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.cc-new-event {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+}
+
+/* The event's panel. */
+.cc-panel-kind {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cc-panel-icon {
+  flex: 0 0 auto;
+}
+
+.cc-panel-place {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.cc-panel-place svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.cc-panel-gap {
+  padding: 6px 10px;
+  border-left: 3px solid var(--line-strong);
+  background: var(--surface-soft);
+}
+
+.cc-panel-notes {
+  display: grid;
+  gap: 4px;
+}
+
+.cc-panel-notes-text {
+  margin: 0;
+  font-size: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cc-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* The event form: every field 16 px (iOS never zooms) and 44 px tall. */
+.cc-event-form {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.cc-form-fields {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cc-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cc-field-label {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.cc-field-optional {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.cc-event-form input:not([type="checkbox"]),
+.cc-event-form select,
+.cc-event-form textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+}
+
+.cc-event-form textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.cc-event-form [aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.cc-event-form input:focus-visible,
+.cc-event-form select:focus-visible,
+.cc-event-form textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.cc-field-hint,
+.cc-field-error {
+  font-size: 12px;
+}
+
+.cc-field-hint {
+  color: var(--muted);
+}
+
+.cc-field-error,
+.cc-form-error {
+  color: var(--danger);
+}
+
+.cc-form-error {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.cc-field-static {
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.cc-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.cc-fieldset {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 12px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.cc-fieldset legend {
+  padding: 0 4px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.cc-fieldset-static {
+  gap: 4px;
+}
+
+.cc-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.cc-check input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.cc-check-label {
+  min-width: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.cc-check-note {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.cc-check-list {
+  display: grid;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.cc-athlete-picker {
+  display: grid;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.cc-form-row,
+.cc-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cc-form-small,
+.cc-form-actions .plain-button {
+  min-height: 44px;
+}
+
+.cc-athletes-toggle {
+  justify-self: start;
+  margin-top: 4px;
+}
+
+.cc-unconfirmed {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--cc-awaiting);
+  border-radius: var(--radius);
+  background: var(--cc-awaiting-soft);
+}
+
+.cc-unconfirmed-title {
+  margin: 0;
+  color: var(--cc-awaiting);
+  font-weight: 800;
+}
+
+.cc-cancel-name {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .cc-filters-toggle {
+    flex: 1 1 auto;
+  }
+
+  .cc-new-event {
+    width: 100%;
+  }
+
+  .cc-form-actions .plain-button {
+    flex: 1 1 100%;
+  }
+}

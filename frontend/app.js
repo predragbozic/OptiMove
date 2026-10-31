@@ -76,7 +76,7 @@ import {
 import { renderCoachesHtml } from "./coach-profiles.js";
 import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
-import { captureCentralCalendarView, centralCalendarLayout, centralCalendarRosterIndex, closeCentralCalendarPanel, handleCentralCalendarAction, restoreCentralCalendarView } from "./central-calendar-actions.js";
+import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
@@ -297,7 +297,7 @@ async function init() {
   // Refresh and Later (the app installed on an iPhone keeps an old version
   // until iOS restarts it). Never refreshes by itself; an unsaved Training
   // Load draft (a dashboard layout, Advanced settings) is asked about first.
-  startAppUpdateWatch({ mayLeave: () => confirmLeaveTrainingLoad(null, { discard: false }) });
+  startAppUpdateWatch({ mayLeave: () => confirmLeaveTrainingLoad(null, { discard: false }) && centralCalendarMayBeLeft() });
   if (window.location.pathname === "/invite") {
     await renderInviteAcceptAction({ renderUserControls, setStatus });
     return;
@@ -505,6 +505,8 @@ function bindEvents() {
   els.content.addEventListener("change", (event) => handleVariablesInput(event.target, { render: renderActiveTrainingLoadSurface }));
   // Data configuration -> Source fields: the operator select reports through "change" too.
   els.content.addEventListener("change", (event) => handleSourceFieldsInput(event.target));
+  // Central calendar (K2a-2): the event form's select, dates and boxes too.
+  els.content.addEventListener("change", (event) => handleCentralCalendarInput(event.target, { render: renderCentralCalendar }));
   // Imports (phase 4b): the sessions calendar is a <details>; the browser
   // opens and folds it itself, and its own "toggle" event (it does not
   // bubble, hence the capture) keeps that state for the next repaint. A
@@ -646,6 +648,8 @@ function bindEvents() {
   window.addEventListener("beforeunload", (event) => handleExerciseMediaBeforeUnload(event, state));
   // Import from Google Drive: files on their way ask the same way.
   window.addEventListener("beforeunload", handleDriveImportBeforeUnload);
+  // Central calendar (K2a-2): an event save in flight, not confirmed or not made.
+  window.addEventListener("beforeunload", handleCentralCalendarBeforeUnload);
   // Import from Google Drive: an opened <details> of its card survives the
   // repaints of a running import (toggle does not bubble: caught on the way
   // down), and a repaint of its card waits while a pointer is down, then
@@ -691,6 +695,12 @@ async function handleContentSubmit(event) {
   if (event.target.closest("[data-source-fields-form]")) {
     event.preventDefault();
     await submitSourceFieldsForm({ render: renderActiveTrainingLoadSurface });
+    return;
+  }
+  // Central calendar (K2a-2): create, edit or cancel an event.
+  if (event.target.closest("[data-cc-event-form]")) {
+    event.preventDefault();
+    await submitCentralCalendarEventForm({ render: renderCentralCalendar });
     return;
   }
 
@@ -1278,6 +1288,8 @@ function handleContentInput(event) {
   if (handleVariablesInput(event.target, { render: renderActiveTrainingLoadSurface })) return;
   // Data configuration -> Source fields: the confirmation form's values.
   if (handleSourceFieldsInput(event.target)) return;
+  // Central calendar (K2a-2): the event form's values.
+  if (handleCentralCalendarInput(event.target, { render: renderCentralCalendar })) return;
 
   const trainingLoadInput = event.target.closest("[data-action^='training-load-']");
   if (trainingLoadInput && trainingLoadInput.matches("input, textarea")) {
@@ -1848,7 +1860,8 @@ async function handleGlobalClick(event) {
     closeWorkspaceSwitcherIfOutside(event.target);
     return;
   }
-  if (await handleWorkspaceAction(action, { onWorkspaceChanged, confirmLeave: askLeaveTrainingLoad })) {
+  // A workspace switch resets the central calendar too: its event form asks first (K2a-2).
+  if (await handleWorkspaceAction(action, { onWorkspaceChanged, confirmLeave: () => askLeaveTrainingLoad() && centralCalendarMayBeLeft() })) {
     return;
   }
   if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openTrainingLoadAssignment, openTrainingLoadResults, openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification, confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts })) {
@@ -2242,7 +2255,11 @@ function renderCentralCalendar() {
   if (state.activeTab !== "central-calendar") return;
   // A repaint keeps the chip rows' sideways scroll and the focused control.
   const snapshot = captureCentralCalendarView(els.content.querySelector(".central-calendar"));
-  els.content.innerHTML = renderCentralCalendarHtml(state.centralCalendar, { today: localDateIso(), layout: centralCalendarLayout(), roster: centralCalendarRosterIndex() });
+  els.content.innerHTML = renderCentralCalendarHtml(state.centralCalendar, {
+    today: localDateIso(), layout: centralCalendarLayout(), roster: centralCalendarRosterIndex(),
+    // K2a-2: New event where this workspace may create one; the event form's athletes.
+    canCreate: centralCalendarCanCreateEvents(), eventRoster: centralCalendarEventRoster(),
+  });
   restoreCentralCalendarView(els.content.querySelector(".central-calendar"), snapshot);
 }
 
