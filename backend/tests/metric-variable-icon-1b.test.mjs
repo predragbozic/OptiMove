@@ -22,6 +22,9 @@ import { execFileSync } from "node:child_process";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 import { writeRevision } from "./support/source-revisions.mjs";
 import { createDisposableDatabase } from "./support/disposable-db.mjs";
+import { allowSyntheticTestFields } from "./support/test-extractors.mjs";
+
+allowSyntheticTestFields();
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;

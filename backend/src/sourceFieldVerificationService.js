@@ -39,6 +39,7 @@
 // audit link). No T3, T4, canonical or binding row is locked.
 import { adminWriteKit, LIST_CAPS, SourceMetricMappingError } from "./sourceMetricMappingService.js";
 import { unitTokenOk } from "./canonicalVariableAdminService.js";
+import { extractorFor } from "./sourceMetricExtractors.js";
 
 const {
   runWrite, boundedRead, rightsStillHold, refusal, NOT_FOUND, MESSAGES, plainObject, uuidField, hashOf, UUID,
@@ -118,7 +119,9 @@ export async function getField({ ctx, fieldId, query }) {
     return {
       field: {
         id: field.id, sourceSystem: field.source_system, apiFamily: field.api_family, key: field.source_metric_key,
-        label: field.source_label, state: field.state, revisions: revisions.map(revisionOut),
+        label: field.source_label, state: field.state,
+        extractorAvailable: extractorFor({ sourceSystem: field.source_system, apiFamily: field.api_family, sourceMetricKey: field.source_metric_key }) !== null,
+        revisions: revisions.map(revisionOut),
       },
       verifications: history.map((h) => ({
         revisionId: h.source_metric_version_id, act: h.action === "source_metric_unit_verified" ? "unit" : "meaning",

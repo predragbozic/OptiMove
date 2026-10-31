@@ -33,7 +33,16 @@ added later the same day at `70e9e2b` (merge of PR #287), after the owner's read
 re-derived then. PR #290 (those facts), the 7c and 7d contracts (PR #291, C106), phase 7c (migration v47, PR #293), the
 deploy of `69af453`, the open 7d-B pull request (PR #295, migration v48) and PR #292 and PR #294 of the owner's other
 sessions were added later the same day at `6a94ce29` (merge of PR #294), after the owner's read-only v47 post-check;
-nothing else was re-derived then.
+nothing else was re-derived then. PR #296 (those facts), phase 7d-B (migration v48, PR #295), the deploy of `e915a5b`,
+the 7e–7g contracts with the owner's decisions OD1–OD7 (PR #297) and the owner's concern about an athlete who trains
+with two teams were added later the same day at `39b4b52` (merge of PR #297), after the owner's read-only v48
+post-check; nothing else was re-derived then. PR #299 (those facts) and the note on the standing order for migration
+PRs were added on top of `6568cf7` (merge of PR #299); nothing else was re-derived then. Phase 7f-B (PR #301), PR #300
+(the standing order for migration PRs, in force) and the deploy of `be0fe1b` were added at `be0fe1b` (merge of PR
+#300), with the gpexe baseline reproduction on `6568cf7`; nothing else was re-derived then. Phase 7e-B (PR #303), PR
+#298 (the calendar's events and migration v49, another track) with the *Rukovodilac*'s v49 post-check, and the deploys
+of `0117912` and `e6ca433` were added at `e6ca433` (merge of PR #303), with the gpexe baseline reproduction on
+`0117912`; nothing else was re-derived then.
 
 ## Active phase
 
@@ -2395,14 +2404,107 @@ Technical details.
       - **Post-check (owner-run, read-only, after 18:24 UTC):** all five blocks as expected („sve potvrdjeno na
         postcheku”, as the *Rukovodilac* relays it in its message of 18:28 UTC; the block values were not written out).
         **v47 is directly confirmed on the production database.**
-    - **7d-B, PR #295 (Draft): T5 activations, with migration v48 — not merged, v48 applied to no persistent
-      database.** S1 (start one active version on listed bindings), S2 (end one activation) and S3 (list them), for an
-      active platform admin and, by C106, the active admin of the club that owns the binding's connection; A1, A2 and
-      the pinned step end the open activations of the version they disable. Head `578717af`; the internal reviews
-      (`db-reviewer`, `security-reviewer`, `code-reviewer`) READY or READY WITH NON-BLOCKING NOTES; the EXTERNAL REVIEW
-      REQUIRED package went to the *Rukovodilac* and the *Nezavisni revizor* on 2026-10-30. Its merge needs the owner's
-      order naming the pull request, `migrations_v2/202610301900_training_load_v48_mapping_activations.sql` and its
-      sha256, with the preflight `docs/runbooks/mapping-activations-v48-preflight.sql` the same day.
+    - **7d-B, PR #295: T5 activations, with migration v48 — merged and deployed, and v48 directly confirmed on the
+      production database.** Contract J10; as built: J10 of the discovery document; runbook
+      `docs/runbooks/mapping-activations-v48.md`.
+      - **What it adds:** under `/api/training-load/sources/metrics/activations`, S1 (start one active version on 1–50
+        listed bindings), S2 (end one activation) and S3 (list them), for an active platform admin and, by C106, the
+        active admin of the club that owns the binding's connection; A1, A2 and the pinned step end the open activations
+        of the version they disable. v48 is the database actor guard of T5 and its audit rows.
+      - **Reviews:** the internal reviews (`db-reviewer`, `security-reviewer`, `code-reviewer`), then GO on head
+        `578717af` from the *Rukovodilac* and the *Nezavisni revizor*.
+      - **The owner's order** (owner turn `0c75e9cc`, 21:49:14 UTC, in the *Rukovodilac*'s chat, checked by the
+        executor word for word in its transcript): „Odobravam i naređujem merge PR #295 sa migracijom
+        202610301900_training_load_v48_mapping_activations.sql, sha256
+        71e57c43c0820315926c9535c31b5efcd634908bfb4c7947a75fe8990193abe0.” **Preflight (owner-run, read-only):**
+        „preflight proslao odobravm merge 295” (owner turn `0eec3966`, 22:06:37 UTC).
+      - **Merge** by the executor: `e915a5b` (parents `f3fb8057` and `578717af`, 22:07:33 UTC), exactly from
+        `578717af`. `main` had moved after the branch's last merge of it by PR #294 (the calendar frontend) and PR #296
+        (documents): no migration and no file shared with PR #295.
+      - **Deploy:** by the owner by hand, as `e915a5b` („… e915a5b9 je deployed”, owner turn `e21a1604`, 22:19:50 UTC).
+        The *Rukovodilac*'s smoke, 22:20:00 – 22:20:21 UTC: `/api/health` answered `ok: true` on `e915a5b` three times
+        in a row; `/api/auth/me` answered `{"user":null}`; without a login the activations list
+        (`?bindingId=<zero UUID>`), the start and the end of an activation (with `{}`), the mappings, variables and
+        conversions reads, the GPEXE team status and the source-connection list answered 401.
+      - **Post-check (owner-run, read-only):** all six blocks as expected (owner turn `fe3ef070`, 22:26:39 UTC):
+        `v48_rows` 1, `v48_checksum_ok` true, `later_migrations` 0; `bodies_v48` 9; `basis_checks_v48` 2; `links_ok` 2,
+        `guards_enabled` 2; `index_ok` true; `activations` 0, `activation_audit_rows` 0. **v48 is directly confirmed on
+        the production database.** No activation exists in production.
+      - **A known nit, accepted by the *Rukovodilac*** (its message queued at 19:25:07 UTC): the v48 file ends with an
+        extra blank line (`git diff --check`: "new blank line at EOF", line 597). The file stays as merged, since an
+        applied migration is never changed. From now on `git diff --check` is clean before every package that carries a
+        migration (the *Rukovodilac*'s rule).
+    - **The contracts of 7e, 7f and 7g, PR #297 — merged (documents only).** J11 (`docs/ai/phase7e-aggregate-preview-contract.md`),
+      J12 (`docs/ai/phase7f-extractor-registry-contract.md`) and J13 (`docs/ai/phase7g-source-instance-end-contract.md`),
+      the owner's read-only C97 procedure (`docs/runbooks/gpexe-c97-unit-evidence-owner-procedure.md`), the owner's
+      decisions OD1–OD7 (C107–C109 of the discovery document) and the plan's phases 7h and 7i. Reviewed in one ★★ round
+      with narrow re-reviews, both GOs on head `92a900ef`. Merged as `39b4b52` (parents `e915a5b` and `92a900ef`,
+      22:23:10 UTC) exactly from `92a900ef`, on the owner's word „merge” / „297” (owner turns `4fb1a9da`, 22:22:13 UTC,
+      and `629c4a79`, 22:22:18 UTC), which put it before this facts record (the *Rukovodilac*'s order had the facts
+      record first). Deployed with `be0fe1b` (2026-10-30, live 23:55:23 UTC).
+    - **PR #299, the 7d-B facts record — merged (documents only).** Merged as `6568cf7` (parents `39b4b52` and
+      `b46cdcac`, 23:00:07 UTC) by the executor under the standing merge order, exactly from `b46cdcac`, after the
+      *Rukovodilac*'s GO on that head. Deployed with `be0fe1b`.
+    - **Migration PRs of the Metrics Core plan:** see "Standing order for migration PRs" in section 2 of
+      `docs/ai/metrics-core-plan.md`, in force from the merge of the PR that added it, on the terms of that section
+      ("When it is in force").
+    - **7f-B, PR #301: the extractor registry (J12, no migration) — merged and deployed.**
+      - **What:** `backend/src/sourceMetricExtractors.js`, one extractor for each of the ten seeded `gpexe` / `rest_v1`
+        fields; T4 create and A1 answer `409 source_metric_unsupported` / `parameters_unsupported` with nothing
+        written; `GET /fields` and `GET /fields/:fieldId` carry `extractorAvailable`. J12 section 11 ("As built")
+        records it.
+      - **Reviews:** the internal reviews (`code-reviewer`, `security-reviewer`), then GO on `25627d79` from the
+        *Nezavisni revizor* (its turn `85df98fd`, 23:36:45 UTC) and the *Rukovodilac* (its turn `1debe65f`, 23:37:50
+        UTC).
+      - **Merge** by the executor under the standing merge order: `59c2192` (parents `6568cf7` and `25627d79`, 23:39:12
+        UTC), exactly from `25627d79`.
+      - **Deploy:** the first deploy under step 6 of the standing order for migration PRs, by the *Rukovodilac* through
+        the Render API, as `be0fe1b` (it carries `59c2192` and PR #300): no migration path differs between the served
+        `e915a5b` and `be0fe1b`; started 23:54:35 UTC, live 23:55:23 UTC. The *Rukovodilac*'s smoke, 23:55:29 – 23:55:50
+        UTC: `/api/health` answered `ok: true` on `be0fe1b` three times in a row; `/api/auth/me` answered
+        `{"user":null}`; without a login `GET /fields`, `GET /fields/<zero UUID>`, `POST /mappings/<zero UUID>/versions`
+        (with `{}`), `GET /activations`, `GET /mappings` and the GPEXE team status answered 401. No migration: v48
+        stays the last one on the production database.
+    - **PR #300, the standing order for migration PRs — merged; in force.** Merged as `be0fe1b` (parents `59c2192` and
+      `d5be8103`, 23:53:51 UTC) by the executor, exactly from `d5be8103`, on the owner's word directly in the
+      executor's chat (owner turn `215b662b`, 23:52:57 UTC: „Odobravam PR #300 (head …) – stalni nalog za migracione
+      PR-ove, uključujući korak 6 (Render deploy preko Rukovodioca)”, the owner typing „…” for the head; the executor
+      reads it as `d5be8103`, the only head with both GOs and the PR's head since them), after the GO of the *Nezavisni revizor* (its turn `10e14ad9`) and the *Rukovodilac* (its turn
+      `1debe65f`) on that head. Deployed with `be0fe1b` (below).
+    - **PR #302, the 7f-B facts record — merged (documents only).** Merged as `0c30e84` (parents `be0fe1b` and
+      `28d00c26`, 2026-10-31 00:03:31 UTC) by the executor under the standing merge order, exactly from `28d00c26`,
+      after the *Rukovodilac*'s GO on that head (its turn `ffcefe12`, 00:03:04 UTC). Deployed with `0117912`.
+    - **7e-B, PR #303: the aggregate preview of a mapping version (J11, no migration) — merged and deployed.**
+      - **What:** `GET /api/training-load/sources/metrics/mappings/:mappingId/versions/:versionId/preview?candidateId=…`
+        for 7d's audience: over one saved GPEXE candidate, the count of athletes with a value and min / max in the
+        source unit and through the version's own conversion, per level, min / max only from 3 athletes (OD3); the
+        identical 404 before `snapshot_expired`; nothing written. J11 section 12 ("As built") records it.
+      - **Reviews:** the internal reviews (`code-reviewer`, `security-reviewer`, `db-reviewer`) and a narrow re-review
+        of their notes, then GO on `ee873f53` from the *Nezavisni revizor* (its turn `88e691e3`, 01:36:16 UTC) and the
+        *Rukovodilac* (its turn `3bf1249e`, 01:38:21 UTC), each with one optional LOW that was not applied, so no new
+        head (J11 section 12, "After the external round").
+      - **Merge gate:** PR #298 (below) merged migration v49 at 00:22:52 UTC, so under section 2 of the plan nothing was
+        merged before v49's post-check. The owner left the post-check to the *Rukovodilac* (owner turn `92025482`,
+        01:40:21 UTC, typed „Ja ne radim post ček već ri”, read as „… već ti”), which ran
+        `docs/runbooks/calendar-events-v49-postcheck.sql` (sha256
+        `8b61a1a2240668fff20c25539ac357329adcc22d57c0e000755f0edceb5666e7` at `0117912` and at `e6ca433`, the same hash
+        its run printed) read-only, each of its seven blocks in `begin transaction read only; … rollback;` by its own
+        report, every block as expected, and then gave the merge order (its turn `8ced4dea`, 01:42:04 UTC). The
+        executor checked the file's hash and the order in the *Rukovodilac*'s transcript, not each wrapped call: step 5
+        of the plan's standing order is written for this plan's migration PRs, and PR #298 is another track.
+      - **Merge** by the executor under the standing merge order: `e6ca433` (parents `0117912` and `ee873f53`, 01:42:32
+        UTC), exactly from `ee873f53`.
+      - **Deploy** by the *Rukovodilac* through the Render API (step 6): no migration path differs between the served
+        `0117912` and `e6ca433`; started 01:43:09 UTC, live 01:43:55 UTC. Its smoke, 01:44:01 – 01:44:22 UTC (its turn
+        `f81ff94b`): `/api/health` answered `ok: true` on `e6ca433` three times in a row; `/api/auth/me` answered
+        `{"user":null}`; without a login the preview route (with and without `?candidateId=<zero UUID>`), `GET /fields`,
+        `GET /activations?bindingId=<zero UUID>` and the GPEXE team status answered 401. No migration: v49 stays the
+        last one on the production database.
+    - **PR #298, the central calendar's events K2a-1a and migration v49 — merged and deployed (another track).** Merge
+      commit `0117912` (2026-10-31 00:22:52 UTC), merged from the owner's account in another session, a track outside
+      this plan's reviews. **v49 directly confirmed** by the *Rukovodilac*'s read-only post-check (above). v49 is the
+      calendar's migration, not Metrics Core's: 7g-B's migration is therefore v50 (J13 named v49 "if none comes
+      between").
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -2868,6 +2970,22 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- **Deployed with `e6ca433`** (the merge of PR #303, 7e-B), started by the *Rukovodilac* through the Render API on
+  2026-10-31 (live 01:43:55 UTC), under step 6 of the standing order for migration PRs. Over `0117912` it adds only
+  PR #303; no migration. See the 7e-B entry of the active phase for its smoke.
+- **Deployed with `0117912`** (the merge of PR #298, the calendar's events, migration v49): production served it at
+  01:07 UTC on 2026-10-31 at the latest; who started that deploy is not recorded here. Over `be0fe1b` it adds PR #302
+  (the 7f-B facts, documents only, `0c30e84`, merged by the executor under the standing merge order) and PR #298.
+  **v49 directly confirmed** by the *Rukovodilac*'s read-only post-check (the 7e-B entry of the active phase).
+- **Deployed with `be0fe1b`** (the merge of PR #300), started by the *Rukovodilac* through the Render API on
+  2026-10-30 (live 23:55:23 UTC), the first deploy under step 6 of the standing order for migration PRs. Over
+  `e915a5b` it adds PR #297, PR #299, PR #301 (7f-B) and PR #300; no migration. See the 7f-B entry of the active phase
+  for its smoke.
+- **Deployed with `e915a5b`** (the merge of PR #295, phase 7d-B, migration v48), deployed by the owner by hand on
+  2026-10-30 (reported in owner turn `e21a1604`, 22:19:50 UTC). Over `69af453` it adds PR #295, and PR #294 and PR #296 unless an
+  earlier deploy carried them (not recorded here). See the phase 7d-B entry of the active phase for its smoke and the
+  v48 post-check (**v48 directly confirmed**). PR #297 (`39b4b52`, documents only) was merged after it and went out
+  with `be0fe1b` (above).
 - **Deployed with `69af453`** (the merge of PR #293, phase 7c, migration v47), started by the owner by hand on
   2026-10-30. It adds only PR #293 to `aa84d574`. See the phase 7c entry of the active phase for its smoke and the v47
   post-check (**v47 directly confirmed**).
@@ -3261,7 +3379,14 @@ pre-existing; pass/fail counts don't belong in this file
   The same seven files failed again in the PR-1b and PR-1c runs of 2026-10-30, as on a clean detached `01cd32d`.
 - Reproduced on a clean detached `main` worktree (`0592550`) on 2026-10-30 with `--preset gpexe`, Node 22.22.0 (not
   fixed): `gpexe-client.test.mjs`, `gpexe-rest-v1-adapter-reads.test.mjs` and `gpexe-backup-verify.test.mjs` (the last
-  as recorded above); the PR-1b and PR-1c runs failed in exactly these three files.
+  as recorded above); the PR-1b and PR-1c runs failed in exactly these three files. Reproduced again on a clean
+  detached `6568cf7` on 2026-10-30 for the 7f-B runs: `--preset gpexe` failed in the same three files and
+  `--preset backend-fast` in `gpexe-client.test.mjs` and `gpexe-rest-v1-adapter-reads.test.mjs`; the latter is
+  cancelled from B4.2 on before most of its tests run, so the note above that its "never answers" fakes pass on Node
+  22 does not hold in this container. Its tests B7.5 and B7.8, run alone with `--test-name-pattern`, passed.
+  Reproduced again on a clean detached `0117912` on 2026-10-31 for the 7e-B runs (`--preset gpexe`, Node 22.22.0): the
+  same three files, with the same counts as the branch's runs; on the branch, B7.7, B7.7b, B7.8 and B8.2 of the
+  adapter suite, run alone with `--test-name-pattern`, passed.
 - `backend/tests/source-hosts-server3.test.mjs` test 12 (no credential or token in any file of the change) failed on
   `main` from PR #264 on: two full 40-hex commit ids in this file read as a REST token's shape. They are shortened in
   the facts pull request of 2026-10-30.
@@ -3282,6 +3407,12 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
+- **The 7e preview: a test that a candidate whose last check is another team's answers `409
+  candidate_source_mismatch`** (the *Nezavisni revizor*'s optional LOW-1 on PR #303, 2026-10-31; J11 section 12,
+  "After the external round"). It kills the mutation dropping `k.owner_team_id = s.owner_team_id` in
+  `backend/src/sourceMetricPreviewService.js`. The executor wrote it as a case of the route suite's test 13 and saw that
+  mutation fail it, but did not commit it (both GOs were on `ee873f53`); it goes with the next pull request that
+  touches the preview.
 - **A self-report activity has no roster — v44, merged and deployed** (owner decision 2026-10-29, option A; branch
   `fix/activity-roster-self-report-activities` from `cd0fce6`; PR #275, merge commit `835e462`, 2026-10-30 10:56:55
   UTC, merged from the owner's account in another session; deployed with `0592550`, and its migration record read on
@@ -3312,8 +3443,32 @@ pre-existing; pass/fail counts don't belong in this file
   activities exist there is not read.
 - **A stale comment in `pinnedDecisions`** (`backend/src/sourceRevisionLifecycleService.js`; the *Nezavisni revizor*'s
   LOW-1 on PR #273): it still says the caller learns "which archived clubs to restore", while `club_archived` no longer
-  points to a restore (R8). The *Rukovodilac*'s order: fix it in the phase 7c pull request. **Not done in PR #293:** the
-  comment is still at `backend/src/sourceRevisionLifecycleService.js:235-236` on `6a94ce29`; still open.
+  points to a restore (R8). Not done in PR #293 or PR #295: the comment is still at
+  `backend/src/sourceRevisionLifecycleService.js:234-235` on `39b4b52` (PR #295 moved it up one line). **The
+  *Rukovodilac*'s rule** (its message queued at 19:22:40 UTC): no pull request head is made for it alone; it is fixed in
+  the first next pull request that touches that file (the *Rukovodilac* names 7d-C, D3's prepared replacement).
+- **Owner concern, 2026-10-30: an athlete who trains with two teams** (owner turn `67e1025c`, 22:15:23 UTC, in the
+  *Rukovodilac*'s chat): „… vise me brine situacija da jedan talentovani sportista je u nekim danima u prvom timu a nekim
+  danima u u19 timu pa kako njega da sredimo da mu upadaju podaci kod njega”. The existing design, as the *Rukovodilac*
+  reads it and the executor checked on `e915a5b`:
+  - an athlete may hold several different active team memberships at once (`public.athlete_memberships` allows no two
+    identical active memberships, per athlete and club and per athlete and team, and nothing more,
+    `migrations/20260801_athlete_memberships.sql:63-73`; `backend/src/routes/organization.js:3509-3510`);
+  - a GPEXE athlete link is per OptiMove team (unique per team and GPEXE athlete, and per team and athlete, among
+    active links, `migrations_v2/202609191000_training_load_v22_gpexe_in_app_import.sql:94-97`) and needs an active
+    membership of the athlete in that team (the link trigger, v22 `:125`);
+  - so both teams link their GPEXE record to the same OptiMove athlete, and an event's participant is the athlete
+    (`training_load.metric_event_participants.athlete_id`, v12 `:135-147`): both teams' data gather on him.
+  - **Risks:** (1) two profiles of one person (one created in each team) split his data. The only per-person
+    uniqueness is one login → at most one athlete profile (`athletes_user_id_unique`,
+    `migrations/20260802_user_global_roles.sql:54-61`, which `backend/src/routes/organization.js:1745-1766` relies on);
+    nothing stops two profiles without a login for the same person, and no athlete-profile merge exists. (2) If the two
+    teams' zones differ, his values land in two canonical variables (OD1), which a per-athlete analysis has to know.
+  - **Not checked (open discovery questions):** both GPEXE teams recording the same session; the same GPEXE athlete id
+    in both GPEXE teams.
+  - No phase is opened for it without the *Rukovodilac*'s order.
+- **An athlete-profile duplicate guard, or a profile merge** (from the owner's concern above; a future proposal, not
+  scheduled): today nothing stops a second login-less profile of the same person, and nothing merges two profiles.
 - **The disposable test databases do not carry PR #267's three `media.*` migrations** (`GPEXE_TEST_MIGRATIONS` in
   `backend/tests/_gpexe-disposable-db.mjs`), so their order differs from production's. No object is shared with
   `training_load`, so no Metrics Core test is affected; whether to add them (with the earlier media migrations they
@@ -3872,12 +4027,16 @@ window diagnostic (PR #147), the whole-list window (PR #148), the drill projecti
    - phase 5b, the zone model (option A, C102), is done: PR #259 merged (`ed86ca8`) and deployed with `d9a02ad8`, v42
      directly confirmed by the owner's post-check. Its first real zone confirmation waits for the C97 evidence;
    - Data configuration: PR-2 (PR #263) and the language pass (PR #261) are merged and deployed (with `00b3958`);
-   - phase 7, the rest of M2: 7a (PR #269), 7b (PR #273, v43) and 7c (PR #293, v47) are done, merged
-     and deployed, v43 and v47 directly confirmed by the owner's post-checks. 7d-B (T5 activations, v48) is Draft PR
-     #295, under the external review; its merge needs the owner's order. Next by the plan: the contracts of 7e (the
-     aggregate preview), 7f (the extractor registry) and 7g (ending a held source instance, D9) in one docs pull
-     request, then phase 8 (the Mappings tab). A mapping version is activated in production only once its source
-     field's unit is confirmed (C97);
+   - phase 7, the rest of M2: 7a (PR #269), 7b (PR #273, v43), 7c (PR #293, v47) and 7d-B (PR #295, v48) are done,
+     merged and deployed, v43, v47 and v48 directly confirmed by the owner's post-checks. The contracts of 7e, 7f and 7g
+     and the owner's decisions OD1–OD7 are merged (PR #297); 7f-B (the extractor registry, PR #301) and 7e-B (the
+     aggregate preview, PR #303) are merged and deployed. Next by the plan: 7g-B (ending a held source instance,
+     migration v50, since v49 is the calendar's, PR #298), then
+     a minimal phase 8 (the Mappings tab) and phase 9 (the first controlled import); phases 7h and 7i come right after
+     the first import, before more clubs are brought on. A mapping version is activated in production only once its
+     source field's unit is confirmed (C97; the owner's read-only procedure is
+     `docs/runbooks/gpexe-c97-unit-evidence-owner-procedure.md`, and the stored snapshots of 05–06.10 expire around
+     2026-11-10);
    - Data configuration: PR-1b (a variable's icon, v45) and PR-1c (the icons of domains and categories, v46) are merged
      and deployed, both migrations directly confirmed by the owner's post-checks; their follow-ups are under Separate
      tasks;

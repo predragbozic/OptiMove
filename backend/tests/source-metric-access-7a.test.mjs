@@ -89,8 +89,13 @@ test("4. no access decision is made in the M2 service; the module makes them and
 
 test("5. every service that uses the M2 kit takes the right check from it, never from a copy", () => {
   const kitUsers = [...files].filter(([file, text]) => file !== SERVICE && /\badminWriteKit\b/.test(text)).map(([file]) => file).sort();
-  assert.deepEqual(kitUsers, ["canonicalClassificationService.js", "canonicalVariableAdminService.js", "sourceFieldVerificationService.js", "sourceMetricActivationService.js", "sourceRevisionLifecycleService.js", "unitConversionService.js"]);
-  for (const file of kitUsers) {
+  assert.deepEqual(kitUsers, ["canonicalClassificationService.js", "canonicalVariableAdminService.js", "sourceFieldVerificationService.js", "sourceMetricActivationService.js", "sourceMetricPreviewService.js", "sourceRevisionLifecycleService.js", "unitConversionService.js"]);
+  // Phase 7e: the preview is a read only - it takes the bounded read and no
+  // write machinery, so it has no right to re-check under a lock.
+  const preview = files.get("sourceMetricPreviewService.js").match(/const \{([\s\S]*?)\} = adminWriteKit;/)[1];
+  assert.match(preview, /\bboundedRead\b/);
+  assert.doesNotMatch(preview, /\b(runWrite|rightsStillHold)\b/);
+  for (const file of kitUsers.filter((name) => name !== "sourceMetricPreviewService.js")) {
     const text = files.get(file);
     const kit = text.match(/const \{([\s\S]*?)\} = adminWriteKit;/);
     assert.ok(kit && /\brightsStillHold\b/.test(kit[1]), `${file} takes rightsStillHold from the kit`);
