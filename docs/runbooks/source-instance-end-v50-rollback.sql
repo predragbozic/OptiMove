@@ -15,8 +15,9 @@
 -- v50 adds two functions with their two triggers on
 -- training_load.metric_source_connections (the state guard and the deferred
 -- audit link) and one unique index on training_load.source_metric_audit, and
--- replaces one function body (v48's source_metric_audit_revision_guard). No
--- table, column or data. This script restores that body byte for byte, drops
+-- replaces two function bodies (v48's source_metric_audit_revision_guard and
+-- v16's dashboard_widget_series_validate_source_connection_active_state). No
+-- table, column or data. This script restores both bodies byte for byte, drops
 -- what v50 added and removes the v50 record; it changes no row. It refuses,
 -- changing nothing, when
 --   * the migrator is running (it holds the advisory lock 822026 of
@@ -28,7 +29,7 @@
 --     exists (once one exists the way forward is a new migration, never this
 --     script);
 --   * a v50 object is missing, a v50 trigger is disabled, or a body in force
---     of the three v50 functions is not v50's (by md5).
+--     of the four v50 functions is not v50's (by md5).
 --
 -- One transaction: everything or nothing. Run it at a quiet moment as
 --   psql -v ON_ERROR_STOP=1 -f source-instance-end-v50-rollback.sql
@@ -99,8 +100,9 @@ begin
   end if;
   if exists (select 1 from (values
                ('source_metric_audit_revision_guard', '16c87e61856986987a4794412c9e6dc2'),
-               ('metric_source_connections_state_guard', 'dc5df075b4836478bb8005acec15f212'),
-               ('metric_source_connections_end_link', '587a3aab90a9d7109a503bb7d0e5c8b5')) as want(name, digest)
+               ('metric_source_connections_state_guard', '6d75f98fd6d8eda3ca5f01f75f58300d'),
+               ('metric_source_connections_end_link', '587a3aab90a9d7109a503bb7d0e5c8b5'),
+               ('dashboard_widget_series_validate_source_connection_active_state', 'b82288610bf6117cb0524f040a396cee')) as want(name, digest)
               where (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
                       where n.nspname = 'training_load' and p.proname = want.name) is distinct from want.digest) then
     reasons := array_append(reasons, 'a body in force is not v50''s');
@@ -250,6 +252,22 @@ begin
   if exists (select 1 from training_load.source_metric_audit
               where action = new.action and source_metric_version_id = new.source_metric_version_id) then
     raise exception 'source_metric_audit: the verification already has its audit row' using errcode = '23514';
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+-- v16's dashboard gate, verbatim.
+create or replace function training_load.dashboard_widget_series_validate_source_connection_active_state() returns trigger as $$
+declare
+  v_state varchar;
+begin
+  if new.source_connection_id is null then
+    return new;
+  end if;
+  select state into v_state from training_load.metric_source_connections where id = new.source_connection_id for share;
+  if v_state <> 'active' then
+    raise exception 'dashboard_widget_series: source_connection % is not active (state=%) — a series may only be newly bound to an ACTIVE source connection (widget %)', new.source_connection_id, v_state, new.widget_id;
   end if;
   return new;
 end;

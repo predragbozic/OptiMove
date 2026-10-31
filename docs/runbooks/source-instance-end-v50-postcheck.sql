@@ -16,19 +16,20 @@
 --    Expected: v50_rows = 1, v50_checksum_ok = true, later_migrations = 0.
 select
   (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202610311200_training_load_v50_source_instance_end.sql') as v50_rows,
-  (select bool_and(checksum = '19827e52b91364d1ee86201642b27a8e81570b231925d42edd69034a0685e6e6') from public.schema_migrations
+  (select bool_and(checksum = 'ca479c07934bc542c70936f2516fdb03f2e11444a2bf88ca79a64921021e7ba3') from public.schema_migrations
     where migration_name = 'migrations_v2/202610311200_training_load_v50_source_instance_end.sql') as v50_checksum_ok,
   (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%'
     and migration_name > 'migrations_v2/202610311200_training_load_v50_source_instance_end.sql') as later_migrations;
 
--- 2. The three function bodies are v50's: the revision guard it replaced and
---    the two it added.
---    Expected: bodies_v50 = 3.
+-- 2. The four function bodies are v50's: the two it replaced (the revision
+--    guard and the dashboard gate) and the two it added.
+--    Expected: bodies_v50 = 4.
 select count(*) filter (where md5(p.prosrc) = want.digest) as bodies_v50
   from (values
           ('source_metric_audit_revision_guard', '16c87e61856986987a4794412c9e6dc2'),
-          ('metric_source_connections_state_guard', 'dc5df075b4836478bb8005acec15f212'),
-          ('metric_source_connections_end_link', '587a3aab90a9d7109a503bb7d0e5c8b5')) as want(name, digest)
+          ('metric_source_connections_state_guard', '6d75f98fd6d8eda3ca5f01f75f58300d'),
+          ('metric_source_connections_end_link', '587a3aab90a9d7109a503bb7d0e5c8b5'),
+          ('dashboard_widget_series_validate_source_connection_active_state', 'b82288610bf6117cb0524f040a396cee')) as want(name, digest)
   join pg_proc p on p.proname = want.name and p.pronamespace = 'training_load'::regnamespace;
 
 -- 3. The state guard: enabled, BEFORE UPDATE (tgtype 19), not deferrable, with

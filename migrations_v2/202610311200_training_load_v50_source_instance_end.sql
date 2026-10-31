@@ -14,13 +14,16 @@
 -- instance with a reason. Until now state had no trigger: an UPDATE of it was
 -- limited only by the two partial uniques. v50 changes:
 --
---   * A check, before anything changes, that the body in force of
---     training_load.source_metric_audit_revision_guard() is v48's (its md5): v50
---     replaces that body in full, so it refuses to run over another one.
+--   * A check, before anything changes, that the bodies in force of
+--     training_load.source_metric_audit_revision_guard() and of
+--     training_load.dashboard_widget_series_validate_source_connection_active_state()
+--     are v48's and v16's (their md5): v50 replaces both in full, so it refuses
+--     to run over another one.
 --   * The v11 state guard (BEFORE UPDATE OF state, WHEN the state changes):
 --     inactive -> active is always refused (an ended instance is final);
 --     active -> inactive only for a row that already held T7 keys and was
---     team-owned before the UPDATE, with no owner change in it; by the acting
+--     team-owned before the UPDATE, with no owner or source-system change in
+--     it; by the acting
 --     user of the transaction (the v35 setting optimove.source_metric_actor),
 --     an active platform admin; under the owner team's import lock (v24's
 --     hold_gpexe_team_lock: re-entrant for the route, which takes it first;
@@ -31,6 +34,16 @@
 --     activation included, C58). An INSERT (the importer's) is untouched.
 --   * At COMMIT (a deferred constraint trigger): an end has its
 --     source_instance_end audit row.
+--   * v16's dashboard gate (dashboard_widget_series_validate_source_connection_
+--     active_state, BEFORE INSERT OR UPDATE OF source_connection_id) returns
+--     at once on an UPDATE that leaves source_connection_id unchanged:
+--     update_series() (v17) names the column in every SET, so without it an
+--     end would make every series pinned to the instance uneditable - against
+--     v16's own rule ("a series may only be NEWLY bound ... a connection later
+--     deactivated must never retroactively break an already-bound series") and
+--     J13 section 1. A new binding, and a real re-binding, to an inactive
+--     connection stay refused. Every other line of v16's body stays byte for
+--     byte; v50 checks that body's md5 first, as it does the revision guard's.
 --   * T8 (source_metric_audit): the revision guard gains the
 --     source_instance_end branch - the connection written in this transaction
 --     (xmin), now inactive, team-owned and keyed; the row names the owner team,
@@ -66,7 +79,8 @@ lock table training_load.metric_source_connections in share row exclusive mode;
 lock table training_load.source_metric_audit in share row exclusive mode;
 
 -- ---------------------------------------------------------------------------
--- 1. v50 is written on v48's body of the T8 revision guard: refuse any other.
+-- 1. v50 is written on v48's body of the T8 revision guard and v16's body of
+--    the dashboard gate: refuse any other.
 -- ---------------------------------------------------------------------------
 do $$
 begin
@@ -75,6 +89,12 @@ begin
        where n.nspname = 'training_load' and p.proname = 'source_metric_audit_revision_guard')
      is distinct from '921db06f6f2833eb57c062fb61e82e25' then
     raise exception 'v50 refused: the body in force of training_load.source_metric_audit_revision_guard is not v48''s' using errcode = '23514';
+  end if;
+  if (select md5(p.prosrc)
+        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'training_load' and p.proname = 'dashboard_widget_series_validate_source_connection_active_state')
+     is distinct from 'e978eb882932c930f78876179a11b190' then
+    raise exception 'v50 refused: the body in force of training_load.dashboard_widget_series_validate_source_connection_active_state is not v16''s' using errcode = '23514';
   end if;
 end;
 $$;
@@ -90,6 +110,7 @@ begin
     raise exception 'metric_source_connections: an ended source instance is final' using errcode = '23514';
   end if;
   if old.owner_scope is distinct from 'team' or old.source_host_key is null or old.source_instance_key is null
+     or new.source_system is distinct from old.source_system
      or new.owner_scope is distinct from old.owner_scope or new.owner_team_id is distinct from old.owner_team_id
      or new.owner_club_id is distinct from old.owner_club_id or new.owner_user_id is distinct from old.owner_user_id then
     raise exception 'metric_source_connections: only a team''s source instance is ended' using errcode = '23514';
@@ -141,12 +162,40 @@ begin
 end;
 $$ language plpgsql;
 
+comment on function training_load.metric_source_connections_end_link() is
+  'v50 (J13, D9): at COMMIT, a source instance ended in the transaction has its source_instance_end audit row.';
+
 create constraint trigger metric_source_connections_v50_audit_link_end
   after update on training_load.metric_source_connections
   deferrable initially deferred
   for each row
   when (old.state is distinct from new.state)
   execute function training_load.metric_source_connections_end_link();
+
+-- ---------------------------------------------------------------------------
+-- 3b. v16's dashboard gate: only a new binding. Its one change is the early
+--     return for an UPDATE that leaves source_connection_id unchanged
+--     (update_series() names that column in every SET); every other line is
+--     v16's, byte for byte. Only the trigger's body: no new write path to the
+--     dashboard tables (ADR-003).
+-- ---------------------------------------------------------------------------
+create or replace function training_load.dashboard_widget_series_validate_source_connection_active_state() returns trigger as $$
+declare
+  v_state varchar;
+begin
+  if tg_op = 'UPDATE' and new.source_connection_id is not distinct from old.source_connection_id then
+    return new;
+  end if;
+  if new.source_connection_id is null then
+    return new;
+  end if;
+  select state into v_state from training_load.metric_source_connections where id = new.source_connection_id for share;
+  if v_state <> 'active' then
+    raise exception 'dashboard_widget_series: source_connection % is not active (state=%) — a series may only be newly bound to an ACTIVE source connection (widget %)', new.source_connection_id, v_state, new.widget_id;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
 
 -- ---------------------------------------------------------------------------
 -- 4. Once per connection.

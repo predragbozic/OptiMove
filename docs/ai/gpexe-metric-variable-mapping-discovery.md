@@ -3986,7 +3986,8 @@ UTC); their implementations stay separate pull requests:
   owner team's import lock; a guard on the v11 `state` and the T8 chain in a migration written after v48 is merged
   (v49 if none comes between; v49 is the calendar's, PR #298, so it is v50). **Built by 7g-B** in an open pull request
   (J13 section 12, "As built"; J1 rows 10, 11): the routes, `backend/src/sourceInstanceEndService.js` and migration
-  v50 (`migrations_v2/202610311200_training_load_v50_source_instance_end.sql`), dormant until M4 writes T7 keys.
+  v50 (`migrations_v2/202610311200_training_load_v50_source_instance_end.sql`, which also keeps a dashboard series
+  pinned to an ended instance editable: J13 section 12, item 17), dormant until M4 writes T7 keys.
 
 **The owner's decisions** of these phases (J11 section 0.1; C107–C109), decided on 2026-10-30: OD1 team-relative
 zones (not now; two canonical variables), OD2 the preview's fields, OD3 the minimum count of athletes (3), OD4 bounds

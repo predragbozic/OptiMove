@@ -39,20 +39,23 @@ select
     and migration_name >= 'migrations_v2/202610311200_training_load_v50_source_instance_end.sql') as at_or_after_v50,
   (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') as last_migration;
 
--- 3. The body v50 replaces is v48's (the migration checks the same md5 and
---    refuses otherwise; the rollback restores exactly this body), and the two
---    v48 bodies v50 relies on unchanged are in force: source_metric_audit_row_ok
---    (its source_instance_end shape) and source_metric_audit_actor_guard (it
---    admits this action for an active platform admin).
+-- 3. The two bodies v50 replaces are v48's revision guard and v16's dashboard
+--    gate (the migration checks the same md5s and refuses otherwise; the
+--    rollback restores exactly these bodies), and the two v48 bodies v50 relies
+--    on unchanged are in force: source_metric_audit_row_ok (its
+--    source_instance_end shape) and source_metric_audit_actor_guard (it admits
+--    this action for an active platform admin).
 --    Expected: every column = true.
 select
   bool_and(md5(p.prosrc) = want.digest) filter (where want.name = 'source_metric_audit_revision_guard') as revision_guard_is_v48,
   bool_and(md5(p.prosrc) = want.digest) filter (where want.name = 'source_metric_audit_row_ok') as row_ok_is_v48,
-  bool_and(md5(p.prosrc) = want.digest) filter (where want.name = 'source_metric_audit_actor_guard') as actor_guard_is_v48
+  bool_and(md5(p.prosrc) = want.digest) filter (where want.name = 'source_metric_audit_actor_guard') as actor_guard_is_v48,
+  bool_and(md5(p.prosrc) = want.digest) filter (where want.name = 'dashboard_widget_series_validate_source_connection_active_state') as dashboard_gate_is_v16
   from (values
           ('source_metric_audit_revision_guard', '921db06f6f2833eb57c062fb61e82e25'),
           ('source_metric_audit_row_ok', '764f4ad70de273a443be84bc9bebd87a'),
-          ('source_metric_audit_actor_guard', '3622725a1b0d454767704b2021db731c')) as want(name, digest)
+          ('source_metric_audit_actor_guard', '3622725a1b0d454767704b2021db731c'),
+          ('dashboard_widget_series_validate_source_connection_active_state', 'e978eb882932c930f78876179a11b190')) as want(name, digest)
   left join pg_proc p on p.proname = want.name and p.pronamespace = 'training_load'::regnamespace;
 
 -- 4. HARD ASSERTION: no source_instance_end audit row and no keyed inactive

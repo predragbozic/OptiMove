@@ -56,6 +56,8 @@ const ACTIVATION_OPEN = /^metric_source_connections: an activation of this sourc
 const END_LINK = /^metric_source_connections: a source instance is ended with its audit row$/;
 const AUDIT_FOLLOWS = /^source_metric_audit: the audit row must follow its own source instance end in the same transaction$/;
 const AUDIT_ONCE = /^source_metric_audit: the source instance end already has its audit row$/;
+const DASH_GATE = "dashboard_widget_series_validate_source_connection_active_state";
+const SERIES_INACTIVE = /^dashboard_widget_series: source_connection [0-9a-f-]{36} is not active \(state=inactive\)/;
 const TEAM_LOCK = /^gpexe: a GPEXE check, import or connection change is running for team [0-9a-f-]{36} \(.*\); try again when it has finished$/;
 
 let rdb, db, r, k, server, apiBase, service, instances, dbModule, appPool, createSession;
@@ -449,7 +451,7 @@ test("1. on v49: every expected value of the read-only preflight (block 4 counts
   assert.deepEqual(Object.keys(pre).map(Number), [1, 2, 3, 4, 5, 6, 7, 8]);
   assert.equal(pre[1][0].pg15_or_later, true);
   assert.deepEqual(pre[2][0], { v48_rows: "1", v48_checksum_ok: true, v49_rows: "1", v49_checksum_ok: true, v50_rows: "0", at_or_after_v50: "0", last_migration: V49_NAME });
-  assert.deepEqual(pre[3][0], { revision_guard_is_v48: true, row_ok_is_v48: true, actor_guard_is_v48: true });
+  assert.deepEqual(pre[3][0], { revision_guard_is_v48: true, row_ok_is_v48: true, actor_guard_is_v48: true, dashboard_gate_is_v16: true });
   assert.deepEqual(pre[4][0], { instance_end_rows: "0", inactive_keyed: "0", keyed_connections: "0", safe_to_merge: true });
   assert.deepEqual(pre[5][0], { v50_functions: "0", v50_triggers: "0", v50_index: "0" });
   assert.deepEqual(pre[6][0], { schema_create: true, owns_connections: true, owns_audit: true, disabled_triggers: "0" });
@@ -475,13 +477,20 @@ test("1. on v49: every expected value of the read-only preflight (block 4 counts
   W.before49 = await catalog(r);
   W.v48Body = await prosrc(r, "source_metric_audit_revision_guard");
   assert.equal(crypto.createHash("md5").update(W.v48Body).digest("hex"), "921db06f6f2833eb57c062fb61e82e25", "v48's body is in force on v49");
+  W.v16Body = await prosrc(r, DASH_GATE);
+  assert.equal(crypto.createHash("md5").update(W.v16Body).digest("hex"), "e978eb882932c930f78876179a11b190", "v16's dashboard gate is in force on v49");
 });
 
-test("2. v50 refuses, changing nothing, when the body in force of the T8 revision guard is not v48's (its md5 check runs before any change)", async () => {
-  const error = await inRolledBack(r, (c) => c.query(`create or replace function training_load.source_metric_audit_revision_guard() returns trigger as $$ begin return new; end; $$ language plpgsql`), V50_FILE);
-  assert.equal(error?.code, "23514", error?.message);
-  assert.match(error.message, /^v50 refused: the body in force of training_load\.source_metric_audit_revision_guard is not v48's$/);
-  assert.deepEqual(await catalog(r), W.before49, "nothing changed");
+test("2. v50 refuses, changing nothing, when the body in force of the T8 revision guard is not v48's or the body of v16's dashboard gate is not v16's (its md5 checks run before any change)", async () => {
+  for (const [name, pattern] of [
+    ["source_metric_audit_revision_guard", /^v50 refused: the body in force of training_load\.source_metric_audit_revision_guard is not v48's$/],
+    [DASH_GATE, /^v50 refused: the body in force of training_load\.dashboard_widget_series_validate_source_connection_active_state is not v16's$/],
+  ]) {
+    const error = await inRolledBack(r, (c) => c.query(`create or replace function training_load.${name}() returns trigger as $$ begin return new; end; $$ language plpgsql`), V50_FILE);
+    assert.equal(error?.code, "23514", error?.message);
+    assert.match(error.message, pattern);
+    assert.deepEqual(await catalog(r), W.before49, `nothing changed (${name})`);
+  }
 });
 
 test("3. v50 through the runner on v49: a FOR SHARE reader of the connections never blocks it; an open INSERT makes it wait, and it then applies with no deadlock; it adds exactly its two functions, two triggers and one index and replaces only the revision guard's body (v48's plus the new branch); every expected value of the post-check", async () => {
@@ -527,7 +536,7 @@ test("3. v50 through the runner on v49: a FOR SHARE reader of the connections ne
   const newFunctions = after.functions.filter((x) => !before.functions.some((y) => fnKey(y) === fnKey(x)));
   assert.deepEqual(newFunctions.map((x) => x.proname).sort(), ["metric_source_connections_end_link", "metric_source_connections_state_guard"]);
   const changed = after.functions.filter((x) => !newFunctions.includes(x) && !before.functions.some((y) => fnKey(y) === fnKey(x) && y.digest === x.digest && y.comment === x.comment));
-  assert.deepEqual(changed.map((x) => x.proname), ["source_metric_audit_revision_guard"]);
+  assert.deepEqual(changed.map((x) => x.proname).sort(), [DASH_GATE, "source_metric_audit_revision_guard"]);
   const trigKey = (x) => `${x.relname}.${x.tgname}`;
   const newTriggers = after.triggers.filter((x) => !before.triggers.some((y) => trigKey(y) === trigKey(x)));
   assert.deepEqual(newTriggers.map((x) => [x.relname, x.tgname, x.tgenabled]).sort(), [
@@ -544,10 +553,17 @@ test("3. v50 through the runner on v49: a FOR SHARE reader of the connections ne
   const branchEnd = v50Body.indexOf("  if new.action not in ('source_metric_unit_verified', 'source_metric_meaning_verified') then");
   assert.ok(branchStart > 0 && branchEnd > branchStart);
   assert.equal(v50Body.slice(0, branchStart) + v50Body.slice(branchEnd), W.v48Body, "v48's body byte for byte around the new branch");
+  // v16's dashboard gate plus its early return for an unchanged connection, nothing else.
+  const gate = await prosrc(r, DASH_GATE);
+  const earlyStart = gate.indexOf("  if tg_op = 'UPDATE'");
+  const earlyEnd = gate.indexOf("  if new.source_connection_id is null then");
+  assert.ok(earlyStart > 0 && earlyEnd > earlyStart);
+  assert.equal(gate.slice(earlyStart, earlyEnd), "  if tg_op = 'UPDATE' and new.source_connection_id is not distinct from old.source_connection_id then\n    return new;\n  end if;\n", "the one change");
+  assert.equal(gate.slice(0, earlyStart) + gate.slice(earlyEnd), W.v16Body, "v16's body byte for byte around the early return");
   const post = await blocks(r, POSTCHECK);
   assert.deepEqual(Object.keys(post).map(Number), [1, 2, 3, 4, 5]);
   assert.deepEqual(post[1][0], { v50_rows: "1", v50_checksum_ok: true, later_migrations: "0" });
-  assert.deepEqual(post[2][0], { bodies_v50: "3" });
+  assert.deepEqual(post[2][0], { bodies_v50: "4" });
   assert.deepEqual(post[3][0], { guard_ok: true, link_ok: true });
   assert.deepEqual(post[4][0], { index_ok: true });
   assert.deepEqual(post[5][0], { instance_end_rows: "0", inactive_keyed: "0" });
@@ -581,7 +597,7 @@ test("4. the rollback refuses, changing nothing: under a later migration, once a
   await refuses((c) => c.query(`drop trigger metric_source_connections_v50_state_guard on training_load.metric_source_connections`),
     /^v50 rollback refused: a v50 trigger is missing$/);
   await refuses((c) => c.query(`drop index training_load.source_metric_audit_v50_instance_end_once`), /^v50 rollback refused: the v50 index is missing$/);
-  for (const name of ["source_metric_audit_revision_guard", "metric_source_connections_state_guard", "metric_source_connections_end_link"]) {
+  for (const name of ["source_metric_audit_revision_guard", "metric_source_connections_state_guard", "metric_source_connections_end_link", DASH_GATE]) {
     await refuses((c) => c.query(`create or replace function training_load.${name}() returns trigger as $$ begin return new; end; $$ language plpgsql`),
       /^v50 rollback refused: a body in force is not v50's$/);
   }
@@ -599,11 +615,12 @@ test("4. the rollback refuses, changing nothing: under a later migration, once a
   }
 });
 
-test("5. the rollback returns v49's catalog exactly (comments included; v48's body of the revision guard byte for byte) and changes no row; v50 then applies again to the same catalog; a v50 whose last statement fails leaves nothing", async () => {
+test("5. the rollback returns v49's catalog exactly (comments included; v48's body of the revision guard and v16's of the dashboard gate byte for byte) and changes no row; v50 then applies again to the same catalog; a v50 whose last statement fails leaves nothing", async () => {
   const before = (await one(r, `select count(*)::int as n from training_load.source_metric_audit`)).n;
   await r.query(await fsp.readFile(ROLLBACK, "utf8"));
   assert.deepEqual(await catalog(r), W.before49, "v49's catalog");
   assert.equal(await prosrc(r, "source_metric_audit_revision_guard"), W.v48Body);
+  assert.equal(await prosrc(r, DASH_GATE), W.v16Body);
   assert.equal((await one(r, `select count(*)::int as n from training_load.source_metric_audit`)).n, before);
   const failing = `${await fsp.readFile(V50_FILE, "utf8")}\nselect 1 / 0;\n`;
   await assert.rejects(migrate(rdb.url, UP_TO_V49, { extra: { name: V50, text: failing } }));
@@ -615,7 +632,7 @@ test("5. the rollback returns v49's catalog exactly (comments included; v48's bo
 // ---------------------------------------------------------------------------
 // The behaviour database (through v50).
 // ---------------------------------------------------------------------------
-test("6. the database guard, in direct SQL: no actor, a club admin, a keyless or club-owned connection, keys or an owner change in the ending statement, an active binding of the owner team, an open activation on its ended binding, a held team lock, a missing audit row at COMMIT - each refused; an ended instance is final; `set state = state` passes; an INSERT is untouched", async () => {
+test("6. the database guard, in direct SQL: no actor, a club admin, a keyless or club-owned connection, keys, an owner change or a source-system change in the ending statement, an active binding of the owner team, an open activation on its ended binding, a held team lock, a missing audit row at COMMIT - each refused; an ended instance is final; `set state = state` passes; an INSERT is untouched", async () => {
   const pa = W.pa.id;
   // The importer's INSERT (keyless, no actor) is untouched.
   const freshTeam = await team(W.clubA);
@@ -632,6 +649,10 @@ test("6. the database guard, in direct SQL: no actor, a club admin, a keyless or
     "23514", ONLY_TEAM);
   refusedWith(await tx(pa, (c) => c.query(`update training_load.metric_source_connections set owner_team_id = $2, state = 'inactive' where id = $1`, [inst.connectionId, freshTeam])),
     "23514", ONLY_TEAM);
+  refusedWith(await tx(pa, async (c) => {
+    await c.query(`update training_load.metric_source_connections set source_system = 'othersys', state = 'inactive' where id = $1`, [inst.connectionId]);
+    await auditSql(c, inst);
+  }), "23514", ONLY_TEAM);
   // `set state = state` is no state change: no guard, no link, no actor needed.
   assert.equal((await tx(null, (c) => c.query(`update training_load.metric_source_connections set state = state where id = $1`, [inst.connectionId]))).ok, true);
   // An active binding of the owner team; then an open activation on its ended binding (C58).
@@ -936,8 +957,9 @@ test("11. concurrency: the owner team's import lock held by a bind, an Unbind or
     const ending = endIt(W.pa, t6);
     await until(() => state.entered, "the end holds the bindings");
     await writer.query("begin");
+    // Bounded: were the end's bindings locked more strongly than FOR SHARE, this read would fail with 55P03.
+    await writer.query("set local lock_timeout = '2s'");
     await writer.query(`select 1 from training_load.source_team_bindings where id = $1 for share`, [t6.bindingId]);
-    assert.equal(await someoneWaits(k, 300), false, "the binding FOR SHARE does not wait on the end");
     await writer.query(`select 1 from training_load.metric_source_connections where id = $1 for share`, [t6.connectionId]);
     g.open();
     assert.equal(await someoneWaits(k), true, "the end now waits for the connection");
@@ -954,9 +976,10 @@ test("11. concurrency: the owner team's import lock held by a bind, an Unbind or
   const { g, state } = holdEnd("write");
   const ending = endIt(W.pa, s1);
   await until(() => state.entered, "the end holds its locks");
-  const started = Date.now();
-  refused(await startS1(v, s1.bindingId, W.pa2), 409, "binding_not_active");
-  assert.ok(Date.now() - started < 1_500, "S1 did not wait");
+  // Were S1 to wait on any of the end's locks, it could not answer before the gate opens.
+  const s1Answer = await Promise.race([startS1(v, s1.bindingId, W.pa2), new Promise((res) => setTimeout(() => res(null), 10_000))]);
+  assert.ok(s1Answer, "S1 answered while the end still held its locks");
+  refused(s1Answer, 409, "binding_not_active");
   g.open();
   assert.equal(ok(await ending).instance.state, "inactive");
   // A real S1 on the active binding, then an Unbind (C58): the open activation keeps the instance in use until S2 ends it.
@@ -1032,7 +1055,78 @@ test("12. the list: only team-owned connections that hold an instance, active by
   }
 });
 
-test("13. no answer carries a reason, an acting user, a credential part, an account label or a database text, and no log line a reason or a database text", async () => {
+test("13. a right lost during the request: on a keyless connection (the identical 404, never instance_not_held), during the end (the identical 404, nothing written, the key free) and after its COMMIT (the identical 404; with the right back, the replay answers the end)", async () => {
+  const revoke = () => k.query(`update public.user_global_roles set is_active = false where user_id = $1`, [W.pa2.id]);
+  const restore = () => k.query(`update public.user_global_roles set is_active = true where user_id = $1`, [W.pa2.id]);
+  const onCall = (n, fn) => { let calls = 0; return async () => { calls += 1; if (calls === n) await fn(); }; };
+  const keyless = (await one(k, `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('gpexe','team',$1) returning id`, [await team(W.clubA)])).id;
+  service.setMappingRightsHoldForTests(onCall(1, revoke));
+  try {
+    isNotFound(await endIt(W.pa2, keyless, { expected: { sourceSystem: "gpexe", sourceHostKey: "server3", sourceInstanceKey: "1" } }), "not held, the right lost");
+  } finally {
+    service.setMappingRightsHoldForTests(null);
+    await restore();
+  }
+  const during = await instance();
+  const duringBody = endBody(during);
+  service.setMappingRightsHoldForTests(onCall(1, revoke));
+  try {
+    isNotFound(await post(endPath(during), W.pa2.cookie, duringBody), "the right lost during the end");
+  } finally {
+    service.setMappingRightsHoldForTests(null);
+    await restore();
+  }
+  assert.deepEqual([(await connectionRow(during.connectionId)).state, (await endRows(during.connectionId)).length], ["active", 0], "nothing written");
+  assert.equal(ok(await post(endPath(during), W.pa2.cookie, duringBody)).replayed, false, "the key was free");
+  const afterCommit = await instance();
+  const afterBody = endBody(afterCommit);
+  service.setMappingRightsHoldForTests(onCall(2, revoke));
+  try {
+    isNotFound(await post(endPath(afterCommit), W.pa2.cookie, afterBody), "the right lost after the COMMIT");
+  } finally {
+    service.setMappingRightsHoldForTests(null);
+    await restore();
+  }
+  assert.deepEqual([(await connectionRow(afterCommit.connectionId)).state, (await endRows(afterCommit.connectionId)).length], ["inactive", 1], "the end committed");
+  const replay = ok(await post(endPath(afterCommit), W.pa2.cookie, afterBody));
+  assert.deepEqual([replay.replayed, replay.instance.state], [true, "inactive"]);
+});
+
+test("14. a dashboard series pinned to an instance stays editable after the end (the real update_series()), while a new binding and a real re-binding to the ended connection (from another connection or from none) stay refused (v16's gate as v50 leaves it)", async () => {
+  const inst = await instance();
+  const target = await variable(W.pa);
+  const dash = await one(k, `select id, revision from training_load.create_dashboard($1, null, 'team', null, null, $2, 'team', $2, false, $3)`, [`7g dashboard ${uid()}`, inst.teamId, W.pa.id]);
+  const widget = await one(k, `select * from training_load.create_widget($1, $2, 'table', '7g widget', 0, 0::smallint, 0::smallint, 6::smallint, 4::smallint, 0)`, [dash.id, dash.revision]);
+  const widgetRevision = async () => (await one(k, `select revision from training_load.dashboard_widgets where id = $1`, [widget.widget_id])).revision;
+  const addSeries = async (order, connectionId) => one(k,
+    `select * from training_load.add_series($1, $2, $3, $4, null, null, 'primary', null, null, 'source_connection', $5, 'session', 'sum', 'standalone_and_source_rollup', 'complete_and_partial', null, $6)`,
+    [widget.widget_id, await widgetRevision(), order, target.id, connectionId, W.pa.id]);
+  const updateSeries = async (seriesId, { color = null, label = null, policy = null, connectionId = null } = {}) => one(k,
+    `select * from training_load.update_series($1, $2, $3, null, $4, false, $5, false, $6, $7, null, null, null, null, null, false)`,
+    [seriesId, widget.widget_id, await widgetRevision(), color, label, policy, connectionId]);
+  const pinned = await addSeries(1, inst.connectionId);
+  ok(await endIt(W.pa, inst));
+  // Editing the pinned series (update_series names source_connection_id in its SET): it passes.
+  await updateSeries(pinned.series_id, { color: "#336699" });
+  await updateSeries(pinned.series_id, { label: "7g pinned" });
+  const row = await one(k, `select color, display_label, source_connection_id from training_load.dashboard_widget_series where id = $1`, [pinned.series_id]);
+  assert.deepEqual([row.color, row.display_label, row.source_connection_id], ["#336699", "7g pinned", inst.connectionId]);
+  // A new binding to the ended connection: refused.
+  await assert.rejects(addSeries(2, inst.connectionId), (e) => SERIES_INACTIVE.test(e.message));
+  // A real re-binding of another series to the ended connection: refused.
+  const other = (await one(k, `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('gpexe','team',$1) returning id`, [inst.teamId])).id;
+  const second = await addSeries(3, other);
+  await assert.rejects(updateSeries(second.series_id, { connectionId: inst.connectionId }), (e) => SERIES_INACTIVE.test(e.message));
+  assert.equal((await one(k, `select source_connection_id from training_load.dashboard_widget_series where id = $1`, [second.series_id])).source_connection_id, other);
+  // From no connection (another source policy) to the ended one: refused.
+  const unpinned = await one(k,
+    `select * from training_load.add_series($1, $2, 4, $3, null, null, 'primary', null, null, 'all_with_conflicts', null, 'session', 'sum', 'standalone_and_source_rollup', 'complete_and_partial', null, $4)`,
+    [widget.widget_id, await widgetRevision(), target.id, W.pa.id]);
+  await assert.rejects(updateSeries(unpinned.series_id, { policy: "source_connection", connectionId: inst.connectionId }), (e) => SERIES_INACTIVE.test(e.message));
+  assert.equal((await one(k, `select source_connection_id from training_load.dashboard_widget_series where id = $1`, [unpinned.series_id])).source_connection_id, null);
+});
+
+test("15. no answer carries a reason, an acting user, a credential part, an account label or a database text, and no log line a reason or a database text", async () => {
   // One more answer of each kind for the scan.
   const inst = await instance();
   ok(await endIt(W.pa, inst));

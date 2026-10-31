@@ -337,15 +337,16 @@ touches no Metrics Core function or table (it only calls `training_load.source_m
 
 **Files.**
 - `migrations_v2/202610311200_training_load_v50_source_instance_end.sql`: the two locks of section 6.4; the `DO` block
-  that refuses (`23514`) unless `md5(prosrc)` of the revision guard in force is v48's (`921db06f…`); the state guard
+  that refuses (`23514`) unless `md5(prosrc)` of the revision guard in force is v48's (`921db06f…`) and that of v16's
+  dashboard gate is v16's (`e978eb88…`, item 17); the state guard
   `metric_source_connections_state_guard()` with its trigger `metric_source_connections_v50_state_guard`; the deferred
   link `metric_source_connections_end_link()` with its constraint trigger `metric_source_connections_v50_audit_link_end`;
   the unique index `source_metric_audit_v50_instance_end_once`; the revision guard: v48's body byte for byte plus the
   `source_instance_end` branch, inserted right before v48's `if new.action not in ('source_metric_unit_verified',
-  'source_metric_meaning_verified') then`.
+  'source_metric_meaning_verified') then`; v16's dashboard gate with one early return (item 17).
 - `docs/runbooks/source-instance-end-v50.md`, `…-v50-preflight.sql`, `…-v50-postcheck.sql`, `…-v50-rollback.sql`; the
   four SQL files and the migration are LF, and `.gitattributes` gains `docs/runbooks/source-instance-end-v50*.sql text
-  eol=lf`. The rollback restores v48's body verbatim.
+  eol=lf`. The rollback restores v48's and v16's bodies verbatim.
 - `backend/src/sourceInstanceEndService.js` (new): `mayEndInstances`, `listInstances()`, `endInstance()`, through M2's
   write kit (`adminWriteKit`); the routes in `backend/src/routes/sourceMetrics.js`, before the catch-all.
 - Tests: `backend/tests/source-instance-end-7g.test.mjs` (new); the GPEXE test migrations gain v50; the architecture
@@ -363,7 +364,8 @@ touches no Metrics Core function or table (it only calls `training_load.source_m
    `where action = 'source_instance_end'` cannot answer the foreign key's lookup by `metric_source_connection_id`
    alone. Nothing deletes a connection, so the lookup never runs; recorded, not changed.
 4. **The guard checks OLD.** "The row has T7 keys and `owner_scope = 'team'`" (section 6.1) reads OLD's scope and keys,
-   and the same UPDATE may change no owner column: v34's write-once trigger allows NULL → value in that UPDATE, and
+   and the same UPDATE may change no owner column and not `source_system` (the binding and activation checks read OLD's
+   system, so a changed one would leave them checking another instance): v34's write-once trigger allows NULL → value in that UPDATE, and
    v11's `protect_ownership` allows an owner change on an unused row, so a check of NEW would let a keyless or
    another team's row be ended in one statement.
 5. **The T8 branch also refuses `evidence_ref`** (as every other v48 branch does; `source_metric_audit_row_ok` does
@@ -407,13 +409,26 @@ touches no Metrics Core function or table (it only calls `training_load.source_m
 16. **Informational.** Ending an instance of a team without events lifts v24's "imported GPEXE data" blocker of the
     team's settings change (v24's `refuse_gpexe_team_repoint`; `gpexeImportService.js`); the other blockers stay, and after M4 the events keep it.
 
+17. **A dashboard series pinned to an ended instance stays editable** (section 1 says v16's gate is "a gate for a new
+    series binding only, not retroactive"; for an UPDATE it was not). v16's
+    `dashboard_widget_series_validate_source_connection_active_state` is `before insert or update of
+    source_connection_id`, and `update_series()` (v17) names that column in every SET, so the gate ran on every edit of
+    a series and, after an end, refused it with the database's own text. v50 adds one early return to that body, `if
+    tg_op = 'UPDATE' and new.source_connection_id is not distinct from old.source_connection_id then return new;` (v16's
+    own comment: "only ... a genuine UPDATE of source_connection_id"); every other line stays v16's, and v50 checks
+    v16's md5 first. A new binding and a real re-binding to an inactive connection stay refused, and so does a clone of
+    a dashboard with such a series (`409 sourceConnectionResolutionRequired`, `trainingLoadDashboardCatalog.js`,
+    unchanged). Only the trigger's body changes: no new write path to the dashboard tables (ADR-003), and v16's
+    analogous metric gate is untouched. Found by the internal `db-reviewer` round; built on the *Rukovodilac*'s decision
+    (option (a), 2026-10-31); no effect in production before M4 (no instance can be ended).
+
 **Tests** (`backend/tests/source-instance-end-7g.test.mjs`, two disposable databases): on v49 the preflight's every
 block, its stop values planted and rolled back, and the rollback's refusal without v50; the `DO` assertion refusing a
-foreign body with nothing changed; v50 through the runner with a `FOR SHARE` reader and an open INSERT, the exact
-catalog difference, v48's body around the new branch byte for byte, every post-check value and the file's sha256 in
+foreign body (either of the two) with nothing changed; v50 through the runner with a `FOR SHARE` reader and an open INSERT, the exact
+catalog difference, v48's body around the new branch and v16's around the early return byte for byte, every post-check value and the file's sha256 in
 the post-check; every refusal of the rollback with the catalog unchanged, the four files LF; the rollback back to v49's
-catalog and v48's body, a failing v50 leaving nothing, and v50 again. On v50: the guard in direct SQL (no actor, a club
-admin, a keyless or club-owned connection, keys or an owner change in the ending statement, an active binding, an open
+catalog and v48's and v16's bodies, a failing v50 leaving nothing, and v50 again. On v50: the guard in direct SQL (no actor, a club
+admin, a keyless or club-owned connection, keys, an owner or a source-system change in the ending statement, an active binding, an open
 activation on an ended binding, a held team lock, a missing audit row, `inactive → active`, `set state = state`); the
 T8 branch (an earlier end, no end, a row written in the transaction without an end, a savepoint, another team, no
 team, evidence, another user or basis, a club admin, twice) and the once-index; the audience and every body shape; each 409 in order with its exact `current` keys, a keyless connection that
@@ -421,13 +436,16 @@ becomes an instance before the re-read, and a binding of the same source team on
 200, the replay, `request_key_reused`, a replay after the right is gone, the lost COMMIT both ways and the missing
 audit row; every other `training_load` table byte-identical and an event still pointing to the ended instance;
 concurrency against a check's lock, a bind, an Unbind, an owner changed before the lock, a `FOR SHARE` holder of the
-connection, a T6-shaped writer and S1; the list (filters, `held`, `endedAt`, pages of 100, every bad query); a scan of every answer and log line.
+connection, a T6-shaped writer and S1; the list (filters, `held`, `endedAt`, pages of 100, every bad query); a right lost on a keyless connection, during
+the end and after its COMMIT; a pinned dashboard series edited through the real `update_series()` after the end, and a
+new binding and a re-binding to the ended connection refused; a scan of every answer and log line.
 
 **Mutations** of every service check (the gate's workspace, the try-lock's answer, `for share of b`, the order of the
-409s, the activation named, the owner re-compare, the not-held re-read, the host filter, `held`, the list's filters,
-query and cursor, `expected`'s formats) and of every v50 guard branch (final, OLD's keys, an owner change, the actor,
-the team lock, the binding and activation checks with their host, the `WHEN` clause, the deferred link, the T8
-branch's transaction, state, evidence, team and once checks) are killed by the suite. The one survivor, the T8
+409s, the activation named, the owner re-compare, the not-held re-read, both re-checks of the right, the host filter,
+`held`, the list's filters, query and cursor, `expected`'s formats) and of every v50 guard branch (final, OLD's keys, an owner or source-system
+change, the actor, the team lock, the binding and activation checks with their host, the `WHEN` clause, the deferred
+link, the T8 branch's transaction, state, evidence, team and once checks, the dashboard gate's early return and its
+condition) are killed by the suite. The one survivor, the T8
 branch's own actor check, is equivalent by construction: v35's trigger `source_metric_audit_v35_actor_guard` (v48's
 body) runs before the revision guard's and refuses every row that check would (another user than the acting one, an
 actor who is not an active platform admin, a basis other than `platform_admin`). Every source restored byte for byte
