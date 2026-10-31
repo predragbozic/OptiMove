@@ -970,10 +970,24 @@ order covers is merged under it; a migration PR that the standing order for migr
 - **The contracts of 7e, 7f and 7g were merged before this record** as PR #297 (`39b4b52`, 22:23:10 UTC) on the
   owner's word „merge” / „297” (owner turns `4fb1a9da`, 22:22:13 UTC, and `629c4a79`, 22:22:18 UTC), which changed
   the *Rukovodilac*'s order (this facts record first).
+- **7f-B, Done, 2026-10-30.**
+  - PR #301 (branch `feature/7f-extractor-registry`, base `6568cf7`): the extractor registry
+    (`backend/src/sourceMetricExtractors.js`), the two refusals at T4 create and A1, `extractorAvailable` on the field
+    reads; no migration. J12 section 11 ("As built") records it.
+  - Reviews: the internal reviews, then GO on `25627d79` from the *Nezavisni revizor* (its turn `85df98fd`, 23:36:45
+    UTC) and the *Rukovodilac* (its turn `1debe65f`, 23:37:50 UTC).
+  - Merge by the executor under the standing merge order: `59c2192` (parents `6568cf7` and `25627d79`, 23:39:12 UTC),
+    exactly from `25627d79`.
+  - Deploy: by the *Rukovodilac* through the Render API (step 6 of the standing order for migration PRs, in force from
+    the merge of PR #300), as `be0fe1b` (the merge of PR #300, which carries `59c2192`), started at 23:54:35 UTC and
+    live at 23:55:23 UTC; no migration path differs between the served `e915a5b` and `be0fe1b`. The *Rukovodilac*'s
+    smoke, 23:55:29 – 23:55:50 UTC: `/api/health` answered `ok: true` on `be0fe1b` three times in a row;
+    `/api/auth/me` answered `{"user":null}`; without a login `GET /fields`, `GET /fields/<zero UUID>`,
+    `POST /mappings/<zero UUID>/versions` (with `{}`), `GET /activations`, `GET /mappings` and the GPEXE team status
+    answered 401.
 - **7d-C** (D3's prepared replacement in L4, R1 of J10) is not built; it is part of 7d (J10, R1) and has no place in
   the order yet.
-- **Next, by J12's R1 (below): 7f-B, then 7e-B, then 7g-B** (its migration written now that v48 is merged and
-  deployed).
+- **Next, by J12's R1 (below): 7e-B, then 7g-B** (its migration written now that v48 is merged and deployed).
 - **Input (red zone):** the owner's decisions from section K of the discovery document:
   - the minimum number of athletes for min / max;
   - system or club zone mappings;
