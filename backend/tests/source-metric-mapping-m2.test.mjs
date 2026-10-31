@@ -991,7 +991,7 @@ test("19. a mapping's versions are read in pages (number descending, an opaque c
   assert.deepEqual([detailAgain.status, detailAgain.body.mapping.versions[0].versionNumber], [200, count + 1]);
 });
 
-test("20. architecture: only the M2 service writes a mapping; a mapping version only the M2 service (create, submit and, from phase 7b, activate, replace and disable) and the revision lifecycle (its pinned step disables); the T8 audit is written by the M2 service, the M2b verification service, the revision lifecycle, the unit-conversion service (phase 7c) and the activation service with its shared steps (phase 7d), a T2b revision only by the M2b verification service and the revision lifecycle, a unit conversion only by the unit-conversion service, a T5 activation only by the activation service and its shared steps (phase 7d; A1, A2 and the pinned step call those steps); nothing in backend/src writes a T2a field or a T6 value provenance, and nothing switches a trigger off", async () => {
+test("20. architecture: only the M2 service writes a mapping; a mapping version only the M2 service (create, submit and, from phase 7b, activate, replace and disable) and the revision lifecycle (its pinned step disables); the T8 audit is written by the M2 service, the M2b verification service, the revision lifecycle, the unit-conversion service (phase 7c), the activation service with its shared steps (phase 7d) and the source-instance end (phase 7g), a T2b revision only by the M2b verification service and the revision lifecycle, a unit conversion only by the unit-conversion service, a T5 activation only by the activation service and its shared steps (phase 7d; A1, A2 and the pinned step call those steps), a Metrics Core source connection only by the import writer and the source-instance end (phase 7g); nothing in backend/src writes a T2a field or a T6 value provenance, and nothing switches a trigger off", async () => {
   const { readdirSync, readFileSync } = await import("node:fs");
   const { join, relative } = await import("node:path");
   const src = new URL("../src/", import.meta.url);
@@ -1009,10 +1009,13 @@ test("20. architecture: only the M2 service writes a mapping; a mapping version 
   const writers = (table) => files.filter((f) => writes(table).test(readFileSync(f, "utf8"))).map((f) => relative(root, f).replace(/\\/g, "/")).sort();
   assert.deepEqual(writers("source_metric_mappings"), ["sourceMetricMappingService.js"]);
   assert.deepEqual(writers("source_metric_mapping_versions"), ["sourceMetricMappingService.js", "sourceRevisionLifecycleService.js"]);
-  assert.deepEqual(writers("source_metric_audit"), ["sourceFieldVerificationService.js", "sourceMetricActivationService.js", "sourceMetricActivationSteps.js", "sourceMetricMappingService.js", "sourceRevisionLifecycleService.js", "unitConversionService.js"]);
+  assert.deepEqual(writers("source_metric_audit"), ["sourceFieldVerificationService.js", "sourceInstanceEndService.js", "sourceMetricActivationService.js", "sourceMetricActivationSteps.js", "sourceMetricMappingService.js", "sourceRevisionLifecycleService.js", "unitConversionService.js"]);
   // Phase 7d (J10): the writers of T5 - S2's end in the activation service, the
   // starts and the version-driven ends in the shared steps.
   assert.deepEqual(writers("source_metric_mapping_activations"), ["sourceMetricActivationService.js", "sourceMetricActivationSteps.js"]);
+  // Phase 7g (J13): the importer creates a Metrics Core connection; the end of
+  // a held source instance is the one other writer.
+  assert.deepEqual(writers("metric_source_connections"), ["gpexeImportWriter.js", "sourceInstanceEndService.js"]);
   // Phase 7c (J9): the one writer of the unit conversions.
   assert.deepEqual(writers("unit_conversions"), ["unitConversionService.js"]);
   // No production module switches a trigger off (the Rukovodilac's note (ii) at the 7c GO).
