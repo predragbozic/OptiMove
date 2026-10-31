@@ -15,7 +15,7 @@ after 7f-B** (it reads values only through 7f's registry; J12, R1).
 
 | | |
 |---|---|
-| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 11). |
+| Status | Proposed by the executor on 2026-10-30, on the *Rukovodilac*'s order of that day (queued at 18:31:50 UTC); revised after the internal reviews (section 11); accepted with PR #297. **Built by 7e-B** in an open pull request (section 12, "As built"). |
 | Verified against commit | `6a94ce29` (merge of PR #294). Every file and line reference below is to that commit unless it names another. |
 | Migration | **None.** A read over existing rows; no table, column, trigger or audit row. |
 | **Owner decisions** | **OD2** (the preview's fields, section 3), **OD3** (the minimum count of athletes, section 4) and **OD4** (a system mapping carrying zone or threshold bounds, section 6): **decided on 2026-10-30 as recommended** — section 0.1, with the owner's words. |
@@ -292,3 +292,138 @@ GPEXE answer, a preview of several candidates at once.
   *Rukovodilac*'s decision); the guideline on several sources; the full quote of `88ad60ca`; the order of 7h and 7i
   pending owner (head `c3193ca7`). Then the owner's turn `e21a1604` (22:19:50 UTC) confirmed OD4 and the order as the
   *Rukovodilac* recommended; written in the following head, with a narrow re-review of the delta by both.
+
+## 12. As built (7e-B)
+
+**Base** `0117912` (merge of PR #298, the calendar's events and migration v49; no Metrics Core file). The sections above were verified against `6a94ce29`; their references into
+code moved since: `boundedRead` is `backend/src/sourceMetricMappingService.js:168-199`; `mayManageActivations` is
+`backend/src/sourceMetricAccess.js:46-49` and `readableOwnerKeys` `:109` (7a's module, not `:55-76`); `getMapping` is
+`sourceMetricMappingService.js:720-746`. **No migration, no write, no importer change.**
+
+**Files.**
+- `backend/src/gpexeImportMapper.js`: `gpexeLevelValues(bundle, extract)`, after `buildGpexeImportPlan`, which is
+  unchanged byte for byte.
+- `backend/src/sourceMetricPreview.js` (new, pure): `PREVIEW_MINIMUM_ATHLETES` (3, OD3), `STORAGE_SCALE` (9, D8),
+  `convertAtStorageScale()` and `previewLevel()`. In its own module, so its tests need no database.
+- `backend/src/sourceMetricPreviewService.js` (new): `previewVersion()` and `PREVIEW_MAX_BUNDLE_BYTES` (16 MiB, R7).
+- `backend/src/routes/sourceMetrics.js`: the route, after the submit route; `adminContext`, then
+  `mayManageActivations`, then the service (which asks `mayManageActivations` again first).
+- `backend/src/sourceMetricMappingService.js`: the M2 kit also hands out `PARAMS_AS_TEXT` (one word).
+
+**R3, the mapper's gates, as built.** No refactor: `buildGpexeImportPlan(bundle, { metricSpecs })` already takes its
+specs (the seam M4 will use: the discovery document's M4 row has the mapper read the activations instead of
+`GPEXE_METRIC_SPECS`), and `gpexeLevelValues` calls it with one spec whose `extract` is the version's extractor with the
+version's parameters. So the session gates, the athlete gates, the per-row input and the drill rows are the import's
+own. It returns `{ code }` for a `GpexeMappingError` and `{ code: null, athletes: [{ session: [values], drill:
+[values] }] }` otherwise: no id, message, anomaly or skip crosses. Any other error is thrown (a `500`). The guard tests
+on the mapper's text (B7.7, B7.8, B8.2 and the reasons scan) pass unchanged.
+
+**The order of answers, as built** (section 2):
+1. `401` (`requireAuth`); no mapping-admin context, or `mayManageActivations` false: the identical `404`.
+2. The path ids (a string UUID each) and the query, read from the **raw query string** with `URLSearchParams`, never
+   from Express's parsed `req.query` (its `qs` parser drops a key named like an `Object.prototype` member, such as
+   `constructor` or `__proto__`, and nests brackets): exactly one entry, `candidateId`, a UUID. A repeated, empty,
+   missing or bracketed one and any other key, those names included, are the `404`. The ids are lowercased (an
+   upper-case id is the same candidate).
+3. One `boundedRead` (REPEATABLE READ READ ONLY, the read's bounds):
+   - **Statement V:** the version of the named mapping, with `owner_key = any(readableOwnerKeys(ctx))`; its factors as
+     `trim_scale(…)::text`, its stored parameters through `PARAMS_AS_TEXT` (exact decimal text), its levels, and the
+     field's key, family and revision shape. No row: `404`.
+   - **The registry** (`extractabilityCode`) is decided from that row alone (pure, no lock), so the bundle is read only
+     for a version that may read it; its refusal is still answered in section 2's place, below.
+   - **Statement C:** a `MATERIALIZED` CTE holds the candidate with its team and the team's club, both active, and
+     the scope in its `WHERE`: `(scope 'system' and no club id) or (scope 'club' and team.club_id = the workspace's
+     club)`; it also derives `purged` and `expired` (`raw_expires_at <= now()`). Then, each in a lateral with
+     `OFFSET 0` (evaluated once), the uncompressed size `octet_length(raw_bundle::text)` — measured only for a stored,
+     unexpired snapshot — and the one decision `too_large` (size above the bound). Then the candidate's last check (of
+     its own team) and the GPEXE catalog's `api_family` of that check's host. `raw_bundle` is returned only when
+     `too_large` is false, the check read through `source_connection`, the host's family is the version's and the
+     version may read it (a GPEXE field the registry accepts); otherwise NULL. No row: `404`. The CTE is the fence
+     that applies the scope before anything of the row is measured.
+   - Still inside the transaction: `409 snapshot_expired` (`purged`, then `expired`), `409 candidate_too_large`,
+     `409 candidate_source_mismatch`, `409 source_metric_unsupported` / `parameters_unsupported`.
+4. After the transaction: a bundle that is not an object here fails closed (`500`); the mapper
+   (`409 candidate_not_importable` with `current.reason`); then the two levels and `200`.
+
+**Where the build differs from or settles the sections above.**
+1. **The family** (R5) is a mismatch also when the version's field is not of `gpexe`, and when the candidate's last
+   check is of another team (no constraint ties them; it reads as no path). Both fail closed.
+2. **No status gate** (open question): `pending`, `blocked`, `superseded` and `imported` candidates are previewed
+   while their snapshot is stored and not expired; a superseded one is tested. The v33 rule that only a candidate
+   last seen by a succeeded check is approvable is the approval's, not the preview's.
+3. **A candidate whose `drill_parameter_effect` is `not_observed`** is previewed with its drill values, although its
+   approval is refused (v33). Recorded; no code without the *Rukovodilac*.
+4. **A count of 0 against `candidate_not_importable`:** when the mapper leaves every athlete out it refuses the
+   session (`no_importable_participants`), so the answer is that `409`, as M4 will behave. A count of 0 means athletes
+   passed the gates and the extractor skipped every value (tested with bounds of 22–55 W/kg, which fit no threshold
+   of the fixture's team).
+5. **Section 1's list of the mapper's refusals is incomplete.** The twenty `new GpexeMappingError(` sites are at
+   `gpexeImportMapper.js` lines 190, 193, 225, 236, 238, 243, 259, 279, 280, 282, 288, 303, 318, 319, 321, 337, 340,
+   349, 385 and 386; each becomes `candidate_not_importable` with its code. Section 5's list of messages that carry ids
+   is incomplete too (also 236–259, 280, 337, 340, 349 and 386; an anomaly at 378 carries values). None of them
+   crosses: only `error.code` leaves `gpexeLevelValues`.
+6. **Exact values.** `raw_bundle` is `jsonb`, parsed by node-pg with `JSON.parse`, so a source number reaches the
+   extractor as a double and its text is that double's shortest round-trip form (J12 states the same). min and max
+   are compared as exact decimals; only those two are converted, exactly (BigInt), and rounded once to 9 decimals half
+   away from zero. Every canonical min and max of the value tests passes `training_load.source_metric_value_matches`
+   and fails it one unit away.
+7. **Messages.** Four new, none naming an id, a parameter or a value: `snapshot_expired`, `candidate_too_large`,
+   `candidate_source_mismatch`, `candidate_not_importable`. The registry's two use M2's existing messages.
+8. **An existing test changed:** `source-metric-access-7a.test.mjs` test 5 lists the M2 kit's users; the preview
+   service is added, and checked to take the bounded read and neither `runWrite` nor `rightsStillHold` (a read has no
+   right to re-check under a lock).
+9. **The candidate's scope lives in SQL only** (R1: one statement), with no JavaScript second check: a second check
+   would make every single-point mutation of the SQL rule equivalent, so the rule could no longer be shown to be
+   tested. Its 7d sibling, `activationInScope` (`sourceMetricAccess.js`), decides by the binding's club; the preview
+   decides by the team's current club (R6, tested with a team moved to another club). A later phase that changes the
+   scope (OD6's club approvals, phase 7h; OD7's system variables used as they are, phase 7i) changes both.
+10. **A limit:** the size is measured by serializing the stored value. For any bundle the importer stores (each source
+    answer is bounded at 5 MiB) that is cheap; a pathological stored value far above the bound could run past the
+    read's 5 s statement bound and answer `409 try_again` instead of `candidate_too_large`. No guard by the stored
+    (compressed) size is added, because jsonb's binary size can be several times its text and would refuse a valid
+    bundle.
+
+**Tests** (section 8):
+- `backend/tests/source-metric-preview-math-7e.test.mjs` (unit, no database): the constants; the conversion on the
+  seeded pairs (s → min, m/s → km/h, km/h → m/s), a tie at the 10th place in both signs, an offset, a number written
+  with an exponent, no negative zero; one level (an athlete counted once, min / max as decimals, the minimum, a count
+  of 0); `gpexeLevelValues` against today's plan for every spec of `GPEXE_METRIC_SPECS` with its own bounds at both
+  levels (the athlete on two tracks left out), its exact output keys and per-row input, and each whole-session refusal
+  returning `{ code }` only.
+- `backend/tests/source-metric-preview-7e.test.mjs` (a disposable database, the real route): `401`; the exact `200`
+  shape; the identical `404` with `no-store` for every caller and case of section 8, each with an available, a purged
+  and an expired candidate; the path and query cases; who may, by workspace (another team of the same club included,
+  R6); the order of every `409`, each pair adjacent; the values of eleven versions over the ten seeded fields equal to
+  today's plan, with every canonical min and max checked by `source_metric_value_matches` exactly and one unit away;
+  the minimum, a level that is `null`, a count of 0; the size bound with a bundle whose stored size is under the bound
+  and its text over it, with every row the request reads recorded (the bundle never leaves the database), and exactly
+  the bound (previewed) against one byte more (refused); a family or registry refusal answered without the bundle
+  leaving the database; R6 with a team moved to another club; a superseded candidate previewed and nothing written;
+  the service's own audience check and its raw query string (prototype-named keys included); the architecture (no
+  write, no workspace resolution, one candidate statement, its two fences, the route never reading `req.query`); and
+  no preview answer or log line carrying an athlete, track or session id, a raw key of the bundle, a stack or a
+  database text. The fixtures' bundles (`backend/tests/support/preview-bundles.mjs`)
+  are the rest_v1 stored form with planted 12-digit athlete and track ids.
+- **Mutations** of the scope (each half of the rule, both active flags, the clubs join, the owner keys, the version's
+  mapping, the whole rule, the connection's owner club in place of the team's), every adjacent pair of the order of
+  answers, the family (the bundle guard; the JavaScript check), the registry's bundle guard, the expiry, the size (the
+  stored size; the bundle guard; the boundary `>` → `>=`; the refusal), the service's audience check, the query
+  (another key; the first of a repeated one; Express's `req.query`), a level's `applies_to`, the gates (athletes from
+  the raw rows), the minimum (3 → 2, `<` → `<=`), the count per value, min / max by text, the conversion (the tie, the
+  offset, the divisor's scale, the sign, binary floating point) and the seam (a message, every error, drill values at
+  the session level): each one fails a test. Equivalent, recorded: the route's own `mayManageActivations` (the
+  service asks again), the `no club id` half of the system branch (a system scope never carries one),
+  `compareDecimal` against `Number` (every extracted value is a double), measuring the size of an expired row too
+  (a cost only: `snapshot_expired` is answered first) and checking `candidate_too_large` before `snapshot_expired`
+  (the size is measured only for a stored, unexpired snapshot, so `too_large` is never true where `snapshot_expired`
+  applies: the order is held by the statement itself).
+
+**Review record.** Internal round on `aa315883`: `code-reviewer`, `security-reviewer` and `db-reviewer`, each READY WITH
+NON-BLOCKING NOTES, no BLOCKER, HIGH or MEDIUM. Applied in the next head: the registry decided inside the read before
+the bundle can leave the database (code, LOW); R6 tested with a moved team (security, LOW); the raw query string
+(security, NIT); one size decision with its exact boundary tested, the size measured only for a stored, unexpired
+snapshot, the catalog joined by GPEXE's own source system, and the two fences explained and pinned (db, LOW / NIT).
+Recorded without code: the scope in SQL only (item 9) and the size limit (item 10). Answered: a platform admin
+without a club role has no club workspace (`workspace.js` lists a club workspace only for an active `club_admin`
+role), so the suite's platform admin in club A's workspace holds that role and still resolves with the
+`platform_admin` basis.

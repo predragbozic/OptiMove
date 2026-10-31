@@ -1577,5 +1577,5 @@ export async function disableVersion({ ctx, mappingId, versionId, body }) {
 export const adminWriteKit = Object.freeze({
   runWrite, boundedRead, rightsStillHold, refusal, NOT_FOUND, MESSAGES, plainObject, uuidField, boundedText, boundedOut,
   dec, decCmp, hashOf, encodeCursor, decodeCursor, cursorQuery, invalidCursor, ownerKeyOf, CURSOR_AT, LOWER_UUID, UUID,
-  CANONICAL_VERSION_COLUMNS, canonicalParametersOf, notReadyCodeOf, REVISION_COLUMNS, revisionOut,
+  CANONICAL_VERSION_COLUMNS, canonicalParametersOf, notReadyCodeOf, REVISION_COLUMNS, revisionOut, PARAMS_AS_TEXT,
 });
