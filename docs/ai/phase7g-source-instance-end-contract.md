@@ -387,11 +387,14 @@ touches no Metrics Core function or table (it only calls `training_load.source_m
    `400` → inside the write: `request_key_reused` or the replay → a missing connection `404` → the 409s. `try_again` can
    come before every 409 (the owner team's try-lock is step 2, and a row lock not granted in its bound is answered
    where it happens), and before the `404` of a right lost during the request. Its other causes: the owner changed
-   between the plain read and the lock, a keyless connection became an instance before the re-read (item 13), and a
-   request record taken by a concurrent request with the same key (`source_metric_audit_one_request_per_operation`).
+   between the plain read and the lock, a keyless connection became an instance before the re-read (item 13), a
+   request record taken by a concurrent request with the same key (`source_metric_audit_one_request_per_operation`),
+   and, as for every M2 write (J1), the per-user lock not granted in its bound, a statement timeout or a deadlock
+   (`55P03`, `57014`, `40P01`).
 10. **The 200's keys** are `{ instance, replayed }`, plus `commitConfirmation: "verified_after_commit_error"` after a
-    verified COMMIT (section 3.2 names only `instance`); a committed end whose answer could not be read (the write kit's
-    `answerAfterCommit`) is `200 { readError: true, connectionId, replayed: false }`.
+    verified COMMIT (section 3.2 names only `instance`). A committed end whose answer could not be read follows J1's
+    rule for every M2 write (the write kit's `answerAfterCommit`): `200 { readError: true, replayed: false }`, with
+    `connectionId` only once the right was confirmed again, and `commitConfirmation` after a verified COMMIT.
 11. **The bindings and the host** (section 4 step 3): a binding has no host column; the host is
     `source_credential_connections.host_key` through `connection_id`. The service locks `for share of b` (never
     stronger, R5) the owner team's bindings of that source system and source team, in ascending id, and the host decides
@@ -478,4 +481,8 @@ actor who is not an active platform admin, a basis other than `platform_admin`).
 
   Not applied: db's optional preflight check of the gate function's owner (the migrator's role created it in v16, and
   a failure rolls v50 back whole).
+- **Narrow re-review of that delta** (`code-reviewer`): READY WITH NON-BLOCKING NOTES, every round-2 note closed; its
+  one note (items 9 and 10 and J1 row 11 did not name `try_again`'s shared M2 causes, and `connectionId` in a
+  `readError` answer only after the right is confirmed again) applied as wording in the next head, with no code or
+  test change.
 - **External round (★★):** pending.
