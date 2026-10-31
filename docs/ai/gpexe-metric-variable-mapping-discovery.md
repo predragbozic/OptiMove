@@ -3964,7 +3964,7 @@ with an extra blank line, kept as merged):**
   first line is the same gate, while `resolveMappingAdmin` returns no context that the gate refuses (test 13 pins
   the gate itself). The PR names the list.
 
-### J11, J12, J13. The aggregate preview, the extractor registry, ending a held source instance — phases 7e, 7f, 7g (proposed)
+### J11, J12, J13. The aggregate preview, the extractor registry, ending a held source instance — phases 7e, 7f, 7g (contracts; J12 built)
 
 Three proposed ★★ contracts, reviewed in one round on the *Rukovodilac*'s order of 2026-10-30 (queued at 18:31:50
 UTC); their implementations stay separate pull requests:
